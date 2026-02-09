@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell } from 'electron'
+import { app, BrowserWindow, Menu, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { createApplicationMenu } from './menu'
@@ -16,10 +16,53 @@ let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 
 /**
+ * 检查窗口是否在可用显示器范围内
+ * 处理外接显示器断开后窗口位于不可见区域的情况
+ */
+function ensureWindowOnScreen(win: BrowserWindow): void {
+  const bounds = win.getBounds()
+  const displays = screen.getAllDisplays()
+  // 检查窗口中心点是否在任一显示器范围内
+  const centerX = bounds.x + bounds.width / 2
+  const centerY = bounds.y + bounds.height / 2
+  const isOnScreen = displays.some((display) => {
+    const { x, y, width, height } = display.workArea
+    return centerX >= x && centerX <= x + width && centerY >= y && centerY <= y + height
+  })
+  if (!isOnScreen) {
+    // 窗口不在任何屏幕内，移动到主显示器居中位置
+    const primary = screen.getPrimaryDisplay()
+    const { x, y, width, height } = primary.workArea
+    win.setBounds({
+      x: x + Math.round((width - bounds.width) / 2),
+      y: y + Math.round((height - bounds.height) / 2),
+      width: bounds.width,
+      height: bounds.height,
+    })
+    console.log('[窗口] 窗口已重新定位到主显示器')
+  }
+}
+
+/** 显示并聚焦主窗口，恢复 Dock 图标，确保窗口在可见区域 */
+function showAndFocusMainWindow(): void {
+  if (!mainWindow) return
+  ensureWindowOnScreen(mainWindow)
+  if (process.platform === 'darwin') {
+    app.dock?.show()
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+/**
  * Get the appropriate app icon path for the current platform
  */
 function getIconPath(): string {
-  const resourcesDir = join(__dirname, '../resources')
+  // resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
+  const resourcesDir = join(__dirname, 'resources')
 
   if (process.platform === 'darwin') {
     return join(resourcesDir, 'icon.icns')
@@ -123,7 +166,7 @@ app.whenReady().then(async () => {
 
   // Set dock icon on macOS (required for dev mode, bundled apps use Info.plist)
   if (process.platform === 'darwin' && app.dock) {
-    const dockIconPath = join(__dirname, '../resources/icon.png')
+    const dockIconPath = join(__dirname, 'resources/icon.png')
     if (existsSync(dockIconPath)) {
       app.dock.setIcon(dockIconPath)
     }
@@ -148,6 +191,9 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
+    } else {
+      // 窗口已存在但可能被隐藏（macOS 关闭按钮 = hide），重新显示
+      showAndFocusMainWindow()
     }
   })
 })
