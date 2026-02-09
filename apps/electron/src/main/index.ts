@@ -6,7 +6,9 @@ import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
-import { initAutoUpdater } from './lib/updater/auto-updater'
+import { stopAllAgents } from './lib/agent-service'
+import { stopAllGenerations } from './lib/chat-service'
+import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 
 let mainWindow: BrowserWindow | null = null
@@ -162,6 +164,11 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 标记正在退出，让 close 事件不再阻止关闭
   isQuitting = true
+  // 中止所有活跃的 Agent 和 Chat 子进程
+  stopAllAgents()
+  stopAllGenerations()
+  // 清理更新器定时器
+  cleanupUpdater()
   // 停止工作区文件监听
   stopWorkspaceWatcher()
   // Clean up system tray before quitting
