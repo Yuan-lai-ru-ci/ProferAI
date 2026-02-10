@@ -132,6 +132,13 @@ export interface ElectronAPI {
   /** 删除指定消息 */
   deleteMessage: (conversationId: string, messageId: string) => Promise<ChatMessage[]>
 
+  /** 从指定消息开始截断（包含该消息） */
+  truncateMessagesFrom: (
+    conversationId: string,
+    messageId: string,
+    preserveFirstMessageAttachments?: boolean,
+  ) => Promise<ChatMessage[]>
+
   /** 更新上下文分隔线 */
   updateContextDividers: (conversationId: string, dividers: string[]) => Promise<ConversationMeta>
 
@@ -407,6 +414,19 @@ const electronAPI: ElectronAPI = {
 
   deleteMessage: (conversationId: string, messageId: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.DELETE_MESSAGE, conversationId, messageId)
+  },
+
+  truncateMessagesFrom: (
+    conversationId: string,
+    messageId: string,
+    preserveFirstMessageAttachments = false,
+  ) => {
+    return ipcRenderer.invoke(
+      CHAT_IPC_CHANNELS.TRUNCATE_MESSAGES_FROM,
+      conversationId,
+      messageId,
+      preserveFirstMessageAttachments,
+    )
   },
 
   updateContextDividers: (conversationId: string, dividers: string[]) => {
