@@ -36,7 +36,7 @@ import {
   chatStreamErrorsAtom,
   currentChatErrorAtom,
 } from '@/atoms/chat-atoms'
-import type { PendingAttachment, ConversationStreamState } from '@/atoms/chat-atoms'
+import type { ConversationStreamState } from '@/atoms/chat-atoms'
 import type {
   ChatSendInput,
   GenerateTitleInput,
@@ -241,18 +241,19 @@ export function ChatView(): React.ReactElement {
   const syncContextDividers = React.useCallback(async (
     conversationId: string,
     messages: { id: string }[],
+    currentDividers: string[],
   ): Promise<string[]> => {
     const messageIdSet = new Set(messages.map((msg) => msg.id))
-    const newDividers = contextDividers.filter((id) => messageIdSet.has(id))
-    if (newDividers.length !== contextDividers.length) {
+    const newDividers = currentDividers.filter((id) => messageIdSet.has(id))
+    if (newDividers.length !== currentDividers.length) {
       setContextDividers(newDividers)
       await window.electronAPI.updateContextDividers(conversationId, newDividers)
     }
     return newDividers
-  }, [contextDividers, setContextDividers])
+  }, [setContextDividers])
 
   /** 发送消息 */
-  const handleSend = async (
+  const handleSend = React.useCallback(async (
     content: string,
     options?: {
       attachments?: FileAttachment[]
@@ -360,7 +361,19 @@ export function ChatView(): React.ReactElement {
         return map
       })
     })
-  }
+  }, [
+    currentConversationId,
+    selectedModel,
+    currentMessages.length,
+    pendingAttachments,
+    contextLength,
+    contextDividers,
+    thinkingEnabled,
+    setChatStreamErrors,
+    setPendingAttachments,
+    setStreamingStates,
+    setCurrentMessages,
+  ])
 
   /** 从某条消息起截断（包含该条） */
   const truncateFromMessage = React.useCallback(async (
@@ -395,7 +408,7 @@ export function ChatView(): React.ReactElement {
         setInlineEditingMessageId(null)
       }
     }
-    const contextDividersAfterTruncate = await syncContextDividers(currentConversationId, updatedMessages)
+    const contextDividersAfterTruncate = await syncContextDividers(currentConversationId, updatedMessages, contextDividers)
     return {
       targetAttachments,
       messageCountBeforeSend: targetIndex >= 0 ? targetIndex : updatedMessages.length,
@@ -404,6 +417,7 @@ export function ChatView(): React.ReactElement {
   }, [
     currentConversationId,
     currentMessages,
+    contextDividers,
     setCurrentMessages,
     setHasMoreMessages,
     inlineEditingMessageId,
@@ -438,7 +452,7 @@ export function ChatView(): React.ReactElement {
       if (inlineEditingMessageId === messageId) {
         setInlineEditingMessageId(null)
       }
-      await syncContextDividers(currentConversationId, updatedMessages)
+      await syncContextDividers(currentConversationId, updatedMessages, contextDividers)
     } catch (error) {
       console.error('[ChatView] 删除消息失败:', error)
     }
