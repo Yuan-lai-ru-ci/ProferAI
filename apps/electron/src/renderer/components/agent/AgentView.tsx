@@ -13,7 +13,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -669,10 +669,7 @@ export function AgentView(): React.ReactElement {
       {/* 主内容区域 */}
       <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
-        <AgentHeader
-          onToggleFileBrowser={() => setFileBrowserOpen((prev) => !prev)}
-          fileBrowserOpen={fileBrowserOpen}
-        />
+        <AgentHeader />
 
         {/* 消息区域 */}
         <AgentMessages />
@@ -857,13 +854,50 @@ export function AgentView(): React.ReactElement {
         </div>
       </div>
 
-      {/* 文件浏览器侧面板 */}
-      {fileBrowserOpen && sessionPath && (
-        <div className="w-[300px] border-l flex-shrink-0">
-          <FileBrowser
-            rootPath={sessionPath}
-            onClose={() => setFileBrowserOpen(false)}
-          />
+      {/* 文件浏览器侧栏 — 始终渲染同一个切换按钮 */}
+      {sessionPath && (
+        <div
+          className={cn(
+            'relative flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden',
+            fileBrowserOpen ? 'w-[300px] border-l' : 'w-10'
+          )}
+        >
+          {/* 切换按钮 — 始终固定在右上角，同一个 DOM 元素 */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-2.5 top-2.5 z-10 h-7 w-7"
+                onClick={() => setFileBrowserOpen((prev) => !prev)}
+              >
+                <FolderOpen
+                  className={cn(
+                    'size-3.5 absolute transition-all duration-200',
+                    fileBrowserOpen ? 'opacity-0 rotate-90 scale-75' : 'opacity-100 rotate-0 scale-100'
+                  )}
+                />
+                <X
+                  className={cn(
+                    'size-3.5 absolute transition-all duration-200',
+                    fileBrowserOpen ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 -rotate-90 scale-75'
+                  )}
+                />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              <p>{fileBrowserOpen ? '关闭文件浏览器' : '打开文件浏览器'}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* FileBrowser 内容 — 收起时隐藏 */}
+          <div className={cn(
+            'w-[300px] h-full transition-opacity duration-300',
+            fileBrowserOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          )}>
+            <FileBrowser rootPath={sessionPath} />
+          </div>
         </div>
       )}
     </div>
