@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -42,6 +42,7 @@ import type {
   SkillMeta,
   WorkspaceCapabilities,
   FileEntry,
+  EnvironmentCheckResult,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -183,6 +184,11 @@ export interface ElectronAPI {
 
   /** 订阅系统主题变化事件（返回清理函数） */
   onSystemThemeChanged: (callback: (isDark: boolean) => void) => () => void
+
+  // ===== 环境检测相关 =====
+
+  /** 执行环境检测 */
+  checkEnvironment: () => Promise<EnvironmentCheckResult>
 
   // ===== 流式事件订阅（返回清理函数） =====
 
@@ -484,6 +490,11 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, isDark: boolean): void => callback(isDark)
     ipcRenderer.on(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, listener)
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, listener) }
+  },
+
+  // 环境检测
+  checkEnvironment: () => {
+    return ipcRenderer.invoke(ENVIRONMENT_IPC_CHANNELS.CHECK)
   },
 
   // 流式事件订阅
