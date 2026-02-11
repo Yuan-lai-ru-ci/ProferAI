@@ -451,16 +451,32 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
 // ===== 详情面板 =====
 
 function ActivityDetails({ activity, onClose }: { activity: ToolActivity; onClose: () => void }): React.ReactElement {
+  const [copied, setCopied] = React.useState(false)
+
+  const handleCopy = (): void => {
+    const parts: string[] = [`[${activity.toolName}]`]
+    if (Object.keys(activity.input).length > 0) {
+      parts.push('输入:\n' + formatInput(activity.input))
+    }
+    if (activity.result) {
+      parts.push('结果:\n' + (activity.result.length > 2000 ? activity.result.slice(0, 2000) + '\n… [截断]' : activity.result))
+    }
+    navigator.clipboard.writeText(parts.join('\n\n')).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
   return (
     <div className="mt-1 rounded-md border border-border/40 bg-muted/20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300 ease-out">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
         <span className="text-[11px] font-medium text-foreground/50">{activity.toolName}</span>
         <button
           type="button"
-          onClick={onClose}
+          onClick={handleCopy}
           className="text-[11px] text-foreground/40 hover:text-foreground transition-colors"
         >
-          收起
+          {copied ? '已复制' : '复制'}
         </button>
       </div>
 
