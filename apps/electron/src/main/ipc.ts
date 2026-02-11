@@ -58,6 +58,7 @@ import {
   updateConversationMeta,
   deleteConversation,
   deleteMessage,
+  truncateMessagesFrom,
   updateContextDividers,
 } from './lib/conversation-manager'
 import { sendMessage, stopGeneration, generateTitle } from './lib/chat-service'
@@ -302,6 +303,23 @@ export function registerIpcHandlers(): void {
     CHAT_IPC_CHANNELS.DELETE_MESSAGE,
     async (_, conversationId: string, messageId: string): Promise<ChatMessage[]> => {
       return deleteMessage(conversationId, messageId)
+    }
+  )
+
+  // 从指定消息开始截断（包含该消息）
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.TRUNCATE_MESSAGES_FROM,
+    async (
+      _,
+      conversationId: string,
+      messageId: string,
+      preserveFirstMessageAttachments?: boolean,
+    ): Promise<ChatMessage[]> => {
+      return truncateMessagesFrom(
+        conversationId,
+        messageId,
+        preserveFirstMessageAttachments ?? false,
+      )
     }
   )
 
