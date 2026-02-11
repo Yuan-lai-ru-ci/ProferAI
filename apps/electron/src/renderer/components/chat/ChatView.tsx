@@ -120,7 +120,7 @@ export function ChatView(): React.ReactElement {
       updater: (prev: ConversationStreamState) => ConversationStreamState
     ): void => {
       setStreamingStates((prev) => {
-        const current = prev.get(convId) ?? { streaming: false, content: '', reasoning: '' }
+        const current = prev.get(convId) ?? { streaming: false, content: '', reasoning: '', model: undefined }
         const next = updater(current)
         const map = new Map(prev)
         map.set(convId, next)
@@ -324,7 +324,12 @@ export function ChatView(): React.ReactElement {
     // 初始化当前对话的流式状态
     setStreamingStates((prev) => {
       const map = new Map(prev)
-      map.set(currentConversationId, { streaming: true, content: '', reasoning: '' })
+      map.set(currentConversationId, {
+        streaming: true,
+        content: '',
+        reasoning: '',
+        model: selectedModel.modelId,
+      })
       return map
     })
 

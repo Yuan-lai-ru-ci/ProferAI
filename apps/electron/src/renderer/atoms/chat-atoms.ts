@@ -35,6 +35,7 @@ export interface ConversationStreamState {
   streaming: boolean
   content: string
   reasoning: string
+  model?: string
 }
 
 /**
@@ -91,6 +92,15 @@ export const streamingReasoningAtom = atom<string>(
     const currentId = get(currentConversationIdAtom)
     if (!currentId) return ''
     return get(streamingStatesAtom).get(currentId)?.reasoning ?? ''
+  },
+)
+
+/** 当前对话流式消息绑定的模型（发送时快照） */
+export const streamingModelAtom = atom<string | null>(
+  (get) => {
+    const currentId = get(currentConversationIdAtom)
+    if (!currentId) return null
+    return get(streamingStatesAtom).get(currentId)?.model ?? null
   },
 )
 
