@@ -23,6 +23,8 @@ export interface StreamSSEOptions {
   onEvent: StreamEventCallback
   /** AbortSignal 用于取消请求 */
   signal?: AbortSignal
+  /** 自定义 fetch 函数（代理等场景下由调用方注入） */
+  fetchFn?: typeof globalThis.fetch
 }
 
 /** streamSSE 的返回结果 */
@@ -46,10 +48,10 @@ export interface StreamSSEResult {
  * 7. 返回完整内容
  */
 export async function streamSSE(options: StreamSSEOptions): Promise<StreamSSEResult> {
-  const { request, adapter, onEvent, signal } = options
+  const { request, adapter, onEvent, signal, fetchFn = fetch } = options
 
-  // 1. 发起请求
-  const response = await fetch(request.url, {
+  // 1. 发起请求（支持通过 fetchFn 注入代理）
+  const response = await fetchFn(request.url, {
     method: 'POST',
     headers: request.headers,
     body: request.body,
@@ -122,9 +124,10 @@ export async function streamSSE(options: StreamSSEOptions): Promise<StreamSSERes
 export async function fetchTitle(
   request: ProviderRequest,
   adapter: ProviderAdapter,
+  fetchFn: typeof globalThis.fetch = fetch,
 ): Promise<string | null> {
   try {
-    const response = await fetch(request.url, {
+    const response = await fetchFn(request.url, {
       method: 'POST',
       headers: request.headers,
       body: request.body,
