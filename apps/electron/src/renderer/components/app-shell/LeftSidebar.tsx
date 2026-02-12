@@ -533,7 +533,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         open={pendingDeleteId !== null}
         onOpenChange={(open) => { if (!open) setPendingDeleteId(null) }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              handleConfirmDelete()
+            }
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除对话</AlertDialogTitle>
             <AlertDialogDescription>
