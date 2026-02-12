@@ -21,7 +21,7 @@ export function ModeSwitcher(): React.ReactElement {
         {/* 滑动背景指示器 */}
         <div
           className={cn(
-            'absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-md bg-background shadow-sm transition-transform duration-300 ease-in-out',
+            'absolute top-1 bottom-1 w-[calc(50%-4px)] rounded bg-background shadow-sm transition-transform duration-300 ease-in-out',
             mode === 'chat' ? 'translate-x-0' : 'translate-x-[calc(100%+4px)]'
           )}
         />

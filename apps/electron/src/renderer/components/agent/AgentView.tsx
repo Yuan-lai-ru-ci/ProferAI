@@ -132,6 +132,12 @@ export function AgentView(): React.ReactElement {
     currentSessionIdRef.current = currentSessionId
   }, [currentSessionId])
 
+  // pendingFiles ref（供 addFilesAsAttachments 读取最新列表，避免闭包旧值）
+  const pendingFilesRef = React.useRef(pendingFiles)
+  React.useEffect(() => {
+    pendingFilesRef.current = pendingFiles
+  }, [pendingFiles])
+
   // 渠道已选但模型未选时，自动选择第一个可用模型
   React.useEffect(() => {
     if (!agentChannelId || agentModelId) return
@@ -332,16 +338,34 @@ export function AgentView(): React.ReactElement {
 
   // ===== 附件处理 =====
 
+  /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
+  const makeUniqueFilename = React.useCallback((originalName: string, existingNames: string[]): string => {
+    if (!existingNames.includes(originalName)) return originalName
+    const dotIdx = originalName.lastIndexOf('.')
+    const baseName = dotIdx > 0 ? originalName.slice(0, dotIdx) : originalName
+    const ext = dotIdx > 0 ? originalName.slice(dotIdx) : ''
+    let counter = 1
+    while (existingNames.includes(`${baseName}-${counter}${ext}`)) {
+      counter++
+    }
+    return `${baseName}-${counter}${ext}`
+  }, [])
+
   /** 将 File 对象列表添加为待发送附件 */
   const addFilesAsAttachments = React.useCallback(async (files: File[]): Promise<void> => {
+    // 收集已有的 pending 文件名，用于去重
+    const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
+
     for (const file of files) {
       try {
         const base64 = await fileToBase64(file)
         const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
+        const uniqueFilename = makeUniqueFilename(file.name, usedNames)
+        usedNames.push(uniqueFilename)
 
         const pending: AgentPendingFile = {
           id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          filename: file.name,
+          filename: uniqueFilename,
           mediaType: file.type || 'application/octet-stream',
           size: file.size,
           previewUrl,
@@ -357,7 +381,7 @@ export function AgentView(): React.ReactElement {
         console.error('[AgentView] 添加附件失败:', error)
       }
     }
-  }, [setPendingFiles])
+  }, [makeUniqueFilename, setPendingFiles])
 
   /** 打开文件选择对话框 */
   const handleOpenFileDialog = React.useCallback(async (): Promise<void> => {
