@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -45,6 +45,8 @@ import type {
   EnvironmentCheckResult,
   ProxyConfig,
   SystemProxyDetectResult,
+  GitHubRelease,
+  GitHubReleaseListOptions,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -336,6 +338,11 @@ export interface ElectronAPI {
       error?: string
     }) => void) => () => void
   }
+
+  // GitHub Release
+  getLatestRelease: () => Promise<GitHubRelease | null>
+  listReleases: (options?: GitHubReleaseListOptions) => Promise<GitHubRelease[]>
+  getReleaseByTag: (tag: string) => Promise<GitHubRelease | null>
 }
 
 /**
@@ -702,6 +709,19 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('updater:status-changed', listener)
       return () => { ipcRenderer.removeListener('updater:status-changed', listener) }
     },
+  },
+
+  // GitHub Release
+  getLatestRelease: () => {
+    return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.GET_LATEST_RELEASE)
+  },
+
+  listReleases: (options) => {
+    return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.LIST_RELEASES, options)
+  },
+
+  getReleaseByTag: (tag) => {
+    return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG, tag)
   },
 }
 

@@ -5,7 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -39,6 +39,8 @@ import type {
   EnvironmentCheckResult,
   ProxyConfig,
   SystemProxyDetectResult,
+  GitHubRelease,
+  GitHubReleaseListOptions,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -99,6 +101,11 @@ import {
   getAgentWorkspace,
   deleteWorkspaceSkill,
 } from './lib/agent-workspace-manager'
+import {
+  getLatestRelease,
+  listReleases as listGitHubReleases,
+  getReleaseByTag,
+} from './lib/github-release-service'
 
 /**
  * 注册 IPC 处理器
@@ -761,6 +768,32 @@ export function registerIpcHandlers(): void {
       }
 
       shell.showItemInFolder(safePath)
+    }
+  )
+
+  // ===== GitHub Release =====
+
+  // 获取最新 Release
+  ipcMain.handle(
+    GITHUB_RELEASE_IPC_CHANNELS.GET_LATEST_RELEASE,
+    async (): Promise<GitHubRelease | null> => {
+      return getLatestRelease()
+    }
+  )
+
+  // 获取 Release 列表
+  ipcMain.handle(
+    GITHUB_RELEASE_IPC_CHANNELS.LIST_RELEASES,
+    async (_, options?: GitHubReleaseListOptions): Promise<GitHubRelease[]> => {
+      return listGitHubReleases(options)
+    }
+  )
+
+  // 获取指定版本的 Release
+  ipcMain.handle(
+    GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG,
+    async (_, tag: string): Promise<GitHubRelease | null> => {
+      return getReleaseByTag(tag)
     }
   )
 

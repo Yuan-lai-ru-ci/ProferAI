@@ -6,7 +6,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RefreshCw, Download, Loader2, CheckCircle2, AlertCircle, Info, Terminal } from 'lucide-react'
+import { RefreshCw, Download, Loader2, CheckCircle2, AlertCircle, Info, Terminal, ChevronDown, ChevronUp } from 'lucide-react'
 import type { EnvironmentCheckResult, RuntimeStatus } from '@proma/shared'
 import {
   SettingsSection,
@@ -21,6 +21,8 @@ import {
 import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { ReleaseNotesViewer } from './ReleaseNotesViewer'
+import { VersionHistory } from './VersionHistory'
 
 /** 从 package.json 构建时由 Vite define 注入 */
 declare const __APP_VERSION__: string
@@ -31,6 +33,8 @@ function UpdateCard(): React.ReactElement | null {
   const available = useAtomValue(updaterAvailableAtom)
   const status = useAtomValue(updateStatusAtom)
   const [checking, setChecking] = React.useState(false)
+  const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
+  const [release, setRelease] = React.useState<import('@proma/shared').GitHubRelease | null>(null)
 
   // updater 不可用时不渲染
   if (!available) return null
@@ -49,7 +53,26 @@ function UpdateCard(): React.ReactElement | null {
     await installUpdate()
   }
 
+  // 当检测到新版本时，获取完整的 release 信息
+  React.useEffect(() => {
+    if (status.status === 'available' && status.version && !release) {
+      // 从 GitHub 获取完整的 release 信息
+      window.electronAPI
+        .getReleaseByTag(`v${status.version}`)
+        .then((r) => {
+          if (r) {
+            setRelease(r)
+            setShowReleaseNotes(true)
+          }
+        })
+        .catch((err) => {
+          console.error('[更新] 获取 Release 信息失败:', err)
+        })
+    }
+  }, [status.status, status.version, release])
+
   const isChecking = checking || status.status === 'checking'
+  const hasReleaseNotes = status.releaseNotes || release?.body
 
   return (
     <SettingsCard>
@@ -96,6 +119,33 @@ function UpdateCard(): React.ReactElement | null {
           <p className="text-xs text-muted-foreground mt-1">
             下载中 {Math.round(status.progress.percent)}%
           </p>
+        </div>
+      )}
+
+      {/* Release Notes（新版本可用或已下载时显示） */}
+      {(status.status === 'available' || status.status === 'downloaded') && hasReleaseNotes && (
+        <div className="px-4 pb-4 border-t">
+          <button
+            onClick={() => setShowReleaseNotes(!showReleaseNotes)}
+            className="w-full flex items-center justify-between py-3 text-left hover:opacity-80 transition-opacity"
+          >
+            <span className="text-sm font-medium">更新日志</span>
+            {showReleaseNotes ? (
+              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            )}
+          </button>
+
+          {showReleaseNotes && release && (
+            <div className="mt-2">
+              <ReleaseNotesViewer
+                release={release}
+                showHeader={false}
+                compact
+              />
+            </div>
+          )}
         </div>
       )}
     </SettingsCard>
@@ -408,6 +458,9 @@ export function AboutSettings(): React.ReactElement {
 
       {/* 自动更新卡片（updater 不可用时不渲染） */}
       <UpdateCard />
+
+      {/* 版本历史 */}
+      <VersionHistory />
 
       {/* 环境检测卡片 */}
       <EnvironmentCard />
