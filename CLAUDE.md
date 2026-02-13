@@ -185,6 +185,26 @@ bun run generate:icons    # 生成应用图标
 - **开发热重载**：渲染进程 Vite HMR 即时生效；主进程/Preload 通过 electronmon 监听 dist 文件变化自动重启
 - **打包分发**：electron-builder（配置见 `electron-builder.yml`）
 
+### 重要：打包配置注意事项
+
+**Agent SDK 打包要求（必须遵守）：**
+- `@anthropic-ai/claude-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
+- electron-builder 的**平台特定** `extraResources` 配置会**覆盖通用配置**
+- **每个平台**（macOS、Windows、Linux）都必须在其 `extraResources` 中显式包含 SDK：
+  ```yaml
+  extraResources:
+    - from: node_modules/@anthropic-ai/claude-agent-sdk
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk
+      filter:
+        - "**/*"
+  ```
+- 如果缺少平台特定的 SDK 配置，会导致运行时错误：`Cannot find package '@anthropic-ai/claude-agent-sdk'`
+
+**修改打包配置时的检查清单：**
+1. ✅ 确认 SDK 在 esbuild 中使用 `--external` 参数
+2. ✅ 检查 `electron-builder.yml` 中所有平台的 `extraResources` 都包含 SDK
+3. ✅ 本地测试打包后的应用 Agent 功能是否正常
+
 ## 代码风格
 
 - 永远不要使用 `any` 类型 — 创建合适的 interface
