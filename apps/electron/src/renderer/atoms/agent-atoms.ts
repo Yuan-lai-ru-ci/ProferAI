@@ -46,6 +46,13 @@ export interface AgentStreamState {
   contextWindow?: number
   /** 是否正在压缩上下文 */
   isCompacting?: boolean
+  /** 重试状态 */
+  retrying?: {
+    attempt: number
+    maxAttempts: number
+    delaySeconds: number
+    reason: string
+  }
 }
 
 /** 从 ToolActivity 派生状态 */
@@ -192,6 +199,12 @@ export const agentStreamingModelAtom = atom<string | undefined>((get) => {
   return get(agentStreamingStatesAtom).get(currentId)?.model
 })
 
+export const agentRetryingAtom = atom<AgentStreamState['retrying'] | undefined>((get) => {
+  const currentId = get(currentAgentSessionIdAtom)
+  if (!currentId) return undefined
+  return get(agentStreamingStatesAtom).get(currentId)?.retrying
+})
+
 export const agentRunningSessionIdsAtom = atom<Set<string>>((get) => {
   const states = get(agentStreamingStatesAtom)
   const ids = new Set<string>()
@@ -210,7 +223,8 @@ export function applyAgentEvent(
 ): AgentStreamState {
   switch (event.type) {
     case 'text_delta':
-      return { ...prev, content: prev.content + event.text }
+      // 开始接收文本 - 清除重试状态（重试成功）
+      return { ...prev, content: prev.content + event.text, retrying: undefined }
 
     case 'text_complete':
       return prev
@@ -225,6 +239,8 @@ export function applyAgentEvent(
               ? { ...t, input: event.input, intent: event.intent || t.intent, displayName: event.displayName || t.displayName }
               : t
           ),
+          // 开始工具调用 - 清除重试状态（重试成功）
+          retrying: undefined,
         }
       }
       return {
@@ -238,6 +254,8 @@ export function applyAgentEvent(
           done: false,
           parentToolUseId: event.parentToolUseId,
         }],
+        // 开始工具调用 - 清除重试状态（重试成功）
+        retrying: undefined,
       }
     }
 
@@ -302,6 +320,17 @@ export function applyAgentEvent(
 
     case 'compact_complete':
       return { ...prev, isCompacting: false }
+
+    case 'retrying':
+      return {
+        ...prev,
+        retrying: {
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delaySeconds: event.delaySeconds,
+          reason: event.reason,
+        },
+      }
 
     default:
       return prev

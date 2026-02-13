@@ -84,7 +84,7 @@ import {
   updateAgentSessionMeta,
   deleteAgentSession,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession } from './lib/agent-service'
+import { runAgentWithRetry, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession } from './lib/agent-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir } from './lib/config-paths'
 import {
   listAgentWorkspaces,
@@ -610,11 +610,11 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 发送 Agent 消息（触发 Agent SDK 流式响应）
+  // 发送 Agent 消息（触发 Agent SDK 流式响应，带自动重试）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
-      await runAgent(input, event.sender)
+      await runAgentWithRetry(input, event.sender)
     }
   )
 

@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, FileText, FileImage } from 'lucide-react'
+import { Bot, FileText, FileImage, RotateCw } from 'lucide-react'
 import {
   Message,
   MessageHeader,
@@ -35,10 +35,11 @@ import {
   agentStreamingContentAtom,
   agentToolActivitiesAtom,
   agentStreamingModelAtom,
+  agentRetryingAtom,
 } from '@/atoms/agent-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import type { AgentMessage } from '@proma/shared'
-import type { ToolActivity } from '@/atoms/agent-atoms'
+import type { ToolActivity, AgentStreamState } from '@/atoms/agent-atoms'
 
 function EmptyState(): React.ReactElement {
   return (
@@ -170,6 +171,18 @@ function AttachedFileChip({ file }: { file: AttachedFileRef }): React.ReactEleme
   )
 }
 
+/** 重试提示组件 - 简洁版 */
+function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['retrying']> }): React.ReactElement {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3 px-1">
+      <RotateCw className="size-3 animate-spin opacity-60" />
+      <span>
+        重试中 ({retrying.attempt}/{retrying.maxAttempts}) · {retrying.reason}
+      </span>
+    </div>
+  )
+}
+
 function AgentMessageItem({ message }: { message: AgentMessage }): React.ReactElement | null {
   const userProfile = useAtomValue(userProfileAtom)
 
@@ -246,6 +259,7 @@ export function AgentMessages(): React.ReactElement {
   const streamingContent = useAtomValue(agentStreamingContentAtom)
   const toolActivities = useAtomValue(agentToolActivitiesAtom)
   const agentStreamingModel = useAtomValue(agentStreamingModelAtom)
+  const retrying = useAtomValue(agentRetryingAtom)
 
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,
@@ -263,7 +277,7 @@ export function AgentMessages(): React.ReactElement {
               <AgentMessageItem key={msg.id} message={msg} />
             ))}
 
-            {(streaming || smoothContent || toolActivities.length > 0) && (
+            {(streaming || smoothContent || toolActivities.length > 0 || retrying) && (
               <Message from="assistant">
                 <MessageHeader
                   model={agentStreamingModel}
@@ -271,6 +285,7 @@ export function AgentMessages(): React.ReactElement {
                   logo={<AssistantLogo model={agentStreamingModel} />}
                 />
                 <MessageContent>
+                  {retrying && <RetryingNotice retrying={retrying} />}
                   {toolActivities.length > 0 && (
                     <div className="mb-3">
                       <ToolActivityList activities={toolActivities} animate />
@@ -282,7 +297,7 @@ export function AgentMessages(): React.ReactElement {
                       {streaming && <StreamingIndicator />}
                     </>
                   ) : (
-                    streaming && toolActivities.length === 0 && <MessageLoading />
+                    streaming && toolActivities.length === 0 && !retrying && <MessageLoading />
                   )}
                 </MessageContent>
               </Message>
