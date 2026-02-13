@@ -189,21 +189,27 @@ bun run generate:icons    # 生成应用图标
 
 **Agent SDK 打包要求（必须遵守）：**
 - `@anthropic-ai/claude-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
-- electron-builder 的**平台特定** `extraResources` 配置会**覆盖通用配置**
-- **每个平台**（macOS、Windows、Linux）都必须在其 `extraResources` 中显式包含 SDK：
+- SDK 必须通过 electron-builder 的 `files` 配置包含到应用中，而不是 `extraResources`
+- 在 `electron-builder.yml` 的 `files` 配置中添加：
   ```yaml
-  extraResources:
-    - from: node_modules/@anthropic-ai/claude-agent-sdk
-      to: app/node_modules/@anthropic-ai/claude-agent-sdk
-      filter:
-        - "**/*"
+  files:
+    - dist/**/*
+    - package.json
+    - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+    - "!node_modules/@proma/**"
   ```
-- 如果缺少平台特定的 SDK 配置，会导致运行时错误：`Cannot find package '@anthropic-ai/claude-agent-sdk'`
+- 这样 SDK 会被复制到 `app/node_modules/@anthropic-ai/claude-agent-sdk`，与 dist 和 package.json 同级
+- Node.js 的模块解析会从 `app/dist/main.cjs` 向上查找，能正确找到 `app/node_modules/` 下的 SDK
+
+**为什么不使用 extraResources：**
+- `extraResources` 会将文件复制到 `Contents/Resources/` 目录
+- 使用 `to: app/node_modules/...` 路径时，Node.js 模块解析可能无法正确找到
+- 直接使用 `files` 配置更简单可靠，确保 SDK 在正确的 node_modules 路径下
 
 **修改打包配置时的检查清单：**
 1. ✅ 确认 SDK 在 esbuild 中使用 `--external` 参数
-2. ✅ 检查 `electron-builder.yml` 中所有平台的 `extraResources` 都包含 SDK
-3. ✅ 本地测试打包后的应用 Agent 功能是否正常
+2. ✅ 确认 SDK 在 `files` 配置中被正确包含
+3. ✅ 本地测试打包后的应用 Agent 功能（使用 `CSC_IDENTITY_AUTO_DISCOVERY=false bunx electron-builder --mac --dir` 快速测试）
 
 ## 代码风格
 
