@@ -3,12 +3,14 @@
  *
  * 负责协调所有运行时初始化逻辑，包括：
  * 1. Shell 环境加载（macOS）
- * 2. Bun 运行时检测
- * 3. Git 运行时检测
+ * 2. Node.js 运行时检测
+ * 3. Bun 运行时检测
+ * 4. Git 运行时检测
  */
 
 import type { RuntimeStatus, RuntimeInitOptions } from '@proma/shared'
 import { loadShellEnv } from './shell-env'
+import { detectNodeRuntime } from './node-detector'
 import { detectBunRuntime } from './bun-finder'
 import { detectGitRuntime, getGitRepoStatus } from './git-detector'
 
@@ -23,8 +25,9 @@ let isInitialized = false
  *
  * 按顺序执行：
  * 1. loadShellEnv() - 加载 Shell 环境（仅 macOS 打包环境）
- * 2. detectBunRuntime() - 检测 Bun 运行时
- * 3. detectGitRuntime() - 检测 Git 运行时
+ * 2. detectNodeRuntime() - 检测 Node.js 运行时
+ * 3. detectBunRuntime() - 检测 Bun 运行时
+ * 4. detectGitRuntime() - 检测 Git 运行时
  *
  * @param options - 初始化选项
  * @returns 运行时状态
@@ -46,7 +49,17 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
     }
   }
 
-  // 2. 检测 Bun 运行时
+  // 2. 检测 Node.js 运行时
+  const nodeStatus = options.skipNodeDetection
+    ? {
+        available: false,
+        path: null,
+        version: null,
+        error: '已跳过 Node.js 检测',
+      }
+    : await detectNodeRuntime()
+
+  // 3. 检测 Bun 运行时
   const bunStatus = options.skipBunDetection
     ? {
         available: false,
@@ -57,7 +70,7 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
       }
     : await detectBunRuntime()
 
-  // 3. 检测 Git 运行时
+  // 4. 检测 Git 运行时
   const gitStatus = options.skipGitDetection
     ? {
         available: false,
@@ -69,6 +82,7 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
 
   // 构建运行时状态
   const runtimeStatus: RuntimeStatus = {
+    node: nodeStatus,
     bun: bunStatus,
     git: gitStatus,
     envLoaded,
@@ -82,6 +96,7 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
   const duration = Date.now() - startTime
   console.log(`[运行时初始化] 初始化完成 (耗时 ${duration}ms)`)
   console.log('[运行时初始化] 状态:', {
+    node: nodeStatus.available ? `✅ ${nodeStatus.version}` : `❌ ${nodeStatus.error}`,
     bun: bunStatus.available ? `✅ ${bunStatus.version} (${bunStatus.source})` : `❌ ${bunStatus.error}`,
     git: gitStatus.available ? `✅ ${gitStatus.version}` : `❌ ${gitStatus.error}`,
     envLoaded: envLoaded ? '✅' : '⚠️ 未加载或不需要',
@@ -122,5 +137,6 @@ export async function reinitializeRuntime(options: RuntimeInitOptions = {}): Pro
 
 // 重新导出子模块的函数，方便外部使用
 export { getGitRepoStatus } from './git-detector'
+export { detectNodeRuntime } from './node-detector'
 export { detectBunRuntime } from './bun-finder'
 export { loadShellEnv } from './shell-env'

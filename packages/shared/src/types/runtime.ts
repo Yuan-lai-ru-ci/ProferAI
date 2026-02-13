@@ -55,6 +55,20 @@ export interface BunRuntimeStatus {
 }
 
 /**
+ * Node.js 运行时状态
+ */
+export interface NodeRuntimeStatus {
+  /** 是否可用 */
+  available: boolean
+  /** Node.js 版本号 */
+  version: string | null
+  /** Node.js 可执行路径 */
+  path: string | null
+  /** 错误信息（如果不可用）*/
+  error: string | null
+}
+
+/**
  * Git 运行时状态
  */
 export interface GitRuntimeStatus {
@@ -86,6 +100,8 @@ export interface GitRepoStatus {
  * 完整运行时状态
  */
 export interface RuntimeStatus {
+  /** Node.js 运行时状态 */
+  node: NodeRuntimeStatus
   /** Bun 运行时状态 */
   bun: BunRuntimeStatus
   /** Git 运行时状态 */
@@ -102,6 +118,8 @@ export interface RuntimeStatus {
 export interface RuntimeInitOptions {
   /** 是否跳过 Shell 环境加载（用于测试或特殊场景）*/
   skipEnvLoad?: boolean
+  /** 是否跳过 Node.js 检测 */
+  skipNodeDetection?: boolean
   /** 是否跳过 Bun 检测 */
   skipBunDetection?: boolean
   /** 是否跳过 Git 检测 */
