@@ -12,6 +12,7 @@ import {
   Message,
   MessageHeader,
   MessageContent,
+  MessageActions,
   MessageLoading,
   MessageResponse,
   StreamingIndicator,
@@ -24,6 +25,7 @@ import {
 } from '@/components/ai-elements/conversation'
 import { useSmoothStream } from '@proma/ui'
 import { UserAvatar } from '@/components/chat/UserAvatar'
+import { CopyButton } from '@/components/chat/CopyButton'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
@@ -195,6 +197,12 @@ function AgentMessageItem({ message }: { message: AgentMessage }): React.ReactEl
             <UserMessageContent>{messageText}</UserMessageContent>
           )}
         </MessageContent>
+        {/* 操作按钮（hover 时可见） */}
+        {messageText && (
+          <MessageActions className="pl-[46px] mt-0.5">
+            <CopyButton content={messageText} />
+          </MessageActions>
+        )}
       </Message>
     )
   }
@@ -219,6 +227,12 @@ function AgentMessageItem({ message }: { message: AgentMessage }): React.ReactEl
             <MessageResponse>{message.content}</MessageResponse>
           )}
         </MessageContent>
+        {/* 操作按钮（hover 时可见） */}
+        {message.content && (
+          <MessageActions className="pl-[46px] mt-0.5">
+            <CopyButton content={message.content} />
+          </MessageActions>
+        )}
       </Message>
     )
   }

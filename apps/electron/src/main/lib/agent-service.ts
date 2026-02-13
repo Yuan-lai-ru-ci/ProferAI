@@ -917,18 +917,27 @@ export async function runAgent(
     const errorStack = error instanceof Error ? error.stack : undefined
     console.error(`[Agent 服务] 执行失败:`, error)
 
+    // 诊断信息：检查累积状态
+    console.log(`[Agent 服务][诊断] 累积状态 - 文本长度: ${accumulatedText.length}, 事件数: ${accumulatedEvents.length}`)
+
     // 保存已累积的部分内容（避免数据丢失）
     if (accumulatedText || accumulatedEvents.length > 0) {
-      const partialMsg: AgentMessage = {
-        id: randomUUID(),
-        role: 'assistant',
-        content: accumulatedText,
-        createdAt: Date.now(),
-        model: resolvedModel,
-        events: accumulatedEvents,
+      try {
+        const partialMsg: AgentMessage = {
+          id: randomUUID(),
+          role: 'assistant',
+          content: accumulatedText,
+          createdAt: Date.now(),
+          model: resolvedModel,
+          events: accumulatedEvents,
+        }
+        appendAgentMessage(sessionId, partialMsg)
+        console.log(`[Agent 服务] ✓ 已保存部分执行结果 (${accumulatedText.length} 字符, ${accumulatedEvents.length} 事件)`)
+      } catch (saveError) {
+        console.error('[Agent 服务] ✗ 保存部分内容失败:', saveError)
       }
-      appendAgentMessage(sessionId, partialMsg)
-      console.log(`[Agent 服务] 已保存部分执行结果 (${accumulatedText.length} 字符, ${accumulatedEvents.length} 事件)`)
+    } else {
+      console.log('[Agent 服务] 无部分内容可保存（累积为空）')
     }
 
     // 构建包含详细诊断信息的错误消息

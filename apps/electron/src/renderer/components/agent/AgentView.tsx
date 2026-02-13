@@ -218,14 +218,20 @@ export function AgentView(): React.ReactElement {
         const finalize = (): void => removeState(data.sessionId)
 
         if (data.sessionId === currentSessionIdRef.current) {
+          console.log('[AgentView][诊断] 错误发生在当前会话，重新加载消息...')
           window.electronAPI
             .getAgentSessionMessages(data.sessionId)
             .then((messages) => {
+              console.log(`[AgentView][诊断] 已加载 ${messages.length} 条消息`)
               setCurrentMessages(messages)
               finalize()
             })
-            .catch(() => finalize())
+            .catch((error) => {
+              console.error('[AgentView][诊断] 加载消息失败:', error)
+              finalize()
+            })
         } else {
+          console.log('[AgentView][诊断] 错误发生在后台会话，不重新加载')
           finalize()
         }
       }
