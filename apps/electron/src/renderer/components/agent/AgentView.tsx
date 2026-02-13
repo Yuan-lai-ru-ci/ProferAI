@@ -768,6 +768,7 @@ export function AgentView(): React.ReactElement {
                   : '请先在设置中选择 Agent 供应商'
               }
               disabled={!agentChannelId}
+              autoFocusTrigger={currentSessionId}
             />
 
             {/* Footer 工具栏 */}
