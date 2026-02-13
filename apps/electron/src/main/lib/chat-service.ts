@@ -25,6 +25,8 @@ import { listChannels, decryptApiKey } from './channel-manager'
 import { appendMessage, updateConversationMeta, getConversationMessages } from './conversation-manager'
 import { readAttachmentAsBase64, isImageAttachment } from './attachment-service'
 import { extractTextFromAttachment, isDocumentAttachment } from './document-parser'
+import { getFetchFn } from './proxy-fetch'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
@@ -252,10 +254,14 @@ export async function sendMessage(
       thinkingEnabled,
     })
 
+    const proxyUrl = await getEffectiveProxyUrl()
+    const fetchFn = getFetchFn(proxyUrl)
+
     const { content, reasoning } = await streamSSE({
       request,
       adapter,
       signal: controller.signal,
+      fetchFn,
       onEvent: (event) => {
         switch (event.type) {
           case 'chunk':
@@ -424,7 +430,9 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
       prompt: TITLE_PROMPT + userMessage,
     })
 
-    const title = await fetchTitle(request, adapter)
+    const proxyUrl = await getEffectiveProxyUrl()
+    const fetchFn = getFetchFn(proxyUrl)
+    const title = await fetchTitle(request, adapter, fetchFn)
     if (!title) return null
 
     // 截断到最大长度并清理引号

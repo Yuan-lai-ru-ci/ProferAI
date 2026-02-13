@@ -5,7 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -37,6 +37,8 @@ import type {
   WorkspaceCapabilities,
   FileEntry,
   EnvironmentCheckResult,
+  ProxyConfig,
+  SystemProxyDetectResult,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -73,6 +75,8 @@ import { extractTextFromAttachment } from './lib/document-parser'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
 import { checkEnvironment } from './lib/environment-checker'
+import { getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
+import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
   listAgentSessions,
   createAgentSession,
@@ -448,6 +452,32 @@ export function registerIpcHandlers(): void {
         lastEnvironmentCheck: result,
       })
       return result
+    }
+  )
+
+  // ===== 代理配置相关 =====
+
+  // 获取代理配置
+  ipcMain.handle(
+    PROXY_IPC_CHANNELS.GET_SETTINGS,
+    async (): Promise<ProxyConfig> => {
+      return getProxySettings()
+    }
+  )
+
+  // 更新代理配置
+  ipcMain.handle(
+    PROXY_IPC_CHANNELS.UPDATE_SETTINGS,
+    async (_, config: ProxyConfig): Promise<void> => {
+      await saveProxySettings(config)
+    }
+  )
+
+  // 检测系统代理
+  ipcMain.handle(
+    PROXY_IPC_CHANNELS.DETECT_SYSTEM,
+    async (): Promise<SystemProxyDetectResult> => {
+      return detectSystemProxy()
     }
   )
 

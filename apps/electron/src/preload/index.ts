@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -43,6 +43,8 @@ import type {
   WorkspaceCapabilities,
   FileEntry,
   EnvironmentCheckResult,
+  ProxyConfig,
+  SystemProxyDetectResult,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -189,6 +191,17 @@ export interface ElectronAPI {
 
   /** 执行环境检测 */
   checkEnvironment: () => Promise<EnvironmentCheckResult>
+
+  // ===== 代理配置相关 =====
+
+  /** 获取代理配置 */
+  getProxySettings: () => Promise<ProxyConfig>
+
+  /** 更新代理配置 */
+  updateProxySettings: (config: ProxyConfig) => Promise<void>
+
+  /** 检测系统代理 */
+  detectSystemProxy: () => Promise<SystemProxyDetectResult>
 
   // ===== 流式事件订阅（返回清理函数） =====
 
@@ -495,6 +508,19 @@ const electronAPI: ElectronAPI = {
   // 环境检测
   checkEnvironment: () => {
     return ipcRenderer.invoke(ENVIRONMENT_IPC_CHANNELS.CHECK)
+  },
+
+  // 代理配置
+  getProxySettings: () => {
+    return ipcRenderer.invoke(PROXY_IPC_CHANNELS.GET_SETTINGS)
+  },
+
+  updateProxySettings: (config: ProxyConfig) => {
+    return ipcRenderer.invoke(PROXY_IPC_CHANNELS.UPDATE_SETTINGS, config)
+  },
+
+  detectSystemProxy: () => {
+    return ipcRenderer.invoke(PROXY_IPC_CHANNELS.DETECT_SYSTEM)
   },
 
   // 流式事件订阅
