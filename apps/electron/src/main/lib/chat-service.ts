@@ -403,6 +403,7 @@ const MAX_TITLE_LENGTH = 20
  */
 export async function generateTitle(input: GenerateTitleInput): Promise<string | null> {
   const { userMessage, channelId, modelId } = input
+  console.log('[标题生成] 开始生成标题:', { channelId, modelId, userMessage: userMessage.slice(0, 50) })
 
   // 查找渠道
   const channels = listChannels()
@@ -433,11 +434,16 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
     const proxyUrl = await getEffectiveProxyUrl()
     const fetchFn = getFetchFn(proxyUrl)
     const title = await fetchTitle(request, adapter, fetchFn)
-    if (!title) return null
+    if (!title) {
+      console.warn('[标题生成] API 返回空标题')
+      return null
+    }
 
     // 截断到最大长度并清理引号
     const cleaned = title.trim().replace(/^["'""'']+|["'""'']+$/g, '').trim()
-    return cleaned.slice(0, MAX_TITLE_LENGTH) || null
+    const result = cleaned.slice(0, MAX_TITLE_LENGTH) || null
+    console.log('[标题生成] 成功生成标题:', result)
+    return result
   } catch (error) {
     console.warn('[标题生成] 请求失败:', error)
     return null
