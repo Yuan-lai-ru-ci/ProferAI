@@ -32,7 +32,7 @@ import {
   agentStreamingAtom,
   agentStreamingContentAtom,
   agentToolActivitiesAtom,
-  agentModelIdAtom,
+  agentStreamingModelAtom,
 } from '@/atoms/agent-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import type { AgentMessage } from '@proma/shared'
@@ -231,7 +231,7 @@ export function AgentMessages(): React.ReactElement {
   const streaming = useAtomValue(agentStreamingAtom)
   const streamingContent = useAtomValue(agentStreamingContentAtom)
   const toolActivities = useAtomValue(agentToolActivitiesAtom)
-  const agentModelId = useAtomValue(agentModelIdAtom)
+  const agentStreamingModel = useAtomValue(agentStreamingModelAtom)
 
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,
@@ -252,9 +252,9 @@ export function AgentMessages(): React.ReactElement {
             {(streaming || smoothContent || toolActivities.length > 0) && (
               <Message from="assistant">
                 <MessageHeader
-                  model={agentModelId || undefined}
+                  model={agentStreamingModel}
                   time={formatMessageTime(Date.now())}
-                  logo={<AssistantLogo model={agentModelId || undefined} />}
+                  logo={<AssistantLogo model={agentStreamingModel} />}
                 />
                 <MessageContent>
                   {toolActivities.length > 0 && (

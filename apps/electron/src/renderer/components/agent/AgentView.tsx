@@ -185,7 +185,7 @@ export function AgentView(): React.ReactElement {
       updater: (prev: AgentStreamState) => AgentStreamState,
     ): void => {
       setStreamingStates((prev) => {
-        const current = prev.get(sessionId) ?? { running: true, content: '', toolActivities: [] }
+        const current = prev.get(sessionId) ?? { running: true, content: '', toolActivities: [], model: undefined }
         const next = updater(current)
         const map = new Map(prev)
         map.set(sessionId, next)
@@ -296,7 +296,12 @@ export function AgentView(): React.ReactElement {
       // 初始化流式状态
       setStreamingStates((prev) => {
         const map = new Map(prev)
-        map.set(currentSessionId, { running: true, content: '', toolActivities: [] })
+        map.set(currentSessionId, {
+          running: true,
+          content: '',
+          toolActivities: [],
+          model: agentModelId || undefined,
+        })
         return map
       })
 
@@ -575,7 +580,12 @@ export function AgentView(): React.ReactElement {
     // 初始化流式状态
     setStreamingStates((prev) => {
       const map = new Map(prev)
-      map.set(currentSessionId, { running: true, content: '', toolActivities: [] })
+      map.set(currentSessionId, {
+        running: true,
+        content: '',
+        toolActivities: [],
+        model: agentModelId || undefined,
+      })
       return map
     })
 
@@ -631,7 +641,12 @@ export function AgentView(): React.ReactElement {
     // 初始化流式状态
     setStreamingStates((prev) => {
       const map = new Map(prev)
-      const current = prev.get(currentSessionId) ?? { running: true, content: '', toolActivities: [] }
+      const current = prev.get(currentSessionId) ?? {
+        running: true,
+        content: '',
+        toolActivities: [],
+        model: agentModelId || undefined,
+      }
       map.set(currentSessionId, { ...current, running: true })
       return map
     })
