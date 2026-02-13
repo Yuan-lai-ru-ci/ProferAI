@@ -959,14 +959,33 @@ export function stopAllAgents(): void {
 export function saveFilesToAgentSession(input: AgentSaveFilesInput): AgentSavedFile[] {
   const sessionDir = getAgentSessionWorkspacePath(input.workspaceSlug, input.sessionId)
   const results: AgentSavedFile[] = []
+  const usedPaths = new Set<string>()
 
   for (const file of input.files) {
-    const targetPath = join(sessionDir, file.filename)
+    let targetPath = join(sessionDir, file.filename)
+
+    // 防止同名文件覆盖：若路径已存在或本批次已使用，则追加序号
+    if (usedPaths.has(targetPath) || existsSync(targetPath)) {
+      const dotIdx = file.filename.lastIndexOf('.')
+      const baseName = dotIdx > 0 ? file.filename.slice(0, dotIdx) : file.filename
+      const ext = dotIdx > 0 ? file.filename.slice(dotIdx) : ''
+      let counter = 1
+      let candidate = join(sessionDir, `${baseName}-${counter}${ext}`)
+      while (usedPaths.has(candidate) || existsSync(candidate)) {
+        counter++
+        candidate = join(sessionDir, `${baseName}-${counter}${ext}`)
+      }
+      targetPath = candidate
+    }
+    usedPaths.add(targetPath)
+
     // 确保父目录存在（支持 filename 包含子路径，如 "subdir/file.txt"）
     mkdirSync(dirname(targetPath), { recursive: true })
     const buffer = Buffer.from(file.data, 'base64')
     writeFileSync(targetPath, buffer)
-    results.push({ filename: file.filename, targetPath })
+
+    const actualFilename = targetPath.slice(sessionDir.length + 1)
+    results.push({ filename: actualFilename, targetPath })
     console.log(`[Agent 服务] 文件已保存: ${targetPath} (${buffer.length} bytes)`)
   }
 

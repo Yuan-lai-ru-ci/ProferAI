@@ -13,7 +13,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -131,6 +131,12 @@ export function AgentView(): React.ReactElement {
   React.useEffect(() => {
     currentSessionIdRef.current = currentSessionId
   }, [currentSessionId])
+
+  // pendingFiles ref（供 addFilesAsAttachments 读取最新列表，避免闭包旧值）
+  const pendingFilesRef = React.useRef(pendingFiles)
+  React.useEffect(() => {
+    pendingFilesRef.current = pendingFiles
+  }, [pendingFiles])
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
   React.useEffect(() => {
@@ -337,16 +343,34 @@ export function AgentView(): React.ReactElement {
 
   // ===== 附件处理 =====
 
+  /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
+  const makeUniqueFilename = React.useCallback((originalName: string, existingNames: string[]): string => {
+    if (!existingNames.includes(originalName)) return originalName
+    const dotIdx = originalName.lastIndexOf('.')
+    const baseName = dotIdx > 0 ? originalName.slice(0, dotIdx) : originalName
+    const ext = dotIdx > 0 ? originalName.slice(dotIdx) : ''
+    let counter = 1
+    while (existingNames.includes(`${baseName}-${counter}${ext}`)) {
+      counter++
+    }
+    return `${baseName}-${counter}${ext}`
+  }, [])
+
   /** 将 File 对象列表添加为待发送附件 */
   const addFilesAsAttachments = React.useCallback(async (files: File[]): Promise<void> => {
+    // 收集已有的 pending 文件名，用于去重
+    const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
+
     for (const file of files) {
       try {
         const base64 = await fileToBase64(file)
         const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
+        const uniqueFilename = makeUniqueFilename(file.name, usedNames)
+        usedNames.push(uniqueFilename)
 
         const pending: AgentPendingFile = {
           id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          filename: file.name,
+          filename: uniqueFilename,
           mediaType: file.type || 'application/octet-stream',
           size: file.size,
           previewUrl,
@@ -362,7 +386,7 @@ export function AgentView(): React.ReactElement {
         console.error('[AgentView] 添加附件失败:', error)
       }
     }
-  }, [setPendingFiles])
+  }, [makeUniqueFilename, setPendingFiles])
 
   /** 打开文件选择对话框 */
   const handleOpenFileDialog = React.useCallback(async (): Promise<void> => {
@@ -684,10 +708,7 @@ export function AgentView(): React.ReactElement {
       {/* 主内容区域 */}
       <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
-        <AgentHeader
-          onToggleFileBrowser={() => setFileBrowserOpen((prev) => !prev)}
-          fileBrowserOpen={fileBrowserOpen}
-        />
+        <AgentHeader />
 
         {/* 消息区域 */}
         <AgentMessages />
@@ -873,13 +894,50 @@ export function AgentView(): React.ReactElement {
         </div>
       </div>
 
-      {/* 文件浏览器侧面板 */}
-      {fileBrowserOpen && sessionPath && (
-        <div className="w-[300px] border-l flex-shrink-0">
-          <FileBrowser
-            rootPath={sessionPath}
-            onClose={() => setFileBrowserOpen(false)}
-          />
+      {/* 文件浏览器侧栏 — 始终渲染同一个切换按钮 */}
+      {sessionPath && (
+        <div
+          className={cn(
+            'relative flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden',
+            fileBrowserOpen ? 'w-[300px] border-l' : 'w-10'
+          )}
+        >
+          {/* 切换按钮 — 始终固定在右上角，同一个 DOM 元素 */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-2.5 top-2.5 z-10 h-7 w-7"
+                onClick={() => setFileBrowserOpen((prev) => !prev)}
+              >
+                <FolderOpen
+                  className={cn(
+                    'size-3.5 absolute transition-all duration-200',
+                    fileBrowserOpen ? 'opacity-0 rotate-90 scale-75' : 'opacity-100 rotate-0 scale-100'
+                  )}
+                />
+                <X
+                  className={cn(
+                    'size-3.5 absolute transition-all duration-200',
+                    fileBrowserOpen ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 -rotate-90 scale-75'
+                  )}
+                />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              <p>{fileBrowserOpen ? '关闭文件浏览器' : '打开文件浏览器'}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* FileBrowser 内容 — 收起时隐藏 */}
+          <div className={cn(
+            'w-[300px] h-full transition-opacity duration-300',
+            fileBrowserOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          )}>
+            <FileBrowser rootPath={sessionPath} />
+          </div>
         </div>
       )}
     </div>

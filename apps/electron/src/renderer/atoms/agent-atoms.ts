@@ -95,7 +95,12 @@ function mergeTodoWrites(activities: ToolActivity[]): ToolActivity[] {
  * 每层内 TodoWrite 合并去重并置底。
  */
 export function groupActivities(activities: ToolActivity[]): Array<ActivityGroup | ToolActivity> {
-  const processed = mergeTodoWrites(activities)
+  // 过滤幽灵条目：tool_progress 创建的空 input 条目，完成后仍无内容
+  const filtered = activities.filter((a) => {
+    if (a.done && Object.keys(a.input).length === 0 && !a.result) return false
+    return true
+  })
+  const processed = mergeTodoWrites(filtered)
 
   const parentIds = new Set<string>()
   for (const a of processed) {
