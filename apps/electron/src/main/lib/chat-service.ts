@@ -211,7 +211,10 @@ export async function sendMessage(
     return
   }
 
-  // 3. 追加用户消息到 JSONL
+  // 3. 先读取历史消息（在追加用户消息之前，避免 adapter 重复发送当前消息）
+  const fullHistory = getConversationMessages(conversationId)
+
+  // 4. 追加用户消息到 JSONL
   const userMsg: ChatMessage = {
     id: randomUUID(),
     role: 'user',
@@ -221,11 +224,8 @@ export async function sendMessage(
   }
   appendMessage(conversationId, userMsg)
 
-  // 4. 从磁盘读取完整消息历史（不依赖前端传入，确保上下文完整）
-  const fullHistory = getConversationMessages(conversationId)
+  // 5. 过滤历史并提取文档附件文本
   const filteredHistory = filterHistory(fullHistory, contextDividers, contextLength)
-
-  // 5. 提取文档附件文本，注入到消息内容中
   const enrichedHistory = await enrichHistoryWithDocuments(filteredHistory)
   const enrichedUserMessage = await enrichMessageWithDocuments(userMessage, attachments)
 
