@@ -30,12 +30,14 @@ export function ChannelSettings(): React.ReactElement {
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
 
   /** 加载渠道列表 */
-  const loadChannels = React.useCallback(async () => {
+  const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
     try {
       const list = await window.electronAPI.listChannels()
       setChannels(list)
+      return list
     } catch (error) {
       console.error('[渠道设置] 加载渠道列表失败:', error)
+      return []
     } finally {
       setLoading(false)
     }
@@ -77,7 +79,9 @@ export function ChannelSettings(): React.ReactElement {
         await window.electronAPI.updateSettings({ agentChannelId: undefined, agentModelId: undefined })
       }
 
-      await loadChannels()
+      // 加载最新渠道列表并检查是否需要自动选择
+      const updatedChannels = await loadChannels()
+      await checkAndAutoSelectAgentChannel(updatedChannels)
     } catch (error) {
       console.error('[渠道设置] 切换渠道状态失败:', error)
     }
@@ -94,11 +98,36 @@ export function ChannelSettings(): React.ReactElement {
     }
   }
 
+  /** 检查并自动选择 Agent 渠道 */
+  const checkAndAutoSelectAgentChannel = async (channels: Channel[]): Promise<void> => {
+    // 获取可用的 Anthropic 渠道
+    const availableAnthropicChannels = channels.filter(
+      (c) => c.provider === 'anthropic' && c.enabled
+    )
+
+    // 如果当前没有选择 Agent 渠道，或当前选择的渠道不可用，自动选择第一个可用渠道
+    const currentAgentChannel = agentChannelId
+      ? channels.find((c) => c.id === agentChannelId)
+      : null
+    const shouldAutoSelect =
+      !agentChannelId || // 没有选择
+      !currentAgentChannel || // 选择的渠道不存在
+      !currentAgentChannel.enabled || // 选择的渠道已禁用
+      currentAgentChannel.provider !== 'anthropic' // 选择的不是 Anthropic 渠道
+
+    if (shouldAutoSelect && availableAnthropicChannels.length > 0) {
+      await handleSelectAgentProvider(availableAnthropicChannels[0].id)
+    }
+  }
+
   /** 表单保存回调 */
-  const handleFormSaved = (): void => {
+  const handleFormSaved = async (): Promise<void> => {
     setViewMode('list')
     setEditingChannel(null)
-    loadChannels()
+
+    // 加载最新渠道列表并检查是否需要自动选择
+    const updatedChannels = await loadChannels()
+    await checkAndAutoSelectAgentChannel(updatedChannels)
   }
 
   /** 取消表单 */
