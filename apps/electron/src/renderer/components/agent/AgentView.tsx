@@ -59,50 +59,6 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
-/** 递归读取 FileSystemDirectoryEntry 中所有文件 */
-function readDirectoryRecursive(
-  dirEntry: FileSystemDirectoryEntry,
-  basePath: string,
-): Promise<Array<{ relativePath: string; file: File }>> {
-  return new Promise((resolve, reject) => {
-    const results: Array<{ relativePath: string; file: File }> = []
-    const reader = dirEntry.createReader()
-
-    const readBatch = (): void => {
-      reader.readEntries(
-        async (entries) => {
-          if (entries.length === 0) {
-            resolve(results)
-            return
-          }
-
-          for (const entry of entries) {
-            if (entry.isFile) {
-              const fileEntry = entry as FileSystemFileEntry
-              const file = await new Promise<File>((res, rej) => {
-                fileEntry.file(res, rej)
-              })
-              results.push({ relativePath: `${basePath}/${entry.name}`, file })
-            } else if (entry.isDirectory) {
-              const subResults = await readDirectoryRecursive(
-                entry as FileSystemDirectoryEntry,
-                `${basePath}/${entry.name}`,
-              )
-              results.push(...subResults)
-            }
-          }
-
-          // readEntries 可能分批返回，需要持续读取
-          readBatch()
-        },
-        reject,
-      )
-    }
-
-    readBatch()
-  })
-}
-
 export function AgentView(): React.ReactElement {
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const [currentMessages, setCurrentMessages] = useAtom(currentAgentMessagesAtom)
@@ -125,6 +81,8 @@ export function AgentView(): React.ReactElement {
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [pendingFolderRefs, setPendingFolderRefs] = React.useState<AgentSavedFile[]>([])
+  const [isUploadingFolder, setIsUploadingFolder] = React.useState(false)
+  const [dragFolderWarning, setDragFolderWarning] = React.useState(false)
 
   // 当前会话 ID ref（避免闭包捕获旧值）
   const currentSessionIdRef = React.useRef(currentSessionId)
@@ -421,7 +379,7 @@ export function AgentView(): React.ReactElement {
 
   /** 打开文件夹选择对话框 */
   const handleOpenFolderDialog = React.useCallback(async (): Promise<void> => {
-    if (!currentSessionId || !currentWorkspaceId) return
+    if (!currentSessionId || !currentWorkspaceId || isUploadingFolder) return
 
     const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
     if (!workspace) return
@@ -430,6 +388,9 @@ export function AgentView(): React.ReactElement {
       const result = await window.electronAPI.openFolderDialog()
       if (!result) return
 
+      setIsUploadingFolder(true)
+      console.log(`[AgentView] 开始复制文件夹: ${result.path}`)
+
       const saved = await window.electronAPI.copyFolderToSession({
         sourcePath: result.path,
         workspaceSlug: workspace.slug,
@@ -437,10 +398,19 @@ export function AgentView(): React.ReactElement {
       })
 
       setPendingFolderRefs((prev) => [...prev, ...saved])
+      console.log(`[AgentView] 文件夹复制成功，共 ${saved.length} 个文件`)
     } catch (error) {
       console.error('[AgentView] 文件夹选择失败:', error)
+      // 显示错误提示
+      setAgentStreamErrors((prev) => {
+        const map = new Map(prev)
+        map.set(currentSessionId, `文件夹上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
+        return map
+      })
+    } finally {
+      setIsUploadingFolder(false)
     }
-  }, [currentSessionId, currentWorkspaceId, workspaces])
+  }, [currentSessionId, currentWorkspaceId, workspaces, isUploadingFolder, setAgentStreamErrors])
 
   /** 移除待发送文件 */
   const handleRemoveFile = React.useCallback((id: string): void => {
@@ -479,55 +449,33 @@ export function AgentView(): React.ReactElement {
 
     const items = Array.from(e.dataTransfer.items)
     const regularFiles: File[] = []
-    const folderEntries: FileSystemDirectoryEntry[] = []
+    let hasFolders = false
 
     // 使用 webkitGetAsEntry 区分文件和文件夹
     for (const item of items) {
       if (item.kind !== 'file') continue
       const entry = item.webkitGetAsEntry?.()
       if (entry?.isDirectory) {
-        folderEntries.push(entry as FileSystemDirectoryEntry)
+        // 检测到文件夹，显示警告
+        hasFolders = true
+        console.warn('[AgentView] 拖拽文件夹已禁用，请使用"添加文件夹"按钮')
       } else {
         const file = item.getAsFile()
         if (file) regularFiles.push(file)
       }
     }
 
-    // 处理普通文件
+    // 如果检测到文件夹，显示提示
+    if (hasFolders) {
+      setDragFolderWarning(true)
+      setTimeout(() => setDragFolderWarning(false), 3000)
+    }
+
+    // 只处理普通文件
     if (regularFiles.length > 0) {
       addFilesAsAttachments(regularFiles)
     }
-
-    // 处理文件夹：递归读取 → base64 → saveFilesToAgentSession
-    if (folderEntries.length > 0 && currentSessionId && currentWorkspaceId) {
-      const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
-      if (!workspace) return
-
-      for (const dirEntry of folderEntries) {
-        try {
-          const files = await readDirectoryRecursive(dirEntry, dirEntry.name)
-          if (files.length === 0) continue
-
-          const filesToSave = await Promise.all(
-            files.map(async ({ relativePath, file }) => ({
-              filename: relativePath,
-              data: await fileToBase64(file),
-            }))
-          )
-
-          const saved = await window.electronAPI.saveFilesToAgentSession({
-            workspaceSlug: workspace.slug,
-            sessionId: currentSessionId,
-            files: filesToSave,
-          })
-
-          setPendingFolderRefs((prev) => [...prev, ...saved])
-        } catch (error) {
-          console.error('[AgentView] 拖拽文件夹处理失败:', error)
-        }
-      }
-    }
-  }, [addFilesAsAttachments, currentSessionId, currentWorkspaceId, workspaces])
+  }, [addFilesAsAttachments])
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
@@ -735,6 +683,21 @@ export function AgentView(): React.ReactElement {
           </div>
         )}
 
+        {/* 拖拽文件夹警告 */}
+        {dragFolderWarning && (
+          <div className="mx-4 mb-2 px-4 py-2.5 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 text-sm flex items-center gap-2">
+            <FolderPlus className="size-4 shrink-0" />
+            <span className="flex-1">不支持拖拽文件夹，请使用"添加文件夹"按钮</span>
+            <button
+              type="button"
+              className="shrink-0 p-0.5 rounded hover:bg-amber-500/10 transition-colors"
+              onClick={() => setDragFolderWarning(false)}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2">
           <div
@@ -834,14 +797,15 @@ export function AgentView(): React.ReactElement {
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-[30px] rounded-full text-foreground/60 hover:text-foreground"
+                          className="size-[30px] rounded-full text-foreground/60 hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                           onClick={handleOpenFolderDialog}
+                          disabled={isUploadingFolder}
                         >
                           <FolderPlus className="size-5" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top">
-                        <p>添加文件夹</p>
+                        <p>{isUploadingFolder ? '正在上传文件夹...' : '添加文件夹'}</p>
                       </TooltipContent>
                     </Tooltip>
                     <ModelSelector

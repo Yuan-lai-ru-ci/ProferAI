@@ -16,7 +16,8 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { writeFileSync, mkdirSync, cpSync, readdirSync, statSync, existsSync, symlinkSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, symlinkSync } from 'node:fs'
+import { cp, readdir, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type { WebContents } from 'electron'
@@ -477,6 +478,32 @@ export async function runAgent(
 ): Promise<void> {
   const { sessionId, userMessage, channelId, modelId, workspaceId } = input
 
+  // 0. Windows 平台：检查 Shell 环境可用性
+  if (process.platform === 'win32') {
+    const runtimeStatus = getRuntimeStatus()
+    const shellStatus = runtimeStatus?.shell
+
+    if (shellStatus && !shellStatus.gitBash?.available && !shellStatus.wsl?.available) {
+      const errorMsg = `Windows 平台需要 Git Bash 或 WSL 环境才能运行 Agent。
+
+当前状态：
+- Git Bash: ${shellStatus.gitBash?.error || '未检测到'}
+- WSL: ${shellStatus.wsl?.error || '未检测到'}
+
+解决方案：
+1. 安装 Git for Windows（推荐）: https://git-scm.com/download/win
+2. 或启用 WSL: https://learn.microsoft.com/zh-cn/windows/wsl/install
+
+安装完成后请重启应用。`
+
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_ERROR, {
+        sessionId,
+        error: errorMsg,
+      })
+      return
+    }
+  }
+
   // 1. 获取渠道信息并解密 API Key
   const channel = getChannelById(channelId)
   if (!channel) {
@@ -517,6 +544,35 @@ export async function runAgent(
   if (proxyUrl) {
     sdkEnv.HTTPS_PROXY = proxyUrl
     sdkEnv.HTTP_PROXY = proxyUrl
+  }
+
+  // Windows 平台：配置 Shell 环境（Git Bash / WSL）
+  if (process.platform === 'win32') {
+    const runtimeStatus = getRuntimeStatus()
+    const shellStatus = runtimeStatus?.shell
+
+    if (shellStatus) {
+      // 优先使用 Git Bash
+      if (shellStatus.gitBash?.available && shellStatus.gitBash.path) {
+        sdkEnv.CLAUDE_CODE_SHELL = shellStatus.gitBash.path
+        console.log(`[Agent 服务] 配置 Shell 环境: Git Bash (${shellStatus.gitBash.path})`)
+      }
+      // 降级到 WSL
+      else if (shellStatus.wsl?.available) {
+        sdkEnv.CLAUDE_CODE_SHELL = 'wsl'
+        console.log(
+          `[Agent 服务] 配置 Shell 环境: WSL ${shellStatus.wsl.version} (${shellStatus.wsl.defaultDistro})`,
+        )
+      }
+      // 无可用环境
+      else {
+        console.warn('[Agent 服务] Windows 平台未检测到可用的 Shell 环境（Git Bash / WSL）')
+        console.warn('[Agent 服务] Agent 的 Bash 工具可能无法正常工作')
+      }
+
+      // 性能优化：跳过登录 shell，加速 Bash 执行
+      sdkEnv.CLAUDE_BASH_NO_LOGIN = '1'
+    }
   }
 
   // 2.5 读取已有的 SDK session ID（用于 resume 衔接上下文）
@@ -1029,11 +1085,11 @@ export function saveFilesToAgentSession(input: AgentSaveFilesInput): AgentSavedF
 }
 
 /**
- * 复制文件夹到 Agent session 工作目录
+ * 复制文件夹到 Agent session 工作目录（异步版本）
  *
- * 使用 fs.cpSync 递归复制整个文件夹，返回所有复制的文件列表。
+ * 使用异步 fs.cp 递归复制整个文件夹，返回所有复制的文件列表。
  */
-export function copyFolderToSession(input: AgentCopyFolderInput): AgentSavedFile[] {
+export async function copyFolderToSession(input: AgentCopyFolderInput): Promise<AgentSavedFile[]> {
   const { sourcePath, workspaceSlug, sessionId } = input
   const sessionDir = getAgentSessionWorkspacePath(workspaceSlug, sessionId)
 
@@ -1041,25 +1097,25 @@ export function copyFolderToSession(input: AgentCopyFolderInput): AgentSavedFile
   const folderName = sourcePath.split('/').filter(Boolean).pop() || 'folder'
   const targetDir = join(sessionDir, folderName)
 
-  // 递归复制
-  cpSync(sourcePath, targetDir, { recursive: true })
+  // 异步递归复制
+  await cp(sourcePath, targetDir, { recursive: true })
   console.log(`[Agent 服务] 文件夹已复制: ${sourcePath} → ${targetDir}`)
 
-  // 遍历复制后的目录，收集所有文件路径
+  // 异步遍历复制后的目录，收集所有文件路径
   const results: AgentSavedFile[] = []
-  const collectFiles = (dir: string, relativeTo: string): void => {
-    const items = readdirSync(dir, { withFileTypes: true })
+  const collectFiles = async (dir: string, relativeTo: string): Promise<void> => {
+    const items = await readdir(dir, { withFileTypes: true })
     for (const item of items) {
       const fullPath = join(dir, item.name)
       if (item.isDirectory()) {
-        collectFiles(fullPath, relativeTo)
+        await collectFiles(fullPath, relativeTo)
       } else {
         const relPath = fullPath.slice(relativeTo.length + 1)
         results.push({ filename: relPath, targetPath: fullPath })
       }
     }
   }
-  collectFiles(targetDir, sessionDir)
+  await collectFiles(targetDir, sessionDir)
 
   console.log(`[Agent 服务] 文件夹复制完成，共 ${results.length} 个文件`)
   return results

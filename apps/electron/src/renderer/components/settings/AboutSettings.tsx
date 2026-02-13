@@ -6,8 +6,8 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RefreshCw, Download, Loader2, CheckCircle2, AlertCircle, Info } from 'lucide-react'
-import type { EnvironmentCheckResult } from '@proma/shared'
+import { RefreshCw, Download, Loader2, CheckCircle2, AlertCircle, Info, Terminal } from 'lucide-react'
+import type { EnvironmentCheckResult, RuntimeStatus } from '@proma/shared'
 import {
   SettingsSection,
   SettingsCard,
@@ -258,6 +258,123 @@ function EnvironmentCard(): React.ReactElement {
   )
 }
 
+/** Shell 环境卡片（Windows 平台）*/
+function ShellEnvironmentCard(): React.ReactElement | null {
+  const [runtimeStatus, setRuntimeStatus] = React.useState<RuntimeStatus | null>(null)
+  const [isChecking, setIsChecking] = React.useState(false)
+
+  // 初始化时加载运行时状态
+  React.useEffect(() => {
+    window.electronAPI.getRuntimeStatus().then((status) => {
+      setRuntimeStatus(status)
+    })
+  }, [])
+
+  // 重新检测
+  const handleCheck = async () => {
+    setIsChecking(true)
+    try {
+      // 触发重新初始化运行时（后续可以添加此 IPC 方法）
+      const status = await window.electronAPI.getRuntimeStatus()
+      setRuntimeStatus(status)
+    } catch (error) {
+      console.error('[Shell 环境检测] 检测失败:', error)
+    } finally {
+      setIsChecking(false)
+    }
+  }
+
+  // 非 Windows 平台不显示
+  if (!runtimeStatus || !runtimeStatus.shell) {
+    return null
+  }
+
+  const { shell } = runtimeStatus
+  const hasShell = shell.gitBash?.available || shell.wsl?.available
+
+  return (
+    <SettingsCard>
+      <div className="p-4 border-b">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-muted-foreground" />
+            <h3 className="text-sm font-medium">Shell 环境（Windows）</h3>
+            {!hasShell && <Badge variant="destructive">!</Badge>}
+          </div>
+          <button
+            onClick={handleCheck}
+            disabled={isChecking}
+            className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+          >
+            {isChecking ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            {isChecking ? '检测中...' : '重新检查'}
+          </button>
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Agent 模式需要 Git Bash 或 WSL 支持
+        </p>
+      </div>
+
+      <div className="p-4 space-y-3">
+        {/* Git Bash 检测卡片 */}
+        <EnvironmentCheckCard
+          name="Git Bash"
+          status={shell.gitBash?.available ? 'success' : 'error'}
+          version={shell.gitBash?.version}
+          requirement="Git for Windows 自带"
+          downloadUrl="https://git-scm.com/download/win"
+          statusText={
+            shell.gitBash?.available
+              ? `${shell.gitBash.path}`
+              : shell.gitBash?.error || '未安装'
+          }
+        />
+
+        {/* WSL 检测卡片 */}
+        <EnvironmentCheckCard
+          name="WSL"
+          status={shell.wsl?.available ? 'success' : 'error'}
+          version={shell.wsl?.version ? `WSL ${shell.wsl.version}` : undefined}
+          requirement="WSL 1 或 WSL 2"
+          downloadUrl="https://learn.microsoft.com/zh-cn/windows/wsl/install"
+          statusText={
+            shell.wsl?.available
+              ? `默认发行版: ${shell.wsl.defaultDistro || '未设置'} (${shell.wsl.distros.join(', ')})`
+              : shell.wsl?.error || '未安装'
+          }
+        />
+
+        {/* 推荐环境提示 */}
+        {shell.recommended && (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription className="text-xs">
+              <strong>当前使用：</strong>
+              {shell.recommended === 'git-bash' ? 'Git Bash（推荐）' : 'WSL'}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* 无可用环境警告 */}
+        {!hasShell && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="text-xs">
+              <strong>未检测到可用的 Shell 环境！</strong>
+              <br />
+              Agent 模式需要 Git Bash 或 WSL 才能运行。请安装其中之一后重启应用。
+            </AlertDescription>
+          </Alert>
+        )}
+      </div>
+    </SettingsCard>
+  )
+}
+
 export function AboutSettings(): React.ReactElement {
   return (
     <SettingsSection
@@ -294,6 +411,9 @@ export function AboutSettings(): React.ReactElement {
 
       {/* 环境检测卡片 */}
       <EnvironmentCard />
+
+      {/* Shell 环境卡片（仅 Windows） */}
+      <ShellEnvironmentCard />
     </SettingsSection>
   )
 }
