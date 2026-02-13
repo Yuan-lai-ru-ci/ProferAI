@@ -339,3 +339,31 @@ export const currentAgentErrorAtom = atom<string | null>((get) => {
   if (!currentId) return null
   return get(agentStreamErrorsAtom).get(currentId) ?? null
 })
+
+/**
+ * Agent 会话输入框草稿 Map — 以 sessionId 为 key
+ * 用于在切换会话时保留输入框内容
+ */
+export const agentSessionDraftsAtom = atom<Map<string, string>>(new Map())
+
+/** 当前 Agent 会话的草稿内容（派生读写原子） */
+export const currentAgentSessionDraftAtom = atom<string>(
+  (get) => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return ''
+    return get(agentSessionDraftsAtom).get(currentId) ?? ''
+  },
+  (get, set, newDraft: string) => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return
+    set(agentSessionDraftsAtom, (prev) => {
+      const map = new Map(prev)
+      if (newDraft.trim() === '') {
+        map.delete(currentId)
+      } else {
+        map.set(currentId, newDraft)
+      }
+      return map
+    })
+  }
+)

@@ -13,7 +13,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen, Copy, Check } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -40,6 +40,7 @@ import {
   agentContextStatusAtom,
   agentStreamErrorsAtom,
   currentAgentErrorAtom,
+  currentAgentSessionDraftAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -76,13 +77,14 @@ export function AgentView(): React.ReactElement {
   const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
   const agentError = useAtomValue(currentAgentErrorAtom)
 
-  const [inputContent, setInputContent] = React.useState('')
+  const [inputContent, setInputContent] = useAtom(currentAgentSessionDraftAtom)
   const [fileBrowserOpen, setFileBrowserOpen] = React.useState(false)
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [pendingFolderRefs, setPendingFolderRefs] = React.useState<AgentSavedFile[]>([])
   const [isUploadingFolder, setIsUploadingFolder] = React.useState(false)
   const [dragFolderWarning, setDragFolderWarning] = React.useState(false)
+  const [errorCopied, setErrorCopied] = React.useState(false)
 
   // 当前会话 ID ref（避免闭包捕获旧值）
   const currentSessionIdRef = React.useRef(currentSessionId)
@@ -632,6 +634,19 @@ export function AgentView(): React.ReactElement {
     }).catch(console.error)
   }, [currentSessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setStreamingStates])
 
+  /** 复制错误信息到剪贴板 */
+  const handleCopyError = React.useCallback(async (): Promise<void> => {
+    if (!agentError) return
+
+    try {
+      await navigator.clipboard.writeText(agentError)
+      setErrorCopied(true)
+      setTimeout(() => setErrorCopied(false), 2000)
+    } catch (error) {
+      console.error('[AgentView] 复制错误信息失败:', error)
+    }
+  }, [agentError])
+
   const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || pendingFolderRefs.length > 0) && agentChannelId !== null && !streaming
 
   // 无当前会话 → 引导文案
@@ -663,23 +678,47 @@ export function AgentView(): React.ReactElement {
 
         {/* 错误提示 */}
         {agentError && (
-          <div className="mx-4 mb-2 px-4 py-2.5 rounded-lg bg-destructive/10 text-destructive text-sm flex items-center gap-2">
-            <AlertCircle className="size-4 shrink-0" />
-            <span className="flex-1 break-all">{agentError}</span>
-            <button
-              type="button"
-              className="shrink-0 p-0.5 rounded hover:bg-destructive/10 transition-colors"
-              onClick={() => {
-                if (!currentSessionId) return
-                setAgentStreamErrors((prev) => {
-                  const map = new Map(prev)
-                  map.delete(currentSessionId)
-                  return map
-                })
-              }}
-            >
-              <X className="size-3.5" />
-            </button>
+          <div className="mx-4 mb-2 rounded-lg bg-destructive/10 border border-destructive/20">
+            <div className="px-4 py-2.5 flex items-start gap-2">
+              <AlertCircle className="size-4 shrink-0 mt-0.5 text-destructive" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-destructive mb-1">Agent 执行错误</div>
+                <pre className="text-xs text-destructive/90 whitespace-pre-wrap break-words font-mono leading-relaxed max-h-[300px] overflow-y-auto">
+                  {agentError}
+                </pre>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-destructive"
+                      onClick={handleCopyError}
+                    >
+                      {errorCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">
+                    <p>{errorCopied ? '已复制' : '复制错误信息'}</p>
+                  </TooltipContent>
+                </Tooltip>
+                <button
+                  type="button"
+                  className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-destructive"
+                  onClick={() => {
+                    if (!currentSessionId) return
+                    setAgentStreamErrors((prev) => {
+                      const map = new Map(prev)
+                      map.delete(currentSessionId)
+                      return map
+                    })
+                    setErrorCopied(false)
+                  }}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

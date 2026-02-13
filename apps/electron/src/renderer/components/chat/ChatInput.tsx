@@ -33,6 +33,7 @@ import {
   thinkingEnabledAtom,
   pendingAttachmentsAtom,
   currentConversationIdAtom,
+  currentConversationDraftAtom,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
@@ -64,7 +65,7 @@ function fileToBase64(file: File): Promise<string> {
 }
 
 export function ChatInput({ onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {
-  const [content, setContent] = React.useState('')
+  const [content, setContent] = useAtom(currentConversationDraftAtom)
   const selectedModel = useAtomValue(selectedModelAtom)
   const streaming = useAtomValue(streamingAtom)
   const [thinkingEnabled, setThinkingEnabled] = useAtom(thinkingEnabledAtom)

@@ -608,6 +608,11 @@ export async function runAgent(
   let resolvedModel = modelId || 'claude-sonnet-4-5-20250929'
   // 收集 stderr 输出用于错误诊断（声明在 try 之前，确保 catch 可访问）
   const stderrChunks: string[] = []
+  // 运行环境信息（声明在 try 之前，供 catch 块使用）
+  let agentExec: { type: 'node' | 'bun'; path: string } | undefined
+  let agentCwd: string | undefined
+  let workspaceSlug: string | undefined
+  let workspace: import('@proma/shared').AgentWorkspace | undefined
 
   try {
     // 6. 动态导入 SDK（避免在 esbuild 打包时出问题）
@@ -615,7 +620,7 @@ export async function runAgent(
 
     // 7. 构建 SDK query（通过 env 注入认证信息）
     const cliPath = resolveSDKCliPath()
-    const agentExec = getAgentExecutable()
+    agentExec = getAgentExecutable()
 
     // 路径验证
     if (!existsSync(cliPath)) {
@@ -639,9 +644,9 @@ export async function runAgent(
     const executableArgs = agentExec.type === 'bun' ? [`--env-file=${nullDevice}`] : []
 
     // 确定 Agent 工作目录：优先使用 session 级别路径
-    let agentCwd = homedir()
-    let workspaceSlug: string | undefined
-    let workspace: import('@proma/shared').AgentWorkspace | undefined
+    agentCwd = homedir()
+    workspaceSlug = undefined
+    workspace = undefined
     if (workspaceId) {
       const ws = getAgentWorkspace(workspaceId)
       if (ws) {
@@ -909,13 +914,46 @@ export async function runAgent(
     }
 
     const errorMessage = error instanceof Error ? error.message : '未知错误'
+    const errorStack = error instanceof Error ? error.stack : undefined
     console.error(`[Agent 服务] 执行失败:`, error)
 
-    // 构建包含 stderr 诊断信息的错误消息
+    // 构建包含详细诊断信息的错误消息
     const stderrOutput = stderrChunks.join('').trim()
-    const detailedError = stderrOutput
-      ? `${errorMessage}\n\nstderr: ${stderrOutput.slice(0, 500)}`
-      : errorMessage
+    const diagnosticParts: string[] = []
+
+    // 主错误消息
+    diagnosticParts.push(`错误: ${errorMessage}`)
+
+    // stderr 输出（如果有）
+    if (stderrOutput) {
+      // 提取最后 1000 字符，通常包含最相关的错误信息
+      const relevantStderr = stderrOutput.slice(-1000)
+      diagnosticParts.push(`\nStderr 输出:\n${relevantStderr}`)
+    }
+
+    // 运行环境信息（帮助诊断）
+    diagnosticParts.push('\n运行环境:')
+    if (agentExec) {
+      diagnosticParts.push(`- 运行时: ${agentExec.type} (${agentExec.path})`)
+    }
+    diagnosticParts.push(`- 模型: ${modelId || 'claude-sonnet-4-5-20250929'}`)
+    diagnosticParts.push(`- 平台: ${process.platform} ${process.arch}`)
+    if (workspaceSlug && workspace) {
+      diagnosticParts.push(`- 工作区: ${workspace.name} (${agentCwd || '未知'})`)
+    }
+    if (existingSdkSessionId) {
+      diagnosticParts.push(`- Resume: ${existingSdkSessionId}`)
+    }
+
+    // 堆栈跟踪（仅在非生产环境或开发模式下）
+    if (errorStack && (!app.isPackaged || process.env.NODE_ENV === 'development')) {
+      diagnosticParts.push(`\n堆栈跟踪:\n${errorStack.slice(0, 500)}`)
+    }
+
+    const detailedError = diagnosticParts.join('\n')
+
+    // 完整错误信息输出到控制台，便于调试
+    console.error('[Agent 服务] 详细错误信息:', detailedError)
 
     // 如果是 resume 失败，清除 sdkSessionId 以便下次重新开始
     if (existingSdkSessionId) {
