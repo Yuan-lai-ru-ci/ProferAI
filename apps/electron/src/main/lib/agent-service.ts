@@ -34,6 +34,7 @@ import {
   fetchTitle,
 } from '@proma/core'
 import { getFetchFn } from './proxy-fetch'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendAgentMessage, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath } from './config-paths'
@@ -495,9 +496,10 @@ export async function runAgent(
     delete sdkEnv.ANTHROPIC_BASE_URL
   }
   // 代理配置：SDK 通过子进程运行，注入 HTTPS_PROXY 环境变量
-  if (channel.proxyUrl?.trim()) {
-    sdkEnv.HTTPS_PROXY = channel.proxyUrl.trim()
-    sdkEnv.HTTP_PROXY = channel.proxyUrl.trim()
+  const proxyUrl = await getEffectiveProxyUrl()
+  if (proxyUrl) {
+    sdkEnv.HTTPS_PROXY = proxyUrl
+    sdkEnv.HTTP_PROXY = proxyUrl
   }
 
   // 2.5 读取已有的 SDK session ID（用于 resume 衔接上下文）
@@ -891,7 +893,8 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
       prompt: TITLE_PROMPT + userMessage,
     })
 
-    const fetchFn = getFetchFn(channel.proxyUrl)
+    const proxyUrl = await getEffectiveProxyUrl()
+    const fetchFn = getFetchFn(proxyUrl)
     const title = await fetchTitle(request, adapter, fetchFn)
     if (!title) return null
 

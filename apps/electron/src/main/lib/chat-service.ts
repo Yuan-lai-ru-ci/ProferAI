@@ -26,6 +26,7 @@ import { appendMessage, updateConversationMeta, getConversationMessages } from '
 import { readAttachmentAsBase64, isImageAttachment } from './attachment-service'
 import { extractTextFromAttachment, isDocumentAttachment } from './document-parser'
 import { getFetchFn } from './proxy-fetch'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
@@ -250,7 +251,8 @@ export async function sendMessage(
       thinkingEnabled,
     })
 
-    const fetchFn = getFetchFn(channel.proxyUrl)
+    const proxyUrl = await getEffectiveProxyUrl()
+    const fetchFn = getFetchFn(proxyUrl)
 
     const { content, reasoning } = await streamSSE({
       request,
@@ -421,7 +423,8 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
       prompt: TITLE_PROMPT + userMessage,
     })
 
-    const fetchFn = getFetchFn(channel.proxyUrl)
+    const proxyUrl = await getEffectiveProxyUrl()
+    const fetchFn = getFetchFn(proxyUrl)
     const title = await fetchTitle(request, adapter, fetchFn)
     if (!title) return null
 

@@ -80,8 +80,6 @@ export interface Channel {
   baseUrl: string
   /** 加密后的 API Key（base64 编码） */
   apiKey: string
-  /** HTTP 代理地址（如 http://127.0.0.1:7890） */
-  proxyUrl?: string
   /** 可用模型列表 */
   models: ChannelModel[]
   /** 是否启用 */
@@ -101,8 +99,6 @@ export interface ChannelCreateInput {
   baseUrl: string
   /** 明文 API Key，主进程会加密后存储 */
   apiKey: string
-  /** HTTP 代理地址（如 http://127.0.0.1:7890） */
-  proxyUrl?: string
   models: ChannelModel[]
   enabled: boolean
 }
@@ -116,8 +112,6 @@ export interface ChannelUpdateInput {
   baseUrl?: string
   /** 明文 API Key，为空字符串表示不更新 */
   apiKey?: string
-  /** HTTP 代理地址（如 http://127.0.0.1:7890），空字符串表示清除 */
-  proxyUrl?: string
   models?: ChannelModel[]
   enabled?: boolean
 }
@@ -150,8 +144,6 @@ export interface FetchModelsInput {
   baseUrl: string
   /** 明文 API Key */
   apiKey: string
-  /** HTTP 代理地址 */
-  proxyUrl?: string
 }
 
 /**

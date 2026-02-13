@@ -22,6 +22,7 @@ import type {
   ProviderType,
 } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
 
 /** 当前配置版本 */
 const CONFIG_VERSION = 1
@@ -163,7 +164,6 @@ export function createChannel(input: ChannelCreateInput): Channel {
     provider: input.provider,
     baseUrl: input.baseUrl,
     apiKey: encryptApiKey(input.apiKey),
-    proxyUrl: input.proxyUrl?.trim() || undefined,
     models: input.models,
     enabled: input.enabled,
     createdAt: now,
@@ -193,9 +193,6 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
   }
 
   const existing = config.channels[index]
-  // proxyUrl: 传入空字符串表示清除，undefined 表示不更新
-  const resolvedProxyUrl = input.proxyUrl === '' ? undefined
-    : (input.proxyUrl !== undefined ? input.proxyUrl.trim() || undefined : existing.proxyUrl)
 
   const updated: Channel = {
     ...existing,
@@ -203,7 +200,6 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
     provider: input.provider ?? existing.provider,
     baseUrl: input.baseUrl ?? existing.baseUrl,
     apiKey: input.apiKey ? encryptApiKey(input.apiKey) : existing.apiKey,
-    proxyUrl: resolvedProxyUrl,
     models: input.models ?? existing.models,
     enabled: input.enabled ?? existing.enabled,
     updatedAt: Date.now(),
@@ -263,11 +259,12 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
   }
 
   const apiKey = decryptKey(channel.apiKey)
+  const proxyUrl = await getEffectiveProxyUrl()
 
   try {
     switch (channel.provider) {
       case 'anthropic':
-        return await testAnthropic(channel.baseUrl, apiKey, channel.proxyUrl)
+        return await testAnthropic(channel.baseUrl, apiKey, proxyUrl)
       case 'openai':
       case 'deepseek':
       case 'moonshot':
@@ -276,9 +273,9 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'doubao':
       case 'qwen':
       case 'custom':
-        return await testOpenAICompatible(channel.baseUrl, apiKey, channel.proxyUrl)
+        return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl)
       case 'google':
-        return await testGoogle(channel.baseUrl, apiKey, channel.proxyUrl)
+        return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
       default:
         return { success: false, message: `不支持的供应商: ${channel.provider}` }
     }
@@ -381,10 +378,12 @@ async function testGoogle(baseUrl: string, apiKey: string, proxyUrl?: string): P
  * 适用于创建/编辑渠道时用户在保存前先验证连接。
  */
 export async function testChannelDirect(input: FetchModelsInput): Promise<ChannelTestResult> {
+  const proxyUrl = await getEffectiveProxyUrl()
+
   try {
     switch (input.provider) {
       case 'anthropic':
-        return await testAnthropic(input.baseUrl, input.apiKey, input.proxyUrl)
+        return await testAnthropic(input.baseUrl, input.apiKey, proxyUrl)
       case 'openai':
       case 'deepseek':
       case 'moonshot':
@@ -393,9 +392,9 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
       case 'doubao':
       case 'qwen':
       case 'custom':
-        return await testOpenAICompatible(input.baseUrl, input.apiKey, input.proxyUrl)
+        return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl)
       case 'google':
-        return await testGoogle(input.baseUrl, input.apiKey, input.proxyUrl)
+        return await testGoogle(input.baseUrl, input.apiKey, proxyUrl)
       default:
         return { success: false, message: `不支持的提供商: ${input.provider}` }
     }
@@ -414,10 +413,12 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
  * 针对不同供应商使用不同的 API 端点和响应解析。
  */
 export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsResult> {
+  const proxyUrl = await getEffectiveProxyUrl()
+
   try {
     switch (input.provider) {
       case 'anthropic':
-        return await fetchAnthropicModels(input.baseUrl, input.apiKey, input.proxyUrl)
+        return await fetchAnthropicModels(input.baseUrl, input.apiKey, proxyUrl)
       case 'openai':
       case 'deepseek':
       case 'moonshot':
@@ -426,9 +427,9 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'doubao':
       case 'qwen':
       case 'custom':
-        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, input.proxyUrl)
+        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl)
       case 'google':
-        return await fetchGoogleModels(input.baseUrl, input.apiKey, input.proxyUrl)
+        return await fetchGoogleModels(input.baseUrl, input.apiKey, proxyUrl)
       default:
         return { success: false, message: `不支持的供应商: ${input.provider}`, models: [] }
     }

@@ -103,7 +103,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   const [apiKey, setApiKey] = React.useState('')
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [models, setModels] = React.useState<ChannelModel[]>(channel?.models ?? [])
-  const [proxyUrl, setProxyUrl] = React.useState(channel?.proxyUrl ?? '')
   const [enabled, setEnabled] = React.useState(channel?.enabled ?? true)
 
   // 新模型输入
@@ -178,7 +177,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         provider,
         baseUrl,
         apiKey,
-        proxyUrl: proxyUrl.trim() || undefined,
       })
 
       setFetchResult(result)
@@ -212,7 +210,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         provider,
         baseUrl,
         apiKey,
-        proxyUrl: proxyUrl.trim() || undefined,
       })
       setTestResult(result)
     } catch (error) {
@@ -230,7 +227,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         provider,
         baseUrl,
         apiKey: apiKey || undefined,
-        proxyUrl: proxyUrl.trim() || '',
         models,
         enabled,
       })
@@ -240,7 +236,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         provider,
         baseUrl,
         apiKey,
-        proxyUrl: proxyUrl.trim() || undefined,
         models,
         enabled,
       }
@@ -318,13 +313,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
             onChange={setBaseUrl}
             placeholder="https://api.example.com"
             description={baseUrl.trim() ? `预览：${buildPreviewUrl(baseUrl, provider)}` : undefined}
-          />
-          <SettingsInput
-            label="HTTP 代理"
-            value={proxyUrl}
-            onChange={setProxyUrl}
-            placeholder="如 http://127.0.0.1:7890（可选）"
-            description="配置后所有 API 请求将通过此代理发送"
           />
           {/* API Key + 测试连接同行 */}
           <div className="px-4 py-3 space-y-2">
