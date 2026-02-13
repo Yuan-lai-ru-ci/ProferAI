@@ -917,6 +917,20 @@ export async function runAgent(
     const errorStack = error instanceof Error ? error.stack : undefined
     console.error(`[Agent 服务] 执行失败:`, error)
 
+    // 保存已累积的部分内容（避免数据丢失）
+    if (accumulatedText || accumulatedEvents.length > 0) {
+      const partialMsg: AgentMessage = {
+        id: randomUUID(),
+        role: 'assistant',
+        content: accumulatedText,
+        createdAt: Date.now(),
+        model: resolvedModel,
+        events: accumulatedEvents,
+      }
+      appendAgentMessage(sessionId, partialMsg)
+      console.log(`[Agent 服务] 已保存部分执行结果 (${accumulatedText.length} 字符, ${accumulatedEvents.length} 事件)`)
+    }
+
     // 构建包含详细诊断信息的错误消息
     const stderrOutput = stderrChunks.join('').trim()
     const diagnosticParts: string[] = []
