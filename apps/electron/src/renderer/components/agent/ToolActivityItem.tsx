@@ -617,7 +617,8 @@ export function ToolActivityList({ activities, animate = false }: ToolActivityLi
                   activity={activity}
                   index={i}
                   animate={animate}
-                  onOpenDetails={handleOpenDetails}
+                  // 不传递 onOpenDetails，TodoWrite/TaskCreate 不支持点击展开详情
+                  // 因为它们已经有专属的 TodoList 展示
                 />
                 <TodoList items={todos} />
               </React.Fragment>
