@@ -2,8 +2,8 @@
  * ChannelSettings - 渠道配置页
  *
  * 分为两个区块：
- * 1. 聊天渠道 — 所有渠道列表 + 添加/编辑/删除
- * 2. Agent 供应商 — 仅 Anthropic 渠道，radio 选择默认 Agent 渠道
+ * 1. 渠道管理 — 所有渠道列表 + 添加/编辑/删除（渠道同时用于 Chat 和 Agent）
+ * 2. Agent 供应商 — 从已启用的 Anthropic 渠道中选择默认 Agent 供应商
  */
 
 import * as React from 'react'
@@ -155,10 +155,10 @@ export function ChannelSettings(): React.ReactElement {
   // 列表视图
   return (
     <div className="space-y-8">
-      {/* 区块一：聊天渠道 */}
+      {/* 区块一：渠道管理 */}
       <SettingsSection
-        title="聊天渠道供应商"
-        description="管理 AI 对话的供应商连接，配置 API Key 和可用模型"
+        title="渠道管理"
+        description="管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式"
         action={
           <Button size="sm" onClick={() => setViewMode('create')}>
             <Plus size={16} />
@@ -198,7 +198,7 @@ export function ChannelSettings(): React.ReactElement {
       {/* 区块二：Agent 供应商 */}
       <SettingsSection
         title="Agent 供应商"
-        description="选择一个 Anthropic 兼容格式的渠道作为 Agent 模式的默认供应商"
+        description="选择 Agent 模式的默认供应商，上方已启用的 Anthropic 兼容渠道会自动出现在此列表"
       >
         <SettingsCard>
           <PromaProviderCard />
@@ -242,6 +242,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
+    channel.provider === 'anthropic' ? '可用于 Agent' : undefined,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -333,7 +334,7 @@ function PromaProviderCard(): React.ReactElement {
     <SettingsRow
       label="Proma"
       icon={<img src={PromaLogo} alt="Proma" className="w-8 h-8 rounded" />}
-      description="Proma 官方供应｜稳定｜靠谱｜丝滑｜简单｜优惠套餐"
+      description="Proma 官方供应｜稳定｜靠谱｜丝滑｜简单｜优惠套餐｜可用于 Agent"
     >
       <Button size="sm" variant="outline" className="gap-1.5" onClick={handleDownload}>
         <ExternalLink size={13} />
