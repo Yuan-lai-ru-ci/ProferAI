@@ -96,13 +96,30 @@ function resolveSDKCliPath(): string {
 }
 
 /**
- * 获取 Bun 运行时路径
+ * 获取 Agent SDK 运行时可执行文件
  *
- * 优先使用 runtime-init 检测到的路径，降级为 'bun'（依赖 PATH）。
+ * 优先级策略：
+ * 1. Node.js（用户已安装，无需额外依赖）
+ * 2. Bun（开发环境或打包版本可能包含）
+ * 3. 降级到字符串 'node'（依赖系统 PATH）
+ *
+ * @returns { type: 'node' | 'bun', path: string }
  */
-function getBunExecutablePath(): string {
+function getAgentExecutable(): { type: 'node' | 'bun'; path: string } {
   const status = getRuntimeStatus()
-  return status?.bun?.path ?? 'bun'
+
+  // 优先使用 Node.js（用户已安装）
+  if (status?.node?.available && status.node.path) {
+    return { type: 'node', path: status.node.path }
+  }
+
+  // 降级到 Bun
+  if (status?.bun?.available && status.bun.path) {
+    return { type: 'bun', path: status.bun.path }
+  }
+
+  // 最后降级到字符串 'node'（依赖 PATH）
+  return { type: 'node', path: 'node' }
 }
 
 /**
@@ -542,7 +559,7 @@ export async function runAgent(
 
     // 7. 构建 SDK query（通过 env 注入认证信息）
     const cliPath = resolveSDKCliPath()
-    const bunPath = getBunExecutablePath()
+    const agentExec = getAgentExecutable()
 
     // 路径验证
     if (!existsSync(cliPath)) {
@@ -555,10 +572,15 @@ export async function runAgent(
     // 确保 ripgrep 可用（打包环境下创建 symlink）
     ensureRipgrepAvailable(cliPath)
 
-    console.log(`[Agent 服务] 启动 SDK — CLI: ${cliPath}, Bun: ${bunPath}, 模型: ${modelId || 'claude-sonnet-4-5-20250929'}, resume: ${existingSdkSessionId ?? '无'}`)
+    console.log(
+      `[Agent 服务] 启动 SDK — CLI: ${cliPath}, 运行时: ${agentExec.type} (${agentExec.path}), 模型: ${modelId || 'claude-sonnet-4-5-20250929'}, resume: ${existingSdkSessionId ?? '无'}`,
+    )
 
-    // 安全：--env-file=/dev/null 阻止 Bun 自动加载用户项目中的 .env 文件
+    // 安全：阻止运行时自动加载用户项目中的 .env 文件
+    // Bun: --env-file=/dev/null
+    // Node.js: 默认不会加载 .env，无需特殊处理
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
+    const executableArgs = agentExec.type === 'bun' ? [`--env-file=${nullDevice}`] : []
 
     // 确定 Agent 工作目录：优先使用 session 级别路径
     let agentCwd = homedir()
@@ -649,8 +671,8 @@ export async function runAgent(
       prompt: finalPrompt,
       options: {
         pathToClaudeCodeExecutable: cliPath,
-        executable: bunPath as 'bun',
-        executableArgs: [`--env-file=${nullDevice}`],
+        executable: agentExec.type,
+        executableArgs,
         model: modelId || 'claude-sonnet-4-5-20250929',
         maxTurns: 30,
         permissionMode: 'bypassPermissions',
@@ -875,6 +897,7 @@ const DEFAULT_SESSION_TITLE = '新 Agent 会话'
  */
 export async function generateAgentTitle(input: AgentGenerateTitleInput): Promise<string | null> {
   const { userMessage, channelId, modelId } = input
+  console.log('[Agent 标题生成] 开始生成标题:', { channelId, modelId, userMessage: userMessage.slice(0, 50) })
 
   try {
     const channels = listChannels()
@@ -896,12 +919,15 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
     const proxyUrl = await getEffectiveProxyUrl()
     const fetchFn = getFetchFn(proxyUrl)
     const title = await fetchTitle(request, adapter, fetchFn)
-    if (!title) return null
+    if (!title) {
+      console.warn('[Agent 标题生成] API 返回空标题')
+      return null
+    }
 
     const cleaned = title.trim().replace(/^["'""''「《]+|["'""''」》]+$/g, '').trim()
     const result = cleaned.slice(0, MAX_TITLE_LENGTH) || null
 
-    console.log(`[Agent 标题生成] 生成标题: "${result}"`)
+    console.log(`[Agent 标题生成] 生成标题成功: "${result}"`)
     return result
   } catch (error) {
     console.warn('[Agent 标题生成] 生成失败:', error)
