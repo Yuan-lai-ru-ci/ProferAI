@@ -116,7 +116,7 @@ export function ChannelSettings(): React.ReactElement {
       currentAgentChannel.provider !== 'anthropic' // 选择的不是 Anthropic 渠道
 
     if (shouldAutoSelect && availableAnthropicChannels.length > 0) {
-      await handleSelectAgentProvider(availableAnthropicChannels[0].id)
+      await handleSelectAgentProvider(availableAnthropicChannels[0]!.id)
     }
   }
 

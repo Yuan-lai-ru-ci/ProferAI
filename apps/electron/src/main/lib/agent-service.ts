@@ -966,7 +966,7 @@ async function runAgentInternal(
         // 衔接上下文：有 SDK session ID 则 resume
         ...(existingSdkSessionId ? { resume: existingSdkSessionId } : {}),
         // MCP 服务器（每次 query 都从磁盘读取最新配置，支持回合间动态更新）
-        ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
+        ...(Object.keys(mcpServers).length > 0 && { mcpServers: mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig> }),
         // Skill 插件（SDK 自动发现 skills/ 目录下的 SKILL.md）
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
         stderr: (data: string) => {

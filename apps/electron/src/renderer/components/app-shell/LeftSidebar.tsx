@@ -195,7 +195,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         setConversations(list)
         // 默认加载最近一条对话（按 updatedAt 降序，首条即最新）
         if (list.length > 0) {
-          setCurrentConversationId(list[0].id)
+          setCurrentConversationId(list[0]!.id)
         }
       })
       .catch(console.error)
