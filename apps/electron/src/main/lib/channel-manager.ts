@@ -41,6 +41,8 @@ const CONFIG_VERSION = 1
  */
 function normalizeAnthropicBaseUrl(baseUrl: string): string {
   let url = baseUrl.trim().replace(/\/+$/, '')
+  // 去除用户误填的 /messages 后缀，避免后续拼接时路径重复
+  url = url.replace(/\/messages$/, '')
   if (!url.match(/\/v\d+$/)) {
     url = `${url}/v1`
   }
