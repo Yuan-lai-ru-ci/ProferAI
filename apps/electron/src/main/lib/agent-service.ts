@@ -739,8 +739,13 @@ async function runAgentInternal(
     ANTHROPIC_API_KEY: apiKey,
   }
   // 自定义 Base URL 时注入 ANTHROPIC_BASE_URL
+  // SDK 内部会自动拼接 /v1/messages，需要去除用户误填的路径后缀
   if (channel.baseUrl && channel.baseUrl !== DEFAULT_ANTHROPIC_URL) {
     sdkEnv.ANTHROPIC_BASE_URL = channel.baseUrl
+      .trim()
+      .replace(/\/+$/, '')
+      .replace(/\/v\d+\/messages$/, '')
+      .replace(/\/v\d+$/, '')
   } else {
     // 确保不会残留上一次的 Base URL
     delete sdkEnv.ANTHROPIC_BASE_URL
