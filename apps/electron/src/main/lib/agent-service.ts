@@ -1177,7 +1177,8 @@ async function runAgentInternal(
     webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId })
 
     // 异步生成标题（不阻塞 stream complete 响应）
-    autoGenerateTitle(sessionId, userMessage, channelId, modelId || 'claude-sonnet-4-5-20250929', webContents)
+    // 使用 SDK 实际确认的模型，避免因默认模型与当前渠道不匹配导致标题生成失败。
+    autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, webContents)
   } catch (error) {
     // 清理超时计时器
     if (inactivityTimer) {
