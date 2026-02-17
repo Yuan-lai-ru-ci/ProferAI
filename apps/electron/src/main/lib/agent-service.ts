@@ -955,6 +955,7 @@ async function runAgentInternal(
     if (workspaceSlug) {
       const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
       for (const [name, entry] of Object.entries(mcpConfig.servers ?? {})) {
+        // 只加载已启用的服务器（用户已通过测试验证）
         if (!entry.enabled) continue
 
         if (entry.type === 'stdio' && entry.command) {
@@ -968,12 +969,17 @@ async function runAgentInternal(
             command: entry.command,
             ...(entry.args && entry.args.length > 0 && { args: entry.args }),
             ...(Object.keys(mergedEnv).length > 0 && { env: mergedEnv }),
+            // 容错配置：单个服务器启动失败不影响整个 SDK
+            required: false,
+            startup_timeout_sec: 30,
           }
         } else if ((entry.type === 'http' || entry.type === 'sse') && entry.url) {
           mcpServers[name] = {
             type: entry.type,
             url: entry.url,
             ...(entry.headers && Object.keys(entry.headers).length > 0 && { headers: entry.headers }),
+            // 容错配置
+            required: false,
           }
         }
       }

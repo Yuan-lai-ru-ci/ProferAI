@@ -601,6 +601,19 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 测试 MCP 服务器连接
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.TEST_MCP_SERVER,
+    async (_, name: string, entry: import('@proma/shared').McpServerEntry): Promise<{ success: boolean; message: string }> => {
+      const { validateMcpServer } = await import('./lib/mcp-validator')
+      const result = await validateMcpServer(name, entry)
+      return {
+        success: result.valid,
+        message: result.valid ? '连接成功' : (result.reason || '连接失败'),
+      }
+    }
+  )
+
   // 获取工作区 Skill 列表
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SKILLS,

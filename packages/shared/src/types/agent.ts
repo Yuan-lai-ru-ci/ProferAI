@@ -175,6 +175,12 @@ export interface McpServerEntry {
   headers?: Record<string, string>
   /** 是否启用 */
   enabled: boolean
+  /** 最后一次测试结果 */
+  lastTestResult?: {
+    success: boolean
+    message: string
+    timestamp: number
+  }
 }
 
 /** 工作区 MCP 配置文件 */
@@ -319,6 +325,8 @@ export const AGENT_IPC_CHANNELS = {
   GET_MCP_CONFIG: 'agent:get-mcp-config',
   /** 保存工作区 MCP 配置 */
   SAVE_MCP_CONFIG: 'agent:save-mcp-config',
+  /** 测试 MCP 服务器连接 */
+  TEST_MCP_SERVER: 'agent:test-mcp-server',
   /** 获取工作区 Skill 列表 */
   GET_SKILLS: 'agent:get-skills',
   /** 删除工作区 Skill */
