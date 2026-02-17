@@ -6,7 +6,7 @@
  */
 
 import { atom } from 'jotai'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -46,12 +46,16 @@ export interface AgentStreamState {
   contextWindow?: number
   /** 是否正在压缩上下文 */
   isCompacting?: boolean
-  /** 重试状态 */
+  /** 重试状态（扩展版） */
   retrying?: {
-    attempt: number
+    /** 当前第几次尝试 */
+    currentAttempt: number
+    /** 最大尝试次数 */
     maxAttempts: number
-    delaySeconds: number
-    reason: string
+    /** 重试历史记录（按时间顺序） */
+    history: RetryAttempt[]
+    /** 是否已失败 */
+    failed: boolean
   }
 }
 
@@ -303,9 +307,12 @@ export function applyAgentEvent(
       return prev
 
     case 'complete':
-      return { ...prev, running: false }
+      // 成功完成 - 清除 retrying
+      return { ...prev, running: false, retrying: undefined }
 
     case 'error':
+      // 改进：error 事件不再清除 retrying 状态
+      // retrying 状态由专用事件控制
       return { ...prev, running: false }
 
     case 'usage_update':
@@ -322,15 +329,49 @@ export function applyAgentEvent(
       return { ...prev, isCompacting: false }
 
     case 'retrying':
+      // 向后兼容：保留原有的简单 retrying 事件
+      return {
+        ...prev,
+        retrying: prev.retrying ?? {
+          currentAttempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          history: [],
+          failed: false,
+        },
+      }
+
+    case 'retry_attempt': {
+      // 新增：记录详细的重试尝试
+      const currentHistory = prev.retrying?.history ?? []
       return {
         ...prev,
         retrying: {
-          attempt: event.attempt,
-          maxAttempts: event.maxAttempts,
-          delaySeconds: event.delaySeconds,
-          reason: event.reason,
+          currentAttempt: event.attemptData.attempt,
+          maxAttempts: prev.retrying?.maxAttempts ?? 3,
+          history: [...currentHistory, event.attemptData],
+          failed: false,
         },
       }
+    }
+
+    case 'retry_cleared':
+      // 新增：重试成功，清除状态
+      return { ...prev, retrying: undefined }
+
+    case 'retry_failed': {
+      // 新增：重试失败，标记为 failed 但保留历史
+      const finalHistory = prev.retrying?.history ?? []
+      return {
+        ...prev,
+        running: false,
+        retrying: {
+          currentAttempt: event.finalAttempt.attempt,
+          maxAttempts: prev.retrying?.maxAttempts ?? 3,
+          history: [...finalHistory, event.finalAttempt],
+          failed: true,
+        },
+      }
+    }
 
     default:
       return prev

@@ -52,16 +52,16 @@ const activeControllers = new Map<string, AbortController>()
 const RETRY_CONFIG = {
   /** 最大重试次数 */
   maxAttempts: 3,
-  /** 初始延迟（秒） */
-  initialDelaySeconds: 1,
+  /** 初始延迟（秒） - 更密集的重试 */
+  initialDelaySeconds: 0.5, // 0.5秒 → 1秒 → 2秒
   /** 延迟倍数（指数退避） */
   delayMultiplier: 2,
   /** 初始响应超时（毫秒） - 用于检测网络连接问题 */
-  initialResponseTimeoutMs: 30000, // 30 秒
+  initialResponseTimeoutMs: 60000, // 1分钟
   /** 流式输出超时（毫秒） - 用于检测连接中断（仅当没有活跃工具时） */
-  streamingTimeoutMs: 60000, // 60 秒
+  streamingTimeoutMs: 120000, // 2分钟
   /** 工具执行超时（毫秒） - 工具执行时的宽松超时 */
-  toolExecutionTimeoutMs: 300000, // 5 分钟
+  toolExecutionTimeoutMs: 300000, // 5分钟
 } as const
 
 /**
@@ -616,6 +616,7 @@ export async function runAgentWithRetry(
 ): Promise<void> {
   let attempt = 0
   const stderrChunks: string[] = []
+  const { sessionId, modelId } = input
 
   while (attempt < RETRY_CONFIG.maxAttempts) {
     attempt++
@@ -623,35 +624,92 @@ export async function runAgentWithRetry(
     try {
       // 尝试运行 Agent
       await runAgentInternal(input, webContents, stderrChunks)
-      // 成功完成 - 退出重试循环
+
+      // 成功完成 - 发送 retry_cleared 事件（如果之前有重试）
+      if (attempt > 1) {
+        const clearedEvent: AgentEvent = { type: 'retry_cleared' }
+        webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          event: clearedEvent,
+        } as AgentStreamEvent)
+        console.log(`[Agent 服务] 重试成功，已清除重试状态`)
+      }
+
       return
     } catch (error) {
       const stderrOutput = stderrChunks.join('').trim()
       const isRetryable = isRetryableError(error, stderrOutput)
 
-      // 最后一次尝试失败 - 不再重试
+      // 收集错误信息
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorStack = error instanceof Error ? error.stack : undefined
+      const reason = getErrorReason(error)
+      const delaySeconds = RETRY_CONFIG.initialDelaySeconds * Math.pow(RETRY_CONFIG.delayMultiplier, attempt - 1)
+
+      // 构建 RetryAttempt 数据（简化版，不包含详细运行环境）
+      const attemptData: import('@proma/shared').RetryAttempt = {
+        attempt,
+        timestamp: Date.now(),
+        reason,
+        errorMessage,
+        stderr: stderrOutput || undefined,
+        stack: errorStack,
+        environment: {
+          runtime: process.version, // Node.js 版本
+          platform: `${process.platform} ${process.arch}`,
+          model: modelId || 'claude-sonnet-4-5-20250929',
+        },
+        delaySeconds,
+      }
+
+      // 最后一次尝试失败 - 发送 retry_failed 事件
       if (attempt >= RETRY_CONFIG.maxAttempts) {
         console.error(`[Agent 服务] 重试失败，已达到最大次数 (${RETRY_CONFIG.maxAttempts})`)
-        // 错误已在 runAgentInternal 中发送给 UI，这里直接返回
+
+        const failedEvent: AgentEvent = {
+          type: 'retry_failed',
+          finalAttempt: attemptData,
+        }
+        webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          event: failedEvent,
+        } as AgentStreamEvent)
+
         return
       }
 
-      // 不可重试的错误 - 立即失败
+      // 不可重试的错误 - 发送 retry_failed 事件并立即失败
       if (!isRetryable) {
-        console.log(`[Agent 服务] 错误不可重试，停止尝试: ${error instanceof Error ? error.message : error}`)
+        console.log(`[Agent 服务] 错误不可重试，停止尝试: ${errorMessage}`)
+
+        const failedEvent: AgentEvent = {
+          type: 'retry_failed',
+          finalAttempt: attemptData,
+        }
+        webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          event: failedEvent,
+        } as AgentStreamEvent)
+
         return
       }
 
-      // 可重试 - 延迟后重试
-      const delaySeconds = RETRY_CONFIG.initialDelaySeconds * Math.pow(RETRY_CONFIG.delayMultiplier, attempt - 1)
-      const reason = getErrorReason(error)
-
+      // 可重试 - 发送 retry_attempt 事件
       console.log(
         `[Agent 服务] 遇到可恢复错误，准备重试 (${attempt}/${RETRY_CONFIG.maxAttempts}): ${reason}`,
       )
 
-      // 发送重试事件给 UI
-      const retryEvent: AgentEvent = {
+      const retryAttemptEvent: AgentEvent = {
+        type: 'retry_attempt',
+        attemptData,
+      }
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+        sessionId,
+        event: retryAttemptEvent,
+      } as AgentStreamEvent)
+
+      // 发送兼容的 retrying 事件
+      const retryingEvent: AgentEvent = {
         type: 'retrying',
         attempt,
         maxAttempts: RETRY_CONFIG.maxAttempts,
@@ -659,8 +717,8 @@ export async function runAgentWithRetry(
         reason,
       }
       webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
-        sessionId: input.sessionId,
-        event: retryEvent,
+        sessionId,
+        event: retryingEvent,
       } as AgentStreamEvent)
 
       // 等待后重试

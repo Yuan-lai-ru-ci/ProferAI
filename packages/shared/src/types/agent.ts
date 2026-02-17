@@ -33,6 +33,41 @@ export interface AgentEventUsage {
 }
 
 /**
+ * 重试尝试记录
+ *
+ * 记录每次重试尝试的详细信息，用于错误诊断和 UI 展示。
+ */
+export interface RetryAttempt {
+  /** 第几次尝试 (1-based) */
+  attempt: number
+  /** 时间戳 */
+  timestamp: number
+  /** 错误原因（简短描述，如"SDK 响应超时"） */
+  reason: string
+  /** 完整错误消息 */
+  errorMessage: string
+  /** stderr 输出（可选） */
+  stderr?: string
+  /** 堆栈跟踪（可选） */
+  stack?: string
+  /** 运行环境信息（可选） */
+  environment?: {
+    /** 运行时，如 "Bun 1.0.0" */
+    runtime: string
+    /** 平台，如 "darwin arm64" */
+    platform: string
+    /** 模型，如 "claude-sonnet-4-5-20250929" */
+    model: string
+    /** 工作区名称 */
+    workspace?: string
+    /** 工作目录 */
+    cwd?: string
+  }
+  /** 延迟秒数 */
+  delaySeconds: number
+}
+
+/**
  * Agent 事件类型
  *
  * 从 SDK 消息转换而来的扁平事件流，用于驱动 UI 渲染。
@@ -53,7 +88,10 @@ export type AgentEvent =
   | { type: 'complete'; stopReason?: string; usage?: AgentEventUsage }
   | { type: 'error'; message: string }
   // 重试机制
-  | { type: 'retrying'; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
+  | { type: 'retrying'; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }  // 保留向后兼容
+  | { type: 'retry_attempt'; attemptData: RetryAttempt }  // 新增：记录详细尝试信息
+  | { type: 'retry_cleared' }  // 新增：重试成功，清除状态
+  | { type: 'retry_failed'; finalAttempt: RetryAttempt }  // 新增：重试失败
   // Usage 更新
   | { type: 'usage_update'; usage: { inputTokens: number; contextWindow?: number } }
   // 上下文压缩
