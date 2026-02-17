@@ -62,6 +62,8 @@ const RETRY_CONFIG = {
   streamingTimeoutMs: 120000, // 2分钟
   /** 工具执行超时（毫秒） - 工具执行时的宽松超时 */
   toolExecutionTimeoutMs: 300000, // 5分钟
+  /** 上下文压缩超时（毫秒） - 压缩操作涉及 AI 总结，需要更长时间 */
+  compactingTimeoutMs: 600000, // 10分钟
 } as const
 
 /**
@@ -887,6 +889,7 @@ async function runAgentInternal(
   let receivedFirstMessage = false // 是否已收到第一条消息（用于检测初始连接问题）
   let activeToolCount = 0 // 当前正在执行的工具数量
   let isTimeoutAborted = false // 是否因超时而中止（区分用户主动中止）
+  let isCompacting = false // 是否正在执行上下文压缩
 
   try {
     // 6. 动态导入 SDK（避免在 esbuild 打包时出问题）
@@ -1066,12 +1069,16 @@ async function runAgentInternal(
         // 阶段 1：等待初始响应（检测网络连接问题）
         timeoutMs = RETRY_CONFIG.initialResponseTimeoutMs
         timeoutReason = '等待初始响应'
+      } else if (isCompacting) {
+        // 阶段 2：上下文压缩中（涉及 AI 总结，需要最长超时）
+        timeoutMs = RETRY_CONFIG.compactingTimeoutMs
+        timeoutReason = '上下文压缩中'
       } else if (activeToolCount > 0) {
-        // 阶段 2：工具正在执行（允许长时间操作）
+        // 阶段 3：工具正在执行（允许长时间操作）
         timeoutMs = RETRY_CONFIG.toolExecutionTimeoutMs
         timeoutReason = `工具执行中 (${activeToolCount} 个活跃工具)`
       } else {
-        // 阶段 3：流式输出中（检测连接中断）
+        // 阶段 4：流式输出中（检测连接中断）
         timeoutMs = RETRY_CONFIG.streamingTimeoutMs
         timeoutReason = '流式输出中'
       }
@@ -1158,11 +1165,19 @@ async function runAgentInternal(
           const evt: AgentEvent = { type: 'compact_complete' }
           webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
           accumulatedEvents.push(evt)
+          // 更新本地压缩状态
+          isCompacting = false
+          // 切换超时模式（从压缩超时回到正常超时）
+          resetInactivityTimer()
           console.log('[Agent 服务] 上下文压缩完成')
         } else if (sysMsg.subtype === 'status' && sysMsg.status === 'compacting') {
           const evt: AgentEvent = { type: 'compacting' }
           webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
           accumulatedEvents.push(evt)
+          // 更新本地压缩状态
+          isCompacting = true
+          // 切换超时模式（启用压缩超时）
+          resetInactivityTimer()
           console.log('[Agent 服务] 上下文压缩中...')
         }
       }
