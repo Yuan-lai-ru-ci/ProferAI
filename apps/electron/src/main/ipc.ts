@@ -41,6 +41,8 @@ import type {
   SystemProxyDetectResult,
   GitHubRelease,
   GitHubReleaseListOptions,
+  PermissionResponse,
+  PromaPermissionMode,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -87,6 +89,7 @@ import {
   deleteAgentSession,
 } from './lib/agent-session-manager'
 import { runAgentWithRetry, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession } from './lib/agent-service'
+import { permissionService } from './lib/agent-permission-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir } from './lib/config-paths'
 import {
   listAgentWorkspaces,
@@ -100,6 +103,8 @@ import {
   getWorkspaceCapabilities,
   getAgentWorkspace,
   deleteWorkspaceSkill,
+  getWorkspacePermissionMode,
+  setWorkspacePermissionMode,
 } from './lib/agent-workspace-manager'
 import {
   getLatestRelease,
@@ -534,6 +539,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DELETE_SESSION,
     async (_, id: string): Promise<void> => {
+      // 清理权限服务中该会话的白名单
+      permissionService.clearSessionWhitelist(id)
+      permissionService.clearSessionPending(id)
       return deleteAgentSession(id)
     }
   )
@@ -630,6 +638,46 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (_, sessionId: string): Promise<void> => {
       stopAgent(sessionId)
+    }
+  )
+
+  // ===== Agent 权限系统 =====
+
+  // 响应权限请求
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.PERMISSION_RESPOND,
+    async (event, response: PermissionResponse): Promise<void> => {
+      const { requestId, behavior, alwaysAllow } = response
+      const sessionId = permissionService.respondToPermission(requestId, behavior, alwaysAllow)
+
+      // 发送 permission_resolved 事件给渲染进程
+      if (sessionId) {
+        event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          event: { type: 'permission_resolved', requestId, behavior },
+        })
+      }
+    }
+  )
+
+  // 获取工作区权限模式
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_PERMISSION_MODE,
+    async (_, workspaceSlug: string): Promise<PromaPermissionMode> => {
+      return getWorkspacePermissionMode(workspaceSlug)
+    }
+  )
+
+  // 设置工作区权限模式
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SET_PERMISSION_MODE,
+    async (_, workspaceSlug: string, mode: PromaPermissionMode): Promise<void> => {
+      // 运行时验证模式值
+      const validModes = new Set<string>(['auto', 'smart', 'supervised'])
+      if (!validModes.has(mode)) {
+        throw new Error(`无效的权限模式: ${mode}`)
+      }
+      setWorkspacePermissionMode(workspaceSlug, mode)
     }
   )
 

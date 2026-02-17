@@ -6,7 +6,7 @@
  */
 
 import { atom } from 'jotai'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, PromaPermissionMode, PermissionRequest } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -167,6 +167,14 @@ export const workspaceCapabilitiesVersionAtom = atom(0)
 
 /** 工作区文件版本号 — 文件变化时自增，触发文件浏览器重新加载 */
 export const workspaceFilesVersionAtom = atom(0)
+
+// ===== 权限系统 Atoms =====
+
+/** 当前工作区权限模式 */
+export const agentPermissionModeAtom = atom<PromaPermissionMode>('smart')
+
+/** 待处理的权限请求队列（支持并发请求，FIFO） */
+export const pendingPermissionRequestsAtom = atom<readonly PermissionRequest[]>([])
 
 export const currentAgentSessionAtom = atom<AgentSessionMeta | null>((get) => {
   const sessions = get(agentSessionsAtom)
@@ -331,6 +339,14 @@ export function applyAgentEvent(
           reason: event.reason,
         },
       }
+
+    case 'permission_request':
+      // 权限请求事件由 PermissionBanner 处理，不影响流式状态
+      return prev
+
+    case 'permission_resolved':
+      // 权限解决事件由 PermissionBanner 处理，不影响流式状态
+      return prev
 
     default:
       return prev

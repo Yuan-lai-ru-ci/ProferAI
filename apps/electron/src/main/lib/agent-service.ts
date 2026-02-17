@@ -42,6 +42,10 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath } from './config-pa
 import { getRuntimeStatus } from './runtime-init'
 import { getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
 import { buildSystemPromptAppend, buildDynamicContext } from './agent-prompt-builder'
+import { permissionService } from './agent-permission-service'
+import { getWorkspacePermissionMode } from './agent-workspace-manager'
+import type { PermissionRequest, PromaPermissionMode } from '@proma/shared'
+import { SAFE_TOOLS } from '@proma/shared'
 
 /** 活跃的 AbortController 映射（sessionId → controller） */
 const activeControllers = new Map<string, AbortController>()
@@ -944,6 +948,29 @@ async function runAgentInternal(
       console.log(`[Agent 服务] 已回填历史上下文（无 resume）`)
     }
 
+    // 10. 获取权限模式并创建 canUseTool 回调
+    const permissionMode: PromaPermissionMode = workspaceSlug
+      ? getWorkspacePermissionMode(workspaceSlug)
+      : 'smart'
+    console.log(`[Agent 服务] 权限模式: ${permissionMode}`)
+
+    const canUseTool = permissionMode !== 'auto'
+      ? permissionService.createCanUseTool(
+          sessionId,
+          permissionMode,
+          (request: PermissionRequest) => {
+            // 发送权限请求到渲染进程
+            webContents.send(AGENT_IPC_CHANNELS.PERMISSION_REQUEST, {
+              sessionId,
+              request,
+            })
+            // 同时作为 AgentEvent 推送（用于消息流中显示）
+            const event: AgentEvent = { type: 'permission_request', request }
+            webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
+          },
+        )
+      : undefined
+
     const queryIterator = sdk.query({
       prompt: finalPrompt,
       options: {
@@ -952,8 +979,13 @@ async function runAgentInternal(
         executableArgs,
         model: modelId || 'claude-sonnet-4-5-20250929',
         maxTurns: 30,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
+        // 权限模式：auto 使用 bypass，其他使用 default
+        permissionMode: permissionMode === 'auto' ? 'bypassPermissions' : 'default',
+        allowDangerouslySkipPermissions: permissionMode === 'auto',
+        // 自定义权限处理器（非 auto 模式才注入）
+        ...(canUseTool && { canUseTool }),
+        // 只读工具白名单（SDK 级别优化，减少 canUseTool 调用次数）
+        ...(permissionMode === 'smart' && { allowedTools: [...SAFE_TOOLS] }),
         includePartialMessages: true,
         cwd: agentCwd,
         abortController: controller,
@@ -1297,6 +1329,8 @@ async function runAgentInternal(
     throw error
   } finally {
     activeControllers.delete(sessionId)
+    // 清理权限服务中的待处理请求
+    permissionService.clearSessionPending(sessionId)
   }
 }
 

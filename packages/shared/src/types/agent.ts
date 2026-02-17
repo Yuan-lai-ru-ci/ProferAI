@@ -59,6 +59,9 @@ export type AgentEvent =
   // 上下文压缩
   | { type: 'compacting' }
   | { type: 'compact_complete' }
+  // 权限请求
+  | { type: 'permission_request'; request: PermissionRequest }
+  | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
 
 // ===== Agent 会话管理 =====
 
@@ -236,6 +239,45 @@ export interface AgentCopyFolderInput {
   sessionId: string
 }
 
+// ===== 权限系统类型 =====
+
+/** Proma 权限模式 */
+export type PromaPermissionMode = 'auto' | 'smart' | 'supervised'
+
+/** 权限模式定义顺序（用于循环切换） */
+export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['auto', 'smart', 'supervised']
+
+/** 危险等级 */
+export type DangerLevel = 'safe' | 'normal' | 'dangerous'
+
+/** 权限请求（主进程 → 渲染进程） */
+export interface PermissionRequest {
+  /** 请求唯一 ID */
+  requestId: string
+  /** 会话 ID */
+  sessionId: string
+  /** 工具名称 */
+  toolName: string
+  /** 工具输入参数 */
+  toolInput: Record<string, unknown>
+  /** 操作描述（人类可读） */
+  description: string
+  /** 具体命令（Bash 工具时有值） */
+  command?: string
+  /** 危险等级 */
+  dangerLevel: DangerLevel
+  /** SDK 提供的原因说明 */
+  decisionReason?: string
+}
+
+/** 权限响应（渲染进程 → 主进程） */
+export interface PermissionResponse {
+  requestId: string
+  behavior: 'allow' | 'deny'
+  /** 是否记住选择（加入会话白名单） */
+  alwaysAllow: boolean
+}
+
 // ===== IPC 通道常量 =====
 
 /**
@@ -323,4 +365,14 @@ export const AGENT_IPC_CHANNELS = {
   CAPABILITIES_CHANGED: 'agent:capabilities-changed',
   /** 工作区文件变化（session 目录文件监听触发，用于文件浏览器刷新） */
   WORKSPACE_FILES_CHANGED: 'agent:workspace-files-changed',
+
+  // 权限系统
+  /** 权限请求（主进程 → 渲染进程推送） */
+  PERMISSION_REQUEST: 'agent:permission:request',
+  /** 权限响应（渲染进程 → 主进程） */
+  PERMISSION_RESPOND: 'agent:permission:respond',
+  /** 设置权限模式（渲染进程 → 主进程） */
+  SET_PERMISSION_MODE: 'agent:set-permission-mode',
+  /** 获取权限模式（渲染进程 → 主进程） */
+  GET_PERMISSION_MODE: 'agent:get-permission-mode',
 } as const

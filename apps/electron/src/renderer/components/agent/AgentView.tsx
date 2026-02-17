@@ -17,6 +17,7 @@ import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCirc
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
+import { PermissionBanner } from './PermissionBanner'
 import { FileBrowser } from '@/components/file-browser'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
@@ -41,6 +42,7 @@ import {
   agentStreamErrorsAtom,
   currentAgentErrorAtom,
   currentAgentSessionDraftAtom,
+  pendingPermissionRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -78,6 +80,7 @@ export function AgentView(): React.ReactElement {
   const agentError = useAtomValue(currentAgentErrorAtom)
 
   const [inputContent, setInputContent] = useAtom(currentAgentSessionDraftAtom)
+  const setPendingPermissions = useSetAtom(pendingPermissionRequestsAtom)
   const [fileBrowserOpen, setFileBrowserOpen] = React.useState(false)
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
@@ -134,6 +137,7 @@ export function AgentView(): React.ReactElement {
   React.useEffect(() => {
     if (!currentSessionId) {
       setCurrentMessages([])
+      setPendingPermissions([])
       return
     }
 
@@ -141,7 +145,10 @@ export function AgentView(): React.ReactElement {
       .getAgentSessionMessages(currentSessionId)
       .then(setCurrentMessages)
       .catch(console.error)
-  }, [currentSessionId, setCurrentMessages])
+
+    // 切换会话时清除待处理的权限请求
+    setPendingPermissions([])
+  }, [currentSessionId, setCurrentMessages, setPendingPermissions])
 
   // 订阅 Agent 流式 IPC 事件
   React.useEffect(() => {
@@ -245,13 +252,33 @@ export function AgentView(): React.ReactElement {
         .catch(console.error)
     })
 
+    // 订阅权限请求事件
+    const cleanupPermission = window.electronAPI.onPermissionRequest(
+      (data) => {
+        // 只处理当前会话的权限请求；其他会话的自动拒绝
+        if (data.sessionId === currentSessionIdRef.current) {
+          setPendingPermissions((prev) => [...prev, data.request])
+        } else {
+          // 非当前会话的请求自动拒绝（避免 SDK 无限等待）
+          window.electronAPI.respondPermission({
+            requestId: data.request.requestId,
+            behavior: 'deny',
+            alwaysAllow: false,
+          }).catch(() => {
+            // 拒绝失败不影响 UI
+          })
+        }
+      }
+    )
+
     return () => {
       cleanupEvent()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
+      cleanupPermission()
     }
-  }, [setStreamingStates, setCurrentMessages, setAgentSessions, setAgentStreamErrors])
+  }, [setStreamingStates, setCurrentMessages, setAgentSessions, setAgentStreamErrors, setPendingPermissions])
 
   // 自动发送 pending prompt（从设置页"对话完成配置"触发）
   React.useEffect(() => {
@@ -742,6 +769,9 @@ export function AgentView(): React.ReactElement {
             </button>
           </div>
         )}
+
+        {/* 权限请求横幅 */}
+        <PermissionBanner />
 
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2">
