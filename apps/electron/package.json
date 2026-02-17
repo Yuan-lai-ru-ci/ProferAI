@@ -11,7 +11,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c blue,green \"bun run dev:vite\" \"bun run dev:electron\"",
-    "dev:split": "concurrently -k -n vite,electron -c blue,green --hide 0 \"bun run dev:vite\" \"bun run dev:electron\"",
+    "dev:split": "bash scripts/dev-split.sh",
     "dev:vite": "vite dev",
     "dev:electron": "bun run build:main && bun run build:preload && bun run build:resources && sleep 2 && concurrently -k -n main,preload,app -c yellow,magenta,cyan \"bun run watch:main\" \"bun run watch:preload\" \"bunx electronmon .\"",
     "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk",
@@ -37,7 +37,7 @@
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.41",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.44",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@proma/core": "workspace:*",

@@ -6,6 +6,7 @@
  */
 
 import { atom } from 'jotai'
+import { atomFamily } from 'jotai/utils'
 import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt } from '@proma/shared'
 
 /** 活动状态 */
@@ -310,6 +311,11 @@ export function applyAgentEvent(
       // 成功完成 - 清除 retrying
       return { ...prev, running: false, retrying: undefined }
 
+    case 'typed_error':
+      // 处理类型化错误（TypedError）
+      // 停止运行，清除重试状态
+      return { ...prev, running: false, retrying: undefined }
+
     case 'error':
       // 改进：error 事件不再清除 retrying 状态
       // retrying 状态由专用事件控制
@@ -436,4 +442,36 @@ export const currentAgentSessionDraftAtom = atom(
       return map
     })
   }
+)
+
+// ===== 后台任务管理 =====
+
+/**
+ * 后台任务数据结构
+ *
+ * 用于 ActiveTasksBar 显示运行中的 Agent 任务和 Shell 任务。
+ */
+export interface BackgroundTask {
+  /** 任务或 Shell ID */
+  id: string
+  /** 任务类型 */
+  type: 'agent' | 'shell'
+  /** 关联的工具调用 ID（用于滚动定位到 ToolActivityItem） */
+  toolUseId: string
+  /** 任务开始时间戳 */
+  startTime: number
+  /** 已耗时（秒） */
+  elapsedSeconds: number
+  /** 任务意图/描述 */
+  intent?: string
+}
+
+/**
+ * 后台任务列表原子家族
+ *
+ * 按 sessionId 隔离，每个会话独立管理后台任务。
+ * 任务完成后从列表中移除（只显示运行中任务）。
+ */
+export const backgroundTasksAtomFamily = atomFamily((sessionId: string) =>
+  atom<BackgroundTask[]>([])
 )

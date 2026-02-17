@@ -38,6 +38,9 @@ import type {
   AgentSaveFilesInput,
   AgentSavedFile,
   AgentCopyFolderInput,
+  GetTaskOutputInput,
+  GetTaskOutputResult,
+  StopTaskInput,
   WorkspaceMcpConfig,
   SkillMeta,
   WorkspaceCapabilities,
@@ -244,6 +247,14 @@ export interface ElectronAPI {
 
   /** 中止 Agent 执行 */
   stopAgent: (sessionId: string) => Promise<void>
+
+  // ===== Agent 后台任务管理 =====
+
+  /** 获取任务输出 */
+  getTaskOutput: (input: GetTaskOutputInput) => Promise<GetTaskOutputResult>
+
+  /** 停止任务 */
+  stopTask: (input: StopTaskInput) => Promise<void>
 
   // ===== Agent 工作区管理相关 =====
 
@@ -593,6 +604,15 @@ const electronAPI: ElectronAPI = {
 
   stopAgent: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, sessionId)
+  },
+
+  // Agent 后台任务管理
+  getTaskOutput: (input: GetTaskOutputInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TASK_OUTPUT, input)
+  },
+
+  stopTask: (input: StopTaskInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_TASK, input)
   },
 
   // Agent 工作区管理

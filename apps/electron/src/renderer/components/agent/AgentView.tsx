@@ -24,6 +24,7 @@ import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { useBackgroundTasks } from '@/hooks/useBackgroundTasks'
 import {
   currentAgentSessionIdAtom,
   currentAgentMessagesAtom,
@@ -85,6 +86,14 @@ export function AgentView(): React.ReactElement {
   const [isUploadingFolder, setIsUploadingFolder] = React.useState(false)
   const [dragFolderWarning, setDragFolderWarning] = React.useState(false)
   const [errorCopied, setErrorCopied] = React.useState(false)
+
+  // 后台任务管理
+  const {
+    tasks: backgroundTasks,
+    addTask,
+    updateTaskProgress,
+    removeTask,
+  } = useBackgroundTasks(currentSessionId || '')
 
   // 当前会话 ID ref（避免闭包捕获旧值）
   const currentSessionIdRef = React.useRef(currentSessionId)
@@ -167,13 +176,53 @@ export function AgentView(): React.ReactElement {
         map.delete(sessionId)
         return map
       })
+
+      // 清理后台任务（SDK 退出时，所有后台任务都应停止）
+      if (sessionId === currentSessionId && backgroundTasks.length > 0) {
+        console.log(`[AgentView] 清理 ${backgroundTasks.length} 个后台任务`)
+        // 逐个移除所有后台任务
+        backgroundTasks.forEach((task) => {
+          removeTask(task.toolUseId)
+        })
+      }
     }
 
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
       (streamEvent: AgentStreamEvent) => {
-        updateState(streamEvent.sessionId, (prev) =>
-          applyAgentEvent(prev, streamEvent.event)
-        )
+        const { sessionId, event } = streamEvent
+
+        // 应用事件到流式状态
+        updateState(sessionId, (prev) => applyAgentEvent(prev, event))
+
+        // 处理后台任务事件
+        if (event.type === 'task_backgrounded') {
+          addTask({
+            id: event.taskId,
+            type: 'agent',
+            toolUseId: event.toolUseId,
+            startTime: Date.now(),
+            intent: event.intent,
+          })
+        } else if (event.type === 'task_progress') {
+          updateTaskProgress(event.toolUseId, event.elapsedSeconds)
+        } else if (event.type === 'shell_backgrounded') {
+          addTask({
+            id: event.shellId,
+            type: 'shell',
+            toolUseId: event.toolUseId,
+            startTime: Date.now(),
+            intent: event.command || event.intent,
+          })
+        } else if (event.type === 'tool_result') {
+          // 工具完成时，移除对应的后台任务
+          removeTask(event.toolUseId)
+        } else if (event.type === 'shell_killed') {
+          // Shell 被杀死时，移除任务
+          const task = backgroundTasks.find((t) => t.id === event.shellId)
+          if (task) {
+            removeTask(task.toolUseId)
+          }
+        }
       }
     )
 
@@ -250,7 +299,7 @@ export function AgentView(): React.ReactElement {
       cleanupError()
       cleanupTitleUpdated()
     }
-  }, [setStreamingStates, setCurrentMessages, setAgentSessions, setAgentStreamErrors])
+  }, [setStreamingStates, setCurrentMessages, setAgentSessions, setAgentStreamErrors, addTask, updateTaskProgress, removeTask, backgroundTasks])
 
   // 自动发送 pending prompt（从设置页"对话完成配置"触发）
   React.useEffect(() => {

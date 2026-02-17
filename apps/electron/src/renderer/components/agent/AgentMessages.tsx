@@ -29,8 +29,11 @@ import { CopyButton } from '@/components/chat/CopyButton'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
+import { BackgroundTasksPanel } from './BackgroundTasksPanel'
+import { useBackgroundTasks } from '@/hooks/useBackgroundTasks'
 import {
   currentAgentMessagesAtom,
+  currentAgentSessionIdAtom,
   agentStreamingAtom,
   agentStreamingContentAtom,
   agentToolActivitiesAtom,
@@ -429,16 +432,46 @@ function AgentMessageItem({ message }: { message: AgentMessage }): React.ReactEl
     )
   }
 
+  if (message.role === 'status' && message.errorCode) {
+    // TypedError 消息 - 复用普通消息格式，简单显示错误
+    return (
+      <Message from="assistant">
+        <MessageHeader
+          model={undefined}
+          time={formatMessageTime(message.createdAt)}
+          logo={
+            <div className="size-[35px] rounded-[25%] bg-destructive/10 flex items-center justify-center">
+              <AlertTriangle size={18} className="text-destructive" />
+            </div>
+          }
+        />
+        <MessageContent>
+          <div className="text-destructive">
+            <MessageResponse>{message.content}</MessageResponse>
+          </div>
+        </MessageContent>
+        {/* 操作按钮（hover 时可见） */}
+        <MessageActions className="pl-[46px] mt-0.5">
+          <CopyButton content={message.content} />
+        </MessageActions>
+      </Message>
+    )
+  }
+
   return null
 }
 
 export function AgentMessages(): React.ReactElement {
   const messages = useAtomValue(currentAgentMessagesAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const streaming = useAtomValue(agentStreamingAtom)
   const streamingContent = useAtomValue(agentStreamingContentAtom)
   const toolActivities = useAtomValue(agentToolActivitiesAtom)
   const agentStreamingModel = useAtomValue(agentStreamingModelAtom)
   const retrying = useAtomValue(agentRetryingAtom)
+
+  // 获取后台任务列表
+  const { tasks: backgroundTasks } = useBackgroundTasks(currentSessionId || '')
 
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,
@@ -468,6 +501,8 @@ export function AgentMessages(): React.ReactElement {
                   {toolActivities.length > 0 && (
                     <div className="mb-3">
                       <ToolActivityList activities={toolActivities} animate />
+                      {/* 后台任务面板 — 显示在工具活动下方 */}
+                      <BackgroundTasksPanel tasks={backgroundTasks} />
                     </div>
                   )}
                   {smoothContent ? (
