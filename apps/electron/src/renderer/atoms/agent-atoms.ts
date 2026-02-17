@@ -279,7 +279,7 @@ export function applyAgentEvent(
         ...prev,
         toolActivities: prev.toolActivities.map((t) =>
           t.toolUseId === event.toolUseId
-            ? { ...t, isBackground: true, taskId: event.taskId }
+            ? { ...t, isBackground: true, taskId: event.taskId, done: true }
             : t
         ),
       }
@@ -299,7 +299,7 @@ export function applyAgentEvent(
         ...prev,
         toolActivities: prev.toolActivities.map((t) =>
           t.toolUseId === event.toolUseId
-            ? { ...t, isBackground: true, shellId: event.shellId }
+            ? { ...t, isBackground: true, shellId: event.shellId, done: true }
             : t
         ),
       }
