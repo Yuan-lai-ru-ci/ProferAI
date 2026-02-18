@@ -43,8 +43,9 @@ import { getRuntimeStatus } from './runtime-init'
 import { getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
 import { buildSystemPromptAppend, buildDynamicContext } from './agent-prompt-builder'
 import { permissionService } from './agent-permission-service'
+import { askUserService } from './agent-ask-user-service'
 import { getWorkspacePermissionMode } from './agent-workspace-manager'
-import type { PermissionRequest, PromaPermissionMode } from '@proma/shared'
+import type { PermissionRequest, PromaPermissionMode, AskUserRequest } from '@proma/shared'
 import { SAFE_TOOLS } from '@proma/shared'
 
 /** 活跃的 AbortController 映射（sessionId → controller） */
@@ -968,6 +969,18 @@ async function runAgentInternal(
             const event: AgentEvent = { type: 'permission_request', request }
             webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
           },
+          // AskUserQuestion 交互式问答处理器
+          (sid, input, signal, sendAskUser) => askUserService.handleAskUserQuestion(sid, input, signal, sendAskUser),
+          // AskUser IPC 发送回调
+          (request: AskUserRequest) => {
+            webContents.send(AGENT_IPC_CHANNELS.ASK_USER_REQUEST, {
+              sessionId,
+              request,
+            })
+            // 同时作为 AgentEvent 推送
+            const event: AgentEvent = { type: 'ask_user_request', request }
+            webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
+          },
         )
       : undefined
 
@@ -985,7 +998,7 @@ async function runAgentInternal(
         // 自定义权限处理器（非 auto 模式才注入）
         ...(canUseTool && { canUseTool }),
         // 只读工具白名单（SDK 级别，跳过 canUseTool 回调）
-        // smart 和 supervised 模式都需要：避免 AskUserQuestion 等无害工具触发审批
+        // 注意：AskUserQuestion 不在 SAFE_TOOLS 中，会走 canUseTool 以展示交互式 UI
         ...(permissionMode !== 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         includePartialMessages: true,
         cwd: agentCwd,
@@ -1332,6 +1345,8 @@ async function runAgentInternal(
     activeControllers.delete(sessionId)
     // 清理权限服务中的待处理请求
     permissionService.clearSessionPending(sessionId)
+    // 清理 AskUser 服务中的待处理请求
+    askUserService.clearSessionPending(sessionId)
   }
 }
 

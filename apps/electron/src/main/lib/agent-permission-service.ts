@@ -15,6 +15,7 @@ import type {
   PromaPermissionMode,
   PermissionRequest,
   DangerLevel,
+  AskUserRequest,
 } from '@proma/shared'
 import {
   SAFE_TOOLS,
@@ -26,7 +27,8 @@ import {
 /** SDK PermissionResult 类型（避免直接依赖 SDK 内部类型） */
 type PermissionResult = {
   behavior: 'allow'
-  updatedInput?: Record<string, unknown>
+  /** SDK CLI 的 Zod 校验要求此字段为 record 类型，不能省略 */
+  updatedInput: Record<string, unknown>
 } | {
   behavior: 'deny'
   message: string
@@ -76,30 +78,37 @@ export class AgentPermissionService {
     sessionId: string,
     mode: PromaPermissionMode,
     sendToRenderer: (request: PermissionRequest) => void,
+    askUserHandler?: (sessionId: string, input: Record<string, unknown>, signal: AbortSignal, sendToRenderer: (request: AskUserRequest) => void) => Promise<PermissionResult>,
+    sendAskUserToRenderer?: (request: AskUserRequest) => void,
   ): (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions) => Promise<PermissionResult> {
     return async (toolName, input, options) => {
+      // AskUserQuestion 拦截：委托给交互式问答服务
+      if (toolName === 'AskUserQuestion' && askUserHandler && sendAskUserToRenderer) {
+        return askUserHandler(sessionId, input, options.signal, sendAskUserToRenderer)
+      }
+
       // 自动模式：全部允许（理论上不会到这里，auto 模式使用 bypassPermissions）
       if (mode === 'auto') {
-        return { behavior: 'allow' as const }
+        return { behavior: 'allow' as const, updatedInput: {} }
       }
 
       // 智能模式：只读工具自动允许
       if (mode === 'smart') {
         if (this.isReadOnlyTool(toolName, input)) {
-          return { behavior: 'allow' as const }
+          return { behavior: 'allow' as const, updatedInput: {} }
         }
         if (this.isWhitelisted(sessionId, toolName, input)) {
-          return { behavior: 'allow' as const }
+          return { behavior: 'allow' as const, updatedInput: {} }
         }
       }
 
       // 监督模式：安全工具自动允许 + 检查白名单
       if (mode === 'supervised') {
         if (this.isReadOnlyTool(toolName, input)) {
-          return { behavior: 'allow' as const }
+          return { behavior: 'allow' as const, updatedInput: {} }
         }
         if (this.isWhitelisted(sessionId, toolName, input)) {
-          return { behavior: 'allow' as const }
+          return { behavior: 'allow' as const, updatedInput: {} }
         }
       }
 
@@ -139,7 +148,7 @@ export class AgentPermissionService {
 
     pending.resolve(
       behavior === 'allow'
-        ? { behavior: 'allow' as const }
+        ? { behavior: 'allow' as const, updatedInput: {} }
         : { behavior: 'deny' as const, message: '用户拒绝了此操作' }
     )
     this.pendingPermissions.delete(requestId)
@@ -195,8 +204,10 @@ export class AgentPermissionService {
       return whitelist.allowedTools.has(toolName)
     }
 
-    // Bash 工具：检查基础命令是否在白名单中
+    // Bash 工具：即使基础命令在白名单中，也要重新检查完整命令的安全性
     const command = typeof input.command === 'string' ? input.command : ''
+    if (hasDangerousStructure(command)) return false
+    if (isDangerousCommand(command)) return false
     const baseCommand = this.extractBaseCommand(command)
     return whitelist.allowedBashCommands.has(baseCommand)
   }

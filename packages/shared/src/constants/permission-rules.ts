@@ -15,7 +15,7 @@ export const SAFE_TOOLS: readonly string[] = [
   'TodoRead',        // Todo 列表读取
   'TodoWrite',       // Todo 列表写入（无安全风险）
   'TaskOutput',      // 后台任务输出
-  'AskUserQuestion', // 向用户提问
+  // 注意：AskUserQuestion 不在此列表 — 由 canUseTool 拦截并展示交互式 UI
 ]
 
 /** 安全的 Bash 命令模式（只读操作） */
@@ -75,6 +75,10 @@ export function hasDangerousStructure(command: string): boolean {
   if (/>{1,2}/.test(command)) return true
   // find -exec / -delete（可执行任意命令/删除文件）
   if (/\b-exec\b/.test(command) || /\b-delete\b/.test(command)) return true
+  // 命令链接操作符（&&、;）
+  if (/[;&]/.test(command)) return true
+  // 子 shell / 命令替换（$(...) 和反引号）
+  if (/\$\(/.test(command) || /`/.test(command)) return true
   return false
 }
 

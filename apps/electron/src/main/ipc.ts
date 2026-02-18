@@ -43,6 +43,7 @@ import type {
   GitHubReleaseListOptions,
   PermissionResponse,
   PromaPermissionMode,
+  AskUserResponse,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -90,6 +91,7 @@ import {
 } from './lib/agent-session-manager'
 import { runAgentWithRetry, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
+import { askUserService } from './lib/agent-ask-user-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir } from './lib/config-paths'
 import {
   listAgentWorkspaces,
@@ -542,6 +544,8 @@ export function registerIpcHandlers(): void {
       // 清理权限服务中该会话的白名单
       permissionService.clearSessionWhitelist(id)
       permissionService.clearSessionPending(id)
+      // 清理 AskUser 服务中的待处理请求
+      askUserService.clearSessionPending(id)
       return deleteAgentSession(id)
     }
   )
@@ -678,6 +682,25 @@ export function registerIpcHandlers(): void {
         throw new Error(`无效的权限模式: ${mode}`)
       }
       setWorkspacePermissionMode(workspaceSlug, mode)
+    }
+  )
+
+  // ===== AskUserQuestion 交互式问答 =====
+
+  // 响应 AskUser 请求
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.ASK_USER_RESPOND,
+    async (event, response: AskUserResponse): Promise<void> => {
+      const { requestId, answers } = response
+      const sessionId = askUserService.respondToAskUser(requestId, answers)
+
+      // 发送 ask_user_resolved 事件给渲染进程
+      if (sessionId) {
+        event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          event: { type: 'ask_user_resolved', requestId },
+        })
+      }
     }
   )
 

@@ -62,6 +62,9 @@ export type AgentEvent =
   // 权限请求
   | { type: 'permission_request'; request: PermissionRequest }
   | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
+  // AskUserQuestion 交互式问答
+  | { type: 'ask_user_request'; request: AskUserRequest }
+  | { type: 'ask_user_resolved'; requestId: string }
 
 // ===== Agent 会话管理 =====
 
@@ -239,6 +242,48 @@ export interface AgentCopyFolderInput {
   sessionId: string
 }
 
+// ===== AskUserQuestion 交互式问答类型 =====
+
+/** AskUserQuestion 工具的选项定义 */
+export interface AskUserQuestionOption {
+  /** 选项显示文本 */
+  label: string
+  /** 选项说明 */
+  description?: string
+}
+
+/** AskUserQuestion 工具的问题定义 */
+export interface AskUserQuestion {
+  /** 问题内容 */
+  question: string
+  /** 短标签（chip 显示） */
+  header?: string
+  /** 可选项列表 */
+  options: AskUserQuestionOption[]
+  /** 是否支持多选 */
+  multiSelect?: boolean
+}
+
+/** AskUser 请求（主进程 → 渲染进程） */
+export interface AskUserRequest {
+  /** 请求唯一 ID */
+  requestId: string
+  /** 会话 ID */
+  sessionId: string
+  /** 问题列表 */
+  questions: AskUserQuestion[]
+  /** 工具原始输入（用于构建 updatedInput） */
+  toolInput: Record<string, unknown>
+}
+
+/** AskUser 响应（渲染进程 → 主进程） */
+export interface AskUserResponse {
+  /** 请求 ID */
+  requestId: string
+  /** 用户答案（问题索引字符串 → 答案文本） */
+  answers: Record<string, string>
+}
+
 // ===== 权限系统类型 =====
 
 /** Proma 权限模式 */
@@ -375,4 +420,10 @@ export const AGENT_IPC_CHANNELS = {
   SET_PERMISSION_MODE: 'agent:set-permission-mode',
   /** 获取权限模式（渲染进程 → 主进程） */
   GET_PERMISSION_MODE: 'agent:get-permission-mode',
+
+  // AskUserQuestion 交互式问答
+  /** AskUser 请求（主进程 → 渲染进程推送） */
+  ASK_USER_REQUEST: 'agent:ask-user:request',
+  /** AskUser 响应（渲染进程 → 主进程） */
+  ASK_USER_RESPOND: 'agent:ask-user:respond',
 } as const

@@ -18,6 +18,7 @@ import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { PermissionBanner } from './PermissionBanner'
+import { AskUserBanner } from './AskUserBanner'
 import { FileBrowser } from '@/components/file-browser'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
@@ -43,6 +44,7 @@ import {
   currentAgentErrorAtom,
   currentAgentSessionDraftAtom,
   pendingPermissionRequestsAtom,
+  pendingAskUserRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -81,6 +83,7 @@ export function AgentView(): React.ReactElement {
 
   const [inputContent, setInputContent] = useAtom(currentAgentSessionDraftAtom)
   const setPendingPermissions = useSetAtom(pendingPermissionRequestsAtom)
+  const setPendingAskUserRequests = useSetAtom(pendingAskUserRequestsAtom)
   const [fileBrowserOpen, setFileBrowserOpen] = React.useState(false)
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
@@ -148,7 +151,8 @@ export function AgentView(): React.ReactElement {
 
     // 切换会话时清除待处理的权限请求
     setPendingPermissions([])
-  }, [currentSessionId, setCurrentMessages, setPendingPermissions])
+    setPendingAskUserRequests([])
+  }, [currentSessionId, setCurrentMessages, setPendingPermissions, setPendingAskUserRequests])
 
   // 订阅 Agent 流式 IPC 事件
   React.useEffect(() => {
@@ -271,14 +275,33 @@ export function AgentView(): React.ReactElement {
       }
     )
 
+    // 订阅 AskUser 请求事件
+    const cleanupAskUser = window.electronAPI.onAskUserRequest(
+      (data) => {
+        // 只处理当前会话的 AskUser 请求；其他会话自动回复空答案
+        if (data.sessionId === currentSessionIdRef.current) {
+          setPendingAskUserRequests((prev) => [...prev, data.request])
+        } else {
+          // 非当前会话：回复空答案（避免 SDK 无限等待）
+          window.electronAPI.respondAskUser({
+            requestId: data.request.requestId,
+            answers: {},
+          }).catch(() => {
+            // 失败不影响 UI
+          })
+        }
+      }
+    )
+
     return () => {
       cleanupEvent()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
       cleanupPermission()
+      cleanupAskUser()
     }
-  }, [setStreamingStates, setCurrentMessages, setAgentSessions, setAgentStreamErrors, setPendingPermissions])
+  }, [setStreamingStates, setCurrentMessages, setAgentSessions, setAgentStreamErrors, setPendingPermissions, setPendingAskUserRequests])
 
   // 自动发送 pending prompt（从设置页"对话完成配置"触发）
   React.useEffect(() => {
@@ -772,6 +795,9 @@ export function AgentView(): React.ReactElement {
 
         {/* 权限请求横幅 */}
         <PermissionBanner />
+
+        {/* AskUserQuestion 交互式问答横幅 */}
+        <AskUserBanner />
 
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2">

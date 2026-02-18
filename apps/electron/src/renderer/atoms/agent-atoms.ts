@@ -6,7 +6,7 @@
  */
 
 import { atom } from 'jotai'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, PromaPermissionMode, PermissionRequest } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, PromaPermissionMode, PermissionRequest, AskUserRequest } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -175,6 +175,9 @@ export const agentPermissionModeAtom = atom<PromaPermissionMode>('smart')
 
 /** 待处理的权限请求队列（支持并发请求，FIFO） */
 export const pendingPermissionRequestsAtom = atom<readonly PermissionRequest[]>([])
+
+/** 待处理的 AskUser 请求队列（FIFO） */
+export const pendingAskUserRequestsAtom = atom<readonly AskUserRequest[]>([])
 
 export const currentAgentSessionAtom = atom<AgentSessionMeta | null>((get) => {
   const sessions = get(agentSessionsAtom)
@@ -346,6 +349,14 @@ export function applyAgentEvent(
 
     case 'permission_resolved':
       // 权限解决事件由 PermissionBanner 处理，不影响流式状态
+      return prev
+
+    case 'ask_user_request':
+      // AskUser 请求事件由 AskUserBanner 处理，不影响流式状态
+      return prev
+
+    case 'ask_user_resolved':
+      // AskUser 解决事件由 AskUserBanner 处理，不影响流式状态
       return prev
 
     default:
