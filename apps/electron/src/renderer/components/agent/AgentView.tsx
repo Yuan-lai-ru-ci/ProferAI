@@ -18,6 +18,7 @@ import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { PermissionBanner } from './PermissionBanner'
+import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { FileBrowser } from '@/components/file-browser'
 import { ModelSelector } from '@/components/chat/ModelSelector'
@@ -140,7 +141,6 @@ export function AgentView(): React.ReactElement {
   React.useEffect(() => {
     if (!currentSessionId) {
       setCurrentMessages([])
-      setPendingPermissions([])
       return
     }
 
@@ -149,10 +149,7 @@ export function AgentView(): React.ReactElement {
       .then(setCurrentMessages)
       .catch(console.error)
 
-    // 切换会话时清除待处理的权限请求
-    setPendingPermissions([])
-    setPendingAskUserRequests([])
-  }, [currentSessionId, setCurrentMessages, setPendingPermissions, setPendingAskUserRequests])
+  }, [currentSessionId, setCurrentMessages])
 
   // 订阅 Agent 流式 IPC 事件
   React.useEffect(() => {
@@ -162,7 +159,7 @@ export function AgentView(): React.ReactElement {
       updater: (prev: AgentStreamState) => AgentStreamState,
     ): void => {
       setStreamingStates((prev) => {
-        const current = prev.get(sessionId) ?? { running: true, content: '', toolActivities: [], model: undefined }
+        const current = prev.get(sessionId) ?? { running: true, content: '', toolActivities: [], model: undefined, startedAt: Date.now() }
         const next = updater(current)
         const map = new Map(prev)
         map.set(sessionId, next)
@@ -323,6 +320,7 @@ export function AgentView(): React.ReactElement {
           content: '',
           toolActivities: [],
           model: agentModelId || undefined,
+          startedAt: Date.now(),
         })
         return map
       })
@@ -676,8 +674,9 @@ export function AgentView(): React.ReactElement {
         content: '',
         toolActivities: [],
         model: agentModelId || undefined,
+        startedAt: Date.now(),
       }
-      map.set(currentSessionId, { ...current, running: true })
+      map.set(currentSessionId, { ...current, running: true, startedAt: current.startedAt ?? Date.now() })
       return map
     })
 
@@ -909,6 +908,7 @@ export function AgentView(): React.ReactElement {
                         <p>{isUploadingFolder ? '正在上传文件夹...' : '添加文件夹'}</p>
                       </TooltipContent>
                     </Tooltip>
+                    <PermissionModeSelector />
                     <ModelSelector
                       filterChannelId={agentChannelId}
                       externalSelectedModel={externalSelectedModel}

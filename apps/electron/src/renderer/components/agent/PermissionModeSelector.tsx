@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
-import { Zap, Brain, Eye } from 'lucide-react'
+import { Zap, Compass, Eye } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { agentPermissionModeAtom, currentAgentWorkspaceIdAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import type { PromaPermissionMode } from '@proma/shared'
@@ -27,8 +27,8 @@ const MODE_CONFIG: Record<PromaPermissionMode, {
     className: 'text-green-500 hover:text-green-400',
   },
   smart: {
-    icon: Brain,
-    label: '智能',
+    icon: Compass,
+    label: '探索',
     description: '只读自动允许，写入/危险操作需确认',
     className: 'text-blue-500 hover:text-blue-400',
   },

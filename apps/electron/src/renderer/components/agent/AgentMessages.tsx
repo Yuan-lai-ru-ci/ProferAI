@@ -36,6 +36,7 @@ import {
   agentToolActivitiesAtom,
   agentStreamingModelAtom,
   agentRetryingAtom,
+  agentStartedAtAtom,
 } from '@/atoms/agent-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import type { AgentMessage } from '@proma/shared'
@@ -260,6 +261,7 @@ export function AgentMessages(): React.ReactElement {
   const toolActivities = useAtomValue(agentToolActivitiesAtom)
   const agentStreamingModel = useAtomValue(agentStreamingModelAtom)
   const retrying = useAtomValue(agentRetryingAtom)
+  const startedAt = useAtomValue(agentStartedAtAtom)
 
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,
@@ -297,7 +299,7 @@ export function AgentMessages(): React.ReactElement {
                       {streaming && <StreamingIndicator />}
                     </>
                   ) : (
-                    streaming && toolActivities.length === 0 && !retrying && <MessageLoading />
+                    streaming && toolActivities.length === 0 && !retrying && <MessageLoading startedAt={startedAt} />
                   )}
                 </MessageContent>
               </Message>

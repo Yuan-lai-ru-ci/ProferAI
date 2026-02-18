@@ -10,46 +10,51 @@
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { Shield, ShieldAlert, Check, X, ChevronDown } from 'lucide-react'
+import { Shield, ShieldAlert, Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { pendingPermissionRequestsAtom } from '@/atoms/agent-atoms'
 import type { DangerLevel } from '@proma/shared'
 
-/** 危险等级对应的样式 */
-const DANGER_STYLES: Record<DangerLevel, { border: string; icon: string; bg: string }> = {
-  safe: {
-    border: 'border-green-500/30',
-    icon: 'text-green-500',
-    bg: 'bg-green-500/5',
-  },
-  normal: {
-    border: 'border-primary/20',
-    icon: 'text-primary',
-    bg: 'bg-primary/5',
-  },
-  dangerous: {
-    border: 'border-amber-500/40',
-    icon: 'text-amber-500',
-    bg: 'bg-amber-500/5',
-  },
+/** 危险等级对应的图标颜色 */
+const DANGER_ICON_STYLES: Record<DangerLevel, string> = {
+  safe: 'text-green-500',
+  normal: 'text-primary',
+  dangerous: 'text-amber-500',
+}
+
+/** 解析工具显示名称（MCP 工具显示 server / tool） */
+function formatToolName(toolName: string): string {
+  const parts = toolName.split('__')
+  if (parts[0] === 'mcp' && parts.length >= 3) {
+    return `${parts[1]} / ${parts.slice(2).join('__')}`
+  }
+  return toolName
 }
 
 export function PermissionBanner(): React.ReactElement | null {
   const [requests, setRequests] = useAtom(pendingPermissionRequestsAtom)
-  const [showAlwaysAllow, setShowAlwaysAllow] = React.useState(false)
   const [responding, setResponding] = React.useState(false)
+  const respondRef = React.useRef<(behavior: 'allow' | 'deny', alwaysAllow?: boolean) => void>()
 
-  // 展示队列中的第一个请求
   const request = requests[0] ?? null
 
-  // 当请求变化时重置"总是允许"展开状态
+  // Enter 键快捷允许
   React.useEffect(() => {
-    setShowAlwaysAllow(false)
+    if (!request) return
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        respondRef.current?.('allow')
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
   }, [request?.requestId])
 
   if (!request) return null
 
-  const styles = DANGER_STYLES[request.dangerLevel]
+  const iconColor = DANGER_ICON_STYLES[request.dangerLevel]
   const isDangerous = request.dangerLevel === 'dangerous'
   const IconComponent = isDangerous ? ShieldAlert : Shield
 
@@ -73,14 +78,16 @@ export function PermissionBanner(): React.ReactElement | null {
     }
   }
 
+  respondRef.current = respond
+
   return (
     <div
-      className={`mx-4 mb-3 rounded-lg border ${styles.border} ${styles.bg} overflow-hidden animate-in slide-in-from-bottom-2 duration-200`}
+      className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200"
     >
       {/* 头部 */}
       <div className="flex items-center justify-between px-3 py-2">
         <div className="flex items-center gap-2">
-          <IconComponent className={`size-4 ${styles.icon}`} />
+          <IconComponent className={`size-4 ${iconColor}`} />
           <span className="text-sm font-medium">
             {isDangerous ? '危险操作需要确认' : '需要确认'}
           </span>
@@ -91,7 +98,7 @@ export function PermissionBanner(): React.ReactElement | null {
           )}
         </div>
         <span className="text-xs text-muted-foreground font-mono">
-          {request.toolName}
+          {formatToolName(request.toolName)}
         </span>
       </div>
 
@@ -100,6 +107,10 @@ export function PermissionBanner(): React.ReactElement | null {
         {request.command ? (
           <pre className="text-xs font-mono bg-background/50 rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap break-all max-h-[120px] overflow-y-auto">
             {request.command}
+          </pre>
+        ) : Object.keys(request.toolInput).length > 0 ? (
+          <pre className="text-xs font-mono bg-background/50 rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap break-all max-h-[120px] overflow-y-auto">
+            {JSON.stringify(request.toolInput, null, 2)}
           </pre>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -110,6 +121,9 @@ export function PermissionBanner(): React.ReactElement | null {
 
       {/* 操作按钮 */}
       <div className="flex items-center justify-end gap-1.5 px-3 pb-2.5">
+        <span className="text-[10px] text-muted-foreground/40 mr-auto">
+          Enter 允许
+        </span>
         <Button
           variant="ghost"
           size="sm"
@@ -121,28 +135,15 @@ export function PermissionBanner(): React.ReactElement | null {
           拒绝
         </Button>
 
-        {/* 总是允许（折叠，避免误触） */}
-        {showAlwaysAllow ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => respond('allow', true)}
-            disabled={responding}
-            className="h-7 px-3 text-xs"
-          >
-            本次会话总是允许
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowAlwaysAllow(true)}
-            disabled={responding}
-            className="h-7 px-1 text-xs text-muted-foreground"
-          >
-            <ChevronDown className="size-3" />
-          </Button>
-        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => respond('allow', true)}
+          disabled={responding}
+          className="h-7 px-3 text-xs"
+        >
+          本次会话总是允许
+        </Button>
 
         <Button
           variant="default"

@@ -1,7 +1,7 @@
 /**
  * AgentHeader — Agent 会话头部
  *
- * 显示会话标题（可点击编辑）+ 权限模式选择器。
+ * 显示会话标题（可点击编辑）。
  * 参照 ChatHeader 的编辑模式。
  */
 
@@ -9,7 +9,6 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Pencil, Check, X } from 'lucide-react'
 import { currentAgentSessionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
-import { PermissionModeSelector } from './PermissionModeSelector'
 
 export function AgentHeader(): React.ReactElement | null {
   const session = useAtomValue(currentAgentSessionAtom)
@@ -87,17 +86,14 @@ export function AgentHeader(): React.ReactElement | null {
           </button>
         </div>
       ) : (
-        <>
-          <button
-            type="button"
-            onClick={startEdit}
-            className="group flex items-center gap-1.5 text-sm font-medium text-foreground hover:text-foreground/80 transition-colors truncate flex-1 min-w-0"
-          >
-            <span className="truncate">{session.title}</span>
-            <Pencil className="size-3 opacity-40 group-hover:opacity-70 transition-opacity flex-shrink-0" />
-          </button>
-          <PermissionModeSelector />
-        </>
+        <button
+          type="button"
+          onClick={startEdit}
+          className="group flex items-center gap-1.5 text-sm font-medium text-foreground hover:text-foreground/80 transition-colors truncate flex-1 min-w-0"
+        >
+          <span className="truncate">{session.title}</span>
+          <Pencil className="size-3 opacity-40 group-hover:opacity-70 transition-opacity flex-shrink-0" />
+        </button>
       )}
     </div>
   )

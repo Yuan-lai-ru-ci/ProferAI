@@ -46,6 +46,8 @@ export interface AgentStreamState {
   contextWindow?: number
   /** 是否正在压缩上下文 */
   isCompacting?: boolean
+  /** 流式开始时间戳（用于思考计时持久化） */
+  startedAt?: number
   /** 重试状态 */
   retrying?: {
     attempt: number
@@ -173,11 +175,57 @@ export const workspaceFilesVersionAtom = atom(0)
 /** 当前工作区权限模式 */
 export const agentPermissionModeAtom = atom<PromaPermissionMode>('smart')
 
-/** 待处理的权限请求队列（支持并发请求，FIFO） */
-export const pendingPermissionRequestsAtom = atom<readonly PermissionRequest[]>([])
+/** 待处理的权限请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
+const _allPendingPermissionRequestsAtom = atom<Map<string, readonly PermissionRequest[]>>(new Map())
 
-/** 待处理的 AskUser 请求队列（FIFO） */
-export const pendingAskUserRequestsAtom = atom<readonly AskUserRequest[]>([])
+type PermissionRequestsUpdate = readonly PermissionRequest[] | ((prev: readonly PermissionRequest[]) => readonly PermissionRequest[])
+
+/** 当前会话的权限请求队列（派生读写原子） */
+export const pendingPermissionRequestsAtom = atom(
+  (get): readonly PermissionRequest[] => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return []
+    return get(_allPendingPermissionRequestsAtom).get(currentId) ?? []
+  },
+  (get, set, update: PermissionRequestsUpdate) => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return
+    set(_allPendingPermissionRequestsAtom, (prev) => {
+      const map = new Map(prev)
+      const current = map.get(currentId) ?? []
+      const newValue = typeof update === 'function' ? update(current) : update
+      if (newValue.length === 0) map.delete(currentId)
+      else map.set(currentId, newValue)
+      return map
+    })
+  }
+)
+
+/** 待处理的 AskUser 请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
+const _allPendingAskUserRequestsAtom = atom<Map<string, readonly AskUserRequest[]>>(new Map())
+
+type AskUserRequestsUpdate = readonly AskUserRequest[] | ((prev: readonly AskUserRequest[]) => readonly AskUserRequest[])
+
+/** 当前会话的 AskUser 请求队列（派生读写原子） */
+export const pendingAskUserRequestsAtom = atom(
+  (get): readonly AskUserRequest[] => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return []
+    return get(_allPendingAskUserRequestsAtom).get(currentId) ?? []
+  },
+  (get, set, update: AskUserRequestsUpdate) => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return
+    set(_allPendingAskUserRequestsAtom, (prev) => {
+      const map = new Map(prev)
+      const current = map.get(currentId) ?? []
+      const newValue = typeof update === 'function' ? update(current) : update
+      if (newValue.length === 0) map.delete(currentId)
+      else map.set(currentId, newValue)
+      return map
+    })
+  }
+)
 
 export const currentAgentSessionAtom = atom<AgentSessionMeta | null>((get) => {
   const sessions = get(agentSessionsAtom)
@@ -214,6 +262,12 @@ export const agentRetryingAtom = atom<AgentStreamState['retrying'] | undefined>(
   const currentId = get(currentAgentSessionIdAtom)
   if (!currentId) return undefined
   return get(agentStreamingStatesAtom).get(currentId)?.retrying
+})
+
+export const agentStartedAtAtom = atom<number | undefined>((get) => {
+  const currentId = get(currentAgentSessionIdAtom)
+  if (!currentId) return undefined
+  return get(agentStreamingStatesAtom).get(currentId)?.startedAt
 })
 
 export const agentRunningSessionIdsAtom = atom<Set<string>>((get) => {
