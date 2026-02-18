@@ -93,8 +93,11 @@ export class AgentPermissionService {
         }
       }
 
-      // 监督模式：检查白名单
+      // 监督模式：安全工具自动允许 + 检查白名单
       if (mode === 'supervised') {
+        if (this.isReadOnlyTool(toolName, input)) {
+          return { behavior: 'allow' as const }
+        }
         if (this.isWhitelisted(sessionId, toolName, input)) {
           return { behavior: 'allow' as const }
         }

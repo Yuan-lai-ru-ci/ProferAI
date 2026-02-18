@@ -984,8 +984,9 @@ async function runAgentInternal(
         allowDangerouslySkipPermissions: permissionMode === 'auto',
         // 自定义权限处理器（非 auto 模式才注入）
         ...(canUseTool && { canUseTool }),
-        // 只读工具白名单（SDK 级别优化，减少 canUseTool 调用次数）
-        ...(permissionMode === 'smart' && { allowedTools: [...SAFE_TOOLS] }),
+        // 只读工具白名单（SDK 级别，跳过 canUseTool 回调）
+        // smart 和 supervised 模式都需要：避免 AskUserQuestion 等无害工具触发审批
+        ...(permissionMode !== 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         includePartialMessages: true,
         cwd: agentCwd,
         abortController: controller,
