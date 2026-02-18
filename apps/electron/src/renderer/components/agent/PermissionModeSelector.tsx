@@ -92,7 +92,7 @@ export function PermissionModeSelector(): React.ReactElement | null {
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={cycleMode}
+            onClick={() => { cycleMode(); requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus()) }}
             className={`flex items-center gap-1 px-1.5 py-1 rounded text-xs font-medium transition-colors ${config.className}`}
           >
             <Icon className="size-3.5" />
