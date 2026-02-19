@@ -24,6 +24,10 @@ import {
   workspaceFilesVersionAtom,
 } from './atoms/agent-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
+import {
+  notificationsEnabledAtom,
+  initializeNotifications,
+} from './atoms/notifications'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import './styles/globals.css'
 
@@ -138,6 +142,21 @@ function UpdaterInitializer(): null {
 }
 
 /**
+ * 通知初始化组件
+ *
+ * 从主进程加载通知开关设置。
+ */
+function NotificationsInitializer(): null {
+  const setEnabled = useSetAtom(notificationsEnabledAtom)
+
+  useEffect(() => {
+    initializeNotifications(setEnabled)
+  }, [setEnabled])
+
+  return null
+}
+
+/**
  * Agent IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Agent 流式事件、权限请求
@@ -152,6 +171,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeInitializer />
     <AgentSettingsInitializer />
+    <NotificationsInitializer />
     <AgentListenersInitializer />
     <UpdaterInitializer />
     <App />

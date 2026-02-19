@@ -14,10 +14,15 @@ import {
   SettingsSection,
   SettingsCard,
   SettingsRow,
+  SettingsToggle,
 } from './primitives'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/popover'
 import { UserAvatar } from '../chat/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
+import {
+  notificationsEnabledAtom,
+  updateNotificationsEnabled,
+} from '@/atoms/notifications'
 import { cn } from '@/lib/utils'
 
 /** emoji-mart 选择回调的 emoji 对象类型 */
@@ -32,6 +37,7 @@ interface EmojiMartEmoji {
 
 export function GeneralSettings(): React.ReactElement {
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
+  const [notificationsEnabled, setNotificationsEnabled] = useAtom(notificationsEnabledAtom)
   const [isEditingName, setIsEditingName] = React.useState(false)
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
@@ -196,6 +202,15 @@ export function GeneralSettings(): React.ReactElement {
           >
             <span className="text-[13px] text-foreground/40">简体中文</span>
           </SettingsRow>
+          <SettingsToggle
+            label="桌面通知"
+            description="Agent 完成任务或需要操作时发送通知"
+            checked={notificationsEnabled}
+            onCheckedChange={(checked) => {
+              setNotificationsEnabled(checked)
+              updateNotificationsEnabled(checked)
+            }}
+          />
         </SettingsCard>
       </SettingsSection>
     </div>

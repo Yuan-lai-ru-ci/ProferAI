@@ -20,6 +20,10 @@ import {
   backgroundTasksAtomFamily,
   applyAgentEvent,
 } from '@/atoms/agent-atoms'
+import {
+  notificationsEnabledAtom,
+  sendDesktopNotification,
+} from '@/atoms/notifications'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import type { AgentStreamEvent } from '@proma/shared'
 
@@ -99,6 +103,16 @@ export function useGlobalAgentListeners(): void {
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: { sessionId: string }) => {
         const currentId = store.get(currentAgentSessionIdAtom)
+
+        // 发送桌面通知
+        const enabled = store.get(notificationsEnabledAtom)
+        const sessions = store.get(agentSessionsAtom)
+        const session = sessions.find((s) => s.id === data.sessionId)
+        sendDesktopNotification(
+          'Agent 任务完成',
+          session?.title ?? '任务已完成',
+          enabled
+        )
 
         /** 竞态保护：检查该会话是否已有新的流式请求正在运行 */
         const isNewStreamRunning = (): boolean => {
@@ -196,6 +210,16 @@ export function useGlobalAgentListeners(): void {
           map.set(sessionId, [...current, request])
           return map
         })
+
+        // 发送桌面通知
+        const enabled = store.get(notificationsEnabledAtom)
+        sendDesktopNotification(
+          '需要权限确认',
+          request.toolName
+            ? `Agent 请求使用工具: ${request.toolName}`
+            : 'Agent 需要你的权限确认',
+          enabled
+        )
       }
     )
 
@@ -209,6 +233,14 @@ export function useGlobalAgentListeners(): void {
           map.set(sessionId, [...current, request])
           return map
         })
+
+        // 发送桌面通知
+        const enabled = store.get(notificationsEnabledAtom)
+        sendDesktopNotification(
+          'Agent 需要你的输入',
+          request.questions[0]?.question ?? 'Agent 有问题需要你回答',
+          enabled
+        )
       }
     )
 
