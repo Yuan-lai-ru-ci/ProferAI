@@ -14,7 +14,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen, Copy, Check } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
@@ -77,6 +77,7 @@ export function AgentView(): React.ReactElement {
   const contextStatus = useAtomValue(agentContextStatusAtom)
   const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
   const agentError = useAtomValue(currentAgentErrorAtom)
+  const store = useStore()
 
   const [inputContent, setInputContent] = useAtom(currentAgentSessionDraftAtom)
   const [fileBrowserOpen, setFileBrowserOpen] = React.useState(false)
@@ -444,6 +445,24 @@ export function AgentView(): React.ReactElement {
     // 2. 构建最终消息
     const finalMessage = fileReferences + text
 
+    // 防御性快照：将当前流式 assistant 内容保存到消息列表
+    // 避免重置流式状态时丢失前一轮回复（竞态场景：complete 事件到达但 STREAM_COMPLETE 尚未到达）
+    const prevStream = store.get(agentStreamingStatesAtom).get(currentSessionId)
+    if (prevStream && prevStream.content && !prevStream.running) {
+      setCurrentMessages((prev) => {
+        // 仅在最后一条不是 assistant 消息时追加（避免重复）
+        const lastMsg = prev[prev.length - 1]
+        if (lastMsg?.role === 'assistant') return prev
+        return [...prev, {
+          id: `snapshot-${Date.now()}`,
+          role: 'assistant' as const,
+          content: prevStream.content,
+          createdAt: Date.now(),
+          model: prevStream.model,
+        }]
+      })
+    }
+
     // 初始化流式状态
     setStreamingStates((prev) => {
       const map = new Map(prev)
@@ -484,7 +503,7 @@ export function AgentView(): React.ReactElement {
         return map
       })
     })
-  }, [inputContent, pendingFiles, pendingFolderRefs, currentSessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, setStreamingStates, setCurrentMessages, setPendingFiles, setAgentStreamErrors])
+  }, [inputContent, pendingFiles, pendingFolderRefs, currentSessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, store, setStreamingStates, setCurrentMessages, setPendingFiles, setAgentStreamErrors])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {

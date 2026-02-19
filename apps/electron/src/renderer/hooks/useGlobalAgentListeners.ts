@@ -25,7 +25,7 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import type { AgentStreamEvent } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload } from '@proma/shared'
 
 export function useGlobalAgentListeners(): void {
   const store = useStore()
@@ -101,7 +101,7 @@ export function useGlobalAgentListeners(): void {
 
     // ===== 2. 流式完成 =====
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
-      (data: { sessionId: string }) => {
+      (data: AgentStreamCompletePayload) => {
         const currentId = store.get(currentAgentSessionIdAtom)
 
         // 发送桌面通知
@@ -145,15 +145,23 @@ export function useGlobalAgentListeners(): void {
         }
 
         if (data.sessionId === currentId) {
-          window.electronAPI
-            .getAgentSessionMessages(data.sessionId)
-            .then((messages) => {
-              // 竞态保护：新流已启动时跳过消息覆盖
-              if (isNewStreamRunning()) return
-              store.set(currentAgentMessagesAtom, messages)
-              finalize()
-            })
-            .catch(() => finalize())
+          if (data.messages) {
+            // 同步路径：直接使用 payload 中已持久化的消息，消除异步 IPC 竞态窗口
+            if (!isNewStreamRunning()) {
+              store.set(currentAgentMessagesAtom, data.messages)
+            }
+            finalize()
+          } else {
+            // 降级路径：payload 无消息（兼容旧版主进程），异步重新加载
+            window.electronAPI
+              .getAgentSessionMessages(data.sessionId)
+              .then((messages) => {
+                if (isNewStreamRunning()) return
+                store.set(currentAgentMessagesAtom, messages)
+                finalize()
+              })
+              .catch(() => finalize())
+          }
         } else {
           finalize()
         }

@@ -1142,8 +1142,9 @@ export async function runAgent(
           // 清理 activeController（在发送 STREAM_COMPLETE 前）
           activeControllers.delete(sessionId)
 
-          // 发送 STREAM_COMPLETE
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId })
+          // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
+          const finalMessages = getAgentSessionMessages(sessionId)
+          webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId, messages: finalMessages })
 
           // 退出处理（错误后不应继续）
           return
@@ -1184,7 +1185,9 @@ export async function runAgent(
     // 清理 activeController（在发送 STREAM_COMPLETE 前，确保后端准备好接受新请求）
     activeControllers.delete(sessionId)
 
-    webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId })
+    // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
+    const finalMessages = getAgentSessionMessages(sessionId)
+    webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId, messages: finalMessages })
 
     // 异步生成标题（不阻塞 stream complete 响应）
     // 使用 SDK 实际确认的模型，避免因默认模型与当前渠道不匹配导致标题生成失败。
@@ -1219,7 +1222,9 @@ export async function runAgent(
       // 清理 activeController
       activeControllers.delete(sessionId)
 
-      webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId })
+      // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
+      const abortFinalMessages = getAgentSessionMessages(sessionId)
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId, messages: abortFinalMessages })
       return
     }
 
@@ -1283,8 +1288,9 @@ export async function runAgent(
     // 清理 activeController（在发送 STREAM_COMPLETE 前）
     activeControllers.delete(sessionId)
 
-    // 发送 STREAM_COMPLETE（确保前端知道流式已结束）
-    webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId })
+    // 发送 STREAM_COMPLETE（携带已持久化的消息，确保前端知道流式已结束）
+    const errorFinalMessages = getAgentSessionMessages(sessionId)
+    webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId, messages: errorFinalMessages })
 
     // 根据错误类型决定是否保留 sdkSessionId
     // API 配置错误（400/401/403/404）保留，服务器错误（500+）清除

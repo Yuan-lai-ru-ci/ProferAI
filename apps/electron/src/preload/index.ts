@@ -33,6 +33,7 @@ import type {
   AgentMessage,
   AgentSendInput,
   AgentStreamEvent,
+  AgentStreamCompletePayload,
   AgentWorkspace,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
@@ -299,7 +300,7 @@ export interface ElectronAPI {
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
 
   /** 订阅 Agent 流式完成事件 */
-  onAgentStreamComplete: (callback: (data: { sessionId: string }) => void) => () => void
+  onAgentStreamComplete: (callback: (data: AgentStreamCompletePayload) => void) => () => void
 
   /** 订阅 Agent 流式错误事件 */
   onAgentStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void
@@ -690,8 +691,8 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.STREAM_EVENT, listener) }
   },
 
-  onAgentStreamComplete: (callback: (data: { sessionId: string }) => void) => {
-    const listener = (_: unknown, data: { sessionId: string }): void => callback(data)
+  onAgentStreamComplete: (callback: (data: AgentStreamCompletePayload) => void) => {
+    const listener = (_: unknown, data: AgentStreamCompletePayload): void => callback(data)
     ipcRenderer.on(AGENT_IPC_CHANNELS.STREAM_COMPLETE, listener)
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.STREAM_COMPLETE, listener) }
   },

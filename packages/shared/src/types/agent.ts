@@ -339,6 +339,16 @@ export interface AgentStreamEvent {
   event: AgentEvent
 }
 
+/**
+ * Agent 流式完成事件载荷（主进程 → 渲染进程）
+ * 包含已持久化的消息列表，避免异步重新加载的竞态窗口。
+ */
+export interface AgentStreamCompletePayload {
+  sessionId: string
+  /** 已持久化的完整消息列表 */
+  messages?: AgentMessage[]
+}
+
 // ===== 文件浏览器 =====
 
 /** 文件/目录条目（用于文件浏览器树形视图） */
