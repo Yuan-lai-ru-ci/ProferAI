@@ -176,6 +176,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <AgentListenersInitializer />
     <UpdaterInitializer />
     <App />
-    <Toaster position="top-center" />
+    <Toaster position="top-right" />
   </React.StrictMode>
 )
