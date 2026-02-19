@@ -15,6 +15,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { toast } from 'sonner'
 import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen, Copy, Check } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
@@ -395,7 +396,15 @@ export function AgentView(): React.ReactElement {
   /** 发送消息 */
   const handleSend = React.useCallback(async (): Promise<void> => {
     const text = inputContent.trim()
-    if ((!text && pendingFiles.length === 0 && pendingFolderRefs.length === 0) || !currentSessionId || !agentChannelId || streaming) return
+    if ((!text && pendingFiles.length === 0 && pendingFolderRefs.length === 0) || !currentSessionId || !agentChannelId) return
+
+    // 上一条消息仍在处理中，提示用户等待或停止
+    if (streaming) {
+      toast.info('上一条消息还在处理中', {
+        description: '请等待完成后发送，或点击右下角停止按钮结束当前任务',
+      })
+      return
+    }
 
     // 清除当前会话的错误消息
     setAgentStreamErrors((prev) => {

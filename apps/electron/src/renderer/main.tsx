@@ -29,6 +29,7 @@ import {
   initializeNotifications,
 } from './atoms/notifications'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
+import { Toaster } from './components/ui/sonner'
 import './styles/globals.css'
 
 /**
@@ -175,5 +176,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <AgentListenersInitializer />
     <UpdaterInitializer />
     <App />
+    <Toaster position="top-center" />
   </React.StrictMode>
 )
