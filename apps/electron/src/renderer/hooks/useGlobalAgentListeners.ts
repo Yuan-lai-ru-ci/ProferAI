@@ -100,7 +100,16 @@ export function useGlobalAgentListeners(): void {
       (data: { sessionId: string }) => {
         const currentId = store.get(currentAgentSessionIdAtom)
 
+        /** 竞态保护：检查该会话是否已有新的流式请求正在运行 */
+        const isNewStreamRunning = (): boolean => {
+          const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
+          return state?.running === true
+        }
+
         const finalize = (): void => {
+          // 竞态保护：新流已启动时不要清理状态
+          if (isNewStreamRunning()) return
+
           // 移除流式状态
           store.set(agentStreamingStatesAtom, (prev) => {
             if (!prev.has(data.sessionId)) return prev
@@ -125,6 +134,8 @@ export function useGlobalAgentListeners(): void {
           window.electronAPI
             .getAgentSessionMessages(data.sessionId)
             .then((messages) => {
+              // 竞态保护：新流已启动时跳过消息覆盖
+              if (isNewStreamRunning()) return
               store.set(currentAgentMessagesAtom, messages)
               finalize()
             })
@@ -153,6 +164,9 @@ export function useGlobalAgentListeners(): void {
           window.electronAPI
             .getAgentSessionMessages(data.sessionId)
             .then((messages) => {
+              // 竞态保护：新流已启动时跳过消息覆盖
+              const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
+              if (state?.running) return
               store.set(currentAgentMessagesAtom, messages)
             })
             .catch((error) => {
