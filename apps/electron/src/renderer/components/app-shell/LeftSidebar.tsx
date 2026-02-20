@@ -34,6 +34,7 @@ import {
 import { userProfileAtom } from '@/atoms/user-profile'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
+import { promptConfigAtom, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
 import {
   AlertDialog,
@@ -146,6 +147,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const mode = useAtomValue(appModeAtom)
   const hasUpdate = useAtomValue(hasUpdateAtom)
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom)
+  const promptConfig = useAtomValue(promptConfigAtom)
+  const setSelectedPromptId = useSetAtom(selectedPromptIdAtom)
 
   // Agent 模式状态
   const [agentSessions, setAgentSessions] = useAtom(agentSessionsAtom)
@@ -241,6 +244,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       // 确保在对话视图
       setActiveView('conversations')
       setActiveItem('all-chats')
+      // 根据默认提示词重置选中
+      if (promptConfig.defaultPromptId) {
+        setSelectedPromptId(promptConfig.defaultPromptId)
+      }
     } catch (error) {
       console.error('[侧边栏] 创建对话失败:', error)
     }
