@@ -45,6 +45,8 @@ import {
   agentStreamErrorsAtom,
   currentAgentErrorAtom,
   currentAgentSessionDraftAtom,
+  agentPromptSuggestionsAtom,
+  currentAgentSuggestionAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, AgentSavedFile, ModelOption } from '@proma/shared'
@@ -79,6 +81,8 @@ export function AgentView(): React.ReactElement {
   const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
   const agentError = useAtomValue(currentAgentErrorAtom)
   const store = useStore()
+  const suggestion = useAtomValue(currentAgentSuggestionAtom)
+  const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
 
   const [inputContent, setInputContent] = useAtom(currentAgentSessionDraftAtom)
   const [fileBrowserOpen, setFileBrowserOpen] = React.useState(false)
@@ -396,7 +400,9 @@ export function AgentView(): React.ReactElement {
   /** 发送消息 */
   const handleSend = React.useCallback(async (): Promise<void> => {
     const text = inputContent.trim()
-    if ((!text && pendingFiles.length === 0 && pendingFolderRefs.length === 0) || !currentSessionId || !agentChannelId) return
+    // 如果输入为空但有建议，使用建议内容
+    const effectiveText = text || suggestion || ''
+    if ((!effectiveText && pendingFiles.length === 0 && pendingFolderRefs.length === 0) || !currentSessionId || !agentChannelId) return
 
     // 上一条消息仍在处理中，提示用户等待或停止
     if (streaming) {
@@ -408,6 +414,14 @@ export function AgentView(): React.ReactElement {
 
     // 清除当前会话的错误消息
     setAgentStreamErrors((prev) => {
+      if (!prev.has(currentSessionId)) return prev
+      const map = new Map(prev)
+      map.delete(currentSessionId)
+      return map
+    })
+
+    // 清除当前会话的提示建议
+    setPromptSuggestions((prev) => {
       if (!prev.has(currentSessionId)) return prev
       const map = new Map(prev)
       map.delete(currentSessionId)
@@ -452,7 +466,7 @@ export function AgentView(): React.ReactElement {
     }
 
     // 2. 构建最终消息
-    const finalMessage = fileReferences + text
+    const finalMessage = fileReferences + effectiveText
 
     // 防御性快照：将当前流式 assistant 内容保存到消息列表
     // 避免重置流式状态时丢失前一轮回复（竞态场景：complete 事件到达但 STREAM_COMPLETE 尚未到达）
@@ -512,7 +526,7 @@ export function AgentView(): React.ReactElement {
         return map
       })
     })
-  }, [inputContent, pendingFiles, pendingFolderRefs, currentSessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, store, setStreamingStates, setCurrentMessages, setPendingFiles, setAgentStreamErrors])
+  }, [inputContent, pendingFiles, pendingFolderRefs, currentSessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, store, setStreamingStates, setCurrentMessages, setPendingFiles, setAgentStreamErrors, setPromptSuggestions])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -569,7 +583,7 @@ export function AgentView(): React.ReactElement {
     }
   }, [agentError])
 
-  const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || pendingFolderRefs.length > 0) && agentChannelId !== null && !streaming
+  const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || pendingFolderRefs.length > 0 || !!suggestion) && agentChannelId !== null && !streaming
 
   // 无当前会话 → 引导文案
   if (!currentSessionId) {
@@ -684,9 +698,12 @@ export function AgentView(): React.ReactElement {
               onPasteFiles={handlePasteFiles}
               placeholder={
                 agentChannelId
-                  ? '输入消息... (Enter 发送，Shift+Enter 换行)'
+                  ? suggestion
+                    ? `${suggestion} (Proma Agent 提供，按下回车自动发送，或手动输入)`
+                    : '输入消息... (Enter 发送，Shift+Enter 换行)'
                   : '请先在设置中选择 Agent 供应商'
               }
+              suggestionActive={!!suggestion && inputContent.trim().length === 0}
               disabled={!agentChannelId}
               autoFocusTrigger={currentSessionId}
             />

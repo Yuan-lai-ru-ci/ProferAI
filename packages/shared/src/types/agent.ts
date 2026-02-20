@@ -133,6 +133,7 @@ export type AgentEvent =
   | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string }
   // 后台任务
   | { type: 'task_backgrounded'; toolUseId: string; taskId: string; intent?: string; turnId?: string }
+  | { type: 'task_started'; taskId: string; toolUseId?: string; description: string; taskType?: string; turnId?: string }
   | { type: 'task_progress'; toolUseId: string; elapsedSeconds: number; turnId?: string }
   | { type: 'shell_backgrounded'; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
   | { type: 'shell_killed'; shellId: string; turnId?: string }
@@ -156,6 +157,8 @@ export type AgentEvent =
   // AskUserQuestion 交互式问答
   | { type: 'ask_user_request'; request: AskUserRequest }
   | { type: 'ask_user_resolved'; requestId: string }
+  // 提示建议
+  | { type: 'prompt_suggestion'; suggestion: string }
 
 // ===== Agent 会话管理 =====
 

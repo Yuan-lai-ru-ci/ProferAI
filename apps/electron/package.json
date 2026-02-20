@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "description": "Proma next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -37,7 +37,7 @@
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.44",
+    "@anthropic-ai/claude-agent-sdk": "0.2.49",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@proma/core": "workspace:*",

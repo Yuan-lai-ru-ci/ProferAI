@@ -17,6 +17,7 @@ import {
   currentAgentMessagesAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
+  agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
   applyAgentEvent,
 } from '@/atoms/agent-atoms'
@@ -94,6 +95,14 @@ export function useGlobalAgentListeners(): void {
             const task = prev.find((t) => t.id === event.shellId)
             if (!task) return prev
             return prev.filter((t) => t.toolUseId !== task.toolUseId)
+          })
+        } else if (event.type === 'prompt_suggestion') {
+          // 存储提示建议到 atom
+          console.log(`[GlobalAgentListeners] 收到建议: sessionId=${sessionId}, suggestion="${event.suggestion.slice(0, 50)}..."`)
+          store.set(agentPromptSuggestionsAtom, (prev) => {
+            const map = new Map(prev)
+            map.set(sessionId, event.suggestion)
+            return map
           })
         }
       }

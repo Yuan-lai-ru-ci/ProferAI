@@ -834,30 +834,10 @@ export async function runAgent(
         // 迁移兼容：确保已有工作区包含 SDK plugin manifest（否则 skills 不可发现）
         ensurePluginManifest(ws.slug, ws.name)
 
-        // 迁移兼容：旧会话在 workspace 级别 cwd 下创建，resume 在新 cwd 下会失败
-        // 检测：session 目录完全为空（刚创建）→ 清除并回填历史
-        //
-        // 注意：SDK 不会在工作目录创建 .claude-agent/ 等可见标识文件，
-        // resume 机制基于 SDK 内部状态（可能在 ~/.claude/ 或内存中），
-        // 我们只需要确保不在空目录中尝试 resume（因为 cwd 迁移会导致文件路径变化）
+        // SDK session 状态保存在 ~/.claude/projects/，不在 cwd 目录中。
+        // 如果有 sdkSessionId 则直接信任并 resume，失败时 SDK 会自动降级为新会话。
         if (existingSdkSessionId) {
-          try {
-            const { readdirSync } = await import('node:fs')
-            const contents = readdirSync(agentCwd)
-            console.log(`[Agent 服务] 检查 session 目录: ${agentCwd}, 文件数: ${contents.length}`)
-
-            // 只在目录完全为空时清除 sdkSessionId（说明是新创建或刚迁移的会话）
-            if (contents.length === 0) {
-              updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
-              existingSdkSessionId = undefined
-              console.log(`[Agent 服务] 迁移: session 目录为空（新创建或迁移），清除 sdkSessionId`)
-            } else {
-              console.log(`[Agent 服务] 保留 sdkSessionId，将尝试 resume: ${existingSdkSessionId}`)
-            }
-          } catch (error) {
-            console.warn('[Agent 服务] 读取 session 目录失败:', error)
-            // 读取失败不影响主流程，保留 sdkSessionId 尝试 resume
-          }
+          console.log(`[Agent 服务] 将尝试 resume: ${existingSdkSessionId}`)
         } else {
           console.log(`[Agent 服务] 无 sdkSessionId，将作为新会话启动（回填历史上下文）`)
         }
@@ -976,6 +956,7 @@ export async function runAgent(
         // 注意：AskUserQuestion 不在 SAFE_TOOLS 中，会走 canUseTool 以展示交互式 UI
         ...(permissionMode !== 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         includePartialMessages: true,
+        promptSuggestions: true,
         cwd: agentCwd,
         abortController: controller,
         env: sdkEnv,
@@ -1057,9 +1038,9 @@ export async function runAgent(
         }
       }
 
-      // 处理 system compaction 事件
+      // 处理 system 事件
       if (msg.type === 'system') {
-        const sysMsg = msg as { type: 'system'; subtype?: string; status?: string }
+        const sysMsg = msg as { type: 'system'; subtype?: string; status?: string; task_id?: string; tool_use_id?: string; description?: string; task_type?: string }
         if (sysMsg.subtype === 'compact_boundary') {
           const evt: AgentEvent = { type: 'compact_complete' }
           webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
@@ -1072,6 +1053,30 @@ export async function runAgent(
           accumulatedEvents.push(evt)
           isCompacting = true
           console.log('[Agent 服务] 上下文压缩中...')
+        } else if (sysMsg.subtype === 'task_started' && sysMsg.task_id && sysMsg.description) {
+          const evt: AgentEvent = {
+            type: 'task_started',
+            taskId: sysMsg.task_id,
+            toolUseId: sysMsg.tool_use_id,
+            description: sysMsg.description,
+            taskType: sysMsg.task_type,
+            turnId: turnId.value || undefined,
+          }
+          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
+          accumulatedEvents.push(evt)
+          console.log(`[Agent 服务] 子任务启动: ${sysMsg.task_id} — ${sysMsg.description}`)
+        }
+      }
+
+      // 处理 prompt_suggestion 消息（SDK v0.2.49+）
+      if (msg.type === 'prompt_suggestion') {
+        const suggestionMsg = msg as { type: 'prompt_suggestion'; suggestion?: string }
+        console.log(`[Agent 服务][建议] 收到 prompt_suggestion 消息:`, JSON.stringify(suggestionMsg).slice(0, 200))
+        if (suggestionMsg.suggestion) {
+          const evt: AgentEvent = { type: 'prompt_suggestion', suggestion: suggestionMsg.suggestion }
+          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
+          // prompt_suggestion 不需要持久化到 accumulatedEvents
+          console.log(`[Agent 服务] 收到提示建议: ${suggestionMsg.suggestion.slice(0, 50)}...`)
         }
       }
 
