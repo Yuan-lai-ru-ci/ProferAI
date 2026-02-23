@@ -46,7 +46,7 @@ export function SystemPromptSelector(): React.ReactElement {
           title={tooltipText}
           className="inline-flex items-center justify-center h-7 w-7 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
         >
-          <BookOpen className="size-3.5" />
+          <BookOpen className="size-4" />
         </button>
       </DropdownMenuTrigger>
 

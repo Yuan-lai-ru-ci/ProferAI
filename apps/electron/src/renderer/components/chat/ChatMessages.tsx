@@ -31,6 +31,8 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
+import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
+import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { ContextDivider } from '@/components/ai-elements/context-divider'
 import {
@@ -51,6 +53,7 @@ import {
   currentConversationIdAtom,
 } from '@/atoms/chat-atoms'
 import { getModelLogo } from '@/lib/model-logo'
+import { userProfileAtom } from '@/atoms/user-profile'
 import type { ChatMessage } from '@proma/shared'
 
 // ===== 滚动到顶部加载更多 =====
@@ -162,6 +165,7 @@ export function ChatMessages({
   onLoadMore,
 }: ChatMessagesProps): React.ReactElement {
   const messages = useAtomValue(currentMessagesAtom)
+  const userProfile = useAtomValue(userProfileAtom)
   const streaming = useAtomValue(streamingAtom)
   const streamingContent = useAtomValue(streamingContentAtom)
   const streamingReasoning = useAtomValue(streamingReasoningAtom)
@@ -235,6 +239,18 @@ export function ChatMessages({
     }
   }, [parallelMode, hasMore, handleLoadMore])
 
+  // 迷你地图数据（必须在所有条件分支之前调用，遵守 hooks 规则）
+  const minimapItems: MinimapItem[] = React.useMemo(
+    () => messages.map((m) => ({
+      id: m.id,
+      role: m.role as MinimapItem['role'],
+      preview: m.content.slice(0, 80),
+      avatar: m.role === 'user' ? userProfile.avatar : undefined,
+      model: m.model,
+    })),
+    [messages, userProfile.avatar]
+  )
+
   // 并排模式
   if (parallelMode) {
     return (
@@ -275,18 +291,20 @@ export function ChatMessages({
             {/* 已有消息 + 分隔线 */}
             {messages.map((msg: ChatMessage) => (
               <React.Fragment key={msg.id}>
-                <ChatMessageItem
-                  message={msg}
-                  isStreaming={false}
-                  isLastAssistant={false}
-                  allMessages={messages}
-                  onDeleteMessage={onDeleteMessage}
-                  onResendMessage={onResendMessage}
-                  onStartInlineEdit={onStartInlineEdit}
-                  onSubmitInlineEdit={onSubmitInlineEdit}
-                  onCancelInlineEdit={onCancelInlineEdit}
-                  isInlineEditing={msg.id === inlineEditingMessageId}
-                />
+                <div data-message-id={msg.id}>
+                  <ChatMessageItem
+                    message={msg}
+                    isStreaming={false}
+                    isLastAssistant={false}
+                    allMessages={messages}
+                    onDeleteMessage={onDeleteMessage}
+                    onResendMessage={onResendMessage}
+                    onStartInlineEdit={onStartInlineEdit}
+                    onSubmitInlineEdit={onSubmitInlineEdit}
+                    onCancelInlineEdit={onCancelInlineEdit}
+                    isInlineEditing={msg.id === inlineEditingMessageId}
+                  />
+                </div>
                 {/* 分隔线 */}
                 {dividerSet.has(msg.id) && (
                   <ContextDivider
@@ -339,6 +357,7 @@ export function ChatMessages({
           </>
         )}
       </ConversationContent>
+      <ScrollMinimap items={minimapItems} />
       <ConversationScrollButton />
     </Conversation>
   )
