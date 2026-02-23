@@ -27,6 +27,8 @@ interface ScrollMinimapProps {
 
 /** 最少消息数才显示迷你地图 */
 const MIN_ITEMS = 4
+/** 迷你地图最多渲染的横杠数 */
+const MAX_BARS = 20
 
 export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement | null {
   const { scrollRef } = useStickToBottomContext()
@@ -86,8 +88,9 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
 
   if (items.length < MIN_ITEMS || !canScroll) return null
 
-  // 迷你地图高度：紧凑排列在右上角，每条消息占 6px
-  const stripHeight = Math.min(items.length * 6, 120)
+  // 迷你地图：超过 MAX_BARS 条时按比例采样，避免拥挤
+  const barCount = Math.min(items.length, MAX_BARS)
+  const stripHeight = barCount * 6
 
   return (
     <div
@@ -121,17 +124,21 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
 
       {/* 迷你地图条 — 集中在右上角 */}
       <div className="relative mt-3 flex-shrink-0" style={{ width: 24, height: stripHeight }}>
-        {items.map((item, i) => {
-          const top = ((i + 0.5) / items.length) * 100
-          const isVisible = visibleIds.has(item.id)
+        {Array.from({ length: barCount }, (_, i) => {
+          const start = Math.floor((i * items.length) / barCount)
+          const end = Math.floor(((i + 1) * items.length) / barCount)
+          const group = items.slice(start, end)
+          const isVisible = group.some((it) => visibleIds.has(it.id))
+          const hasUser = group.some((it) => it.role === 'user')
+          const top = ((i + 0.5) / barCount) * 100
           return (
             <div
-              key={item.id}
+              key={i}
               className={cn(
                 'absolute left-1 h-[2px] w-[20px] rounded-full transition-colors',
                 isVisible
                   ? 'bg-primary/60'
-                  : item.role === 'user'
+                  : hasUser
                     ? 'bg-muted-foreground/25'
                     : 'bg-muted-foreground/45'
               )}

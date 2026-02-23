@@ -612,10 +612,9 @@ export function ChatView(): React.ReactElement {
     <div className="flex h-full overflow-hidden">
       {/* 主内容区域 */}
       <div className="flex flex-col h-full flex-1 min-w-0">
-        <div className="flex flex-col h-full w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden">
-          {/* 头部：对话标题 + 并排模式切换 */}
-          <ChatHeader />
-
+        {/* Header 在 max-w 外，按钮可到达最右侧 */}
+        <ChatHeader />
+        <div className="flex flex-col flex-1 w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden min-h-0">
           {/* 中间：消息区域 */}
           <ChatMessages
             onDeleteMessage={handleDeleteMessage}
@@ -661,11 +660,11 @@ export function ChatView(): React.ReactElement {
 
       {/* 提示词编辑侧栏 */}
       <div className={cn(
-        'flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden',
-        promptSidebarOpen ? 'w-[300px] border-l' : 'w-0'
+        'relative flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden titlebar-drag-region',
+        promptSidebarOpen ? 'w-[300px] border-l' : 'w-10'
       )}>
         <div className={cn(
-          'w-[300px] h-full transition-opacity duration-200',
+          'w-[300px] h-full transition-opacity duration-200 titlebar-no-drag',
           promptSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         )}>
           <PromptEditorSidebar />

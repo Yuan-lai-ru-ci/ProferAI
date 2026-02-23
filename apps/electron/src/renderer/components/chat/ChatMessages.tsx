@@ -239,6 +239,18 @@ export function ChatMessages({
     }
   }, [parallelMode, hasMore, handleLoadMore])
 
+  // 迷你地图数据（必须在所有条件分支之前调用，遵守 hooks 规则）
+  const minimapItems: MinimapItem[] = React.useMemo(
+    () => messages.map((m) => ({
+      id: m.id,
+      role: m.role as MinimapItem['role'],
+      preview: m.content.slice(0, 80),
+      avatar: m.role === 'user' ? userProfile.avatar : undefined,
+      model: m.model,
+    })),
+    [messages, userProfile.avatar]
+  )
+
   // 并排模式
   if (parallelMode) {
     return (
@@ -262,18 +274,6 @@ export function ChatMessages({
 
   // 标准消息列表模式
   const dividerSet = new Set(contextDividers)
-
-  // 迷你地图数据
-  const minimapItems: MinimapItem[] = React.useMemo(
-    () => messages.map((m) => ({
-      id: m.id,
-      role: m.role as MinimapItem['role'],
-      preview: m.content.slice(0, 80),
-      avatar: m.role === 'user' ? userProfile.avatar : undefined,
-      model: m.model,
-    })),
-    [messages, userProfile.avatar]
-  )
 
   return (
     <Conversation className={ready ? 'opacity-100 transition-opacity duration-200' : 'opacity-0'}>
