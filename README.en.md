@@ -33,7 +33,7 @@ Shared memory across Chat and Agent modes — AI truly understands you and remem
 
 ![Proma memory settings](https://img.erlich.fun/personal-blog/uPic/94B0LN.png)
 
-![Proma memory demo](https://img.erlich.fun/personal-blog/uPic/Snipaste_2026-02-24_09-44-37.png)
+![Proma memory demo](https://img.erlich.fun/personal-blog/uPic/Wi8QfB.png)
 
 ### Channel Configuration
 

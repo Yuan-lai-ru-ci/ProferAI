@@ -32,7 +32,7 @@ Proma Skills 和 MCP，默认内置 Brainstorming 和办公软件 Skill，支持
 Proma 记忆功能，Chat 和 Agent 共享记忆，让 AI 真正了解你、记住你的偏好和习惯。
 ![Proma memory settings](https://img.erlich.fun/personal-blog/uPic/94B0LN.png)
 
-![Proma memory dmeo](https://img.erlich.fun/personal-blog/uPic/Snipaste_2026-02-24_09-44-37.png)
+![Proma memory dmeo](https://img.erlich.fun/personal-blog/uPic/Wi8QfB.png)
 
 
 ### Proma 渠道配置功能
