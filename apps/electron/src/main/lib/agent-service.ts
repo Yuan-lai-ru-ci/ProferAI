@@ -1,16 +1,16 @@
 /**
- * Agent SDK 服务层
+ * Agent 服务层（编排层）
  *
- * 负责 Agent SDK 的调用编排：
+ * 负责 Agent 调用的流程编排：
  * - 获取渠道信息（API Key + Base URL）
  * - 注入环境变量（ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL）
- * - 构建 SDK Options（pathToClaudeCodeExecutable + executable + env）
- * - 调用 query() 获取消息流
- * - 遍历 SDKMessage → convertSDKMessage() → AgentEvent[]
+ * - 构建查询选项（ClaudeAgentQueryOptions）
+ * - 通过 AgentProviderAdapter 获取 AgentEvent 流
  * - 每个事件 → webContents.send() 推送给渲染进程
  * - 同时 appendAgentMessage() 持久化
  *
- * 参考 craft-agents-oss 的 reinitializeAuth + getDefaultOptions 模式。
+ * SDK 消息翻译逻辑已内聚到 ClaudeAgentAdapter 中，
+ * 本层只关心流程编排，不关心底层 SDK 细节。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -22,13 +22,8 @@ import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type { WebContents } from 'electron'
 import { AGENT_IPC_CHANNELS } from '@proma/shared'
-import type { AgentSendInput, AgentEvent, AgentMessage, AgentStreamEvent, AgentGenerateTitleInput, AgentSaveFilesInput, AgentSavedFile, AgentCopyFolderInput, TypedError, ErrorCode } from '@proma/shared'
-import {
-  ToolIndex,
-  extractToolStarts,
-  extractToolResults,
-  type ContentBlock,
-} from '@proma/shared'
+import type { AgentSendInput, AgentEvent, AgentMessage, AgentStreamEvent, AgentGenerateTitleInput, AgentSaveFilesInput, AgentSavedFile, AgentCopyFolderInput } from '@proma/shared'
+import { ClaudeAgentAdapter, type ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import {
   getAdapter,
@@ -50,70 +45,11 @@ import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest } from '@proma/shared'
 import { SAFE_TOOLS } from '@proma/shared'
 
-/** 活跃的 AbortController 映射（sessionId → controller） */
-const activeControllers = new Map<string, AbortController>()
+/** Adapter 单例 */
+const adapter = new ClaudeAgentAdapter()
 
-/**
- * 映射 SDK 错误代码到 TypedError
- *
- * 参考 craft-agents-oss 的实现，将 SDK 的错误代码（如 authentication_failed）
- * 映射为结构化的 TypedError，包含用户友好的提示和建议操作。
- */
-function mapSDKErrorToTypedError(
-  errorCode: string,
-  detailedMessage: string,
-  originalError: string
-): TypedError {
-  // SDK 错误代码映射
-  const errorMap: Record<string, { code: ErrorCode; title: string; message: string; canRetry: boolean }> = {
-    'authentication_failed': {
-      code: 'invalid_api_key',
-      title: '认证失败',
-      message: '无法通过 API 认证，API Key 可能无效或已过期',
-      canRetry: true,
-    },
-    'billing_error': {
-      code: 'billing_error',
-      title: '账单错误',
-      message: '您的账户存在账单问题',
-      canRetry: false,
-    },
-    'rate_limited': {
-      code: 'rate_limited',
-      title: '请求频率限制',
-      message: '请求过于频繁，请稍后再试',
-      canRetry: true,
-    },
-    'overloaded': {
-      code: 'provider_error',
-      title: '服务繁忙',
-      message: 'API 服务当前过载，请稍后再试',
-      canRetry: true,
-    },
-  }
-
-  const mapped = errorMap[errorCode] || {
-    code: 'unknown_error' as ErrorCode,
-    title: '未知错误',
-    message: detailedMessage || errorCode,
-    canRetry: false,
-  }
-
-  return {
-    code: mapped.code,
-    title: mapped.title,
-    // 优先使用详细消息，回退到映射消息
-    message: detailedMessage || mapped.message,
-    actions: [
-      { key: 's', label: '设置', action: 'settings' },
-      ...(mapped.canRetry ? [{ key: 'r', label: '重试', action: 'retry' }] : []),
-    ],
-    canRetry: mapped.canRetry,
-    retryDelayMs: mapped.canRetry ? 1000 : undefined,
-    originalError,
-  }
-}
-
+/** 活跃会话集合（并发守卫） */
+const activeSessions = new Set<string>()
 
 
 /**
@@ -277,329 +213,7 @@ function ensureRipgrepAvailable(cliPath: string): void {
   }
 }
 
-// SDK 消息类型定义（简化版，避免直接依赖 SDK 内部类型）
-interface SDKAssistantMessage {
-  type: 'assistant'
-  message: {
-    content: Array<{ type: string; id?: string; name?: string; input?: Record<string, unknown>; text?: string }>
-    usage?: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
-  }
-  parent_tool_use_id: string | null
-  error?: { message: string; errorType?: string }
-  isReplay?: boolean
-}
-
-interface SDKUserMessage {
-  type: 'user'
-  message?: { content?: unknown[] }
-  parent_tool_use_id: string | null
-  tool_use_result?: unknown
-  isReplay?: boolean
-}
-
-interface SDKStreamEvent {
-  type: 'stream_event'
-  event: {
-    type: string
-    message?: { id?: string }
-    delta?: { type: string; text?: string; stop_reason?: string }
-    content_block?: { type: string; id: string; name: string; input?: Record<string, unknown> }
-  }
-  parent_tool_use_id: string | null
-}
-
-interface SDKResultMessage {
-  type: 'result'
-  subtype: 'success' | 'error'
-  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
-  total_cost_usd?: number
-  modelUsage?: Record<string, { contextWindow?: number }>
-  errors?: string[]
-}
-
-interface SDKToolProgressMessage {
-  type: 'tool_progress'
-  tool_use_id: string
-  tool_name: string
-  parent_tool_use_id: string | null
-  elapsed_time_seconds?: number
-}
-
-type SDKMessage = SDKAssistantMessage | SDKUserMessage | SDKStreamEvent | SDKResultMessage | SDKToolProgressMessage | { type: string; parent_tool_use_id?: string | null }
-
-/**
- * 将 SDK 消息转换为 AgentEvent 列表
- */
-function convertSDKMessage(
-  message: SDKMessage,
-  toolIndex: ToolIndex,
-  emittedToolStarts: Set<string>,
-  activeParentTools: Set<string>,
-  pendingText: { value: string | null },
-  turnId: { value: string | null },
-): AgentEvent[] {
-  const events: AgentEvent[] = []
-
-  switch (message.type) {
-    case 'assistant': {
-      const msg = message as SDKAssistantMessage
-
-      // SDK 级别错误（如 authentication_failed）
-      if (msg.error) {
-        let detailedMessage: string = msg.error.message
-        let originalError: string = msg.error.message
-        const errorType = msg.error.errorType
-
-        // 尝试从 content 中提取详细错误信息
-        try {
-          const content = msg.message?.content
-          if (Array.isArray(content) && content.length > 0) {
-            const textBlock = content.find((block: any) => block.type === 'text')
-            if (textBlock && 'text' in textBlock && typeof textBlock.text === 'string') {
-              const fullText: string = textBlock.text
-              originalError = fullText
-
-              // 提取 JSON 格式的 API 错误：API Error: 401 {"error":{"message":"..."}}
-              const apiErrorMatch = fullText.match(/API Error:\s*\d+\s*(\{.*\})/s)
-              if (apiErrorMatch && apiErrorMatch[1]) {
-                try {
-                  const apiErrorObj = JSON.parse(apiErrorMatch[1])
-                  if (apiErrorObj.error?.message) {
-                    detailedMessage = apiErrorObj.error.message
-                  }
-                } catch {
-                  // JSON 解析失败，使用完整文本
-                  detailedMessage = fullText
-                }
-              } else {
-                // 没有 JSON 格式，使用完整文本
-                detailedMessage = fullText
-              }
-            }
-          }
-        } catch (err) {
-          // 提取失败，使用原始 error 字段
-          console.error('[convertSDKMessage] 提取错误详情失败:', err)
-        }
-
-        // 映射到 TypedError（使用 errorType 作为错误代码）
-        const errorCode = errorType || 'unknown_error'
-        const typedError = mapSDKErrorToTypedError(errorCode, detailedMessage, originalError)
-        events.push({ type: 'typed_error', error: typedError })
-        break
-      }
-
-      // 跳过重放消息
-      if (msg.isReplay) break
-
-      const content = msg.message.content
-
-      // 提取文本内容
-      let textContent = ''
-      for (const block of content) {
-        if (block.type === 'text' && 'text' in block) {
-          textContent += block.text
-        }
-      }
-
-      // 工具启动事件提取
-      const sdkParentId = msg.parent_tool_use_id
-      const toolStartEvents = extractToolStarts(
-        content as ContentBlock[],
-        sdkParentId,
-        toolIndex,
-        emittedToolStarts,
-        turnId.value || undefined,
-        activeParentTools,
-      )
-
-      // 跟踪活跃的 Task 工具
-      for (const event of toolStartEvents) {
-        if (event.type === 'tool_start' && event.toolName === 'Task') {
-          activeParentTools.add(event.toolUseId)
-        }
-      }
-
-      events.push(...toolStartEvents)
-
-      if (textContent) {
-        pendingText.value = textContent
-      }
-      break
-    }
-
-    case 'stream_event': {
-      const msg = message as SDKStreamEvent
-      const streamEvent = msg.event
-
-      // 捕获 turn ID
-      if (streamEvent.type === 'message_start') {
-        const messageId = streamEvent.message?.id
-        if (messageId) {
-          turnId.value = messageId
-        }
-      }
-
-      // message_delta 包含实际 stop_reason — 发出 pending 文本
-      if (streamEvent.type === 'message_delta') {
-        const stopReason = streamEvent.delta?.stop_reason
-        if (pendingText.value) {
-          const isIntermediate = stopReason === 'tool_use'
-          events.push({
-            type: 'text_complete',
-            text: pendingText.value,
-            isIntermediate,
-            turnId: turnId.value || undefined,
-            parentToolUseId: msg.parent_tool_use_id || undefined,
-          })
-          pendingText.value = null
-        }
-      }
-
-      // 流式文本增量
-      if (streamEvent.type === 'content_block_delta' && streamEvent.delta?.type === 'text_delta') {
-        events.push({
-          type: 'text_delta',
-          text: streamEvent.delta.text || '',
-          turnId: turnId.value || undefined,
-          parentToolUseId: msg.parent_tool_use_id || undefined,
-        })
-      }
-
-      // 流式工具启动
-      if (streamEvent.type === 'content_block_start' && streamEvent.content_block?.type === 'tool_use') {
-        const toolBlock = streamEvent.content_block
-        const sdkParentId = msg.parent_tool_use_id
-        const streamBlocks: ContentBlock[] = [{
-          type: 'tool_use' as const,
-          id: toolBlock.id,
-          name: toolBlock.name,
-          input: (toolBlock.input ?? {}) as Record<string, unknown>,
-        }]
-        const streamEvents = extractToolStarts(
-          streamBlocks,
-          sdkParentId,
-          toolIndex,
-          emittedToolStarts,
-          turnId.value || undefined,
-          activeParentTools,
-        )
-
-        for (const evt of streamEvents) {
-          if (evt.type === 'tool_start' && evt.toolName === 'Task') {
-            activeParentTools.add(evt.toolUseId)
-          }
-        }
-
-        events.push(...streamEvents)
-      }
-      break
-    }
-
-    case 'user': {
-      const msg = message as SDKUserMessage
-
-      if (msg.isReplay) break
-
-      if (msg.tool_use_result !== undefined || msg.message) {
-        const msgContent = msg.message
-          ? ((msg.message as { content?: unknown[] }).content ?? [])
-          : []
-        const contentBlocks = (Array.isArray(msgContent) ? msgContent : []) as ContentBlock[]
-
-        const sdkParentId = msg.parent_tool_use_id
-        const toolUseResultValue = msg.tool_use_result
-
-        const resultEvents = extractToolResults(
-          contentBlocks,
-          sdkParentId,
-          toolUseResultValue,
-          toolIndex,
-          turnId.value || undefined,
-        )
-
-        for (const event of resultEvents) {
-          if (event.type === 'tool_result' && event.toolName === 'Task') {
-            activeParentTools.delete(event.toolUseId)
-          }
-        }
-
-        events.push(...resultEvents)
-      }
-      break
-    }
-
-    case 'tool_progress': {
-      const msg = message as SDKToolProgressMessage
-
-      if (msg.elapsed_time_seconds !== undefined) {
-        events.push({
-          type: 'task_progress',
-          toolUseId: msg.parent_tool_use_id || msg.tool_use_id,
-          elapsedSeconds: msg.elapsed_time_seconds,
-          turnId: turnId.value || undefined,
-        })
-      }
-
-      // 如果还没见过这个工具，发出 tool_start
-      if (!emittedToolStarts.has(msg.tool_use_id)) {
-        const progressBlocks: ContentBlock[] = [{
-          type: 'tool_use' as const,
-          id: msg.tool_use_id,
-          name: msg.tool_name,
-          input: {},
-        }]
-        const progressEvents = extractToolStarts(
-          progressBlocks,
-          msg.parent_tool_use_id,
-          toolIndex,
-          emittedToolStarts,
-          turnId.value || undefined,
-          activeParentTools,
-        )
-
-        for (const evt of progressEvents) {
-          if (evt.type === 'tool_start' && evt.toolName === 'Task') {
-            activeParentTools.add(evt.toolUseId)
-          }
-        }
-
-        events.push(...progressEvents)
-      }
-      break
-    }
-
-    case 'result': {
-      const msg = message as SDKResultMessage
-
-      const modelUsageEntries = Object.values(msg.modelUsage || {})
-      const primaryModelUsage = modelUsageEntries[0]
-
-      const usage = {
-        inputTokens: msg.usage.input_tokens + (msg.usage.cache_read_input_tokens ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0),
-        outputTokens: msg.usage.output_tokens,
-        costUsd: msg.total_cost_usd,
-        contextWindow: primaryModelUsage?.contextWindow,
-      }
-
-      if (msg.subtype === 'success') {
-        events.push({ type: 'complete', usage })
-      } else {
-        const errorMsg = msg.errors ? msg.errors.join(', ') : 'Agent 查询失败'
-        events.push({ type: 'error', message: errorMsg })
-        events.push({ type: 'complete', usage })
-      }
-      break
-    }
-
-    default:
-      // 记录未处理的消息类型，帮助调试
-      console.log(`[Agent 服务] 忽略消息类型: ${message.type}`)
-      break
-  }
-
-  return events
-}
+// convertSDKMessage 已迁移到 ClaudeAgentAdapter.translateMessage()
 
 /** 最大回填消息条数 */
 const MAX_CONTEXT_MESSAGES = 20
@@ -641,7 +255,7 @@ export async function runAgent(
   const stderrChunks: string[] = []
 
   // 0. 并发保护：检查是否已有正在运行的请求
-  if (activeControllers.has(sessionId)) {
+  if (activeSessions.has(sessionId)) {
     console.warn(`[Agent 服务] 会话 ${sessionId} 正在处理中，拒绝新请求`)
     webContents.send(AGENT_IPC_CHANNELS.STREAM_ERROR, {
       sessionId,
@@ -766,31 +380,18 @@ export async function runAgent(
   }
   appendAgentMessage(sessionId, userMsg)
 
-  // 4. 创建 AbortController
-  const controller = new AbortController()
-  activeControllers.set(sessionId, controller)
+  // 4. 注册活跃会话（Adapter 内部管理 AbortController）
+  activeSessions.add(sessionId)
 
-  // 5. 状态初始化
-  const toolIndex = new ToolIndex()
-  const emittedToolStarts = new Set<string>()
-  const activeParentTools = new Set<string>()
-  const pendingText = { value: null as string | null }
-  const turnId = { value: null as string | null }
-  // 上下文使用量追踪（参考 craft-agents-oss cachedContextWindow 模式）
-  let cachedContextWindow: number | undefined
-
-  // 累积文本用于持久化
+  // 5. 状态初始化（工具索引等内部状态已迁移到 Adapter）
   let accumulatedText = ''
   const accumulatedEvents: AgentEvent[] = []
-  // SDK 确认的实际模型（从 system init 消息获取）
   let resolvedModel = modelId || 'claude-sonnet-4-5-20250929'
-  // stderrChunks 从外部传入（供重试判断使用）
   // 运行环境信息（声明在 try 之前，供 catch 块使用）
   let agentExec: { type: 'node' | 'bun'; path: string } | undefined
   let agentCwd: string | undefined
   let workspaceSlug: string | undefined
   let workspace: import('@proma/shared').AgentWorkspace | undefined
-  let isCompacting = false // 是否正在执行上下文压缩
 
   try {
     // 6. 动态导入 SDK（避免在 esbuild 打包时出问题）
@@ -995,232 +596,123 @@ export async function runAgent(
         )
       : undefined
 
-    const queryIterator = sdk.query({
+    // 11. 构建 Adapter 查询选项
+    const queryOptions: ClaudeAgentQueryOptions = {
+      sessionId,
       prompt: finalPrompt,
-      options: {
-        pathToClaudeCodeExecutable: cliPath,
-        executable: agentExec.type,
-        executableArgs,
-        model: modelId || 'claude-sonnet-4-5-20250929',
-        maxTurns: 30,
-        // 权限模式：auto 使用 bypass，其他使用 default
-        permissionMode: permissionMode === 'auto' ? 'bypassPermissions' : 'default',
-        allowDangerouslySkipPermissions: permissionMode === 'auto',
-        // 自定义权限处理器（非 auto 模式才注入）
-        ...(canUseTool && { canUseTool }),
-        // 只读工具白名单（SDK 级别，跳过 canUseTool 回调）
-        // 注意：AskUserQuestion 不在 SAFE_TOOLS 中，会走 canUseTool 以展示交互式 UI
-        ...(permissionMode !== 'auto' && { allowedTools: [...SAFE_TOOLS] }),
-        includePartialMessages: true,
-        promptSuggestions: true,
-        cwd: agentCwd,
-        abortController: controller,
-        env: sdkEnv,
-        // 静态 system prompt（利用 prompt caching）
-        systemPrompt: {
-          type: 'preset' as const,
-          preset: 'claude_code' as const,
-          append: buildSystemPromptAppend({
-            workspaceName: workspace?.name,
-            workspaceSlug,
-            sessionId,
-          }),
-        },
-        // 衔接上下文：有 SDK session ID 则 resume
-        ...(existingSdkSessionId ? { resume: existingSdkSessionId } : {}),
-        // MCP 服务器（每次 query 都从磁盘读取最新配置，支持回合间动态更新）
-        ...(Object.keys(mcpServers).length > 0 && { mcpServers: mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig> }),
-        // Skill 插件（SDK 自动发现 skills/ 目录下的 SKILL.md）
-        ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
-        stderr: (data: string) => {
-          stderrChunks.push(data)
-          console.error(`[Agent SDK stderr] ${data}`)
-        },
+      model: modelId || 'claude-sonnet-4-5-20250929',
+      cwd: agentCwd,
+      sdkCliPath: cliPath,
+      executable: agentExec,
+      executableArgs,
+      env: sdkEnv,
+      maxTurns: 30,
+      sdkPermissionMode: permissionMode === 'auto' ? 'bypassPermissions' : 'default',
+      allowDangerouslySkipPermissions: permissionMode === 'auto',
+      ...(canUseTool && { canUseTool }),
+      ...(permissionMode !== 'auto' && { allowedTools: [...SAFE_TOOLS] }),
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: buildSystemPromptAppend({
+          workspaceName: workspace?.name,
+          workspaceSlug,
+          sessionId,
+        }),
       },
-    })
-
-    console.log(`[Agent 服务] SDK query 已创建，开始遍历消息流...`)
-
-    // 8. 遍历 SDK 消息流
-    for await (const sdkMessage of queryIterator) {
-
-      if (controller.signal.aborted) break
-
-      const msg = sdkMessage as SDKMessage
-      console.log(`[Agent 服务] 收到 SDK 消息: type=${msg.type}`)
-
-      // 从 system init 消息中捕获 SDK 确认的模型 + 诊断 skills
-      if (msg.type === 'system' && 'subtype' in msg && msg.subtype === 'init') {
-        const initMsg = msg as { model?: string; skills?: string[]; tools?: string[]; plugins?: Array<{ name: string; path: string }>; slash_commands?: string[] }
-        if (typeof initMsg.model === 'string') {
-          resolvedModel = initMsg.model
-          console.log(`[Agent 服务] SDK 确认模型: ${resolvedModel}`)
-        }
-        // 诊断：Skills 发现情况
-        console.log(`[Agent 服务][诊断] SDK init skills: ${JSON.stringify(initMsg.skills)}`)
-        console.log(`[Agent 服务][诊断] SDK init plugins: ${JSON.stringify(initMsg.plugins)}`)
-        console.log(`[Agent 服务][诊断] SDK init tools 包含 Skill: ${initMsg.tools?.includes('Skill')}`)
-        console.log(`[Agent 服务][诊断] SDK init slash_commands: ${JSON.stringify(initMsg.slash_commands)}`)
-      }
-
-      // 捕获 SDK session_id 用于后续 resume（参考 craft-agents-oss）
-      if ('session_id' in msg && typeof msg.session_id === 'string' && msg.session_id) {
-        const sdkSid = msg.session_id as string
-        if (sdkSid !== existingSdkSessionId) {
+      resumeSessionId: existingSdkSessionId,
+      ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
+      ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
+      onStderr: (data: string) => {
+        stderrChunks.push(data)
+        console.error(`[Agent SDK stderr] ${data}`)
+      },
+      onSessionId: (sdkSessionId: string) => {
+        if (sdkSessionId !== existingSdkSessionId) {
           try {
-            updateAgentSessionMeta(sessionId, { sdkSessionId: sdkSid })
-            console.log(`[Agent 服务] 已保存 SDK session_id: ${sdkSid}`)
+            updateAgentSessionMeta(sessionId, { sdkSessionId })
+            console.log(`[Agent 服务] 已保存 SDK session_id: ${sdkSessionId}`)
           } catch {
             // 索引更新失败不影响主流程
           }
         }
-      }
+      },
+      onModelResolved: (model: string) => {
+        resolvedModel = model
+        console.log(`[Agent 服务] SDK 确认模型: ${resolvedModel}`)
+      },
+      onContextWindow: (cw: number) => {
+        console.log(`[Agent 服务] 缓存 contextWindow: ${cw}`)
+      },
+    }
 
-      // 追踪 assistant 消息的 usage（实时上下文显示）
-      if (msg.type === 'assistant') {
-        const aMsg = msg as SDKAssistantMessage
-        // 仅追踪主链消息（子代理 sidechain 不影响主上下文）
-        if (!aMsg.parent_tool_use_id && aMsg.message.usage) {
-          const u = aMsg.message.usage
-          const currentInputTokens = u.input_tokens
-            + (u.cache_read_input_tokens ?? 0)
-            + (u.cache_creation_input_tokens ?? 0)
-          const usageEvt: AgentEvent = {
-            type: 'usage_update',
-            usage: { inputTokens: currentInputTokens, contextWindow: cachedContextWindow },
-          }
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: usageEvt } as AgentStreamEvent)
-          accumulatedEvents.push(usageEvt)
-        }
-      }
+    console.log(`[Agent 服务] 开始通过 Adapter 遍历事件流...`)
 
-      // 处理 system 事件
-      if (msg.type === 'system') {
-        const sysMsg = msg as { type: 'system'; subtype?: string; status?: string; task_id?: string; tool_use_id?: string; description?: string; task_type?: string }
-        if (sysMsg.subtype === 'compact_boundary') {
-          const evt: AgentEvent = { type: 'compact_complete' }
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
-          accumulatedEvents.push(evt)
-          isCompacting = false
-          console.log('[Agent 服务] 上下文压缩完成')
-        } else if (sysMsg.subtype === 'status' && sysMsg.status === 'compacting') {
-          const evt: AgentEvent = { type: 'compacting' }
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
-          accumulatedEvents.push(evt)
-          isCompacting = true
-          console.log('[Agent 服务] 上下文压缩中...')
-        } else if (sysMsg.subtype === 'task_started' && sysMsg.task_id && sysMsg.description) {
-          const evt: AgentEvent = {
-            type: 'task_started',
-            taskId: sysMsg.task_id,
-            toolUseId: sysMsg.tool_use_id,
-            description: sysMsg.description,
-            taskType: sysMsg.task_type,
-            turnId: turnId.value || undefined,
-          }
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
-          accumulatedEvents.push(evt)
-          console.log(`[Agent 服务] 子任务启动: ${sysMsg.task_id} — ${sysMsg.description}`)
-        }
-      }
-
-      // 处理 prompt_suggestion 消息（SDK v0.2.49+）
-      if (msg.type === 'prompt_suggestion') {
-        const suggestionMsg = msg as { type: 'prompt_suggestion'; suggestion?: string }
-        console.log(`[Agent 服务][建议] 收到 prompt_suggestion 消息:`, JSON.stringify(suggestionMsg).slice(0, 200))
-        if (suggestionMsg.suggestion) {
-          const evt: AgentEvent = { type: 'prompt_suggestion', suggestion: suggestionMsg.suggestion }
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event: evt } as AgentStreamEvent)
-          // prompt_suggestion 不需要持久化到 accumulatedEvents
-          console.log(`[Agent 服务] 收到提示建议: ${suggestionMsg.suggestion.slice(0, 50)}...`)
-        }
-      }
-
-      const agentEvents = convertSDKMessage(
-        msg,
-        toolIndex,
-        emittedToolStarts,
-        activeParentTools,
-        pendingText,
-        turnId,
-      )
-
-      // 从 result 消息中缓存 contextWindow（参考 craft-agents-oss）
-      if (msg.type === 'result') {
-        const resultMsg = msg as SDKResultMessage
-        const modelUsageEntries = Object.values(resultMsg.modelUsage || {})
-        const primaryModelUsage = modelUsageEntries[0]
-        if (primaryModelUsage?.contextWindow) {
-          cachedContextWindow = primaryModelUsage.contextWindow
-          console.log(`[Agent 服务] 缓存 contextWindow: ${cachedContextWindow}`)
-        }
-      }
-
-      for (const event of agentEvents) {
-        // 检查 typed_error 事件 - 立即保存错误消息并退出
-        if (event.type === 'typed_error') {
-          // 先保存已累积的 assistant 内容（如果有）
-          if (accumulatedText || accumulatedEvents.length > 0) {
-            const assistantMsg: AgentMessage = {
-              id: randomUUID(),
-              role: 'assistant',
-              content: accumulatedText,
-              createdAt: Date.now(),
-              model: resolvedModel,
-              events: accumulatedEvents,
-            }
-            appendAgentMessage(sessionId, assistantMsg)
-          }
-
-          // 保存 TypedError 作为 status 消息
-          const errorMsg: AgentMessage = {
+    // 12. 遍历 Adapter 产出的 AgentEvent 流
+    for await (const event of adapter.query(queryOptions)) {
+      // 检查 typed_error 事件 - 立即保存错误消息并退出
+      if (event.type === 'typed_error') {
+        // 先保存已累积的 assistant 内容（如果有）
+        if (accumulatedText || accumulatedEvents.length > 0) {
+          const assistantMsg: AgentMessage = {
             id: randomUUID(),
-            role: 'status',
-            content: event.error.title
-              ? `${event.error.title}: ${event.error.message}`
-              : event.error.message,
+            role: 'assistant',
+            content: accumulatedText,
             createdAt: Date.now(),
-            errorCode: event.error.code,
-            errorTitle: event.error.title,
-            errorDetails: event.error.details,
-            errorOriginal: event.error.originalError,
-            errorCanRetry: event.error.canRetry,
-            errorActions: event.error.actions,
+            model: resolvedModel,
+            events: accumulatedEvents,
           }
-          appendAgentMessage(sessionId, errorMsg)
-          console.log(`[Agent 服务] 已保存 TypedError 消息: ${event.error.code} - ${event.error.title}`)
-
-          // 推送 typed_error 事件给渲染进程
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
-
-          // 更新会话索引
-          try {
-            updateAgentSessionMeta(sessionId, {})
-          } catch {
-            // 索引更新失败不影响主流程
-          }
-
-          // 清理 activeController（在发送 STREAM_COMPLETE 前）
-          activeControllers.delete(sessionId)
-
-          // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
-          const finalMessages = getAgentSessionMessages(sessionId)
-          webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId, messages: finalMessages })
-
-          // 退出处理（错误后不应继续）
-          return
+          appendAgentMessage(sessionId, assistantMsg)
         }
 
-        // 累积文本
-        if (event.type === 'text_delta') {
-          accumulatedText += event.text
+        // 保存 TypedError 作为 status 消息
+        const errorMsg: AgentMessage = {
+          id: randomUUID(),
+          role: 'status',
+          content: event.error.title
+            ? `${event.error.title}: ${event.error.message}`
+            : event.error.message,
+          createdAt: Date.now(),
+          errorCode: event.error.code,
+          errorTitle: event.error.title,
+          errorDetails: event.error.details,
+          errorOriginal: event.error.originalError,
+          errorCanRetry: event.error.canRetry,
+          errorActions: event.error.actions,
         }
-        accumulatedEvents.push(event)
+        appendAgentMessage(sessionId, errorMsg)
+        console.log(`[Agent 服务] 已保存 TypedError 消息: ${event.error.code} - ${event.error.title}`)
 
-        // 推送给渲染进程
-        const streamEvent: AgentStreamEvent = { sessionId, event }
-        webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, streamEvent)
+        // 推送 typed_error 事件给渲染进程
+        webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
+
+        // 更新会话索引
+        try {
+          updateAgentSessionMeta(sessionId, {})
+        } catch {
+          // 索引更新失败不影响主流程
+        }
+
+        // 清理活跃会话（在发送 STREAM_COMPLETE 前）
+        activeSessions.delete(sessionId)
+
+        // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
+        const finalMessages = getAgentSessionMessages(sessionId)
+        webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId, messages: finalMessages })
+
+        // 退出处理（错误后不应继续）
+        return
       }
+
+      // 累积文本
+      if (event.type === 'text_delta') {
+        accumulatedText += event.text
+      }
+      accumulatedEvents.push(event)
+
+      // 推送给渲染进程
+      const streamEvent: AgentStreamEvent = { sessionId, event }
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, streamEvent)
     }
 
     // 9. 持久化 assistant 消息（包含完整文本和工具事件）
@@ -1243,8 +735,8 @@ export async function runAgent(
       // 索引更新失败不影响主流程
     }
 
-    // 清理 activeController（在发送 STREAM_COMPLETE 前，确保后端准备好接受新请求）
-    activeControllers.delete(sessionId)
+    // 清理活跃会话（在发送 STREAM_COMPLETE 前，确保后端准备好接受新请求）
+    activeSessions.delete(sessionId)
 
     // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
     const finalMessages = getAgentSessionMessages(sessionId)
@@ -1263,8 +755,8 @@ export async function runAgent(
       console.error(`[Agent 服务] stderr 为空`)
     }
 
-    // 用户主动中止
-    if (controller.signal.aborted) {
+    // 用户主动中止（stopAgent 会先从 activeSessions 移除再调用 adapter.abort）
+    if (!activeSessions.has(sessionId)) {
       console.log(`[Agent 服务] 会话 ${sessionId} 已被用户中止`)
 
       // 保存已累积的部分内容
@@ -1279,9 +771,6 @@ export async function runAgent(
         }
         appendAgentMessage(sessionId, partialMsg)
       }
-
-      // 清理 activeController
-      activeControllers.delete(sessionId)
 
       // 发送 STREAM_COMPLETE（携带已持久化的消息，避免渲染进程异步加载的竞态窗口）
       const abortFinalMessages = getAgentSessionMessages(sessionId)
@@ -1346,8 +835,8 @@ export async function runAgent(
       error: userFacingError,
     })
 
-    // 清理 activeController（在发送 STREAM_COMPLETE 前）
-    activeControllers.delete(sessionId)
+    // 清理活跃会话（在发送 STREAM_COMPLETE 前）
+    activeSessions.delete(sessionId)
 
     // 发送 STREAM_COMPLETE（携带已持久化的消息，确保前端知道流式已结束）
     const errorFinalMessages = getAgentSessionMessages(sessionId)
@@ -1370,7 +859,7 @@ export async function runAgent(
 
     throw error
   } finally {
-    activeControllers.delete(sessionId)
+    activeSessions.delete(sessionId)
     // 清理权限服务中的待处理请求
     permissionService.clearSessionPending(sessionId)
     // 清理 AskUser 服务中的待处理请求
@@ -1464,25 +953,22 @@ async function autoGenerateTitle(
 
 /**
  * 中止指定会话的 Agent 执行
+ *
+ * 先从 activeSessions 移除（供 runAgent catch 块检测用户中止），
+ * 再调用 adapter.abort() 中止底层 SDK 进程。
  */
 export function stopAgent(sessionId: string): void {
-  const controller = activeControllers.get(sessionId)
-  if (controller) {
-    controller.abort()
-    activeControllers.delete(sessionId)
-    console.log(`[Agent 服务] 已中止会话: ${sessionId}`)
-  }
+  activeSessions.delete(sessionId)
+  adapter.abort(sessionId)
+  console.log(`[Agent 服务] 已中止会话: ${sessionId}`)
 }
 
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
 export function stopAllAgents(): void {
-  if (activeControllers.size === 0) return
-  console.log(`[Agent 服务] 正在中止所有活跃会话 (${activeControllers.size} 个)...`)
-  for (const [sessionId, controller] of activeControllers) {
-    controller.abort()
-    console.log(`[Agent 服务] 已中止会话: ${sessionId}`)
-  }
-  activeControllers.clear()
+  if (activeSessions.size === 0) return
+  console.log(`[Agent 服务] 正在中止所有活跃会话 (${activeSessions.size} 个)...`)
+  adapter.dispose()
+  activeSessions.clear()
 }
 
 /**

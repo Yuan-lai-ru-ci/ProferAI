@@ -24,6 +24,9 @@ export * from './chat'
 // Agent 相关类型
 export * from './agent'
 
+// Agent Provider 适配器接口
+export * from './agent-provider'
+
 // 环境检测相关类型
 export * from './environment'
 
