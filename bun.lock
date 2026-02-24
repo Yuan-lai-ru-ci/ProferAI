@@ -19,7 +19,7 @@
     },
     "apps/electron": {
       "name": "@proma/electron",
-      "version": "0.4.22",
+      "version": "0.4.25",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.2.49",
         "@emoji-mart/data": "^1.2.1",
@@ -66,6 +66,7 @@
         "undici": "^7.21.0",
         "use-stick-to-bottom": "^1.1.2",
         "word-extractor": "1.0.4",
+        "zod": "^4.0.0",
       },
       "devDependencies": {
         "@tailwindcss/typography": "^0.5.19",
@@ -107,7 +108,7 @@
     },
     "packages/shared": {
       "name": "@proma/shared",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "devDependencies": {
         "typescript": "^5.0.0",
       },

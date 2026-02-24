@@ -47,6 +47,7 @@ import type {
   StreamReasoningEvent,
   StreamCompleteEvent,
   StreamErrorEvent,
+  StreamToolActivityEvent,
   FileAttachment,
   AttachmentSaveInput,
 } from '@proma/shared'
@@ -125,7 +126,7 @@ export function ChatView(): React.ReactElement {
       updater: (prev: ConversationStreamState) => ConversationStreamState
     ): void => {
       setStreamingStates((prev) => {
-        const current = prev.get(convId) ?? { streaming: false, content: '', reasoning: '', model: undefined }
+        const current = prev.get(convId) ?? { streaming: false, content: '', reasoning: '', model: undefined, toolActivities: [] }
         const next = updater(current)
         const map = new Map(prev)
         map.set(convId, next)
@@ -235,11 +236,21 @@ export function ChatView(): React.ReactElement {
       }
     )
 
+    const cleanupToolActivity = window.electronAPI.onStreamToolActivity(
+      (event: StreamToolActivityEvent) => {
+        updateState(event.conversationId, (s) => ({
+          ...s,
+          toolActivities: [...s.toolActivities, event.activity],
+        }))
+      }
+    )
+
     return () => {
       cleanupChunk()
       cleanupReasoning()
       cleanupComplete()
       cleanupError()
+      cleanupToolActivity()
     }
   }, [
     setStreamingStates,
@@ -342,6 +353,7 @@ export function ChatView(): React.ReactElement {
         content: '',
         reasoning: '',
         model: selectedModel.modelId,
+        toolActivities: [],
       })
       return map
     })
