@@ -215,6 +215,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     emittedToolStarts: Set<string>,
     activeParentTools: Set<string>,
     pendingText: { value: string | null },
+    pendingParentToolUseId: { value: string | null },
     turnId: { value: string | null },
     cachedContextWindow: { value: number | undefined },
   ): AgentEvent[] {
@@ -273,12 +274,13 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         }
         if (textContent) {
           pendingText.value = textContent
+          pendingParentToolUseId.value = msg.parent_tool_use_id || null
         }
         break
       }
 
       case 'stream_event':
-        this.translateStreamEvent(message as SDKStreamEvent, events, toolIndex, emittedToolStarts, activeParentTools, pendingText, turnId)
+        this.translateStreamEvent(message as SDKStreamEvent, events, toolIndex, emittedToolStarts, activeParentTools, pendingText, pendingParentToolUseId, turnId)
         break
 
       case 'user':
@@ -316,6 +318,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     emittedToolStarts: Set<string>,
     activeParentTools: Set<string>,
     pendingText: { value: string | null },
+    pendingParentToolUseId: { value: string | null },
     turnId: { value: string | null },
   ): void {
     const streamEvent = msg.event
@@ -337,6 +340,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           parentToolUseId: msg.parent_tool_use_id || undefined,
         })
         pendingText.value = null
+        pendingParentToolUseId.value = null
       }
     }
 
@@ -555,6 +559,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     const emittedToolStarts = new Set<string>()
     const activeParentTools = new Set<string>()
     const pendingText = { value: null as string | null }
+    const pendingParentToolUseId = { value: null as string | null }
     const turnId = { value: null as string | null }
     const cachedContextWindow = { value: undefined as number | undefined }
 
@@ -613,7 +618,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         // 统一翻译
         const events = this.translateMessage(
           msg, toolIndex, emittedToolStarts,
-          activeParentTools, pendingText, turnId, cachedContextWindow,
+          activeParentTools, pendingText, pendingParentToolUseId, turnId, cachedContextWindow,
         )
 
         // 上下文窗口回调
@@ -633,6 +638,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           text: pendingText.value,
           isIntermediate: false,
           turnId: turnId.value || undefined,
+          parentToolUseId: pendingParentToolUseId.value || undefined,
         }
       }
     } finally {

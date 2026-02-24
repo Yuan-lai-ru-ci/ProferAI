@@ -40,7 +40,11 @@ export class AgentEventBus {
   emit(sessionId: string, event: AgentEvent): void {
     const dispatch = (): void => {
       for (const handler of this.handlers) {
-        handler(sessionId, event)
+        try {
+          handler(sessionId, event)
+        } catch (error) {
+          console.error(`[AgentEventBus] 事件处理器错误:`, error)
+        }
       }
     }
 
@@ -56,11 +60,22 @@ export class AgentEventBus {
     while (index >= 0) {
       const mw = this.middlewares[index]!
       const next = chain
-      chain = () => mw(sessionId, event, next)
+      chain = () => {
+        try {
+          mw(sessionId, event, next)
+        } catch (error) {
+          console.error(`[AgentEventBus] 中间件错误:`, error)
+          next()
+        }
+      }
       index--
     }
 
-    chain()
+    try {
+      chain()
+    } catch (error) {
+      console.error(`[AgentEventBus] 事件分发错误:`, error)
+    }
   }
 
   /** 注册事件监听器，返回取消注册函数 */

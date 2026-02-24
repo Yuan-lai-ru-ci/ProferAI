@@ -762,7 +762,6 @@ export class AgentOrchestrator {
 
           try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
 
-          this.activeSessions.delete(sessionId)
           const finalMessages = getAgentSessionMessages(sessionId)
           callbacks.onComplete(finalMessages)
           return
@@ -782,9 +781,6 @@ export class AgentOrchestrator {
       this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
 
       try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
-
-      // 清理活跃会话（在发送完成信号前）
-      this.activeSessions.delete(sessionId)
 
       // 发送完成信号（携带已持久化的消息）
       const finalMessages = getAgentSessionMessages(sessionId)
@@ -856,9 +852,6 @@ export class AgentOrchestrator {
 
       // 发送错误给 UI
       callbacks.onError(userFacingError)
-
-      // 清理活跃会话
-      this.activeSessions.delete(sessionId)
 
       // 发送完成信号
       const errorFinalMessages = getAgentSessionMessages(sessionId)

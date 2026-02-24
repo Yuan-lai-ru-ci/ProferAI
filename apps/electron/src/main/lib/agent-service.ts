@@ -63,6 +63,12 @@ export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
+  // 并发检查：保护 sessionWebContents 映射不被覆盖
+  if (sessionWebContents.has(input.sessionId)) {
+    console.warn(`[Agent 服务] 会话 ${input.sessionId} 已在处理中，拒绝重复请求`)
+    throw new Error('会话正在处理中')
+  }
+
   sessionWebContents.set(input.sessionId, webContents)
   try {
     await orchestrator.sendMessage(input, {
