@@ -572,12 +572,7 @@ export async function runAgent(
           sessionId,
           permissionMode,
           (request: PermissionRequest) => {
-            // 发送权限请求到渲染进程
-            webContents.send(AGENT_IPC_CHANNELS.PERMISSION_REQUEST, {
-              sessionId,
-              request,
-            })
-            // 同时作为 AgentEvent 推送（用于消息流中显示）
+            // 通过统一的 STREAM_EVENT 通道发送权限请求
             const event: AgentEvent = { type: 'permission_request', request }
             webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
           },
@@ -585,11 +580,7 @@ export async function runAgent(
           (sid, input, signal, sendAskUser) => askUserService.handleAskUserQuestion(sid, input, signal, sendAskUser),
           // AskUser IPC 发送回调
           (request: AskUserRequest) => {
-            webContents.send(AGENT_IPC_CHANNELS.ASK_USER_REQUEST, {
-              sessionId,
-              request,
-            })
-            // 同时作为 AgentEvent 推送
+            // 通过统一的 STREAM_EVENT 通道发送 AskUser 请求
             const event: AgentEvent = { type: 'ask_user_request', request }
             webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
           },

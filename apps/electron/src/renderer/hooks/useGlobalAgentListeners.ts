@@ -104,6 +104,38 @@ export function useGlobalAgentListeners(): void {
             map.set(sessionId, event.suggestion)
             return map
           })
+        } else if (event.type === 'permission_request') {
+          // 权限请求入队（统一通道，不区分当前/后台会话）
+          store.set(allPendingPermissionRequestsAtom, (prev) => {
+            const map = new Map(prev)
+            const current = map.get(sessionId) ?? []
+            map.set(sessionId, [...current, event.request])
+            return map
+          })
+          // 桌面通知
+          const enabled = store.get(notificationsEnabledAtom)
+          sendDesktopNotification(
+            '需要权限确认',
+            event.request.toolName
+              ? `Agent 请求使用工具: ${event.request.toolName}`
+              : 'Agent 需要你的权限确认',
+            enabled
+          )
+        } else if (event.type === 'ask_user_request') {
+          // AskUser 请求入队（统一通道，不区分当前/后台会话）
+          store.set(allPendingAskUserRequestsAtom, (prev) => {
+            const map = new Map(prev)
+            const current = map.get(sessionId) ?? []
+            map.set(sessionId, [...current, event.request])
+            return map
+          })
+          // 桌面通知
+          const enabled = store.get(notificationsEnabledAtom)
+          sendDesktopNotification(
+            'Agent 需要你的输入',
+            event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
+            enabled
+          )
         }
       }
     )
@@ -217,57 +249,11 @@ export function useGlobalAgentListeners(): void {
         .catch(console.error)
     })
 
-    // ===== 5. 权限请求 — 入队所有会话，不区分当前/后台 =====
-    const cleanupPermission = window.electronAPI.onPermissionRequest(
-      (data) => {
-        const { sessionId, request } = data
-        store.set(allPendingPermissionRequestsAtom, (prev) => {
-          const map = new Map(prev)
-          const current = map.get(sessionId) ?? []
-          map.set(sessionId, [...current, request])
-          return map
-        })
-
-        // 发送桌面通知
-        const enabled = store.get(notificationsEnabledAtom)
-        sendDesktopNotification(
-          '需要权限确认',
-          request.toolName
-            ? `Agent 请求使用工具: ${request.toolName}`
-            : 'Agent 需要你的权限确认',
-          enabled
-        )
-      }
-    )
-
-    // ===== 6. AskUser 请求 — 入队所有会话，不区分当前/后台 =====
-    const cleanupAskUser = window.electronAPI.onAskUserRequest(
-      (data) => {
-        const { sessionId, request } = data
-        store.set(allPendingAskUserRequestsAtom, (prev) => {
-          const map = new Map(prev)
-          const current = map.get(sessionId) ?? []
-          map.set(sessionId, [...current, request])
-          return map
-        })
-
-        // 发送桌面通知
-        const enabled = store.get(notificationsEnabledAtom)
-        sendDesktopNotification(
-          'Agent 需要你的输入',
-          request.questions[0]?.question ?? 'Agent 有问题需要你回答',
-          enabled
-        )
-      }
-    )
-
     return () => {
       cleanupEvent()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
-      cleanupPermission()
-      cleanupAskUser()
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }
