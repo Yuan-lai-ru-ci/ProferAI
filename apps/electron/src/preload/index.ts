@@ -234,6 +234,9 @@ export interface ElectronAPI {
   /** 订阅流式错误事件 */
   onStreamError: (callback: (event: StreamErrorEvent) => void) => () => void
 
+  /** 订阅流式工具活动事件 */
+  onStreamToolActivity: (callback: (event: StreamToolActivityEvent) => void) => () => void
+
   // ===== Agent 会话管理相关 =====
 
   /** 获取 Agent 会话列表 */
