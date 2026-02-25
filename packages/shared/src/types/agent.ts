@@ -604,8 +604,6 @@ export const AGENT_IPC_CHANNELS = {
   WORKSPACE_FILES_CHANGED: 'agent:workspace-files-changed',
 
   // 权限系统
-  /** 权限请求（主进程 → 渲染进程推送） */
-  PERMISSION_REQUEST: 'agent:permission:request',
   /** 权限响应（渲染进程 → 主进程） */
   PERMISSION_RESPOND: 'agent:permission:respond',
   /** 设置权限模式（渲染进程 → 主进程） */
@@ -614,8 +612,6 @@ export const AGENT_IPC_CHANNELS = {
   GET_PERMISSION_MODE: 'agent:get-permission-mode',
 
   // AskUserQuestion 交互式问答
-  /** AskUser 请求（主进程 → 渲染进程推送） */
-  ASK_USER_REQUEST: 'agent:ask-user:request',
   /** AskUser 响应（渲染进程 → 主进程） */
   ASK_USER_RESPOND: 'agent:ask-user:respond',
 } as const

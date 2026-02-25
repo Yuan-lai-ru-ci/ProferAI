@@ -297,7 +297,8 @@ export function applyAgentEvent(
       return { ...prev, content: prev.content + event.text, retrying: undefined }
 
     case 'text_complete':
-      return prev
+      // 用完整文本替换增量累积的文本（用于回放场景：只需 text_complete 即可重建文本状态）
+      return { ...prev, content: event.text }
 
     case 'tool_start': {
       const existing = prev.toolActivities.find((t) => t.toolUseId === event.toolUseId)

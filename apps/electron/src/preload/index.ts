@@ -337,16 +337,10 @@ export interface ElectronAPI {
   /** 测试记忆连接 */
   testMemoryConnection: () => Promise<{ success: boolean; message: string }>
 
-  /** 订阅权限请求事件（返回清理函数） */
-  onPermissionRequest: (callback: (data: { sessionId: string; request: PermissionRequest }) => void) => () => void
-
   // ===== AskUserQuestion 交互式问答 =====
 
   /** 响应 AskUser 请求 */
   respondAskUser: (response: AskUserResponse) => Promise<void>
-
-  /** 订阅 AskUser 请求事件（返回清理函数） */
-  onAskUserRequest: (callback: (data: { sessionId: string; request: AskUserRequest }) => void) => () => void
 
   // ===== Agent 附件 =====
 
@@ -779,21 +773,9 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(MEMORY_IPC_CHANNELS.TEST_CONNECTION)
   },
 
-  onPermissionRequest: (callback: (data: { sessionId: string; request: PermissionRequest }) => void) => {
-    const listener = (_: unknown, data: { sessionId: string; request: PermissionRequest }): void => callback(data)
-    ipcRenderer.on(AGENT_IPC_CHANNELS.PERMISSION_REQUEST, listener)
-    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.PERMISSION_REQUEST, listener) }
-  },
-
   // AskUserQuestion 交互式问答
   respondAskUser: (response: AskUserResponse) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ASK_USER_RESPOND, response)
-  },
-
-  onAskUserRequest: (callback: (data: { sessionId: string; request: AskUserRequest }) => void) => {
-    const listener = (_: unknown, data: { sessionId: string; request: AskUserRequest }): void => callback(data)
-    ipcRenderer.on(AGENT_IPC_CHANNELS.ASK_USER_REQUEST, listener)
-    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.ASK_USER_REQUEST, listener) }
   },
 
   // 工作区文件变化通知
