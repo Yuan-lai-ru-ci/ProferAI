@@ -205,6 +205,8 @@ export interface AgentSessionMeta {
   sdkSessionId?: string
   /** 所属工作区 ID */
   workspaceId?: string
+  /** 是否置顶 */
+  pinned?: boolean
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -524,6 +526,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_TITLE: 'agent:update-title',
   /** 删除会话 */
   DELETE_SESSION: 'agent:delete-session',
+  /** 切换会话置顶状态 */
+  TOGGLE_PIN: 'agent:toggle-pin',
 
   // 工作区管理
   /** 获取工作区列表 */

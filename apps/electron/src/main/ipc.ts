@@ -567,6 +567,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 切换 Agent 会话置顶状态
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.TOGGLE_PIN,
+    async (_, id: string): Promise<AgentSessionMeta> => {
+      const sessions = listAgentSessions()
+      const current = sessions.find((s) => s.id === id)
+      if (!current) throw new Error(`Agent 会话不存在: ${id}`)
+      return updateAgentSessionMeta(id, { pinned: !current.pinned })
+    }
+  )
+
   // ===== Agent 工作区管理相关 =====
 
   // 确保默认工作区存在

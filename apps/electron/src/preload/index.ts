@@ -254,6 +254,9 @@ export interface ElectronAPI {
   /** 删除 Agent 会话 */
   deleteAgentSession: (id: string) => Promise<void>
 
+  /** 切换 Agent 会话置顶状态 */
+  togglePinAgentSession: (id: string) => Promise<AgentSessionMeta>
+
   /** 生成 Agent 会话标题 */
   generateAgentTitle: (input: AgentGenerateTitleInput) => Promise<string | null>
 
@@ -658,6 +661,10 @@ const electronAPI: ElectronAPI = {
 
   deleteAgentSession: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SESSION, id)
+  },
+
+  togglePinAgentSession: (id: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_PIN, id)
   },
 
   generateAgentTitle: (input: AgentGenerateTitleInput) => {
