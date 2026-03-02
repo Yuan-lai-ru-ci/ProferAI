@@ -193,17 +193,8 @@ export function useGlobalAgentListeners(): void {
             })
             .catch(console.error)
 
-          // 延迟移除流式状态 — 等待消息重新加载完成后再清除流式气泡
-          // 防止消息闪烁（流式内容消失 → 持久化消息尚未加载）
-          setTimeout(() => {
-            if (isNewStreamRunning()) return
-            store.set(agentStreamingStatesAtom, (prev) => {
-              if (!prev.has(data.sessionId)) return prev
-              const map = new Map(prev)
-              map.delete(data.sessionId)
-              return map
-            })
-          }, 300)
+          // 注意：流式状态的完全清除由 AgentView 在消息加载完成后执行，
+          // 确保不会出现「气泡消失 → 持久化消息尚未加载」的空档闪烁
         }
 
         // 通知 AgentView 重新加载消息（无论是否为当前会话）

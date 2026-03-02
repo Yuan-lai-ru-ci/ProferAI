@@ -162,9 +162,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   React.useEffect(() => {
     window.electronAPI
       .getAgentSessionMessages(sessionId)
-      .then(setMessages)
+      .then((msgs) => {
+        setMessages(msgs)
+
+        // 消息加载完成后，清除已完成的流式状态（running=false 的过渡气泡）
+        // 在同一个微任务中执行，确保 React 在一次渲染中同时显示持久化消息并移除流式气泡
+        setStreamingStates((prev) => {
+          const state = prev.get(sessionId)
+          if (!state || state.running) return prev  // 仍在运行中，不清除
+          const map = new Map(prev)
+          map.delete(sessionId)
+          return map
+        })
+      })
       .catch(console.error)
-  }, [sessionId, refreshVersion])
+  }, [sessionId, refreshVersion, setStreamingStates])
 
   // 自动发送 pending prompt（从设置页"对话完成配置"触发）
   React.useEffect(() => {

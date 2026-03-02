@@ -94,8 +94,10 @@ export function useGlobalChatListeners(): void {
     // ===== 3. 流式完成 =====
     const cleanupComplete = window.electronAPI.onStreamComplete(
       (event: StreamCompleteEvent) => {
-        // 清理 Map 中的流式状态
-        removeState(event.conversationId)
+        // 标记 streaming=false，但保留 content/reasoning 作为过渡气泡
+        // 流式状态的完全清除由 ChatView 在消息加载完成后执行（见 chatMessageRefreshAtom 的 useEffect），
+        // 确保不会出现「气泡消失 → 持久化消息尚未加载」的空档闪烁
+        updateState(event.conversationId, (s) => ({ ...s, streaming: false }))
 
         // 递增消息刷新版本号，通知 ChatView 重新加载消息
         store.set(chatMessageRefreshAtom, (prev) => {
@@ -141,8 +143,8 @@ export function useGlobalChatListeners(): void {
       (event: StreamErrorEvent) => {
         console.error('[GlobalChatListeners] 流式错误:', event.error)
 
-        // 清理 Map 中的流式状态
-        removeState(event.conversationId)
+        // 标记 streaming=false，保留内容作为过渡（与完成逻辑一致）
+        updateState(event.conversationId, (s) => ({ ...s, streaming: false }))
 
         // 存储错误消息，供 UI 显示
         store.set(chatStreamErrorsAtom, (prev) => {
@@ -152,6 +154,7 @@ export function useGlobalChatListeners(): void {
         })
 
         // 递增消息刷新版本号，通知 ChatView 重新加载消息
+        // 流式状态的完全清除由 ChatView 在消息加载完成后执行
         store.set(chatMessageRefreshAtom, (prev) => {
           const map = new Map(prev)
           map.set(event.conversationId, (prev.get(event.conversationId) ?? 0) + 1)
