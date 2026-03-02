@@ -13,7 +13,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { CornerDownLeft, Square, Lightbulb, Paperclip } from 'lucide-react'
 import { ModelSelector } from './ModelSelector'
 import { ClearContextButton } from './ClearContextButton'
@@ -29,11 +29,13 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  selectedModelAtom,
-  thinkingEnabledAtom,
   conversationDraftsAtom,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment } from '@/atoms/chat-atoms'
+import {
+  useConversationModel,
+  useConversationThinkingEnabled,
+} from '@/hooks/useConversationSettings'
 import { cn } from '@/lib/utils'
 import { fileToBase64 } from '@/lib/file-utils'
 
@@ -71,8 +73,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     })
   }, [conversationId, setDraftsMap])
 
-  const selectedModel = useAtomValue(selectedModelAtom)
-  const [thinkingEnabled, setThinkingEnabled] = useAtom(thinkingEnabledAtom)
+  const [selectedModel] = useConversationModel()
+  const [thinkingEnabled, setThinkingEnabled] = useConversationThinkingEnabled()
   const setPendingAttachments = onSetPendingAttachments
   const [isDragOver, setIsDragOver] = React.useState(false)
 

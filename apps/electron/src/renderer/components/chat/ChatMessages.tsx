@@ -42,9 +42,7 @@ import {
   ReasoningContent,
 } from '@/components/ai-elements/reasoning'
 import { useSmoothStream } from '@proma/ui'
-import {
-  parallelModeAtom,
-} from '@/atoms/chat-atoms'
+import { useConversationParallelMode } from '@/hooks/useConversationSettings'
 import { getModelLogo } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import type { ChatMessage, ChatToolActivity } from '@proma/shared'
@@ -195,7 +193,7 @@ export function ChatMessages({
     content: streamingReasoning,
     isStreaming: streaming,
   })
-  const parallelMode = useAtomValue(parallelModeAtom)
+  const [parallelMode] = useConversationParallelMode()
 
   /** 是否正在加载更多历史 */
   const [loadingMore, setLoadingMore] = React.useState(false)

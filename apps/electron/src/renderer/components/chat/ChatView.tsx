@@ -14,7 +14,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { AlertCircle, X } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
 import { ChatMessages } from './ChatMessages'
@@ -25,17 +25,23 @@ import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import {
   conversationsAtom,
   streamingStatesAtom,
-  selectedModelAtom,
-  contextLengthAtom,
-  thinkingEnabledAtom,
   chatStreamErrorsAtom,
   chatMessageRefreshAtom,
   pendingAgentRecommendationAtom,
+  conversationModelsAtom,
   INITIAL_MESSAGE_LIMIT,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment } from '@/atoms/chat-atoms'
-import { resolvedSystemMessageAtom, promptSidebarOpenAtom } from '@/atoms/system-prompt-atoms'
+import { promptConfigAtom, promptSidebarOpenAtom, conversationPromptIdAtom, resolveSystemMessage, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { activeToolIdsAtom } from '@/atoms/chat-tool-atoms'
+import { userProfileAtom } from '@/atoms/user-profile'
+import { ConversationProvider } from '@/contexts/session-context'
+import {
+  useConversationModel,
+  useConversationContextLength,
+  useConversationThinkingEnabled,
+  useConversationPromptId,
+} from '@/hooks/useConversationSettings'
 import { registerPendingTitle } from '@/hooks/useGlobalChatListeners'
 import { cn } from '@/lib/utils'
 import type {
@@ -50,6 +56,14 @@ interface ChatViewProps {
 }
 
 export function ChatView({ conversationId }: ChatViewProps): React.ReactElement {
+  return (
+    <ConversationProvider conversationId={conversationId}>
+      <ChatViewInner conversationId={conversationId} />
+    </ConversationProvider>
+  )
+}
+
+function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   // ===== 本地状态（每个实例独立） =====
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [contextDividers, setContextDividers] = React.useState<string[]>([])
@@ -57,17 +71,22 @@ export function ChatView({ conversationId }: ChatViewProps): React.ReactElement 
   const [hasMoreMessages, setHasMoreMessages] = React.useState(false)
   const [inlineEditingMessageId, setInlineEditingMessageId] = React.useState<string | null>(null)
 
+  // ===== Per-conversation hooks（分屏独立） =====
+  const [selectedModel, setSelectedModel] = useConversationModel()
+  const [contextLength] = useConversationContextLength()
+  const [thinkingEnabled] = useConversationThinkingEnabled()
+  const [conversationPromptId] = useConversationPromptId()
+
   // ===== 全局 atoms（Map 结构，按 conversationId 读取） =====
   const conversations = useAtomValue(conversationsAtom)
   const streamingStates = useAtomValue(streamingStatesAtom)
   const setStreamingStates = useSetAtom(streamingStatesAtom)
-  const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom)
-  const contextLength = useAtomValue(contextLengthAtom)
-  const thinkingEnabled = useAtomValue(thinkingEnabledAtom)
+  const setConversationModels = useSetAtom(conversationModelsAtom)
   const setChatStreamErrors = useSetAtom(chatStreamErrorsAtom)
   const chatStreamErrors = useAtomValue(chatStreamErrorsAtom)
   const refreshMap = useAtomValue(chatMessageRefreshAtom)
-  const resolvedSystemMessage = useAtomValue(resolvedSystemMessageAtom)
+  const promptConfig = useAtomValue(promptConfigAtom)
+  const userProfile = useAtomValue(userProfileAtom)
   const promptSidebarOpen = useAtomValue(promptSidebarOpenAtom)
   const activeToolIds = useAtomValue(activeToolIdsAtom)
   const setPendingRecommendation = useSetAtom(pendingAgentRecommendationAtom)
@@ -119,15 +138,19 @@ export function ChatView({ conversationId }: ChatViewProps): React.ReactElement 
     }
   }, [conversation?.contextDividers])
 
-  // 从对话元数据恢复模型/渠道选择
+  // 从对话元数据恢复模型/渠道选择（写入 per-conversation Map）
   React.useEffect(() => {
     if (conversation?.modelId && conversation?.channelId) {
-      setSelectedModel({
-        channelId: conversation.channelId,
-        modelId: conversation.modelId,
+      setConversationModels((prev) => {
+        const map = new Map(prev)
+        map.set(conversationId, {
+          channelId: conversation.channelId,
+          modelId: conversation.modelId,
+        })
+        return map
       })
     }
-  }, [conversation?.modelId, conversation?.channelId, setSelectedModel])
+  }, [conversationId, conversation?.modelId, conversation?.channelId, setConversationModels])
 
   const syncContextDividers = React.useCallback(async (
     convId: string,
@@ -237,7 +260,7 @@ export function ChatView({ conversationId }: ChatViewProps): React.ReactElement 
       contextDividers: options?.contextDividersOverride ?? contextDividers,
       attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
       thinkingEnabled: thinkingEnabled || undefined,
-      systemMessage: resolvedSystemMessage,
+      systemMessage: resolveSystemMessage(conversationPromptId, promptConfig, userProfile.userName),
       enabledToolIds: activeToolIds.length > 0 ? activeToolIds : undefined,
     }
 
@@ -270,7 +293,9 @@ export function ChatView({ conversationId }: ChatViewProps): React.ReactElement 
     contextLength,
     contextDividers,
     thinkingEnabled,
-    resolvedSystemMessage,
+    conversationPromptId,
+    promptConfig,
+    userProfile.userName,
     activeToolIds,
     setChatStreamErrors,
     setStreamingStates,

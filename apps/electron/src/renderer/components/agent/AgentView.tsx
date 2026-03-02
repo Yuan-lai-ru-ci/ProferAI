@@ -48,6 +48,7 @@ import {
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
+import { AgentSessionProvider } from '@/contexts/session-context'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, AgentSavedFile, ModelOption } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
 
@@ -683,6 +684,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || pendingFolderRefs.length > 0) && agentChannelId !== null && !streaming
 
   return (
+    <AgentSessionProvider sessionId={sessionId}>
     <div className="flex h-full overflow-hidden">
       {/* 主内容区域 */}
       <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
@@ -911,5 +913,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       {/* 侧面板（Team Activity + File Browser） */}
       <SidePanel sessionId={sessionId} sessionPath={sessionPath} />
     </div>
+    </AgentSessionProvider>
   )
 }

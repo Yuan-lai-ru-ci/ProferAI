@@ -18,10 +18,11 @@ import { cn } from '@/lib/utils'
 import { FileBrowser, FileDropZone } from '@/components/file-browser'
 import { TeamActivityPanel } from './TeamActivityPanel'
 import {
-  agentSidePanelOpenAtom,
-  agentSidePanelTabAtom,
-  hasTeamActivityAtom,
-  teamActivityCountAtom,
+  agentSidePanelOpenMapAtom,
+  agentSidePanelTabMapAtom,
+  agentStreamingStatesAtom,
+  cachedTeamActivitiesAtom,
+  buildTeamActivityEntries,
   workspaceFilesVersionAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -34,10 +35,60 @@ interface SidePanelProps {
 }
 
 export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.ReactElement {
-  const [isOpen, setIsOpen] = useAtom(agentSidePanelOpenAtom)
-  const [activeTab, setActiveTab] = useAtom(agentSidePanelTabAtom)
-  const hasTeamActivity = useAtomValue(hasTeamActivityAtom)
-  const runningCount = useAtomValue(teamActivityCountAtom)
+  // per-session 侧面板状态
+  const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
+  const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
+  const sidePanelTabMap = useAtomValue(agentSidePanelTabMapAtom)
+  const setSidePanelTabMap = useSetAtom(agentSidePanelTabMapAtom)
+
+  const isOpen = sidePanelOpenMap.get(sessionId) ?? false
+  const activeTab = sidePanelTabMap.get(sessionId) ?? 'team'
+
+  const setIsOpen = React.useCallback((value: boolean | ((prev: boolean) => boolean)) => {
+    setSidePanelOpenMap((prev) => {
+      const map = new Map(prev)
+      const current = map.get(sessionId) ?? false
+      map.set(sessionId, typeof value === 'function' ? value(current) : value)
+      return map
+    })
+  }, [sessionId, setSidePanelOpenMap])
+
+  const setActiveTab = React.useCallback((tab: SidePanelTab) => {
+    setSidePanelTabMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, tab)
+      return map
+    })
+  }, [sessionId, setSidePanelTabMap])
+
+  // 直接用 sessionId 计算 team 活动（不依赖 currentAgentSessionIdAtom）
+  const streamingStates = useAtomValue(agentStreamingStatesAtom)
+  const cachedActivities = useAtomValue(cachedTeamActivitiesAtom)
+
+  const hasTeamActivity = React.useMemo(() => {
+    const state = streamingStates.get(sessionId)
+    if (state) {
+      return state.toolActivities.some(
+        (a) => a.toolName === 'Task' || a.toolName === 'Agent'
+      )
+    }
+    const cached = cachedActivities.get(sessionId)
+    return cached !== undefined && cached.length > 0
+  }, [sessionId, streamingStates, cachedActivities])
+
+  const runningCount = React.useMemo(() => {
+    const state = streamingStates.get(sessionId)
+    if (state && state.toolActivities.length > 0) {
+      const entries = buildTeamActivityEntries(state.toolActivities)
+      return entries.filter((e) => e.status === 'running' || e.status === 'backgrounded').length
+    }
+    const cached = cachedActivities.get(sessionId)
+    if (cached) {
+      return cached.filter((e) => e.status === 'running' || e.status === 'backgrounded').length
+    }
+    return 0
+  }, [sessionId, streamingStates, cachedActivities])
+
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
   const hasFileChanges = filesVersion > 0

@@ -10,7 +10,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   tabsAtom,
   splitLayoutAtom,
@@ -21,6 +21,17 @@ import {
   focusTab,
   reorderTabs,
 } from '@/atoms/tab-atoms'
+import {
+  conversationModelsAtom,
+  conversationContextLengthAtom,
+  conversationThinkingEnabledAtom,
+  conversationParallelModeAtom,
+} from '@/atoms/chat-atoms'
+import {
+  agentSidePanelOpenMapAtom,
+  agentSidePanelTabMapAtom,
+} from '@/atoms/agent-atoms'
+import { conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { TabBarItem } from './TabBarItem'
 import { SplitModeToggle } from './SplitModeToggle'
 
@@ -30,6 +41,34 @@ export function TabBar(): React.ReactElement {
   const activeTabId = useAtomValue(activeTabIdAtom)
   const streamingMap = useAtomValue(tabStreamingMapAtom)
   const scrollRef = React.useRef<HTMLDivElement>(null)
+
+  // per-conversation/session Map atoms（用于关闭标签时清理）
+  const setConvModels = useSetAtom(conversationModelsAtom)
+  const setConvContextLength = useSetAtom(conversationContextLengthAtom)
+  const setConvThinking = useSetAtom(conversationThinkingEnabledAtom)
+  const setConvParallel = useSetAtom(conversationParallelModeAtom)
+  const setConvPromptId = useSetAtom(conversationPromptIdAtom)
+  const setAgentSidePanelOpen = useSetAtom(agentSidePanelOpenMapAtom)
+  const setAgentSidePanelTab = useSetAtom(agentSidePanelTabMapAtom)
+
+  /** 清理关闭标签对应的 per-conversation/session Map atoms 条目 */
+  const cleanupMapAtoms = React.useCallback((tabId: string) => {
+    const deleteKey = <T,>(prev: Map<string, T>): Map<string, T> => {
+      if (!prev.has(tabId)) return prev
+      const map = new Map(prev)
+      map.delete(tabId)
+      return map
+    }
+    // Chat per-conversation atoms
+    setConvModels(deleteKey)
+    setConvContextLength(deleteKey)
+    setConvThinking(deleteKey)
+    setConvParallel(deleteKey)
+    setConvPromptId(deleteKey)
+    // Agent per-session atoms
+    setAgentSidePanelOpen(deleteKey)
+    setAgentSidePanelTab(deleteKey)
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen, setAgentSidePanelTab])
 
   // 拖拽状态
   const dragState = React.useRef<{
@@ -50,7 +89,9 @@ export function TabBar(): React.ReactElement {
       setTimeout(() => setLayout(result.layout), 0)
       return result.tabs
     })
-  }, [layout, setTabs, setLayout])
+    // 清理 per-conversation/session Map atoms 条目，防止内存泄漏
+    cleanupMapAtoms(tabId)
+  }, [layout, setTabs, setLayout, cleanupMapAtoms])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键

@@ -250,11 +250,11 @@ export const workspaceFilesVersionAtom = atom(0)
 
 // ===== 侧面板 Atoms =====
 
-/** 侧面板是否打开 */
-export const agentSidePanelOpenAtom = atom(false)
+/** 侧面板是否打开（per-session Map） */
+export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
-/** 侧面板当前活跃 Tab */
-export const agentSidePanelTabAtom = atom<SidePanelTab>('team')
+/** 侧面板当前活跃 Tab（per-session Map） */
+export const agentSidePanelTabMapAtom = atom<Map<string, SidePanelTab>>(new Map())
 
 /**
  * Team 活动缓存 — 以 sessionId 为 key

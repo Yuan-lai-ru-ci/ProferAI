@@ -18,9 +18,8 @@ import {
   allPendingAskUserRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
-  agentSidePanelOpenAtom,
-  agentSidePanelTabAtom,
-  currentAgentSessionIdAtom,
+  agentSidePanelOpenMapAtom,
+  agentSidePanelTabMapAtom,
   cachedTeamActivitiesAtom,
   buildTeamActivityEntries,
   applyAgentEvent,
@@ -59,11 +58,16 @@ export function useGlobalAgentListeners(): void {
 
         // 自动打开侧面板：检测到 Agent/Task 工具启动时
         if (event.type === 'tool_start' && (event.toolName === 'Agent' || event.toolName === 'Task')) {
-          const currentSessionId = store.get(currentAgentSessionIdAtom)
-          if (sessionId === currentSessionId) {
-            store.set(agentSidePanelOpenAtom, true)
-            store.set(agentSidePanelTabAtom, 'team')
-          }
+          store.set(agentSidePanelOpenMapAtom, (prev) => {
+            const map = new Map(prev)
+            map.set(sessionId, true)
+            return map
+          })
+          store.set(agentSidePanelTabMapAtom, (prev) => {
+            const map = new Map(prev)
+            map.set(sessionId, 'team')
+            return map
+          })
         }
 
         // 处理后台任务事件
