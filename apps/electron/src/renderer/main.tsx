@@ -6,7 +6,7 @@
 
 import React, { useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
-import { useSetAtom, useAtomValue } from 'jotai'
+import { useSetAtom, useAtomValue, useStore } from 'jotai'
 import App from './App'
 import {
   themeModeAtom,
@@ -29,6 +29,9 @@ import {
   initializeNotifications,
 } from './atoms/notifications'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
+import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
+import { tabsAtom, splitLayoutAtom } from './atoms/tab-atoms'
+import type { TabItem, SplitLayoutState } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
@@ -161,6 +164,17 @@ function NotificationsInitializer(): null {
 }
 
 /**
+ * Chat IPC 监听器初始化组件
+ *
+ * 全局挂载，永不销毁。确保 Chat 流式事件
+ * 在页面切换时不丢失。
+ */
+function ChatListenersInitializer(): null {
+  useGlobalChatListeners()
+  return null
+}
+
+/**
  * Agent IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Agent 流式事件、权限请求
@@ -207,6 +221,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ThemeInitializer />
     <AgentSettingsInitializer />
     <NotificationsInitializer />
+    <ChatListenersInitializer />
     <AgentListenersInitializer />
     <ChatToolInitializer />
     <UpdaterInitializer />

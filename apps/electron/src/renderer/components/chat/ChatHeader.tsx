@@ -5,16 +5,20 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { Pencil, Check, X, Pin, Columns2 } from 'lucide-react'
-import { currentConversationAtom, conversationsAtom, parallelModeAtom } from '@/atoms/chat-atoms'
+import { conversationsAtom, parallelModeAtom } from '@/atoms/chat-atoms'
+import type { ConversationMeta } from '@proma/shared'
 import { SystemPromptSelector } from './SystemPromptSelector'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
-export function ChatHeader(): React.ReactElement | null {
-  const conversation = useAtomValue(currentConversationAtom)
+interface ChatHeaderProps {
+  conversation: ConversationMeta | null
+}
+
+export function ChatHeader({ conversation }: ChatHeaderProps): React.ReactElement | null {
   const setConversations = useSetAtom(conversationsAtom)
   const [parallelMode, setParallelMode] = useAtom(parallelModeAtom)
   const [editing, setEditing] = React.useState(false)

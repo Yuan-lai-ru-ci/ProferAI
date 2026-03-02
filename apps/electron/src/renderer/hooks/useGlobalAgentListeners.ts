@@ -13,8 +13,7 @@ import {
   agentStreamingStatesAtom,
   agentStreamErrorsAtom,
   agentSessionsAtom,
-  currentAgentSessionIdAtom,
-  currentAgentMessagesAtom,
+  agentMessageRefreshAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
   agentPromptSuggestionsAtom,
@@ -25,6 +24,7 @@ import {
   notificationsEnabledAtom,
   sendDesktopNotification,
 } from '@/atoms/notifications'
+import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import type { AgentStreamEvent, AgentStreamCompletePayload } from '@proma/shared'
 
@@ -143,8 +143,6 @@ export function useGlobalAgentListeners(): void {
     // ===== 2. 流式完成 =====
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: AgentStreamCompletePayload) => {
-        const currentId = store.get(currentAgentSessionIdAtom)
-
         // 发送桌面通知
         const enabled = store.get(notificationsEnabledAtom)
         const sessions = store.get(agentSessionsAtom)
@@ -159,6 +157,15 @@ export function useGlobalAgentListeners(): void {
         const isNewStreamRunning = (): boolean => {
           const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
           return state?.running === true
+        }
+
+        /** 递增消息刷新版本号，通知 AgentView 重新加载消息 */
+        const bumpRefresh = (): void => {
+          store.set(agentMessageRefreshAtom, (prev) => {
+            const map = new Map(prev)
+            map.set(data.sessionId, (prev.get(data.sessionId) ?? 0) + 1)
+            return map
+          })
         }
 
         const finalize = (): void => {
@@ -185,27 +192,11 @@ export function useGlobalAgentListeners(): void {
             .catch(console.error)
         }
 
-        if (data.sessionId === currentId) {
-          if (data.messages) {
-            // 同步路径：直接使用 payload 中已持久化的消息，消除异步 IPC 竞态窗口
-            if (!isNewStreamRunning()) {
-              store.set(currentAgentMessagesAtom, data.messages)
-            }
-            finalize()
-          } else {
-            // 降级路径：payload 无消息（兼容旧版主进程），异步重新加载
-            window.electronAPI
-              .getAgentSessionMessages(data.sessionId)
-              .then((messages) => {
-                if (isNewStreamRunning()) return
-                store.set(currentAgentMessagesAtom, messages)
-                finalize()
-              })
-              .catch(() => finalize())
-          }
-        } else {
-          finalize()
+        // 通知 AgentView 重新加载消息（无论是否为当前会话）
+        if (!isNewStreamRunning()) {
+          bumpRefresh()
         }
+        finalize()
       }
     )
 
@@ -221,20 +212,14 @@ export function useGlobalAgentListeners(): void {
           return map
         })
 
-        // 重新加载当前会话的消息
-        const currentId = store.get(currentAgentSessionIdAtom)
-        if (data.sessionId === currentId) {
-          window.electronAPI
-            .getAgentSessionMessages(data.sessionId)
-            .then((messages) => {
-              // 竞态保护：新流已启动时跳过消息覆盖
-              const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
-              if (state?.running) return
-              store.set(currentAgentMessagesAtom, messages)
-            })
-            .catch((error) => {
-              console.error('[GlobalAgentListeners] 加载消息失败:', error)
-            })
+        // 递增消息刷新版本号，通知 AgentView 重新加载消息
+        const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
+        if (!state?.running) {
+          store.set(agentMessageRefreshAtom, (prev) => {
+            const map = new Map(prev)
+            map.set(data.sessionId, (prev.get(data.sessionId) ?? 0) + 1)
+            return map
+          })
         }
       }
     )
@@ -244,7 +229,15 @@ export function useGlobalAgentListeners(): void {
       window.electronAPI
         .listAgentSessions()
         .then((sessions) => {
+          const prevSessions = store.get(agentSessionsAtom)
           store.set(agentSessionsAtom, sessions)
+          // 同步更新标签页标题（比较新旧标题，有变化才更新）
+          for (const session of sessions) {
+            const prev = prevSessions.find((s) => s.id === session.id)
+            if (prev && prev.title !== session.title) {
+              store.set(tabsAtom, (tabs) => updateTabTitle(tabs, session.id, session.title))
+            }
+          }
         })
         .catch(console.error)
     })

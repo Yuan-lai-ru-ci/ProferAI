@@ -30,6 +30,26 @@ export interface AppSettings {
   lastEnvironmentCheck?: EnvironmentCheckResult
   /** 是否启用桌面通知 */
   notificationsEnabled?: boolean
+  /** 标签页持久化状态（重启恢复） */
+  tabState?: PersistedTabSettings
+}
+
+/** 持久化的标签页状态 */
+export interface PersistedTabSettings {
+  tabs: Array<{
+    id: string
+    type: 'chat' | 'agent'
+    sessionId: string
+    title: string
+  }>
+  splitLayout: {
+    mode: 'single' | 'horizontal-2' | 'vertical-2' | 'grid-4'
+    panels: Array<{
+      index: number
+      activeTabId: string | null
+    }>
+    focusedPanelIndex: number
+  }
 }
 
 /** 设置 IPC 通道 */

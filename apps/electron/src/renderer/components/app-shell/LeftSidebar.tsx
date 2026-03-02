@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue } from 'jotai'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -32,6 +32,15 @@ import {
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
+import {
+  tabsAtom,
+  splitLayoutAtom,
+  activeTabIdAtom,
+  sidebarCollapsedAtom,
+  openTab,
+  closeTab,
+  updateTabTitle,
+} from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
@@ -47,6 +56,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { ActiveView } from '@/atoms/active-view'
 import type { ConversationMeta, AgentSessionMeta, WorkspaceCapabilities } from '@proma/shared'
 
@@ -158,6 +168,12 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [capabilities, setCapabilities] = React.useState<WorkspaceCapabilities | null>(null)
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
+  // Tab 状态
+  const [tabs, setTabs] = useAtom(tabsAtom)
+  const [layout, setLayout] = useAtom(splitLayoutAtom)
+  const activeTabId = useAtomValue(activeTabIdAtom)
+  const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
+
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
     return workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
@@ -198,10 +214,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       .listConversations()
       .then((list) => {
         setConversations(list)
-        // 默认加载最近一条对话（按 updatedAt 降序，首条即最新）
-        if (list.length > 0) {
-          setCurrentConversationId(list[0]!.id)
-        }
       })
       .catch(console.error)
     window.electronAPI
@@ -213,7 +225,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       .then(setAgentSessions)
       .catch(console.error)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setConversations, setCurrentConversationId, setUserProfile, setAgentSessions])
+  }, [setConversations, setUserProfile, setAgentSessions])
 
   /** 处理导航项点击 */
   const handleItemClick = (item: SidebarItemId): void => {
@@ -242,6 +254,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         selectedModel?.channelId,
       )
       setConversations((prev) => [meta, ...prev])
+      // 打开新标签页
+      const result = openTab(tabs, layout, { type: 'chat', sessionId: meta.id, title: meta.title })
+      setTabs(result.tabs)
+      setLayout(result.layout)
       setCurrentConversationId(meta.id)
       // 确保在对话视图
       setActiveView('conversations')
@@ -255,8 +271,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     }
   }
 
-  /** 选择对话 */
-  const handleSelectConversation = (id: string): void => {
+  /** 选择对话（打开或聚焦标签页） */
+  const handleSelectConversation = (id: string, title: string): void => {
+    const result = openTab(tabs, layout, { type: 'chat', sessionId: id, title })
+    setTabs(result.tabs)
+    setLayout(result.layout)
     setCurrentConversationId(id)
     setActiveView('conversations')
     setActiveItem('all-chats')
@@ -274,6 +293,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setConversations((prev) =>
         prev.map((c) => (c.id === updated.id ? updated : c))
       )
+      // 同步更新标签页标题
+      setTabs((prev) => updateTabTitle(prev, id, newTitle))
     } catch (error) {
       console.error('[侧边栏] 重命名对话失败:', error)
     }
@@ -294,6 +315,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   /** 确认删除对话 */
   const handleConfirmDelete = async (): Promise<void> => {
     if (!pendingDeleteId) return
+
+    // 关闭对应的标签页
+    const tabResult = closeTab(tabs, layout, pendingDeleteId)
+    setTabs(tabResult.tabs)
+    setLayout(tabResult.layout)
 
     if (mode === 'agent') {
       // Agent 模式：删除 Agent 会话
@@ -333,6 +359,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         currentWorkspaceId || undefined,
       )
       setAgentSessions((prev) => [meta, ...prev])
+      // 打开新标签页
+      const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
+      setTabs(result.tabs)
+      setLayout(result.layout)
       setCurrentAgentSessionId(meta.id)
       setActiveView('conversations')
       setActiveItem('all-chats')
@@ -341,8 +371,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     }
   }
 
-  /** 选择 Agent 会话 */
-  const handleSelectAgentSession = (id: string): void => {
+  /** 选择 Agent 会话（打开或聚焦标签页） */
+  const handleSelectAgentSession = (id: string, title: string): void => {
+    const result = openTab(tabs, layout, { type: 'agent', sessionId: id, title })
+    setTabs(result.tabs)
+    setLayout(result.layout)
     setCurrentAgentSessionId(id)
     setActiveView('conversations')
     setActiveItem('all-chats')
@@ -355,6 +388,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setAgentSessions((prev) =>
         prev.map((s) => (s.id === id ? { ...s, title: newTitle, updatedAt: Date.now() } : s))
       )
+      // 同步更新标签页标题
+      setTabs((prev) => updateTabTitle(prev, id, newTitle))
     } catch (error) {
       console.error('[侧边栏] 重命名 Agent 会话失败:', error)
     }
@@ -384,15 +419,137 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     [filteredAgentSessions]
   )
 
+  // 删除确认弹窗（collapsed/expanded 共享）
+  const deleteDialog = (
+    <AlertDialog
+      open={pendingDeleteId !== null}
+      onOpenChange={(open) => { if (!open) setPendingDeleteId(null) }}
+    >
+      <AlertDialogContent
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            handleConfirmDelete()
+          }
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>确认删除对话</AlertDialogTitle>
+          <AlertDialogDescription>
+            删除后将无法恢复，确定要删除这个对话吗？
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleConfirmDelete}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            删除
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
+  // ===== 折叠状态：精简图标视图 =====
+  if (sidebarCollapsed) {
+    return (
+      <div
+        className="h-full flex flex-col items-center bg-background transition-[width] duration-300"
+        style={{ width: 48, flexShrink: 0 }}
+      >
+        {/* 顶部留空，避开 macOS 红绿灯 */}
+        <div className="pt-[50px]" />
+
+        {/* 展开按钮 */}
+        <div className="pt-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="p-2 rounded-[10px] text-foreground/60 hover:bg-foreground/[0.04] hover:text-foreground transition-colors titlebar-no-drag"
+              >
+                <PanelLeftOpen size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">展开侧边栏</TooltipContent>
+          </Tooltip>
+        </div>
+
+        {/* 新对话/会话按钮 */}
+        <div className="pt-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
+                className="p-2 rounded-[10px] text-foreground/70 bg-foreground/[0.04] hover:bg-foreground/[0.08] transition-colors titlebar-no-drag border border-dashed border-foreground/10 hover:border-foreground/20"
+              >
+                <Plus size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {mode === 'agent' ? '新会话' : '新对话'}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
+        {/* 弹性空间 */}
+        <div className="flex-1" />
+
+        {/* 设置按钮 */}
+        <div className="pb-3">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => handleItemClick('settings')}
+                className={cn(
+                  'relative p-2 rounded-[10px] transition-colors titlebar-no-drag',
+                  activeItem === 'settings'
+                    ? 'bg-foreground/[0.08] text-foreground'
+                    : 'text-foreground/60 hover:bg-foreground/[0.04] hover:text-foreground'
+                )}
+              >
+                <Settings size={18} />
+                {(hasUpdate || hasEnvironmentIssues) && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">设置</TooltipContent>
+          </Tooltip>
+        </div>
+
+        {deleteDialog}
+      </div>
+    )
+  }
+
+  // ===== 展开状态：完整侧边栏 =====
   return (
     <div
-      className="h-full flex flex-col bg-background"
+      className="h-full flex flex-col bg-background transition-[width] duration-300"
       style={{ width: width ?? 280, minWidth: 180, flexShrink: 1 }}
     >
       {/* 顶部留空，避开 macOS 红绿灯 */}
       <div className="pt-[50px]">
-        {/* 模式切换器 */}
-        <ModeSwitcher />
+        {/* 模式切换器 + 折叠按钮 */}
+        <div className="flex items-start gap-1 pr-1">
+          <div className="flex-1 min-w-0">
+            <ModeSwitcher />
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="mt-2 size-10 flex items-center justify-center rounded-[10px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
+              >
+                <PanelLeftClose size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">收起侧边栏</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       {/* Agent 模式：工作区选择器 */}
@@ -439,11 +596,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
               <ConversationItem
                 key={`pinned-${conv.id}`}
                 conversation={conv}
-                active={conv.id === currentConversationId}
+                active={conv.id === activeTabId}
                 hovered={conv.id === hoveredId}
                 streaming={streamingIds.has(conv.id)}
                 showPinIcon={false}
-                onSelect={() => handleSelectConversation(conv.id)}
+                onSelect={() => handleSelectConversation(conv.id, conv.title)}
                 onRequestDelete={() => handleRequestDelete(conv.id)}
                 onRename={handleRename}
                 onTogglePin={handleTogglePin}
@@ -481,11 +638,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
               <AgentSessionItem
                 key={`pinned-${session.id}`}
                 session={session}
-                active={session.id === currentAgentSessionId}
+                active={session.id === activeTabId}
                 hovered={session.id === hoveredId}
                 running={agentRunningIds.has(session.id)}
                 showPinIcon={false}
-                onSelect={() => handleSelectAgentSession(session.id)}
+                onSelect={() => handleSelectAgentSession(session.id, session.title)}
                 onRequestDelete={() => handleRequestDelete(session.id)}
                 onRename={handleAgentRename}
                 onTogglePin={handleTogglePinAgent}
@@ -511,11 +668,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                   <ConversationItem
                     key={conv.id}
                     conversation={conv}
-                    active={conv.id === currentConversationId}
+                    active={conv.id === activeTabId}
                     hovered={conv.id === hoveredId}
                     streaming={streamingIds.has(conv.id)}
                     showPinIcon={!!conv.pinned}
-                    onSelect={() => handleSelectConversation(conv.id)}
+                    onSelect={() => handleSelectConversation(conv.id, conv.title)}
                     onRequestDelete={() => handleRequestDelete(conv.id)}
                     onRename={handleRename}
                     onTogglePin={handleTogglePin}
@@ -538,11 +695,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                   <AgentSessionItem
                     key={session.id}
                     session={session}
-                    active={session.id === currentAgentSessionId}
+                    active={session.id === activeTabId}
                     hovered={session.id === hoveredId}
                     running={agentRunningIds.has(session.id)}
                     showPinIcon={!!session.pinned}
-                    onSelect={() => handleSelectAgentSession(session.id)}
+                    onSelect={() => handleSelectAgentSession(session.id, session.title)}
                     onRequestDelete={() => handleRequestDelete(session.id)}
                     onRename={handleAgentRename}
                     onTogglePin={handleTogglePinAgent}
@@ -600,36 +757,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         />
       </div>
 
-      {/* 删除确认弹窗 */}
-      <AlertDialog
-        open={pendingDeleteId !== null}
-        onOpenChange={(open) => { if (!open) setPendingDeleteId(null) }}
-      >
-        <AlertDialogContent
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              handleConfirmDelete()
-            }
-          }}
-        >
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认删除对话</AlertDialogTitle>
-            <AlertDialogDescription>
-              删除后将无法恢复，确定要删除这个对话吗？
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleteDialog}
     </div>
   )
 }

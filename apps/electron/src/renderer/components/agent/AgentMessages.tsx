@@ -33,20 +33,18 @@ import { getModelLogo } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
 import { BackgroundTasksPanel } from './BackgroundTasksPanel'
 import { useBackgroundTasks } from '@/hooks/useBackgroundTasks'
-import {
-  currentAgentMessagesAtom,
-  currentAgentSessionIdAtom,
-  agentStreamingAtom,
-  agentStreamingContentAtom,
-  agentToolActivitiesAtom,
-  agentStreamingModelAtom,
-  agentRetryingAtom,
-  agentStartedAtAtom,
-} from '@/atoms/agent-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { cn } from '@/lib/utils'
 import type { AgentMessage, RetryAttempt } from '@proma/shared'
 import type { ToolActivity, AgentStreamState } from '@/atoms/agent-atoms'
+
+/** AgentMessages 属性接口 */
+interface AgentMessagesProps {
+  sessionId: string
+  messages: AgentMessage[]
+  streaming: boolean
+  streamState?: AgentStreamState
+}
 
 function EmptyState(): React.ReactElement {
   return (
@@ -469,19 +467,18 @@ function AgentMessageItem({ message }: { message: AgentMessage }): React.ReactEl
   return null
 }
 
-export function AgentMessages(): React.ReactElement {
-  const messages = useAtomValue(currentAgentMessagesAtom)
+export function AgentMessages({ sessionId, messages, streaming, streamState }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
-  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
-  const streaming = useAtomValue(agentStreamingAtom)
-  const streamingContent = useAtomValue(agentStreamingContentAtom)
-  const toolActivities = useAtomValue(agentToolActivitiesAtom)
-  const agentStreamingModel = useAtomValue(agentStreamingModelAtom)
-  const retrying = useAtomValue(agentRetryingAtom)
-  const startedAt = useAtomValue(agentStartedAtAtom)
+
+  // 从 streamState 属性中计算派生值
+  const streamingContent = streamState?.content ?? ''
+  const toolActivities = streamState?.toolActivities ?? []
+  const agentStreamingModel = streamState?.model
+  const retrying = streamState?.retrying
+  const startedAt = streamState?.startedAt
 
   // 获取后台任务列表
-  const { tasks: backgroundTasks } = useBackgroundTasks(currentSessionId || '')
+  const { tasks: backgroundTasks } = useBackgroundTasks(sessionId)
 
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,

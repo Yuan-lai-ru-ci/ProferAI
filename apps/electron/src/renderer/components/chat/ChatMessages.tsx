@@ -43,20 +43,11 @@ import {
 } from '@/components/ai-elements/reasoning'
 import { useSmoothStream } from '@proma/ui'
 import {
-  currentMessagesAtom,
-  streamingAtom,
-  streamingContentAtom,
-  streamingReasoningAtom,
-  streamingModelAtom,
-  streamingToolActivitiesAtom,
-  contextDividersAtom,
   parallelModeAtom,
-  hasMoreMessagesAtom,
-  currentConversationIdAtom,
 } from '@/atoms/chat-atoms'
 import { getModelLogo } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
-import type { ChatMessage } from '@proma/shared'
+import type { ChatMessage, ChatToolActivity } from '@proma/shared'
 
 // ===== 滚动到顶部加载更多 =====
 
@@ -124,6 +115,24 @@ function ScrollTopLoader({ hasMore, loading, onLoadMore }: ScrollTopLoaderProps)
 // ===== 主组件 =====
 
 interface ChatMessagesProps {
+  /** 当前对话 ID */
+  conversationId: string
+  /** 消息列表 */
+  messages: ChatMessage[]
+  /** 是否正在流式生成 */
+  streaming: boolean
+  /** 流式累积内容 */
+  streamingContent: string
+  /** 流式推理内容 */
+  streamingReasoning: string
+  /** 流式消息绑定的模型 */
+  streamingModel: string | null
+  /** 工具活动列表 */
+  toolActivities: ChatToolActivity[]
+  /** 上下文分隔线 */
+  contextDividers: string[]
+  /** 是否还有更多历史消息 */
+  hasMore: boolean
   /** 删除消息回调 */
   onDeleteMessage?: (messageId: string) => Promise<void>
   /** 重新发送消息回调 */
@@ -157,6 +166,15 @@ function EmptyState(): React.ReactElement {
 }
 
 export function ChatMessages({
+  conversationId,
+  messages,
+  streaming,
+  streamingContent,
+  streamingReasoning,
+  streamingModel,
+  toolActivities,
+  contextDividers,
+  hasMore,
   onDeleteMessage,
   onResendMessage,
   onStartInlineEdit,
@@ -166,14 +184,9 @@ export function ChatMessages({
   onDeleteDivider,
   onLoadMore,
 }: ChatMessagesProps): React.ReactElement {
-  const messages = useAtomValue(currentMessagesAtom)
   const userProfile = useAtomValue(userProfileAtom)
-  const streaming = useAtomValue(streamingAtom)
-  const streamingContent = useAtomValue(streamingContentAtom)
-  const streamingReasoning = useAtomValue(streamingReasoningAtom)
-  const toolActivities = useAtomValue(streamingToolActivitiesAtom)
 
-  // 平滑流式输出：将高频 atom 更新转为逐字渲染
+  // 平滑流式输出：将高频更新转为逐字渲染
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,
     isStreaming: streaming,
@@ -182,11 +195,7 @@ export function ChatMessages({
     content: streamingReasoning,
     isStreaming: streaming,
   })
-  const contextDividers = useAtomValue(contextDividersAtom)
   const parallelMode = useAtomValue(parallelModeAtom)
-  const streamingModel = useAtomValue(streamingModelAtom)
-  const hasMore = useAtomValue(hasMoreMessagesAtom)
-  const currentConversationId = useAtomValue(currentConversationIdAtom)
 
   /** 是否正在加载更多历史 */
   const [loadingMore, setLoadingMore] = React.useState(false)
@@ -200,11 +209,11 @@ export function ChatMessages({
 
   // 对话切换时立即隐藏
   React.useEffect(() => {
-    if (currentConversationId !== prevConversationIdRef.current) {
-      prevConversationIdRef.current = currentConversationId
+    if (conversationId !== prevConversationIdRef.current) {
+      prevConversationIdRef.current = conversationId
       setReady(false)
     }
-  }, [currentConversationId])
+  }, [conversationId])
 
   // 消息渲染 + StickToBottom 定位完成后淡入
   React.useEffect(() => {

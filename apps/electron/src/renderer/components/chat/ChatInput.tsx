@@ -13,7 +13,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { CornerDownLeft, Square, Lightbulb, Paperclip } from 'lucide-react'
 import { ModelSelector } from './ModelSelector'
 import { ClearContextButton } from './ClearContextButton'
@@ -30,16 +30,21 @@ import {
 } from '@/components/ui/tooltip'
 import {
   selectedModelAtom,
-  streamingAtom,
   thinkingEnabledAtom,
-  pendingAttachmentsAtom,
-  currentConversationIdAtom,
-  currentConversationDraftAtom,
+  conversationDraftsAtom,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
 
 interface ChatInputProps {
+  /** 当前对话 ID */
+  conversationId: string
+  /** 是否正在流式生成 */
+  streaming: boolean
+  /** 待发送附件列表 */
+  pendingAttachments: PendingAttachment[]
+  /** 设置待发送附件 */
+  onSetPendingAttachments: React.Dispatch<React.SetStateAction<PendingAttachment[]>>
   /** 发送消息回调 */
   onSend: (content: string) => void
   /** 停止生成回调 */
@@ -65,13 +70,26 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
-export function ChatInput({ onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {
-  const [content, setContent] = useAtom(currentConversationDraftAtom)
+export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {
+  // 从 Map atom 读写草稿
+  const draftsMap = useAtomValue(conversationDraftsAtom)
+  const setDraftsMap = useSetAtom(conversationDraftsAtom)
+  const content = draftsMap.get(conversationId) ?? ''
+  const setContent = React.useCallback((value: string) => {
+    setDraftsMap((prev) => {
+      const map = new Map(prev)
+      if (value.trim() === '') {
+        map.delete(conversationId)
+      } else {
+        map.set(conversationId, value)
+      }
+      return map
+    })
+  }, [conversationId, setDraftsMap])
+
   const selectedModel = useAtomValue(selectedModelAtom)
-  const streaming = useAtomValue(streamingAtom)
   const [thinkingEnabled, setThinkingEnabled] = useAtom(thinkingEnabledAtom)
-  const [pendingAttachments, setPendingAttachments] = useAtom(pendingAttachmentsAtom)
-  const currentConversationId = useAtomValue(currentConversationIdAtom)
+  const setPendingAttachments = onSetPendingAttachments
   const [isDragOver, setIsDragOver] = React.useState(false)
 
   const canSend = (content.trim().length > 0 || pendingAttachments.length > 0)
@@ -256,7 +274,7 @@ export function ChatInput({ onSend, onStop, onClearContext }: ChatInputProps): R
                 : '请先选择模型'
             }
             disabled={!selectedModel}
-            autoFocusTrigger={currentConversationId}
+            autoFocusTrigger={conversationId}
           />
 
           {/* Footer 工具栏 — Cherry Studio: padding 5px 8px, height 40px, gap 16px */}

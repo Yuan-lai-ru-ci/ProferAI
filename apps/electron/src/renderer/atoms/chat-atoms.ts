@@ -204,6 +204,13 @@ export const currentConversationDraftAtom = atom(
   }
 )
 
+/**
+ * Chat 消息刷新版本 Map — 以 conversationId 为 key
+ * 全局监听器在流式完成/错误时递增版本号，
+ * ChatView 监听版本号变化来重新加载消息。
+ */
+export const chatMessageRefreshAtom = atom<Map<string, number>>(new Map())
+
 // ===== Agent 模式推荐 =====
 
 /** Agent 模式推荐数据（由 suggest_agent_mode 工具结果写入） */

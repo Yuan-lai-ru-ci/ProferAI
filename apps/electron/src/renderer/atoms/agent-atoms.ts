@@ -510,6 +510,13 @@ export const agentContextStatusAtom = atom<AgentContextStatus>((get) => {
  */
 export const agentStreamErrorsAtom = atom<Map<string, string>>(new Map())
 
+/**
+ * Agent 消息刷新版本 Map — 以 sessionId 为 key
+ * 全局监听器在流式完成/错误时递增版本号，
+ * AgentView 监听版本号变化来重新加载消息。
+ */
+export const agentMessageRefreshAtom = atom<Map<string, number>>(new Map())
+
 /** 当前 Agent 会话的错误消息（派生只读原子） */
 export const currentAgentErrorAtom = atom<string | null>((get) => {
   const currentId = get(currentAgentSessionIdAtom)
