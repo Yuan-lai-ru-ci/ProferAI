@@ -35,6 +35,23 @@ export interface ActivityGroup {
   children: ToolActivity[]
 }
 
+/** 子代理条目（从 ToolActivity 派生，用于侧面板展示 — TODO: 完善 Team UI 时启用） */
+export interface SubAgentEntry {
+  toolUseId: string
+  toolName: 'Task' | 'Agent'
+  subagentType?: string
+  description: string
+  teamName?: string
+  status: ActivityStatus
+  elapsedSeconds?: number
+  isBackground?: boolean
+  taskId?: string
+  childActivities: ToolActivity[]
+}
+
+/** 侧面板活跃 Tab */
+export type SidePanelTab = 'team' | 'files'
+
 /** Agent 会话的流式状态 */
 export interface AgentStreamState {
   running: boolean
@@ -148,6 +165,62 @@ export function isActivityGroup(item: ActivityGroup | ToolActivity): item is Act
   return 'parent' in item && 'children' in item
 }
 
+/**
+ * 从 ToolActivity[] 构建 SubAgentEntry[]
+ *
+ * 将 Task/Agent 提取为顶层条目，
+ * 其子活动（parentToolUseId 匹配）嵌套在 childActivities 中。
+ */
+export function buildTeamActivityEntries(activities: ToolActivity[]): SubAgentEntry[] {
+  const subAgentIds = new Set<string>()
+  const entries: SubAgentEntry[] = []
+
+  // 第一遍：收集所有 Task/Agent 的 toolUseId
+  for (const a of activities) {
+    if (a.toolName === 'Task' || a.toolName === 'Agent') {
+      subAgentIds.add(a.toolUseId)
+    }
+  }
+
+  if (subAgentIds.size === 0) return []
+
+  // 第二遍：按 parentToolUseId 分组子活动
+  const childrenMap = new Map<string, ToolActivity[]>()
+  for (const a of activities) {
+    if (a.parentToolUseId && subAgentIds.has(a.parentToolUseId)) {
+      const children = childrenMap.get(a.parentToolUseId) ?? []
+      children.push(a)
+      childrenMap.set(a.parentToolUseId, children)
+    }
+  }
+
+  // 第三遍：构建 SubAgentEntry
+  for (const a of activities) {
+    if (a.toolName !== 'Task' && a.toolName !== 'Agent') continue
+
+    const description = typeof a.input.description === 'string'
+      ? a.input.description
+      : typeof a.input.prompt === 'string'
+        ? a.input.prompt
+        : a.intent ?? a.toolName
+
+    entries.push({
+      toolUseId: a.toolUseId,
+      toolName: a.toolName as 'Task' | 'Agent',
+      subagentType: typeof a.input.subagent_type === 'string' ? a.input.subagent_type : undefined,
+      description,
+      teamName: typeof a.input.team_name === 'string' ? a.input.team_name : undefined,
+      status: getActivityStatus(a),
+      elapsedSeconds: a.elapsedSeconds,
+      isBackground: a.isBackground,
+      taskId: a.taskId,
+      childActivities: childrenMap.get(a.toolUseId) ?? [],
+    })
+  }
+
+  return entries
+}
+
 /** 待自动发送的 Agent 提示（从设置页"对话完成配置"触发） */
 export interface AgentPendingPrompt {
   sessionId: string
@@ -174,6 +247,58 @@ export const workspaceCapabilitiesVersionAtom = atom(0)
 
 /** 工作区文件版本号 — 文件变化时自增，触发文件浏览器重新加载 */
 export const workspaceFilesVersionAtom = atom(0)
+
+// ===== 侧面板 Atoms =====
+
+/** 侧面板是否打开 */
+export const agentSidePanelOpenAtom = atom(false)
+
+/** 侧面板当前活跃 Tab */
+export const agentSidePanelTabAtom = atom<SidePanelTab>('team')
+
+/**
+ * Team 活动缓存 — 以 sessionId 为 key
+ *
+ * 流式完成后 agentStreamingStatesAtom 会被清除，
+ * 此缓存在清除前保存 Team 活动数据，确保面板内容不丢失。
+ */
+export const cachedTeamActivitiesAtom = atom<Map<string, SubAgentEntry[]>>(new Map())
+
+/** 当前会话是否有 Team/Task 活动（派生只读原子，同时检查流式状态和缓存） */
+export const hasTeamActivityAtom = atom<boolean>((get) => {
+  const currentId = get(currentAgentSessionIdAtom)
+  if (!currentId) return false
+  // 优先检查流式状态
+  const state = get(agentStreamingStatesAtom).get(currentId)
+  if (state) {
+    return state.toolActivities.some(
+      (a) => a.toolName === 'Task' || a.toolName === 'Agent'
+    )
+  }
+  // 回退到缓存
+  const cached = get(cachedTeamActivitiesAtom).get(currentId)
+  return cached !== undefined && cached.length > 0
+})
+
+/** 当前会话的 Team 活动数据（派生只读原子，同时读取流式状态和缓存） */
+export const teamActivityEntriesAtom = atom<SubAgentEntry[]>((get) => {
+  const currentId = get(currentAgentSessionIdAtom)
+  if (!currentId) return []
+  // 优先使用流式状态
+  const state = get(agentStreamingStatesAtom).get(currentId)
+  if (state && state.toolActivities.length > 0) {
+    const entries = buildTeamActivityEntries(state.toolActivities)
+    if (entries.length > 0) return entries
+  }
+  // 回退到缓存
+  return get(cachedTeamActivitiesAtom).get(currentId) ?? []
+})
+
+/** 运行中的子代理数量（用于 badge 指示器） */
+export const teamActivityCountAtom = atom<number>((get) => {
+  const entries = get(teamActivityEntriesAtom)
+  return entries.filter((e) => e.status === 'running' || e.status === 'backgrounded').length
+})
 
 // ===== 权限系统 Atoms =====
 

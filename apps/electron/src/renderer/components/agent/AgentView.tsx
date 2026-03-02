@@ -16,14 +16,14 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, AlertCircle, X, FolderOpen, Copy, Check, Sparkles } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Sparkles } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
-import { FileBrowser } from '@/components/file-browser'
+import { SidePanel } from './SidePanel'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
@@ -108,7 +108,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
   }, [sessionId, setDraftsMap])
-  const [fileBrowserOpen, setFileBrowserOpen] = React.useState(false)
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [pendingFolderRefs, setPendingFolderRefs] = React.useState<AgentSavedFile[]>([])
@@ -922,54 +921,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </div>
       </div>
 
-      {/* 文件浏览器侧栏 — 始终渲染 w-10 占位，避免切换模式时布局跳动 */}
-      <div
-        className={cn(
-          'relative flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden titlebar-drag-region',
-          sessionPath && fileBrowserOpen ? 'w-[300px] border-l' : 'w-10'
-        )}
-      >
-        {sessionPath && (
-          <>
-            {/* 切换按钮 — 始终固定在右上角，同一个 DOM 元素 */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-2.5 top-2.5 z-10 h-7 w-7 titlebar-no-drag"
-                  onClick={() => setFileBrowserOpen((prev) => !prev)}
-                >
-                  <FolderOpen
-                    className={cn(
-                      'size-3.5 absolute transition-all duration-200',
-                      fileBrowserOpen ? 'opacity-0 rotate-90 scale-75' : 'opacity-100 rotate-0 scale-100'
-                    )}
-                  />
-                  <X
-                    className={cn(
-                      'size-3.5 absolute transition-all duration-200',
-                      fileBrowserOpen ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 -rotate-90 scale-75'
-                    )}
-                  />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                <p>{fileBrowserOpen ? '关闭文件浏览器' : '打开文件浏览器'}</p>
-              </TooltipContent>
-            </Tooltip>
-
-            {/* FileBrowser 内容 — 收起时隐藏 */}
-            <div className={cn(
-              'w-[300px] h-full transition-opacity duration-300 titlebar-no-drag',
-              fileBrowserOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
-            )}>
-              <FileBrowser rootPath={sessionPath} />
-            </div>
-          </>
-        )}
-      </div>
+      {/* 侧面板（Team Activity + File Browser） */}
+      <SidePanel sessionId={sessionId} sessionPath={sessionPath} />
     </div>
   )
 }
