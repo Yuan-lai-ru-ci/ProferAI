@@ -42,9 +42,12 @@ import {
   agentSessionDraftsAtom,
   agentPromptSuggestionsAtom,
   agentMessageRefreshAtom,
+  agentSessionsAtom,
+  currentAgentSessionIdAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, AgentSavedFile, ModelOption } from '@proma/shared'
 
 /** 将 File 对象转为 base64 字符串 */
@@ -86,6 +89,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
   const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
+  const [tabs, setTabs] = useAtom(tabsAtom)
+  const [layout, setLayout] = useAtom(splitLayoutAtom)
 
   const draftsMap = useAtomValue(agentSessionDraftsAtom)
   const setDraftsMap = useSetAtom(agentSessionDraftsAtom)
@@ -595,6 +602,86 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [agentError])
 
+  /** 重试：在当前会话中重新发送最后一条用户消息 */
+  const handleRetry = React.useCallback((): void => {
+    if (!agentChannelId || streaming) return
+
+    // 找到最后一条用户消息
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
+    if (!lastUserMsg) return
+
+    // 清除错误状态
+    setAgentStreamErrors((prev) => {
+      if (!prev.has(sessionId)) return prev
+      const map = new Map(prev)
+      map.delete(sessionId)
+      return map
+    })
+
+    // 初始化流式状态
+    setStreamingStates((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, {
+        running: true,
+        content: '',
+        toolActivities: [],
+        model: agentModelId || undefined,
+      })
+      return map
+    })
+
+    window.electronAPI.sendAgentMessage({
+      sessionId,
+      userMessage: lastUserMsg.content,
+      channelId: agentChannelId,
+      modelId: agentModelId || undefined,
+      workspaceId: currentWorkspaceId || undefined,
+    }).catch(console.error)
+  }, [messages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates])
+
+  /** 在新会话中重试：创建新会话 + 切换 tab + 发送引用旧会话的提示词 */
+  const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
+    if (!agentChannelId) return
+
+    try {
+      const meta = await window.electronAPI.createAgentSession(
+        undefined, agentChannelId, currentWorkspaceId || undefined,
+      )
+      setAgentSessions((prev) => [meta, ...prev])
+
+      // 切换到新会话 tab
+      const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
+      setTabs(result.tabs)
+      setLayout(result.layout)
+      setCurrentAgentSessionId(meta.id)
+
+      // 发送引用旧会话的默认提示词
+      const prompt = `上个会话的 id 是 ${sessionId}，可以参考同工作区下的会话继续完成工作`
+
+      // 初始化新会话流式状态
+      setStreamingStates((prev) => {
+        const map = new Map(prev)
+        map.set(meta.id, {
+          running: true,
+          content: '',
+          toolActivities: [],
+          model: agentModelId || undefined,
+        })
+        return map
+      })
+
+      window.electronAPI.sendAgentMessage({
+        sessionId: meta.id,
+        userMessage: prompt,
+        channelId: agentChannelId,
+        modelId: agentModelId || undefined,
+        workspaceId: currentWorkspaceId || undefined,
+      }).catch(console.error)
+    } catch (error) {
+      console.error('[AgentView] 在新会话中重试失败:', error)
+    }
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout, setStreamingStates])
+
   const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || pendingFolderRefs.length > 0) && agentChannelId !== null && !streaming
 
   return (
@@ -610,6 +697,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           messages={messages}
           streaming={streaming}
           streamState={streamState}
+          onRetry={handleRetry}
+          onRetryInNewSession={handleRetryInNewSession}
         />
 
         {/* 拖拽文件夹警告 */}

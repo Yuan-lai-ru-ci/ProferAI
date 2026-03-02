@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { existsSync, mkdirSync, symlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentSendInput, AgentEvent, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter } from '@proma/shared'
+import type { AgentSendInput, AgentEvent, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt } from '@proma/shared'
 import { SAFE_TOOLS } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
@@ -33,6 +33,7 @@ import { appendAgentMessage, updateAgentSessionMeta, getAgentSessionMeta, getAge
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspacePermissionMode } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
+import { getSettings } from './settings-service'
 import { buildSystemPromptAppend, buildDynamicContext } from './agent-prompt-builder'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -105,6 +106,45 @@ function extractApiError(stderr: string): { statusCode: number; message: string 
   }
 
   return null
+}
+
+// ===== 自动重试工具函数 =====
+
+/** 可自动重试的 TypedError 错误码 */
+const AUTO_RETRYABLE_ERROR_CODES: ReadonlySet<string> = new Set([
+  'rate_limited',
+  'provider_error',      // overloaded 映射为 provider_error
+  'service_error',
+  'service_unavailable',
+  'network_error',
+])
+
+/** 判断 typed_error 事件是否可自动重试 */
+function isAutoRetryableTypedError(error: TypedError): boolean {
+  return AUTO_RETRYABLE_ERROR_CODES.has(error.code)
+}
+
+/** 判断 catch 块中的 API 错误是否可自动重试（HTTP 429 / 5xx / 已知可恢复错误模式） */
+function isAutoRetryableCatchError(
+  apiError: { statusCode: number; message: string } | null,
+  rawErrorMessage?: string,
+): boolean {
+  if (apiError) {
+    if (apiError.statusCode === 429 || apiError.statusCode >= 500) return true
+  }
+  // 已知的可恢复错误模式（无 HTTP 状态码但可重试）
+  if (rawErrorMessage) {
+    if (rawErrorMessage.includes('context_management')) return true
+  }
+  return false
+}
+
+/** 最大自动重试次数 */
+const MAX_AUTO_RETRIES = 3
+
+/** 计算重试延迟（指数退避：1s, 2s, 4s） */
+function getRetryDelayMs(attempt: number): number {
+  return Math.min(1000 * Math.pow(2, attempt - 1), 8000)
 }
 
 /**
@@ -243,9 +283,6 @@ const DEFAULT_SESSION_TITLE = '新 Agent 会话'
 /** 默认模型 ID */
 const DEFAULT_MODEL_ID = 'claude-sonnet-4-5-20250929'
 
-/** Agent 单次查询最大轮次（防止无限工具调用循环） */
-const MAX_AGENT_TURNS = 30
-
 // ===== AgentOrchestrator =====
 
 export class AgentOrchestrator {
@@ -271,6 +308,12 @@ export class AgentOrchestrator {
     const sdkEnv: Record<string, string | undefined> = {
       ...process.env,
       ANTHROPIC_API_KEY: apiKey,
+      // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+      // 启用 Agent Teams（实验性多 Agent 协作）
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+      // 启用 Tasks 功能
+      CLAUDE_CODE_ENABLE_TASKS: 'true',
     }
 
     if (baseUrl && baseUrl !== DEFAULT_ANTHROPIC_URL) {
@@ -334,7 +377,7 @@ export class AgentOrchestrator {
           ...(entry.args && entry.args.length > 0 && { args: entry.args }),
           ...(Object.keys(mergedEnv).length > 0 && { env: mergedEnv }),
           required: false,
-          startup_timeout_sec: 30,
+          startup_timeout_sec: entry.timeout ?? 30,
         }
       } else if ((entry.type === 'http' || entry.type === 'sse') && entry.url) {
         mcpServers[name] = {
@@ -564,7 +607,7 @@ export class AgentOrchestrator {
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)
-    const existingSdkSessionId = sessionMeta?.sdkSessionId
+    let existingSdkSessionId = sessionMeta?.sdkSessionId
     console.log(`[Agent 编排] 会话 resume 状态: sdkSessionId=${existingSdkSessionId || '无'}`)
 
     // 5. 持久化用户消息
@@ -634,6 +677,22 @@ export class AgentOrchestrator {
         }
       }
 
+      // 9.5 验证 sdkSessionId 是否仍然有效（SDK 0.2.53 listSessions）
+      if (existingSdkSessionId) {
+        try {
+          const sessions = await sdk.listSessions({ dir: agentCwd })
+          const isValid = sessions.some((s: { sessionId: string }) => s.sessionId === existingSdkSessionId)
+          if (!isValid) {
+            console.log(`[Agent 编排] sdkSessionId 已失效 (${existingSdkSessionId})，将使用上下文注入`)
+            existingSdkSessionId = undefined
+            updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
+          }
+        } catch {
+          // 验证失败不阻塞主流程
+          console.warn(`[Agent 编排] listSessions 验证失败，继续使用现有 sessionId`)
+        }
+      }
+
       // 10. 构建 MCP 服务器配置 + 记忆工具
       const mcpServers = this.buildMcpServers(workspaceSlug)
       await this.injectMemoryTools(sdk, mcpServers)
@@ -659,10 +718,11 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 无 resume，已回填历史上下文（最近 ${MAX_CONTEXT_MESSAGES} 条消息）`)
       }
 
-      // 12. 获取权限模式并创建 canUseTool 回调
+      // 12. 读取应用设置 + 获取权限模式
+      const appSettings = getSettings()
       const permissionMode: PromaPermissionMode = workspaceSlug
         ? getWorkspacePermissionMode(workspaceSlug)
-        : 'smart'
+        : (appSettings.agentPermissionMode ?? 'smart')
       console.log(`[Agent 编排] 权限模式: ${permissionMode}`)
 
       const canUseTool = permissionMode !== 'auto'
@@ -682,6 +742,9 @@ export class AgentOrchestrator {
         : undefined
 
       // 13. 构建 Adapter 查询选项
+      const maxTurns = appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0
+        ? appSettings.agentMaxTurns
+        : undefined
       const queryOptions: ClaudeAgentQueryOptions = {
         sessionId,
         prompt: finalPrompt,
@@ -691,7 +754,7 @@ export class AgentOrchestrator {
         executable: agentExec,
         executableArgs,
         env: sdkEnv,
-        maxTurns: MAX_AGENT_TURNS,
+        ...(maxTurns != null && { maxTurns }),
         sdkPermissionMode: permissionMode === 'auto' ? 'bypassPermissions' : 'default',
         allowDangerouslySkipPermissions: permissionMode === 'auto',
         ...(canUseTool && { canUseTool }),
@@ -709,6 +772,12 @@ export class AgentOrchestrator {
         resumeSessionId: existingSdkSessionId,
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
+        // SDK 0.2.52+ 新增选项（从 settings 读取）
+        ...(appSettings.agentThinking && { thinking: appSettings.agentThinking }),
+        ...(appSettings.agentEffort && { effort: appSettings.agentEffort }),
+        ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
+          maxBudgetUsd: appSettings.agentMaxBudgetUsd,
+        }),
         onStderr: (data: string) => {
           stderrChunks.push(data)
           console.error(`[Agent SDK stderr] ${data}`)
@@ -734,143 +803,269 @@ export class AgentOrchestrator {
 
       console.log(`[Agent 编排] 开始通过 Adapter 遍历事件流...`)
 
-      // 14. 遍历 Adapter 产出的 AgentEvent 流
-      for await (const event of this.adapter.query(queryOptions)) {
-        // 检查 typed_error 事件 - 立即保存错误消息并退出
-        if (event.type === 'typed_error') {
-          this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+      // 14. 遍历 Adapter 产出的 AgentEvent 流（含自动重试）
+      let lastRetryableError: string | undefined
+      let retrySucceeded = false
 
-          // 保存 TypedError 作为 status 消息
-          const errorMsg: AgentMessage = {
-            id: randomUUID(),
-            role: 'status',
-            content: event.error.title
-              ? `${event.error.title}: ${event.error.message}`
-              : event.error.message,
-            createdAt: Date.now(),
-            errorCode: event.error.code,
-            errorTitle: event.error.title,
-            errorDetails: event.error.details,
-            errorOriginal: event.error.originalError,
-            errorCanRetry: event.error.canRetry,
-            errorActions: event.error.actions,
+      for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
+        // 非首次尝试：等待 + 发送重试事件到 UI
+        if (attempt > 1) {
+          const delayMs = getRetryDelayMs(attempt - 1)
+          const delaySec = delayMs / 1000
+          const attemptData: RetryAttempt = {
+            attempt: attempt - 1,
+            timestamp: Date.now(),
+            reason: lastRetryableError ?? '未知错误',
+            errorMessage: lastRetryableError ?? '',
+            delaySeconds: delaySec,
           }
-          appendAgentMessage(sessionId, errorMsg)
-          console.log(`[Agent 编排] 已保存 TypedError 消息: ${event.error.code} - ${event.error.title}`)
 
-          // 推送 typed_error 事件
-          this.eventBus.emit(sessionId, event)
+          this.eventBus.emit(sessionId, {
+            type: 'retrying',
+            attempt: attempt - 1,
+            maxAttempts: MAX_AUTO_RETRIES,
+            delaySeconds: delaySec,
+            reason: lastRetryableError ?? '未知错误',
+          })
+          this.eventBus.emit(sessionId, { type: 'retry_attempt', attemptData })
 
+          console.log(`[Agent 编排] 第 ${attempt - 1} 次重试，等待 ${delaySec}s...`)
+          await new Promise((r) => setTimeout(r, delayMs))
+
+          // 等待期间如果会话被中止，退出
+          if (!this.activeSessions.has(sessionId)) {
+            this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+            callbacks.onComplete(getAgentSessionMessages(sessionId))
+            return
+          }
+        }
+
+        let shouldRetryFromTypedError = false
+
+        try {
+          for await (const event of this.adapter.query(queryOptions)) {
+            // typed_error：判断是否可自动重试
+            if (event.type === 'typed_error') {
+              if (isAutoRetryableTypedError(event.error) && attempt <= MAX_AUTO_RETRIES) {
+                lastRetryableError = event.error.title
+                  ? `${event.error.title}: ${event.error.message}`
+                  : event.error.message
+                console.log(`[Agent 编排] 可重试错误 (typed_error): ${event.error.code} - ${lastRetryableError}`)
+                // 保存部分内容后准备重试
+                this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+                accumulatedText = ''
+                accumulatedEvents.length = 0
+                shouldRetryFromTypedError = true
+                break  // 跳出 for-await，进入下一次 retry 循环
+              }
+
+              // 不可重试 → 走原有终止逻辑
+              this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+
+              const errorMsg: AgentMessage = {
+                id: randomUUID(),
+                role: 'status',
+                content: event.error.title
+                  ? `${event.error.title}: ${event.error.message}`
+                  : event.error.message,
+                createdAt: Date.now(),
+                errorCode: event.error.code,
+                errorTitle: event.error.title,
+                errorDetails: event.error.details,
+                errorOriginal: event.error.originalError,
+                errorCanRetry: event.error.canRetry,
+                errorActions: event.error.actions,
+              }
+              appendAgentMessage(sessionId, errorMsg)
+              console.log(`[Agent 编排] 已保存 TypedError 消息: ${event.error.code} - ${event.error.title}`)
+
+              // 如果之前有重试记录，发送 retry_failed
+              if (attempt > 1 && lastRetryableError) {
+                this.eventBus.emit(sessionId, {
+                  type: 'retry_failed',
+                  finalAttempt: {
+                    attempt: attempt - 1,
+                    timestamp: Date.now(),
+                    reason: lastRetryableError,
+                    errorMessage: event.error.message,
+                    delaySeconds: 0,
+                  },
+                })
+              }
+
+              this.eventBus.emit(sessionId, event)
+              try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+              callbacks.onComplete(getAgentSessionMessages(sessionId))
+              return
+            }
+
+            // 正常事件处理
+            if (event.type === 'text_delta') {
+              accumulatedText += event.text
+            }
+            accumulatedEvents.push(event)
+            this.eventBus.emit(sessionId, event)
+          }
+
+          // typed_error break 触发了 → 继续循环
+          if (shouldRetryFromTypedError) {
+            continue
+          }
+
+          // 正常完成 — 如果之前有重试，发送 retry_cleared
+          if (attempt > 1) {
+            this.eventBus.emit(sessionId, { type: 'retry_cleared' })
+            console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
+          }
+          retrySucceeded = true
+
+          // 15. 持久化 assistant 消息
+          this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
           try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
 
-          const finalMessages = getAgentSessionMessages(sessionId)
-          callbacks.onComplete(finalMessages)
-          return
+          // 发送完成信号
+          callbacks.onComplete(getAgentSessionMessages(sessionId))
+
+          // 异步生成标题
+          this.autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, callbacks)
+            .catch((err) => console.error('[Agent 编排] 标题生成未捕获异常:', err))
+
+          break  // 成功完成，退出重试循环
+
+        } catch (error) {
+          // 打印 stderr
+          const fullStderr = stderrChunks.join('').trim()
+          if (fullStderr) {
+            console.error(`[Agent 编排] 完整 stderr 输出 (${fullStderr.length} 字符):`)
+            console.error(fullStderr)
+          } else {
+            console.error(`[Agent 编排] stderr 为空`)
+          }
+
+          // 用户主动中止
+          if (!this.activeSessions.has(sessionId)) {
+            console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
+            this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+            callbacks.onComplete(getAgentSessionMessages(sessionId))
+            return
+          }
+
+          // 从 stderr 提取 API 错误
+          const stderrOutput = stderrChunks.join('').trim()
+          const apiError = extractApiError(stderrOutput)
+          const rawErrorMessage = error instanceof Error ? error.message : ''
+
+          // 判断是否可重试
+          if (isAutoRetryableCatchError(apiError, rawErrorMessage) && attempt <= MAX_AUTO_RETRIES) {
+            lastRetryableError = apiError
+              ? `API Error ${apiError.statusCode}: ${apiError.message}`
+              : (error instanceof Error ? error.message : '未知错误')
+            console.log(`[Agent 编排] 可重试错误 (catch): ${lastRetryableError}`)
+            // 保存部分内容
+            this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+            accumulatedText = ''
+            accumulatedEvents.length = 0
+            stderrChunks.length = 0
+            continue  // 进入下一次 retry 循环
+          }
+
+          // 不可重试 — 走原有终止逻辑
+          const errorMessage = error instanceof Error ? error.message : '未知错误'
+          console.error(`[Agent 编排] 执行失败:`, error)
+
+          // 保存已累积的部分内容
+          if (accumulatedText || accumulatedEvents.length > 0) {
+            try {
+              this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+              console.log(`[Agent 编排] 已保存部分执行结果 (${accumulatedText.length} 字符, ${accumulatedEvents.length} 事件)`)
+            } catch (saveError) {
+              console.error('[Agent 编排] 保存部分内容失败:', saveError)
+            }
+          }
+
+          let userFacingError: string
+          if (apiError) {
+            userFacingError = `API 错误 (${apiError.statusCode}):\n${apiError.message}`
+          } else {
+            userFacingError = errorMessage
+          }
+
+          // 保存错误消息到 JSONL
+          try {
+            const errMsg: AgentMessage = {
+              id: randomUUID(),
+              role: 'status',
+              content: userFacingError,
+              createdAt: Date.now(),
+              errorCode: 'unknown_error',
+              errorTitle: '执行错误',
+              errorOriginal: error instanceof Error ? error.stack : String(error),
+            }
+            appendAgentMessage(sessionId, errMsg)
+            console.log(`[Agent 编排] 已保存错误消息到 JSONL`)
+          } catch (saveError) {
+            console.error('[Agent 编排] 保存错误消息失败:', saveError)
+          }
+
+          // 如果之前有重试记录，发送 retry_failed
+          if (attempt > 1 && lastRetryableError) {
+            this.eventBus.emit(sessionId, {
+              type: 'retry_failed',
+              finalAttempt: {
+                attempt: attempt - 1,
+                timestamp: Date.now(),
+                reason: lastRetryableError,
+                errorMessage: userFacingError,
+                delaySeconds: 0,
+              },
+            })
+          }
+
+          callbacks.onError(userFacingError)
+          callbacks.onComplete(getAgentSessionMessages(sessionId))
+
+          // 根据错误类型决定是否保留 sdkSessionId
+          const shouldClearSession = !apiError || apiError.statusCode >= 500
+          if (existingSdkSessionId && shouldClearSession) {
+            try {
+              updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
+              console.log(`[Agent 编排] 已清除失效的 sdkSessionId`)
+            } catch { /* 忽略 */ }
+          } else if (existingSdkSessionId && !shouldClearSession) {
+            console.log(`[Agent 编排] 保留 sdkSessionId (API 错误 ${apiError?.statusCode})`)
+          }
+
+          throw error
         }
-
-        // 累积文本
-        if (event.type === 'text_delta') {
-          accumulatedText += event.text
-        }
-        accumulatedEvents.push(event)
-
-        // 通过 EventBus 分发事件
-        this.eventBus.emit(sessionId, event)
       }
 
-      // 15. 持久化 assistant 消息
-      this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
+      // 重试循环结束（达到最大次数仍失败）
+      if (!retrySucceeded && lastRetryableError) {
+        this.eventBus.emit(sessionId, {
+          type: 'retry_failed',
+          finalAttempt: {
+            attempt: MAX_AUTO_RETRIES,
+            timestamp: Date.now(),
+            reason: lastRetryableError,
+            errorMessage: `重试 ${MAX_AUTO_RETRIES} 次后仍然失败`,
+            delaySeconds: 0,
+          },
+        })
 
-      try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
-
-      // 发送完成信号（携带已持久化的消息）
-      const finalMessages = getAgentSessionMessages(sessionId)
-      callbacks.onComplete(finalMessages)
-
-      // 异步生成标题（不阻塞完成响应）
-      this.autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, callbacks)
-        .catch((err) => console.error('[Agent 编排] 标题生成未捕获异常:', err))
-
-    } catch (error) {
-      // 打印完整的 stderr 用于诊断
-      const fullStderr = stderrChunks.join('').trim()
-      if (fullStderr) {
-        console.error(`[Agent 编排] 完整 stderr 输出 (${fullStderr.length} 字符):`)
-        console.error(fullStderr)
-      } else {
-        console.error(`[Agent 编排] stderr 为空`)
-      }
-
-      // 用户主动中止
-      if (!this.activeSessions.has(sessionId)) {
-        console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
-        this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
-        const abortFinalMessages = getAgentSessionMessages(sessionId)
-        callbacks.onComplete(abortFinalMessages)
-        return
-      }
-
-      const errorMessage = error instanceof Error ? error.message : '未知错误'
-      console.error(`[Agent 编排] 执行失败:`, error)
-
-      // 保存已累积的部分内容
-      if (accumulatedText || accumulatedEvents.length > 0) {
-        try {
-          this.persistAssistantMessage(sessionId, accumulatedText, accumulatedEvents, resolvedModel)
-          console.log(`[Agent 编排] 已保存部分执行结果 (${accumulatedText.length} 字符, ${accumulatedEvents.length} 事件)`)
-        } catch (saveError) {
-          console.error('[Agent 编排] 保存部分内容失败:', saveError)
-        }
-      }
-
-      // 从 stderr 提取 API 原始错误
-      const stderrOutput = stderrChunks.join('').trim()
-      const apiError = extractApiError(stderrOutput)
-
-      let userFacingError: string
-      if (apiError) {
-        userFacingError = `API 错误 (${apiError.statusCode}):\n${apiError.message}`
-      } else {
-        userFacingError = errorMessage
-      }
-
-      // 保存错误消息到 JSONL
-      try {
-        const errorMsg: AgentMessage = {
+        // 保存错误消息
+        const retryErrorMsg: AgentMessage = {
           id: randomUUID(),
           role: 'status',
-          content: userFacingError,
+          content: `重试 ${MAX_AUTO_RETRIES} 次后仍然失败: ${lastRetryableError}`,
           createdAt: Date.now(),
           errorCode: 'unknown_error',
-          errorTitle: '执行错误',
-          errorOriginal: error instanceof Error ? error.stack : String(error),
+          errorTitle: '重试失败',
         }
-        appendAgentMessage(sessionId, errorMsg)
-        console.log(`[Agent 编排] 已保存错误消息到 JSONL`)
-      } catch (saveError) {
-        console.error('[Agent 编排] 保存错误消息失败:', saveError)
+        appendAgentMessage(sessionId, retryErrorMsg)
+
+        callbacks.onError(`重试 ${MAX_AUTO_RETRIES} 次后仍然失败: ${lastRetryableError}`)
+        callbacks.onComplete(getAgentSessionMessages(sessionId))
       }
-
-      // 发送错误给 UI
-      callbacks.onError(userFacingError)
-
-      // 发送完成信号
-      const errorFinalMessages = getAgentSessionMessages(sessionId)
-      callbacks.onComplete(errorFinalMessages)
-
-      // 根据错误类型决定是否保留 sdkSessionId
-      const shouldClearSession = !apiError || apiError.statusCode >= 500
-
-      if (existingSdkSessionId && shouldClearSession) {
-        try {
-          updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
-          console.log(`[Agent 编排] 已清除失效的 sdkSessionId`)
-        } catch { /* 忽略 */ }
-      } else if (existingSdkSessionId && !shouldClearSession) {
-        console.log(`[Agent 编排] 保留 sdkSessionId (API 错误 ${apiError?.statusCode})`)
-      }
-
-      throw error
 
     } finally {
       this.activeSessions.delete(sessionId)
@@ -889,6 +1084,11 @@ export class AgentOrchestrator {
     this.activeSessions.delete(sessionId)
     this.adapter.abort(sessionId)
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
+  }
+
+  /** 检查指定会话是否正在处理中 */
+  isActive(sessionId: string): boolean {
+    return this.activeSessions.has(sessionId)
   }
 
   /** 中止所有活跃的 Agent 会话（应用退出时调用） */

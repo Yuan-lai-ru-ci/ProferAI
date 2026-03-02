@@ -24,11 +24,15 @@ import {
   currentAgentSessionIdAtom,
   agentPendingPromptAtom,
   workspaceCapabilitiesVersionAtom,
+  agentThinkingAtom,
+  agentEffortAtom,
+  agentMaxBudgetUsdAtom,
+  agentMaxTurnsAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
-import type { McpServerEntry, SkillMeta, WorkspaceMcpConfig } from '@proma/shared'
-import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
+import type { McpServerEntry, SkillMeta, WorkspaceMcpConfig, ThinkingConfig, AgentEffort } from '@proma/shared'
+import { SettingsSection, SettingsCard, SettingsRow, SettingsSegmentedControl, SettingsInput } from './primitives'
 import { McpServerForm } from './McpServerForm'
 
 /** 组件视图模式 */
@@ -305,6 +309,9 @@ ${skillList}
   // 列表视图
   return (
     <div className="space-y-8">
+      {/* 区块零：Agent 高级设置 */}
+      <AgentAdvancedSettings />
+
       {/* 区块一：MCP 服务器 */}
       <SettingsSection
         title="MCP 服务器"
@@ -689,5 +696,138 @@ function SkillItemRow({ skill, displayName, expanded, onToggleExpand, onDelete, 
         </div>
       </div>
     </div>
+  )
+}
+
+// ===== Agent 高级设置子组件 =====
+
+/** 思考模式选项 */
+const THINKING_OPTIONS = [
+  { value: 'default', label: '默认' },
+  { value: 'adaptive', label: '自适应' },
+  { value: 'disabled', label: '关闭' },
+]
+
+/** 推理深度选项 */
+const EFFORT_OPTIONS = [
+  { value: 'default', label: '默认' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'max', label: '最大' },
+]
+
+/** 从 ThinkingConfig 转为 UI 字符串 */
+function thinkingToValue(config: ThinkingConfig | undefined): string {
+  if (!config) return 'default'
+  return config.type === 'adaptive' ? 'adaptive' : config.type === 'disabled' ? 'disabled' : 'default'
+}
+
+/** 从 UI 字符串转为 ThinkingConfig（'default' 返回 undefined） */
+function valueToThinking(value: string): ThinkingConfig | undefined {
+  if (value === 'adaptive') return { type: 'adaptive' }
+  if (value === 'disabled') return { type: 'disabled' }
+  return undefined
+}
+
+/** 从 AgentEffort 转为 UI 字符串 */
+function effortToValue(effort: AgentEffort | undefined): string {
+  return effort ?? 'default'
+}
+
+/** 从 UI 字符串转为 AgentEffort（'default' 返回 undefined） */
+function valueToEffort(value: string): AgentEffort | undefined {
+  if (value === 'default') return undefined
+  return value as AgentEffort
+}
+
+function AgentAdvancedSettings(): React.ReactElement {
+  const thinking = useAtomValue(agentThinkingAtom)
+  const setThinking = useSetAtom(agentThinkingAtom)
+  const effort = useAtomValue(agentEffortAtom)
+  const setEffort = useSetAtom(agentEffortAtom)
+  const maxBudget = useAtomValue(agentMaxBudgetUsdAtom)
+  const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
+  const maxTurns = useAtomValue(agentMaxTurnsAtom)
+  const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
+
+  // 数字输入使用字符串状态，失焦时持久化
+  const [budgetStr, setBudgetStr] = React.useState(maxBudget != null ? String(maxBudget) : '')
+  const [turnsStr, setTurnsStr] = React.useState(maxTurns != null ? String(maxTurns) : '')
+
+  // 同步外部变化（如初始化加载）
+  React.useEffect(() => {
+    setBudgetStr(maxBudget != null ? String(maxBudget) : '')
+  }, [maxBudget])
+  React.useEffect(() => {
+    setTurnsStr(maxTurns != null ? String(maxTurns) : '')
+  }, [maxTurns])
+
+  const handleThinkingChange = (value: string): void => {
+    const config = valueToThinking(value)
+    setThinking(config)
+    window.electronAPI.updateSettings({ agentThinking: config })
+  }
+
+  const handleEffortChange = (value: string): void => {
+    const effortValue = valueToEffort(value)
+    setEffort(effortValue)
+    window.electronAPI.updateSettings({ agentEffort: effortValue })
+  }
+
+  const handleBudgetBlur = (): void => {
+    const num = parseFloat(budgetStr)
+    const value = !isNaN(num) && num > 0 ? num : undefined
+    setMaxBudget(value)
+    window.electronAPI.updateSettings({ agentMaxBudgetUsd: value })
+  }
+
+  const handleTurnsBlur = (): void => {
+    const num = parseInt(turnsStr, 10)
+    const value = !isNaN(num) && num > 0 ? num : undefined
+    setMaxTurns(value)
+    window.electronAPI.updateSettings({ agentMaxTurns: value })
+  }
+
+  return (
+    <SettingsSection
+      title="Agent 高级设置"
+      description="控制 Agent 的思考模式、推理深度和资源限制"
+    >
+      <SettingsCard>
+        <SettingsSegmentedControl
+          label="思考模式"
+          description="自适应模式下 Agent 会根据任务复杂度自动决定是否启用深度思考"
+          value={thinkingToValue(thinking)}
+          onValueChange={handleThinkingChange}
+          options={THINKING_OPTIONS}
+        />
+        <SettingsSegmentedControl
+          label="推理深度"
+          description="控制 Agent 在每次回复中投入的推理计算量"
+          value={effortToValue(effort)}
+          onValueChange={handleEffortChange}
+          options={EFFORT_OPTIONS}
+        />
+        <SettingsInput
+          label="预算限制（美元/次）"
+          description="单次 Agent 会话的最大花费，留空则不限制"
+          value={budgetStr}
+          onChange={setBudgetStr}
+          onBlur={handleBudgetBlur}
+          placeholder="例如: 1.0"
+          type="number"
+        />
+        <SettingsInput
+          label="最大轮次"
+          description="单次 Agent 会话的最大交互轮次，留空则使用 SDK 默认值"
+          value={turnsStr}
+          onChange={setTurnsStr}
+          onBlur={handleTurnsBlur}
+          placeholder="例如: 30"
+          type="number"
+        />
+      </SettingsCard>
+    </SettingsSection>
   )
 }
