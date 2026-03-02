@@ -729,6 +729,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               }
               disabled={!agentChannelId}
               autoFocusTrigger={sessionId}
+              collapsible
             />
 
             {/* Footer 工具栏 */}
