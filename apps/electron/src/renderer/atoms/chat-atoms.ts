@@ -10,7 +10,7 @@ import { atomWithStorage } from 'jotai/utils'
 import type { ConversationMeta, ChatMessage, FileAttachment, ChatToolActivity } from '@proma/shared'
 
 /** 选中的模型信息 */
-interface SelectedModel {
+export interface SelectedModel {
   channelId: string
   modelId: string
 }
@@ -225,3 +225,18 @@ export interface AgentRecommendation {
 
 /** 待处理的 Agent 模式推荐（工具结果写入，用户操作/关闭/切换对话时清除） */
 export const pendingAgentRecommendationAtom = atom<AgentRecommendation | null>(null)
+
+// ===== Per-conversation 设置 Map =====
+// 分屏时每个 ChatView 实例独立控制，缺省时使用全局默认值
+
+/** 每个对话的模型选择 */
+export const conversationModelsAtom = atom<Map<string, SelectedModel | null>>(new Map())
+
+/** 每个对话的上下文长度 */
+export const conversationContextLengthAtom = atom<Map<string, ContextLengthValue>>(new Map())
+
+/** 每个对话的思考模式 */
+export const conversationThinkingEnabledAtom = atom<Map<string, boolean>>(new Map())
+
+/** 每个对话的并排模式 */
+export const conversationParallelModeAtom = atom<Map<string, boolean>>(new Map())

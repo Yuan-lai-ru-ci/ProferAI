@@ -5,9 +5,10 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useSetAtom } from 'jotai'
 import { Pencil, Check, X, Pin, Columns2 } from 'lucide-react'
-import { conversationsAtom, parallelModeAtom } from '@/atoms/chat-atoms'
+import { conversationsAtom } from '@/atoms/chat-atoms'
+import { useConversationParallelMode } from '@/hooks/useConversationSettings'
 import type { ConversationMeta } from '@proma/shared'
 import { SystemPromptSelector } from './SystemPromptSelector'
 import { Button } from '@/components/ui/button'
@@ -20,7 +21,7 @@ interface ChatHeaderProps {
 
 export function ChatHeader({ conversation }: ChatHeaderProps): React.ReactElement | null {
   const setConversations = useSetAtom(conversationsAtom)
-  const [parallelMode, setParallelMode] = useAtom(parallelModeAtom)
+  const [parallelMode, setParallelMode] = useConversationParallelMode()
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
   const inputRef = React.useRef<HTMLInputElement>(null)

@@ -22,6 +22,10 @@ import {
   currentConversationIdAtom,
   selectedModelAtom,
   streamingConversationIdsAtom,
+  conversationModelsAtom,
+  conversationContextLengthAtom,
+  conversationThinkingEnabledAtom,
+  conversationParallelModeAtom,
 } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
@@ -31,6 +35,8 @@ import {
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
+  agentSidePanelOpenMapAtom,
+  agentSidePanelTabMapAtom,
 } from '@/atoms/agent-atoms'
 import {
   tabsAtom,
@@ -44,7 +50,7 @@ import {
 import { userProfileAtom } from '@/atoms/user-profile'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
-import { promptConfigAtom, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
+import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
 import {
   AlertDialog,
@@ -172,6 +178,32 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [layout, setLayout] = useAtom(splitLayoutAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
   const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
+
+  // per-conversation/session Map atoms（删除时清理）
+  const setConvModels = useSetAtom(conversationModelsAtom)
+  const setConvContextLength = useSetAtom(conversationContextLengthAtom)
+  const setConvThinking = useSetAtom(conversationThinkingEnabledAtom)
+  const setConvParallel = useSetAtom(conversationParallelModeAtom)
+  const setConvPromptId = useSetAtom(conversationPromptIdAtom)
+  const setAgentSidePanelOpen = useSetAtom(agentSidePanelOpenMapAtom)
+  const setAgentSidePanelTab = useSetAtom(agentSidePanelTabMapAtom)
+
+  /** 清理 per-conversation/session Map atoms 条目 */
+  const cleanupMapAtoms = React.useCallback((id: string) => {
+    const deleteKey = <T,>(prev: Map<string, T>): Map<string, T> => {
+      if (!prev.has(id)) return prev
+      const map = new Map(prev)
+      map.delete(id)
+      return map
+    }
+    setConvModels(deleteKey)
+    setConvContextLength(deleteKey)
+    setConvThinking(deleteKey)
+    setConvParallel(deleteKey)
+    setConvPromptId(deleteKey)
+    setAgentSidePanelOpen(deleteKey)
+    setAgentSidePanelTab(deleteKey)
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen, setAgentSidePanelTab])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
@@ -319,6 +351,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     const tabResult = closeTab(tabs, layout, pendingDeleteId)
     setTabs(tabResult.tabs)
     setLayout(tabResult.layout)
+
+    // 清理 per-conversation/session Map atoms 条目
+    cleanupMapAtoms(pendingDeleteId)
 
     if (mode === 'agent') {
       // Agent 模式：删除 Agent 会话
