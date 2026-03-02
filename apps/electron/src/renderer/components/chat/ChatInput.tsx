@@ -35,6 +35,7 @@ import {
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
+import { fileToBase64 } from '@/lib/file-utils'
 
 interface ChatInputProps {
   /** 当前对话 ID */
@@ -51,23 +52,6 @@ interface ChatInputProps {
   onStop: () => void
   /** 清除上下文回调 */
   onClearContext?: () => void
-}
-
-/**
- * 将 File 对象转为 base64 字符串
- */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      // 去掉 data:xxx;base64, 前缀
-      const base64 = result.split(',')[1]!
-      resolve(base64)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
 }
 
 export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {

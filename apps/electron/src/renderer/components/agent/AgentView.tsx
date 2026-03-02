@@ -49,20 +49,7 @@ import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, AgentSavedFile, ModelOption } from '@proma/shared'
-
-/** 将 File 对象转为 base64 字符串 */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      const base64 = result.split(',')[1]!
-      resolve(base64)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
+import { fileToBase64 } from '@/lib/file-utils'
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [messages, setMessages] = React.useState<AgentMessage[]>([])
