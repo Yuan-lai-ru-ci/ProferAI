@@ -153,6 +153,16 @@ export function useGlobalAgentListeners(): void {
           enabled
         )
 
+        // STREAM_COMPLETE 表示后端已完全结束 — 立即标记 running: false
+        // （complete 事件只清除 retrying，保持 running: true 以防竞态）
+        store.set(agentStreamingStatesAtom, (prev) => {
+          const current = prev.get(data.sessionId)
+          if (!current || !current.running) return prev
+          const map = new Map(prev)
+          map.set(data.sessionId, { ...current, running: false })
+          return map
+        })
+
         /** 竞态保护：检查该会话是否已有新的流式请求正在运行 */
         const isNewStreamRunning = (): boolean => {
           const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
@@ -172,14 +182,6 @@ export function useGlobalAgentListeners(): void {
           // 竞态保护：新流已启动时不要清理状态
           if (isNewStreamRunning()) return
 
-          // 移除流式状态
-          store.set(agentStreamingStatesAtom, (prev) => {
-            if (!prev.has(data.sessionId)) return prev
-            const map = new Map(prev)
-            map.delete(data.sessionId)
-            return map
-          })
-
           // 清理后台任务
           store.set(backgroundTasksAtomFamily(data.sessionId), [])
 
@@ -190,6 +192,18 @@ export function useGlobalAgentListeners(): void {
               store.set(agentSessionsAtom, sessions)
             })
             .catch(console.error)
+
+          // 延迟移除流式状态 — 等待消息重新加载完成后再清除流式气泡
+          // 防止消息闪烁（流式内容消失 → 持久化消息尚未加载）
+          setTimeout(() => {
+            if (isNewStreamRunning()) return
+            store.set(agentStreamingStatesAtom, (prev) => {
+              if (!prev.has(data.sessionId)) return prev
+              const map = new Map(prev)
+              map.delete(data.sessionId)
+              return map
+            })
+          }, 300)
         }
 
         // 通知 AgentView 重新加载消息（无论是否为当前会话）

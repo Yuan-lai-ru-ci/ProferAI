@@ -22,6 +22,11 @@ import {
   currentAgentWorkspaceIdAtom,
   workspaceCapabilitiesVersionAtom,
   workspaceFilesVersionAtom,
+  agentPermissionModeAtom,
+  agentThinkingAtom,
+  agentEffortAtom,
+  agentMaxBudgetUsdAtom,
+  agentMaxTurnsAtom,
 } from './atoms/agent-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import {
@@ -89,6 +94,11 @@ function AgentSettingsInitializer(): null {
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
   const bumpFiles = useSetAtom(workspaceFilesVersionAtom)
+  const setPermissionMode = useSetAtom(agentPermissionModeAtom)
+  const setThinking = useSetAtom(agentThinkingAtom)
+  const setEffort = useSetAtom(agentEffortAtom)
+  const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
+  const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
 
   useEffect(() => {
     // 加载设置
@@ -98,6 +108,21 @@ function AgentSettingsInitializer(): null {
       }
       if (settings.agentModelId) {
         setAgentModelId(settings.agentModelId)
+      }
+      if (settings.agentPermissionMode) {
+        setPermissionMode(settings.agentPermissionMode)
+      }
+      if (settings.agentThinking) {
+        setThinking(settings.agentThinking)
+      }
+      if (settings.agentEffort) {
+        setEffort(settings.agentEffort)
+      }
+      if (settings.agentMaxBudgetUsd != null) {
+        setMaxBudget(settings.agentMaxBudgetUsd)
+      }
+      if (settings.agentMaxTurns != null) {
+        setMaxTurns(settings.agentMaxTurns)
       }
 
       // 加载工作区列表并恢复上次选中的工作区
@@ -112,7 +137,7 @@ function AgentSettingsInitializer(): null {
         }
       }).catch(console.error)
     }).catch(console.error)
-  }, [setAgentChannelId, setAgentModelId, setAgentWorkspaces, setCurrentWorkspaceId])
+  }, [setAgentChannelId, setAgentModelId, setAgentWorkspaces, setCurrentWorkspaceId, setPermissionMode, setThinking, setEffort, setMaxBudget, setMaxTurns])
 
   // 订阅主进程文件监听推送
   useEffect(() => {

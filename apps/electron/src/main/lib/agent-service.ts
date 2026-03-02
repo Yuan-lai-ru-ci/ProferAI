@@ -63,12 +63,7 @@ export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
-  // 并发检查：保护 sessionWebContents 映射不被覆盖
-  if (sessionWebContents.has(input.sessionId)) {
-    console.warn(`[Agent 服务] 会话 ${input.sessionId} 已在处理中，拒绝重复请求`)
-    throw new Error('会话正在处理中')
-  }
-
+  // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   sessionWebContents.set(input.sessionId, webContents)
   try {
     await orchestrator.sendMessage(input, {
@@ -98,7 +93,11 @@ export async function runAgent(
       },
     })
   } finally {
-    sessionWebContents.delete(input.sessionId)
+    // 仅在 orchestrator 已完成此会话时清理映射
+    // 避免被拒绝的请求误删仍在运行的会话映射
+    if (!orchestrator.isActive(input.sessionId)) {
+      sessionWebContents.delete(input.sessionId)
+    }
   }
 }
 

@@ -12,6 +12,11 @@ import type {
   AgentProviderAdapter,
   TypedError,
   ErrorCode,
+  ThinkingConfig,
+  AgentEffort,
+  AgentDefinition,
+  SdkBeta,
+  JsonSchemaOutputFormat,
 } from '@proma/shared'
 import {
   ToolIndex,
@@ -19,10 +24,7 @@ import {
   extractToolResults,
   type ContentBlock,
 } from '@proma/shared'
-
-// ============================================================================
-// SDK 消息类型定义（从 agent-service.ts 迁移）
-// ============================================================================
+import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 
 interface SDKAssistantMessage {
   type: 'assistant'
@@ -93,15 +95,18 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   executableArgs: string[]
   /** 环境变量（含 API Key、Base URL、代理等） */
   env: Record<string, string | undefined>
-  /** 最大轮次 */
-  maxTurns: number
+  /** 最大轮次（undefined = SDK 默认） */
+  maxTurns?: number
   /** SDK 权限模式 */
   sdkPermissionMode: 'bypassPermissions' | 'default'
   /** 是否跳过权限检查 */
   allowDangerouslySkipPermissions: boolean
-  /** 自定义权限处理器（透传给 SDK，签名由 SDK 定义） */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  canUseTool?: (...args: any[]) => any
+  /** 自定义权限处理器（匹配 SDK CanUseTool 签名） */
+  canUseTool?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    options: CanUseToolOptions,
+  ) => Promise<PermissionResult>
   /** 只读工具白名单 */
   allowedTools?: string[]
   /** 系统提示词 */
@@ -120,6 +125,35 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   onModelResolved?: (model: string) => void
   /** 上下文窗口缓存回调 */
   onContextWindow?: (contextWindow: number) => void
+
+  // ===== SDK 0.2.52 ~ 0.2.63 新增选项 =====
+
+  /** 思考模式配置（替代已废弃的 maxThinkingTokens） */
+  thinking?: ThinkingConfig
+  /** 推理深度等级（与 adaptive thinking 配合使用） */
+  effort?: AgentEffort
+  /** 自定义子代理定义 */
+  agents?: Record<string, AgentDefinition>
+  /** 主线程使用的代理名称（必须在 agents 中定义） */
+  agent?: string
+  /** 启用文件检查点（支持 rewindFiles 回退） */
+  enableFileCheckpointing?: boolean
+  /** 禁止使用的工具名称列表 */
+  disallowedTools?: string[]
+  /** 备用模型（主模型不可用时使用） */
+  fallbackModel?: string
+  /** 最大预算（美元），超出后停止查询 */
+  maxBudgetUsd?: number
+  /** 结构化 JSON 输出格式 */
+  outputFormat?: JsonSchemaOutputFormat
+  /** Beta 特性（如 1M context window） */
+  betas?: SdkBeta[]
+  /** 是否持久化会话到磁盘（默认 true） */
+  persistSession?: boolean
+  /** resume 时是否 fork 为新会话 */
+  forkSession?: boolean
+  /** 指定 SDK 会话 ID（替代自动生成，与 AgentQueryInput.sessionId 区分） */
+  sdkSessionId?: string
 }
 
 // ============================================================================
@@ -567,29 +601,47 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       // 动态导入 SDK
       const sdk = await import('@anthropic-ai/claude-agent-sdk')
 
-      // SDK options 构建（promptSuggestions 运行时支持但类型未声明，需要类型断言）
+      // SDK options 构建
       const sdkOptions = {
+        // 基础字段
         pathToClaudeCodeExecutable: options.sdkCliPath,
         executable: options.executable.type,
         executableArgs: options.executableArgs,
         model: options.model || 'claude-sonnet-4-5-20250929',
-        maxTurns: options.maxTurns,
+        ...(options.maxTurns != null && { maxTurns: options.maxTurns }),
         permissionMode: options.sdkPermissionMode,
         allowDangerouslySkipPermissions: options.allowDangerouslySkipPermissions,
-        ...(options.canUseTool && { canUseTool: options.canUseTool }),
-        ...(options.allowedTools && { allowedTools: options.allowedTools }),
         includePartialMessages: true,
         promptSuggestions: true,
         cwd: options.cwd,
         abortController: controller,
         env: options.env,
         systemPrompt: options.systemPrompt,
+
+        // 条件字段
+        ...(options.canUseTool && { canUseTool: options.canUseTool }),
+        ...(options.allowedTools && { allowedTools: options.allowedTools }),
         ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),
         ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 && {
           mcpServers: options.mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig>,
         }),
         ...(options.plugins && { plugins: options.plugins }),
         ...(options.onStderr && { stderr: options.onStderr }),
+
+        // ===== SDK 0.2.52+ 新增选项透传 =====
+        ...(options.thinking && { thinking: options.thinking }),
+        ...(options.effort && { effort: options.effort }),
+        ...(options.agents && { agents: options.agents }),
+        ...(options.agent && { agent: options.agent }),
+        ...(options.enableFileCheckpointing != null && { enableFileCheckpointing: options.enableFileCheckpointing }),
+        ...(options.disallowedTools && { disallowedTools: options.disallowedTools }),
+        ...(options.fallbackModel && { fallbackModel: options.fallbackModel }),
+        ...(options.maxBudgetUsd != null && { maxBudgetUsd: options.maxBudgetUsd }),
+        ...(options.outputFormat && { outputFormat: options.outputFormat }),
+        ...(options.betas && { betas: options.betas }),
+        ...(options.persistSession != null && { persistSession: options.persistSession }),
+        ...(options.forkSession != null && { forkSession: options.forkSession }),
+        ...(options.sdkSessionId && { sessionId: options.sdkSessionId }),
       } as import('@anthropic-ai/claude-agent-sdk').Options
 
       const queryIterator = sdk.query({

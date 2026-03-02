@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ThinkingConfig, AgentEffort } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -179,6 +179,18 @@ export const workspaceFilesVersionAtom = atom(0)
 
 /** 当前工作区权限模式 */
 export const agentPermissionModeAtom = atom<PromaPermissionMode>('smart')
+
+/** Agent 思考模式 */
+export const agentThinkingAtom = atom<ThinkingConfig | undefined>(undefined)
+
+/** Agent 推理深度 */
+export const agentEffortAtom = atom<AgentEffort | undefined>(undefined)
+
+/** Agent 最大预算（美元/次） */
+export const agentMaxBudgetUsdAtom = atom<number | undefined>(undefined)
+
+/** Agent 最大轮次 */
+export const agentMaxTurnsAtom = atom<number | undefined>(undefined)
 
 /** 待处理的权限请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
 export const allPendingPermissionRequestsAtom = atom<Map<string, readonly PermissionRequest[]>>(new Map())
@@ -389,8 +401,10 @@ export function applyAgentEvent(
       return prev
 
     case 'complete':
-      // 成功完成 - 清除 retrying
-      return { ...prev, running: false, retrying: undefined }
+      // 成功完成 — 清除 retrying，但保持 running: true
+      // 等待 STREAM_COMPLETE IPC 回调通过删除流式状态来控制 UI 就绪状态
+      // 这避免了用户在后端尚未完成清理时就能发送新消息的竞态条件
+      return { ...prev, retrying: undefined }
 
     case 'typed_error':
       // 处理类型化错误（TypedError）
