@@ -14,9 +14,10 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { MessageSquare, Loader2, Brain, CheckCircle2, XCircle } from 'lucide-react'
+import { MessageSquare, Loader2 } from 'lucide-react'
 import { ChatMessageItem, formatMessageTime } from './ChatMessageItem'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
+import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
 import { ParallelChatMessages } from './ParallelChatMessages'
 import {
   Message,
@@ -55,65 +56,7 @@ import {
 } from '@/atoms/chat-atoms'
 import { getModelLogo } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
-import type { ChatMessage, ChatToolActivity } from '@proma/shared'
-import { cn } from '@/lib/utils'
-
-// ===== 记忆工具活动指示器 =====
-
-/** 工具名称到中文标签的映射 */
-const TOOL_LABELS: Record<string, { running: string; done: string }> = {
-  recall_memory: { running: '正在回忆…', done: '回忆完成' },
-  add_memory: { running: '正在记住…', done: '已记住' },
-}
-
-function MemoryToolIndicator({ activities }: { activities: ChatToolActivity[] }): React.ReactElement | null {
-  if (activities.length === 0) return null
-
-  // 合并同一个 toolCallId 的 start/result 事件
-  const merged = new Map<string, { toolName: string; done: boolean; isError?: boolean }>()
-  for (const a of activities) {
-    const existing = merged.get(a.toolCallId)
-    if (a.type === 'start') {
-      merged.set(a.toolCallId, { toolName: a.toolName, done: false })
-    } else if (a.type === 'result') {
-      merged.set(a.toolCallId, {
-        toolName: existing?.toolName ?? a.toolName,
-        done: true,
-        isError: a.isError,
-      })
-    }
-  }
-
-  const items = Array.from(merged.values())
-  if (items.length === 0) return null
-
-  return (
-    <div className="space-y-1 mb-2">
-      {items.map((item, i) => {
-        const label = TOOL_LABELS[item.toolName] ?? { running: item.toolName, done: item.toolName }
-        return (
-          <div
-            key={i}
-            className={cn(
-              'flex items-center gap-1.5 text-xs text-muted-foreground',
-              'animate-in fade-in slide-in-from-left-2 duration-200',
-            )}
-          >
-            {!item.done ? (
-              <Loader2 className="size-3 animate-spin text-primary" />
-            ) : item.isError ? (
-              <XCircle className="size-3 text-destructive" />
-            ) : (
-              <CheckCircle2 className="size-3 text-green-500" />
-            )}
-            <Brain className="size-3" />
-            <span>{item.done ? (item.isError ? `${label.done}（失败）` : label.done) : label.running}</span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
+import type { ChatMessage } from '@proma/shared'
 
 // ===== 滚动到顶部加载更多 =====
 
@@ -390,8 +333,8 @@ export function ChatMessages({
                   }
                 />
                 <MessageContent>
-                  {/* 记忆工具活动指示器 */}
-                  <MemoryToolIndicator activities={toolActivities} />
+                  {/* 工具活动指示器 */}
+                  <ChatToolActivityIndicator activities={toolActivities} />
 
                   {/* 推理内容（如果有） */}
                   {smoothReasoning && (

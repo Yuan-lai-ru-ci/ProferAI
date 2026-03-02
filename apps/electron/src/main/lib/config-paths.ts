@@ -166,6 +166,15 @@ export function getMemoryConfigPath(): string {
 }
 
 /**
+ * 获取 Chat 工具配置文件路径
+ *
+ * @returns ~/.proma/chat-tools.json
+ */
+export function getChatToolsConfigPath(): string {
+  return join(getConfigDir(), 'chat-tools.json')
+}
+
+/**
  * 获取 Agent 会话索引文件路径
  *
  * @returns ~/.proma/agent-sessions.json

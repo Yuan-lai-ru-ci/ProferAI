@@ -7,7 +7,7 @@
  * - 调用 @proma/core 的 Provider 适配器系统
  * - 桥接 StreamEvent → webContents.send()
  * - 持久化消息到 JSONL + 更新索引
- * - 记忆工具的 function calling 循环（当记忆功能启用时）
+ * - 模块化工具的 function calling 循环（通过 ChatToolRegistry + ChatToolExecutor）
  *
  * 纯逻辑（消息转换、SSE 解析、请求构建）已抽象到 @proma/core/providers。
  */
@@ -15,75 +15,27 @@
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import { CHAT_IPC_CHANNELS } from '@proma/shared'
-import type { ChatSendInput, ChatMessage, GenerateTitleInput, FileAttachment, MemoryConfig } from '@proma/shared'
+import type { ChatSendInput, ChatMessage, GenerateTitleInput, FileAttachment, ChatToolActivity } from '@proma/shared'
 import {
   getAdapter,
   streamSSE,
   fetchTitle,
 } from '@proma/core'
-import type { ImageAttachmentData, ToolDefinition, ToolCall, ToolResult, ContinuationMessage } from '@proma/core'
+import type { ImageAttachmentData, ContinuationMessage } from '@proma/core'
 import { listChannels, decryptApiKey } from './channel-manager'
 import { appendMessage, updateConversationMeta, getConversationMessages } from './conversation-manager'
 import { readAttachmentAsBase64, isImageAttachment } from './attachment-service'
 import { extractTextFromAttachment, isDocumentAttachment } from './document-parser'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { getMemoryConfig } from './memory-service'
-import { searchMemory, addMemory, formatSearchResult } from './memos-client'
+import { getEnabledTools } from './chat-tool-registry'
+import { executeToolCalls } from './chat-tool-executor'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
 
-// ===== 记忆工具定义 =====
-
-/** Chat 模式记忆工具定义 */
-const MEMORY_TOOLS: ToolDefinition[] = [
-  {
-    name: 'recall_memory',
-    description: 'Search user memories (facts and preferences). Use this to recall relevant context about the user before responding.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query for memory retrieval' },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'add_memory',
-    description: 'Store a conversation message pair for long-term memory. Call this after meaningful exchanges worth remembering.',
-    parameters: {
-      type: 'object',
-      properties: {
-        userMessage: { type: 'string', description: 'The user message to store' },
-        assistantMessage: { type: 'string', description: 'The assistant response to store' },
-      },
-      required: ['userMessage'],
-    },
-  },
-]
-
-/** 记忆系统提示词追加 */
-const MEMORY_SYSTEM_PROMPT = `
-<memory_instructions>
-你拥有跨会话的记忆能力。
-
-**recall_memory — 回忆：**
-在你觉得过去的经历可能对当前有帮助时主动调用：
-- 用户提到"之前"、"上次"等回溯性表述
-- 当前任务可能和过去做过的事情有关
-
-**add_memory — 记住：**
-当对话中发生值得记住的事时调用：
-- 用户分享了工作方式或偏好
-- 一起做了重要决定
-- 解决了棘手问题
-
-自然地运用记忆，不要提及"记忆系统"等内部概念。
-</memory_instructions>`
-
-/** 最大工具续接轮数（防止无限循环） */
-const MAX_TOOL_ROUNDS = 5
+/** 最大工具续接轮数（防止无限循环，每轮可含多个工具调用） */
+const MAX_TOOL_ROUNDS = 20
 
 // ===== 平台相关：图片附件读取器 =====
 
@@ -226,60 +178,13 @@ function filterHistory(
   return filtered
 }
 
-// ===== 记忆工具执行 =====
-
-/**
- * 执行记忆工具调用
- */
-async function executeMemoryToolCall(
-  toolCall: ToolCall,
-  memoryConfig: MemoryConfig,
-): Promise<ToolResult> {
-  const credentials = {
-    apiKey: memoryConfig.apiKey,
-    userId: memoryConfig.userId?.trim() || 'proma-user',
-    baseUrl: memoryConfig.baseUrl,
-  }
-
-  try {
-    if (toolCall.name === 'recall_memory') {
-      const query = toolCall.arguments.query as string
-      const result = await searchMemory(credentials, query)
-      return {
-        toolCallId: toolCall.id,
-        content: formatSearchResult(result),
-      }
-    } else if (toolCall.name === 'add_memory') {
-      const userMessage = toolCall.arguments.userMessage as string
-      const assistantMessage = toolCall.arguments.assistantMessage as string | undefined
-      await addMemory(credentials, { userMessage, assistantMessage })
-      return {
-        toolCallId: toolCall.id,
-        content: 'Memory stored successfully.',
-      }
-    }
-    return {
-      toolCallId: toolCall.id,
-      content: `Unknown tool: ${toolCall.name}`,
-      isError: true,
-    }
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error)
-    console.error(`[聊天服务] 记忆工具执行失败 (${toolCall.name}):`, error)
-    return {
-      toolCallId: toolCall.id,
-      content: `Tool execution failed: ${msg}`,
-      isError: true,
-    }
-  }
-}
-
 // ===== 核心流式函数 =====
 
 /**
  * 发送消息并流式返回 AI 响应
  *
- * 当记忆功能启用时，自动注入记忆工具定义并处理 tool use 循环。
+ * 通过 ChatToolRegistry 获取启用的工具定义，
+ * 通过 ChatToolExecutor 统一执行工具调用。
  *
  * @param input 发送参数
  * @param webContents 渲染进程的 webContents 实例（用于推送事件）
@@ -291,7 +196,7 @@ export async function sendMessage(
   const {
     conversationId, userMessage, channelId,
     modelId, systemMessage, contextLength, contextDividers, attachments,
-    thinkingEnabled,
+    thinkingEnabled, enabledToolIds,
   } = input
 
   // 1. 查找渠道
@@ -342,21 +247,20 @@ export async function sendMessage(
   // 在 try 外累积流式内容，abort 时 catch 块仍可访问
   let accumulatedContent = ''
   let accumulatedReasoning = ''
+  const accumulatedToolActivities: ChatToolActivity[] = []
 
   try {
     // 7. 获取适配器
     const adapter = getAdapter(channel.provider)
 
-    // 8. 检查记忆功能
-    const memoryConfig = getMemoryConfig()
-    const memoryEnabled = memoryConfig.enabled && !!memoryConfig.apiKey
-    const tools = memoryEnabled ? MEMORY_TOOLS : undefined
+    // 8. 从工具注册表获取启用的工具
+    const { tools, systemPromptAppend } = getEnabledTools(enabledToolIds)
 
-    // 注入记忆系统提示词
-    const effectiveSystemMessage = memoryEnabled && systemMessage
-      ? systemMessage + MEMORY_SYSTEM_PROMPT
-      : memoryEnabled
-        ? MEMORY_SYSTEM_PROMPT
+    // 注入工具系统提示词
+    const effectiveSystemMessage = systemPromptAppend && systemMessage
+      ? systemMessage + systemPromptAppend
+      : systemPromptAppend
+        ? systemPromptAppend
         : systemMessage
 
     const proxyUrl = await getEffectiveProxyUrl()
@@ -365,9 +269,44 @@ export async function sendMessage(
     // 9. 工具续接循环
     let continuationMessages: ContinuationMessage[] = []
     let round = 0
+    /** 标记最近一轮是否执行了工具（用于判断是否需要最终响应轮） */
+    let pendingToolResults = false
+
+    /** 流式事件处理器（工具轮和最终响应轮复用） */
+    const handleStreamEvent = (event: { type: string; delta?: string; toolCallId?: string; toolName?: string }): void => {
+      switch (event.type) {
+        case 'chunk':
+          accumulatedContent += event.delta ?? ''
+          webContents.send(CHAT_IPC_CHANNELS.STREAM_CHUNK, {
+            conversationId,
+            delta: event.delta,
+          })
+          break
+        case 'reasoning':
+          accumulatedReasoning += event.delta ?? ''
+          webContents.send(CHAT_IPC_CHANNELS.STREAM_REASONING, {
+            conversationId,
+            delta: event.delta,
+          })
+          break
+        case 'tool_call_start':
+          accumulatedToolActivities.push({
+            toolCallId: event.toolCallId!,
+            toolName: event.toolName!,
+            type: 'start',
+          })
+          webContents.send(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
+            conversationId,
+            activity: { type: 'start', toolName: event.toolName!, toolCallId: event.toolCallId! },
+          })
+          break
+        // done 事件在外部处理
+      }
+    }
 
     while (round < MAX_TOOL_ROUNDS) {
       round++
+      pendingToolResults = false
 
       const request = adapter.buildStreamRequest({
         baseUrl: channel.baseUrl,
@@ -383,36 +322,12 @@ export async function sendMessage(
         continuationMessages: continuationMessages.length > 0 ? continuationMessages : undefined,
       })
 
-      const { content, reasoning, toolCalls, stopReason } = await streamSSE({
+      const { content, toolCalls, stopReason } = await streamSSE({
         request,
         adapter,
         signal: controller.signal,
         fetchFn,
-        onEvent: (event) => {
-          switch (event.type) {
-            case 'chunk':
-              accumulatedContent += event.delta
-              webContents.send(CHAT_IPC_CHANNELS.STREAM_CHUNK, {
-                conversationId,
-                delta: event.delta,
-              })
-              break
-            case 'reasoning':
-              accumulatedReasoning += event.delta
-              webContents.send(CHAT_IPC_CHANNELS.STREAM_REASONING, {
-                conversationId,
-                delta: event.delta,
-              })
-              break
-            case 'tool_call_start':
-              webContents.send(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
-                conversationId,
-                activity: { type: 'start', toolName: event.toolName, toolCallId: event.toolCallId },
-              })
-              break
-            // done 事件在外部处理
-          }
-        },
+        onEvent: handleStreamEvent,
       })
 
       // 如果没有工具调用或不是 tool_use 停止，退出循环
@@ -420,23 +335,22 @@ export async function sendMessage(
         break
       }
 
-      // 执行工具调用
-      const toolResults: ToolResult[] = []
-      for (const tc of toolCalls) {
-        if (tc.name === 'recall_memory' || tc.name === 'add_memory') {
-          const result = await executeMemoryToolCall(tc, memoryConfig)
-          toolResults.push(result)
+      // 执行工具调用（通过统一执行器）
+      const toolResults = await executeToolCalls(toolCalls, {
+        webContents,
+        conversationId,
+      })
 
-          // 发送工具结果事件给 UI
-          webContents.send(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
-            conversationId,
-            activity: {
-              type: 'result',
-              toolName: tc.name,
-              toolCallId: tc.id,
-              result: result.content,
-              isError: result.isError,
-            },
+      // 累积工具结果到持久化数据
+      for (const tc of toolCalls) {
+        const tr = toolResults.find((r) => r.toolCallId === tc.id)
+        if (tr) {
+          accumulatedToolActivities.push({
+            toolCallId: tc.id,
+            toolName: tc.name,
+            type: 'result',
+            result: tr.content,
+            isError: tr.isError,
           })
         }
       }
@@ -447,8 +361,37 @@ export async function sendMessage(
         { role: 'assistant' as const, content, toolCalls },
         { role: 'tool' as const, results: toolResults },
       ]
+      pendingToolResults = true
 
       // 注意：不重置 accumulatedContent/accumulatedReasoning，跨轮次持续累积
+    }
+
+    // 10. 最终响应轮：如果因达到 MAX_TOOL_ROUNDS 退出但仍有待处理的工具结果，
+    // 再发起一次 API 调用（不传 tools）让模型基于工具结果生成最终文本回复
+    if (pendingToolResults && continuationMessages.length > 0) {
+      console.log(`[聊天服务] 工具轮次已达上限 (${MAX_TOOL_ROUNDS})，发起最终响应轮`)
+
+      const finalRequest = adapter.buildStreamRequest({
+        baseUrl: channel.baseUrl,
+        apiKey,
+        modelId,
+        history: enrichedHistory,
+        userMessage: enrichedUserMessage,
+        systemMessage: effectiveSystemMessage,
+        attachments,
+        readImageAttachments: getImageAttachmentData,
+        thinkingEnabled,
+        // 不传 tools，强制模型生成文本回复而非继续调用工具
+        continuationMessages,
+      })
+
+      await streamSSE({
+        request: finalRequest,
+        adapter,
+        signal: controller.signal,
+        fetchFn,
+        onEvent: handleStreamEvent,
+      })
     }
 
     // 10. 保存 assistant 消息（空内容不保存）
@@ -461,6 +404,7 @@ export async function sendMessage(
         createdAt: Date.now(),
         model: modelId,
         reasoning: accumulatedReasoning || undefined,
+        toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
       }
       appendMessage(conversationId, assistantMsg)
 
@@ -495,6 +439,7 @@ export async function sendMessage(
           model: modelId,
           reasoning: accumulatedReasoning || undefined,
           stopped: true,
+          toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
         }
         appendMessage(conversationId, partialMsg)
 

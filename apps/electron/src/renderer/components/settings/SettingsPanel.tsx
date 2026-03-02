@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Brain } from 'lucide-react'
+import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { settingsTabAtom } from '@/atoms/settings-tab'
 import type { SettingsTab } from '@/atoms/settings-tab'
@@ -23,7 +23,7 @@ import { AppearanceSettings } from './AppearanceSettings'
 import { AboutSettings } from './AboutSettings'
 import { AgentSettings } from './AgentSettings'
 import { PromptSettings } from './PromptSettings'
-import { MemorySettings } from './MemorySettings'
+import { ToolSettings } from './ToolSettings'
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -42,7 +42,7 @@ const BASE_TABS: TabItem[] = [
 
 /** Agent 模式专属 Tab */
 const AGENT_TAB: TabItem = { id: 'agent', label: '配置', icon: <Plug size={16} /> }
-const MEMORY_TAB: TabItem = { id: 'memory', label: '记忆', icon: <Brain size={16} /> }
+const TOOLS_TAB: TabItem = { id: 'tools', label: '工具', icon: <Wrench size={16} /> }
 
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
@@ -63,8 +63,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <ProxySettings />
     case 'agent':
       return <AgentSettings />
-    case 'memory':
-      return <MemorySettings />
+    case 'tools':
+      return <ToolSettings />
     case 'appearance':
       return <AppearanceSettings />
     case 'about':
@@ -78,12 +78,12 @@ export function SettingsPanel(): React.ReactElement {
   const hasUpdate = useAtomValue(hasUpdateAtom)
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom)
 
-  // Agent 模式时在渠道后插入 Agent Tab，记忆 tab 两种模式都显示
+  // Agent 模式时在渠道后插入 Agent Tab，工具 tab 两种模式都显示
   const tabs = React.useMemo(() => {
     if (appMode === 'agent') {
-      return [...BASE_TABS, AGENT_TAB, MEMORY_TAB, ...TAIL_TABS]
+      return [...BASE_TABS, AGENT_TAB, TOOLS_TAB, ...TAIL_TABS]
     }
-    return [...BASE_TABS, MEMORY_TAB, ...TAIL_TABS]
+    return [...BASE_TABS, TOOLS_TAB, ...TAIL_TABS]
   }, [appMode])
 
   return (

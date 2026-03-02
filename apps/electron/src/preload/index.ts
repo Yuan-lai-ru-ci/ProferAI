@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -62,6 +62,9 @@ import type {
   SystemPromptCreateInput,
   SystemPromptUpdateInput,
   MemoryConfig,
+  ChatToolInfo,
+  ChatToolState,
+  ChatToolMeta,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -254,6 +257,9 @@ export interface ElectronAPI {
   /** 删除 Agent 会话 */
   deleteAgentSession: (id: string) => Promise<void>
 
+  /** 迁移 Chat 对话记录到 Agent 会话 */
+  migrateChatToAgent: (conversationId: string, agentSessionId: string) => Promise<void>
+
   /** 切换 Agent 会话置顶状态 */
   togglePinAgentSession: (id: string) => Promise<AgentSessionMeta>
 
@@ -339,6 +345,32 @@ export interface ElectronAPI {
 
   /** 测试记忆连接 */
   testMemoryConnection: () => Promise<{ success: boolean; message: string }>
+
+  // ===== Chat 工具管理 =====
+
+  /** 获取所有工具信息 */
+  getChatTools: () => Promise<ChatToolInfo[]>
+
+  /** 获取工具凭据 */
+  getChatToolCredentials: (toolId: string) => Promise<Record<string, string>>
+
+  /** 更新工具开关状态 */
+  updateChatToolState: (toolId: string, state: ChatToolState) => Promise<void>
+
+  /** 更新工具凭据 */
+  updateChatToolCredentials: (toolId: string, credentials: Record<string, string>) => Promise<void>
+
+  /** 创建自定义工具 */
+  createCustomChatTool: (meta: ChatToolMeta) => Promise<void>
+
+  /** 删除自定义工具 */
+  deleteCustomChatTool: (toolId: string) => Promise<void>
+
+  /** 监听自定义工具配置变更 */
+  onCustomToolChanged: (callback: () => void) => () => void
+
+  /** 测试工具连接 */
+  testChatTool: (toolId: string) => Promise<{ success: boolean; message: string }>
 
   // ===== AskUserQuestion 交互式问答 =====
 
@@ -663,6 +695,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SESSION, id)
   },
 
+  migrateChatToAgent: (conversationId: string, agentSessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MIGRATE_CHAT_TO_AGENT, conversationId, agentSessionId)
+  },
+
   togglePinAgentSession: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_PIN, id)
   },
@@ -778,6 +814,41 @@ const electronAPI: ElectronAPI = {
 
   testMemoryConnection: () => {
     return ipcRenderer.invoke(MEMORY_IPC_CHANNELS.TEST_CONNECTION)
+  },
+
+  // Chat 工具管理
+  getChatTools: () => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.GET_ALL_TOOLS)
+  },
+
+  getChatToolCredentials: (toolId: string) => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.GET_TOOL_CREDENTIALS, toolId)
+  },
+
+  updateChatToolState: (toolId: string, state: ChatToolState) => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.UPDATE_TOOL_STATE, toolId, state)
+  },
+
+  updateChatToolCredentials: (toolId: string, credentials: Record<string, string>) => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.UPDATE_TOOL_CREDENTIALS, toolId, credentials)
+  },
+
+  createCustomChatTool: (meta: ChatToolMeta) => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.CREATE_CUSTOM_TOOL, meta)
+  },
+
+  deleteCustomChatTool: (toolId: string) => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.DELETE_CUSTOM_TOOL, toolId)
+  },
+
+  onCustomToolChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(CHAT_TOOL_IPC_CHANNELS.CUSTOM_TOOL_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(CHAT_TOOL_IPC_CHANNELS.CUSTOM_TOOL_CHANGED, listener) }
+  },
+
+  testChatTool: (toolId: string) => {
+    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.TEST_TOOL, toolId)
   },
 
   // AskUserQuestion 交互式问答

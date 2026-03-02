@@ -10,6 +10,7 @@ import { stopAllAgents } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
+import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting, isUpdating } from './lib/app-lifecycle'
 
 let mainWindow: BrowserWindow | null = null
@@ -182,6 +183,9 @@ app.whenReady().then(async () => {
     startWorkspaceWatcher(mainWindow)
   }
 
+  // 启动 Chat 工具配置文件监听（Agent 创建工具后自动通知渲染进程）
+  startChatToolsWatcher()
+
   // 生产环境下初始化自动更新
   if (app.isPackaged && mainWindow) {
     initAutoUpdater(mainWindow)
@@ -223,6 +227,8 @@ app.on('before-quit', () => {
   cleanupUpdater()
   // 停止工作区文件监听
   stopWorkspaceWatcher()
+  // 停止 Chat 工具配置文件监听
+  stopChatToolsWatcher()
   // Clean up system tray before quitting
   destroyTray()
 })

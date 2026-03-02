@@ -18,6 +18,7 @@ import { CornerDownLeft, Square, Lightbulb, Paperclip } from 'lucide-react'
 import { ModelSelector } from './ModelSelector'
 import { ClearContextButton } from './ClearContextButton'
 import { ContextSettingsPopover } from './ContextSettingsPopover'
+import { ToolSelectorPopover } from './ToolSelectorPopover'
 import { AttachmentPreviewItem } from './AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
@@ -304,6 +305,8 @@ export function ChatInput({ onSend, onStop, onClearContext }: ChatInputProps): R
               </Tooltip>
 
               <SpeechButton onTranscript={handleSpeechTranscript} />
+
+              <ToolSelectorPopover />
 
               <ContextSettingsPopover />
 

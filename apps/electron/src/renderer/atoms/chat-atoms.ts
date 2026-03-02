@@ -203,3 +203,18 @@ export const currentConversationDraftAtom = atom(
     })
   }
 )
+
+// ===== Agent 模式推荐 =====
+
+/** Agent 模式推荐数据（由 suggest_agent_mode 工具结果写入） */
+export interface AgentRecommendation {
+  /** 推荐理由（AI 生成，描述 Agent 如何帮助用户） */
+  reason: string
+  /** 建议的 Agent 初始提示词 */
+  suggestedPrompt: string
+  /** 来源对话 ID（用于对话切换时清除） */
+  conversationId: string
+}
+
+/** 待处理的 Agent 模式推荐（工具结果写入，用户操作/关闭/切换对话时清除） */
+export const pendingAgentRecommendationAtom = atom<AgentRecommendation | null>(null)

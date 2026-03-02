@@ -526,6 +526,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_TITLE: 'agent:update-title',
   /** 删除会话 */
   DELETE_SESSION: 'agent:delete-session',
+  /** 迁移 Chat 对话记录到 Agent 会话 */
+  MIGRATE_CHAT_TO_AGENT: 'agent:migrate-chat-to-agent',
   /** 切换会话置顶状态 */
   TOGGLE_PIN: 'agent:toggle-pin',
 

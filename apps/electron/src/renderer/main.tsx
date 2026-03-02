@@ -29,7 +29,9 @@ import {
   initializeNotifications,
 } from './atoms/notifications'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
+import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { Toaster } from './components/ui/sonner'
+import { toast } from 'sonner'
 import { UpdateDialog } from './components/settings/UpdateDialog'
 import './styles/globals.css'
 
@@ -169,12 +171,44 @@ function AgentListenersInitializer(): null {
   return null
 }
 
+/**
+ * Chat 工具初始化组件
+ *
+ * 启动时从主进程加载所有工具信息到 atom。
+ * 订阅 chat-tools.json 文件变更通知，自动刷新工具列表。
+ */
+function ChatToolInitializer(): null {
+  const setChatTools = useSetAtom(chatToolsAtom)
+
+  useEffect(() => {
+    window.electronAPI.getChatTools()
+      .then(setChatTools)
+      .catch((err: unknown) => console.error('[ChatToolInitializer] 加载工具列表失败:', err))
+  }, [setChatTools])
+
+  // 订阅自定义工具配置变更
+  useEffect(() => {
+    const cleanup = window.electronAPI.onCustomToolChanged(() => {
+      window.electronAPI.getChatTools()
+        .then((tools) => {
+          setChatTools(tools)
+          toast.success('Chat 工具已更新')
+        })
+        .catch((err: unknown) => console.error('[ChatToolInitializer] 刷新工具列表失败:', err))
+    })
+    return cleanup
+  }, [setChatTools])
+
+  return null
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeInitializer />
     <AgentSettingsInitializer />
     <NotificationsInitializer />
     <AgentListenersInitializer />
+    <ChatToolInitializer />
     <UpdaterInitializer />
     <App />
     <UpdateDialog />
