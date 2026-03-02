@@ -9,13 +9,13 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
-import { PanelRight, X, Users, FolderOpen } from 'lucide-react'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { PanelRight, X, Users, FolderOpen, ExternalLink, RefreshCw } from 'lucide-react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { FileBrowser } from '@/components/file-browser'
+import { FileBrowser, FileDropZone } from '@/components/file-browser'
 import { TeamActivityPanel } from './TeamActivityPanel'
 import {
   agentSidePanelOpenAtom,
@@ -23,6 +23,8 @@ import {
   hasTeamActivityAtom,
   teamActivityCountAtom,
   workspaceFilesVersionAtom,
+  currentAgentWorkspaceIdAtom,
+  agentWorkspacesAtom,
 } from '@/atoms/agent-atoms'
 import type { SidePanelTab } from '@/atoms/agent-atoms'
 
@@ -37,7 +39,30 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
   const hasTeamActivity = useAtomValue(hasTeamActivityAtom)
   const runningCount = useAtomValue(teamActivityCountAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
+  const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
   const hasFileChanges = filesVersion > 0
+
+  // 派生当前工作区 slug（用于 FileDropZone IPC 调用）
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const workspaceSlug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
+
+  // 文件上传完成后递增版本号，触发 FileBrowser 刷新
+  const handleFilesUploaded = React.useCallback(() => {
+    setFilesVersion((prev) => prev + 1)
+  }, [setFilesVersion])
+
+  // 手动刷新文件列表
+  const handleRefresh = React.useCallback(() => {
+    setFilesVersion((prev) => prev + 1)
+  }, [setFilesVersion])
+
+  // 面包屑：显示根路径最后两段
+  const breadcrumb = React.useMemo(() => {
+    if (!sessionPath) return ''
+    const parts = sessionPath.split('/').filter(Boolean)
+    return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : sessionPath
+  }, [sessionPath])
 
   // 自动打开：文件变化时（仅在有 sessionPath 时）
   const prevFilesVersionRef = React.useRef(filesVersion)
@@ -139,8 +164,45 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
 
             {/* File Browser Tab */}
             <TabsContent value="files" className="flex-1 overflow-hidden m-0 data-[state=active]:flex data-[state=active]:flex-col">
-              {sessionPath ? (
-                <FileBrowser rootPath={sessionPath} />
+              {sessionPath && workspaceSlug ? (
+                <>
+                  {/* 工具栏：路径面包屑 + 打开文件夹 + 刷新 */}
+                  <div className="flex items-center gap-1 px-3 h-[36px] border-b flex-shrink-0">
+                    <span className="text-xs text-muted-foreground truncate flex-1" title={sessionPath}>
+                      {breadcrumb}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 flex-shrink-0"
+                      onClick={() => window.electronAPI.openFile(sessionPath).catch(console.error)}
+                      title="在 Finder 中打开"
+                    >
+                      <ExternalLink className="size-3" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 flex-shrink-0"
+                      onClick={handleRefresh}
+                      title="刷新"
+                    >
+                      <RefreshCw className="size-3" />
+                    </Button>
+                  </div>
+                  {/* 文件拖拽上传区域 */}
+                  <FileDropZone
+                    workspaceSlug={workspaceSlug}
+                    sessionId={sessionId}
+                    onFilesUploaded={handleFilesUploaded}
+                  />
+                  {/* 文件浏览器（隐藏内置工具栏） */}
+                  <div className="flex-1 min-h-0">
+                    <FileBrowser rootPath={sessionPath} hideToolbar />
+                  </div>
+                </>
               ) : (
                 <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                   请选择工作区
