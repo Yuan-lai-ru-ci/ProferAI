@@ -22,6 +22,7 @@ import {
   ToolIndex,
   extractToolStarts,
   extractToolResults,
+  SUBAGENT_TOOL_NAMES,
   type ContentBlock,
 } from '@proma/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
@@ -293,7 +294,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           activeParentTools,
         )
         for (const evt of toolStartEvents) {
-          if (evt.type === 'tool_start' && evt.toolName === 'Task') {
+          if (evt.type === 'tool_start' && SUBAGENT_TOOL_NAMES.has(evt.toolName)) {
             activeParentTools.add(evt.toolUseId)
           }
         }
@@ -402,7 +403,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         emittedToolStarts, turnId.value || undefined, activeParentTools,
       )
       for (const evt of streamEvents) {
-        if (evt.type === 'tool_start' && evt.toolName === 'Task') {
+        if (evt.type === 'tool_start' && SUBAGENT_TOOL_NAMES.has(evt.toolName)) {
           activeParentTools.add(evt.toolUseId)
         }
       }
@@ -430,7 +431,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         msg.tool_use_result, toolIndex, turnId.value || undefined,
       )
       for (const evt of resultEvents) {
-        if (evt.type === 'tool_result' && evt.toolName === 'Task') {
+        if (evt.type === 'tool_result' && evt.toolName && SUBAGENT_TOOL_NAMES.has(evt.toolName)) {
           activeParentTools.delete(evt.toolUseId)
         }
       }
@@ -468,7 +469,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         emittedToolStarts, turnId.value || undefined, activeParentTools,
       )
       for (const evt of progressEvents) {
-        if (evt.type === 'tool_start' && evt.toolName === 'Task') {
+        if (evt.type === 'tool_start' && SUBAGENT_TOOL_NAMES.has(evt.toolName)) {
           activeParentTools.add(evt.toolUseId)
         }
       }

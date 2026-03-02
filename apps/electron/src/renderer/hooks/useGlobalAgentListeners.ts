@@ -18,6 +18,11 @@ import {
   allPendingAskUserRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
+  agentSidePanelOpenAtom,
+  agentSidePanelTabAtom,
+  currentAgentSessionIdAtom,
+  cachedTeamActivitiesAtom,
+  buildTeamActivityEntries,
   applyAgentEvent,
 } from '@/atoms/agent-atoms'
 import {
@@ -51,6 +56,15 @@ export function useGlobalAgentListeners(): void {
           map.set(sessionId, next)
           return map
         })
+
+        // 自动打开侧面板：检测到 Agent/Task 工具启动时
+        if (event.type === 'tool_start' && (event.toolName === 'Agent' || event.toolName === 'Task')) {
+          const currentSessionId = store.get(currentAgentSessionIdAtom)
+          if (sessionId === currentSessionId) {
+            store.set(agentSidePanelOpenAtom, true)
+            store.set(agentSidePanelTabAtom, 'team')
+          }
+        }
 
         // 处理后台任务事件
         if (event.type === 'task_backgrounded') {
@@ -162,6 +176,19 @@ export function useGlobalAgentListeners(): void {
           map.set(data.sessionId, { ...current, running: false })
           return map
         })
+
+        // 缓存 Team 活动数据（在流式状态被清除前保存，防止面板数据丢失）
+        const streamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
+        if (streamState && streamState.toolActivities.length > 0) {
+          const teamEntries = buildTeamActivityEntries(streamState.toolActivities)
+          if (teamEntries.length > 0) {
+            store.set(cachedTeamActivitiesAtom, (prev) => {
+              const map = new Map(prev)
+              map.set(data.sessionId, teamEntries)
+              return map
+            })
+          }
+        }
 
         /** 竞态保护：检查该会话是否已有新的流式请求正在运行 */
         const isNewStreamRunning = (): boolean => {

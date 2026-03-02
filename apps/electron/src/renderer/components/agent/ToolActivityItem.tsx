@@ -74,6 +74,7 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   TaskGet: ListTodo,
   TaskList: ListTodo,
   TeamCreate: Users,
+  Agent: Users,
 }
 
 function getToolIcon(toolName: string): React.ComponentType<{ className?: string }> {
@@ -181,7 +182,7 @@ function ErrorBadge(): React.ReactElement {
 
 // ===== 格式化耗时 =====
 
-function formatElapsed(seconds: number): string {
+export function formatElapsed(seconds: number): string {
   if (seconds < 60) return `${seconds.toFixed(1)}s`
   const m = Math.floor(seconds / 60)
   const s = Math.round(seconds % 60)
@@ -283,6 +284,16 @@ function getInputSummary(toolName: string, input: Record<string, unknown>): stri
       return name
     }
   }
+  // Agent：显示 name + description
+  if (toolName === 'Agent') {
+    const agentName = input.name
+    const desc = input.description ?? input.prompt
+    if (typeof agentName === 'string' && typeof desc === 'string') {
+      return `${agentName} · ${desc.length > 60 ? desc.slice(0, 60) + '…' : desc}`
+    }
+    if (typeof desc === 'string') return desc.length > 80 ? desc.slice(0, 80) + '…' : desc
+    if (typeof agentName === 'string') return agentName
+  }
   return null
 }
 
@@ -341,14 +352,14 @@ function TodoList({ items }: { items: TodoItem[] }): React.ReactElement {
 
 // ===== 活动行 =====
 
-interface ActivityRowProps {
+export interface ActivityRowProps {
   activity: ToolActivity
   index?: number
   animate?: boolean
   onOpenDetails?: (activity: ToolActivity) => void
 }
 
-function ActivityRow({ activity, index = 0, animate = false, onOpenDetails }: ActivityRowProps): React.ReactElement {
+export function ActivityRow({ activity, index = 0, animate = false, onOpenDetails }: ActivityRowProps): React.ReactElement {
   const status = getActivityStatus(activity)
   const filePath = extractFilePath(activity.input)
   const diffStats = computeDiffStats(activity.toolName, activity.input)
