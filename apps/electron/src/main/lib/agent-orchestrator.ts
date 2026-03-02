@@ -703,6 +703,7 @@ export class AgentOrchestrator {
             workspaceName: workspace?.name,
             workspaceSlug,
             sessionId,
+            permissionMode,
           }),
         },
         resumeSessionId: existingSdkSessionId,
