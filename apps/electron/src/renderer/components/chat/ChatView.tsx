@@ -96,9 +96,19 @@ export function ChatView({ conversationId }: ChatViewProps): React.ReactElement 
       .then((result) => {
         setMessages(result.messages)
         setHasMoreMessages(result.hasMore)
+
+        // 消息加载完成后，清除已完成的流式状态（streaming=false 的过渡气泡）
+        // 在同一个微任务中执行，确保 React 在一次渲染中同时显示持久化消息并移除流式气泡
+        setStreamingStates((prev) => {
+          const state = prev.get(conversationId)
+          if (!state || state.streaming) return prev  // 仍在流式中，不清除
+          const map = new Map(prev)
+          map.delete(conversationId)
+          return map
+        })
       })
       .catch(console.error)
-  }, [conversationId, refreshVersion])
+  }, [conversationId, refreshVersion, setStreamingStates])
 
   // 从对话元数据加载分隔线
   React.useEffect(() => {
