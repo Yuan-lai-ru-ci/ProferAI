@@ -14,14 +14,32 @@ import type { ChatToolInfo } from '@proma/shared'
 /** 从主进程加载的所有工具列表 */
 export const chatToolsAtom = atom<ChatToolInfo[]>([])
 
+// 一次性迁移：为已有用户补充 agent-mode-recommend 默认开启
+const MIGRATION_KEY = 'proma-tool-migration-agent-recommend'
+if (typeof localStorage !== 'undefined' && !localStorage.getItem(MIGRATION_KEY)) {
+  const stored = localStorage.getItem('proma-enabled-tool-ids')
+  if (stored) {
+    try {
+      const ids = JSON.parse(stored) as string[]
+      if (Array.isArray(ids) && !ids.includes('agent-mode-recommend')) {
+        ids.push('agent-mode-recommend')
+        localStorage.setItem('proma-enabled-tool-ids', JSON.stringify(ids))
+      }
+    } catch {
+      // 解析失败忽略
+    }
+  }
+  localStorage.setItem(MIGRATION_KEY, '1')
+}
+
 /**
  * 用户在 ChatInput 工具栏中切换的工具 ID 集合
  *
- * localStorage 持久化，默认包含 'memory'（记忆工具默认开启）
+ * localStorage 持久化，默认包含 'memory' 和 'agent-mode-recommend'
  */
 export const enabledToolIdsAtom = atomWithStorage<string[]>(
   'proma-enabled-tool-ids',
-  ['memory'],
+  ['memory', 'agent-mode-recommend'],
 )
 
 /**

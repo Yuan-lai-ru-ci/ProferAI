@@ -104,7 +104,7 @@ import {
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir } from './lib/config-paths'
 import {
   listAgentWorkspaces,
   createAgentWorkspace,
@@ -113,10 +113,11 @@ import {
   ensureDefaultWorkspace,
   getWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
-  getWorkspaceSkills,
+  getAllWorkspaceSkills,
   getWorkspaceCapabilities,
   getAgentWorkspace,
   deleteWorkspaceSkill,
+  toggleWorkspaceSkill,
   getWorkspacePermissionMode,
   setWorkspacePermissionMode,
 } from './lib/agent-workspace-manager'
@@ -668,11 +669,19 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 获取工作区 Skill 列表
+  // 获取工作区 Skill 列表（含活跃和不活跃，设置页 UI 用）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SKILLS,
     async (_, workspaceSlug: string): Promise<SkillMeta[]> => {
-      return getWorkspaceSkills(workspaceSlug)
+      return getAllWorkspaceSkills(workspaceSlug)
+    }
+  )
+
+  // 获取工作区 Skills 目录绝对路径
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_SKILLS_DIR,
+    async (_, workspaceSlug: string): Promise<string> => {
+      return getWorkspaceSkillsDir(workspaceSlug)
     }
   )
 
@@ -681,6 +690,14 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.DELETE_SKILL,
     async (_, workspaceSlug: string, skillSlug: string): Promise<void> => {
       return deleteWorkspaceSkill(workspaceSlug, skillSlug)
+    }
+  )
+
+  // 切换工作区 Skill 启用/禁用
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.TOGGLE_SKILL,
+    async (_, workspaceSlug: string, skillSlug: string, enabled: boolean): Promise<void> => {
+      return toggleWorkspaceSkill(workspaceSlug, skillSlug, enabled)
     }
   )
 

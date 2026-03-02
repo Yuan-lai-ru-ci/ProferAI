@@ -300,6 +300,7 @@ export interface SkillMeta {
   name: string
   description?: string
   icon?: string
+  enabled: boolean
 }
 
 /** 工作区能力摘要（MCP + Skill 计数） */
@@ -568,8 +569,12 @@ export const AGENT_IPC_CHANNELS = {
   TEST_MCP_SERVER: 'agent:test-mcp-server',
   /** 获取工作区 Skill 列表 */
   GET_SKILLS: 'agent:get-skills',
+  /** 获取工作区 Skills 目录绝对路径 */
+  GET_SKILLS_DIR: 'agent:get-skills-dir',
   /** 删除工作区 Skill */
   DELETE_SKILL: 'agent:delete-skill',
+  /** 切换工作区 Skill 启用/禁用 */
+  TOGGLE_SKILL: 'agent:toggle-skill',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */
