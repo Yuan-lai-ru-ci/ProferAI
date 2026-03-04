@@ -305,8 +305,21 @@ export class AgentOrchestrator {
     baseUrl: string | undefined,
   ): Promise<Record<string, string | undefined>> {
     const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
+
+    // 从 process.env 继承系统变量，但清理所有 ANTHROPIC_ 前缀的变量，
+    // 防止本地开发环境（如 ANTHROPIC_AUTH_TOKEN、ANTHROPIC_API_KEY、
+    // ANTHROPIC_BASE_URL 等）干扰 SDK 的认证和请求目标。
+    // 即使 index.ts 启动时已清理过一次，initializeRuntime() 中的
+    // loadShellEnv() 可能从 shell 配置文件（~/.zshrc 等）重新注入这些变量。
+    const cleanEnv: Record<string, string | undefined> = {}
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!key.startsWith('ANTHROPIC_')) {
+        cleanEnv[key] = value
+      }
+    }
+
     const sdkEnv: Record<string, string | undefined> = {
-      ...process.env,
+      ...cleanEnv,
       ANTHROPIC_API_KEY: apiKey,
       // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
@@ -316,14 +329,13 @@ export class AgentOrchestrator {
       CLAUDE_CODE_ENABLE_TASKS: 'true',
     }
 
+    // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入
     if (baseUrl && baseUrl !== DEFAULT_ANTHROPIC_URL) {
       sdkEnv.ANTHROPIC_BASE_URL = baseUrl
         .trim()
         .replace(/\/+$/, '')
         .replace(/\/v\d+\/messages$/, '')
         .replace(/\/v\d+$/, '')
-    } else {
-      delete sdkEnv.ANTHROPIC_BASE_URL
     }
 
     const proxyUrl = await getEffectiveProxyUrl()
@@ -603,6 +615,16 @@ export class AgentOrchestrator {
     }
 
     // 3. 构建环境变量
+    // 同步凭证到 process.env（SDK in-process 代码可能直接读取 process.env）
+    // 先清理再注入，确保 SDK 无论从 env 选项还是 process.env 都拿到正确值
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+    delete process.env.ANTHROPIC_BASE_URL
+    process.env.ANTHROPIC_API_KEY = apiKey
+    if (channel.baseUrl) {
+      process.env.ANTHROPIC_BASE_URL = channel.baseUrl
+    }
+
     const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
