@@ -61,6 +61,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tiptap/extension-code-block-lowlight": "^3.19.0",
     "@tiptap/extension-link": "^3.19.0",
+    "@tiptap/extension-mention": "^3.19.0",
     "@tiptap/extension-placeholder": "^3.19.0",
     "@tiptap/extension-underline": "^3.19.0",
     "@tiptap/react": "^3.19.0",
