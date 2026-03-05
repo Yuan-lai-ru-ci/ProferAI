@@ -52,9 +52,11 @@ interface FileBrowserProps {
   rootPath: string
   /** 隐藏内置顶部工具栏（面包屑 + 按钮），由外部自行渲染 */
   hideToolbar?: boolean
+  /** 嵌入模式：不使用内部 ScrollArea 和 h-full，由外部容器控制布局和滚动 */
+  embedded?: boolean
 }
 
-export function FileBrowser({ rootPath, hideToolbar }: FileBrowserProps): React.ReactElement {
+export function FileBrowser({ rootPath, hideToolbar, embedded }: FileBrowserProps): React.ReactElement {
   const [entries, setEntries] = React.useState<FileEntry[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -150,8 +152,30 @@ export function FileBrowser({ rootPath, hideToolbar }: FileBrowserProps): React.
     return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : rootPath
   }, [rootPath])
 
+  const fileTree = (
+    <div className="py-1">
+      {error && (
+        <div className="px-3 py-2 text-xs text-destructive">{error}</div>
+      )}
+      {!error && entries.length === 0 && !loading && (
+        <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+          目录为空
+        </div>
+      )}
+      {entries.map((entry) => (
+        <FileTreeItem
+          key={entry.path}
+          entry={entry}
+          depth={0}
+          onContextMenu={handleContextMenu}
+          onRefresh={loadRoot}
+        />
+      ))}
+    </div>
+  )
+
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className={cn('flex flex-col bg-background', !embedded && 'h-full')}>
       {/* 顶部工具栏（可由外部接管） */}
       {!hideToolbar && (
         <div className="flex items-center gap-1 px-3 pr-10 h-[48px] border-b flex-shrink-0">
@@ -182,27 +206,11 @@ export function FileBrowser({ rootPath, hideToolbar }: FileBrowserProps): React.
       )}
 
       {/* 文件树 */}
-      <ScrollArea className="flex-1">
-        <div className="py-1">
-          {error && (
-            <div className="px-3 py-2 text-xs text-destructive">{error}</div>
-          )}
-          {!error && entries.length === 0 && !loading && (
-            <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-              目录为空
-            </div>
-          )}
-          {entries.map((entry) => (
-            <FileTreeItem
-              key={entry.path}
-              entry={entry}
-              depth={0}
-              onContextMenu={handleContextMenu}
-              onRefresh={loadRoot}
-            />
-          ))}
-        </div>
-      </ScrollArea>
+      {embedded ? fileTree : (
+        <ScrollArea className="flex-1">
+          {fileTree}
+        </ScrollArea>
+      )}
 
       {/* 右键菜单（手动定位弹出层） */}
       {contextMenu && (

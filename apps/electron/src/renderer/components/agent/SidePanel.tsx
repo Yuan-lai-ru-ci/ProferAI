@@ -301,45 +301,46 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  {/* 附加目录列表 */}
-                  {attachedDirs.length > 0 && (
-                    <div className="px-3 pt-2.5 pb-1 space-y-1 flex-shrink-0">
-                      <div className="text-[11px] font-medium text-muted-foreground mb-1">附加目录（Agent 可以读取并操作此文件夹）</div>
-                      {attachedDirs.map((dir) => {
-                        const dirName = dir.split('/').filter(Boolean).pop() || dir
-                        return (
-                          <div
-                            key={dir}
-                            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/50 group"
-                          >
-                            <FolderOpen className="size-3.5 text-amber-500 shrink-0" />
-                            <span className="text-xs truncate flex-1" title={dir}>
-                              {dirName}
-                            </span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={() => handleDetachDirectory(dir)}
+                  {/* 可滚动内容区：附加目录 + 文件浏览器 + 拖拽上传 */}
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    {/* 附加目录列表 */}
+                    {attachedDirs.length > 0 && (
+                      <div className="px-3 pt-2.5 pb-1 space-y-1 flex-shrink-0">
+                        <div className="text-[11px] font-medium text-muted-foreground mb-1">附加目录（Agent 可以读取并操作此文件夹）</div>
+                        {attachedDirs.map((dir) => {
+                          const dirName = dir.split('/').filter(Boolean).pop() || dir
+                          return (
+                            <div
+                              key={dir}
+                              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/50 group"
                             >
-                              <X className="size-3" />
-                            </Button>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                  {/* 文件拖拽上传区域 */}
-                  <FileDropZone
-                    workspaceSlug={workspaceSlug}
-                    sessionId={sessionId}
-                    onFilesUploaded={handleFilesUploaded}
-                    onAttachFolder={handleAttachFolder}
-                  />
-                  {/* 文件浏览器（隐藏内置工具栏） */}
-                  <div className="flex-1 min-h-0">
-                    <FileBrowser rootPath={sessionPath} hideToolbar />
+                              <FolderOpen className="size-3.5 text-amber-500 shrink-0" />
+                              <span className="text-xs truncate flex-1" title={dir}>
+                                {dirName}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={() => handleDetachDirectory(dir)}
+                              >
+                                <X className="size-3" />
+                              </Button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {/* 文件浏览器（嵌入模式，不自带滚动） */}
+                    <FileBrowser rootPath={sessionPath} hideToolbar embedded />
+                    {/* 文件拖拽上传区域 */}
+                    <FileDropZone
+                      workspaceSlug={workspaceSlug}
+                      sessionId={sessionId}
+                      onFilesUploaded={handleFilesUploaded}
+                      onAttachFolder={handleAttachFolder}
+                    />
                   </div>
                 </>
               ) : (
