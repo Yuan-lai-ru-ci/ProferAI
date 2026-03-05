@@ -65,6 +65,7 @@ import type {
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
+  MoveSessionToWorkspaceInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -262,6 +263,9 @@ export interface ElectronAPI {
 
   /** 切换 Agent 会话置顶状态 */
   togglePinAgentSession: (id: string) => Promise<AgentSessionMeta>
+
+  /** 迁移 Agent 会话到另一个工作区 */
+  moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
 
   /** 生成 Agent 会话标题 */
   generateAgentTitle: (input: AgentGenerateTitleInput) => Promise<string | null>
@@ -707,6 +711,10 @@ const electronAPI: ElectronAPI = {
 
   togglePinAgentSession: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_PIN, id)
+  },
+
+  moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE, input)
   },
 
   generateAgentTitle: (input: AgentGenerateTitleInput) => {

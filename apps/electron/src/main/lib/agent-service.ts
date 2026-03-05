@@ -115,6 +115,13 @@ export function stopAgent(sessionId: string): void {
   orchestrator.stop(sessionId)
 }
 
+/**
+ * 检查指定会话是否正在运行
+ */
+export function isAgentSessionActive(sessionId: string): boolean {
+  return orchestrator.isActive(sessionId)
+}
+
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
 export function stopAllAgents(): void {
   orchestrator.stopAll()

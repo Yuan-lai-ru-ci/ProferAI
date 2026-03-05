@@ -55,6 +55,7 @@ import type {
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
+  MoveSessionToWorkspaceInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -100,8 +101,9 @@ import {
   updateAgentSessionMeta,
   deleteAgentSession,
   migrateChatToAgentSession,
+  moveSessionToWorkspace,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession } from './lib/agent-service'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession, isAgentSessionActive } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir } from './lib/config-paths'
@@ -590,6 +592,17 @@ export function registerIpcHandlers(): void {
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent 会话不存在: ${id}`)
       return updateAgentSessionMeta(id, { pinned: !current.pinned })
+    }
+  )
+
+  // 迁移 Agent 会话到另一个工作区
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE,
+    async (_, input: MoveSessionToWorkspaceInput): Promise<AgentSessionMeta> => {
+      if (isAgentSessionActive(input.sessionId)) {
+        throw new Error('会话正在运行中，请停止后再迁移')
+      }
+      return moveSessionToWorkspace(input.sessionId, input.targetWorkspaceId)
     }
   )
 

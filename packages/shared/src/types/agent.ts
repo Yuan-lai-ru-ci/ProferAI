@@ -434,6 +434,18 @@ export interface AgentSendInput {
   workspaceId?: string
 }
 
+// ===== 会话迁移输入 =====
+
+/**
+ * 迁移会话到另一个工作区的输入参数
+ */
+export interface MoveSessionToWorkspaceInput {
+  /** 要迁移的会话 ID */
+  sessionId: string
+  /** 目标工作区 ID */
+  targetWorkspaceId: string
+}
+
 // ===== 后台任务管理 =====
 
 /**
@@ -638,6 +650,8 @@ export const AGENT_IPC_CHANNELS = {
   MIGRATE_CHAT_TO_AGENT: 'agent:migrate-chat-to-agent',
   /** 切换会话置顶状态 */
   TOGGLE_PIN: 'agent:toggle-pin',
+  /** 迁移会话到另一个工作区 */
+  MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
 
   // 工作区管理
   /** 获取工作区列表 */

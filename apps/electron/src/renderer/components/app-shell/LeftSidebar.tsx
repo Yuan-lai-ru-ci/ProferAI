@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue } from 'jotai'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -52,6 +52,7 @@ import { hasUpdateAtom } from '@/atoms/updater'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
+import { MoveSessionDialog } from '@/components/agent/MoveSessionDialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -148,6 +149,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [hoveredId, setHoveredId] = React.useState<string | null>(null)
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
+  /** 待迁移会话 ID，非空时显示迁移对话框 */
+  const [moveTargetId, setMoveTargetId] = React.useState<string | null>(null)
   /** 置顶区域展开/收起 */
   const [pinnedExpanded, setPinnedExpanded] = React.useState(true)
   /** Agent 置顶区域展开/收起 */
@@ -441,6 +444,21 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     }
   }
 
+  /** 迁移会话到另一个工作区后的回调 */
+  const handleSessionMoved = (updatedSession: AgentSessionMeta): void => {
+    setAgentSessions((prev) =>
+      prev.map((s) => (s.id === updatedSession.id ? updatedSession : s))
+    )
+    // 如果迁移的是当前选中的会话，取消选中并关闭标签页
+    if (currentAgentSessionId === updatedSession.id) {
+      const tabResult = closeTab(tabs, layout, updatedSession.id)
+      setTabs(tabResult.tabs)
+      setLayout(tabResult.layout)
+      setCurrentAgentSessionId(null)
+    }
+    setMoveTargetId(null)
+  }
+
   /** Agent 会话按工作区过滤 */
   const filteredAgentSessions = React.useMemo(
     () => agentSessions.filter((s) => s.workspaceId === currentWorkspaceId),
@@ -484,6 +502,18 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+
+  // 迁移会话对话框（collapsed/expanded 共享）
+  const moveDialog = (
+    <MoveSessionDialog
+      open={moveTargetId !== null}
+      onOpenChange={(open) => { if (!open) setMoveTargetId(null) }}
+      sessionId={moveTargetId ?? ''}
+      currentWorkspaceId={currentWorkspaceId ?? undefined}
+      workspaces={workspaces}
+      onMoved={handleSessionMoved}
+    />
   )
 
   // ===== 折叠状态：精简图标视图 =====
@@ -555,6 +585,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </div>
 
         {deleteDialog}
+        {moveDialog}
       </div>
     )
   }
@@ -678,6 +709,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 showPinIcon={false}
                 onSelect={() => handleSelectAgentSession(session.id, session.title)}
                 onRequestDelete={() => handleRequestDelete(session.id)}
+                onRequestMove={() => setMoveTargetId(session.id)}
                 onRename={handleAgentRename}
                 onTogglePin={handleTogglePinAgent}
                 onMouseEnter={() => setHoveredId(session.id)}
@@ -735,6 +767,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                     showPinIcon={!!session.pinned}
                     onSelect={() => handleSelectAgentSession(session.id, session.title)}
                     onRequestDelete={() => handleRequestDelete(session.id)}
+                    onRequestMove={() => setMoveTargetId(session.id)}
                     onRename={handleAgentRename}
                     onTogglePin={handleTogglePinAgent}
                     onMouseEnter={() => setHoveredId(session.id)}
@@ -792,6 +825,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       </div>
 
       {deleteDialog}
+      {moveDialog}
     </div>
   )
 }
@@ -925,36 +959,48 @@ function ConversationItem({
         'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100',
         hovered && !editing ? 'opacity-100' : 'opacity-0 pointer-events-none'
       )}>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onTogglePin(conversation.id)
-          }}
-          className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-          title={isPinned ? '取消置顶' : '置顶对话'}
-        >
-          {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            startEdit()
-          }}
-          className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-          title="重命名"
-        >
-          <Pencil size={13} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onRequestDelete()
-          }}
-          className="p-1 rounded-md text-foreground/30 hover:bg-destructive/10 hover:text-destructive transition-colors"
-          title="删除对话"
-        >
-          <Trash2 size={13} />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onTogglePin(conversation.id)
+              }}
+              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+            >
+              {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{isPinned ? '取消置顶' : '置顶对话'}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                startEdit()
+              }}
+              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+            >
+              <Pencil size={13} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">重命名</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onRequestDelete()
+              }}
+              className="p-1 rounded-md text-foreground/30 hover:bg-destructive/10 hover:text-destructive transition-colors"
+            >
+              <Trash2 size={13} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">删除对话</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )
@@ -970,6 +1016,7 @@ interface AgentSessionItemProps {
   showPinIcon?: boolean
   onSelect: () => void
   onRequestDelete: () => void
+  onRequestMove: () => void
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onMouseEnter: () => void
@@ -984,6 +1031,7 @@ function AgentSessionItem({
   showPinIcon,
   onSelect,
   onRequestDelete,
+  onRequestMove,
   onRename,
   onTogglePin,
   onMouseEnter,
@@ -1079,36 +1127,64 @@ function AgentSessionItem({
         'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100',
         hovered && !editing ? 'opacity-100' : 'opacity-0 pointer-events-none'
       )}>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onTogglePin(session.id)
-          }}
-          className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-          title={session.pinned ? '取消置顶' : '置顶会话'}
-        >
-          {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            startEdit()
-          }}
-          className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
-          title="重命名"
-        >
-          <Pencil size={13} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onRequestDelete()
-          }}
-          className="p-1 rounded-md text-foreground/30 hover:bg-destructive/10 hover:text-destructive transition-colors"
-          title="删除会话"
-        >
-          <Trash2 size={13} />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onTogglePin(session.id)
+              }}
+              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+            >
+              {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{session.pinned ? '取消置顶' : '置顶会话'}</TooltipContent>
+        </Tooltip>
+        {!running && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRequestMove()
+                }}
+                className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+              >
+                <ArrowRightLeft size={13} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">迁移到其他工作区</TooltipContent>
+          </Tooltip>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                startEdit()
+              }}
+              className="p-1 rounded-md text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors"
+            >
+              <Pencil size={13} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">重命名</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onRequestDelete()
+              }}
+              className="p-1 rounded-md text-foreground/30 hover:bg-destructive/10 hover:text-destructive transition-colors"
+            >
+              <Trash2 size={13} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">删除会话</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )
