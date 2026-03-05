@@ -21,7 +21,7 @@ import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
-import { getIsQuitting, setQuitting, isUpdating } from './lib/app-lifecycle'
+import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -223,12 +223,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
-
-  // 正在安装更新时，让 electron-updater 控制退出流程，不做额外操作
-  if (isUpdating()) {
-    console.log('[应用] 正在安装更新，跳过额外清理')
-    return
-  }
 
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()

@@ -438,25 +438,21 @@ export interface ElectronAPI {
   /** 设置默认提示词 */
   setDefaultPrompt: (id: string | null) => Promise<void>
 
-  // ===== 自动更新相关（可选，仅在 updater 模块存在时可用） =====
+  // ===== 版本检测相关（仅检测，不自动下载/安装） =====
 
   /** 更新 API */
   updater?: {
     checkForUpdates: () => Promise<void>
-    downloadUpdate: () => Promise<void>
-    installUpdate: () => Promise<void>
     getStatus: () => Promise<{
-      status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'installing' | 'error'
+      status: 'idle' | 'checking' | 'available' | 'not-available' | 'error'
       version?: string
       releaseNotes?: string
-      progress?: { percent: number; transferred: number; total: number }
       error?: string
     }>
     onStatusChanged: (callback: (status: {
-      status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'installing' | 'error'
+      status: 'idle' | 'checking' | 'available' | 'not-available' | 'error'
       version?: string
       releaseNotes?: string
-      progress?: { percent: number; transferred: number; total: number }
       error?: string
     }) => void) => () => void
   }
@@ -957,11 +953,9 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT, id)
   },
 
-  // 自动更新（updater 模块为可选，bridge 始终暴露，IPC 调用失败时由渲染进程处理）
+  // 自动更新（仅版本检测，不自动下载/安装）
   updater: {
     checkForUpdates: () => ipcRenderer.invoke('updater:check'),
-    downloadUpdate: () => ipcRenderer.invoke('updater:download'),
-    installUpdate: () => ipcRenderer.invoke('updater:install'),
     getStatus: () => ipcRenderer.invoke('updater:get-status'),
     onStatusChanged: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, status: Parameters<typeof callback>[0]): void => callback(status)
