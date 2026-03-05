@@ -566,7 +566,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -794,6 +794,7 @@ export class AgentOrchestrator {
         resumeSessionId: existingSdkSessionId,
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
+        ...(additionalDirectories && additionalDirectories.length > 0 && { additionalDirectories }),
         // SDK 0.2.52+ 新增选项（从 settings 读取）
         ...(appSettings.agentThinking && { thinking: appSettings.agentThinking }),
         ...(appSettings.agentEffort && { effort: appSettings.agentEffort }),

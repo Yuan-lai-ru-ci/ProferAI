@@ -31,7 +31,7 @@ import type {
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSavedFile,
-  AgentCopyFolderInput,
+  AgentAttachDirectoryInput,
   GetTaskOutputInput,
   GetTaskOutputResult,
   StopTaskInput,
@@ -97,13 +97,14 @@ import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
   listAgentSessions,
   createAgentSession,
+  getAgentSessionMeta,
   getAgentSessionMessages,
   updateAgentSessionMeta,
   deleteAgentSession,
   migrateChatToAgentSession,
   moveSessionToWorkspace,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, copyFolderToSession, isAgentSessionActive } from './lib/agent-service'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, isAgentSessionActive } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir } from './lib/config-paths'
@@ -996,11 +997,33 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 复制文件夹到 Agent session 工作目录
+  // 附加外部目录到 Agent 会话
   ipcMain.handle(
-    AGENT_IPC_CHANNELS.COPY_FOLDER_TO_SESSION,
-    async (_, input: AgentCopyFolderInput): Promise<AgentSavedFile[]> => {
-      return copyFolderToSession(input)
+    AGENT_IPC_CHANNELS.ATTACH_DIRECTORY,
+    async (_, input: AgentAttachDirectoryInput): Promise<string[]> => {
+      const meta = getAgentSessionMeta(input.sessionId)
+      if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
+
+      const existing = meta.attachedDirectories ?? []
+      if (existing.includes(input.directoryPath)) return existing
+
+      const updated = [...existing, input.directoryPath]
+      updateAgentSessionMeta(input.sessionId, { attachedDirectories: updated })
+      return updated
+    }
+  )
+
+  // 移除会话的附加目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.DETACH_DIRECTORY,
+    async (_, input: AgentAttachDirectoryInput): Promise<string[]> => {
+      const meta = getAgentSessionMeta(input.sessionId)
+      if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
+
+      const existing = meta.attachedDirectories ?? []
+      const updated = existing.filter((d) => d !== input.directoryPath)
+      updateAgentSessionMeta(input.sessionId, { attachedDirectories: updated })
+      return updated
     }
   )
 

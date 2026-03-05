@@ -155,6 +155,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   forkSession?: boolean
   /** 指定 SDK 会话 ID（替代自动生成，与 AgentQueryInput.sessionId 区分） */
   sdkSessionId?: string
+  /** 附加的外部目录（SDK additionalDirectories） */
+  additionalDirectories?: string[]
 }
 
 // ============================================================================
@@ -647,6 +649,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         ...(options.persistSession != null && { persistSession: options.persistSession }),
         ...(options.forkSession != null && { forkSession: options.forkSession }),
         ...(options.sdkSessionId && { sessionId: options.sdkSessionId }),
+        ...(options.additionalDirectories && options.additionalDirectories.length > 0 && {
+          additionalDirectories: options.additionalDirectories,
+        }),
       } as import('@anthropic-ai/claude-agent-sdk').Options
 
       const queryIterator = sdk.query({

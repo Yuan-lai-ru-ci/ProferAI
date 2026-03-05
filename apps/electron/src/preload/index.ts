@@ -39,7 +39,7 @@ import type {
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSavedFile,
-  AgentCopyFolderInput,
+  AgentAttachDirectoryInput,
   GetTaskOutputInput,
   GetTaskOutputResult,
   StopTaskInput,
@@ -395,8 +395,11 @@ export interface ElectronAPI {
   /** 打开文件夹选择对话框 */
   openFolderDialog: () => Promise<{ path: string; name: string } | null>
 
-  /** 复制文件夹到 Agent session 工作目录 */
-  copyFolderToSession: (input: AgentCopyFolderInput) => Promise<AgentSavedFile[]>
+  /** 附加外部目录到 Agent 会话 */
+  attachDirectory: (input: AgentAttachDirectoryInput) => Promise<string[]>
+
+  /** 移除会话的附加目录 */
+  detachDirectory: (input: AgentAttachDirectoryInput) => Promise<string[]>
 
   // ===== Agent 文件系统操作 =====
 
@@ -900,8 +903,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FOLDER_DIALOG)
   },
 
-  copyFolderToSession: (input: AgentCopyFolderInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.COPY_FOLDER_TO_SESSION, input)
+  attachDirectory: (input: AgentAttachDirectoryInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ATTACH_DIRECTORY, input)
+  },
+
+  detachDirectory: (input: AgentAttachDirectoryInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DETACH_DIRECTORY, input)
   },
 
   // Agent 文件系统操作

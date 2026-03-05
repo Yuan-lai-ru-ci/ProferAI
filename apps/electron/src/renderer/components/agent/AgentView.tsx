@@ -44,12 +44,13 @@ import {
   agentMessageRefreshAtom,
   agentSessionsAtom,
   currentAgentSessionIdAtom,
+  agentAttachedDirectoriesMapAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import { AgentSessionProvider } from '@/contexts/session-context'
-import type { AgentSendInput, AgentMessage, AgentPendingFile, AgentSavedFile, ModelOption } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
@@ -81,6 +82,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [layout, setLayout] = useAtom(splitLayoutAtom)
+  const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
+  const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
+  const attachedDirs = attachedDirsMap.get(sessionId) ?? []
 
   const draftsMap = useAtomValue(agentSessionDraftsAtom)
   const setDraftsMap = useSetAtom(agentSessionDraftsAtom)
@@ -98,8 +102,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [sessionId, setDraftsMap])
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
-  const [pendingFolderRefs, setPendingFolderRefs] = React.useState<AgentSavedFile[]>([])
-  const [isUploadingFolder, setIsUploadingFolder] = React.useState(false)
   const [dragFolderWarning, setDragFolderWarning] = React.useState(false)
   const [errorCopied, setErrorCopied] = React.useState(false)
 
@@ -164,6 +166,25 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       })
       .catch(console.error)
   }, [sessionId, refreshVersion, setStreamingStates])
+
+  // 从会话元数据初始化附加目录
+  const sessions = useAtomValue(agentSessionsAtom)
+  React.useEffect(() => {
+    const meta = sessions.find((s) => s.id === sessionId)
+    const dirs = meta?.attachedDirectories ?? []
+    setAttachedDirsMap((prev) => {
+      const existing = prev.get(sessionId)
+      // 避免不必要的更新
+      if (JSON.stringify(existing) === JSON.stringify(dirs)) return prev
+      const map = new Map(prev)
+      if (dirs.length > 0) {
+        map.set(sessionId, dirs)
+      } else {
+        map.delete(sessionId)
+      }
+      return map
+    })
+  }, [sessionId, sessions, setAttachedDirsMap])
 
   // 自动发送 pending prompt（从设置页"对话完成配置"触发）
   React.useEffect(() => {
@@ -298,40 +319,29 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [setPendingFiles])
 
-  /** 打开文件夹选择对话框 */
-  const handleOpenFolderDialog = React.useCallback(async (): Promise<void> => {
-    if (!currentWorkspaceId || isUploadingFolder) return
-
-    const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
-    if (!workspace) return
-
+  /** 附加文件夹（不复制，仅记录路径） */
+  const handleAttachFolder = React.useCallback(async (): Promise<void> => {
     try {
       const result = await window.electronAPI.openFolderDialog()
       if (!result) return
 
-      setIsUploadingFolder(true)
-      console.log(`[AgentView] 开始复制文件夹: ${result.path}`)
-
-      const saved = await window.electronAPI.copyFolderToSession({
-        sourcePath: result.path,
-        workspaceSlug: workspace.slug,
+      const updated = await window.electronAPI.attachDirectory({
         sessionId,
+        directoryPath: result.path,
       })
 
-      setPendingFolderRefs((prev) => [...prev, ...saved])
-      console.log(`[AgentView] 文件夹复制成功，共 ${saved.length} 个文件`)
-    } catch (error) {
-      console.error('[AgentView] 文件夹选择失败:', error)
-      // 显示错误提示
-      setAgentStreamErrors((prev) => {
+      setAttachedDirsMap((prev) => {
         const map = new Map(prev)
-        map.set(sessionId, `文件夹上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
+        map.set(sessionId, updated)
         return map
       })
-    } finally {
-      setIsUploadingFolder(false)
+
+      toast.success(`已附加目录: ${result.name}`)
+    } catch (error) {
+      console.error('[AgentView] 附加文件夹失败:', error)
+      toast.error('附加文件夹失败')
     }
-  }, [sessionId, currentWorkspaceId, workspaces, isUploadingFolder, setAgentStreamErrors])
+  }, [sessionId, setAttachedDirsMap])
 
   /** 移除待发送文件 */
   const handleRemoveFile = React.useCallback((id: string): void => {
@@ -422,7 +432,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const text = inputContent.trim()
     // 如果输入为空但有建议，使用建议内容
     const effectiveText = text || suggestion || ''
-    if ((!effectiveText && pendingFiles.length === 0 && pendingFolderRefs.length === 0) || !agentChannelId) return
+    if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId) return
 
     // 上一条消息仍在处理中，提示用户等待或停止
     if (streaming) {
@@ -478,13 +488,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       setPendingFiles([])
     }
 
-    // 1b. 如果有 pending 文件夹引用（已复制到 session 目录）
-    if (pendingFolderRefs.length > 0) {
-      const refs = pendingFolderRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
-      fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
-      setPendingFolderRefs([])
-    }
-
     // 2. 构建最终消息
     const finalMessage = fileReferences + effectiveText
 
@@ -533,6 +536,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      ...(attachedDirs.length > 0 && { additionalDirectories: attachedDirs }),
     }
 
     setInputContent('')
@@ -546,7 +550,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, pendingFiles, pendingFolderRefs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent])
+  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -681,7 +685,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout, setStreamingStates])
 
-  const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || pendingFolderRefs.length > 0) && agentChannelId !== null && !streaming
+  const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0) && agentChannelId !== null && !streaming
 
   return (
     <AgentSessionProvider sessionId={sessionId}>
@@ -705,7 +709,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         {dragFolderWarning && (
           <div className="mx-4 mb-2 px-4 py-2.5 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 text-sm flex items-center gap-2">
             <FolderPlus className="size-4 shrink-0" />
-            <span className="flex-1">不支持拖拽文件夹，请使用"添加文件夹"按钮</span>
+            <span className="flex-1">不支持拖拽文件夹，请使用"附加文件夹"按钮</span>
             <button
               type="button"
               className="shrink-0 p-0.5 rounded hover:bg-amber-500/10 transition-colors"
@@ -760,23 +764,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     onRemove={() => handleRemoveFile(file.id)}
                   />
                 ))}
-              </div>
-            )}
-
-            {/* 文件夹引用预览区域 */}
-            {pendingFolderRefs.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 px-3 pb-1.5">
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-muted text-xs text-muted-foreground">
-                  <FolderPlus className="size-3.5" />
-                  <span>已附加 {pendingFolderRefs.length} 个文件</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-muted-foreground/60 hover:text-foreground transition-colors"
-                    onClick={() => setPendingFolderRefs([])}
-                  >
-                    ×
-                  </button>
-                </div>
               </div>
             )}
 
@@ -848,15 +835,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-[30px] rounded-full text-foreground/60 hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-                          onClick={handleOpenFolderDialog}
-                          disabled={isUploadingFolder}
+                          className="size-[30px] rounded-full text-foreground/60 hover:text-foreground"
+                          onClick={handleAttachFolder}
                         >
                           <FolderPlus className="size-5" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top">
-                        <p>{isUploadingFolder ? '正在上传文件夹...' : '添加文件夹'}</p>
+                        <p>附加文件夹</p>
                       </TooltipContent>
                     </Tooltip>
                     <PermissionModeSelector />

@@ -669,6 +669,13 @@ export const currentAgentErrorAtom = atom<string | null>((get) => {
  */
 export const agentSessionDraftsAtom = atom<Map<string, string>>(new Map())
 
+/**
+ * 会话附加目录 Map — 以 sessionId 为 key
+ * 存储每个会话通过"附加文件夹"功能关联的外部目录路径列表。
+ * 这些路径作为 SDK additionalDirectories 参数传递。
+ */
+export const agentAttachedDirectoriesMapAtom = atom<Map<string, string[]>>(new Map())
+
 /** 当前 Agent 会话的草稿内容（派生读写原子） */
 export const currentAgentSessionDraftAtom = atom(
   (get) => {
