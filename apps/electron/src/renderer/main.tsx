@@ -42,6 +42,7 @@ import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
 import { UpdateDialog } from './components/settings/UpdateDialog'
 import './styles/globals.css'
+import 'katex/dist/katex.min.css'
 
 /**
  * 主题初始化组件
