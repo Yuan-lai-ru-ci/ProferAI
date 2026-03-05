@@ -315,6 +315,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                       <AttachedDirsSection
                         attachedDirs={attachedDirs}
                         onDetach={handleDetachDirectory}
+                        refreshVersion={filesVersion}
                       />
                     )}
                     {/* 文件浏览器（嵌入模式，不自带滚动） */}
@@ -346,10 +347,12 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
 interface AttachedDirsSectionProps {
   attachedDirs: string[]
   onDetach: (dirPath: string) => void
+  /** 文件版本号，用于自动刷新已展开的目录 */
+  refreshVersion: number
 }
 
 /** 附加目录区域：统一管理所有子项的选中状态 */
-function AttachedDirsSection({ attachedDirs, onDetach }: AttachedDirsSectionProps): React.ReactElement {
+function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion }: AttachedDirsSectionProps): React.ReactElement {
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
 
   const handleSelect = React.useCallback((path: string, ctrlKey: boolean) => {
@@ -379,6 +382,7 @@ function AttachedDirsSection({ attachedDirs, onDetach }: AttachedDirsSectionProp
           onDetach={() => onDetach(dir)}
           selectedPaths={selectedPaths}
           onSelect={handleSelect}
+          refreshVersion={refreshVersion}
         />
       ))}
     </div>
@@ -392,15 +396,26 @@ interface AttachedDirTreeProps {
   onDetach: () => void
   selectedPaths: Set<string>
   onSelect: (path: string, ctrlKey: boolean) => void
+  /** 文件版本号，变化时已展开的目录自动重新加载 */
+  refreshVersion: number
 }
 
 /** 附加目录根节点：可展开/收起，带移除按钮 */
-function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect }: AttachedDirTreeProps): React.ReactElement {
+function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion }: AttachedDirTreeProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
 
   const dirName = dirPath.split('/').filter(Boolean).pop() || dirPath
+
+  // 当 refreshVersion 变化时，已展开的目录自动重新加载
+  React.useEffect(() => {
+    if (expanded && loaded) {
+      window.electronAPI.listAttachedDirectory(dirPath)
+        .then((items) => setChildren(items))
+        .catch((err) => console.error('[AttachedDirTree] 刷新失败:', err))
+    }
+  }, [refreshVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleExpand = async (): Promise<void> => {
     if (!expanded && !loaded) {
@@ -451,7 +466,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect }: Attache
         </div>
       )}
       {expanded && children.map((child) => (
-        <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} />
+        <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} />
       ))}
     </div>
   )
@@ -462,10 +477,12 @@ interface AttachedDirItemProps {
   depth: number
   selectedPaths: Set<string>
   onSelect: (path: string, ctrlKey: boolean) => void
+  /** 文件版本号，变化时已展开的目录自动重新加载 */
+  refreshVersion: number
 }
 
 /** 附加目录子项：递归可展开，支持选中 + 三点菜单（含重命名、移动） */
-function AttachedDirItem({ entry, depth, selectedPaths, onSelect }: AttachedDirItemProps): React.ReactElement {
+function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion }: AttachedDirItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
@@ -478,6 +495,15 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect }: AttachedDirI
   const [currentPath, setCurrentPath] = React.useState(entry.path)
 
   const isSelected = selectedPaths.has(currentPath)
+
+  // 当 refreshVersion 变化时，已展开的文件夹自动重新加载子项
+  React.useEffect(() => {
+    if (expanded && loaded && entry.isDirectory) {
+      window.electronAPI.listAttachedDirectory(currentPath)
+        .then((items) => setChildren(items))
+        .catch((err) => console.error('[AttachedDirItem] 刷新子目录失败:', err))
+    }
+  }, [refreshVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleDir = async (): Promise<void> => {
     if (!entry.isDirectory) return
@@ -668,7 +694,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect }: AttachedDirI
         </div>
       )}
       {expanded && children.map((child) => (
-        <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} />
+        <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} />
       ))}
     </>
   )
