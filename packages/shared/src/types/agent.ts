@@ -215,6 +215,16 @@ export interface AgentEventUsage {
   contextWindow?: number
 }
 
+/** Teammate 任务用量统计 */
+export interface TaskUsage {
+  /** 总 Token 数 */
+  totalTokens: number
+  /** 工具调用次数 */
+  toolUses: number
+  /** 运行耗时（毫秒） */
+  durationMs: number
+}
+
 /**
  * 重试尝试记录
  *
@@ -265,9 +275,12 @@ export type AgentEvent =
   // 后台任务
   | { type: 'task_backgrounded'; toolUseId: string; taskId: string; intent?: string; turnId?: string }
   | { type: 'task_started'; taskId: string; toolUseId?: string; description: string; taskType?: string; turnId?: string }
-  | { type: 'task_progress'; toolUseId: string; elapsedSeconds: number; turnId?: string }
+  | { type: 'task_progress'; toolUseId: string; elapsedSeconds?: number; turnId?: string; taskId?: string; description?: string; lastToolName?: string; usage?: TaskUsage }
+  | { type: 'task_notification'; taskId: string; toolUseId?: string; status: 'completed' | 'failed' | 'stopped'; summary: string; outputFile?: string; usage?: TaskUsage; turnId?: string }
   | { type: 'shell_backgrounded'; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
   | { type: 'shell_killed'; shellId: string; turnId?: string }
+  // 工具使用摘要
+  | { type: 'tool_use_summary'; summary: string; precedingToolUseIds: string[] }
   // 控制流
   | { type: 'complete'; stopReason?: string; usage?: AgentEventUsage }
   | { type: 'error'; message: string }
@@ -290,6 +303,9 @@ export type AgentEvent =
   | { type: 'ask_user_resolved'; requestId: string }
   // 提示建议
   | { type: 'prompt_suggestion'; suggestion: string }
+  // Auto-Resume（Teams 完成后自动收集结果）
+  | { type: 'waiting_resume'; message: string }
+  | { type: 'resume_start'; messageId: string }
 
 // ===== Agent 会话管理 =====
 
@@ -634,6 +650,86 @@ export interface PermissionResponse {
   alwaysAllow: boolean
 }
 
+// ===== Agent Teams 数据类型 =====
+
+/** Team 配置（~/.claude/teams/{name}/config.json） */
+export interface TeamConfig {
+  /** 团队名称 */
+  name: string
+  /** 团队描述 */
+  description?: string
+  /** 创建时间戳 */
+  createdAt: number
+  /** 领导 Agent ID */
+  leadAgentId?: string
+  /** 领导 Agent 的 SDK 会话 ID */
+  leadSessionId?: string
+  /** 团队成员列表 */
+  members: TeamMember[]
+}
+
+/** Team 成员 */
+export interface TeamMember {
+  /** Agent ID */
+  agentId: string
+  /** 显示名称 */
+  name: string
+  /** Agent 类型（如 'general-purpose', 'Explore'） */
+  agentType: string
+  /** 使用的模型 */
+  model?: string
+  /** 颜色标识 */
+  color?: string
+  /** 加入时间戳 */
+  joinedAt?: number
+}
+
+/** 任务项（~/.claude/tasks/{teamName}/） */
+export interface TaskItem {
+  /** 任务 ID */
+  id: string
+  /** 任务标题 */
+  subject: string
+  /** 任务描述 */
+  description?: string
+  /** 进行中的显示文本 */
+  activeForm?: string
+  /** 负责人 Agent 名称 */
+  owner?: string
+  /** 任务状态 */
+  status: 'pending' | 'in_progress' | 'completed'
+  /** 阻塞的任务 ID 列表 */
+  blocks: string[]
+  /** 被阻塞的任务 ID 列表 */
+  blockedBy: string[]
+}
+
+/** 解析后的收件箱消息 */
+export interface ParsedMailboxMessage {
+  /** 发送者名称 */
+  from: string
+  /** 消息文本 */
+  text: string
+  /** 摘要 */
+  summary?: string
+  /** 时间戳 */
+  timestamp?: string
+  /** 解析后的消息类型 */
+  parsedType: 'idle_notification' | 'shutdown_request' | 'shutdown_approved' | 'task_assignment' | 'text'
+}
+
+/** Agent Team 聚合数据（IPC 返回） */
+export interface AgentTeamData {
+  /** 团队名称 */
+  teamName: string
+  /** 团队配置 */
+  team: TeamConfig
+  /** 任务列表 */
+  tasks: TaskItem[]
+  /** 收件箱消息（agent 名称 → 消息列表） */
+  inboxes: Record<string, ParsedMailboxMessage[]>
+}
+
 // ===== IPC 通道常量 =====
 
 /**
@@ -753,4 +849,10 @@ export const AGENT_IPC_CHANNELS = {
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */
   ASK_USER_RESPOND: 'agent:ask-user:respond',
+
+  // Agent Teams 数据
+  /** 获取 Team 聚合数据（sdkSessionId → AgentTeamData | null） */
+  GET_TEAM_DATA: 'agent:get-team-data',
+  /** 读取 Teammate 输出文件（filePath → string） */
+  GET_AGENT_OUTPUT: 'agent:get-agent-output',
 } as const

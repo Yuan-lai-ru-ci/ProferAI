@@ -65,6 +65,7 @@ import type {
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
+  AgentTeamData,
   MoveSessionToWorkspaceInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
@@ -386,6 +387,14 @@ export interface ElectronAPI {
 
   /** 响应 AskUser 请求 */
   respondAskUser: (response: AskUserResponse) => Promise<void>
+
+  // ===== Agent Teams 数据 =====
+
+  /** 获取 Team 聚合数据（团队配置 + 任务列表 + 收件箱） */
+  getAgentTeamData: (sdkSessionId: string) => Promise<AgentTeamData | null>
+
+  /** 读取 Teammate 输出文件内容 */
+  getAgentOutput: (filePath: string) => Promise<string>
 
   // ===== Agent 附件 =====
 
@@ -875,6 +884,15 @@ const electronAPI: ElectronAPI = {
   // AskUserQuestion 交互式问答
   respondAskUser: (response: AskUserResponse) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ASK_USER_RESPOND, response)
+  },
+
+  // Agent Teams 数据
+  getAgentTeamData: (sdkSessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TEAM_DATA, sdkSessionId)
+  },
+
+  getAgentOutput: (filePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_AGENT_OUTPUT, filePath)
   },
 
   // 工作区文件变化通知

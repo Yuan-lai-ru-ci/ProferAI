@@ -55,6 +55,7 @@ import type {
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
+  AgentTeamData,
   MoveSessionToWorkspaceInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
@@ -107,6 +108,7 @@ import {
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, isAgentSessionActive } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
+import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir } from './lib/config-paths'
 import {
   listAgentWorkspaces,
@@ -964,6 +966,24 @@ export function registerIpcHandlers(): void {
           event: { type: 'ask_user_resolved', requestId },
         })
       }
+    }
+  )
+
+  // ===== Agent Teams 数据 =====
+
+  // 获取 Team 聚合数据（团队配置 + 任务列表 + 收件箱）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_TEAM_DATA,
+    async (_, sdkSessionId: string): Promise<AgentTeamData | null> => {
+      return getAgentTeamData(sdkSessionId)
+    }
+  )
+
+  // 读取 Teammate 输出文件内容
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_AGENT_OUTPUT,
+    async (_, filePath: string): Promise<string> => {
+      return readAgentOutputFile(filePath)
     }
   )
 
