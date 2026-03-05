@@ -47,6 +47,7 @@ import type {
   SkillMeta,
   WorkspaceCapabilities,
   FileEntry,
+  FileSearchResult,
   EnvironmentCheckResult,
   ProxyConfig,
   SystemProxyDetectResult,
@@ -426,6 +427,30 @@ export interface ElectronAPI {
 
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
+
+  /** 重命名文件/目录 */
+  renameFile: (filePath: string, newName: string) => Promise<void>
+
+  /** 移动文件/目录到目标目录 */
+  moveFile: (filePath: string, targetDir: string) => Promise<void>
+
+  /** 列出附加目录内容（无工作区路径限制） */
+  listAttachedDirectory: (dirPath: string) => Promise<FileEntry[]>
+
+  /** 用系统默认应用打开附加目录文件（无工作区路径限制） */
+  openAttachedFile: (filePath: string) => Promise<void>
+
+  /** 在文件管理器中显示附加目录文件（无工作区路径限制） */
+  showAttachedInFolder: (filePath: string) => Promise<void>
+
+  /** 重命名附加目录文件/目录（无工作区路径限制） */
+  renameAttachedFile: (filePath: string, newName: string) => Promise<void>
+
+  /** 移动附加目录文件/目录（无工作区路径限制） */
+  moveAttachedFile: (filePath: string, targetDir: string) => Promise<void>
+
+  /** 搜索工作区文件（用于 @ 引用，支持附加目录） */
+  searchWorkspaceFiles: (rootPath: string, query: string, limit?: number, additionalPaths?: string[]) => Promise<FileSearchResult>
 
   // ===== 系统提示词管理 =====
 
@@ -944,6 +969,38 @@ const electronAPI: ElectronAPI = {
 
   showInFolder: (filePath: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_IN_FOLDER, filePath)
+  },
+
+  renameFile: (filePath: string, newName: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_FILE, filePath, newName)
+  },
+
+  moveFile: (filePath: string, targetDir: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_FILE, filePath, targetDir)
+  },
+
+  listAttachedDirectory: (dirPath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY, dirPath)
+  },
+
+  openAttachedFile: (filePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE, filePath)
+  },
+
+  showAttachedInFolder: (filePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER, filePath)
+  },
+
+  renameAttachedFile: (filePath: string, newName: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE, filePath, newName)
+  },
+
+  moveAttachedFile: (filePath: string, targetDir: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE, filePath, targetDir)
+  },
+
+  searchWorkspaceFiles: (rootPath: string, query: string, limit = 20, additionalPaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES, rootPath, query, limit, additionalPaths)
   },
 
   // 系统提示词管理

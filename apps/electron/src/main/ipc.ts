@@ -39,6 +39,7 @@ import type {
   SkillMeta,
   WorkspaceCapabilities,
   FileEntry,
+  FileSearchResult,
   EnvironmentCheckResult,
   ProxyConfig,
   SystemProxyDetectResult,
@@ -1146,6 +1147,202 @@ export function registerIpcHandlers(): void {
       }
 
       shell.showItemInFolder(safePath)
+    }
+  )
+
+  // 重命名文件/目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RENAME_FILE,
+    async (_, filePath: string, newName: string): Promise<void> => {
+      const { renameSync } = await import('node:fs')
+      const { resolve, dirname, join } = await import('node:path')
+
+      const safePath = resolve(filePath)
+      const workspacesRoot = resolve(getAgentWorkspacesDir())
+      if (!safePath.startsWith(workspacesRoot)) {
+        throw new Error('访问路径超出 Agent 工作区范围')
+      }
+
+      const newPath = join(dirname(safePath), newName)
+      renameSync(safePath, newPath)
+      console.log(`[Agent 文件] 已重命名: ${safePath} → ${newPath}`)
+    }
+  )
+
+  // 移动文件/目录到目标目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.MOVE_FILE,
+    async (_, filePath: string, targetDir: string): Promise<void> => {
+      const { renameSync } = await import('node:fs')
+      const { resolve, basename, join } = await import('node:path')
+
+      const safePath = resolve(filePath)
+      const safeTarget = resolve(targetDir)
+      const workspacesRoot = resolve(getAgentWorkspacesDir())
+      if (!safePath.startsWith(workspacesRoot) || !safeTarget.startsWith(workspacesRoot)) {
+        throw new Error('访问路径超出 Agent 工作区范围')
+      }
+
+      const newPath = join(safeTarget, basename(safePath))
+      renameSync(safePath, newPath)
+      console.log(`[Agent 文件] 已移动: ${safePath} → ${newPath}`)
+    }
+  )
+
+  // 列出附加目录内容（无工作区路径限制，用于用户附加的外部目录）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY,
+    async (_, dirPath: string): Promise<FileEntry[]> => {
+      const { readdirSync } = await import('node:fs')
+      const { resolve } = await import('node:path')
+
+      const safePath = resolve(dirPath)
+      const entries: FileEntry[] = []
+      const items = readdirSync(safePath, { withFileTypes: true })
+
+      for (const item of items) {
+        if (item.name.startsWith('.')) continue
+        const fullPath = resolve(safePath, item.name)
+        entries.push({
+          name: item.name,
+          path: fullPath,
+          isDirectory: item.isDirectory(),
+        })
+      }
+
+      entries.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+
+      return entries
+    }
+  )
+
+  // 用系统默认应用打开附加目录文件（无工作区路径限制）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE,
+    async (_, filePath: string): Promise<void> => {
+      const { resolve } = await import('node:path')
+      await shell.openPath(resolve(filePath))
+    }
+  )
+
+  // 在文件管理器中显示附加目录文件（无工作区路径限制）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER,
+    async (_, filePath: string): Promise<void> => {
+      const { resolve } = await import('node:path')
+      shell.showItemInFolder(resolve(filePath))
+    }
+  )
+
+  // 重命名附加目录文件/目录（无工作区路径限制）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE,
+    async (_, filePath: string, newName: string): Promise<void> => {
+      const { renameSync } = await import('node:fs')
+      const { resolve, dirname, join } = await import('node:path')
+
+      const safePath = resolve(filePath)
+      const newPath = join(dirname(safePath), newName)
+      renameSync(safePath, newPath)
+      console.log(`[附加目录] 已重命名: ${safePath} → ${newPath}`)
+    }
+  )
+
+  // 移动附加目录文件/目录（无工作区路径限制）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE,
+    async (_, filePath: string, targetDir: string): Promise<void> => {
+      const { renameSync } = await import('node:fs')
+      const { resolve, basename, join } = await import('node:path')
+
+      const safePath = resolve(filePath)
+      const newPath = join(resolve(targetDir), basename(safePath))
+      renameSync(safePath, newPath)
+      console.log(`[附加目录] 已移动: ${safePath} → ${newPath}`)
+    }
+  )
+
+  // 搜索工作区文件（用于 @ 引用，递归扫描，支持附加目录）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES,
+    async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[]): Promise<FileSearchResult> => {
+      const { readdirSync } = await import('node:fs')
+      const { resolve, relative } = await import('node:path')
+
+      const safeRoot = resolve(rootPath)
+      const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
+
+      // 递归收集文件（限制深度 5 层）
+      const allEntries: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
+
+      function scan(dir: string, depth: number, baseRoot: string): void {
+        if (depth > 5) return
+        try {
+          const items = readdirSync(dir, { withFileTypes: true })
+          for (const item of items) {
+            if (item.name.startsWith('.')) continue
+            if (item.isDirectory() && ignoreDirs.has(item.name)) continue
+
+            const fullPath = resolve(dir, item.name)
+            const relPath = relative(baseRoot, fullPath)
+            allEntries.push({
+              name: item.name,
+              path: relPath,
+              type: item.isDirectory() ? 'dir' : 'file',
+            })
+
+            if (item.isDirectory()) {
+              scan(fullPath, depth + 1, baseRoot)
+            }
+          }
+        } catch {
+          // 忽略无权限的目录
+        }
+      }
+
+      scan(safeRoot, 0, safeRoot)
+
+      // 扫描附加目录（外部路径）
+      if (additionalPaths && additionalPaths.length > 0) {
+        for (const addPath of additionalPaths) {
+          const addRoot = resolve(addPath)
+          scan(addRoot, 0, addRoot)
+        }
+      }
+
+      // 搜索匹配
+      const q = query.toLowerCase()
+      if (!q) {
+        return { entries: allEntries.slice(0, limit), total: allEntries.length }
+      }
+
+      const matched = allEntries.filter((entry) => {
+        const nameLower = entry.name.toLowerCase()
+        const pathLower = entry.path.toLowerCase()
+        if (nameLower.startsWith(q)) return true
+        if (nameLower.includes(q) || pathLower.includes(q)) return true
+        // 模糊匹配
+        let qi = 0
+        for (let i = 0; i < nameLower.length && qi < q.length; i++) {
+          if (nameLower[i] === q[qi]) qi++
+        }
+        return qi === q.length
+      })
+
+      // 排序：精确前缀优先，目录优先，路径短优先
+      matched.sort((a, b) => {
+        const aStartsWith = a.name.toLowerCase().startsWith(q) ? 0 : 1
+        const bStartsWith = b.name.toLowerCase().startsWith(q) ? 0 : 1
+        if (aStartsWith !== bStartsWith) return aStartsWith - bStartsWith
+        if (a.type === 'dir' && b.type !== 'dir') return -1
+        if (a.type !== 'dir' && b.type === 'dir') return 1
+        return a.path.length - b.path.length
+      })
+
+      return { entries: matched.slice(0, limit), total: matched.length }
     }
   )
 
