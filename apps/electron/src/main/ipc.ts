@@ -143,6 +143,7 @@ import {
   listReleases as listGitHubReleases,
   getReleaseByTag,
 } from './lib/github-release-service'
+import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspace-watcher'
 
 /**
  * 注册 IPC 处理器
@@ -531,7 +532,16 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_SESSIONS,
     async (): Promise<AgentSessionMeta[]> => {
-      return listAgentSessions()
+      const sessions = listAgentSessions()
+      // 启动所有已有附加目录的文件监听
+      for (const session of sessions) {
+        if (session.attachedDirectories) {
+          for (const dir of session.attachedDirectories) {
+            watchAttachedDirectory(dir)
+          }
+        }
+      }
+      return sessions
     }
   )
 
@@ -1030,6 +1040,8 @@ export function registerIpcHandlers(): void {
 
       const updated = [...existing, input.directoryPath]
       updateAgentSessionMeta(input.sessionId, { attachedDirectories: updated })
+      // 启动附加目录文件监听
+      watchAttachedDirectory(input.directoryPath)
       return updated
     }
   )
@@ -1044,6 +1056,8 @@ export function registerIpcHandlers(): void {
       const existing = meta.attachedDirectories ?? []
       const updated = existing.filter((d) => d !== input.directoryPath)
       updateAgentSessionMeta(input.sessionId, { attachedDirectories: updated })
+      // 停止附加目录文件监听
+      unwatchAttachedDirectory(input.directoryPath)
       return updated
     }
   )

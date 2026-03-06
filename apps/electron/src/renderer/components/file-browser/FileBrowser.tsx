@@ -235,6 +235,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded }: FileBrowserProp
           selectedCount={selectedCount}
           renamingPath={renamingPath}
           moving={moving}
+          refreshVersion={filesVersion}
           onSelect={handleSelect}
           onShowInFolder={handleShowInFolder}
           onStartRename={handleStartRename}
@@ -324,6 +325,8 @@ interface FileTreeItemProps {
   selectedCount: number
   renamingPath: string | null
   moving: boolean
+  /** 文件版本号，变化时已展开的文件夹自动重新加载子项 */
+  refreshVersion: number
   onSelect: (entry: FileEntry, event: React.MouseEvent) => void
   onShowInFolder: (entry: FileEntry) => void
   onStartRename: (entry: FileEntry) => void
@@ -341,6 +344,7 @@ function FileTreeItem({
   selectedCount,
   renamingPath,
   moving,
+  refreshVersion,
   onSelect,
   onShowInFolder,
   onStartRename,
@@ -353,6 +357,15 @@ function FileTreeItem({
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [childrenLoaded, setChildrenLoaded] = React.useState(false)
+
+  // 当 refreshVersion 变化时，已展开的文件夹自动重新加载子项
+  React.useEffect(() => {
+    if (expanded && childrenLoaded && entry.isDirectory) {
+      window.electronAPI.listDirectory(entry.path)
+        .then((items) => setChildren(items))
+        .catch((err) => console.error('[FileTreeItem] 刷新子目录失败:', err))
+    }
+  }, [refreshVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 重命名编辑状态
   const [editName, setEditName] = React.useState('')
@@ -603,6 +616,7 @@ function FileTreeItem({
           selectedCount={selectedCount}
           renamingPath={renamingPath}
           moving={moving}
+          refreshVersion={refreshVersion}
           onSelect={onSelect}
           onShowInFolder={onShowInFolder}
           onStartRename={onStartRename}
