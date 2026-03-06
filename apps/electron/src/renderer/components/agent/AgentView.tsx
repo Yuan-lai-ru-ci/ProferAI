@@ -30,6 +30,7 @@ import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
 import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
@@ -906,6 +907,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                       isProcessing={streaming}
                       onCompact={handleCompact}
                     />
+                    <FeishuNotifyToggle sessionId={sessionId} />
                   </>
                 )}
               </div>

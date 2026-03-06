@@ -40,6 +40,7 @@
     "@anthropic-ai/claude-agent-sdk": "0.2.66",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@proma/core": "workspace:*",
     "@proma/shared": "workspace:*",
     "@proma/ui": "workspace:*",

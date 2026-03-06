@@ -5,7 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -58,6 +58,13 @@ import type {
   ChatToolMeta,
   AgentTeamData,
   MoveSessionToWorkspaceInput,
+  FeishuConfigInput,
+  FeishuConfig,
+  FeishuBridgeState,
+  FeishuTestResult,
+  FeishuChatBinding,
+  FeishuPresenceReport,
+  FeishuNotifyMode,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -144,6 +151,9 @@ import {
   getReleaseByTag,
 } from './lib/github-release-service'
 import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspace-watcher'
+import { getFeishuConfig, saveFeishuConfig } from './lib/feishu-config'
+import { feishuBridge } from './lib/feishu-bridge'
+import { presenceService } from './lib/feishu-presence'
 
 /**
  * 注册 IPC 处理器
@@ -1433,6 +1443,87 @@ export function registerIpcHandlers(): void {
     GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG,
     async (_, tag: string): Promise<GitHubRelease | null> => {
       return getReleaseByTag(tag)
+    }
+  )
+
+  // ===== 飞书集成 =====
+
+  // 获取飞书配置
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.GET_CONFIG,
+    async (): Promise<FeishuConfig> => {
+      return getFeishuConfig()
+    }
+  )
+
+  // 保存飞书配置
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.SAVE_CONFIG,
+    async (_, input: FeishuConfigInput): Promise<FeishuConfig> => {
+      const config = saveFeishuConfig(input)
+      // 配置变更后自动重启或停止 Bridge
+      if (input.enabled && input.appId && input.appSecret) {
+        await feishuBridge.restart()
+      } else if (!input.enabled) {
+        feishuBridge.stop()
+      }
+      return config
+    }
+  )
+
+  // 测试飞书连接
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.TEST_CONNECTION,
+    async (_, appId: string, appSecret: string): Promise<FeishuTestResult> => {
+      return feishuBridge.testConnection(appId, appSecret)
+    }
+  )
+
+  // 启动飞书 Bridge
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.START_BRIDGE,
+    async (): Promise<void> => {
+      await feishuBridge.start()
+    }
+  )
+
+  // 停止飞书 Bridge
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.STOP_BRIDGE,
+    async (): Promise<void> => {
+      feishuBridge.stop()
+    }
+  )
+
+  // 获取飞书 Bridge 状态
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.GET_STATUS,
+    async (): Promise<FeishuBridgeState> => {
+      return feishuBridge.getStatus()
+    }
+  )
+
+  // 获取活跃绑定列表
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.LIST_BINDINGS,
+    async (): Promise<FeishuChatBinding[]> => {
+      return feishuBridge.listBindings()
+    }
+  )
+
+  // 上报用户在场状态
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.REPORT_PRESENCE,
+    async (_, report: FeishuPresenceReport): Promise<void> => {
+      presenceService.updatePresence(report)
+    }
+  )
+
+  // 设置会话通知模式
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.SET_SESSION_NOTIFY,
+    async (_, sessionId: string, mode: FeishuNotifyMode): Promise<void> => {
+      feishuBridge.setSessionNotifyMode(sessionId, mode)
     }
   )
 

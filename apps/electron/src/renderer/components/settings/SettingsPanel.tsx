@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench } from 'lucide-react'
+import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench, MessageSquare } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { settingsTabAtom } from '@/atoms/settings-tab'
 import type { SettingsTab } from '@/atoms/settings-tab'
@@ -24,6 +24,7 @@ import { AboutSettings } from './AboutSettings'
 import { AgentSettings } from './AgentSettings'
 import { PromptSettings } from './PromptSettings'
 import { ToolSettings } from './ToolSettings'
+import { FeishuSettings } from './FeishuSettings'
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -43,6 +44,7 @@ const BASE_TABS: TabItem[] = [
 /** Agent 模式专属 Tab */
 const AGENT_TAB: TabItem = { id: 'agent', label: '配置', icon: <Plug size={16} /> }
 const TOOLS_TAB: TabItem = { id: 'tools', label: '工具', icon: <Wrench size={16} /> }
+const FEISHU_TAB: TabItem = { id: 'feishu', label: '飞书', icon: <MessageSquare size={16} /> }
 
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
@@ -69,6 +71,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <AppearanceSettings />
     case 'about':
       return <AboutSettings />
+    case 'feishu':
+      return <FeishuSettings />
   }
 }
 
@@ -81,9 +85,9 @@ export function SettingsPanel(): React.ReactElement {
   // Agent 模式时在渠道后插入 Agent Tab，工具 tab 两种模式都显示
   const tabs = React.useMemo(() => {
     if (appMode === 'agent') {
-      return [...BASE_TABS, AGENT_TAB, TOOLS_TAB, ...TAIL_TABS]
+      return [...BASE_TABS, AGENT_TAB, TOOLS_TAB, FEISHU_TAB, ...TAIL_TABS]
     }
-    return [...BASE_TABS, TOOLS_TAB, ...TAIL_TABS]
+    return [...BASE_TABS, TOOLS_TAB, FEISHU_TAB, ...TAIL_TABS]
   }, [appMode])
 
   return (
