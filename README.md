@@ -1,5 +1,7 @@
 # Proma
 
+> **📖 新手？从这里开始 →** [**Proma 使用教程系列**](./tutorial/tutorial-1.md) — 从零开始配置环境、连接大模型，3-5 分钟即可上手。
+
 下一代集成通用 Agent 的 AI 桌面应用，支持对话、Agent、Agent Teams 等能力，本地优先、多供应商支持、完全开源。支持远程通过飞书机器人与 Agent 对话和交互，让你用手机也可以处理很多必要的工作。
 
 [English version README.md](./README.en.md)
