@@ -351,6 +351,8 @@ export function FeishuSettings(): React.ReactElement {
                 <div className="bg-muted/50 rounded-md p-3 font-mono text-xs space-y-0.5">
                   <div><span className="text-foreground/70">im:message</span> — 获取与发送单聊、群组消息</div>
                   <div><span className="text-foreground/70">im:message:send_as_bot</span> — 以机器人身份发送消息</div>
+                  <div><span className="text-foreground/70">im:message.group_at_msg:readonly</span> — 接收群聊中 @机器人 的消息</div>
+                  <div><span className="text-foreground/70">im:message.group_msg</span> — 读取群聊历史消息（群聊上下文）</div>
                   <div><span className="text-foreground/70">im:chat:readonly</span> — 获取群组信息</div>
                   <div><span className="text-foreground/70">im:resource</span> — 获取消息中的资源文件</div>
                 </div>

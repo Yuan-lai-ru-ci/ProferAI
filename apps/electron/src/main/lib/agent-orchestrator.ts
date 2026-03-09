@@ -625,7 +625,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -777,9 +777,15 @@ export class AgentOrchestrator {
         }
       }
 
-      // 10. 构建 MCP 服务器配置 + 记忆工具
+      // 10. 构建 MCP 服务器配置 + 记忆工具 + 自定义工具
       const mcpServers = this.buildMcpServers(workspaceSlug)
       await this.injectMemoryTools(sdk, mcpServers)
+
+      // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
+      if (customMcpServers) {
+        Object.assign(mcpServers, customMcpServers)
+        console.log(`[Agent 编排] 已合并 ${Object.keys(customMcpServers).length} 个自定义 MCP 服务器`)
+      }
 
       // 11. 构建动态上下文和最终 prompt
       const dynamicCtx = buildDynamicContext({
@@ -804,10 +810,11 @@ export class AgentOrchestrator {
 
       // 12. 读取应用设置 + 获取权限模式
       const appSettings = getSettings()
-      const permissionMode: PromaPermissionMode = workspaceSlug
-        ? getWorkspacePermissionMode(workspaceSlug)
-        : (appSettings.agentPermissionMode ?? 'smart')
-      console.log(`[Agent 编排] 权限模式: ${permissionMode}`)
+      const permissionMode: PromaPermissionMode = permissionModeOverride
+        ?? (workspaceSlug
+          ? getWorkspacePermissionMode(workspaceSlug)
+          : (appSettings.agentPermissionMode ?? 'smart'))
+      console.log(`[Agent 编排] 权限模式: ${permissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
 
       const canUseTool = permissionMode !== 'auto'
         ? permissionService.createCanUseTool(
@@ -883,6 +890,9 @@ export class AgentOrchestrator {
         onModelResolved: (model: string) => {
           resolvedModel = model
           console.log(`[Agent 编排] SDK 确认模型: ${resolvedModel}`)
+          // 通知渲染进程更新流式状态中的模型信息
+          const modelEvent: AgentEvent = { type: 'model_resolved', model }
+          this.eventBus.emit(sessionId, modelEvent)
         },
         onContextWindow: (cw: number) => {
           console.log(`[Agent 编排] 缓存 contextWindow: ${cw}`)

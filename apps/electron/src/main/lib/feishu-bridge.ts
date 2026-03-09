@@ -18,6 +18,10 @@ import type {
   FeishuTestResult,
   FeishuNotifyMode,
   FeishuNotificationSentPayload,
+  FeishuMention,
+  FeishuGroupInfo,
+  FeishuMessageContext,
+  FeishuChatMessage,
 } from '@proma/shared'
 import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@proma/shared'
 import { getFeishuConfig, getDecryptedAppSecret } from './feishu-config'
@@ -59,6 +63,9 @@ class FeishuBridge {
   /** 连接状态 */
   private status: FeishuBridgeState = { status: 'disconnected', activeBindings: 0 }
 
+  /** Bot 自身的 open_id（连接时获取，用于群聊 @Bot 精确检测） */
+  private botOpenId: string | null = null
+
   /** chatId → 绑定信息 */
   private chatBindings = new Map<string, FeishuChatBinding>()
   /** sessionId → chatId（反向索引） */
@@ -69,6 +76,15 @@ class FeishuBridge {
   private sessionNotifyModes = new Map<string, FeishuNotifyMode>()
   /** 默认通知目标 chatId（最后一个与 Bot 交互的飞书聊天） */
   private defaultNotifyChatId: string | null = null
+
+  /** chatId → 最近收到的用户消息 ID（用于群聊 thread reply） */
+  private lastUserMessageId = new Map<string, string>()
+  /** chatId → 群聊信息缓存 */
+  private groupInfoCache = new Map<string, FeishuGroupInfo>()
+  /** open_id → 用户显示名称缓存 */
+  private userNameCache = new Map<string, string>()
+  /** 群信息缓存有效期（毫秒）：1 小时 */
+  private static readonly GROUP_CACHE_TTL = 3600_000
 
   /** 消息去重（防止 SDK WebSocket 重复投递） */
   private recentMessageIds = new Set<string>()
@@ -101,6 +117,23 @@ class FeishuBridge {
         appSecret,
         appType: lark.AppType.SelfBuild,
       })
+
+      // 获取 Bot 自身的 open_id（用于群聊 @Bot 精确检测）
+      try {
+        // SDK 未暴露 bot.v3.info 语义方法，使用 httpInstance 直接调用
+        const botInfoResp = await this.client.httpInstance.get<{
+          code?: number
+          data?: { bot?: { open_id?: string } }
+        }>('https://open.feishu.cn/open-apis/bot/v3/info/')
+        this.botOpenId = botInfoResp?.data?.bot?.open_id ?? null
+        if (this.botOpenId) {
+          console.log(`[飞书 Bridge] Bot open_id: ${this.botOpenId.slice(0, 10)}...`)
+        } else {
+          console.warn('[飞书 Bridge] 未能获取 Bot open_id，群聊 @Bot 检测将使用回退策略')
+        }
+      } catch (error) {
+        console.warn('[飞书 Bridge] 获取 Bot info 失败（非致命）:', error)
+      }
 
       // 创建事件分发器
       // 重要：回调必须立即返回，不能 await 长时间操作
@@ -156,7 +189,11 @@ class FeishuBridge {
     this.recentMessageIds.clear()
     this.recentEventIds.clear()
     this.processingChats.clear()
+    this.lastUserMessageId.clear()
+    this.groupInfoCache.clear()
+    this.userNameCache.clear()
     this.defaultNotifyChatId = null
+    this.botOpenId = null
 
     this.updateStatus({ status: 'disconnected', activeBindings: 0 })
     console.log('[飞书 Bridge] 已停止')
@@ -261,6 +298,7 @@ class FeishuBridge {
     const messageType = message.message_type as string
     const chatType = message.chat_type as string
     const userId = (sender?.sender_id as Record<string, unknown>)?.open_id as string ?? 'unknown'
+    const mentions = message.mentions as FeishuMention[] | undefined
 
     // chatId 级处理锁：同一聊天同时只处理一条消息，防止 bot 回复被重入处理
     if (this.processingChats.has(chatId)) {
@@ -270,14 +308,14 @@ class FeishuBridge {
 
     // 群聊中仅处理 @Bot 的消息
     if (chatType === 'group') {
-      const mentions = message.mentions as Array<Record<string, unknown>> | undefined
-      const hasBotMention = mentions?.some(
-        (m) => (m as Record<string, unknown>).id?.toString()?.includes('app_id') ||
-               (m as Record<string, unknown>).key !== undefined
-      ) ?? false
-      if (!hasBotMention && mentions?.length === 0) {
+      if (!this.isBotMentioned(mentions)) {
         return
       }
+    }
+
+    // 记录群聊最近用户消息 ID（用于 thread reply）
+    if (chatType === 'group' && messageId) {
+      this.lastUserMessageId.set(chatId, messageId)
     }
 
     // 记录最近交互的 chatId 作为默认通知目标
@@ -297,79 +335,102 @@ class FeishuBridge {
 
     if (!text) return
 
+    // 获取群聊上下文
+    let groupName: string | undefined
+    let senderName: string | undefined
+    if (chatType === 'group') {
+      const [groupInfo, userName] = await Promise.all([
+        this.getGroupInfo(chatId),
+        this.getUserName(userId),
+      ])
+      groupName = groupInfo?.name
+      senderName = userName
+    }
+
+    // 构建消息上下文
+    const msgCtx: FeishuMessageContext = {
+      chatId,
+      senderOpenId: userId,
+      senderName,
+      messageId,
+      chatType: chatType as 'p2p' | 'group',
+      groupName,
+    }
+
     // 加锁：防止命令回复触发的事件被重入处理
     this.processingChats.add(chatId)
     try {
       // 命令路由
       if (text.startsWith('/')) {
-        await this.handleCommand(chatId, userId, text)
+        await this.handleCommand(msgCtx, text)
         return
       }
 
       // 普通文本 → 转发到会话
-      await this.handleUserMessage(chatId, userId, text)
+      await this.handleUserMessage(msgCtx, text)
     } finally {
       this.processingChats.delete(chatId)
     }
   }
 
-  private async handleCommand(chatId: string, userId: string, text: string): Promise<void> {
+  private async handleCommand(msgCtx: FeishuMessageContext, text: string): Promise<void> {
+    const { chatId } = msgCtx
     const [command, ...args] = text.split(/\s+/)
     const arg = args.join(' ').trim()
 
     switch (command?.toLowerCase()) {
       case '/help':
-        await this.sendCard(chatId, buildHelpCard())
+        await this.sendCardMessage(chatId, buildHelpCard())
         break
 
       case '/new':
-        await this.createNewSession(chatId, userId, 'agent', arg || undefined)
+        await this.createNewSession(msgCtx, 'agent', arg || undefined)
         break
 
       case '/chat':
-        await this.updateBindingMode(chatId, userId, 'chat')
+        await this.updateBindingMode(msgCtx, 'chat')
         break
 
       case '/agent':
-        await this.updateBindingMode(chatId, userId, 'agent')
+        await this.updateBindingMode(msgCtx, 'agent')
         break
 
       case '/list':
-        await this.handleListCommand(chatId, userId)
+        await this.handleListCommand(msgCtx)
         break
 
       case '/stop':
-        await this.handleStopCommand(chatId)
+        await this.handleStopCommand(msgCtx)
         break
 
       case '/switch': {
         if (!arg) {
-          await this.sendTextMessage(chatId, '用法: /switch <序号>（先用 /list 查看）')
+          await this.sendMessage(chatId, '用法: /switch <序号>（先用 /list 查看）')
           return
         }
-        await this.handleSwitchCommand(chatId, userId, arg)
+        await this.handleSwitchCommand(msgCtx, arg)
         break
       }
 
       case '/workspace': {
-        await this.handleWorkspaceCommand(chatId, userId, arg || undefined)
+        await this.handleWorkspaceCommand(msgCtx, arg || undefined)
         break
       }
 
       default:
-        await this.sendTextMessage(chatId, `未知命令: ${command}。输入 /help 查看帮助。`)
+        await this.sendMessage(chatId, `未知命令: ${command}。输入 /help 查看帮助。`)
     }
   }
 
   // ===== 会话管理 =====
 
   private async createNewSession(
-    chatId: string,
-    userId: string,
+    msgCtx: FeishuMessageContext,
     mode: 'agent' | 'chat',
     title?: string,
     overrideWorkspaceId?: string,
   ): Promise<void> {
+    const { chatId } = msgCtx
     const config = getFeishuConfig()
     const appSettings = getSettings()
 
@@ -381,14 +442,14 @@ class FeishuBridge {
     }
 
     if (!workspaceId) {
-      await this.sendTextMessage(chatId, '请先在 Proma 设置中创建工作区。')
+      await this.sendMessage(chatId, '请先在 Proma 设置中创建工作区。')
       return
     }
 
     // 渠道/模型：直接复用 Proma 应用当前设置
     const channelId = appSettings.agentChannelId
     if (!channelId) {
-      await this.sendTextMessage(chatId, '请先在 Proma Agent 设置中选择渠道。')
+      await this.sendMessage(chatId, '请先在 Proma Agent 设置中选择渠道。')
       return
     }
 
@@ -402,12 +463,14 @@ class FeishuBridge {
     // 绑定
     const binding: FeishuChatBinding = {
       chatId,
-      userId,
+      userId: msgCtx.senderOpenId,
       sessionId: session.id,
       workspaceId,
       channelId,
       modelId: appSettings.agentModelId ?? undefined,
       mode,
+      chatType: msgCtx.chatType,
+      groupName: msgCtx.groupName,
       createdAt: Date.now(),
     }
     this.chatBindings.set(chatId, binding)
@@ -424,22 +487,24 @@ class FeishuBridge {
     }
 
     const modeLabel = mode === 'agent' ? 'Agent' : 'Chat'
-    await this.sendTextMessage(chatId, `✅ 已创建 ${modeLabel} 会话 (${session.id.slice(0, 8)})`)
+    await this.sendMessage(chatId, `✅ 已创建 ${modeLabel} 会话 (${session.id.slice(0, 8)})`)
   }
 
-  private async updateBindingMode(chatId: string, _userId: string, mode: 'agent' | 'chat'): Promise<void> {
+  private async updateBindingMode(msgCtx: FeishuMessageContext, mode: 'agent' | 'chat'): Promise<void> {
+    const { chatId } = msgCtx
     const binding = this.chatBindings.get(chatId)
     if (binding) {
       binding.mode = mode
       const modeLabel = mode === 'agent' ? 'Agent' : 'Chat'
-      await this.sendTextMessage(chatId, `已切换到 ${modeLabel} 模式`)
+      await this.sendMessage(chatId, `已切换到 ${modeLabel} 模式`)
     } else {
       const modeLabel = mode === 'agent' ? 'Agent' : 'Chat'
-      await this.sendTextMessage(chatId, `当前没有会话。直接发送消息将自动创建 ${modeLabel} 会话，或使用 /new 创建。`)
+      await this.sendMessage(chatId, `当前没有会话。直接发送消息将自动创建 ${modeLabel} 会话，或使用 /new 创建。`)
     }
   }
 
-  private async handleListCommand(chatId: string, _userId: string): Promise<void> {
+  private async handleListCommand(msgCtx: FeishuMessageContext): Promise<void> {
+    const { chatId } = msgCtx
     const sessions = listAgentSessions()
     const workspaces = listAgentWorkspaces()
     const binding = this.chatBindings.get(chatId)
@@ -482,21 +547,23 @@ class FeishuBridge {
       wsItems.push({ id: '', name: '未分配工作区', sessions: orphanSessions })
     }
 
-    await this.sendCard(chatId, buildSessionListCard(wsItems, currentWorkspaceId))
+    await this.sendCardMessage(chatId, buildSessionListCard(wsItems, currentWorkspaceId))
   }
 
-  private async handleStopCommand(chatId: string): Promise<void> {
+  private async handleStopCommand(msgCtx: FeishuMessageContext): Promise<void> {
+    const { chatId } = msgCtx
     const binding = this.chatBindings.get(chatId)
     if (!binding) {
-      await this.sendTextMessage(chatId, '当前没有绑定的会话。')
+      await this.sendMessage(chatId, '当前没有绑定的会话。')
       return
     }
 
     stopAgent(binding.sessionId)
-    await this.sendTextMessage(chatId, '✅ 已停止 Agent')
+    await this.sendMessage(chatId, '✅ 已停止 Agent')
   }
 
-  private async handleSwitchCommand(chatId: string, userId: string, arg: string): Promise<void> {
+  private async handleSwitchCommand(msgCtx: FeishuMessageContext, arg: string): Promise<void> {
+    const { chatId } = msgCtx
     const sessions = listAgentSessions()
 
     // 支持序号（如 /switch 1）和 ID 前缀两种方式
@@ -506,7 +573,7 @@ class FeishuBridge {
       : sessions.find((s) => s.id.startsWith(arg))
 
     if (!match) {
-      await this.sendTextMessage(chatId, `未找到会话。使用 /list 查看可用会话。`)
+      await this.sendMessage(chatId, `未找到会话。使用 /list 查看可用会话。`)
       return
     }
 
@@ -520,22 +587,25 @@ class FeishuBridge {
     const config = getFeishuConfig()
     const binding: FeishuChatBinding = {
       chatId,
-      userId,
+      userId: msgCtx.senderOpenId,
       sessionId: match.id,
       workspaceId: match.workspaceId ?? config.defaultWorkspaceId ?? appSettings.agentWorkspaceId ?? '',
       channelId: match.channelId ?? appSettings.agentChannelId ?? '',
       modelId: appSettings.agentModelId ?? undefined,
       mode: 'agent',
+      chatType: msgCtx.chatType,
+      groupName: msgCtx.groupName,
       createdAt: Date.now(),
     }
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(match.id, chatId)
     this.updateStatus({ activeBindings: this.chatBindings.size })
 
-    await this.sendTextMessage(chatId, `✅ 已切换到会话: ${match.title} (${match.id.slice(0, 8)})`)
+    await this.sendMessage(chatId, `✅ 已切换到会话: ${match.title} (${match.id.slice(0, 8)})`)
   }
 
-  private async handleWorkspaceCommand(chatId: string, _userId: string, arg?: string): Promise<void> {
+  private async handleWorkspaceCommand(msgCtx: FeishuMessageContext, arg?: string): Promise<void> {
+    const { chatId } = msgCtx
     const workspaces = listAgentWorkspaces()
     const binding = this.chatBindings.get(chatId)
     const currentWorkspaceId = binding?.workspaceId
@@ -547,7 +617,7 @@ class FeishuBridge {
         name: w.name,
         isCurrent: w.id === currentWorkspaceId,
       }))
-      await this.sendCard(chatId, buildWorkspaceListCard(items))
+      await this.sendCardMessage(chatId, buildWorkspaceListCard(items))
       return
     }
 
@@ -561,7 +631,7 @@ class FeishuBridge {
 
     if (!match) {
       const available = workspaces.map((w, i) => `${i + 1}. ${w.name}`).join(', ')
-      await this.sendTextMessage(chatId, `未找到工作区 "${arg}"。可用: ${available}`)
+      await this.sendMessage(chatId, `未找到工作区 "${arg}"。可用: ${available}`)
       return
     }
 
@@ -587,17 +657,18 @@ class FeishuBridge {
         index: sessions.indexOf(s) + 1,
       }))
 
-    await this.sendCard(chatId, buildWorkspaceSwitchedCard(match.name, recentSessions))
+    await this.sendCardMessage(chatId, buildWorkspaceSwitchedCard(match.name, recentSessions))
   }
 
   // ===== 用户消息处理 =====
 
-  private async handleUserMessage(chatId: string, userId: string, text: string): Promise<void> {
+  private async handleUserMessage(msgCtx: FeishuMessageContext, text: string): Promise<void> {
+    const { chatId } = msgCtx
     let binding = this.chatBindings.get(chatId)
 
     // 自动创建会话
     if (!binding) {
-      await this.createNewSession(chatId, userId, 'agent')
+      await this.createNewSession(msgCtx, 'agent')
       binding = this.chatBindings.get(chatId)
       if (!binding) return
     }
@@ -611,22 +682,55 @@ class FeishuBridge {
 
     // 发送思考中指示
     const prefix = this.resolveContextPrefix(chatId)
-    await this.sendTextMessage(chatId, `${prefix}⏳ Agent 处理中...`)
+    await this.sendMessage(chatId, `${prefix}⏳ Agent 处理中...`)
 
     if (binding.mode === 'agent') {
+      // 群聊时注入发送者、群组上下文以及聊天历史到消息
+      let agentMessage = text
+      if (msgCtx.chatType === 'group') {
+        const contextParts: string[] = []
+        if (msgCtx.groupName) {
+          contextParts.push(`[群聊: ${msgCtx.groupName}]`)
+        }
+        if (msgCtx.senderName) {
+          contextParts.push(`[发送者: ${msgCtx.senderName}]`)
+        }
+
+        // 获取群聊历史消息作为上下文
+        const chatHistory = await this.fetchChatHistory(chatId)
+        const historyContext = this.formatChatHistoryContext(chatHistory)
+
+        const parts: string[] = []
+        if (contextParts.length > 0) parts.push(contextParts.join(' '))
+        if (historyContext) parts.push(historyContext)
+        parts.push(text)
+        agentMessage = parts.join('\n')
+      }
+
       // Agent 模式 — fire-and-forget，不阻塞事件回调
+      // 群聊时注入动态 MCP 工具（允许 Agent 主动拉取更多群聊历史）
+      let customMcpServers: Record<string, Record<string, unknown>> | undefined
+      if (msgCtx.chatType === 'group') {
+        const mcpServer = await this.createFeishuChatMcpServer(chatId)
+        if (mcpServer) {
+          customMcpServers = { feishu_chat: mcpServer as unknown as Record<string, unknown> }
+        }
+      }
+
       const input: AgentSendInput = {
         sessionId: binding.sessionId,
-        userMessage: text,
+        userMessage: agentMessage,
         channelId: binding.channelId,
         modelId: binding.modelId,
         workspaceId: binding.workspaceId,
+        permissionModeOverride: 'auto',
+        ...(customMcpServers && { customMcpServers }),
       }
 
       runAgentHeadless(input, {
         onError: (error) => {
           const errPrefix = this.resolveContextPrefix(chatId)
-          this.sendCard(chatId, buildErrorCard(`${errPrefix}${error}`)).catch(console.error)
+          this.sendCardMessage(chatId, buildErrorCard(`${errPrefix}${error}`)).catch(console.error)
           this.sessionBuffers.delete(binding!.sessionId)
         },
         onComplete: () => {
@@ -640,7 +744,7 @@ class FeishuBridge {
       })
     } else {
       // Chat 模式 — TODO: Phase 4 实现
-      await this.sendTextMessage(chatId, 'Chat 模式暂未实现，请使用 /agent 切换到 Agent 模式。')
+      await this.sendMessage(chatId, 'Chat 模式暂未实现，请使用 /agent 切换到 Agent 模式。')
       this.sessionBuffers.delete(binding.sessionId)
     }
   }
@@ -671,7 +775,7 @@ class FeishuBridge {
       const chatId = this.sessionToChat.get(sessionId)
       if (chatId) {
         const prefix = this.resolveContextPrefix(chatId)
-        this.sendCard(chatId, buildErrorCard(`${prefix}${event.message}`)).catch(console.error)
+        this.sendCardMessage(chatId, buildErrorCard(`${prefix}${event.message}`)).catch(console.error)
       }
       this.sessionBuffers.delete(sessionId)
     }
@@ -747,7 +851,7 @@ class FeishuBridge {
     const prefix = this.resolveContextPrefix(chatId)
 
     if (!result.text.trim()) {
-      await this.sendTextMessage(chatId, `${prefix}✅ Agent 已完成（无文本输出）`)
+      await this.sendMessage(chatId, `${prefix}✅ Agent 已完成（无文本输出）`)
       return
     }
 
@@ -760,7 +864,7 @@ class FeishuBridge {
 
     if (chunks.length === 1) {
       // 单条卡片
-      await this.sendCard(chatId, buildAgentReplyCard(prefixedResult))
+      await this.sendCardMessage(chatId, buildAgentReplyCard(prefixedResult))
     } else {
       // 多条消息
       for (let i = 0; i < chunks.length; i++) {
@@ -769,7 +873,7 @@ class FeishuBridge {
           toolSummaries: i === chunks.length - 1 ? result.toolSummaries : [],
           duration: i === chunks.length - 1 ? result.duration : 0,
         }
-        await this.sendCard(chatId, buildAgentReplyCard(chunkResult))
+        await this.sendCardMessage(chatId, buildAgentReplyCard(chunkResult))
       }
     }
   }
@@ -782,6 +886,321 @@ class FeishuBridge {
     if (set.size > FeishuBridge.DEDUP_MAX) {
       const first = set.values().next().value as string
       set.delete(first)
+    }
+  }
+
+  // ===== 群聊辅助方法 =====
+
+  /**
+   * 检测消息的 mentions 列表中是否包含 @Bot
+   *
+   * 优先用 botOpenId 精确匹配，未获取时回退为 "有 mention 就通过"。
+   */
+  private isBotMentioned(mentions: FeishuMention[] | undefined): boolean {
+    if (!mentions || mentions.length === 0) return false
+
+    if (this.botOpenId) {
+      return mentions.some((m) => m.id === this.botOpenId)
+    }
+
+    // 回退：botOpenId 未获取时，只要有 mention 就放行
+    console.warn('[飞书 Bridge] botOpenId 未获取，使用回退检测')
+    return mentions.length > 0
+  }
+
+  /**
+   * 获取群聊信息（带缓存，TTL 1 小时）
+   */
+  private async getGroupInfo(chatId: string): Promise<FeishuGroupInfo | null> {
+    const cached = this.groupInfoCache.get(chatId)
+    if (cached && Date.now() - cached.cachedAt < FeishuBridge.GROUP_CACHE_TTL) {
+      return cached
+    }
+
+    if (!this.client) return null
+
+    try {
+      const resp = await this.client.im.chat.get({
+        path: { chat_id: chatId },
+      })
+      const name = resp?.data?.name ?? '未知群组'
+      const description = resp?.data?.description
+
+      const info: FeishuGroupInfo = { chatId, name, description, cachedAt: Date.now() }
+      this.groupInfoCache.set(chatId, info)
+      return info
+    } catch (error) {
+      console.warn('[飞书 Bridge] 获取群聊信息失败:', error)
+      return null
+    }
+  }
+
+  /**
+   * 获取用户显示名称（带缓存）
+   *
+   * 失败时回退返回 open_id 前 8 位。
+   */
+  private async getUserName(openId: string): Promise<string> {
+    const cached = this.userNameCache.get(openId)
+    if (cached) return cached
+
+    if (!this.client) return openId.slice(0, 8)
+
+    try {
+      const resp = await this.client.contact.user.get({
+        path: { user_id: openId },
+        params: { user_id_type: 'open_id' },
+      })
+      const name = resp?.data?.user?.name
+      if (name) {
+        this.userNameCache.set(openId, name)
+        return name
+      }
+    } catch (error) {
+      console.warn('[飞书 Bridge] 获取用户信息失败:', error)
+    }
+
+    return openId.slice(0, 8)
+  }
+
+  // ===== 群聊消息历史 =====
+
+  /** 默认拉取的群聊历史消息数量 */
+  private static readonly DEFAULT_HISTORY_COUNT = 20
+
+  /**
+   * 获取聊天历史消息
+   *
+   * 调用 `im/v1/messages` 接口，按时间倒序拉取指定数量的消息。
+   * 需要 `im:message.group_msg` 权限。
+   */
+  private async fetchChatHistory(
+    chatId: string,
+    options?: {
+      pageSize?: number
+      beforeTimestamp?: number
+    },
+  ): Promise<FeishuChatMessage[]> {
+    if (!this.client) return []
+
+    try {
+      const pageSize = Math.min(options?.pageSize ?? FeishuBridge.DEFAULT_HISTORY_COUNT, 50)
+      const endTime = options?.beforeTimestamp
+        ? Math.floor(options.beforeTimestamp / 1000).toString()
+        : undefined
+
+      const resp = await this.client.im.message.list({
+        params: {
+          container_id_type: 'chat',
+          container_id: chatId,
+          sort_type: 'ByCreateTimeDesc',
+          page_size: pageSize,
+          ...(endTime && { end_time: endTime }),
+        },
+      })
+
+      if (resp.code !== 0) {
+        console.warn('[飞书 Bridge] 获取聊天历史失败:', resp.msg)
+        return []
+      }
+
+      const items = resp.data?.items ?? []
+      const messages: FeishuChatMessage[] = []
+
+      for (const item of items) {
+        // 跳过已删除的消息
+        if (item.deleted) continue
+
+        const senderId = item.sender?.id ?? 'unknown'
+        const senderType = (item.sender?.sender_type ?? 'unknown') as FeishuChatMessage['senderType']
+        const msgType = item.msg_type ?? 'unknown'
+        const createTime = Number(item.create_time ?? 0)
+
+        // 解析消息内容
+        const content = this.parseChatMessageContent(msgType, item.body?.content)
+
+        messages.push({
+          messageId: item.message_id ?? '',
+          senderId,
+          senderType,
+          msgType,
+          content,
+          createTime,
+        })
+      }
+
+      // 按时间正序返回（API 返回的是倒序）
+      messages.reverse()
+
+      // 异步解析发送者名称（不阻塞返回）
+      await this.resolveMessageSenderNames(messages)
+
+      return messages
+    } catch (error) {
+      console.warn('[飞书 Bridge] 获取聊天历史异常:', error)
+      return []
+    }
+  }
+
+  /**
+   * 解析消息内容为可读文本
+   */
+  private parseChatMessageContent(msgType: string, rawContent?: string): string {
+    if (!rawContent) return '[空消息]'
+
+    try {
+      switch (msgType) {
+        case 'text': {
+          const parsed = JSON.parse(rawContent) as { text?: string }
+          return parsed.text ?? ''
+        }
+        case 'post': {
+          // 富文本消息，提取纯文本
+          const parsed = JSON.parse(rawContent) as {
+            title?: string
+            content?: Array<Array<{ tag: string; text?: string }>>
+          }
+          const parts: string[] = []
+          if (parsed.title) parts.push(parsed.title)
+          for (const line of parsed.content ?? []) {
+            const lineText = line
+              .filter((el) => el.tag === 'text' && el.text)
+              .map((el) => el.text)
+              .join('')
+            if (lineText) parts.push(lineText)
+          }
+          return parts.join('\n') || '[富文本消息]'
+        }
+        case 'interactive':
+          return '[交互卡片]'
+        case 'image':
+          return '[图片]'
+        case 'file':
+          return '[文件]'
+        case 'audio':
+          return '[语音]'
+        case 'media':
+          return '[视频]'
+        case 'sticker':
+          return '[表情]'
+        case 'share_chat':
+          return '[群名片]'
+        case 'share_user':
+          return '[个人名片]'
+        default:
+          return `[${msgType}]`
+      }
+    } catch {
+      return `[${msgType}]`
+    }
+  }
+
+  /**
+   * 批量解析消息发送者名称
+   */
+  private async resolveMessageSenderNames(messages: FeishuChatMessage[]): Promise<void> {
+    const uniqueUserIds = new Set<string>()
+    for (const msg of messages) {
+      if (msg.senderType === 'user' && !this.userNameCache.has(msg.senderId)) {
+        uniqueUserIds.add(msg.senderId)
+      }
+    }
+
+    // 并发获取用户名称（最多 10 个并发）
+    const userIds = Array.from(uniqueUserIds).slice(0, 10)
+    await Promise.allSettled(userIds.map((id) => this.getUserName(id)))
+
+    // 回填名称
+    for (const msg of messages) {
+      if (msg.senderType === 'user') {
+        msg.senderName = this.userNameCache.get(msg.senderId)
+      } else if (msg.senderType === 'app') {
+        msg.senderName = 'Bot'
+      }
+    }
+  }
+
+  /**
+   * 将消息历史格式化为 Agent 可读的上下文文本
+   */
+  private formatChatHistoryContext(messages: FeishuChatMessage[]): string {
+    if (messages.length === 0) return ''
+
+    const lines = messages.map((msg) => {
+      const time = new Date(msg.createTime).toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+      const sender = msg.senderName ?? msg.senderId.slice(0, 8)
+      const role = msg.senderType === 'app' ? 'Bot' : sender
+      return `[${time}] ${role}: ${msg.content}`
+    })
+
+    return [
+      '--- 群聊历史消息（最近） ---',
+      ...lines,
+      '--- 历史消息结束 ---',
+    ].join('\n')
+  }
+
+  /**
+   * 创建飞书群聊 MCP 服务器（动态工具，仅在群聊 Agent 会话中注入）
+   *
+   * 提供 `fetch_group_chat_history` 工具，让 Agent 可以主动拉取更多群聊历史。
+   */
+  private async createFeishuChatMcpServer(
+    chatId: string,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const sdk = await import('@anthropic-ai/claude-agent-sdk')
+      const { z } = await import('zod')
+
+      const server = sdk.createSdkMcpServer({
+        name: 'feishu_chat',
+        version: '1.0.0',
+        tools: [
+          sdk.tool(
+            'fetch_group_chat_history',
+            '获取飞书群聊的历史消息。当你需要了解更多群聊上下文来完成任务时使用此工具。' +
+            '返回指定数量的历史消息，包含发送者、时间和内容。',
+            {
+              limit: z.number().min(1).max(50).optional()
+                .describe('要获取的消息数量（默认 20，最多 50）'),
+              before_timestamp: z.number().optional()
+                .describe('获取此时间戳（毫秒）之前的消息，用于向前翻页'),
+            },
+            async (args) => {
+              const messages = await this.fetchChatHistory(chatId, {
+                pageSize: args.limit,
+                beforeTimestamp: args.before_timestamp,
+              })
+
+              if (messages.length === 0) {
+                return {
+                  content: [{ type: 'text' as const, text: '没有更多历史消息。' }],
+                }
+              }
+
+              const formatted = this.formatChatHistoryContext(messages)
+              const oldestTimestamp = messages[0]?.createTime ?? 0
+
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text: `${formatted}\n\n（如需更早的消息，使用 before_timestamp: ${oldestTimestamp}）`,
+                }],
+              }
+            },
+            { annotations: { readOnlyHint: true } },
+          ),
+        ],
+      })
+
+      console.log('[飞书 Bridge] 已创建群聊 MCP 工具')
+      return server as unknown as Record<string, unknown>
+    } catch (error) {
+      console.warn('[飞书 Bridge] 创建群聊 MCP 工具失败:', error)
+      return null
     }
   }
 
@@ -840,6 +1259,80 @@ class FeishuBridge {
       if (sentId) this.addToDedup(this.recentMessageIds, sentId)
     } catch (error) {
       console.error('[飞书 Bridge] 发送卡片消息失败:', error)
+    }
+  }
+
+  // ===== 群聊 Thread Reply =====
+
+  /** 回复指定消息（文本，群聊线程回复） */
+  private async replyTextMessage(messageId: string, text: string): Promise<void> {
+    if (!this.client) return
+
+    try {
+      const resp = await this.client.im.message.reply({
+        path: { message_id: messageId },
+        data: {
+          content: JSON.stringify({ text }),
+          msg_type: 'text',
+        },
+      })
+      const sentId = (resp?.data as Record<string, unknown>)?.message_id as string | undefined
+      if (sentId) this.addToDedup(this.recentMessageIds, sentId)
+    } catch (error) {
+      console.error('[飞书 Bridge] 回复文本消息失败:', error)
+    }
+  }
+
+  /** 回复指定消息（卡片，群聊线程回复） */
+  private async replyCard(messageId: string, card: Record<string, unknown>): Promise<void> {
+    if (!this.client) return
+
+    try {
+      const resp = await this.client.im.message.reply({
+        path: { message_id: messageId },
+        data: {
+          content: JSON.stringify(card),
+          msg_type: 'interactive',
+        },
+      })
+      const sentId = (resp?.data as Record<string, unknown>)?.message_id as string | undefined
+      if (sentId) this.addToDedup(this.recentMessageIds, sentId)
+    } catch (error) {
+      console.error('[飞书 Bridge] 回复卡片消息失败:', error)
+    }
+  }
+
+  /**
+   * 发送文本消息到聊天（自动选择回复或新建）
+   *
+   * 群聊时使用 reply（线程回复），单聊时使用 create。
+   */
+  private async sendMessage(chatId: string, text: string): Promise<void> {
+    const binding = this.chatBindings.get(chatId)
+    const replyToId = binding?.chatType === 'group'
+      ? this.lastUserMessageId.get(chatId)
+      : undefined
+
+    if (replyToId) {
+      await this.replyTextMessage(replyToId, text)
+    } else {
+      await this.sendTextMessage(chatId, text)
+    }
+  }
+
+  /**
+   * 发送卡片消息到聊天（自动选择回复或新建）
+   */
+  private async sendCardMessage(chatId: string, card: Record<string, unknown>): Promise<void> {
+    const binding = this.chatBindings.get(chatId)
+    const replyToId = binding?.chatType === 'group'
+      ? this.lastUserMessageId.get(chatId)
+      : undefined
+
+    if (replyToId) {
+      await this.replyCard(replyToId, card)
+    } else {
+      await this.sendCard(chatId, card)
     }
   }
 
