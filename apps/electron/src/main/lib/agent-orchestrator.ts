@@ -271,11 +271,37 @@ function ensureRipgrepAvailable(cliPath: string): void {
 /** 最大回填消息条数 */
 const MAX_CONTEXT_MESSAGES = 20
 
+/** 单条工具摘要最大字符数 */
+const MAX_TOOL_SUMMARY_LENGTH = 200
+
+/**
+ * 从 assistant 消息的 events 中提取工具活动摘要
+ *
+ * 返回简要的工具名称 + 关键输入信息，帮助新 SDK 会话理解之前做过什么。
+ */
+function extractToolSummary(events: import('@proma/shared').AgentEvent[]): string {
+  const summaries: string[] = []
+  for (const event of events) {
+    if (event.type === 'tool_start') {
+      const input = event.input
+      // 提取关键输入参数（如 file_path、command 等）
+      const keyParam = input.file_path ?? input.command ?? input.path ?? input.query ?? ''
+      const paramStr = keyParam ? `: ${String(keyParam).slice(0, 100)}` : ''
+      summaries.push(`[tool: ${event.toolName}${paramStr}]`)
+    }
+  }
+  if (summaries.length === 0) return ''
+  const joined = summaries.join(' ')
+  return joined.length > MAX_TOOL_SUMMARY_LENGTH
+    ? joined.slice(0, MAX_TOOL_SUMMARY_LENGTH) + '...'
+    : joined
+}
+
 /**
  * 构建带历史上下文的 prompt
  *
  * 当 resume 不可用时，将最近消息拼接为上下文注入 prompt，
- * 让新 SDK 会话保留对话记忆。仅取 user/assistant 角色的文本内容。
+ * 让新 SDK 会话保留对话记忆。包含文本内容和工具活动摘要。
  */
 function buildContextPrompt(sessionId: string, currentUserMessage: string): string {
   const allMessages = getAgentSessionMessages(sessionId)
@@ -287,7 +313,17 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string): stri
   const recent = history.slice(-MAX_CONTEXT_MESSAGES)
   const lines = recent
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-    .map((m) => `[${m.role}]: ${m.content}`)
+    .map((m) => {
+      let line = `[${m.role}]: ${m.content}`
+      // assistant 消息附带工具活动摘要，减少迁移后的"失忆"感
+      if (m.role === 'assistant' && m.events && m.events.length > 0) {
+        const toolSummary = extractToolSummary(m.events)
+        if (toolSummary) {
+          line += `\n  工具活动: ${toolSummary}`
+        }
+      }
+      return line
+    })
 
   if (lines.length === 0) return currentUserMessage
 
