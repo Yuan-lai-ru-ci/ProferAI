@@ -28,6 +28,9 @@ import { getFeishuConfig, getDecryptedAppSecret } from './feishu-config'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
 import { listAgentWorkspaces, getAgentWorkspace } from './agent-workspace-manager'
+import { getAgentSessionWorkspacePath } from './config-paths'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { getSettings } from './settings-service'
 import { presenceService } from './feishu-presence'
 import {
@@ -44,6 +47,16 @@ import {
 import type { ToolSummary, FormattedAgentResult, WorkspaceListItem } from './feishu-message'
 
 // ===== 类型定义 =====
+
+/** 飞书图片附件（已下载，待保存到 session 工作目录） */
+interface FeishuImageAttachment {
+  /** 飞书 image_key */
+  imageKey: string
+  /** 图片二进制数据 */
+  data: Buffer
+  /** MIME 类型 */
+  mediaType: string
+}
 
 /** 会话累积缓冲 */
 interface SessionBuffer {
@@ -257,6 +270,80 @@ class FeishuBridge {
     }
   }
 
+  // ===== 飞书图片处理 =====
+
+  /**
+   * 从飞书下载图片
+   *
+   * 使用 im.messageResource.get API 获取消息中的图片资源。
+   */
+  private async downloadFeishuImage(messageId: string, imageKey: string): Promise<Buffer> {
+    if (!this.client) throw new Error('飞书 Client 未初始化')
+
+    const resp = await this.client.im.messageResource.get({
+      path: { message_id: messageId, file_key: imageKey },
+      params: { type: 'image' },
+    })
+
+    // Lark SDK 返回 Readable stream 或 Buffer
+    if (Buffer.isBuffer(resp)) return resp
+
+    if (resp && typeof (resp as NodeJS.ReadableStream).pipe === 'function') {
+      const chunks: Buffer[] = []
+      for await (const chunk of resp as AsyncIterable<Buffer>) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferLike))
+      }
+      return Buffer.concat(chunks)
+    }
+
+    return Buffer.from(resp as ArrayBufferLike)
+  }
+
+  /**
+   * 通过 magic bytes 推断图片 MIME 类型
+   */
+  private inferImageMediaType(buffer: Buffer): string {
+    if (buffer.length < 4) return 'image/jpeg'
+
+    // JPEG: FF D8 FF
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return 'image/jpeg'
+    // PNG: 89 50 4E 47
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return 'image/png'
+    // GIF: 47 49 46 38
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return 'image/gif'
+    // WebP: 52 49 46 46 ... 57 45 42 50
+    if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+        buffer.length >= 12 && buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+      return 'image/webp'
+    }
+
+    return 'image/jpeg'
+  }
+
+  /**
+   * 保存图片到 Agent session 工作目录
+   *
+   * @returns 图片文件的绝对路径
+   */
+  private saveImageToSession(
+    workspaceSlug: string,
+    sessionId: string,
+    imageKey: string,
+    mediaType: string,
+    data: Buffer,
+  ): string {
+    const sessionDir = getAgentSessionWorkspacePath(workspaceSlug, sessionId)
+    const ext = mediaType.split('/')[1] || 'jpg'
+    const filename = `feishu-${imageKey}.${ext}`
+    const targetPath = join(sessionDir, filename)
+
+    mkdirSync(sessionDir, { recursive: true })
+    writeFileSync(targetPath, data)
+    console.log(`[飞书 Bridge] 图片已保存: ${targetPath} (${data.length} bytes)`)
+
+    return targetPath
+  }
+
   // ===== 飞书消息处理 =====
 
   private async handleFeishuMessage(data: Record<string, unknown>): Promise<void> {
@@ -321,19 +408,40 @@ class FeishuBridge {
     // 记录最近交互的 chatId 作为默认通知目标
     this.defaultNotifyChatId = chatId
 
-    // 仅处理文本消息
-    if (messageType !== 'text') {
-      await this.sendTextMessage(chatId, '目前仅支持文本消息。')
+    // 仅处理文本和图片消息
+    if (messageType !== 'text' && messageType !== 'image') {
+      await this.sendTextMessage(chatId, '目前仅支持文本和图片消息。')
       return
     }
 
-    const content = JSON.parse(message.content as string) as { text?: string }
-    let text = content.text?.trim() ?? ''
+    // 解析消息内容
+    let text = ''
+    const imageAttachments: FeishuImageAttachment[] = []
 
-    // 去除 @Bot 的占位符（如 @_user_1）
-    text = text.replace(/@_user_\d+/g, '').trim()
+    if (messageType === 'text') {
+      const content = JSON.parse(message.content as string) as { text?: string }
+      text = content.text?.trim() ?? ''
+      // 去除 @Bot 的占位符（如 @_user_1）
+      text = text.replace(/@_user_\d+/g, '').trim()
+    } else if (messageType === 'image') {
+      const content = JSON.parse(message.content as string) as { image_key?: string }
+      if (content.image_key) {
+        try {
+          const imageData = await this.downloadFeishuImage(messageId, content.image_key)
+          const mediaType = this.inferImageMediaType(imageData)
+          if (imageData.length > 10 * 1024 * 1024) {
+            console.warn(`[飞书 Bridge] 图片较大: ${(imageData.length / 1024 / 1024).toFixed(1)}MB`)
+          }
+          imageAttachments.push({ imageKey: content.image_key, data: imageData, mediaType })
+        } catch (error) {
+          console.error('[飞书 Bridge] 下载图片失败:', error)
+          await this.sendCardMessage(chatId, buildErrorCard('图片下载失败，请重试。'))
+          return
+        }
+      }
+    }
 
-    if (!text) return
+    if (!text && imageAttachments.length === 0) return
 
     // 获取群聊上下文
     let groupName: string | undefined
@@ -366,8 +474,8 @@ class FeishuBridge {
         return
       }
 
-      // 普通文本 → 转发到会话
-      await this.handleUserMessage(msgCtx, text)
+      // 普通消息（文本/图片）→ 转发到会话
+      await this.handleUserMessage(msgCtx, text, imageAttachments)
     } finally {
       this.processingChats.delete(chatId)
     }
@@ -662,7 +770,11 @@ class FeishuBridge {
 
   // ===== 用户消息处理 =====
 
-  private async handleUserMessage(msgCtx: FeishuMessageContext, text: string): Promise<void> {
+  private async handleUserMessage(
+    msgCtx: FeishuMessageContext,
+    text: string,
+    imageAttachments: FeishuImageAttachment[] = [],
+  ): Promise<void> {
     const { chatId } = msgCtx
     let binding = this.chatBindings.get(chatId)
 
@@ -671,6 +783,22 @@ class FeishuBridge {
       await this.createNewSession(msgCtx, 'agent')
       binding = this.chatBindings.get(chatId)
       if (!binding) return
+    }
+
+    // 保存飞书图片到 session 工作目录，构建文件引用
+    let imageReferences = ''
+    if (imageAttachments.length > 0) {
+      const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
+      if (workspace) {
+        const refs: string[] = []
+        for (const img of imageAttachments) {
+          const savedPath = this.saveImageToSession(
+            workspace.slug, binding.sessionId, img.imageKey, img.mediaType, img.data,
+          )
+          refs.push(`- feishu-${img.imageKey}: ${savedPath}`)
+        }
+        imageReferences = `<attached_files>\n${refs.join('\n')}\n</attached_files>\n\n`
+      }
     }
 
     // 初始化缓冲
@@ -685,8 +813,11 @@ class FeishuBridge {
     await this.sendMessage(chatId, `${prefix}⏳ Agent 处理中...`)
 
     if (binding.mode === 'agent') {
+      // 构建消息：图片引用 + 文本
+      const userText = text || (imageAttachments.length > 0 ? '请查看上面附加的图片文件。' : '')
+      let agentMessage = imageReferences + userText
+
       // 群聊时注入发送者、群组上下文以及聊天历史到消息
-      let agentMessage = text
       if (msgCtx.chatType === 'group') {
         const contextParts: string[] = []
         if (msgCtx.groupName) {
@@ -703,7 +834,8 @@ class FeishuBridge {
         const parts: string[] = []
         if (contextParts.length > 0) parts.push(contextParts.join(' '))
         if (historyContext) parts.push(historyContext)
-        parts.push(text)
+        if (imageReferences) parts.push(imageReferences.trimEnd())
+        parts.push(userText)
         agentMessage = parts.join('\n')
       }
 
