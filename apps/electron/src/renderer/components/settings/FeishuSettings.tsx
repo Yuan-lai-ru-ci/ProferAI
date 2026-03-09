@@ -7,6 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
+import { toast } from 'sonner'
 import { Loader2, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SettingsSection } from './primitives/SettingsSection'
@@ -67,16 +68,17 @@ export function FeishuSettings(): React.ReactElement {
 
   // UI 状态
   const [loading, setLoading] = React.useState(true)
-  const [saving, setSaving] = React.useState(false)
-  const [savingDefaults, setSavingDefaults] = React.useState(false)
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<FeishuTestResult | null>(null)
 
   // 加载配置
   React.useEffect(() => {
-    window.electronAPI.getFeishuConfig().then((config) => {
+    Promise.all([
+      window.electronAPI.getFeishuConfig(),
+      window.electronAPI.getDecryptedFeishuSecret().catch(() => ''),
+    ]).then(([config, secret]) => {
       setAppId(config.appId ?? '')
-      // appSecret 不回显（加密态），留空表示不修改
+      if (secret) setAppSecret(secret)
       setDefaultWorkspaceId(config.defaultWorkspaceId ?? '')
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -88,11 +90,10 @@ export function FeishuSettings(): React.ReactElement {
     [workspaces]
   )
 
-  // 保存配置
+  // 保存配置（乐观更新）
   const handleSave = React.useCallback(async () => {
     if (!appId.trim()) return
 
-    setSaving(true)
     try {
       await window.electronAPI.saveFeishuConfig({
         enabled: true,
@@ -100,14 +101,14 @@ export function FeishuSettings(): React.ReactElement {
         appSecret: appSecret || '', // 空字符串时主进程保留原值
         defaultWorkspaceId: defaultWorkspaceId || undefined,
       })
-    } finally {
-      setSaving(false)
+      toast.success('飞书配置已保存')
+    } catch {
+      toast.error('保存飞书配置失败')
     }
   }, [appId, appSecret, defaultWorkspaceId])
 
-  // 保存默认配置
+  // 保存默认配置（乐观更新）
   const handleSaveDefaults = React.useCallback(async () => {
-    setSavingDefaults(true)
     try {
       await window.electronAPI.saveFeishuConfig({
         enabled: true,
@@ -115,8 +116,9 @@ export function FeishuSettings(): React.ReactElement {
         appSecret: '', // 空字符串 → 主进程保留原值
         defaultWorkspaceId: defaultWorkspaceId || undefined,
       })
-    } finally {
-      setSavingDefaults(false)
+      toast.success('默认配置已保存')
+    } catch {
+      toast.error('保存默认配置失败')
     }
   }, [appId, defaultWorkspaceId])
 
@@ -143,8 +145,14 @@ export function FeishuSettings(): React.ReactElement {
   const handleToggleBridge = React.useCallback(async () => {
     if (bridgeState.status === 'connected' || bridgeState.status === 'connecting') {
       await window.electronAPI.stopFeishuBridge()
+      toast.success('飞书 Bridge 已停止')
     } else {
-      await window.electronAPI.startFeishuBridge()
+      try {
+        await window.electronAPI.startFeishuBridge()
+        toast.success('飞书 Bridge 启动中...')
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '启动飞书 Bridge 失败')
+      }
     }
   }, [bridgeState.status])
 
@@ -210,7 +218,7 @@ export function FeishuSettings(): React.ReactElement {
             label="App Secret"
             value={appSecret}
             onChange={setAppSecret}
-            placeholder="输入新的 App Secret（留空保留原值）"
+            placeholder="输入 App Secret"
           />
         </SettingsCard>
 
@@ -227,10 +235,9 @@ export function FeishuSettings(): React.ReactElement {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={saving || !appId.trim()}
+            disabled={!appId.trim()}
           >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            <span>{saving ? '保存中...' : '保存配置'}</span>
+            保存配置
           </Button>
         </div>
 
@@ -263,7 +270,7 @@ export function FeishuSettings(): React.ReactElement {
           />
           {workspaceOptions.length > 0 && (
             <SettingsSelect
-              label="默认工作区"
+              label="默认工作区（可在飞书内通过 /workspaces 选择）"
               value={defaultWorkspaceId}
               onValueChange={setDefaultWorkspaceId}
               options={workspaceOptions}
@@ -276,10 +283,8 @@ export function FeishuSettings(): React.ReactElement {
           <Button
             size="sm"
             onClick={handleSaveDefaults}
-            disabled={savingDefaults}
           >
-            {savingDefaults && <Loader2 size={14} className="animate-spin" />}
-            <span>{savingDefaults ? '保存中...' : '保存默认配置'}</span>
+            保存默认配置
           </Button>
         </div>
       </SettingsSection>

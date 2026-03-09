@@ -105,6 +105,8 @@ export const FEISHU_IPC_CHANNELS = {
   GET_CONFIG: 'feishu:get-config',
   /** 保存飞书配置 */
   SAVE_CONFIG: 'feishu:save-config',
+  /** 获取解密后的 App Secret */
+  GET_DECRYPTED_SECRET: 'feishu:get-decrypted-secret',
   /** 测试飞书连接 */
   TEST_CONNECTION: 'feishu:test-connection',
   /** 启动 Bridge */

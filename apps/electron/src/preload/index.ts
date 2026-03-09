@@ -512,6 +512,8 @@ export interface ElectronAPI {
 
   /** 获取飞书配置 */
   getFeishuConfig: () => Promise<FeishuConfig>
+  /** 获取解密后的 App Secret */
+  getDecryptedFeishuSecret: () => Promise<string>
   /** 保存飞书配置（appSecret 为明文） */
   saveFeishuConfig: (input: FeishuConfigInput) => Promise<FeishuConfig>
   /** 测试飞书连接 */
@@ -1089,6 +1091,10 @@ const electronAPI: ElectronAPI = {
 
   getFeishuConfig: () => {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_CONFIG)
+  },
+
+  getDecryptedFeishuSecret: () => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_DECRYPTED_SECRET)
   },
 
   saveFeishuConfig: (input: FeishuConfigInput) => {

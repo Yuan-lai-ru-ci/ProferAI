@@ -86,8 +86,7 @@ class FeishuBridge {
   async start(): Promise<void> {
     const config = getFeishuConfig()
     if (!config.enabled || !config.appId || !config.appSecret) {
-      console.log('[飞书 Bridge] 未配置或未启用，跳过启动')
-      return
+      throw new Error('请先配置 App ID 和 App Secret')
     }
 
     this.updateStatus({ status: 'connecting' })

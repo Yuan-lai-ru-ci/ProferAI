@@ -151,7 +151,7 @@ import {
   getReleaseByTag,
 } from './lib/github-release-service'
 import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspace-watcher'
-import { getFeishuConfig, saveFeishuConfig } from './lib/feishu-config'
+import { getFeishuConfig, saveFeishuConfig, getDecryptedAppSecret } from './lib/feishu-config'
 import { feishuBridge } from './lib/feishu-bridge'
 import { presenceService } from './lib/feishu-presence'
 
@@ -1458,6 +1458,14 @@ export function registerIpcHandlers(): void {
     FEISHU_IPC_CHANNELS.GET_CONFIG,
     async (): Promise<FeishuConfig> => {
       return getFeishuConfig()
+    }
+  )
+
+  // 获取解密后的 App Secret
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.GET_DECRYPTED_SECRET,
+    async (): Promise<string> => {
+      return getDecryptedAppSecret()
     }
   )
 
