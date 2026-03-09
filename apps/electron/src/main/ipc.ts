@@ -98,6 +98,7 @@ import {
   openFileDialog,
 } from './lib/attachment-service'
 import { extractTextFromAttachment } from './lib/document-parser'
+import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
 import { checkEnvironment } from './lib/environment-checker'
@@ -339,6 +340,22 @@ export function registerIpcHandlers(): void {
       const current = conversations.find((c) => c.id === id)
       if (!current) throw new Error(`对话不存在: ${id}`)
       return updateConversationMeta(id, { pinned: !current.pinned })
+    }
+  )
+
+  // 获取教程内容
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.GET_TUTORIAL_CONTENT,
+    async (): Promise<string | null> => {
+      return getTutorialContent()
+    }
+  )
+
+  // 创建欢迎对话（含教程附件）
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.CREATE_WELCOME_CONVERSATION,
+    async (): Promise<ConversationMeta | null> => {
+      return createWelcomeConversation()
     }
   )
 

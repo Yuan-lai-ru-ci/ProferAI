@@ -1,4 +1,12 @@
-# 在这个系列开始之前（推荐看）
+# Proma 教程
+
+编辑时间：2026年3月9日
+编辑时版本：v0.7.0
+作者：Erlich Liu
+
+## 在开始之前（推荐看）
+
+![Proma 海报](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
 大家好，感谢大家关注开源通用 Agent 项目 Proma，我是 Proma 的开发者 Erlich。在正式开始关于 Proma 的使用教程前，我想先简单做个本次系列教程的介绍。
 
