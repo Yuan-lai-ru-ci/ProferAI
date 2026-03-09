@@ -46,6 +46,16 @@ export interface FeishuBridgeState {
 
 // ===== 聊天绑定 =====
 
+/** 更新绑定请求（渲染进程 → 主进程） */
+export interface FeishuUpdateBindingInput {
+  /** 目标 chat_id */
+  chatId: string
+  /** 新的工作区 ID（不传则不修改） */
+  workspaceId?: string
+  /** 新的会话 ID（不传则不修改） */
+  sessionId?: string
+}
+
 /** 飞书聊天 → Proma 会话绑定（内存态，不持久化） */
 export interface FeishuChatBinding {
   /** 飞书 chat_id（单聊或群聊） */
@@ -108,10 +118,12 @@ export interface FeishuNotificationSentPayload {
 export interface FeishuMention {
   /** 消息体中的占位符 key（如 "@_user_1"） */
   key: string
-  /** 被 @ 用户的 open_id（如 "ou_xxx"） */
-  id: string
+  /** 被 @ 用户/机器人的 ID，可能是字符串或 { open_id, union_id, user_id } 对象 */
+  id: string | { open_id?: string; union_id?: string; user_id?: string }
   /** 被 @ 用户的显示名称 */
   name: string
+  /** ID 类型（飞书 API 返回） */
+  id_type?: string
 }
 
 /** 飞书群聊信息缓存 */
@@ -122,8 +134,18 @@ export interface FeishuGroupInfo {
   name: string
   /** 群描述 */
   description?: string
+  /** 群成员列表 */
+  members?: FeishuGroupMember[]
   /** 缓存时间戳 */
   cachedAt: number
+}
+
+/** 飞书群成员信息 */
+export interface FeishuGroupMember {
+  /** 成员 open_id */
+  openId: string
+  /** 显示名称 */
+  name: string
 }
 
 /** 飞书消息上下文（贯穿消息处理链） */
@@ -183,6 +205,10 @@ export const FEISHU_IPC_CHANNELS = {
   STATUS_CHANGED: 'feishu:status-changed',
   /** 获取活跃绑定列表 */
   LIST_BINDINGS: 'feishu:list-bindings',
+  /** 更新绑定（修改工作区/会话） */
+  UPDATE_BINDING: 'feishu:update-binding',
+  /** 移除绑定 */
+  REMOVE_BINDING: 'feishu:remove-binding',
   /** 渲染进程 → 主进程：上报用户在场状态 */
   REPORT_PRESENCE: 'feishu:report-presence',
   /** 渲染进程 → 主进程：设置某会话的通知模式 */

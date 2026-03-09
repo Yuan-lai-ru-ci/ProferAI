@@ -76,6 +76,7 @@ import type {
   FeishuPresenceReport,
   FeishuNotifyMode,
   FeishuNotificationSentPayload,
+  FeishuUpdateBindingInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -534,6 +535,10 @@ export interface ElectronAPI {
   getFeishuStatus: () => Promise<FeishuBridgeState>
   /** 获取活跃绑定列表 */
   listFeishuBindings: () => Promise<FeishuChatBinding[]>
+  /** 更新绑定（修改工作区/会话） */
+  updateFeishuBinding: (input: FeishuUpdateBindingInput) => Promise<FeishuChatBinding | null>
+  /** 移除绑定 */
+  removeFeishuBinding: (chatId: string) => Promise<boolean>
   /** 上报用户在场状态 */
   reportFeishuPresence: (report: FeishuPresenceReport) => Promise<void>
   /** 设置会话通知模式 */
@@ -1136,6 +1141,14 @@ const electronAPI: ElectronAPI = {
 
   listFeishuBindings: () => {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.LIST_BINDINGS)
+  },
+
+  updateFeishuBinding: (input: FeishuUpdateBindingInput) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.UPDATE_BINDING, input)
+  },
+
+  removeFeishuBinding: (chatId: string) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REMOVE_BINDING, chatId)
   },
 
   reportFeishuPresence: (report: FeishuPresenceReport) => {

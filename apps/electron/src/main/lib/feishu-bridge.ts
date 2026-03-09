@@ -20,16 +20,18 @@ import type {
   FeishuNotificationSentPayload,
   FeishuMention,
   FeishuGroupInfo,
+  FeishuGroupMember,
   FeishuMessageContext,
   FeishuChatMessage,
+  FeishuUpdateBindingInput,
 } from '@proma/shared'
 import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@proma/shared'
 import { getFeishuConfig, getDecryptedAppSecret } from './feishu-config'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
-import { listAgentWorkspaces, getAgentWorkspace } from './agent-workspace-manager'
-import { getAgentSessionWorkspacePath } from './config-paths'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { listAgentWorkspaces, getAgentWorkspace, getWorkspaceCapabilities } from './agent-workspace-manager'
+import { getAgentSessionWorkspacePath, getFeishuBindingsPath } from './config-paths'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { getSettings } from './settings-service'
 import { presenceService } from './feishu-presence'
@@ -56,6 +58,16 @@ interface FeishuImageAttachment {
   data: Buffer
   /** MIME 类型 */
   mediaType: string
+}
+
+/** 飞书文件附件（已下载，待保存到 session 工作目录） */
+interface FeishuFileAttachment {
+  /** 飞书 file_key */
+  fileKey: string
+  /** 原始文件名 */
+  fileName: string
+  /** 文件二进制数据 */
+  data: Buffer
 }
 
 /** 会话累积缓冲 */
@@ -89,6 +101,11 @@ class FeishuBridge {
   private sessionNotifyModes = new Map<string, FeishuNotifyMode>()
   /** 默认通知目标 chatId（最后一个与 Bot 交互的飞书聊天） */
   private defaultNotifyChatId: string | null = null
+
+  /** chatId → 待合并的图片（纯图片消息暂存，等待后续文本一起发送） */
+  private pendingImages = new Map<string, FeishuImageAttachment[]>()
+  /** chatId → 待合并的文件（纯文件消息暂存，等待后续文本一起发送） */
+  private pendingFiles = new Map<string, FeishuFileAttachment[]>()
 
   /** chatId → 最近收到的用户消息 ID（用于群聊 thread reply） */
   private lastUserMessageId = new Map<string, string>()
@@ -133,14 +150,19 @@ class FeishuBridge {
 
       // 获取 Bot 自身的 open_id（用于群聊 @Bot 精确检测）
       try {
-        // SDK 未暴露 bot.v3.info 语义方法，使用 httpInstance 直接调用
-        const botInfoResp = await this.client.httpInstance.get<{
+        const botInfoResp = await this.client.request<{
           code?: number
-          data?: { bot?: { open_id?: string } }
-        }>('https://open.feishu.cn/open-apis/bot/v3/info/')
-        this.botOpenId = botInfoResp?.data?.bot?.open_id ?? null
+          bot?: { open_id?: string; app_name?: string }
+          data?: { bot?: { open_id?: string; app_name?: string } }
+        }>({
+          method: 'GET',
+          url: 'https://open.feishu.cn/open-apis/bot/v3/info/',
+        })
+        console.log('[飞书 Bridge] Bot info 响应:', JSON.stringify(botInfoResp, null, 2))
+        // 飞书 API 返回 bot 在顶层，Lark SDK 可能包装在 data 下，兼容两种
+        this.botOpenId = botInfoResp?.bot?.open_id ?? botInfoResp?.data?.bot?.open_id ?? null
         if (this.botOpenId) {
-          console.log(`[飞书 Bridge] Bot open_id: ${this.botOpenId.slice(0, 10)}...`)
+          console.log(`[飞书 Bridge] Bot open_id: ${this.botOpenId}`)
         } else {
           console.warn('[飞书 Bridge] 未能获取 Bot open_id，群聊 @Bot 检测将使用回退策略')
         }
@@ -172,6 +194,9 @@ class FeishuBridge {
       this.eventBusUnsubscribe = agentEventBus.on((sessionId, event) => {
         this.handleAgentEvent(sessionId, event)
       })
+
+      // 恢复之前的聊天绑定
+      this.loadBindings()
 
       this.updateStatus({ status: 'connected', connectedAt: Date.now() })
       console.log('[飞书 Bridge] 已连接')
@@ -217,6 +242,53 @@ class FeishuBridge {
     await this.start()
   }
 
+  // ===== 绑定持久化 =====
+
+  /** 从磁盘恢复聊天绑定（应用重启后延续之前的会话） */
+  private loadBindings(): void {
+    const bindingsPath = getFeishuBindingsPath()
+    if (!existsSync(bindingsPath)) return
+
+    try {
+      const raw = readFileSync(bindingsPath, 'utf-8')
+      const bindings = JSON.parse(raw) as FeishuChatBinding[]
+      const appSettings = getSettings()
+
+      for (const b of bindings) {
+        // 验证对应会话仍然存在
+        const session = getAgentSessionMeta(b.sessionId)
+        if (session) {
+          // 同步最新的渠道和模型设置（用户可能已更改）
+          if (appSettings.agentChannelId) {
+            b.channelId = appSettings.agentChannelId
+          }
+          if (appSettings.agentModelId) {
+            b.modelId = appSettings.agentModelId
+          }
+          this.chatBindings.set(b.chatId, b)
+          this.sessionToChat.set(b.sessionId, b.chatId)
+        }
+      }
+      if (this.chatBindings.size > 0) {
+        console.log(`[飞书 Bridge] 已恢复 ${this.chatBindings.size} 个聊天绑定`)
+        this.updateStatus({ activeBindings: this.chatBindings.size })
+      }
+    } catch (error) {
+      console.error('[飞书 Bridge] 加载绑定失败:', error)
+    }
+  }
+
+  /** 持久化聊天绑定到磁盘 */
+  private saveBindings(): void {
+    try {
+      const bindings = Array.from(this.chatBindings.values())
+      const bindingsPath = getFeishuBindingsPath()
+      writeFileSync(bindingsPath, JSON.stringify(bindings, null, 2), 'utf-8')
+    } catch (error) {
+      console.error('[飞书 Bridge] 保存绑定失败:', error)
+    }
+  }
+
   // ===== 状态查询 =====
 
   getStatus(): FeishuBridgeState {
@@ -225,6 +297,37 @@ class FeishuBridge {
 
   listBindings(): FeishuChatBinding[] {
     return Array.from(this.chatBindings.values())
+  }
+
+  /** 更新绑定的工作区/会话（从设置页调用） */
+  updateBinding(input: FeishuUpdateBindingInput): FeishuChatBinding | null {
+    const binding = this.chatBindings.get(input.chatId)
+    if (!binding) return null
+
+    if (input.workspaceId !== undefined) {
+      binding.workspaceId = input.workspaceId
+    }
+    if (input.sessionId !== undefined) {
+      // 清理旧反向索引，建立新的
+      this.sessionToChat.delete(binding.sessionId)
+      binding.sessionId = input.sessionId
+      this.sessionToChat.set(input.sessionId, input.chatId)
+    }
+
+    this.saveBindings()
+    return { ...binding }
+  }
+
+  /** 移除绑定（从设置页调用） */
+  removeBinding(chatId: string): boolean {
+    const binding = this.chatBindings.get(chatId)
+    if (!binding) return false
+
+    this.sessionToChat.delete(binding.sessionId)
+    this.chatBindings.delete(chatId)
+    this.updateStatus({ activeBindings: this.chatBindings.size })
+    this.saveBindings()
+    return true
   }
 
   setSessionNotifyMode(sessionId: string, mode: FeishuNotifyMode): void {
@@ -285,18 +388,51 @@ class FeishuBridge {
       params: { type: 'image' },
     })
 
-    // Lark SDK 返回 Readable stream 或 Buffer
-    if (Buffer.isBuffer(resp)) return resp
-
-    if (resp && typeof (resp as NodeJS.ReadableStream).pipe === 'function') {
-      const chunks: Buffer[] = []
-      for await (const chunk of resp as AsyncIterable<Buffer>) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferLike))
-      }
-      return Buffer.concat(chunks)
+    // Lark SDK 返回 { writeFile, getReadableStream, headers } 对象
+    const stream = resp.getReadableStream()
+    const chunks: Buffer[] = []
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
     }
+    return Buffer.concat(chunks)
+  }
 
-    return Buffer.from(resp as ArrayBufferLike)
+  /**
+   * 下载飞书消息中的文件资源
+   */
+  private async downloadFeishuFile(messageId: string, fileKey: string): Promise<Buffer> {
+    if (!this.client) throw new Error('飞书 Client 未初始化')
+
+    const resp = await this.client.im.messageResource.get({
+      path: { message_id: messageId, file_key: fileKey },
+      params: { type: 'file' },
+    })
+
+    const stream = resp.getReadableStream()
+    const chunks: Buffer[] = []
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    }
+    return Buffer.concat(chunks)
+  }
+
+  /**
+   * 保存文件到 Agent session 工作目录
+   */
+  private saveFileToSession(
+    workspaceSlug: string,
+    sessionId: string,
+    fileName: string,
+    data: Buffer,
+  ): string {
+    const sessionDir = getAgentSessionWorkspacePath(workspaceSlug, sessionId)
+    const targetPath = join(sessionDir, fileName)
+
+    mkdirSync(sessionDir, { recursive: true })
+    writeFileSync(targetPath, data)
+    console.log(`[飞书 Bridge] 文件已保存: ${targetPath} (${data.length} bytes)`)
+
+    return targetPath
   }
 
   /**
@@ -395,7 +531,7 @@ class FeishuBridge {
 
     // 群聊中仅处理 @Bot 的消息
     if (chatType === 'group') {
-      if (!this.isBotMentioned(mentions)) {
+      if (!(await this.isBotMentioned(mentions))) {
         return
       }
     }
@@ -408,21 +544,48 @@ class FeishuBridge {
     // 记录最近交互的 chatId 作为默认通知目标
     this.defaultNotifyChatId = chatId
 
-    // 仅处理文本和图片消息
-    if (messageType !== 'text' && messageType !== 'image') {
-      await this.sendTextMessage(chatId, '目前仅支持文本和图片消息。')
+    // 仅处理文本、图片、富文本和文件消息
+    const supportedTypes = new Set(['text', 'image', 'post', 'file'])
+    if (!supportedTypes.has(messageType)) {
+      console.log(`[飞书 Bridge] 不支持的消息类型: ${messageType}`)
+      await this.sendTextMessage(chatId, '目前仅支持文本、图片和文件消息。')
       return
     }
 
     // 解析消息内容
     let text = ''
     const imageAttachments: FeishuImageAttachment[] = []
+    const fileAttachments: FeishuFileAttachment[] = []
 
     if (messageType === 'text') {
       const content = JSON.parse(message.content as string) as { text?: string }
       text = content.text?.trim() ?? ''
       // 去除 @Bot 的占位符（如 @_user_1）
       text = text.replace(/@_user_\d+/g, '').trim()
+    } else if (messageType === 'post') {
+      // 富文本消息：提取文本和图片
+      const content = JSON.parse(message.content as string) as {
+        title?: string
+        content?: Array<Array<{ tag: string; text?: string; image_key?: string }>>
+      }
+      const textParts: string[] = []
+      if (content.title) textParts.push(content.title)
+      for (const line of content.content ?? []) {
+        for (const node of line) {
+          if (node.tag === 'text' && node.text) {
+            textParts.push(node.text)
+          } else if (node.tag === 'img' && node.image_key) {
+            try {
+              const imageData = await this.downloadFeishuImage(messageId, node.image_key)
+              const mediaType = this.inferImageMediaType(imageData)
+              imageAttachments.push({ imageKey: node.image_key, data: imageData, mediaType })
+            } catch (error) {
+              console.error('[飞书 Bridge] 下载富文本图片失败:', error)
+            }
+          }
+        }
+      }
+      text = textParts.join(' ').replace(/@_user_\d+/g, '').trim()
     } else if (messageType === 'image') {
       const content = JSON.parse(message.content as string) as { image_key?: string }
       if (content.image_key) {
@@ -439,9 +602,60 @@ class FeishuBridge {
           return
         }
       }
+    } else if (messageType === 'file') {
+      const content = JSON.parse(message.content as string) as { file_key?: string; file_name?: string }
+      if (content.file_key) {
+        try {
+          const fileData = await this.downloadFeishuFile(messageId, content.file_key)
+          const fileName = content.file_name || `feishu-${content.file_key}`
+          if (fileData.length > 50 * 1024 * 1024) {
+            await this.sendTextMessage(chatId, '文件过大（超过 50MB），暂不支持处理。')
+            return
+          }
+          fileAttachments.push({ fileKey: content.file_key, fileName, data: fileData })
+        } catch (error) {
+          console.error('[飞书 Bridge] 下载文件失败:', error)
+          await this.sendCardMessage(chatId, buildErrorCard('文件下载失败，请重试。'))
+          return
+        }
+      }
     }
 
-    if (!text && imageAttachments.length === 0) return
+    const hasAttachments = imageAttachments.length > 0 || fileAttachments.length > 0
+    if (!text && !hasAttachments) return
+
+    // 纯附件消息（无文本）：暂存，等待后续文本一起触发 Agent
+    if (!text && hasAttachments) {
+      if (imageAttachments.length > 0) {
+        const existing = this.pendingImages.get(chatId) ?? []
+        existing.push(...imageAttachments)
+        this.pendingImages.set(chatId, existing)
+      }
+      if (fileAttachments.length > 0) {
+        const existing = this.pendingFiles.get(chatId) ?? []
+        existing.push(...fileAttachments)
+        this.pendingFiles.set(chatId, existing)
+      }
+      const parts: string[] = []
+      const imgCount = this.pendingImages.get(chatId)?.length ?? 0
+      const fileCount = this.pendingFiles.get(chatId)?.length ?? 0
+      if (imgCount > 0) parts.push(`${imgCount} 张图片`)
+      if (fileCount > 0) parts.push(`${fileCount} 个文件`)
+      await this.sendTextMessage(chatId, `📎 已收到${parts.join('和')}，请继续发送文字消息来触发处理。`)
+      return
+    }
+
+    // 文本消息到达时，合并暂存的图片和文件
+    if (text && this.pendingImages.has(chatId)) {
+      const pending = this.pendingImages.get(chatId)!
+      imageAttachments.unshift(...pending)
+      this.pendingImages.delete(chatId)
+    }
+    if (text && this.pendingFiles.has(chatId)) {
+      const pending = this.pendingFiles.get(chatId)!
+      fileAttachments.unshift(...pending)
+      this.pendingFiles.delete(chatId)
+    }
 
     // 获取群聊上下文
     let groupName: string | undefined
@@ -474,8 +688,8 @@ class FeishuBridge {
         return
       }
 
-      // 普通消息（文本/图片）→ 转发到会话
-      await this.handleUserMessage(msgCtx, text, imageAttachments)
+      // 普通消息（文本/图片/文件）→ 转发到会话
+      await this.handleUserMessage(msgCtx, text, imageAttachments, fileAttachments)
     } finally {
       this.processingChats.delete(chatId)
     }
@@ -524,6 +738,10 @@ class FeishuBridge {
         await this.handleWorkspaceCommand(msgCtx, arg || undefined)
         break
       }
+
+      case '/now':
+        await this.handleNowCommand(msgCtx)
+        break
 
       default:
         await this.sendMessage(chatId, `未知命令: ${command}。输入 /help 查看帮助。`)
@@ -584,6 +802,7 @@ class FeishuBridge {
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(session.id, chatId)
     this.updateStatus({ activeBindings: this.chatBindings.size })
+    this.saveBindings()
 
     // 通知渲染进程刷新会话列表（复用 TITLE_UPDATED 通道触发列表刷新）
     const windows = BrowserWindow.getAllWindows()
@@ -708,6 +927,7 @@ class FeishuBridge {
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(match.id, chatId)
     this.updateStatus({ activeBindings: this.chatBindings.size })
+    this.saveBindings()
 
     await this.sendMessage(chatId, `✅ 已切换到会话: ${match.title} (${match.id.slice(0, 8)})`)
   }
@@ -748,6 +968,7 @@ class FeishuBridge {
       this.sessionToChat.delete(binding.sessionId)
       this.chatBindings.delete(chatId)
       this.updateStatus({ activeBindings: this.chatBindings.size })
+      this.saveBindings()
     }
 
     // 更新飞书配置的默认工作区（下次自动创建会话时使用）
@@ -768,12 +989,97 @@ class FeishuBridge {
     await this.sendCardMessage(chatId, buildWorkspaceSwitchedCard(match.name, recentSessions))
   }
 
+  private async handleNowCommand(msgCtx: FeishuMessageContext): Promise<void> {
+    const { chatId } = msgCtx
+    const binding = this.chatBindings.get(chatId)
+
+    const lines: string[] = []
+
+    // 会话信息
+    if (binding) {
+      const session = getAgentSessionMeta(binding.sessionId)
+      lines.push(`**会话**: ${session?.title ?? '未知'} (\`${binding.sessionId.slice(0, 8)}\`)`)
+      lines.push(`**模式**: ${binding.mode === 'agent' ? 'Agent' : 'Chat'}`)
+    } else {
+      lines.push('**会话**: 未绑定（发送消息将自动创建）')
+    }
+
+    // 工作区信息
+    const workspaceId = binding?.workspaceId
+    const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
+    if (workspace) {
+      lines.push(`**工作区**: ${workspace.name} (\`${workspace.slug}\`)`)
+
+      // MCP Servers
+      const capabilities = getWorkspaceCapabilities(workspace.slug)
+      if (capabilities.mcpServers.length > 0) {
+        lines.push('')
+        lines.push('**MCP Servers**:')
+        for (const mcp of capabilities.mcpServers) {
+          const status = mcp.enabled !== false ? '✅' : '⏸️'
+          lines.push(`  ${status} ${mcp.name}`)
+        }
+      } else {
+        lines.push('**MCP Servers**: 无')
+      }
+
+      // Skills
+      if (capabilities.skills.length > 0) {
+        lines.push('')
+        lines.push('**Skills**:')
+        for (const skill of capabilities.skills) {
+          const status = skill.enabled !== false ? '✅' : '⏸️'
+          lines.push(`  ${status} ${skill.name}`)
+        }
+      } else {
+        lines.push('**Skills**: 无')
+      }
+
+      // 工作区文件列表
+      const { getAgentWorkspacePath: getWsPath } = await import('./config-paths')
+      const wsPath = getWsPath(workspace.slug)
+      try {
+        const entries = readdirSync(wsPath, { withFileTypes: true })
+        const fileList = entries
+          .filter((e) => !e.name.startsWith('.') && e.name !== 'mcp.json' && e.name !== 'config.json' && e.name !== 'skills' && e.name !== 'skills-inactive')
+          .map((e) => e.isDirectory() ? `📁 ${e.name}/` : `📄 ${e.name}`)
+        if (fileList.length > 0) {
+          lines.push('')
+          lines.push('**工作区文件**:')
+          for (const f of fileList.slice(0, 20)) {
+            lines.push(`  ${f}`)
+          }
+          if (fileList.length > 20) {
+            lines.push(`  ... 还有 ${fileList.length - 20} 项`)
+          }
+        }
+      } catch {
+        // 目录不存在或无法读取，忽略
+      }
+    } else {
+      lines.push('**工作区**: 未设置')
+    }
+
+    const card: Record<string, unknown> = {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: '当前状态' },
+        template: 'blue',
+      },
+      elements: [
+        { tag: 'markdown', content: lines.join('\n') },
+      ],
+    }
+    await this.sendCardMessage(chatId, card)
+  }
+
   // ===== 用户消息处理 =====
 
   private async handleUserMessage(
     msgCtx: FeishuMessageContext,
     text: string,
     imageAttachments: FeishuImageAttachment[] = [],
+    fileAttachments: FeishuFileAttachment[] = [],
   ): Promise<void> {
     const { chatId } = msgCtx
     let binding = this.chatBindings.get(chatId)
@@ -785,21 +1091,26 @@ class FeishuBridge {
       if (!binding) return
     }
 
-    // 保存飞书图片到 session 工作目录，构建文件引用
-    let imageReferences = ''
-    if (imageAttachments.length > 0) {
-      const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
-      if (workspace) {
-        const refs: string[] = []
-        for (const img of imageAttachments) {
-          const savedPath = this.saveImageToSession(
-            workspace.slug, binding.sessionId, img.imageKey, img.mediaType, img.data,
-          )
-          refs.push(`- feishu-${img.imageKey}: ${savedPath}`)
-        }
-        imageReferences = `<attached_files>\n${refs.join('\n')}\n</attached_files>\n\n`
+    // 保存飞书图片和文件到 session 工作目录，构建文件引用
+    const attachedRefs: string[] = []
+    const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
+    if (workspace) {
+      for (const img of imageAttachments) {
+        const savedPath = this.saveImageToSession(
+          workspace.slug, binding.sessionId, img.imageKey, img.mediaType, img.data,
+        )
+        attachedRefs.push(`- feishu-${img.imageKey}: ${savedPath}`)
+      }
+      for (const file of fileAttachments) {
+        const savedPath = this.saveFileToSession(
+          workspace.slug, binding.sessionId, file.fileName, file.data,
+        )
+        attachedRefs.push(`- ${file.fileName}: ${savedPath}`)
       }
     }
+    const fileReferences = attachedRefs.length > 0
+      ? `<attached_files>\n${attachedRefs.join('\n')}\n</attached_files>\n\n`
+      : ''
 
     // 初始化缓冲
     this.sessionBuffers.set(binding.sessionId, {
@@ -813,9 +1124,10 @@ class FeishuBridge {
     await this.sendMessage(chatId, `${prefix}⏳ Agent 处理中...`)
 
     if (binding.mode === 'agent') {
-      // 构建消息：图片引用 + 文本
-      const userText = text || (imageAttachments.length > 0 ? '请查看上面附加的图片文件。' : '')
-      let agentMessage = imageReferences + userText
+      // 构建消息：附件引用 + 文本
+      const hasAnyAttachment = imageAttachments.length > 0 || fileAttachments.length > 0
+      const userText = text || (hasAnyAttachment ? '请查看上面附加的文件。' : '')
+      let agentMessage = fileReferences + userText
 
       // 群聊时注入发送者、群组上下文以及聊天历史到消息
       if (msgCtx.chatType === 'group') {
@@ -827,6 +1139,18 @@ class FeishuBridge {
           contextParts.push(`[发送者: ${msgCtx.senderName}]`)
         }
 
+        // 注入群成员列表（方便 Agent @某人）
+        const groupInfo = this.groupInfoCache.get(chatId)
+        if (groupInfo?.members && groupInfo.members.length > 0) {
+          const membersExceptBot = groupInfo.members
+            .filter((m) => m.openId !== this.botOpenId)
+          const memberList = membersExceptBot
+            .map((m) => `${m.name}(${m.openId})`)
+            .join(', ')
+          contextParts.push(`[群成员: ${memberList}]`)
+          contextParts.push('[提示: 如需 @某人，请直接使用 @姓名 格式，如 @Alice，系统会自动转换为飞书 @mention]')
+        }
+
         // 获取群聊历史消息作为上下文
         const chatHistory = await this.fetchChatHistory(chatId)
         const historyContext = this.formatChatHistoryContext(chatHistory)
@@ -834,7 +1158,7 @@ class FeishuBridge {
         const parts: string[] = []
         if (contextParts.length > 0) parts.push(contextParts.join(' '))
         if (historyContext) parts.push(historyContext)
-        if (imageReferences) parts.push(imageReferences.trimEnd())
+        if (fileReferences) parts.push(fileReferences.trimEnd())
         parts.push(userText)
         agentMessage = parts.join('\n')
       }
@@ -849,11 +1173,16 @@ class FeishuBridge {
         }
       }
 
+      // 使用最新的渠道和模型设置（用户可能在运行中更改）
+      const latestSettings = getSettings()
+      const channelId = latestSettings.agentChannelId || binding.channelId
+      const modelId = latestSettings.agentModelId || binding.modelId
+
       const input: AgentSendInput = {
         sessionId: binding.sessionId,
         userMessage: agentMessage,
-        channelId: binding.channelId,
-        modelId: binding.modelId,
+        channelId,
+        modelId,
         workspaceId: binding.workspaceId,
         permissionModeOverride: 'auto',
         ...(customMcpServers && { customMcpServers }),
@@ -980,34 +1309,68 @@ class FeishuBridge {
   }
 
   private async sendAgentReply(chatId: string, result: FormattedAgentResult): Promise<void> {
-    const prefix = this.resolveContextPrefix(chatId)
+    const subtitle = this.resolveContextSubtitle(chatId)
 
     if (!result.text.trim()) {
-      await this.sendMessage(chatId, `${prefix}✅ Agent 已完成（无文本输出）`)
+      await this.sendMessage(chatId, `${subtitle ? `${subtitle} | ` : ''}✅ Agent 已完成（无文本输出）`)
       return
     }
 
-    // 在正文前追加上下文前缀
-    const prefixedResult: FormattedAgentResult = {
+    // 群聊时，将 @Name 转换为飞书 <at> 标签
+    const binding = this.chatBindings.get(chatId)
+    const processedResult: FormattedAgentResult = {
       ...result,
-      text: `${prefix}\n${result.text}`,
+      text: binding?.chatType === 'group'
+        ? this.convertMentionsToAtTags(result.text, chatId)
+        : result.text,
     }
-    const chunks = splitLongContent(prefixedResult.text)
+
+    const chunks = splitLongContent(processedResult.text)
 
     if (chunks.length === 1) {
       // 单条卡片
-      await this.sendCardMessage(chatId, buildAgentReplyCard(prefixedResult))
+      await this.sendCardMessage(chatId, buildAgentReplyCard(processedResult, subtitle))
     } else {
       // 多条消息
       for (let i = 0; i < chunks.length; i++) {
         const chunkResult: FormattedAgentResult = {
           text: chunks[i]!,
-          toolSummaries: i === chunks.length - 1 ? result.toolSummaries : [],
-          duration: i === chunks.length - 1 ? result.duration : 0,
+          toolSummaries: i === chunks.length - 1 ? processedResult.toolSummaries : [],
+          duration: i === chunks.length - 1 ? processedResult.duration : 0,
         }
-        await this.sendCardMessage(chatId, buildAgentReplyCard(chunkResult))
+        await this.sendCardMessage(chatId, buildAgentReplyCard(chunkResult, subtitle))
       }
     }
+  }
+
+  /**
+   * 将 Agent 文本中的 @Name 转换为飞书卡片 markdown 的 <at id=open_id>Name</at> 格式
+   *
+   * 匹配规则：@Name 中的 Name 必须与群成员缓存中的某个成员名称完全匹配。
+   */
+  private convertMentionsToAtTags(text: string, chatId: string): string {
+    const groupInfo = this.groupInfoCache.get(chatId)
+    if (!groupInfo?.members || groupInfo.members.length === 0) return text
+
+    // 构建 name → openId 映射（排除 Bot 自身）
+    const nameToId = new Map<string, string>()
+    for (const m of groupInfo.members) {
+      if (m.openId !== this.botOpenId) {
+        nameToId.set(m.name, m.openId)
+      }
+    }
+    if (nameToId.size === 0) return text
+
+    // 按名称长度降序排列，避免短名称先匹配导致长名称被截断
+    const names = Array.from(nameToId.keys()).sort((a, b) => b.length - a.length)
+    // 构建正则：匹配 @Name（Name 为群成员名称）
+    const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    const pattern = new RegExp(`@(${escaped.join('|')})(?![\\w])`, 'g')
+
+    return text.replace(pattern, (_, name: string) => {
+      const openId = nameToId.get(name)
+      return openId ? `<at id=${openId}>${name}</at>` : `@${name}`
+    })
   }
 
   // ===== 飞书 API =====
@@ -1024,20 +1387,62 @@ class FeishuBridge {
   // ===== 群聊辅助方法 =====
 
   /**
+   * 从 mention.id 中提取 open_id
+   *
+   * 飞书事件中 mention.id 可能是字符串（如 "all"）或对象 { open_id, union_id, user_id }。
+   */
+  private extractMentionOpenId(mention: FeishuMention): string | null {
+    const { id } = mention
+    if (typeof id === 'string') return id
+    if (typeof id === 'object' && id !== null) return id.open_id ?? null
+    return null
+  }
+
+  /**
    * 检测消息的 mentions 列表中是否包含 @Bot
    *
-   * 优先用 botOpenId 精确匹配，未获取时回退为 "有 mention 就通过"。
+   * 优先用 botOpenId 精确匹配；未获取时尝试重新获取。
+   * 飞书群聊 @所有人 时 mention.id 为 "all"，直接排除。
    */
-  private isBotMentioned(mentions: FeishuMention[] | undefined): boolean {
+  private async isBotMentioned(mentions: FeishuMention[] | undefined): Promise<boolean> {
     if (!mentions || mentions.length === 0) return false
 
-    if (this.botOpenId) {
-      return mentions.some((m) => m.id === this.botOpenId)
+    // 提取所有 mention 的 open_id，排除 @所有人
+    const mentionIds = mentions
+      .map((m) => ({ name: m.name, openId: this.extractMentionOpenId(m) }))
+      .filter((m) => m.openId && m.openId !== 'all')
+    if (mentionIds.length === 0) return false
+
+    // 如果 botOpenId 未获取，尝试重新获取
+    if (!this.botOpenId && this.client) {
+      try {
+        const botInfoResp = await this.client.request<{
+          bot?: { open_id?: string }
+          data?: { bot?: { open_id?: string } }
+        }>({
+          method: 'GET',
+          url: 'https://open.feishu.cn/open-apis/bot/v3/info/',
+        })
+        this.botOpenId = botInfoResp?.bot?.open_id ?? botInfoResp?.data?.bot?.open_id ?? null
+        if (this.botOpenId) {
+          console.log(`[飞书 Bridge] 延迟获取 Bot open_id 成功: ${this.botOpenId}`)
+        }
+      } catch (error) {
+        console.warn('[飞书 Bridge] 延迟获取 Bot info 失败:', error)
+      }
     }
 
-    // 回退：botOpenId 未获取时，只要有 mention 就放行
-    console.warn('[飞书 Bridge] botOpenId 未获取，使用回退检测')
-    return mentions.length > 0
+    if (this.botOpenId) {
+      const matched = mentionIds.some((m) => m.openId === this.botOpenId)
+      if (!matched) {
+        console.log(`[飞书 Bridge] @Bot 未匹配 — botOpenId=${this.botOpenId}, mentions=[${mentionIds.map((m) => `${m.name}(${m.openId})`).join(', ')}]`)
+      }
+      return matched
+    }
+
+    // botOpenId 仍未获取：拒绝，避免 @其他人误触发
+    console.warn(`[飞书 Bridge] botOpenId 未获取，无法精确匹配，跳过消息（mentions: ${mentionIds.map((m) => `${m.name}(${m.openId})`).join(', ')}）`)
+    return false
   }
 
   /**
@@ -1052,18 +1457,46 @@ class FeishuBridge {
     if (!this.client) return null
 
     try {
-      const resp = await this.client.im.chat.get({
-        path: { chat_id: chatId },
-      })
-      const name = resp?.data?.name ?? '未知群组'
-      const description = resp?.data?.description
+      const [chatResp, members] = await Promise.all([
+        this.client.im.chat.get({ path: { chat_id: chatId } }),
+        this.fetchGroupMembers(chatId),
+      ])
+      const name = chatResp?.data?.name ?? '未知群组'
+      const description = chatResp?.data?.description
 
-      const info: FeishuGroupInfo = { chatId, name, description, cachedAt: Date.now() }
+      const info: FeishuGroupInfo = { chatId, name, description, members, cachedAt: Date.now() }
       this.groupInfoCache.set(chatId, info)
+
+      // 同时填充 userNameCache
+      for (const m of members) {
+        this.userNameCache.set(m.openId, m.name)
+      }
+
       return info
     } catch (error) {
       console.warn('[飞书 Bridge] 获取群聊信息失败:', error)
       return null
+    }
+  }
+
+  /**
+   * 拉取群成员列表（最多 200 人，不含机器人）
+   */
+  private async fetchGroupMembers(chatId: string): Promise<FeishuGroupMember[]> {
+    if (!this.client) return []
+
+    try {
+      const resp = await this.client.im.chatMembers.get({
+        path: { chat_id: chatId },
+        params: { member_id_type: 'open_id', page_size: 100 },
+      })
+      const items = resp?.data?.items ?? []
+      return items
+        .filter((item) => item.member_id && item.name)
+        .map((item) => ({ openId: item.member_id!, name: item.name! }))
+    } catch (error) {
+      console.warn('[飞书 Bridge] 获取群成员列表失败:', error)
+      return []
     }
   }
 
@@ -1352,6 +1785,20 @@ class FeishuBridge {
     const sessName = session?.title ?? binding.sessionId.slice(0, 8)
 
     return `[${wsName}]->[${sessName}]：`
+  }
+
+  /** 获取卡片 header subtitle 用的上下文描述 */
+  private resolveContextSubtitle(chatId: string): string {
+    const binding = this.chatBindings.get(chatId)
+    if (!binding) return ''
+
+    const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
+    const session = getAgentSessionMeta(binding.sessionId)
+
+    const wsName = workspace?.name ?? '默认工作区'
+    const sessName = session?.title ?? binding.sessionId.slice(0, 8)
+
+    return `${wsName} · ${sessName}`
   }
 
   private async sendTextMessage(chatId: string, text: string): Promise<void> {

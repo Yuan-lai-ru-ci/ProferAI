@@ -65,6 +65,7 @@ import type {
   FeishuChatBinding,
   FeishuPresenceReport,
   FeishuNotifyMode,
+  FeishuUpdateBindingInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -1538,6 +1539,22 @@ export function registerIpcHandlers(): void {
     FEISHU_IPC_CHANNELS.LIST_BINDINGS,
     async (): Promise<FeishuChatBinding[]> => {
       return feishuBridge.listBindings()
+    }
+  )
+
+  // 更新绑定（工作区/会话）
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.UPDATE_BINDING,
+    async (_, input: FeishuUpdateBindingInput): Promise<FeishuChatBinding | null> => {
+      return feishuBridge.updateBinding(input)
+    }
+  )
+
+  // 移除绑定
+  ipcMain.handle(
+    FEISHU_IPC_CHANNELS.REMOVE_BINDING,
+    async (_, chatId: string): Promise<boolean> => {
+      return feishuBridge.removeBinding(chatId)
     }
   )
 
