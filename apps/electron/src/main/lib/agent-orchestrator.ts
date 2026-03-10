@@ -27,12 +27,12 @@ import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
-import { getAdapter, fetchTitle } from '@proma/core'
+import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk } from '@proma/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendAgentMessage, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspacePermissionMode } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPromptAppend, buildDynamicContext } from './agent-prompt-builder'
@@ -387,15 +387,14 @@ export class AgentOrchestrator {
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       // 启用 Tasks 功能
       CLAUDE_CODE_ENABLE_TASKS: 'true',
+      // 配置隔离：让 SDK 使用独立的配置目录，不读取用户的 ~/.claude.json
+      CLAUDE_CONFIG_DIR: getSdkConfigDir(),
     }
 
     // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入
+    // 使用统一的 normalizeAnthropicBaseUrlForSdk 规范化，SDK 内部会自动拼接 /v1/messages
     if (baseUrl && baseUrl !== DEFAULT_ANTHROPIC_URL) {
-      sdkEnv.ANTHROPIC_BASE_URL = baseUrl
-        .trim()
-        .replace(/\/+$/, '')
-        .replace(/\/v\d+\/messages$/, '')
-        .replace(/\/v\d+$/, '')
+      sdkEnv.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(baseUrl)
     }
 
     const proxyUrl = await getEffectiveProxyUrl()
@@ -681,8 +680,9 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_BASE_URL
     process.env.ANTHROPIC_API_KEY = apiKey
-    if (channel.baseUrl) {
-      process.env.ANTHROPIC_BASE_URL = channel.baseUrl
+    // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
+    if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
+      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
     }
 
     const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl)

@@ -395,3 +395,24 @@ export function getAgentSessionWorkspacePath(workspaceSlug: string, sessionId: s
 
   return dir
 }
+
+/**
+ * 获取 SDK 隔离配置目录路径
+ *
+ * 用于设置 CLAUDE_CONFIG_DIR 环境变量，让 SDK 读取独立的配置文件，
+ * 而不是用户的 ~/.claude.json，实现 Proma 与 Claude Code CLI 的配置隔离。
+ *
+ * 如果目录不存在则自动创建。
+ *
+ * @returns ~/.proma/sdk-config/
+ */
+export function getSdkConfigDir(): string {
+  const dir = join(getConfigDir(), 'sdk-config')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+    console.log(`[配置] 已创建 SDK 配置目录: ${dir}`)
+  }
+
+  return dir
+}
