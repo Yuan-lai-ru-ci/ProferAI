@@ -172,6 +172,7 @@ export type ErrorCode =
   | 'data_policy_error'
   | 'invalid_request'
   | 'image_too_large'
+  | 'prompt_too_long'
   | 'provider_error'
   | 'unknown_error'
 
@@ -182,7 +183,7 @@ export interface RecoveryAction {
   /** 操作标签 */
   label: string
   /** 操作类型 */
-  action: 'settings' | 'retry' | 'cancel' | string
+  action: 'settings' | 'retry' | 'cancel' | 'compact' | string
 }
 
 /** 类型化错误 */

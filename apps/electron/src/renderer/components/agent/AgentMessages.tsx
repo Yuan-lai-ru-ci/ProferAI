@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus } from 'lucide-react'
+import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2 } from 'lucide-react'
 import {
   Message,
   MessageHeader,
@@ -47,6 +47,7 @@ interface AgentMessagesProps {
   streamState?: AgentStreamState
   onRetry?: () => void
   onRetryInNewSession?: () => void
+  onCompact?: () => void
 }
 
 function EmptyState(): React.ReactElement {
@@ -379,9 +380,10 @@ interface AgentMessageItemProps {
   message: AgentMessage
   onRetry?: () => void
   onRetryInNewSession?: () => void
+  onCompact?: () => void
 }
 
-function AgentMessageItem({ message, onRetry, onRetryInNewSession }: AgentMessageItemProps): React.ReactElement | null {
+function AgentMessageItem({ message, onRetry, onRetryInNewSession, onCompact }: AgentMessageItemProps): React.ReactElement | null {
   const userProfile = useAtomValue(userProfileAtom)
 
   if (message.role === 'user') {
@@ -467,8 +469,14 @@ function AgentMessageItem({ message, onRetry, onRetryInNewSession }: AgentMessag
           </div>
           {/* 错误操作按钮 */}
           <div className="flex items-center gap-2 mt-3">
+            {message.errorCode === 'prompt_too_long' && onCompact && (
+              <Button size="sm" onClick={onCompact}>
+                <Minimize2 className="size-3.5 mr-1.5" />
+                压缩上下文
+              </Button>
+            )}
             {onRetry && (
-              <Button size="sm" onClick={onRetry}>
+              <Button size="sm" variant={message.errorCode === 'prompt_too_long' ? 'outline' : 'default'} onClick={onRetry}>
                 <RotateCw className="size-3.5 mr-1.5" />
                 重试
               </Button>
@@ -492,7 +500,7 @@ function AgentMessageItem({ message, onRetry, onRetryInNewSession }: AgentMessag
   return null
 }
 
-export function AgentMessages({ sessionId, messages, streaming, streamState, onRetry, onRetryInNewSession }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, messages, streaming, streamState, onRetry, onRetryInNewSession, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
 
   // 从 streamState 属性中计算派生值
@@ -535,6 +543,7 @@ export function AgentMessages({ sessionId, messages, streaming, streamState, onR
                   message={msg}
                   onRetry={onRetry}
                   onRetryInNewSession={onRetryInNewSession}
+                  onCompact={onCompact}
                 />
               </div>
             ))}

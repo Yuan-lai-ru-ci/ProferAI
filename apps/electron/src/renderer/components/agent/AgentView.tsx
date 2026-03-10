@@ -750,6 +750,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           streamState={streamState}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
+          onCompact={handleCompact}
         />
 
         {/* 拖拽文件夹警告 */}

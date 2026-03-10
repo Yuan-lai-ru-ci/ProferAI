@@ -165,6 +165,23 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
 // 错误映射（从 agent-service.ts 迁移）
 // ============================================================================
 
+/** Prompt too long 错误关键词匹配 */
+const PROMPT_TOO_LONG_PATTERNS = [
+  'prompt is too long',
+  'prompt_too_long',
+  'input is too long',
+  'context_length_exceeded',
+  'maximum context length',
+  'token limit',
+  'exceeds the model',
+] as const
+
+/** 检测错误消息是否为 prompt too long 类型 */
+export function isPromptTooLongError(...messages: string[]): boolean {
+  const combined = messages.join(' ').toLowerCase()
+  return PROMPT_TOO_LONG_PATTERNS.some((p) => combined.includes(p))
+}
+
 function mapSDKErrorToTypedError(
   errorCode: string,
   detailedMessage: string,
@@ -195,6 +212,12 @@ function mapSDKErrorToTypedError(
       message: 'API 服务当前过载，请稍后再试',
       canRetry: true,
     },
+    'prompt_too_long': {
+      code: 'prompt_too_long',
+      title: '上下文过长',
+      message: '当前对话的上下文已超出模型限制，请压缩上下文或开启新会话',
+      canRetry: false,
+    },
   }
 
   const mapped = errorMap[errorCode] || {
@@ -211,6 +234,7 @@ function mapSDKErrorToTypedError(
     actions: [
       { key: 's', label: '设置', action: 'settings' },
       ...(mapped.canRetry ? [{ key: 'r', label: '重试', action: 'retry' }] : []),
+      ...(mapped.code === 'prompt_too_long' ? [{ key: 'c', label: '压缩上下文', action: 'compact' }] : []),
     ],
     canRetry: mapped.canRetry,
     retryDelayMs: mapped.canRetry ? 1000 : undefined,
@@ -267,7 +291,11 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         // SDK 级别错误（如 authentication_failed）
         if (msg.error) {
           const { detailedMessage, originalError } = this.extractErrorDetails(msg)
-          const errorCode = msg.error.errorType || 'unknown_error'
+          let errorCode = msg.error.errorType || 'unknown_error'
+          // 从错误消息中检测 prompt too long（errorType 可能不精确）
+          if (isPromptTooLongError(detailedMessage, originalError)) {
+            errorCode = 'prompt_too_long'
+          }
           const typedError = mapSDKErrorToTypedError(errorCode, detailedMessage, originalError)
           events.push({ type: 'typed_error', error: typedError })
           break

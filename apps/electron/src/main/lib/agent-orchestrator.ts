@@ -24,6 +24,7 @@ import type { AgentSendInput, AgentEvent, AgentMessage, AgentGenerateTitleInput,
 import { SAFE_TOOLS } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
+import { isPromptTooLongError } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { getAdapter, fetchTitle } from '@proma/core'
@@ -1291,13 +1292,22 @@ export class AgentOrchestrator {
 
           // 保存错误消息到 JSONL
           try {
+            // 检测是否为 prompt too long 错误
+            const isPromptTooLong = isPromptTooLongError(
+              userFacingError,
+              error instanceof Error ? (error.stack ?? error.message) : String(error),
+              stderrOutput,
+            )
+
             const errMsg: AgentMessage = {
               id: randomUUID(),
               role: 'status',
-              content: userFacingError,
+              content: isPromptTooLong
+                ? '上下文过长：当前对话的上下文已超出模型限制，请压缩上下文或开启新会话'
+                : userFacingError,
               createdAt: Date.now(),
-              errorCode: 'unknown_error',
-              errorTitle: '执行错误',
+              errorCode: isPromptTooLong ? 'prompt_too_long' : 'unknown_error',
+              errorTitle: isPromptTooLong ? '上下文过长' : '执行错误',
               errorOriginal: error instanceof Error ? error.stack : String(error),
             }
             appendAgentMessage(sessionId, errMsg)
