@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { existsSync, mkdirSync, symlinkSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type { AgentSendInput, AgentEvent, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt } from '@proma/shared'
@@ -222,7 +223,11 @@ function resolveSDKCliPath(): string {
 /**
  * 获取 Agent SDK 运行时可执行文件
  *
- * 优先级：Node.js → Bun → 降级到字符串 'node'
+ * 优先级：Node.js → Bun → which node 同步查找 → 字符串 'node'
+ *
+ * 当 runtimeStatusCache 尚未初始化时（应用启动竞态），
+ * 降级到 'node' 字符串可能因 Electron 进程 PATH 不含 node 而触发 ENOENT。
+ * 此时用 which/where 同步查找作为兜底，避免 SDK spawn 失败。
  */
 function getAgentExecutable(): { type: 'node' | 'bun'; path: string } {
   const status = getRuntimeStatus()
@@ -233,6 +238,20 @@ function getAgentExecutable(): { type: 'node' | 'bun'; path: string } {
 
   if (status?.bun?.available && status.bun.path) {
     return { type: 'bun', path: status.bun.path }
+  }
+
+  // runtimeStatusCache 未就绪时，同步查找 node 路径
+  try {
+    const cmd = process.platform === 'win32' ? 'where' : 'which'
+    const nodePath = execFileSync(cmd, ['node'], { encoding: 'utf-8', timeout: 2000 })
+      .trim()
+      .split('\n')[0]
+    if (nodePath && existsSync(nodePath)) {
+      console.warn(`[Agent 编排] runtimeStatusCache 未就绪，同步查找 node: ${nodePath}`)
+      return { type: 'node', path: nodePath }
+    }
+  } catch {
+    // 忽略查找失败，继续降级
   }
 
   return { type: 'node', path: 'node' }
