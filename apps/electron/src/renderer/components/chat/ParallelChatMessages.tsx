@@ -44,6 +44,8 @@ interface ParallelChatMessagesProps {
   streaming: boolean
   streamingContent: string
   streamingReasoning: string
+  /** 流式开始时间戳 */
+  startedAt?: number
   contextDividers?: string[]
   onDeleteDivider?: (messageId: string) => void
   onDeleteMessage?: (messageId: string) => Promise<void>
@@ -133,6 +135,7 @@ interface MessageColumnProps {
   streaming?: boolean
   streamingContent?: string
   streamingReasoning?: string
+  startedAt?: number
 }
 
 function MessageColumn({
@@ -148,6 +151,7 @@ function MessageColumn({
   streaming = false,
   streamingContent = '',
   streamingReasoning = '',
+  startedAt,
 }: MessageColumnProps): React.ReactElement {
   const streamingModel = useAtomValue(streamingModelAtom)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -217,7 +221,7 @@ function MessageColumn({
                   {streaming && <StreamingIndicator />}
                 </>
               ) : (
-                streaming && !streamingReasoning && <MessageLoading />
+                streaming && !streamingReasoning && <MessageLoading startedAt={startedAt} />
               )}
             </MessageContent>
           </Message>
@@ -232,6 +236,7 @@ export function ParallelChatMessages({
   streaming,
   streamingContent,
   streamingReasoning,
+  startedAt,
   contextDividers = [],
   onDeleteDivider,
   onDeleteMessage,
@@ -310,6 +315,7 @@ export function ParallelChatMessages({
               streaming={streaming}
               streamingContent={streamingContent}
               streamingReasoning={streamingReasoning}
+              startedAt={startedAt}
             />
           </div>
         </div>
@@ -378,6 +384,7 @@ export function ParallelChatMessages({
                   streaming={index === segments.length - 1 ? streaming : false}
                   streamingContent={index === segments.length - 1 ? streamingContent : ''}
                   streamingReasoning={index === segments.length - 1 ? streamingReasoning : ''}
+                  startedAt={index === segments.length - 1 ? startedAt : undefined}
                 />
               </div>
             </div>

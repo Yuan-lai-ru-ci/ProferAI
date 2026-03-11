@@ -561,6 +561,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         teammates: [],
         model: agentModelId || undefined,
+        startedAt: Date.now(),
       })
       return map
     })
@@ -675,6 +676,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         teammates: [],
         model: agentModelId || undefined,
+        startedAt: Date.now(),
       })
       return map
     })
@@ -716,6 +718,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           toolActivities: [],
           teammates: [],
           model: agentModelId || undefined,
+          startedAt: Date.now(),
         })
         return map
       })

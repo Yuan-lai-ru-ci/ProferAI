@@ -125,6 +125,8 @@ interface ChatMessagesProps {
   streamingReasoning: string
   /** 流式消息绑定的模型 */
   streamingModel: string | null
+  /** 流式开始时间戳 */
+  startedAt?: number
   /** 工具活动列表 */
   toolActivities: ChatToolActivity[]
   /** 上下文分隔线 */
@@ -170,6 +172,7 @@ export function ChatMessages({
   streamingContent,
   streamingReasoning,
   streamingModel,
+  startedAt,
   toolActivities,
   contextDividers,
   hasMore,
@@ -269,6 +272,7 @@ export function ChatMessages({
         streaming={streaming}
         streamingContent={smoothContent}
         streamingReasoning={smoothReasoning}
+        startedAt={startedAt}
         contextDividers={contextDividers}
         onDeleteDivider={onDeleteDivider}
         onDeleteMessage={onDeleteMessage}
@@ -362,7 +366,7 @@ export function ChatMessages({
                     </>
                   ) : (
                     /* 等待首个 chunk 时的加载动画（仅流式中且无推理时显示） */
-                    streaming && !smoothReasoning && <MessageLoading />
+                    streaming && !smoothReasoning && <MessageLoading startedAt={startedAt} />
                   )}
                 </MessageContent>
               </Message>
