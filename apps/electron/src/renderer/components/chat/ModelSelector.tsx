@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   conversationsAtom,
+  selectedModelAtom,
 } from '@/atoms/chat-atoms'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
@@ -82,6 +83,7 @@ export function ModelSelector({
   const [conversationModel, setConversationModel] = useConversationModelOptional()
   const conversationId = useConversationIdOptional()
   const setConversations = useSetAtom(conversationsAtom)
+  const setGlobalModel = useSetAtom(selectedModelAtom)
   const [channels, setChannels] = React.useState<Channel[]>([])
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -167,10 +169,11 @@ export function ModelSelector({
       return
     }
 
-    // Chat 模式：写入 per-conversation Map
+    // Chat 模式：写入 per-conversation Map + 同步全局默认值
     if (setConversationModel) {
       setConversationModel({ channelId: option.channelId, modelId: option.modelId })
     }
+    setGlobalModel({ channelId: option.channelId, modelId: option.modelId })
     setOpen(false)
 
     // 将模型/渠道选择保存到当前对话元数据

@@ -22,7 +22,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { ChevronDown, ChevronUp, Paperclip, FileText } from 'lucide-react'
+import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -278,8 +278,8 @@ export const MessageResponse = React.memo(
 /** 折叠行数阈值 */
 const COLLAPSE_LINE_THRESHOLD = 4
 
-/** 将文本中的 @file:路径 替换为样式化 chip */
-const FILE_MENTION_RE = /@file:(\S+)/g
+/** 将文本中的 @file:路径、/skill:名称、#mcp:名称 替换为样式化 chip */
+const MENTION_RE = /@file:(\S+)|\/skill:(\S+)|#mcp:(\S+)/g
 
 function renderTextWithMentions(text: string): React.ReactNode {
   const parts: React.ReactNode[] = []
@@ -287,26 +287,46 @@ function renderTextWithMentions(text: string): React.ReactNode {
   let match: RegExpExecArray | null
 
   // 重置 lastIndex（全局正则复用时需要）
-  FILE_MENTION_RE.lastIndex = 0
+  MENTION_RE.lastIndex = 0
 
-  while ((match = FILE_MENTION_RE.exec(text)) !== null) {
+  while ((match = MENTION_RE.exec(text)) !== null) {
     // 添加 match 前的纯文本
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index))
     }
-    // 渲染 mention chip
-    const filePath = match[1] ?? ''
-    const fileName = filePath.split('/').pop() || filePath
-    parts.push(
-      <span
-        key={`mention-${match.index}`}
-        className="inline-flex items-center gap-0.5 bg-primary/10 text-primary rounded px-1 py-[1px] text-[13px] font-medium whitespace-nowrap align-baseline"
-        title={filePath}
-      >
-        <FileText className="size-3 inline shrink-0" />
-        {fileName}
-      </span>
-    )
+
+    const key = `mention-${match.index}`
+
+    if (match[1]) {
+      // @file: 文件引用 — 蓝色 chip
+      const filePath = match[1]
+      const fileName = filePath.split('/').pop() || filePath
+      parts.push(
+        <span key={key} className="inline-flex items-center gap-0.5 bg-primary/10 text-primary rounded px-1 py-[1px] text-[13px] font-medium whitespace-nowrap align-baseline" title={filePath}>
+          <FileText className="size-3 inline shrink-0" />
+          {fileName}
+        </span>
+      )
+    } else if (match[2]) {
+      // /skill: Skill 引用 — 紫色 chip
+      const skillName = match[2]
+      parts.push(
+        <span key={key} className="inline-flex items-center gap-0.5 rounded px-1 py-[1px] text-[13px] font-medium whitespace-nowrap align-baseline bg-[hsl(270_60%_60%/0.15)] text-[hsl(270_60%_50%)]">
+          <Sparkles className="size-3 inline shrink-0" />
+          {skillName}
+        </span>
+      )
+    } else if (match[3]) {
+      // #mcp: MCP 引用 — 绿色 chip
+      const mcpName = match[3]
+      parts.push(
+        <span key={key} className="inline-flex items-center gap-0.5 rounded px-1 py-[1px] text-[13px] font-medium whitespace-nowrap align-baseline bg-[hsl(160_60%_45%/0.15)] text-[hsl(160_60%_35%)]">
+          <Server className="size-3 inline shrink-0" />
+          {mcpName}
+        </span>
+      )
+    }
+
     lastIndex = match.index + match[0].length
   }
 
