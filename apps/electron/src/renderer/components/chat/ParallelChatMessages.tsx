@@ -41,6 +41,8 @@ interface MessageSegment {
 
 interface ParallelChatMessagesProps {
   messages: ChatMessage[]
+  /** 当前对话 ID（用于迁移到 Agent 模式） */
+  conversationId?: string
   streaming: boolean
   streamingContent: string
   streamingReasoning: string
@@ -124,6 +126,8 @@ function segmentMessages(
 interface MessageColumnProps {
   messages: ChatMessage[]
   allMessages: ChatMessage[]
+  /** 当前对话 ID（用于迁移到 Agent 模式） */
+  conversationId?: string
   onDeleteMessage?: (messageId: string) => Promise<void>
   onResendMessage?: (message: ChatMessage) => Promise<void>
   onStartInlineEdit?: (message: ChatMessage) => void
@@ -141,6 +145,7 @@ interface MessageColumnProps {
 function MessageColumn({
   messages,
   allMessages,
+  conversationId,
   onDeleteMessage,
   onResendMessage,
   onStartInlineEdit,
@@ -184,6 +189,7 @@ function MessageColumn({
           <ChatMessageItem
             key={message.id}
             message={message}
+            conversationId={conversationId}
             allMessages={allMessages}
             onDeleteMessage={onDeleteMessage}
             onResendMessage={onResendMessage}
@@ -233,6 +239,7 @@ function MessageColumn({
 
 export function ParallelChatMessages({
   messages,
+  conversationId,
   streaming,
   streamingContent,
   streamingReasoning,
@@ -285,6 +292,7 @@ export function ParallelChatMessages({
             <MessageColumn
               messages={userMessages}
               allMessages={messages}
+              conversationId={conversationId}
               onDeleteMessage={onDeleteMessage}
               onResendMessage={onResendMessage}
               onStartInlineEdit={onStartInlineEdit}
@@ -305,6 +313,7 @@ export function ParallelChatMessages({
             <MessageColumn
               messages={assistantMessages}
               allMessages={messages}
+              conversationId={conversationId}
               onDeleteMessage={onDeleteMessage}
               onResendMessage={onResendMessage}
               onStartInlineEdit={onStartInlineEdit}
@@ -352,6 +361,7 @@ export function ParallelChatMessages({
                 <MessageColumn
                   messages={segment.userMessages}
                   allMessages={messages}
+                  conversationId={conversationId}
                   onDeleteMessage={onDeleteMessage}
                   onResendMessage={onResendMessage}
                   onStartInlineEdit={onStartInlineEdit}
@@ -374,6 +384,7 @@ export function ParallelChatMessages({
                 <MessageColumn
                   messages={segment.assistantMessages}
                   allMessages={messages}
+                  conversationId={conversationId}
                   onDeleteMessage={onDeleteMessage}
                   onResendMessage={onResendMessage}
                   onStartInlineEdit={onStartInlineEdit}
