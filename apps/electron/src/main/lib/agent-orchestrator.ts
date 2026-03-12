@@ -33,7 +33,8 @@ import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendAgentMessage, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspacePermissionMode } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir } from './config-paths'
+import { getWorkspaceAttachedDirectories } from './agent-workspace-manager'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPromptAppend, buildDynamicContext } from './agent-prompt-builder'
@@ -885,7 +886,23 @@ export class AgentOrchestrator {
         resumeSessionId: existingSdkSessionId,
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
-        ...(additionalDirectories && additionalDirectories.length > 0 && { additionalDirectories }),
+        // 合并用户附加目录 + 工作区附加目录 + 工作区文件目录
+        ...(() => {
+          const allDirs = [...(additionalDirectories || [])]
+          if (workspaceSlug) {
+            // 工作区级附加目录
+            const workspaceDirs = getWorkspaceAttachedDirectories(workspaceSlug)
+            for (const dir of workspaceDirs) {
+              if (!allDirs.includes(dir)) allDirs.push(dir)
+            }
+            // 工作区文件目录
+            const wsFilesDir = getWorkspaceFilesDir(workspaceSlug)
+            if (!allDirs.includes(wsFilesDir)) {
+              allDirs.push(wsFilesDir)
+            }
+          }
+          return allDirs.length > 0 ? { additionalDirectories: allDirs } : {}
+        })(),
         // SDK 0.2.52+ 新增选项（从 settings 读取）
         ...(appSettings.agentThinking && { thinking: appSettings.agentThinking }),
         ...(appSettings.agentEffort && { effort: appSettings.agentEffort }),

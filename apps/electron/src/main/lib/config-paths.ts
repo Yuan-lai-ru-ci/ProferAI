@@ -286,6 +286,25 @@ export function getWorkspaceSkillsDir(slug: string): string {
 }
 
 /**
+ * 获取工作区文件目录路径
+ *
+ * 工作区内所有会话可访问的文件存放于此。
+ * 如果目录不存在则自动创建。
+ *
+ * @param slug 工作区 slug
+ * @returns ~/.proma/agent-workspaces/{slug}/workspace-files/
+ */
+export function getWorkspaceFilesDir(slug: string): string {
+  const dir = join(getAgentWorkspacePath(slug), 'workspace-files')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
+}
+
+/**
  * 获取工作区不活跃 Skills 目录路径
  *
  * 禁用的 Skill 会被移动到此目录，Agent SDK 不会扫描该目录。

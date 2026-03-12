@@ -30,8 +30,10 @@ import type {
   AgentWorkspace,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
+  AgentSaveWorkspaceFilesInput,
   AgentSavedFile,
   AgentAttachDirectoryInput,
+  WorkspaceAttachDirectoryInput,
   GetTaskOutputInput,
   GetTaskOutputResult,
   StopTaskInput,
@@ -115,11 +117,11 @@ import {
   migrateChatToAgentSession,
   moveSessionToWorkspace,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, isAgentSessionActive } from './lib/agent-service'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir } from './lib/config-paths'
 import {
   listAgentWorkspaces,
   createAgentWorkspace,
@@ -135,6 +137,9 @@ import {
   toggleWorkspaceSkill,
   getWorkspacePermissionMode,
   setWorkspacePermissionMode,
+  getWorkspaceAttachedDirectories,
+  attachWorkspaceDirectory,
+  detachWorkspaceDirectory,
 } from './lib/agent-workspace-manager'
 import { getMemoryConfig, setMemoryConfig } from './lib/memory-service'
 import { getAllToolInfos } from './lib/chat-tool-registry'
@@ -1041,6 +1046,22 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 保存文件到工作区文件目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SAVE_FILES_TO_WORKSPACE,
+    async (_, input: AgentSaveWorkspaceFilesInput): Promise<AgentSavedFile[]> => {
+      return saveFilesToWorkspaceFiles(input)
+    }
+  )
+
+  // 获取工作区文件目录路径
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_WORKSPACE_FILES_PATH,
+    async (_, workspaceSlug: string): Promise<string> => {
+      return getWorkspaceFilesDir(workspaceSlug)
+    }
+  )
+
   // 打开文件夹选择对话框
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_FOLDER_DIALOG,
@@ -1092,6 +1113,34 @@ export function registerIpcHandlers(): void {
       // 停止附加目录文件监听
       unwatchAttachedDirectory(input.directoryPath)
       return updated
+    }
+  )
+
+  // 附加外部目录到工作区（所有会话可访问）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.ATTACH_WORKSPACE_DIRECTORY,
+    async (_, input: WorkspaceAttachDirectoryInput): Promise<string[]> => {
+      const updated = attachWorkspaceDirectory(input.workspaceSlug, input.directoryPath)
+      watchAttachedDirectory(input.directoryPath)
+      return updated
+    }
+  )
+
+  // 移除工作区的附加目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.DETACH_WORKSPACE_DIRECTORY,
+    async (_, input: WorkspaceAttachDirectoryInput): Promise<string[]> => {
+      const updated = detachWorkspaceDirectory(input.workspaceSlug, input.directoryPath)
+      unwatchAttachedDirectory(input.directoryPath)
+      return updated
+    }
+  )
+
+  // 获取工作区附加目录列表
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_WORKSPACE_DIRECTORIES,
+    async (_, workspaceSlug: string): Promise<string[]> => {
+      return getWorkspaceAttachedDirectories(workspaceSlug)
     }
   )
 

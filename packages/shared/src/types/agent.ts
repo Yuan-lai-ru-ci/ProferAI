@@ -584,10 +584,24 @@ export interface AgentSavedFile {
   targetPath: string
 }
 
+/** Agent 文件保存到工作区文件目录的输入 */
+export interface AgentSaveWorkspaceFilesInput {
+  workspaceSlug: string
+  files: Array<{ filename: string; data: string }>
+}
+
 /** 附加/分离目录的输入参数 */
 export interface AgentAttachDirectoryInput {
   /** 会话 ID */
   sessionId: string
+  /** 目录的绝对路径 */
+  directoryPath: string
+}
+
+/** 工作区级附加/分离目录的输入参数 */
+export interface WorkspaceAttachDirectoryInput {
+  /** 工作区 slug */
+  workspaceSlug: string
   /** 目录的绝对路径 */
   directoryPath: string
 }
@@ -832,12 +846,22 @@ export const AGENT_IPC_CHANNELS = {
   // 附件
   /** 保存文件到 Agent session 工作目录 */
   SAVE_FILES_TO_SESSION: 'agent:save-files-to-session',
+  /** 保存文件到工作区文件目录 */
+  SAVE_FILES_TO_WORKSPACE: 'agent:save-files-to-workspace',
+  /** 获取工作区文件目录路径 */
+  GET_WORKSPACE_FILES_PATH: 'agent:get-workspace-files-path',
   /** 打开文件夹选择对话框 */
   OPEN_FOLDER_DIALOG: 'agent:open-folder-dialog',
   /** 附加外部目录到 Agent 会话 */
   ATTACH_DIRECTORY: 'agent:attach-directory',
   /** 移除会话的附加目录 */
   DETACH_DIRECTORY: 'agent:detach-directory',
+  /** 附加外部目录到工作区（所有会话共享） */
+  ATTACH_WORKSPACE_DIRECTORY: 'agent:attach-workspace-directory',
+  /** 移除工作区的附加目录 */
+  DETACH_WORKSPACE_DIRECTORY: 'agent:detach-workspace-directory',
+  /** 获取工作区附加目录列表 */
+  GET_WORKSPACE_DIRECTORIES: 'agent:get-workspace-directories',
 
   // 文件系统操作
   /** 获取 session 工作路径 */

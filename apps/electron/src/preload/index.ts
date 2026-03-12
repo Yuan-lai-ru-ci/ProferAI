@@ -38,8 +38,10 @@ import type {
   AgentWorkspace,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
+  AgentSaveWorkspaceFilesInput,
   AgentSavedFile,
   AgentAttachDirectoryInput,
+  WorkspaceAttachDirectoryInput,
   GetTaskOutputInput,
   GetTaskOutputResult,
   StopTaskInput,
@@ -419,6 +421,12 @@ export interface ElectronAPI {
   /** 保存文件到 Agent session 工作目录 */
   saveFilesToAgentSession: (input: AgentSaveFilesInput) => Promise<AgentSavedFile[]>
 
+  /** 保存文件到工作区文件目录 */
+  saveFilesToWorkspaceFiles: (input: AgentSaveWorkspaceFilesInput) => Promise<AgentSavedFile[]>
+
+  /** 获取工作区文件目录路径 */
+  getWorkspaceFilesPath: (workspaceSlug: string) => Promise<string>
+
   /** 打开文件夹选择对话框 */
   openFolderDialog: () => Promise<{ path: string; name: string } | null>
 
@@ -427,6 +435,15 @@ export interface ElectronAPI {
 
   /** 移除会话的附加目录 */
   detachDirectory: (input: AgentAttachDirectoryInput) => Promise<string[]>
+
+  /** 附加外部目录到工作区（所有会话可访问） */
+  attachWorkspaceDirectory: (input: WorkspaceAttachDirectoryInput) => Promise<string[]>
+
+  /** 移除工作区的附加目录 */
+  detachWorkspaceDirectory: (input: WorkspaceAttachDirectoryInput) => Promise<string[]>
+
+  /** 获取工作区附加目录列表 */
+  getWorkspaceDirectories: (workspaceSlug: string) => Promise<string[]>
 
   // ===== Agent 文件系统操作 =====
 
@@ -995,6 +1012,14 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_FILES_TO_SESSION, input)
   },
 
+  saveFilesToWorkspaceFiles: (input: AgentSaveWorkspaceFilesInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_FILES_TO_WORKSPACE, input)
+  },
+
+  getWorkspaceFilesPath: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_FILES_PATH, workspaceSlug)
+  },
+
   openFolderDialog: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FOLDER_DIALOG)
   },
@@ -1005,6 +1030,18 @@ const electronAPI: ElectronAPI = {
 
   detachDirectory: (input: AgentAttachDirectoryInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DETACH_DIRECTORY, input)
+  },
+
+  attachWorkspaceDirectory: (input: WorkspaceAttachDirectoryInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ATTACH_WORKSPACE_DIRECTORY, input)
+  },
+
+  detachWorkspaceDirectory: (input: WorkspaceAttachDirectoryInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DETACH_WORKSPACE_DIRECTORY, input)
+  },
+
+  getWorkspaceDirectories: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_DIRECTORIES, workspaceSlug)
   },
 
   // Agent 文件系统操作

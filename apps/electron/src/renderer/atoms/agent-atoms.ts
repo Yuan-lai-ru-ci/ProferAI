@@ -1169,6 +1169,13 @@ export const agentSessionDraftsAtom = atom<Map<string, string>>(new Map())
  */
 export const agentAttachedDirectoriesMapAtom = atom<Map<string, string[]>>(new Map())
 
+/**
+ * 工作区级附加目录列表（按 workspaceId 存储）
+ *
+ * 工作区内所有会话共享这些附加目录。
+ */
+export const workspaceAttachedDirectoriesMapAtom = atom<Map<string, string[]>>(new Map())
+
 /** 当前 Agent 会话的草稿内容（派生读写原子） */
 export const currentAgentSessionDraftAtom = atom(
   (get) => {
