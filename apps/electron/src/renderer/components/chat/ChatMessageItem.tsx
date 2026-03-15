@@ -192,6 +192,11 @@ export function ChatMessageItem({
               ) : message.stopped ? (
                 <MessageStopped />
               ) : null}
+
+              {/* 生成的图片附件（如 Nano Banana 生图结果） */}
+              {message.attachments && message.attachments.length > 0 && (
+                <MessageAttachments attachments={message.attachments} />
+              )}
             </>
           ) : (
             /* 用户消息 - 附件 + 可折叠文本 / 原地编辑 */

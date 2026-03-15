@@ -441,6 +441,35 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 另存图片到用户选择的位置（原生 Save As 对话框）
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.SAVE_IMAGE_AS,
+    async (event, localPath: string, defaultFilename: string): Promise<boolean> => {
+      const { dialog, BrowserWindow } = await import('electron')
+      const { writeFileSync } = await import('node:fs')
+      const { extname: pathExtname } = await import('node:path')
+
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const ext = pathExtname(defaultFilename).replace('.', '').toLowerCase()
+      const filterMap: Record<string, string> = { jpg: 'JPEG', jpeg: 'JPEG', png: 'PNG', gif: 'GIF', webp: 'WebP', bmp: 'BMP' }
+      const filterName = filterMap[ext] ?? 'Image'
+
+      const result = await dialog.showSaveDialog(win ?? BrowserWindow.getFocusedWindow()!, {
+        defaultPath: defaultFilename,
+        filters: [
+          { name: `${filterName} 图片`, extensions: [ext || 'png'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      })
+
+      if (result.canceled || !result.filePath) return false
+
+      const base64 = readAttachmentAsBase64(localPath)
+      writeFileSync(result.filePath, Buffer.from(base64, 'base64'))
+      return true
+    }
+  )
+
   // 删除附件
   ipcMain.handle(
     CHAT_IPC_CHANNELS.DELETE_ATTACHMENT,
@@ -991,6 +1020,35 @@ export function registerIpcHandlers(): void {
             return { success: false, message: `API 请求失败 (${response.status}): ${errorText}` }
           }
           return { success: true, message: '连接成功，Tavily 搜索 API 可用' }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error)
+          return { success: false, message: `连接失败: ${msg}` }
+        }
+      }
+      // Nano Banana 生图工具测试
+      if (toolId === 'nano-banana') {
+        const { getToolCredentials: getCredentials } = await import('./lib/chat-tool-config')
+        const credentials = getCredentials('nano-banana')
+        if (!credentials.apiKey) {
+          return { success: false, message: '请先填写 Gemini API Key' }
+        }
+        try {
+          const baseUrl = credentials.baseUrl?.trim() || 'https://generativelanguage.googleapis.com'
+          const model = credentials.model?.trim() || 'gemini-3.1-flash-image-preview'
+          const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${credentials.apiKey}`
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
+              generationConfig: { maxOutputTokens: 10 },
+            }),
+          })
+          if (!response.ok) {
+            const errorText = await response.text()
+            return { success: false, message: `API 请求失败 (${response.status}): ${errorText.slice(0, 200)}` }
+          }
+          return { success: true, message: `连接成功，模型 ${model} 可用` }
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error)
           return { success: false, message: `连接失败: ${msg}` }

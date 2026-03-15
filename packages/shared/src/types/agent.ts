@@ -264,6 +264,16 @@ export interface RetryAttempt {
 /**
  * Agent 事件类型
  *
+/** MCP 工具结果中的图片附件 */
+export interface AgentToolResultImage {
+  localPath: string
+  filename: string
+  mediaType: string
+}
+
+/**
+ * Agent 事件流类型
+ *
  * 从 SDK 消息转换而来的扁平事件流，用于驱动 UI 渲染。
  */
 export type AgentEvent =
@@ -272,7 +282,7 @@ export type AgentEvent =
   | { type: 'text_complete'; text: string; isIntermediate: boolean; turnId?: string; parentToolUseId?: string }
   // 工具执行
   | { type: 'tool_start'; toolName: string; toolUseId: string; input: Record<string, unknown>; intent?: string; displayName?: string; turnId?: string; parentToolUseId?: string }
-  | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string }
+  | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string; imageAttachments?: AgentToolResultImage[] }
   // 后台任务
   | { type: 'task_backgrounded'; toolUseId: string; taskId: string; intent?: string; turnId?: string }
   | { type: 'task_started'; taskId: string; toolUseId?: string; description: string; taskType?: string; turnId?: string }

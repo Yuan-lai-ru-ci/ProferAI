@@ -545,6 +545,23 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 注入 SDK 内置生图工具（Nano Banana）
+   */
+  private async injectNanoBananaTools(
+    sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
+    mcpServers: Record<string, Record<string, unknown>>,
+    sessionId: string,
+    agentCwd?: string,
+  ): Promise<void> {
+    try {
+      const { injectNanoBananaMcpServer } = await import('./chat-tools/nano-banana-mcp')
+      await injectNanoBananaMcpServer(sdk, mcpServers, sessionId, agentCwd)
+    } catch (err) {
+      console.error(`[Agent 编排] 注入 Nano Banana MCP 失败:`, err)
+    }
+  }
+
+  /**
    * 生成 Agent 会话标题
    *
    * 使用 Provider 适配器系统，支持所有渠道。任何错误返回 null。
@@ -798,9 +815,10 @@ export class AgentOrchestrator {
         }
       }
 
-      // 10. 构建 MCP 服务器配置 + 记忆工具 + 自定义工具
+      // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
       const mcpServers = this.buildMcpServers(workspaceSlug)
       await this.injectMemoryTools(sdk, mcpServers)
+      await this.injectNanoBananaTools(sdk, mcpServers, sessionId, agentCwd)
 
       // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
       if (customMcpServers) {

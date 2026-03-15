@@ -27,6 +27,8 @@ export interface ToolActivity {
   taskId?: string
   shellId?: string
   isBackground?: boolean
+  /** MCP 工具返回的图片附件 */
+  imageAttachments?: Array<{ localPath: string; filename: string; mediaType: string }>
 }
 
 /** 活动分组（Task 子代理） */
@@ -856,7 +858,7 @@ export function applyAgentEvent(
         ...prev,
         toolActivities: prev.toolActivities.map((t) =>
           t.toolUseId === event.toolUseId
-            ? { ...t, result: event.result, isError: event.isError, done: true }
+            ? { ...t, result: event.result, isError: event.isError, done: true, imageAttachments: event.imageAttachments }
             : t
         ),
       }

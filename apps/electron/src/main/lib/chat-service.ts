@@ -248,6 +248,7 @@ export async function sendMessage(
   let accumulatedContent = ''
   let accumulatedReasoning = ''
   const accumulatedToolActivities: ChatToolActivity[] = []
+  const accumulatedGeneratedAttachments: FileAttachment[] = []
 
   try {
     // 7. 获取适配器
@@ -336,9 +337,15 @@ export async function sendMessage(
       }
 
       // 执行工具调用（通过统一执行器）
+      // 提取前一轮对话的附件（用于参考图支持）
+      const lastUserMsg = fullHistory.filter((m) => m.role === 'user').at(-1)
+      const lastAssistantMsg = fullHistory.filter((m) => m.role === 'assistant').at(-1)
       const toolResults = await executeToolCalls(toolCalls, {
         webContents,
         conversationId,
+        currentAttachments: attachments,
+        previousUserAttachments: lastUserMsg?.attachments,
+        previousAssistantAttachments: lastAssistantMsg?.attachments,
       })
 
       // 累积工具结果到持久化数据
@@ -352,6 +359,10 @@ export async function sendMessage(
             result: tr.content,
             isError: tr.isError,
           })
+          // 收集工具生成的附件（如生图工具的图片）
+          if (tr.generatedAttachments) {
+            accumulatedGeneratedAttachments.push(...tr.generatedAttachments)
+          }
         }
       }
 
@@ -394,9 +405,9 @@ export async function sendMessage(
       })
     }
 
-    // 10. 保存 assistant 消息（空内容不保存）
+    // 10. 保存 assistant 消息（空内容不保存，除非有生成的附件）
     const assistantMsgId = randomUUID()
-    if (accumulatedContent.trim()) {
+    if (accumulatedContent.trim() || accumulatedGeneratedAttachments.length > 0) {
       const assistantMsg: ChatMessage = {
         id: assistantMsgId,
         role: 'assistant',
@@ -405,6 +416,7 @@ export async function sendMessage(
         model: modelId,
         reasoning: accumulatedReasoning || undefined,
         toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
+        attachments: accumulatedGeneratedAttachments.length > 0 ? accumulatedGeneratedAttachments : undefined,
       }
       appendMessage(conversationId, assistantMsg)
 
@@ -415,13 +427,13 @@ export async function sendMessage(
         // 索引更新失败不影响主流程
       }
     } else {
-      console.warn(`[聊天服务] 模型返回空内容，跳过保存 (对话 ${conversationId})`)
+      console.warn(`[聊天服务] 模型返回空内容且无生成附件，跳过保存 (对话 ${conversationId})`)
     }
 
     webContents.send(CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
       conversationId,
       model: modelId,
-      messageId: accumulatedContent.trim() ? assistantMsgId : undefined,
+      messageId: (accumulatedContent.trim() || accumulatedGeneratedAttachments.length > 0) ? assistantMsgId : undefined,
     })
   } catch (error) {
     // 被中止的请求：保存已输出的部分内容，通知前端停止

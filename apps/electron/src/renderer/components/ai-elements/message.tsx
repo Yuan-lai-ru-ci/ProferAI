@@ -22,7 +22,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server } from 'lucide-react'
+import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -507,6 +507,11 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
       })
   }, [attachment.localPath, attachment.mediaType])
 
+  /** 保存图片到本地 */
+  const handleSave = React.useCallback((): void => {
+    window.electronAPI.saveImageAs(attachment.localPath, attachment.filename)
+  }, [attachment.localPath, attachment.filename])
+
   if (!imageSrc) {
     return (
       <div className={cn(
@@ -516,7 +521,7 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
     )
   }
 
-  return isSingle ? (
+  const imgElement = isSingle ? (
     <img
       src={imageSrc}
       alt={attachment.filename}
@@ -528,6 +533,20 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
       alt={attachment.filename}
       className="size-[280px] rounded-lg object-cover shrink-0"
     />
+  )
+
+  return (
+    <div className="relative group inline-block">
+      {imgElement}
+      <button
+        type="button"
+        onClick={handleSave}
+        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+        title="保存图片"
+      >
+        <Download className="size-4" />
+      </button>
+    </div>
   )
 }
 

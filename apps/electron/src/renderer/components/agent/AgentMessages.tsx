@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2 } from 'lucide-react'
+import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download } from 'lucide-react'
 import {
   Message,
   MessageHeader,
@@ -80,6 +80,62 @@ function AssistantLogo({ model }: { model?: string }): React.ReactElement {
   )
 }
 
+/** 单张工具结果图片（内联显示） */
+function InlineImage({ attachment }: { attachment: { localPath: string; filename: string; mediaType: string } }): React.ReactElement {
+  const [imageSrc, setImageSrc] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    window.electronAPI
+      .readAttachment(attachment.localPath)
+      .then((base64) => {
+        setImageSrc(`data:${attachment.mediaType};base64,${base64}`)
+      })
+      .catch((error) => {
+        console.error('[InlineImage] 读取附件失败:', error)
+      })
+  }, [attachment.localPath, attachment.mediaType])
+
+  const handleSave = React.useCallback((): void => {
+    window.electronAPI.saveImageAs(attachment.localPath, attachment.filename)
+  }, [attachment.localPath, attachment.filename])
+
+  if (!imageSrc) {
+    return <div className="size-[280px] rounded-lg bg-muted/30 animate-pulse shrink-0" />
+  }
+
+  return (
+    <div className="relative group inline-block">
+      <img
+        src={imageSrc}
+        alt={attachment.filename}
+        className="size-[280px] rounded-lg object-cover shrink-0"
+      />
+      <button
+        type="button"
+        onClick={handleSave}
+        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+        title="保存图片"
+      >
+        <Download className="size-4" />
+      </button>
+    </div>
+  )
+}
+
+/** 从工具活动中提取并内联显示所有生成的图片 */
+function ToolResultInlineImages({ activities }: { activities: ToolActivity[] }): React.ReactElement | null {
+  const allImages = activities.flatMap((a) => a.imageAttachments ?? [])
+  if (allImages.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap gap-2 mb-3">
+      {allImages.map((img, i) => (
+        <InlineImage key={`${img.localPath}-${i}`} attachment={img} />
+      ))}
+    </div>
+  )
+}
+
 /** 从持久化事件中提取工具活动列表 */
 function extractToolActivities(events: AgentMessage['events']): ToolActivity[] {
   if (!events) return []
@@ -114,6 +170,7 @@ function extractToolActivities(events: AgentMessage['events']): ToolActivity[] {
           result: event.result,
           isError: event.isError,
           done: true,
+          imageAttachments: event.imageAttachments,
         }
       }
     } else if (event.type === 'task_backgrounded') {
@@ -436,6 +493,7 @@ function AgentMessageItem({ message, onRetry, onRetryInNewSession, onCompact }: 
               <ToolActivityList activities={toolActivities} />
             </div>
           )}
+          <ToolResultInlineImages activities={toolActivities} />
           {message.content && (
             <MessageResponse>{message.content}</MessageResponse>
           )}
@@ -564,6 +622,7 @@ export function AgentMessages({ sessionId, messages, streaming, streamState, onR
                       <BackgroundTasksPanel tasks={backgroundTasks} />
                     </div>
                   )}
+                  <ToolResultInlineImages activities={toolActivities} />
                   {smoothContent ? (
                     <>
                       <MessageResponse>{smoothContent}</MessageResponse>
