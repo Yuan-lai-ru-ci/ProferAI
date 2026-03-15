@@ -1304,6 +1304,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 在新窗口中预览文件（允许任意绝对路径）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.PREVIEW_FILE,
+    async (_, filePath: string): Promise<void> => {
+      const { openFilePreview } = await import('./lib/file-preview-service')
+      openFilePreview(filePath)
+    }
+  )
+
   // 重命名文件/目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_FILE,

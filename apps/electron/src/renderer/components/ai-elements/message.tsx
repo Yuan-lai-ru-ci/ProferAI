@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/tooltip'
 import { LoadingIndicator } from '@/components/ui/loading-indicator'
 import { CodeBlock, MermaidBlock } from '@proma/ui'
+import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
 import type { HTMLAttributes, ComponentProps, ReactNode } from 'react'
 import type { FileAttachment } from '@proma/shared'
 
@@ -201,11 +202,13 @@ interface MessageResponseProps {
   /** Markdown 内容 */
   children: string
   className?: string
+  /** 基础目录路径，用于解析相对文件路径（如 Agent 会话工作目录） */
+  basePath?: string
 }
 
 /** 使用 react-markdown 渲染 assistant 消息内容，代码块使用 Shiki 语法高亮 */
 export const MessageResponse = React.memo(
-  function MessageResponse({ children, className }: MessageResponseProps): React.ReactElement {
+  function MessageResponse({ children, className, basePath }: MessageResponseProps): React.ReactElement {
     return (
       <div
         className={cn(
@@ -263,6 +266,30 @@ export const MessageResponse = React.memo(
 
               return <CodeBlock>{preChildren}</CodeBlock>
             },
+            code: ({ children: codeChildren, className: codeClassName, ...codeProps }) => {
+              // 仅处理行内代码（代码块内的 <code> 有 className="language-xxx"）
+              if (codeClassName) {
+                return <code className={codeClassName} {...codeProps}>{codeChildren}</code>
+              }
+
+              // 提取纯文本内容
+              const text = typeof codeChildren === 'string' ? codeChildren : ''
+
+              if (text) {
+                // 检测绝对文件路径
+                if (isAbsoluteFilePath(text)) {
+                  return <FilePathChip filePath={text.trim()} />
+                }
+
+                // 检测相对文件路径（需要 basePath）
+                if (basePath && isRelativeFilePath(text)) {
+                  return <FilePathChip filePath={text.trim()} basePath={basePath} />
+                }
+              }
+
+              // 默认渲染
+              return <code {...codeProps}>{codeChildren}</code>
+            },
           }}
         >
           {children}
@@ -270,7 +297,7 @@ export const MessageResponse = React.memo(
       </div>
     )
   },
-  (prevProps, nextProps) => prevProps.children === nextProps.children
+  (prevProps, nextProps) => prevProps.children === nextProps.children && prevProps.basePath === nextProps.basePath
 )
 
 // ===== UserMessageContent 可折叠用户消息 =====

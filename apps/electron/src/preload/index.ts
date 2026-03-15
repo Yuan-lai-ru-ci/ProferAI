@@ -465,6 +465,9 @@ export interface ElectronAPI {
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
 
+  /** 在新窗口中预览文件 */
+  previewFile: (filePath: string) => Promise<void>
+
   /** 重命名文件/目录 */
   renameFile: (filePath: string, newName: string) => Promise<void>
 
@@ -1070,6 +1073,10 @@ const electronAPI: ElectronAPI = {
 
   showInFolder: (filePath: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_IN_FOLDER, filePath)
+  },
+
+  previewFile: (filePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PREVIEW_FILE, filePath)
   },
 
   renameFile: (filePath: string, newName: string) => {

@@ -790,6 +790,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           messages={messages}
           streaming={streaming}
           streamState={streamState}
+          sessionPath={sessionPath}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
           onCompact={handleCompact}

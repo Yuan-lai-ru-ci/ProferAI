@@ -45,6 +45,8 @@ interface AgentMessagesProps {
   messages: AgentMessage[]
   streaming: boolean
   streamState?: AgentStreamState
+  /** 当前会话工作目录，用于解析相对文件路径 */
+  sessionPath?: string | null
   onRetry?: () => void
   onRetryInNewSession?: () => void
   onCompact?: () => void
@@ -435,12 +437,13 @@ function RetryAttemptItem({
 /** AgentMessageItem 属性接口 */
 interface AgentMessageItemProps {
   message: AgentMessage
+  sessionPath?: string | null
   onRetry?: () => void
   onRetryInNewSession?: () => void
   onCompact?: () => void
 }
 
-function AgentMessageItem({ message, onRetry, onRetryInNewSession, onCompact }: AgentMessageItemProps): React.ReactElement | null {
+function AgentMessageItem({ message, sessionPath, onRetry, onRetryInNewSession, onCompact }: AgentMessageItemProps): React.ReactElement | null {
   const userProfile = useAtomValue(userProfileAtom)
 
   if (message.role === 'user') {
@@ -495,7 +498,7 @@ function AgentMessageItem({ message, onRetry, onRetryInNewSession, onCompact }: 
           )}
           <ToolResultInlineImages activities={toolActivities} />
           {message.content && (
-            <MessageResponse>{message.content}</MessageResponse>
+            <MessageResponse basePath={sessionPath || undefined}>{message.content}</MessageResponse>
           )}
         </MessageContent>
         {/* 操作按钮（hover 时可见） */}
@@ -558,7 +561,7 @@ function AgentMessageItem({ message, onRetry, onRetryInNewSession, onCompact }: 
   return null
 }
 
-export function AgentMessages({ sessionId, messages, streaming, streamState, onRetry, onRetryInNewSession, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, messages, streaming, streamState, sessionPath, onRetry, onRetryInNewSession, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
 
   // 从 streamState 属性中计算派生值
@@ -599,6 +602,7 @@ export function AgentMessages({ sessionId, messages, streaming, streamState, onR
               <div key={msg.id} data-message-id={msg.id}>
                 <AgentMessageItem
                   message={msg}
+                  sessionPath={sessionPath}
                   onRetry={onRetry}
                   onRetryInNewSession={onRetryInNewSession}
                   onCompact={onCompact}
@@ -625,7 +629,7 @@ export function AgentMessages({ sessionId, messages, streaming, streamState, onR
                   <ToolResultInlineImages activities={toolActivities} />
                   {smoothContent ? (
                     <>
-                      <MessageResponse>{smoothContent}</MessageResponse>
+                      <MessageResponse basePath={sessionPath || undefined}>{smoothContent}</MessageResponse>
                       {streaming && <StreamingIndicator />}
                     </>
                   ) : (
