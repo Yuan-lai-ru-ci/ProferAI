@@ -52,6 +52,7 @@ import {
   buildTeamActivityEntries,
   rebuildTeamDataFromMessages,
   agentAttachedDirectoriesMapAtom,
+  workspaceAttachedDirectoriesMapAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -92,6 +93,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
   const attachedDirs = attachedDirsMap.get(sessionId) ?? []
+  const wsAttachedDirsMap = useAtomValue(workspaceAttachedDirectoriesMapAtom)
+  const wsAttachedDirs = currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
 
   const draftsMap = useAtomValue(agentSessionDraftsAtom)
   const setDraftsMap = useSetAtom(agentSessionDraftsAtom)
@@ -108,6 +111,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
   }, [sessionId, setDraftsMap])
   const [sessionPath, setSessionPath] = React.useState<string | null>(null)
+  const [workspaceFilesPath, setWorkspaceFilesPath] = React.useState<string | null>(null)
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [dragFolderWarning, setDragFolderWarning] = React.useState(false)
   const [errorCopied, setErrorCopied] = React.useState(false)
@@ -149,6 +153,33 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .then(setSessionPath)
       .catch(() => setSessionPath(null))
   }, [sessionId, currentWorkspaceId])
+
+  // 获取工作区共享文件目录路径（@ 引用时需要搜索）
+  const workspaceSlug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
+  React.useEffect(() => {
+    if (!workspaceSlug) {
+      setWorkspaceFilesPath(null)
+      return
+    }
+    window.electronAPI
+      .getWorkspaceFilesPath(workspaceSlug)
+      .then(setWorkspaceFilesPath)
+      .catch(() => setWorkspaceFilesPath(null))
+  }, [workspaceSlug])
+
+  // 合并工作区文件目录、工作区级附加目录和会话级附加目录，供 @ 引用搜索
+  const allAttachedDirs = React.useMemo(() => {
+    const dirs = [...attachedDirs]
+    // 添加工作区级附加目录
+    for (const d of wsAttachedDirs) {
+      if (!dirs.includes(d)) dirs.push(d)
+    }
+    // 添加工作区共享文件目录
+    if (workspaceFilesPath && !dirs.includes(workspaceFilesPath)) {
+      dirs.unshift(workspaceFilesPath)
+    }
+    return dirs
+  }, [attachedDirs, wsAttachedDirs, workspaceFilesPath])
 
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
@@ -866,8 +897,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               autoFocusTrigger={sessionId}
               collapsible
               workspacePath={sessionPath}
-              workspaceSlug={workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null}
-              attachedDirs={attachedDirs}
+              workspaceSlug={workspaceSlug}
+              attachedDirs={allAttachedDirs}
             />
 
             {/* Footer 工具栏 */}
