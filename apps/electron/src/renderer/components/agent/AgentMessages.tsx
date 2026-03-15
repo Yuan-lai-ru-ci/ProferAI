@@ -564,6 +564,35 @@ function AgentMessageItem({ message, sessionPath, onRetry, onRetryInNewSession, 
 export function AgentMessages({ sessionId, messages, streaming, streamState, sessionPath, onRetry, onRetryInNewSession, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
 
+  /**
+   * 淡入控制：切换会话时先隐藏，等布局完成后再显示。
+   * 同时用于延迟启用 content-visibility 优化，避免初次加载跳动。
+   */
+  const [ready, setReady] = React.useState(false)
+  const prevSessionIdRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    if (sessionId !== prevSessionIdRef.current) {
+      prevSessionIdRef.current = sessionId
+      setReady(false)
+    }
+  }, [sessionId])
+
+  React.useEffect(() => {
+    if (ready) return
+    if (messages.length === 0 && !streaming) {
+      setReady(true)
+      return
+    }
+    let cancelled = false
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setReady(true)
+      })
+    })
+    return () => { cancelled = true }
+  }, [messages, streaming, ready])
+
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''
   const toolActivities = streamState?.toolActivities ?? []
@@ -592,7 +621,7 @@ export function AgentMessages({ sessionId, messages, streaming, streamState, ses
   )
 
   return (
-    <Conversation>
+    <Conversation className={ready ? 'cv-ready opacity-100 transition-opacity duration-200' : 'opacity-0'}>
       <ConversationContent>
         {messages.length === 0 && !streaming ? (
           <EmptyState />
