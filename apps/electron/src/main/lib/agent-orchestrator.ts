@@ -25,7 +25,7 @@ import type { AgentSendInput, AgentEvent, AgentMessage, AgentGenerateTitleInput,
 import { SAFE_TOOLS } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
-import { isPromptTooLongError } from './adapters/claude-agent-adapter'
+import { isPromptTooLongError, friendlyErrorMessage } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk } from '@proma/core'
@@ -1357,9 +1357,9 @@ export class AgentOrchestrator {
 
           let userFacingError: string
           if (apiError) {
-            userFacingError = `API 错误 (${apiError.statusCode}):\n${apiError.message}`
+            userFacingError = friendlyErrorMessage(`API 错误 (${apiError.statusCode}):\n${apiError.message}`)
           } else {
-            userFacingError = errorMessage
+            userFacingError = friendlyErrorMessage(errorMessage)
           }
 
           // 保存错误消息到 JSONL

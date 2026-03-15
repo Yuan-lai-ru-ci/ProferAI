@@ -162,6 +162,26 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
 }
 
 // ============================================================================
+// SDK 错误消息友好化
+// ============================================================================
+
+/** 已知 SDK 错误 → 用户友好提示映射 */
+const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
+  {
+    pattern: /not logged in|please run \/login/i,
+    message: '请检查是否选择了正确的 Proma 供应渠道和模型',
+  },
+]
+
+/** 将 SDK 原始错误消息转换为用户友好的提示（无匹配则返回原文） */
+export function friendlyErrorMessage(raw: string): string {
+  for (const { pattern, message } of FRIENDLY_ERROR_MESSAGES) {
+    if (pattern.test(raw)) return message
+  }
+  return raw
+}
+
+// ============================================================================
 // 错误映射（从 agent-service.ts 迁移）
 // ============================================================================
 
@@ -296,7 +316,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           if (isPromptTooLongError(detailedMessage, originalError)) {
             errorCode = 'prompt_too_long'
           }
-          const typedError = mapSDKErrorToTypedError(errorCode, detailedMessage, originalError)
+          const typedError = mapSDKErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError)
           events.push({ type: 'typed_error', error: typedError })
           break
         }
@@ -546,7 +566,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     if (msg.subtype === 'success') {
       events.push({ type: 'complete', usage })
     } else {
-      const errorMsg = msg.errors ? msg.errors.join(', ') : 'Agent 查询失败'
+      const errorMsg = friendlyErrorMessage(msg.errors ? msg.errors.join(', ') : 'Agent 查询失败')
       events.push({ type: 'error', message: errorMsg })
       events.push({ type: 'complete', usage })
     }
