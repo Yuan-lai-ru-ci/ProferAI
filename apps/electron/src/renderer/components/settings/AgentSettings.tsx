@@ -742,6 +742,8 @@ function valueToEffort(value: string): AgentEffort | undefined {
 }
 
 function AgentAdvancedSettings(): React.ReactElement {
+  const [collapsed, setCollapsed] = React.useState(true)
+
   const thinking = useAtomValue(agentThinkingAtom)
   const setThinking = useSetAtom(agentThinkingAtom)
   const effort = useAtomValue(agentEffortAtom)
@@ -791,43 +793,56 @@ function AgentAdvancedSettings(): React.ReactElement {
 
   return (
     <SettingsSection
-      title="Agent 高级设置"
-      description="控制 Agent 的思考模式、推理深度和资源限制"
+      title={
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className="flex items-center gap-2 hover:text-foreground/80 transition-colors"
+        >
+          {collapsed
+            ? <ChevronRight size={16} className="text-muted-foreground" />
+            : <ChevronDown size={16} className="text-muted-foreground" />
+          }
+          <span>Agent 高级设置</span>
+        </button>
+      }
+      description={collapsed ? undefined : '控制 Agent 的思考模式、推理深度和资源限制'}
     >
-      <SettingsCard>
-        <SettingsSegmentedControl
-          label="思考模式"
-          description="自适应模式下 Agent 会根据任务复杂度自动决定是否启用深度思考"
-          value={thinkingToValue(thinking)}
-          onValueChange={handleThinkingChange}
-          options={THINKING_OPTIONS}
-        />
-        <SettingsSegmentedControl
-          label="推理深度"
-          description="控制 Agent 在每次回复中投入的推理计算量"
-          value={effortToValue(effort)}
-          onValueChange={handleEffortChange}
-          options={EFFORT_OPTIONS}
-        />
-        <SettingsInput
-          label="预算限制（美元/次）"
-          description="单次 Agent 会话的最大花费，留空则不限制"
-          value={budgetStr}
-          onChange={setBudgetStr}
-          onBlur={handleBudgetBlur}
-          placeholder="例如: 1.0"
-          type="number"
-        />
-        <SettingsInput
-          label="最大轮次"
-          description="单次 Agent 会话的最大交互轮次，留空则使用 SDK 默认值"
-          value={turnsStr}
-          onChange={setTurnsStr}
-          onBlur={handleTurnsBlur}
-          placeholder="例如: 30"
-          type="number"
-        />
-      </SettingsCard>
+      {!collapsed && (
+        <SettingsCard>
+          <SettingsSegmentedControl
+            label="思考模式"
+            description="自适应模式下 Agent 会根据任务复杂度自动决定是否启用深度思考"
+            value={thinkingToValue(thinking)}
+            onValueChange={handleThinkingChange}
+            options={THINKING_OPTIONS}
+          />
+          <SettingsSegmentedControl
+            label="推理深度"
+            description="控制 Agent 在每次回复中投入的推理计算量"
+            value={effortToValue(effort)}
+            onValueChange={handleEffortChange}
+            options={EFFORT_OPTIONS}
+          />
+          <SettingsInput
+            label="预算限制（美元/次）"
+            description="单次 Agent 会话的最大花费，留空则不限制"
+            value={budgetStr}
+            onChange={setBudgetStr}
+            onBlur={handleBudgetBlur}
+            placeholder="例如: 1.0"
+            type="number"
+          />
+          <SettingsInput
+            label="最大轮次"
+            description="单次 Agent 会话的最大交互轮次，留空则使用 SDK 默认值"
+            value={turnsStr}
+            onChange={setTurnsStr}
+            onBlur={handleTurnsBlur}
+            placeholder="例如: 30"
+            type="number"
+          />
+        </SettingsCard>
+      )}
     </SettingsSection>
   )
 }
