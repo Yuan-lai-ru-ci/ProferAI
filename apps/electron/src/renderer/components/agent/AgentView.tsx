@@ -16,7 +16,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Sparkles } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Sparkles, Brain } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -53,27 +53,40 @@ import {
   rebuildTeamDataFromMessages,
   agentAttachedDirectoriesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
+  liveMessagesMapAtom,
+  agentThinkingAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import { AgentSessionProvider } from '@/contexts/session-context'
-import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [messages, setMessages] = React.useState<AgentMessage[]>([])
+  const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const streamState = streamingStates.get(sessionId)
   const streaming = streamState?.running ?? false
+  const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
+  const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
+  const liveMessages = liveMessagesMap.get(sessionId) ?? []
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [agentModelId, setAgentModelId] = useAtom(agentModelIdAtom)
+  const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
+  // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
+  const stableChannelIdRef = React.useRef(agentChannelId)
+  if (agentChannelId) stableChannelIdRef.current = agentChannelId
+  const stableChannelId = agentChannelId ?? stableChannelIdRef.current
+
   const contextStatus: AgentContextStatus = {
     isCompacting: streamState?.isCompacting ?? false,
     inputTokens: streamState?.inputTokens,
@@ -123,23 +136,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [pendingFiles])
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
+  const globalChannels = useAtomValue(channelsAtom)
   React.useEffect(() => {
     if (!agentChannelId || agentModelId) return
 
-    window.electronAPI.listChannels().then((channels) => {
-      const channel = channels.find((c) => c.id === agentChannelId && c.enabled)
-      if (!channel) return
+    const channel = globalChannels.find((c) => c.id === agentChannelId && c.enabled)
+    if (!channel) return
 
-      const firstModel = channel.models.find((m) => m.enabled)
-      if (!firstModel) return
+    const firstModel = channel.models.find((m) => m.enabled)
+    if (!firstModel) return
 
-      setAgentModelId(firstModel.id)
-      window.electronAPI.updateSettings({
-        agentChannelId,
-        agentModelId: firstModel.id,
-      }).catch(console.error)
+    setAgentModelId(firstModel.id)
+    window.electronAPI.updateSettings({
+      agentChannelId,
+      agentModelId: firstModel.id,
     }).catch(console.error)
-  }, [agentChannelId, agentModelId, setAgentModelId])
+  }, [agentChannelId, agentModelId, globalChannels, setAgentModelId])
 
   // 获取当前 session 的工作路径（文件浏览器需要）
   React.useEffect(() => {
@@ -187,10 +199,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   // 加载当前会话消息
   React.useEffect(() => {
-    window.electronAPI
-      .getAgentSessionMessages(sessionId)
-      .then((msgs) => {
+    // 并行加载旧格式（用于 Team 数据重建）和新格式（用于 UI 渲染）
+    const loadOldMessages = window.electronAPI.getAgentSessionMessages(sessionId)
+    const loadSDKMessages = window.electronAPI.getAgentSessionSDKMessages(sessionId)
+
+    Promise.all([loadOldMessages, loadSDKMessages])
+      .then(([msgs, sdkMsgs]) => {
         setMessages(msgs)
+        setPersistedSDKMessages(sdkMsgs)
 
         // 从持久化消息中重建 Team 数据并填充缓存（页面刷新后恢复）
         const teamData = rebuildTeamDataFromMessages(msgs)
@@ -219,8 +235,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           }
         }
 
-        // 消息加载完成后，清除已完成的流式状态（running=false 的过渡气泡）
-        // 在同一个微任务中执行，确保 React 在一次渲染中同时显示持久化消息并移除流式气泡
+        // 消息加载完成后，同步清除流式状态和实时消息，
+        // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
+        // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
         setStreamingStates((prev) => {
           const state = prev.get(sessionId)
           if (!state || state.running) return prev  // 仍在运行中，不清除
@@ -228,9 +245,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           map.delete(sessionId)
           return map
         })
+        setLiveMessagesMap((prev) => {
+          if (!prev.has(sessionId)) return prev
+          const map = new Map(prev)
+          map.delete(sessionId)
+          return map
+        })
       })
       .catch(console.error)
-  }, [sessionId, refreshVersion, setStreamingStates, store])
+  }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, store])
 
   // 从会话元数据初始化附加目录
   const sessions = useAtomValue(agentSessionsAtom)
@@ -285,6 +308,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         createdAt: Date.now(),
       }
       setMessages((prev) => [...prev, tempUserMsg])
+
+      // 乐观更新：SDKMessage 格式（Phase 4）
+      const tempUserSDKMsg: SDKMessage = {
+        type: 'user',
+        message: {
+          content: [{ type: 'text', text: prompt.message }],
+        },
+        parent_tool_use_id: null,
+        _createdAt: Date.now(),
+      } as unknown as SDKMessage
+      setPersistedSDKMessages((prev) => [...prev, tempUserSDKMsg])
 
       // 发送消息
       const input: AgentSendInput = {
@@ -605,6 +639,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
     setMessages((prev) => [...prev, tempUserMsg])
 
+    // 乐观更新：SDKMessage 格式的用户消息（Phase 4）
+    const tempUserSDKMsg: SDKMessage = {
+      type: 'user',
+      message: {
+        content: [{ type: 'text', text: finalMessage }],
+      },
+      parent_tool_use_id: null,
+      _createdAt: Date.now(),
+    } as unknown as SDKMessage
+    setPersistedSDKMessages((prev) => [...prev, tempUserSDKMsg])
+
     const input: AgentSendInput = {
       sessionId,
       userMessage: finalMessage,
@@ -788,8 +833,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         <AgentMessages
           sessionId={sessionId}
           messages={messages}
+          persistedSDKMessages={persistedSDKMessages}
           streaming={streaming}
           streamState={streamState}
+          liveMessages={liveMessages}
           sessionPath={sessionPath}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
@@ -903,58 +950,84 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             />
 
             {/* Footer 工具栏 */}
-            <div className="flex items-center justify-between px-2 py-[5px] h-[40px] gap-4">
+            <div className="flex items-center justify-between px-2 py-1 h-[48px] gap-4">
               <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                {agentChannelId && (
-                  <>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-[30px] rounded-full text-foreground/60 hover:text-foreground"
-                          onClick={handleOpenFileDialog}
-                        >
-                          <Paperclip className="size-5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">
-                        <p>添加附件</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-[30px] rounded-full text-foreground/60 hover:text-foreground"
-                          onClick={handleAttachFolder}
-                        >
-                          <FolderPlus className="size-5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">
-                        <p>附加文件夹</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <PermissionModeSelector />
-                    <ModelSelector
-                      filterChannelId={agentChannelId}
-                      externalSelectedModel={externalSelectedModel}
-                      onModelSelect={handleModelSelect}
-                    />
-                    <ContextUsageBadge
-                      inputTokens={contextStatus.inputTokens}
-                      contextWindow={contextStatus.contextWindow}
-                      isCompacting={contextStatus.isCompacting}
-                      isProcessing={streaming}
-                      onCompact={handleCompact}
-                    />
-                    <FeishuNotifyToggle sessionId={sessionId} />
-                  </>
+                {stableChannelId && (
+                  <ModelSelector
+                    filterChannelId={stableChannelId}
+                    externalSelectedModel={externalSelectedModel}
+                    onModelSelect={handleModelSelect}
+                  />
                 )}
+                <PermissionModeSelector />
+                {/* 思考模式切换 */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        'size-[36px] rounded-full',
+                        agentThinking?.type === 'adaptive'
+                          ? 'text-green-500'
+                          : 'text-foreground/60 hover:text-foreground'
+                      )}
+                      onClick={() => {
+                        const next = agentThinking?.type === 'adaptive'
+                          ? { type: 'disabled' as const }
+                          : { type: 'adaptive' as const }
+                        setAgentThinking(next)
+                        window.electronAPI.updateSettings({ agentThinking: next })
+                      }}
+                    >
+                      <Brain className="size-5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p>{agentThinking?.type === 'adaptive' ? '关闭思考模式' : '开启思考模式（自适应）'}</p>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
+                      onClick={handleOpenFileDialog}
+                    >
+                      <Paperclip className="size-5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p>添加附件</p>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
+                      onClick={handleAttachFolder}
+                    >
+                      <FolderPlus className="size-5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p>附加文件夹</p>
+                  </TooltipContent>
+                </Tooltip>
+                <ContextUsageBadge
+                  inputTokens={contextStatus.inputTokens}
+                  contextWindow={contextStatus.contextWindow}
+                  isCompacting={contextStatus.isCompacting}
+                  isProcessing={streaming}
+                  onCompact={handleCompact}
+                />
+                {/* <FeishuNotifyToggle sessionId={sessionId} /> */}
               </div>
 
               <div className="flex items-center gap-1.5">
@@ -963,7 +1036,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-[30px] rounded-full text-destructive hover:bg-destructive/10"
+                    className="size-[36px] rounded-full text-destructive hover:bg-destructive/10"
                     onClick={handleStop}
                   >
                     <Square className="size-[22px]" />
@@ -974,7 +1047,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     variant="ghost"
                     size="icon"
                     className={cn(
-                      'size-[30px] rounded-full',
+                      'size-[36px] rounded-full',
                       canSend
                         ? 'text-primary hover:bg-primary/10'
                         : 'text-foreground/30 cursor-not-allowed'

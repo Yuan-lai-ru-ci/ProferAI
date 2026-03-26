@@ -42,6 +42,7 @@ import {
   ReasoningContent,
 } from '@/components/ai-elements/reasoning'
 import { useSmoothStream } from '@proma/ui'
+import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { useConversationParallelMode } from '@/hooks/useConversationSettings'
 import { getModelLogo } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -291,7 +292,8 @@ export function ChatMessages({
   const dividerSet = new Set(contextDividers)
 
   return (
-    <Conversation className={ready ? `${streaming ? '' : 'cv-ready '}opacity-100 transition-opacity duration-200` : 'opacity-0'}>
+    <Conversation resize={ready ? 'smooth' : 'instant'} className={ready ? `${streaming ? '' : 'cv-ready '}opacity-100 transition-opacity duration-200` : 'opacity-0'}>
+      <ScrollPositionManager id={conversationId} ready={ready} />
       {/* 滚动到顶部时自动加载更多历史 */}
       <ScrollTopLoader
         hasMore={hasMore}

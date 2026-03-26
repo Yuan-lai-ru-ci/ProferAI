@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ThinkingConfig, AgentEffort, TaskUsage, AgentTeamData } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ThinkingConfig, AgentEffort, TaskUsage, AgentTeamData, SDKMessage } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -183,7 +183,7 @@ export function groupActivities(activities: ToolActivity[]): Array<ActivityGroup
 
   const parentIds = new Set<string>()
   for (const a of processed) {
-    if (a.toolName === 'Task') parentIds.add(a.toolUseId)
+    if (a.toolName === 'Task' || a.toolName === 'Agent') parentIds.add(a.toolUseId)
   }
 
   const childrenMap = new Map<string, ToolActivity[]>()
@@ -544,6 +544,15 @@ export const agentModelIdAtom = atom<string | null>(null)
 export const currentAgentSessionIdAtom = atom<string | null>(null)
 export const currentAgentMessagesAtom = atom<AgentMessage[]>([])
 export const agentStreamingStatesAtom = atom<Map<string, AgentStreamState>>(new Map())
+
+/**
+ * 实时 SDKMessage 累积 Map — Phase 2 新增
+ *
+ * 流式期间每条 SDKMessage 直接追加，供新 UI 渲染。
+ * 流式完成后清空（持久化消息从 JSONL 加载）。
+ */
+export const liveMessagesMapAtom = atom<Map<string, SDKMessage[]>>(new Map())
+
 export const agentPendingPromptAtom = atom<AgentPendingPrompt | null>(null)
 
 /** Agent 待发送文件列表 */
@@ -679,7 +688,7 @@ export const teamOverviewAtom = atom<TeamOverview | null>((get) => {
 // ===== 权限系统 Atoms =====
 
 /** 当前工作区权限模式 */
-export const agentPermissionModeAtom = atom<PromaPermissionMode>('smart')
+export const agentPermissionModeAtom = atom<PromaPermissionMode>('acceptEdits')
 
 /** Agent 思考模式 */
 export const agentThinkingAtom = atom<ThinkingConfig | undefined>(undefined)

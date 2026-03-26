@@ -19,7 +19,7 @@ import {
   getAgentWorkspacePath,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import type { AgentSessionMeta, AgentMessage } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, SDKMessage } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
 
@@ -156,6 +156,115 @@ export function appendAgentMessage(id: string, message: AgentMessage): void {
     console.error(`[Agent 会话] 追加消息失败 (${id}):`, error)
     throw new Error('追加 Agent 消息失败')
   }
+}
+
+/**
+ * 追加 SDKMessage 到会话的 JSONL 文件（Phase 4 新持久化格式）
+ *
+ * 每条 SDKMessage 单独一行 JSON。读取时通过 `type` 字段区分新旧格式。
+ */
+export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
+  if (messages.length === 0) return
+
+  const filePath = getAgentSessionMessagesPath(id)
+
+  try {
+    const lines = messages.map((m) => JSON.stringify(m)).join('\n') + '\n'
+    appendFileSync(filePath, lines, 'utf-8')
+  } catch (error) {
+    console.error(`[Agent 会话] 追加 SDKMessage 失败 (${id}):`, error)
+    throw new Error('追加 SDKMessage 失败')
+  }
+}
+
+/**
+ * 读取会话的所有 SDKMessage（兼容旧 AgentMessage 格式）
+ *
+ * 旧格式（有 `role` 字段）会被转换为近似的 SDKMessage。
+ * 新格式（有 `type` 字段）直接返回。
+ */
+export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
+  const filePath = getAgentSessionMessagesPath(id)
+
+  if (!existsSync(filePath)) {
+    return []
+  }
+
+  try {
+    const raw = readFileSync(filePath, 'utf-8')
+    const lines = raw.split('\n').filter((line) => line.trim())
+    return lines.map((line) => {
+      const parsed = JSON.parse(line)
+      // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
+      if ('role' in parsed && !('type' in parsed)) {
+        return convertLegacyMessage(parsed as AgentMessage)
+      }
+      return parsed as SDKMessage
+    })
+  } catch (error) {
+    console.error(`[Agent 会话] 读取 SDKMessage 失败 (${id}):`, error)
+    return []
+  }
+}
+
+/**
+ * 将旧的 AgentMessage 转换为近似的 SDKMessage（向后兼容）
+ *
+ * 不需要完美还原，只需在 UI 中可读即可。
+ */
+function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
+  if (legacy.role === 'user') {
+    return {
+      type: 'user',
+      message: {
+        content: [{ type: 'text', text: legacy.content }],
+      },
+      parent_tool_use_id: null,
+      // 附加元数据供渲染器使用
+      _legacy: true,
+      _createdAt: legacy.createdAt,
+    } as unknown as SDKMessage
+  }
+
+  if (legacy.role === 'assistant') {
+    return {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: legacy.content }],
+        model: legacy.model,
+      },
+      parent_tool_use_id: null,
+      _legacy: true,
+      _createdAt: legacy.createdAt,
+    } as unknown as SDKMessage
+  }
+
+  if (legacy.role === 'status') {
+    // 错误消息转换为 assistant error 格式
+    return {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: legacy.content }],
+      },
+      parent_tool_use_id: null,
+      error: { message: legacy.content, errorType: legacy.errorCode },
+      _legacy: true,
+      _createdAt: legacy.createdAt,
+      _errorCode: legacy.errorCode,
+      _errorTitle: legacy.errorTitle,
+      _errorDetails: legacy.errorDetails,
+      _errorCanRetry: legacy.errorCanRetry,
+      _errorActions: legacy.errorActions,
+    } as unknown as SDKMessage
+  }
+
+  // 其他类型，作为 system 消息返回
+  return {
+    type: 'system',
+    subtype: 'init',
+    _legacy: true,
+    _createdAt: legacy.createdAt,
+  } as unknown as SDKMessage
 }
 
 /**

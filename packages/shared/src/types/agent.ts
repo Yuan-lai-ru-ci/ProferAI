@@ -151,6 +151,155 @@ export interface JsonSchemaOutputFormat {
   description?: string
 }
 
+// ===== SDK 消息类型（直接透传，不再翻译） =====
+
+/** SDK 文本内容块 */
+export interface SDKTextBlock {
+  type: 'text'
+  text: string
+}
+
+/** SDK 工具调用内容块 */
+export interface SDKToolUseBlock {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+/** SDK 思考内容块 */
+export interface SDKThinkingBlock {
+  type: 'thinking'
+  thinking: string
+}
+
+/** SDK 内容块联合类型 */
+export type SDKContentBlock =
+  | SDKTextBlock
+  | SDKToolUseBlock
+  | SDKThinkingBlock
+  | { type: string; [key: string]: unknown }
+
+/** SDK tool_result 内容块（在 user 消息中） */
+export interface SDKToolResultBlock {
+  type: 'tool_result'
+  tool_use_id: string
+  content?: unknown
+  is_error?: boolean
+}
+
+/** SDK user 消息内容块联合类型 */
+export type SDKUserContentBlock =
+  | SDKToolResultBlock
+  | SDKTextBlock
+  | { type: string; [key: string]: unknown }
+
+/** SDK assistant 消息 */
+export interface SDKAssistantMessage {
+  type: 'assistant'
+  message: {
+    content: SDKContentBlock[]
+    usage?: {
+      input_tokens: number
+      output_tokens?: number
+      cache_read_input_tokens?: number
+      cache_creation_input_tokens?: number
+    }
+    model?: string
+    stop_reason?: string
+  }
+  parent_tool_use_id: string | null
+  session_id?: string
+  error?: { message: string; errorType?: string }
+  isReplay?: boolean
+}
+
+/** SDK user 消息 */
+export interface SDKUserMessage {
+  type: 'user'
+  message?: {
+    content?: SDKUserContentBlock[]
+  }
+  parent_tool_use_id: string | null
+  session_id?: string
+  tool_use_result?: unknown
+  isReplay?: boolean
+}
+
+/** SDK result 消息（查询结束时返回） */
+export interface SDKResultMessage {
+  type: 'result'
+  subtype: 'success' | 'error'
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  }
+  total_cost_usd?: number
+  modelUsage?: Record<string, { contextWindow?: number }>
+  errors?: string[]
+  session_id?: string
+}
+
+/** SDK system 消息（init / compact_boundary / task_started / task_progress / task_notification） */
+export interface SDKSystemMessage {
+  type: 'system'
+  subtype?: string
+  session_id?: string
+  /** init: 确认的模型 */
+  model?: string
+  /** task 相关字段 */
+  task_id?: string
+  description?: string
+  task_type?: string
+  tool_use_id?: string
+  status?: string
+  summary?: string
+  output_file?: string
+  last_tool_name?: string
+  usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
+  [key: string]: unknown
+}
+
+/** SDK tool_progress 消息（工具执行心跳） */
+export interface SDKToolProgressMessage {
+  type: 'tool_progress'
+  tool_use_id: string
+  tool_name: string
+  parent_tool_use_id: string | null
+  elapsed_time_seconds?: number
+  /** Agent Teams: 所属 teammate 任务 ID */
+  task_id?: string
+  session_id?: string
+}
+
+/** SDK prompt_suggestion 消息 */
+export interface SDKPromptSuggestionMessage {
+  type: 'prompt_suggestion'
+  suggestion?: string
+  session_id?: string
+}
+
+/** SDK tool_use_summary 消息 */
+export interface SDKToolUseSummaryMessage {
+  type: 'tool_use_summary'
+  summary?: string
+  preceding_tool_use_ids?: string[]
+  session_id?: string
+}
+
+/** SDK 消息联合类型（v1 query + includePartialMessages: false 返回的完整 JSON 对象） */
+export type SDKMessage =
+  | SDKAssistantMessage
+  | SDKUserMessage
+  | SDKResultMessage
+  | SDKSystemMessage
+  | SDKToolProgressMessage
+  | SDKPromptSuggestionMessage
+  | SDKToolUseSummaryMessage
+  | { type: string; session_id?: string; parent_tool_use_id?: string | null; [key: string]: unknown }
+
 // ===== Agent 事件类型 =====
 
 /** 错误代码 */
@@ -319,6 +468,27 @@ export type AgentEvent =
   // Auto-Resume（Teams 完成后自动收集结果）
   | { type: 'waiting_resume'; message: string }
   | { type: 'resume_start'; messageId: string }
+  // 权限模式变更（Plan → bypassPermissions 等）
+  | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
+
+// ===== Proma 内部事件（SDK 不覆盖的场景） =====
+
+/** Proma 内部事件类型 */
+export type PromaEvent =
+  | { type: 'permission_request'; request: PermissionRequest }
+  | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
+  | { type: 'ask_user_request'; request: AskUserRequest }
+  | { type: 'ask_user_resolved'; requestId: string }
+  | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
+  | { type: 'model_resolved'; model: string }
+  | { type: 'waiting_resume'; message: string }
+  | { type: 'resume_start'; messageId: string }
+  | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
+
+/** IPC 传输的统一 payload（替代 AgentEvent） */
+export type AgentStreamPayload =
+  | { kind: 'sdk_message'; message: SDKMessage }
+  | { kind: 'proma_event'; event: PromaEvent }
 
 // ===== Agent 会话管理 =====
 
@@ -467,7 +637,7 @@ export interface AgentSendInput {
   additionalDirectories?: string[]
   /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */
   customMcpServers?: Record<string, Record<string, unknown>>
-  /** 强制覆盖权限模式（飞书等无 UI 交互场景下强制 'auto'） */
+  /** 强制覆盖权限模式（飞书等无 UI 交互场景下强制 'bypassPermissions'） */
   permissionModeOverride?: PromaPermissionMode
   /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
   mentionedSkills?: string[]
@@ -529,8 +699,10 @@ export interface StopTaskInput {
 export interface AgentStreamEvent {
   /** 会话 ID */
   sessionId: string
-  /** 事件数据 */
-  event: AgentEvent
+  /** 事件数据（新格式） */
+  payload: AgentStreamPayload
+  /** @deprecated 兼容旧格式，Phase 2 后移除 */
+  event?: AgentEvent
 }
 
 /**
@@ -664,11 +836,24 @@ export interface AskUserResponse {
 
 // ===== 权限系统类型 =====
 
-/** Proma 权限模式 */
-export type PromaPermissionMode = 'auto' | 'smart' | 'supervised'
+/** Proma 权限模式（直接映射 SDK 原生模式） */
+export type PromaPermissionMode = 'acceptEdits' | 'bypassPermissions' | 'plan'
 
 /** 权限模式定义顺序（用于循环切换） */
-export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['auto', 'smart', 'supervised']
+export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['acceptEdits', 'bypassPermissions', 'plan']
+
+/** 旧权限模式到新模式的迁移映射 */
+const PERMISSION_MODE_MIGRATION: Record<string, PromaPermissionMode> = {
+  auto: 'bypassPermissions',
+  smart: 'acceptEdits',
+  supervised: 'acceptEdits',
+}
+
+/** 迁移旧权限模式值到新模式 */
+export function migratePermissionMode(mode: string): PromaPermissionMode {
+  if (mode === 'acceptEdits' || mode === 'bypassPermissions' || mode === 'plan') return mode
+  return PERMISSION_MODE_MIGRATION[mode] ?? 'acceptEdits'
+}
 
 /** 危险等级 */
 export type DangerLevel = 'safe' | 'normal' | 'dangerous'
@@ -794,6 +979,8 @@ export const AGENT_IPC_CHANNELS = {
   CREATE_SESSION: 'agent:create-session',
   /** 获取会话消息 */
   GET_MESSAGES: 'agent:get-messages',
+  /** 获取会话 SDKMessage（Phase 4 新格式） */
+  GET_SDK_MESSAGES: 'agent:get-sdk-messages',
   /** 更新会话标题 */
   UPDATE_TITLE: 'agent:update-title',
   /** 删除会话 */

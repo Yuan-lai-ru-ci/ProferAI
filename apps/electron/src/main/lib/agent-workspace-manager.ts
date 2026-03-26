@@ -20,6 +20,7 @@ import {
   getDefaultSkillsDir,
 } from './config-paths'
 import type { AgentWorkspace, McpServerEntry, WorkspaceMcpConfig, SkillMeta, WorkspaceCapabilities, PromaPermissionMode } from '@proma/shared'
+import { migratePermissionMode } from '@proma/shared'
 
 /**
  * 工作区索引文件格式
@@ -509,11 +510,11 @@ function writeWorkspaceConfig(workspaceSlug: string, config: WorkspaceConfig): v
 /**
  * 获取工作区权限模式
  *
- * 默认返回 'smart'（智能模式）。
+ * 默认返回 'acceptEdits'。支持旧模式值自动迁移。
  */
 export function getWorkspacePermissionMode(workspaceSlug: string): PromaPermissionMode {
   const config = readWorkspaceConfig(workspaceSlug)
-  return config.permissionMode ?? 'smart'
+  return config.permissionMode ? migratePermissionMode(config.permissionMode) : 'acceptEdits'
 }
 
 /**

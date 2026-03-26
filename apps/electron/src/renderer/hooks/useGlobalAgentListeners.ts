@@ -26,6 +26,8 @@ import {
   buildTeamActivityEntries,
   extractTeamOverview,
   applyAgentEvent,
+  liveMessagesMapAtom,
+  agentPermissionModeAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -33,7 +35,194 @@ import {
 } from '@/atoms/notifications'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import type { AgentStreamEvent, AgentStreamCompletePayload } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
+
+// ============================================================================
+// Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
+// Phase 2 将移除此转换，直接使用 SDKMessage 渲染
+// ============================================================================
+
+function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
+  if (payload.kind === 'proma_event') {
+    const evt = payload.event
+    switch (evt.type) {
+      case 'permission_request':
+        return [{ type: 'permission_request', request: evt.request }]
+      case 'permission_resolved':
+        return [{ type: 'permission_resolved', requestId: evt.requestId, behavior: evt.behavior }]
+      case 'ask_user_request':
+        return [{ type: 'ask_user_request', request: evt.request }]
+      case 'ask_user_resolved':
+        return [{ type: 'ask_user_resolved', requestId: evt.requestId }]
+      case 'model_resolved':
+        return [{ type: 'model_resolved', model: evt.model }]
+      case 'permission_mode_changed':
+        return [{ type: 'permission_mode_changed', mode: evt.mode }]
+      case 'waiting_resume':
+        return [{ type: 'waiting_resume', message: evt.message }]
+      case 'resume_start':
+        return [{ type: 'resume_start', messageId: evt.messageId }]
+      case 'retry': {
+        const events: AgentEvent[] = []
+        if (evt.status === 'starting' && evt.attempt != null && evt.maxAttempts != null) {
+          events.push({ type: 'retrying', attempt: evt.attempt, maxAttempts: evt.maxAttempts, delaySeconds: evt.delaySeconds ?? 0, reason: evt.reason ?? '' })
+        }
+        if (evt.status === 'attempt' && evt.attemptData) {
+          events.push({ type: 'retry_attempt', attemptData: evt.attemptData })
+        }
+        if (evt.status === 'cleared') {
+          events.push({ type: 'retry_cleared' })
+        }
+        if (evt.status === 'failed' && evt.attemptData) {
+          events.push({ type: 'retry_failed', finalAttempt: evt.attemptData })
+        }
+        return events
+      }
+      default:
+        return []
+    }
+  }
+
+  // sdk_message → 转换为对应的 AgentEvent
+  const msg = payload.message
+
+  switch (msg.type) {
+    case 'assistant': {
+      const aMsg = msg as SDKAssistantMessage
+      if (aMsg.isReplay) return []
+      if (aMsg.error) {
+        // 错误已在主进程处理，这里仅作为 typed_error 透传
+        return [{ type: 'error', message: aMsg.error.message }]
+      }
+      const events: AgentEvent[] = []
+      for (const block of aMsg.message.content) {
+        if (block.type === 'text' && 'text' in block) {
+          events.push({ type: 'text_complete', text: (block as { text: string }).text, isIntermediate: false, parentToolUseId: aMsg.parent_tool_use_id ?? undefined })
+        } else if (block.type === 'tool_use') {
+          const tb = block as SDKContentBlock & { id: string; name: string; input: Record<string, unknown> }
+          const intent = (tb.input._intent as string | undefined)
+            ?? (tb.name === 'Bash' ? (tb.input.description as string | undefined) : undefined)
+          events.push({
+            type: 'tool_start',
+            toolName: tb.name,
+            toolUseId: tb.id,
+            input: tb.input,
+            intent,
+            displayName: tb.input._displayName as string | undefined,
+            parentToolUseId: aMsg.parent_tool_use_id ?? undefined,
+          })
+        }
+      }
+      // Usage
+      if (!aMsg.parent_tool_use_id && aMsg.message.usage) {
+        const u = aMsg.message.usage
+        const inputTokens = u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+        events.push({ type: 'usage_update', usage: { inputTokens } })
+      }
+      return events
+    }
+
+    case 'user': {
+      const uMsg = msg as SDKUserMessage
+      if (uMsg.isReplay) return []
+      const events: AgentEvent[] = []
+      const contentBlocks = uMsg.message?.content ?? []
+      for (const block of contentBlocks) {
+        if (block.type === 'tool_result') {
+          const tb = block as SDKUserContentBlock & { tool_use_id: string; content?: unknown; is_error?: boolean }
+          const resultStr = typeof tb.content === 'string' ? tb.content : (tb.content != null ? JSON.stringify(tb.content) : '')
+          events.push({
+            type: 'tool_result',
+            toolUseId: tb.tool_use_id,
+            result: resultStr,
+            isError: tb.is_error ?? false,
+            parentToolUseId: uMsg.parent_tool_use_id ?? undefined,
+          })
+        }
+      }
+      return events
+    }
+
+    case 'result': {
+      const rMsg = msg as { subtype: string; usage?: { input_tokens: number; output_tokens?: number }; modelUsage?: Record<string, { contextWindow?: number }> }
+      const usage = rMsg.usage
+      const contextWindow = rMsg.modelUsage ? Object.values(rMsg.modelUsage)[0]?.contextWindow : undefined
+      return [{
+        type: 'complete',
+        stopReason: rMsg.subtype === 'success' ? 'end_turn' : 'error',
+        usage: usage ? {
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          contextWindow,
+        } : undefined,
+      }]
+    }
+
+    case 'system': {
+      const sMsg = msg as SDKSystemMessage
+      if (sMsg.subtype === 'compact_boundary') return [{ type: 'compact_complete' }]
+      if (sMsg.subtype === 'compacting') return [{ type: 'compacting' }]
+      if (sMsg.subtype === 'task_started' && sMsg.task_id) {
+        return [{ type: 'task_started', taskId: sMsg.task_id, description: sMsg.description ?? '', taskType: sMsg.task_type, toolUseId: sMsg.tool_use_id }]
+      }
+      if (sMsg.subtype === 'task_notification' && sMsg.task_id) {
+        return [{
+          type: 'task_notification',
+          taskId: sMsg.task_id,
+          status: (sMsg.status as 'completed' | 'failed' | 'stopped') ?? 'completed',
+          summary: sMsg.summary ?? '',
+          outputFile: sMsg.output_file,
+          toolUseId: sMsg.tool_use_id,
+          usage: sMsg.usage ? {
+            totalTokens: sMsg.usage.total_tokens ?? 0,
+            toolUses: sMsg.usage.tool_uses ?? 0,
+            durationMs: sMsg.usage.duration_ms ?? 0,
+          } : undefined,
+        }]
+      }
+      if (sMsg.subtype === 'task_progress' && sMsg.task_id) {
+        return [{
+          type: 'task_progress',
+          taskId: sMsg.task_id,
+          toolUseId: sMsg.tool_use_id ?? sMsg.task_id,
+          description: sMsg.description,
+          lastToolName: sMsg.last_tool_name,
+          usage: sMsg.usage ? {
+            totalTokens: sMsg.usage.total_tokens ?? 0,
+            toolUses: sMsg.usage.tool_uses ?? 0,
+            durationMs: sMsg.usage.duration_ms ?? 0,
+          } : undefined,
+        }]
+      }
+      return []
+    }
+
+    case 'tool_progress': {
+      const tpMsg = msg as { tool_use_id: string; elapsed_time_seconds?: number; task_id?: string }
+      return [{
+        type: 'task_progress',
+        toolUseId: tpMsg.tool_use_id,
+        elapsedSeconds: tpMsg.elapsed_time_seconds,
+        taskId: tpMsg.task_id,
+      }]
+    }
+
+    case 'prompt_suggestion': {
+      const psMsg = msg as { suggestion?: string }
+      if (psMsg.suggestion) return [{ type: 'prompt_suggestion', suggestion: psMsg.suggestion }]
+      return []
+    }
+
+    case 'tool_use_summary': {
+      const tusMsg = msg as { summary?: string; preceding_tool_use_ids?: string[] }
+      if (tusMsg.summary) return [{ type: 'tool_use_summary', summary: tusMsg.summary, precedingToolUseIds: tusMsg.preceding_tool_use_ids ?? [] }]
+      return []
+    }
+
+    default:
+      return []
+  }
+}
 
 export function useGlobalAgentListeners(): void {
   const store = useStore()
@@ -42,125 +231,147 @@ export function useGlobalAgentListeners(): void {
     // ===== 1. 流式事件 =====
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
       (streamEvent: AgentStreamEvent) => {
-        const { sessionId, event } = streamEvent
+        const { sessionId, payload } = streamEvent
 
-        // 更新流式状态
-        store.set(agentStreamingStatesAtom, (prev) => {
-          const current: AgentStreamState = prev.get(sessionId) ?? {
-            running: true,
-            content: '',
-            toolActivities: [],
-            teammates: [],
-            model: undefined,
-            startedAt: Date.now(),
+        // Phase 2: 直接累积 SDKMessage 到 liveMessagesMapAtom（跳过 replay 消息，避免与持久化消息重复）
+        if (payload.kind === 'sdk_message') {
+          const msgRecord = payload.message as Record<string, unknown>
+          if (!msgRecord.isReplay) {
+            store.set(liveMessagesMapAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              map.set(sessionId, [...current, payload.message])
+              return map
+            })
           }
-          const next = applyAgentEvent(current, event)
-          const map = new Map(prev)
-          map.set(sessionId, next)
-          return map
-        })
-
-        // 自动打开侧面板：检测到 Agent/Task 工具启动或 teammate 任务开始时
-        if (
-          (event.type === 'tool_start' && (event.toolName === 'Agent' || event.toolName === 'Task')) ||
-          event.type === 'task_started'
-        ) {
-          store.set(agentSidePanelOpenMapAtom, (prev) => {
-            const map = new Map(prev)
-            map.set(sessionId, true)
-            return map
-          })
-          store.set(agentSidePanelTabMapAtom, (prev) => {
-            const map = new Map(prev)
-            map.set(sessionId, 'team')
-            return map
-          })
         }
 
-        // 处理后台任务事件
-        if (event.type === 'task_backgrounded') {
-          store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
-            if (prev.some((t) => t.toolUseId === event.toolUseId)) return prev
-            return [...prev, {
-              id: event.taskId,
-              type: 'agent' as const,
-              toolUseId: event.toolUseId,
-              startTime: Date.now(),
-              elapsedSeconds: 0,
-              intent: event.intent,
-            }]
+        // Phase 1 兼容：将新 AgentStreamPayload 转换为旧 AgentEvent[]
+        const legacyEvents = payloadToLegacyEvents(payload)
+
+        for (const event of legacyEvents) {
+          // 更新流式状态
+          store.set(agentStreamingStatesAtom, (prev) => {
+            const current: AgentStreamState = prev.get(sessionId) ?? {
+              running: true,
+              content: '',
+              toolActivities: [],
+              teammates: [],
+              model: undefined,
+              startedAt: Date.now(),
+            }
+            const next = applyAgentEvent(current, event)
+            const map = new Map(prev)
+            map.set(sessionId, next)
+            return map
           })
-        } else if (event.type === 'task_progress') {
-          store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
-            prev.map((t) =>
-              t.toolUseId === event.toolUseId
-                ? { ...t, elapsedSeconds: event.elapsedSeconds ?? t.elapsedSeconds }
-                : t
+
+          // 自动打开侧面板：检测到 Agent/Task 工具启动或 teammate 任务开始时
+          if (
+            (event.type === 'tool_start' && (event.toolName === 'Agent' || event.toolName === 'Task')) ||
+            event.type === 'task_started'
+          ) {
+            store.set(agentSidePanelOpenMapAtom, (prev) => {
+              const map = new Map(prev)
+              map.set(sessionId, true)
+              return map
+            })
+            store.set(agentSidePanelTabMapAtom, (prev) => {
+              const map = new Map(prev)
+              map.set(sessionId, 'team')
+              return map
+            })
+          }
+
+          // 处理后台任务事件
+          if (event.type === 'task_backgrounded') {
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
+              if (prev.some((t) => t.toolUseId === event.toolUseId)) return prev
+              return [...prev, {
+                id: event.taskId,
+                type: 'agent' as const,
+                toolUseId: event.toolUseId,
+                startTime: Date.now(),
+                elapsedSeconds: 0,
+                intent: event.intent,
+              }]
+            })
+          } else if (event.type === 'task_progress') {
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
+              prev.map((t) =>
+                t.toolUseId === event.toolUseId
+                  ? { ...t, elapsedSeconds: event.elapsedSeconds ?? t.elapsedSeconds }
+                  : t
+              )
             )
-          )
-        } else if (event.type === 'shell_backgrounded') {
-          store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
-            if (prev.some((t) => t.toolUseId === event.toolUseId)) return prev
-            return [...prev, {
-              id: event.shellId,
-              type: 'shell' as const,
-              toolUseId: event.toolUseId,
-              startTime: Date.now(),
-              elapsedSeconds: 0,
-              intent: event.command || event.intent,
-            }]
-          })
-        } else if (event.type === 'tool_result') {
-          // 工具完成时，移除对应的后台任务
-          store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
-            prev.filter((t) => t.toolUseId !== event.toolUseId)
-          )
-        } else if (event.type === 'shell_killed') {
-          store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
-            const task = prev.find((t) => t.id === event.shellId)
-            if (!task) return prev
-            return prev.filter((t) => t.toolUseId !== task.toolUseId)
-          })
-        } else if (event.type === 'prompt_suggestion') {
-          // 存储提示建议到 atom
-          console.log(`[GlobalAgentListeners] 收到建议: sessionId=${sessionId}, suggestion="${event.suggestion.slice(0, 50)}..."`)
-          store.set(agentPromptSuggestionsAtom, (prev) => {
-            const map = new Map(prev)
-            map.set(sessionId, event.suggestion)
-            return map
-          })
-        } else if (event.type === 'permission_request') {
-          // 权限请求入队（统一通道，不区分当前/后台会话）
-          store.set(allPendingPermissionRequestsAtom, (prev) => {
-            const map = new Map(prev)
-            const current = map.get(sessionId) ?? []
-            map.set(sessionId, [...current, event.request])
-            return map
-          })
-          // 桌面通知
-          const enabled = store.get(notificationsEnabledAtom)
-          sendDesktopNotification(
-            '需要权限确认',
-            event.request.toolName
-              ? `Agent 请求使用工具: ${event.request.toolName}`
-              : 'Agent 需要你的权限确认',
-            enabled
-          )
-        } else if (event.type === 'ask_user_request') {
-          // AskUser 请求入队（统一通道，不区分当前/后台会话）
-          store.set(allPendingAskUserRequestsAtom, (prev) => {
-            const map = new Map(prev)
-            const current = map.get(sessionId) ?? []
-            map.set(sessionId, [...current, event.request])
-            return map
-          })
-          // 桌面通知
-          const enabled = store.get(notificationsEnabledAtom)
-          sendDesktopNotification(
-            'Agent 需要你的输入',
-            event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
-            enabled
-          )
+          } else if (event.type === 'shell_backgrounded') {
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
+              if (prev.some((t) => t.toolUseId === event.toolUseId)) return prev
+              return [...prev, {
+                id: event.shellId,
+                type: 'shell' as const,
+                toolUseId: event.toolUseId,
+                startTime: Date.now(),
+                elapsedSeconds: 0,
+                intent: event.command || event.intent,
+              }]
+            })
+          } else if (event.type === 'tool_result') {
+            // 工具完成时，移除对应的后台任务
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
+              prev.filter((t) => t.toolUseId !== event.toolUseId)
+            )
+          } else if (event.type === 'shell_killed') {
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
+              const task = prev.find((t) => t.id === event.shellId)
+              if (!task) return prev
+              return prev.filter((t) => t.toolUseId !== task.toolUseId)
+            })
+          } else if (event.type === 'prompt_suggestion') {
+            // 存储提示建议到 atom
+            console.log(`[GlobalAgentListeners] 收到建议: sessionId=${sessionId}, suggestion="${event.suggestion.slice(0, 50)}..."`)
+            store.set(agentPromptSuggestionsAtom, (prev) => {
+              const map = new Map(prev)
+              map.set(sessionId, event.suggestion)
+              return map
+            })
+          } else if (event.type === 'permission_request') {
+            // 权限请求入队（统一通道，不区分当前/后台会话）
+            store.set(allPendingPermissionRequestsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              map.set(sessionId, [...current, event.request])
+              return map
+            })
+            // 桌面通知
+            const enabled = store.get(notificationsEnabledAtom)
+            sendDesktopNotification(
+              '需要权限确认',
+              event.request.toolName
+                ? `Agent 请求使用工具: ${event.request.toolName}`
+                : 'Agent 需要你的权限确认',
+              enabled
+            )
+          } else if (event.type === 'ask_user_request') {
+            // AskUser 请求入队（统一通道，不区分当前/后台会话）
+            store.set(allPendingAskUserRequestsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              map.set(sessionId, [...current, event.request])
+              return map
+            })
+            // 桌面通知
+            const enabled = store.get(notificationsEnabledAtom)
+            sendDesktopNotification(
+              'Agent 需要你的输入',
+              event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
+              enabled
+            )
+          } else if (event.type === 'permission_mode_changed') {
+            // 权限模式变更（如 Plan 模式退出时切换到完全自动）
+            console.log(`[GlobalAgentListeners] 权限模式变更: ${event.mode}`)
+            store.set(agentPermissionModeAtom, event.mode)
+          }
         }
       }
     )
@@ -243,6 +454,9 @@ export function useGlobalAgentListeners(): void {
 
           // 清理后台任务
           store.set(backgroundTasksAtomFamily(data.sessionId), [])
+
+          // 注意：liveMessages 的清理已移至 AgentView 消息加载完成后执行，
+          // 与 streamingState 清理同步，避免「实时消息已清 → 持久化消息未到」的空档闪烁
 
           // 刷新会话列表
           window.electronAPI

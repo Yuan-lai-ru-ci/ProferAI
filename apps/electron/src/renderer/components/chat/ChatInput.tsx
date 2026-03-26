@@ -14,7 +14,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { CornerDownLeft, Square, Lightbulb, Paperclip } from 'lucide-react'
+import { CornerDownLeft, Square, Brain, Paperclip } from 'lucide-react'
 import { ModelSelector } from './ModelSelector'
 import { ClearContextButton } from './ClearContextButton'
 import { ContextSettingsPopover } from './ContextSettingsPopover'
@@ -260,7 +260,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           />
 
           {/* Footer 工具栏 — Cherry Studio: padding 5px 8px, height 40px, gap 16px */}
-          <div className="flex items-center justify-between px-2 py-[5px] h-[40px] gap-4">
+          <div className="flex items-center justify-between px-2 py-1 h-[48px] gap-4">
             {/* 左侧工具按钮 */}
             <div className="flex items-center gap-1.5 flex-1 min-w-0">
               {/* 附件按钮 */}
@@ -270,7 +270,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-[30px] rounded-full text-foreground/60 hover:text-foreground"
+                    className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
                     onClick={handleOpenFileDialog}
                   >
                     <Paperclip className="size-5" />
@@ -291,12 +291,12 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
                     variant="ghost"
                     size="icon"
                     className={cn(
-                      'size-[30px] rounded-full',
+                      'size-[36px] rounded-full',
                       thinkingEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
                     )}
                     onClick={() => setThinkingEnabled(!thinkingEnabled)}
                   >
-                    <Lightbulb className="size-5" />
+                    <Brain className="size-5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
@@ -322,7 +322,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-[30px] rounded-full text-destructive hover:bg-destructive/10"
+                  className="size-[36px] rounded-full text-destructive hover:bg-destructive/10"
                   onClick={onStop}
                 >
                   <Square className="size-[22px]" />
@@ -333,7 +333,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
                   variant="ghost"
                   size="icon"
                   className={cn(
-                    'size-[30px] rounded-full',
+                    'size-[36px] rounded-full',
                     canSend
                       ? 'text-primary hover:bg-primary/10'
                       : 'text-foreground/30 cursor-not-allowed'

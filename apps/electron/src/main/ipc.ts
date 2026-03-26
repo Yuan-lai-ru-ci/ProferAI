@@ -68,6 +68,7 @@ import type {
   FeishuPresenceReport,
   FeishuNotifyMode,
   FeishuUpdateBindingInput,
+  SDKMessage,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -112,6 +113,7 @@ import {
   createAgentSession,
   getAgentSessionMeta,
   getAgentSessionMessages,
+  getAgentSessionSDKMessages,
   updateAgentSessionMeta,
   deleteAgentSession,
   migrateChatToAgentSession,
@@ -623,6 +625,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 获取 Agent 会话 SDKMessage（Phase 4 新格式）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
+    async (_, id: string): Promise<SDKMessage[]> => {
+      return getAgentSessionSDKMessages(id)
+    }
+  )
+
   // 更新 Agent 会话标题
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
@@ -844,7 +854,7 @@ export function registerIpcHandlers(): void {
       if (sessionId) {
         event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
           sessionId,
-          event: { type: 'permission_resolved', requestId, behavior },
+          payload: { kind: 'proma_event', event: { type: 'permission_resolved', requestId, behavior } },
         })
       }
     }
@@ -879,7 +889,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SET_PERMISSION_MODE,
     async (_, workspaceSlug: string, mode: PromaPermissionMode): Promise<void> => {
-      const validModes = new Set<string>(['auto', 'smart', 'supervised'])
+      const validModes = new Set<string>(['acceptEdits', 'bypassPermissions', 'plan'])
       if (!validModes.has(mode)) {
         throw new Error(`无效的权限模式: ${mode}`)
       }
@@ -1070,7 +1080,7 @@ export function registerIpcHandlers(): void {
       if (sessionId) {
         event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
           sessionId,
-          event: { type: 'ask_user_resolved', requestId },
+          payload: { kind: 'proma_event', event: { type: 'ask_user_resolved', requestId } },
         })
       }
     }

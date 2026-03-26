@@ -40,11 +40,11 @@ import { tabsAtom, splitLayoutAtom } from './atoms/tab-atoms'
 import type { TabItem, SplitLayoutState } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBridgeStateAtom } from './atoms/feishu-atoms'
-import { currentConversationIdAtom } from './atoms/chat-atoms'
+import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom } from './atoms/chat-atoms'
 import type { FeishuBridgeState, FeishuNotificationSentPayload } from '@proma/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
-import { diffCapabilities } from '@proma/shared'
+import { diffCapabilities, migratePermissionMode } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
@@ -108,6 +108,9 @@ function AgentSettingsInitializer(): null {
   const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
   const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
 
+  const setChannels = useSetAtom(channelsAtom)
+  const setChannelsLoaded = useSetAtom(channelsLoadedAtom)
+
   // 读取当前工作区信息（用于能力变化 diff）
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
@@ -118,6 +121,11 @@ function AgentSettingsInitializer(): null {
   const suppressToastRef = useRef(true)
 
   useEffect(() => {
+    // 预加载渠道列表到全局缓存（ModelSelector 直接读 atom，无需各自 fetch）
+    window.electronAPI.listChannels()
+      .then((list) => { setChannels(list); setChannelsLoaded(true) })
+      .catch(console.error)
+
     // 加载设置
     window.electronAPI.getSettings().then((settings) => {
       if (settings.agentChannelId) {
@@ -127,7 +135,8 @@ function AgentSettingsInitializer(): null {
         setAgentModelId(settings.agentModelId)
       }
       if (settings.agentPermissionMode) {
-        setPermissionMode(settings.agentPermissionMode)
+        // 迁移旧权限模式值（auto/smart/supervised → acceptEdits/bypassPermissions/plan）
+        setPermissionMode(migratePermissionMode(settings.agentPermissionMode))
       }
       if (settings.agentThinking) {
         setThinking(settings.agentThinking)
@@ -154,7 +163,7 @@ function AgentSettingsInitializer(): null {
         }
       }).catch(console.error)
     }).catch(console.error)
-  }, [setAgentChannelId, setAgentModelId, setAgentWorkspaces, setCurrentWorkspaceId, setPermissionMode, setThinking, setEffort, setMaxBudget, setMaxTurns])
+  }, [setAgentChannelId, setAgentModelId, setAgentWorkspaces, setCurrentWorkspaceId, setPermissionMode, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {

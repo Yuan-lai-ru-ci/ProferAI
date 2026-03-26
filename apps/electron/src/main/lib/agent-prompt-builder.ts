@@ -93,15 +93,15 @@ description: 简要描述
   }
 
   // 不确定性处理策略（根据权限模式区分）
-  if (ctx.permissionMode === 'auto') {
+  if (ctx.permissionMode === 'bypassPermissions' || ctx.permissionMode === 'plan') {
     sections.push(`## 不确定性处理
 
-当前用户使用的是自动模式（所有工具调用自动批准），此模式下 AskUserQuestion 工具不可用。
+当前用户使用的是${ctx.permissionMode === 'bypassPermissions' ? '完全自动模式（所有工具调用自动批准）' : '计划模式（仅规划不执行）'}，此模式下 AskUserQuestion 工具不可用。
 
 **当你遇到不确定的情况时：**
 - **停下来，直接在回复文本中向用户提问**，等待用户回复后再继续
 - 列出你考虑的选项和各自的利弊，让用户决策
-- **绝对不要**调用 AskUserQuestion 工具，该工具在自动模式下会失败`)
+- **绝对不要**调用 AskUserQuestion 工具，该工具在当前模式下会失败`)
   } else {
     sections.push(`## 不确定性处理
 
@@ -110,6 +110,17 @@ description: 简要描述
 - 每个选项附带简短说明，帮助用户快速决策
 - 拆分多个独立问题为多个 AskUserQuestion 调用，避免一次性提问过多
 - 特别是在触发 brainstorming / 头脑风暴类 Skill 时，**必须**通过 AskUserQuestion 逐步引导用户明确需求和方向，而非让用户自己大段输入`)
+  }
+
+  // 计划模式特殊指令
+  if (ctx.permissionMode === 'plan') {
+    sections.push(`## 计划模式
+
+你当前处于计划模式。规则：
+1. 将计划文件写入当前工作目录的 \`.context/\` 子目录（如 \`.context/my-plan.md\`）
+2. 完成计划后，**不要立即调用 ExitPlanMode**
+3. 先向用户展示计划摘要，然后等待用户确认后再退出计划模式
+4. 用户确认执行后，再调用 ExitPlanMode 退出计划模式`)
   }
 
   // 交互规范

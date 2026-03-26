@@ -20,6 +20,8 @@ import {
 import {
   conversationsAtom,
   selectedModelAtom,
+  channelsAtom,
+  channelsLoadedAtom,
 } from '@/atoms/chat-atoms'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
@@ -84,25 +86,22 @@ export function ModelSelector({
   const conversationId = useConversationIdOptional()
   const setConversations = useSetAtom(conversationsAtom)
   const setGlobalModel = useSetAtom(selectedModelAtom)
-  const [channels, setChannels] = React.useState<Channel[]>([])
+  const channels = useAtomValue(channelsAtom)
+  const channelsLoaded = useAtomValue(channelsLoadedAtom)
+  const setChannels = useSetAtom(channelsAtom)
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
 
   // 外部模型优先 → per-conversation 模型
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : conversationModel
 
-  // 加载渠道列表
-  React.useEffect(() => {
-    window.electronAPI.listChannels().then(setChannels).catch(console.error)
-  }, [])
-
-  // 每次打开时刷新，重置搜索
+  // 每次打开 Dialog 时刷新渠道列表，确保最新
   React.useEffect(() => {
     if (open) {
       window.electronAPI.listChannels().then(setChannels).catch(console.error)
       setSearch('')
     }
-  }, [open])
+  }, [open, setChannels])
 
   const modelOptions = React.useMemo(() => buildModelOptions(channels, filterChannelId), [channels, filterChannelId])
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
@@ -161,6 +160,11 @@ export function ModelSelector({
     ) ?? null
   }, [selectedModel, modelOptions])
 
+  // 保持上次有效的模型信息，避免渠道未加载时闪烁"选择模型"
+  const stableModelInfoRef = React.useRef(currentModelInfo)
+  if (currentModelInfo) stableModelInfoRef.current = currentModelInfo
+  const displayModelInfo = currentModelInfo ?? stableModelInfoRef.current
+
   /** 选择模型并持久化到当前对话 */
   const handleSelect = (option: ModelOption): void => {
     if (onModelSelect) {
@@ -206,7 +210,7 @@ export function ModelSelector({
     }
   }
 
-  if (modelOptions.length === 0) {
+  if (channelsLoaded && modelOptions.length === 0) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1">
         <Cpu className="size-3.5" />
@@ -223,17 +227,17 @@ export function ModelSelector({
         onClick={() => setOpen(true)}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
       >
-        {currentModelInfo ? (
+        {displayModelInfo ? (
           <img
-            src={getModelLogo(currentModelInfo.modelId, currentModelInfo.provider)}
-            alt={currentModelInfo.modelName}
+            src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
+            alt={displayModelInfo.modelName}
             className="size-4 rounded object-cover"
           />
         ) : (
           <Cpu className="size-3.5" />
         )}
         <span className="max-w-[200px] truncate">
-          {currentModelInfo ? currentModelInfo.modelName : '选择模型'}
+          {displayModelInfo ? displayModelInfo.modelName : '选择模型'}
         </span>
         <ChevronDown className="size-3" />
       </button>

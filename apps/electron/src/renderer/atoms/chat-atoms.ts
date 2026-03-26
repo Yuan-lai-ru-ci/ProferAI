@@ -7,7 +7,13 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import type { ConversationMeta, ChatMessage, FileAttachment, ChatToolActivity } from '@proma/shared'
+import type { ConversationMeta, ChatMessage, FileAttachment, ChatToolActivity, Channel } from '@proma/shared'
+
+/** 全局渠道列表缓存（启动时加载一次，设置变更时刷新） */
+export const channelsAtom = atom<Channel[]>([])
+
+/** 渠道列表是否已完成首次加载 */
+export const channelsLoadedAtom = atom(false)
 
 /** 选中的模型信息 */
 export interface SelectedModel {

@@ -7,7 +7,7 @@
  */
 
 import * as React from 'react'
-import { useAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -15,6 +15,7 @@ import { PROVIDER_LABELS } from '@proma/shared'
 import type { Channel } from '@proma/shared'
 import { getChannelLogo, PromaLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom } from '@/atoms/agent-atoms'
+import { channelsAtom } from '@/atoms/chat-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
 import { ChannelForm } from './ChannelForm'
 
@@ -28,12 +29,14 @@ export function ChannelSettings(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
+  const setGlobalChannels = useSetAtom(channelsAtom)
 
   /** 加载渠道列表 */
   const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
     try {
       const list = await window.electronAPI.listChannels()
       setChannels(list)
+      setGlobalChannels(list) // 同步到全局缓存
       return list
     } catch (error) {
       console.error('[渠道设置] 加载渠道列表失败:', error)

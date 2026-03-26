@@ -22,6 +22,7 @@ import type {
   AgentSaveWorkspaceFilesInput,
   AgentSavedFile,
   AgentStreamEvent,
+  AgentStreamPayload,
 } from '@proma/shared'
 import { ClaudeAgentAdapter } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
@@ -47,10 +48,10 @@ const sessionWebContents = new Map<string, WebContents>()
 
 // ===== EventBus IPC 转发中间件 =====
 
-eventBus.use((sessionId, event, next) => {
+eventBus.use((sessionId, payload, next) => {
   const wc = sessionWebContents.get(sessionId)
   if (wc && !wc.isDestroyed()) {
-    wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, event } as AgentStreamEvent)
+    wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload } as AgentStreamEvent)
   }
   next()
 })

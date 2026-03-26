@@ -11,18 +11,6 @@
 
 import * as React from 'react'
 import {
-  Pencil,
-  FilePenLine,
-  FileText,
-  Terminal,
-  FolderSearch,
-  Search,
-  GitBranch,
-  Globe,
-  BookOpen,
-  Zap,
-  ListTodo,
-  Wrench,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -30,11 +18,10 @@ import {
   ChevronRight,
   MessageCircleDashed,
   Plus,
-  Users,
-  ImagePlus,
   Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getToolIcon } from './tool-utils'
 import {
   type ToolActivity,
   type ActivityGroup,
@@ -54,35 +41,6 @@ const SIZE = {
   autoScrollThreshold: 6,
   rowHeight: 22,
 } as const
-
-// ===== 工具图标映射 =====
-
-const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  Edit: Pencil,
-  Write: FilePenLine,
-  Read: FileText,
-  Bash: Terminal,
-  Glob: FolderSearch,
-  Grep: Search,
-  Task: GitBranch,
-  WebFetch: Globe,
-  WebSearch: Globe,
-  NotebookEdit: BookOpen,
-  Skill: Zap,
-  TodoWrite: ListTodo,
-  TodoRead: ListTodo,
-  TaskCreate: ListTodo,
-  TaskUpdate: ListTodo,
-  TaskGet: ListTodo,
-  TaskList: ListTodo,
-  TeamCreate: Users,
-  Agent: Users,
-  generate_image: ImagePlus,
-}
-
-function getToolIcon(toolName: string): React.ComponentType<{ className?: string }> {
-  return TOOL_ICONS[toolName] ?? Wrench
-}
 
 // ===== 状态图标 =====
 
@@ -441,8 +399,9 @@ interface ActivityGroupRowProps {
 }
 
 function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, detailsId, onCloseDetails }: ActivityGroupRowProps): React.ReactElement {
-  const [expanded, setExpanded] = React.useState(true)
   const { parent, children } = group
+  // Agent 子代理默认折叠，Task 子代理默认展开
+  const [expanded, setExpanded] = React.useState(parent.toolName !== 'Agent')
 
   const derivedStatus = React.useMemo((): ActivityStatus => {
     const selfStatus = getActivityStatus(parent)
@@ -463,7 +422,7 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
     ? parent.input.description
     : typeof parent.input.prompt === 'string'
       ? parent.input.prompt
-      : parent.intent ?? parent.displayName ?? 'Task'
+      : parent.intent ?? parent.displayName ?? parent.toolName
 
   const delay = animate && index < SIZE.staggerLimit ? `${index * 30}ms` : '0ms'
 
@@ -490,7 +449,9 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
           )}
         />
 
-        <StatusIcon status={derivedStatus} toolName="Task" />
+        <StatusIcon status={derivedStatus} toolName={parent.toolName} />
+
+        <span className="shrink-0 text-foreground/80">{parent.toolName}</span>
 
         {subagentType && (
           <span className="shrink-0 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-medium leading-none">
@@ -498,7 +459,7 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
           </span>
         )}
 
-        <span className="truncate flex-1 min-w-0 text-foreground/70">{description}</span>
+        <span className="truncate flex-1 min-w-0 text-foreground/50">{description}</span>
 
         {parent.elapsedSeconds !== undefined && parent.elapsedSeconds > 0 && (
           <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">

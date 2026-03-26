@@ -45,6 +45,12 @@ export function ContextUsageBadge({
   isProcessing,
   onCompact,
 }: ContextUsageBadgeProps): React.ReactElement | null {
+  // 保留最近一次有效的 token 值，避免切换会话时闪烁消失
+  const stableRef = React.useRef<{ inputTokens: number; contextWindow?: number } | null>(null)
+  if (inputTokens && inputTokens > 0) {
+    stableRef.current = { inputTokens, contextWindow }
+  }
+
   // 压缩中 → 始终显示 spinner
   if (isCompacting) {
     return (
@@ -55,26 +61,30 @@ export function ContextUsageBadge({
     )
   }
 
-  // 无 usage 数据 → 不显示（首次请求前无 token 信息）
-  if (!inputTokens || inputTokens <= 0) return null
+  // 使用稳定值：优先当前数据，回退到上次有效数据
+  const displayTokens = (inputTokens && inputTokens > 0) ? inputTokens : stableRef.current?.inputTokens
+  const displayWindow = (inputTokens && inputTokens > 0) ? contextWindow : stableRef.current?.contextWindow
 
-  const compactThreshold = contextWindow
-    ? Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
+  // 从未有过 usage 数据 → 不显示
+  if (!displayTokens || displayTokens <= 0) return null
+
+  const compactThreshold = displayWindow
+    ? Math.floor(displayWindow * COMPACT_THRESHOLD_RATIO)
     : undefined
 
   const usageRatio = compactThreshold
-    ? inputTokens / compactThreshold
+    ? displayTokens / compactThreshold
     : undefined
 
   const isWarning = usageRatio !== undefined && usageRatio >= WARNING_RATIO
 
   const displayText = compactThreshold
-    ? `${formatTokens(inputTokens)} / ${formatTokens(compactThreshold)}`
-    : formatTokens(inputTokens)
+    ? `${formatTokens(displayTokens)} / ${formatTokens(compactThreshold)}`
+    : formatTokens(displayTokens)
 
-  const tooltipText = contextWindow
-    ? `上下文: ${inputTokens.toLocaleString()} / ${compactThreshold!.toLocaleString()} tokens (窗口 ${contextWindow.toLocaleString()})${isWarning ? '\n点击手动压缩' : ''}`
-    : `上下文: ${inputTokens.toLocaleString()} tokens`
+  const tooltipText = displayWindow
+    ? `上下文: ${displayTokens.toLocaleString()} / ${compactThreshold!.toLocaleString()} tokens (窗口 ${displayWindow.toLocaleString()})${isWarning ? '\n点击手动压缩' : ''}`
+    : `上下文: ${displayTokens.toLocaleString()} tokens`
 
   const percentText = usageRatio !== undefined
     ? `${Math.round(usageRatio * 100)}%`
