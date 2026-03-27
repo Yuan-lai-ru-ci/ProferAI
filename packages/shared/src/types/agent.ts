@@ -210,6 +210,8 @@ export interface SDKAssistantMessage {
   }
   parent_tool_use_id: string | null
   session_id?: string
+  /** SDK 消息唯一标识，用于 forkSession / resumeSessionAt */
+  uuid?: string
   error?: { message: string; errorType?: string }
   isReplay?: boolean
 }
@@ -222,6 +224,8 @@ export interface SDKUserMessage {
   }
   parent_tool_use_id: string | null
   session_id?: string
+  /** SDK 消息唯一标识 */
+  uuid?: string
   tool_use_result?: unknown
   isReplay?: boolean
 }
@@ -513,6 +517,12 @@ export interface AgentSessionMeta {
   pinned?: boolean
   /** 附加的外部目录路径列表（绝对路径，作为 SDK additionalDirectories 传递） */
   attachedDirectories?: string[]
+  /** 分叉来源：源会话的 SDK session ID（首次发消息时用于 resume + forkSession） */
+  forkedFromSdkSessionId?: string
+  /** 分叉截断点：源会话中的消息 uuid（inclusive） */
+  forkAtMessageUuid?: string
+  /** 分叉来源：源会话的 Proma 工作目录（SDK session 文件在此目录的项目空间中） */
+  forkSourceDir?: string
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -645,6 +655,56 @@ export interface AgentSendInput {
   mentionedMcpServers?: string[]
 }
 
+// ===== Agent 队列消息 =====
+
+/** 队列消息优先级 */
+export type AgentQueuePriority = 'now' | 'next' | 'later'
+
+/** 排队发送消息的输入参数 */
+export interface AgentQueueMessageInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 用户消息内容 */
+  userMessage: string
+  /** 优先级（默认 'next'：当前 turn 完成后发送） */
+  priority?: AgentQueuePriority
+  /** 前端预生成的 UUID（用于乐观更新去重） */
+  uuid?: string
+}
+
+/** 取消队列消息的输入参数 */
+export interface AgentCancelQueuedMessageInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 队列消息 UUID */
+  messageUuid: string
+}
+
+/** 提升队列消息为立即发送的输入参数 */
+export interface AgentPromoteQueuedMessageInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 队列消息 UUID */
+  messageUuid: string
+}
+
+/** 队列消息状态 */
+export type QueuedMessageStatus = 'queued' | 'sent' | 'cancelled'
+
+/** 队列消息状态变更事件（主进程 → 渲染进程推送） */
+export interface AgentQueuedMessageEvent {
+  /** 会话 ID */
+  sessionId: string
+  /** 队列消息 UUID */
+  messageUuid: string
+  /** 消息文本（首次 queued 时携带，便于前端乐观更新） */
+  text?: string
+  /** 优先级 */
+  priority?: AgentQueuePriority
+  /** 状态 */
+  status: QueuedMessageStatus
+}
+
 // ===== 会话迁移输入 =====
 
 /**
@@ -655,6 +715,14 @@ export interface MoveSessionToWorkspaceInput {
   sessionId: string
   /** 目标工作区 ID */
   targetWorkspaceId: string
+}
+
+/** Fork（分叉）会话输入 */
+export interface ForkSessionInput {
+  /** Proma 会话 ID */
+  sessionId: string
+  /** SDK 消息 uuid（截断点，inclusive）。省略时复制全部历史 */
+  upToMessageUuid?: string
 }
 
 // ===== 后台任务管理 =====
@@ -991,6 +1059,8 @@ export const AGENT_IPC_CHANNELS = {
   TOGGLE_PIN: 'agent:toggle-pin',
   /** 迁移会话到另一个工作区 */
   MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
+  /** 分叉会话（从指定消息处创建新会话） */
+  FORK_SESSION: 'agent:fork-session',
 
   // 工作区管理
   /** 获取工作区列表 */
@@ -1121,4 +1191,14 @@ export const AGENT_IPC_CHANNELS = {
   GET_TEAM_DATA: 'agent:get-team-data',
   /** 读取 Teammate 输出文件（filePath → string） */
   GET_AGENT_OUTPUT: 'agent:get-agent-output',
+
+  // 队列消息（Agent 运行中排队发送）
+  /** 排队发送消息 */
+  QUEUE_MESSAGE: 'agent:queue-message',
+  /** 取消队列消息 */
+  CANCEL_QUEUED_MESSAGE: 'agent:cancel-queued-message',
+  /** 提升队列消息为立即发送 */
+  PROMOTE_QUEUED_MESSAGE: 'agent:promote-queued-message',
+  /** 队列消息状态变更通知（主进程 → 渲染进程推送） */
+  QUEUED_MESSAGE_STATUS: 'agent:queued-message-status',
 } as const

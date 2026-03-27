@@ -24,6 +24,7 @@ import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { SidePanel } from './SidePanel'
+import { QueuedMessagesBanner } from './QueuedMessagesBanner'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
@@ -55,8 +56,10 @@ import {
   workspaceAttachedDirectoriesMapAtom,
   liveMessagesMapAtom,
   agentThinkingAtom,
+  agentQueuedMessagesMapAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
+import type { QueuedMessage } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
@@ -533,10 +536,80 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const effectiveText = text || suggestion || ''
     if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId) return
 
-    // 上一条消息仍在处理中，提示用户等待或停止
+    // 上一条消息仍在处理中，排队发送
     if (streaming) {
-      toast.info('上一条消息还在处理中', {
-        description: '请等待完成后发送，或点击右下角停止按钮结束当前任务',
+      // 排队时不处理附件（仅支持纯文本排队）
+      if (pendingFiles.length > 0) {
+        toast.info('Agent 运行中暂不支持排队发送附件', {
+          description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
+        })
+        return
+      }
+
+      // 生成本地 UUID，先做乐观更新再发送 IPC
+      const localUuid = crypto.randomUUID()
+
+      // 1. 立即更新队列 atom（浮动卡片可见）
+      store.set(agentQueuedMessagesMapAtom, (prev: Map<string, QueuedMessage[]>) => {
+        const map = new Map(prev)
+        const queue = [...(map.get(sessionId) ?? [])]
+        queue.push({
+          uuid: localUuid,
+          text: effectiveText,
+          priority: 'next',
+          createdAt: Date.now(),
+          status: 'queued',
+        })
+        map.set(sessionId, queue)
+        return map
+      })
+
+      // 2. 注入合成 SDKUserMessage 到 liveMessages，让用户消息立即可见于对话历史
+      //    SDK 不会为 'next' 优先级的队列消息发出独立的 SDKUserMessage 事件，
+      //    因此需要前端主动注入。UUID 标记可防止 SDK 后续推送时重复。
+      const syntheticUserMsg: SDKMessage = {
+        type: 'user',
+        uuid: localUuid,
+        message: {
+          content: [{ type: 'text', text: effectiveText }],
+        },
+        parent_tool_use_id: null,
+        _createdAt: Date.now(),
+        _queuedMessage: true,
+      } as unknown as SDKMessage
+      store.set(liveMessagesMapAtom, (prev: Map<string, SDKMessage[]>) => {
+        const map = new Map(prev)
+        const current = map.get(sessionId) ?? []
+        map.set(sessionId, [...current, syntheticUserMsg])
+        return map
+      })
+
+      // 2. 清空输入框
+      setInputContent('')
+      setPromptSuggestions((prev) => {
+        if (!prev.has(sessionId)) return prev
+        const map = new Map(prev)
+        map.delete(sessionId)
+        return map
+      })
+
+      // 3. 异步发送到后端（传递本地 UUID 确保一致性）
+      window.electronAPI.queueAgentMessage({
+        sessionId,
+        userMessage: effectiveText,
+        priority: 'next',
+        uuid: localUuid,
+      }).catch((error) => {
+        console.error('[AgentView] 排队消息失败:', error)
+        toast.error('排队消息失败', { description: String(error) })
+        // 回滚：从队列中移除
+        store.set(agentQueuedMessagesMapAtom, (prev: Map<string, QueuedMessage[]>) => {
+          const map = new Map(prev)
+          const queue = (map.get(sessionId) ?? []).filter((m) => m.uuid !== localUuid)
+          if (queue.length === 0) map.delete(sessionId)
+          else map.set(sessionId, queue)
+          return map
+        })
       })
       return
     }
@@ -679,7 +752,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent])
+  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -819,6 +892,32 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout, setStreamingStates])
 
+  /** 分叉会话：从指定消息处创建新会话并自动切换 */
+  const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
+    try {
+      const meta = await window.electronAPI.forkAgentSession({
+        sessionId,
+        upToMessageUuid,
+      })
+      setAgentSessions((prev) => [meta, ...prev])
+
+      // 切换到新会话 tab
+      const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
+      setTabs(result.tabs)
+      setLayout(result.layout)
+      setCurrentAgentSessionId(meta.id)
+
+      toast.success('已创建分叉会话', {
+        description: meta.title,
+      })
+    } catch (error) {
+      console.error('[AgentView] 分叉会话失败:', error)
+      toast.error('分叉会话失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [sessionId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout])
+
   const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0) && agentChannelId !== null && !streaming
 
   return (
@@ -840,6 +939,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           sessionPath={sessionPath}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
+          onFork={handleFork}
           onCompact={handleCompact}
         />
 
@@ -863,6 +963,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         {/* AskUserQuestion 交互式问答横幅 */}
         <AskUserBanner sessionId={sessionId} />
+
+        {/* 队列消息浮动卡片（输入框外上方） */}
+        <QueuedMessagesBanner sessionId={sessionId} />
 
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2">

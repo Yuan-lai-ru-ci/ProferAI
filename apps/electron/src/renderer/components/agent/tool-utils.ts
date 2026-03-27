@@ -21,7 +21,7 @@ import {
   ListChecks,
   Pencil,
   Plug,
-  RefreshCw,
+
   Search,
   Terminal,
   Users,
@@ -45,7 +45,7 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   TodoWrite: ListChecks,
   TodoRead: ClipboardList,
   TaskCreate: FilePlus,
-  TaskUpdate: RefreshCw,
+  TaskUpdate: ListChecks,
   TaskGet: FileSearch,
   TaskList: List,
   TeamCreate: Users,
@@ -79,12 +79,12 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   Skill: '使用技能',
   TodoWrite: '更新待办',
   TodoRead: '阅读待办',
-  TaskCreate: '任务创建',
-  TaskUpdate: '任务更新',
-  TaskGet: '任务加载',
+  TaskCreate: '创建任务',
+  TaskUpdate: '更新任务',
+  TaskGet: '加载任务',
   TaskList: '任务列表',
   TeamCreate: '创建团队',
-  Agent: 'Agent 调用',
+  Agent: 'Agent',
   generate_image: '生成图片',
 }
 
@@ -97,7 +97,7 @@ export function getToolDisplayName(toolName: string): string {
   if (TOOL_DISPLAY_NAMES[toolName]) return TOOL_DISPLAY_NAMES[toolName]
   // MCP 工具：mcp__serverName__toolName → "SERVERNAME / TOOLNAME"
   const parts = toolName.split('__')
-  if (parts[0] === 'mcp' && parts.length >= 3) {
+  if (parts[0] === 'mcp' && parts.length >= 3 && parts[1]) {
     return `${parts[1].toUpperCase()} / ${parts.slice(2).join('_').toUpperCase()}`
   }
   return toolName
@@ -179,17 +179,25 @@ export function getInputSummary(
     }
 
     case 'TaskUpdate': {
+      const statusMap: Record<string, string> = {
+        pending: '待处理',
+        in_progress: '正在进行中',
+        completed: '已结束',
+        cancelled: '已取消',
+        blocked: '已阻塞',
+        error: '出错',
+      }
       const parts: string[] = []
       if (typeof input.taskId === 'string') {
-        parts.push(`#${input.taskId}`)
+        parts.push(`任务 #${input.taskId}`)
       }
       if (typeof input.status === 'string') {
-        parts.push(input.status)
+        parts.push(statusMap[input.status] ?? input.status)
       }
       if (typeof input.subject === 'string') {
         parts.push(input.subject)
       }
-      return parts.length > 0 ? parts.join(' · ') : null
+      return parts.length > 0 ? parts.join(' ') : null
     }
 
     case 'TaskGet': {

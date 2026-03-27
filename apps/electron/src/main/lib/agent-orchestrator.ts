@@ -383,6 +383,14 @@ export class AgentOrchestrator {
   private eventBus: AgentEventBus
   private activeSessions = new Set<string>()
 
+  /** 队列消息本地记录（sessionId → 消息列表） */
+  private queuedMessages = new Map<string, Array<{
+    uuid: string
+    text: string
+    priority: 'now' | 'next' | 'later'
+    cancelled: boolean
+  }>>()
+
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
     this.eventBus = eventBus
@@ -746,7 +754,26 @@ export class AgentOrchestrator {
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)
     let existingSdkSessionId = sessionMeta?.sdkSessionId
-    console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}`)
+
+    // 4.1 检测延迟 fork 元数据：首次发消息时消费，使用 resume + forkSession 让 SDK 在当前目录创建分叉
+    let isForkResume = false
+    let forkResumeSessionAt: string | undefined
+    let forkSourceDir: string | undefined
+    if (!existingSdkSessionId && sessionMeta?.forkedFromSdkSessionId) {
+      existingSdkSessionId = sessionMeta.forkedFromSdkSessionId
+      forkResumeSessionAt = sessionMeta.forkAtMessageUuid
+      forkSourceDir = sessionMeta.forkSourceDir
+      isForkResume = true
+      console.log(`[Agent 编排] 检测到延迟 fork: 源 SDK session=${existingSdkSessionId}, 截断点=${forkResumeSessionAt || '全部'}, 源目录=${forkSourceDir || '无'}`)
+      // 清除 fork 元数据（只消费一次）
+      updateAgentSessionMeta(sessionId, {
+        forkedFromSdkSessionId: undefined,
+        forkAtMessageUuid: undefined,
+        forkSourceDir: undefined,
+      })
+    }
+
+    console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}, fork=${isForkResume}`)
 
     // 5. 持久化用户消息（SDKMessage 格式）
     const userSDKMsg: SDKMessage = {
@@ -814,6 +841,13 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] 无 sdkSessionId，将作为新会话启动（回填历史上下文）`)
           }
         }
+      }
+
+      // 9.4.1 Fork resume: 使用源会话的 cwd，让 SDK 能找到源 session 文件
+      // fork 后 SDK 会创建新 session，后续 resume 使用新 sdkSessionId 在新 cwd 下工作
+      if (isForkResume && forkSourceDir) {
+        agentCwd = forkSourceDir
+        console.log(`[Agent 编排] Fork resume: 使用源会话 cwd=${forkSourceDir}`)
       }
 
       // 9.5 确保 SDK 项目设置（plansDirectory → .context）
@@ -957,6 +991,9 @@ export class AgentOrchestrator {
           }),
         },
         resumeSessionId: existingSdkSessionId,
+        // 延迟 fork：首次发消息时让 SDK 在当前 cwd 的项目空间创建分叉 session
+        ...(isForkResume && { forkSession: true }),
+        ...(isForkResume && forkResumeSessionAt && { resumeSessionAt: forkResumeSessionAt }),
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
         // 合并用户附加目录 + 工作区附加目录 + 工作区文件目录
@@ -1507,6 +1544,7 @@ export class AgentOrchestrator {
 
     } finally {
       this.activeSessions.delete(sessionId)
+      this.queuedMessages.delete(sessionId)
       permissionService.clearSessionPending(sessionId)
       askUserService.clearSessionPending(sessionId)
     }
@@ -1520,6 +1558,7 @@ export class AgentOrchestrator {
    */
   stop(sessionId: string): void {
     this.activeSessions.delete(sessionId)
+    this.queuedMessages.delete(sessionId)
     this.adapter.abort(sessionId)
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
   }
@@ -1535,5 +1574,123 @@ export class AgentOrchestrator {
     console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
     this.adapter.dispose()
     this.activeSessions.clear()
+    this.queuedMessages.clear()
+  }
+
+  // ===== 队列消息管理 =====
+
+  /**
+   * 排队发送消息
+   *
+   * 在 Agent 运行中注入用户消息到 SDK 命令队列。
+   * 默认 priority: 'next'（当前 turn 完成后发送）。
+   *
+   * @returns 队列消息 UUID
+   */
+  async queueMessage(
+    sessionId: string,
+    text: string,
+    priority: 'now' | 'next' | 'later' = 'next',
+    presetUuid?: string,
+  ): Promise<string> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法排队消息: ${sessionId}`)
+    }
+
+    if (!this.adapter.sendQueuedMessage) {
+      throw new Error('[Agent 编排] 当前适配器不支持队列消息')
+    }
+
+    // 使用前端预生成的 UUID（乐观更新去重），或生成新的
+    const uuid = presetUuid || randomUUID()
+
+    // 记录到本地队列
+    const queue = this.queuedMessages.get(sessionId) ?? []
+    queue.push({ uuid, text, priority, cancelled: false })
+    this.queuedMessages.set(sessionId, queue)
+
+    // 构造 SDKUserMessage 并注入
+    const sdkMessage = {
+      type: 'user' as const,
+      message: { role: 'user' as const, content: text },
+      parent_tool_use_id: null,
+      priority,
+      uuid,
+      session_id: sessionId,
+    }
+
+    try {
+      await this.adapter.sendQueuedMessage(sessionId, sdkMessage)
+      console.log(`[Agent 编排] 队列消息已注入: sessionId=${sessionId}, uuid=${uuid}, priority=${priority}`)
+
+      // 持久化队列用户消息到 JSONL（与 sendMessage 中的用户消息持久化一致）
+      // SDK 消费 'next' 优先级消息时不会发出独立的 SDKUserMessage 事件，
+      // 因此需要在此处主动持久化，确保 reload 时用户消息不丢失。
+      const persistMsg: SDKMessage = {
+        type: 'user',
+        uuid,
+        message: {
+          content: [{ type: 'text', text }],
+        },
+        parent_tool_use_id: null,
+        _createdAt: Date.now(),
+        _queuedMessage: true,
+      } as unknown as SDKMessage
+      appendSDKMessages(sessionId, [persistMsg])
+    } catch (error) {
+      // 注入失败时从本地队列移除
+      const q = this.queuedMessages.get(sessionId)
+      if (q) {
+        const idx = q.findIndex((m) => m.uuid === uuid)
+        if (idx >= 0) q.splice(idx, 1)
+      }
+      throw error
+    }
+
+    return uuid
+  }
+
+  /**
+   * 取消队列中的待发送消息
+   *
+   * 标记本地记录为已取消，并尝试通过适配器取消 SDK 队列。
+   */
+  cancelQueuedMessage(sessionId: string, messageUuid: string): void {
+    const queue = this.queuedMessages.get(sessionId)
+    if (!queue) return
+
+    const msg = queue.find((m) => m.uuid === messageUuid)
+    if (!msg || msg.cancelled) return
+
+    msg.cancelled = true
+    console.log(`[Agent 编排] 队列消息已取消: sessionId=${sessionId}, uuid=${messageUuid}`)
+
+    // 尝试通知 SDK 取消（最佳努力）
+    this.adapter.cancelQueuedMessage?.(sessionId, messageUuid).catch((err) => {
+      console.warn(`[Agent 编排] SDK 取消队列消息失败（已在本地标记取消）:`, err)
+    })
+  }
+
+  /**
+   * 提升队列消息为立即发送
+   *
+   * 取消原队列消息，以 'now' 优先级重新注入。
+   *
+   * @returns 新队列消息 UUID
+   */
+  async promoteQueuedMessage(sessionId: string, messageUuid: string): Promise<string> {
+    const queue = this.queuedMessages.get(sessionId)
+    if (!queue) throw new Error(`[Agent 编排] 无队列消息: ${sessionId}`)
+
+    const msg = queue.find((m) => m.uuid === messageUuid && !m.cancelled)
+    if (!msg) throw new Error(`[Agent 编排] 队列消息不存在或已取消: ${messageUuid}`)
+
+    const text = msg.text
+
+    // 取消原消息
+    this.cancelQueuedMessage(sessionId, messageUuid)
+
+    // 以 'now' 优先级重新发送
+    return this.queueMessage(sessionId, text, 'now')
   }
 }

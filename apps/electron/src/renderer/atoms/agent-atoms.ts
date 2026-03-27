@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ThinkingConfig, AgentEffort, TaskUsage, AgentTeamData, SDKMessage } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ThinkingConfig, AgentEffort, TaskUsage, AgentTeamData, SDKMessage, AgentQueuePriority, QueuedMessageStatus } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -1251,4 +1251,44 @@ export interface BackgroundTask {
  */
 export const backgroundTasksAtomFamily = atomFamily((sessionId: string) =>
   atom<BackgroundTask[]>([])
+)
+
+// ===== 队列消息 Atoms =====
+
+/** 队列消息条目 */
+export interface QueuedMessage {
+  /** 队列消息 UUID */
+  uuid: string
+  /** 消息文本 */
+  text: string
+  /** 优先级 */
+  priority: AgentQueuePriority
+  /** 创建时间戳 */
+  createdAt: number
+  /** 状态 */
+  status: QueuedMessageStatus
+}
+
+/** 队列消息 Map — 以 sessionId 为 key */
+export const agentQueuedMessagesMapAtom = atom<Map<string, QueuedMessage[]>>(new Map())
+
+/** 当前会话的队列消息（派生读写原子） */
+export const currentQueuedMessagesAtom = atom(
+  (get): QueuedMessage[] => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return []
+    return get(agentQueuedMessagesMapAtom).get(currentId) ?? []
+  },
+  (get, set, update: QueuedMessage[] | ((prev: QueuedMessage[]) => QueuedMessage[])) => {
+    const currentId = get(currentAgentSessionIdAtom)
+    if (!currentId) return
+    set(agentQueuedMessagesMapAtom, (prev) => {
+      const map = new Map(prev)
+      const current = map.get(currentId) ?? []
+      const newValue = typeof update === 'function' ? update(current) : update
+      if (newValue.length === 0) map.delete(currentId)
+      else map.set(currentId, newValue)
+      return map
+    })
+  }
 )

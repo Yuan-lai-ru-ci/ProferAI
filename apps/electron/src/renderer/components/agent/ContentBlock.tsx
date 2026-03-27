@@ -87,6 +87,52 @@ export interface ContentBlockProps {
 
 // ===== 工具调用块（简洁单行风格） =====
 
+// ===== 提示词折叠行 =====
+
+function PromptRow({ prompt, dimmed = false }: { prompt: string; dimmed?: boolean }): React.ReactElement {
+  const [expanded, setExpanded] = React.useState(false)
+  const preview = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt
+
+  return (
+    <div>
+      <button
+        type="button"
+        className="flex items-center gap-2 py-0.5 text-left hover:opacity-70 transition-opacity group"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <MessageSquareText className={cn('size-3.5 shrink-0', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')} />
+
+        <span className={cn(
+          'shrink-0 text-[14px]',
+          dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
+        )}>提示词</span>
+
+        <span className={cn(
+          'truncate text-[14px]',
+          dimmed ? 'text-muted-foreground/50' : 'text-muted-foreground/60',
+        )}>
+          {preview}
+        </span>
+
+        <ChevronRight
+          className={cn(
+            'shrink-0 size-3 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-all duration-150',
+            expanded && 'rotate-90 opacity-100',
+          )}
+        />
+      </button>
+
+      {expanded && (
+        <div className="ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30 animate-in fade-in slide-in-from-top-1 duration-150">
+          <p className="text-[13px] text-foreground/70 leading-relaxed whitespace-pre-wrap break-words">
+            {prompt}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface ToolUseBlockProps {
   block: SDKToolUseBlock
   allMessages: SDKMessage[]
@@ -107,9 +153,11 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   // Agent/Task 子代理内容默认折叠
   const [childrenExpanded, setChildrenExpanded] = React.useState(false)
 
-  const displayName = getToolDisplayName(block.name)
   const inputSummary = getInputSummary(block.name, block.input)
-  const ToolIcon = getToolIcon(block.name)
+  // 自描述工具：摘要已包含完整语义，直接作为显示名，不再额外显示工具名
+  const isSelfDescribing = block.name === 'TaskUpdate' && !!inputSummary
+  const displayName = isSelfDescribing ? inputSummary : getToolDisplayName(block.name)
+  const ToolIcon = getToolIcon(isSelfDescribing ? 'TaskUpdate' : block.name)
 
   const isCompleted = toolResult !== null
   const isError = toolResult?.isError === true
@@ -180,15 +228,8 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         {/* 展开内容 */}
         {childrenExpanded && (
           <div className="pl-5 mt-1.5 space-y-2 border-l-2 border-primary/20 ml-[5px] animate-in fade-in slide-in-from-top-1 duration-150">
-            {/* Prompt 气泡 */}
-            {agentPrompt && (
-              <div className="flex items-start gap-2 py-1">
-                <MessageSquareText className="size-3.5 text-primary/60 shrink-0 mt-0.5" />
-                <p className="text-[13px] text-foreground/70 leading-relaxed whitespace-pre-wrap break-words">
-                  {agentPrompt.length > 500 ? agentPrompt.slice(0, 500) + '…' : agentPrompt}
-                </p>
-              </div>
-            )}
+            {/* 提示词：可折叠行，与普通工具一致 */}
+            {agentPrompt && <PromptRow prompt={agentPrompt} dimmed={dimmed} />}
 
             {/* 子代理工具调用 */}
             {hasChildren && childBlocks.map((childBlock, ci) => (
@@ -234,7 +275,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
         )}>{displayName}</span>
 
-        {inputSummary && (
+        {!isSelfDescribing && inputSummary && (
           <span className={cn(
             'truncate text-[14px] font-mono',
             dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',

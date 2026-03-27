@@ -190,11 +190,19 @@ function getInputSummary(toolName: string, input: Record<string, unknown>): stri
     const subject = input.subject
     if (typeof subject === 'string') return subject.length > 80 ? subject.slice(0, 80) + '…' : subject
   }
-  // TaskUpdate：显示状态变更
+  // TaskUpdate：显示状态变更（中文化）
   if (toolName === 'TaskUpdate') {
+    const statusMap: Record<string, string> = {
+      pending: '待处理',
+      in_progress: '正在进行中',
+      completed: '已结束',
+      cancelled: '已取消',
+      blocked: '已阻塞',
+      error: '出错',
+    }
     const parts: string[] = []
-    if (typeof input.taskId === 'string') parts.push(`#${input.taskId}`)
-    if (typeof input.status === 'string') parts.push(input.status)
+    if (typeof input.taskId === 'string') parts.push(`任务 #${input.taskId}`)
+    if (typeof input.status === 'string') parts.push(statusMap[input.status] ?? input.status)
     if (typeof input.subject === 'string') parts.push(input.subject.length > 60 ? input.subject.slice(0, 60) + '…' : input.subject)
     return parts.length > 0 ? parts.join(' ') : null
   }
@@ -325,12 +333,18 @@ export interface ActivityRowProps {
   onOpenDetails?: (activity: ToolActivity) => void
 }
 
+/** 自描述工具：inputSummary 已包含完整语义，不再额外显示工具名 */
+const SELF_DESCRIBING_TOOLS = new Set(['TaskUpdate'])
+
 export function ActivityRow({ activity, index = 0, animate = false, onOpenDetails }: ActivityRowProps): React.ReactElement {
   const status = getActivityStatus(activity)
   const filePath = extractFilePath(activity.input)
   const diffStats = computeDiffStats(activity.toolName, activity.input)
   const inputSummary = getInputSummary(activity.toolName, activity.input)
   const intent = activity.intent ?? activity.displayName
+
+  // 自描述工具：摘要已包含完整信息，直接作为主标签，隐藏工具名
+  const isSelfDescribing = SELF_DESCRIBING_TOOLS.has(activity.toolName) && !!inputSummary
 
   const delay = animate && index < SIZE.staggerLimit ? `${index * 30}ms` : '0ms'
 
@@ -357,12 +371,20 @@ export function ActivityRow({ activity, index = 0, animate = false, onOpenDetail
             </span>
             <Plus className={cn(SIZE.icon, 'absolute text-foreground/60 opacity-0 transition-opacity duration-150 group-hover/expand:opacity-100')} />
           </span>
-          <span className="shrink-0 text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{activity.toolName}</span>
+          {isSelfDescribing ? (
+            <span className="shrink-0 text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{inputSummary}</span>
+          ) : (
+            <span className="shrink-0 text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{activity.toolName}</span>
+          )}
         </button>
       ) : (
         <>
           <StatusIcon status={status} toolName={activity.toolName} />
-          <span className="shrink-0 text-foreground/80">{activity.toolName}</span>
+          {isSelfDescribing ? (
+            <span className="shrink-0 text-foreground/80">{inputSummary}</span>
+          ) : (
+            <span className="shrink-0 text-foreground/80">{activity.toolName}</span>
+          )}
         </>
       )}
 
@@ -372,11 +394,13 @@ export function ActivityRow({ activity, index = 0, animate = false, onOpenDetail
 
       {activity.isError && <ErrorBadge />}
 
-      <span className="truncate flex-1 min-w-0 text-foreground/50">
-        {intent && <>{intent}</>}
-        {!intent && inputSummary && <>{inputSummary}</>}
-        {intent && inputSummary && <> · <span className="opacity-70">{inputSummary}</span></>}
-      </span>
+      {!isSelfDescribing && (
+        <span className="truncate flex-1 min-w-0 text-foreground/50">
+          {intent && <>{intent}</>}
+          {!intent && inputSummary && <>{inputSummary}</>}
+          {intent && inputSummary && <> · <span className="opacity-70">{inputSummary}</span></>}
+        </span>
+      )}
 
       {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
         <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">

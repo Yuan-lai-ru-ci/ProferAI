@@ -19,7 +19,7 @@ import {
   getAgentWorkspacePath,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import type { AgentSessionMeta, AgentMessage, SDKMessage } from '@proma/shared'
+import type { AgentSessionMeta, AgentMessage, SDKMessage, ForkSessionInput } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
 
@@ -272,7 +272,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'attachedDirectories'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'attachedDirectories' | 'forkedFromSdkSessionId' | 'forkAtMessageUuid' | 'forkSourceDir'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -450,4 +450,75 @@ export function migrateChatToAgentSession(conversationId: string, agentSessionId
   }
 
   console.log(`[Agent 会话] 已迁移 ${count} 条消息到 Agent 会话 (${conversationId} → ${agentSessionId})`)
+}
+
+/**
+ * 分叉 Agent 会话（延迟 fork 模式）
+ *
+ * 不直接调用 SDK forkSession()，而是创建一个带有 fork 元数据的新会话。
+ * 首次发消息时，orchestrator 检测到 fork 元数据，会使用
+ * `resume + forkSession: true + resumeSessionAt` 让 SDK 在正确的项目目录下
+ * 创建分叉 session 文件。
+ *
+ * @returns 新创建的会话元数据
+ */
+export function forkAgentSession(input: ForkSessionInput): AgentSessionMeta {
+  const { sessionId, upToMessageUuid } = input
+
+  // 1. 获取源会话元数据
+  const sourceMeta = getAgentSessionMeta(sessionId)
+  if (!sourceMeta) {
+    throw new Error(`源 Agent 会话不存在: ${sessionId}`)
+  }
+
+  if (!sourceMeta.sdkSessionId) {
+    throw new Error('该会话没有 SDK session，无法分叉')
+  }
+
+  // 2. 确定源会话的工作目录（fork 时 SDK 需要从此目录的项目空间读取 session 文件）
+  let sourceDir: string | undefined
+  if (sourceMeta.workspaceId) {
+    const ws = getAgentWorkspace(sourceMeta.workspaceId)
+    if (ws) {
+      sourceDir = getAgentSessionWorkspacePath(ws.slug, sessionId)
+    }
+  }
+
+  // 3. 创建 Proma 新会话，携带 fork 元数据
+  const forkTitle = `${sourceMeta.title} (fork)`
+  const newMeta = createAgentSession(
+    forkTitle,
+    sourceMeta.channelId,
+    sourceMeta.workspaceId,
+  )
+
+  // 4. 写入 fork 元数据（orchestrator 首次发消息时消费）
+  updateAgentSessionMeta(newMeta.id, {
+    forkedFromSdkSessionId: sourceMeta.sdkSessionId,
+    forkAtMessageUuid: upToMessageUuid,
+    forkSourceDir: sourceDir,
+  })
+  newMeta.forkedFromSdkSessionId = sourceMeta.sdkSessionId
+  newMeta.forkAtMessageUuid = upToMessageUuid
+  newMeta.forkSourceDir = sourceDir
+
+  // 5. 复制截断后的 SDKMessages 到新会话的 JSONL（用于 UI 展示历史）
+  const sourceMessages = getAgentSessionSDKMessages(sessionId)
+  let messagesToCopy: SDKMessage[]
+
+  if (upToMessageUuid) {
+    const cutIndex = sourceMessages.findIndex(
+      (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid,
+    )
+    messagesToCopy = cutIndex >= 0 ? sourceMessages.slice(0, cutIndex + 1) : sourceMessages
+  } else {
+    messagesToCopy = sourceMessages
+  }
+
+  if (messagesToCopy.length > 0) {
+    appendSDKMessages(newMeta.id, messagesToCopy)
+  }
+
+  console.log(`[Agent 会话] 分叉会话已创建（延迟 fork）: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息)`)
+  return newMeta
 }

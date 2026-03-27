@@ -8,6 +8,16 @@
 
 import type { SDKMessage } from './agent'
 
+/** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
+export interface SDKUserMessageInput {
+  type: 'user'
+  message: { role: 'user'; content: string }
+  parent_tool_use_id: null
+  priority?: 'now' | 'next' | 'later'
+  uuid?: string
+  session_id: string
+}
+
 /**
  * Agent 查询输入（Provider 无关）
  *
@@ -40,4 +50,8 @@ export interface AgentProviderAdapter {
   abort(sessionId: string): void
   /** 释放资源 */
   dispose(): void
+  /** 向活跃查询注入队列消息（可选，仅支持队列的 Provider 实现） */
+  sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput): Promise<void>
+  /** 取消队列中的待发送消息（可选） */
+  cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
 }

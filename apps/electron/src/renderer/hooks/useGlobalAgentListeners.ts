@@ -28,6 +28,7 @@ import {
   applyAgentEvent,
   liveMessagesMapAtom,
   agentPermissionModeAtom,
+  agentQueuedMessagesMapAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -35,7 +36,7 @@ import {
 } from '@/atoms/notifications'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, AgentQueuedMessageEvent } from '@proma/shared'
 
 // ============================================================================
 // Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
@@ -240,6 +241,13 @@ export function useGlobalAgentListeners(): void {
             store.set(liveMessagesMapAtom, (prev) => {
               const map = new Map(prev)
               const current = map.get(sessionId) ?? []
+
+              // UUID 去重：队列消息已被乐观注入，SDK 再次推送时跳过
+              const incomingUuid = msgRecord.uuid as string | undefined
+              if (incomingUuid && current.some((m) => (m as Record<string, unknown>).uuid === incomingUuid)) {
+                return prev
+              }
+
               map.set(sessionId, [...current, payload.message])
               return map
             })
@@ -399,6 +407,10 @@ export function useGlobalAgentListeners(): void {
           return map
         })
 
+        // 注意：不清除队列消息 — STREAM_COMPLETE 表示整个查询结束，
+        // 此时所有 'next' 队列消息应已被 SDK 消费。
+        // 队列 atom 由 IPC QUEUED_MESSAGE_STATUS 事件管理生命周期。
+
         // 缓存 Team 活动数据（在流式状态被清除前保存，防止面板数据丢失）
         const streamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
         if (streamState && streamState.toolActivities.length > 0) {
@@ -520,11 +532,51 @@ export function useGlobalAgentListeners(): void {
         .catch(console.error)
     })
 
+    // ===== 5. 队列消息状态变更 =====
+    const cleanupQueuedMessageStatus = window.electronAPI.onQueuedMessageStatus(
+      (event: AgentQueuedMessageEvent) => {
+        const { sessionId, messageUuid, status, text, priority } = event
+
+        store.set(agentQueuedMessagesMapAtom, (prev) => {
+          const map = new Map(prev)
+          const queue = [...(map.get(sessionId) ?? [])]
+
+          switch (status) {
+            case 'queued': {
+              // 追加新的队列消息（跳过已乐观注入的）
+              if (text && !queue.some((m) => m.uuid === messageUuid)) {
+                queue.push({
+                  uuid: messageUuid,
+                  text,
+                  priority: priority ?? 'next',
+                  createdAt: Date.now(),
+                  status: 'queued',
+                })
+              }
+              break
+            }
+            case 'sent':
+            case 'cancelled': {
+              // 从队列中移除
+              const idx = queue.findIndex((m) => m.uuid === messageUuid)
+              if (idx >= 0) queue.splice(idx, 1)
+              break
+            }
+          }
+
+          if (queue.length === 0) map.delete(sessionId)
+          else map.set(sessionId, queue)
+          return map
+        })
+      }
+    )
+
     return () => {
       cleanupEvent()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
+      cleanupQueuedMessageStatus()
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }

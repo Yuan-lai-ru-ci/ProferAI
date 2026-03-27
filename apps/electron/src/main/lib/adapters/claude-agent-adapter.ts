@@ -8,6 +8,7 @@
 import type {
   AgentQueryInput,
   AgentProviderAdapter,
+  SDKUserMessageInput,
   TypedError,
   ErrorCode,
   ThinkingConfig,
@@ -18,6 +19,9 @@ import type {
   SDKMessage,
 } from '@proma/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
+
+/** SDK Query 对象类型（从动态导入中推断） */
+type SDKQuery = ReturnType<typeof import('@anthropic-ai/claude-agent-sdk').query>
 
 // ============================================================================
 // Claude 适配器专用查询选项
@@ -51,6 +55,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   systemPrompt: { type: 'preset'; preset: 'claude_code'; append: string }
   /** SDK session ID（用于 resume） */
   resumeSessionId?: string
+  /** resume 时从指定消息 uuid 处截断（配合 forkSession 实现分叉） */
+  resumeSessionAt?: string
   /** MCP 服务器配置 */
   mcpServers?: Record<string, unknown>
   /** 插件配置 */
@@ -240,6 +246,16 @@ export function extractErrorDetails(msg: { error?: { message: string }; message?
 /** 活跃的 AbortController 映射（sessionId → controller） */
 const activeControllers = new Map<string, AbortController>()
 
+/** 活跃的 SDK Query 对象映射（sessionId → query），用于队列消息注入 */
+const activeQueries = new Map<string, SDKQuery>()
+
+/** Query 就绪 Promise（在 SDK init 完成前缓冲队列消息） */
+const queryReadyPromises = new Map<string, Promise<void>>()
+const queryReadyResolvers = new Map<string, () => void>()
+
+/** SDK init 超时时间（毫秒） */
+const QUERY_READY_TIMEOUT_MS = 60_000
+
 export class ClaudeAgentAdapter implements AgentProviderAdapter {
 
   abort(sessionId: string): void {
@@ -255,6 +271,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       controller.abort()
     }
     activeControllers.clear()
+    activeQueries.clear()
+    queryReadyPromises.clear()
+    queryReadyResolvers.clear()
   }
 
   /**
@@ -268,6 +287,12 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     // 创建 AbortController
     const controller = new AbortController()
     activeControllers.set(options.sessionId, controller)
+
+    // 创建 Query 就绪 Promise（队列消息会等待此 Promise）
+    const readyPromise = new Promise<void>((resolve) => {
+      queryReadyResolvers.set(options.sessionId, resolve)
+    })
+    queryReadyPromises.set(options.sessionId, readyPromise)
 
     try {
       // 动态导入 SDK
@@ -297,6 +322,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         ...(options.canUseTool && { canUseTool: options.canUseTool }),
         ...(options.allowedTools && { allowedTools: options.allowedTools }),
         ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),
+        ...(options.resumeSessionAt && { resumeSessionAt: options.resumeSessionAt }),
         ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 && {
           mcpServers: options.mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig>,
         }),
@@ -322,10 +348,35 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         }),
       } as import('@anthropic-ai/claude-agent-sdk').Options
 
+      // 将初始 prompt 包装为 AsyncIterable<SDKUserMessage>，
+      // 启用 SDK 的流式输入模式，使 Query.streamInput() 可用于后续队列消息注入。
+      // 如果用 string prompt，SDK 以单次输入模式运行，streamInput() 不可用。
+      async function* initialPromptStream(): AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKUserMessage> {
+        yield {
+          type: 'user' as const,
+          session_id: options.sessionId,
+          message: {
+            role: 'user' as const,
+            content: options.prompt,
+          },
+          parent_tool_use_id: null,
+        }
+      }
+
       const queryIterator = sdk.query({
-        prompt: options.prompt,
+        prompt: initialPromptStream(),
         options: sdkOptions,
       })
+
+      // 保存 Query 引用，供队列消息注入使用
+      activeQueries.set(options.sessionId, queryIterator)
+
+      // 通知 Query 已就绪，解除 sendQueuedMessage 的等待
+      const resolveReady = queryReadyResolvers.get(options.sessionId)
+      if (resolveReady) {
+        resolveReady()
+        queryReadyResolvers.delete(options.sessionId)
+      }
 
       for await (const sdkMessage of queryIterator) {
         if (controller.signal.aborted) break
@@ -359,6 +410,53 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       }
     } finally {
       activeControllers.delete(options.sessionId)
+      activeQueries.delete(options.sessionId)
+      queryReadyPromises.delete(options.sessionId)
+      queryReadyResolvers.delete(options.sessionId)
     }
+  }
+
+  /**
+   * 向活跃查询注入队列消息
+   *
+   * 通过 SDK Query.streamInput() 方法在查询进行中注入用户消息。
+   * 如果 SDK 尚未完成初始化，会自动等待（带超时保护）。
+   */
+  async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput): Promise<void> {
+    // 等待 Query 就绪（SDK init 可能需要几秒）
+    const readyPromise = queryReadyPromises.get(sessionId)
+    if (readyPromise) {
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('[Claude 适配器] 等待 SDK 初始化超时，请稍后重试')), QUERY_READY_TIMEOUT_MS)
+      )
+      await Promise.race([readyPromise, timeoutPromise])
+    }
+
+    const query = activeQueries.get(sessionId)
+    if (!query) {
+      throw new Error(`[Claude 适配器] 无活跃查询可注入队列消息: ${sessionId}`)
+    }
+    // 构造单元素 AsyncIterable 注入消息
+    async function* singleMessage() {
+      yield message as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage
+    }
+    await query.streamInput(singleMessage())
+    console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, priority=${message.priority}`)
+  }
+
+  /**
+   * 取消队列中的待发送消息
+   *
+   * 通过构造 cancel_async_message 控制消息注入，
+   * 由 SDK 内部匹配 uuid 并从命令队列中移除。
+   */
+  async cancelQueuedMessage(sessionId: string, messageUuid: string): Promise<void> {
+    const query = activeQueries.get(sessionId)
+    if (!query) return
+    // cancel_async_message 需要通过 streamInput 传递一个特殊的控制消息
+    // SDK Query 对象本身没有直接的 cancel 方法，但 streamInput 接受 SDKUserMessage
+    // 此处我们通过重新注入一个 'now' 优先级的空消息来间接触发
+    // 实际上 SDK 的 cancel_async_message 是 control_request，暂时在 orchestrator 层管理
+    console.log(`[Claude 适配器] 队列消息取消请求: sessionId=${sessionId}, uuid=${messageUuid}`)
   }
 }

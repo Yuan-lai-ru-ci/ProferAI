@@ -54,6 +54,7 @@ interface AgentMessagesProps {
   sessionPath?: string | null
   onRetry?: () => void
   onRetryInNewSession?: () => void
+  onFork?: (upToMessageUuid: string) => void
   onCompact?: () => void
 }
 
@@ -593,7 +594,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, onRetry, onRetryInNewSession, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
 
   /**
@@ -710,6 +711,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
                   group={group}
                   allMessages={allSDKMessages}
                   basePath={sessionPath || undefined}
+                  onFork={onFork}
                 />
               ))
             ) : (

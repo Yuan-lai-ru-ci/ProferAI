@@ -71,6 +71,7 @@ import type {
   ChatToolMeta,
   AgentTeamData,
   MoveSessionToWorkspaceInput,
+  ForkSessionInput,
   FeishuConfig,
   FeishuConfigInput,
   FeishuBridgeState,
@@ -80,6 +81,10 @@ import type {
   FeishuNotifyMode,
   FeishuNotificationSentPayload,
   FeishuUpdateBindingInput,
+  AgentQueueMessageInput,
+  AgentCancelQueuedMessageInput,
+  AgentPromoteQueuedMessageInput,
+  AgentQueuedMessageEvent,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -295,6 +300,9 @@ export interface ElectronAPI {
   /** 迁移 Agent 会话到另一个工作区 */
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
 
+  /** 分叉 Agent 会话 */
+  forkAgentSession: (input: ForkSessionInput) => Promise<AgentSessionMeta>
+
   /** 生成 Agent 会话标题 */
   generateAgentTitle: (input: AgentGenerateTitleInput) => Promise<string | null>
 
@@ -303,6 +311,20 @@ export interface ElectronAPI {
 
   /** 中止 Agent 执行 */
   stopAgent: (sessionId: string) => Promise<void>
+
+  // ===== Agent 队列消息 =====
+
+  /** 排队发送 Agent 消息（Agent 运行中） */
+  queueAgentMessage: (input: AgentQueueMessageInput) => Promise<string>
+
+  /** 取消队列中的 Agent 消息 */
+  cancelQueuedAgentMessage: (input: AgentCancelQueuedMessageInput) => Promise<void>
+
+  /** 提升队列消息为立即发送 */
+  promoteQueuedAgentMessage: (input: AgentPromoteQueuedMessageInput) => Promise<string>
+
+  /** 监听队列消息状态变更（主进程 → 渲染进程） */
+  onQueuedMessageStatus: (callback: (event: AgentQueuedMessageEvent) => void) => () => void
 
   // ===== Agent 后台任务管理 =====
 
@@ -842,6 +864,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE, input)
   },
 
+  forkAgentSession: (input: ForkSessionInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.FORK_SESSION, input)
+  },
+
   generateAgentTitle: (input: AgentGenerateTitleInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GENERATE_TITLE, input)
   },
@@ -852,6 +878,25 @@ const electronAPI: ElectronAPI = {
 
   stopAgent: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, sessionId)
+  },
+
+  // Agent 队列消息
+  queueAgentMessage: (input: AgentQueueMessageInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.QUEUE_MESSAGE, input)
+  },
+
+  cancelQueuedAgentMessage: (input: AgentCancelQueuedMessageInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CANCEL_QUEUED_MESSAGE, input)
+  },
+
+  promoteQueuedAgentMessage: (input: AgentPromoteQueuedMessageInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PROMOTE_QUEUED_MESSAGE, input)
+  },
+
+  onQueuedMessageStatus: (callback: (event: AgentQueuedMessageEvent) => void) => {
+    const listener = (_: unknown, event: AgentQueuedMessageEvent): void => callback(event)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, listener) }
   },
 
   // Agent 后台任务管理

@@ -60,6 +60,7 @@ import type {
   ChatToolMeta,
   AgentTeamData,
   MoveSessionToWorkspaceInput,
+  ForkSessionInput,
   FeishuConfigInput,
   FeishuConfig,
   FeishuBridgeState,
@@ -118,8 +119,9 @@ import {
   deleteAgentSession,
   migrateChatToAgentSession,
   moveSessionToWorkspace,
+  forkAgentSession,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive } from './lib/agent-service'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, cancelQueuedAgentMessage, promoteQueuedAgentMessage } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
@@ -697,6 +699,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 分叉 Agent 会话
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.FORK_SESSION,
+    async (_, input: ForkSessionInput): Promise<AgentSessionMeta> => {
+      return forkAgentSession(input)
+    }
+  )
+
   // ===== Agent 工作区管理相关 =====
 
   // 确保默认工作区存在
@@ -818,6 +828,32 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (_, sessionId: string): Promise<void> => {
       stopAgent(sessionId)
+    }
+  )
+
+  // ===== Agent 队列消息 =====
+
+  // 排队发送消息
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.QUEUE_MESSAGE,
+    async (event, input: import('@proma/shared').AgentQueueMessageInput): Promise<string> => {
+      return queueAgentMessage(input, event.sender)
+    }
+  )
+
+  // 取消队列消息
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CANCEL_QUEUED_MESSAGE,
+    async (event, input: import('@proma/shared').AgentCancelQueuedMessageInput): Promise<void> => {
+      cancelQueuedAgentMessage(input, event.sender)
+    }
+  )
+
+  // 提升队列消息为立即发送
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.PROMOTE_QUEUED_MESSAGE,
+    async (event, input: import('@proma/shared').AgentPromoteQueuedMessageInput): Promise<string> => {
+      return promoteQueuedAgentMessage(input, event.sender)
     }
   )
 

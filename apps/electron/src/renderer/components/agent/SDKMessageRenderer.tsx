@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split } from 'lucide-react'
 import { useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ContentBlock } from './ContentBlock'
@@ -21,6 +21,7 @@ import {
   MessageHeader,
   MessageContent,
   MessageActions,
+  MessageAction,
   MessageResponse,
   UserMessageContent,
 } from '@/components/ai-elements/message'
@@ -279,9 +280,11 @@ export interface AssistantTurnRendererProps {
   /** 所有消息（全局，供工具结果查找跨 turn 的结果） */
   allMessages: SDKMessage[]
   basePath?: string
+  /** 分叉回调（传入最后一条 assistant 消息的 uuid） */
+  onFork?: (upToMessageUuid: string) => void
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, basePath }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork }: AssistantTurnRendererProps): React.ReactElement | null {
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -380,6 +383,27 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath }: Assistant
           </div>
         )}
       </MessageContent>
+      {/* 操作按钮：复制 + 分叉 */}
+      {(() => {
+        const textContent = topLevelBlocks
+          .filter((b) => b.type === 'text' && 'text' in b)
+          .map((b) => (b as { text: string }).text)
+          .join('\n\n')
+        // 取最后一条 assistant 消息的 uuid 作为分叉截断点
+        const lastUuid = turn.assistantMessages.length > 0
+          ? turn.assistantMessages[turn.assistantMessages.length - 1]?.uuid
+          : undefined
+        return (textContent || lastUuid) ? (
+          <MessageActions className="pl-[46px] mt-0.5">
+            {textContent && <CopyButton content={textContent} />}
+            {onFork && lastUuid && (
+              <MessageAction tooltip="从此处分叉" onClick={() => onFork(lastUuid)}>
+                <Split className="size-3.5" />
+              </MessageAction>
+            )}
+          </MessageActions>
+        ) : null
+      })()}
     </Message>
   )
 }
@@ -441,6 +465,18 @@ export function SDKMessageRenderer({
             ))}
           </div>
         </MessageContent>
+        {/* 复制按钮：提取所有文本块内容 */}
+        {(() => {
+          const textContent = blocks
+            .filter((b) => b.type === 'text' && 'text' in b)
+            .map((b) => (b as { text: string }).text)
+            .join('\n\n')
+          return textContent ? (
+            <MessageActions className="pl-[46px] mt-0.5">
+              <CopyButton content={textContent} />
+            </MessageActions>
+          ) : null
+        })()}
       </Message>
     )
   }
@@ -658,9 +694,10 @@ export interface MessageGroupRendererProps {
   group: MessageGroup
   allMessages: SDKMessage[]
   basePath?: string
+  onFork?: (upToMessageUuid: string) => void
 }
 
-export function MessageGroupRenderer({ group, allMessages, basePath }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, basePath, onFork }: MessageGroupRendererProps): React.ReactElement | null {
   if (group.type === 'user') {
     return <UserInputMessage message={group.message} />
   }
@@ -678,6 +715,7 @@ export function MessageGroupRenderer({ group, allMessages, basePath }: MessageGr
       turn={group}
       allMessages={allMessages}
       basePath={basePath}
+      onFork={onFork}
     />
   )
 }
