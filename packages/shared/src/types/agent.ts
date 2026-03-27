@@ -455,7 +455,7 @@ export type AgentEvent =
   | { type: 'retry_cleared' }  // 新增：重试成功，清除状态
   | { type: 'retry_failed'; finalAttempt: RetryAttempt }  // 新增：重试失败
   // Usage 更新
-  | { type: 'usage_update'; usage: { inputTokens: number; contextWindow?: number } }
+  | { type: 'usage_update'; usage: AgentEventUsage }
   // 上下文压缩
   | { type: 'compacting' }
   | { type: 'compact_complete' }
@@ -559,6 +559,10 @@ export interface AgentMessage {
   errorCanRetry?: boolean
   /** 错误恢复操作（status 消息） */
   errorActions?: RecoveryAction[]
+  /** 耗时（毫秒），assistant 消息从流式开始到完成的时间 */
+  durationMs?: number
+  /** Token 用量明细（assistant 消息完成时记录） */
+  usage?: AgentEventUsage
 }
 
 // ===== Agent 标题生成输入 =====

@@ -1125,6 +1125,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                 </Tooltip>
                 <ContextUsageBadge
                   inputTokens={contextStatus.inputTokens}
+                  outputTokens={contextStatus.outputTokens}
+                  cacheReadTokens={contextStatus.cacheReadTokens}
+                  cacheCreationTokens={contextStatus.cacheCreationTokens}
                   contextWindow={contextStatus.contextWindow}
                   isCompacting={contextStatus.isCompacting}
                   isProcessing={streaming}

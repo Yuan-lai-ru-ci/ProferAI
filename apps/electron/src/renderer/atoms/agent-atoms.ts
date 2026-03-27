@@ -104,6 +104,14 @@ export interface AgentStreamState {
   model?: string
   /** 当前输入 token 数（上下文使用量） */
   inputTokens?: number
+  /** 输出 token 数 */
+  outputTokens?: number
+  /** 缓存读取 token 数 */
+  cacheReadTokens?: number
+  /** 缓存写入 token 数 */
+  cacheCreationTokens?: number
+  /** 费用（美元） */
+  costUsd?: number
   /** 模型上下文窗口大小 */
   contextWindow?: number
   /** 是否正在压缩上下文 */
@@ -1046,6 +1054,10 @@ export function applyAgentEvent(
       return {
         ...prev,
         inputTokens: event.usage.inputTokens,
+        ...(event.usage.outputTokens != null && { outputTokens: event.usage.outputTokens }),
+        ...(event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
+        ...(event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
+        ...(event.usage.costUsd != null && { costUsd: event.usage.costUsd }),
         ...(event.usage.contextWindow && { contextWindow: event.usage.contextWindow }),
       }
 
@@ -1132,6 +1144,10 @@ export function applyAgentEvent(
 export interface AgentContextStatus {
   isCompacting: boolean
   inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+  costUsd?: number
   contextWindow?: number
 }
 
@@ -1143,6 +1159,10 @@ export const agentContextStatusAtom = atom<AgentContextStatus>((get) => {
   return {
     isCompacting: state?.isCompacting ?? false,
     inputTokens: state?.inputTokens,
+    outputTokens: state?.outputTokens,
+    cacheReadTokens: state?.cacheReadTokens,
+    cacheCreationTokens: state?.cacheCreationTokens,
+    costUsd: state?.costUsd,
     contextWindow: state?.contextWindow,
   }
 })

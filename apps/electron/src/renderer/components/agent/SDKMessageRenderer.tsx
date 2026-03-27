@@ -16,6 +16,7 @@ import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split } fro
 import { useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ContentBlock } from './ContentBlock'
+import { DurationBadge } from './AgentMessages'
 import {
   Message,
   MessageHeader,
@@ -36,6 +37,8 @@ import type {
   SDKUserMessage,
   SDKSystemMessage,
   SDKContentBlock,
+  SDKResultMessage,
+  AgentEventUsage,
 } from '@proma/shared'
 
 // ===== SDKMessageRenderer Props =====
@@ -87,6 +90,33 @@ function extractMeta(message: SDKMessage): MessageMeta {
   return {
     createdAt: typeof msg._createdAt === 'number' ? msg._createdAt : undefined,
   }
+}
+
+/** 从 turn 消息列表中提取 result 消息的耗时和用量数据 */
+function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; usage?: AgentEventUsage } {
+  for (const msg of turnMessages) {
+    if (msg.type !== 'result') continue
+    const resultMsg = msg as SDKResultMessage
+    const raw = msg as Record<string, unknown>
+    const durationMs = typeof raw._durationMs === 'number' ? raw._durationMs : undefined
+    const u = resultMsg.usage
+    if (!u) return { durationMs }
+    const contextWindow = resultMsg.modelUsage
+      ? Object.values(resultMsg.modelUsage)[0]?.contextWindow
+      : undefined
+    return {
+      durationMs,
+      usage: {
+        inputTokens: u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+        outputTokens: u.output_tokens,
+        cacheReadTokens: u.cache_read_input_tokens,
+        cacheCreationTokens: u.cache_creation_input_tokens,
+        costUsd: resultMsg.total_cost_usd,
+        contextWindow,
+      },
+    }
+  }
+  return {}
 }
 
 // ===== 辅助：从 user 消息中提取纯文本内容 =====
@@ -282,9 +312,11 @@ export interface AssistantTurnRendererProps {
   basePath?: string
   /** 分叉回调（传入最后一条 assistant 消息的 uuid） */
   onFork?: (upToMessageUuid: string) => void
+  /** 是否正在流式输出中（隐藏操作栏） */
+  isStreaming?: boolean
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isStreaming }: AssistantTurnRendererProps): React.ReactElement | null {
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -316,6 +348,9 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork }: A
 
   // 如果没有任何内容
   if (enrichedBlocks.length === 0 && !hasError) return null
+
+  // 从 turnMessages 中提取 result 消息的耗时和用量
+  const { durationMs, usage } = extractTurnUsage(turn.turnMessages)
 
   // 构建 Agent/Task tool_use → 子代理内容块映射
   const agentToolIds = new Set<string>()
@@ -383,18 +418,21 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork }: A
           </div>
         )}
       </MessageContent>
-      {/* 操作按钮：复制 + 分叉 */}
-      {(() => {
+      {/* 操作栏：左侧耗时标签 + 右侧操作按钮（流式输出中隐藏） */}
+      {!isStreaming && (() => {
         const textContent = topLevelBlocks
           .filter((b) => b.type === 'text' && 'text' in b)
           .map((b) => (b as { text: string }).text)
           .join('\n\n')
-        // 取最后一条 assistant 消息的 uuid 作为分叉截断点
         const lastUuid = turn.assistantMessages.length > 0
           ? turn.assistantMessages[turn.assistantMessages.length - 1]?.uuid
           : undefined
-        return (textContent || lastUuid) ? (
-          <MessageActions className="pl-[46px] mt-0.5">
+        const hasActions = !!(textContent || (onFork && lastUuid))
+        const hasDuration = durationMs != null
+        if (!hasDuration && !hasActions) return null
+        return (
+          <MessageActions className="pl-[46px] mt-0.5 justify-start">
+            {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
             {textContent && <CopyButton content={textContent} />}
             {onFork && lastUuid && (
               <MessageAction tooltip="从此处分叉" onClick={() => onFork(lastUuid)}>
@@ -402,7 +440,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork }: A
               </MessageAction>
             )}
           </MessageActions>
-        ) : null
+        )
       })()}
     </Message>
   )
@@ -465,18 +503,6 @@ export function SDKMessageRenderer({
             ))}
           </div>
         </MessageContent>
-        {/* 复制按钮：提取所有文本块内容 */}
-        {(() => {
-          const textContent = blocks
-            .filter((b) => b.type === 'text' && 'text' in b)
-            .map((b) => (b as { text: string }).text)
-            .join('\n\n')
-          return textContent ? (
-            <MessageActions className="pl-[46px] mt-0.5">
-              <CopyButton content={textContent} />
-            </MessageActions>
-          ) : null
-        })()}
       </Message>
     )
   }
@@ -695,9 +721,11 @@ export interface MessageGroupRendererProps {
   allMessages: SDKMessage[]
   basePath?: string
   onFork?: (upToMessageUuid: string) => void
+  /** 是否正在流式输出中（隐藏操作栏） */
+  isStreaming?: boolean
 }
 
-export function MessageGroupRenderer({ group, allMessages, basePath, onFork }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, basePath, onFork, isStreaming }: MessageGroupRendererProps): React.ReactElement | null {
   if (group.type === 'user') {
     return <UserInputMessage message={group.message} />
   }
@@ -716,6 +744,7 @@ export function MessageGroupRenderer({ group, allMessages, basePath, onFork }: M
       allMessages={allMessages}
       basePath={basePath}
       onFork={onFork}
+      isStreaming={isStreaming}
     />
   )
 }

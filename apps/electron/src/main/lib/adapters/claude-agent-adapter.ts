@@ -51,8 +51,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   ) => Promise<PermissionResult>
   /** 只读工具白名单 */
   allowedTools?: string[]
-  /** 系统提示词 */
-  systemPrompt: { type: 'preset'; preset: 'claude_code'; append: string }
+  /** 系统提示词（字符串为自定义提示词，对象为 claude_code preset） */
+  systemPrompt: string | { type: 'preset'; preset: 'claude_code'; append?: string }
   /** SDK session ID（用于 resume） */
   resumeSessionId?: string
   /** resume 时从指定消息 uuid 处截断（配合 forkSession 实现分叉） */

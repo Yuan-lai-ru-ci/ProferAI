@@ -37,7 +37,7 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, g
 import { getWorkspaceAttachedDirectories } from './agent-workspace-manager'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
-import { buildSystemPromptAppend, buildDynamicContext } from './agent-prompt-builder'
+import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -657,16 +657,18 @@ export class AgentOrchestrator {
   /**
    * 持久化累积的 SDKMessage（Phase 4: 直接存储原始 SDKMessage）
    *
-   * 只持久化 assistant 和 user 类型的消息（跳过 system、tool_progress 等临时消息）。
+   * 持久化 assistant、user 和 result 类型的消息（result 包含 token 用量和费用数据）。
+   * 跳过 system、tool_progress 等临时消息。
    */
   private persistSDKMessages(
     sessionId: string,
     accumulatedMessages: SDKMessage[],
+    durationMs?: number,
   ): void {
     if (accumulatedMessages.length === 0) return
 
     const toPersist = accumulatedMessages.filter(
-      (m) => m.type === 'assistant' || m.type === 'user'
+      (m) => m.type === 'assistant' || m.type === 'user' || m.type === 'result'
     )
 
     if (toPersist.length === 0) return
@@ -676,6 +678,10 @@ export class AgentOrchestrator {
     const withTimestamps = toPersist.map((m) => {
       const msg = m as Record<string, unknown>
       if (typeof msg._createdAt === 'number') return m
+      // 为 result 消息附加 _durationMs
+      if (m.type === 'result' && durationMs != null) {
+        return { ...m, _createdAt: now, _durationMs: durationMs } as unknown as SDKMessage
+      }
       return { ...m, _createdAt: now } as unknown as SDKMessage
     })
 
@@ -980,16 +986,16 @@ export class AgentOrchestrator {
         allowDangerouslySkipPermissions: true,
         ...(canUseTool && { canUseTool }),
         ...(permissionMode === 'acceptEdits' && { allowedTools: [...SAFE_TOOLS] }),
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: buildSystemPromptAppend({
+        systemPrompt: buildSystemPrompt({
             workspaceName: workspace?.name,
             workspaceSlug,
             sessionId,
             permissionMode,
+            memoryEnabled: (() => {
+              const mc = getMemoryConfig()
+              return !!(mc.enabled && mc.apiKey)
+            })(),
           }),
-        },
         resumeSessionId: existingSdkSessionId,
         // 延迟 fork：首次发消息时让 SDK 在当前 cwd 的项目空间创建分叉 session
         ...(isForkResume && { forkSession: true }),
@@ -1053,6 +1059,8 @@ export class AgentOrchestrator {
       // 14. 遍历 Adapter 产出的 AgentEvent 流（含自动重试 + Watchdog 死锁检测）
       let lastRetryableError: string | undefined
       let retrySucceeded = false
+      /** 查询开始时间戳（用于计算 durationMs） */
+      const queryStartedAt = Date.now()
 
       // Agent Teams 追踪
       const startedTaskIds = new Set<string>()
@@ -1090,7 +1098,7 @@ export class AgentOrchestrator {
 
           // 等待期间如果会话被中止，退出
           if (!this.activeSessions.has(sessionId)) {
-            this.persistSDKMessages(sessionId, accumulatedMessages)
+            this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             callbacks.onComplete(getAgentSessionMessages(sessionId))
             return
           }
@@ -1190,14 +1198,14 @@ export class AgentOrchestrator {
                     ? `${typedError.title}: ${typedError.message}`
                     : typedError.message
                   console.log(`[Agent 编排] 可重试错误 (assistant error): ${typedError.code} - ${lastRetryableError}`)
-                  this.persistSDKMessages(sessionId, accumulatedMessages)
+                  this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
                   accumulatedMessages.length = 0
                   shouldRetryFromError = true
                   break
                 }
 
                 // 不可重试 → 终止
-                this.persistSDKMessages(sessionId, accumulatedMessages)
+                this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
 
                 const errorContent = typedError.title
                     ? `${typedError.title}: ${typedError.message}`
@@ -1238,10 +1246,11 @@ export class AgentOrchestrator {
               }
             }
 
-            // 累积 assistant 和 user 消息用于持久化
+            // 累积 assistant、user 和 result 消息用于持久化
             // - 跳过 replay 消息，避免 resume 时重复写入
             // - 对 user 消息，仅累积含 tool_result 的（初始用户消息已在步骤 5 手动持久化）
-            if (msg.type === 'assistant' || msg.type === 'user') {
+            // - result 消息包含 token 用量和费用数据
+            if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'result') {
               const msgRecord = msg as Record<string, unknown>
               if (!msgRecord.isReplay) {
                 if (msg.type === 'user') {
@@ -1305,7 +1314,7 @@ export class AgentOrchestrator {
           retrySucceeded = true
 
           // 15. 持久化 assistant 消息
-          this.persistSDKMessages(sessionId, accumulatedMessages)
+          this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
 
           // 16. Agent Teams Auto-Resume：teammates 完成后自动收集结果并汇总
           console.log(`[Agent 编排] Auto-resume 条件检查: startedTasks=${startedTaskIds.size}, sdkSession=${!!capturedSdkSessionId}, active=${this.activeSessions.has(sessionId)}`)
@@ -1368,7 +1377,7 @@ export class AgentOrchestrator {
 
                 // 持久化 resume 助手消息
                 if (resumeMessages.length > 0) {
-                  this.persistSDKMessages(sessionId, resumeMessages)
+                  this.persistSDKMessages(sessionId, resumeMessages, Date.now() - queryStartedAt)
                 }
 
                 console.log(`[Agent 编排] Auto-resume 完成`)
@@ -1418,7 +1427,7 @@ export class AgentOrchestrator {
           // 用户主动中止
           if (!this.activeSessions.has(sessionId)) {
             console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
-            this.persistSDKMessages(sessionId, accumulatedMessages)
+            this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             callbacks.onComplete(getAgentSessionMessages(sessionId))
             return
           }
@@ -1435,7 +1444,7 @@ export class AgentOrchestrator {
               : (error instanceof Error ? error.message : '未知错误')
             console.log(`[Agent 编排] 可重试错误 (catch): ${lastRetryableError}`)
             // 保存部分内容
-            this.persistSDKMessages(sessionId, accumulatedMessages)
+            this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             accumulatedMessages.length = 0
             stderrChunks.length = 0
             continue  // 进入下一次 retry 循环
@@ -1448,7 +1457,7 @@ export class AgentOrchestrator {
           // 保存已累积的部分内容
           if (accumulatedMessages.length > 0) {
             try {
-              this.persistSDKMessages(sessionId, accumulatedMessages)
+              this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
               console.log(`[Agent 编排] 已保存部分执行结果 (${accumulatedMessages.length} 条消息)`)
             } catch (saveError) {
               console.error('[Agent 编排] 保存部分内容失败:', saveError)

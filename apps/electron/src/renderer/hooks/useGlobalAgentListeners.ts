@@ -114,11 +114,19 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
           })
         }
       }
-      // Usage
+      // Usage（保留完整字段用于详细展示）
       if (!aMsg.parent_tool_use_id && aMsg.message.usage) {
         const u = aMsg.message.usage
         const inputTokens = u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-        events.push({ type: 'usage_update', usage: { inputTokens } })
+        events.push({
+          type: 'usage_update',
+          usage: {
+            inputTokens,
+            outputTokens: u.output_tokens,
+            cacheReadTokens: u.cache_read_input_tokens,
+            cacheCreationTokens: u.cache_creation_input_tokens,
+          },
+        })
       }
       return events
     }
@@ -145,15 +153,18 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
     }
 
     case 'result': {
-      const rMsg = msg as { subtype: string; usage?: { input_tokens: number; output_tokens?: number }; modelUsage?: Record<string, { contextWindow?: number }> }
+      const rMsg = msg as { subtype: string; usage?: { input_tokens: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }; total_cost_usd?: number; modelUsage?: Record<string, { contextWindow?: number }> }
       const usage = rMsg.usage
       const contextWindow = rMsg.modelUsage ? Object.values(rMsg.modelUsage)[0]?.contextWindow : undefined
       return [{
         type: 'complete',
         stopReason: rMsg.subtype === 'success' ? 'end_turn' : 'error',
         usage: usage ? {
-          inputTokens: usage.input_tokens,
+          inputTokens: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
           outputTokens: usage.output_tokens,
+          cacheReadTokens: usage.cache_read_input_tokens,
+          cacheCreationTokens: usage.cache_creation_input_tokens,
+          costUsd: rMsg.total_cost_usd,
           contextWindow,
         } : undefined,
       }]

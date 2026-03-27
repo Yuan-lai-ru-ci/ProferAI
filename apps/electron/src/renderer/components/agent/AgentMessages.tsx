@@ -36,8 +36,9 @@ import { userProfileAtom } from '@/atoms/user-profile'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { groupIntoTurns, MessageGroupRenderer } from './SDKMessageRenderer'
-import type { AgentMessage, RetryAttempt, SDKMessage } from '@proma/shared'
+import type { AgentMessage, AgentEventUsage, RetryAttempt, SDKMessage } from '@proma/shared'
 import type { ToolActivity, AgentStreamState } from '@/atoms/agent-atoms'
 
 /** AgentMessages 属性接口 */
@@ -507,10 +508,11 @@ function AgentMessageItem({ message, sessionPath, onRetry, onRetryInNewSession, 
             <MessageResponse basePath={sessionPath || undefined}>{message.content}</MessageResponse>
           )}
         </MessageContent>
-        {/* 操作按钮（hover 时可见） */}
-        {message.content && (
-          <MessageActions className="pl-[46px] mt-0.5">
-            <CopyButton content={message.content} />
+        {/* 操作栏：左侧靠左排列 */}
+        {(message.durationMs != null || message.content) && (
+          <MessageActions className="pl-[46px] mt-0.5 justify-start gap-2.5">
+            {message.durationMs != null && <DurationBadge durationMs={message.durationMs} usage={message.usage} />}
+            {message.content && <CopyButton content={message.content} />}
           </MessageActions>
         )}
       </Message>
@@ -565,6 +567,48 @@ function AgentMessageItem({ message, sessionPath, onRetry, onRetryInNewSession, 
   }
 
   return null
+}
+
+/** 格式化耗时（毫秒 → 可读字符串） */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}m ${s.toFixed(0)}s`
+}
+
+/** 构建 usage tooltip 多行文本 */
+export function buildUsageTooltip(durationMs: number, usage?: AgentEventUsage): string {
+  const lines: string[] = []
+  lines.push(`耗时: ${formatDuration(durationMs)}`)
+
+  if (usage) {
+    const pureInput = usage.inputTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheCreationTokens ?? 0)
+    if (pureInput > 0) lines.push(`输入: ${pureInput.toLocaleString()}`)
+    if (usage.outputTokens) lines.push(`输出: ${usage.outputTokens.toLocaleString()}`)
+    if (usage.cacheCreationTokens) lines.push(`缓存写入: ${usage.cacheCreationTokens.toLocaleString()}`)
+    if (usage.cacheReadTokens) lines.push(`缓存读取: ${usage.cacheReadTokens.toLocaleString()}`)
+  }
+
+  return lines.join('\n')
+}
+
+/** 耗时徽章 — 悬浮显示 token 用量明细 */
+export function DurationBadge({ durationMs, usage }: { durationMs: number; usage?: AgentEventUsage }): React.ReactElement {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="text-[15px] text-muted-foreground/60 tabular-nums font-light cursor-default">
+          {formatDuration(durationMs)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <p className="whitespace-pre-line text-left">{buildUsageTooltip(durationMs, usage)}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 /** Agent 运行指示器 — Shimmer Spinner + 无括号的运行时间 */
@@ -736,12 +780,13 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
                 group={group}
                 allMessages={allSDKMessages}
                 basePath={sessionPath || undefined}
+                isStreaming
               />
             ))}
 
             {/* 有实时助手内容时：仅追加运行指示器 */}
             {hasLiveAssistantContent && (streaming || retrying) && (
-              <div className="pl-[46px]">
+              <div className="pl-[56px]">
                 {retrying && <RetryingNotice retrying={retrying} />}
                 {streaming && <AgentRunningIndicator startedAt={startedAt} />}
               </div>
