@@ -16,6 +16,7 @@ import {
   agentMessageRefreshAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
+  allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
   agentSidePanelOpenMapAtom,
@@ -28,7 +29,7 @@ import {
   applyAgentEvent,
   liveMessagesMapAtom,
   agentPermissionModeAtom,
-  agentQueuedMessagesMapAtom,
+  stoppedByUserSessionsAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -36,7 +37,7 @@ import {
 } from '@/atoms/notifications'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, AgentQueuedMessageEvent } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
 
 // ============================================================================
 // Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
@@ -55,6 +56,10 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         return [{ type: 'ask_user_request', request: evt.request }]
       case 'ask_user_resolved':
         return [{ type: 'ask_user_resolved', requestId: evt.requestId }]
+      case 'exit_plan_mode_request':
+        return [{ type: 'exit_plan_mode_request', request: evt.request }]
+      case 'exit_plan_mode_resolved':
+        return [{ type: 'exit_plan_mode_resolved', requestId: evt.requestId }]
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'permission_mode_changed':
@@ -386,6 +391,21 @@ export function useGlobalAgentListeners(): void {
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               enabled
             )
+          } else if (event.type === 'exit_plan_mode_request') {
+            // ExitPlanMode 请求入队
+            store.set(allPendingExitPlanRequestsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              map.set(sessionId, [...current, event.request])
+              return map
+            })
+            // 桌面通知
+            const enabled = store.get(notificationsEnabledAtom)
+            sendDesktopNotification(
+              'Agent 计划待审批',
+              'Agent 已完成计划，等待你的审批',
+              enabled
+            )
           } else if (event.type === 'permission_mode_changed') {
             // 权限模式变更（如 Plan 模式退出时切换到完全自动）
             console.log(`[GlobalAgentListeners] 权限模式变更: ${event.mode}`)
@@ -418,9 +438,14 @@ export function useGlobalAgentListeners(): void {
           return map
         })
 
-        // 注意：不清除队列消息 — STREAM_COMPLETE 表示整个查询结束，
-        // 此时所有 'next' 队列消息应已被 SDK 消费。
-        // 队列 atom 由 IPC QUEUED_MESSAGE_STATUS 事件管理生命周期。
+        // 标记用户主动打断状态
+        if (data.stoppedByUser) {
+          store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
+            const next = new Set(prev)
+            next.add(data.sessionId)
+            return next
+          })
+        }
 
         // 缓存 Team 活动数据（在流式状态被清除前保存，防止面板数据丢失）
         const streamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
@@ -543,51 +568,11 @@ export function useGlobalAgentListeners(): void {
         .catch(console.error)
     })
 
-    // ===== 5. 队列消息状态变更 =====
-    const cleanupQueuedMessageStatus = window.electronAPI.onQueuedMessageStatus(
-      (event: AgentQueuedMessageEvent) => {
-        const { sessionId, messageUuid, status, text, priority } = event
-
-        store.set(agentQueuedMessagesMapAtom, (prev) => {
-          const map = new Map(prev)
-          const queue = [...(map.get(sessionId) ?? [])]
-
-          switch (status) {
-            case 'queued': {
-              // 追加新的队列消息（跳过已乐观注入的）
-              if (text && !queue.some((m) => m.uuid === messageUuid)) {
-                queue.push({
-                  uuid: messageUuid,
-                  text,
-                  priority: priority ?? 'next',
-                  createdAt: Date.now(),
-                  status: 'queued',
-                })
-              }
-              break
-            }
-            case 'sent':
-            case 'cancelled': {
-              // 从队列中移除
-              const idx = queue.findIndex((m) => m.uuid === messageUuid)
-              if (idx >= 0) queue.splice(idx, 1)
-              break
-            }
-          }
-
-          if (queue.length === 0) map.delete(sessionId)
-          else map.set(sessionId, queue)
-          return map
-        })
-      }
-    )
-
     return () => {
       cleanupEvent()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
-      cleanupQueuedMessageStatus()
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }

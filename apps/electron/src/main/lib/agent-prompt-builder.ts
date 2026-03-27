@@ -73,12 +73,15 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   if (ctx.permissionMode === 'bypassPermissions' || ctx.permissionMode === 'plan') {
     sections.push(`## 不确定性处理
 
-当前用户使用的是${ctx.permissionMode === 'bypassPermissions' ? '完全自动模式（所有工具调用自动批准）' : '计划模式（仅规划不执行）'}，此模式下 AskUserQuestion 工具不可用。
+当前用户使用的是${ctx.permissionMode === 'bypassPermissions' ? '完全自动模式（所有工具调用自动批准）' : '计划模式（仅规划不执行）'}。
+
+**⚠️ 严禁调用 AskUserQuestion 工具！**
+在当前模式下，AskUserQuestion 工具的弹窗不会显示给用户，调用后会直接导致请求失败并中断你的工作流。这是一个已知的技术限制，不是你能绕过的问题。
 
 **当你遇到不确定的情况时：**
 - **停下来，直接在回复文本中向用户提问**，等待用户回复后再继续
 - 列出你考虑的选项和各自的利弊，让用户决策
-- **绝对不要**调用 AskUserQuestion 工具，该工具在当前模式下会失败`)
+- **绝对不要**调用 AskUserQuestion 工具，改为在普通文本回复中提问`)
   } else {
     sections.push(`## 不确定性处理
 

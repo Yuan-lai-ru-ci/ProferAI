@@ -23,8 +23,8 @@ import { ContextUsageBadge } from './ContextUsageBadge'
 import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
+import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { SidePanel } from './SidePanel'
-import { QueuedMessagesBanner } from './QueuedMessagesBanner'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
@@ -56,10 +56,9 @@ import {
   workspaceAttachedDirectoriesMapAtom,
   liveMessagesMapAtom,
   agentThinkingAtom,
-  agentQueuedMessagesMapAtom,
+  stoppedByUserSessionsAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
-import type { QueuedMessage } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
@@ -536,38 +535,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const effectiveText = text || suggestion || ''
     if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId) return
 
-    // 上一条消息仍在处理中，排队发送
+    // 上一条消息仍在处理中，直接追加发送
     if (streaming) {
-      // 排队时不处理附件（仅支持纯文本排队）
+      // 流式追加时不处理附件（仅支持纯文本）
       if (pendingFiles.length > 0) {
-        toast.info('Agent 运行中暂不支持排队发送附件', {
+        toast.info('Agent 运行中暂不支持追加发送附件', {
           description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
         })
         return
       }
 
-      // 生成本地 UUID，先做乐观更新再发送 IPC
       const localUuid = crypto.randomUUID()
 
-      // 1. 立即更新队列 atom（浮动卡片可见）
-      store.set(agentQueuedMessagesMapAtom, (prev: Map<string, QueuedMessage[]>) => {
-        const map = new Map(prev)
-        const queue = [...(map.get(sessionId) ?? [])]
-        queue.push({
-          uuid: localUuid,
-          text: effectiveText,
-          priority: 'next',
-          createdAt: Date.now(),
-          status: 'queued',
-        })
-        map.set(sessionId, queue)
-        return map
-      })
-
-      // 2. 注入合成 SDKUserMessage 到 liveMessages，让用户消息立即可见于对话历史
-      //    SDK 不会为 'next' 优先级的队列消息发出独立的 SDKUserMessage 事件，
-      //    因此需要前端主动注入。UUID 标记可防止 SDK 后续推送时重复。
-      const syntheticUserMsg: SDKMessage = {
+      // 1. 立即注入 liveMessages（作为普通用户消息显示）
+      const syntheticMsg: import('@proma/shared').SDKMessage = {
         type: 'user',
         uuid: localUuid,
         message: {
@@ -575,12 +556,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         },
         parent_tool_use_id: null,
         _createdAt: Date.now(),
-        _queuedMessage: true,
-      } as unknown as SDKMessage
-      store.set(liveMessagesMapAtom, (prev: Map<string, SDKMessage[]>) => {
+      } as unknown as import('@proma/shared').SDKMessage
+
+      store.set(liveMessagesMapAtom, (prev) => {
         const map = new Map(prev)
         const current = map.get(sessionId) ?? []
-        map.set(sessionId, [...current, syntheticUserMsg])
+        map.set(sessionId, [...current, syntheticMsg])
         return map
       })
 
@@ -593,21 +574,23 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
 
-      // 3. 异步发送到后端（传递本地 UUID 确保一致性）
+      // 3. 异步发送到后端（'now' 优先级立即注入 SDK + 持久化 JSONL）
       window.electronAPI.queueAgentMessage({
         sessionId,
         userMessage: effectiveText,
-        priority: 'next',
         uuid: localUuid,
+      }).then(() => {
+        toast.info('消息已追加发送')
       }).catch((error) => {
-        console.error('[AgentView] 排队消息失败:', error)
-        toast.error('排队消息失败', { description: String(error) })
-        // 回滚：从队列中移除
-        store.set(agentQueuedMessagesMapAtom, (prev: Map<string, QueuedMessage[]>) => {
+        console.error('[AgentView] 追加消息失败:', error)
+        toast.error('追加消息失败', { description: String(error) })
+        // 回滚：从 liveMessages 移除
+        store.set(liveMessagesMapAtom, (prev) => {
           const map = new Map(prev)
-          const queue = (map.get(sessionId) ?? []).filter((m) => m.uuid !== localUuid)
-          if (queue.length === 0) map.delete(sessionId)
-          else map.set(sessionId, queue)
+          const current = (map.get(sessionId) ?? []).filter(
+            (m) => (m as unknown as { uuid?: string }).uuid !== localUuid
+          )
+          map.set(sessionId, current)
           return map
         })
       })
@@ -683,6 +666,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     // 新一轮对话开始时，解除 Team 面板关闭状态（允许新 Team 数据显示）
     store.set(dismissedTeamSessionIdsAtom, (prev: Set<string>) => {
+      if (!prev.has(sessionId)) return prev
+      const next = new Set(prev)
+      next.delete(sessionId)
+      return next
+    })
+
+    // 清除打断状态（上一轮的打断标记不再显示）
+    store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
       if (!prev.has(sessionId)) return prev
       const next = new Set(prev)
       next.delete(sessionId)
@@ -964,8 +955,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         {/* AskUserQuestion 交互式问答横幅 */}
         <AskUserBanner sessionId={sessionId} />
 
-        {/* 队列消息浮动卡片（输入框外上方） */}
-        <QueuedMessagesBanner sessionId={sessionId} />
+        {/* ExitPlanMode 计划审批横幅 */}
+        <ExitPlanModeBanner sessionId={sessionId} />
 
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2">

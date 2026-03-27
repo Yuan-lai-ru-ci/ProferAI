@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download } from 'lucide-react'
+import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download, Square } from 'lucide-react'
 import {
   Message,
   MessageHeader,
@@ -33,6 +33,7 @@ import { ToolActivityList } from './ToolActivityItem'
 import { BackgroundTasksPanel } from './BackgroundTasksPanel'
 import { useBackgroundTasks } from '@/hooks/useBackgroundTasks'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { stoppedByUserSessionsAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
@@ -640,6 +641,8 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 
 export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
+  const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
+  const stoppedByUser = stoppedByUserSessions.has(sessionId)
 
   /**
    * 淡入控制：切换会话时先隐藏，等布局完成后再显示。
@@ -819,6 +822,14 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
                   )}
                 </MessageContent>
               </Message>
+            )}
+
+            {/* 用户打断指示器 */}
+            {!streaming && stoppedByUser && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 mt-2 ml-[46px]">
+                <Square className="size-3" />
+                <span>已被用户打断</span>
+              </div>
             )}
           </>
         )}

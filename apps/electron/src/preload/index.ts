@@ -61,6 +61,7 @@ import type {
   PromaPermissionMode,
   AskUserRequest,
   AskUserResponse,
+  ExitPlanModeResponse,
   SystemPromptConfig,
   SystemPrompt,
   SystemPromptCreateInput,
@@ -82,9 +83,6 @@ import type {
   FeishuNotificationSentPayload,
   FeishuUpdateBindingInput,
   AgentQueueMessageInput,
-  AgentCancelQueuedMessageInput,
-  AgentPromoteQueuedMessageInput,
-  AgentQueuedMessageEvent,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -314,17 +312,8 @@ export interface ElectronAPI {
 
   // ===== Agent 队列消息 =====
 
-  /** 排队发送 Agent 消息（Agent 运行中） */
+  /** 流式追加发送 Agent 消息（Agent 运行中） */
   queueAgentMessage: (input: AgentQueueMessageInput) => Promise<string>
-
-  /** 取消队列中的 Agent 消息 */
-  cancelQueuedAgentMessage: (input: AgentCancelQueuedMessageInput) => Promise<void>
-
-  /** 提升队列消息为立即发送 */
-  promoteQueuedAgentMessage: (input: AgentPromoteQueuedMessageInput) => Promise<string>
-
-  /** 监听队列消息状态变更（主进程 → 渲染进程） */
-  onQueuedMessageStatus: (callback: (event: AgentQueuedMessageEvent) => void) => () => void
 
   // ===== Agent 后台任务管理 =====
 
@@ -436,6 +425,11 @@ export interface ElectronAPI {
 
   /** 响应 AskUser 请求 */
   respondAskUser: (response: AskUserResponse) => Promise<void>
+
+  // ===== ExitPlanMode 计划审批 =====
+
+  /** 响应 ExitPlanMode 请求 */
+  respondExitPlanMode: (response: ExitPlanModeResponse) => Promise<void>
 
   // ===== Agent Teams 数据 =====
 
@@ -885,20 +879,6 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.QUEUE_MESSAGE, input)
   },
 
-  cancelQueuedAgentMessage: (input: AgentCancelQueuedMessageInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CANCEL_QUEUED_MESSAGE, input)
-  },
-
-  promoteQueuedAgentMessage: (input: AgentPromoteQueuedMessageInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PROMOTE_QUEUED_MESSAGE, input)
-  },
-
-  onQueuedMessageStatus: (callback: (event: AgentQueuedMessageEvent) => void) => {
-    const listener = (_: unknown, event: AgentQueuedMessageEvent): void => callback(event)
-    ipcRenderer.on(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, listener)
-    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, listener) }
-  },
-
   // Agent 后台任务管理
   getTaskOutput: (input: GetTaskOutputInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TASK_OUTPUT, input)
@@ -1046,6 +1026,11 @@ const electronAPI: ElectronAPI = {
   // AskUserQuestion 交互式问答
   respondAskUser: (response: AskUserResponse) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ASK_USER_RESPOND, response)
+  },
+
+  // ExitPlanMode 计划审批
+  respondExitPlanMode: (response: ExitPlanModeResponse) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.EXIT_PLAN_MODE_RESPOND, response)
   },
 
   // Agent Teams 数据

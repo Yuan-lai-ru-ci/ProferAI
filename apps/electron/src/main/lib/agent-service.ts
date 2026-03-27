@@ -24,9 +24,6 @@ import type {
   AgentStreamEvent,
   AgentStreamPayload,
   AgentQueueMessageInput,
-  AgentCancelQueuedMessageInput,
-  AgentPromoteQueuedMessageInput,
-  AgentQueuedMessageEvent,
 } from '@proma/shared'
 import { ClaudeAgentAdapter } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
@@ -83,11 +80,12 @@ export async function runAgent(
           })
         }
       },
-      onComplete: (messages) => {
+      onComplete: (messages, opts) => {
         if (!webContents.isDestroyed()) {
           webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
             sessionId: input.sessionId,
             messages,
+            stoppedByUser: opts?.stoppedByUser ?? false,
           })
         }
       },
@@ -196,95 +194,23 @@ export function stopAllAgents(): void {
   orchestrator.stopAll()
 }
 
-// ===== 队列消息 =====
+// ===== 流式追加消息 =====
 
 /**
- * 排队发送 Agent 消息
+ * 在 Agent 流式中追加发送消息
  *
- * 在 Agent 运行中注入队列消息，推送状态事件到渲染进程。
+ * 使用 'now' 优先级立即注入 SDK 并持久化。
  */
 export async function queueAgentMessage(
   input: AgentQueueMessageInput,
-  webContents: WebContents,
+  _webContents: WebContents,
 ): Promise<string> {
-  const uuid = await orchestrator.queueMessage(
+  return orchestrator.queueMessage(
     input.sessionId,
     input.userMessage,
-    input.priority ?? 'next',
+    undefined,
     input.uuid,
   )
-
-  // 推送 queued 状态到渲染进程
-  if (!webContents.isDestroyed()) {
-    const event: AgentQueuedMessageEvent = {
-      sessionId: input.sessionId,
-      messageUuid: uuid,
-      text: input.userMessage,
-      priority: input.priority ?? 'next',
-      status: 'queued',
-    }
-    webContents.send(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, event)
-  }
-
-  return uuid
-}
-
-/**
- * 取消队列中的 Agent 消息
- */
-export function cancelQueuedAgentMessage(
-  input: AgentCancelQueuedMessageInput,
-  webContents: WebContents,
-): void {
-  orchestrator.cancelQueuedMessage(input.sessionId, input.messageUuid)
-
-  // 推送 cancelled 状态到渲染进程
-  if (!webContents.isDestroyed()) {
-    const event: AgentQueuedMessageEvent = {
-      sessionId: input.sessionId,
-      messageUuid: input.messageUuid,
-      status: 'cancelled',
-    }
-    webContents.send(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, event)
-  }
-}
-
-/**
- * 提升队列消息为立即发送
- *
- * 取消原消息 + 以 'now' 优先级重新发送，推送状态变更。
- */
-export async function promoteQueuedAgentMessage(
-  input: AgentPromoteQueuedMessageInput,
-  webContents: WebContents,
-): Promise<string> {
-  // 先推送原消息的 cancelled 状态
-  if (!webContents.isDestroyed()) {
-    const cancelEvent: AgentQueuedMessageEvent = {
-      sessionId: input.sessionId,
-      messageUuid: input.messageUuid,
-      status: 'cancelled',
-    }
-    webContents.send(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, cancelEvent)
-  }
-
-  const newUuid = await orchestrator.promoteQueuedMessage(
-    input.sessionId,
-    input.messageUuid,
-  )
-
-  // 推送新消息的 queued 状态（priority: 'now'）
-  if (!webContents.isDestroyed()) {
-    const queueEvent: AgentQueuedMessageEvent = {
-      sessionId: input.sessionId,
-      messageUuid: newUuid,
-      priority: 'now',
-      status: 'queued',
-    }
-    webContents.send(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, queueEvent)
-  }
-
-  return newUuid
 }
 
 // ===== 文件操作 =====

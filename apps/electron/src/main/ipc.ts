@@ -50,6 +50,7 @@ import type {
   PermissionResponse,
   PromaPermissionMode,
   AskUserResponse,
+  ExitPlanModeResponse,
   SystemPromptConfig,
   SystemPrompt,
   SystemPromptCreateInput,
@@ -121,9 +122,10 @@ import {
   moveSessionToWorkspace,
   forkAgentSession,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, cancelQueuedAgentMessage, promoteQueuedAgentMessage } from './lib/agent-service'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
+import { exitPlanService } from './lib/agent-exit-plan-service'
 import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir } from './lib/config-paths'
 import {
@@ -660,6 +662,8 @@ export function registerIpcHandlers(): void {
       permissionService.clearSessionPending(id)
       // 清理 AskUser 服务中的待处理请求
       askUserService.clearSessionPending(id)
+      // 清理 ExitPlanMode 服务中的待处理请求
+      exitPlanService.clearSessionPending(id)
       return deleteAgentSession(id)
     }
   )
@@ -838,22 +842,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.QUEUE_MESSAGE,
     async (event, input: import('@proma/shared').AgentQueueMessageInput): Promise<string> => {
       return queueAgentMessage(input, event.sender)
-    }
-  )
-
-  // 取消队列消息
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.CANCEL_QUEUED_MESSAGE,
-    async (event, input: import('@proma/shared').AgentCancelQueuedMessageInput): Promise<void> => {
-      cancelQueuedAgentMessage(input, event.sender)
-    }
-  )
-
-  // 提升队列消息为立即发送
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.PROMOTE_QUEUED_MESSAGE,
-    async (event, input: import('@proma/shared').AgentPromoteQueuedMessageInput): Promise<string> => {
-      return promoteQueuedAgentMessage(input, event.sender)
     }
   )
 
@@ -1122,6 +1110,42 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ===== ExitPlanMode 计划审批 =====
+
+  // 响应 ExitPlanMode 请求
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.EXIT_PLAN_MODE_RESPOND,
+    async (event, response: ExitPlanModeResponse): Promise<void> => {
+      const result = exitPlanService.respondToExitPlanMode(response)
+
+      if (result) {
+        const { sessionId, targetMode } = result
+
+        // 通知渲染进程请求已处理
+        event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          payload: { kind: 'proma_event', event: { type: 'exit_plan_mode_resolved', requestId: response.requestId } },
+        })
+
+        // 如果用户选择了新的权限模式，通知渲染进程更新 UI
+        if (targetMode) {
+          const { setWorkspacePermissionMode } = await import('./lib/agent-workspace-manager')
+          // 尝试获取当前会话的 workspaceSlug
+          const { getAgentSessionMeta } = await import('./lib/agent-session-manager')
+          const meta = getAgentSessionMeta(sessionId)
+          if (meta?.workspaceId) {
+            setWorkspacePermissionMode(meta.workspaceId, targetMode)
+          }
+          event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+            sessionId,
+            payload: { kind: 'proma_event', event: { type: 'permission_mode_changed', mode: targetMode } },
+          })
+          console.log(`[IPC] ExitPlanMode 权限模式切换: ${targetMode}`)
+        }
+      }
+    }
+  )
+
   // ===== Agent Teams 数据 =====
 
   // 获取 Team 聚合数据（团队配置 + 任务列表 + 收件箱）
@@ -1278,9 +1302,6 @@ export function registerIpcHandlers(): void {
       const items = readdirSync(safePath, { withFileTypes: true })
 
       for (const item of items) {
-        // 跳过隐藏文件
-        if (item.name.startsWith('.')) continue
-
         const fullPath = resolve(safePath, item.name)
         entries.push({
           name: item.name,
@@ -1289,9 +1310,12 @@ export function registerIpcHandlers(): void {
         })
       }
 
-      // 目录在前，文件在后，各自按名称排序
+      // 目录在前，文件在后；隐藏文件（.开头）排在同类末尾，各自按名称排序
       entries.sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        const aHidden = a.name.startsWith('.')
+        const bHidden = b.name.startsWith('.')
+        if (aHidden !== bHidden) return aHidden ? 1 : -1
         return a.name.localeCompare(b.name)
       })
 
@@ -1410,7 +1434,6 @@ export function registerIpcHandlers(): void {
       const items = readdirSync(safePath, { withFileTypes: true })
 
       for (const item of items) {
-        if (item.name.startsWith('.')) continue
         const fullPath = resolve(safePath, item.name)
         entries.push({
           name: item.name,
@@ -1419,8 +1442,12 @@ export function registerIpcHandlers(): void {
         })
       }
 
+      // 目录在前，文件在后；隐藏文件（.开头）排在同类末尾
       entries.sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        const aHidden = a.name.startsWith('.')
+        const bHidden = b.name.startsWith('.')
+        if (aHidden !== bHidden) return aHidden ? 1 : -1
         return a.name.localeCompare(b.name)
       })
 

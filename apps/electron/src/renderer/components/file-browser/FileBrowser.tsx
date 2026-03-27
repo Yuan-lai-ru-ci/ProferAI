@@ -385,6 +385,16 @@ function FileTreeItem({
         const items = await window.electronAPI.listDirectory(entry.path)
         setChildren(items)
         setChildrenLoaded(true)
+
+        // 首次展开空目录时，延迟重试一次（应对 Agent 正在写入文件的时序问题）
+        if (items.length === 0) {
+          setTimeout(async () => {
+            try {
+              const retryItems = await window.electronAPI.listDirectory(entry.path)
+              if (retryItems.length > 0) setChildren(retryItems)
+            } catch { /* 静默忽略 */ }
+          }, 800)
+        }
       } catch (err) {
         console.error('[FileTreeItem] 加载子目录失败:', err)
       }

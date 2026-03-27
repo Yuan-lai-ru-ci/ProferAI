@@ -465,6 +465,9 @@ export type AgentEvent =
   // AskUserQuestion 交互式问答
   | { type: 'ask_user_request'; request: AskUserRequest }
   | { type: 'ask_user_resolved'; requestId: string }
+  // ExitPlanMode 计划审批
+  | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
+  | { type: 'exit_plan_mode_resolved'; requestId: string }
   // 提示建议
   | { type: 'prompt_suggestion'; suggestion: string }
   // 模型确认（SDK 确认实际使用的模型）
@@ -483,11 +486,14 @@ export type PromaEvent =
   | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
   | { type: 'ask_user_request'; request: AskUserRequest }
   | { type: 'ask_user_resolved'; requestId: string }
+  | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
+  | { type: 'exit_plan_mode_resolved'; requestId: string }
   | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
   | { type: 'model_resolved'; model: string }
   | { type: 'waiting_resume'; message: string }
   | { type: 'resume_start'; messageId: string }
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
+
 
 /** IPC 传输的统一 payload（替代 AgentEvent） */
 export type AgentStreamPayload =
@@ -661,52 +667,14 @@ export interface AgentSendInput {
 
 // ===== Agent 队列消息 =====
 
-/** 队列消息优先级 */
-export type AgentQueuePriority = 'now' | 'next' | 'later'
-
-/** 排队发送消息的输入参数 */
+/** 流式追加消息的输入参数（Agent 流式中发送新消息） */
 export interface AgentQueueMessageInput {
   /** 会话 ID */
   sessionId: string
   /** 用户消息内容 */
   userMessage: string
-  /** 优先级（默认 'next'：当前 turn 完成后发送） */
-  priority?: AgentQueuePriority
   /** 前端预生成的 UUID（用于乐观更新去重） */
   uuid?: string
-}
-
-/** 取消队列消息的输入参数 */
-export interface AgentCancelQueuedMessageInput {
-  /** 会话 ID */
-  sessionId: string
-  /** 队列消息 UUID */
-  messageUuid: string
-}
-
-/** 提升队列消息为立即发送的输入参数 */
-export interface AgentPromoteQueuedMessageInput {
-  /** 会话 ID */
-  sessionId: string
-  /** 队列消息 UUID */
-  messageUuid: string
-}
-
-/** 队列消息状态 */
-export type QueuedMessageStatus = 'queued' | 'sent' | 'cancelled'
-
-/** 队列消息状态变更事件（主进程 → 渲染进程推送） */
-export interface AgentQueuedMessageEvent {
-  /** 会话 ID */
-  sessionId: string
-  /** 队列消息 UUID */
-  messageUuid: string
-  /** 消息文本（首次 queued 时携带，便于前端乐观更新） */
-  text?: string
-  /** 优先级 */
-  priority?: AgentQueuePriority
-  /** 状态 */
-  status: QueuedMessageStatus
 }
 
 // ===== 会话迁移输入 =====
@@ -785,6 +753,8 @@ export interface AgentStreamCompletePayload {
   sessionId: string
   /** 已持久化的完整消息列表 */
   messages?: AgentMessage[]
+  /** 是否由用户手动中止 */
+  stoppedByUser?: boolean
 }
 
 // ===== 文件浏览器 =====
@@ -904,6 +874,41 @@ export interface AskUserResponse {
   requestId: string
   /** 用户答案（问题索引字符串 → 答案文本） */
   answers: Record<string, string>
+}
+
+// ===== ExitPlanMode 计划审批类型 =====
+
+/** ExitPlanMode SDK 工具输入中的 allowedPrompts 项 */
+export interface ExitPlanAllowedPrompt {
+  /** 工具名称（目前仅 "Bash"） */
+  tool: 'Bash'
+  /** 语义化的操作描述（如 "run tests"、"install dependencies"） */
+  prompt: string
+}
+
+/** ExitPlanMode 请求（主进程 → 渲染进程） */
+export interface ExitPlanModeRequest {
+  /** 请求唯一 ID */
+  requestId: string
+  /** 会话 ID */
+  sessionId: string
+  /** SDK 工具原始输入 */
+  toolInput: Record<string, unknown>
+  /** 解析后的 allowedPrompts 列表 */
+  allowedPrompts: ExitPlanAllowedPrompt[]
+}
+
+/** ExitPlanMode 用户选择行为 */
+export type ExitPlanModeAction = 'approve_auto' | 'approve_edit' | 'deny' | 'feedback'
+
+/** ExitPlanMode 响应（渲染进程 → 主进程） */
+export interface ExitPlanModeResponse {
+  /** 请求 ID */
+  requestId: string
+  /** 用户选择的行为 */
+  action: ExitPlanModeAction
+  /** 用户反馈内容（action 为 feedback 时有值） */
+  feedback?: string
 }
 
 // ===== 权限系统类型 =====
@@ -1189,6 +1194,10 @@ export const AGENT_IPC_CHANNELS = {
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */
   ASK_USER_RESPOND: 'agent:ask-user:respond',
+
+  // ExitPlanMode 计划审批
+  /** ExitPlanMode 响应（渲染进程 → 主进程） */
+  EXIT_PLAN_MODE_RESPOND: 'agent:exit-plan-mode:respond',
 
   // Agent Teams 数据
   /** 获取 Team 聚合数据（sdkSessionId → AgentTeamData | null） */
