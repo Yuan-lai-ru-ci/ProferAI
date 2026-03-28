@@ -423,8 +423,6 @@ export class AgentOrchestrator {
       ANTHROPIC_API_KEY: apiKey,
       // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
-      // 启用 Agent Teams（实验性多 Agent 协作）
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       // 启用 Tasks 功能
       CLAUDE_CODE_ENABLE_TASKS: 'true',
       // 配置隔离：让 SDK 使用独立的配置目录，不读取用户的 ~/.claude.json

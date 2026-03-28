@@ -2,7 +2,7 @@
  * AgentMessages — Agent 消息列表
  *
  * 复用 Chat 的 Conversation/Message 原语组件，
- * 使用 ToolActivityList 渲染紧凑工具活动列表。
+ * 流式输出通过 SDK 渲染路径（MessageGroupRenderer）展示工具活动。
  */
 
 import * as React from 'react'
@@ -30,8 +30,6 @@ import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { Button } from '@/components/ui/button'
 import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
-import { BackgroundTasksPanel } from './BackgroundTasksPanel'
-import { useBackgroundTasks } from '@/hooks/useBackgroundTasks'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { stoppedByUserSessionsAtom } from '@/atoms/agent-atoms'
@@ -693,13 +691,9 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
 
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''
-  const toolActivities = streamState?.toolActivities ?? []
   const agentStreamingModel = streamState?.model ? resolveModelDisplayName(streamState.model, channels) : undefined
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
-
-  // 获取后台任务列表
-  const { tasks: backgroundTasks } = useBackgroundTasks(sessionId)
 
   const { displayedContent: smoothContent } = useSmoothStream({
     content: streamingContent,
@@ -817,14 +811,15 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
 
             {/* 有实时助手内容时：仅追加运行指示器 */}
             {hasLiveAssistantContent && (streaming || retrying) && (
-              <div className="pl-[46px] mt-0.5">
+              <div className="pl-[56px] mt-0.5">
                 {retrying && <RetryingNotice retrying={retrying} />}
                 {streaming && <AgentRunningIndicator startedAt={startedAt} />}
               </div>
             )}
 
             {/* 无实时助手内容时：显示完整气泡（含头像/名称/时间） */}
-            {!hasLiveAssistantContent && (streaming || smoothContent || toolActivities.length > 0 || retrying) && (
+            {/* 注意：工具活动已通过 SDK 渲染路径（liveGroups）展示，此处不再使用 ToolActivityList */}
+            {!hasLiveAssistantContent && (streaming || smoothContent || retrying) && (
               <Message from="assistant">
                 <MessageHeader
                   model={agentStreamingModel}
@@ -833,13 +828,6 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
                 />
                 <MessageContent>
                   {retrying && <RetryingNotice retrying={retrying} />}
-                  {toolActivities.length > 0 && (
-                    <div className="mb-3">
-                      <ToolActivityList activities={toolActivities} animate />
-                      <BackgroundTasksPanel tasks={backgroundTasks} />
-                    </div>
-                  )}
-                  <ToolResultInlineImages activities={toolActivities} />
                   {smoothContent ? (
                     <>
                       <MessageResponse basePath={sessionPath || undefined}>{smoothContent}</MessageResponse>
@@ -854,7 +842,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
 
             {/* 用户打断指示器 */}
             {!streaming && stoppedByUser && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 mt-2 ml-[46px]">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 mt-2 ml-[56px]">
                 <Square className="size-3" />
                 <span>已被用户打断</span>
               </div>
