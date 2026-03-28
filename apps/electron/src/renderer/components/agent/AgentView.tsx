@@ -47,12 +47,6 @@ import {
   agentMessageRefreshAtom,
   agentSessionsAtom,
   currentAgentSessionIdAtom,
-  cachedTeamOverviewsAtom,
-  cachedTeammateStatesAtom,
-  cachedTeamActivitiesAtom,
-  dismissedTeamSessionIdsAtom,
-  buildTeamActivityEntries,
-  rebuildTeamDataFromMessages,
   agentAttachedDirectoriesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
   liveMessagesMapAtom,
@@ -214,33 +208,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .then(([msgs, sdkMsgs]) => {
         setMessages(msgs)
         setPersistedSDKMessages(sdkMsgs)
-
-        // 从持久化消息中重建 Team 数据并填充缓存（页面刷新后恢复）
-        const teamData = rebuildTeamDataFromMessages(msgs)
-        if (teamData) {
-          if (teamData.overview) {
-            store.set(cachedTeamOverviewsAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(sessionId, teamData.overview!)
-              return map
-            })
-          }
-          if (teamData.teammates.length > 0) {
-            store.set(cachedTeammateStatesAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(sessionId, teamData.teammates)
-              return map
-            })
-          }
-          const entries = buildTeamActivityEntries(teamData.toolActivities)
-          if (entries.length > 0) {
-            store.set(cachedTeamActivitiesAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(sessionId, entries)
-              return map
-            })
-          }
-        }
 
         // 消息加载完成后，同步清除流式状态和实时消息，
         // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
@@ -668,14 +635,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         }]
       })
     }
-
-    // 新一轮对话开始时，解除 Team 面板关闭状态（允许新 Team 数据显示）
-    store.set(dismissedTeamSessionIdsAtom, (prev: Set<string>) => {
-      if (!prev.has(sessionId)) return prev
-      const next = new Set(prev)
-      next.delete(sessionId)
-      return next
-    })
 
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {

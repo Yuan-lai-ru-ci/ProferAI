@@ -207,8 +207,14 @@ export function getToolPhrase(toolName: string, input: Record<string, unknown>):
 
     case 'TeamCreate': {
       const name = input.team_name
-      if (typeof name === 'string') return phrase(`创建团队 ${name}`)
-      return phrase('创建团队')
+      if (typeof name === 'string') return phrase(`创建 Agent Teams ${name}`)
+      return phrase('创建 Agent Teams')
+    }
+
+    case 'TeamDelete': {
+      const name = input.team_name
+      if (typeof name === 'string') return phrase(`删除 Agent Teams ${name}`)
+      return phrase('删除 Agent Teams')
     }
 
     case 'EnterPlanMode': {

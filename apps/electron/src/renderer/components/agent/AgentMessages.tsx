@@ -39,7 +39,7 @@ import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { groupIntoTurns, MessageGroupRenderer } from './SDKMessageRenderer'
+import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview } from './SDKMessageRenderer'
 import type { AgentMessage, AgentEventUsage, RetryAttempt, SDKMessage } from '@proma/shared'
 import type { ToolActivity, AgentStreamState } from '@/atoms/agent-atoms'
 
@@ -708,14 +708,39 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
 
   // 迷你地图数据
   const minimapItems: MinimapItem[] = React.useMemo(
-    () => messages.map((m, i) => ({
-      id: m.id || `msg-${i}`,
-      role: m.role === 'status' ? 'status' as const : m.role as MinimapItem['role'],
-      preview: (m.content ?? '').replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '').slice(0, 80),
-      avatar: m.role === 'user' ? userProfile.avatar : undefined,
-      model: m.model,
-    })),
-    [messages, userProfile.avatar]
+    () => {
+      // SDK 渲染路径：从 Turn 分组构建迷你地图项
+      if (persistedSDKMessages && persistedSDKMessages.length > 0) {
+        const persistedG = groupIntoTurns(persistedSDKMessages)
+        const liveG = groupIntoTurns(liveMessages ?? [])
+        // 去重：liveMessages 中可能包含与 persisted 相同的消息
+        const seenIds = new Set(persistedG.map(getGroupId))
+        const allGroups = [...persistedG, ...liveG.filter((g) => {
+          const id = getGroupId(g)
+          if (seenIds.has(id)) return false
+          seenIds.add(id)
+          return true
+        })]
+        return allGroups.map((group) => ({
+          id: getGroupId(group),
+          role: group.type === 'user' ? 'user' as const
+            : group.type === 'system' ? 'status' as const
+            : 'assistant' as const,
+          preview: getGroupPreview(group),
+          avatar: group.type === 'user' ? userProfile.avatar : undefined,
+          model: group.type === 'assistant-turn' ? group.model : undefined,
+        }))
+      }
+      // 旧格式回退
+      return messages.map((m, i) => ({
+        id: m.id || `msg-${i}`,
+        role: m.role === 'status' ? 'status' as const : m.role as MinimapItem['role'],
+        preview: (m.content ?? '').replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '').slice(0, 80),
+        avatar: m.role === 'user' ? userProfile.avatar : undefined,
+        model: m.model,
+      }))
+    },
+    [messages, persistedSDKMessages, liveMessages, userProfile.avatar]
   )
 
   // 判断是否使用新的 SDKMessage 渲染路径

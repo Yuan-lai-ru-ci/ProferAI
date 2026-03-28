@@ -17,7 +17,6 @@ import {
   Circle,
   ChevronRight,
   MessageCircleDashed,
-  Plus,
   Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -174,30 +173,30 @@ export function ActivityRow({ activity, index = 0, animate = false, onOpenDetail
       {canExpand ? (
         <button
           type="button"
-          className="group/expand shrink-0 flex items-center gap-2 cursor-pointer min-w-0"
+          className="group/expand shrink-0 flex items-center gap-1.5 cursor-pointer min-w-0 flex-1"
           onClick={(e) => { e.stopPropagation(); onOpenDetails(activity) }}
         >
-          <span className={cn(SIZE.icon, 'relative flex items-center justify-center shrink-0')}>
-            <span className="transition-opacity duration-150 group-hover/expand:opacity-0">
-              <StatusIcon status={status} toolName={activity.toolName} />
+          <StatusIcon status={status} toolName={activity.toolName} />
+          <span className="truncate text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150 flex-1">{displayLabel}</span>
+          {activity.isError && <ErrorBadge />}
+          {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
+            <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
+              {formatElapsed(activity.elapsedSeconds)}
             </span>
-            <Plus className={cn(SIZE.icon, 'absolute text-foreground/60 opacity-0 transition-opacity duration-150 group-hover/expand:opacity-100')} />
-          </span>
-          <span className="truncate text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{displayLabel}</span>
+          )}
+          <ChevronRight className={cn(SIZE.icon, 'shrink-0 text-muted-foreground/40 group-hover/expand:text-foreground/60 transition-colors duration-150')} />
         </button>
       ) : (
         <>
           <StatusIcon status={status} toolName={activity.toolName} />
           <span className="truncate text-foreground/80">{displayLabel}</span>
+          {activity.isError && <ErrorBadge />}
+          {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
+            <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
+              {formatElapsed(activity.elapsedSeconds)}
+            </span>
+          )}
         </>
-      )}
-
-      {activity.isError && <ErrorBadge />}
-
-      {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
-        <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
-          {formatElapsed(activity.elapsedSeconds)}
-        </span>
       )}
     </div>
   )
@@ -561,5 +560,5 @@ export function ToolActivityItem({ activity }: { activity: ToolActivity }): Reac
   return <ToolActivityList activities={[activity]} />
 }
 
-// 导出格式化耗时（向后兼容 TeamActivityPanel 等外部引用）
+// 导出格式化耗时（供外部组件引用）
 export { formatElapsed }

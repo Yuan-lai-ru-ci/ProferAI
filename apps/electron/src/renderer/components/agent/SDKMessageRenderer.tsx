@@ -728,26 +728,75 @@ export interface MessageGroupRendererProps {
   isStreaming?: boolean
 }
 
-export function MessageGroupRenderer({ group, allMessages, basePath, onFork, isStreaming }: MessageGroupRendererProps): React.ReactElement | null {
+/**
+ * 从 MessageGroup 中提取稳定的 ID，用于 data-message-id 和迷你地图
+ */
+export function getGroupId(group: MessageGroup): string {
   if (group.type === 'user') {
-    return <UserInputMessage message={group.message} />
+    return group.message.uuid ?? `user-${Date.now()}`
+  }
+  if (group.type === 'system') {
+    return `system-${group.message.subtype ?? 'unknown'}`
+  }
+  // assistant-turn：取首条 assistant 消息的 uuid
+  const first = group.assistantMessages[0]
+  return first?.uuid ?? `turn-${Date.now()}`
+}
+
+/**
+ * 从 MessageGroup 中提取纯文本预览，供迷你地图使用
+ */
+export function getGroupPreview(group: MessageGroup): string {
+  if (group.type === 'user') {
+    return (extractUserText(group.message) ?? '').replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '').slice(0, 80)
+  }
+  if (group.type === 'system') {
+    if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
+    if (group.message.subtype === 'compacting') return '正在压缩上下文...'
+    return ''
+  }
+  // assistant-turn：收集所有 text 块
+  const texts: string[] = []
+  for (const aMsg of group.assistantMessages) {
+    const blocks = aMsg.message?.content
+    if (!Array.isArray(blocks)) continue
+    for (const block of blocks) {
+      if (block.type === 'text' && 'text' in block) {
+        texts.push((block as { text: string }).text)
+      }
+    }
+  }
+  return texts.join(' ').slice(0, 80)
+}
+
+export function MessageGroupRenderer({ group, allMessages, basePath, onFork, isStreaming }: MessageGroupRendererProps): React.ReactElement | null {
+  const groupId = getGroupId(group)
+
+  if (group.type === 'user') {
+    return (
+      <div data-message-id={groupId}>
+        <UserInputMessage message={group.message} />
+      </div>
+    )
   }
 
   if (group.type === 'system') {
     const subtype = group.message.subtype
-    if (subtype === 'compact_boundary') return <CompactBoundaryDivider />
-    if (subtype === 'compacting') return <CompactingIndicator />
+    if (subtype === 'compact_boundary') return <div data-message-id={groupId}><CompactBoundaryDivider /></div>
+    if (subtype === 'compacting') return <div data-message-id={groupId}><CompactingIndicator /></div>
     return null
   }
 
   // assistant-turn
   return (
-    <AssistantTurnRenderer
-      turn={group}
-      allMessages={allMessages}
-      basePath={basePath}
-      onFork={onFork}
-      isStreaming={isStreaming}
-    />
+    <div data-message-id={groupId}>
+      <AssistantTurnRenderer
+        turn={group}
+        allMessages={allMessages}
+        basePath={basePath}
+        onFork={onFork}
+        isStreaming={isStreaming}
+      />
+    </div>
   )
 }

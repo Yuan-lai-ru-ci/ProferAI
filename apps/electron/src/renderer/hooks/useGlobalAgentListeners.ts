@@ -20,12 +20,6 @@ import {
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
   agentSidePanelOpenMapAtom,
-  agentSidePanelTabMapAtom,
-  cachedTeamActivitiesAtom,
-  cachedTeammateStatesAtom,
-  cachedTeamOverviewsAtom,
-  buildTeamActivityEntries,
-  extractTeamOverview,
   applyAgentEvent,
   liveMessagesMapAtom,
   agentPermissionModeAtom,
@@ -309,11 +303,6 @@ export function useGlobalAgentListeners(): void {
               map.set(sessionId, true)
               return map
             })
-            store.set(agentSidePanelTabMapAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(sessionId, 'team')
-              return map
-            })
           }
 
           // 处理后台任务事件
@@ -480,40 +469,6 @@ export function useGlobalAgentListeners(): void {
           next.delete(data.sessionId)
           return next
         })
-
-        // 缓存 Team 活动数据（在流式状态被清除前保存，防止面板数据丢失）
-        const streamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
-        if (streamState && streamState.toolActivities.length > 0) {
-          const teamEntries = buildTeamActivityEntries(streamState.toolActivities)
-          if (teamEntries.length > 0) {
-            store.set(cachedTeamActivitiesAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(data.sessionId, teamEntries)
-              return map
-            })
-          }
-        }
-
-        // 缓存 Teammate 状态数据（Agent Teams 功能）
-        if (streamState && streamState.teammates.length > 0) {
-          store.set(cachedTeammateStatesAtom, (prev) => {
-            const map = new Map(prev)
-            map.set(data.sessionId, streamState.teammates)
-            return map
-          })
-        }
-
-        // 缓存 TeamOverview 快照（确保切换 tab 后团队全景数据不丢失）
-        if (streamState && streamState.toolActivities.length > 0) {
-          const overview = extractTeamOverview(streamState.toolActivities, streamState.teammates)
-          if (overview) {
-            store.set(cachedTeamOverviewsAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(data.sessionId, overview)
-              return map
-            })
-          }
-        }
 
         /** 竞态保护：检查该会话是否已有新的流式请求正在运行 */
         const isNewStreamRunning = (): boolean => {

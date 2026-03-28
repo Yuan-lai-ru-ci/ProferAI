@@ -37,7 +37,6 @@ import {
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
   agentSidePanelOpenMapAtom,
-  agentSidePanelTabMapAtom,
 } from '@/atoms/agent-atoms'
 import {
   tabsAtom,
@@ -190,7 +189,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setConvParallel = useSetAtom(conversationParallelModeAtom)
   const setConvPromptId = useSetAtom(conversationPromptIdAtom)
   const setAgentSidePanelOpen = useSetAtom(agentSidePanelOpenMapAtom)
-  const setAgentSidePanelTab = useSetAtom(agentSidePanelTabMapAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
   const cleanupMapAtoms = React.useCallback((id: string) => {
@@ -206,8 +204,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setConvParallel(deleteKey)
     setConvPromptId(deleteKey)
     setAgentSidePanelOpen(deleteKey)
-    setAgentSidePanelTab(deleteKey)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen, setAgentSidePanelTab])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
