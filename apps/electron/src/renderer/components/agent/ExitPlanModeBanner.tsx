@@ -51,7 +51,7 @@ const PLAN_OPTIONS: PlanOption[] = [
   {
     action: 'deny',
     label: '拒绝计划',
-    description: 'Agent 将重新规划',
+    description: '直接拒绝，Agent 不会执行计划',
     icon: <X className="size-3.5" />,
     variant: 'destructive',
   },

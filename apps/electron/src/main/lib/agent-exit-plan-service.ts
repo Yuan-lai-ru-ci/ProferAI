@@ -139,6 +139,13 @@ export class AgentExitPlanService {
   }
 
   /**
+   * 获取当前所有待处理的 ExitPlanMode 请求（用于渲染进程重载后恢复状态）
+   */
+  getPendingRequests(): ExitPlanModeRequest[] {
+    return [...this.pendingRequests.values()].map((p) => p.request)
+  }
+
+  /**
    * 清除指定会话的所有待处理请求
    */
   clearSessionPending(sessionId: string): void {

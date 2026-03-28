@@ -468,6 +468,8 @@ export type AgentEvent =
   // ExitPlanMode 计划审批
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
+  // EnterPlanMode 进入计划模式
+  | { type: 'enter_plan_mode'; sessionId: string }
   // 提示建议
   | { type: 'prompt_suggestion'; suggestion: string }
   // 模型确认（SDK 确认实际使用的模型）
@@ -488,6 +490,7 @@ export type PromaEvent =
   | { type: 'ask_user_resolved'; requestId: string }
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
+  | { type: 'enter_plan_mode'; sessionId: string }
   | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
   | { type: 'model_resolved'; model: string }
   | { type: 'waiting_resume'; message: string }
@@ -1214,4 +1217,20 @@ export const AGENT_IPC_CHANNELS = {
   PROMOTE_QUEUED_MESSAGE: 'agent:promote-queued-message',
   /** 队列消息状态变更通知（主进程 → 渲染进程推送） */
   QUEUED_MESSAGE_STATUS: 'agent:queued-message-status',
+
+  // 待处理请求恢复（渲染进程重载后查询主进程状态）
+  /** 获取所有待处理的交互请求快照 */
+  GET_PENDING_REQUESTS: 'agent:get-pending-requests',
 } as const
+
+/**
+ * 待处理交互请求快照（用于渲染进程重载后恢复状态）
+ */
+export interface PendingRequestsSnapshot {
+  /** 待处理的权限请求 */
+  permissions: PermissionRequest[]
+  /** 待处理的 AskUser 请求 */
+  askUsers: AskUserRequest[]
+  /** 待处理的 ExitPlanMode 请求 */
+  exitPlans: ExitPlanModeRequest[]
+}

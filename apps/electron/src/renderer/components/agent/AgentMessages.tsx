@@ -601,7 +601,7 @@ export function DurationBadge({ durationMs, usage }: { durationMs: number; usage
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="text-[15px] text-muted-foreground/60 tabular-nums font-light cursor-default">
+        <span className="text-[15px] tabular-nums font-light cursor-default">
           {formatDuration(durationMs)}
         </span>
       </TooltipTrigger>
@@ -632,7 +632,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   }
 
   return (
-    <div className="flex items-center gap-2 py-1">
+    <div className="flex items-center gap-2 min-h-[28px]">
       <Spinner size="sm" className="text-primary/50" />
       <span className="text-[13px] font-light text-muted-foreground/50 tabular-nums">Agent Running {formatTime(elapsed)}</span>
     </div>
@@ -789,7 +789,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
 
             {/* 有实时助手内容时：仅追加运行指示器 */}
             {hasLiveAssistantContent && (streaming || retrying) && (
-              <div className="pl-[56px]">
+              <div className="pl-[46px] mt-0.5">
                 {retrying && <RetryingNotice retrying={retrying} />}
                 {streaming && <AgentRunningIndicator startedAt={startedAt} />}
               </div>

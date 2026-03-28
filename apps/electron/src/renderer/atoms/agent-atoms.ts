@@ -765,6 +765,9 @@ export const pendingAskUserRequestsAtom = atom(
 /** 待处理的 ExitPlanMode 请求 Map — 以 sessionId 为 key */
 export const allPendingExitPlanRequestsAtom = atom<Map<string, readonly ExitPlanModeRequest[]>>(new Map())
 
+/** 当前处于 Plan 模式的会话 ID 集合 */
+export const agentPlanModeSessionsAtom = atom<Set<string>>(new Set<string>())
+
 export const currentAgentSessionAtom = atom<AgentSessionMeta | null>((get) => {
   const sessions = get(agentSessionsAtom)
   const currentId = get(currentAgentSessionIdAtom)

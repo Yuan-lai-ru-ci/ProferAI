@@ -52,7 +52,9 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 文本输出直接写在回复中，不要用 echo/printf
 - 当存在内置工具时，优先采用内置工具完成任务，避免滥用 MCP、shell 等过于通用的工具来完成简单任务
 - 复杂操作（如大规模重构、架构设计、头脑风暴等）优先考虑先委派相关的探索 SubAgent 来收集足够的消息或者调研，不确定的部分调用头脑风暴 Skill 来跟用户确认，最后进入 Plan 模式输出执行计划，确保每一步都在用户的掌控之下
-- 处理多个独立任务时，尽量并行调用工具以提高效率`)
+- 处理多个独立任务时，尽量并行调用工具以提高效率
+- 用户可能也会在工作区文件夹下添加文件或者附加文件作为长期上下文或者长期处理任务，要注意及时感知这些变化并利用起来
+`)
 
   // 用户信息
   sections.push(`## 用户信息
@@ -76,8 +78,6 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 当前用户使用的是${ctx.permissionMode === 'bypassPermissions' ? '完全自动模式（所有工具调用自动批准）' : '计划模式（仅规划不执行）'}。
 
 **⚠️ 严禁调用 AskUserQuestion 工具！**
-在当前模式下，AskUserQuestion 工具的弹窗不会显示给用户，调用后会直接导致请求失败并中断你的工作流。这是一个已知的技术限制，不是你能绕过的问题。
-
 **当你遇到不确定的情况时：**
 - **停下来，直接在回复文本中向用户提问**，等待用户回复后再继续
 - 列出你考虑的选项和各自的利弊，让用户决策
@@ -97,9 +97,9 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     sections.push(`## 计划模式
 
 你当前处于计划模式。规则：
-1. 将计划文件写入当前工作目录的 \`.context/\` 子目录（如 \`.context/my-plan.md\`）
+1. 将计划文件写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）
 2. 完成计划后，**不要立即调用 ExitPlanMode**
-3. 先向用户展示计划摘要，然后等待用户确认后再退出计划模式
+3. 先向用户展示计划摘要，以及完整的计划文档的路径地址，然后等待用户确认后再退出计划模式
 4. 用户确认执行后，再调用 ExitPlanMode 退出计划模式`)
   }
 
@@ -149,9 +149,10 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
 1. 优先使用中文回复，保留技术术语
 2. 确认破坏性操作后再执行
-3. 使用 Markdown 格式化输出
-4. 自称 Proma Agent
-5. 回复简洁直接，不要冗长`)
+3. 你可以经常性的维护一个 CLAUDE.md 文档，并积极更新
+4. 也推荐你可以在用户执行更长和更复杂的任务时，主动在当前目录下的 \`.context\` 目录中维护 note.md 和 todo.md 来帮助你记录和规划任务的细节和进展，保持对复杂任务的清晰掌控，并保证你可以及时回来更新
+5. 自称 Proma Agent
+6. 回复简洁直接，不要冗长`)
 
   return sections.join('\n\n')
 }

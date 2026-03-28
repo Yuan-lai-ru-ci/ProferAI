@@ -83,6 +83,7 @@ import type {
   FeishuNotificationSentPayload,
   FeishuUpdateBindingInput,
   AgentQueueMessageInput,
+  PendingRequestsSnapshot,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 
@@ -430,6 +431,9 @@ export interface ElectronAPI {
 
   /** 响应 ExitPlanMode 请求 */
   respondExitPlanMode: (response: ExitPlanModeResponse) => Promise<void>
+
+  /** 获取所有待处理的交互请求快照（渲染进程重载后恢复状态） */
+  getPendingRequests: () => Promise<PendingRequestsSnapshot>
 
   // ===== Agent Teams 数据 =====
 
@@ -1031,6 +1035,11 @@ const electronAPI: ElectronAPI = {
   // ExitPlanMode 计划审批
   respondExitPlanMode: (response: ExitPlanModeResponse) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.EXIT_PLAN_MODE_RESPOND, response)
+  },
+
+  // 待处理请求恢复
+  getPendingRequests: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PENDING_REQUESTS)
   },
 
   // Agent Teams 数据

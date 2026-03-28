@@ -185,6 +185,13 @@ export class AgentPermissionService {
   }
 
   /**
+   * 获取当前所有待处理的权限请求（用于渲染进程重载后恢复状态）
+   */
+  getPendingRequests(): PermissionRequest[] {
+    return [...this.pendingPermissions.values()].map((p) => p.request)
+  }
+
+  /**
    * 清除指定会话的白名单（会话结束时调用）
    */
   clearSessionWhitelist(sessionId: string): void {

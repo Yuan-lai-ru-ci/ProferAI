@@ -19,6 +19,8 @@ import {
   ImagePlus,
   List,
   ListChecks,
+  Map,
+  MapPinOff,
   Pencil,
   Plug,
 
@@ -50,6 +52,8 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   TaskList: List,
   TeamCreate: Users,
   Agent: Bot,
+  EnterPlanMode: Map,
+  ExitPlanMode: MapPinOff,
   generate_image: ImagePlus,
 }
 
@@ -85,6 +89,8 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   TaskList: '任务列表',
   TeamCreate: '创建团队',
   Agent: 'Agent',
+  EnterPlanMode: '正在生成计划',
+  ExitPlanMode: '正在退出计划',
   generate_image: '生成图片',
 }
 

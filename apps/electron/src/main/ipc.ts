@@ -1146,6 +1146,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ===== 待处理请求恢复 =====
+
+  // 获取所有待处理的交互请求快照（渲染进程重载后恢复状态）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_PENDING_REQUESTS,
+    async (): Promise<import('@proma/shared').PendingRequestsSnapshot> => {
+      return {
+        permissions: permissionService.getPendingRequests(),
+        askUsers: askUserService.getPendingRequests(),
+        exitPlans: exitPlanService.getPendingRequests(),
+      }
+    }
+  )
+
   // ===== Agent Teams 数据 =====
 
   // 获取 Team 聚合数据（团队配置 + 任务列表 + 收件箱）

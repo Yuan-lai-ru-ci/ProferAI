@@ -30,6 +30,7 @@ import {
   liveMessagesMapAtom,
   agentPermissionModeAtom,
   stoppedByUserSessionsAtom,
+  agentPlanModeSessionsAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -60,6 +61,8 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         return [{ type: 'exit_plan_mode_request', request: evt.request }]
       case 'exit_plan_mode_resolved':
         return [{ type: 'exit_plan_mode_resolved', requestId: evt.requestId }]
+      case 'enter_plan_mode':
+        return [{ type: 'enter_plan_mode', sessionId: evt.sessionId }]
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'permission_mode_changed':
@@ -254,6 +257,12 @@ export function useGlobalAgentListeners(): void {
         if (payload.kind === 'sdk_message') {
           const msgRecord = payload.message as Record<string, unknown>
           if (!msgRecord.isReplay) {
+            // 为实时消息补充 _createdAt 时间戳（与持久化时的逻辑一致），
+            // 避免 AssistantTurnRenderer 因缺少时间戳导致 header 时间消失
+            if (typeof msgRecord._createdAt !== 'number') {
+              msgRecord._createdAt = Date.now()
+            }
+
             store.set(liveMessagesMapAtom, (prev) => {
               const map = new Map(prev)
               const current = map.get(sessionId) ?? []
@@ -399,6 +408,13 @@ export function useGlobalAgentListeners(): void {
               map.set(sessionId, [...current, event.request])
               return map
             })
+            // 退出 Plan 模式指示状态
+            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) => {
+              if (!prev.has(sessionId)) return prev
+              const next = new Set(prev)
+              next.delete(sessionId)
+              return next
+            })
             // 桌面通知
             const enabled = store.get(notificationsEnabledAtom)
             sendDesktopNotification(
@@ -406,6 +422,16 @@ export function useGlobalAgentListeners(): void {
               'Agent 已完成计划，等待你的审批',
               enabled
             )
+          } else if (event.type === 'enter_plan_mode') {
+            // 进入 Plan 模式
+            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) => {
+              if (prev.has(sessionId)) return prev
+              const next = new Set(prev)
+              next.add(sessionId)
+              return next
+            })
+            // 同步更新权限模式选择器
+            store.set(agentPermissionModeAtom, 'plan')
           } else if (event.type === 'permission_mode_changed') {
             // 权限模式变更（如 Plan 模式退出时切换到完全自动）
             console.log(`[GlobalAgentListeners] 权限模式变更: ${event.mode}`)
@@ -446,6 +472,14 @@ export function useGlobalAgentListeners(): void {
             return next
           })
         }
+
+        // 清除 Plan 模式状态（防止异常退出时残留）
+        store.set(agentPlanModeSessionsAtom, (prev: Set<string>) => {
+          if (!prev.has(data.sessionId)) return prev
+          const next = new Set(prev)
+          next.delete(data.sessionId)
+          return next
+        })
 
         // 缓存 Team 活动数据（在流式状态被清除前保存，防止面板数据丢失）
         const streamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
