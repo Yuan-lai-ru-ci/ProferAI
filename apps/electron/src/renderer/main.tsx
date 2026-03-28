@@ -18,6 +18,7 @@ import {
 import {
   agentChannelIdAtom,
   agentModelIdAtom,
+  agentChannelIdsAtom,
   agentWorkspacesAtom,
   currentAgentWorkspaceIdAtom,
   currentAgentSessionIdAtom,
@@ -98,6 +99,7 @@ function ThemeInitializer(): null {
 function AgentSettingsInitializer(): null {
   const setAgentChannelId = useSetAtom(agentChannelIdAtom)
   const setAgentModelId = useSetAtom(agentModelIdAtom)
+  const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const setAgentWorkspaces = useSetAtom(agentWorkspacesAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
@@ -134,6 +136,15 @@ function AgentSettingsInitializer(): null {
       if (settings.agentModelId) {
         setAgentModelId(settings.agentModelId)
       }
+      // 加载 Agent 启用渠道列表，兼容旧版本从 agentChannelId 迁移
+      if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {
+        setAgentChannelIds(settings.agentChannelIds)
+      } else if (settings.agentChannelId) {
+        // 迁移：旧版本只有 agentChannelId，自动转为数组
+        const migrated = [settings.agentChannelId]
+        setAgentChannelIds(migrated)
+        window.electronAPI.updateSettings({ agentChannelIds: migrated }).catch(console.error)
+      }
       if (settings.agentPermissionMode) {
         // 迁移旧权限模式值（auto/smart/supervised → acceptEdits/bypassPermissions/plan）
         setPermissionMode(migratePermissionMode(settings.agentPermissionMode))
@@ -163,7 +174,7 @@ function AgentSettingsInitializer(): null {
         }
       }).catch(console.error)
     }).catch(console.error)
-  }, [setAgentChannelId, setAgentModelId, setAgentWorkspaces, setCurrentWorkspaceId, setPermissionMode, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded])
+  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentWorkspaces, setCurrentWorkspaceId, setPermissionMode, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {

@@ -1,11 +1,11 @@
 /**
  * ToolActivityItem — 紧凑列表式工具活动展示
  *
- * 对标 craft-agents-oss TurnCard 的 ActivityRow 设计：
- * - 单行紧凑布局（24px 行高）
- * - 工具类型图标 + 语义状态切换
- * - Badge 系统（文件名 / diff 统计 / 错误）
- * - Task 子代理折叠分组 + 左边框层级
+ * 核心设计：
+ * - 收起行：语义化短语（如 "读取 foo.ts 第 10-60 行"），替代工具名 + Badge + 摘要
+ * - 展开面板：按工具类型结构化渲染结果，无输入区
+ * - Loading 态：语义化进行时（如 "正在读取 foo.ts..."）
+ * - Task/Agent 子代理折叠分组 + 左边框层级
  * - CSS 动画（交错入场 / 状态切换）
  */
 
@@ -21,7 +21,9 @@ import {
   Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getToolIcon } from './tool-utils'
+import { getToolIcon, formatElapsed } from './tool-utils'
+import { getToolPhrase } from './tool-phrase'
+import { ToolResultRenderer } from './tool-result-renderers'
 import {
   type ToolActivity,
   type ActivityGroup,
@@ -86,52 +88,7 @@ function StatusIcon({ status, toolName }: { status: ActivityStatus; toolName?: s
   )
 }
 
-// ===== Diff 统计 =====
-
-interface DiffStats {
-  additions: number
-  deletions: number
-}
-
-function computeDiffStats(toolName: string, input: Record<string, unknown>): DiffStats | null {
-  if (toolName === 'Edit') {
-    const oldStr = typeof input.old_string === 'string' ? input.old_string : ''
-    const newStr = typeof input.new_string === 'string' ? input.new_string : ''
-    if (!oldStr && !newStr) return null
-    const oldLines = oldStr.split('\n').length
-    const newLines = newStr.split('\n').length
-    return { additions: Math.max(0, newLines - oldLines + 1), deletions: Math.max(0, oldLines - newLines + 1) }
-  }
-  return null
-}
-
-// ===== Badge 组件 =====
-
-function FileBadge({ path }: { path: string }): React.ReactElement {
-  const filename = path.split('/').pop() ?? path
-  return (
-    <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-background shadow-sm text-foreground/70 leading-none">
-      {filename}
-    </span>
-  )
-}
-
-function DiffBadges({ stats }: { stats: DiffStats }): React.ReactElement {
-  return (
-    <span className="shrink-0 flex items-center gap-1">
-      {stats.deletions > 0 && (
-        <span className="px-1.5 py-0.5 rounded text-[10px] bg-destructive/5 text-destructive leading-none shadow-sm">
-          -{stats.deletions}
-        </span>
-      )}
-      {stats.additions > 0 && (
-        <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-500/5 text-green-600 dark:text-green-400 leading-none shadow-sm">
-          +{stats.additions}
-        </span>
-      )}
-    </span>
-  )
-}
+// ===== 错误 Badge =====
 
 function ErrorBadge(): React.ReactElement {
   return (
@@ -139,146 +96,6 @@ function ErrorBadge(): React.ReactElement {
       Error
     </span>
   )
-}
-
-// ===== 格式化耗时 =====
-
-export function formatElapsed(seconds: number): string {
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const m = Math.floor(seconds / 60)
-  const s = Math.round(seconds % 60)
-  return `${m}m${s}s`
-}
-
-// ===== 提取文件路径 =====
-
-function extractFilePath(input: Record<string, unknown>): string | null {
-  const fp = input.file_path ?? input.filePath ?? input.path ?? input.notebook_path
-  return typeof fp === 'string' ? fp : null
-}
-
-// ===== 格式化输入摘要（单行） =====
-
-function getInputSummary(toolName: string, input: Record<string, unknown>): string | null {
-  if (toolName === 'Bash') {
-    const cmd = input.command
-    if (typeof cmd === 'string') return cmd.length > 80 ? cmd.slice(0, 80) + '…' : cmd
-  }
-  if (toolName === 'Grep') {
-    const pattern = input.pattern
-    if (typeof pattern === 'string') return `/${pattern}/`
-  }
-  if (toolName === 'Glob') {
-    const pattern = input.pattern
-    if (typeof pattern === 'string') return pattern
-  }
-  if (toolName === 'WebFetch' || toolName === 'WebSearch') {
-    const url = input.url ?? input.query
-    if (typeof url === 'string') return url.length > 60 ? url.slice(0, 60) + '…' : url
-  }
-  if (toolName === 'Skill') {
-    const skill = input.skill
-    if (typeof skill === 'string') return skill
-  }
-  // Task 子代理：显示 description
-  if (toolName === 'Task') {
-    const desc = input.description ?? input.prompt
-    if (typeof desc === 'string') return desc.length > 80 ? desc.slice(0, 80) + '…' : desc
-  }
-  // TaskCreate：显示 subject
-  if (toolName === 'TaskCreate') {
-    const subject = input.subject
-    if (typeof subject === 'string') return subject.length > 80 ? subject.slice(0, 80) + '…' : subject
-  }
-  // TaskUpdate：显示状态变更（中文化）
-  if (toolName === 'TaskUpdate') {
-    const statusMap: Record<string, string> = {
-      pending: '待处理',
-      in_progress: '正在进行中',
-      completed: '已结束',
-      cancelled: '已取消',
-      blocked: '已阻塞',
-      error: '出错',
-    }
-    const parts: string[] = []
-    if (typeof input.taskId === 'string') parts.push(`任务 #${input.taskId}`)
-    if (typeof input.status === 'string') parts.push(statusMap[input.status] ?? input.status)
-    if (typeof input.subject === 'string') parts.push(input.subject.length > 60 ? input.subject.slice(0, 60) + '…' : input.subject)
-    return parts.length > 0 ? parts.join(' ') : null
-  }
-  // TaskGet / TaskList：显示 taskId 或 reason
-  if (toolName === 'TaskGet') {
-    const taskId = input.taskId
-    if (typeof taskId === 'string') return `#${taskId}`
-  }
-  if (toolName === 'TaskList') {
-    const reason = input.reason
-    if (typeof reason === 'string') return reason.length > 80 ? reason.slice(0, 80) + '…' : reason
-  }
-  // Read：显示文件路径
-  if (toolName === 'Read') {
-    const fp = input.file_path ?? input.filePath
-    if (typeof fp === 'string') {
-      const filename = fp.split('/').pop() ?? fp
-      return filename
-    }
-  }
-  // Edit / Write：显示文件路径
-  if (toolName === 'Edit' || toolName === 'Write') {
-    const fp = input.file_path ?? input.filePath
-    if (typeof fp === 'string') {
-      const filename = fp.split('/').pop() ?? fp
-      return filename
-    }
-  }
-  // NotebookEdit：显示 notebook 路径
-  if (toolName === 'NotebookEdit') {
-    const fp = input.notebook_path
-    if (typeof fp === 'string') {
-      const filename = fp.split('/').pop() ?? fp
-      return filename
-    }
-  }
-  // TodoWrite：显示任务数量
-  if (toolName === 'TodoWrite') {
-    const todos = input.todos
-    if (Array.isArray(todos)) return `${todos.length} 项任务`
-  }
-  // TeamCreate：显示 team_name + description
-  if (toolName === 'TeamCreate') {
-    const name = input.team_name
-    const desc = input.description
-    if (typeof name === 'string') {
-      if (typeof desc === 'string') return `${name} · ${desc.length > 60 ? desc.slice(0, 60) + '…' : desc}`
-      return name
-    }
-  }
-  // Agent：显示 name + description
-  if (toolName === 'Agent') {
-    const agentName = input.name
-    const desc = input.description ?? input.prompt
-    if (typeof agentName === 'string' && typeof desc === 'string') {
-      return `${agentName} · ${desc.length > 60 ? desc.slice(0, 60) + '…' : desc}`
-    }
-    if (typeof desc === 'string') return desc.length > 80 ? desc.slice(0, 80) + '…' : desc
-    if (typeof agentName === 'string') return agentName
-  }
-  // generate_image (Nano Banana MCP)：显示 prompt
-  if (toolName === 'generate_image') {
-    const prompt = input.prompt
-    if (typeof prompt === 'string') return prompt.length > 80 ? prompt.slice(0, 80) + '…' : prompt
-  }
-  return null
-}
-
-// ===== 格式化 Input JSON =====
-
-function formatInput(input: Record<string, unknown>): string {
-  const filtered: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(input)) {
-    if (!key.startsWith('_')) filtered[key] = value
-  }
-  try { return JSON.stringify(filtered, null, 2) } catch { return '[不可序列化]' }
 }
 
 // ===== TodoWrite 可视化 =====
@@ -333,18 +150,13 @@ export interface ActivityRowProps {
   onOpenDetails?: (activity: ToolActivity) => void
 }
 
-/** 自描述工具：inputSummary 已包含完整语义，不再额外显示工具名 */
-const SELF_DESCRIBING_TOOLS = new Set(['TaskUpdate'])
-
 export function ActivityRow({ activity, index = 0, animate = false, onOpenDetails }: ActivityRowProps): React.ReactElement {
   const status = getActivityStatus(activity)
-  const filePath = extractFilePath(activity.input)
-  const diffStats = computeDiffStats(activity.toolName, activity.input)
-  const inputSummary = getInputSummary(activity.toolName, activity.input)
-  const intent = activity.intent ?? activity.displayName
+  const phrase = getToolPhrase(activity.toolName, activity.input)
+  const isRunning = status === 'running' || status === 'backgrounded'
 
-  // 自描述工具：摘要已包含完整信息，直接作为主标签，隐藏工具名
-  const isSelfDescribing = SELF_DESCRIBING_TOOLS.has(activity.toolName) && !!inputSummary
+  // 运行中显示进行时短语，完成后显示完成态短语
+  const displayLabel = isRunning ? phrase.loadingLabel : phrase.label
 
   const delay = animate && index < SIZE.staggerLimit ? `${index * 30}ms` : '0ms'
 
@@ -362,45 +174,25 @@ export function ActivityRow({ activity, index = 0, animate = false, onOpenDetail
       {canExpand ? (
         <button
           type="button"
-          className="group/expand shrink-0 flex items-center gap-2 cursor-pointer"
+          className="group/expand shrink-0 flex items-center gap-2 cursor-pointer min-w-0"
           onClick={(e) => { e.stopPropagation(); onOpenDetails(activity) }}
         >
-          <span className={cn(SIZE.icon, 'relative flex items-center justify-center')}>
+          <span className={cn(SIZE.icon, 'relative flex items-center justify-center shrink-0')}>
             <span className="transition-opacity duration-150 group-hover/expand:opacity-0">
               <StatusIcon status={status} toolName={activity.toolName} />
             </span>
             <Plus className={cn(SIZE.icon, 'absolute text-foreground/60 opacity-0 transition-opacity duration-150 group-hover/expand:opacity-100')} />
           </span>
-          {isSelfDescribing ? (
-            <span className="shrink-0 text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{inputSummary}</span>
-          ) : (
-            <span className="shrink-0 text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{activity.toolName}</span>
-          )}
+          <span className="truncate text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150">{displayLabel}</span>
         </button>
       ) : (
         <>
           <StatusIcon status={status} toolName={activity.toolName} />
-          {isSelfDescribing ? (
-            <span className="shrink-0 text-foreground/80">{inputSummary}</span>
-          ) : (
-            <span className="shrink-0 text-foreground/80">{activity.toolName}</span>
-          )}
+          <span className="truncate text-foreground/80">{displayLabel}</span>
         </>
       )}
 
-      {diffStats && <DiffBadges stats={diffStats} />}
-
-      {filePath && <FileBadge path={filePath} />}
-
       {activity.isError && <ErrorBadge />}
-
-      {!isSelfDescribing && (
-        <span className="truncate flex-1 min-w-0 text-foreground/50">
-          {intent && <>{intent}</>}
-          {!intent && inputSummary && <>{inputSummary}</>}
-          {intent && inputSummary && <> · <span className="opacity-70">{inputSummary}</span></>}
-        </span>
-      )}
 
       {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
         <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
@@ -437,16 +229,13 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
     return selfStatus
   }, [parent, children])
 
+  const phrase = getToolPhrase(parent.toolName, parent.input)
+  const isRunning = derivedStatus === 'running' || derivedStatus === 'backgrounded'
+  const displayLabel = isRunning ? phrase.loadingLabel : phrase.label
+
   const subagentType = typeof parent.input.subagent_type === 'string'
     ? parent.input.subagent_type
     : undefined
-
-  // 优先使用 description，回退到 prompt
-  const description = typeof parent.input.description === 'string'
-    ? parent.input.description
-    : typeof parent.input.prompt === 'string'
-      ? parent.input.prompt
-      : parent.intent ?? parent.displayName ?? parent.toolName
 
   const delay = animate && index < SIZE.staggerLimit ? `${index * 30}ms` : '0ms'
 
@@ -475,15 +264,13 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
 
         <StatusIcon status={derivedStatus} toolName={parent.toolName} />
 
-        <span className="shrink-0 text-foreground/80">{parent.toolName}</span>
-
         {subagentType && (
           <span className="shrink-0 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-medium leading-none">
             {subagentType}
           </span>
         )}
 
-        <span className="truncate flex-1 min-w-0 text-foreground/50">{description}</span>
+        <span className="truncate flex-1 min-w-0 text-foreground/80">{displayLabel}</span>
 
         {parent.elapsedSeconds !== undefined && parent.elapsedSeconds > 0 && (
           <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
@@ -567,18 +354,15 @@ function ToolResultImage({ attachment }: { attachment: { localPath: string; file
   )
 }
 
-// ===== 详情面板 =====
+// ===== 详情面板（仅显示结果，使用 ToolResultRenderer） =====
 
 function ActivityDetails({ activity, onClose }: { activity: ToolActivity; onClose: () => void }): React.ReactElement {
   const [copied, setCopied] = React.useState(false)
 
   const handleCopy = (): void => {
     const parts: string[] = [`[${activity.toolName}]`]
-    if (Object.keys(activity.input).length > 0) {
-      parts.push('输入:\n' + formatInput(activity.input))
-    }
     if (activity.result) {
-      parts.push('结果:\n' + (activity.result.length > 2000 ? activity.result.slice(0, 2000) + '\n… [截断]' : activity.result))
+      parts.push(activity.result)
     }
     navigator.clipboard.writeText(parts.join('\n\n')).then(() => {
       setCopied(true)
@@ -589,7 +373,7 @@ function ActivityDetails({ activity, onClose }: { activity: ToolActivity; onClos
   return (
     <div className="mt-1 rounded-md border border-border/40 bg-muted/20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300 ease-out">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
-        <span className="text-[11px] font-medium text-foreground/50">{activity.toolName}</span>
+        <span className="text-[11px] font-medium text-foreground/50">{getToolPhrase(activity.toolName, activity.input).label}</span>
         <button
           type="button"
           onClick={handleCopy}
@@ -599,27 +383,14 @@ function ActivityDetails({ activity, onClose }: { activity: ToolActivity; onClos
         </button>
       </div>
 
-      <div className="px-3 py-2 space-y-2 max-h-[300px] overflow-y-auto">
-        {Object.keys(activity.input).length > 0 && (
-          <div>
-            <div className="text-[10px] font-medium text-foreground/40 mb-1">输入</div>
-            <pre className="text-[11px] text-foreground/60 bg-background/50 rounded p-2 overflow-x-auto max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all">
-              {formatInput(activity.input)}
-            </pre>
-          </div>
-        )}
+      <div className="px-3 py-2 space-y-2 max-h-[400px] overflow-y-auto">
         {activity.result && (
-          <div>
-            <div className="text-[10px] font-medium text-foreground/40 mb-1">结果</div>
-            <pre
-              className={cn(
-                'text-[11px] rounded p-2 overflow-x-auto max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all',
-                activity.isError ? 'text-destructive/80 bg-destructive/5' : 'text-foreground/60 bg-background/50',
-              )}
-            >
-              {activity.result.length > 2000 ? activity.result.slice(0, 2000) + '\n… [截断]' : activity.result}
-            </pre>
-          </div>
+          <ToolResultRenderer
+            toolName={activity.toolName}
+            input={activity.input}
+            result={activity.result}
+            isError={activity.isError ?? false}
+          />
         )}
         {activity.imageAttachments && activity.imageAttachments.length > 0 && (
           <div>
@@ -789,3 +560,6 @@ export function ToolActivityList({ activities, animate = false }: ToolActivityLi
 export function ToolActivityItem({ activity }: { activity: ToolActivity }): React.ReactElement {
   return <ToolActivityList activities={[activity]} />
 }
+
+// 导出格式化耗时（向后兼容 TeamActivityPanel 等外部引用）
+export { formatElapsed }

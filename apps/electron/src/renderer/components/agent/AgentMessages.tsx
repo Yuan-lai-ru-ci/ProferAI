@@ -28,11 +28,12 @@ import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { Button } from '@/components/ui/button'
-import { getModelLogo } from '@/lib/model-logo'
+import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
 import { BackgroundTasksPanel } from './BackgroundTasksPanel'
 import { useBackgroundTasks } from '@/hooks/useBackgroundTasks'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { channelsAtom } from '@/atoms/chat-atoms'
 import { stoppedByUserSessionsAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
@@ -453,6 +454,7 @@ interface AgentMessageItemProps {
 
 function AgentMessageItem({ message, sessionPath, onRetry, onRetryInNewSession, onCompact }: AgentMessageItemProps): React.ReactElement | null {
   const userProfile = useAtomValue(userProfileAtom)
+  const channels = useAtomValue(channelsAtom)
 
   if (message.role === 'user') {
     const { files: attachedFiles, text: messageText } = parseAttachedFiles(message.content)
@@ -494,7 +496,7 @@ function AgentMessageItem({ message, sessionPath, onRetry, onRetryInNewSession, 
     return (
       <Message from="assistant">
         <MessageHeader
-          model={message.model}
+          model={message.model ? resolveModelDisplayName(message.model, channels) : undefined}
           time={formatMessageTime(message.createdAt)}
           logo={<AssistantLogo model={message.model} />}
         />
@@ -641,6 +643,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 
 export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
+  const channels = useAtomValue(channelsAtom)
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
 
@@ -691,7 +694,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''
   const toolActivities = streamState?.toolActivities ?? []
-  const agentStreamingModel = streamState?.model
+  const agentStreamingModel = streamState?.model ? resolveModelDisplayName(streamState.model, channels) : undefined
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
 

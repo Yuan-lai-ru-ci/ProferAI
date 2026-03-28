@@ -16,10 +16,12 @@ export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
 export interface AppSettings {
   /** 主题模式 */
   themeMode: ThemeMode
-  /** Agent 默认渠道 ID（仅限 Anthropic 渠道） */
+  /** Agent 默认渠道 ID（仅限 Anthropic 渠道） — 当前选中的渠道 */
   agentChannelId?: string
   /** Agent 默认模型 ID */
   agentModelId?: string
+  /** Agent 启用的渠道 ID 列表（多选，Switch 开关） */
+  agentChannelIds?: string[]
   /** Agent 当前工作区 ID */
   agentWorkspaceId?: string
   /** 是否已完成 Onboarding 流程 */

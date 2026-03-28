@@ -29,8 +29,9 @@ import {
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
-import { getModelLogo } from '@/lib/model-logo'
+import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { channelsAtom } from '@/atoms/chat-atoms'
 import type {
   SDKMessage,
   SDKAssistantMessage,
@@ -317,6 +318,7 @@ export interface AssistantTurnRendererProps {
 }
 
 export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isStreaming }: AssistantTurnRendererProps): React.ReactElement | null {
+  const channels = useAtomValue(channelsAtom)
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -384,7 +386,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isS
   return (
     <Message from="assistant">
       <MessageHeader
-        model={turn.model}
+        model={turn.model ? resolveModelDisplayName(turn.model, channels) : undefined}
         time={turn.createdAt ? formatMessageTime(turn.createdAt) : undefined}
         logo={<AssistantLogo model={turn.model} />}
       />
@@ -454,6 +456,7 @@ export function SDKMessageRenderer({
   basePath,
   showHeader = true,
 }: SDKMessageRendererProps): React.ReactElement | null {
+  const channels = useAtomValue(channelsAtom)
   const msgType = message.type
 
   // assistant 消息：遍历内容块渲染
@@ -483,7 +486,7 @@ export function SDKMessageRenderer({
       <Message from="assistant">
         {showHeader && (
           <MessageHeader
-            model={model}
+            model={model ? resolveModelDisplayName(model, channels) : undefined}
             time={meta.createdAt ? formatMessageTime(meta.createdAt) : undefined}
             logo={<AssistantLogo model={model} />}
           />

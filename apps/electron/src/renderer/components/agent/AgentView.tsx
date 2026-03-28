@@ -36,6 +36,7 @@ import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
   agentModelIdAtom,
+  agentChannelIdsAtom,
   currentAgentWorkspaceIdAtom,
   agentPendingPromptAtom,
   agentPendingFilesAtom,
@@ -79,6 +80,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const liveMessages = liveMessagesMap.get(sessionId) ?? []
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [agentModelId, setAgentModelId] = useAtom(agentModelIdAtom)
+  const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -1058,13 +1060,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             {/* Footer 工具栏 */}
             <div className="flex items-center justify-between px-2 py-1 h-[48px] gap-4">
               <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                {stableChannelId && (
-                  <ModelSelector
-                    filterChannelId={stableChannelId}
-                    externalSelectedModel={externalSelectedModel}
-                    onModelSelect={handleModelSelect}
-                  />
-                )}
+                <ModelSelector
+                  filterChannelIds={agentChannelIds}
+                  externalSelectedModel={externalSelectedModel}
+                  onModelSelect={handleModelSelect}
+                />
                 <PermissionModeSelector />
                 {/* 思考模式切换 */}
                 <Tooltip>

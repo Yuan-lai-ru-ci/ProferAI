@@ -549,6 +549,8 @@ export const agentWorkspacesAtom = atom<AgentWorkspace[]>([])
 export const currentAgentWorkspaceIdAtom = atom<string | null>(null)
 export const agentChannelIdAtom = atom<string | null>(null)
 export const agentModelIdAtom = atom<string | null>(null)
+/** Agent 启用的渠道 ID 列表（多选，设置页 Switch 开关控制） */
+export const agentChannelIdsAtom = atom<string[]>([])
 export const currentAgentSessionIdAtom = atom<string | null>(null)
 export const currentAgentMessagesAtom = atom<AgentMessage[]>([])
 export const agentStreamingStatesAtom = atom<Map<string, AgentStreamState>>(new Map())

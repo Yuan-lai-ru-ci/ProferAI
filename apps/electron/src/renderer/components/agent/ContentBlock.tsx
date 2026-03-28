@@ -3,7 +3,7 @@
  *
  * 支持三种内容块类型：
  * - text: 通过 MessageResponse 渲染 Markdown
- * - tool_use: 简洁单行（图标 + 工具名 + 摘要），可展开详情
+ * - tool_use: 语义化短语行（如 "读取 foo.ts 第 10-60 行"），展开显示结构化结果
  * - thinking: 默认展开，左上角 "Thinking" 标签 + 虚线边框内容区
  */
 
@@ -17,7 +17,9 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { MessageResponse } from '@/components/ai-elements/message'
-import { getToolIcon, getToolDisplayName, getInputSummary } from './tool-utils'
+import { getToolIcon } from './tool-utils'
+import { getToolPhrase } from './tool-phrase'
+import { ToolResultRenderer } from './tool-result-renderers'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -85,8 +87,6 @@ export interface ContentBlockProps {
   childBlocks?: SDKContentBlock[]
 }
 
-// ===== 工具调用块（简洁单行风格） =====
-
 // ===== 提示词折叠行 =====
 
 function PromptRow({ prompt, dimmed = false }: { prompt: string; dimmed?: boolean }): React.ReactElement {
@@ -133,13 +133,14 @@ function PromptRow({ prompt, dimmed = false }: { prompt: string; dimmed?: boolea
   )
 }
 
+// ===== 工具调用块 =====
+
 interface ToolUseBlockProps {
   block: SDKToolUseBlock
   allMessages: SDKMessage[]
   animate?: boolean
   index?: number
   dimmed?: boolean
-  /** 子代理的内容块（Agent/Task 嵌套） */
   childBlocks?: SDKContentBlock[]
   basePath?: string
 }
@@ -153,14 +154,14 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   // Agent/Task 子代理内容默认折叠
   const [childrenExpanded, setChildrenExpanded] = React.useState(false)
 
-  const inputSummary = getInputSummary(block.name, block.input)
-  // 自描述工具：摘要已包含完整语义，直接作为显示名，不再额外显示工具名
-  const isSelfDescribing = block.name === 'TaskUpdate' && !!inputSummary
-  const displayName = isSelfDescribing ? inputSummary : getToolDisplayName(block.name)
-  const ToolIcon = getToolIcon(isSelfDescribing ? 'TaskUpdate' : block.name)
+  const phrase = getToolPhrase(block.name, block.input)
+  const ToolIcon = getToolIcon(block.name)
 
   const isCompleted = toolResult !== null
   const isError = toolResult?.isError === true
+
+  // 运行中显示进行时短语，完成后显示完成态短语
+  const displayLabel = isCompleted ? phrase.label : phrase.loadingLabel
 
   const delay = animate && index < 10 ? `${index * 30}ms` : '0ms'
 
@@ -181,7 +182,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         )}
         style={animate ? { animationDelay: delay } : undefined}
       >
-        {/* 头部行：折叠箭头 + Spinner + 工具名 + 描述 */}
+        {/* 头部行：折叠箭头 + 状态 + 语义短语 */}
         <button
           type="button"
           className="w-full flex items-center gap-2 py-0.5 text-left hover:opacity-70 transition-opacity group"
@@ -194,7 +195,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
             )}
           />
 
-          {/* Spinner / 完成状态 */}
+          {/* 状态指示 */}
           {!isCompleted ? (
             <Loader2 className="size-3.5 animate-spin text-primary/50 shrink-0" />
           ) : isError ? (
@@ -204,18 +205,9 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           <ToolIcon className={cn('size-3.5 shrink-0', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')} />
 
           <span className={cn(
-            'shrink-0 text-[14px]',
+            'truncate text-[14px]',
             dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
-          )}>{displayName}</span>
-
-          {inputSummary && (
-            <span className={cn(
-              'truncate text-[14px]',
-              dimmed ? 'text-muted-foreground/50' : 'text-muted-foreground/60',
-            )}>
-              {inputSummary}
-            </span>
-          )}
+          )}>{displayLabel}</span>
 
           {/* 子工具计数（折叠时显示） */}
           {childToolCount > 0 && !childrenExpanded && (
@@ -228,7 +220,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         {/* 展开内容 */}
         {childrenExpanded && (
           <div className="pl-5 mt-1.5 space-y-2 border-l-2 border-primary/20 ml-[5px] animate-in fade-in slide-in-from-top-1 duration-150">
-            {/* 提示词：可折叠行，与普通工具一致 */}
+            {/* 提示词：可折叠行 */}
             {agentPrompt && <PromptRow prompt={agentPrompt} dimmed={dimmed} />}
 
             {/* 子代理工具调用 */}
@@ -249,7 +241,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
     )
   }
 
-  // ===== 普通工具：原有渲染 =====
+  // ===== 普通工具：语义化短语 + 结构化结果 =====
   return (
     <div
       className={cn(
@@ -271,18 +263,9 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         <ToolIcon className={cn('size-3.5 shrink-0', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')} />
 
         <span className={cn(
-          'shrink-0 text-[14px]',
+          'truncate text-[14px]',
           dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
-        )}>{displayName}</span>
-
-        {!isSelfDescribing && inputSummary && (
-          <span className={cn(
-            'truncate text-[14px] font-mono',
-            dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
-          )}>
-            {inputSummary}
-          </span>
-        )}
+        )}>{displayLabel}</span>
 
         <ChevronRight
           className={cn(
@@ -292,33 +275,14 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         />
       </button>
 
-      {expanded && (
-        <div className="ml-5.5 mt-1 mb-2 space-y-2 pl-3 border-l-2 border-border/30 animate-in fade-in slide-in-from-top-1 duration-150">
-          {Object.keys(block.input).length > 0 && (
-            <div>
-              <div className="text-[11px] font-medium text-muted-foreground/50 mb-1">输入</div>
-              <pre className="text-[11px] text-muted-foreground bg-muted/30 rounded p-2 overflow-x-auto max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all">
-                {JSON.stringify(block.input, null, 2)}
-              </pre>
-            </div>
-          )}
-          {toolResult?.result && (
-            <div>
-              <div className="text-[11px] font-medium text-muted-foreground/50 mb-1">结果</div>
-              <pre
-                className={cn(
-                  'text-[11px] rounded p-2 overflow-x-auto max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all',
-                  isError
-                    ? 'text-destructive/80 bg-destructive/5'
-                    : 'text-muted-foreground bg-muted/30',
-                )}
-              >
-                {toolResult.result.length > 2000
-                  ? toolResult.result.slice(0, 2000) + '\n… [截断]'
-                  : toolResult.result}
-              </pre>
-            </div>
-          )}
+      {expanded && toolResult?.result && (
+        <div className="ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30 animate-in fade-in slide-in-from-top-1 duration-150">
+          <ToolResultRenderer
+            toolName={block.name}
+            input={block.input}
+            result={toolResult.result}
+            isError={isError}
+          />
         </div>
       )}
     </div>
