@@ -46,6 +46,8 @@ export interface AppSettings {
   agentMaxTurns?: number
   /** 教程推荐横幅是否已关闭 */
   tutorialBannerDismissed?: boolean
+  /** 自动归档天数（0 = 禁用，默认 7） */
+  archiveAfterDays?: number
 }
 
 /** 持久化的标签页状态 */

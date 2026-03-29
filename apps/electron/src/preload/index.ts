@@ -30,6 +30,7 @@ import type {
   AttachmentSaveResult,
   FileDialogResult,
   RecentMessagesResult,
+  MessageSearchResult,
   AgentSessionMeta,
   AgentMessage,
   SDKMessage,
@@ -73,6 +74,7 @@ import type {
   AgentTeamData,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
+  AgentMessageSearchResult,
   FeishuConfig,
   FeishuConfigInput,
   FeishuBridgeState,
@@ -162,6 +164,12 @@ export interface ElectronAPI {
 
   /** 切换对话置顶状态 */
   togglePinConversation: (id: string) => Promise<ConversationMeta>
+
+  /** 切换对话归档状态 */
+  toggleArchiveConversation: (id: string) => Promise<ConversationMeta>
+
+  /** 搜索对话消息内容 */
+  searchConversationMessages: (query: string) => Promise<MessageSearchResult[]>
 
   // ===== 教程 =====
 
@@ -295,6 +303,12 @@ export interface ElectronAPI {
 
   /** 切换 Agent 会话置顶状态 */
   togglePinAgentSession: (id: string) => Promise<AgentSessionMeta>
+
+  /** 切换 Agent 会话归档状态 */
+  toggleArchiveAgentSession: (id: string) => Promise<AgentSessionMeta>
+
+  /** 搜索 Agent 会话消息内容 */
+  searchAgentSessionMessages: (query: string) => Promise<AgentMessageSearchResult[]>
 
   /** 迁移 Agent 会话到另一个工作区 */
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
@@ -680,6 +694,14 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.TOGGLE_PIN, id)
   },
 
+  toggleArchiveConversation: (id: string) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.TOGGLE_ARCHIVE, id)
+  },
+
+  searchConversationMessages: (query: string) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SEARCH_MESSAGES, query)
+  },
+
   // 教程
   getTutorialContent: () => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_TUTORIAL_CONTENT)
@@ -856,6 +878,14 @@ const electronAPI: ElectronAPI = {
 
   togglePinAgentSession: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_PIN, id)
+  },
+
+  toggleArchiveAgentSession: (id: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_ARCHIVE, id)
+  },
+
+  searchAgentSessionMessages: (query: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_MESSAGES, query)
   },
 
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => {

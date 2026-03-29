@@ -524,6 +524,8 @@ export interface AgentSessionMeta {
   workspaceId?: string
   /** 是否置顶 */
   pinned?: boolean
+  /** 是否已归档 */
+  archived?: boolean
   /** 附加的外部目录路径列表（绝对路径，作为 SDK additionalDirectories 传递） */
   attachedDirectories?: string[]
   /** 分叉来源：源会话的 SDK session ID（首次发消息时用于 resume + forkSession） */
@@ -572,6 +574,30 @@ export interface AgentMessage {
   durationMs?: number
   /** Token 用量明细（assistant 消息完成时记录） */
   usage?: AgentEventUsage
+}
+
+// ===== Agent 消息搜索 =====
+
+/**
+ * Agent 会话消息搜索结果
+ */
+export interface AgentMessageSearchResult {
+  /** 会话 ID */
+  sessionId: string
+  /** 会话标题 */
+  sessionTitle: string
+  /** 消息 ID */
+  messageId: string
+  /** 消息角色 */
+  role: 'user' | 'assistant' | 'tool' | 'status'
+  /** 匹配上下文片段（约 80 字符） */
+  snippet: string
+  /** snippet 内匹配起始位置 */
+  matchStart: number
+  /** 匹配长度 */
+  matchLength: number
+  /** 是否已归档 */
+  archived?: boolean
 }
 
 // ===== Agent 标题生成输入 =====
@@ -1069,6 +1095,10 @@ export const AGENT_IPC_CHANNELS = {
   MIGRATE_CHAT_TO_AGENT: 'agent:migrate-chat-to-agent',
   /** 切换会话置顶状态 */
   TOGGLE_PIN: 'agent:toggle-pin',
+  /** 切换会话归档状态 */
+  TOGGLE_ARCHIVE: 'agent:toggle-archive',
+  /** 搜索会话消息内容 */
+  SEARCH_MESSAGES: 'agent:search-messages',
   /** 迁移会话到另一个工作区 */
   MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
   /** 分叉会话（从指定消息处创建新会话） */

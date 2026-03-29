@@ -95,6 +95,8 @@ import {
   deleteMessage,
   truncateMessagesFrom,
   updateContextDividers,
+  autoArchiveConversations,
+  searchConversationMessages,
 } from './lib/conversation-manager'
 import { sendMessage, stopGeneration, generateTitle } from './lib/chat-service'
 import {
@@ -121,6 +123,8 @@ import {
   migrateChatToAgentSession,
   moveSessionToWorkspace,
   forkAgentSession,
+  autoArchiveAgentSessions,
+  searchAgentSessionMessages,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
@@ -352,6 +356,25 @@ export function registerIpcHandlers(): void {
       const current = conversations.find((c) => c.id === id)
       if (!current) throw new Error(`对话不存在: ${id}`)
       return updateConversationMeta(id, { pinned: !current.pinned })
+    }
+  )
+
+  // 切换对话归档状态
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.TOGGLE_ARCHIVE,
+    async (_, id: string): Promise<ConversationMeta> => {
+      const conversations = listConversations()
+      const current = conversations.find((c) => c.id === id)
+      if (!current) throw new Error(`对话不存在: ${id}`)
+      return updateConversationMeta(id, { archived: !current.archived })
+    }
+  )
+
+  // 搜索对话消息内容
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.SEARCH_MESSAGES,
+    async (_, query: string) => {
+      return searchConversationMessages(query)
     }
   )
 
@@ -684,6 +707,25 @@ export function registerIpcHandlers(): void {
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent 会话不存在: ${id}`)
       return updateAgentSessionMeta(id, { pinned: !current.pinned })
+    }
+  )
+
+  // 切换 Agent 会话归档状态
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.TOGGLE_ARCHIVE,
+    async (_, id: string): Promise<AgentSessionMeta> => {
+      const sessions = listAgentSessions()
+      const current = sessions.find((s) => s.id === id)
+      if (!current) throw new Error(`Agent 会话不存在: ${id}`)
+      return updateAgentSessionMeta(id, { archived: !current.archived })
+    }
+  )
+
+  // 搜索 Agent 会话消息内容
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SEARCH_MESSAGES,
+    async (_, query: string) => {
+      return searchAgentSessionMessages(query)
     }
   )
 
@@ -1781,4 +1823,24 @@ export function registerIpcHandlers(): void {
 
   // 注册更新 IPC 处理器
   registerUpdaterIpc()
+
+  // 启动时自动归档 + 每 24 小时定期检查
+  const runAutoArchive = (): void => {
+    try {
+      const settings = getSettings()
+      const days = settings.archiveAfterDays ?? 7
+      if (days > 0) {
+        const archivedChats = autoArchiveConversations(days)
+        const archivedSessions = autoArchiveAgentSessions(days)
+        if (archivedChats + archivedSessions > 0) {
+          console.log(`[自动归档] 已归档 ${archivedChats} 个对话, ${archivedSessions} 个 Agent 会话`)
+        }
+      }
+    } catch (error) {
+      console.error('[自动归档] 自动归档失败:', error)
+    }
+  }
+
+  runAutoArchive()
+  setInterval(runAutoArchive, 24 * 60 * 60 * 1000)
 }
