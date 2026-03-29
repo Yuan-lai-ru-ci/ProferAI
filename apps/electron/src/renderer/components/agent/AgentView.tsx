@@ -37,6 +37,8 @@ import {
   agentChannelIdAtom,
   agentModelIdAtom,
   agentChannelIdsAtom,
+  agentSessionChannelMapAtom,
+  agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
   agentPendingPromptAtom,
   agentPendingFilesAtom,
@@ -72,8 +74,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
   const liveMessages = liveMessagesMap.get(sessionId) ?? []
-  const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
-  const [agentModelId, setAgentModelId] = useAtom(agentModelIdAtom)
+  // Per-session 渠道/模型配置（优先读 session map，回退到全局默认值）
+  const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
+  const sessionModelMap = useAtomValue(agentSessionModelMapAtom)
+  const setSessionChannelMap = useSetAtom(agentSessionChannelMapAtom)
+  const setSessionModelMap = useSetAtom(agentSessionModelMapAtom)
+  const [defaultChannelId, setDefaultChannelId] = useAtom(agentChannelIdAtom)
+  const [defaultModelId, setDefaultModelId] = useAtom(agentModelIdAtom)
+  const agentChannelId = sessionChannelMap.get(sessionId) ?? defaultChannelId
+  const agentModelId = sessionModelMap.get(sessionId) ?? defaultModelId
   const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
@@ -85,6 +94,27 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
   const stableChannelId = agentChannelId ?? stableChannelIdRef.current
+
+  // 已有会话首次打开时，从全局默认值初始化 per-session map
+  React.useEffect(() => {
+    if (!sessionId) return
+    if (!sessionChannelMap.has(sessionId) && defaultChannelId) {
+      setSessionChannelMap((prev) => {
+        if (prev.has(sessionId)) return prev
+        const map = new Map(prev)
+        map.set(sessionId, defaultChannelId)
+        return map
+      })
+    }
+    if (!sessionModelMap.has(sessionId) && defaultModelId) {
+      setSessionModelMap((prev) => {
+        if (prev.has(sessionId)) return prev
+        const map = new Map(prev)
+        map.set(sessionId, defaultModelId)
+        return map
+      })
+    }
+  }, [sessionId, sessionChannelMap, sessionModelMap, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap])
 
   const contextStatus: AgentContextStatus = {
     isCompacting: streamState?.isCompacting ?? false,
@@ -147,12 +177,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const firstModel = channel.models.find((m) => m.enabled)
     if (!firstModel) return
 
-    setAgentModelId(firstModel.id)
+    // 更新 per-session map
+    setSessionModelMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, firstModel.id)
+      return map
+    })
+    // 同步全局默认值
+    setDefaultModelId(firstModel.id)
     window.electronAPI.updateSettings({
       agentChannelId,
       agentModelId: firstModel.id,
     }).catch(console.error)
-  }, [agentChannelId, agentModelId, globalChannels, setAgentModelId])
+  }, [agentChannelId, agentModelId, globalChannels, sessionId, setSessionModelMap, setDefaultModelId])
 
   // 获取当前 session 的工作路径（文件浏览器需要）
   React.useEffect(() => {
@@ -221,6 +258,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
         setLiveMessagesMap((prev) => {
           if (!prev.has(sessionId)) return prev
+          // 仍在运行中，不清除实时消息（与 streamingStates 保护逻辑一致）
+          const streamingState = store.get(agentStreamingStatesAtom).get(sessionId)
+          if (streamingState?.running) return prev
           const map = new Map(prev)
           map.delete(sessionId)
           return map
@@ -484,15 +524,28 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    setAgentChannelId(option.channelId)
-    setAgentModelId(option.modelId)
+    // 更新当前会话的 per-session 配置
+    setSessionChannelMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, option.channelId)
+      return map
+    })
+    setSessionModelMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, option.modelId)
+      return map
+    })
+
+    // 同时更新全局默认值（新会话继承）
+    setDefaultChannelId(option.channelId)
+    setDefaultModelId(option.modelId)
 
     // 持久化到设置
     window.electronAPI.updateSettings({
       agentChannelId: option.channelId,
       agentModelId: option.modelId,
     }).catch(console.error)
-  }, [setAgentChannelId, setAgentModelId])
+  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const externalSelectedModel = React.useMemo(() => {

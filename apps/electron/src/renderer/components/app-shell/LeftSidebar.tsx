@@ -35,6 +35,9 @@ import {
   currentAgentSessionIdAtom,
   agentRunningSessionIdsAtom,
   agentChannelIdAtom,
+  agentModelIdAtom,
+  agentSessionChannelMapAtom,
+  agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
@@ -173,6 +176,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [currentAgentSessionId, setCurrentAgentSessionId] = useAtom(currentAgentSessionIdAtom)
   const agentRunningIds = useAtomValue(agentRunningSessionIdsAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
+  const agentModelId = useAtomValue(agentModelIdAtom)
+  const setSessionChannelMap = useSetAtom(agentSessionChannelMapAtom)
+  const setSessionModelMap = useSetAtom(agentSessionModelMapAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
 
@@ -212,7 +218,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setConvParallel(deleteKey)
     setConvPromptId(deleteKey)
     setAgentSidePanelOpen(deleteKey)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen])
+    setSessionChannelMap(deleteKey)
+    setSessionModelMap(deleteKey)
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen, setSessionChannelMap, setSessionModelMap])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
@@ -430,6 +438,21 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         currentWorkspaceId || undefined,
       )
       setAgentSessions((prev) => [meta, ...prev])
+      // 从全局默认值初始化 per-session 渠道/模型配置
+      if (agentChannelId) {
+        setSessionChannelMap((prev) => {
+          const map = new Map(prev)
+          map.set(meta.id, agentChannelId)
+          return map
+        })
+      }
+      if (agentModelId) {
+        setSessionModelMap((prev) => {
+          const map = new Map(prev)
+          map.set(meta.id, agentModelId)
+          return map
+        })
+      }
       // 打开新标签页
       const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
       setTabs(result.tabs)
