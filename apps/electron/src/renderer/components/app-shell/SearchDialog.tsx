@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Search, X, MessageSquare, Bot, Archive, Loader2 } from 'lucide-react'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
@@ -326,8 +326,9 @@ export function SearchDialog(): React.ReactElement {
         hideClose
         className="sm:max-w-[520px] p-0 gap-0 overflow-hidden"
         onKeyDown={handleKeyDown}
-        aria-label="搜索对话"
+        aria-describedby={undefined}
       >
+        <DialogTitle className="sr-only">搜索对话</DialogTitle>
         {/* 搜索输入框 */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50">
           <Search size={16} className="text-foreground/40 flex-shrink-0" />

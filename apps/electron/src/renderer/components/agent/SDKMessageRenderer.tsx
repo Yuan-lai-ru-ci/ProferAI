@@ -729,18 +729,34 @@ export interface MessageGroupRendererProps {
 }
 
 /**
+ * WeakMap 缓存：为没有 uuid 的 group 生成稳定的 fallback ID
+ */
+const groupIdCache = new WeakMap<MessageGroup, string>()
+let fallbackIdCounter = 0
+
+/**
  * 从 MessageGroup 中提取稳定的 ID，用于 data-message-id 和迷你地图
  */
 export function getGroupId(group: MessageGroup): string {
   if (group.type === 'user') {
-    return group.message.uuid ?? `user-${Date.now()}`
+    if (group.message.uuid) return group.message.uuid
+    // 没有 uuid：使用缓存的稳定 ID
+    if (!groupIdCache.has(group)) {
+      groupIdCache.set(group, `user-${++fallbackIdCounter}`)
+    }
+    return groupIdCache.get(group)!
   }
   if (group.type === 'system') {
     return `system-${group.message.subtype ?? 'unknown'}`
   }
   // assistant-turn：取首条 assistant 消息的 uuid
   const first = group.assistantMessages[0]
-  return first?.uuid ?? `turn-${Date.now()}`
+  if (first?.uuid) return first.uuid
+  // 没有 uuid：使用缓存的稳定 ID
+  if (!groupIdCache.has(group)) {
+    groupIdCache.set(group, `turn-${++fallbackIdCounter}`)
+  }
+  return groupIdCache.get(group)!
 }
 
 /**

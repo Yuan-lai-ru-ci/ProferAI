@@ -646,19 +646,19 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
   const prevSessionIdRef = React.useRef<string | null>(null)
 
   /**
-   * content-visibility 延迟启用：流式结束后延迟启用 cv-ready，
+   * content-visibility 延迟启用：与 ready 状态同步，
    * 避免流式→持久化消息切换瞬间 content-visibility:auto 导致浏览器 reflow 跳动。
    */
-  const [cvReady, setCvReady] = React.useState(!streaming)
+  const [cvReady, setCvReady] = React.useState(false)
   React.useEffect(() => {
-    if (streaming) {
+    if (!ready || streaming) {
       setCvReady(false)
       return
     }
-    // 流式结束后延迟启用 content-visibility，等消息切换完成后再优化
-    const timer = setTimeout(() => setCvReady(true), 300)
+    // ready 后延迟启用 content-visibility，等布局稳定后再优化
+    const timer = setTimeout(() => setCvReady(true), 100)
     return () => clearTimeout(timer)
-  }, [streaming])
+  }, [ready, streaming])
 
   React.useEffect(() => {
     if (sessionId !== prevSessionIdRef.current) {
@@ -680,7 +680,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
       })
     })
     return () => { cancelled = true }
-  }, [messages, streaming, ready])
+  }, [messages, streaming, persistedSDKMessages])
 
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''
@@ -767,9 +767,9 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
             {/* 持久化消息渲染 */}
             {useSDKRenderer ? (
               // Turn 分组渲染 — 每个 turn 只有一个模型 header
-              persistedGroups.map((group, i) => (
+              persistedGroups.map((group) => (
                 <MessageGroupRenderer
-                  key={`group-${i}`}
+                  key={getGroupId(group)}
                   group={group}
                   allMessages={allSDKMessages}
                   basePath={sessionPath || undefined}
@@ -792,9 +792,9 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
             )}
 
             {/* 实时 SDKMessage 渲染（流式期间，按 Turn 分组 — 与持久化渲染一致） */}
-            {liveGroups.map((group, i) => (
+            {liveGroups.map((group) => (
               <MessageGroupRenderer
-                key={`live-group-${i}`}
+                key={getGroupId(group)}
                 group={group}
                 allMessages={allSDKMessages}
                 basePath={sessionPath || undefined}

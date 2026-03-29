@@ -948,17 +948,15 @@ export type PromaPermissionMode = 'acceptEdits' | 'bypassPermissions' | 'plan'
 /** 权限模式定义顺序（用于循环切换） */
 export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['acceptEdits', 'bypassPermissions', 'plan']
 
-/** 旧权限模式到新模式的迁移映射 */
-const PERMISSION_MODE_MIGRATION: Record<string, PromaPermissionMode> = {
-  auto: 'bypassPermissions',
-  smart: 'acceptEdits',
-  supervised: 'acceptEdits',
-}
-
 /** 迁移旧权限模式值到新模式 */
 export function migratePermissionMode(mode: string): PromaPermissionMode {
   if (mode === 'acceptEdits' || mode === 'bypassPermissions' || mode === 'plan') return mode
-  return PERMISSION_MODE_MIGRATION[mode] ?? 'acceptEdits'
+  const migration: Record<string, PromaPermissionMode> = {
+    auto: 'bypassPermissions',
+    smart: 'acceptEdits',
+    supervised: 'acceptEdits',
+  }
+  return migration[mode] ?? 'acceptEdits'
 }
 
 /** 危险等级 */

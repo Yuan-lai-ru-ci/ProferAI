@@ -248,7 +248,7 @@ export function ModelSelector({
 
       {/* 模型选择 Dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="p-0 gap-0 max-w-lg">
+        <DialogContent className="p-0 gap-0 max-w-lg" aria-describedby={undefined}>
           <DialogHeader className="sr-only">
             <DialogTitle>选择模型</DialogTitle>
           </DialogHeader>
