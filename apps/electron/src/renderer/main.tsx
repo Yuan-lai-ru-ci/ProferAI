@@ -49,6 +49,7 @@ import { diffCapabilities, migratePermissionMode } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
+import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import './styles/globals.css'
 import 'katex/dist/katex.min.css'
 
@@ -382,6 +383,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ChatToolInitializer />
     <UpdaterInitializer />
     <FeishuInitializer />
+    <GlobalShortcuts />
     <App />
     <UpdateDialog />
     <Toaster position="top-right" />

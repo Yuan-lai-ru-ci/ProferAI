@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench, MessageSquare, GraduationCap, X } from 'lucide-react'
+import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench, MessageSquare, GraduationCap, X, Keyboard } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { settingsTabAtom } from '@/atoms/settings-tab'
 import type { SettingsTab } from '@/atoms/settings-tab'
@@ -25,6 +25,7 @@ import { PromptSettings } from './PromptSettings'
 import { ToolSettings } from './ToolSettings'
 import { FeishuSettings } from './FeishuSettings'
 import { TutorialViewer } from '../tutorial/TutorialViewer'
+import { ShortcutSettings } from './ShortcutSettings'
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -46,6 +47,7 @@ const AGENT_TAB: TabItem = { id: 'agent', label: '配置', icon: <Plug size={16}
 const TOOLS_TAB: TabItem = { id: 'tools', label: '工具', icon: <Wrench size={16} /> }
 const FEISHU_TAB: TabItem = { id: 'feishu', label: '飞书', icon: <MessageSquare size={16} /> }
 const TUTORIAL_TAB: TabItem = { id: 'tutorial', label: '教程', icon: <GraduationCap size={16} /> }
+const SHORTCUTS_TAB: TabItem = { id: 'shortcuts', label: '快捷键', icon: <Keyboard size={16} /> }
 
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
@@ -76,6 +78,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <FeishuSettings />
     case 'tutorial':
       return <TutorialViewer />
+    case 'shortcuts':
+      return <ShortcutSettings />
   }
 }
 
@@ -92,9 +96,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps): React.ReactEleme
   // Agent 模式时在渠道后插入 Agent Tab，工具 tab 两种模式都显示
   const tabs = React.useMemo(() => {
     if (appMode === 'agent') {
-      return [...BASE_TABS, AGENT_TAB, TOOLS_TAB, FEISHU_TAB, TUTORIAL_TAB, ...TAIL_TABS]
+      return [...BASE_TABS, AGENT_TAB, TOOLS_TAB, FEISHU_TAB, TUTORIAL_TAB, SHORTCUTS_TAB, ...TAIL_TABS]
     }
-    return [...BASE_TABS, TOOLS_TAB, FEISHU_TAB, TUTORIAL_TAB, ...TAIL_TABS]
+    return [...BASE_TABS, TOOLS_TAB, FEISHU_TAB, TUTORIAL_TAB, SHORTCUTS_TAB, ...TAIL_TABS]
   }, [appMode])
 
   // 当前 tab 标题

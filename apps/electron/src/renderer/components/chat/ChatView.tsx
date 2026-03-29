@@ -382,6 +382,15 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     window.electronAPI.stopGeneration(conversationId).catch(console.error)
   }, [conversationId, setStreamingStates])
 
+  // 监听快捷键系统分发的 stop-generation 事件（Cmd+.）
+  React.useEffect(() => {
+    const handler = (): void => {
+      if (isStreaming) handleStop()
+    }
+    window.addEventListener('proma:stop-generation', handler)
+    return () => window.removeEventListener('proma:stop-generation', handler)
+  }, [isStreaming, handleStop])
+
   /** 删除消息 */
   const handleDeleteMessage = React.useCallback(async (messageId: string): Promise<void> => {
     try {

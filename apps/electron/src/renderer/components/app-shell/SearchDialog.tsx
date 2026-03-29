@@ -296,17 +296,7 @@ export function SearchDialog(): React.ReactElement {
     }
   }, [selectedIndex])
 
-  // 全局快捷键 Cmd+F
-  React.useEffect(() => {
-    const handler = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault()
-        setOpen(true)
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [setOpen])
+  // 全局快捷键 Cmd+F 已迁移到 GlobalShortcuts 组件统一管理
 
   // 打开时重置状态并聚焦
   React.useEffect(() => {

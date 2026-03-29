@@ -6,6 +6,14 @@
 
 import type { EnvironmentCheckResult, PromaPermissionMode, ThinkingConfig, AgentEffort } from '@proma/shared'
 
+/** 用户自定义快捷键覆盖（持久化到 settings.json） */
+export interface ShortcutOverrides {
+  [shortcutId: string]: {
+    mac?: string
+    win?: string
+  }
+}
+
 /** 主题模式 */
 export type ThemeMode = 'light' | 'dark' | 'system'
 
@@ -48,6 +56,8 @@ export interface AppSettings {
   tutorialBannerDismissed?: boolean
   /** 自动归档天数（0 = 禁用，默认 7） */
   archiveAfterDays?: number
+  /** 用户自定义快捷键覆盖 */
+  shortcutOverrides?: ShortcutOverrides
 }
 
 /** 持久化的标签页状态 */

@@ -936,6 +936,25 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [sessionId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout])
 
+  // 监听快捷键系统分发的 stop-generation 事件（Cmd+.）
+  React.useEffect(() => {
+    const handler = (): void => {
+      if (streaming) handleStop()
+    }
+    window.addEventListener('proma:stop-generation', handler)
+    return () => window.removeEventListener('proma:stop-generation', handler)
+  }, [streaming, handleStop])
+
+  // 监听快捷键系统分发的 focus-input 事件（Cmd+L）
+  React.useEffect(() => {
+    const handler = (): void => {
+      const proseMirror = document.querySelector('[data-input-mode="agent"] .ProseMirror') as HTMLElement | null
+      proseMirror?.focus()
+    }
+    window.addEventListener('proma:focus-input', handler)
+    return () => window.removeEventListener('proma:focus-input', handler)
+  }, [])
+
   const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0) && agentChannelId !== null && !streaming
 
   return (
@@ -995,7 +1014,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         <ExitPlanModeBanner sessionId={sessionId} />
 
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
-        <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2">
+        <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2" data-input-mode="agent">
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm pt-2 transition-all duration-200',

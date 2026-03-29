@@ -608,6 +608,8 @@ export interface ElectronAPI {
   onFeishuStatusChanged: (callback: (state: FeishuBridgeState) => void) => () => void
   /** 订阅飞书通知已发送事件 */
   onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => () => void
+  /** 订阅菜单关闭标签页事件（Cmd+W 被菜单拦截后转发） */
+  onMenuCloseTab: (callback: () => void) => () => void
 }
 
 /**
@@ -1297,6 +1299,12 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: FeishuNotificationSentPayload): void => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener) }
+  },
+
+  onMenuCloseTab: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('menu:close-tab', listener)
+    return () => { ipcRenderer.removeListener('menu:close-tab', listener) }
   },
 }
 
