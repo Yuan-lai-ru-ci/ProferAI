@@ -3,8 +3,8 @@
  */
 
 import * as React from 'react'
-import { FileText } from 'lucide-react'
 import { CollapsibleResult } from './collapsible-result'
+import { FileTypeIcon } from '@/components/file-browser'
 
 interface GlobResultRendererProps {
   result: string
@@ -32,7 +32,7 @@ export function GlobResultRenderer({ result, isError }: GlobResultRendererProps)
         <div className="rounded-md bg-muted/20 p-2 space-y-0.5">
           {visibleFiles.map((file, i) => (
             <div key={i} className="flex items-center gap-1.5 text-[12px] font-mono text-foreground/70 py-0.5">
-              <FileText className="size-3 shrink-0 text-muted-foreground/50" />
+              <FileTypeIcon name={file.split('/').pop() || file} isDirectory={false} size={12} />
               <span className="truncate">{file}</span>
             </div>
           ))}

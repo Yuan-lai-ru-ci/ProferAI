@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { PanelRight, X, FolderOpen, ExternalLink, RefreshCw, ChevronRight, Folder, FileText, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart } from 'lucide-react'
+import { PanelRight, X, FolderOpen, ExternalLink, RefreshCw, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { FileBrowser, FileDropZone } from '@/components/file-browser'
+import { FileBrowser, FileDropZone, FileTypeIcon } from '@/components/file-browser'
 import {
   agentSidePanelOpenMapAtom,
   workspaceFilesVersionAtom,
@@ -510,11 +510,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
             expanded && 'rotate-90',
           )}
         />
-        {expanded ? (
-          <FolderOpen className="size-4 text-amber-500 flex-shrink-0" />
-        ) : (
-          <Folder className="size-4 text-amber-500 flex-shrink-0" />
-        )}
+        <FileTypeIcon name={dirName} isDirectory isOpen={expanded} />
         <span className="text-xs truncate flex-1" title={dirPath}>
           {dirName}
         </span>
@@ -673,15 +669,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
         ) : (
           <span className="w-3.5 flex-shrink-0" />
         )}
-        {entry.isDirectory ? (
-          expanded ? (
-            <FolderOpen className="size-4 text-amber-500 flex-shrink-0" />
-          ) : (
-            <Folder className="size-4 text-amber-500 flex-shrink-0" />
-          )
-        ) : (
-          <FileText className="size-4 text-muted-foreground flex-shrink-0" />
-        )}
+        <FileTypeIcon name={currentName} isDirectory={entry.isDirectory} isOpen={expanded} />
 
         {/* 名称：正常显示 / 重命名输入框 */}
         {isRenaming ? (
@@ -702,21 +690,22 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
           <span className="truncate text-xs flex-1">{currentName}</span>
         )}
 
-        {/* 三点菜单按钮 */}
-        {isSelected && !isRenaming && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70"
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </button>
-              </DropdownMenuTrigger>
+        {/* 三点菜单按钮（始终占位，避免选中时行高跳动） */}
+        <div
+          className={cn('flex-shrink-0', !(isSelected && !isRenaming) && 'invisible')}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70"
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            {isSelected && !isRenaming && (
               <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
                 <DropdownMenuItem
                   className="text-xs py-1 [&>svg]:size-3.5"
@@ -749,9 +738,9 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                   移动到...
                 </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )}
+            )}
+          </DropdownMenu>
+        </div>
       </div>
       {expanded && children.length === 0 && loaded && (
         <div

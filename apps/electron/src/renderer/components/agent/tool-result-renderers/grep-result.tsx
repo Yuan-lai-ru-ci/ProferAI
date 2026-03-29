@@ -6,8 +6,8 @@
  */
 
 import * as React from 'react'
-import { FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FileTypeIcon } from '@/components/file-browser'
 import { CollapsibleResult } from './collapsible-result'
 
 interface GrepResultRendererProps {
@@ -117,7 +117,7 @@ export function GrepResultRenderer({ result, isError, input }: GrepResultRendere
           <div key={group.file} className="rounded-md overflow-hidden bg-zinc-900 dark:bg-zinc-950">
             {/* 文件头 */}
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/50 text-[11px]">
-              <FileText className="size-3 text-zinc-400" />
+              <FileTypeIcon name={group.file.split('/').pop() || group.file} isDirectory={false} size={12} />
               <span className="font-mono text-zinc-300">{group.file}</span>
               <span className="text-zinc-500">({group.matches.length})</span>
             </div>

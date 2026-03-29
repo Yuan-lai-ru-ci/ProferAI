@@ -13,9 +13,6 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Folder,
-  FolderOpen,
-  FileText,
   ChevronRight,
   Trash2,
   RefreshCw,
@@ -47,6 +44,7 @@ import {
 import { cn } from '@/lib/utils'
 import { workspaceFilesVersionAtom } from '@/atoms/agent-atoms'
 import type { FileEntry } from '@proma/shared'
+import { FileTypeIcon } from './FileTypeIcon'
 
 interface FileBrowserProps {
   rootPath: string
@@ -518,15 +516,7 @@ function FileTreeItem({
         )}
 
         {/* 文件/文件夹图标 */}
-        {entry.isDirectory ? (
-          expanded ? (
-            <FolderOpen className="size-4 text-amber-500 flex-shrink-0" />
-          ) : (
-            <Folder className="size-4 text-amber-500 flex-shrink-0" />
-          )
-        ) : (
-          <FileText className="size-4 text-muted-foreground flex-shrink-0" />
-        )}
+        <FileTypeIcon name={entry.name} isDirectory={entry.isDirectory} isOpen={expanded} />
 
         {/* 文件名 / 重命名输入框 */}
         {isRenaming ? (
@@ -552,21 +542,22 @@ function FileTreeItem({
           <span className="truncate text-xs flex-1">{entry.name}</span>
         )}
 
-        {/* 三点菜单按钮 */}
-        {showMenu && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70"
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </button>
-              </DropdownMenuTrigger>
+        {/* 三点菜单按钮（始终占位，避免选中时行高跳动） */}
+        <div
+          className={cn('flex-shrink-0', !showMenu && 'invisible')}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70"
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            {showMenu && (
               <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
                 {selectedCount === 1 && (
                   <DropdownMenuItem
@@ -603,9 +594,9 @@ function FileTreeItem({
                   {selectedCount > 1 ? `删除选中 (${selectedCount})` : '删除'}
                 </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )}
+            )}
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* 子项 */}
