@@ -657,6 +657,7 @@ export interface SkillMeta {
   name: string
   description?: string
   icon?: string
+  version?: string
   enabled: boolean
 }
 

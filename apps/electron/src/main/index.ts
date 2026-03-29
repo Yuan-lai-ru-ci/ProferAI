@@ -16,6 +16,7 @@ import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
+import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { stopAllAgents } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
@@ -175,6 +176,9 @@ app.whenReady().then(async () => {
 
   // 同步默认 Skills 模板到 ~/.proma/default-skills/
   seedDefaultSkills()
+
+  // 升级所有工作区中版本过旧的默认 Skills
+  upgradeDefaultSkillsInWorkspaces()
 
   // Create application menu
   const menu = createApplicationMenu()

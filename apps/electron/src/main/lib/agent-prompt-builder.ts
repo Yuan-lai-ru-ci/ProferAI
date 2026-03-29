@@ -383,6 +383,22 @@ export function buildDynamicContext(ctx: DynamicContext): string {
         const desc = skill.description ? `: ${skill.description}` : ''
         wsLines.push(`- ${qualifiedName}${desc}`)
       }
+
+      // 当 skill-creator 处于启用状态时，注入 Skill 持续改进提示
+      const hasSkillCreator = skills.some((s) => s.slug === 'skill-creator')
+      if (hasSkillCreator) {
+        wsLines.push('')
+        wsLines.push([
+          '<skill_improvement_hint>',
+          'skill-creator 已启用。在调用其他 Skill 前后，留意以下信号：',
+          '- 用户主动修正了某个 Skill 产出的内容（格式、流程、术语等）→ 该 Skill 可能需要更新',
+          '- 用户反复描述一类任务但没有匹配的 Skill → 可能值得创建新 Skill',
+          '- 某个 Skill 的输出持续需要大量后续调整 → 可能需要重构',
+          '发现上述信号时，先简要告知用户观察到的改进点，征得同意后再通过 skill-creator 执行创建、更新或重构。',
+          '不要在每次调用 Skill 后都提出建议——仅在确实观察到可复用的改进模式时才提出。',
+          '</skill_improvement_hint>',
+        ].join('\n'))
+      }
     }
 
     if (wsLines.length > 0) {
