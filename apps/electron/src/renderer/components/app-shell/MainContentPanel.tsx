@@ -38,7 +38,7 @@ export function MainContentPanel(): React.ReactElement {
   return (
     <Panel
       variant="grow"
-      className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl rounded-2xl shadow-xl border border-border/50"
+      className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl rounded-2xl shadow-xl"
     >
       {renderConversations()}
     </Panel>
