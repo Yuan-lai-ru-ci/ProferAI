@@ -1,10 +1,10 @@
 /**
  * WelcomeEmptyState — 对话/会话空状态引导
  *
- * 在 ChatMessages / AgentMessages 没有消息时展示：
+ * 在没有会话时展示：
  * 1. 个性化时段问候
  * 2. 平台感知的小 Tips
- * 3. Chat/Agent 模式切换 Tab（切换时创建新会话）
+ * 3. Chat/Agent 模式切换 Tab
  */
 
 import * as React from 'react'
@@ -42,14 +42,14 @@ export function WelcomeEmptyState(): React.ReactElement {
   const greeting = getGreeting(hour)
   const displayName = userProfile.userName || '用户'
 
-  /** 切换模式：创建新会话并切换 */
+  /** 切换模式：切换模式并创建对应的 draft 会话 */
   const handleModeSwitch = React.useCallback(async (targetMode: AppMode): Promise<void> => {
     if (targetMode === mode) return
     setMode(targetMode)
     if (targetMode === 'chat') {
-      await createChat()
+      await createChat({ draft: true })
     } else {
-      await createAgent()
+      await createAgent({ draft: true })
     }
   }, [mode, setMode, createChat, createAgent])
 
@@ -94,11 +94,6 @@ export function WelcomeEmptyState(): React.ReactElement {
           )
         })}
       </div>
-
-      {/* 底部提示 */}
-      <p className="text-xs text-muted-foreground/60">
-        {mode === 'chat' ? '在下方输入框开始对话' : '在下方输入框开始使用 Agent'}
-      </p>
     </div>
   )
 }

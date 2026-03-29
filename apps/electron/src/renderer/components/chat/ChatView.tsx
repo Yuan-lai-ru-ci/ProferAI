@@ -43,6 +43,7 @@ import {
   useConversationPromptId,
 } from '@/hooks/useConversationSettings'
 import { registerPendingTitle } from '@/hooks/useGlobalChatListeners'
+import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { cn } from '@/lib/utils'
 import type {
   ChatMessage,
@@ -79,6 +80,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
 
   // ===== 全局 atoms（Map 结构，按 conversationId 读取） =====
   const conversations = useAtomValue(conversationsAtom)
+  const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const streamingStates = useAtomValue(streamingStatesAtom)
   const setStreamingStates = useSetAtom(streamingStatesAtom)
   const setConversationModels = useSetAtom(conversationModelsAtom)
@@ -216,6 +218,13 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
         userMessage: content,
         channelId: selectedModel.channelId,
         modelId: selectedModel.modelId,
+      })
+      // 取消 draft 标记，让会话出现在侧边栏
+      setDraftSessionIds((prev: Set<string>) => {
+        if (!prev.has(conversationId)) return prev
+        const next = new Set(prev)
+        next.delete(conversationId)
+        return next
       })
     }
 

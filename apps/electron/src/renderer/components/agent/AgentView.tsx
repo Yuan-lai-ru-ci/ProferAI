@@ -61,6 +61,7 @@ import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import { AgentSessionProvider } from '@/contexts/session-context'
+import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
 
@@ -86,6 +87,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtom)
@@ -691,6 +693,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
+      if (!prev.has(sessionId)) return prev
+      const next = new Set(prev)
+      next.delete(sessionId)
+      return next
+    })
+
+    // 取消 draft 标记，让会话出现在侧边栏
+    setDraftSessionIds((prev: Set<string>) => {
       if (!prev.has(sessionId)) return prev
       const next = new Set(prev)
       next.delete(sessionId)

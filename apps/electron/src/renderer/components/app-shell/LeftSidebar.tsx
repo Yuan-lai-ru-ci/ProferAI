@@ -56,6 +56,7 @@ import { userProfileAtom } from '@/atoms/user-profile'
 import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { hasUpdateAtom } from '@/atoms/updater'
+import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
@@ -153,6 +154,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeItem, setActiveItem] = React.useState<SidebarItemId>('all-chats')
   const [conversations, setConversations] = useAtom(conversationsAtom)
   const [currentConversationId, setCurrentConversationId] = useAtom(currentConversationIdAtom)
+  const draftSessionIds = useAtomValue(draftSessionIdsAtom)
+  const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const [hoveredId, setHoveredId] = React.useState<string | null>(null)
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
@@ -238,27 +241,27 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       .catch(console.error)
   }, [currentWorkspaceSlug, mode, activeView, capabilitiesVersion])
 
-  /** 置顶对话列表（仅活跃模式显示） */
+  /** 置顶对话列表（仅活跃模式显示，排除 draft） */
   const pinnedConversations = React.useMemo(
-    () => viewMode === 'active' ? conversations.filter((c) => c.pinned) : [],
-    [conversations, viewMode]
+    () => viewMode === 'active' ? conversations.filter((c) => c.pinned && !draftSessionIds.has(c.id)) : [],
+    [conversations, viewMode, draftSessionIds]
   )
 
-  /** 置顶 Agent 会话列表（仅活跃模式显示，跨工作区） */
+  /** 置顶 Agent 会话列表（仅活跃模式显示，跨工作区，排除 draft） */
   const pinnedAgentSessions = React.useMemo(
-    () => viewMode === 'active' ? agentSessions.filter((s) => s.pinned) : [],
-    [agentSessions, viewMode]
+    () => viewMode === 'active' ? agentSessions.filter((s) => s.pinned && !draftSessionIds.has(s.id)) : [],
+    [agentSessions, viewMode, draftSessionIds]
   )
 
-  /** 对话按日期分组（根据 viewMode 过滤归档状态） */
+  /** 对话按日期分组（根据 viewMode 过滤归档状态，排除 draft） */
   const conversationGroups = React.useMemo(
     () => {
       const filtered = viewMode === 'archived'
-        ? conversations.filter((c) => c.archived)
-        : conversations.filter((c) => !c.archived)
+        ? conversations.filter((c) => c.archived && !draftSessionIds.has(c.id))
+        : conversations.filter((c) => !c.archived && !draftSessionIds.has(c.id))
       return groupByDate(filtered)
     },
-    [conversations, viewMode]
+    [conversations, viewMode, draftSessionIds]
   )
 
   /** 已归档对话数量 */
@@ -395,6 +398,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     // 关闭对应的标签页
     const tabResult = closeTab(tabs, layout, pendingDeleteId)
     setTabs(tabResult.tabs)
+
+    // 清理 draft 标记（如有）
+    setDraftSessionIds((prev: Set<string>) => {
+      if (!prev.has(pendingDeleteId)) return prev
+      const next = new Set(prev)
+      next.delete(pendingDeleteId)
+      return next
+    })
     setLayout(tabResult.layout)
 
     // 清理 per-conversation/session Map atoms 条目
@@ -532,15 +543,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     })
   }
 
-  /** Agent 会话按工作区过滤 + 归档过滤 */
+  /** Agent 会话按工作区过滤 + 归档过滤 + 排除 draft */
   const filteredAgentSessions = React.useMemo(
     () => {
-      const byWorkspace = agentSessions.filter((s) => s.workspaceId === currentWorkspaceId)
+      const byWorkspace = agentSessions.filter((s) => s.workspaceId === currentWorkspaceId && !draftSessionIds.has(s.id))
       return viewMode === 'archived'
         ? byWorkspace.filter((s) => s.archived)
         : byWorkspace.filter((s) => !s.archived)
     },
-    [agentSessions, currentWorkspaceId, viewMode]
+    [agentSessions, currentWorkspaceId, viewMode, draftSessionIds]
   )
 
   /** Agent 会话按日期分组 */
