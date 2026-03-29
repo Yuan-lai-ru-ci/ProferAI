@@ -9,9 +9,9 @@ import { useAtomValue } from 'jotai'
 import { tabsAtom } from '@/atoms/tab-atoms'
 import { Panel } from '@/components/app-shell/Panel'
 import { SettingsDialog } from '@/components/settings'
+import { WelcomeView } from '@/components/welcome/WelcomeView'
 import { TabBar } from './TabBar'
 import { SplitContainer } from './SplitContainer'
-import { MessageSquare } from 'lucide-react'
 
 export function MainArea(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -24,17 +24,7 @@ export function MainArea(): React.ReactElement {
       >
         <TabBar />
         {tabs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center flex-1 gap-4 text-muted-foreground titlebar-no-drag" style={{ zoom: 1.1 }}>
-            <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
-              <MessageSquare size={32} className="text-muted-foreground/60" />
-            </div>
-            <div className="text-center space-y-2">
-              <h2 className="text-lg font-medium text-foreground">开始使用</h2>
-              <p className="text-sm max-w-[300px]">
-                从左侧选择或创建一个对话，它将以标签页的形式打开
-              </p>
-            </div>
-          </div>
+          <WelcomeView />
         ) : (
           <SplitContainer />
         )}

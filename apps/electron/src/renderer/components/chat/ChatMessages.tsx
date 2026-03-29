@@ -14,7 +14,8 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { MessageSquare, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import { ChatMessageItem, formatMessageTime } from './ChatMessageItem'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
@@ -152,18 +153,9 @@ interface ChatMessagesProps {
   onLoadMore?: () => Promise<void>
 }
 
-/** 空状态引导 */
+/** 空状态引导 — 使用 WelcomeEmptyState */
 function EmptyState(): React.ReactElement {
-  return (
-    <div className="flex h-full items-center justify-center">
-      <div className="flex flex-col items-center gap-3 text-muted-foreground">
-        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-          <MessageSquare size={24} className="text-muted-foreground/60" />
-        </div>
-        <p className="text-sm">在下方输入框开始对话</p>
-      </div>
-    </div>
-  )
+  return <WelcomeEmptyState />
 }
 
 export function ChatMessages({

@@ -8,6 +8,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download, Square } from 'lucide-react'
+import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   Message,
   MessageHeader,
@@ -59,17 +60,9 @@ interface AgentMessagesProps {
   onCompact?: () => void
 }
 
+/** 空状态引导 — 使用 WelcomeEmptyState */
 function EmptyState(): React.ReactElement {
-  return (
-    <div className="flex h-full items-center justify-center">
-      <div className="flex flex-col items-center gap-3 text-muted-foreground">
-        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-          <Bot size={24} className="text-muted-foreground/60" />
-        </div>
-        <p className="text-sm">在下方输入框开始使用 Agent</p>
-      </div>
-    </div>
-  )
+  return <WelcomeEmptyState />
 }
 
 function AssistantLogo({ model }: { model?: string }): React.ReactElement {
