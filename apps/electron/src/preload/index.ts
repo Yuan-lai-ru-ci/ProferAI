@@ -87,7 +87,8 @@ import type {
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
 } from '@proma/shared'
-import type { UserProfile, AppSettings } from '../types'
+import type { UserProfile, AppSettings, QuickTaskSubmitInput, QuickTaskOpenSessionData } from '../types'
+import { QUICK_TASK_IPC_CHANNELS } from '../types'
 
 /**
  * 暴露给渲染进程的 API 接口定义
@@ -610,6 +611,19 @@ export interface ElectronAPI {
   onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => () => void
   /** 订阅菜单关闭标签页事件（Cmd+W 被菜单拦截后转发） */
   onMenuCloseTab: (callback: () => void) => () => void
+
+  // ===== 快速任务窗口 =====
+
+  /** 提交快速任务 */
+  submitQuickTask: (input: QuickTaskSubmitInput) => Promise<void>
+  /** 隐藏快速任务窗口 */
+  hideQuickTask: () => Promise<void>
+  /** 重新注册全局快捷键（设置变更后） */
+  reregisterGlobalShortcuts: () => Promise<Record<string, boolean>>
+  /** 订阅快速任务窗口聚焦事件 */
+  onQuickTaskFocus: (callback: () => void) => () => void
+  /** 订阅快速任务打开会话事件（主窗口接收，由渲染进程负责创建会话） */
+  onQuickTaskOpenSession: (callback: (data: QuickTaskOpenSessionData) => void) => () => void
 }
 
 /**
@@ -1305,6 +1319,32 @@ const electronAPI: ElectronAPI = {
     const listener = (): void => callback()
     ipcRenderer.on('menu:close-tab', listener)
     return () => { ipcRenderer.removeListener('menu:close-tab', listener) }
+  },
+
+  // ===== 快速任务窗口 =====
+
+  submitQuickTask: (input: QuickTaskSubmitInput) => {
+    return ipcRenderer.invoke(QUICK_TASK_IPC_CHANNELS.SUBMIT, input)
+  },
+
+  hideQuickTask: () => {
+    return ipcRenderer.invoke(QUICK_TASK_IPC_CHANNELS.HIDE)
+  },
+
+  reregisterGlobalShortcuts: () => {
+    return ipcRenderer.invoke(QUICK_TASK_IPC_CHANNELS.REREGISTER_GLOBAL_SHORTCUTS)
+  },
+
+  onQuickTaskFocus: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(QUICK_TASK_IPC_CHANNELS.FOCUS, listener)
+    return () => { ipcRenderer.removeListener(QUICK_TASK_IPC_CHANNELS.FOCUS, listener) }
+  },
+
+  onQuickTaskOpenSession: (callback: (data: QuickTaskOpenSessionData) => void) => {
+    const listener = (_: unknown, data: QuickTaskOpenSessionData): void => callback(data)
+    ipcRenderer.on('quick-task:open-session', listener)
+    return () => { ipcRenderer.removeListener('quick-task:open-session', listener) }
   },
 }
 

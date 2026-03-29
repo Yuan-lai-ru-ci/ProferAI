@@ -24,8 +24,15 @@ import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-wa
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import { feishuBridge } from './lib/feishu-bridge'
 import { getFeishuConfig } from './lib/feishu-config'
+import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
+import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 
 let mainWindow: BrowserWindow | null = null
+
+/** 获取主窗口实例（供其他模块使用） */
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow
+}
 
 /**
  * 检查窗口是否在可用显示器范围内
@@ -203,6 +210,13 @@ app.whenReady().then(async () => {
     initAutoUpdater(mainWindow)
   }
 
+  // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
+  createQuickTaskWindow()
+
+  // 注册全局快捷键
+  registerGlobalShortcut('quick-task', toggleQuickTaskWindow)
+  registerGlobalShortcut('show-main-window', showAndFocusMainWindow)
+
   // 飞书 Bridge 自动启动（配置启用时）
   const feishuConfig = getFeishuConfig()
   if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
@@ -245,6 +259,10 @@ app.on('before-quit', () => {
   stopChatToolsWatcher()
   // 停止飞书 Bridge
   feishuBridge.stop()
+  // 注销全局快捷键
+  unregisterAllGlobalShortcuts()
+  // 销毁快速任务窗口
+  destroyQuickTaskWindow()
   // Clean up system tray before quitting
   destroyTray()
 })

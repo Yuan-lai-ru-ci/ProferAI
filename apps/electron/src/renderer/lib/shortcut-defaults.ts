@@ -8,7 +8,7 @@
 // ===== 类型定义 =====
 
 /** 快捷键分类 */
-export type ShortcutCategory = 'app' | 'edit' | 'navigation'
+export type ShortcutCategory = 'app' | 'edit' | 'navigation' | 'global'
 
 /** 快捷键定义（不可变，内置于代码） */
 export interface ShortcutDefinition {
@@ -24,6 +24,8 @@ export interface ShortcutDefinition {
   defaultWin: string
   /** 分类 */
   category: ShortcutCategory
+  /** 是否为全局快捷键（由主进程 globalShortcut 注册） */
+  global?: boolean
 }
 
 /** 用户自定义快捷键覆盖（持久化到 settings.json） */
@@ -40,6 +42,7 @@ export const SHORTCUT_CATEGORY_LABELS: Record<ShortcutCategory, string> = {
   app: '应用',
   edit: '编辑',
   navigation: '导航',
+  global: '全局',
 }
 
 // ===== 默认快捷键列表 =====
@@ -119,6 +122,26 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     defaultMac: 'Cmd+W',
     defaultWin: 'Ctrl+W',
     category: 'app',
+  },
+
+  // 全局快捷键（由主进程 globalShortcut 注册，应用外也生效）
+  {
+    id: 'quick-task',
+    name: '快速任务',
+    description: '唤起浮动快速任务输入窗口',
+    defaultMac: 'Alt+Space',
+    defaultWin: 'Alt+Space',
+    category: 'global',
+    global: true,
+  },
+  {
+    id: 'show-main-window',
+    name: '显示主窗口',
+    description: '显示并聚焦 Proma 主窗口',
+    defaultMac: 'Cmd+Shift+P',
+    defaultWin: 'Ctrl+Shift+P',
+    category: 'global',
+    global: true,
   },
 ]
 

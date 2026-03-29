@@ -6,7 +6,8 @@
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS } from '../types'
+import type { QuickTaskSubmitInput } from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -1843,4 +1844,46 @@ export function registerIpcHandlers(): void {
 
   runAutoArchive()
   setInterval(runAutoArchive, 24 * 60 * 60 * 1000)
+
+  // ===== 快速任务窗口 =====
+
+  // 提交快速任务 → 隐藏窗口 + 转发到主窗口（由渲染进程创建会话并发送消息）
+  ipcMain.handle(
+    QUICK_TASK_IPC_CHANNELS.SUBMIT,
+    async (_, input: QuickTaskSubmitInput): Promise<void> => {
+      const { hideQuickTaskWindow } = await import('./lib/quick-task-window')
+      const { getMainWindow } = await import('./index')
+      hideQuickTaskWindow()
+
+      const mainWin = getMainWindow()
+      if (mainWin && !mainWin.isDestroyed()) {
+        // 转发到主窗口渲染进程，由 GlobalShortcuts 创建会话并触发发送
+        mainWin.webContents.send('quick-task:open-session', {
+          mode: input.mode,
+          text: input.text,
+          files: input.files,
+        })
+        mainWin.show()
+        mainWin.focus()
+      }
+    }
+  )
+
+  // 隐藏快速任务窗口
+  ipcMain.handle(
+    QUICK_TASK_IPC_CHANNELS.HIDE,
+    async (): Promise<void> => {
+      const { hideQuickTaskWindow } = await import('./lib/quick-task-window')
+      hideQuickTaskWindow()
+    }
+  )
+
+  // 重新注册全局快捷键（设置中修改快捷键后调用）
+  ipcMain.handle(
+    QUICK_TASK_IPC_CHANNELS.REREGISTER_GLOBAL_SHORTCUTS,
+    async (): Promise<Record<string, boolean>> => {
+      const { reregisterAllGlobalShortcuts } = await import('./lib/global-shortcut-service')
+      return reregisterAllGlobalShortcuts()
+    }
+  )
 }

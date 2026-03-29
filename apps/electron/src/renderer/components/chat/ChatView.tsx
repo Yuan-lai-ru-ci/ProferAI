@@ -29,9 +29,10 @@ import {
   chatMessageRefreshAtom,
   pendingAgentRecommendationAtom,
   conversationModelsAtom,
+  chatPendingMessageAtom,
   INITIAL_MESSAGE_LIMIT,
 } from '@/atoms/chat-atoms'
-import type { PendingAttachment } from '@/atoms/chat-atoms'
+import type { PendingAttachment, ChatPendingMessage } from '@/atoms/chat-atoms'
 import { promptConfigAtom, promptSidebarOpenAtom, conversationPromptIdAtom, resolveSystemMessage, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { activeToolIdsAtom } from '@/atoms/chat-tool-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -92,6 +93,19 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const promptSidebarOpen = useAtomValue(promptSidebarOpenAtom)
   const activeToolIds = useAtomValue(activeToolIdsAtom)
   const setPendingRecommendation = useSetAtom(pendingAgentRecommendationAtom)
+  const [chatPendingMessage, setChatPendingMessage] = React.useState<ChatPendingMessage | null>(null)
+
+  // 从全局 atom 读取快速任务待发送消息
+  const globalChatPending = useAtomValue(chatPendingMessageAtom)
+  const setGlobalChatPending = useSetAtom(chatPendingMessageAtom)
+
+  // 检测到当前对话的待发送消息时，捕获到本地状态
+  React.useEffect(() => {
+    if (!globalChatPending) return
+    if (globalChatPending.conversationId !== conversationId) return
+    setChatPendingMessage(globalChatPending)
+    setGlobalChatPending(null)
+  }, [globalChatPending, conversationId, setGlobalChatPending])
 
   // ===== 从 Map 派生当前对话状态 =====
   const conversation = conversations.find((c) => c.id === conversationId) ?? null
@@ -328,6 +342,26 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     setChatStreamErrors,
     setStreamingStates,
   ])
+
+  // ===== 自动发送快速任务消息 =====
+  // 使用 queueMicrotask 延迟发送：microtask 在当前任务结束后、React 下一次渲染前执行，
+  // 避免 setState → 重渲染 → cleanup 取消 timer 的竞态。
+  React.useEffect(() => {
+    if (!chatPendingMessage) return
+    if (chatPendingMessage.conversationId !== conversationId) return
+    if (!selectedModel || isStreaming) return
+
+    const pending = chatPendingMessage
+    setChatPendingMessage(null)
+
+    queueMicrotask(() => {
+      handleSend(pending.message, {
+        consumePendingAttachments: false,
+        messageCountBeforeSend: 0,
+        attachments: pending.attachments,
+      })
+    })
+  }, [chatPendingMessage, conversationId, selectedModel, isStreaming, handleSend])
 
   /** 从某条消息起截断（包含该条） */
   const truncateFromMessage = React.useCallback(async (

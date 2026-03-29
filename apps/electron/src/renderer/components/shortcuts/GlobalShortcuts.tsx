@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useCallback } from 'react'
-import { useAtomValue, useSetAtom, useAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
 import { appModeAtom } from '@/atoms/app-mode'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
@@ -20,8 +20,24 @@ import {
   sidebarCollapsedAtom,
   activeTabIdAtom,
   closeTab,
+  openTab,
 } from '@/atoms/tab-atoms'
 import { shortcutOverridesAtom } from '@/atoms/shortcut-atoms'
+import {
+  agentPendingPromptAtom,
+  agentSessionsAtom,
+  currentAgentSessionIdAtom,
+  agentChannelIdAtom,
+  currentAgentWorkspaceIdAtom,
+  agentWorkspacesAtom,
+} from '@/atoms/agent-atoms'
+import {
+  chatPendingMessageAtom,
+  conversationsAtom,
+  currentConversationIdAtom,
+  selectedModelAtom,
+} from '@/atoms/chat-atoms'
+import { activeViewAtom } from '@/atoms/active-view'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useShortcut } from '@/hooks/useShortcut'
 import {
@@ -150,6 +166,125 @@ export function GlobalShortcuts(): null {
       window.dispatchEvent(new CustomEvent('proma:stop-generation'))
     }, []),
   )
+
+  // ===== 快速任务窗口 → 创建会话并自动发送 =====
+
+  const store = useStore()
+
+  useEffect(() => {
+    const cleanup = window.electronAPI.onQuickTaskOpenSession(async (data) => {
+      try {
+        // 切换到对应模式
+        store.set(appModeAtom, data.mode)
+        store.set(activeViewAtom, 'conversations')
+
+        if (data.mode === 'agent') {
+          // Agent 模式：创建会话 + 保存附件到 session 目录
+          const channelId = store.get(agentChannelIdAtom) || undefined
+          const workspaceId = store.get(currentAgentWorkspaceIdAtom) || undefined
+          const meta = await window.electronAPI.createAgentSession(
+            undefined,
+            channelId,
+            workspaceId,
+          )
+          // 更新 atom 状态
+          store.set(agentSessionsAtom, (prev) => [meta, ...prev])
+          store.set(currentAgentSessionIdAtom, meta.id)
+
+          // 处理附件：保存到 session 目录，构建 file references
+          let fileReferences = ''
+          if (data.files && data.files.length > 0 && workspaceId) {
+            const workspaces = store.get(agentWorkspacesAtom)
+            const workspace = workspaces.find((w) => w.id === workspaceId)
+            if (workspace) {
+              try {
+                const filesToSave = data.files.map((f) => ({
+                  filename: f.filename,
+                  data: f.base64,
+                }))
+                const saved = await window.electronAPI.saveFilesToAgentSession({
+                  workspaceSlug: workspace.slug,
+                  sessionId: meta.id,
+                  files: filesToSave,
+                })
+                const refs = saved.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
+                fileReferences = `<attached_files>\n${refs}\n</attached_files>\n\n`
+              } catch (error) {
+                console.error('[快速任务] 保存 Agent 附件失败:', error)
+              }
+            }
+          }
+
+          // 打开新标签页
+          const currentTabs = store.get(tabsAtom)
+          const currentLayout = store.get(splitLayoutAtom)
+          const result = openTab(currentTabs, currentLayout, {
+            type: 'agent',
+            sessionId: meta.id,
+            title: data.text.slice(0, 30),
+          })
+          store.set(tabsAtom, result.tabs)
+          store.set(splitLayoutAtom, result.layout)
+
+          // 设置待发送消息（附件引用已内联到消息文本中）
+          store.set(agentPendingPromptAtom, {
+            sessionId: meta.id,
+            message: fileReferences + data.text,
+          })
+        } else {
+          // Chat 模式：创建对话 + 保存附件到磁盘
+          const chatModel = store.get(selectedModelAtom)
+          const meta = await window.electronAPI.createConversation(
+            undefined,
+            chatModel?.modelId,
+            chatModel?.channelId,
+          )
+          // 更新 atom 状态
+          store.set(conversationsAtom, (prev) => [meta, ...prev])
+          store.set(currentConversationIdAtom, meta.id)
+
+          // 处理附件：保存到磁盘，收集 FileAttachment[]
+          const savedAttachments: import('@proma/shared').FileAttachment[] = []
+          if (data.files && data.files.length > 0) {
+            for (const file of data.files) {
+              try {
+                const result = await window.electronAPI.saveAttachment({
+                  conversationId: meta.id,
+                  filename: file.filename,
+                  mediaType: file.mediaType,
+                  data: file.base64,
+                })
+                savedAttachments.push(result.attachment)
+              } catch (error) {
+                console.error('[快速任务] 保存 Chat 附件失败:', error)
+              }
+            }
+          }
+
+          // 打开新标签页
+          const currentTabs = store.get(tabsAtom)
+          const currentLayout = store.get(splitLayoutAtom)
+          const tabResult = openTab(currentTabs, currentLayout, {
+            type: 'chat',
+            sessionId: meta.id,
+            title: data.text.slice(0, 30),
+          })
+          store.set(tabsAtom, tabResult.tabs)
+          store.set(splitLayoutAtom, tabResult.layout)
+
+          // 设置待发送消息（含已保存的附件）
+          store.set(chatPendingMessageAtom, {
+            conversationId: meta.id,
+            message: data.text,
+            attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
+          })
+        }
+      } catch (error) {
+        console.error('[快速任务] 创建会话失败:', error)
+      }
+    })
+    return cleanup
+  }, [store])
 
   return null
 }

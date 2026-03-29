@@ -82,6 +82,8 @@ let parsedCache = new Map<string, ParsedAccelerator>()
 function rebuildCache(): void {
   parsedCache = new Map()
   for (const def of DEFAULT_SHORTCUTS) {
+    // 全局快捷键由主进程 globalShortcut 处理，不在渲染进程注册
+    if (def.global) continue
     const accel = getActiveAccelerator(def.id)
     parsedCache.set(def.id, parseAccelerator(accel))
   }

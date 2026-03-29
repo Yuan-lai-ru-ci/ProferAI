@@ -85,3 +85,40 @@ export const SETTINGS_IPC_CHANNELS = {
   GET_SYSTEM_THEME: 'settings:get-system-theme',
   ON_SYSTEM_THEME_CHANGED: 'settings:system-theme-changed',
 } as const
+
+/** 快速任务窗口 IPC 通道 */
+export const QUICK_TASK_IPC_CHANNELS = {
+  /** 提交快速任务（渲染进程 → 主进程） */
+  SUBMIT: 'quick-task:submit',
+  /** 隐藏快速任务窗口 */
+  HIDE: 'quick-task:hide',
+  /** 通知渲染进程聚焦输入框 */
+  FOCUS: 'quick-task:focus',
+  /** 重新注册全局快捷键（设置变更后） */
+  REREGISTER_GLOBAL_SHORTCUTS: 'quick-task:reregister-global-shortcuts',
+} as const
+
+/** 快速任务提交输入 */
+export interface QuickTaskSubmitInput {
+  /** 任务文本内容 */
+  text: string
+  /** 目标模式 */
+  mode: 'chat' | 'agent'
+  /** 附件列表（base64 编码） */
+  files?: QuickTaskFile[]
+}
+
+/** 快速任务附件 */
+export interface QuickTaskFile {
+  filename: string
+  mediaType: string
+  base64: string
+  size: number
+}
+
+/** 主窗口接收的快速任务打开会话数据 */
+export interface QuickTaskOpenSessionData {
+  mode: 'chat' | 'agent'
+  text: string
+  files?: QuickTaskFile[]
+}

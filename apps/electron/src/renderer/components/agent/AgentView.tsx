@@ -237,8 +237,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
   const refreshVersion = refreshMap.get(sessionId) ?? 0
 
+  // 消息是否已完成首次加载（用于 auto-send 等待）
+  const [messagesLoaded, setMessagesLoaded] = React.useState(false)
+
   // 加载当前会话消息
   React.useEffect(() => {
+    setMessagesLoaded(false)
     // 并行加载旧格式（用于 Team 数据重建）和新格式（用于 UI 渲染）
     const loadOldMessages = window.electronAPI.getAgentSessionMessages(sessionId)
     const loadSDKMessages = window.electronAPI.getAgentSessionSDKMessages(sessionId)
@@ -247,6 +251,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .then(([msgs, sdkMsgs]) => {
         setMessages(msgs)
         setPersistedSDKMessages(sdkMsgs)
+        setMessagesLoaded(true)
 
         // 消息加载完成后，同步清除流式状态和实时消息，
         // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
@@ -290,18 +295,25 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
   }, [sessionId, sessions, setAttachedDirsMap])
 
-  // 自动发送 pending prompt（从设置页"对话完成配置"触发）
+  // 自动发送 pending prompt（从快速任务窗口或设置页触发）
+  // 等待 messagesLoaded 确保消息加载完成后再插入乐观消息，避免被加载结果覆盖。
+  // 使用 queueMicrotask 延迟发送：避免 setState → 重渲染 → cleanup 取消 timer 的竞态。
   React.useEffect(() => {
+    if (!messagesLoaded) return
     if (!pendingPrompt) return
     if (pendingPrompt.sessionId !== sessionId) return
     if (!agentChannelId || streaming) return
 
-    // 立即清除，防止重复执行
-    const prompt = pendingPrompt
+    // 快照当前上下文
+    const snapshot = {
+      message: pendingPrompt.message,
+      channelId: agentChannelId,
+      modelId: agentModelId || undefined,
+      workspaceId: currentWorkspaceId || undefined,
+    }
     setPendingPrompt(null)
 
-    // 短延时确保 IPC 订阅已就绪
-    const timer = setTimeout(() => {
+    queueMicrotask(() => {
       // 初始化流式状态
       setStreamingStates((prev) => {
         const map = new Map(prev)
@@ -310,7 +322,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           content: '',
           toolActivities: [],
           teammates: [],
-          model: agentModelId || undefined,
+          model: snapshot.modelId,
           startedAt: Date.now(),
         })
         return map
@@ -320,7 +332,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const tempUserMsg: AgentMessage = {
         id: `temp-${Date.now()}`,
         role: 'user',
-        content: prompt.message,
+        content: snapshot.message,
         createdAt: Date.now(),
       }
       setMessages((prev) => [...prev, tempUserMsg])
@@ -329,7 +341,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const tempUserSDKMsg: SDKMessage = {
         type: 'user',
         message: {
-          content: [{ type: 'text', text: prompt.message }],
+          content: [{ type: 'text', text: snapshot.message }],
         },
         parent_tool_use_id: null,
         _createdAt: Date.now(),
@@ -339,10 +351,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       // 发送消息
       const input: AgentSendInput = {
         sessionId,
-        userMessage: prompt.message,
-        channelId: agentChannelId,
-        modelId: agentModelId || undefined,
-        workspaceId: currentWorkspaceId || undefined,
+        userMessage: snapshot.message,
+        channelId: snapshot.channelId,
+        modelId: snapshot.modelId,
+        workspaceId: snapshot.workspaceId,
       }
       window.electronAPI.sendAgentMessage(input).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
@@ -352,10 +364,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           return map
         })
       })
-    }, 150)
-
-    return () => clearTimeout(timer)
-  }, [pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates])
+    })
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates])
 
   // ===== 附件处理 =====
 

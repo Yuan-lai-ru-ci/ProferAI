@@ -211,6 +211,13 @@ export function ShortcutSettings(): React.ReactElement {
       // 持久化到 settings.json
       window.electronAPI
         .updateSettings({ shortcutOverrides: newOverrides })
+        .then(() => {
+          // 如果修改的是全局快捷键，通知主进程重新注册
+          const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
+          if (def?.global) {
+            window.electronAPI.reregisterGlobalShortcuts().catch(console.error)
+          }
+        })
         .catch(console.error)
     },
     [overrides, setOverrides],
@@ -226,6 +233,13 @@ export function ShortcutSettings(): React.ReactElement {
 
       window.electronAPI
         .updateSettings({ shortcutOverrides: newOverrides })
+        .then(() => {
+          // 如果重置的是全局快捷键，通知主进程重新注册
+          const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
+          if (def?.global) {
+            window.electronAPI.reregisterGlobalShortcuts().catch(console.error)
+          }
+        })
         .catch(console.error)
     },
     [overrides, setOverrides],
@@ -238,13 +252,17 @@ export function ShortcutSettings(): React.ReactElement {
 
     window.electronAPI
       .updateSettings({ shortcutOverrides: {} })
+      .then(() => {
+        // 重新注册全局快捷键（恢复默认绑定）
+        window.electronAPI.reregisterGlobalShortcuts().catch(console.error)
+      })
       .catch(console.error)
   }, [setOverrides])
 
   const hasOverrides = Object.keys(overrides).length > 0
 
   // 分类顺序
-  const categoryOrder: ShortcutCategory[] = ['app', 'navigation', 'edit']
+  const categoryOrder: ShortcutCategory[] = ['app', 'navigation', 'edit', 'global']
 
   return (
     <div className="space-y-6">
@@ -276,6 +294,11 @@ export function ShortcutSettings(): React.ReactElement {
             <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
               {SHORTCUT_CATEGORY_LABELS[category]}
             </h3>
+            {category === 'global' && (
+              <p className="text-xs text-muted-foreground/70 mb-2">
+                全局快捷键在应用未聚焦时也能触发，可能与系统或其他应用冲突
+              </p>
+            )}
             <div className="space-y-1">
               {shortcuts.map((def) => {
                 const currentAccel = getActiveAccelerator(def.id)
