@@ -27,7 +27,7 @@ proma-v2/
 │   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.2)
 │   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.3)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.7.4)
+    └── electron/   # Electron 桌面应用 (v0.8.0)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -56,10 +56,10 @@ proma-v2/
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`shiki`、Radix UI
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.7.4)
+#### @proma/electron (v0.8.0)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
-  - `@anthropic-ai/claude-agent-sdk@0.2.84` - Agent SDK
+  - `@anthropic-ai/claude-agent-sdk@0.2.87` - Agent SDK
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -135,7 +135,7 @@ bun run generate:icons    # 生成应用图标
 | **构建工具** | Vite | 6.0.3 |
 | **打包工具** | esbuild | 0.24.0+ |
 | **分发工具** | Electron Builder | 25.1.8 |
-| **Agent SDK** | @anthropic-ai/claude-agent-sdk | 0.2.84 |
+| **Agent SDK** | @anthropic-ai/claude-agent-sdk | 0.2.87 |
 | **飞书 SDK** | @larksuiteoapi/node-sdk | 最新 |
 
 ## 核心架构
@@ -371,7 +371,7 @@ bun run generate:icons    # 生成应用图标
 
 ## Agent SDK 集成架构
 
-基于 `@anthropic-ai/claude-agent-sdk@0.2.84` 实现 Agent 模式，与 Chat 模式并行。
+基于 `@anthropic-ai/claude-agent-sdk@0.2.87` 实现 Agent 模式，与 Chat 模式并行。
 
 ### 核心流程
 
