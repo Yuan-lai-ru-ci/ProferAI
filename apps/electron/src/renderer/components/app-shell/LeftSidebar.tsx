@@ -907,7 +907,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 </div>
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">点击配置 MCP 与 Skills</TooltipContent>
+            <TooltipContent side="top">点击配置 MCP 与 Skills</TooltipContent>
           </Tooltip>
         </div>
       )}
@@ -1079,7 +1079,7 @@ function ConversationItem({
               {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{isPinned ? '取消置顶' : '置顶对话'}</TooltipContent>
+          <TooltipContent side="top">{isPinned ? '取消置顶' : '置顶对话'}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1093,7 +1093,7 @@ function ConversationItem({
               <Pencil size={13} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">重命名</TooltipContent>
+          <TooltipContent side="top">重命名</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1107,7 +1107,7 @@ function ConversationItem({
               {conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{conversation.archived ? '取消归档' : '归档'}</TooltipContent>
+          <TooltipContent side="top">{conversation.archived ? '取消归档' : '归档'}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1121,7 +1121,7 @@ function ConversationItem({
               <Trash2 size={13} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">删除对话</TooltipContent>
+          <TooltipContent side="top">删除对话</TooltipContent>
         </Tooltip>
       </div>
     </div>
@@ -1263,7 +1263,7 @@ function AgentSessionItem({
               {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{session.pinned ? '取消置顶' : '置顶会话'}</TooltipContent>
+          <TooltipContent side="top">{session.pinned ? '取消置顶' : '置顶会话'}</TooltipContent>
         </Tooltip>
         {!running && (
           <Tooltip>
@@ -1278,7 +1278,7 @@ function AgentSessionItem({
                 <ArrowRightLeft size={13} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">迁移到其他工作区</TooltipContent>
+            <TooltipContent side="top">迁移到其他工作区</TooltipContent>
           </Tooltip>
         )}
         <Tooltip>
@@ -1293,7 +1293,7 @@ function AgentSessionItem({
               <Pencil size={13} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">重命名</TooltipContent>
+          <TooltipContent side="top">重命名</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1307,7 +1307,7 @@ function AgentSessionItem({
               {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{session.archived ? '取消归档' : '归档'}</TooltipContent>
+          <TooltipContent side="top">{session.archived ? '取消归档' : '归档'}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1321,7 +1321,7 @@ function AgentSessionItem({
               <Trash2 size={13} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">删除会话</TooltipContent>
+          <TooltipContent side="top">删除会话</TooltipContent>
         </Tooltip>
       </div>
     </div>
