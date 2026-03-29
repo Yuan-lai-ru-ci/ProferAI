@@ -106,6 +106,22 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   React.useEffect(() => {
     setInlineEditingMessageId(null)
     setPendingRecommendation(null)
+
+    // 清空附件列表和缓存
+    setPendingAttachments((prev) => {
+      // 释放 blob URLs
+      prev.forEach((att) => {
+        if (att.previewUrl?.startsWith('blob:')) {
+          URL.revokeObjectURL(att.previewUrl)
+        }
+      })
+      return []
+    })
+
+    // 清空附件数据缓存（如果存在）
+    if (window.__pendingAttachmentData) {
+      window.__pendingAttachmentData.clear()
+    }
   }, [conversationId, setPendingRecommendation])
 
   // ===== 加载消息 + 上下文分隔线 =====
