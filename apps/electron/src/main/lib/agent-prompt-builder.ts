@@ -180,7 +180,7 @@ Agent 工具支持 \`model\` 参数（可选值：\`sonnet\` / \`opus\` / \`haik
 
 存在两个 \`.context/\` 目录，用途不同：
 - **会话级** \`.context/\`（当前 cwd 下）：当前会话的临时工作台，存放本次任务的 todo.md、plan/、临时笔记等
-- **工作区级** \`~/.proma/agent-workspaces/${ctx.workspaceSlug}/.context/\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等
+- **工作区级** \`~/.proma/agent-workspaces/${ctx.workspaceSlug}/workspace-files/.context/\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等
 
 选择写入哪个目录时：
 - 只与当前任务相关的内容 → 会话级 \`.context/\`

@@ -274,7 +274,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
 
           {/* 文件浏览内容 */}
           {sessionPath && workspaceSlug ? (
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 flex flex-col">
                   {/* ===== 会话文件区 ===== */}
                   <div className="flex items-center gap-1 px-3 h-[32px] flex-shrink-0">
                     <FolderOpen className="size-3 text-muted-foreground" />
@@ -323,30 +323,33 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  {/* 附加目录列表（可展开目录树） */}
-                  {attachedDirs.length > 0 && (
-                    <AttachedDirsSection
-                      attachedDirs={attachedDirs}
-                      onDetach={handleDetachDirectory}
-                      refreshVersion={filesVersion}
+                  {/* 会话文件内容区（独立滚动） */}
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    {/* 附加目录列表（可展开目录树） */}
+                    {attachedDirs.length > 0 && (
+                      <AttachedDirsSection
+                        attachedDirs={attachedDirs}
+                        onDetach={handleDetachDirectory}
+                        refreshVersion={filesVersion}
+                      />
+                    )}
+                    {/* 会话文件浏览器 */}
+                    <FileBrowser rootPath={sessionPath} hideToolbar embedded />
+                    {/* 会话文件拖拽上传区域 */}
+                    <FileDropZone
+                      workspaceSlug={workspaceSlug}
+                      sessionId={sessionId}
+                      target="session"
+                      onFilesUploaded={handleFilesUploaded}
+                      onAttachFolder={handleAttachFolder}
                     />
-                  )}
-                  {/* 会话文件浏览器 */}
-                  <FileBrowser rootPath={sessionPath} hideToolbar embedded />
-                  {/* 会话文件拖拽上传区域 */}
-                  <FileDropZone
-                    workspaceSlug={workspaceSlug}
-                    sessionId={sessionId}
-                    target="session"
-                    onFilesUploaded={handleFilesUploaded}
-                    onAttachFolder={handleAttachFolder}
-                  />
+                  </div>
 
                   {/* ===== 分隔线 ===== */}
                   <div className="mx-3 my-3 border-t border-dashed border-muted-foreground/20" />
 
                   {/* ===== 工作区文件区 ===== */}
-                  <div className="bg-muted/30 rounded-lg mx-2 mb-2 pb-1">
+                  <div className="flex-1 min-h-0 flex flex-col bg-muted/30 rounded-lg mx-2 mb-2">
                     <div className="flex items-center gap-1 px-2 h-[32px] flex-shrink-0">
                       <FolderHeart className="size-3 text-primary/70" />
                       <span className="text-[11px] font-medium text-primary/70">工作区文件</span>
@@ -378,25 +381,28 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                         </Tooltip>
                       )}
                     </div>
-                    {/* 工作区级附加目录 */}
-                    {wsAttachedDirs.length > 0 && (
-                      <AttachedDirsSection
-                        attachedDirs={wsAttachedDirs}
-                        onDetach={handleDetachWorkspaceDirectory}
-                        refreshVersion={filesVersion}
+                    {/* 工作区文件内容区（独立滚动） */}
+                    <div className="flex-1 min-h-0 overflow-y-auto pb-1">
+                      {/* 工作区级附加目录 */}
+                      {wsAttachedDirs.length > 0 && (
+                        <AttachedDirsSection
+                          attachedDirs={wsAttachedDirs}
+                          onDetach={handleDetachWorkspaceDirectory}
+                          refreshVersion={filesVersion}
+                        />
+                      )}
+                      {/* 工作区文件浏览器 */}
+                      {workspaceFilesPath && (
+                        <FileBrowser rootPath={workspaceFilesPath} hideToolbar embedded />
+                      )}
+                      {/* 工作区文件拖拽上传区域 */}
+                      <FileDropZone
+                        workspaceSlug={workspaceSlug}
+                        target="workspace"
+                        onFilesUploaded={handleFilesUploaded}
+                        onAttachFolder={handleAttachWorkspaceFolder}
                       />
-                    )}
-                    {/* 工作区文件浏览器 */}
-                    {workspaceFilesPath && (
-                      <FileBrowser rootPath={workspaceFilesPath} hideToolbar embedded />
-                    )}
-                    {/* 工作区文件拖拽上传区域 */}
-                    <FileDropZone
-                      workspaceSlug={workspaceSlug}
-                      target="workspace"
-                      onFilesUploaded={handleFilesUploaded}
-                      onAttachFolder={handleAttachWorkspaceFolder}
-                    />
+                    </div>
                   </div>
                 </div>
               ) : (
