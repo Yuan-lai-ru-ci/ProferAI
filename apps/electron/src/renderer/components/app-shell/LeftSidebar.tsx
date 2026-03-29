@@ -15,9 +15,10 @@ import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight,
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
+import { UserAvatar } from '@/components/chat/UserAvatar'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
-import { settingsTabAtom } from '@/atoms/settings-tab'
+import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import {
   conversationsAtom,
   currentConversationIdAtom,
@@ -101,13 +102,12 @@ export interface LeftSidebarProps {
 }
 
 /** 侧边栏导航项标识 */
-type SidebarItemId = 'pinned' | 'all-chats' | 'settings'
+type SidebarItemId = 'pinned' | 'all-chats'
 
 /** 导航项到视图的映射 */
 const ITEM_TO_VIEW: Record<SidebarItemId, ActiveView> = {
   pinned: 'conversations',
   'all-chats': 'conversations',
-  settings: 'settings',
 }
 
 /** 日期分组标签 */
@@ -143,6 +143,7 @@ function groupByDate<T extends { updatedAt: number }>(items: T[]): Array<{ label
 export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const [activeItem, setActiveItem] = React.useState<SidebarItemId>('all-chats')
   const [conversations, setConversations] = useAtom(conversationsAtom)
   const [currentConversationId, setCurrentConversationId] = useAtom(currentConversationIdAtom)
@@ -155,7 +156,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [pinnedExpanded, setPinnedExpanded] = React.useState(true)
   /** Agent 置顶区域展开/收起 */
   const [pinnedAgentExpanded, setPinnedAgentExpanded] = React.useState(true)
-  const setUserProfile = useSetAtom(userProfileAtom)
+  const [userProfile, setUserProfile] = useAtom(userProfileAtom)
   const selectedModel = useAtomValue(selectedModelAtom)
   const streamingIds = useAtomValue(streamingConversationIdsAtom)
   const mode = useAtomValue(appModeAtom)
@@ -269,13 +270,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setActiveItem(item)
     setActiveView(ITEM_TO_VIEW[item])
   }
-
-  // 当 activeView 从外部改变时，同步 activeItem
-  React.useEffect(() => {
-    if (activeView === 'conversations' && activeItem === 'settings') {
-      setActiveItem('all-chats')
-    }
-  }, [activeView, activeItem])
 
   /** 创建新对话（继承当前选中的模型/渠道） */
   const handleNewConversation = async (): Promise<void> => {
@@ -562,22 +556,17 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         {/* 弹性空间 */}
         <div className="flex-1" />
 
-        {/* 设置按钮 */}
+        {/* 用户头像（点击打开设置） */}
         <div className="pb-3">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => handleItemClick('settings')}
-                className={cn(
-                  'relative p-2 rounded-[10px] transition-colors titlebar-no-drag',
-                  activeItem === 'settings'
-                    ? 'bg-foreground/[0.08] text-foreground'
-                    : 'text-foreground/60 hover:bg-foreground/[0.04] hover:text-foreground'
-                )}
+                onClick={() => setSettingsOpen(true)}
+                className="relative p-1 rounded-[10px] transition-colors titlebar-no-drag hover:bg-foreground/[0.04]"
               >
-                <Settings size={18} />
+                <UserAvatar avatar={userProfile.avatar} size={28} />
                 {(hasUpdate || hasEnvironmentIssues) && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500" />
+                  <span className="absolute top-0 right-0 w-2 h-2 rounded-full bg-red-500" />
                 )}
               </button>
             </TooltipTrigger>
@@ -787,7 +776,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => { setSettingsTab('agent'); handleItemClick('settings') }}
+                onClick={() => { setSettingsTab('agent'); setSettingsOpen(true) }}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-[10px] text-[12px] text-foreground/50 hover:bg-foreground/[0.04] hover:text-foreground/70 transition-colors titlebar-no-drag"
               >
                 <div className="flex items-center gap-2.5 flex-1 min-w-0">
@@ -810,19 +799,21 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </div>
       )}
 
-      {/* 底部设置 */}
+      {/* 底部：用户资料 + 设置入口 */}
       <div className="px-3 pb-3">
-        <SidebarItem
-          icon={<Settings size={18} />}
-          label="设置"
-          active={activeItem === 'settings'}
-          onClick={() => handleItemClick('settings')}
-          suffix={
-            (hasUpdate || hasEnvironmentIssues) ? (
-              <span className="w-2 h-2 rounded-full bg-red-500" />
-            ) : undefined
-          }
-        />
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="w-full flex items-center gap-3 px-3 py-2 rounded-[10px] transition-colors titlebar-no-drag text-foreground/70 hover:bg-foreground/[0.04] hover:text-foreground"
+        >
+          <UserAvatar avatar={userProfile.avatar} size={28} />
+          <span className="flex-1 text-sm truncate text-left">{userProfile.userName}</span>
+          <div className="relative flex-shrink-0 text-foreground/40">
+            <Settings size={16} />
+            {(hasUpdate || hasEnvironmentIssues) && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
+            )}
+          </div>
+        </button>
       </div>
 
       {deleteDialog}

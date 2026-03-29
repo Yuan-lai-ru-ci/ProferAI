@@ -1,15 +1,14 @@
 /**
  * SettingsPanel - 设置面板
  *
- * 左侧导航 + 右侧 ScrollArea 内容区域。
- * 四个标签页：通用 / 渠道配置 / 外观 / 关于
+ * 顶部 Header（标题 + 关闭按钮）+ 下方（左侧导航 + 右侧 ScrollArea 内容区域）。
  * 使用 Jotai atom 管理当前标签页状态。
  */
 
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench, MessageSquare, GraduationCap } from 'lucide-react'
+import { Settings, Radio, Palette, Info, Plug, Globe, BookOpen, Wrench, MessageSquare, GraduationCap, X } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { settingsTabAtom } from '@/atoms/settings-tab'
 import type { SettingsTab } from '@/atoms/settings-tab'
@@ -37,7 +36,7 @@ interface TabItem {
 /** 基础 Tabs（所有模式都有） */
 const BASE_TABS: TabItem[] = [
   { id: 'general', label: '通用', icon: <Settings size={16} /> },
-  { id: 'channels', label: '渠道', icon: <Radio size={16} /> },
+  { id: 'channels', label: '模型', icon: <Radio size={16} /> },
   { id: 'prompts', label: '提示词', icon: <BookOpen size={16} /> },
   { id: 'proxy', label: '代理', icon: <Globe size={16} /> },
 ]
@@ -80,7 +79,11 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
   }
 }
 
-export function SettingsPanel(): React.ReactElement {
+interface SettingsPanelProps {
+  onClose?: () => void
+}
+
+export function SettingsPanel({ onClose }: SettingsPanelProps): React.ReactElement {
   const [activeTab, setActiveTab] = useAtom(settingsTabAtom)
   const appMode = useAtomValue(appModeAtom)
   const hasUpdate = useAtomValue(hasUpdateAtom)
@@ -94,41 +97,57 @@ export function SettingsPanel(): React.ReactElement {
     return [...BASE_TABS, TOOLS_TAB, FEISHU_TAB, TUTORIAL_TAB, ...TAIL_TABS]
   }, [appMode])
 
+  // 当前 tab 标题
+  const activeTabLabel = tabs.find((t) => t.id === activeTab)?.label ?? '设置'
+
   return (
-    <div className="flex h-full">
-      {/* 左侧 Tab 导航 */}
-      <div className="w-[180px] border-r border-border/50 pt-14 px-2">
-        <h2 className="text-xs font-medium text-muted-foreground px-3 mb-2 uppercase tracking-wider">
-          设置
-        </h2>
-        <nav className="flex flex-col gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
-                activeTab === tab.id
-                  ? 'bg-muted text-foreground font-medium'
-                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-              )}
-            >
-              {tab.icon}
-              <span>{tab.label}</span>
-              {tab.id === 'about' && (hasUpdate || hasEnvironmentIssues) && (
-                <span className="w-2 h-2 rounded-full bg-red-500" />
-              )}
-            </button>
-          ))}
-        </nav>
+    <div className="flex flex-col h-full">
+      {/* 顶部 Header 栏 */}
+      <div className="h-12 flex items-center justify-between px-5 border-b border-border/50 flex-shrink-0">
+        <h2 className="text-sm font-medium text-foreground">{activeTabLabel}</h2>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="rounded-md p-1.5 text-muted-foreground/60 hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <X size={16} />
+          </button>
+        )}
       </div>
 
-      {/* 右侧内容区域 */}
-      <ScrollArea className="flex-1 pt-14">
-        <div className="px-6 pb-6">
-          {renderTabContent(activeTab)}
+      {/* 下方主体：左导航 + 右内容 */}
+      <div className="flex flex-1 min-h-0">
+        {/* 左侧 Tab 导航 */}
+        <div className="w-[160px] border-r border-border/50 pt-3 px-2 flex-shrink-0">
+          <nav className="flex flex-col gap-0.5">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
+                  activeTab === tab.id
+                    ? 'bg-muted text-foreground font-medium'
+                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                )}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+                {tab.id === 'about' && (hasUpdate || hasEnvironmentIssues) && (
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                )}
+              </button>
+            ))}
+          </nav>
         </div>
-      </ScrollArea>
+
+        {/* 右侧内容区域 */}
+        <ScrollArea className="flex-1">
+          <div className="px-6 py-4">
+            {renderTabContent(activeTab)}
+          </div>
+        </ScrollArea>
+      </div>
     </div>
   )
 }

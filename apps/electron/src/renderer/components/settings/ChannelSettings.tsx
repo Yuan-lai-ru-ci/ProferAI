@@ -159,14 +159,14 @@ export function ChannelSettings(): React.ReactElement {
   // 列表视图
   return (
     <div className="space-y-8">
-      {/* 区块一：渠道管理 */}
+      {/* 区块一：模型配置 */}
       <SettingsSection
-        title="渠道管理"
+        title="模型配置"
         description="管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式"
         action={
           <Button size="sm" onClick={() => setViewMode('create')}>
             <Plus size={16} />
-            <span>添加渠道</span>
+            <span>添加配置</span>
           </Button>
         }
       >
@@ -178,7 +178,7 @@ export function ChannelSettings(): React.ReactElement {
         ) : channels.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="text-sm text-muted-foreground py-12 text-center">
-              还没有配置任何渠道，点击上方"添加渠道"开始
+              还没有配置任何模型，点击上方"添加配置"开始
             </div>
           </SettingsCard>
         ) : (

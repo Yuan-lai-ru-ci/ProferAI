@@ -15,3 +15,6 @@ export type SettingsTab = 'general' | 'channels' | 'proxy' | 'appearance' | 'abo
 
 /** 当前设置标签页（不持久化，每次打开设置默认显示渠道） */
 export const settingsTabAtom = atom<SettingsTab>('channels')
+
+/** 设置浮窗是否打开 */
+export const settingsOpenAtom = atom(false)

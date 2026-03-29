@@ -55,7 +55,7 @@ import {
   agentPlanModeSessionsAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
-import { activeViewAtom } from '@/atoms/active-view'
+import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import { AgentSessionProvider } from '@/contexts/session-context'
@@ -76,7 +76,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const [agentModelId, setAgentModelId] = useAtom(agentModelIdAtom)
   const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
-  const setActiveView = useSetAtom(activeViewAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtom)
@@ -950,7 +950,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                 <button
                   type="button"
                   className="text-xs underline underline-offset-2 hover:text-foreground transition-colors"
-                  onClick={() => setActiveView('settings')}
+                  onClick={() => setSettingsOpen(true)}
                 >
                   前往设置
                 </button>
