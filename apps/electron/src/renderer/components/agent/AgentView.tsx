@@ -30,6 +30,8 @@ import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
 import {
@@ -58,12 +60,92 @@ import {
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
+
+// ===== 思考模式 Hover Popover =====
+
+interface AgentThinkingPopoverProps {
+  agentThinking: import('@proma/shared').ThinkingConfig | undefined
+  onToggle: () => void
+}
+
+function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverProps): React.ReactElement {
+  const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
+  const [open, setOpen] = React.useState(false)
+  const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const isEnabled = agentThinking?.type === 'adaptive'
+
+  const handleMouseEnter = React.useCallback(() => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
+    setOpen(true)
+  }, [])
+
+  const handleMouseLeave = React.useCallback(() => {
+    hoverTimeout.current = setTimeout(() => setOpen(false), 150)
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
+    }
+  }, [])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'size-[36px] rounded-full',
+            isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+          )}
+          onClick={onToggle}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          <Brain className="size-5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="center"
+        sideOffset={8}
+        className="w-auto min-w-[160px] p-2 px-2.5"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-xs text-foreground/70">思考模式</span>
+            <Switch
+              checked={isEnabled}
+              onCheckedChange={onToggle}
+              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+            />
+          </div>
+          <div className="h-px bg-border" />
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-xs text-foreground/70">展开思考</span>
+            <Switch
+              checked={thinkingExpanded}
+              onCheckedChange={setThinkingExpanded}
+              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+            />
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [messages, setMessages] = React.useState<AgentMessage[]>([])
@@ -616,8 +698,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         sessionId,
         userMessage: effectiveText,
         uuid: localUuid,
-      }).then(() => {
-        toast.info('消息已追加发送')
       }).catch((error) => {
         console.error('[AgentView] 追加消息失败:', error)
         toast.error('追加消息失败', { description: String(error) })
@@ -1117,34 +1197,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                   onModelSelect={handleModelSelect}
                 />
                 <PermissionModeSelector />
-                {/* 思考模式切换 */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        'size-[36px] rounded-full',
-                        agentThinking?.type === 'adaptive'
-                          ? 'text-green-500'
-                          : 'text-foreground/60 hover:text-foreground'
-                      )}
-                      onClick={() => {
-                        const next = agentThinking?.type === 'adaptive'
-                          ? { type: 'disabled' as const }
-                          : { type: 'adaptive' as const }
-                        setAgentThinking(next)
-                        window.electronAPI.updateSettings({ agentThinking: next })
-                      }}
-                    >
-                      <Brain className="size-5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    <p>{agentThinking?.type === 'adaptive' ? '关闭思考模式' : '开启思考模式（自适应）'}</p>
-                  </TooltipContent>
-                </Tooltip>
+                {/* 思考模式切换 + 展开偏好 */}
+                <AgentThinkingPopover
+                  agentThinking={agentThinking}
+                  onToggle={() => {
+                    const next = agentThinking?.type === 'adaptive'
+                      ? { type: 'disabled' as const }
+                      : { type: 'adaptive' as const }
+                    setAgentThinking(next)
+                    window.electronAPI.updateSettings({ agentThinking: next })
+                  }}
+                />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

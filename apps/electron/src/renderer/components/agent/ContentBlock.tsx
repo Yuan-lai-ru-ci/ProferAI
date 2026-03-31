@@ -10,11 +10,15 @@
 import * as React from 'react'
 import {
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   XCircle,
   Loader2,
   Brain,
   MessageSquareText,
 } from 'lucide-react'
+import { useAtomValue } from 'jotai'
+import { thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
 import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon } from './tool-utils'
@@ -296,7 +300,33 @@ interface ThinkingBlockProps {
   dimmed?: boolean
 }
 
+/** 思考块折叠行数阈值 */
+const THINKING_COLLAPSE_LINE_THRESHOLD = 4
+
 function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.ReactElement {
+  const thinkingExpanded = useAtomValue(thinkingExpandedAtom)
+  const [isExpanded, setIsExpanded] = React.useState(thinkingExpanded)
+  const [shouldCollapse, setShouldCollapse] = React.useState(false)
+  const contentRef = React.useRef<HTMLDivElement>(null)
+
+  // 检测内容是否超过阈值行数
+  React.useEffect(() => {
+    if (!contentRef.current) return
+    const el = contentRef.current
+    const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 22
+    const maxHeight = lineHeight * THINKING_COLLAPSE_LINE_THRESHOLD
+    setShouldCollapse(el.scrollHeight > maxHeight + 10)
+  }, [block.thinking])
+
+  // 当全局偏好变更时同步（仅在"应折叠"时生效）
+  React.useEffect(() => {
+    setIsExpanded(thinkingExpanded)
+  }, [thinkingExpanded])
+
+  const toggleExpand = React.useCallback(() => {
+    setIsExpanded((prev) => !prev)
+  }, [])
+
   return (
     <div className="relative mb-3">
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -307,20 +337,48 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
       </div>
       <div
         className={cn(
-          'rounded-lg px-3.5 py-2.5',
+          'relative rounded-lg px-3.5 py-2.5',
           dimmed ? 'bg-muted/30' : 'bg-muted/50',
+          shouldCollapse && !isExpanded && 'pb-7',
         )}
         style={{
           border: 'none',
           backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' rx='8' ry='8' stroke='${dimmed ? 'rgba(128,128,128,0.3)' : 'rgba(128,128,128,0.5)'}' stroke-width='1.5' stroke-dasharray='8%2c 6' stroke-dashoffset='0' stroke-linecap='round'/%3e%3c/svg%3e")`,
         }}
       >
-        <div className={cn(
-          'prose prose-sm dark:prose-invert max-w-none prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 whitespace-pre-wrap text-[14px] leading-relaxed',
-          dimmed ? 'text-muted-foreground' : 'text-foreground/90',
-        )}>
-          {block.thinking}
+        <div
+          ref={contentRef}
+          className={cn(
+            'prose prose-sm dark:prose-invert max-w-none prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 text-[14px] leading-relaxed overflow-hidden transition-[max-height] duration-200',
+            dimmed ? 'text-muted-foreground' : 'text-foreground/90',
+            shouldCollapse && !isExpanded && 'max-h-[5.6em]',
+          )}
+        >
+          <MessageResponse>{block.thinking}</MessageResponse>
         </div>
+        {shouldCollapse && (
+          <button
+            type="button"
+            onClick={toggleExpand}
+            className={cn(
+              'flex items-center gap-1 text-xs text-foreground/40 hover:text-foreground/70 transition-colors mt-1',
+              !isExpanded &&
+                'absolute bottom-0 left-0 right-0 px-3.5 pb-2 pt-4 rounded-b-lg bg-gradient-to-t from-muted/80 to-transparent'
+            )}
+          >
+            {isExpanded ? (
+              <>
+                <ChevronUp className="size-3" />
+                <span>收起</span>
+              </>
+            ) : (
+              <>
+                <ChevronDown className="size-3" />
+                <span>展开思考</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   )
