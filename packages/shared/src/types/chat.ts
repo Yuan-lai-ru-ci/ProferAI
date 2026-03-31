@@ -262,6 +262,8 @@ export interface ChatToolActivity {
   result?: string
   /** 是否遇到错误 */
   isError?: boolean
+  /** 工具调用参数（result 事件中携带，用于语义化短语和结构化结果渲染） */
+  input?: Record<string, unknown>
 }
 
 /**

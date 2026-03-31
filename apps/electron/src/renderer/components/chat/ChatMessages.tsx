@@ -348,7 +348,7 @@ export function ChatMessages({
                 />
                 <MessageContent>
                   {/* 工具活动指示器 */}
-                  <ChatToolActivityIndicator activities={toolActivities} />
+                  <ChatToolActivityIndicator activities={toolActivities} isStreaming={streaming} />
 
                   {/* 推理内容（如果有） */}
                   {smoothReasoning && (
