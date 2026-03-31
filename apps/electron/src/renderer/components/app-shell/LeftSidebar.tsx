@@ -385,6 +385,16 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setConversations((prev) =>
         prev.map((c) => (c.id === updated.id ? updated : c))
       )
+      // 归档时自动关闭该对话的标签页
+      if (updated.archived) {
+        const tabResult = closeTab(tabs, layout, id)
+        setTabs(tabResult.tabs)
+        setLayout(tabResult.layout)
+        // 如果归档的是当前选中的对话，取消选中
+        if (currentConversationId === id) {
+          setCurrentConversationId(null)
+        }
+      }
       toast.success(updated.archived ? '已归档' : '已取消归档')
     } catch (error) {
       console.error('[侧边栏] 切换归档失败:', error)
@@ -519,6 +529,16 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setAgentSessions((prev) =>
         prev.map((s) => (s.id === updated.id ? updated : s))
       )
+      // 归档时自动关闭该会话的标签页
+      if (updated.archived) {
+        const tabResult = closeTab(tabs, layout, id)
+        setTabs(tabResult.tabs)
+        setLayout(tabResult.layout)
+        // 如果归档的是当前选中的会话，取消选中
+        if (currentAgentSessionId === id) {
+          setCurrentAgentSessionId(null)
+        }
+      }
       toast.success(updated.archived ? '已归档' : '已取消归档')
     } catch (error) {
       console.error('[侧边栏] 切换 Agent 会话归档失败:', error)
