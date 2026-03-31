@@ -214,7 +214,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
   return (
     <div
       className={cn(
-        'relative flex-shrink-0 overflow-hidden titlebar-drag-region',
+        'relative flex-shrink-0 overflow-hidden titlebar-drag-region bg-[hsl(var(--content-area))]',
         animateRef.current && 'transition-[width] duration-300 ease-in-out',
         isOpen ? 'w-[320px] border-l' : hasContent ? 'w-10' : 'w-0',
       )}
@@ -346,16 +346,16 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                   </div>
 
                   {/* ===== 分隔线 ===== */}
-                  <div className="mx-3 my-3 border-t border-dashed border-muted-foreground/20" />
+                  <div className="mx-3 my-3 border-t border-muted-foreground/20" />
 
                   {/* ===== 工作区文件区 ===== */}
-                  <div className="flex-1 min-h-0 flex flex-col bg-muted/30 rounded-lg mx-2 mb-2">
+                  <div className="flex-1 min-h-0 flex flex-col mx-2 mb-2">
                     <div className="flex items-center gap-1 px-2 h-[32px] flex-shrink-0">
-                      <FolderHeart className="size-3 text-primary/70" />
-                      <span className="text-[11px] font-medium text-primary/70">工作区文件</span>
+                      <FolderHeart className="size-3 text-muted-foreground" />
+                      <span className="text-[11px] font-medium text-muted-foreground">工作区文件</span>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Info className="size-3 text-primary/40 cursor-help" />
+                          <Info className="size-3 text-muted-foreground/50 cursor-help" />
                         </TooltipTrigger>
                         <TooltipContent side="bottom" className="max-w-[220px]">
                           <p>工作区内所有会话可访问的文件和文件夹，每个新对话都可以自动读取</p>
