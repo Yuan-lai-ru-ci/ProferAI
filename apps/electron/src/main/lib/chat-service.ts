@@ -477,6 +477,30 @@ export async function sendMessage(
 
     const errorMessage = error instanceof Error ? error.message : '未知错误'
     console.error(`[聊天服务] 流式请求失败:`, error)
+
+    // 保存已累积的部分助手消息（与 abort 逻辑一致，防止内容丢失）
+    if (accumulatedContent) {
+      const assistantMsgId = randomUUID()
+      const partialMsg: ChatMessage = {
+        id: assistantMsgId,
+        role: 'assistant',
+        content: accumulatedContent,
+        createdAt: Date.now(),
+        model: modelId,
+        reasoning: accumulatedReasoning || undefined,
+        stopped: true,
+        error: errorMessage,
+        toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
+      }
+      appendMessage(conversationId, partialMsg)
+
+      try {
+        updateConversationMeta(conversationId, {})
+      } catch {
+        // 索引更新失败不影响主流程
+      }
+    }
+
     webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
       error: errorMessage,

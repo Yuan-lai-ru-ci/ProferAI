@@ -77,6 +77,8 @@ export interface ChatMessage {
   reasoning?: string
   /** 是否被用户中止 */
   stopped?: boolean
+  /** 流式生成时遇到的错误信息 */
+  error?: string
   /** 文件附件列表 */
   attachments?: FileAttachment[]
   /** 工具活动记录（assistant 消息，工具调用历史） */
@@ -258,7 +260,7 @@ export interface ChatToolActivity {
   type: 'start' | 'result'
   /** 执行结果（仅 result 时存在） */
   result?: string
-  /** 是否出错 */
+  /** 是否遇到错误 */
   isError?: boolean
 }
 
