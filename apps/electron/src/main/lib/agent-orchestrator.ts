@@ -802,6 +802,7 @@ export class AgentOrchestrator {
     // 7. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
+    let titleGenerationStarted = false
     let agentExec: { type: 'node' | 'bun'; path: string } | undefined
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
@@ -1134,6 +1135,13 @@ export class AgentOrchestrator {
             } catch (err) {
               console.error(`[Agent 编排] 保存 SDK session_id 失败:`, err)
             }
+          }
+
+          // SDK 初始化完成后立即触发标题生成，使多会话并发时用户能快速区分
+          if (!titleGenerationStarted) {
+            titleGenerationStarted = true
+            this.autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, callbacks)
+              .catch((err) => console.error('[Agent 编排] 标题生成未捕获异常:', err))
           }
         },
         onModelResolved: (model: string) => {
@@ -1527,10 +1535,6 @@ export class AgentOrchestrator {
 
           // 发送完成信号
           callbacks.onComplete(getAgentSessionMessages(sessionId))
-
-          // 异步生成标题
-          this.autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, callbacks)
-            .catch((err) => console.error('[Agent 编排] 标题生成未捕获异常:', err))
 
           break  // 成功完成，退出重试循环
 
