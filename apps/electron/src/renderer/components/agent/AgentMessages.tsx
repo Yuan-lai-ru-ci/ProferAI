@@ -638,31 +638,9 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
 
-  /**
-   * 淡入控制：切换会话时先隐藏，等布局完成后再显示。
-   * 同时用于延迟启用 content-visibility 优化，避免初次加载跳动。
-   */
+  /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
   const [ready, setReady] = React.useState(false)
   const prevSessionIdRef = React.useRef<string | null>(null)
-
-  /**
-   * content-visibility 延迟启用：ready 后延迟开启，之后保持不变。
-   * 不随 streaming 状态反复切换，避免 content-visibility:auto 反复开关导致浏览器 reflow 跳动。
-   * 仅在切换会话（ready 重置为 false）时才重新走延迟启用流程。
-   */
-  const [cvReady, setCvReady] = React.useState(false)
-  React.useEffect(() => {
-    if (!ready) {
-      setCvReady(false)
-      return
-    }
-    // 已启用则保持，不因 streaming 反复切换
-    if (cvReady) return
-    // 流式期间暂不启用，等首次流式完成后再启用
-    if (streaming) return
-    const timer = setTimeout(() => setCvReady(true), 100)
-    return () => clearTimeout(timer)
-  }, [ready, streaming, cvReady])
 
   React.useEffect(() => {
     if (sessionId !== prevSessionIdRef.current) {
@@ -696,6 +674,24 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
     content: streamingContent,
     isStreaming: streaming,
   })
+
+  /**
+   * 流式完成过渡：streaming 结束到持久化消息加载完成之间，
+   * 强制 resize="instant" 避免中间高度变化触发平滑滚动动画。
+   */
+  const [transitioning, setTransitioning] = React.useState(false)
+  React.useEffect(() => {
+    if (streaming) {
+      setTransitioning(false)
+      return
+    }
+    if (streamingContent || smoothContent) {
+      setTransitioning(true)
+      return
+    }
+    const timer = setTimeout(() => setTransitioning(false), 150)
+    return () => clearTimeout(timer)
+  }, [streaming, streamingContent, smoothContent])
 
   // 判断是否使用新的 SDKMessage 渲染路径
   const useSDKRenderer = persistedSDKMessages && persistedSDKMessages.length > 0
@@ -758,7 +754,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
   const hasLiveAssistantContent = liveGroups.some((g) => g.type === 'assistant-turn')
 
   return (
-    <Conversation resize={ready ? 'smooth' : 'instant'} className={ready ? `${cvReady ? 'cv-ready ' : ''}opacity-100 transition-opacity duration-200` : 'opacity-0'}>
+    <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? 'opacity-100 transition-opacity duration-200' : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
       <ConversationContent>
         {!hasContent && !streaming ? (

@@ -202,6 +202,24 @@ export function ChatMessages({
   const [loadingMore, setLoadingMore] = React.useState(false)
 
   /**
+   * 流式完成过渡：streaming 结束到持久化消息加载完成之间，
+   * 强制 resize="instant" 避免中间高度变化触发平滑滚动动画。
+   */
+  const [transitioning, setTransitioning] = React.useState(false)
+  React.useEffect(() => {
+    if (streaming) {
+      setTransitioning(false)
+      return
+    }
+    if (streamingContent || smoothContent) {
+      setTransitioning(true)
+      return
+    }
+    const timer = setTimeout(() => setTransitioning(false), 150)
+    return () => clearTimeout(timer)
+  }, [streaming, streamingContent, smoothContent])
+
+  /**
    * 淡入控制：切换对话时先隐藏，等 StickToBottom 定位完成后再显示。
    * 避免 "先看到顶部消息再跳到底部" 的闪烁。
    */
@@ -291,7 +309,7 @@ export function ChatMessages({
   const dividerSet = new Set(contextDividers)
 
   return (
-    <Conversation resize={ready ? 'smooth' : 'instant'} className={ready ? `${streaming ? '' : 'cv-ready '}opacity-100 transition-opacity duration-200` : 'opacity-0'}>
+    <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? 'opacity-100 transition-opacity duration-200' : 'opacity-0'}>
       <ScrollPositionManager id={conversationId} ready={ready} />
       {/* 滚动到顶部时自动加载更多历史 */}
       <ScrollTopLoader
