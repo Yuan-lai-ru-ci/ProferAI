@@ -701,6 +701,9 @@ export class AgentOrchestrator {
       return
     }
 
+    // 0.5 清除上一轮中断标记
+    try { updateAgentSessionMeta(sessionId, { stoppedByUser: false }) } catch { /* 会话可能已删除 */ }
+
     // 1. Windows 平台：检查 Shell 环境可用性
     if (process.platform === 'win32') {
       const runtimeStatus = getRuntimeStatus()
@@ -1473,6 +1476,8 @@ export class AgentOrchestrator {
             const wasStoppedByUser = this.stoppedBySessions.delete(sessionId)
             console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+            // 持久化中断状态到会话 meta
+            try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
             callbacks.onComplete(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser })
             return
           }

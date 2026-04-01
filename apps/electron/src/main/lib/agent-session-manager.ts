@@ -282,7 +282,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'forkedFromSdkSessionId' | 'forkAtMessageUuid' | 'forkSourceDir'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'forkedFromSdkSessionId' | 'forkAtMessageUuid' | 'forkSourceDir' | 'stoppedByUser'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -292,8 +292,9 @@ export function updateAgentSessionMeta(
   }
 
   const existing = index.sessions[idx]!
-  // 非手动归档操作时，若会话已归档则自动恢复为活跃
-  const autoUnarchive = existing.archived && !('archived' in updates)
+  // 非手动归档操作时，若会话已归档则自动恢复为活跃（仅更新 stoppedByUser 不触发解归档）
+  const isStoppedByUserOnly = Object.keys(updates).every((k) => k === 'stoppedByUser')
+  const autoUnarchive = existing.archived && !('archived' in updates) && !isStoppedByUserOnly
   const updated: AgentSessionMeta = {
     ...existing,
     ...updates,

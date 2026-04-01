@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download, Square } from 'lucide-react'
+import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   Message,
@@ -33,7 +33,6 @@ import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { stoppedByUserSessionsAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
@@ -635,9 +634,6 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
-  const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
-  const stoppedByUser = stoppedByUserSessions.has(sessionId)
-
   /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
   const [ready, setReady] = React.useState(false)
   const prevSessionIdRef = React.useRef<string | null>(null)
@@ -830,13 +826,6 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
               </Message>
             )}
 
-            {/* 用户打断指示器 */}
-            {!streaming && stoppedByUser && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 mt-2 ml-[56px]">
-                <Square className="size-3" />
-                <span>已被用户打断</span>
-              </div>
-            )}
           </>
         )}
       </ConversationContent>
