@@ -69,10 +69,12 @@ function escapeRegExp(str: string): string {
 export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement | null {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
   const [hovered, setHovered] = React.useState(false)
+  const [isLeaving, setIsLeaving] = React.useState(false)
   const [visibleIds, setVisibleIds] = React.useState<Set<string>>(new Set())
   const [canScroll, setCanScroll] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
   const closeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const searchInputRef = React.useRef<HTMLInputElement>(null)
 
   // ── 组件卸载时清理计时器 ──
@@ -80,6 +82,7 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
   React.useEffect(() => {
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
     }
   }, [])
 
@@ -133,17 +136,25 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
     if (!hovered) setSearchQuery('')
   }, [hovered])
 
-  // ── 鼠标进出控制（搜索框 focus 时不关闭） ──
+  // ── 鼠标进出控制 ──
 
   const handleMouseEnter = (): void => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    setIsLeaving(false)
     setHovered(true)
   }
 
   const handleMouseLeave = (): void => {
-    // 搜索框有焦点时不关闭面板
-    if (document.activeElement === searchInputRef.current) return
-    closeTimerRef.current = setTimeout(() => setHovered(false), 150)
+    // 40ms 延迟后开始淡出动画
+    closeTimerRef.current = setTimeout(() => {
+      setIsLeaving(true)
+      // 淡出动画 80ms 后关闭
+      fadeTimerRef.current = setTimeout(() => {
+        setHovered(false)
+        setIsLeaving(false)
+      }, 80)
+    }, 40)
   }
 
   // ── 跳转到指定消息（直接操作 scrollTop，绕过 scrollIntoView） ──
@@ -198,7 +209,12 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
       {/* ── 展开面板 ── */}
       {hovered && (
         <div
-          className="mr-1 w-[280px] rounded-lg border bg-popover shadow-xl animate-in fade-in-0 zoom-in-95 duration-150 origin-top-right flex flex-col overflow-hidden"
+          className={cn(
+            'mr-1 w-[280px] rounded-lg border bg-popover shadow-xl origin-top-right flex flex-col overflow-hidden',
+            isLeaving
+              ? 'animate-out fade-out-0 zoom-out-95 duration-75'
+              : 'animate-in fade-in-0 zoom-in-95 duration-150'
+          )}
           style={{ maxHeight: 'min(420px, 60vh)', marginTop: 12 }}
         >
           {/* 标题栏 */}
@@ -218,12 +234,11 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
                 placeholder="搜索消息..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                onBlur={() => {
-                  // 失焦后允许面板被鼠标离开关闭
-                  closeTimerRef.current = setTimeout(() => setHovered(false), 300)
-                }}
                 onFocus={() => {
+                  // 搜索框获焦时取消关闭计时器
                   if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+                  if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+                  setIsLeaving(false)
                 }}
                 className="h-7 text-xs pl-7"
               />
@@ -273,10 +288,10 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
               className={cn(
                 'absolute left-1 h-[2px] w-[20px] rounded-full transition-colors',
                 isVisible
-                  ? 'bg-primary/60'
+                  ? 'bg-primary dark:bg-primary/70'
                   : hasUser
-                    ? 'bg-muted-foreground/25'
-                    : 'bg-muted-foreground/45'
+                    ? 'bg-primary/25 dark:bg-primary/15'
+                    : 'bg-primary/40 dark:bg-primary/25'
               )}
               style={{ top: `${top}%` }}
             />

@@ -100,9 +100,9 @@
 
   /* 苍穹暮色 (ocean-dark) */
   .theme-ocean-dark {
-    --background: 210 40% 8%;             /* #0c141d 背景 */
+    --background: 210 35% 11%;            /* #121c26 背景（侧边栏） */
     --foreground: 210 20% 92%;            /* #e7ebef 前景文字 */
-    --content-area: 210 35% 11%;          /* #121c26 内容区域 */
+    --content-area: 210 40% 8%;           /* #0c141d 内容区域 */
     --muted: 210 30% 14%;                 /* #19242e 次要背景 */
     --muted-foreground: 210 15% 55%;      /* #7b8c9d 次要文字 */
     --border: 210 30% 18%;                /* #202e3c 边框 */
@@ -164,9 +164,9 @@
 
   /* 森息夜语（深色） - 自然绿调，沉稳内敛 */
   .theme-forest-dark {
-    --background: 150 20% 8%;             /* #101814 背景 */
+    --background: 147 14% 15%;            /* #212c26 背景（侧边栏） */
     --foreground: 140 10% 90%;            /* #e3e8e5 前景文字 */
-    --content-area: 147 14% 15%;          /* #212c26 内容区域 */
+    --content-area: 150 20% 8%;           /* #101814 内容区域 */
     --muted: 150 18% 13%;                 /* #1b2721 次要背景 */
     --muted-foreground: 140 10% 55%;      /* #819888 次要文字 */
     --border: 150 18% 17%;                /* #24332b 边框 */
@@ -233,10 +233,10 @@
 
   /* 莫兰迪夜（深色） - 柔和莫兰迪色系，优雅内敛 */
   .theme-slate-dark {
-    /* 基础色 - 深灰紫调背景 */
-    --background: 270 8% 9%;              /* #161418 背景 */
+    /* 基础色 - 侧边栏与内容区对调 */
+    --background: 260 6% 12%;             /* #1d1b20 背景（侧边栏） */
     --foreground: 30 10% 90%;             /* #e9e6e3 温暖前景文字 */
-    --content-area: 260 6% 12%;           /* #1d1b20 内容区域 */
+    --content-area: 270 8% 9%;            /* #161418 内容区域 */
     /* 次要色 - 淡紫灰调 */
     --muted: 260 6% 16%;                  /* #272429 次要背景 */
     --muted-foreground: 30 8% 60%;        /* #9f9690 次要文字 */
@@ -359,9 +359,9 @@
 }
 
 /* 苍穹暮色：深蓝背景 + 亮蓝文字 */
-.theme-ocean-dark .session-item-selected,
-.theme-ocean-dark .workspace-item-selected {
-  background: hsl(210 40% 18%) !important;  /* 深蓝色背景 */
+.theme-ocean-dark .session-item-selected.session-item-selected,
+.theme-ocean-dark .workspace-item-selected.workspace-item-selected {
+  background-color: hsl(210 40% 18%) !important;  /* 深蓝色背景 */
   color: hsl(205 70% 75%) !important;       /* 亮蓝色文字 */
 }
 .theme-ocean-dark .session-item-selected *,
@@ -382,9 +382,9 @@
 }
 
 /* 森息夜语：深绿背景 + 亮绿文字 */
-.theme-forest-dark .session-item-selected,
-.theme-forest-dark .workspace-item-selected {
-  background: hsl(150 25% 18%) !important;  /* 深绿色背景 */
+.theme-forest-dark .session-item-selected.session-item-selected,
+.theme-forest-dark .workspace-item-selected.workspace-item-selected {
+  background-color: hsl(150 25% 18%) !important;  /* 深绿色背景 */
   color: hsl(150 40% 70%) !important;       /* 亮绿色文字 */
 }
 .theme-forest-dark .session-item-selected *,
@@ -404,9 +404,9 @@
 
 /* ===== 莫兰迪主题：会话/工作区选中状态 ===== */
 /* 莫兰迪夜：淡紫灰背景 + 温暖杏粉文字 */
-.theme-slate-dark .session-item-selected,
-.theme-slate-dark .workspace-item-selected {
-  background: hsl(260 10% 22%) !important;  /* 淡紫灰背景 */
+.theme-slate-dark .session-item-selected.session-item-selected,
+.theme-slate-dark .workspace-item-selected.workspace-item-selected {
+  background-color: hsl(260 10% 22%) !important;  /* 淡紫灰背景 */
   color: hsl(15 30% 75%) !important;        /* 淡杏粉文字 */
 }
 .theme-slate-dark .session-item-selected *,
@@ -444,6 +444,22 @@
 /* 莫兰迪夜：底部浅色阴影勾勒轮廓 */
 .theme-slate-dark .tabbar-bg {
   box-shadow: inset 0 -1px 0 0 hsl(260 10% 18% / 0.6);
+}
+
+/* ===== 深色主题：代码块标题栏 ===== */
+/* 苍穹暮色: RGB 26 34 43 */
+.theme-ocean-dark .code-block-wrapper > div:first-child {
+  background: rgb(26, 34, 43) !important;
+}
+
+/* 森息夜语: RGB 34 42 37 */
+.theme-forest-dark .code-block-wrapper > div:first-child {
+  background: rgb(34, 42, 37) !important;
+}
+
+/* 莫兰迪夜: RGB 36 35 39 */
+.theme-slate-dark .code-block-wrapper > div:first-child {
+  background: rgb(36, 35, 39) !important;
 }
 
 /* 快速任务窗口：透明背景 + 无拖拽 */

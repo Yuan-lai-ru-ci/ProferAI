@@ -1132,10 +1132,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         <ExitPlanModeBanner sessionId={sessionId} />
 
         {/* 输入区域 — 复用 Chat 的卡片式输入风格 */}
-        <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px] pt-2" data-input-mode="agent">
+        <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
           <div
             className={cn(
-              'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm pt-2 transition-all duration-200',
+              'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
             onDragOver={handleDragOver}
