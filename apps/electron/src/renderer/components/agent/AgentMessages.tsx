@@ -697,16 +697,36 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
     isStreaming: streaming,
   })
 
-  // 迷你地图数据
+  // 判断是否使用新的 SDKMessage 渲染路径
+  const useSDKRenderer = persistedSDKMessages && persistedSDKMessages.length > 0
+  const hasContent = useSDKRenderer ? persistedSDKMessages.length > 0 : messages.length > 0
+
+  // 合并持久化 + 实时 SDKMessage（供 ContentBlock 内查找工具结果）
+  const allSDKMessages = React.useMemo(() => {
+    const persisted = persistedSDKMessages ?? []
+    const live = liveMessages ?? []
+    return [...persisted, ...live]
+  }, [persistedSDKMessages, liveMessages])
+
+  // Turn 分组（持久化消息按 turn 分组渲染）
+  const persistedGroups = React.useMemo(() => {
+    if (!persistedSDKMessages || persistedSDKMessages.length === 0) return []
+    return groupIntoTurns(persistedSDKMessages)
+  }, [persistedSDKMessages])
+
+  // Turn 分组（实时消息同样按 turn 分组，避免多个气泡最终合并的跳变）
+  const liveGroups = React.useMemo(() => {
+    if (!liveMessages || liveMessages.length === 0) return []
+    return groupIntoTurns(liveMessages)
+  }, [liveMessages])
+
+  // 迷你地图数据 — 复用 persistedGroups / liveGroups，确保 getGroupId 对同一对象引用返回一致的 ID
   const minimapItems: MinimapItem[] = React.useMemo(
     () => {
-      // SDK 渲染路径：从 Turn 分组构建迷你地图项
-      if (persistedSDKMessages && persistedSDKMessages.length > 0) {
-        const persistedG = groupIntoTurns(persistedSDKMessages)
-        const liveG = groupIntoTurns(liveMessages ?? [])
-        // 去重：liveMessages 中可能包含与 persisted 相同的消息
-        const seenIds = new Set(persistedG.map(getGroupId))
-        const allGroups = [...persistedG, ...liveG.filter((g) => {
+      if (useSDKRenderer) {
+        // 去重：liveGroups 中可能包含与 persistedGroups 相同的消息
+        const seenIds = new Set(persistedGroups.map(getGroupId))
+        const allGroups = [...persistedGroups, ...liveGroups.filter((g) => {
           const id = getGroupId(g)
           if (seenIds.has(id)) return false
           seenIds.add(id)
@@ -731,31 +751,8 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
         model: m.model,
       }))
     },
-    [messages, persistedSDKMessages, liveMessages, userProfile.avatar]
+    [useSDKRenderer, persistedGroups, liveGroups, messages, userProfile.avatar]
   )
-
-  // 判断是否使用新的 SDKMessage 渲染路径
-  const useSDKRenderer = persistedSDKMessages && persistedSDKMessages.length > 0
-  const hasContent = useSDKRenderer ? persistedSDKMessages.length > 0 : messages.length > 0
-
-  // 合并持久化 + 实时 SDKMessage（供 ContentBlock 内查找工具结果）
-  const allSDKMessages = React.useMemo(() => {
-    const persisted = persistedSDKMessages ?? []
-    const live = liveMessages ?? []
-    return [...persisted, ...live]
-  }, [persistedSDKMessages, liveMessages])
-
-  // Turn 分组（持久化消息按 turn 分组渲染）
-  const persistedGroups = React.useMemo(() => {
-    if (!persistedSDKMessages || persistedSDKMessages.length === 0) return []
-    return groupIntoTurns(persistedSDKMessages)
-  }, [persistedSDKMessages])
-
-  // Turn 分组（实时消息同样按 turn 分组，避免多个气泡最终合并的跳变）
-  const liveGroups = React.useMemo(() => {
-    if (!liveMessages || liveMessages.length === 0) return []
-    return groupIntoTurns(liveMessages)
-  }, [liveMessages])
 
   // 实时消息中是否已有可渲染的助手内容
   const hasLiveAssistantContent = liveGroups.some((g) => g.type === 'assistant-turn')
