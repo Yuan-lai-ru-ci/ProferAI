@@ -36,6 +36,8 @@ import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-wa
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import { feishuBridge } from './lib/feishu-bridge'
 import { getFeishuConfig } from './lib/feishu-config'
+import { dingtalkBridge } from './lib/dingtalk-bridge'
+import { getDingTalkConfig } from './lib/dingtalk-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 
@@ -240,6 +242,14 @@ app.whenReady().then(async () => {
     })
   }
 
+  // 钉钉 Bridge 自动启动（配置启用时）
+  const dingtalkConfig = getDingTalkConfig()
+  if (dingtalkConfig.enabled && dingtalkConfig.clientId && dingtalkConfig.clientSecret) {
+    dingtalkBridge.start().catch((err) => {
+      console.error('[钉钉 Bridge] 自动启动失败:', err)
+    })
+  }
+
   app.on('activate', () => {
     // 直接检查 mainWindow 引用，避免 getAllWindows() 包含 DevTools 等其他窗口导致误判
     if (!mainWindow || mainWindow.isDestroyed()) {
@@ -274,6 +284,8 @@ app.on('before-quit', () => {
   stopChatToolsWatcher()
   // 停止飞书 Bridge
   feishuBridge.stop()
+  // 停止钉钉 Bridge
+  dingtalkBridge.stop()
   // 注销全局快捷键
   unregisterAllGlobalShortcuts()
   // 销毁快速任务窗口

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -84,6 +84,10 @@ import type {
   FeishuNotifyMode,
   FeishuNotificationSentPayload,
   FeishuUpdateBindingInput,
+  DingTalkConfig,
+  DingTalkConfigInput,
+  DingTalkBridgeState,
+  DingTalkTestResult,
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
 } from '@proma/shared'
@@ -609,6 +613,26 @@ export interface ElectronAPI {
   onFeishuStatusChanged: (callback: (state: FeishuBridgeState) => void) => () => void
   /** 订阅飞书通知已发送事件 */
   onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => () => void
+
+  // ===== 钉钉集成 =====
+
+  /** 获取钉钉配置 */
+  getDingTalkConfig: () => Promise<DingTalkConfig>
+  /** 获取解密后的 Client Secret */
+  getDecryptedDingTalkSecret: () => Promise<string>
+  /** 保存钉钉配置（clientSecret 为明文） */
+  saveDingTalkConfig: (input: DingTalkConfigInput) => Promise<DingTalkConfig>
+  /** 测试钉钉连接 */
+  testDingTalkConnection: (clientId: string, clientSecret: string) => Promise<DingTalkTestResult>
+  /** 启动钉钉 Bridge */
+  startDingTalkBridge: () => Promise<void>
+  /** 停止钉钉 Bridge */
+  stopDingTalkBridge: () => Promise<void>
+  /** 获取钉钉 Bridge 状态 */
+  getDingTalkStatus: () => Promise<DingTalkBridgeState>
+  /** 订阅钉钉 Bridge 状态变化 */
+  onDingTalkStatusChanged: (callback: (state: DingTalkBridgeState) => void) => () => void
+
   /** 订阅菜单关闭标签页事件（Cmd+W 被菜单拦截后转发） */
   onMenuCloseTab: (callback: () => void) => () => void
 
@@ -1313,6 +1337,42 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: FeishuNotificationSentPayload): void => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener) }
+  },
+
+  // ===== 钉钉集成 =====
+
+  getDingTalkConfig: () => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.GET_CONFIG)
+  },
+
+  getDecryptedDingTalkSecret: () => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.GET_DECRYPTED_SECRET)
+  },
+
+  saveDingTalkConfig: (input: DingTalkConfigInput) => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.SAVE_CONFIG, input)
+  },
+
+  testDingTalkConnection: (clientId: string, clientSecret: string) => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.TEST_CONNECTION, clientId, clientSecret)
+  },
+
+  startDingTalkBridge: () => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.START_BRIDGE)
+  },
+
+  stopDingTalkBridge: () => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.STOP_BRIDGE)
+  },
+
+  getDingTalkStatus: () => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.GET_STATUS)
+  },
+
+  onDingTalkStatusChanged: (callback: (state: DingTalkBridgeState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: DingTalkBridgeState): void => callback(state)
+    ipcRenderer.on(DINGTALK_IPC_CHANNELS.STATUS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(DINGTALK_IPC_CHANNELS.STATUS_CHANGED, listener) }
   },
 
   onMenuCloseTab: (callback: () => void) => {

@@ -435,6 +435,15 @@ export function seedDefaultSkills(): void {
 }
 
 /**
+ * 获取钉钉配置文件路径
+ *
+ * @returns ~/.proma/dingtalk.json
+ */
+export function getDingTalkConfigPath(): string {
+  return join(getConfigDir(), 'dingtalk.json')
+}
+
+/**
  * 获取飞书配置文件路径
  *
  * @returns ~/.proma/feishu.json

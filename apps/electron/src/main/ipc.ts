@@ -5,7 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS } from '../types'
 import type { QuickTaskSubmitInput } from '../types'
 import type {
@@ -71,6 +71,10 @@ import type {
   FeishuPresenceReport,
   FeishuNotifyMode,
   FeishuUpdateBindingInput,
+  DingTalkConfigInput,
+  DingTalkConfig,
+  DingTalkBridgeState,
+  DingTalkTestResult,
   SDKMessage,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
@@ -172,6 +176,8 @@ import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspac
 import { getFeishuConfig, saveFeishuConfig, getDecryptedAppSecret } from './lib/feishu-config'
 import { feishuBridge } from './lib/feishu-bridge'
 import { presenceService } from './lib/feishu-presence'
+import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret } from './lib/dingtalk-config'
+import { dingtalkBridge } from './lib/dingtalk-bridge'
 
 /**
  * 注册 IPC 处理器
@@ -1824,6 +1830,71 @@ export function registerIpcHandlers(): void {
     FEISHU_IPC_CHANNELS.SET_SESSION_NOTIFY,
     async (_, sessionId: string, mode: FeishuNotifyMode): Promise<void> => {
       feishuBridge.setSessionNotifyMode(sessionId, mode)
+    }
+  )
+
+  // ===== 钉钉集成 =====
+
+  // 获取钉钉配置
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.GET_CONFIG,
+    async (): Promise<DingTalkConfig> => {
+      return getDingTalkConfig()
+    }
+  )
+
+  // 获取解密后的 Client Secret
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.GET_DECRYPTED_SECRET,
+    async (): Promise<string> => {
+      return getDecryptedClientSecret()
+    }
+  )
+
+  // 保存钉钉配置
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.SAVE_CONFIG,
+    async (_, input: DingTalkConfigInput): Promise<DingTalkConfig> => {
+      const config = saveDingTalkConfig(input)
+      // 配置变更后自动重启或停止 Bridge
+      if (input.enabled && input.clientId && input.clientSecret) {
+        await dingtalkBridge.restart()
+      } else if (!input.enabled) {
+        dingtalkBridge.stop()
+      }
+      return config
+    }
+  )
+
+  // 测试钉钉连接
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.TEST_CONNECTION,
+    async (_, clientId: string, clientSecret: string): Promise<DingTalkTestResult> => {
+      return dingtalkBridge.testConnection(clientId, clientSecret)
+    }
+  )
+
+  // 启动钉钉 Bridge
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.START_BRIDGE,
+    async (): Promise<void> => {
+      await dingtalkBridge.start()
+    }
+  )
+
+  // 停止钉钉 Bridge
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.STOP_BRIDGE,
+    async (): Promise<void> => {
+      dingtalkBridge.stop()
+    }
+  )
+
+  // 获取钉钉 Bridge 状态
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.GET_STATUS,
+    async (): Promise<DingTalkBridgeState> => {
+      return dingtalkBridge.getStatus()
     }
   )
 
