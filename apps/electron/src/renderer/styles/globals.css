@@ -30,6 +30,8 @@
     --tooltip: 0 0% 15%;
     --tooltip-foreground: 0 0% 98%;
     --tooltip-muted: 0 0% 75%;
+    /* 代码块背景 */
+    --code-bg: 210 13% 12%;                   /* #1e2228 */
   }
 
   .dark {
@@ -59,6 +61,8 @@
     --tooltip: 0 0% 20%;
     --tooltip-foreground: 0 0% 98%;
     --tooltip-muted: 0 0% 70%;
+    /* 代码块背景 */
+    --code-bg: 210 13% 12%;                   /* #1e2228 */
   }
 
   /* ===== 特殊风格主题 ===== */
@@ -90,6 +94,8 @@
     --tooltip: 210 45% 18%;               /* #192e43 Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 210 20% 75%;         /* #b3bfcc Tooltip弱 */
+    /* 代码块背景 - 蓝调 */
+    --code-bg: 210 35% 14%;               /* #172030 深蓝 */
   }
 
   /* 苍穹暮色 (ocean-dark) */
@@ -119,6 +125,8 @@
     --tooltip: 210 40% 22%;               /* #22384f Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 210 20% 70%;         /* #a3b3c2 Tooltip弱 */
+    /* 代码块背景 - 深海蓝 */
+    --code-bg: 210 50% 6%;                /* #081219 更深的海蓝 */
   }
 
   /* ===== 森系色系 ===== */
@@ -150,6 +158,8 @@
     --tooltip: 150 20% 18%;               /* #25372e Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 140 10% 60%;         /* #8fa396 Tooltip弱 */
+    /* 代码块背景 - 森林绿调 */
+    --code-bg: 150 35% 12%;               /* #142820 深森绿 */
   }
 
   /* 森息夜语（深色） - 自然绿调，沉稳内敛 */
@@ -179,6 +189,8 @@
     --tooltip: 150 25% 20%;               /* #264033 Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 140 10% 65%;         /* #9dafa3 Tooltip弱 */
+    /* 代码块背景 - 深绿调 */
+    --code-bg: 150 25% 8%;                /* #0f1a14 深林绿 */
   }
 
   /* ===== 赛博朋克色系 ===== */
@@ -215,6 +227,8 @@
     --tooltip: 40 8% 20%;                 /* #37352e Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 40 5% 55%;           /* #928e84 Tooltip弱 */
+    /* 代码块背景 - 与主色相近的深暖棕 */
+    --code-bg: 18 15% 18%;                /* #362f2b 深暖棕（主色深版） */
   }
 
   /* 莫兰迪夜（深色） - 柔和莫兰迪色系，优雅内敛 */
@@ -249,6 +263,8 @@
     --tooltip: 260 8% 22%;                /* #38343d Tooltip */
     --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
     --tooltip-muted: 30 8% 65%;           /* #aca49d Tooltip弱 */
+    /* 代码块背景 - 莫兰迪紫调 */
+    --code-bg: 270 10% 10%;               /* #1a171d 淡紫深灰 */
   }
 }
 
@@ -522,6 +538,7 @@
 
 .code-block-wrapper pre.shiki {
   font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  background-color: hsl(var(--code-bg)) !important;
 }
 
 .code-block-wrapper pre.shiki code {

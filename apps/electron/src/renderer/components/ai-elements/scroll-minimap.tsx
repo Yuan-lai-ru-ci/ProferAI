@@ -191,7 +191,7 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
 
   return (
     <div
-      className="absolute right-0 top-0 z-10 flex items-start"
+      className="absolute right-2 top-0 z-10 flex items-start"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -251,9 +251,6 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
                   <div className="flex-1 min-w-0">
                     <HighlightedPreview text={item.preview} query={searchQuery} />
                   </div>
-                  {visibleIds.has(item.id) && (
-                    <div className="size-1.5 rounded-full bg-primary/60 shrink-0 mt-1.5" />
-                  )}
                 </button>
               ))
             )}
