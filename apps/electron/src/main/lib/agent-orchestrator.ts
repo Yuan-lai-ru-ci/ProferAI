@@ -668,6 +668,7 @@ export class AgentOrchestrator {
 
     const toPersist = accumulatedMessages.filter(
       (m) => m.type === 'assistant' || m.type === 'user' || m.type === 'result'
+        || (m.type === 'system' && (m as import('@proma/shared').SDKSystemMessage).subtype === 'compact_boundary')
     )
 
     if (toPersist.length === 0) return
@@ -1340,6 +1341,7 @@ export class AgentOrchestrator {
             // 累积 assistant 和 user 消息用于持久化
             // - 跳过 replay 消息，避免 resume 时重复写入
             // - 对 user 消息，仅累积含 tool_result 的（初始用户消息已在步骤 5 手动持久化）
+            // - 对 system 消息，仅累积 compact_boundary（上下文压缩分界线需要持久化显示）
             if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'result') {
               const msgRecord = msg as Record<string, unknown>
               if (!msgRecord.isReplay) {
@@ -1353,6 +1355,11 @@ export class AgentOrchestrator {
                 } else {
                   accumulatedMessages.push(msg)
                 }
+              }
+            } else if (msg.type === 'system') {
+              const sysMsg = msg as import('@proma/shared').SDKSystemMessage
+              if (sysMsg.subtype === 'compact_boundary') {
+                accumulatedMessages.push(msg)
               }
             }
 
@@ -1480,6 +1487,8 @@ export class AgentOrchestrator {
                   // 跳过 replay 消息，仅累积新产生的消息
                   const resumeMsgRecord = resumeMsg as Record<string, unknown>
                   if ((resumeMsg.type === 'assistant' || resumeMsg.type === 'user') && !resumeMsgRecord.isReplay) {
+                    resumeMessages.push(resumeMsg)
+                  } else if (resumeMsg.type === 'system' && (resumeMsg as import('@proma/shared').SDKSystemMessage).subtype === 'compact_boundary') {
                     resumeMessages.push(resumeMsg)
                   }
                   this.eventBus.emit(sessionId, { kind: 'sdk_message', message: resumeMsg })
