@@ -37,7 +37,7 @@
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.87",
+    "@anthropic-ai/claude-agent-sdk": "0.2.89",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@larksuiteoapi/node-sdk": "^1.59.0",
@@ -114,7 +114,10 @@
     "vite": "^6.0.3"
   },
   "electronmon": {
-    "patterns": ["dist/main.cjs", "dist/preload.cjs"],
+    "patterns": [
+      "dist/main.cjs",
+      "dist/preload.cjs"
+    ],
     "logLevel": "verbose"
   },
   "build": {
