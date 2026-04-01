@@ -295,6 +295,16 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setConversations, setUserProfile, setAgentSessions])
 
+  // 窗口聚焦时重新同步列表，修复长时间后前后端不一致
+  React.useEffect(() => {
+    const handleFocus = (): void => {
+      window.electronAPI.listConversations().then(setConversations).catch(console.error)
+      window.electronAPI.listAgentSessions().then(setAgentSessions).catch(console.error)
+    }
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [setConversations, setAgentSessions])
+
   /** 处理导航项点击 */
   const handleItemClick = (item: SidebarItemId): void => {
     if (item === 'pinned') {
@@ -425,12 +435,19 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       // Agent 模式：删除 Agent 会话
       try {
         await window.electronAPI.deleteAgentSession(pendingDeleteId)
-        setAgentSessions((prev) => prev.filter((s) => s.id !== pendingDeleteId))
+        // 全量刷新确保与后端同步
+        const sessions = await window.electronAPI.listAgentSessions()
+        setAgentSessions(sessions)
         if (currentAgentSessionId === pendingDeleteId) {
           setCurrentAgentSessionId(null)
         }
       } catch (error) {
         console.error('[侧边栏] 删除 Agent 会话失败:', error)
+        // 即使后端报错，也从本地列表移除（可能是会话已不存在）
+        setAgentSessions((prev) => prev.filter((s) => s.id !== pendingDeleteId))
+        if (currentAgentSessionId === pendingDeleteId) {
+          setCurrentAgentSessionId(null)
+        }
       } finally {
         setPendingDeleteId(null)
       }
@@ -439,12 +456,19 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
     try {
       await window.electronAPI.deleteConversation(pendingDeleteId)
-      setConversations((prev) => prev.filter((c) => c.id !== pendingDeleteId))
+      // 全量刷新确保与后端同步
+      const conversations = await window.electronAPI.listConversations()
+      setConversations(conversations)
       if (currentConversationId === pendingDeleteId) {
         setCurrentConversationId(null)
       }
     } catch (error) {
       console.error('[侧边栏] 删除对话失败:', error)
+      // 即使后端报错，也从本地列表移除（可能是对话已不存在）
+      setConversations((prev) => prev.filter((c) => c.id !== pendingDeleteId))
+      if (currentConversationId === pendingDeleteId) {
+        setCurrentConversationId(null)
+      }
     } finally {
       setPendingDeleteId(null)
     }

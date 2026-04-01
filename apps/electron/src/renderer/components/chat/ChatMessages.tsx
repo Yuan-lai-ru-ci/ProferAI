@@ -257,7 +257,7 @@ export function ChatMessages({
     () => messages.map((m) => ({
       id: m.id,
       role: m.role as MinimapItem['role'],
-      preview: m.content.slice(0, 80),
+      preview: m.content.slice(0, 200),
       avatar: m.role === 'user' ? userProfile.avatar : undefined,
       model: m.model,
     })),

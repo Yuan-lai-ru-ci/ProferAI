@@ -726,7 +726,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
       return messages.map((m, i) => ({
         id: m.id || `msg-${i}`,
         role: m.role === 'status' ? 'status' as const : m.role as MinimapItem['role'],
-        preview: (m.content ?? '').replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '').slice(0, 80),
+        preview: (m.content ?? '').replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '').slice(0, 200),
         avatar: m.role === 'user' ? userProfile.avatar : undefined,
         model: m.model,
       }))

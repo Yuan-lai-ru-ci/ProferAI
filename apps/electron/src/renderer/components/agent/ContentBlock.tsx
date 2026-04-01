@@ -24,6 +24,7 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
+import { formatDuration } from './AgentMessages'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -32,6 +33,7 @@ import type {
   SDKThinkingBlock,
   SDKUserMessage,
   SDKToolResultBlock,
+  SDKSystemMessage,
 } from '@proma/shared'
 
 // ===== useToolResult Hook =====
@@ -70,6 +72,119 @@ function useToolResult(toolUseId: string, allMessages: SDKMessage[]): ToolResult
     }
     return null
   }, [toolUseId, allMessages])
+}
+
+// ===== useSubAgentMeta Hook =====
+
+interface SubAgentMeta {
+  durationMs: number
+  totalTokens: number
+  toolUses: number
+}
+
+/** 从 allMessages 中查找匹配 toolUseId 的 task_notification 系统消息，提取用量数据 */
+function useSubAgentMeta(toolUseId: string, allMessages: SDKMessage[]): SubAgentMeta | null {
+  return React.useMemo(() => {
+    for (const msg of allMessages) {
+      if (msg.type !== 'system') continue
+      const sysMsg = msg as SDKSystemMessage
+      if (sysMsg.subtype !== 'task_notification') continue
+      if (sysMsg.tool_use_id !== toolUseId) continue
+      const usage = sysMsg.usage
+      if (!usage) return null
+      return {
+        durationMs: usage.duration_ms ?? 0,
+        totalTokens: usage.total_tokens ?? 0,
+        toolUses: usage.tool_uses ?? 0,
+      }
+    }
+    return null
+  }, [toolUseId, allMessages])
+}
+
+// ===== SubAgent 结果文本解析 =====
+
+interface ParsedAgentResult {
+  /** 清理后的输出文本（去除元数据） */
+  text: string
+  /** 从 <usage> 标签解析的用量数据（作为 task_notification 的备用） */
+  usage?: SubAgentMeta
+}
+
+/** 从 Agent tool_result 文本中分离内容与元数据（agentId 行 + <usage> 标签） */
+function parseAgentResultText(raw: string): ParsedAgentResult {
+  let text = raw
+
+  // 提取 <usage> 标签中的用量数据
+  let usage: SubAgentMeta | undefined
+  const usageMatch = text.match(/<usage>([\s\S]*?)<\/usage>/)
+  if (usageMatch) {
+    const body = usageMatch[1]!
+    const totalTokens = Number(body.match(/total_tokens:\s*(\d+)/)?.[1]) || 0
+    const toolUses = Number(body.match(/tool_uses:\s*(\d+)/)?.[1]) || 0
+    const durationMs = Number(body.match(/duration_ms:\s*(\d+)/)?.[1]) || 0
+    if (totalTokens > 0 || toolUses > 0 || durationMs > 0) {
+      usage = { durationMs, totalTokens, toolUses }
+    }
+    text = text.replace(/<usage>[\s\S]*?<\/usage>/, '')
+  }
+
+  // 移除 agentId 行
+  text = text.replace(/agentId:.*\n?/g, '')
+
+  // 移除 <output> 标签包裹
+  text = text.replace(/<\/?output>/g, '')
+
+  return { text: text.trim(), usage }
+}
+
+// ===== SubAgent 完成信息尾部 =====
+
+function SubAgentFooter({
+  meta,
+  resultText,
+}: {
+  meta: SubAgentMeta | null
+  resultText?: string
+}): React.ReactElement | null {
+  // 解析结果文本，分离内容与元数据
+  const parsed = React.useMemo(
+    () => resultText ? parseAgentResultText(resultText) : null,
+    [resultText],
+  )
+
+  // 优先使用 task_notification 的用量数据，备用从 result 文本中解析
+  const effectiveMeta = meta ?? parsed?.usage ?? null
+  const cleanText = parsed?.text || ''
+
+  // 没有任何信息时不渲染
+  if (!effectiveMeta && !cleanText) return null
+
+  return (
+    <div className="mt-2 pt-2 border-t border-border/20 space-y-1.5">
+      {/* 最终输出文本（Markdown 渲染） */}
+      {cleanText && (
+        <div className="text-muted-foreground/70">
+          <MessageResponse>{cleanText}</MessageResponse>
+        </div>
+      )}
+
+      {/* 用量统计行（最底部） */}
+      {effectiveMeta && (
+        <div className="flex items-center gap-3 text-[12px] text-muted-foreground/60 tabular-nums">
+          {effectiveMeta.durationMs > 0 && (
+            <span>{formatDuration(effectiveMeta.durationMs)}</span>
+          )}
+          {effectiveMeta.totalTokens > 0 && (
+            <span>{effectiveMeta.totalTokens.toLocaleString()} tokens</span>
+          )}
+          {effectiveMeta.toolUses > 0 && (
+            <span>{effectiveMeta.toolUses} 次工具调用</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ===== ContentBlock Props =====
@@ -154,6 +269,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   const toolResult = useToolResult(block.id, allMessages)
   const isAgentTool = block.name === 'Agent' || block.name === 'Task'
   const hasChildren = isAgentTool && childBlocks && childBlocks.length > 0
+  const subAgentMeta = useSubAgentMeta(block.id, allMessages)
 
   // Agent/Task 子代理内容默认折叠
   const [childrenExpanded, setChildrenExpanded] = React.useState(false)
@@ -239,6 +355,14 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
                 dimmed
               />
             ))}
+
+            {/* SubAgent 完成信息 */}
+            {isCompleted && (
+              <SubAgentFooter
+                meta={subAgentMeta}
+                resultText={toolResult?.result}
+              />
+            )}
           </div>
         )}
       </div>

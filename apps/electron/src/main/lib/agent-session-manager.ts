@@ -316,7 +316,8 @@ export function deleteAgentSession(id: string): void {
   const idx = index.sessions.findIndex((s) => s.id === id)
 
   if (idx === -1) {
-    throw new Error(`Agent 会话不存在: ${id}`)
+    console.warn(`[Agent 会话] 会话不存在，跳过删除: ${id}`)
+    return
   }
 
   const removed = index.sessions.splice(idx, 1)[0]!
