@@ -120,9 +120,9 @@ export function MessageContent({
   return (
     <div
       className={cn(
-        'flex w-full max-w-full min-w-0 flex-col gap-2 overflow-hidden pl-[46px]',
-        'group-[.is-user]:text-foreground',
-        'group-[.is-assistant]:text-foreground',
+        'flex max-w-full min-w-0 flex-col gap-2 overflow-hidden pl-[46px]',
+        'group-[.is-user]:text-foreground group-[.is-user]:items-start',
+        'group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground',
         className
       )}
       {...props}
