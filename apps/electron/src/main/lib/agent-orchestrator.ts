@@ -41,7 +41,7 @@ import { buildSystemPrompt, buildDynamicContext, buildBuiltinAgents } from './ag
 import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
-import { exitPlanService } from './agent-exit-plan-service'
+import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { getMemoryConfig } from './memory-service'
 import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import {
@@ -389,6 +389,9 @@ export class AgentOrchestrator {
 
   /** 被用户手动中止的会话集合（在 stop 中标记，catch block 中消费） */
   private stoppedBySessions = new Set<string>()
+
+  /** 运行中会话的当前权限模式（支持运行时动态切换） */
+  private sessionPermissionModes = new Map<string, PromaPermissionMode>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
@@ -932,14 +935,20 @@ export class AgentOrchestrator {
 
       // 12. 读取应用设置 + 获取权限模式
       const appSettings = getSettings()
-      const permissionMode: PromaPermissionMode = permissionModeOverride
+      const initialPermissionMode: PromaPermissionMode = permissionModeOverride
         ?? (workspaceSlug
           ? getWorkspacePermissionMode(workspaceSlug)
           : (appSettings.agentPermissionMode ?? 'acceptEdits'))
-      console.log(`[Agent 编排] 权限模式: ${permissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
+      // 注册到 Map，支持运行中动态切换
+      this.sessionPermissionModes.set(sessionId, initialPermissionMode)
+      console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
 
-      // ExitPlanMode 拦截器：所有权限模式下统一走 UI 审批流程
-      const handleExitPlanMode = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> => {
+      /** 读取当前会话的实时权限模式（支持运行中切换） */
+      const getPermissionMode = (): PromaPermissionMode =>
+        this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
+
+      // ExitPlanMode 拦截器：plan 模式下走 UI 审批流程
+      const handleExitPlanMode = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<ExitPlanPermissionResult> => {
         return exitPlanService.handleExitPlanMode(
           sessionId,
           toolInput,
@@ -950,45 +959,99 @@ export class AgentOrchestrator {
         )
       }
 
-      // 构建基础 canUseTool 回调
-      const baseCanUseTool = permissionMode === 'acceptEdits'
-        ? permissionService.createCanUseTool(
-            sessionId,
-            (request: PermissionRequest) => {
-              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
-            },
-            (sid, toolInput, signal, sendAskUser) => askUserService.handleAskUserQuestion(sid, toolInput, signal, sendAskUser),
-            (request: AskUserRequest) => {
-              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
-            },
-          )
-        : permissionMode === 'plan'
-          ? async (_toolName: string, _input: Record<string, unknown>, _options: CanUseToolOptions): Promise<PermissionResult> => {
-              // Plan 模式：自动批准所有工具调用（ExitPlanMode 已在外层拦截）
-              return { behavior: 'allow' as const, updatedInput: _input }
-            }
-          : undefined
+      // 始终创建 acceptEdits 权限回调（运行中可能切换到 acceptEdits）
+      const acceptEditsCanUseTool = permissionService.createCanUseTool(
+        sessionId,
+        (request: PermissionRequest) => {
+          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
+        },
+        (sid, toolInput, signal, sendAskUser) => askUserService.handleAskUserQuestion(sid, toolInput, signal, sendAskUser),
+        (request: AskUserRequest) => {
+          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+        },
+      )
 
-      // 包装 canUseTool：优先拦截 EnterPlanMode/ExitPlanMode，其余走基础逻辑
+      // Plan 模式下允许的只读工具（不包含 Write/Edit/Bash 等写操作）
+      const PLAN_MODE_ALLOWED_TOOLS = new Set([
+        'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
+        'Agent', 'TodoRead', 'TodoWrite', 'TaskOutput',
+        'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
+        'ListMcpResourcesTool', 'ReadMcpResourceTool',
+      ])
+
+      /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
+      let planModeEntered = initialPermissionMode === 'plan'
+
+      // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
-        // ExitPlanMode 统一走 UI 审批
-        if (toolName === 'ExitPlanMode') {
-          return handleExitPlanMode(input, options.signal)
-        }
-        // EnterPlanMode：通知渲染进程 Agent 已进入 Plan 模式，然后放行
-        if (toolName === 'EnterPlanMode') {
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
-          if (baseCanUseTool) {
-            return baseCanUseTool(toolName, input, options)
-          }
+        const currentMode = getPermissionMode()
+
+        // ── EnterPlanMode / ExitPlanMode 处理 ──
+
+        // 完全自动模式：透明化（用户选择了完全信任 Agent）
+        if (currentMode === 'bypassPermissions' && (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode')) {
           return { behavior: 'allow' as const, updatedInput: input }
         }
-        // 有基础回调则委托
-        if (baseCanUseTool) {
-          return baseCanUseTool(toolName, input, options)
+
+        // ExitPlanMode：只有 Agent 确实进入过 Plan 模式才走审批，否则静默放行
+        if (toolName === 'ExitPlanMode') {
+          if (!planModeEntered) {
+            return { behavior: 'allow' as const, updatedInput: input }
+          }
+          const result = await handleExitPlanMode(input, options.signal)
+          if (result.behavior === 'allow' && 'targetMode' in result && result.targetMode) {
+            // 更新 Map，后续 canUseTool 调用使用新模式
+            this.sessionPermissionModes.set(sessionId, result.targetMode)
+            planModeEntered = false
+            // 同步通知 SDK 侧切换权限模式
+            if (this.adapter.setPermissionMode) {
+              this.adapter.setPermissionMode(sessionId, result.targetMode).catch((err: unknown) => {
+                console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
+              })
+            }
+          }
+          return result
         }
-        // bypassPermissions 模式：自动批准
-        return { behavior: 'allow' as const, updatedInput: input }
+
+        // EnterPlanMode：标记进入状态，通知渲染进程
+        if (toolName === 'EnterPlanMode') {
+          planModeEntered = true
+          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+          return { behavior: 'allow' as const, updatedInput: input }
+        }
+
+        // ── 普通工具的权限分派 ──
+
+        switch (currentMode) {
+          case 'bypassPermissions':
+            return { behavior: 'allow' as const, updatedInput: input }
+
+          case 'plan': {
+            // Plan 模式：只允许只读工具 + Write 到 .context/plan/ 目录
+            if (PLAN_MODE_ALLOWED_TOOLS.has(toolName)) {
+              return { behavior: 'allow' as const, updatedInput: input }
+            }
+            // 允许 Write 到 .context/plan/ 目录（计划文件输出）
+            if (toolName === 'Write') {
+              const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+              if (filePath.includes('.context/plan/')) {
+                return { behavior: 'allow' as const, updatedInput: input }
+              }
+            }
+            // MCP 工具（以 mcp__ 开头）允许调用（调研用）
+            if (toolName.startsWith('mcp__')) {
+              return { behavior: 'allow' as const, updatedInput: input }
+            }
+            // 其余工具拒绝
+            return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
+          }
+
+          case 'acceptEdits':
+            return acceptEditsCanUseTool(toolName, input, options)
+
+          default:
+            return { behavior: 'allow' as const, updatedInput: input }
+        }
       }
 
       // 13. 构建 Adapter 查询选项
@@ -1005,12 +1068,12 @@ export class AgentOrchestrator {
         executableArgs,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
-        sdkPermissionMode: permissionMode,
+        sdkPermissionMode: initialPermissionMode,
         // 始终为 true：Worker 子代理使用 SDK 内部 mailbox 通信，
         // 若不跳过权限检查会导致 Worker 阻塞超时并提前停止
         allowDangerouslySkipPermissions: true,
         canUseTool,
-        ...(permissionMode === 'acceptEdits' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(initialPermissionMode === 'acceptEdits' && { allowedTools: [...SAFE_TOOLS] }),
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
@@ -1018,7 +1081,7 @@ export class AgentOrchestrator {
             workspaceName: workspace?.name,
             workspaceSlug,
             sessionId,
-            permissionMode,
+            permissionMode: initialPermissionMode,
             memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
           }),
         },
@@ -1444,7 +1507,7 @@ export class AgentOrchestrator {
           }
 
           // Plan 模式：Agent 完成规划后注入"接受计划"建议
-          if (permissionMode === 'plan' && this.activeSessions.has(sessionId)) {
+          if (initialPermissionMode === 'plan' && this.activeSessions.has(sessionId)) {
             this.eventBus.emit(sessionId, {
               kind: 'sdk_message',
               message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
@@ -1603,6 +1666,7 @@ export class AgentOrchestrator {
 
     } finally {
       this.activeSessions.delete(sessionId)
+      this.sessionPermissionModes.delete(sessionId)
       this.queuedMessageUuids.delete(sessionId)
       permissionService.clearSessionPending(sessionId)
       askUserService.clearSessionPending(sessionId)
@@ -1618,6 +1682,7 @@ export class AgentOrchestrator {
    */
   stop(sessionId: string): void {
     this.activeSessions.delete(sessionId)
+    this.sessionPermissionModes.delete(sessionId)
     this.stoppedBySessions.add(sessionId)
     this.queuedMessageUuids.delete(sessionId)
     this.adapter.abort(sessionId)
@@ -1629,12 +1694,29 @@ export class AgentOrchestrator {
     return this.activeSessions.has(sessionId)
   }
 
+  /**
+   * 运行中动态切换会话的权限模式
+   *
+   * 同时更新 Proma 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
+   * 典型场景：用户在 Agent 运行中通过 PermissionModeSelector 切换模式。
+   */
+  async updateSessionPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) return
+    this.sessionPermissionModes.set(sessionId, mode)
+    // 同步通知 SDK 侧
+    if (this.adapter.setPermissionMode) {
+      await this.adapter.setPermissionMode(sessionId, mode)
+    }
+    console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
+  }
+
   /** 中止所有活跃的 Agent 会话（应用退出时调用） */
   stopAll(): void {
     if (this.activeSessions.size === 0) return
     console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
     this.adapter.dispose()
     this.activeSessions.clear()
+    this.sessionPermissionModes.clear()
     this.queuedMessageUuids.clear()
   }
 
