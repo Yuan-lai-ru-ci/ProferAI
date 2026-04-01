@@ -657,7 +657,8 @@ export class AgentOrchestrator {
   /**
    * 持久化累积的 SDKMessage（Phase 4: 直接存储原始 SDKMessage）
    *
-   * 只持久化 assistant 和 user 类型的消息（跳过 system、tool_progress 等临时消息）。
+   * 只持久化 assistant、user、result 和 compact_boundary system 消息
+   * （跳过 tool_progress、compacting 等临时消息）。
    */
   private persistSDKMessages(
     sessionId: string,
