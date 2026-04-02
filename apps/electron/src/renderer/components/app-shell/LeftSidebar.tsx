@@ -258,7 +258,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     () => {
       const filtered = viewMode === 'archived'
         ? conversations.filter((c) => c.archived && !draftSessionIds.has(c.id))
-        : conversations.filter((c) => !c.archived && !draftSessionIds.has(c.id))
+        : conversations.filter((c) => !c.archived && !c.pinned && !draftSessionIds.has(c.id))
       return groupByDate(filtered)
     },
     [conversations, viewMode, draftSessionIds]
@@ -593,7 +593,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       const byWorkspace = agentSessions.filter((s) => s.workspaceId === currentWorkspaceId && !draftSessionIds.has(s.id))
       return viewMode === 'archived'
         ? byWorkspace.filter((s) => s.archived)
-        : byWorkspace.filter((s) => !s.archived)
+        : byWorkspace.filter((s) => !s.archived && !s.pinned)
     },
     [agentSessions, currentWorkspaceId, viewMode, draftSessionIds]
   )
