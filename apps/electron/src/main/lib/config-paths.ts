@@ -480,6 +480,15 @@ export function getFeishuBindingsPath(): string {
 }
 
 /**
+ * 获取某个飞书 Bot 的聊天绑定持久化路径
+ *
+ * @returns ~/.proma/feishu-bindings-{botId}.json
+ */
+export function getFeishuBotBindingsPath(botId: string): string {
+  return join(getConfigDir(), `feishu-bindings-${botId}.json`)
+}
+
+/**
  * 获取指定 Agent 会话的工作路径
  *
  * 在工作区目录下创建以 sessionId 命名的子文件夹，

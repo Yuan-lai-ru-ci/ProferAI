@@ -616,6 +616,23 @@ export interface ElectronAPI {
   /** 订阅飞书通知已发送事件 */
   onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => () => void
 
+  // --- 多 Bot v2 API ---
+
+  /** 获取多 Bot 配置 */
+  getFeishuMultiConfig: () => Promise<import('@proma/shared').FeishuMultiBotConfig>
+  /** 保存单个 Bot 配置 */
+  saveFeishuBotConfig: (input: import('@proma/shared').FeishuBotConfigInput) => Promise<import('@proma/shared').FeishuBotConfig>
+  /** 获取单个 Bot 解密后的 App Secret */
+  getDecryptedFeishuBotSecret: (botId: string) => Promise<string>
+  /** 删除 Bot */
+  removeFeishuBot: (botId: string) => Promise<boolean>
+  /** 启动单个 Bot */
+  startFeishuBot: (botId: string) => Promise<void>
+  /** 停止单个 Bot */
+  stopFeishuBot: (botId: string) => Promise<void>
+  /** 获取多 Bot 状态 */
+  getFeishuMultiStatus: () => Promise<import('@proma/shared').FeishuMultiBridgeState>
+
   // ===== 钉钉集成 =====
 
   /** 获取钉钉配置 */
@@ -1356,6 +1373,36 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: FeishuNotificationSentPayload): void => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener) }
+  },
+
+  // --- 多 Bot v2 API ---
+
+  getFeishuMultiConfig: () => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_MULTI_CONFIG)
+  },
+
+  saveFeishuBotConfig: (input: import('@proma/shared').FeishuBotConfigInput) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.SAVE_BOT_CONFIG, input)
+  },
+
+  getDecryptedFeishuBotSecret: (botId: string) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_BOT_DECRYPTED_SECRET, botId)
+  },
+
+  removeFeishuBot: (botId: string) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REMOVE_BOT, botId)
+  },
+
+  startFeishuBot: (botId: string) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.START_BOT, botId)
+  },
+
+  stopFeishuBot: (botId: string) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.STOP_BOT, botId)
+  },
+
+  getFeishuMultiStatus: () => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_MULTI_STATUS)
   },
 
   // ===== 微信集成 =====

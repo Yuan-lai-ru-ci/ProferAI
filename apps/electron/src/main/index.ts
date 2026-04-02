@@ -34,8 +34,8 @@ import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
-import { feishuBridge } from './lib/feishu-bridge'
-import { getFeishuConfig } from './lib/feishu-config'
+import { feishuBridgeManager } from './lib/feishu-bridge-manager'
+import { getFeishuMultiBotConfig } from './lib/feishu-config'
 import { dingtalkBridge } from './lib/dingtalk-bridge'
 import { getDingTalkConfig } from './lib/dingtalk-config'
 import { wechatBridge } from './lib/wechat-bridge'
@@ -236,11 +236,11 @@ app.whenReady().then(async () => {
   registerGlobalShortcut('quick-task', toggleQuickTaskWindow)
   registerGlobalShortcut('show-main-window', showAndFocusMainWindow)
 
-  // 飞书 Bridge 自动启动（配置启用时）
-  const feishuConfig = getFeishuConfig()
-  if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
-    feishuBridge.start().catch((err) => {
-      console.error('[飞书 Bridge] 自动启动失败:', err)
+  // 飞书 Bridge 自动启动（所有已启用的 Bot）
+  const feishuMultiConfig = getFeishuMultiBotConfig()
+  if (feishuMultiConfig.bots.some((b) => b.enabled && b.appId && b.appSecret)) {
+    feishuBridgeManager.startAll().catch((err) => {
+      console.error('[飞书 BridgeManager] 自动启动失败:', err)
     })
   }
 
@@ -293,7 +293,7 @@ app.on('before-quit', () => {
   // 停止 Chat 工具配置文件监听
   stopChatToolsWatcher()
   // 停止飞书 Bridge
-  feishuBridge.stop()
+  feishuBridgeManager.stopAll()
   // 停止钉钉 Bridge
   dingtalkBridge.stop()
   // 停止微信 Bridge
