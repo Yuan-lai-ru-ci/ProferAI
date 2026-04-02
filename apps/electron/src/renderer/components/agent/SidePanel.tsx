@@ -264,7 +264,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                             <p>当前会话的专属文件，仅本次对话的 Agent 可以访问</p>
                           </TooltipContent>
                         </Tooltip>
-                        <span className="text-[10px] text-muted-foreground/50 truncate flex-1" title={sessionPath}>
+                        <span className="text-[10px] text-muted-foreground/75 truncate flex-1" title={sessionPath}>
                           {breadcrumb}
                         </span>
                         <Tooltip>
@@ -317,6 +317,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                           </TooltipContent>
                         </Tooltip>
                       </div>
+                      {/* 会话文件内容区（独立滚动） */}
                       <div className="flex-1 min-h-0 overflow-y-auto">
                         {/* 附加目录列表（可展开目录树） */}
                         {attachedDirs.length > 0 && (

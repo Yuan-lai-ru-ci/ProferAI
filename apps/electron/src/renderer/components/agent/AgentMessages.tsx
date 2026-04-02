@@ -45,6 +45,8 @@ import type { ToolActivity, AgentStreamState } from '@/atoms/agent-atoms'
 interface AgentMessagesProps {
   sessionId: string
   messages: AgentMessage[]
+  /** 消息是否已完成首次加载 */
+  messagesLoaded?: boolean
   /** Phase 4: 持久化的 SDKMessage（新格式） */
   persistedSDKMessages?: SDKMessage[]
   streaming: boolean
@@ -627,13 +629,13 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 
   return (
     <div className="flex items-center gap-2 min-h-[28px]">
-      <Spinner size="sm" className="text-primary/50" />
-      <span className="text-[13px] font-light text-muted-foreground/50 tabular-nums">Agent Running {formatTime(elapsed)}</span>
+      <Spinner size="sm" className="text-primary/75" />
+      <span className="text-[13px] font-light text-muted-foreground/75 tabular-nums">Agent Running {formatTime(elapsed)}</span>
     </div>
   )
 }
 
-export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, stoppedByUser, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, messages, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, stoppedByUser, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
   /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
@@ -649,6 +651,10 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
 
   React.useEffect(() => {
     if (ready) return
+
+    // 必须等消息加载完成，否则 messages=[] 会被误判为空对话
+    if (messagesLoaded === false) return
+
     if (messages.length === 0 && (!persistedSDKMessages || persistedSDKMessages.length === 0) && !streaming) {
       setReady(true)
       return
@@ -660,7 +666,7 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
       })
     })
     return () => { cancelled = true }
-  }, [messages, streaming, persistedSDKMessages])
+  }, [messages, streaming, persistedSDKMessages, messagesLoaded])
 
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''

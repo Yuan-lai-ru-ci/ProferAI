@@ -330,10 +330,10 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-[36px] rounded-full text-destructive hover:bg-destructive/10"
+                  className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
                   onClick={onStop}
                 >
-                  <Square className="size-[22px]" />
+                  <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
                 </Button>
               ) : (
                 <Button

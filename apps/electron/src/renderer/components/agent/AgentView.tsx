@@ -24,6 +24,7 @@ import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
+import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
@@ -56,6 +57,7 @@ import {
   agentThinkingAtom,
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
+  agentPermissionModeAtom,
   agentSessionPathMapAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
@@ -212,6 +214,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const agentError = streamErrors.get(sessionId) ?? null
   const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
   const isPlanMode = planModeSessions.has(sessionId)
+  const permissionMode = useAtomValue(agentPermissionModeAtom)
+  const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
@@ -1086,6 +1090,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         <AgentMessages
           sessionId={sessionId}
           messages={messages}
+          messagesLoaded={messagesLoaded}
           persistedSDKMessages={persistedSDKMessages}
           streaming={streaming}
           streamState={streamState}
@@ -1136,12 +1141,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
+              (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
+            {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
             {/* 无 Agent 渠道提示 */}
             {!agentChannelId && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
@@ -1287,10 +1294,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-[36px] rounded-full text-destructive hover:bg-destructive/10"
+                    className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
                     onClick={handleStop}
                   >
-                    <Square className="size-[22px]" />
+                    <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
                   </Button>
                 ) : (
                   <Button
