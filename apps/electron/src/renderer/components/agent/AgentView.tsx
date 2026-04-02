@@ -20,7 +20,6 @@ import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, 
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
-import { Badge } from '@/components/ui/badge'
 import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
@@ -1092,6 +1091,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           streamState={streamState}
           liveMessages={liveMessages}
           sessionPath={sessionPath}
+          stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
           onFork={handleFork}
@@ -1278,11 +1278,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                   isProcessing={streaming}
                   onCompact={handleCompact}
                 />
-                {!streaming && stoppedByUser && (
-                  <Badge variant="outline" className="text-xs text-muted-foreground/70 border-muted-foreground/30 shrink-0">
-                    已被用户中断
-                  </Badge>
-                )}
                 {/* <FeishuNotifyToggle sessionId={sessionId} /> */}
               </div>
 

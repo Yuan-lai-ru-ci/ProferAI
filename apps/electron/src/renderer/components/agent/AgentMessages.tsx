@@ -53,6 +53,8 @@ interface AgentMessagesProps {
   liveMessages?: SDKMessage[]
   /** 当前会话工作目录，用于解析相对文件路径 */
   sessionPath?: string | null
+  /** 最后一轮是否被用户中断 */
+  stoppedByUser?: boolean
   onRetry?: () => void
   onRetryInNewSession?: () => void
   onFork?: (upToMessageUuid: string) => void
@@ -631,7 +633,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, messages, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, stoppedByUser, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
   /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
@@ -760,15 +762,22 @@ export function AgentMessages({ sessionId, messages, persistedSDKMessages, strea
             {/* 持久化消息渲染 */}
             {useSDKRenderer ? (
               // Turn 分组渲染 — 每个 turn 只有一个模型 header
-              persistedGroups.map((group) => (
-                <MessageGroupRenderer
-                  key={getGroupId(group)}
-                  group={group}
-                  allMessages={allSDKMessages}
-                  basePath={sessionPath || undefined}
-                  onFork={onFork}
-                />
-              ))
+              persistedGroups.map((group, idx) => {
+                // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge
+                const isLastAssistantTurn = !streaming && stoppedByUser
+                  && group.type === 'assistant-turn'
+                  && idx === persistedGroups.findLastIndex((g) => g.type === 'assistant-turn')
+                return (
+                  <MessageGroupRenderer
+                    key={getGroupId(group)}
+                    group={group}
+                    allMessages={allSDKMessages}
+                    basePath={sessionPath || undefined}
+                    onFork={onFork}
+                    stoppedByUser={isLastAssistantTurn || undefined}
+                  />
+                )
+              })
             ) : (
               // 旧格式回退 — AgentMessageItem
               messages.map((msg: AgentMessage) => (
