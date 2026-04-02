@@ -154,6 +154,17 @@ function isAutoRetryableCatchError(
   return false
 }
 
+/**
+ * 判断错误是否为 SDK session 不存在（"No conversation found with session ID"）
+ *
+ * 当 resume 目标 session 已过期或被清理时，SDK 会抛出此错误。
+ * 此类错误可通过清除 sdkSessionId 并切换到上下文回填模式来恢复。
+ */
+function isSessionNotFoundError(errorMessage: string, stderr?: string): boolean {
+  const pattern = /No conversation found.*with session/i
+  return pattern.test(errorMessage) || (!!stderr && pattern.test(stderr))
+}
+
 /** 最大自动重试次数 */
 const MAX_AUTO_RETRIES = 3
 
@@ -325,7 +336,7 @@ function extractSDKToolSummary(content: Array<{ type: string; name?: string; inp
  * 当 resume 不可用时，将最近消息拼接为上下文注入 prompt，
  * 让新 SDK 会话保留对话记忆。包含文本内容和工具活动摘要。
  */
-function buildContextPrompt(sessionId: string, currentUserMessage: string): string {
+function buildContextPrompt(sessionId: string, currentUserMessage: string, sessionHint?: { agentCwd: string }): string {
   const allMessages = getAgentSessionSDKMessages(sessionId)
   if (allMessages.length === 0) return currentUserMessage
 
@@ -361,8 +372,13 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string): stri
 
   if (lines.length === 0) return currentUserMessage
 
-  console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史`)
-  return `<conversation_history>\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
+  // 注入 session 元信息，便于 Agent 在需要时读取完整历史
+  const sessionInfoBlock = sessionHint
+    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: 上方为近期对话摘要。如需更多上下文，可读取 ~/.proma/agent-sessions/${sessionId}.jsonl 获取完整历史。\n</session_info>\n`
+    : ''
+
+  console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
+  return `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
 }
 
 /** 标题生成 Prompt */
@@ -928,7 +944,7 @@ export class AgentOrchestrator {
         ? '/compact'
         : existingSdkSessionId
           ? contextualMessage
-          : buildContextPrompt(sessionId, contextualMessage)
+          : buildContextPrompt(sessionId, contextualMessage, { agentCwd })
 
       if (existingSdkSessionId) {
         console.log(`[Agent 编排] 使用 resume 模式，SDK session ID: ${existingSdkSessionId}`)
@@ -1293,6 +1309,20 @@ export class AgentOrchestrator {
                 }
                 const typedError = mapSDKErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError)
 
+                // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
+                if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && attempt <= MAX_AUTO_RETRIES) {
+                  console.log(`[Agent 编排] 检测到 session-not-found 错误 (assistant error)，切换到上下文回填模式`)
+                  existingSdkSessionId = undefined
+                  try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
+                  queryOptions.resumeSessionId = undefined
+                  queryOptions.prompt = buildContextPrompt(sessionId, contextualMessage, { agentCwd })
+                  lastRetryableError = 'Session 已失效，切换到上下文回填模式'
+                  this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+                  accumulatedMessages.length = 0
+                  shouldRetryFromError = true
+                  break
+                }
+
                 // 判断是否可自动重试
                 if (isAutoRetryableTypedError(typedError) && attempt <= MAX_AUTO_RETRIES) {
                   lastRetryableError = typedError.title
@@ -1563,6 +1593,23 @@ export class AgentOrchestrator {
           const stderrOutput = stderrChunks.join('').trim()
           const apiError = extractApiError(stderrOutput)
           const rawErrorMessage = error instanceof Error ? error.message : ''
+
+          // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
+          if (isSessionNotFoundError(rawErrorMessage, stderrOutput) && existingSdkSessionId && attempt <= MAX_AUTO_RETRIES) {
+            console.log(`[Agent 编排] 检测到 session-not-found 错误，清除 sdkSessionId 并切换到上下文回填模式`)
+            // 清除失效的 sdkSessionId
+            existingSdkSessionId = undefined
+            try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
+            // 重建 prompt：从 resume 模式切换到上下文回填，并注入 session 元信息
+            queryOptions.resumeSessionId = undefined
+            queryOptions.prompt = buildContextPrompt(sessionId, contextualMessage, { agentCwd })
+            lastRetryableError = 'Session 已失效，切换到上下文回填模式'
+            // 保存部分内容
+            this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+            accumulatedMessages.length = 0
+            stderrChunks.length = 0
+            continue  // 进入下一次 retry 循环
+          }
 
           // 判断是否可重试
           if (isAutoRetryableCatchError(apiError, rawErrorMessage) && attempt <= MAX_AUTO_RETRIES) {

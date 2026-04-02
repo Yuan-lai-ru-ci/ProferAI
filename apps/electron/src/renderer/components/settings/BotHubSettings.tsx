@@ -10,46 +10,58 @@ import { useAtomValue } from 'jotai'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { feishuBridgeStateAtom } from '@/atoms/feishu-atoms'
+import { dingtalkBridgeStateAtom } from '@/atoms/dingtalk-atoms'
+import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
 import { FeishuSettings } from './FeishuSettings'
 import { DingTalkSettings } from './DingTalkSettings'
 import { WeChatSettings } from './WeChatSettings'
+import { BotDefaultSettings } from './BotDefaultSettings'
+import feishuLogo from '@/assets/bots/feishu.png'
+import dingtalkLogo from '@/assets/bots/dingding.png'
+import wechatLogo from '@/assets/bots/wechat.png'
 
 // ===== 类型 =====
 
-type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat'
+type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'defaults'
 
 interface BotPlatformDef {
   id: BotPlatformId
   name: string
-  /** 图标中显示的字符 */
-  iconChar: string
+  /** Logo 图片 src（有图片时使用） */
+  iconSrc?: string
+  /** 无图片时显示的字符 */
+  iconChar?: string
   iconBgClass: string
-  iconTextClass: string
+  iconTextClass?: string
 }
 
 // ===== 平台定义 =====
 
 const PLATFORMS: readonly BotPlatformDef[] = [
   {
+    id: 'wechat',
+    name: '微信',
+    iconSrc: wechatLogo,
+    iconBgClass: 'bg-green-500/15',
+  },
+  {
     id: 'feishu',
     name: '飞书',
-    iconChar: '飞',
+    iconSrc: feishuLogo,
     iconBgClass: 'bg-blue-500/15',
-    iconTextClass: 'text-blue-600 dark:text-blue-400',
   },
   {
     id: 'dingtalk',
     name: '钉钉',
-    iconChar: '钉',
+    iconSrc: dingtalkLogo,
     iconBgClass: 'bg-orange-500/15',
-    iconTextClass: 'text-orange-600 dark:text-orange-400',
   },
   {
-    id: 'wechat',
-    name: '微信',
-    iconChar: '微',
-    iconBgClass: 'bg-green-500/15',
-    iconTextClass: 'text-green-600 dark:text-green-400',
+    id: 'defaults',
+    name: '用法',
+    iconChar: '⚙',
+    iconBgClass: 'bg-muted',
+    iconTextClass: 'text-muted-foreground',
   },
 ] as const
 
@@ -64,13 +76,20 @@ const BRIDGE_STATUS_COLORS = {
 // ===== 子组件 =====
 
 /** 平台连接状态指示点 */
-function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React.ReactElement {
+function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React.ReactElement | null {
   const feishuState = useAtomValue(feishuBridgeStateAtom)
+  const dingtalkState = useAtomValue(dingtalkBridgeStateAtom)
+  const wechatState = useAtomValue(wechatBridgeStateAtom)
 
-  // 飞书读取真实状态，其他平台暂时显示灰点
-  const colorClass = platformId === 'feishu'
-    ? BRIDGE_STATUS_COLORS[feishuState.status]
-    : 'bg-gray-400'
+  if (platformId === 'defaults') return null
+
+  const statusMap: Record<string, string> = {
+    feishu: feishuState.status,
+    dingtalk: dingtalkState.status,
+    wechat: wechatState.status,
+  }
+  const status = statusMap[platformId] ?? 'disconnected'
+  const colorClass = BRIDGE_STATUS_COLORS[status as keyof typeof BRIDGE_STATUS_COLORS] ?? 'bg-gray-400'
 
   return <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', colorClass)} />
 }
@@ -97,16 +116,22 @@ function PlatformSidebarItem({
       )}
     >
       {/* 平台图标 */}
-      <div className={cn(
-        'flex items-center justify-center w-7 h-7 rounded-md text-xs font-bold flex-shrink-0',
-        platform.iconBgClass,
-        platform.iconTextClass,
-      )}>
-        {platform.iconChar}
-      </div>
+      {platform.iconSrc ? (
+        <div className="flex items-center justify-center w-8 h-8 flex-shrink-0">
+          <img src={platform.iconSrc} alt={platform.name} className="w-8 h-8 rounded-lg object-contain" />
+        </div>
+      ) : (
+        <div className={cn(
+          'flex items-center justify-center w-8 h-8 rounded-lg text-base flex-shrink-0',
+          platform.iconBgClass,
+          platform.iconTextClass,
+        )}>
+          {platform.iconChar}
+        </div>
+      )}
 
       {/* 名称 */}
-      <span className="text-sm font-medium flex-1 min-w-0 truncate">
+      <span className="text-sm flex-1 min-w-0 truncate">
         {platform.name}
       </span>
 
@@ -125,13 +150,15 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
       return <DingTalkSettings />
     case 'wechat':
       return <WeChatSettings />
+    case 'defaults':
+      return <BotDefaultSettings />
   }
 }
 
 // ===== 主组件 =====
 
 export function BotHubSettings(): React.ReactElement {
-  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('feishu')
+  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('wechat')
 
   return (
     <div className="flex -mx-6 -my-4 h-full">

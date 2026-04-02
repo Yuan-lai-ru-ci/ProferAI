@@ -435,6 +435,24 @@ export function seedDefaultSkills(): void {
 }
 
 /**
+ * 获取微信配置文件路径
+ *
+ * @returns ~/.proma/wechat.json
+ */
+export function getWeChatConfigPath(): string {
+  return join(getConfigDir(), 'wechat.json')
+}
+
+/**
+ * 获取微信长轮询同步游标路径
+ *
+ * @returns ~/.proma/wechat-sync.json
+ */
+export function getWeChatSyncPath(): string {
+  return join(getConfigDir(), 'wechat-sync.json')
+}
+
+/**
  * 获取钉钉配置文件路径
  *
  * @returns ~/.proma/dingtalk.json

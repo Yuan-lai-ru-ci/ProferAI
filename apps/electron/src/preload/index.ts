@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -88,6 +88,8 @@ import type {
   DingTalkConfigInput,
   DingTalkBridgeState,
   DingTalkTestResult,
+  WeChatConfig,
+  WeChatBridgeState,
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
 } from '@proma/shared'
@@ -632,6 +634,23 @@ export interface ElectronAPI {
   getDingTalkStatus: () => Promise<DingTalkBridgeState>
   /** 订阅钉钉 Bridge 状态变化 */
   onDingTalkStatusChanged: (callback: (state: DingTalkBridgeState) => void) => () => void
+
+  // ===== 微信集成 =====
+
+  /** 获取微信配置 */
+  getWeChatConfig: () => Promise<WeChatConfig>
+  /** 开始扫码登录 */
+  startWeChatLogin: () => Promise<void>
+  /** 登出微信 */
+  logoutWeChat: () => Promise<void>
+  /** 启动微信 Bridge（用已有凭证） */
+  startWeChatBridge: () => Promise<void>
+  /** 停止微信 Bridge */
+  stopWeChatBridge: () => Promise<void>
+  /** 获取微信 Bridge 状态 */
+  getWeChatStatus: () => Promise<WeChatBridgeState>
+  /** 订阅微信 Bridge 状态变化 */
+  onWeChatStatusChanged: (callback: (state: WeChatBridgeState) => void) => () => void
 
   /** 订阅菜单关闭标签页事件（Cmd+W 被菜单拦截后转发） */
   onMenuCloseTab: (callback: () => void) => () => void
@@ -1337,6 +1356,38 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: FeishuNotificationSentPayload): void => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener) }
+  },
+
+  // ===== 微信集成 =====
+
+  getWeChatConfig: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.GET_CONFIG)
+  },
+
+  startWeChatLogin: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.START_LOGIN)
+  },
+
+  logoutWeChat: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.LOGOUT)
+  },
+
+  startWeChatBridge: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.START_BRIDGE)
+  },
+
+  stopWeChatBridge: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.STOP_BRIDGE)
+  },
+
+  getWeChatStatus: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.GET_STATUS)
+  },
+
+  onWeChatStatusChanged: (callback: (state: WeChatBridgeState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: WeChatBridgeState): void => callback(state)
+    ipcRenderer.on(WECHAT_IPC_CHANNELS.STATUS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(WECHAT_IPC_CHANNELS.STATUS_CHANGED, listener) }
   },
 
   // ===== 钉钉集成 =====

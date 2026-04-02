@@ -5,7 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS } from '../types'
 import type { QuickTaskSubmitInput } from '../types'
 import type {
@@ -75,6 +75,8 @@ import type {
   DingTalkConfig,
   DingTalkBridgeState,
   DingTalkTestResult,
+  WeChatConfig,
+  WeChatBridgeState,
   SDKMessage,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
@@ -178,6 +180,8 @@ import { feishuBridge } from './lib/feishu-bridge'
 import { presenceService } from './lib/feishu-presence'
 import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret } from './lib/dingtalk-config'
 import { dingtalkBridge } from './lib/dingtalk-bridge'
+import { getWeChatConfig } from './lib/wechat-config'
+import { wechatBridge } from './lib/wechat-bridge'
 
 /**
  * 注册 IPC 处理器
@@ -1895,6 +1899,56 @@ export function registerIpcHandlers(): void {
     DINGTALK_IPC_CHANNELS.GET_STATUS,
     async (): Promise<DingTalkBridgeState> => {
       return dingtalkBridge.getStatus()
+    }
+  )
+
+  // ===== 微信集成 =====
+
+  // 获取微信配置
+  ipcMain.handle(
+    WECHAT_IPC_CHANNELS.GET_CONFIG,
+    async (): Promise<WeChatConfig> => {
+      return getWeChatConfig()
+    }
+  )
+
+  // 开始扫码登录
+  ipcMain.handle(
+    WECHAT_IPC_CHANNELS.START_LOGIN,
+    async (): Promise<void> => {
+      await wechatBridge.startLogin()
+    }
+  )
+
+  // 登出
+  ipcMain.handle(
+    WECHAT_IPC_CHANNELS.LOGOUT,
+    async (): Promise<void> => {
+      wechatBridge.logout()
+    }
+  )
+
+  // 启动 Bridge（用已有凭证）
+  ipcMain.handle(
+    WECHAT_IPC_CHANNELS.START_BRIDGE,
+    async (): Promise<void> => {
+      await wechatBridge.start()
+    }
+  )
+
+  // 停止 Bridge
+  ipcMain.handle(
+    WECHAT_IPC_CHANNELS.STOP_BRIDGE,
+    async (): Promise<void> => {
+      wechatBridge.stop()
+    }
+  )
+
+  // 获取 Bridge 状态
+  ipcMain.handle(
+    WECHAT_IPC_CHANNELS.GET_STATUS,
+    async (): Promise<WeChatBridgeState> => {
+      return wechatBridge.getStatus()
     }
   )
 

@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Loader2, CheckCircle2, XCircle, ExternalLink, Users, User, Trash2, RefreshCw, Copy, Check } from 'lucide-react'
+import { Loader2, CheckCircle2, XCircle, ExternalLink, Users, User, Trash2, RefreshCw, Copy, Check, Power, PowerOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -33,8 +33,6 @@ import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
 import { SettingsInput } from './primitives/SettingsInput'
 import { SettingsSecretInput } from './primitives/SettingsSecretInput'
-import { SettingsSelect } from './primitives/SettingsSelect'
-import { SettingsSegmentedControl } from './primitives/SettingsSegmentedControl'
 import { SettingsRow } from './primitives/SettingsRow'
 import { feishuBridgeStateAtom, feishuBindingsAtom } from '@/atoms/feishu-atoms'
 import { agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
@@ -53,17 +51,11 @@ const TAB_OPTIONS: Array<{ value: FeishuTab; label: string }> = [
 /** 连接状态颜色映射 */
 const STATUS_CONFIG = {
   disconnected: { color: 'bg-gray-400', label: '未连接' },
-  connecting: { color: 'bg-yellow-400 animate-pulse', label: '连接中...' },
+  connecting: { color: 'bg-amber-400 animate-pulse', label: '连接中...' },
   connected: { color: 'bg-green-500', label: '已连接' },
   error: { color: 'bg-red-500', label: '连接错误' },
 } as const
 
-/** 通知模式选项 */
-const NOTIFY_MODE_OPTIONS = [
-  { value: 'auto', label: '智能' },
-  { value: 'always', label: '始终' },
-  { value: 'off', label: '关闭' },
-]
 
 /** 飞书批量权限配置 JSON（用于一键复制粘贴到飞书开放平台） */
 const FEISHU_SCOPES_JSON = JSON.stringify({
@@ -401,13 +393,10 @@ function FeishuBindingsTab(): React.ReactElement {
 
 function FeishuConfigTab(): React.ReactElement {
   const bridgeState = useAtomValue(feishuBridgeStateAtom)
-  const workspaces = useAtomValue(agentWorkspacesAtom)
 
   // 表单状态
   const [appId, setAppId] = React.useState('')
   const [appSecret, setAppSecret] = React.useState('')
-  const [defaultWorkspaceId, setDefaultWorkspaceId] = React.useState('')
-  const [defaultNotifyMode, setDefaultNotifyMode] = React.useState('auto')
 
   // UI 状态
   const [loading, setLoading] = React.useState(true)
@@ -422,16 +411,9 @@ function FeishuConfigTab(): React.ReactElement {
     ]).then(([config, secret]) => {
       setAppId(config.appId ?? '')
       if (secret) setAppSecret(secret)
-      setDefaultWorkspaceId(config.defaultWorkspaceId ?? '')
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [])
-
-  // 工作区选项
-  const workspaceOptions = React.useMemo(
-    () => workspaces.map((w) => ({ value: w.id, label: w.name })),
-    [workspaces]
-  )
 
   // 保存配置
   const handleSave = React.useCallback(async () => {
@@ -442,28 +424,12 @@ function FeishuConfigTab(): React.ReactElement {
         enabled: true,
         appId: appId.trim(),
         appSecret: appSecret || '',
-        defaultWorkspaceId: defaultWorkspaceId || undefined,
       })
       toast.success('飞书配置已保存')
     } catch {
       toast.error('保存飞书配置失败')
     }
-  }, [appId, appSecret, defaultWorkspaceId])
-
-  // 保存默认配置
-  const handleSaveDefaults = React.useCallback(async () => {
-    try {
-      await window.electronAPI.saveFeishuConfig({
-        enabled: true,
-        appId: appId.trim(),
-        appSecret: '',
-        defaultWorkspaceId: defaultWorkspaceId || undefined,
-      })
-      toast.success('默认配置已保存')
-    } catch {
-      toast.error('保存默认配置失败')
-    }
-  }, [appId, defaultWorkspaceId])
+  }, [appId, appSecret])
 
   // 测试连接
   const handleTestConnection = React.useCallback(async () => {
@@ -518,23 +484,32 @@ function FeishuConfigTab(): React.ReactElement {
         description="连接飞书机器人，在飞书中控制 Proma Agent"
       >
         <SettingsCard>
-          <SettingsRow
-            label="Bridge 状态"
-            description={bridgeState.errorMessage ?? undefined}
-          >
+          <SettingsRow label="Bridge 状态">
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
-                <span className={cn('w-2 h-2 rounded-full', statusConfig.color)} />
+                <span className={`w-2 h-2 rounded-full ${statusConfig.color}`} />
                 <span className="text-sm text-muted-foreground">{statusConfig.label}</span>
               </div>
-              <Button
-                size="sm"
-                variant={isConnected ? 'destructive' : 'default'}
-                onClick={handleToggleBridge}
-                disabled={!appId}
-              >
-                {isConnected ? '停止' : '启动'}
-              </Button>
+              {isConnected ? (
+                <Button size="sm" variant="outline" onClick={handleToggleBridge}>
+                  <PowerOff size={14} className="mr-1.5" />
+                  停止
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleToggleBridge}
+                  disabled={bridgeState.status === 'connecting' || !appId}
+                >
+                  {bridgeState.status === 'connecting' ? (
+                    <Loader2 size={14} className="animate-spin mr-1.5" />
+                  ) : (
+                    <Power size={14} className="mr-1.5" />
+                  )}
+                  启动
+                </Button>
+              )}
             </div>
           </SettingsRow>
           {bridgeState.activeBindings > 0 && (
@@ -543,6 +518,16 @@ function FeishuConfigTab(): React.ReactElement {
             </SettingsRow>
           )}
         </SettingsCard>
+        {bridgeState.status === 'error' && bridgeState.errorMessage && (
+          <div className="mt-2 px-3 py-2.5 rounded-lg bg-red-500/10 text-red-700 dark:text-red-400 text-sm">
+            {bridgeState.errorMessage}
+          </div>
+        )}
+        {isConnected && (
+          <div className="mt-2 px-3 py-2.5 rounded-lg bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+            飞书 Bridge 已连接，可以在飞书中与 Proma Agent 对话了。
+          </div>
+        )}
       </SettingsSection>
 
       {/* Bot 配置 */}
@@ -596,40 +581,6 @@ function FeishuConfigTab(): React.ReactElement {
             <span>{testResult.message}{testResult.botName && ` — ${testResult.botName}`}</span>
           </div>
         )}
-      </SettingsSection>
-
-      {/* 默认配置 */}
-      <SettingsSection
-        title="默认配置"
-        description="飞书发起新会话时使用的默认设置"
-      >
-        <SettingsCard>
-          <SettingsSegmentedControl
-            label="默认通知模式"
-            description="智能: 离开时才发飞书 | 始终: 总是发 | 关闭: 从不发"
-            value={defaultNotifyMode}
-            onValueChange={setDefaultNotifyMode}
-            options={NOTIFY_MODE_OPTIONS}
-          />
-          {workspaceOptions.length > 0 && (
-            <SettingsSelect
-              label="默认工作区（可在飞书内通过 /workspaces 选择）"
-              value={defaultWorkspaceId}
-              onValueChange={setDefaultWorkspaceId}
-              options={workspaceOptions}
-              placeholder="选择工作区"
-            />
-          )}
-        </SettingsCard>
-
-        <div className="flex items-center mt-3">
-          <Button
-            size="sm"
-            onClick={handleSaveDefaults}
-          >
-            保存默认配置
-          </Button>
-        </div>
       </SettingsSection>
 
       {/* 创建飞书 Bot 引导 */}
@@ -731,39 +682,6 @@ function FeishuConfigTab(): React.ReactElement {
         </SettingsCard>
       </SettingsSection>
 
-      {/* 飞书命令使用说明 */}
-      <SettingsSection
-        title="飞书命令"
-        description="在飞书中向 Bot 发送以下命令"
-      >
-        <SettingsCard divided={false}>
-          <div className="px-4 py-3 space-y-2 text-sm text-muted-foreground">
-            <div className="grid grid-cols-[100px_1fr] gap-y-1.5 gap-x-4">
-              <code className="text-foreground/80 font-mono">/help</code>
-              <span>显示帮助</span>
-              <code className="text-foreground/80 font-mono">/new</code>
-              <span>创建新 Agent 会话</span>
-              {/* <code className="text-foreground/80 font-mono">/chat</code>
-              <span>切换到 Chat 模式</span> */}
-              <code className="text-foreground/80 font-mono">/agent</code>
-              <span>切换到 Agent 模式</span>
-              <code className="text-foreground/80 font-mono">/list</code>
-              <span>列出所有会话</span>
-              <code className="text-foreground/80 font-mono">/stop</code>
-              <span>停止当前 Agent</span>
-              <code className="text-foreground/80 font-mono">/switch</code>
-              <span>切换到已有会话（序号）</span>
-              <code className="text-foreground/80 font-mono">/workspace</code>
-              <span>设置默认工作区</span>
-              <code className="text-foreground/80 font-mono">/now</code>
-              <span>查看当前状态（工作区、会话、MCP、Skills）</span>
-            </div>
-            <p className="pt-2 text-xs">
-              直接发送文本会自动创建新会话或发送到当前绑定的会话。
-            </p>
-          </div>
-        </SettingsCard>
-      </SettingsSection>
     </div>
   )
 }
