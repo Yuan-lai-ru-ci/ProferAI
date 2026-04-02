@@ -34,6 +34,7 @@ import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
+import { registerBridge, startAllBridges, stopAllBridges } from './lib/bridge-registry'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
 import { getFeishuMultiBotConfig } from './lib/feishu-config'
 import { dingtalkBridge } from './lib/dingtalk-bridge'
@@ -42,6 +43,38 @@ import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
+
+// ===== Bridge 注册（新增 Bridge 只需在此添加一个 registerBridge 调用） =====
+
+registerBridge({
+  name: '飞书 BridgeManager',
+  shouldAutoStart: () => {
+    const config = getFeishuMultiBotConfig()
+    return config.bots.some((b) => b.enabled && b.appId && b.appSecret)
+  },
+  start: () => feishuBridgeManager.startAll(),
+  stop: () => feishuBridgeManager.stopAll(),
+})
+
+registerBridge({
+  name: '钉钉 Bridge',
+  shouldAutoStart: () => {
+    const config = getDingTalkConfig()
+    return !!(config.enabled && config.clientId && config.clientSecret)
+  },
+  start: () => dingtalkBridge.start(),
+  stop: () => dingtalkBridge.stop(),
+})
+
+registerBridge({
+  name: '微信 Bridge',
+  shouldAutoStart: () => {
+    const config = getWeChatConfig()
+    return !!(config.enabled && config.credentials)
+  },
+  start: () => wechatBridge.start(),
+  stop: () => wechatBridge.stop(),
+})
 
 let mainWindow: BrowserWindow | null = null
 
@@ -236,29 +269,8 @@ app.whenReady().then(async () => {
   registerGlobalShortcut('quick-task', toggleQuickTaskWindow)
   registerGlobalShortcut('show-main-window', showAndFocusMainWindow)
 
-  // 飞书 Bridge 自动启动（所有已启用的 Bot）
-  const feishuMultiConfig = getFeishuMultiBotConfig()
-  if (feishuMultiConfig.bots.some((b) => b.enabled && b.appId && b.appSecret)) {
-    feishuBridgeManager.startAll().catch((err) => {
-      console.error('[飞书 BridgeManager] 自动启动失败:', err)
-    })
-  }
-
-  // 钉钉 Bridge 自动启动（配置启用时）
-  const dingtalkConfig = getDingTalkConfig()
-  if (dingtalkConfig.enabled && dingtalkConfig.clientId && dingtalkConfig.clientSecret) {
-    dingtalkBridge.start().catch((err) => {
-      console.error('[钉钉 Bridge] 自动启动失败:', err)
-    })
-  }
-
-  // 微信 Bridge 自动启动（有已保存凭证时）
-  const wechatConfig = getWeChatConfig()
-  if (wechatConfig.enabled && wechatConfig.credentials) {
-    wechatBridge.start().catch((err) => {
-      console.error('[微信 Bridge] 自动启动失败:', err)
-    })
-  }
+  // 启动所有已注册的 Bridge（飞书/钉钉/微信等）
+  await startAllBridges()
 
   app.on('activate', () => {
     // 直接检查 mainWindow 引用，避免 getAllWindows() 包含 DevTools 等其他窗口导致误判
@@ -292,12 +304,8 @@ app.on('before-quit', () => {
   stopWorkspaceWatcher()
   // 停止 Chat 工具配置文件监听
   stopChatToolsWatcher()
-  // 停止飞书 Bridge
-  feishuBridgeManager.stopAll()
-  // 停止钉钉 Bridge
-  dingtalkBridge.stop()
-  // 停止微信 Bridge
-  wechatBridge.stop()
+  // 停止所有 Bridge
+  stopAllBridges()
   // 注销全局快捷键
   unregisterAllGlobalShortcuts()
   // 销毁快速任务窗口
