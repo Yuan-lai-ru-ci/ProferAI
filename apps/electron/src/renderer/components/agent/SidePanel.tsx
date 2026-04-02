@@ -266,7 +266,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                         <p>当前会话的专属文件，仅本次对话的 Agent 可以访问</p>
                       </TooltipContent>
                     </Tooltip>
-                    <span className="text-[10px] text-muted-foreground/50 truncate flex-1" title={sessionPath}>
+                    <span className="text-[10px] text-muted-foreground/75 truncate flex-1" title={sessionPath}>
                       {breadcrumb}
                     </span>
                     <Tooltip>
