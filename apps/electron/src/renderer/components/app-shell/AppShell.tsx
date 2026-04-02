@@ -13,7 +13,8 @@ import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { currentAgentSessionIdAtom, agentSidePanelOpenMapAtom } from '@/atoms/agent-atoms'
+import { cn } from '@/lib/utils'
 
 export interface AppShellProps {
   /** Context 值，用于传递给子组件 */
@@ -23,7 +24,9 @@ export interface AppShellProps {
 export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId
+  const isPanelOpen = currentSessionId ? (sidePanelOpenMap.get(currentSessionId) ?? true) : false
 
   return (
     <AppShellProvider value={contextValue}>
@@ -44,7 +47,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
         {/* 右侧边栏：Agent 文件面板，带圆角和内边距 */}
         {showRightPanel && (
-          <div className="p-2 pl-0 relative z-[60]">
+          <div className={cn('relative z-[60] transition-[padding] duration-300 ease-in-out', isPanelOpen ? 'p-2 pl-0' : 'p-0')}>
             <RightSidePanel />
           </div>
         )}
