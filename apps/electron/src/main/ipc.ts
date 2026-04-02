@@ -518,6 +518,46 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 保存应用内置资源文件到用户选择的位置（原生 Save As 对话框）
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS,
+    async (event, resourceRelativePath: string, defaultFilename: string): Promise<boolean> => {
+      const { dialog, BrowserWindow } = await import('electron')
+      const { writeFileSync, readFileSync, existsSync } = await import('node:fs')
+      const { join, normalize, sep, extname: pathExtname } = await import('node:path')
+
+      // 解析到应用内置 resources 目录
+      const resourcesDir = normalize(join(__dirname, 'resources'))
+      const fullPath = normalize(join(resourcesDir, resourceRelativePath))
+
+      // 安全校验：防止路径穿越（追加 sep 防止 resources-evil 绕过）
+      if (!fullPath.startsWith(resourcesDir + sep)) {
+        throw new Error('Path traversal not allowed')
+      }
+      if (!existsSync(fullPath)) {
+        throw new Error(`Resource not found: ${resourceRelativePath}`)
+      }
+
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const ext = pathExtname(defaultFilename).replace('.', '').toLowerCase()
+      const filterMap: Record<string, string> = { jpg: 'JPEG', jpeg: 'JPEG', png: 'PNG', gif: 'GIF', webp: 'WebP' }
+      const filterName = filterMap[ext] ?? 'Image'
+
+      const result = await dialog.showSaveDialog(win ?? BrowserWindow.getFocusedWindow()!, {
+        defaultPath: defaultFilename,
+        filters: [
+          { name: `${filterName} 图片`, extensions: [ext || 'png'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      })
+
+      if (result.canceled || !result.filePath) return false
+
+      writeFileSync(result.filePath, readFileSync(fullPath))
+      return true
+    }
+  )
+
   // 删除附件
   ipcMain.handle(
     CHAT_IPC_CHANNELS.DELETE_ATTACHMENT,

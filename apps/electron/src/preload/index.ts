@@ -221,6 +221,9 @@ export interface ElectronAPI {
   /** 另存图片到用户选择的位置（原生 Save As 对话框） */
   saveImageAs: (localPath: string, defaultFilename: string) => Promise<boolean>
 
+  /** 保存应用内置资源文件到用户选择的位置（原生 Save As 对话框） */
+  saveResourceFileAs: (resourceRelativePath: string, defaultFilename: string) => Promise<boolean>
+
   /** 删除附件 */
   deleteAttachment: (localPath: string) => Promise<void>
 
@@ -832,6 +835,10 @@ const electronAPI: ElectronAPI = {
 
   saveImageAs: (localPath: string, defaultFilename: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SAVE_IMAGE_AS, localPath, defaultFilename)
+  },
+
+  saveResourceFileAs: (resourceRelativePath: string, defaultFilename: string) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS, resourceRelativePath, defaultFilename)
   },
 
   deleteAttachment: (localPath: string) => {

@@ -260,8 +260,11 @@ export const agentSessionPathMapAtom = atom<Map<string, string>>(new Map())
 
 // ===== 权限系统 Atoms =====
 
-/** 当前工作区权限模式 */
-export const agentPermissionModeAtom = atom<PromaPermissionMode>('acceptEdits')
+/** 工作区默认权限模式（初始化和新会话使用） */
+export const agentDefaultPermissionModeAtom = atom<PromaPermissionMode>('acceptEdits')
+
+/** Per-session 权限模式 Map — sessionId → PromaPermissionMode */
+export const agentPermissionModeMapAtom = atom<Map<string, PromaPermissionMode>>(new Map())
 
 /** Agent 思考模式 */
 export const agentThinkingAtom = atom<ThinkingConfig | undefined>(undefined)
