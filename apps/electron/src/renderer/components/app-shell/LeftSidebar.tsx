@@ -1142,8 +1142,8 @@ function ConversationItem({
 
       {/* 操作按钮组（hover 时可见） */}
       <div className={cn(
-        'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100',
-        hovered && !editing ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100 overflow-hidden',
+        hovered && !editing ? 'opacity-100' : 'opacity-0 w-0 pointer-events-none'
       )}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1326,8 +1326,8 @@ function AgentSessionItem({
 
       {/* 操作按钮组（hover 时可见） */}
       <div className={cn(
-        'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100',
-        hovered && !editing ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        'flex items-center gap-0.5 flex-shrink-0 transition-all duration-100 overflow-hidden',
+        hovered && !editing ? 'opacity-100' : 'opacity-0 w-0 pointer-events-none'
       )}>
         <Tooltip>
           <TooltipTrigger asChild>
