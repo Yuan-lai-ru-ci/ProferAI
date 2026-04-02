@@ -37,8 +37,8 @@ import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import { registerBridge, startAllBridges, stopAllBridges } from './lib/bridge-registry'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
 import { getFeishuMultiBotConfig } from './lib/feishu-config'
-import { dingtalkBridge } from './lib/dingtalk-bridge'
-import { getDingTalkConfig } from './lib/dingtalk-config'
+import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
+import { getDingTalkMultiBotConfig } from './lib/dingtalk-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
@@ -57,13 +57,13 @@ registerBridge({
 })
 
 registerBridge({
-  name: '钉钉 Bridge',
+  name: '钉钉 BridgeManager',
   shouldAutoStart: () => {
-    const config = getDingTalkConfig()
-    return !!(config.enabled && config.clientId && config.clientSecret)
+    const config = getDingTalkMultiBotConfig()
+    return config.bots.some((b) => b.enabled && b.clientId && b.clientSecret)
   },
-  start: () => dingtalkBridge.start(),
-  stop: () => dingtalkBridge.stop(),
+  start: () => dingtalkBridgeManager.startAll(),
+  stop: () => dingtalkBridgeManager.stopAll(),
 })
 
 registerBridge({
