@@ -252,6 +252,23 @@ function PromptRow({ prompt, dimmed = false }: { prompt: string; dimmed?: boolea
   )
 }
 
+// ===== 工具短语 diff 着色 =====
+
+/** 将 displayLabel 中的 +N 染绿、-N 染红 */
+function renderLabelWithDiffColors(label: string): React.ReactNode {
+  const parts = label.split(/(\+\d+|-\d+)/g)
+  if (parts.length === 1) return label
+  return parts.map((part, i) => {
+    if (/^\+\d+$/.test(part)) {
+      return <span key={i} className="text-green-500">{part}</span>
+    }
+    if (/^-\d+$/.test(part)) {
+      return <span key={i} className="text-red-500">{part}</span>
+    }
+    return part
+  })
+}
+
 // ===== 工具调用块 =====
 
 interface ToolUseBlockProps {
@@ -393,7 +410,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         <span className={cn(
           'truncate text-[14px]',
           dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
-        )}>{displayLabel}</span>
+        )}>{renderLabelWithDiffColors(displayLabel)}</span>
 
         <ChevronRight
           className={cn(
