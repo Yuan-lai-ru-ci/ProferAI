@@ -214,7 +214,7 @@ export function WorkspaceSelector(): React.ReactElement {
 
     const reordered = [...workspaces]
     const [moved] = reordered.splice(fromIdx, 1)
-    const insertIdx = toIdx
+    const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx
     reordered.splice(insertIdx, 0, moved!)
 
     setWorkspaces(reordered)

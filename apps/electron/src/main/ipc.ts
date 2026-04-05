@@ -192,6 +192,9 @@ import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
 
+/** 文件浏览器中需要隐藏的系统文件 */
+const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
+
 /**
  * 注册 IPC 处理器
  *
@@ -1433,7 +1436,7 @@ export function registerIpcHandlers(): void {
       const items = readdirSync(safePath, { withFileTypes: true })
 
       for (const item of items) {
-        if (item.name === '.DS_Store') continue
+        if (HIDDEN_FS_ENTRIES.has(item.name)) continue
         const fullPath = resolve(safePath, item.name)
         entries.push({
           name: item.name,
@@ -1566,7 +1569,7 @@ export function registerIpcHandlers(): void {
       const items = readdirSync(safePath, { withFileTypes: true })
 
       for (const item of items) {
-        if (item.name === '.DS_Store') continue
+        if (HIDDEN_FS_ENTRIES.has(item.name)) continue
         const fullPath = resolve(safePath, item.name)
         entries.push({
           name: item.name,
