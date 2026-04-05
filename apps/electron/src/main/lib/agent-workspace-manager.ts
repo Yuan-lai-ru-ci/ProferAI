@@ -152,12 +152,34 @@ function slugify(name: string, existingSlugs: Set<string>): string {
   return slug
 }
 
-/**
- * 获取所有工作区（按 updatedAt 降序）
- */
+/** 返回索引中的存储顺序（与 UI 拖拽顺序一致）；返回副本，避免调用方 sort 等操作误改索引数组 */
 export function listAgentWorkspaces(): AgentWorkspace[] {
   const index = readIndex()
-  return index.workspaces.sort((a, b) => b.updatedAt - a.updatedAt)
+  return index.workspaces.slice()
+}
+
+/** 按 updatedAt 降序（桥接/飞书列表等与旧版内联 sort 一致；渲染进程仍用 listAgentWorkspaces） */
+export function listAgentWorkspacesByUpdatedAt(): AgentWorkspace[] {
+  const index = readIndex()
+  return index.workspaces.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** 按指定 ID 顺序重排工作区，未列出的追加到末尾 */
+export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
+  const index = readIndex()
+  const byId = new Map(index.workspaces.map((w) => [w.id, w]))
+  const reordered: AgentWorkspace[] = []
+  for (const id of orderedIds) {
+    const ws = byId.get(id)
+    if (ws) {
+      reordered.push(ws)
+      byId.delete(id)
+    }
+  }
+  for (const ws of byId.values()) reordered.push(ws)
+  index.workspaces = reordered
+  writeIndex(index)
+  return reordered
 }
 
 /**
@@ -194,6 +216,12 @@ function copyDefaultSkills(workspaceSlug: string): void {
  */
 export function createAgentWorkspace(name: string): AgentWorkspace {
   const index = readIndex()
+
+  const duplicate = index.workspaces.find((w) => w.name === name)
+  if (duplicate) {
+    throw new Error(`工作区名称「${name}」已存在`)
+  }
+
   const existingSlugs = new Set(index.workspaces.map((w) => w.slug))
   const slug = slugify(name, existingSlugs)
   const now = Date.now()
@@ -215,7 +243,7 @@ export function createAgentWorkspace(name: string): AgentWorkspace {
   // 复制默认 Skills 模板
   copyDefaultSkills(slug)
 
-  index.workspaces.push(workspace)
+  index.workspaces.unshift(workspace)
   writeIndex(index)
 
   console.log(`[Agent 工作区] 已创建工作区: ${name} (slug: ${slug})`)
@@ -237,6 +265,12 @@ export function updateAgentWorkspace(
   }
 
   const existing = index.workspaces[idx]!
+
+  const duplicate = index.workspaces.find((w) => w.id !== id && w.name === updates.name)
+  if (duplicate) {
+    throw new Error(`工作区名称「${updates.name}」已存在`)
+  }
+
   const updated: AgentWorkspace = {
     ...existing,
     name: updates.name,

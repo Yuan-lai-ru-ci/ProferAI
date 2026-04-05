@@ -362,6 +362,9 @@ export interface ElectronAPI {
   /** 删除 Agent 工作区 */
   deleteAgentWorkspace: (id: string) => Promise<void>
 
+  /** 重排工作区顺序 */
+  reorderAgentWorkspaces: (orderedIds: string[]) => Promise<AgentWorkspace[]>
+
   // ===== 工作区能力（MCP + Skill） =====
 
   /** 获取工作区能力摘要 */
@@ -1037,6 +1040,10 @@ const electronAPI: ElectronAPI = {
 
   deleteAgentWorkspace: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_WORKSPACE, id)
+  },
+
+  reorderAgentWorkspaces: (orderedIds: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REORDER_WORKSPACES, orderedIds)
   },
 
   // 工作区能力（MCP + Skill）

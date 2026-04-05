@@ -144,6 +144,7 @@ import {
   createAgentWorkspace,
   updateAgentWorkspace,
   deleteAgentWorkspace,
+  reorderAgentWorkspaces,
   ensureDefaultWorkspace,
   getWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
@@ -849,6 +850,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 重排工作区顺序
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.REORDER_WORKSPACES,
+    async (_, orderedIds: string[]): Promise<AgentWorkspace[]> => {
+      return reorderAgentWorkspaces(orderedIds)
+    }
+  )
+
   // ===== 工作区能力（MCP + Skill） =====
 
   // 获取工作区能力摘要
@@ -1424,6 +1433,7 @@ export function registerIpcHandlers(): void {
       const items = readdirSync(safePath, { withFileTypes: true })
 
       for (const item of items) {
+        if (item.name === '.DS_Store') continue
         const fullPath = resolve(safePath, item.name)
         entries.push({
           name: item.name,
@@ -1556,6 +1566,7 @@ export function registerIpcHandlers(): void {
       const items = readdirSync(safePath, { withFileTypes: true })
 
       for (const item of items) {
+        if (item.name === '.DS_Store') continue
         const fullPath = resolve(safePath, item.name)
         entries.push({
           name: item.name,
