@@ -379,10 +379,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   /** 切换对话置顶状态 */
   const handleTogglePin = async (id: string): Promise<void> => {
     try {
+      const original = conversations.find((c) => c.id === id)
       const updated = await window.electronAPI.togglePinConversation(id)
       setConversations((prev) =>
         prev.map((c) => (c.id === updated.id ? updated : c))
       )
+      // 归档会话被置顶时会自动取消归档
+      if (original?.archived && updated.pinned && !updated.archived) {
+        toast.success('已取消归档并置顶')
+      }
     } catch (error) {
       console.error('[侧边栏] 切换置顶失败:', error)
     }
@@ -537,10 +542,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   /** 切换 Agent 会话置顶状态 */
   const handleTogglePinAgent = async (id: string): Promise<void> => {
     try {
+      const original = agentSessions.find((s) => s.id === id)
       const updated = await window.electronAPI.togglePinAgentSession(id)
       setAgentSessions((prev) =>
         prev.map((s) => (s.id === updated.id ? updated : s))
       )
+      // 归档会话被置顶时会自动取消归档
+      if (original?.archived && updated.pinned && !updated.archived) {
+        toast.success('已取消归档并置顶')
+      }
     } catch (error) {
       console.error('[侧边栏] 切换 Agent 会话置顶失败:', error)
     }
@@ -775,19 +785,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </Tooltip>
       </div>
 
-      {/* 归档视图标题栏 */}
-      {viewMode === 'archived' && (
-        <div className="px-3 pt-3">
-          <button
-            onClick={() => setViewMode('active')}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] text-foreground/60 hover:text-foreground/80 hover:bg-foreground/[0.04] transition-colors titlebar-no-drag"
-          >
-            <ArrowLeft size={14} />
-            <span>返回活跃{mode === 'agent' ? '会话' : '对话'}</span>
-          </button>
-        </div>
-      )}
-
       {/* Chat 模式：导航菜单（置顶区域） */}
       {mode === 'chat' && (
         <div className="flex flex-col gap-1 pt-3 px-3">
@@ -875,6 +872,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </div>
       )}
 
+      {/* 归档视图标题栏（置顶区域下方） */}
+      {viewMode === 'archived' && (
+        <div className="px-6 pt-3 pb-1">
+          <div className="text-[12px] font-medium text-foreground/40">
+            已归档{mode === 'agent' ? '会话' : '对话'}
+          </div>
+        </div>
+      )}
+
       {/* 列表区域：根据模式切换 */}
       <div className="flex-1 overflow-y-auto px-3 pt-2 pb-3 scrollbar-none">
         {mode === 'chat' ? (
@@ -937,29 +943,39 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         )}
       </div>
 
-      {/* 已归档入口 */}
-      {viewMode === 'active' && (
-        <div className="px-3 pb-1">
-          {mode === 'chat' && archivedConversationCount > 0 && (
-            <button
-              onClick={() => setViewMode('archived')}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
-            >
-              <Archive size={13} className="text-foreground/30" />
-              <span>已归档 ({archivedConversationCount})</span>
-            </button>
-          )}
-          {mode === 'agent' && archivedAgentSessionCount > 0 && (
-            <button
-              onClick={() => setViewMode('archived')}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
-            >
-              <Archive size={13} className="text-foreground/30" />
-              <span>已归档 ({archivedAgentSessionCount})</span>
-            </button>
-          )}
-        </div>
-      )}
+      {/* 已归档入口 / 返回活跃对话 */}
+      <div className="px-3 pb-1">
+        {viewMode === 'active' ? (
+          <>
+            {mode === 'chat' && archivedConversationCount > 0 && (
+              <button
+                onClick={() => setViewMode('archived')}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
+              >
+                <Archive size={13} className="text-foreground/30" />
+                <span>已归档 ({archivedConversationCount})</span>
+              </button>
+            )}
+            {mode === 'agent' && archivedAgentSessionCount > 0 && (
+              <button
+                onClick={() => setViewMode('archived')}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
+              >
+                <Archive size={13} className="text-foreground/30" />
+                <span>已归档 ({archivedAgentSessionCount})</span>
+              </button>
+            )}
+          </>
+        ) : (
+          <button
+            onClick={() => setViewMode('active')}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/60 bg-foreground/[0.04] hover:bg-foreground/[0.07] hover:text-foreground/80 transition-colors titlebar-no-drag"
+          >
+            <ArrowLeft size={13} className="text-foreground/50" />
+            <span>返回活跃{mode === 'agent' ? '会话' : '对话'}</span>
+          </button>
+        )}
+      </div>
 
       {/* Agent 模式：工作区能力指示器 */}
       {mode === 'agent' && capabilities && (

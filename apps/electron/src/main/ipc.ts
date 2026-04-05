@@ -378,7 +378,13 @@ export function registerIpcHandlers(): void {
       const conversations = listConversations()
       const current = conversations.find((c) => c.id === id)
       if (!current) throw new Error(`对话不存在: ${id}`)
-      return updateConversationMeta(id, { pinned: !current.pinned })
+      const newPinned = !current.pinned
+      // 置顶时自动取消归档
+      const updates: Partial<ConversationMeta> = { pinned: newPinned }
+      if (newPinned && current.archived) {
+        updates.archived = false
+      }
+      return updateConversationMeta(id, updates)
     }
   )
 
@@ -389,7 +395,13 @@ export function registerIpcHandlers(): void {
       const conversations = listConversations()
       const current = conversations.find((c) => c.id === id)
       if (!current) throw new Error(`对话不存在: ${id}`)
-      return updateConversationMeta(id, { archived: !current.archived })
+      const newArchived = !current.archived
+      // 归档时自动取消置顶
+      const updates: Partial<ConversationMeta> = { archived: newArchived }
+      if (newArchived && current.pinned) {
+        updates.pinned = false
+      }
+      return updateConversationMeta(id, updates)
     }
   )
 
@@ -769,7 +781,13 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions()
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent 会话不存在: ${id}`)
-      return updateAgentSessionMeta(id, { pinned: !current.pinned })
+      const newPinned = !current.pinned
+      // 置顶时自动取消归档
+      const updates: Partial<AgentSessionMeta> = { pinned: newPinned }
+      if (newPinned && current.archived) {
+        updates.archived = false
+      }
+      return updateAgentSessionMeta(id, updates)
     }
   )
 
@@ -780,7 +798,13 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions()
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent 会话不存在: ${id}`)
-      return updateAgentSessionMeta(id, { archived: !current.archived })
+      const newArchived = !current.archived
+      // 归档时自动取消置顶
+      const updates: Partial<AgentSessionMeta> = { archived: newArchived }
+      if (newArchived && current.pinned) {
+        updates.pinned = false
+      }
+      return updateAgentSessionMeta(id, updates)
     }
   )
 
