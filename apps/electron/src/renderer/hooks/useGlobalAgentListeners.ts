@@ -25,6 +25,7 @@ import {
   agentPermissionModeMapAtom,
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
+  finalizeStreamingActivities,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -471,14 +472,7 @@ export function useGlobalAgentListeners(): void {
           map.set(data.sessionId, {
             ...current,
             running: false,
-            toolActivities: current.toolActivities.map((ta) =>
-              ta.done ? ta : { ...ta, done: true }
-            ),
-            teammates: current.teammates.map((tm) =>
-              tm.status === 'running'
-                ? { ...tm, status: 'stopped' as const, endedAt: Date.now(), currentToolName: undefined, currentToolElapsedSeconds: undefined, currentToolUseId: undefined }
-                : tm
-            ),
+            ...finalizeStreamingActivities(current.toolActivities, current.teammates),
           })
           return map
         })
