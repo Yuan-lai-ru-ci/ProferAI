@@ -166,7 +166,7 @@ const FEISHU_CLI_PROMPT = `请帮我配置飞书 CLI 开发环境，按以下步
 1. 安装飞书 CLI 到全局
 npm install -g @larksuite/cli
 
-2. 将 SKILL 配置到本工作区（不要安装在全局）
+2. 将 SKILL 配置到本工作区（默认配置本工作区，但请提醒用户是否需要额外安装到全局，会使得预置上下文增加，造成不必要的Token消耗）
 npx skills add https://github.com/larksuite/cli -y -g
 
 3. 初始化 CLI 配置
