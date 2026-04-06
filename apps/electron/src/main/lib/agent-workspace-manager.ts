@@ -274,6 +274,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
 
     console.log('[Agent 工作区] 已创建默认工作区')
   } else {
+    // 迁移兼容：确保已有默认工作区包含 plugin manifest
     ensurePluginManifest(defaultWs.slug, defaultWs.name)
   }
 
@@ -423,12 +424,12 @@ function parseSkillFrontmatter(content: string, slug: string, enabled: boolean):
 
     if (!indented) {
       const colonIdx = line.indexOf(':')
-      if (colonIdx === -1) continue
+      if (colonIdx === -1) { currentKey = ''; continue }
 
       const key = line.slice(0, colonIdx).trim()
       const raw = line.slice(colonIdx + 1).trim()
 
-      if (!validKeys.has(key)) { currentKey = ''; continue }
+      if (!validKeys.has(key)) { currentKey = ''; isFolded = false; continue }
 
       if (raw === '|' || raw === '>') {
         currentKey = key
@@ -442,7 +443,7 @@ function parseSkillFrontmatter(content: string, slug: string, enabled: boolean):
       entries[key] = raw.replace(/^["']|["']$/g, '')
     } else if (currentKey) {
       const text = line.trim()
-      if (!text) { entries[currentKey] += '\n'; continue }
+      if (!text) { if (entries[currentKey]) entries[currentKey] += '\n'; continue }
       const sep = isFolded ? ' ' : '\n'
       entries[currentKey] = entries[currentKey] ? entries[currentKey] + sep + text : text
     }
