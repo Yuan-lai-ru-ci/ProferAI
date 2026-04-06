@@ -1693,28 +1693,36 @@ export function registerIpcHandlers(): void {
 
       const safeRoot = resolve(rootPath)
       const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
+      const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
 
-      // 递归收集文件（限制深度 5 层）
-      const allEntries: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
+      // 按来源分组收集文件，用于空 query 时均衡分配结果
+      const rootEntries: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
+      const additionalEntryGroups: Array<Array<{ name: string; path: string; type: 'file' | 'dir' }>> = []
 
-      function scan(dir: string, depth: number, baseRoot: string): void {
-        if (depth > 5) return
+      function scan(
+        dir: string,
+        depth: number,
+        baseRoot: string,
+        target: Array<{ name: string; path: string; type: 'file' | 'dir' }>,
+        useAbsPath: boolean,
+      ): void {
+        if (depth > 10) return
         try {
           const items = readdirSync(dir, { withFileTypes: true })
           for (const item of items) {
-            if (item.name.startsWith('.')) continue
+            if (ignoreFiles.has(item.name)) continue
             if (item.isDirectory() && ignoreDirs.has(item.name)) continue
 
             const fullPath = resolve(dir, item.name)
-            const relPath = relative(baseRoot, fullPath)
-            allEntries.push({
+            const entryPath = useAbsPath ? fullPath : relative(baseRoot, fullPath)
+            target.push({
               name: item.name,
-              path: relPath,
+              path: entryPath,
               type: item.isDirectory() ? 'dir' : 'file',
             })
 
             if (item.isDirectory()) {
-              scan(fullPath, depth + 1, baseRoot)
+              scan(fullPath, depth + 1, baseRoot, target, useAbsPath)
             }
           }
         } catch {
@@ -1722,22 +1730,47 @@ export function registerIpcHandlers(): void {
         }
       }
 
-      scan(safeRoot, 0, safeRoot)
+      // session 目录：相对路径
+      scan(safeRoot, 0, safeRoot, rootEntries, false)
 
-      // 扫描附加目录（外部路径）
+      // 附加目录：绝对路径（消除歧义，agent 可直接使用）
       if (additionalPaths && additionalPaths.length > 0) {
         for (const addPath of additionalPaths) {
           const addRoot = resolve(addPath)
-          scan(addRoot, 0, addRoot)
+          const group: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
+          scan(addRoot, 0, addRoot, group, true)
+          additionalEntryGroups.push(group)
         }
       }
 
       // 搜索匹配
       const q = query.toLowerCase()
+
       if (!q) {
-        return { entries: allEntries.slice(0, limit), total: allEntries.length }
+        // 空 query：从各来源交替取结果，确保均衡展示
+        const allGroups = [rootEntries, ...additionalEntryGroups].filter((g) => g.length > 0)
+        const result: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
+        const groupCount = allGroups.length
+        if (groupCount > 0) {
+          // 每组至少分配 perGroup 条，剩余名额按需补充
+          const perGroup = Math.max(1, Math.floor(limit / groupCount))
+          for (const group of allGroups) {
+            result.push(...group.slice(0, perGroup))
+          }
+          // 如果还有剩余名额，按组顺序补充
+          if (result.length < limit) {
+            for (const group of allGroups) {
+              for (let i = perGroup; i < group.length && result.length < limit; i++) {
+                result.push(group[i]!)
+              }
+            }
+          }
+        }
+        const allEntries = [rootEntries, ...additionalEntryGroups].flat()
+        return { entries: result.slice(0, limit), total: allEntries.length }
       }
 
+      const allEntries = [rootEntries, ...additionalEntryGroups].flat()
       const matched = allEntries.filter((entry) => {
         const nameLower = entry.name.toLowerCase()
         const pathLower = entry.path.toLowerCase()
