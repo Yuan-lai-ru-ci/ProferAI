@@ -462,12 +462,24 @@ export function useGlobalAgentListeners(): void {
         )
 
         // STREAM_COMPLETE 表示后端已完全结束 — 立即标记 running: false
+        // 同时将所有未完成的工具活动标记为已完成，防止 subagent spinner 继续转动
         // （complete 事件只清除 retrying，保持 running: true 以防竞态）
         store.set(agentStreamingStatesAtom, (prev) => {
           const current = prev.get(data.sessionId)
           if (!current || !current.running) return prev
           const map = new Map(prev)
-          map.set(data.sessionId, { ...current, running: false })
+          map.set(data.sessionId, {
+            ...current,
+            running: false,
+            toolActivities: current.toolActivities.map((ta) =>
+              ta.done ? ta : { ...ta, done: true }
+            ),
+            teammates: current.teammates.map((tm) =>
+              tm.status === 'running'
+                ? { ...tm, status: 'stopped' as const, endedAt: Date.now(), currentToolName: undefined, currentToolElapsedSeconds: undefined, currentToolUseId: undefined }
+                : tm
+            ),
+          })
           return map
         })
 

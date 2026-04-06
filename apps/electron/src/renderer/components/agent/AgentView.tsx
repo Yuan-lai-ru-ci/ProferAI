@@ -906,7 +906,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const current = prev.get(sessionId)
       if (!current) return prev
       const map = new Map(prev)
-      map.set(sessionId, { ...current, running: false })
+      map.set(sessionId, {
+        ...current,
+        running: false,
+        // 将所有未完成的工具活动标记为已完成，防止 spinner 继续转动
+        toolActivities: current.toolActivities.map((ta) =>
+          ta.done ? ta : { ...ta, done: true }
+        ),
+        // 将所有 running 的 teammates 标记为 stopped
+        teammates: current.teammates.map((tm) =>
+          tm.status === 'running'
+            ? { ...tm, status: 'stopped' as const, endedAt: Date.now(), currentToolName: undefined, currentToolElapsedSeconds: undefined, currentToolUseId: undefined }
+            : tm
+        ),
+      })
       return map
     })
 
