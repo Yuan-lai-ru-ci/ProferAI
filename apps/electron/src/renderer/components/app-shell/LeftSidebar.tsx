@@ -48,7 +48,6 @@ import {
   splitLayoutAtom,
   activeTabIdAtom,
   sidebarCollapsedAtom,
-  openTab,
   closeTab,
   updateTabTitle,
 } from '@/atoms/tab-atoms'
@@ -59,6 +58,7 @@ import { hasUpdateAtom } from '@/atoms/updater'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
+import { useOpenSession } from '@/hooks/useOpenSession'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
 import { MoveSessionDialog } from '@/components/agent/MoveSessionDialog'
 import {
@@ -194,6 +194,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [layout, setLayout] = useAtom(splitLayoutAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
   const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
+  const openSession = useOpenSession()
 
   // 归档 & 搜索状态
   const [viewMode, setViewMode] = useAtom(sidebarViewModeAtom)
@@ -331,10 +332,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       )
       setConversations((prev) => [meta, ...prev])
       // 打开新标签页
-      const result = openTab(tabs, layout, { type: 'chat', sessionId: meta.id, title: meta.title })
-      setTabs(result.tabs)
-      setLayout(result.layout)
-      setCurrentConversationId(meta.id)
+      openSession('chat', meta.id, meta.title)
       // 确保在对话视图
       setActiveView('conversations')
       setActiveItem('all-chats')
@@ -349,10 +347,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   /** 选择对话（打开或聚焦标签页） */
   const handleSelectConversation = (id: string, title: string): void => {
-    const result = openTab(tabs, layout, { type: 'chat', sessionId: id, title })
-    setTabs(result.tabs)
-    setLayout(result.layout)
-    setCurrentConversationId(id)
+    openSession('chat', id, title)
     setActiveView('conversations')
     setActiveItem('all-chats')
   }
@@ -504,10 +499,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         })
       }
       // 打开新标签页
-      const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
-      setTabs(result.tabs)
-      setLayout(result.layout)
-      setCurrentAgentSessionId(meta.id)
+      openSession('agent', meta.id, meta.title)
       setActiveView('conversations')
       setActiveItem('all-chats')
     } catch (error) {
@@ -517,10 +509,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   /** 选择 Agent 会话（打开或聚焦标签页） */
   const handleSelectAgentSession = (id: string, title: string): void => {
-    const result = openTab(tabs, layout, { type: 'agent', sessionId: id, title })
-    setTabs(result.tabs)
-    setLayout(result.layout)
-    setCurrentAgentSessionId(id)
+    openSession('agent', id, title)
     setActiveView('conversations')
     setActiveItem('all-chats')
   }

@@ -50,7 +50,6 @@ import {
   agentPromptSuggestionsAtom,
   agentMessageRefreshAtom,
   agentSessionsAtom,
-  currentAgentSessionIdAtom,
   agentAttachedDirectoriesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
   liveMessagesMapAtom,
@@ -68,7 +67,7 @@ import {
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
-import { tabsAtom, splitLayoutAtom, openTab } from '@/atoms/tab-atoms'
+import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
@@ -228,9 +227,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const suggestion = suggestionsMap.get(sessionId) ?? null
   const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
-  const [tabs, setTabs] = useAtom(tabsAtom)
-  const [layout, setLayout] = useAtom(splitLayoutAtom)
+  const openSession = useOpenSession()
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
   const attachedDirs = attachedDirsMap.get(sessionId) ?? []
@@ -1033,10 +1030,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       setAgentSessions((prev) => [meta, ...prev])
 
       // 切换到新会话 tab
-      const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
-      setTabs(result.tabs)
-      setLayout(result.layout)
-      setCurrentAgentSessionId(meta.id)
+      openSession('agent', meta.id, meta.title)
 
       // 发送引用旧会话的默认提示词
       const prompt = `上个会话的 id 是 ${sessionId}，可以参考同工作区下的会话继续完成工作`
@@ -1065,7 +1059,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     } catch (error) {
       console.error('[AgentView] 在新会话中重试失败:', error)
     }
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout, setStreamingStates])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates])
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
@@ -1077,10 +1071,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       setAgentSessions((prev) => [meta, ...prev])
 
       // 切换到新会话 tab
-      const result = openTab(tabs, layout, { type: 'agent', sessionId: meta.id, title: meta.title })
-      setTabs(result.tabs)
-      setLayout(result.layout)
-      setCurrentAgentSessionId(meta.id)
+      openSession('agent', meta.id, meta.title)
 
       toast.success('已创建分叉会话', {
         description: meta.title,
@@ -1091,7 +1082,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [sessionId, tabs, layout, setAgentSessions, setCurrentAgentSessionId, setTabs, setLayout])
+  }, [sessionId, openSession, setAgentSessions])
 
   // 监听快捷键系统分发的 stop-generation 事件（Cmd+.）
   React.useEffect(() => {
