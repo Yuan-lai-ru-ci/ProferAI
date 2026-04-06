@@ -223,7 +223,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
       {/* 面板内容 */}
       <div
         className={cn(
-          'w-[320px] h-full flex flex-col titlebar-no-drag pt-3',
+          'w-[320px] h-full flex flex-col titlebar-no-drag pt-0.5',
           shouldAnimate && 'transition-opacity duration-300',
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}
@@ -234,7 +234,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                   {/* ===== 会话文件区（仅当 sessionPath 存在时显示） ===== */}
                   {sessionPath && (
                     <>
-                      <div className="flex items-center gap-1 px-3 h-[32px] flex-shrink-0">
+                      <div className="flex items-center gap-1 pl-3 pr-2 h-[32px] flex-shrink-0">
                         <FolderOpen className="size-3 text-muted-foreground" />
                         <span className="text-[11px] font-medium text-muted-foreground">会话文件</span>
                         <Tooltip>

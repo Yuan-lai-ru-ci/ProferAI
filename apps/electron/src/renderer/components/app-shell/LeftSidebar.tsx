@@ -738,7 +738,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       {/* 顶部留空，避开 macOS 红绿灯 */}
       <div className="pt-[50px]">
         {/* 模式切换器 + 折叠按钮 */}
-        <div className="flex items-start gap-1 pr-1">
+        <div className="flex items-start gap-1.5 px-3">
           <div className="flex-1 min-w-0">
             <ModeSwitcher />
           </div>
@@ -746,9 +746,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             <TooltipTrigger asChild>
               <button
                 onClick={() => setSidebarCollapsed(true)}
-                className="mt-2 size-10 flex items-center justify-center rounded-[10px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
+                className="mt-2 size-[36px] flex-shrink-0 flex items-center justify-center rounded-[10px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
               >
-                <PanelLeftClose size={18} />
+                <PanelLeftClose size={14} />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">收起侧边栏</TooltipContent>
