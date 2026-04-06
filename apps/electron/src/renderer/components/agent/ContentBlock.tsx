@@ -256,9 +256,9 @@ function PromptRow({ prompt, dimmed = false }: { prompt: string; dimmed?: boolea
 
 // ===== 工具短语 diff 着色 =====
 
-/** 将 displayLabel 中的 +N 染绿、-N 染红 */
+/** 将 displayLabel 中的 +N 染绿、-N 染红（仅匹配前面是空格或字符串开头的，避免误染行范围如 505-600） */
 function renderLabelWithDiffColors(label: string): React.ReactNode {
-  const parts = label.split(/(\+\d+|-\d+)/g)
+  const parts = label.split(/((?:^|(?<=\s))[+-]\d+)/g)
   if (parts.length === 1) return label
   return parts.map((part, i) => {
     if (/^\+\d+$/.test(part)) {
