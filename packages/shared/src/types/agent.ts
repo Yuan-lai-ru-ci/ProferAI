@@ -1206,6 +1206,8 @@ export const AGENT_IPC_CHANNELS = {
   RENAME_ATTACHED_FILE: 'agent:rename-attached-file',
   /** 移动附加目录文件/目录（无工作区路径限制） */
   MOVE_ATTACHED_FILE: 'agent:move-attached-file',
+  /** 检查路径类型（文件 or 目录），用于拖拽检测 */
+  CHECK_PATHS_TYPE: 'agent:check-paths-type',
   /** 搜索工作区文件（用于 @ 引用） */
   SEARCH_WORKSPACE_FILES: 'agent:search-workspace-files',
 

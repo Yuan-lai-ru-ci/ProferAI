@@ -92,38 +92,40 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
       .catch(console.error)
   }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap])
 
+  // === 会话级：附加/移除目录 ===
+
+  const attachSessionDir = React.useCallback(async (dirPath: string) => {
+    const updated = await window.electronAPI.attachDirectory({ sessionId, directoryPath: dirPath })
+    setAttachedDirsMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, updated)
+      return map
+    })
+  }, [sessionId, setAttachedDirsMap])
+
   const handleAttachFolder = React.useCallback(async () => {
     try {
       const result = await window.electronAPI.openFolderDialog()
-      if (!result) return
-
-      const updated = await window.electronAPI.attachDirectory({
-        sessionId,
-        directoryPath: result.path,
-      })
-      setAttachedDirsMap((prev) => {
-        const map = new Map(prev)
-        map.set(sessionId, updated)
-        return map
-      })
+      if (result) await attachSessionDir(result.path)
     } catch (error) {
       console.error('[SidePanel] 附加文件夹失败:', error)
     }
-  }, [sessionId, setAttachedDirsMap])
+  }, [attachSessionDir])
+
+  const handleSessionFoldersDropped = React.useCallback(async (folderPaths: string[]) => {
+    for (const dirPath of folderPaths) {
+      try { await attachSessionDir(dirPath) } catch (error) {
+        console.error('[SidePanel] 拖拽附加文件夹失败:', error)
+      }
+    }
+  }, [attachSessionDir])
 
   const handleDetachDirectory = React.useCallback(async (dirPath: string) => {
     try {
-      const updated = await window.electronAPI.detachDirectory({
-        sessionId,
-        directoryPath: dirPath,
-      })
+      const updated = await window.electronAPI.detachDirectory({ sessionId, directoryPath: dirPath })
       setAttachedDirsMap((prev) => {
         const map = new Map(prev)
-        if (updated.length > 0) {
-          map.set(sessionId, updated)
-        } else {
-          map.delete(sessionId)
-        }
+        if (updated.length > 0) { map.set(sessionId, updated) } else { map.delete(sessionId) }
         return map
       })
     } catch (error) {
@@ -131,41 +133,42 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
     }
   }, [sessionId, setAttachedDirsMap])
 
-  // 工作区级附加文件夹
-  const handleAttachWorkspaceFolder = React.useCallback(async () => {
+  // === 工作区级：附加/移除目录 ===
+
+  const attachWorkspaceDir = React.useCallback(async (dirPath: string) => {
     if (!workspaceSlug || !currentWorkspaceId) return
+    const updated = await window.electronAPI.attachWorkspaceDirectory({ workspaceSlug, directoryPath: dirPath })
+    setWsAttachedDirsMap((prev) => {
+      const map = new Map(prev)
+      map.set(currentWorkspaceId, updated)
+      return map
+    })
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap])
+
+  const handleAttachWorkspaceFolder = React.useCallback(async () => {
     try {
       const result = await window.electronAPI.openFolderDialog()
-      if (!result) return
-
-      const updated = await window.electronAPI.attachWorkspaceDirectory({
-        workspaceSlug,
-        directoryPath: result.path,
-      })
-      setWsAttachedDirsMap((prev) => {
-        const map = new Map(prev)
-        map.set(currentWorkspaceId, updated)
-        return map
-      })
+      if (result) await attachWorkspaceDir(result.path)
     } catch (error) {
       console.error('[SidePanel] 附加工作区文件夹失败:', error)
     }
-  }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap])
+  }, [attachWorkspaceDir])
+
+  const handleWorkspaceFoldersDropped = React.useCallback(async (folderPaths: string[]) => {
+    for (const dirPath of folderPaths) {
+      try { await attachWorkspaceDir(dirPath) } catch (error) {
+        console.error('[SidePanel] 拖拽附加工作区文件夹失败:', error)
+      }
+    }
+  }, [attachWorkspaceDir])
 
   const handleDetachWorkspaceDirectory = React.useCallback(async (dirPath: string) => {
     if (!workspaceSlug || !currentWorkspaceId) return
     try {
-      const updated = await window.electronAPI.detachWorkspaceDirectory({
-        workspaceSlug,
-        directoryPath: dirPath,
-      })
+      const updated = await window.electronAPI.detachWorkspaceDirectory({ workspaceSlug, directoryPath: dirPath })
       setWsAttachedDirsMap((prev) => {
         const map = new Map(prev)
-        if (updated.length > 0) {
-          map.set(currentWorkspaceId, updated)
-        } else {
-          map.delete(currentWorkspaceId)
-        }
+        if (updated.length > 0) { map.set(currentWorkspaceId, updated) } else { map.delete(currentWorkspaceId) }
         return map
       })
     } catch (error) {
@@ -314,6 +317,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                           target="session"
                           onFilesUploaded={handleFilesUploaded}
                           onAttachFolder={handleAttachFolder}
+                          onFoldersDropped={handleSessionFoldersDropped}
                         />
                       </div>
                       {/* ===== 分隔线 ===== */}
@@ -396,6 +400,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                         target="workspace"
                         onFilesUploaded={handleFilesUploaded}
                         onAttachFolder={handleAttachWorkspaceFolder}
+                        onFoldersDropped={handleWorkspaceFoldersDropped}
                       />
                     </div>
                   </div>

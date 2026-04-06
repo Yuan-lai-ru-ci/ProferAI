@@ -1661,6 +1661,29 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 检查路径类型（文件 or 目录），用于拖拽检测
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CHECK_PATHS_TYPE,
+    async (_, paths: string[]): Promise<{ directories: string[]; files: string[] }> => {
+      const { statSync } = await import('node:fs')
+      const directories: string[] = []
+      const files: string[] = []
+      for (const p of paths) {
+        try {
+          const stat = statSync(p)
+          if (stat.isDirectory()) {
+            directories.push(p)
+          } else {
+            files.push(p)
+          }
+        } catch {
+          // 无法访问的路径忽略
+        }
+      }
+      return { directories, files }
+    }
+  )
+
   // 搜索工作区文件（用于 @ 引用，递归扫描，支持附加目录）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES,
