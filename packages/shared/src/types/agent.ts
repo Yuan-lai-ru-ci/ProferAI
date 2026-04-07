@@ -787,6 +787,8 @@ export interface AgentStreamCompletePayload {
   messages?: AgentMessage[]
   /** 是否由用户手动中止 */
   stoppedByUser?: boolean
+  /** 本轮流式开始时间戳（用于区分新旧流，防止旧流的 complete 事件重置新流状态） */
+  startedAt?: number
 }
 
 // ===== 文件浏览器 =====
