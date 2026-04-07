@@ -31,56 +31,40 @@ export function ModeSwitcher(): React.ReactElement {
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const tabs = useAtomValue(tabsAtom)
 
-  /** 切换模式并恢复对应模式下的上一个对话/会话 */
+  /** 尝试恢复目标模式下的上一个对话/会话，按优先级 fallback */
+  const restoreSession = React.useCallback((targetMode: AppMode) => {
+    const isChatMode = targetMode === 'chat'
+    const sessions = isChatMode ? conversations : agentSessions
+    const lastId = isChatMode ? currentConversationId : currentAgentSessionId
+
+    // 1. 上次选中的对话仍存在 → 恢复
+    if (lastId) {
+      const match = sessions.find((s) => s.id === lastId)
+      if (match) {
+        openSession(targetMode, match.id, match.title)
+        return
+      }
+    }
+    // 2. 已打开的同类型 Tab → 聚焦
+    const tab = tabs.find((t) => t.type === targetMode)
+    if (tab) {
+      openSession(targetMode, tab.sessionId, tab.title)
+      return
+    }
+    // 3. 最近的未归档对话/会话 → 打开
+    const recent = sessions.find((s) => !s.archived)
+    if (recent) {
+      openSession(targetMode, recent.id, recent.title)
+      return
+    }
+    // 4. 无任何对话，仅切换模式
+    setMode(targetMode)
+  }, [openSession, conversations, agentSessions, currentConversationId, currentAgentSessionId, tabs, setMode])
+
   const handleModeSwitch = React.useCallback((targetMode: AppMode) => {
     if (targetMode === mode) return
-
-    if (targetMode === 'chat') {
-      // 恢复 Chat 模式的上一个对话
-      // 1. 上次选中的对话仍存在 → 恢复
-      if (currentConversationId) {
-        const conv = conversations.find((c) => c.id === currentConversationId)
-        if (conv) {
-          openSession('chat', conv.id, conv.title)
-          return
-        }
-      }
-      // 2. 已打开的 Chat Tab → 聚焦
-      const chatTab = tabs.find((t) => t.type === 'chat')
-      if (chatTab) {
-        openSession('chat', chatTab.sessionId, chatTab.title)
-        return
-      }
-      // 3. 最近的未归档对话 → 打开
-      const recentConv = conversations.find((c) => !c.archived)
-      if (recentConv) {
-        openSession('chat', recentConv.id, recentConv.title)
-        return
-      }
-      // 4. 无任何对话，仅切换模式
-      setMode(targetMode)
-    } else {
-      // 恢复 Agent 模式的上一个会话
-      if (currentAgentSessionId) {
-        const session = agentSessions.find((s) => s.id === currentAgentSessionId)
-        if (session) {
-          openSession('agent', session.id, session.title)
-          return
-        }
-      }
-      const agentTab = tabs.find((t) => t.type === 'agent')
-      if (agentTab) {
-        openSession('agent', agentTab.sessionId, agentTab.title)
-        return
-      }
-      const recentSession = agentSessions.find((s) => !s.archived)
-      if (recentSession) {
-        openSession('agent', recentSession.id, recentSession.title)
-        return
-      }
-      setMode(targetMode)
-    }
-  }, [mode, openSession, conversations, agentSessions, currentConversationId, currentAgentSessionId, tabs, setMode])
+    restoreSession(targetMode)
+  }, [mode, restoreSession])
 
   return (
     <div className="pt-2">
