@@ -1123,6 +1123,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         {/* 消息区域 */}
         <AgentMessages
           sessionId={sessionId}
+          sessionModelId={agentModelId || undefined}
           messages={messages}
           messagesLoaded={messagesLoaded}
           persistedSDKMessages={persistedSDKMessages}

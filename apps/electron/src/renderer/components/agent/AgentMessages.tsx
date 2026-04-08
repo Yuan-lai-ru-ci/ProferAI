@@ -44,6 +44,8 @@ import type { ToolActivity, AgentStreamState } from '@/atoms/agent-atoms'
 /** AgentMessages 属性接口 */
 interface AgentMessagesProps {
   sessionId: string
+  /** 用户在前端选择的模型 ID（用于显示渠道配置的 Model Name） */
+  sessionModelId?: string
   messages: AgentMessage[]
   /** 消息是否已完成首次加载 */
   messagesLoaded?: boolean
@@ -635,7 +637,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, messages, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, stoppedByUser, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messages, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, stoppedByUser, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
   /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
@@ -711,14 +713,14 @@ export function AgentMessages({ sessionId, messages, messagesLoaded, persistedSD
   // Turn 分组（持久化消息按 turn 分组渲染）
   const persistedGroups = React.useMemo(() => {
     if (!persistedSDKMessages || persistedSDKMessages.length === 0) return []
-    return groupIntoTurns(persistedSDKMessages)
-  }, [persistedSDKMessages])
+    return groupIntoTurns(persistedSDKMessages, sessionModelId)
+  }, [persistedSDKMessages, sessionModelId])
 
   // Turn 分组（实时消息同样按 turn 分组，避免多个气泡最终合并的跳变）
   const liveGroups = React.useMemo(() => {
     if (!liveMessages || liveMessages.length === 0) return []
-    return groupIntoTurns(liveMessages)
-  }, [liveMessages])
+    return groupIntoTurns(liveMessages, sessionModelId)
+  }, [liveMessages, sessionModelId])
 
   // 迷你地图数据 — 复用 persistedGroups / liveGroups，确保 getGroupId 对同一对象引用返回一致的 ID
   const minimapItems: MinimapItem[] = React.useMemo(
@@ -781,6 +783,7 @@ export function AgentMessages({ sessionId, messages, messagesLoaded, persistedSD
                     basePath={sessionPath || undefined}
                     onFork={onFork}
                     stoppedByUser={isLastAssistantTurn || undefined}
+                    sessionModelId={sessionModelId}
                   />
                 )
               })
@@ -807,6 +810,7 @@ export function AgentMessages({ sessionId, messages, messagesLoaded, persistedSD
                 allMessages={allSDKMessages}
                 basePath={sessionPath || undefined}
                 isStreaming
+                sessionModelId={sessionModelId}
               />
             ))}
 
