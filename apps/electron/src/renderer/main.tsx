@@ -35,6 +35,8 @@ import {
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import {
   notificationsEnabledAtom,
+  notificationSoundEnabledAtom,
+  notificationSoundsAtom,
   initializeNotifications,
 } from './atoms/notifications'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
@@ -295,10 +297,12 @@ function UpdaterInitializer(): null {
  */
 function NotificationsInitializer(): null {
   const setEnabled = useSetAtom(notificationsEnabledAtom)
+  const setSoundEnabled = useSetAtom(notificationSoundEnabledAtom)
+  const setSounds = useSetAtom(notificationSoundsAtom)
 
   useEffect(() => {
-    initializeNotifications(setEnabled)
-  }, [setEnabled])
+    initializeNotifications(setEnabled, setSoundEnabled, setSounds)
+  }, [setEnabled, setSoundEnabled, setSounds])
 
   return null
 }
