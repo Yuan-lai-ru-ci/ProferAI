@@ -62,7 +62,6 @@ import {
   agentSessionPathMapAtom,
   allPendingAskUserRequestsAtom,
   allPendingExitPlanRequestsAtom,
-  allPendingPermissionRequestsAtom,
   finalizeStreamingActivities,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
@@ -1122,13 +1121,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
   const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
-  const allPermissionRequests = useAtomValue(allPendingPermissionRequestsAtom)
   const hasBannerOverlay =
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
-    (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0 ||
-    (allPermissionRequests.get(sessionId)?.length ?? 0) > 0
+    (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
-  const canSend = (inputContent.trim().length > 0 || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && !streaming
+  const hasTextInput = inputContent.trim().length > 0
+  const canSend = (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && (!streaming || hasTextInput)
 
   return (
     <AgentSessionProvider sessionId={sessionId}>
@@ -1329,7 +1327,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               </div>
 
               <div className="flex items-center gap-1.5">
-                {streaming ? (
+                {streaming && !hasTextInput ? (
                   <Button
                     type="button"
                     variant="ghost"
