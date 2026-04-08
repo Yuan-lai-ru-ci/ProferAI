@@ -47,6 +47,7 @@ import {
   agentWorkspacesAtom,
   agentStreamErrorsAtom,
   agentSessionDraftsAtom,
+  agentSessionDraftHtmlAtom,
   agentPromptSuggestionsAtom,
   agentMessageRefreshAtom,
   agentSessionsAtom,
@@ -248,6 +249,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
   }, [sessionId, setDraftsMap])
+  const draftHtmlMap = useAtomValue(agentSessionDraftHtmlAtom)
+  const setDraftHtmlMap = useSetAtom(agentSessionDraftHtmlAtom)
+  const inputHtmlContent = draftHtmlMap.get(sessionId) ?? ''
+  const setInputHtmlContent = React.useCallback((html: string) => {
+    setDraftHtmlMap((prev) => {
+      const map = new Map(prev)
+      if (!html || html === '<p></p>') {
+        map.delete(sessionId)
+      } else {
+        map.set(sessionId, html)
+      }
+      return map
+    })
+  }, [sessionId, setDraftHtmlMap])
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const sessionPath = sessionPathMap.get(sessionId) ?? null
@@ -746,6 +761,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
       // 2. 清空输入框
       setInputContent('')
+      setInputHtmlContent('')
       setPromptSuggestions((prev) => {
         if (!prev.has(sessionId)) return prev
         const map = new Map(prev)
@@ -910,6 +926,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
 
     setInputContent('')
+    setInputHtmlContent('')
 
     window.electronAPI.sendAgentMessage(input).catch((error) => {
       console.error('[AgentView] 发送消息失败:', error)
@@ -1242,6 +1259,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               workspacePath={sessionPath}
               workspaceSlug={workspaceSlug}
               attachedDirs={allAttachedDirs}
+              htmlValue={inputHtmlContent}
+              onHtmlChange={setInputHtmlContent}
             />
 
             {/* Footer 工具栏 */}
