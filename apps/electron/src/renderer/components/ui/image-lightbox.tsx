@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 
 interface ImageLightboxProps {
   /** 图片 src（data URL 或普通 URL） */
-  src: string
+  src: string | null
   /** 图片 alt / 文件名 */
   alt?: string
   /** 是否打开 */
@@ -31,7 +31,9 @@ export function ImageLightbox({
   open,
   onOpenChange,
   onSave,
-}: ImageLightboxProps): React.ReactElement {
+}: ImageLightboxProps): React.ReactElement | null {
+  if (!src) return null
+
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
