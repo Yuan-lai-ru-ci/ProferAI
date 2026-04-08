@@ -412,7 +412,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isS
                 block={block}
                 allMessages={allMessages}
                 basePath={basePath}
-                animate
+                animate={!!isStreaming}
                 index={i}
                 dimmed={hasTextContent && block.type !== 'text'}
                 childBlocks={childBlocks}
@@ -513,7 +513,6 @@ export function SDKMessageRenderer({
                 block={block}
                 allMessages={allMessages}
                 basePath={basePath}
-                animate
                 index={i}
                 dimmed={hasTextContent && block.type !== 'text'}
               />
