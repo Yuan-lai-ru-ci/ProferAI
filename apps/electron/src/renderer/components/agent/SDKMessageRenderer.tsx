@@ -148,6 +148,8 @@ function extractUserText(message: SDKUserMessage): string | null {
 
 function isUserInputMessage(message: SDKUserMessage): boolean {
   if (message.parent_tool_use_id) return false
+  // SDK 合成消息（如 Skill 展开 prompt）不是用户输入
+  if (message.isSynthetic) return false
   // 包含 tool_result 块的消息是工具结果，不是用户输入
   const content = message.message?.content
   if (Array.isArray(content) && content.some((b) => b.type === 'tool_result')) return false
