@@ -228,9 +228,10 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
       <div className="px-4 pb-2">
         <QuestionCard
           question={currentQuestion}
+          questionIndex={activeTab}
           answer={getAnswer(activeTab)}
           focusedIndex={focusedOptIdx}
-          showHeader={questions.length === 1}
+          showBadge={questions.length === 1}
           onToggleOption={(label) => toggleOptionByState(activeTab, currentQuestion, label)}
           onToggleCustom={() => toggleCustomByState(activeTab)}
           onCustomTextChange={(text) => setAnswers((prev) => {
@@ -268,18 +269,20 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
 /** 单个问题卡片（竖向选项） */
 function QuestionCard({
   question,
+  questionIndex,
   answer,
   focusedIndex,
-  showHeader,
+  showBadge,
   onToggleOption,
   onToggleCustom,
   onCustomTextChange,
   onSubmit,
 }: {
   question: AskUserQuestion
+  questionIndex: number
   answer: QuestionAnswer
   focusedIndex: number
-  showHeader: boolean
+  showBadge: boolean
   onToggleOption: (label: string) => void
   onToggleCustom: () => void
   onCustomTextChange: (text: string) => void
@@ -289,11 +292,11 @@ function QuestionCard({
 
   return (
     <div className="space-y-2">
-      {/* 问题文本 */}
-      <div className="flex items-center gap-2">
-        {showHeader && question.header && (
-          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary">
-            {question.header}
+      {/* 问题标签 + 文本（分行显示） */}
+      <div className="space-y-1">
+        {showBadge && (
+          <span className="shrink-0 inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-primary text-primary-foreground shadow-sm">
+            {`${questionIndex + 1}-${question.multiSelect ? '多选' : '单选'}${question.header ? `：${question.header}` : ''}`}
           </span>
         )}
         <p className="text-sm text-foreground">{question.question}</p>
