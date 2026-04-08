@@ -290,7 +290,7 @@ export function RichTextInput({
       CodeBlockLowlight.configure({
         lowlight,
         HTMLAttributes: {
-          class: 'rounded-md bg-muted p-3 font-mono text-sm',
+          class: 'rounded-md p-3 font-mono text-sm',
         },
       }),
       Placeholder.configure({
@@ -349,8 +349,8 @@ export function RichTextInput({
           'prose dark:prose-invert max-w-none focus:outline-none',
           'min-h-[101px] w-full text-[15px] leading-[1.6]',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
-          '[&_pre]:bg-muted [&_pre]:rounded-md [&_pre]:p-3',
-          '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-sm',
+          '[&_pre]:rounded-md [&_pre]:p-3',
+          '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-sm [&_code]:text-foreground',
           '[&_pre_code]:bg-transparent [&_pre_code]:p-0'
         ),
       },
