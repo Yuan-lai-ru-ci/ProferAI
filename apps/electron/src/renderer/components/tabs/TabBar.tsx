@@ -5,7 +5,7 @@
  * - 点击切换标签
  * - 中键关闭标签
  * - 拖拽重排序
- * - 溢出时水平滚动
+ * - Chrome 风格等分宽度（不滚动）
  * - 分屏模式切换按钮
  */
 
@@ -44,7 +44,6 @@ export function TabBar(): React.ReactElement {
   const [layout, setLayout] = useAtom(splitLayoutAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
   const streamingMap = useAtomValue(tabStreamingMapAtom)
-  const scrollRef = React.useRef<HTMLDivElement>(null)
 
   // Tab 切换时同步 sidebar 状态
   const setAppMode = useSetAtom(appModeAtom)
@@ -149,23 +148,15 @@ export function TabBar(): React.ReactElement {
     document.addEventListener('pointerup', handleUp)
   }, [tabs])
 
-  // 水平滚动支持
-  const handleWheel = React.useCallback((e: React.WheelEvent) => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollLeft += e.deltaY
-    }
-  }, [])
-
   if (tabs.length === 0) return <div className="h-[34px] titlebar-drag-region" />
 
   return (
-    <div className="flex items-end h-[34px] tabbar-bg">
-      {/* 标签区域（可滚动） */}
-      <div
-        ref={scrollRef}
-        className="flex items-end shrink min-w-0 max-w-full overflow-x-auto scrollbar-none titlebar-no-drag"
-        onWheel={handleWheel}
-      >
+    <div className="flex items-end h-[34px] tabbar-bg relative">
+      {/* 底层拖拽区域：铺满整个 bar，Tab 和按钮通过 titlebar-no-drag 覆盖 */}
+      <div className="absolute inset-0 titlebar-drag-region" />
+
+      {/* 标签区域（Chrome 风格：等分空间，不滚动） */}
+      <div className="relative flex items-end flex-1 min-w-0 overflow-x-clip titlebar-no-drag">
         {tabs.map((tab, _index) => (
           <TabBarItem
             key={tab.id}
@@ -181,9 +172,6 @@ export function TabBar(): React.ReactElement {
           />
         ))}
       </div>
-
-      {/* 空白拖拽区域：支持拖动窗口 */}
-      <div className="flex-1 h-full titlebar-drag-region" />
 
       {/* 分屏模式切换 */}
       <SplitModeToggle />

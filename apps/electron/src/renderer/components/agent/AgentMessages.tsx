@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
@@ -32,6 +32,7 @@ import { Button } from '@/components/ui/button'
 import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { ToolActivityList } from './ToolActivityItem'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
@@ -639,6 +640,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 
 export function AgentMessages({ sessionId, sessionModelId, messages, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, stoppedByUser, onRetry, onRetryInNewSession, onFork, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
+  const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
   /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
   const [ready, setReady] = React.useState(false)
@@ -755,6 +757,17 @@ export function AgentMessages({ sessionId, sessionModelId, messages, messagesLoa
     },
     [useSDKRenderer, persistedGroups, liveGroups, messages, userProfile.avatar]
   )
+
+  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
+  React.useEffect(() => {
+    if (minimapItems.length > 0) {
+      setMinimapCache((prev) => {
+        const next = new Map(prev)
+        next.set(sessionId, minimapItems)
+        return next
+      })
+    }
+  }, [sessionId, minimapItems, setMinimapCache])
 
   // 实时消息中是否已有可渲染的助手内容
   const hasLiveAssistantContent = liveGroups.some((g) => g.type === 'assistant-turn')
