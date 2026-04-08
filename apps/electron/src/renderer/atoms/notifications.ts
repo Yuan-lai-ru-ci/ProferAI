@@ -208,7 +208,7 @@ export function sendDesktopNotification(
   if (!enabled) return
   if (!options?.force && document.hasFocus()) return
 
-  const notification = new Notification(title, { body })
+  const notification = new Notification(title, { body, silent: true })
   notification.onclick = () => {
     window.focus()
     options?.onNavigate?.()
