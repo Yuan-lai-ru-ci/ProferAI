@@ -15,6 +15,7 @@ import * as React from 'react'
 import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split } from 'lucide-react'
 import { useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
+import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { DurationBadge } from './AgentMessages'
 import {
@@ -583,9 +584,10 @@ function isImageFile(filename: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(filename)
 }
 
-/** 图片附件缩略图 */
+/** 图片附件缩略图，点击可预览大图 */
 function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
+  const [lightboxOpen, setLightboxOpen] = React.useState(false)
 
   React.useEffect(() => {
     const ext = file.filename.split('.').pop()?.toLowerCase() ?? 'png'
@@ -614,7 +616,8 @@ function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactEle
       <img
         src={imageSrc}
         alt={file.filename}
-        className="max-w-[300px] max-h-[200px] rounded-lg object-contain"
+        className="max-w-[300px] max-h-[200px] rounded-lg object-contain cursor-pointer"
+        onClick={() => setLightboxOpen(true)}
       />
       <button
         type="button"
@@ -624,6 +627,13 @@ function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactEle
       >
         <Download className="size-4" />
       </button>
+      <ImageLightbox
+        src={imageSrc}
+        alt={file.filename}
+        open={lightboxOpen}
+        onOpenChange={setLightboxOpen}
+        onSave={handleSave}
+      />
     </div>
   )
 }

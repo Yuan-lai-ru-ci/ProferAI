@@ -8,6 +8,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Bot, FileText, FileImage, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Plus, Minimize2, Download } from 'lucide-react'
+import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   Message,
@@ -88,9 +89,10 @@ function AssistantLogo({ model }: { model?: string }): React.ReactElement {
   )
 }
 
-/** 单张工具结果图片（内联显示） */
+/** 单张工具结果图片（内联显示），点击可预览大图 */
 function InlineImage({ attachment }: { attachment: { localPath: string; filename: string; mediaType: string } }): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
+  const [lightboxOpen, setLightboxOpen] = React.useState(false)
 
   React.useEffect(() => {
     window.electronAPI
@@ -116,7 +118,8 @@ function InlineImage({ attachment }: { attachment: { localPath: string; filename
       <img
         src={imageSrc}
         alt={attachment.filename}
-        className="size-[280px] rounded-lg object-cover shrink-0"
+        className="size-[280px] rounded-lg object-cover shrink-0 cursor-pointer"
+        onClick={() => setLightboxOpen(true)}
       />
       <button
         type="button"
@@ -126,6 +129,13 @@ function InlineImage({ attachment }: { attachment: { localPath: string; filename
       >
         <Download className="size-4" />
       </button>
+      <ImageLightbox
+        src={imageSrc}
+        alt={attachment.filename}
+        open={lightboxOpen}
+        onOpenChange={setLightboxOpen}
+        onSave={handleSave}
+      />
     </div>
   )
 }
