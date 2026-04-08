@@ -535,7 +535,7 @@ export function RichTextInput({
   return (
     <div
       className={cn(
-        'relative w-full overflow-y-auto transition-[max-height] duration-200 ease-in-out',
+        'rich-text-input relative w-full overflow-y-auto transition-[max-height] duration-200 ease-in-out',
         isManuallyCollapsed
           ? 'max-h-[101px]'
           : isExpanded ? 'max-h-[500px]' : 'max-h-[200px]',

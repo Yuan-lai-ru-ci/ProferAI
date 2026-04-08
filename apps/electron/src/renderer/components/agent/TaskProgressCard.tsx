@@ -64,7 +64,10 @@ function aggregateTaskItems(activities: ToolActivity[], streamEnded: boolean): T
     if (activity.toolName === 'TodoWrite') {
       const todos = activity.input.todos
       if (Array.isArray(todos)) {
-        taskMap.clear()
+        // 仅清除之前的 todo 条目，保留 TaskCreate/TaskUpdate 产生的条目
+        for (const key of taskMap.keys()) {
+          if (key.startsWith('todo-')) taskMap.delete(key)
+        }
         for (const t of todos as Array<Record<string, unknown>>) {
           const id = `todo-${todoAutoId++}`
           taskMap.set(id, {
