@@ -21,6 +21,7 @@ import {
   focusTab,
   reorderTabs,
 } from '@/atoms/tab-atoms'
+import type { TabItem } from '@/atoms/tab-atoms'
 import {
   conversationModelsAtom,
   conversationContextLengthAtom,
@@ -151,13 +152,86 @@ export function TabBar(): React.ReactElement {
   if (tabs.length === 0) return <div className="h-[34px] titlebar-drag-region" />
 
   return (
+    <TabBarInner
+      tabs={tabs}
+      activeTabId={activeTabId}
+      streamingMap={streamingMap}
+      onActivate={handleActivate}
+      onClose={handleClose}
+      onDragStart={handleDragStart}
+    />
+  )
+}
+
+/** 内部组件：管理全局 hover 状态，确保同一时刻只有一个预览面板 */
+function TabBarInner({
+  tabs,
+  activeTabId,
+  streamingMap,
+  onActivate,
+  onClose,
+  onDragStart,
+}: {
+  tabs: TabItem[]
+  activeTabId: string | null
+  streamingMap: Map<string, boolean>
+  onActivate: (tabId: string) => void
+  onClose: (tabId: string) => void
+  onDragStart: (tabId: string, e: React.PointerEvent) => void
+}): React.ReactElement {
+  const [hoveredTabId, setHoveredTabId] = React.useState<string | null>(null)
+  const [isLeaving, setIsLeaving] = React.useState(false)
+  const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+
+  React.useEffect(() => {
+    return () => {
+      if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    }
+  }, [])
+
+  const handleTabHoverEnter = React.useCallback((tabId: string) => {
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    setIsLeaving(false)
+
+    // 如果已经有面板打开（从一个 Tab 滑到另一个），立即切换
+    if (hoveredTabId) {
+      setHoveredTabId(tabId)
+    } else {
+      // 首次 hover，延迟 300ms
+      enterTimerRef.current = setTimeout(() => setHoveredTabId(tabId), 300)
+    }
+  }, [hoveredTabId])
+
+  const handleTabHoverLeave = React.useCallback(() => {
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    leaveTimerRef.current = setTimeout(() => {
+      setIsLeaving(true)
+      fadeTimerRef.current = setTimeout(() => {
+        setHoveredTabId(null)
+        setIsLeaving(false)
+      }, 80)
+    }, 40)
+  }, [])
+
+  // 面板的 hover 进入（阻止关闭）
+  const handlePanelHoverEnter = React.useCallback(() => {
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    setIsLeaving(false)
+  }, [])
+
+  return (
     <div className="flex items-end h-[34px] tabbar-bg relative">
-      {/* 底层拖拽区域：铺满整个 bar，Tab 和按钮通过 titlebar-no-drag 覆盖 */}
       <div className="absolute inset-0 titlebar-drag-region" />
 
-      {/* 标签区域（Chrome 风格：等分空间，不滚动） */}
       <div className="relative flex items-end flex-1 min-w-0 overflow-x-clip titlebar-no-drag">
-        {tabs.map((tab, _index) => (
+        {tabs.map((tab) => (
           <TabBarItem
             key={tab.id}
             id={tab.id}
@@ -165,15 +239,20 @@ export function TabBar(): React.ReactElement {
             title={tab.title}
             isActive={tab.id === activeTabId}
             isStreaming={streamingMap.get(tab.id) ?? false}
-            onActivate={() => handleActivate(tab.id)}
-            onClose={() => handleClose(tab.id)}
-            onMiddleClick={() => handleClose(tab.id)}
-            onDragStart={(e) => handleDragStart(tab.id, e)}
+            isHovered={hoveredTabId === tab.id}
+            isLeaving={hoveredTabId === tab.id && isLeaving}
+            onActivate={() => onActivate(tab.id)}
+            onClose={() => onClose(tab.id)}
+            onMiddleClick={() => onClose(tab.id)}
+            onDragStart={(e) => onDragStart(tab.id, e)}
+            onHoverEnter={() => handleTabHoverEnter(tab.id)}
+            onHoverLeave={handleTabHoverLeave}
+            onPanelHoverEnter={handlePanelHoverEnter}
+            onPanelHoverLeave={handleTabHoverLeave}
           />
         ))}
       </div>
 
-      {/* 分屏模式切换 */}
       <SplitModeToggle />
     </div>
   )

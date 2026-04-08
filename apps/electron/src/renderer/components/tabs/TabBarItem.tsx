@@ -3,6 +3,7 @@
  *
  * 显示：类型图标 + 标题 + 流式指示器 + 关闭按钮
  * 支持：点击聚焦、中键关闭、拖拽重排
+ * hover 预览面板由父级 TabBar 统一管理状态
  */
 
 import * as React from 'react'
@@ -20,11 +21,22 @@ export interface TabBarItemProps {
   title: string
   isActive: boolean
   isStreaming: boolean
+  /** 是否显示 hover 预览面板（由父级管理） */
+  isHovered: boolean
+  /** 预览面板是否正在退出动画 */
+  isLeaving: boolean
   onActivate: () => void
   onClose: () => void
   onMiddleClick: () => void
-  /** 拖拽相关 */
   onDragStart: (e: React.PointerEvent) => void
+  /** hover 进入 Tab */
+  onHoverEnter: () => void
+  /** hover 离开 Tab */
+  onHoverLeave: () => void
+  /** hover 进入面板（阻止关闭） */
+  onPanelHoverEnter: () => void
+  /** hover 离开面板 */
+  onPanelHoverLeave: () => void
 }
 
 export function TabBarItem({
@@ -33,48 +45,20 @@ export function TabBarItem({
   title,
   isActive,
   isStreaming,
+  isHovered,
+  isLeaving,
   onActivate,
   onClose,
   onMiddleClick,
   onDragStart,
+  onHoverEnter,
+  onHoverLeave,
+  onPanelHoverEnter,
+  onPanelHoverLeave,
 }: TabBarItemProps): React.ReactElement {
   const buttonRef = React.useRef<HTMLButtonElement>(null)
   const [isNarrow, setIsNarrow] = React.useState(false)
   const minimapCache = useAtomValue(tabMinimapCacheAtom)
-
-  // hover 预览面板状态
-  const [hovered, setHovered] = React.useState(false)
-  const [isLeaving, setIsLeaving] = React.useState(false)
-  const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
-  const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
-  const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
-
-  React.useEffect(() => {
-    return () => {
-      if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
-      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
-      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
-    }
-  }, [])
-
-  const handleMouseEnter = (): void => {
-    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
-    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
-    setIsLeaving(false)
-    // 延迟 300ms 后显示，避免快速划过时闪烁
-    enterTimerRef.current = setTimeout(() => setHovered(true), 300)
-  }
-
-  const handleMouseLeave = (): void => {
-    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
-    leaveTimerRef.current = setTimeout(() => {
-      setIsLeaving(true)
-      fadeTimerRef.current = setTimeout(() => {
-        setHovered(false)
-        setIsLeaving(false)
-      }, 80)
-    }, 40)
-  }
 
   React.useEffect(() => {
     const el = buttonRef.current
@@ -88,7 +72,6 @@ export function TabBarItem({
   }, [])
 
   const handleMouseDown = (e: React.MouseEvent): void => {
-    // 中键点击关闭
     if (e.button === 1) {
       e.preventDefault()
       onMiddleClick()
@@ -102,12 +85,14 @@ export function TabBarItem({
 
   const Icon = type === 'chat' ? MessageSquare : Bot
   const previewItems = minimapCache.get(id) ?? []
+  // 当前 active Tab 不显示预览面板
+  const showPreview = isHovered && !isActive
 
   return (
     <div
       className="relative flex-1 min-w-[48px] max-w-[200px]"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
     >
       <button
         ref={buttonRef}
@@ -163,14 +148,14 @@ export function TabBarItem({
       </button>
 
       {/* 悬浮预览面板（Portal 渲染到 body） */}
-      {hovered && (
+      {showPreview && (
         <TabPreviewDropdown
           buttonRef={buttonRef}
           title={title}
           items={previewItems}
           isLeaving={isLeaving}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
+          onMouseEnter={onPanelHoverEnter}
+          onMouseLeave={onPanelHoverLeave}
         />
       )}
     </div>
@@ -201,15 +186,11 @@ function TabPreviewDropdown({
     if (!btn) return
     const rect = btn.getBoundingClientRect()
     const viewportWidth = window.innerWidth
-    // 面板顶部紧贴 Tab 底部
-    const top = rect.bottom + 4
-    // 默认左对齐 Tab
+    const top = rect.bottom
     let left = rect.left
-    // 右侧溢出
     if (left + panelWidth > viewportWidth - 8) {
       left = viewportWidth - panelWidth - 8
     }
-    // 左侧溢出
     if (left < 8) {
       left = 8
     }
@@ -220,7 +201,7 @@ function TabPreviewDropdown({
 
   return createPortal(
     <div
-      className="fixed z-[9999]"
+      className="fixed z-[9999] pt-1"
       style={{ top: pos.top, left: pos.left }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
