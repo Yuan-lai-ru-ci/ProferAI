@@ -32,11 +32,19 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
   const [submitting, setSubmitting] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState(0)
   const [focusedOptIdx, setFocusedOptIdx] = React.useState(0)
-  const submitRef = React.useRef<(() => void) | null>(null)
 
   const request = requests[0] ?? null
   const questions = request?.questions ?? []
   const isLastTab = activeTab >= questions.length - 1
+
+  // ===== Refs：确保 keydown handler 始终读取最新值，消除闭包过期问题 =====
+  const activeTabRef = React.useRef(activeTab)
+  activeTabRef.current = activeTab
+  const questionsRef = React.useRef(questions)
+  questionsRef.current = questions
+  const focusedOptIdxRef = React.useRef(focusedOptIdx)
+  focusedOptIdxRef.current = focusedOptIdx
+  const submitRef = React.useRef<(() => void) | null>(null)
 
   React.useEffect(() => {
     setActiveTab(0)
@@ -60,24 +68,25 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
     })
   }, [activeTab])
 
-  const goNextTab = React.useCallback(() => {
-    if (!isLastTab) setActiveTab((prev) => prev + 1)
-  }, [isLastTab])
-
-  // 键盘导航
+  // 键盘导航：只在 requestId 变化时重建 handler，内部通过 ref 读取最新值
   React.useEffect(() => {
     if (!request || questions.length === 0) return
-    const q = questions[activeTab]
-    if (!q) return
-    const itemCount = q.options.length + 1
 
     const handleKeyDown = (e: KeyboardEvent): void => {
+      const curTab = activeTabRef.current
+      const qs = questionsRef.current
+      const curFocusIdx = focusedOptIdxRef.current
+      const q = qs[curTab]
+      if (!q) return
+      const itemCount = q.options.length + 1
+      const lastTab = curTab >= qs.length - 1
+
       // 自由文本输入框内：仅 Enter 生效
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault()
-          if (isLastTab) submitRef.current?.()
-          else goNextTab()
+          if (lastTab) submitRef.current?.()
+          else setActiveTab((prev) => prev + 1)
         }
         return
       }
@@ -85,26 +94,26 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
         const nextIdx = e.key === 'ArrowDown'
-          ? (focusedOptIdx + 1) % itemCount
-          : (focusedOptIdx - 1 + itemCount) % itemCount
+          ? (curFocusIdx + 1) % itemCount
+          : (curFocusIdx - 1 + itemCount) % itemCount
         setFocusedOptIdx(nextIdx)
         // 移动焦点同时选中
         if (nextIdx < q.options.length) {
           const opt = q.options[nextIdx]
-          if (opt) toggleOptionByState(activeTab, q, opt.label)
+          if (opt) toggleOptionByState(curTab, q, opt.label)
         } else {
-          toggleCustomByState(activeTab)
+          toggleCustomByState(curTab)
         }
       } else if (e.key === 'Enter') {
         e.preventDefault()
-        if (isLastTab) submitRef.current?.()
-        else goNextTab()
+        if (lastTab) submitRef.current?.()
+        else setActiveTab((prev) => prev + 1)
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [request?.requestId, questions.length, activeTab, focusedOptIdx, isLastTab, goNextTab])
+  }, [request?.requestId])
 
   if (!request) return null
 
@@ -118,19 +127,6 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
         ? (cur.selected.includes(label) ? cur.selected.filter((s) => s !== label) : [...cur.selected, label])
         : [label]
       map.set(qIdx, { ...cur, selected, showCustom: false, customText: '' })
-
-      // 单选时，选择明确选项后自动跳转到下一个未回答的问题
-      if (!q.multiSelect) {
-        const nextUnanswered = questions.findIndex((_, idx) => {
-          if (idx <= qIdx) return false
-          const a = map.get(idx) ?? EMPTY_ANSWER
-          return a.selected.length === 0 && !(a.showCustom && a.customText.trim())
-        })
-        if (nextUnanswered !== -1) {
-          setTimeout(() => setActiveTab(nextUnanswered), 150)
-        }
-      }
-
       return map
     })
   }
@@ -182,6 +178,10 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
 
   const currentQuestion = questions[activeTab]
   if (!currentQuestion) return null
+
+  const goNextTab = (): void => {
+    if (!isLastTab) setActiveTab((prev) => prev + 1)
+  }
 
   return (
     <div className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
@@ -365,6 +365,7 @@ function QuestionCard({
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
+              e.stopPropagation() // 阻止冒泡到 document handler，避免重复触发 setActiveTab
               onSubmit()
             }
           }}
