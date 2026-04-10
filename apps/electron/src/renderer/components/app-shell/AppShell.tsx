@@ -13,7 +13,7 @@ import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { currentAgentSessionIdAtom, agentSidePanelOpenMapAtom } from '@/atoms/agent-atoms'
+import { currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
 
 export interface AppShellProps {
@@ -24,9 +24,8 @@ export interface AppShellProps {
 export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
-  const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
+  const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId
-  const isPanelOpen = currentSessionId ? (sidePanelOpenMap.get(currentSessionId) ?? true) : false
 
   return (
     <AppShellProvider value={contextValue}>
