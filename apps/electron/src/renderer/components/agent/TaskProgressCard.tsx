@@ -42,7 +42,7 @@ interface TaskItem {
  * 2. 对于 result 尚未到达的 TaskCreate，用 toolUseId 作为临时 key
  * 3. TaskUpdate 通过真实 taskId 匹配已有条目
  */
-function aggregateTaskItems(activities: ToolActivity[], streamEnded: boolean): TaskItem[] {
+function aggregateTaskItems(activities: ToolActivity[], streamEnded: boolean, historicalTaskSubjects?: Map<string, string>): TaskItem[] {
   const taskMap = new Map<string, TaskItem>()
   let todoAutoId = 0
 
@@ -115,7 +115,9 @@ function aggregateTaskItems(activities: ToolActivity[], streamEnded: boolean): T
         // 此时无法确定对应关系，走兜底
         taskMap.set(taskId, {
           id: taskId,
-          subject: typeof activity.input.subject === 'string' ? activity.input.subject : `任务 #${taskId}`,
+          subject: typeof activity.input.subject === 'string'
+            ? activity.input.subject
+            : historicalTaskSubjects?.get(taskId) ?? `任务 #${taskId}`,
           status: (typeof activity.input.status === 'string' ? activity.input.status : 'pending') as TaskItem['status'],
           activeForm: typeof activity.input.activeForm === 'string' ? activity.input.activeForm : undefined,
         })
@@ -212,10 +214,12 @@ interface TaskProgressCardProps {
   animate?: boolean
   /** 流式是否已结束（用于停止 in_progress 任务的 spinner） */
   streamEnded?: boolean
+  /** 历史 TaskCreate 的 taskId → subject 映射（跨 turn 回溯，用于恢复任务名） */
+  historicalTaskSubjects?: Map<string, string>
 }
 
-export function TaskProgressCard({ activities, animate = false, streamEnded = false }: TaskProgressCardProps): React.ReactElement | null {
-  const items = React.useMemo(() => aggregateTaskItems(activities, streamEnded), [activities, streamEnded])
+export function TaskProgressCard({ activities, animate = false, streamEnded = false, historicalTaskSubjects }: TaskProgressCardProps): React.ReactElement | null {
+  const items = React.useMemo(() => aggregateTaskItems(activities, streamEnded, historicalTaskSubjects), [activities, streamEnded, historicalTaskSubjects])
   const [expanded, setExpanded] = React.useState(false)
 
   if (items.length === 0) return null

@@ -398,7 +398,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isS
   )
 
   // Task 聚合数据（useMemo 防止每次渲染重算）
-  const { taskActivities, firstTaskIndex } = React.useMemo(() => {
+  const { taskActivities, firstTaskIndex, historicalTaskSubjects } = React.useMemo(() => {
     const taskBlocks: SDKToolUseBlock[] = []
     let _firstTaskIndex = -1
 
@@ -439,8 +439,57 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isS
       done: true,
     }))
 
-    return { taskActivities: _taskActivities, firstTaskIndex: _firstTaskIndex }
-  }, [topLevelBlocks, turn.turnMessages])
+    // 从 allMessages 中回溯历史 TaskCreate 的 taskId → subject 映射
+    // 用于"继续"后当前 turn 缺少 TaskCreate 时恢复任务名
+    const _historicalTaskSubjects = new Map<string, string>()
+    const globalResultMap = new Map<string, string>()
+    const pendingTaskCreates: SDKToolUseBlock[] = []
+    // 单次遍历：同时收集 tool_result 映射和 TaskCreate 块
+    for (const msg of allMessages) {
+      if (msg.type === 'user') {
+        const userMsg = msg as SDKUserMessage
+        const blocks = userMsg.message?.content
+        if (!Array.isArray(blocks)) continue
+        for (const b of blocks) {
+          if (b.type === 'tool_result') {
+            const rb = b as SDKToolResultBlock
+            const text = typeof rb.content === 'string'
+              ? rb.content
+              : Array.isArray(rb.content)
+                ? (rb.content as Array<{ text?: string }>).map((c) => c.text ?? '').join('')
+                : ''
+            if (text) globalResultMap.set(rb.tool_use_id, text)
+          }
+        }
+      } else if (msg.type === 'assistant') {
+        const aMsg = msg as SDKAssistantMessage
+        const blocks = aMsg.message?.content
+        if (!Array.isArray(blocks)) continue
+        for (const b of blocks) {
+          if (b.type === 'tool_use' && (b as SDKToolUseBlock).name === 'TaskCreate') {
+            pendingTaskCreates.push(b as SDKToolUseBlock)
+          }
+        }
+      }
+    }
+    // 解析 TaskCreate 的真实 taskId 和 subject
+    for (const tb of pendingTaskCreates) {
+      const input = tb.input as Record<string, unknown>
+      const subject = typeof input.subject === 'string'
+        ? input.subject
+        : typeof input.description === 'string'
+          ? input.description
+          : undefined
+      if (!subject) continue
+      const resultText = globalResultMap.get(tb.id)
+      if (resultText) {
+        const match = resultText.match(/Task\s*#(\d+)/i)
+        if (match) _historicalTaskSubjects.set(match[1], subject)
+      }
+    }
+
+    return { taskActivities: _taskActivities, firstTaskIndex: _firstTaskIndex, historicalTaskSubjects: _historicalTaskSubjects }
+  }, [topLevelBlocks, turn.turnMessages, allMessages])
 
   return (
     <Message from="assistant">
@@ -455,7 +504,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, isS
               // Task 工具块：聚合为卡片（同 ToolActivityList 路径的逻辑，此处用索引定位）
               if (block.type === 'tool_use' && TASK_TOOL_NAMES.has((block as SDKToolUseBlock).name)) {
                 if (i === firstTaskIndex) {
-                  return <TaskProgressCard key="task-progress-card" activities={taskActivities} streamEnded={!isStreaming} />
+                  return <TaskProgressCard key="task-progress-card" activities={taskActivities} streamEnded={!isStreaming} historicalTaskSubjects={historicalTaskSubjects} />
                 }
                 return null
               }
