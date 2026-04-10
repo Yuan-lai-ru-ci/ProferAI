@@ -74,6 +74,9 @@ import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
 
+/** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
+const EMPTY_SDK_MESSAGES: SDKMessage[] = []
+
 // ===== 思考模式 Hover Popover =====
 
 interface AgentThinkingPopoverProps {
@@ -166,7 +169,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
   const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
-  const liveMessages = liveMessagesMap.get(sessionId) ?? []
+  // 稳定化空数组引用，避免 ?? [] 每次创建新引用导致下游 useMemo 链不必要重算
+  const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // Per-session 渠道/模型配置（优先读 session map，回退到全局默认值）
   const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
   const sessionModelMap = useAtomValue(agentSessionModelMapAtom)
