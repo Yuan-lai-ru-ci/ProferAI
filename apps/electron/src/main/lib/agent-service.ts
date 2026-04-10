@@ -53,7 +53,11 @@ const sessionWebContents = new Map<string, WebContents>()
 eventBus.use((sessionId, payload, next) => {
   const wc = sessionWebContents.get(sessionId)
   if (wc && !wc.isDestroyed()) {
-    wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload } as AgentStreamEvent)
+    try {
+      wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload } as AgentStreamEvent)
+    } catch (err) {
+      console.error(`[EventBus] wc.send 失败: sessionId=${sessionId}, payload.kind=${(payload as Record<string, unknown>)?.kind}`, err)
+    }
   }
   next()
 })
@@ -88,6 +92,7 @@ export async function runAgent(
             messages,
             stoppedByUser: opts?.stoppedByUser ?? false,
             startedAt: opts?.startedAt,
+            resultSubtype: opts?.resultSubtype,
           })
         }
       },
@@ -151,6 +156,7 @@ export async function runAgentHeadless(
             messages,
             stoppedByUser: opts?.stoppedByUser ?? false,
             startedAt: opts?.startedAt,
+            resultSubtype: opts?.resultSubtype,
           })
         }
       },
