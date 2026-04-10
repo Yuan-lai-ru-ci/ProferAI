@@ -81,9 +81,9 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
       const itemCount = q.options.length + 1
       const lastTab = curTab >= qs.length - 1
 
-      // 自由文本输入框内：仅 Enter 生效
+      // 自由文本输入框内：仅 Enter 生效（输入法组合中跳过）
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
           e.preventDefault()
           if (lastTab) submitRef.current?.()
           else setActiveTab((prev) => prev + 1)
@@ -104,7 +104,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
         } else {
           toggleCustomByState(curTab)
         }
-      } else if (e.key === 'Enter') {
+      } else if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault()
         if (lastTab) submitRef.current?.()
         else setActiveTab((prev) => prev + 1)
@@ -363,7 +363,7 @@ function QuestionCard({
           value={answer.customText}
           onChange={(e) => onCustomTextChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               e.stopPropagation() // 阻止冒泡到 document handler，避免重复触发 setActiveTab
               onSubmit()
