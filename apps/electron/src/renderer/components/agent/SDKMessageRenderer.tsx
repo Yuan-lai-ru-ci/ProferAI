@@ -240,7 +240,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
           type: 'assistant-turn',
           assistantMessages: [aMsg],
           turnMessages: [msg],
-          model: sessionModelId || aMsg.message?.model,
+          model: aMsg._channelModelId || aMsg.message?.model || sessionModelId,
           createdAt: meta.createdAt,
         }
       } else {
@@ -597,7 +597,7 @@ export function SDKMessageRenderer({
     const blocks = aMsg.message?.content
     if (!Array.isArray(blocks) || blocks.length === 0) return null
 
-    const model = sessionModelId || aMsg.message?.model
+    const model = aMsg._channelModelId || aMsg.message?.model || sessionModelId
     const meta = extractMeta(message)
 
     // 检测是否有主要内容（text 块）

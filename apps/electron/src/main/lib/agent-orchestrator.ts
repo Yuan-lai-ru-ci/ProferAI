@@ -1566,6 +1566,10 @@ export class AgentOrchestrator {
                     accumulatedMessages.push(msg)
                   }
                 } else {
+                  // 为 assistant 消息注入渠道 modelId，确保持久化后能正确匹配模型显示名
+                  if (msg.type === 'assistant' && modelId) {
+                    (msg as Record<string, unknown>)._channelModelId = modelId
+                  }
                   accumulatedMessages.push(msg)
                 }
               }
