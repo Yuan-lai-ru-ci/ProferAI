@@ -808,6 +808,7 @@ function findSdkSessionJsonl(sdkSessionId: string, _projectDir?: string): string
  * @param cwd  会话工作目录（文件的基准路径）
  * @param projectDir  项目目录（可选，用于定位 SDK JSONL）
  * @param forkSourceSdkSessionId  源会话 SDK session ID（可选，fork 会话回退时使用）
+ * @param attachedDirectories  附加的外部目录列表（绝对路径，SDK 会将这些目录下的文件以绝对路径记录在 snapshot 中）
  */
 export function rewindFilesFromSnapshot(
   sdkSessionId: string,
@@ -815,6 +816,7 @@ export function rewindFilesFromSnapshot(
   cwd: string,
   projectDir?: string,
   forkSourceSdkSessionId?: string,
+  attachedDirectories?: string[],
 ): { canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number } {
   const sdkConfigDir = getSdkConfigDir()
 
@@ -931,11 +933,17 @@ export function rewindFilesFromSnapshot(
     const filesChanged: string[] = []
 
     const resolvedCwd = resolve(cwd)
-    for (const [filePath, backupFileName] of fileState) {
-      const fullPath = resolve(cwd, filePath)
+    // 预计算允许写入的目录列表（cwd + attachedDirectories）
+    const allowedDirs = [resolvedCwd, ...(attachedDirectories || []).map((d) => resolve(d))]
 
-      // 路径越界检查：防止恶意或损坏的 JSONL 中 filePath 包含 ../../ 导致写入 cwd 之外
-      if (!fullPath.startsWith(resolvedCwd + '/') && fullPath !== resolvedCwd) {
+    for (const [filePath, backupFileName] of fileState) {
+      // SDK 对 cwd 内文件使用相对路径，对 additionalDirectories 内文件使用绝对路径
+      const isAbsolute = filePath.startsWith('/')
+      const fullPath = isAbsolute ? resolve(filePath) : resolve(cwd, filePath)
+
+      // 路径安全检查：文件必须位于 cwd 或 attachedDirectories 之内
+      const isInAllowedDir = allowedDirs.some((dir) => fullPath.startsWith(dir + '/') || fullPath === dir)
+      if (!isInAllowedDir) {
         console.warn(`[Agent 会话] rewindFiles: 拒绝路径越界 ${filePath}`)
         continue
       }

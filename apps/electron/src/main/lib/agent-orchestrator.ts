@@ -2006,7 +2006,7 @@ export class AgentOrchestrator {
         let cwd = homedir()
         if (projectDir) cwd = projectDir
         console.log(`[Agent 编排] 回退: 直接从 snapshot 恢复文件 (cwd=${cwd}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'})`)
-        fileRewindResult = rewindFilesFromSnapshot(sessionMeta.sdkSessionId, userMessageUuid, cwd, projectDir, sessionMeta.forkSourceSdkSessionId)
+        fileRewindResult = rewindFilesFromSnapshot(sessionMeta.sdkSessionId, userMessageUuid, cwd, projectDir, sessionMeta.forkSourceSdkSessionId, sessionMeta.attachedDirectories)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.warn('[Agent 编排] 文件恢复失败，继续截断对话:', errMsg)
