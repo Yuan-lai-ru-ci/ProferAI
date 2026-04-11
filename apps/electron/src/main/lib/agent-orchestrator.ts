@@ -803,6 +803,12 @@ export class AgentOrchestrator {
       return
     }
 
+    // 2.1 立即抢占会话槽位（在所有同步检查通过后、第一个 await 之前）
+    // 防止 buildSdkEnv 等 await 期间并发调用绕过上方的检查，导致多条重复消息写入 JSONL
+    // finally 块会通过 generation 匹配来安全清理，不影响正常流程
+    const runGeneration = Date.now()
+    this.activeSessions.set(sessionId, runGeneration)
+
     // 3. 构建环境变量
     // 同步凭证到 process.env（SDK in-process 代码可能直接读取 process.env）
     // 先清理再注入，确保 SDK 无论从 env 选项还是 process.env 都拿到正确值
@@ -852,11 +858,7 @@ export class AgentOrchestrator {
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])
 
-    // 6. 注册活跃会话（用时间戳作为 generation 标识，区分同一 session 的不同运行轮次）
-    const runGeneration = Date.now()
-    this.activeSessions.set(sessionId, runGeneration)
-
-    // 7. 状态初始化
+    // 6. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
     let titleGenerationStarted = false
