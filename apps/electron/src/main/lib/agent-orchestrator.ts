@@ -1987,9 +1987,13 @@ export class AgentOrchestrator {
 
     // 0.5 从 SDK session JSONL 解析对应的 user message UUID（rewindFiles 需要）
     let projectDir: string | undefined
+    let workspaceSlug: string | undefined
     if (sessionMeta.workspaceId) {
       const ws = getAgentWorkspace(sessionMeta.workspaceId)
-      if (ws) projectDir = getAgentSessionWorkspacePath(ws.slug, sessionMeta.id)
+      if (ws) {
+        workspaceSlug = ws.slug
+        projectDir = getAgentSessionWorkspacePath(ws.slug, sessionMeta.id)
+      }
     }
     const userMessageUuid = resolveUserUuidFromSDK(sessionMeta.sdkSessionId, assistantMessageUuid, projectDir, sessionMeta.forkSourceSdkSessionId)
     console.log(`[Agent 编排] 回退: 解析 user uuid=${userMessageUuid || '未找到'} (assistant uuid=${assistantMessageUuid}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'})`)
@@ -2005,8 +2009,14 @@ export class AgentOrchestrator {
         // 确定 cwd（文件的基准路径）
         let cwd = homedir()
         if (projectDir) cwd = projectDir
-        console.log(`[Agent 编排] 回退: 直接从 snapshot 恢复文件 (cwd=${cwd}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'})`)
-        fileRewindResult = rewindFilesFromSnapshot(sessionMeta.sdkSessionId, userMessageUuid, cwd, projectDir, sessionMeta.forkSourceSdkSessionId, sessionMeta.attachedDirectories)
+        // 收集附加目录（与发消息时相同的来源：工作区附加目录 + 工作区文件目录）
+        const rewindAttachedDirs: string[] = []
+        if (workspaceSlug) {
+          rewindAttachedDirs.push(...getWorkspaceAttachedDirectories(workspaceSlug))
+          rewindAttachedDirs.push(getWorkspaceFilesDir(workspaceSlug))
+        }
+        console.log(`[Agent 编排] 回退: 直接从 snapshot 恢复文件 (cwd=${cwd}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'}, attachedDirs=${rewindAttachedDirs.length})`)
+        fileRewindResult = rewindFilesFromSnapshot(sessionMeta.sdkSessionId, userMessageUuid, cwd, projectDir, sessionMeta.forkSourceSdkSessionId, rewindAttachedDirs)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.warn('[Agent 编排] 文件恢复失败，继续截断对话:', errMsg)
