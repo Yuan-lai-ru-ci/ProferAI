@@ -1200,6 +1200,8 @@ export class AgentOrchestrator {
       }
 
       // 13. 构建 Adapter 查询选项
+      // 检测用户选用的模型是否为 Claude 系列，决定 SubAgent 是否使用独立模型分层
+      const claudeAvailable = (modelId || DEFAULT_MODEL_ID).toLowerCase().includes('claude')
       const maxTurns = appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0
         ? appSettings.agentMaxTurns
         : undefined
@@ -1233,6 +1235,7 @@ export class AgentOrchestrator {
             sessionId,
             permissionMode: initialPermissionMode,
             memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
+            claudeAvailable,
           }),
         },
         resumeSessionId: existingSdkSessionId,
@@ -1265,7 +1268,8 @@ export class AgentOrchestrator {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
         }),
         // 内置 SubAgent 定义（code-reviewer / explorer / researcher）
-        agents: buildBuiltinAgents(),
+        // claudeAvailable=false 时 SubAgent 省略 model 字段，自动继承主 Agent 模型
+        agents: buildBuiltinAgents(claudeAvailable),
         onStderr: (data: string) => {
           stderrChunks.push(data)
           console.error(`[Agent SDK stderr] ${data}`)
