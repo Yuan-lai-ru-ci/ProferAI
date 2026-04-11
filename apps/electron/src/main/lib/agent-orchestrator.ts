@@ -1036,6 +1036,32 @@ export class AgentOrchestrator {
         },
       )
 
+      /**
+       * 判断 Bash 命令是否是只读的（计划模式下安全可执行）
+       * 检测写操作特征：文件重定向、破坏性命令、包管理写操作、git 写操作等
+       */
+      const isBashCommandReadOnly = (command: string): boolean => {
+        // 输出重定向：匹配未被数字或 & 前置的 > 符号（排除 2>/dev/null、&> 等 fd 重定向）
+        if (/(?<![0-9&])>/.test(command)) return false
+        // 破坏性文件操作
+        if (/\b(rm|rmdir)\s/.test(command)) return false
+        if (/\bsed\s+[^|&;]*-i/.test(command)) return false  // sed -i 原地编辑
+        if (/\b(chmod|chown|chattr|truncate)\s/.test(command)) return false
+        if (/\b(mv|cp)\s/.test(command)) return false
+        if (/\b(mkdir|touch|mktemp)\s/.test(command)) return false
+        // 包管理器写操作
+        if (/\b(npm|pnpm|yarn|bun)\s+(install|i\b|add|remove|uninstall|update|upgrade|link|unlink)\b/.test(command)) return false
+        if (/\bpip[23]?\s+(install|uninstall|upgrade)\b/.test(command)) return false
+        if (/\b(apt|apt-get|brew|yum|dnf)\s+(install|remove|purge|uninstall|upgrade)\b/.test(command)) return false
+        // Git 写操作
+        if (/\bgit\s+(commit|push|checkout\s+-[bB]|branch\s+-[mMdD]|merge\b|rebase\b|reset\b|stash\s+(drop|pop)\b|add\b|apply\b|cherry-pick\b)/.test(command)) return false
+        // 进程控制
+        if (/\b(kill|killall|pkill)\s/.test(command)) return false
+        // 脚本执行（具有潜在副作用，如 node script.js / python main.py）
+        if (/\b(node|python[23]?|ruby|perl|php)\s+[^-]/.test(command)) return false
+        return true
+      }
+
       // Plan 模式下允许的只读工具（不包含 Write/Edit/Bash 等写操作）
       const PLAN_MODE_ALLOWED_TOOLS = new Set([
         'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
@@ -1145,6 +1171,14 @@ export class AgentOrchestrator {
                   return { behavior: 'allow' as const, updatedInput: input }
                 }
               }
+            }
+            // Bash 工具：只读命令（find、grep、cat 等）允许执行，写操作拒绝
+            if (toolName === 'Bash') {
+              const command = typeof input.command === 'string' ? input.command : ''
+              if (isBashCommandReadOnly(command)) {
+                return { behavior: 'allow' as const, updatedInput: input }
+              }
+              return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
             }
             // MCP 工具（以 mcp__ 开头）允许调用（调研用）
             if (toolName.startsWith('mcp__')) {
