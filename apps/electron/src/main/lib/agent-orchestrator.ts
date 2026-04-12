@@ -178,6 +178,14 @@ function getRetryDelayMs(attempt: number): number {
   return Math.min(1000 * Math.pow(2, attempt - 1), 8000)
 }
 
+/** 判定是否为可能长时间执行的工具（抑制 idle timeout） */
+function isLongRunningTool(toolName: string): boolean {
+  return toolName === 'Bash'
+    || toolName === 'Agent'
+    || toolName === 'TaskOutput'
+    || toolName.startsWith('mcp__')
+}
+
 /**
  * 可中断的定时器
  *
@@ -1073,8 +1081,17 @@ export class AgentOrchestrator {
       /** 正在等待用户交互（AskUser / ExitPlanMode 审批 / 权限确认），idle watcher 应暂停计时 */
       let waitingForUserInput = false
 
+      /** 长耗时工具正在执行时为 true，抑制 idle timeout（Bash、MCP、Agent 等） */
+      let longRunningToolActive = false
+
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
+        // 长耗时工具：标记执行状态，抑制 idle timeout
+        // （工具完成后由事件循环中的 tool_result 清除）
+        if (isLongRunningTool(toolName)) {
+          longRunningToolActive = true
+        }
+
         const currentMode = getPermissionMode()
 
         // ── 参数校验守卫（所有模式、所有工具，优先于权限检查） ──
@@ -1417,8 +1434,8 @@ export class AgentOrchestrator {
             while (!loopAbort.signal.aborted) {
               await timerWithAbort(CHECK_INTERVAL_MS, loopAbort.signal)
               if (loopAbort.signal.aborted) break
-              // 等待用户交互时（AskUser / 权限确认 / ExitPlanMode 审批）暂停 idle 计时
-              if (waitingForUserInput) {
+              // 等待用户交互 或 长耗时工具执行中 时暂停 idle 计时
+              if (waitingForUserInput || longRunningToolActive) {
                 lastActivityAt = Date.now()
                 continue
               }
@@ -1587,6 +1604,7 @@ export class AgentOrchestrator {
                   const hasToolResult = Array.isArray(content) && content.some((b) => b.type === 'tool_result')
                   if (hasToolResult) {
                     accumulatedMessages.push(msg)
+                    longRunningToolActive = false // 工具执行完毕，恢复 idle timeout
                   }
                 } else {
                   // 为 assistant 消息注入渠道 modelId，确保持久化后能正确匹配模型显示名
@@ -1605,6 +1623,7 @@ export class AgentOrchestrator {
 
             // Turn 结束时：持久化累积消息，并检测 0-token 空响应
             if (msg.type === 'result') {
+              longRunningToolActive = false // turn 结束，兜底清除
               const resultMsg = msg as import('@proma/shared').SDKResultMessage
               capturedResultSubtype = resultMsg.subtype
 
