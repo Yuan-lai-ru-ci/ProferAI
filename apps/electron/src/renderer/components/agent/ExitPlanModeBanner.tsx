@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Send,
   FileText,
+  Square,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { allPendingExitPlanRequestsAtom } from '@/atoms/agent-atoms'
@@ -118,6 +119,15 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
   }
 
   handleActionRef.current = handleAction
+
+  const handleStop = (): void => {
+    setAllRequests((prev) => {
+      const map = new Map(prev)
+      map.delete(sessionId)
+      return map
+    })
+    window.electronAPI.stopAgent(sessionId).catch(console.error)
+  }
 
   // 键盘导航：只在 requestId 变化时重建 handler，内部通过 ref 读取最新值
   React.useEffect(() => {
@@ -278,6 +288,15 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
         <span className="text-[10px] text-muted-foreground/40">
           点击选择 · ↑↓ Enter 确认 · 1-4 快速选择
         </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleStop}
+          className="ml-auto h-7 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+        >
+          <Square className="size-3 mr-1" fill="currentColor" strokeWidth={0} />
+          终止
+        </Button>
       </div>
     </div>
   )
