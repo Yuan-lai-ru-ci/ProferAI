@@ -20,6 +20,12 @@ import {
   getSdkConfigDir,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
+
+// 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
+// process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）
+if (!process.env.CLAUDE_CONFIG_DIR) {
+  process.env.CLAUDE_CONFIG_DIR = getSdkConfigDir()
+}
 import type { AgentSessionMeta, AgentMessage, SDKMessage, ForkSessionInput, AgentMessageSearchResult } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
@@ -493,9 +499,6 @@ export function migrateChatToAgentSession(conversationId: string, agentSessionId
   console.log(`[Agent 会话] 已迁移 ${count} 条消息到 Agent 会话 (${conversationId} → ${agentSessionId})`)
 }
 
-/** fork 操作串行锁，防止并发 forkAgentSession 调用导致 process.env 交叉突变 */
-let forkLock = Promise.resolve()
-
 /**
  * 分叉 Agent 会话（SDK 原生 fork）
  *
@@ -505,23 +508,11 @@ let forkLock = Promise.resolve()
  * forkSourceDir 用于首次 resume 时定位 SDK session 文件（因 fork 后的 session
  * 存储在源 cwd 的项目哈希下），orchestrator 首次 resume 后会清除该字段。
  *
+ * process.env.CLAUDE_CONFIG_DIR 已在模块加载时设置，无需在此处临时修改。
+ *
  * @returns 新创建的会话元数据
  */
 export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSessionMeta> {
-  // 串行化：等待前一个 fork 操作完成，防止 process.env.CLAUDE_CONFIG_DIR 并发突变
-  const prev = forkLock
-  let releaseLock: () => void
-  forkLock = new Promise<void>((resolve) => { releaseLock = resolve })
-  await prev
-
-  try {
-    return await forkAgentSessionImpl(input)
-  } finally {
-    releaseLock!()
-  }
-}
-
-async function forkAgentSessionImpl(input: ForkSessionInput): Promise<AgentSessionMeta> {
   const { sessionId, upToMessageUuid } = input
 
   // 1. 获取源会话元数据
@@ -544,10 +535,7 @@ async function forkAgentSessionImpl(input: ForkSessionInput): Promise<AgentSessi
   }
 
   // 3. 调用 SDK 原生 forkSession
-  // SDK 的独立函数（forkSession）读取 process.env.CLAUDE_CONFIG_DIR 定位 session 文件
-  // Proma 使用隔离配置目录，必须在调用前设置
-  const prevConfigDir = process.env.CLAUDE_CONFIG_DIR
-  process.env.CLAUDE_CONFIG_DIR = getSdkConfigDir()
+  // process.env.CLAUDE_CONFIG_DIR 已在模块加载时设置，SDK 会自动读取
   const sdk = await import('@anthropic-ai/claude-agent-sdk')
   let forkResult: Awaited<ReturnType<typeof sdk.forkSession>>
   try {
@@ -564,13 +552,6 @@ async function forkAgentSessionImpl(input: ForkSessionInput): Promise<AgentSessi
       })
     } else {
       throw err
-    }
-  } finally {
-    // 恢复环境变量
-    if (prevConfigDir !== undefined) {
-      process.env.CLAUDE_CONFIG_DIR = prevConfigDir
-    } else {
-      delete process.env.CLAUDE_CONFIG_DIR
     }
   }
 
