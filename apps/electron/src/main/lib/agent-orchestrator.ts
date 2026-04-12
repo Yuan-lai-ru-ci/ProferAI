@@ -1072,6 +1072,9 @@ export class AgentOrchestrator {
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
       let planModeEntered = initialPermissionMode === 'plan'
 
+      /** Hook 正在等待用户响应时为 true，抑制 idle timeout（权限审批、AskUserQuestion、ExitPlanMode） */
+      let hookPending = false
+
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
@@ -1112,19 +1115,24 @@ export class AgentOrchestrator {
           if (!planModeEntered) {
             return { behavior: 'allow' as const, updatedInput: input }
           }
-          const result = await handleExitPlanMode(input, options.signal)
-          if (result.behavior === 'allow' && 'targetMode' in result && result.targetMode) {
-            // 更新 Map，后续 canUseTool 调用使用新模式
-            this.sessionPermissionModes.set(sessionId, result.targetMode)
-            planModeEntered = false
-            // 同步通知 SDK 侧切换权限模式
-            if (this.adapter.setPermissionMode) {
-              this.adapter.setPermissionMode(sessionId, result.targetMode).catch((err: unknown) => {
-                console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
-              })
+          hookPending = true
+          try {
+            const result = await handleExitPlanMode(input, options.signal)
+            if (result.behavior === 'allow' && 'targetMode' in result && result.targetMode) {
+              // 更新 Map，后续 canUseTool 调用使用新模式
+              this.sessionPermissionModes.set(sessionId, result.targetMode)
+              planModeEntered = false
+              // 同步通知 SDK 侧切换权限模式
+              if (this.adapter.setPermissionMode) {
+                this.adapter.setPermissionMode(sessionId, result.targetMode).catch((err: unknown) => {
+                  console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
+                })
+              }
             }
+            return result
+          } finally {
+            hookPending = false
           }
-          return result
         }
 
         // EnterPlanMode：标记进入状态，通知渲染进程
@@ -1136,12 +1144,17 @@ export class AgentOrchestrator {
 
         // AskUserQuestion：始终走交互式问答流程，不受权限模式影响
         if (toolName === 'AskUserQuestion') {
-          return askUserService.handleAskUserQuestion(
-            sessionId, input, options.signal,
-            (request: AskUserRequest) => {
-              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
-            },
-          )
+          hookPending = true
+          try {
+            return await askUserService.handleAskUserQuestion(
+              sessionId, input, options.signal,
+              (request: AskUserRequest) => {
+                this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+              },
+            )
+          } finally {
+            hookPending = false
+          }
         }
 
         // ── 普通工具的权限分派 ──
@@ -1188,7 +1201,12 @@ export class AgentOrchestrator {
           }
 
           case 'acceptEdits':
-            return acceptEditsCanUseTool(toolName, input, options)
+            hookPending = true
+            try {
+              return await acceptEditsCanUseTool(toolName, input, options)
+            } finally {
+              hookPending = false
+            }
 
           default:
             return { behavior: 'allow' as const, updatedInput: input }
@@ -1401,6 +1419,11 @@ export class AgentOrchestrator {
               await timerWithAbort(CHECK_INTERVAL_MS, loopAbort.signal)
               if (loopAbort.signal.aborted) break
               if (Date.now() - lastActivityAt >= IDLE_TIMEOUT_MS) {
+                // Hook 正在等待用户响应（权限审批、AskUserQuestion 等），不视为 idle
+                if (hookPending) {
+                  lastActivityAt = Date.now()
+                  continue
+                }
                 console.log(
                   `[Agent 编排] Idle timeout: 超过 ${IDLE_TIMEOUT_MS / 1000}s 无 SDK 事件，触发重试`,
                 )

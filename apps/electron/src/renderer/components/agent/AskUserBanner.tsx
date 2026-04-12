@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { Send } from 'lucide-react'
+import { Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { allPendingAskUserRequestsAtom } from '@/atoms/agent-atoms'
 import type { AskUserQuestion } from '@proma/shared'
@@ -171,6 +171,15 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
 
   submitRef.current = handleSubmit
 
+  const handleStop = (): void => {
+    setAllRequests((prev) => {
+      const map = new Map(prev)
+      map.delete(sessionId)
+      return map
+    })
+    window.electronAPI.stopAgent(sessionId).catch(console.error)
+  }
+
   const hasValidAnswers = questions.some((_, idx) => {
     const a = getAnswer(idx)
     return a.selected.length > 0 || (a.showCustom && a.customText.trim().length > 0)
@@ -249,6 +258,15 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
         <span className="text-[10px] text-muted-foreground/40 mr-auto">
           ↑↓ 选择 · Enter {isLastTab ? '确认' : '下一个'}
         </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleStop}
+          className="h-7 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+        >
+          <Square className="size-3 mr-1" fill="currentColor" strokeWidth={0} />
+          终止
+        </Button>
         {isLastTab && (
           <Button
             variant="default"
