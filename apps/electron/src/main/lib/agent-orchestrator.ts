@@ -243,21 +243,17 @@ function resolveSDKCliPath(): string {
 /**
  * 获取 Agent SDK 运行时可执行文件
  *
- * 优先级：Node.js → Bun → which node 同步查找 → 字符串 'node'
+ * 优先级：Node.js（缓存）→ which node 同步查找
  *
  * 当 runtimeStatusCache 尚未初始化时（应用启动竞态），
- * 降级到 'node' 字符串可能因 Electron 进程 PATH 不含 node 而触发 ENOENT。
- * 此时用 which/where 同步查找作为兜底，避免 SDK spawn 失败。
+ * 用 which/where 同步查找作为兜底，避免 SDK spawn 失败。
+ * 如果 Node.js 完全不可用，抛出明确错误。
  */
-function getAgentExecutable(): { type: 'node' | 'bun'; path: string } {
+function getAgentExecutable(): { type: 'node'; path: string } {
   const status = getRuntimeStatus()
 
   if (status?.node?.available && status.node.path) {
     return { type: 'node', path: status.node.path }
-  }
-
-  if (status?.bun?.available && status.bun.path) {
-    return { type: 'bun', path: status.bun.path }
   }
 
   // runtimeStatusCache 未就绪时，同步查找 node 路径
@@ -271,10 +267,13 @@ function getAgentExecutable(): { type: 'node' | 'bun'; path: string } {
       return { type: 'node', path: nodePath }
     }
   } catch {
-    // 忽略查找失败，继续降级
+    // 忽略查找失败
   }
 
-  return { type: 'node', path: 'node' }
+  throw new Error(
+    'Node.js 运行时未找到。Agent 功能需要系统安装 Node.js (v18+)。' +
+      '请访问 https://nodejs.org 下载安装后重启 Proma。',
+  )
 }
 
 /**
@@ -853,7 +852,7 @@ export class AgentOrchestrator {
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
     let titleGenerationStarted = false
-    let agentExec: { type: 'node' | 'bun'; path: string } | undefined
+    let agentExec: { type: 'node'; path: string } | undefined
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
     let workspace: import('@proma/shared').AgentWorkspace | undefined
@@ -879,8 +878,7 @@ export class AgentOrchestrator {
         `[Agent 编排] 启动 SDK — CLI: ${cliPath}, 运行时: ${agentExec.type} (${agentExec.path}), 模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
       )
 
-      const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
-      const executableArgs = agentExec.type === 'bun' ? [`--env-file=${nullDevice}`] : []
+      const executableArgs: string[] = []
 
       // 确定 Agent 工作目录
       agentCwd = homedir()
