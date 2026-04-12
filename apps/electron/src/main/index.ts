@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { getSettings } from './lib/settings-service'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
 // 这在开发环境热重载时经常发生，不影响应用功能
@@ -236,9 +237,15 @@ app.whenReady().then(async () => {
   registerIpcHandlers()
 
   // Set dock icon on macOS (required for dev mode, bundled apps use Info.plist)
+  // 如果用户有保存的图标偏好则使用，否则用默认图标
   if (process.platform === 'darwin' && app.dock) {
-    const dockIconPath = join(__dirname, 'resources/icon.png')
-    if (existsSync(dockIconPath)) {
+    const { resolveAppIconPath } = require('./ipc')
+    const settings = getSettings()
+    const variantId = settings.appIconVariant
+    const dockIconPath = variantId
+      ? resolveAppIconPath(variantId)
+      : join(__dirname, 'resources/icon.png')
+    if (dockIconPath && existsSync(dockIconPath)) {
       app.dock.setIcon(dockIconPath)
     }
   }
