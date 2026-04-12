@@ -1128,6 +1128,43 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [sessionId, openSession, setAgentSessions])
 
+  /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
+  const handleRewind = React.useCallback(async (
+    assistantMessageUuid: string,
+  ): Promise<void> => {
+    try {
+      const result = await window.electronAPI.rewindSession({
+        sessionId,
+        assistantMessageUuid,
+      })
+
+      // 刷新消息列表
+      store.set(agentMessageRefreshAtom, (prev) => {
+        const map = new Map(prev)
+        map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+        return map
+      })
+
+      if (result.fileRewind?.canRewind) {
+        const fileCount = result.fileRewind.filesChanged?.length ?? 0
+        toast.success('已回退到此处', {
+          description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
+        })
+      } else if (result.fileRewind?.error) {
+        toast.warning('已回退对话', {
+          description: `文件恢复不可用：${result.fileRewind.error}`,
+        })
+      } else {
+        toast.success('已回退到此处')
+      }
+    } catch (error) {
+      console.error('[AgentView] 回退失败:', error)
+      toast.error('回退失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [sessionId, store])
+
   // 监听快捷键系统分发的 stop-generation 事件（Cmd+.）
   React.useEffect(() => {
     const handler = (): void => {
@@ -1178,6 +1215,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
           onFork={handleFork}
+          onRewind={handleRewind}
           onCompact={handleCompact}
         />
 
