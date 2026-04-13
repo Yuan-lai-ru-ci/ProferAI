@@ -483,7 +483,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     setPendingPrompt(null)
 
     queueMicrotask(() => {
-      // 初始化流式状态
+      // 初始化流式状态（startedAt 由渲染进程生成，传递给主进程原样回传，确保竞态保护使用同一个值）
+      const streamStartedAt = Date.now()
       setStreamingStates((prev) => {
         const map = new Map(prev)
         map.set(sessionId, {
@@ -492,7 +493,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           toolActivities: [],
           teammates: [],
           model: snapshot.modelId,
-          startedAt: Date.now(),
+          startedAt: streamStartedAt,
         })
         return map
       })
@@ -524,6 +525,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: snapshot.channelId,
         modelId: snapshot.modelId,
         workspaceId: snapshot.workspaceId,
+        startedAt: streamStartedAt,
       }
       window.electronAPI.sendAgentMessage(input).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
@@ -910,7 +912,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return next
     })
 
-    // 初始化流式状态
+    // 初始化流式状态（startedAt 由渲染进程生成，传递给主进程原样回传，确保竞态保护使用同一个值）
+    const streamStartedAt = Date.now()
     setStreamingStates((prev) => {
       const map = new Map(prev)
       map.set(sessionId, {
@@ -919,7 +922,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         teammates: [],
         model: agentModelId || undefined,
-        startedAt: Date.now(),
+        startedAt: streamStartedAt,
       })
       return map
     })
@@ -950,6 +953,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      startedAt: streamStartedAt,
       ...(attachedDirs.length > 0 && { additionalDirectories: attachedDirs }),
       // 解析用户消息中的 Skill/MCP 引用，传递结构化元数据给后端
       ...(() => {
@@ -997,7 +1001,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const handleCompact = React.useCallback((): void => {
     if (!agentChannelId || streaming) return
 
-    // 初始化流式状态
+    // 初始化流式状态（startedAt 由渲染进程生成，传递给主进程原样回传）
+    const streamStartedAt = Date.now()
     setStreamingStates((prev) => {
       const map = new Map(prev)
       const current = prev.get(sessionId) ?? {
@@ -1006,9 +1011,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         teammates: [],
         model: agentModelId || undefined,
-        startedAt: Date.now(),
+        startedAt: streamStartedAt,
       }
-      map.set(sessionId, { ...current, running: true, startedAt: current.startedAt ?? Date.now() })
+      map.set(sessionId, { ...current, running: true, startedAt: streamStartedAt })
       return map
     })
 
@@ -1018,6 +1023,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      startedAt: streamStartedAt,
     }).catch(console.error)
   }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setStreamingStates])
 
@@ -1050,7 +1056,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
 
-    // 初始化流式状态
+    // 初始化流式状态（startedAt 由渲染进程生成，传递给主进程原样回传）
+    const streamStartedAt = Date.now()
     setStreamingStates((prev) => {
       const map = new Map(prev)
       map.set(sessionId, {
@@ -1059,7 +1066,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         teammates: [],
         model: agentModelId || undefined,
-        startedAt: Date.now(),
+        startedAt: streamStartedAt,
       })
       return map
     })
@@ -1070,6 +1077,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      startedAt: streamStartedAt,
     }).catch(console.error)
   }, [messages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates])
 
