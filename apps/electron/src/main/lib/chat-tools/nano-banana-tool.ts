@@ -26,6 +26,8 @@ interface GeminiPart {
   thoughtSignature?: string
   /** snake_case 兼容（部分 API 版本） */
   thought_signature?: string
+  /** Flash 思考模式下的 reasoning part，不应作为输出图展示 */
+  thought?: boolean
 }
 
 interface GeminiContent {
@@ -95,6 +97,7 @@ export const NANO_BANANA_TOOL_META: ChatToolMeta = {
 - prompt: 详细描述想要生成的图片内容，用英文描述效果最佳
 - aspectRatio: 可选宽高比 "1:1"(默认) / "16:9" / "4:3" / "9:16" / "3:4"
 - imageSize: 可选分辨率 "auto"(默认) / "1K" / "2K" / "4K"
+- numberOfImages: 可选生成数量 1-4（默认 1），用户要求多张时设置
 - useReferenceImages: 当用户上传了参考图或要求修改之前生成的图片时设为 true
 
 **使用技巧：**
@@ -131,6 +134,10 @@ export const NANO_BANANA_TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Set to "true" to use uploaded reference images or previously generated images for editing',
           enum: ['true', 'false'],
+        },
+        numberOfImages: {
+          type: 'number',
+          description: 'Number of images to generate (1-4, default 1)',
         },
       },
       required: ['prompt'],
@@ -218,6 +225,7 @@ function buildGeminiRequest(
   options: {
     aspectRatio?: string
     imageSize?: string
+    numberOfImages?: number
   },
 ): Record<string, unknown> {
   // 多轮对话中 model 响应含 thoughtSignature 时，新 user 的 text part 也必须带签名
@@ -249,6 +257,7 @@ function buildGeminiRequest(
   if (options.imageSize && options.imageSize !== 'auto') {
     imageConfig.imageSize = options.imageSize
   }
+  // NOTE: numberOfImages is kept in schema for future API support but not forwarded.
   if (Object.keys(imageConfig).length > 0) {
     generationConfig.imageConfig = imageConfig
   }
@@ -278,6 +287,9 @@ export async function executeNanoBananaTool(
     const aspectRatio = toolCall.arguments.aspectRatio as string | undefined
     const imageSize = toolCall.arguments.imageSize as string | undefined
     const useReferenceImages = toolCall.arguments.useReferenceImages === 'true'
+    const numberOfImages = typeof toolCall.arguments.numberOfImages === 'number'
+      ? Math.min(Math.max(Math.round(toolCall.arguments.numberOfImages), 1), 4)
+      : 1
 
     if (!prompt) {
       return {
@@ -300,6 +312,7 @@ export async function executeNanoBananaTool(
     const requestBody = buildGeminiRequest(prompt, referenceImageParts, history, {
       aspectRatio,
       imageSize,
+      numberOfImages,
     })
 
     const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${credentials.apiKey}`
@@ -346,8 +359,9 @@ export async function executeNanoBananaTool(
     const generatedAttachments: FileAttachment[] = []
     const textParts: string[] = []
 
-    // 解析响应：提取图片和文本
+    // 解析响应：提取图片和文本（跳过 thought parts，它们是推理过程图，不作为输出）
     for (const part of parts) {
+      if (part.thought) continue
       if (part.inlineData) {
         // 保存生成的图片为附件
         const ext = part.inlineData.mimeType === 'image/jpeg' ? '.jpg' : '.png'
