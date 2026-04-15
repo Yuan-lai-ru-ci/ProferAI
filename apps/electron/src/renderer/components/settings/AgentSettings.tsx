@@ -135,9 +135,12 @@ export function AgentSettings(): React.ReactElement {
     )
   }
 
+  /** 配置目录名称：开发模式用 .proma-dev，正式版用 .proma */
+  const configDirName = import.meta.env.DEV ? '.proma-dev' : '.proma'
+
   /** 构建 MCP 配置提示词 */
   const buildMcpPrompt = (): string => {
-    const configPath = `~/.proma/agent-workspaces/${workspaceSlug}/mcp.json`
+    const configPath = `~/${configDirName}/agent-workspaces/${workspaceSlug}/mcp.json`
     const currentConfig = JSON.stringify(mcpConfig, null, 2)
 
     return `请帮我配置当前工作区的 MCP 服务器，你要主动来帮我实现，你可以采用联网搜索深度研究来尝试，当前环境已经有 Claude Agent SDK 了，除非不确定的时候才来问我，否则默认将帮我完成安装，而不是指导我。
@@ -175,7 +178,7 @@ mcp.json 格式如下：
 
   /** 构建 Skill 配置提示词 */
   const buildSkillPrompt = (): string => {
-    const skillsDir = `~/.proma/agent-workspaces/${workspaceSlug}/skills/`
+    const skillsDir = `~/${configDirName}/agent-workspaces/${workspaceSlug}/skills/`
     const skillList = skills.length > 0
       ? skills.map((s) => `- ${s.name}: ${s.description ?? '无描述'}`).join('\n')
       : '暂无 Skill'
