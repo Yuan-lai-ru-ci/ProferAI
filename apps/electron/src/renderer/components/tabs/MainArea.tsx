@@ -16,6 +16,13 @@ import { SplitContainer } from './SplitContainer'
 export function MainArea(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
 
+  // [FLASH-DEBUG] 监控 tabs 变化，如果 tabs.length 变为 0 说明所有标签被卸载
+  React.useEffect(() => {
+    if (tabs.length === 0) {
+      console.warn('[FLASH-DEBUG] MainArea: tabs.length === 0, showing WelcomeView!', new Error().stack)
+    }
+  }, [tabs.length])
+
   return (
     <>
       <Panel

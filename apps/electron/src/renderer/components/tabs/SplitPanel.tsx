@@ -35,6 +35,13 @@ export function SplitPanel({
     }))
   }, [panelIndex, setLayout])
 
+  // [FLASH-DEBUG] 监控 activeTabId 变化
+  React.useEffect(() => {
+    if (!panel.activeTabId) {
+      console.warn(`[FLASH-DEBUG] SplitPanel[${panelIndex}]: activeTabId is null/empty!`, new Error().stack)
+    }
+  }, [panel.activeTabId, panelIndex])
+
   return (
     <div
       className={cn(

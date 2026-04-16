@@ -30,6 +30,24 @@ const GRID_AREAS = ['a', 'b', 'c', 'd']
 export function SplitContainer(): React.ReactElement {
   const layout = useAtomValue(splitLayoutAtom)
 
+  // [FLASH-DEBUG] 监控 layout 变化
+  const prevLayoutRef = React.useRef(layout)
+  React.useEffect(() => {
+    const prev = prevLayoutRef.current
+    const panelsChanged = prev.panels.length !== layout.panels.length
+    const activeIdsChanged = prev.panels.some((p, i) => p.activeTabId !== layout.panels[i]?.activeTabId)
+    const focusChanged = prev.focusedPanelIndex !== layout.focusedPanelIndex
+    if (panelsChanged || activeIdsChanged || focusChanged) {
+      console.log('[FLASH-DEBUG] SplitContainer layout changed:', {
+        prevActiveIds: prev.panels.map(p => p.activeTabId),
+        newActiveIds: layout.panels.map(p => p.activeTabId),
+        focusChanged,
+        panelsChanged,
+      })
+    }
+    prevLayoutRef.current = layout
+  })
+
   const isSplit = layout.mode !== 'single'
 
   return (
