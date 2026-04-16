@@ -227,7 +227,7 @@ function TabBarInner({
         setHoveredTabId(null)
         setIsLeaving(false)
       }, 80)
-    }, 40)
+    }, 200)
   }, [])
 
   // 面板的 hover 进入（阻止关闭）

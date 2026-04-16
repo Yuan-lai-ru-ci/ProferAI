@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Plus, Plug, Pencil, Trash2, Sparkles, FolderOpen, MessageSquare, ShieldCheck, ChevronDown, ChevronRight, Brain, ImagePlus, Settings, RefreshCw } from 'lucide-react'
+import { Plus, Plug, Pencil, Trash2, Sparkles, FolderOpen, MessageSquare, ShieldCheck, ChevronDown, ChevronRight, Brain, ImagePlus, Settings, RefreshCw, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -1007,6 +1007,7 @@ function BuiltinAgentTools(): React.ReactElement {
 
   const memoryTool = tools.find((t) => t.meta.id === 'memory')
   const nanoBananaTool = tools.find((t) => t.meta.id === 'nano-banana')
+  const webSearchTool = tools.find((t) => t.meta.id === 'web-search')
 
   /** 跳转到工具设置页 */
   const goToToolSettings = (): void => {
@@ -1038,6 +1039,14 @@ function BuiltinAgentTools(): React.ReactElement {
       icon: <ImagePlus className="size-4" />,
       enabled: nanoBananaTool?.enabled ?? false,
       available: nanoBananaTool?.available ?? false,
+    },
+    {
+      id: 'web-search',
+      name: '联网搜索',
+      description: '实时搜索互联网获取最新信息',
+      icon: <Search className="size-4" />,
+      enabled: webSearchTool?.enabled ?? false,
+      available: webSearchTool?.available ?? false,
     },
   ]
 
@@ -1143,11 +1152,11 @@ function AgentAdvancedSettings(): React.ReactElement {
           onClick={() => setCollapsed(!collapsed)}
           className="flex items-center gap-2 hover:text-foreground/80 transition-colors"
         >
+          <span>Agent 高级设置</span>
           {collapsed
             ? <ChevronRight size={16} className="text-muted-foreground" />
             : <ChevronDown size={16} className="text-muted-foreground" />
           }
-          <span>Agent 高级设置</span>
         </button>
       }
       description={collapsed ? undefined : '控制 Agent 的思考模式、推理深度和资源限制'}
