@@ -47,6 +47,7 @@ import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/chat-atoms'
+import { appModeAtom } from './atoms/app-mode'
 import type { FeishuBotBridgeState, FeishuBridgeState, FeishuNotificationSentPayload, DingTalkBotBridgeState, DingTalkBridgeState } from '@proma/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
@@ -479,6 +480,114 @@ function DingTalkInitializer(): null {
   return null
 }
 
+/**
+ * 标签页持久化组件
+ *
+ * 启动时从 settings.tabState 恢复上次打开的标签页；
+ * 运行时监听标签页/布局变化，自动保存到 settings.json。
+ */
+function TabStatePersistenceInitializer(): null {
+  const store = useStore()
+
+  // 启动恢复：读取 settings.tabState + 校验会话有效性
+  useEffect(() => {
+    Promise.all([
+      window.electronAPI.getSettings(),
+      window.electronAPI.listConversations(),
+      window.electronAPI.listAgentSessions(),
+    ]).then(([settings, conversations, agentSessions]) => {
+      const tabState = settings.tabState
+      if (!tabState?.tabs?.length) return
+
+      // 构建有效 sessionId 集合
+      const validSessionIds = new Set([
+        ...conversations.map((c) => c.id),
+        ...agentSessions.map((s) => s.id),
+      ])
+
+      // 过滤掉已被删除的会话
+      const validTabs = tabState.tabs.filter((t) => validSessionIds.has(t.sessionId))
+      if (validTabs.length === 0) return
+
+      const validTabIds = new Set(validTabs.map((t) => t.id))
+      const layout = tabState.splitLayout
+
+      // 修正面板激活标签（可能指向已删除的会话）
+      // 分屏模式下尽量给不同面板分配不同的 tab
+      const usedTabIds = new Set<string>()
+      const fixedPanels = layout.panels.map((p) => {
+        if (p.activeTabId && validTabIds.has(p.activeTabId)) {
+          usedTabIds.add(p.activeTabId)
+          return p
+        }
+        const fallback = validTabs.find((t) => !usedTabIds.has(t.id))?.id ?? validTabs[0]?.id ?? null
+        if (fallback) usedTabIds.add(fallback)
+        return { ...p, activeTabId: fallback }
+      })
+
+      const restoredLayout = {
+        ...layout,
+        panels: fixedPanels,
+        focusedPanelIndex: Math.min(layout.focusedPanelIndex, fixedPanels.length - 1),
+      }
+
+      store.set(tabsAtom, validTabs as TabItem[])
+      store.set(splitLayoutAtom, restoredLayout as SplitLayoutState)
+
+      // 同步 appMode 和 currentSessionId
+      const activePanel = fixedPanels[restoredLayout.focusedPanelIndex]
+      const activeTab = validTabs.find((t) => t.id === activePanel?.activeTabId)
+      if (activeTab) {
+        store.set(appModeAtom, activeTab.type)
+        if (activeTab.type === 'chat') {
+          store.set(currentConversationIdAtom, activeTab.sessionId)
+        } else {
+          store.set(currentAgentSessionIdAtom, activeTab.sessionId)
+        }
+      }
+
+      console.log(`[TabRestore] 已恢复 ${validTabs.length} 个标签页`)
+    }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
+  }, [store])
+
+  // 自动保存：监听 tabsAtom / splitLayoutAtom 变化，防抖写入 settings.json
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const save = (): void => {
+      const tabs = store.get(tabsAtom)
+      const splitLayout = store.get(splitLayoutAtom)
+      window.electronAPI.updateSettings({
+        tabState: { tabs, splitLayout },
+      }).catch(console.error)
+    }
+
+    const debouncedSave = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(save, 500)
+    }
+
+    const unsub1 = store.sub(tabsAtom, debouncedSave)
+    const unsub2 = store.sub(splitLayoutAtom, debouncedSave)
+
+    // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
+    const handleBeforeUnload = (): void => {
+      if (timer) clearTimeout(timer)
+      save()
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      unsub1()
+      unsub2()
+      if (timer) clearTimeout(timer)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [store])
+
+  return null
+}
+
 // ===== 快速任务窗口：轻量渲染 =====
 if (isQuickTaskWindow) {
   import('./components/quick-task/QuickTaskApp').then(({ QuickTaskApp }) => {
@@ -502,6 +611,7 @@ if (isQuickTaskWindow) {
       <UpdaterInitializer />
       <FeishuInitializer />
       <DingTalkInitializer />
+      <TabStatePersistenceInitializer />
       <GlobalShortcuts />
       <App />
       <UpdateDialog />
