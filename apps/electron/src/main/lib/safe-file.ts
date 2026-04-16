@@ -12,12 +12,12 @@ import { writeFileSync, renameSync, existsSync, copyFileSync, readFileSync, unli
  * 原子写入 JSON 文件：write-to-temp → rename
  * 写入前自动保留 .bak 备份
  */
-export function writeJsonFileAtomic(filePath: string, data: object): void {
+export function writeJsonFileAtomic(filePath: string, data: object, skipBackup = false): void {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
 
   // 备份当前文件（如果存在且可读）
-  if (existsSync(filePath)) {
+  if (!skipBackup && existsSync(filePath)) {
     try {
       copyFileSync(filePath, bakPath)
     } catch {
@@ -76,8 +76,8 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
       const raw = readFileSync(bakPath, 'utf-8')
       if (raw.trim().length > 0) {
         const parsed = JSON.parse(raw) as T
-        // 用 .bak 恢复主文件（原子写入）
-        writeJsonFileAtomic(filePath, parsed as object)
+        // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
+        writeJsonFileAtomic(filePath, parsed as object, true)
         console.log(`[数据恢复] 从 .bak 文件恢复: ${filePath}`)
         return parsed
       }
