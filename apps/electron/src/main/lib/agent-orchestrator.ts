@@ -482,6 +482,17 @@ export class AgentOrchestrator {
       }
     }
 
+    // 针对 claude-agent-sdk 0.2.111+ 的 options.env 叠加语义加固：
+    // SDK 将 options.env 叠加到 process.env 之上传递给子进程。
+    // 若 shell 中存在 ANTHROPIC_CUSTOM_HEADERS、ANTHROPIC_MODEL 等变量，
+    // 且 sdkEnv 未显式管理，叠加后会回流到 SDK 子进程。
+    // 对于 sdkEnv 未显式管理的 ANTHROPIC_* 变量，显式置空字符串以覆盖回流。
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('ANTHROPIC_') && !(key in sdkEnv)) {
+        sdkEnv[key] = ''
+      }
+    }
+
     return sdkEnv
   }
 
