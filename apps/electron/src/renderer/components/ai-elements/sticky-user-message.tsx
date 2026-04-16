@@ -16,6 +16,7 @@ import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { useAtomValue } from 'jotai'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { MessageResponse } from './message'
 import { cn } from '@/lib/utils'
 
 interface StickyAttachment {
@@ -146,9 +147,11 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
               <ChevronUp className="size-3 text-muted-foreground ml-auto" />
             </div>
 
-            {/* 文本内容：最多两行 */}
+            {/* 文本内容：最多两行，支持 Markdown 渲染 */}
             {stickyMessage?.text && (
-              <p className="text-sm text-foreground/80 line-clamp-2 leading-relaxed">{stickyMessage.text}</p>
+              <div className="text-sm text-foreground/80 line-clamp-2 leading-relaxed [&>div]:inline">
+                <MessageResponse className="prose-p:my-0 prose-p:inline prose-headings:my-0 prose-headings:text-sm prose-pre:hidden prose-ul:my-0 prose-ol:my-0">{stickyMessage.text}</MessageResponse>
+              </div>
             )}
 
             {/* 附件 badges */}

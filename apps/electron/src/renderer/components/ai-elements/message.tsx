@@ -400,6 +400,11 @@ function renderTextWithMentions(text: string): React.ReactNode {
   return parts.length > 0 ? parts : text
 }
 
+/** 预处理用户消息：保留单换行符（Markdown 默认忽略单换行） */
+function preserveLineBreaks(text: string): string {
+  return text.replace(/\n/g, '  \n')
+}
+
 interface UserMessageContentProps extends HTMLAttributes<HTMLDivElement> {
   children: string
 }
@@ -436,12 +441,12 @@ export const UserMessageContent = React.memo(
         <div
           ref={contentRef}
           className={cn(
-            'whitespace-pre-wrap overflow-hidden transition-[max-height] duration-200 text-[15px] leading-[1.6]',
+            'overflow-hidden transition-[max-height] duration-200',
             '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
             shouldCollapse && !isExpanded && 'max-h-[6.5em]'
           )}
         >
-          {renderTextWithMentions(children)}
+          <MessageResponse className="prose-p:my-0.5 prose-headings:my-1.5">{preserveLineBreaks(children)}</MessageResponse>
         </div>
         {shouldCollapse && (
           <button
