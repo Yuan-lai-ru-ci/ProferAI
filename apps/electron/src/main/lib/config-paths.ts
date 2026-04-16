@@ -424,7 +424,7 @@ export function seedDefaultSkills(): void {
   const { app } = require('electron')
   const bundledDir = app.isPackaged
     ? join(process.resourcesPath, 'default-skills')
-    : join(__dirname, '../../default-skills')
+    : join(__dirname, '../default-skills')
 
   if (!existsSync(bundledDir)) {
     console.log('[配置] 未找到内置 default-skills 目录，跳过')
