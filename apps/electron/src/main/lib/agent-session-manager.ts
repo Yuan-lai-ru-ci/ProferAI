@@ -9,6 +9,7 @@
  */
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync } from 'node:fs'
+import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import { join, resolve, dirname } from 'node:path'
 import {
@@ -48,18 +49,9 @@ const INDEX_VERSION = 1
  */
 function readIndex(): AgentSessionsIndex {
   const indexPath = getAgentSessionsIndexPath()
-
-  if (!existsSync(indexPath)) {
-    return { version: INDEX_VERSION, sessions: [] }
-  }
-
-  try {
-    const raw = readFileSync(indexPath, 'utf-8')
-    return JSON.parse(raw) as AgentSessionsIndex
-  } catch (error) {
-    console.error('[Agent 会话] 读取索引文件失败:', error)
-    return { version: INDEX_VERSION, sessions: [] }
-  }
+  const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
+  if (data) return data
+  return { version: INDEX_VERSION, sessions: [] }
 }
 
 /**
@@ -69,7 +61,7 @@ function writeIndex(index: AgentSessionsIndex): void {
   const indexPath = getAgentSessionsIndexPath()
 
   try {
-    writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8')
+    writeJsonFileAtomic(indexPath, index)
   } catch (error) {
     console.error('[Agent 会话] 写入索引文件失败:', error)
     throw new Error('写入 Agent 会话索引失败')
