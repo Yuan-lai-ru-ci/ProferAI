@@ -488,6 +488,7 @@ function DingTalkInitializer(): null {
  */
 function TabStatePersistenceInitializer(): null {
   const store = useStore()
+  const restoredRef = useRef(false)
 
   // 启动恢复：读取 settings.tabState + 校验会话有效性
   useEffect(() => {
@@ -497,7 +498,10 @@ function TabStatePersistenceInitializer(): null {
       window.electronAPI.listAgentSessions(),
     ]).then(([settings, conversations, agentSessions]) => {
       const tabState = settings.tabState
-      if (!tabState?.tabs?.length) return
+      if (!tabState?.tabs?.length) {
+        restoredRef.current = true
+        return
+      }
 
       // 构建有效 sessionId 集合
       const validSessionIds = new Set([
@@ -505,9 +509,21 @@ function TabStatePersistenceInitializer(): null {
         ...agentSessions.map((s) => s.id),
       ])
 
-      // 过滤掉已被删除的会话
-      const validTabs = tabState.tabs.filter((t) => validSessionIds.has(t.sessionId))
-      if (validTabs.length === 0) return
+      // 过滤掉已被删除的会话，同时校验数据结构
+      const validTabs = tabState.tabs.filter(
+        (t): t is TabItem =>
+          typeof t === 'object' &&
+          t !== null &&
+          'id' in t &&
+          'sessionId' in t &&
+          'type' in t &&
+          'title' in t &&
+          validSessionIds.has(t.sessionId),
+      )
+      if (validTabs.length === 0) {
+        restoredRef.current = true
+        return
+      }
 
       const validTabIds = new Set(validTabs.map((t) => t.id))
       const layout = tabState.splitLayout
@@ -520,22 +536,32 @@ function TabStatePersistenceInitializer(): null {
           usedTabIds.add(p.activeTabId)
           return p
         }
-        const fallback = validTabs.find((t) => !usedTabIds.has(t.id))?.id ?? validTabs[0]?.id ?? null
-        if (fallback) usedTabIds.add(fallback)
-        return { ...p, activeTabId: fallback }
+        const fallback = validTabs.find((t) => !usedTabIds.has(t.id))?.id ?? validTabs[0]?.id
+        if (fallback) {
+          usedTabIds.add(fallback)
+          return { ...p, activeTabId: fallback }
+        }
+        return p
       })
 
-      const restoredLayout = {
-        ...layout,
-        panels: fixedPanels,
-        focusedPanelIndex: Math.min(layout.focusedPanelIndex, fixedPanels.length - 1),
+      const validPanels = fixedPanels.filter((p) => p.activeTabId && validTabIds.has(p.activeTabId))
+      if (validPanels.length === 0) {
+        restoredRef.current = true
+        return
       }
 
-      store.set(tabsAtom, validTabs as TabItem[])
-      store.set(splitLayoutAtom, restoredLayout as SplitLayoutState)
+      const finalPanels = validPanels.length === fixedPanels.length ? fixedPanels : validPanels
+      const restoredLayout: SplitLayoutState = {
+        ...layout,
+        panels: finalPanels,
+        focusedPanelIndex: Math.min(layout.focusedPanelIndex, Math.max(finalPanels.length - 1, 0)),
+      }
+
+      store.set(tabsAtom, validTabs)
+      store.set(splitLayoutAtom, restoredLayout)
 
       // 同步 appMode 和 currentSessionId
-      const activePanel = fixedPanels[restoredLayout.focusedPanelIndex]
+      const activePanel = restoredLayout.panels[restoredLayout.focusedPanelIndex]
       const activeTab = validTabs.find((t) => t.id === activePanel?.activeTabId)
       if (activeTab) {
         store.set(appModeAtom, activeTab.type)
@@ -548,6 +574,7 @@ function TabStatePersistenceInitializer(): null {
 
       console.log(`[TabRestore] 已恢复 ${validTabs.length} 个标签页`)
     }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
+      .finally(() => { restoredRef.current = true })
   }, [store])
 
   // 自动保存：监听 tabsAtom / splitLayoutAtom 变化，防抖写入 settings.json
@@ -563,6 +590,7 @@ function TabStatePersistenceInitializer(): null {
     }
 
     const debouncedSave = (): void => {
+      if (!restoredRef.current) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(save, 500)
     }
@@ -573,7 +601,18 @@ function TabStatePersistenceInitializer(): null {
     // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
     const handleBeforeUnload = (): void => {
       if (timer) clearTimeout(timer)
-      save()
+      // 使用同步 IPC 确保关闭前数据写入磁盘
+      const tabs = store.get(tabsAtom)
+      const splitLayout = store.get(splitLayoutAtom)
+      if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
+        const ok = window.electronAPI.updateSettingsSync({ tabState: { tabs, splitLayout } })
+        if (!ok) {
+          console.warn('[TabPersist] sync IPC failed, falling back to async save')
+          save()
+        }
+      } else {
+        save()
+      }
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
 

@@ -114,6 +114,7 @@ export interface PersistedTabSettings {
 export const SETTINGS_IPC_CHANNELS = {
   GET: 'settings:get',
   UPDATE: 'settings:update',
+  UPDATE_SYNC: 'settings:update-sync',
   GET_SYSTEM_THEME: 'settings:get-system-theme',
   ON_SYSTEM_THEME_CHANGED: 'settings:system-theme-changed',
   /** 用户手动切换主题时广播给所有窗口 */
