@@ -14,7 +14,6 @@ import { Plus, Plug, Pencil, Trash2, Sparkles, FolderOpen, MessageSquare, Shield
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -876,7 +875,7 @@ function ImportSkillFromWorkspaceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 px-6 pb-6">
+        <div className="space-y-4 overflow-y-auto px-6 pb-6 max-h-[60vh]">
           {availableWorkspaces.length === 0 ? (
             <SettingsCard divided={false}>
               <div className="py-10 text-center text-sm text-muted-foreground">
@@ -909,7 +908,7 @@ function ImportSkillFromWorkspaceDialog({
                       {workspace.skills.length} 个
                     </span>
                   </div>
-                  <ScrollArea className="max-h-[420px] pr-4">
+                  <div className="pr-1">
                     <div className="grid gap-3 sm:grid-cols-2">
                     {workspace.skills.map((skill) => (
                       <SettingsCard key={skill.slug} divided={false} className="overflow-hidden">
@@ -931,7 +930,7 @@ function ImportSkillFromWorkspaceDialog({
                             </div>
                           </div>
 
-                          <div className="min-h-[40px] text-sm leading-6 text-muted-foreground">
+                          <div className="line-clamp-3 min-h-[40px] text-sm leading-6 text-muted-foreground">
                             {skill.description ?? '暂无描述'}
                           </div>
 
@@ -947,7 +946,7 @@ function ImportSkillFromWorkspaceDialog({
                       </SettingsCard>
                     ))}
                     </div>
-                  </ScrollArea>
+                  </div>
                 </div>
               ))}
             </div>
