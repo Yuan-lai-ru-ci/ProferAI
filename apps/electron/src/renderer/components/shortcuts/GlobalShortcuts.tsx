@@ -30,6 +30,7 @@ import {
   agentChannelIdAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
+  workingDoneSessionIdsAtom,
 } from '@/atoms/agent-atoms'
 import {
   chatPendingMessageAtom,
@@ -64,6 +65,7 @@ export function GlobalShortcuts(): null {
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [layout, setLayout] = useAtom(splitLayoutAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
+  const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
 
   // 初始化：挂载注册表 + 加载用户配置
   useEffect(() => {
@@ -90,7 +92,14 @@ export function GlobalShortcuts(): null {
     const result = closeTab(tabs, layout, activeTabId)
     setTabs(result.tabs)
     setLayout(result.layout)
-  }, [activeTabId, tabs, layout, setTabs, setLayout])
+    // 从 Working Done 集合移除
+    setWorkingDone((prev) => {
+      if (!prev.has(activeTabId)) return prev
+      const next = new Set(prev)
+      next.delete(activeTabId)
+      return next
+    })
+  }, [activeTabId, tabs, layout, setTabs, setLayout, setWorkingDone])
 
   // 监听菜单 IPC 事件（Cmd+W 被 Electron 菜单拦截后通过 IPC 转发）
   useEffect(() => {

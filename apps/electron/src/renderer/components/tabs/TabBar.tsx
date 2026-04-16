@@ -36,6 +36,7 @@ import {
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
+  workingDoneSessionIdsAtom,
 } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
@@ -55,6 +56,7 @@ export function TabBar(): React.ReactElement {
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
+  const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
 
   // per-conversation/session Map atoms（用于关闭标签时清理）
   const setConvModels = useSetAtom(conversationModelsAtom)
@@ -130,7 +132,14 @@ export function TabBar(): React.ReactElement {
     })
     // 清理 per-conversation/session Map atoms 条目，防止内存泄漏
     cleanupMapAtoms(tabId)
-  }, [layout, setTabs, setLayout, cleanupMapAtoms])
+    // 从 Working Done 集合移除
+    setWorkingDone((prev) => {
+      if (!prev.has(tabId)) return prev
+      const next = new Set(prev)
+      next.delete(tabId)
+      return next
+    })
+  }, [layout, setTabs, setLayout, cleanupMapAtoms, setWorkingDone])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键

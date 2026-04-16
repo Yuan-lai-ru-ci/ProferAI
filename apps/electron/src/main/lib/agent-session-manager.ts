@@ -535,7 +535,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   if (upToMessageUuid) {
     const allMessages = getAgentSessionSDKMessages(sessionId)
     for (let i = allMessages.length - 1; i >= 0; i--) {
-      const m = allMessages[i]
+      const m = allMessages[i]!
       if ('uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid) {
         const msgSessionId = (m as { session_id?: string }).session_id
         if (msgSessionId && msgSessionId !== sourceMeta.sdkSessionId) {
