@@ -48,7 +48,6 @@ import {
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import {
   tabsAtom,
-  splitLayoutAtom,
   activeTabIdAtom,
   sidebarCollapsedAtom,
   closeTab,
@@ -207,8 +206,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   // Tab 状态
   const [tabs, setTabs] = useAtom(tabsAtom)
-  const [layout, setLayout] = useAtom(splitLayoutAtom)
-  const activeTabId = useAtomValue(activeTabIdAtom)
+  const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
   const openSession = useOpenSession()
 
@@ -419,9 +417,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       )
       // 归档时自动关闭该对话的标签页
       if (updated.archived) {
-        const tabResult = closeTab(tabs, layout, id)
+        const tabResult = closeTab(tabs, activeTabId, id)
         setTabs(tabResult.tabs)
-        setLayout(tabResult.layout)
+        setActiveTabId(tabResult.activeTabId)
         // 如果归档的是当前选中的对话，取消选中
         if (currentConversationId === id) {
           setCurrentConversationId(null)
@@ -437,9 +435,13 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const handleConfirmDelete = async (): Promise<void> => {
     if (!pendingDeleteId) return
 
-    // 关闭对应的标签页
-    const tabResult = closeTab(tabs, layout, pendingDeleteId)
+    // 关闭对应的标签页：setTabs 与 setActiveTabId 成组更新，便于阅读，
+    // 也避免将来在两者之间意外插入 await 导致跨渲染状态不一致。
+    // （React 18 在同一事件回调中会自动批处理多次 setState，所以单次渲染
+    // 的一致性由 React 保证，这里只是保持代码组织清晰。）
+    const tabResult = closeTab(tabs, activeTabId, pendingDeleteId)
     setTabs(tabResult.tabs)
+    setActiveTabId(tabResult.activeTabId)
 
     // 清理 draft 标记（如有）
     setDraftSessionIds((prev: Set<string>) => {
@@ -448,7 +450,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       next.delete(pendingDeleteId)
       return next
     })
-    setLayout(tabResult.layout)
 
     // 清理 per-conversation/session Map atoms 条目
     cleanupMapAtoms(pendingDeleteId)
@@ -591,9 +592,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       )
       // 归档时自动关闭该会话的标签页
       if (updated.archived) {
-        const tabResult = closeTab(tabs, layout, id)
+        const tabResult = closeTab(tabs, activeTabId, id)
         setTabs(tabResult.tabs)
-        setLayout(tabResult.layout)
+        setActiveTabId(tabResult.activeTabId)
         // 从 Working Done 集合移除
         setWorkingDone((prev) => {
           if (!prev.has(id)) return prev
@@ -619,9 +620,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     )
     // 如果迁移的是当前选中的会话，取消选中并关闭标签页
     if (currentAgentSessionId === updatedSession.id) {
-      const tabResult = closeTab(tabs, layout, updatedSession.id)
+      const tabResult = closeTab(tabs, activeTabId, updatedSession.id)
       setTabs(tabResult.tabs)
-      setLayout(tabResult.layout)
+      setActiveTabId(tabResult.activeTabId)
       setCurrentAgentSessionId(null)
       // 从 Working Done 集合移除
       setWorkingDone((prev) => {

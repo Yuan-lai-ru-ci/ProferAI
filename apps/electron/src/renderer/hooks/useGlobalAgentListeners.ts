@@ -41,7 +41,7 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, splitLayoutAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
@@ -258,10 +258,9 @@ export function useGlobalAgentListeners(): void {
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
       const tabs = store.get(tabsAtom)
-      const layout = store.get(splitLayoutAtom)
-      const result = openTab(tabs, layout, { type: 'agent', sessionId, title: sessionTitle })
+      const result = openTab(tabs, { type: 'agent', sessionId, title: sessionTitle })
       store.set(tabsAtom, result.tabs)
-      store.set(splitLayoutAtom, result.layout)
+      store.set(activeTabIdAtom, result.activeTabId)
       store.set(appModeAtom, 'agent')
       store.set(currentAgentSessionIdAtom, sessionId)
       const sessions = store.get(agentSessionsAtom)

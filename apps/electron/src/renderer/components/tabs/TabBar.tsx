@@ -6,19 +6,16 @@
  * - 中键关闭标签
  * - 拖拽重排序
  * - Chrome 风格等分宽度（不滚动）
- * - 分屏模式切换按钮
  */
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   tabsAtom,
-  splitLayoutAtom,
-  tabIndicatorMapAtom,
   activeTabIdAtom,
+  tabIndicatorMapAtom,
   openTab,
   closeTab,
-  focusTab,
   reorderTabs,
 } from '@/atoms/tab-atoms'
 import type { TabItem } from '@/atoms/tab-atoms'
@@ -41,12 +38,11 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { TabBarItem } from './TabBarItem'
-import { SplitModeToggle } from './SplitModeToggle'
+import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 
 export function TabBar(): React.ReactElement {
   const [tabs, setTabs] = useAtom(tabsAtom)
-  const [layout, setLayout] = useAtom(splitLayoutAtom)
-  const activeTabId = useAtomValue(activeTabIdAtom)
+  const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
 
   // Tab 切换时同步 sidebar 状态
@@ -57,6 +53,9 @@ export function TabBar(): React.ReactElement {
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
+
+  // 关闭活跃标签后同步副作用（与 GlobalShortcuts.handleCloseTab 共用）
+  const syncActiveTabSideEffects = useSyncActiveTabSideEffects()
 
   // per-conversation/session Map atoms（用于关闭标签时清理）
   const setConvModels = useSetAtom(conversationModelsAtom)
@@ -93,7 +92,7 @@ export function TabBar(): React.ReactElement {
   } | null>(null)
 
   const handleActivate = React.useCallback((tabId: string) => {
-    setLayout((prev) => focusTab(prev, tabId))
+    setActiveTabId(tabId)
 
     const tab = tabs.find((t) => t.id === tabId)
     if (!tab) return
@@ -121,15 +120,22 @@ export function TabBar(): React.ReactElement {
         }).catch(console.error)
       }
     }
-  }, [setLayout, tabs, agentSessions, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
+  }, [setActiveTabId, tabs, agentSessions, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
 
   const handleClose = React.useCallback((tabId: string) => {
-    setTabs((prevTabs) => {
-      const result = closeTab(prevTabs, layout, tabId)
-      // 需要同时更新 layout，使用 setTimeout 保证原子性
-      setTimeout(() => setLayout(result.layout), 0)
-      return result.tabs
-    })
+    const wasActive = activeTabId === tabId
+    const result = closeTab(tabs, activeTabId, tabId)
+    setTabs(result.tabs)
+    setActiveTabId(result.activeTabId)
+
+    // 若关闭的是当前活跃标签，将 appMode/currentXxxId 等同步到新激活的标签
+    if (wasActive) {
+      const newActiveTab = result.activeTabId
+        ? result.tabs.find((t) => t.id === result.activeTabId) ?? null
+        : null
+      syncActiveTabSideEffects(newActiveTab)
+    }
+
     // 清理 per-conversation/session Map atoms 条目，防止内存泄漏
     cleanupMapAtoms(tabId)
     // 从 Working Done 集合移除
@@ -139,7 +145,7 @@ export function TabBar(): React.ReactElement {
       next.delete(tabId)
       return next
     })
-  }, [layout, setTabs, setLayout, cleanupMapAtoms, setWorkingDone])
+  }, [tabs, activeTabId, setTabs, setActiveTabId, cleanupMapAtoms, setWorkingDone, syncActiveTabSideEffects])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键
@@ -272,8 +278,6 @@ function TabBarInner({
           />
         ))}
       </div>
-
-      <SplitModeToggle />
     </div>
   )
 }

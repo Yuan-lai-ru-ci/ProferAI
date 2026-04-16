@@ -41,8 +41,8 @@ import {
 } from './atoms/notifications'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
-import { tabsAtom, splitLayoutAtom } from './atoms/tab-atoms'
-import type { TabItem, SplitLayoutState } from './atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom } from './atoms/tab-atoms'
+import type { TabItem } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
@@ -484,8 +484,30 @@ function DingTalkInitializer(): null {
  * 标签页持久化组件
  *
  * 启动时从 settings.tabState 恢复上次打开的标签页；
- * 运行时监听标签页/布局变化，自动保存到 settings.json。
+ * 运行时监听标签页变化，自动保存到 settings.json。
  */
+
+/**
+ * 旧版（分屏时代）持久化结构——仅用于向后兼容读取迁移。
+ * 新版已扁平化为 { tabs, activeTabId }；旧版是 { tabs, splitLayout }。
+ */
+interface LegacyTabStateWithSplitLayout {
+  splitLayout?: {
+    focusedPanelIndex?: number
+    panels?: Array<{ activeTabId?: string | null }>
+  }
+}
+
+/** 从旧版 splitLayout 结构中提取原焦点面板的 activeTabId */
+function extractLegacyActiveTabId(tabState: unknown): string | null {
+  if (!tabState || typeof tabState !== 'object') return null
+  const legacy = tabState as LegacyTabStateWithSplitLayout
+  const panels = legacy.splitLayout?.panels
+  if (!Array.isArray(panels) || panels.length === 0) return null
+  const focusedIndex = legacy.splitLayout?.focusedPanelIndex ?? 0
+  return panels[focusedIndex]?.activeTabId ?? panels[0]?.activeTabId ?? null
+}
+
 function TabStatePersistenceInitializer(): null {
   const store = useStore()
   const restoredRef = useRef(false)
@@ -526,43 +548,26 @@ function TabStatePersistenceInitializer(): null {
       }
 
       const validTabIds = new Set(validTabs.map((t) => t.id))
-      const layout = tabState.splitLayout
 
-      // 修正面板激活标签（可能指向已删除的会话）
-      // 分屏模式下尽量给不同面板分配不同的 tab
-      const usedTabIds = new Set<string>()
-      const fixedPanels = layout.panels.map((p) => {
-        if (p.activeTabId && validTabIds.has(p.activeTabId)) {
-          usedTabIds.add(p.activeTabId)
-          return p
+      // 恢复 activeTabId（校验有效性）
+      let restoredActiveTabId: string | null = null
+      if (tabState.activeTabId && validTabIds.has(tabState.activeTabId)) {
+        restoredActiveTabId = tabState.activeTabId
+      } else {
+        // 向后兼容：从旧版 splitLayout 结构中恢复原焦点面板的 activeTabId
+        const legacyId = extractLegacyActiveTabId(tabState)
+        if (legacyId && validTabIds.has(legacyId)) {
+          restoredActiveTabId = legacyId
+        } else {
+          restoredActiveTabId = validTabs[0]?.id ?? null
         }
-        const fallback = validTabs.find((t) => !usedTabIds.has(t.id))?.id ?? validTabs[0]?.id
-        if (fallback) {
-          usedTabIds.add(fallback)
-          return { ...p, activeTabId: fallback }
-        }
-        return p
-      })
-
-      const validPanels = fixedPanels.filter((p) => p.activeTabId && validTabIds.has(p.activeTabId))
-      if (validPanels.length === 0) {
-        restoredRef.current = true
-        return
-      }
-
-      const finalPanels = validPanels.length === fixedPanels.length ? fixedPanels : validPanels
-      const restoredLayout: SplitLayoutState = {
-        ...layout,
-        panels: finalPanels,
-        focusedPanelIndex: Math.min(layout.focusedPanelIndex, Math.max(finalPanels.length - 1, 0)),
       }
 
       store.set(tabsAtom, validTabs)
-      store.set(splitLayoutAtom, restoredLayout)
+      store.set(activeTabIdAtom, restoredActiveTabId)
 
       // 同步 appMode 和 currentSessionId
-      const activePanel = restoredLayout.panels[restoredLayout.focusedPanelIndex]
-      const activeTab = validTabs.find((t) => t.id === activePanel?.activeTabId)
+      const activeTab = validTabs.find((t) => t.id === restoredActiveTabId)
       if (activeTab) {
         store.set(appModeAtom, activeTab.type)
         if (activeTab.type === 'chat') {
@@ -577,15 +582,15 @@ function TabStatePersistenceInitializer(): null {
       .finally(() => { restoredRef.current = true })
   }, [store])
 
-  // 自动保存：监听 tabsAtom / splitLayoutAtom 变化，防抖写入 settings.json
+  // 自动保存：监听 tabsAtom / activeTabIdAtom 变化，防抖写入 settings.json
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const save = (): void => {
       const tabs = store.get(tabsAtom)
-      const splitLayout = store.get(splitLayoutAtom)
+      const activeTabId = store.get(activeTabIdAtom)
       window.electronAPI.updateSettings({
-        tabState: { tabs, splitLayout },
+        tabState: { tabs, activeTabId },
       }).catch(console.error)
     }
 
@@ -596,16 +601,16 @@ function TabStatePersistenceInitializer(): null {
     }
 
     const unsub1 = store.sub(tabsAtom, debouncedSave)
-    const unsub2 = store.sub(splitLayoutAtom, debouncedSave)
+    const unsub2 = store.sub(activeTabIdAtom, debouncedSave)
 
     // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
     const handleBeforeUnload = (): void => {
       if (timer) clearTimeout(timer)
       // 使用同步 IPC 确保关闭前数据写入磁盘
       const tabs = store.get(tabsAtom)
-      const splitLayout = store.get(splitLayoutAtom)
+      const activeTabId = store.get(activeTabIdAtom)
       if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
-        const ok = window.electronAPI.updateSettingsSync({ tabState: { tabs, splitLayout } })
+        const ok = window.electronAPI.updateSettingsSync({ tabState: { tabs, activeTabId } })
         if (!ok) {
           console.warn('[TabPersist] sync IPC failed, falling back to async save')
           save()

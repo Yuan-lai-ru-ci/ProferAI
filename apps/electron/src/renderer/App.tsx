@@ -7,7 +7,7 @@ import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { TooltipProvider } from './components/ui/tooltip'
 import { environmentCheckResultAtom } from './atoms/environment'
 import { conversationsAtom } from './atoms/chat-atoms'
-import { tabsAtom, splitLayoutAtom, openTab } from './atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, openTab } from './atoms/tab-atoms'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 export default function App(): React.ReactElement {
@@ -61,14 +61,13 @@ export default function App(): React.ReactElement {
 
         // 打开对话标签页
         const tabs = store.get(tabsAtom)
-        const layout = store.get(splitLayoutAtom)
-        const result = openTab(tabs, layout, {
+        const result = openTab(tabs, {
           type: 'chat',
           sessionId: meta.id,
           title: meta.title,
         })
         store.set(tabsAtom, result.tabs)
-        store.set(splitLayoutAtom, result.layout)
+        store.set(activeTabIdAtom, result.activeTabId)
       }
     } catch (error) {
       console.error('[App] 创建欢迎对话失败:', error)
