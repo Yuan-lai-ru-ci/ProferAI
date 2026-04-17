@@ -260,6 +260,10 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       }
     } else {
       // result, tool_progress 等 → 归入当前 turn
+      // prompt_suggestion 不属于对话转录，不入 turn，避免被当作文本附加到助手消息末尾
+      if ((msg as { type: string }).type === 'prompt_suggestion') {
+        continue
+      }
       if (currentTurn) {
         currentTurn.turnMessages.push(msg)
       }
@@ -369,6 +373,15 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
 
   // 从 turnMessages 中提取 result 消息的耗时和用量
   const { durationMs, usage } = extractTurnUsage(turn.turnMessages)
+
+  // 该 turn 是否被软中断（aborted_streaming / aborted_tools）
+  // 用于在消息底部显示“已被用户中断”徽章，独立于会话级 stoppedByUser 标记
+  const isInterruptedTurn = turn.turnMessages.some((m) => {
+    if (m.type !== 'result') return false
+    const reason = (m as { terminal_reason?: string }).terminal_reason
+    return reason === 'aborted_streaming' || reason === 'aborted_tools'
+  })
+  const showStoppedBadge = stoppedByUser || isInterruptedTurn
 
   // 构建 Agent/Task tool_use → 子代理内容块映射
   const agentToolIds = new Set<string>()
@@ -550,7 +563,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           : undefined
         const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
         const hasDuration = durationMs != null
-        if (!hasDuration && !hasActions && !stoppedByUser) return null
+        if (!hasDuration && !hasActions && !showStoppedBadge) return null
         return (
           <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start">
             {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
@@ -565,7 +578,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                 <Undo2 className="size-3.5" />
               </MessageAction>
             )}
-            {stoppedByUser && (
+            {showStoppedBadge && (
               <Badge variant="outline" className="text-xs text-muted-foreground/70 border-muted-foreground/30 shrink-0">
                 已被用户中断
               </Badge>

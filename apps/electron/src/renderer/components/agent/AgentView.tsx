@@ -815,11 +815,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
 
-      // 3. 异步发送到后端（'now' 优先级立即注入 SDK + 持久化 JSONL）
+      // 3. 异步发送到后端（立即软中断当前 turn，再注入消息作为新一轮输入）
       window.electronAPI.queueAgentMessage({
         sessionId,
         userMessage: effectiveText,
         uuid: localUuid,
+        interrupt: true,
       }).catch((error) => {
         console.error('[AgentView] 追加消息失败:', error)
         toast.error('追加消息失败', { description: String(error) })

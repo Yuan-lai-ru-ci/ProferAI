@@ -239,6 +239,7 @@ export async function queueAgentMessage(
     input.userMessage,
     undefined,
     input.uuid,
+    { interrupt: input.interrupt },
   )
 }
 

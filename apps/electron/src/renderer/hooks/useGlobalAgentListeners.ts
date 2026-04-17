@@ -334,7 +334,11 @@ export function useGlobalAgentListeners(): void {
         // Phase 2: 直接累积 SDKMessage 到 liveMessagesMapAtom（跳过 replay 消息，避免与持久化消息重复）
         if (payload.kind === 'sdk_message') {
           const msgRecord = payload.message as Record<string, unknown>
-          if (!msgRecord.isReplay) {
+          // prompt_suggestion 不是对话转录消息，不能进入 liveMessages（会被错误渲染到最后一条助手消息中）
+          // 它通过下方 legacyEvents 分支写入 agentPromptSuggestionsAtom，显示在输入框上方
+          if (msgRecord.type === 'prompt_suggestion') {
+            // 跳过写入 liveMessages
+          } else if (!msgRecord.isReplay) {
             // 为实时消息补充 _createdAt 时间戳（与持久化时的逻辑一致），
             // 避免 AssistantTurnRenderer 因缺少时间戳导致 header 时间消失
             if (typeof msgRecord._createdAt !== 'number') {
