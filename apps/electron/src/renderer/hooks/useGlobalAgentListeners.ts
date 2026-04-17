@@ -52,6 +52,21 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 // Phase 2 将移除此转换，直接使用 SDKMessage 渲染
 // ============================================================================
 
+/**
+ * 按模型名推断 contextWindow。SDK 流式过程中不返回此字段，
+ * 只有 result 消息的 modelUsage 才带（且部分渠道不返回）。
+ * 这里提供一个按模型家族的 fallback，保证进度环永远有分母可用。
+ */
+function inferContextWindow(model?: string): number | undefined {
+  if (!model) return undefined
+  const m = model.toLowerCase()
+  // Claude Haiku 为 200k
+  if (m.includes('claude-haiku')) return 200_000
+  // Claude Sonnet 4.6、Opus 4.6 以及 Opus 4.7 均为 1M 上下文
+  if (m.includes('claude-sonnet-4-6') || m.includes('claude-opus-4-6') || m.includes('claude-opus-4-7')) return 1_000_000
+  return 200_000
+}
+
 function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
   if (payload.kind === 'proma_event') {
     const evt = payload.event
@@ -133,6 +148,9 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       if (!aMsg.parent_tool_use_id && aMsg.message.usage) {
         const u = aMsg.message.usage
         const inputTokens = u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+        // 流式过程中 SDK 不返回 contextWindow，按模型名推断一个默认值作为 fallback
+        const modelName = aMsg.message.model ?? aMsg._channelModelId
+        const fallbackWindow = inferContextWindow(modelName)
         events.push({
           type: 'usage_update',
           usage: {
@@ -140,6 +158,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
             outputTokens: u.output_tokens,
             cacheReadTokens: u.cache_read_input_tokens,
             cacheCreationTokens: u.cache_creation_input_tokens,
+            ...(fallbackWindow ? { contextWindow: fallbackWindow } : {}),
           },
         })
       }

@@ -77,13 +77,17 @@ function CompactBoundaryDivider(): React.ReactElement {
   )
 }
 
-// ===== system 消息：正在压缩指示器 =====
+// ===== system 消息：正在压缩指示器（与 CompactBoundaryDivider 同款横线样式，pill 内带 spinner） =====
 
-function CompactingIndicator(): React.ReactElement {
+export function CompactingIndicator(): React.ReactElement {
   return (
-    <div className="flex items-center gap-2 my-2 px-1 text-[12px] text-muted-foreground/70">
-      <Loader2 className="size-3 animate-spin" />
-      <span>正在压缩上下文...</span>
+    <div className="flex items-center gap-3 my-4 px-1">
+      <div className="flex-1 h-px bg-border/40" />
+      <span className="shrink-0 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20">
+        <Loader2 className="size-3 animate-spin" />
+        正在压缩...
+      </span>
+      <div className="flex-1 h-px bg-border/40" />
     </div>
   )
 }
@@ -297,6 +301,7 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
     for (let i = result.length - 1; i >= 0; i--) {
       const prev = result[i]!
       if (prev.type === 'user') break // 真正的用户输入阻断合并
+      if (prev.type === 'system' && (prev.message as SDKSystemMessage).subtype === 'compact_boundary') break // 压缩边界阻断合并
       if (prev.type === 'assistant-turn') {
         if (prev.model === group.model) {
           mergeTargetIdx = i
@@ -670,9 +675,7 @@ export function SDKMessageRenderer({
       return <CompactBoundaryDivider />
     }
 
-    if (subtype === 'compacting') {
-      return <CompactingIndicator />
-    }
+    // compacting 事件已由 isCompacting flag 驱动的尾部指示器接管（见 AgentMessages），此处不再渲染持久条目
 
     return null
   }
