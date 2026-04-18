@@ -48,6 +48,9 @@ export const tabsAtom = atom<TabItem[]>([])
 /** 当前激活的标签 ID */
 export const activeTabIdAtom = atom<string | null>(null)
 
+/** 标签页 MRU（最近使用）顺序，最近使用的 ID 排在前面 */
+export const tabMruAtom = atom<string[]>([])
+
 /** 侧边栏是否收起（持久化） */
 export const sidebarCollapsedAtom = atomWithStorage<boolean>(
   'proma-sidebar-collapsed',
