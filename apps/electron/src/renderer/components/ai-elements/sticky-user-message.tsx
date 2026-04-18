@@ -63,7 +63,7 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
 
   React.useEffect(() => {
     const el = scrollRef.current
-    if (!el || userMessages.length === 0) {
+    if (!el || userMessages.length === 0 || !stickyEnabled) {
       setStickyMessage(null)
       return
     }
@@ -109,7 +109,7 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
       resizeObserver.disconnect()
       cancelAnimationFrame(rafId)
     }
-  }, [scrollRef, userMessages, messageMap])
+  }, [scrollRef, userMessages, messageMap, stickyEnabled])
 
   // 点击回滚到原始消息
   const scrollToOriginal = React.useCallback(() => {
@@ -133,8 +133,8 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
   const isSticky = stickyMessage !== null
   const hasContent = stickyMessage && (stickyMessage.text || stickyMessage.attachments.length > 0)
 
-  if (!hasContent && !isSticky) return <></>
   if (!stickyEnabled) return <></>
+  if (!hasContent && !isSticky) return <></>
 
   return (
     <div
