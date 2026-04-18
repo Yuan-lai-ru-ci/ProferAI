@@ -269,7 +269,12 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
           answer={getAnswer(activeTab)}
           focusedIndex={focusedOptIdx}
           showBadge={questions.length === 1}
-          onToggleOption={(label) => toggleOptionByState(activeTab, currentQuestion, label)}
+          onToggleOption={(label) => {
+            toggleOptionByState(activeTab, currentQuestion, label)
+            if (!currentQuestion.multiSelect && !isLastTab) {
+              setTimeout(() => setActiveTab((prev) => prev + 1), 150)
+            }
+          }}
           onToggleCustom={() => toggleCustomByState(activeTab)}
           onCustomTextChange={(text) => setAnswers((prev) => {
             const map = new Map(prev)
