@@ -4,7 +4,7 @@
  * 挂载 React 应用，初始化主题系统。
  */
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import ReactDOM from 'react-dom/client'
 import { useSetAtom, useAtomValue, useStore } from 'jotai'
 import App from './App'
@@ -97,9 +97,23 @@ function ThemeInitializer(): null {
   }, [setThemeMode, setSystemIsDark, setThemeStyle])
 
   // 响应式应用主题到 DOM
+  // 用 useMemo 计算"实际会影响 DOM 的状态签名"作为唯一依赖：
+  // special 模式下 systemIsDark 不影响最终 class，避免系统主题变化时触发无意义的
+  // applyThemeToDOM 调用（配合 applyThemeToDOM 内部的幂等检查双重兜底）。
+  const themeSignature = useMemo(() => {
+    if (themeMode === 'special') {
+      return `special:${themeStyle}`
+    }
+    if (themeMode === 'system') {
+      return `system:${systemIsDark ? 'dark' : 'light'}`
+    }
+    return themeMode
+  }, [themeMode, themeStyle, systemIsDark])
+
   useEffect(() => {
     applyThemeToDOM(themeMode, themeStyle, systemIsDark)
-  }, [themeMode, themeStyle, systemIsDark])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [themeSignature])
 
   return null
 }
