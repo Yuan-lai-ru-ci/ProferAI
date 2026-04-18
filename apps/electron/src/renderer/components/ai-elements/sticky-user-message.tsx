@@ -16,6 +16,7 @@ import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { useAtomValue } from 'jotai'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { stickyUserMessageEnabledAtom } from '@/atoms/ui-preferences'
 import { MessageResponse, remarkMentions } from './message'
 import type { RemarkPluginFn } from './message'
 import { cn } from '@/lib/utils'
@@ -46,6 +47,7 @@ interface StickyUserMessageProps {
 export function StickyUserMessage({ userMessages }: StickyUserMessageProps): React.ReactElement {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
   const userProfile = useAtomValue(userProfileAtom)
+  const stickyEnabled = useAtomValue(stickyUserMessageEnabledAtom)
 
   // 当前悬浮展示的消息
   const [stickyMessage, setStickyMessage] = React.useState<UserMessageData | null>(null)
@@ -132,6 +134,7 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
   const hasContent = stickyMessage && (stickyMessage.text || stickyMessage.attachments.length > 0)
 
   if (!hasContent && !isSticky) return <></>
+  if (!stickyEnabled) return <></>
 
   return (
     <div

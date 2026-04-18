@@ -39,6 +39,10 @@ import {
   notificationSoundsAtom,
   initializeNotifications,
 } from './atoms/notifications'
+import {
+  stickyUserMessageEnabledAtom,
+  initializeUiPreferences,
+} from './atoms/ui-preferences'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
 import { tabsAtom, activeTabIdAtom } from './atoms/tab-atoms'
@@ -318,6 +322,21 @@ function NotificationsInitializer(): null {
   useEffect(() => {
     initializeNotifications(setEnabled, setSoundEnabled, setSounds)
   }, [setEnabled, setSoundEnabled, setSounds])
+
+  return null
+}
+
+/**
+ * UI 偏好初始化组件
+ *
+ * 从主进程加载 UI 偏好设置（悬浮置顶条等）。
+ */
+function UiPreferencesInitializer(): null {
+  const setStickyUserMessageEnabled = useSetAtom(stickyUserMessageEnabledAtom)
+
+  useEffect(() => {
+    initializeUiPreferences(setStickyUserMessageEnabled)
+  }, [setStickyUserMessageEnabled])
 
   return null
 }
@@ -663,6 +682,7 @@ if (isQuickTaskWindow) {
       <ThemeInitializer />
       <AgentSettingsInitializer />
       <NotificationsInitializer />
+      <UiPreferencesInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />
       <ChatToolInitializer />

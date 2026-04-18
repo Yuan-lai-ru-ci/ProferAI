@@ -37,6 +37,10 @@ import {
   NOTIFICATION_SOUNDS,
   DEFAULT_NOTIFICATION_SOUNDS,
 } from '@/atoms/notifications'
+import {
+  stickyUserMessageEnabledAtom,
+  updateStickyUserMessageEnabled,
+} from '@/atoms/ui-preferences'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import type { NotificationSoundId, NotificationSoundType, NotificationSoundSettings } from '@/types/settings'
@@ -56,6 +60,7 @@ export function GeneralSettings(): React.ReactElement {
   const [notificationsEnabled, setNotificationsEnabled] = useAtom(notificationsEnabledAtom)
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useAtom(notificationSoundEnabledAtom)
   const [notificationSounds, setNotificationSounds] = useAtom(notificationSoundsAtom)
+  const [stickyUserMessageEnabled, setStickyUserMessageEnabled] = useAtom(stickyUserMessageEnabledAtom)
   const [isEditingName, setIsEditingName] = React.useState(false)
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
@@ -305,6 +310,15 @@ export function GeneralSettings(): React.ReactElement {
               </SelectContent>
             </Select>
           </SettingsRow>
+          <SettingsToggle
+            label="消息悬浮置顶条"
+            description="滚动浏览对话时，在顶部显示最近的用户消息摘要"
+            checked={stickyUserMessageEnabled}
+            onCheckedChange={(checked) => {
+              setStickyUserMessageEnabled(checked)
+              updateStickyUserMessageEnabled(checked)
+            }}
+          />
         </SettingsCard>
       </SettingsSection>
     </div>
