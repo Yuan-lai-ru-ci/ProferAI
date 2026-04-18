@@ -15,6 +15,7 @@ import {
   tabsAtom,
   activeTabIdAtom,
   tabMruAtom,
+  tabIndicatorMapAtom,
 } from '@/atoms/tab-atoms'
 import type { TabItem } from '@/atoms/tab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -25,12 +26,14 @@ import {
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
+import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 
 export function TabSwitcher(): React.ReactElement | null {
   const tabs = useAtomValue(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
   const [mruOrder, setMruOrder] = useAtom(tabMruAtom)
+  const indicatorMap = useAtomValue(tabIndicatorMapAtom)
 
   const setAppMode = useSetAtom(appModeAtom)
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
@@ -219,24 +222,36 @@ export function TabSwitcher(): React.ReactElement | null {
 
         {/* 标签列表 */}
         <div className="py-1.5">
-          {displayTabs.map((tab, index) => (
-            <div
-              key={tab.id}
-              className={cn(
-                'flex items-center gap-3 px-5 py-2.5 text-[15px] cursor-default transition-colors',
-                index === safeIndex
-                  ? 'bg-primary/15 text-foreground font-medium'
-                  : 'text-muted-foreground',
-              )}
-            >
-              {tab.type === 'agent' ? (
-                <Bot className="w-4 h-4 shrink-0 opacity-60" />
-              ) : (
-                <MessageSquare className="w-4 h-4 shrink-0 opacity-60" />
-              )}
-              <span className="truncate">{tab.title || '新对话'}</span>
-            </div>
-          ))}
+          {displayTabs.map((tab, index) => {
+            const indicatorColor = getIndicatorColor(
+              indicatorMap.get(tab.id) ?? 'idle',
+              tab.type,
+            )
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  'flex items-center gap-3 px-5 py-2.5 text-[15px] cursor-default transition-colors',
+                  index === safeIndex
+                    ? 'bg-primary/15 text-foreground font-medium'
+                    : 'text-muted-foreground',
+                )}
+              >
+                {tab.type === 'agent' ? (
+                  <Bot className="w-4 h-4 shrink-0 opacity-60" />
+                ) : (
+                  <MessageSquare className="w-4 h-4 shrink-0 opacity-60" />
+                )}
+                <span className="flex-1 truncate">{tab.title || '新对话'}</span>
+                {indicatorColor && (
+                  <span
+                    className={cn('size-1.5 rounded-full shrink-0', indicatorColor)}
+                    aria-hidden="true"
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
 
         {/* Footer：操作提示 */}
@@ -264,4 +279,22 @@ function Kbd({ children }: { children: React.ReactNode }): React.ReactElement {
       {children}
     </kbd>
   )
+}
+
+/**
+ * 状态指示点颜色（与 TabBarItem 保持一致）
+ * - completed → 绿色（已完成未查看）
+ * - blocked → 橙色脉动（Agent 等待用户输入）
+ * - running + chat → emerald 脉动
+ * - running + agent → 蓝色脉动
+ * - idle → 无
+ */
+function getIndicatorColor(
+  status: SessionIndicatorStatus,
+  type: TabItem['type'],
+): string | undefined {
+  if (status === 'idle') return undefined
+  if (status === 'completed') return 'bg-green-500'
+  if (status === 'blocked') return 'bg-orange-500 animate-pulse'
+  return type === 'chat' ? 'bg-emerald-500 animate-pulse' : 'bg-blue-500 animate-pulse'
 }
