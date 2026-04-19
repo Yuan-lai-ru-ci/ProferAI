@@ -14,6 +14,7 @@ import {
 import {
   agentRunningSessionIdsAtom,
   agentSessionIndicatorMapAtom,
+  workingDoneSessionIdsAtom,
 } from './agent-atoms'
 import type { SessionIndicatorStatus } from './agent-atoms'
 
@@ -97,12 +98,15 @@ export const tabIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((ge
   const tabs = get(tabsAtom)
   const chatStreaming = get(streamingConversationIdsAtom)
   const agentIndicator = get(agentSessionIndicatorMapAtom)
+  const workingDoneIds = get(workingDoneSessionIdsAtom)
   const map = new Map<string, SessionIndicatorStatus>()
   for (const tab of tabs) {
     if (tab.type === 'chat') {
       map.set(tab.id, chatStreaming.has(tab.sessionId) ? 'running' : 'idle')
     } else if (tab.type === 'agent') {
-      map.set(tab.id, agentIndicator.get(tab.sessionId) ?? 'idle')
+      const status = agentIndicator.get(tab.sessionId)
+        ?? (workingDoneIds.has(tab.sessionId) ? 'completed' : 'idle')
+      map.set(tab.id, status)
     }
   }
   return map

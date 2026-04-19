@@ -223,24 +223,27 @@ export function TabSwitcher(): React.ReactElement | null {
         {/* 标签列表 */}
         <div className="py-1.5">
           {displayTabs.map((tab, index) => {
-            const indicatorColor = getIndicatorColor(
-              indicatorMap.get(tab.id) ?? 'idle',
-              tab.type,
-            )
+            const status = indicatorMap.get(tab.id) ?? 'idle'
+            const indicatorColor = getIndicatorColor(status, tab.type)
+            const indicatorPulse = status === 'running' || status === 'blocked'
             return (
               <div
                 key={tab.id}
                 className={cn(
-                  'flex items-center gap-3 px-5 py-2.5 text-[15px] cursor-default transition-colors',
+                  'relative flex items-center gap-3 pl-5 pr-5 py-2.5 text-[15px] cursor-default transition-colors',
                   index === safeIndex
                     ? 'bg-primary/15 text-foreground font-medium'
                     : 'text-muted-foreground',
                 )}
               >
-                {/* 状态指示点（不占固定空间，存在时向后挤压 title） */}
+                {/* 左侧状态竖线条 */}
                 {indicatorColor && (
                   <span
-                    className={cn('size-1.5 rounded-full shrink-0', indicatorColor)}
+                    className={cn(
+                      'absolute left-1.5 top-2 bottom-2 w-[2px] rounded-full',
+                      indicatorColor,
+                      indicatorPulse && 'animate-pulse',
+                    )}
                     aria-hidden="true"
                   />
                 )}
@@ -296,6 +299,6 @@ function getIndicatorColor(
 ): string | undefined {
   if (status === 'idle') return undefined
   if (status === 'completed') return 'bg-green-500'
-  if (status === 'blocked') return 'bg-orange-500 animate-pulse'
-  return type === 'chat' ? 'bg-emerald-500 animate-pulse' : 'bg-blue-500 animate-pulse'
+  if (status === 'blocked') return 'bg-orange-500'
+  return type === 'chat' ? 'bg-emerald-500' : 'bg-blue-500'
 }
