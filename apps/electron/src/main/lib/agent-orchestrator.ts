@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, symlinkSync, readFileSync, writeFileSync } from 
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta } from '@proma/shared'
 import { SAFE_TOOLS } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
@@ -393,6 +393,21 @@ const DEFAULT_SESSION_TITLE = '新 Agent 会话'
 
 /** 默认模型 ID */
 const DEFAULT_MODEL_ID = 'claude-sonnet-4-5-20250929'
+
+/**
+ * 判断模型是否支持 1M context window beta（context-1m-2025-08-07）
+ * 当前支持：Sonnet 4 / 4.5 / 4.6、Opus 4.6 / 4.7
+ * 参考：https://docs.anthropic.com/en/docs/build-with-claude/context-windows
+ */
+function supports1MContext(modelId: string): boolean {
+  const m = modelId.toLowerCase()
+  if (!m.includes('claude')) return false
+  if (m.includes('haiku')) return false
+  // Sonnet 4+ 与 Opus 4.6+ 都支持
+  if (m.includes('sonnet-4-6')) return true
+  if (m.includes('opus-4-6') || m.includes('opus-4-7')) return true
+  return false
+}
 
 // ===== AgentOrchestrator =====
 
@@ -1271,6 +1286,11 @@ export class AgentOrchestrator {
         effort: appSettings.agentEffort ?? 'high',
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
+        }),
+        // 1M context window: 对支持的模型（Opus 4.6/4.7、Sonnet 4.6）自动启用 beta
+        // 未启用时 SDK 默认 200K 并在约 150K 触发压缩；启用后上限提升至 1M
+        ...(supports1MContext(modelId || DEFAULT_MODEL_ID) && {
+          betas: ['context-1m-2025-08-07'] as SdkBeta[],
         }),
         // 内置 SubAgent 定义（code-reviewer / explorer / researcher）
         // claudeAvailable=false 时 SubAgent 省略 model 字段，自动继承主 Agent 模型
