@@ -112,6 +112,7 @@ function isEditableType(previewType: string): boolean {
 /** 通用语言 ID（用于 Monaco） */
 function detectLanguage(filePath: string, ext: string): string {
   const base = basename(filePath).toLowerCase()
+  if (isEnvFile(base)) return 'bash'
   if (SPECIAL_FILENAME_LANG[base]) return SPECIAL_FILENAME_LANG[base]
   return EXT_LANG_MAP[ext] || 'plaintext'
 }
@@ -222,6 +223,15 @@ const PDF_EXTENSIONS = new Set(['.pdf'])
 /** 支持 DOCX 预览的扩展名 */
 const DOCX_EXTENSIONS = new Set(['.docx'])
 
+/**
+ * 是否为 .env 系列文件（.env、.env.local、.env.production、.env.development.local 等）
+ * 这类文件的 extname 会被识别为 .local/.production 等无意义后缀，需要单独判定。
+ */
+function isEnvFile(filename: string): boolean {
+  const lower = filename.toLowerCase()
+  return lower === '.env' || lower.startsWith('.env.')
+}
+
 /** 获取预览类型 */
 function getPreviewType(filePath: string, ext: string): 'image' | 'video' | 'markdown' | 'code' | 'pdf' | 'docx' | 'unsupported' {
   if (IMAGE_EXTENSIONS.has(ext)) return 'image'
@@ -230,8 +240,11 @@ function getPreviewType(filePath: string, ext: string): 'image' | 'video' | 'mar
   if (CODE_EXTENSIONS.has(ext)) return 'code'
   if (PDF_EXTENSIONS.has(ext)) return 'pdf'
   if (DOCX_EXTENSIONS.has(ext)) return 'docx'
+  const base = basename(filePath).toLowerCase()
+  // .env 系列（.env / .env.local / .env.production 等）
+  if (isEnvFile(base)) return 'code'
   // 无扩展名 / 不识别 → 检查特殊文件名（.gitignore、Dockerfile、bun.lock 等）
-  if (SPECIAL_FILENAME_LANG[basename(filePath).toLowerCase()]) return 'code'
+  if (SPECIAL_FILENAME_LANG[base]) return 'code'
   return 'unsupported'
 }
 
