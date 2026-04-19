@@ -1284,6 +1284,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           streamState={streamState}
           liveMessages={liveMessages}
           sessionPath={sessionPath}
+          attachedDirs={attachedDirs}
           stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}

@@ -1648,12 +1648,12 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 在新窗口中预览文件（允许任意绝对路径）
+  // 在新窗口中预览文件（允许任意绝对路径；相对路径按 basePaths 依次解析）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.PREVIEW_FILE,
-    async (_, filePath: string): Promise<void> => {
+    async (_, filePath: string, basePaths?: string[]): Promise<void> => {
       const { openFilePreview } = await import('./lib/file-preview-service')
-      openFilePreview(filePath)
+      openFilePreview(filePath, basePaths)
     }
   )
 

@@ -1410,11 +1410,35 @@ function watchExternalChange(previewWindow: BrowserWindow, state: PreviewWindowS
 }
 
 /**
+ * 解析待预览的文件路径
+ * - 绝对路径：直接 resolve
+ * - 相对路径：依次尝试 basePaths，返回第一个存在的；都不存在则返回基于第一个 base 的拼接结果
+ *   （让后续 statSync 抛出更明确的错误，而不是被相对 process.cwd 误导）
+ */
+function resolveTargetPath(filePath: string, basePaths?: string[]): string {
+  if (filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)) {
+    return resolve(filePath)
+  }
+  if (basePaths && basePaths.length > 0) {
+    for (const base of basePaths) {
+      if (!base) continue
+      const candidate = resolve(base, filePath)
+      if (existsSync(candidate)) return candidate
+    }
+    return resolve(basePaths[0]!, filePath)
+  }
+  return resolve(filePath)
+}
+
+/**
  * 在新窗口中预览文件
  * 不支持的文件类型会调用系统默认应用打开
+ *
+ * @param filePath 绝对路径或相对路径
+ * @param basePaths 当 filePath 为相对路径时，依次尝试这些基础目录解析（主 cwd + 附加目录）
  */
-export function openFilePreview(filePath: string): void {
-  const safePath = resolve(filePath)
+export function openFilePreview(filePath: string, basePaths?: string[]): void {
+  const safePath = resolveTargetPath(filePath, basePaths)
   const filename = basename(safePath)
   const ext = extname(safePath).toLowerCase()
   const previewType = getPreviewType(safePath, ext)
