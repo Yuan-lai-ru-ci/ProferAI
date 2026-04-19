@@ -1730,12 +1730,13 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 用系统默认应用打开附加目录文件（无工作区路径限制）
+  // 在 Proma 内置预览窗口打开附加目录文件（无工作区路径限制；
+  // 不支持的格式由 openFilePreview 内部 fallback 到系统默认应用）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE,
     async (_, filePath: string): Promise<void> => {
-      const { resolve } = await import('node:path')
-      await shell.openPath(resolve(filePath))
+      const { openFilePreview } = await import('./lib/file-preview-service')
+      openFilePreview(filePath)
     }
   )
 
