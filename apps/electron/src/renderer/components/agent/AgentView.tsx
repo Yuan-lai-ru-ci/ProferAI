@@ -430,14 +430,31 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         setPersistedSDKMessages(sdkMsgs)
         setMessagesLoaded(true)
 
-        // 消息加载完成后，同步清除流式状态和实时消息，
+        // 消息加载完成后，同步清除流式展示状态和实时消息，
         // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
         // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
+        // 注意：保留 inputTokens/contextWindow 以维持上下文用量圆环显示
         setStreamingStates((prev) => {
           const state = prev.get(sessionId)
           if (!state || state.running) return prev  // 仍在运行中，不清除
           const map = new Map(prev)
-          map.delete(sessionId)
+          if (state.inputTokens !== undefined) {
+            // 保留 usage 数据，仅清除流式展示字段
+            map.set(sessionId, {
+              running: false,
+              content: '',
+              toolActivities: [],
+              teammates: [],
+              inputTokens: state.inputTokens,
+              outputTokens: state.outputTokens,
+              cacheReadTokens: state.cacheReadTokens,
+              cacheCreationTokens: state.cacheCreationTokens,
+              contextWindow: state.contextWindow,
+              model: state.model,
+            })
+          } else {
+            map.delete(sessionId)
+          }
           return map
         })
         setLiveMessagesMap((prev) => {
@@ -494,6 +511,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const streamStartedAt = Date.now()
       setStreamingStates((prev) => {
         const map = new Map(prev)
+        const existing = prev.get(sessionId)
         map.set(sessionId, {
           running: true,
           content: '',
@@ -501,6 +519,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           teammates: [],
           model: snapshot.modelId,
           startedAt: streamStartedAt,
+          inputTokens: existing?.inputTokens,
+          contextWindow: existing?.contextWindow,
         })
         return map
       })
@@ -537,8 +557,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       window.electronAPI.sendAgentMessage(input).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
         setStreamingStates((prev) => {
+          const current = prev.get(sessionId)
+          if (!current) return prev
           const map = new Map(prev)
-          map.delete(sessionId)
+          map.set(sessionId, { ...current, running: false })
           return map
         })
       })
@@ -924,6 +946,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const streamStartedAt = Date.now()
     setStreamingStates((prev) => {
       const map = new Map(prev)
+      const existing = prev.get(sessionId)
       map.set(sessionId, {
         running: true,
         content: '',
@@ -931,6 +954,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
+        inputTokens: existing?.inputTokens,
+        contextWindow: existing?.contextWindow,
       })
       return map
     })
@@ -980,9 +1005,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     window.electronAPI.sendAgentMessage(input).catch((error) => {
       console.error('[AgentView] 发送消息失败:', error)
       setStreamingStates((prev) => {
-        if (!prev.has(sessionId)) return prev
+        const current = prev.get(sessionId)
+        if (!current) return prev
         const map = new Map(prev)
-        map.delete(sessionId)
+        map.set(sessionId, { ...current, running: false })
         return map
       })
     })
@@ -1106,6 +1132,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const streamStartedAt = Date.now()
     setStreamingStates((prev) => {
       const map = new Map(prev)
+      const existing = prev.get(sessionId)
       map.set(sessionId, {
         running: true,
         content: '',
@@ -1113,6 +1140,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
+        inputTokens: existing?.inputTokens,
+        contextWindow: existing?.contextWindow,
       })
       return map
     })
