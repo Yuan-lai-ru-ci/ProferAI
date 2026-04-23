@@ -855,11 +855,27 @@ export function registerIpcHandlers(): void {
     async (_, id: string): Promise<AgentSessionMeta> => {
       const sessions = listAgentSessions()
       const current = sessions.find((s) => s.id === id)
-      if (!current) throw new Error(`Agent 会话不存在: ${id}`)
+      if (!current) throw new Error(`Agent session not found: ${id}`)
       const newPinned = !current.pinned
       // 置顶时自动取消归档
       const updates: Partial<AgentSessionMeta> = { pinned: newPinned }
       if (newPinned && current.archived) {
+        updates.archived = false
+      }
+      return updateAgentSessionMeta(id, updates)
+    }
+  )
+
+  // 切换 Agent 会话手动工作中状态
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.TOGGLE_MANUAL_WORKING,
+    async (_, id: string): Promise<AgentSessionMeta> => {
+      const sessions = listAgentSessions()
+      const current = sessions.find((s) => s.id === id)
+      if (!current) throw new Error(`Agent session not found: ${id}`)
+      const newManualWorking = !current.manualWorking
+      const updates: Partial<AgentSessionMeta> = { manualWorking: newManualWorking }
+      if (newManualWorking && current.archived) {
         updates.archived = false
       }
       return updateAgentSessionMeta(id, updates)
@@ -872,7 +888,7 @@ export function registerIpcHandlers(): void {
     async (_, id: string): Promise<AgentSessionMeta> => {
       const sessions = listAgentSessions()
       const current = sessions.find((s) => s.id === id)
-      if (!current) throw new Error(`Agent 会话不存在: ${id}`)
+      if (!current) throw new Error(`Agent session not found: ${id}`)
       const newArchived = !current.archived
       // 归档时自动取消置顶
       const updates: Partial<AgentSessionMeta> = { archived: newArchived }

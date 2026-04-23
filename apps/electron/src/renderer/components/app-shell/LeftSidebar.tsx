@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Hammer } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -161,6 +161,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const [hoveredId, setHoveredId] = React.useState<string | null>(null)
+
+  // 窗口失焦时清除 hover 状态，防止 Tooltip 残留
+  React.useEffect(() => {
+    const handleBlur = (): void => setHoveredId(null)
+    window.addEventListener('blur', handleBlur)
+    return () => window.removeEventListener('blur', handleBlur)
+  }, [])
+
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
   /** 待迁移会话 ID，非空时显示迁移对话框 */
@@ -661,6 +669,42 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     }
   }
 
+  /** 切换 Agent 会话手动工作中状态 */
+  const handleToggleManualWorkingAgent = async (id: string): Promise<void> => {
+    try {
+      const isCurrentlyInWorking = workingSessionIds.has(id)
+      if (isCurrentlyInWorking) {
+        // 从工作中移出：清除 manualWorking + 清除 workingDone
+        const session = agentSessions.find((s) => s.id === id)
+        if (session?.manualWorking) {
+          const updated = await window.electronAPI.toggleManualWorkingAgentSession(id)
+          setAgentSessions((prev) =>
+            prev.map((s) => (s.id === updated.id ? updated : s))
+          )
+        }
+        setWorkingDone((prev) => {
+          if (!prev.has(id)) return prev
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      } else {
+        // 加入工作中
+        const original = agentSessions.find((s) => s.id === id)
+        const updated = await window.electronAPI.toggleManualWorkingAgentSession(id)
+        setAgentSessions((prev) =>
+          prev.map((s) => (s.id === updated.id ? updated : s))
+        )
+        if (original?.archived && updated.manualWorking && !updated.archived) {
+          toast.success('已取消归档并标记为工作中')
+        }
+      }
+    } catch (error) {
+      console.error('[Sidebar] Failed to toggle manual working:', error)
+      toast.error('操作失败')
+    }
+  }
+
   /** 切换 Agent 会话归档状态 */
   const handleToggleArchiveAgent = async (id: string): Promise<void> => {
     try {
@@ -1030,6 +1074,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                                 active={session.id === activeTabId}
                                 hovered={session.id === hoveredId}
                                 indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                                isInWorkingSection={workingSessionIds.has(session.id)}
                                 showPinIcon={false}
                                 leftAccent={accent}
                                 onSelect={() => handleSelectAgentSession(session.id, session.title)}
@@ -1037,6 +1082,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                                 onRequestMove={() => setMoveTargetId(session.id)}
                                 onRename={handleAgentRename}
                                 onTogglePin={handleTogglePinAgent}
+                                onToggleManualWorking={handleToggleManualWorkingAgent}
                                 onToggleArchive={handleToggleArchiveAgent}
                                 onMouseEnter={() => setHoveredId(session.id)}
                                 onMouseLeave={() => setHoveredId(null)}
@@ -1063,12 +1109,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                               active={session.id === activeTabId}
                               hovered={session.id === hoveredId}
                               indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                              isInWorkingSection={workingSessionIds.has(session.id)}
                               showPinIcon={false}
                               onSelect={() => handleSelectAgentSession(session.id, session.title)}
                               onRequestDelete={() => handleRequestDelete(session.id)}
                               onRequestMove={() => setMoveTargetId(session.id)}
                               onRename={handleAgentRename}
                               onTogglePin={handleTogglePinAgent}
+                              onToggleManualWorking={handleToggleManualWorkingAgent}
                               onToggleArchive={handleToggleArchiveAgent}
                               onMouseEnter={() => setHoveredId(session.id)}
                               onMouseLeave={() => setHoveredId(null)}
@@ -1113,12 +1161,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                       active={session.id === activeTabId}
                       hovered={session.id === hoveredId}
                       indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                      isInWorkingSection={workingSessionIds.has(session.id)}
                       showPinIcon={!!session.pinned}
                       onSelect={() => handleSelectAgentSession(session.id, session.title)}
                       onRequestDelete={() => handleRequestDelete(session.id)}
                       onRequestMove={() => setMoveTargetId(session.id)}
                       onRename={handleAgentRename}
                       onTogglePin={handleTogglePinAgent}
+                      onToggleManualWorking={handleToggleManualWorkingAgent}
                       onToggleArchive={handleToggleArchiveAgent}
                       onMouseEnter={() => setHoveredId(session.id)}
                       onMouseLeave={() => setHoveredId(null)}
@@ -1185,12 +1235,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                         active={session.id === activeTabId}
                         hovered={session.id === hoveredId}
                         indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                        isInWorkingSection={workingSessionIds.has(session.id)}
                         showPinIcon={!!session.pinned}
                         onSelect={() => handleSelectAgentSession(session.id, session.title)}
                         onRequestDelete={() => handleRequestDelete(session.id)}
                         onRequestMove={() => setMoveTargetId(session.id)}
                         onRename={handleAgentRename}
                         onTogglePin={handleTogglePinAgent}
+                        onToggleManualWorking={handleToggleManualWorkingAgent}
                         onToggleArchive={handleToggleArchiveAgent}
                         onMouseEnter={() => setHoveredId(session.id)}
                         onMouseLeave={() => setHoveredId(null)}
@@ -1499,6 +1551,8 @@ interface AgentSessionItemProps {
   hovered: boolean
   indicatorStatus: SessionIndicatorStatus
   showPinIcon?: boolean
+  /** 是否在工作中分区（auto 或 manual） */
+  isInWorkingSection?: boolean
   /** 行左侧状态色块；未传则不显示 */
   leftAccent?: SessionLeftAccent
   onSelect: () => void
@@ -1506,6 +1560,7 @@ interface AgentSessionItemProps {
   onRequestMove: () => void
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
+  onToggleManualWorking: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
   onMouseEnter: () => void
   onMouseLeave: () => void
@@ -1517,12 +1572,14 @@ function AgentSessionItem({
   hovered,
   indicatorStatus,
   showPinIcon,
+  isInWorkingSection,
   leftAccent,
   onSelect,
   onRequestDelete,
   onRequestMove,
   onRename,
   onTogglePin,
+  onToggleManualWorking,
   onToggleArchive,
   onMouseEnter,
   onMouseLeave,
@@ -1632,6 +1689,34 @@ function AgentSessionItem({
             </button>
           </TooltipTrigger>
           <TooltipContent side="top">{session.pinned ? '取消置顶' : '置顶会话'}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                if (indicatorStatus !== 'running') {
+                  onToggleManualWorking(session.id)
+                }
+              }}
+              disabled={indicatorStatus === 'running'}
+              className={cn(
+                'p-1 rounded-md transition-colors',
+                indicatorStatus === 'running'
+                  ? 'text-primary/40 cursor-not-allowed'
+                  : (isInWorkingSection || session.manualWorking)
+                    ? 'text-primary hover:bg-foreground/[0.08]'
+                    : 'text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60'
+              )}
+            >
+              <Hammer size={13} className={(isInWorkingSection || session.manualWorking) ? 'fill-current' : ''} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {indicatorStatus === 'running'
+              ? '运行中无法移出'
+              : (isInWorkingSection || session.manualWorking) ? '取消工作中' : '标记为工作中'}
+          </TooltipContent>
         </Tooltip>
         {(indicatorStatus === 'idle' || indicatorStatus === 'completed') && (
           <Tooltip>
