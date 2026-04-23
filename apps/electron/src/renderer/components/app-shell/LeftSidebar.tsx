@@ -62,6 +62,7 @@ import { workingSessionGroupsAtom, workingSessionIdsSetAtom } from '@/atoms/work
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
 import { MoveSessionDialog } from '@/components/agent/MoveSessionDialog'
 import {
@@ -198,6 +199,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
   const openSession = useOpenSession()
+  const syncActiveTabSideEffects = useSyncActiveTabSideEffects()
 
   // 归档 & 搜索状态
   const [viewMode, setViewMode] = useAtom(sidebarViewModeAtom)
@@ -460,14 +462,20 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setConversations((prev) =>
         prev.map((c) => (c.id === updated.id ? updated : c))
       )
-      // 归档时自动关闭该对话的标签页
+      // 归档时自动关闭该对话的标签页，并同步新激活标签的副作用
+      // （appMode、currentXxxId 等），避免文件面板/工具栏等 per-tab
+      // 状态被遗留为旧值或被错误地置 null。
       if (updated.archived) {
+        const wasActive = activeTabId === id
         const tabResult = closeTab(tabs, activeTabId, id)
         setTabs(tabResult.tabs)
         setActiveTabId(tabResult.activeTabId)
-        // 如果归档的是当前选中的对话，取消选中
-        if (currentConversationId === id) {
-          setCurrentConversationId(null)
+        cleanupMapAtoms(id)
+        if (wasActive) {
+          const newActiveTab = tabResult.activeTabId
+            ? tabResult.tabs.find((t) => t.id === tabResult.activeTabId) ?? null
+            : null
+          syncActiveTabSideEffects(newActiveTab)
         }
       }
       toast.success(updated.archived ? '已归档' : '已取消归档')
@@ -484,9 +492,20 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     // 也避免将来在两者之间意外插入 await 导致跨渲染状态不一致。
     // （React 18 在同一事件回调中会自动批处理多次 setState，所以单次渲染
     // 的一致性由 React 保证，这里只是保持代码组织清晰。）
+    const wasActive = activeTabId === pendingDeleteId
     const tabResult = closeTab(tabs, activeTabId, pendingDeleteId)
     setTabs(tabResult.tabs)
     setActiveTabId(tabResult.activeTabId)
+
+    // 若关闭的是当前活跃标签，同步新激活标签的副作用（appMode、
+    // currentXxxId、以及右侧文件面板等 per-tab 状态），保持与 TabBar
+    // 关闭逻辑一致，避免删除/归档当前会话后新标签状态缺失。
+    if (wasActive) {
+      const newActiveTab = tabResult.activeTabId
+        ? tabResult.tabs.find((t) => t.id === tabResult.activeTabId) ?? null
+        : null
+      syncActiveTabSideEffects(newActiveTab)
+    }
 
     // 清理 draft 标记（如有）
     setDraftSessionIds((prev: Set<string>) => {
@@ -509,21 +528,19 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
     if (mode === 'agent') {
       // Agent 模式：删除 Agent 会话
+      // 注意：当前会话指针（currentAgentSessionId）已由上面的
+      // syncActiveTabSideEffects 在 wasActive 分支同步到新激活标签，
+      // 这里不要再按旧闭包值强制置 null，否则会覆盖新 sessionId，
+      // 导致 RightSidePanel 消失（依赖 currentAgentSessionIdAtom）。
       try {
         await window.electronAPI.deleteAgentSession(pendingDeleteId)
         // 全量刷新确保与后端同步
         const sessions = await window.electronAPI.listAgentSessions()
         setAgentSessions(sessions)
-        if (currentAgentSessionId === pendingDeleteId) {
-          setCurrentAgentSessionId(null)
-        }
       } catch (error) {
         console.error('[侧边栏] 删除 Agent 会话失败:', error)
         // 即使后端报错，也从本地列表移除（可能是会话已不存在）
         setAgentSessions((prev) => prev.filter((s) => s.id !== pendingDeleteId))
-        if (currentAgentSessionId === pendingDeleteId) {
-          setCurrentAgentSessionId(null)
-        }
       } finally {
         setPendingDeleteId(null)
       }
@@ -535,16 +552,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       // 全量刷新确保与后端同步
       const conversations = await window.electronAPI.listConversations()
       setConversations(conversations)
-      if (currentConversationId === pendingDeleteId) {
-        setCurrentConversationId(null)
-      }
     } catch (error) {
       console.error('[侧边栏] 删除对话失败:', error)
       // 即使后端报错，也从本地列表移除（可能是对话已不存在）
       setConversations((prev) => prev.filter((c) => c.id !== pendingDeleteId))
-      if (currentConversationId === pendingDeleteId) {
-        setCurrentConversationId(null)
-      }
     } finally {
       setPendingDeleteId(null)
     }
@@ -635,11 +646,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setAgentSessions((prev) =>
         prev.map((s) => (s.id === updated.id ? updated : s))
       )
-      // 归档时自动关闭该会话的标签页
+      // 归档时自动关闭该会话的标签页，并同步新激活标签的副作用，
+      // 否则 RightSidePanel（依赖 currentAgentSessionIdAtom）会因为
+      // 指针被错误置 null 而消失。
       if (updated.archived) {
+        const wasActive = activeTabId === id
         const tabResult = closeTab(tabs, activeTabId, id)
         setTabs(tabResult.tabs)
         setActiveTabId(tabResult.activeTabId)
+        cleanupMapAtoms(id)
         // 从 Working Done 集合移除
         setWorkingDone((prev) => {
           if (!prev.has(id)) return prev
@@ -647,9 +662,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
           next.delete(id)
           return next
         })
-        // 如果归档的是当前选中的会话，取消选中
-        if (currentAgentSessionId === id) {
-          setCurrentAgentSessionId(null)
+        if (wasActive) {
+          const newActiveTab = tabResult.activeTabId
+            ? tabResult.tabs.find((t) => t.id === tabResult.activeTabId) ?? null
+            : null
+          syncActiveTabSideEffects(newActiveTab)
         }
       }
       toast.success(updated.archived ? '已归档' : '已取消归档')
