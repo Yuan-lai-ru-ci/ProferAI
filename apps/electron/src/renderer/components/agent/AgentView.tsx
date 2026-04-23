@@ -43,6 +43,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
+import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
 import {
   agentStreamingStatesAtom,
@@ -1266,7 +1267,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [rewindTargetUuid, sessionId, store])
 
-  // 监听快捷键系统分发的 stop-generation 事件（Cmd+.）
+  // 监听快捷键系统分发的 stop-generation 事件
   React.useEffect(() => {
     const handler = (): void => {
       if (streaming) handleStop()
@@ -1502,15 +1503,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
               <div className="flex items-center gap-1.5">
                 {streaming && !hasTextInput ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
-                    onClick={handleStop}
-                  >
-                    <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
+                        onClick={handleStop}
+                      >
+                        <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <p>停止 Agent ({getAcceleratorDisplay(getActiveAccelerator('stop-generation'))})</p>
+                    </TooltipContent>
+                  </Tooltip>
                 ) : (
                   <Button
                     type="button"
