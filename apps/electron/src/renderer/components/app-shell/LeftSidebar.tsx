@@ -261,6 +261,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     [agentTopHeight, setAgentTopHeight],
   )
 
+  // 当 activeTabId 变化时，自动滚动侧边栏使选中项可见
+  React.useEffect(() => {
+    if (!activeTabId) return
+    requestAnimationFrame(() => {
+      const el = document.querySelector('.session-item-selected')
+      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+  }, [activeTabId])
+
   // per-conversation/session Map atoms（删除时清理）
   const setConvModels = useSetAtom(conversationModelsAtom)
   const setConvContextLength = useSetAtom(conversationContextLengthAtom)
