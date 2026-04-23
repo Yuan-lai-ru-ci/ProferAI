@@ -1143,7 +1143,8 @@ class FeishuBridge {
         const savedPath = this.saveImageToSession(
           workspace.slug, binding.sessionId, img.imageKey, img.mediaType, img.data,
         )
-        attachedRefs.push(`- feishu-${img.imageKey}: ${savedPath}`)
+        const imgExt = img.mediaType.split('/')[1] || 'jpg'
+        attachedRefs.push(`- feishu-${img.imageKey}.${imgExt}: ${savedPath}`)
       }
       for (const file of fileAttachments) {
         const savedPath = this.saveFileToSession(
