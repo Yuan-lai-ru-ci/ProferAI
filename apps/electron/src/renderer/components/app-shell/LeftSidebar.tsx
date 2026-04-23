@@ -321,6 +321,19 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     [agentSessions, viewMode, draftSessionIds, currentWorkspaceId, workingSessionIds]
   )
 
+  /** 顶部 TabBar 切换 tab 时，自动同步上区子 Tab 到对应分类 */
+  const prevActiveTabIdForSubTab = React.useRef<string | null>(activeTabId)
+  React.useEffect(() => {
+    if (activeTabId === prevActiveTabIdForSubTab.current) return
+    prevActiveTabIdForSubTab.current = activeTabId
+    if (mode !== 'agent' || viewMode !== 'active' || !activeTabId) return
+    if (pinnedAgentSessions.some((s) => s.id === activeTabId)) {
+      setAgentSubTab('pinned')
+    } else if (workingSessionIds.has(activeTabId)) {
+      setAgentSubTab('working')
+    }
+  }, [activeTabId, mode, viewMode, pinnedAgentSessions, workingSessionIds])
+
   /** 对话按日期分组（根据 viewMode 过滤归档状态，排除 draft） */
   const conversationGroups = React.useMemo(
     () => {
