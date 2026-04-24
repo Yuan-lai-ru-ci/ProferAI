@@ -471,19 +471,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .catch(console.error)
   }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, store])
 
-  // 从会话元数据初始化附加目录
+  // 从会话元数据初始化附加目录（仅冷启动水合，后续由 handleAttachFolder/handleDetachDirectory 实时写入）
   React.useEffect(() => {
     const meta = sessions.find((s) => s.id === sessionId)
     const dirs = meta?.attachedDirectories ?? []
     setAttachedDirsMap((prev) => {
       const existing = prev.get(sessionId)
-      // 避免不必要的更新
-      if (JSON.stringify(existing) === JSON.stringify(dirs)) return prev
+      if (existing != null) return prev
       const map = new Map(prev)
       if (dirs.length > 0) {
         map.set(sessionId, dirs)
-      } else {
-        map.delete(sessionId)
       }
       return map
     })
