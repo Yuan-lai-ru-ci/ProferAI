@@ -26,7 +26,7 @@ export type ProviderType =
 export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com',
+  deepseek: 'https://api.deepseek.com/anthropic',
   google: 'https://generativelanguage.googleapis.com',
   moonshot: 'https://api.moonshot.cn/v1',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
