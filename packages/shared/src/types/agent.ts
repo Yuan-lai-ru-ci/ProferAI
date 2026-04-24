@@ -132,7 +132,7 @@ export interface SDKSessionMessage {
  * SDK Beta 特性标识
  *
  * 当前支持：
- * - context-1m-2025-08-07: 启用 1M token 上下文窗口（仅 Sonnet 4/4.5）
+ * - context-1m-2025-08-07: 启用 1M token 上下文窗口（Claude Sonnet 4+ / Opus 4.6+、DeepSeek V4 系列）
  */
 export type SdkBeta = 'context-1m-2025-08-07'
 
