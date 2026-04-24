@@ -878,20 +878,38 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (pendingFiles.length > 0) {
       const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
       if (workspace) {
-        const filesToSave = pendingFiles.map((f) => ({
-          filename: f.filename,
-          data: window.__pendingAgentFileData?.get(f.id) || '',
-        }))
-        try {
-          const saved = await window.electronAPI.saveFilesToAgentSession({
-            workspaceSlug: workspace.slug,
-            sessionId,
-            files: filesToSave,
-          })
-          const refs = saved.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
+        // 区分：已有 sourcePath 的文件（从侧面板添加）直接引用，其余需要保存
+        const existingFiles = pendingFiles.filter((f) => f.sourcePath)
+        const newFiles = pendingFiles.filter((f) => !f.sourcePath)
+
+        const allRefs: Array<{ filename: string; targetPath: string }> = []
+
+        // 已有路径的文件直接引用
+        for (const f of existingFiles) {
+          allRefs.push({ filename: f.filename, targetPath: f.sourcePath! })
+        }
+
+        // 新上传的文件保存到 session 目录
+        if (newFiles.length > 0) {
+          const filesToSave = newFiles.map((f) => ({
+            filename: f.filename,
+            data: window.__pendingAgentFileData?.get(f.id) || '',
+          }))
+          try {
+            const saved = await window.electronAPI.saveFilesToAgentSession({
+              workspaceSlug: workspace.slug,
+              sessionId,
+              files: filesToSave,
+            })
+            allRefs.push(...saved)
+          } catch (error) {
+            console.error('[AgentView] 保存附件到 session 失败:', error)
+          }
+        }
+
+        if (allRefs.length > 0) {
+          const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
           fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
-        } catch (error) {
-          console.error('[AgentView] 保存附件到 session 失败:', error)
         }
       }
 

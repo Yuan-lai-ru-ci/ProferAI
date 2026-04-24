@@ -888,6 +888,8 @@ export interface AgentPendingFile {
   mediaType: string
   /** 图片预览 URL（blob/data URL） */
   previewUrl?: string
+  /** 文件原始路径（从侧面板添加时设置，发送时跳过复制直接引用） */
+  sourcePath?: string
 }
 
 /** Agent 文件保存到 session 的输入 */
@@ -1277,6 +1279,8 @@ export const AGENT_IPC_CHANNELS = {
   MOVE_ATTACHED_FILE: 'agent:move-attached-file',
   /** 检查路径类型（文件 or 目录），用于拖拽检测 */
   CHECK_PATHS_TYPE: 'agent:check-paths-type',
+  /** 读取附加目录文件内容为 base64（限制在已附加目录范围内，用于侧面板添加到聊天） */
+  READ_ATTACHED_FILE: 'agent:read-attached-file',
   /** 搜索工作区文件（用于 @ 引用） */
   SEARCH_WORKSPACE_FILES: 'agent:search-workspace-files',
 
