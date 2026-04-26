@@ -27,10 +27,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS ARM64: Apple Silicon 产物
+          # 0.2.113+ SDK 的 native binary 按平台/架构分发，optionalDependencies 会按 os/cpu
+          # 筛选，ARM runner 只能装 darwin-arm64，无法在同一 runner 上打 x64 DMG
           - os: macos-latest
             platform: mac
+            arch: arm64
+            builder_arg: --arm64
+          # macOS x64: Intel 产物（macos-13 是 Intel runner）
+          - os: macos-13
+            platform: mac
+            arch: x64
+            builder_arg: --x64
+          # Windows x64
           - os: windows-latest
             platform: win
+            arch: x64
+            builder_arg: --x64
 
     runs-on: ${{ matrix.os }}
 
@@ -87,12 +100,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --publish always
+        run: npx electron-builder --mac ${{ matrix.builder_arg }} --publish always
         working-directory: apps/electron
 
       - name: 打包并发布 (Windows)
         if: matrix.platform == 'win'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --win ${{ matrix.builder_arg }} --publish always
         working-directory: apps/electron

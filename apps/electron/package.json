@@ -37,7 +37,13 @@
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.111"
+    "@anthropic-ai/claude-agent-sdk": "0.2.120"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.2.120",
+    "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.2.120",
+    "@anthropic-ai/claude-agent-sdk-win32-x64": "0.2.120",
+    "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.2.120"
   },
   "devDependencies": {
     "@emoji-mart/data": "^1.2.1",

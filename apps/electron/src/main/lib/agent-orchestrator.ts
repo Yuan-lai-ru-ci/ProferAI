@@ -17,8 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { existsSync, mkdirSync, symlinkSync, readFileSync, writeFileSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta } from '@proma/shared'
@@ -204,118 +203,65 @@ function timerWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * 解析 SDK cli.js 路径
+ * 解析 SDK native CLI binary 路径
  *
- * SDK 作为 esbuild external 依赖，require.resolve 可在运行时解析实际路径。
- * 多种策略降级：createRequire → 全局 require → node_modules 手动查找
+ * 0.2.113+ 起 SDK 改为按平台分发 native binary，通过 optionalDependencies 安装到
+ * `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` 子包，与主包 `@anthropic-ai/claude-agent-sdk`
+ * 同级。binary 名 macOS/Linux 为 `claude`，Windows 为 `claude.exe`。
  *
- * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径，
- * 因为子进程 (bun) 无法读取 asar 归档内的文件。
+ * SDK 作为 esbuild external 依赖，require.resolve 可在运行时解析主包入口路径，
+ * 再沿父目录 `@anthropic-ai/` 找到同级的平台子包。
+ *
+ * 多种策略降级：createRequire → 全局 require → cwd/node_modules 手动查找
+ * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径（即便 Proma 当前 `asar: false`
+ * 兜底不伤人）。
  */
 function resolveSDKCliPath(): string {
-  let cliPath: string | null = null
+  const subpkg = `claude-agent-sdk-${process.platform}-${process.arch}`
+  const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  let binaryPath: string | null = null
 
   // 策略 1：createRequire（标准 ESM/CJS 互操作）
   try {
     const cjsRequire = createRequire(__filename)
     const sdkEntryPath = cjsRequire.resolve('@anthropic-ai/claude-agent-sdk')
-    cliPath = join(dirname(sdkEntryPath), 'cli.js')
-    console.log(`[Agent 编排] SDK CLI 路径 (createRequire): ${cliPath}`)
+    // sdkEntryPath: .../@anthropic-ai/claude-agent-sdk/sdk.mjs
+    // anthropicDir:  .../@anthropic-ai
+    const anthropicDir = dirname(dirname(sdkEntryPath))
+    binaryPath = join(anthropicDir, subpkg, binaryName)
+    console.log(`[Agent 编排] SDK binary 路径 (createRequire): ${binaryPath}`)
   } catch (e) {
     console.warn('[Agent 编排] createRequire 解析 SDK 路径失败:', e)
   }
 
   // 策略 2：全局 require（esbuild CJS bundle 可能保留）
-  if (!cliPath) {
+  if (!binaryPath) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const sdkEntryPath = require.resolve('@anthropic-ai/claude-agent-sdk')
-      cliPath = join(dirname(sdkEntryPath), 'cli.js')
-      console.log(`[Agent 编排] SDK CLI 路径 (require.resolve): ${cliPath}`)
+      const anthropicDir = dirname(dirname(sdkEntryPath))
+      binaryPath = join(anthropicDir, subpkg, binaryName)
+      console.log(`[Agent 编排] SDK binary 路径 (require.resolve): ${binaryPath}`)
     } catch (e) {
       console.warn('[Agent 编排] require.resolve 解析 SDK 路径失败:', e)
     }
   }
 
-  // 策略 3：从项目根目录手动查找
-  if (!cliPath) {
-    cliPath = join(process.cwd(), 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js')
-    console.log(`[Agent 编排] SDK CLI 路径 (手动): ${cliPath}`)
+  // 策略 3：从当前模块目录手动查找（打包后 __dirname 指向 app/dist/，上一级即 app/）
+  // 注意：不使用 process.cwd()，因为打包后的 Electron 应用 cwd 通常是 '/'
+  // 或用户主目录，与 app 安装目录无关。
+  if (!binaryPath) {
+    binaryPath = join(__dirname, '..', 'node_modules', '@anthropic-ai', subpkg, binaryName)
+    console.log(`[Agent 编排] SDK binary 路径 (手动): ${binaryPath}`)
   }
 
   // 打包环境：将 .asar/ 路径转换为 .asar.unpacked/
-  if (app.isPackaged && cliPath.includes('.asar')) {
-    cliPath = cliPath.replace(/\.asar([/\\])/, '.asar.unpacked$1')
-    console.log(`[Agent 编排] 转换为 asar.unpacked 路径: ${cliPath}`)
+  if (app.isPackaged && binaryPath.includes('.asar')) {
+    binaryPath = binaryPath.replace(/\.asar([/\\])/, '.asar.unpacked$1')
+    console.log(`[Agent 编排] 转换为 asar.unpacked 路径: ${binaryPath}`)
   }
 
-  return cliPath
-}
-
-/**
- * 获取 Agent SDK 运行时可执行文件
- *
- * 优先级：Node.js（缓存）→ which node 同步查找
- *
- * 当 runtimeStatusCache 尚未初始化时（应用启动竞态），
- * 用 which/where 同步查找作为兜底，避免 SDK spawn 失败。
- * 如果 Node.js 完全不可用，抛出明确错误。
- */
-function getAgentExecutable(): { type: 'node'; path: string } {
-  const status = getRuntimeStatus()
-
-  if (status?.node?.available && status.node.path) {
-    return { type: 'node', path: status.node.path }
-  }
-
-  // runtimeStatusCache 未就绪时，同步查找 node 路径
-  try {
-    const cmd = process.platform === 'win32' ? 'where' : 'which'
-    const nodePath = execFileSync(cmd, ['node'], { encoding: 'utf-8', timeout: 2000 })
-      .trim()
-      .split('\n')[0]
-    if (nodePath && existsSync(nodePath)) {
-      console.warn(`[Agent 编排] runtimeStatusCache 未就绪，同步查找 node: ${nodePath}`)
-      return { type: 'node', path: nodePath }
-    }
-  } catch {
-    // 忽略查找失败
-  }
-
-  throw new Error(
-    'Node.js 运行时未找到。Agent 功能需要系统安装 Node.js (v18+)。' +
-      '请访问 https://nodejs.org 下载安装后重启 Proma。',
-  )
-}
-
-/**
- * 确保打包环境下 ripgrep 可被 SDK CLI 找到
- *
- * 通过 symlink 桥接 extraResources → SDK 的 vendor 目录。
- */
-function ensureRipgrepAvailable(cliPath: string): void {
-  if (!app.isPackaged) return
-
-  try {
-    const sdkDir = dirname(cliPath)
-    const arch = process.arch
-    const platform = process.platform
-    const expectedDir = join(sdkDir, 'vendor', 'ripgrep', `${arch}-${platform}`)
-    const resourcesRipgrep = join(process.resourcesPath, 'vendor', 'ripgrep')
-
-    if (existsSync(expectedDir)) return
-
-    if (!existsSync(resourcesRipgrep)) {
-      console.warn(`[Agent 编排] ripgrep 资源不存在: ${resourcesRipgrep}`)
-      return
-    }
-
-    mkdirSync(join(sdkDir, 'vendor', 'ripgrep'), { recursive: true })
-    symlinkSync(resourcesRipgrep, expectedDir, 'junction')
-    console.log(`[Agent 编排] ripgrep symlink 创建成功: ${expectedDir} → ${resourcesRipgrep}`)
-  } catch (error) {
-    console.warn('[Agent 编排] ripgrep symlink 创建失败:', error)
-  }
+  return binaryPath
 }
 
 /** 最大回填消息条数 */
@@ -901,7 +847,6 @@ export class AgentOrchestrator {
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
     let titleGenerationStarted = false
-    let agentExec: { type: 'node'; path: string } | undefined
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
     let workspace: import('@proma/shared').AgentWorkspace | undefined
@@ -912,23 +857,18 @@ export class AgentOrchestrator {
 
       // 9. 构建 SDK query
       const cliPath = resolveSDKCliPath()
-      agentExec = getAgentExecutable()
 
       if (!existsSync(cliPath)) {
-        const errMsg = `SDK CLI 文件不存在: ${cliPath}`
+        const errMsg = `SDK native binary 不存在: ${cliPath}。请确保已安装对应平台的 @anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch} optional dependency`
         console.error(`[Agent 编排] ${errMsg}`)
         callbacks.onError(errMsg)
         callbacks.onComplete([], { startedAt: streamStartedAt })
         return
       }
 
-      ensureRipgrepAvailable(cliPath)
-
       console.log(
-        `[Agent 编排] 启动 SDK — CLI: ${cliPath}, 运行时: ${agentExec.type} (${agentExec.path}), 模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
+        `[Agent 编排] 启动 SDK — binary: ${cliPath}, 模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
       )
-
-      const executableArgs: string[] = []
 
       // 确定 Agent 工作目录
       agentCwd = homedir()
@@ -1249,8 +1189,6 @@ export class AgentOrchestrator {
         model: modelId || DEFAULT_MODEL_ID,
         cwd: agentCwd,
         sdkCliPath: cliPath,
-        executable: agentExec,
-        executableArgs,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
         sdkPermissionMode: initialPermissionMode,
