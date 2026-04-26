@@ -34,8 +34,10 @@ jobs:
             platform: mac
             arch: arm64
             builder_arg: --arm64
-          # macOS x64: Intel 产物（macos-13 是 Intel runner）
-          - os: macos-13
+          # macOS x64: Intel 产物
+          # 注意：macos-13 已 deprecated，改用 macos-15-intel（GA Intel runner）
+          # 若 macos-15-intel 仍无法分配，可切换 macos-14-large / macos-26-intel
+          - os: macos-15-intel
             platform: mac
             arch: x64
             builder_arg: --x64
