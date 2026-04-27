@@ -139,8 +139,8 @@ jobs:
         run: |
           mkdir -p release
 
-          # 拷贝 Windows 产物
-          cp artifacts/win-x64/* release/
+          # 拷贝 Windows 产物（排除 win-unpacked 中间目录）
+          cp artifacts/win-x64/*.exe artifacts/win-x64/*.exe.blockmap artifacts/win-x64/latest.yml release/
 
           # 拷贝 macOS 产物（排除 latest-mac.yml，稍后合并）
           cp artifacts/mac-x64/*.dmg artifacts/mac-x64/*.zip artifacts/mac-x64/*.zip.blockmap release/ 2>/dev/null || true
