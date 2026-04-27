@@ -185,11 +185,14 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
     try {
       const answersRecord: Record<string, string> = {}
       for (let i = 0; i < questions.length; i++) {
+        const q = questions[i]
+        if (!q) continue
         const answer = getAnswer(i)
+        const key = q.question || String(i)
         if (answer.showCustom && answer.customText.trim()) {
-          answersRecord[String(i)] = answer.customText.trim()
+          answersRecord[key] = answer.customText.trim()
         } else if (answer.selected.length > 0) {
-          answersRecord[String(i)] = answer.selected.join(', ')
+          answersRecord[key] = answer.selected.join(', ')
         }
       }
       await window.electronAPI.respondAskUser({ requestId: request.requestId, answers: answersRecord })
