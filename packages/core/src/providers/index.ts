@@ -15,6 +15,7 @@ import { GoogleAdapter } from './google-adapter.ts'
 export * from './types.ts'
 export * from './sse-reader.ts'
 export * from './url-utils.ts'
+export * from './thinking-capability.ts'
 
 // 导出适配器类
 export { AnthropicAdapter } from './anthropic-adapter.ts'

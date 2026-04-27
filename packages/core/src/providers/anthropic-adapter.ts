@@ -8,6 +8,12 @@
  * - SSE 解析：content_block_delta → text，thinking_delta → reasoning，tool_use 支持
  * - 认证：x-api-key + Authorization: Bearer
  * - 同时适配 Anthropic 原生 API 和 DeepSeek Anthropic 兼容 API
+ *
+ * 思考模式按模型能力分支（见 thinking-capability.ts）：
+ * - Opus 4.7 / Mythos Preview：adaptive 唯一模式（发 `{type: 'adaptive'}`）
+ * - Opus 4.6 / Sonnet 4.6：推荐 adaptive
+ * - DeepSeek v4 系列：`{type: 'enabled'}` + `output_config.effort = 'max'`
+ * - 更老的 Claude 系列及 DeepSeek v3：manual（旧版 `{type: 'enabled', budget_tokens}`）
  */
 
 import type { ProviderType } from '@proma/shared'
@@ -22,18 +28,21 @@ import type {
   ContinuationMessage,
 } from './types.ts'
 import { normalizeAnthropicBaseUrl, normalizeBaseUrl } from './url-utils.ts'
+import { detectThinkingCapability } from './thinking-capability.ts'
 
 // ===== Anthropic 特有类型 =====
 
 /** Anthropic 内容块（扩展支持 tool_use / tool_result） */
 interface AnthropicContentBlock {
-  type: 'text' | 'image' | 'tool_use' | 'tool_result'
+  type: 'text' | 'image' | 'tool_use' | 'tool_result' | 'thinking'
   text?: string
   source?: {
     type: 'base64'
     media_type: string
     data: string
   }
+  // thinking 字段
+  thinking?: string
   // tool_use 字段
   id?: string
   name?: string
@@ -137,6 +146,17 @@ function toAnthropicMessages(
         return { role, content: buildMessageContent(msg.content, historyImages) }
       }
 
+      // Anthropic extended thinking 要求后续请求必须传回上一轮的 thinking block
+      if (msg.role === 'assistant' && msg.reasoning) {
+        const blocks: AnthropicContentBlock[] = [
+          { type: 'thinking', thinking: msg.reasoning },
+        ]
+        if (msg.content) {
+          blocks.push({ type: 'text', text: msg.content })
+        }
+        return { role, content: blocks }
+      }
+
       return { role, content: msg.content }
     })
 
@@ -216,10 +236,19 @@ export class AnthropicAdapter implements ProviderAdapter {
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
     const messages = toAnthropicMessages(input)
+    const capability = detectThinkingCapability(this.providerType, input.modelId)
 
-    // 启用思考时需要更大的 max_tokens（budget_tokens 必须 < max_tokens）
-    const thinkingBudget = 16384
-    const maxTokens = input.thinkingEnabled ? thinkingBudget + 16384 : 8192
+    // manual 模式：budget_tokens 必须 < max_tokens，所以开启时放大上限
+    // adaptive / effort-based 模式：max_tokens 作为「思考+回答」的总硬上限，给充足空间
+    const manualThinkingBudget = 16384
+    let maxTokens: number
+    if (!input.thinkingEnabled) {
+      maxTokens = 8192
+    } else if (capability.mode === 'manual-only') {
+      maxTokens = manualThinkingBudget + 16384
+    } else {
+      maxTokens = 32000
+    }
 
     const body: Record<string, unknown> = {
       model: input.modelId,
@@ -228,12 +257,30 @@ export class AnthropicAdapter implements ProviderAdapter {
       stream: true,
     }
 
-    // 启用 extended thinking：设置 thinking 参数
-    // 约束：启用时不能设置 temperature/top_k，budget_tokens 最小 1024
-    if (input.thinkingEnabled) {
-      body.thinking = {
-        type: 'enabled',
-        budget_tokens: thinkingBudget,
+    // 根据模型能力选择思考协议
+    // - adaptive-only / adaptive-preferred：发 { type: 'adaptive', display: 'summarized' }
+    //   （Opus 4.7 的 display 默认是 'omitted'，需显式 'summarized' 才能收到 thinking 文本流）
+    // - manual-only：发旧版 { type: 'enabled', budget_tokens }
+    // - effort-based-max（DeepSeek v4 系列）：{type: 'enabled'} + output_config.effort='max'
+    //   DeepSeek v4 默认就开启思考，所以关闭时必须显式 {type: 'disabled'}
+    if (capability.mode === 'effort-based-max') {
+      if (input.thinkingEnabled) {
+        body.thinking = { type: 'enabled' }
+        body.output_config = { effort: 'max' }
+      } else {
+        body.thinking = { type: 'disabled' }
+      }
+    } else if (input.thinkingEnabled) {
+      if (capability.mode === 'adaptive-only' || capability.mode === 'adaptive-preferred') {
+        body.thinking = {
+          type: 'adaptive',
+          display: 'summarized',
+        }
+      } else if (capability.mode === 'manual-only') {
+        body.thinking = {
+          type: 'enabled',
+          budget_tokens: manualThinkingBudget,
+        }
       }
     }
 
@@ -307,6 +354,20 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
+    const capability = detectThinkingCapability(this.providerType, input.modelId)
+
+    const body: Record<string, unknown> = {
+      model: input.modelId,
+      max_tokens: 50,
+      messages: [{ role: 'user', content: input.prompt }],
+    }
+
+    // 标题生成不需要思考：按模型能力选择禁用方式
+    // - Mythos Preview 不接受 disabled，省略字段即可
+    // - 其它 Claude 显式 disabled（对 manual / adaptive 模型都有效）
+    if (capability.disableStrategy === 'explicit-disabled') {
+      body.thinking = { type: 'disabled' }
+    }
 
     return {
       url: `${url}/messages`,
@@ -316,13 +377,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: input.modelId,
-        max_tokens: 50,
-        messages: [{ role: 'user', content: input.prompt }],
-        // 禁用 extended thinking（MiniMax 等供应商也会遵循此设置）
-        thinking: { type: 'disabled' },
-      }),
+      body: JSON.stringify(body),
     }
   }
 
