@@ -935,6 +935,8 @@ export interface AskUserQuestionOption {
   label: string
   /** 选项说明 */
   description?: string
+  /** 选项预览内容（聚焦时展示，支持 Markdown） */
+  preview?: string
 }
 
 /** AskUserQuestion 工具的问题定义 */
