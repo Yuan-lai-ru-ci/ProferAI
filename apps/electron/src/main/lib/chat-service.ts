@@ -323,7 +323,7 @@ export async function sendMessage(
         continuationMessages: continuationMessages.length > 0 ? continuationMessages : undefined,
       })
 
-      const { content, toolCalls, stopReason } = await streamSSE({
+      const { content, reasoning, thinkingBlocks, toolCalls, stopReason } = await streamSSE({
         request,
         adapter,
         signal: controller.signal,
@@ -368,9 +368,11 @@ export async function sendMessage(
       }
 
       // 构建续接消息
+      // thinkingBlocks 保留服务端原始的 thinking 块结构（含签名），
+      // 在思考+工具模式下必须原样回传给 Anthropic 协议家族（Anthropic/DeepSeek/Kimi）
       continuationMessages = [
         ...continuationMessages,
-        { role: 'assistant' as const, content, toolCalls },
+        { role: 'assistant' as const, content, reasoning, thinkingBlocks, toolCalls },
         { role: 'tool' as const, results: toolResults },
       ]
       pendingToolResults = true
