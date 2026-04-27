@@ -3,7 +3,8 @@
  *
  * 分为两个区块：
  * 1. 渠道管理 — 所有渠道列表 + 添加/编辑/删除（渠道同时用于 Chat 和 Agent）
- * 2. Agent 供应商 — 从已启用的 Anthropic 渠道中通过 Switch 开关启用多个 Agent 供应商
+ * 2. Agent 供应商 — 从已启用的 Anthropic 兼容渠道（Anthropic / DeepSeek / Kimi）中
+ *    通过 Switch 开关启用多个 Agent 供应商
  */
 
 import * as React from 'react'
@@ -11,7 +12,7 @@ import { useAtom, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { PROVIDER_LABELS } from '@proma/shared'
+import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
 import type { Channel } from '@proma/shared'
 import { getChannelLogo, PromaLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
@@ -151,9 +152,9 @@ export function ChannelSettings(): React.ReactElement {
     )
   }
 
-  // Anthropic 渠道（已启用）
-  const anthropicChannels = channels.filter(
-    (c) => c.provider === 'anthropic' && c.enabled
+  // Agent 兼容渠道（已启用）：Anthropic / DeepSeek / Kimi API / Kimi Coding Plan
+  const agentCapableChannels = channels.filter(
+    (c) => isAgentCompatibleProvider(c.provider) && c.enabled
   )
 
   // 列表视图
@@ -209,15 +210,15 @@ export function ChannelSettings(): React.ReactElement {
         </SettingsCard>
         {loading ? (
           <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
-        ) : anthropicChannels.length === 0 ? (
+        ) : agentCapableChannels.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="text-sm text-muted-foreground py-8 text-center">
-              暂无可用的 Anthropic 兼容格式渠道，请先在上方添加 Anthropic 渠道并启用
+              暂无可用的 Anthropic 兼容渠道，请先在上方添加 Anthropic / DeepSeek / Kimi 渠道并启用
             </div>
           </SettingsCard>
         ) : (
           <SettingsCard>
-            {anthropicChannels.map((channel) => (
+            {agentCapableChannels.map((channel) => (
               <AgentProviderRow
                 key={channel.id}
                 channel={channel}
@@ -246,7 +247,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
-    channel.provider === 'anthropic' ? '可用于 Agent' : undefined,
+    isAgentCompatibleProvider(channel.provider) ? '可用于 Agent' : undefined,
   ]
     .filter(Boolean)
     .join(' · ')

@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@proma/shared'
 import { SAFE_TOOLS } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
@@ -399,10 +399,12 @@ export class AgentOrchestrator {
    * 构建 SDK 环境变量
    *
    * 注入 API Key、Base URL、代理、Shell 配置等。
+   * 对 Kimi Coding Plan：使用 Bearer 认证（ANTHROPIC_AUTH_TOKEN），注入 User-Agent。
    */
   private async buildSdkEnv(
     apiKey: string,
     baseUrl: string | undefined,
+    provider: ProviderType,
   ): Promise<Record<string, string | undefined>> {
     const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
 
@@ -420,7 +422,6 @@ export class AgentOrchestrator {
 
     const sdkEnv: Record<string, string | undefined> = {
       ...cleanEnv,
-      ANTHROPIC_API_KEY: apiKey,
       // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
       // 启用 Tasks 功能
@@ -429,6 +430,18 @@ export class AgentOrchestrator {
       CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       // 配置隔离：让 SDK 使用独立的配置目录，不读取用户的 ~/.claude.json
       CLAUDE_CONFIG_DIR: getSdkConfigDir(),
+    }
+
+    // 认证方式按 provider 分支
+    // - Kimi Coding Plan：只认 Bearer，且必须伪装成 coding agent（User-Agent）
+    //   用 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer，
+    //   通过 ANTHROPIC_CUSTOM_HEADERS 注入 User-Agent
+    // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
+    if (provider === 'kimi-coding') {
+      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
+      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+    } else {
+      sdkEnv.ANTHROPIC_API_KEY = apiKey
     }
 
     // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入
@@ -809,13 +822,20 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_BASE_URL
-    process.env.ANTHROPIC_API_KEY = apiKey
+    delete process.env.ANTHROPIC_CUSTOM_HEADERS
+    if (channel.provider === 'kimi-coding') {
+      // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
+      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
+      process.env.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+    } else {
+      process.env.ANTHROPIC_API_KEY = apiKey
+    }
     // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
     if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
       process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
     }
 
-    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl)
+    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)

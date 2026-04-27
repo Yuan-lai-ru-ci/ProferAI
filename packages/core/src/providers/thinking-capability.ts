@@ -64,6 +64,12 @@ export function detectThinkingCapability(
     return { mode: 'manual-only', disableStrategy: 'explicit-disabled' }
   }
 
+  // Kimi 的 Anthropic 协议渠道（Kimi API / Kimi Coding Plan）
+  // Kimi K2 系列非 reasoning 模型，协议层面不支持 thinking 参数，直接省略
+  if (providerType === 'kimi-api' || providerType === 'kimi-coding') {
+    return { mode: 'none', disableStrategy: 'omit-field' }
+  }
+
   // 其它非 Anthropic 供应商：不发 thinking
   if (providerType !== 'anthropic') {
     return { mode: 'manual-only', disableStrategy: 'explicit-disabled' }

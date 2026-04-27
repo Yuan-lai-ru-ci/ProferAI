@@ -6,14 +6,20 @@
  * - 角色：user / assistant（不支持 system 角色，system 通过 body.system 传递）
  * - 图片格式：{ type: 'image', source: { type: 'base64', media_type, data } }
  * - SSE 解析：content_block_delta → text，thinking_delta → reasoning，tool_use 支持
- * - 认证：x-api-key + Authorization: Bearer
- * - 同时适配 Anthropic 原生 API 和 DeepSeek Anthropic 兼容 API
+ * - 认证：x-api-key + Authorization: Bearer（Kimi Coding Plan 只用 Bearer）
+ * - 同时适配 Anthropic 原生 API、DeepSeek、Kimi API、Kimi Coding Plan
  *
  * 思考模式按模型能力分支（见 thinking-capability.ts）：
  * - Opus 4.7 / Mythos Preview：adaptive 唯一模式（发 `{type: 'adaptive'}`）
  * - Opus 4.6 / Sonnet 4.6：推荐 adaptive
  * - DeepSeek v4 系列：`{type: 'enabled'}` + `output_config.effort = 'max'`
  * - 更老的 Claude 系列及 DeepSeek v3：manual（旧版 `{type: 'enabled', budget_tokens}`）
+ * - Kimi（kimi-api / kimi-coding）：不发 thinking 字段（K2 系列非 reasoning 模型）
+ *
+ * Kimi Coding Plan 特殊要求：
+ * - Base URL：`https://api.kimi.com/coding/v1`
+ * - 必须发送 `User-Agent: KimiCLI/1.3`，服务端会校验 coding agent 白名单
+ * - 禁止伪造 User-Agent（违反服务条款可能导致会员停权）
  */
 
 import type { ProviderType } from '@proma/shared'
@@ -227,10 +233,38 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /** 根据 provider 类型选择 URL 规范化方式 */
   private normalizeUrl(baseUrl: string): string {
-    if (this.providerType === 'deepseek') {
+    // DeepSeek / Kimi：baseUrl 本身已含非版本路径（如 /anthropic、/coding/v1），不追加 /v1
+    if (
+      this.providerType === 'deepseek' ||
+      this.providerType === 'kimi-api' ||
+      this.providerType === 'kimi-coding'
+    ) {
       return normalizeBaseUrl(baseUrl)
     }
     return normalizeAnthropicBaseUrl(baseUrl)
+  }
+
+  /**
+   * 构造请求头
+   *
+   * Kimi Coding Plan 要求：
+   * - 只使用 Bearer（服务端会校验 User-Agent 白名单，不接受伪装为浏览器/SDK）
+   * - User-Agent 必须是真实 coding agent 身份（如 KimiCLI/1.3）
+   */
+  private buildHeaders(apiKey: string): Record<string, string> {
+    const base: Record<string, string> = {
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    }
+    if (this.providerType === 'kimi-coding') {
+      base['Authorization'] = `Bearer ${apiKey}`
+      base['User-Agent'] = 'KimiCLI/1.3'
+      return base
+    }
+    // 其它渠道：保持双认证头（Anthropic 原生 + Bearer 兼容）
+    base['x-api-key'] = apiKey
+    base['Authorization'] = `Bearer ${apiKey}`
+    return base
   }
 
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
@@ -300,12 +334,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     return {
       url: `${url}/messages`,
-      headers: {
-        'x-api-key': input.apiKey,
-        'Authorization': `Bearer ${input.apiKey}`,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
+      headers: this.buildHeaders(input.apiKey),
       body: JSON.stringify(body),
     }
   }
@@ -371,12 +400,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     return {
       url: `${url}/messages`,
-      headers: {
-        'x-api-key': input.apiKey,
-        'Authorization': `Bearer ${input.apiKey}`,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
+      headers: this.buildHeaders(input.apiKey),
       body: JSON.stringify(body),
     }
   }
