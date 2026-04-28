@@ -199,6 +199,35 @@ export function friendlyErrorMessage(raw: string): string {
 }
 
 // ============================================================================
+// Terminal reason 白名单
+// ============================================================================
+
+/**
+ * 表示"本轮结束但会话应继续"的 terminal_reason 白名单。
+ *
+ * SDK 0.2.96+ 在 SDKResultMessage 引入 `terminal_reason` 字段后，某些值并不代表
+ * 会话真正结束，而是期望 host 保留 stdin 通道、驱动下一轮：
+ * - `aborted_streaming` / `aborted_tools`：query.interrupt() 软中断，等队列续轮
+ * - `tool_deferred`：工具被延迟执行（配套 result.deferred_tool_use），等异步回填
+ * - `hook_stopped` / `stop_hook_prevented`：hook 层面的暂停，host 可继续注入消息
+ *
+ * 未列在此集合中的 terminal_reason（含 `undefined` 的旧版行为、`completed`、
+ * `max_turns`、`prompt_too_long`、各类 error 等）一律按"本轮结束 + 关闭通道"处理。
+ */
+export const CONTINUABLE_TERMINAL_REASONS: ReadonlySet<string> = new Set([
+  'aborted_streaming',
+  'aborted_tools',
+  'tool_deferred',
+  'hook_stopped',
+  'stop_hook_prevented',
+])
+
+/** 判断 result.terminal_reason 是否应保留消息通道以等待下一轮 */
+export function shouldKeepChannelOpen(terminalReason: string | undefined): boolean {
+  return terminalReason != null && CONTINUABLE_TERMINAL_REASONS.has(terminalReason)
+}
+
+// ============================================================================
 // 错误映射
 // ============================================================================
 
@@ -550,13 +579,11 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
               options.onContextWindow?.(firstEntry.contextWindow)
             }
           }
-          // 被软中断（query.interrupt()）产生的 result：不关闭通道，
-          // 让 SDK 继续读取通道中已排队的下一条用户消息并开启新一轮 turn。
-          const wasAborted =
-            resultMsg.terminal_reason === 'aborted_streaming' ||
-            resultMsg.terminal_reason === 'aborted_tools'
-          if (!wasAborted) {
-            // result 表示当前轮次完成，关闭消息通道让 SDK 自然调用 endInput() 关闭 stdin。
+          // 被软中断 / 延迟工具 / hook 暂停等场景产生的 result：不关闭通道，
+          // 让 SDK 继续读取通道中已排队（或后续注入）的消息并开启新一轮 turn。
+          // 完整白名单见 CONTINUABLE_TERMINAL_REASONS。
+          if (!shouldKeepChannelOpen(resultMsg.terminal_reason)) {
+            // result 表示本轮真正结束，关闭消息通道让 SDK 自然调用 endInput() 关闭 stdin。
             // 子进程检测到 stdin EOF 后会退出，readMessages() 结束，iterator 返回 done:true。
             // 注意：prompt_suggestion 等尾部消息仍会通过 stdout 正常传递，不受影响。
             channel.close()
