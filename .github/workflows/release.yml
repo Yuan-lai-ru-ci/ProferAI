@@ -90,94 +90,20 @@ jobs:
         run: bun run electron:build
         working-directory: .
 
-      # 打包（不上传发布，避免并行竞态）
-      - name: 打包 (macOS)
+      # 打包并发布到 GitHub Releases
+      - name: 打包并发布 (macOS)
         if: matrix.platform == 'mac'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac ${{ matrix.builder_arg }}
+        run: npx electron-builder --mac ${{ matrix.builder_arg }} --publish always
         working-directory: apps/electron
 
-      - name: 打包 (Windows)
+      - name: 打包并发布 (Windows)
         if: matrix.platform == 'win'
-        run: npx electron-builder --win ${{ matrix.builder_arg }}
-        working-directory: apps/electron
-
-      # 上传产物为 workflow artifact
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ matrix.platform }}-${{ matrix.arch }}
-          path: apps/electron/out/*
-          retention-days: 1
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: 下载 macOS ARM64 产物
-        uses: actions/download-artifact@v4
-        with:
-          name: build-mac-arm64
-          path: artifacts/mac-arm64
-
-      - name: 下载 macOS x64 产物
-        uses: actions/download-artifact@v4
-        with:
-          name: build-mac-x64
-          path: artifacts/mac-x64
-
-      - name: 下载 Windows x64 产物
-        uses: actions/download-artifact@v4
-        with:
-          name: build-win-x64
-          path: artifacts/win-x64
-
-      - name: 汇总产物并合并 latest-mac.yml
-        run: |
-          mkdir -p release
-
-          # 拷贝 Windows 产物（排除 win-unpacked 中间目录）
-          cp artifacts/win-x64/*.exe artifacts/win-x64/*.exe.blockmap artifacts/win-x64/latest.yml release/
-
-          # 拷贝 macOS 产物（排除 latest-mac.yml，稍后合并）
-          cp artifacts/mac-x64/*.dmg artifacts/mac-x64/*.zip artifacts/mac-x64/*.zip.blockmap release/ 2>/dev/null || true
-          cp artifacts/mac-arm64/*.dmg artifacts/mac-arm64/*.zip artifacts/mac-arm64/*.zip.blockmap release/ 2>/dev/null || true
-
-          # 合并两份 latest-mac.yml
-          pip install pyyaml -q
-          python3 << 'PYEOF'
-          import yaml
-
-          with open('artifacts/mac-x64/latest-mac.yml') as f:
-              x64 = yaml.safe_load(f)
-          with open('artifacts/mac-arm64/latest-mac.yml') as f:
-              arm64 = yaml.safe_load(f)
-
-          files = []
-          if 'files' in x64:
-              files.extend(x64['files'])
-          if 'files' in arm64:
-              files.extend(arm64['files'])
-
-          merged = dict(x64)
-          merged['files'] = files
-
-          with open('release/latest-mac.yml', 'w') as f:
-              yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
-          PYEOF
-
-          echo "=== release/ 文件列表 ==="
-          ls -la release/
-
-      - name: 创建 GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}
-          files: release/*
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win ${{ matrix.builder_arg }} --publish always
+        working-directory: apps/electron
