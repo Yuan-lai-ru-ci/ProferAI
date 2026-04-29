@@ -1153,24 +1153,15 @@ export class AgentOrchestrator {
             return { behavior: 'allow' as const, updatedInput: input }
 
           case 'plan': {
-            // Plan 模式：只允许只读工具 + Write 到 .context/plan/ 目录
+            // Plan 模式：只允许只读工具 + Write/Edit 任意 .md 文件（计划文档）
             if (PLAN_MODE_ALLOWED_TOOLS.has(toolName)) {
               return { behavior: 'allow' as const, updatedInput: input }
             }
-            // 允许 Write 到 .context/plan/ 目录（Proma 自定义路径）
-            // 以及 .context/ 下直接子文件 .md（SDK 生成的 plan 文件如 .context/<slug>.md）
-            if (toolName === 'Write') {
+            // 允许 Write/Edit 到任意 .md 文件（计划文档一定是 markdown；非 .md 仍被拒）
+            if (toolName === 'Write' || toolName === 'Edit') {
               const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-              if (filePath.includes('.context/plan/')) {
+              if (filePath.toLowerCase().endsWith('.md')) {
                 return { behavior: 'allow' as const, updatedInput: input }
-              }
-              // SDK plan 文件：.context/<slug>.md — 仅允许直接子文件，防止 path traversal
-              const ctxIdx = filePath.lastIndexOf('.context/')
-              if (ctxIdx !== -1) {
-                const afterCtx = filePath.substring(ctxIdx + '.context/'.length)
-                if (afterCtx.endsWith('.md') && !afterCtx.includes('/') && !afterCtx.includes('..')) {
-                  return { behavior: 'allow' as const, updatedInput: input }
-                }
               }
             }
             // Bash 工具：只读命令（find、grep、cat 等）允许执行，写操作拒绝
