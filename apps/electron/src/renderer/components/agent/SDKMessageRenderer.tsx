@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2 } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2 } from 'lucide-react'
 import { useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
@@ -30,6 +30,7 @@ import {
 } from '@/components/ai-elements/message'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
@@ -334,6 +335,12 @@ export interface AssistantTurnRendererProps {
   onFork?: (upToMessageUuid: string) => void
   /** 回退回调（传入 assistant message uuid） */
   onRewind?: (assistantMessageUuid: string) => void
+  /** 错误重试回调（仅当 turn 含错误消息时使用） */
+  onRetry?: () => void
+  /** 在新会话中重试回调（仅当 turn 含错误消息时使用） */
+  onRetryInNewSession?: () => void
+  /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
+  onCompact?: () => void
   /** 是否正在流式输出中（隐藏操作栏） */
   isStreaming?: boolean
   /** 是否被用户中断 */
@@ -342,7 +349,7 @@ export interface AssistantTurnRendererProps {
   sessionModelId?: string
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
@@ -370,7 +377,14 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
 
   // 如果只有错误消息
   if (enrichedBlocks.length === 0 && hasError && errorContent) {
-    return <ErrorMessage message={errorContent} />
+    return (
+      <ErrorMessage
+        message={errorContent}
+        onRetry={onRetry}
+        onRetryInNewSession={onRetryInNewSession}
+        onCompact={onCompact}
+      />
+    )
   }
 
   // 如果没有任何内容
@@ -833,17 +847,31 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
 
 // ===== 错误消息渲染 =====
 
-function ErrorMessage({ message }: { message: SDKAssistantMessage }): React.ReactElement {
+interface ErrorMessageProps {
+  message: SDKAssistantMessage
+  /** 重试回调（在当前会话内重试） */
+  onRetry?: () => void
+  /** 在新会话中重试回调（创建新会话并引用当前会话继续） */
+  onRetryInNewSession?: () => void
+  /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
+  onCompact?: () => void
+}
+
+function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: ErrorMessageProps): React.ReactElement {
   const meta = extractMeta(message as unknown as SDKMessage)
   const errorText = message.error?.message ?? '未知错误'
 
   const msgAny = message as unknown as Record<string, unknown>
   const errorTitle = typeof msgAny._errorTitle === 'string' ? msgAny._errorTitle : undefined
+  const errorCode = typeof msgAny._errorCode === 'string' ? msgAny._errorCode : undefined
+  const isPromptTooLong = errorCode === 'prompt_too_long'
 
   const contentText = message.message?.content
     ?.filter((b) => b.type === 'text' && 'text' in b)
     .map((b) => (b as { text: string }).text)
     .join('\n') ?? errorText
+
+  const hasActions = !!(onRetry || onRetryInNewSession || (isPromptTooLong && onCompact))
 
   return (
     <Message from="assistant">
@@ -863,6 +891,33 @@ function ErrorMessage({ message }: { message: SDKAssistantMessage }): React.Reac
         <div className="text-destructive">
           <MessageResponse>{contentText}</MessageResponse>
         </div>
+        {hasActions && (
+          <div className="flex items-center gap-2 mt-3">
+            {isPromptTooLong && onCompact && (
+              <Button size="sm" onClick={onCompact}>
+                <Minimize2 className="size-3.5 mr-1.5" />
+                压缩上下文
+              </Button>
+            )}
+            {onRetry && (
+              <Button size="sm" variant={isPromptTooLong ? 'outline' : 'default'} onClick={onRetry}>
+                <RotateCw className="size-3.5 mr-1.5" />
+                重试
+              </Button>
+            )}
+            {onRetryInNewSession && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onRetryInNewSession}
+                title="如遇到未知错误，可点此按钮在新会话中尝试解决"
+              >
+                <Plus className="size-3.5 mr-1.5" />
+                在新会话中重试
+              </Button>
+            )}
+          </div>
+        )}
       </MessageContent>
       <MessageActions className="pl-[46px] mt-0.5">
         <CopyButton content={contentText} />
@@ -879,6 +934,12 @@ export interface MessageGroupRendererProps {
   basePath?: string
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
+  /** 错误重试回调（仅当 turn 含错误消息时使用） */
+  onRetry?: () => void
+  /** 在新会话中重试回调（仅当 turn 含错误消息时使用） */
+  onRetryInNewSession?: () => void
+  /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
+  onCompact?: () => void
   /** 是否正在流式输出中（隐藏操作栏） */
   isStreaming?: boolean
   /** 是否被用户中断 */
@@ -953,7 +1014,7 @@ export function getGroupPreview(group: MessageGroup): string {
   return texts.join(' ').slice(0, 200)
 }
 
-export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -980,6 +1041,9 @@ export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onR
         basePath={basePath}
         onFork={onFork}
         onRewind={onRewind}
+        onRetry={onRetry}
+        onRetryInNewSession={onRetryInNewSession}
+        onCompact={onCompact}
         isStreaming={isStreaming}
         stoppedByUser={stoppedByUser}
         sessionModelId={sessionModelId}
