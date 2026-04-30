@@ -178,7 +178,7 @@ function createWindow(): void {
     titleBarStyle: 'hiddenInset', // macOS style
     trafficLightPosition: { x: 18, y: 18 },
     vibrancy: 'under-window', // macOS glass effect
-    visualEffectState: 'followsWindowActiveState',
+    visualEffectState: 'followWindow',
   })
 
   // Load the renderer
