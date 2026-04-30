@@ -24,6 +24,8 @@ import {
   Search,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useSetAtom } from 'jotai'
+import { channelFormDirtyAtom } from '@/atoms/settings-tab'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +42,16 @@ import type {
   ProviderType,
 } from '@proma/shared'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   SettingsSection,
   SettingsCard,
@@ -140,8 +152,11 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   const [fetchingModels, setFetchingModels] = React.useState(false)
   const [fetchResult, setFetchResult] = React.useState<FetchModelsResult | null>(null)
   const [apiKeyLoaded, setApiKeyLoaded] = React.useState(false)
+  const [showExitDialog, setShowExitDialog] = React.useState(false)
 
-  // 编辑模式下加载明文 API Key
+  const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
+
+  /** 编辑模式下加载明文 API Key */
   React.useEffect(() => {
     if (isEdit && channel && !apiKeyLoaded) {
       window.electronAPI.decryptApiKey(channel.id).then((key) => {
@@ -325,9 +340,9 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
     }
   }
 
-  /** 创建渠道（仅新建模式） */
-  const handleCreate = async (): Promise<void> => {
-    if (!name.trim() || !apiKey.trim()) return
+  /** 执行创建渠道 */
+  const doCreate = React.useCallback(async (): Promise<boolean> => {
+    if (!name.trim() || !apiKey.trim()) return false
 
     setSaving(true)
     try {
@@ -341,14 +356,74 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
       }
       await window.electronAPI.createChannel(input)
       toast.success('渠道创建成功')
-      onSaved()
+      return true
     } catch (error) {
       console.error('[模型配置表单] 创建失败:', error)
       toast.error('渠道创建失败，请检查配置后重试')
+      return false
     } finally {
       setSaving(false)
     }
+  }, [name, provider, baseUrl, apiKey, models, enabled])
+
+  /** 创建渠道（仅新建模式） */
+  const handleCreate = async (): Promise<void> => {
+    if (models.length === 0) {
+      toast.warning('尚未配置模型，建议先从供应商获取或手动添加', { id: 'no-models-warn' })
+      return
+    }
+    const ok = await doCreate()
+    if (ok) onSaved()
   }
+
+  /** 检测表单是否有未保存内容 */
+  const isDirty = !isEdit && (name.trim() !== '' || apiKey.trim() !== '' || models.length > 0)
+  const hasNoModels = !isEdit && models.length === 0
+
+  /** 返回按钮：创建模式下有未保存内容时拦截 */
+  const handleBack = (): void => {
+    if (!isEdit && isDirty) {
+      setShowExitDialog(true)
+      return
+    }
+    if (isEdit) {
+      onSaved()
+    } else {
+      onCancel()
+    }
+  }
+
+  /** 放弃编辑 */
+  const handleDiscard = (): void => {
+    setShowExitDialog(false)
+    onCancel()
+  }
+
+  /** 保存并关闭（从弹窗触发） */
+  const handleSaveAndClose = async (): Promise<void> => {
+    const ok = await doCreate()
+    if (ok) {
+      setShowExitDialog(false)
+      onSaved()
+    }
+  }
+
+  // 同步表单 dirty 状态到全局 atom（供 SettingsPanel 拦截侧边栏导航）
+  React.useEffect(() => {
+    setChannelFormDirty(isDirty)
+    return () => { setChannelFormDirty(false) }
+  }, [isDirty, setChannelFormDirty])
+
+  // 拦截窗口关闭（Cmd+W / Alt+F4 / 点击窗口 X）
+  React.useEffect(() => {
+    if (!isDirty) return
+    const handler = (e: BeforeUnloadEvent): void => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
 
   // ===== 模型分区 =====
   const enabledModels = models.filter((m) => m.enabled)
@@ -369,7 +444,7 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          onClick={() => { isEdit ? onSaved() : onCancel() }}
+          onClick={handleBack}
         >
           <ArrowLeft size={18} />
         </Button>
@@ -647,6 +722,29 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
           </div>
         </SettingsCard>
       </SettingsSection>
+
+      {/* 退出拦截弹窗 */}
+      <AlertDialog open={showExitDialog} onOpenChange={setShowExitDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>放弃未保存的更改？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {hasNoModels
+                ? '当前尚未配置模型，建议先配置模型再保存。'
+                : '您填写的内容尚未保存，确定要放弃编辑吗？'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDiscard}>放弃编辑</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleSaveAndClose}
+              disabled={saving || !name.trim() || !apiKey.trim()}
+            >
+              {saving ? <><Loader2 size={14} className="animate-spin" /> 保存中...</> : '保存并关闭'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
