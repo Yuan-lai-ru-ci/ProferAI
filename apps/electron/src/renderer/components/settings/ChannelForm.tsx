@@ -22,7 +22,6 @@ import {
   Zap,
   Download,
   Search,
-  Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -141,8 +140,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   const [fetchingModels, setFetchingModels] = React.useState(false)
   const [fetchResult, setFetchResult] = React.useState<FetchModelsResult | null>(null)
   const [apiKeyLoaded, setApiKeyLoaded] = React.useState(false)
-  /** auto-save 状态指示 */
-  const [autoSaveStatus, setAutoSaveStatus] = React.useState<'idle' | 'saving' | 'saved'>('idle')
 
   // 编辑模式下加载明文 API Key
   React.useEffect(() => {
@@ -172,7 +169,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
     currentEnabled: boolean,
   ) => {
     if (!isEdit || !channel) return
-    setAutoSaveStatus('saving')
     try {
       await window.electronAPI.updateChannel(channel.id, {
         name: currentName,
@@ -182,11 +178,9 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         models: currentModels,
         enabled: currentEnabled,
       })
-      setAutoSaveStatus('saved')
-      setTimeout(() => setAutoSaveStatus('idle'), 1500)
+      toast.success('已保存', { id: 'auto-save-success' })
     } catch (error) {
       console.error('[模型配置表单] auto-save 失败:', error)
-      setAutoSaveStatus('idle')
       toast.error('自动保存失败，请检查后手动重试', { id: 'auto-save-error' })
     }
   }, [isEdit, channel])
@@ -382,14 +376,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         <h3 className="text-lg font-medium text-foreground flex-1">
           {isEdit ? '编辑模型配置' : '添加模型配置'}
         </h3>
-        {/* 编辑模式：auto-save 状态 */}
-        {isEdit && autoSaveStatus !== 'idle' && (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            {autoSaveStatus === 'saving' && <Loader2 size={12} className="animate-spin" />}
-            {autoSaveStatus === 'saved' && <Check size={12} className="text-emerald-500" />}
-            <span>{autoSaveStatus === 'saving' ? '保存中...' : '已保存'}</span>
-          </span>
-        )}
         {/* 新建模式：创建按钮 */}
         {!isEdit && (
           <Button
