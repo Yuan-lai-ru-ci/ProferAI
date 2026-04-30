@@ -119,7 +119,7 @@ function htmlToMarkdown(html: string): string {
         if (dataType === 'mention') {
           if (suggestionChar === '/') return `/skill:${dataId}`
           if (suggestionChar === '#') return `#mcp:${dataId}`
-          return `@file:${dataId}`
+          return `@file:${encodeURIComponent(dataId)}`
         }
         return children
       }
