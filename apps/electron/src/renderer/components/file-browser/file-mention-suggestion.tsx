@@ -10,7 +10,7 @@ import { ReactRenderer } from '@tiptap/react'
 import type { SuggestionOptions } from '@tiptap/suggestion'
 import { FileMentionList } from './FileMentionList'
 import type { FileMentionRef } from './FileMentionList'
-import type { FileIndexEntry } from '@proma/shared'
+import type { FileIndexEntry, FileSearchResult } from '@proma/shared'
 import { createMentionPopup, positionPopup } from '@/components/agent/mention-popup-utils'
 
 /**
@@ -18,38 +18,52 @@ import { createMentionPopup, positionPopup } from '@/components/agent/mention-po
  *
  * @param workspacePathRef 当前工作区根路径引用
  * @param mentionActiveRef 是否正在 mention 模式（用于阻止 Enter 发送消息）
- * @param attachedDirsRef 附加目录路径列表引用（搜索时一并扫描）
+ * @param attachedDirsRef 工作区级附加目录路径列表引用（标记为 workspace）
+ * @param mentionItemCountRef mention 条目计数
+ * @param sessionAttachedDirsRef 会话级附加目录路径列表引用（标记为 session）
  */
 export function createFileMentionSuggestion(
   workspacePathRef: React.RefObject<string | null>,
   mentionActiveRef: React.MutableRefObject<boolean>,
   attachedDirsRef?: React.RefObject<string[]>,
   mentionItemCountRef?: React.MutableRefObject<number>,
+  sessionAttachedDirsRef?: React.RefObject<string[]>,
 ): Omit<SuggestionOptions<FileIndexEntry>, 'editor'> {
+  let lastResult: FileSearchResult | null = null
+
   return {
     char: '@',
     allowSpaces: false,
 
-    // 异步搜索文件
     items: async ({ query }): Promise<FileIndexEntry[]> => {
       const wsPath = workspacePathRef.current
-      if (!wsPath) return []
+      if (!wsPath) {
+        console.warn('[FileMention] workspacePath is null, mention disabled')
+        return []
+      }
 
       try {
         const additionalPaths = attachedDirsRef?.current ?? []
+        const sessionPaths = sessionAttachedDirsRef?.current ?? []
+
+        console.log('[FileMention] searching files, query:', JSON.stringify(query), 'ws:', wsPath, 'additionalPaths:', additionalPaths, 'sessionPaths:', sessionPaths)
         const result = await window.electronAPI.searchWorkspaceFiles(
           wsPath,
           query ?? '',
           20,
           additionalPaths.length > 0 ? additionalPaths : undefined,
+          sessionPaths.length > 0 ? sessionPaths : undefined,
         )
+        console.log('[FileMention] search result:', { total: result.total, sessionCount: result.sessionEntries.length, workspaceCount: result.workspaceEntries.length })
+        lastResult = result
         return result.entries
-      } catch {
+      } catch(e) {
+        console.error('[FileMention] search failed:', e)
+        lastResult = null
         return []
       }
     },
 
-    // 渲染下拉列表
     render: () => {
       let renderer: ReactRenderer<FileMentionRef> | null = null
       let popup: HTMLDivElement | null = null
@@ -58,26 +72,54 @@ export function createFileMentionSuggestion(
         onStart(props) {
           mentionActiveRef.current = true
           if (mentionItemCountRef) mentionItemCountRef.current = props.items.length
-          renderer = new ReactRenderer(FileMentionList, {
-            props: {
-              items: props.items,
-              selectedIndex: 0,
-              onSelect: (item: FileIndexEntry) => {
-                props.command({ id: item.path, label: item.name })
-              },
-            },
-            editor: props.editor,
-          })
 
-          popup = createMentionPopup(renderer.element)
-          positionPopup(popup, props.clientRect?.())
+          try {
+            const result = lastResult
+            // 兼容旧版 IPC（未返回 sessionEntries/workspaceEntries）：从 entries 按 source 拆分
+            let sessionEntries = result?.sessionEntries ?? []
+            let workspaceEntries = result?.workspaceEntries ?? []
+            if (sessionEntries.length === 0 && workspaceEntries.length === 0 && (result?.entries.length ?? 0) > 0) {
+              const hasSource = result!.entries.some((e) => 'source' in e && e.source)
+              if (hasSource) {
+                sessionEntries = result!.entries.filter((e) => e.source === 'session')
+                workspaceEntries = result!.entries.filter((e) => e.source === 'workspace')
+              } else {
+                // 旧版完全不返回 source，全部归入会话文件
+                sessionEntries = result!.entries
+              }
+            }
+            renderer = new ReactRenderer(FileMentionList, {
+              props: {
+                sessionEntries,
+                workspaceEntries,
+                onSelect: (item: { name: string; path: string; type: 'file' | 'dir' }) => {
+                  props.command({ id: item.path, label: item.name })
+                },
+              },
+              editor: props.editor,
+            })
+
+            popup = createMentionPopup(renderer.element)
+            positionPopup(popup, props.clientRect?.())
+          } catch (e) {
+            console.error('[FileMention] render popup failed:', e)
+          }
         },
 
         onUpdate(props) {
           if (mentionItemCountRef) mentionItemCountRef.current = props.items.length
+
+          const result = lastResult
+          let sessionEntries = result?.sessionEntries ?? []
+          let workspaceEntries = result?.workspaceEntries ?? []
+          if (sessionEntries.length === 0 && workspaceEntries.length === 0 && (result?.entries.length ?? 0) > 0) {
+            sessionEntries = result!.entries.filter((e) => e.source === 'session')
+            workspaceEntries = result!.entries.filter((e) => e.source === 'workspace')
+          }
           renderer?.updateProps({
-            items: props.items,
-            onSelect: (item: FileIndexEntry) => {
+            sessionEntries,
+            workspaceEntries,
+            onSelect: (item: { name: string; path: string; type: 'file' | 'dir' }) => {
               props.command({ id: item.path, label: item.name })
             },
           })
@@ -85,12 +127,16 @@ export function createFileMentionSuggestion(
         },
 
         onKeyDown(props) {
-          return renderer?.ref?.onKeyDown({ event: props.event }) ?? false
+          if (renderer?.ref) {
+            return renderer.ref.onKeyDown({ event: props.event })
+          }
+          return false
         },
 
         onExit() {
           mentionActiveRef.current = false
           if (mentionItemCountRef) mentionItemCountRef.current = 0
+          lastResult = null
           popup?.remove()
           popup = null
           renderer?.destroy()

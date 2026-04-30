@@ -1938,24 +1938,26 @@ export function registerIpcHandlers(): void {
   // 搜索工作区文件（用于 @ 引用，递归扫描，支持附加目录）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES,
-    async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[]): Promise<FileSearchResult> => {
+    async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]): Promise<FileSearchResult> => {
       const { readdirSync } = await import('node:fs')
-      const { resolve, relative } = await import('node:path')
+      const { resolve, relative, basename } = await import('node:path')
 
       const safeRoot = resolve(rootPath)
       const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
       const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
 
-      // 按来源分组收集文件，用于空 query 时均衡分配结果
-      const rootEntries: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
-      const additionalEntryGroups: Array<Array<{ name: string; path: string; type: 'file' | 'dir' }>> = []
+      // 按来源分组收集文件
+      type Entry = { name: string; path: string; type: 'file' | 'dir'; source: 'session' | 'workspace' }
+      const rootEntries: Entry[] = []
+      const workspaceEntries: Entry[] = []
 
       function scan(
         dir: string,
         depth: number,
         baseRoot: string,
-        target: Array<{ name: string; path: string; type: 'file' | 'dir' }>,
+        target: Entry[],
         useAbsPath: boolean,
+        source: 'session' | 'workspace',
       ): void {
         if (depth > 10) return
         try {
@@ -1970,10 +1972,11 @@ export function registerIpcHandlers(): void {
               name: item.name,
               path: entryPath,
               type: item.isDirectory() ? 'dir' : 'file',
+              source,
             })
 
             if (item.isDirectory()) {
-              scan(fullPath, depth + 1, baseRoot, target, useAbsPath)
+              scan(fullPath, depth + 1, baseRoot, target, useAbsPath, source)
             }
           }
         } catch {
@@ -1982,70 +1985,96 @@ export function registerIpcHandlers(): void {
       }
 
       // session 目录：相对路径
-      scan(safeRoot, 0, safeRoot, rootEntries, false)
+      scan(safeRoot, 0, safeRoot, rootEntries, false, 'session')
 
-      // 附加目录：绝对路径（消除歧义，agent 可直接使用）
+      // 会话级附加目录：绝对路径，标记为 session（归入会话文件分组）
+      if (sessionPaths && sessionPaths.length > 0) {
+        for (const sp of sessionPaths) {
+          const sRoot = resolve(sp)
+          // 添加附加目录本身作为顶层条目
+          rootEntries.push({
+            name: basename(sRoot),
+            path: sRoot,
+            type: 'dir',
+            source: 'session',
+          })
+          scan(sRoot, 0, sRoot, rootEntries, true, 'session')
+        }
+      }
+
+      // 工作区文件 + 工作区级附加目录：绝对路径，标记为 workspace
       if (additionalPaths && additionalPaths.length > 0) {
         for (const addPath of additionalPaths) {
           const addRoot = resolve(addPath)
-          const group: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
-          scan(addRoot, 0, addRoot, group, true)
-          additionalEntryGroups.push(group)
+          // 添加附加目录本身作为顶层条目
+          workspaceEntries.push({
+            name: basename(addRoot),
+            path: addRoot,
+            type: 'dir',
+            source: 'workspace',
+          })
+          scan(addRoot, 0, addRoot, workspaceEntries, true, 'workspace')
         }
       }
 
-      // 搜索匹配
+      // 组内排序：目录优先，前缀匹配优先，路径短优先
+      function sortGroup(entries: Entry[], q: string): void {
+        entries.sort((a, b) => {
+          const aStartsWith = a.name.toLowerCase().startsWith(q) ? 0 : 1
+          const bStartsWith = b.name.toLowerCase().startsWith(q) ? 0 : 1
+          if (aStartsWith !== bStartsWith) return aStartsWith - bStartsWith
+          if (a.type === 'dir' && b.type !== 'dir') return -1
+          if (a.type !== 'dir' && b.type === 'dir') return 1
+          return a.path.length - b.path.length
+        })
+      }
+
+      function matchEntries(entries: Entry[], q: string): Entry[] {
+        return entries.filter((entry) => {
+          const nameLower = entry.name.toLowerCase()
+          const pathLower = entry.path.toLowerCase()
+          if (nameLower.startsWith(q)) return true
+          if (nameLower.includes(q) || pathLower.includes(q)) return true
+          let qi = 0
+          for (let i = 0; i < nameLower.length && qi < q.length; i++) {
+            if (nameLower[i] === q) qi++
+          }
+          return qi === q.length
+        })
+      }
+
       const q = query.toLowerCase()
 
       if (!q) {
-        // 空 query：从各来源交替取结果，确保均衡展示
-        const allGroups = [rootEntries, ...additionalEntryGroups].filter((g) => g.length > 0)
-        const result: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
-        const groupCount = allGroups.length
-        if (groupCount > 0) {
-          // 每组至少分配 perGroup 条，剩余名额按需补充
-          const perGroup = Math.max(1, Math.floor(limit / groupCount))
-          for (const group of allGroups) {
-            result.push(...group.slice(0, perGroup))
-          }
-          // 如果还有剩余名额，按组顺序补充
-          if (result.length < limit) {
-            for (const group of allGroups) {
-              for (let i = perGroup; i < group.length && result.length < limit; i++) {
-                result.push(group[i]!)
-              }
-            }
-          }
+        // 空 query：每个分组返回较多条目，避免截断
+        const perGroup = Math.max(limit, 100)
+        const sessionSlice = rootEntries.slice(0, perGroup)
+        const workspaceSlice = workspaceEntries.slice(0, perGroup)
+        const combined = [...sessionSlice, ...workspaceSlice].slice(0, perGroup * 2)
+        return {
+          entries: combined,
+          total: rootEntries.length + workspaceEntries.length,
+          sessionEntries: sessionSlice,
+          workspaceEntries: workspaceSlice,
         }
-        const allEntries = [rootEntries, ...additionalEntryGroups].flat()
-        return { entries: result.slice(0, limit), total: allEntries.length }
       }
 
-      const allEntries = [rootEntries, ...additionalEntryGroups].flat()
-      const matched = allEntries.filter((entry) => {
-        const nameLower = entry.name.toLowerCase()
-        const pathLower = entry.path.toLowerCase()
-        if (nameLower.startsWith(q)) return true
-        if (nameLower.includes(q) || pathLower.includes(q)) return true
-        // 模糊匹配
-        let qi = 0
-        for (let i = 0; i < nameLower.length && qi < q.length; i++) {
-          if (nameLower[i] === q[qi]) qi++
-        }
-        return qi === q.length
-      })
+      const sessionMatched = matchEntries(rootEntries, q)
+      const workspaceMatched = matchEntries(workspaceEntries, q)
+      sortGroup(sessionMatched, q)
+      sortGroup(workspaceMatched, q)
 
-      // 排序：精确前缀优先，目录优先，路径短优先
-      matched.sort((a, b) => {
-        const aStartsWith = a.name.toLowerCase().startsWith(q) ? 0 : 1
-        const bStartsWith = b.name.toLowerCase().startsWith(q) ? 0 : 1
-        if (aStartsWith !== bStartsWith) return aStartsWith - bStartsWith
-        if (a.type === 'dir' && b.type !== 'dir') return -1
-        if (a.type !== 'dir' && b.type === 'dir') return 1
-        return a.path.length - b.path.length
-      })
+      const halfLimit = Math.max(1, Math.floor(limit / 2))
+      const sessionSlice = sessionMatched.slice(0, halfLimit)
+      const workspaceSlice = workspaceMatched.slice(0, halfLimit)
+      const combined = [...sessionSlice, ...workspaceSlice].slice(0, limit)
 
-      return { entries: matched.slice(0, limit), total: matched.length }
+      return {
+        entries: combined,
+        total: sessionMatched.length + workspaceMatched.length,
+        sessionEntries: sessionSlice,
+        workspaceEntries: workspaceSlice,
+      }
     }
   )
 

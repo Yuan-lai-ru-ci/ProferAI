@@ -886,12 +886,18 @@ export interface FileIndexEntry {
   path: string
   /** 条目类型 */
   type: 'file' | 'dir'
+  /** 来源：会话文件或工作区文件 */
+  source: 'session' | 'workspace'
 }
 
 /** 文件搜索结果 */
 export interface FileSearchResult {
   entries: FileIndexEntry[]
   total: number
+  /** 会话文件条目（来自 session 工作目录） */
+  sessionEntries: FileIndexEntry[]
+  /** 工作区文件条目（来自 workspace files + 附加目录） */
+  workspaceEntries: FileIndexEntry[]
 }
 
 // ===== Agent 附件 =====

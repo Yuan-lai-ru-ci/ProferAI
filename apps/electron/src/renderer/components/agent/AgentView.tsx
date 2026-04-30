@@ -393,19 +393,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .catch(() => setWorkspaceFilesPath(null))
   }, [workspaceSlug])
 
-  // 合并工作区文件目录、工作区级附加目录和会话级附加目录，供 @ 引用搜索
-  const allAttachedDirs = React.useMemo(() => {
-    const dirs = [...attachedDirs]
-    // 添加工作区级附加目录
+  // 工作区级目录（workspace shared files + 工作区级附加目录），@ 引用标记为工作区文件
+  const workspaceDirs = React.useMemo(() => {
+    const dirs: string[] = []
+    if (workspaceFilesPath) dirs.push(workspaceFilesPath)
     for (const d of wsAttachedDirs) {
       if (!dirs.includes(d)) dirs.push(d)
     }
-    // 添加工作区共享文件目录
-    if (workspaceFilesPath && !dirs.includes(workspaceFilesPath)) {
-      dirs.unshift(workspaceFilesPath)
-    }
     return dirs
-  }, [attachedDirs, wsAttachedDirs, workspaceFilesPath])
+  }, [workspaceFilesPath, wsAttachedDirs])
 
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
@@ -1445,7 +1441,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               collapsible
               workspacePath={sessionPath}
               workspaceSlug={workspaceSlug}
-              attachedDirs={allAttachedDirs}
+              attachedDirs={workspaceDirs}
+              sessionAttachedDirs={attachedDirs}
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
