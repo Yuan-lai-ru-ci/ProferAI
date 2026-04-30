@@ -574,7 +574,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           </div>
         )}
       </MessageContent>
-      {/* 操作栏：左侧耗时标签 + 右侧操作按钮（流式输出中隐藏） */}
+      {/* 操作栏：流式输出完成后显示操作按钮 */}
       {!isStreaming && (() => {
         const textContent = topLevelBlocks
           .filter((b) => b.type === 'text' && 'text' in b)
