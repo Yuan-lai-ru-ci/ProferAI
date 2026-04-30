@@ -766,26 +766,53 @@ export class AgentOrchestrator {
     // 0.5 清除上一轮中断标记
     try { updateAgentSessionMeta(sessionId, { stoppedByUser: false }) } catch { /* 会话可能已删除 */ }
 
+    // 环境 / 配置类错误的统一上报：持久化为 TypedError 消息，由 SDKMessageRenderer 渲染
+    const reportPreflightError = (typedError: TypedError) => {
+      const errorContent = typedError.title
+        ? `${typedError.title}: ${typedError.message}`
+        : typedError.message
+      const errorSDKMsg: SDKMessage = {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: errorContent }],
+        },
+        parent_tool_use_id: null,
+        error: { message: typedError.message, errorType: typedError.code },
+        _createdAt: Date.now(),
+        _errorCode: typedError.code,
+        _errorTitle: typedError.title,
+        _errorDetails: typedError.details,
+        _errorCanRetry: typedError.canRetry,
+        _errorActions: typedError.actions,
+      } as unknown as SDKMessage
+      try { appendSDKMessages(sessionId, [errorSDKMsg]) } catch (e) {
+        console.error('[Agent 编排] 持久化 preflight error 失败:', e)
+      }
+      callbacks.onError(errorContent)
+      callbacks.onComplete([], { startedAt: input.startedAt })
+    }
+
     // 1. Windows 平台：检查 Shell 环境可用性
     if (process.platform === 'win32') {
       const runtimeStatus = getRuntimeStatus()
       const shellStatus = runtimeStatus?.shell
 
       if (shellStatus && !shellStatus.gitBash?.available && !shellStatus.wsl?.available) {
-        const errorMsg = `Windows 平台需要 Git Bash 或 WSL 环境才能运行 Agent。
-
-当前状态：
-- Git Bash: ${shellStatus.gitBash?.error || '未检测到'}
-- WSL: ${shellStatus.wsl?.error || '未检测到'}
-
-解决方案：
-1. 安装 Git for Windows（推荐）: https://git-scm.com/download/win
-2. 或启用 WSL: https://learn.microsoft.com/zh-cn/windows/wsl/install
-
-安装完成后请重启应用。`
-
-        callbacks.onError(errorMsg)
-        callbacks.onComplete([], { startedAt: input.startedAt })
+        reportPreflightError({
+          code: 'windows_shell_missing',
+          title: 'Windows 环境未就绪',
+          message:
+            '需要 Git Bash 或 WSL 才能运行 Agent。建议安装 Git for Windows（自带 Git Bash），安装完成后点「打开环境检测」刷新状态。',
+          details: [
+            `Git Bash: ${shellStatus.gitBash?.error || '未检测到'}`,
+            `WSL: ${shellStatus.wsl?.error || '未检测到'}`,
+          ],
+          actions: [
+            { key: 'e', label: '打开环境检测', action: 'open_environment_check' },
+            { key: 'g', label: '去官方下载 Git', action: 'open_external', payload: 'https://git-scm.com/download/win' },
+          ],
+          canRetry: false,
+        })
         return
       }
     }
@@ -793,8 +820,15 @@ export class AgentOrchestrator {
     // 2. 获取渠道信息并解密 API Key
     const channel = getChannelById(channelId)
     if (!channel) {
-      callbacks.onError('渠道不存在')
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      reportPreflightError({
+        code: 'channel_not_found',
+        title: '渠道不存在',
+        message: '当前会话引用的渠道已被删除或不可用，请在设置中重新选择。',
+        actions: [
+          { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+        ],
+        canRetry: false,
+      })
       return
     }
 
@@ -802,8 +836,15 @@ export class AgentOrchestrator {
     try {
       apiKey = decryptApiKey(channelId)
     } catch {
-      callbacks.onError('解密 API Key 失败')
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      reportPreflightError({
+        code: 'api_key_decrypt_failed',
+        title: 'API Key 解密失败',
+        message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
+        actions: [
+          { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+        ],
+        canRetry: false,
+      })
       return
     }
 
@@ -879,10 +920,33 @@ export class AgentOrchestrator {
       const cliPath = resolveSDKCliPath()
 
       if (!existsSync(cliPath)) {
-        const errMsg = `SDK native binary 不存在: ${cliPath}。请确保已安装对应平台的 @anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch} optional dependency`
-        console.error(`[Agent 编排] ${errMsg}`)
-        callbacks.onError(errMsg)
-        callbacks.onComplete([], { startedAt: streamStartedAt })
+        const subpkg = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`
+        console.error(`[Agent 编排] SDK native binary 不存在: ${cliPath}`)
+        reportPreflightError({
+          code: 'claude_binary_not_found',
+          title: 'Claude 核心未就绪',
+          message:
+            '应用安装包里缺少 Claude Agent SDK 的核心可执行文件（claude.exe）。这通常是打包时未包含当前平台的 SDK 组件导致。请重新下载最新安装包，或提交 issue 告知我们。',
+          details: [
+            `缺失文件: ${cliPath}`,
+            `需要的子包: ${subpkg}`,
+          ],
+          actions: [
+            {
+              key: 'd',
+              label: '下载最新安装包',
+              action: 'open_external',
+              payload: 'https://proma.cool/download',
+            },
+            {
+              key: 'i',
+              label: '报告问题',
+              action: 'open_external',
+              payload: 'https://github.com/ErlichLiu/Proma/issues/new',
+            },
+          ],
+          canRetry: false,
+        })
         return
       }
 

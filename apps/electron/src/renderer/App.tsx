@@ -1,10 +1,12 @@
 import * as React from 'react'
-import { useStore } from 'jotai'
+import { useAtom, useStore } from 'jotai'
 import { AppShell } from './components/app-shell/AppShell'
 import { OnboardingView } from './components/onboarding/OnboardingView'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
+import { EnvironmentCheckDialog } from './components/environment/EnvironmentCheckDialog'
 import { TooltipProvider } from './components/ui/tooltip'
 import { conversationsAtom } from './atoms/chat-atoms'
+import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { tabsAtom, activeTabIdAtom, openTab } from './atoms/tab-atoms'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
@@ -21,7 +23,8 @@ export default function App(): React.ReactElement {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
 
   // 初始化：检查是否需要显示 Onboarding
-  // SDK 0.2.113+ 自带 claude native binary，不再依赖宿主 Node/Git，启动路径不做环境检测。
+  // macOS/Linux 上 SDK 自带 claude native binary 不依赖宿主 Node/Git；
+  // Windows 上仍需 Git Bash/WSL，由 Onboarding Step 2 与聊天错误卡片引导用户安装。
   React.useEffect(() => {
     const initialize = async () => {
       try {
@@ -94,6 +97,15 @@ export default function App(): React.ReactElement {
     <TooltipProvider delayDuration={200}>
       <AppShell contextValue={contextValue} />
       <TutorialBanner />
+      <GlobalEnvironmentCheckDialog />
     </TooltipProvider>
   )
+}
+
+/**
+ * 全局环境检测 Dialog，由错误卡片的 recovery action 按钮打开。
+ */
+function GlobalEnvironmentCheckDialog(): React.ReactElement {
+  const [open, setOpen] = useAtom(environmentCheckDialogOpenAtom)
+  return <EnvironmentCheckDialog open={open} onOpenChange={setOpen} />
 }

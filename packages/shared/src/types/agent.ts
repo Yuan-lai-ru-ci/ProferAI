@@ -331,6 +331,12 @@ export type ErrorCode =
   | 'image_too_large'
   | 'prompt_too_long'
   | 'provider_error'
+  // 环境 / 配置类错误（本地可修复）
+  | 'windows_shell_missing'
+  | 'channel_not_found'
+  | 'api_key_decrypt_failed'
+  | 'claude_binary_not_found'
+  | 'session_busy'
   | 'unknown_error'
 
 /** 恢复操作 */
@@ -340,7 +346,17 @@ export interface RecoveryAction {
   /** 操作标签 */
   label: string
   /** 操作类型 */
-  action: 'settings' | 'retry' | 'cancel' | 'compact' | string
+  action:
+    | 'settings'
+    | 'retry'
+    | 'cancel'
+    | 'compact'
+    | 'open_environment_check'
+    | 'open_channel_settings'
+    | 'open_external'
+    | (string & {})
+  /** 操作附带的载荷，例如 open_external 的 URL */
+  payload?: string
 }
 
 /** 类型化错误 */
