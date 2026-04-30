@@ -24,6 +24,7 @@ import {
   Search,
   Check,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -186,6 +187,7 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
     } catch (error) {
       console.error('[模型配置表单] auto-save 失败:', error)
       setAutoSaveStatus('idle')
+      toast.error('自动保存失败，请检查后手动重试', { id: 'auto-save-error' })
     }
   }, [isEdit, channel])
 
@@ -344,9 +346,11 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         enabled,
       }
       await window.electronAPI.createChannel(input)
+      toast.success('渠道创建成功')
       onSaved()
     } catch (error) {
       console.error('[模型配置表单] 创建失败:', error)
+      toast.error('渠道创建失败，请检查配置后重试')
     } finally {
       setSaving(false)
     }
