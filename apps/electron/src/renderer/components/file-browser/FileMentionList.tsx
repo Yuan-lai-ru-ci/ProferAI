@@ -9,7 +9,7 @@
  * - 工作区文件（workspace files + 附加目录下的文件）
  *
  * 交互：
- * - 文件夹初始折叠，选中后按 ` 键展开/折叠
+ * - 文件夹初始折叠，Tab 键展开/折叠，→/← 方向键辅助
  * - 任何时候按 Enter 完成 @ 引用（文件或目录均可）
  */
 
@@ -253,7 +253,15 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
           setSelectedIndex((prev) => (prev >= totalItems - 1 ? 0 : prev + 1))
           return true
         }
-        if (event.key === '`' || event.key === 'ArrowRight') {
+        if (event.key === 'Tab') {
+          event.preventDefault()
+          const node = getNodeAt(selectedIndex)
+          if (node && node.type === 'dir' && node.children.length > 0) {
+            toggleExpand(node.path)
+          }
+          return true
+        }
+        if (event.key === 'ArrowRight') {
           event.preventDefault()
           const node = getNodeAt(selectedIndex)
           if (node && node.type === 'dir' && node.children.length > 0 && !node.expanded) {
@@ -483,12 +491,12 @@ function TreeNodeList({
           {/* 选中文件夹时的快捷键提示 */}
           {isSelected && node.type === 'dir' && node.children.length > 0 && !node.expanded && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0 bg-muted/50 rounded px-1 py-px">
-              → 展开
+              Tab 展开
             </span>
           )}
           {isSelected && node.type === 'dir' && node.children.length > 0 && node.expanded && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0 bg-muted/50 rounded px-1 py-px">
-              ← 折叠
+              Tab 折叠
             </span>
           )}
         </button>

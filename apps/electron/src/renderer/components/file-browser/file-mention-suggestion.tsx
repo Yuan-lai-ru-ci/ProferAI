@@ -3,6 +3,7 @@
  *
  * 工厂函数，创建用于 @ 引用文件的 TipTap Suggestion 配置。
  * 输入 @ 后异步搜索工作区文件，弹出 FileMentionList 浮动列表。
+ * 弹窗底部锚定在光标上方，展开文件夹时向上生长。
  */
 
 import type React from 'react'
@@ -13,15 +14,6 @@ import type { FileMentionRef } from './FileMentionList'
 import type { FileIndexEntry, FileSearchResult } from '@proma/shared'
 import { createMentionPopup, positionPopup } from '@/components/agent/mention-popup-utils'
 
-/**
- * 创建文件 @ 引用的 Suggestion 配置
- *
- * @param workspacePathRef 当前工作区根路径引用
- * @param mentionActiveRef 是否正在 mention 模式（用于阻止 Enter 发送消息）
- * @param attachedDirsRef 工作区级附加目录路径列表引用（标记为 workspace）
- * @param mentionItemCountRef mention 条目计数
- * @param sessionAttachedDirsRef 会话级附加目录路径列表引用（标记为 session）
- */
 export function createFileMentionSuggestion(
   workspacePathRef: React.RefObject<string | null>,
   mentionActiveRef: React.MutableRefObject<boolean>,
@@ -67,6 +59,41 @@ export function createFileMentionSuggestion(
     render: () => {
       let renderer: ReactRenderer<FileMentionRef> | null = null
       let popup: HTMLDivElement | null = null
+      let resizeObserver: ResizeObserver | null = null
+
+      function splitEntries(result: FileSearchResult | null) {
+        let sessionEntries = result?.sessionEntries ?? []
+        let workspaceEntries = result?.workspaceEntries ?? []
+        if (sessionEntries.length === 0 && workspaceEntries.length === 0 && (result?.entries.length ?? 0) > 0) {
+          const hasSource = result!.entries.some((e) => 'source' in e && e.source)
+          if (hasSource) {
+            sessionEntries = result!.entries.filter((e) => e.source === 'session')
+            workspaceEntries = result!.entries.filter((e) => e.source === 'workspace')
+          } else {
+            sessionEntries = result!.entries
+          }
+        }
+        return { sessionEntries, workspaceEntries }
+      }
+
+      function createRenderer(props: any) {
+        const { sessionEntries, workspaceEntries } = splitEntries(lastResult)
+        renderer = new ReactRenderer(FileMentionList, {
+          props: {
+            sessionEntries,
+            workspaceEntries,
+            onSelect: (item: { name: string; path: string; type: 'file' | 'dir' }) => {
+              props.command({ id: item.path, label: item.name })
+            },
+          },
+          editor: props.editor,
+        })
+      }
+
+      function anchorPopup(rect?: (() => DOMRect | null) | null) {
+        if (!popup) return
+        positionPopup(popup, rect?.(), { anchorBottom: true })
+      }
 
       return {
         onStart(props) {
@@ -74,33 +101,15 @@ export function createFileMentionSuggestion(
           if (mentionItemCountRef) mentionItemCountRef.current = props.items.length
 
           try {
-            const result = lastResult
-            // 兼容旧版 IPC（未返回 sessionEntries/workspaceEntries）：从 entries 按 source 拆分
-            let sessionEntries = result?.sessionEntries ?? []
-            let workspaceEntries = result?.workspaceEntries ?? []
-            if (sessionEntries.length === 0 && workspaceEntries.length === 0 && (result?.entries.length ?? 0) > 0) {
-              const hasSource = result!.entries.some((e) => 'source' in e && e.source)
-              if (hasSource) {
-                sessionEntries = result!.entries.filter((e) => e.source === 'session')
-                workspaceEntries = result!.entries.filter((e) => e.source === 'workspace')
-              } else {
-                // 旧版完全不返回 source，全部归入会话文件
-                sessionEntries = result!.entries
-              }
-            }
-            renderer = new ReactRenderer(FileMentionList, {
-              props: {
-                sessionEntries,
-                workspaceEntries,
-                onSelect: (item: { name: string; path: string; type: 'file' | 'dir' }) => {
-                  props.command({ id: item.path, label: item.name })
-                },
-              },
-              editor: props.editor,
-            })
+            createRenderer(props)
+            popup = createMentionPopup(renderer!.element)
+            anchorPopup(props.clientRect)
 
-            popup = createMentionPopup(renderer.element)
-            positionPopup(popup, props.clientRect?.())
+            // 监听弹窗高度变化（展开/折叠文件夹时），重新定位保持底部锚定
+            resizeObserver = new ResizeObserver(() => {
+              anchorPopup(props.clientRect)
+            })
+            resizeObserver.observe(popup!)
           } catch (e) {
             console.error('[FileMention] render popup failed:', e)
           }
@@ -109,13 +118,7 @@ export function createFileMentionSuggestion(
         onUpdate(props) {
           if (mentionItemCountRef) mentionItemCountRef.current = props.items.length
 
-          const result = lastResult
-          let sessionEntries = result?.sessionEntries ?? []
-          let workspaceEntries = result?.workspaceEntries ?? []
-          if (sessionEntries.length === 0 && workspaceEntries.length === 0 && (result?.entries.length ?? 0) > 0) {
-            sessionEntries = result!.entries.filter((e) => e.source === 'session')
-            workspaceEntries = result!.entries.filter((e) => e.source === 'workspace')
-          }
+          const { sessionEntries, workspaceEntries } = splitEntries(lastResult)
           renderer?.updateProps({
             sessionEntries,
             workspaceEntries,
@@ -123,7 +126,7 @@ export function createFileMentionSuggestion(
               props.command({ id: item.path, label: item.name })
             },
           })
-          positionPopup(popup, props.clientRect?.())
+          anchorPopup(props.clientRect)
         },
 
         onKeyDown(props) {
@@ -137,6 +140,8 @@ export function createFileMentionSuggestion(
           mentionActiveRef.current = false
           if (mentionItemCountRef) mentionItemCountRef.current = 0
           lastResult = null
+          resizeObserver?.disconnect()
+          resizeObserver = null
           popup?.remove()
           popup = null
           renderer?.destroy()

@@ -2007,8 +2007,9 @@ export function registerIpcHandlers(): void {
         for (const addPath of additionalPaths) {
           const addRoot = resolve(addPath)
           // 添加附加目录本身作为顶层条目
+          const rootName = basename(addRoot)
           workspaceEntries.push({
-            name: basename(addRoot),
+            name: rootName === 'workspace-files' ? '工作文件' : rootName,
             path: addRoot,
             type: 'dir',
             source: 'workspace',
