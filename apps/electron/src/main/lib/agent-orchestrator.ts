@@ -1068,7 +1068,7 @@ export class AgentOrchestrator {
       const initialPermissionMode: PromaPermissionMode = permissionModeOverride
         ?? (workspaceSlug
           ? getWorkspacePermissionMode(workspaceSlug)
-          : (appSettings.agentPermissionMode ?? 'acceptEdits'))
+          : (appSettings.agentPermissionMode ?? 'auto'))
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
@@ -1089,8 +1089,8 @@ export class AgentOrchestrator {
         )
       }
 
-      // 始终创建 acceptEdits 权限回调（运行中可能切换到 acceptEdits）
-      const acceptEditsCanUseTool = permissionService.createCanUseTool(
+      // 始终创建 auto 权限回调（运行中可能切换到 auto）
+      const autoCanUseTool = permissionService.createCanUseTool(
         sessionId,
         (request: PermissionRequest) => {
           this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
@@ -1244,8 +1244,8 @@ export class AgentOrchestrator {
             return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
           }
 
-          case 'acceptEdits':
-            return acceptEditsCanUseTool(toolName, input, options)
+          case 'auto':
+            return autoCanUseTool(toolName, input, options)
 
           default:
             return { behavior: 'allow' as const, updatedInput: input }
@@ -1270,11 +1270,11 @@ export class AgentOrchestrator {
         // 当提供 canUseTool 回调时必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
         // 两个矛盾的指令，导致 ExitPlanMode/AskUserQuestion 等交互式工具失败。
-        // canUseTool 已完整处理所有权限模式（plan/acceptEdits/bypassPermissions），
+        // canUseTool 已完整处理所有权限模式（plan/auto/bypassPermissions），
         // Worker 子代理在 bypassPermissions 模式下也会被自动放行。
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
-        ...(initialPermissionMode === 'acceptEdits' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(initialPermissionMode === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {

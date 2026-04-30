@@ -1240,7 +1240,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SET_PERMISSION_MODE,
     async (_, workspaceSlug: string, mode: PromaPermissionMode): Promise<void> => {
-      const validModes = new Set<string>(['acceptEdits', 'bypassPermissions', 'plan'])
+      const validModes = new Set<string>(['auto', 'bypassPermissions', 'plan'])
       if (!validModes.has(mode)) {
         throw new Error(`无效的权限模式: ${mode}`)
       }
