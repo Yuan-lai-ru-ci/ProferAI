@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import type { FileIndexEntry } from '@proma/shared'
 import { FileTypeIcon } from './FileTypeIcon'
 import { ChevronRight, Folder } from 'lucide-react'
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 
 // ===== Error Boundary =====
 
@@ -298,16 +299,19 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
     // 无匹配结果
     if (!hasResults) {
       return (
-        <MentionErrorBoundary>
-          <div className="rounded-lg border bg-popover p-2 shadow-lg text-[11px] text-muted-foreground">
-            无匹配文件
-          </div>
-        </MentionErrorBoundary>
+        <TooltipProvider>
+          <MentionErrorBoundary>
+            <div className="rounded-lg border bg-popover p-2 shadow-lg text-[11px] text-muted-foreground">
+              无匹配文件
+            </div>
+          </MentionErrorBoundary>
+        </TooltipProvider>
       )
     }
 
     return (
-      <MentionErrorBoundary>
+      <TooltipProvider>
+        <MentionErrorBoundary>
       <div
         ref={containerRef}
         className="rounded-lg border bg-popover shadow-lg overflow-y-auto max-h-[360px] min-w-[260px]"
@@ -337,6 +341,7 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
         )}
       </div>
       </MentionErrorBoundary>
+      </TooltipProvider>
     )
   },
 )
@@ -437,7 +442,9 @@ function TreeNodeList({
 
     return (
       <React.Fragment key={node.path}>
-        <button
+        <Tooltip delayDuration={300}>
+          <TooltipTrigger asChild>
+            <button
           type="button"
           data-mention-item=""
           className={cn(
@@ -500,6 +507,11 @@ function TreeNodeList({
             </span>
           )}
         </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="z-[10000] max-w-xs break-all">
+            <p>{node.path}</p>
+          </TooltipContent>
+        </Tooltip>
         {/* 展开状态下递归渲染子节点 */}
         {node.type === 'dir' && node.expanded && node.children.length > 0 &&
           node.children.map((child) => renderNode(child))
