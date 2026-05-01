@@ -306,7 +306,7 @@ export function remarkMentions() {
           parts.push({ type: 'text', value: text.slice(lastIdx, m.index) })
         }
         const mType: MentionType = m[1] ? 'file' : m[2] ? 'skill' : 'mcp'
-        const mValue = m[1] || m[2] || m[3]
+        const mValue = m[1] ?? m[2] ?? m[3] ?? ''
         // 新版 htmlToMarkdown 已 encodeURIComponent，旧消息是原始路径
         const alreadyEncoded = /%[0-9A-Fa-f]{2}/.test(mValue)
         const safeValue = alreadyEncoded ? mValue : encodeURIComponent(mValue)

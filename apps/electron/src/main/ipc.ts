@@ -2038,7 +2038,7 @@ export function registerIpcHandlers(): void {
           if (nameLower.includes(q) || pathLower.includes(q)) return true
           let qi = 0
           for (let i = 0; i < nameLower.length && qi < q.length; i++) {
-            if (nameLower[i] === q) qi++
+            if (nameLower[i] === q[qi]) qi++
           }
           return qi === q.length
         })

@@ -11,6 +11,7 @@
  * 交互：
  * - 文件夹初始折叠，Tab 键展开/折叠，→/← 方向键辅助
  * - 任何时候按 Enter 完成 @ 引用（文件或目录均可）
+ * - 鼠标单击文件夹：展开/折叠；双击文件夹：选中并插入 @ 引用
  */
 
 import * as React from 'react'
@@ -299,13 +300,9 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
     // 无匹配结果
     if (!hasResults) {
       return (
-        <TooltipProvider>
-          <MentionErrorBoundary>
-            <div className="rounded-lg border bg-popover p-2 shadow-lg text-[11px] text-muted-foreground">
-              无匹配文件
-            </div>
-          </MentionErrorBoundary>
-        </TooltipProvider>
+        <div className="rounded-lg border bg-popover p-2 shadow-lg text-[11px] text-muted-foreground">
+          无匹配文件
+        </div>
       )
     }
 
@@ -318,7 +315,8 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
       >
         {/* 会话文件 */}
         {hasSession && (
-          <SessionSection
+          <FileSection
+            label="会话文件"
             tree={sessionTreeWithState}
             selectedIndex={selectedIndex}
             baseIndex={0}
@@ -330,7 +328,8 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
 
         {/* 工作区文件 */}
         {hasWorkspace && (
-          <WorkspaceSection
+          <FileSection
+            label="工作区文件"
             tree={workspaceTreeWithState}
             selectedIndex={selectedIndex}
             baseIndex={sessionVisible.length}
@@ -348,8 +347,9 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
 
 // ===== 子组件 =====
 
-/** 会话文件区域 */
-function SessionSection({
+/** 分组区域（会话文件 / 工作区文件） */
+function FileSection({
+  label,
   tree,
   selectedIndex,
   baseIndex,
@@ -357,6 +357,7 @@ function SessionSection({
   onToggle,
   setSelectedIndex,
 }: {
+  label: string
   tree: FileTreeNode[]
   selectedIndex: number
   baseIndex: number
@@ -368,41 +369,7 @@ function SessionSection({
     <div>
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium bg-primary/10 text-primary border-b border-border/50">
         <Folder className="size-3" />
-        <span>会话文件</span>
-      </div>
-      <TreeNodeList
-        nodes={tree}
-        selectedIndex={selectedIndex}
-        baseIndex={baseIndex}
-        onSelect={onSelect}
-        onToggle={onToggle}
-        setSelectedIndex={setSelectedIndex}
-      />
-    </div>
-  )
-}
-
-/** 工作区文件区域 */
-function WorkspaceSection({
-  tree,
-  selectedIndex,
-  baseIndex,
-  onSelect,
-  onToggle,
-  setSelectedIndex,
-}: {
-  tree: FileTreeNode[]
-  selectedIndex: number
-  baseIndex: number
-  onSelect: (node: FileTreeNode) => void
-  onToggle: (path: string) => void
-  setSelectedIndex: (index: number) => void
-}) {
-  return (
-    <div>
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium bg-primary/10 text-primary border-b border-border/50">
-        <Folder className="size-3" />
-        <span>工作区文件</span>
+        <span>{label}</span>
       </div>
       <TreeNodeList
         nodes={tree}
@@ -434,6 +401,33 @@ function TreeNodeList({
 }) {
   let offset = 0
 
+  // 双击检测：单击目录时延迟触发 toggle，等待可能的双击
+  const clickTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  React.useEffect(() => {
+    return () => {
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current)
+    }
+  }, [])
+
+  function handleDirClick(node: FileTreeNode) {
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current)
+      clickTimerRef.current = null
+    }
+    clickTimerRef.current = setTimeout(() => {
+      onToggle(node.path)
+      clickTimerRef.current = null
+    }, 180)
+  }
+
+  function handleDirDoubleClick(node: FileTreeNode) {
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current)
+      clickTimerRef.current = null
+    }
+    onSelect(node)
+  }
+
   function renderNode(node: FileTreeNode): React.ReactElement {
     const idx = baseIndex + offset
     const isSelected = idx === selectedIndex
@@ -457,9 +451,14 @@ function TreeNodeList({
           onClick={() => {
             setSelectedIndex(idx)
             if (node.type === 'dir') {
-              onToggle(node.path)
+              handleDirClick(node)
             } else {
               onSelect(node)
+            }
+          }}
+          onDoubleClick={() => {
+            if (node.type === 'dir') {
+              handleDirDoubleClick(node)
             }
           }}
         >

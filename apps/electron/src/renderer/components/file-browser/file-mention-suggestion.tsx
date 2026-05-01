@@ -8,7 +8,7 @@
 
 import type React from 'react'
 import { ReactRenderer } from '@tiptap/react'
-import type { SuggestionOptions } from '@tiptap/suggestion'
+import type { SuggestionOptions, SuggestionProps } from '@tiptap/suggestion'
 import { FileMentionList } from './FileMentionList'
 import type { FileMentionRef } from './FileMentionList'
 import type { FileIndexEntry, FileSearchResult } from '@proma/shared'
@@ -38,7 +38,6 @@ export function createFileMentionSuggestion(
         const additionalPaths = attachedDirsRef?.current ?? []
         const sessionPaths = sessionAttachedDirsRef?.current ?? []
 
-        console.log('[FileMention] searching files, query:', JSON.stringify(query), 'ws:', wsPath, 'additionalPaths:', additionalPaths, 'sessionPaths:', sessionPaths)
         const result = await window.electronAPI.searchWorkspaceFiles(
           wsPath,
           query ?? '',
@@ -46,7 +45,6 @@ export function createFileMentionSuggestion(
           additionalPaths.length > 0 ? additionalPaths : undefined,
           sessionPaths.length > 0 ? sessionPaths : undefined,
         )
-        console.log('[FileMention] search result:', { total: result.total, sessionCount: result.sessionEntries.length, workspaceCount: result.workspaceEntries.length })
         lastResult = result
         return result.entries
       } catch(e) {
@@ -62,21 +60,13 @@ export function createFileMentionSuggestion(
       let resizeObserver: ResizeObserver | null = null
 
       function splitEntries(result: FileSearchResult | null) {
-        let sessionEntries = result?.sessionEntries ?? []
-        let workspaceEntries = result?.workspaceEntries ?? []
-        if (sessionEntries.length === 0 && workspaceEntries.length === 0 && (result?.entries.length ?? 0) > 0) {
-          const hasSource = result!.entries.some((e) => 'source' in e && e.source)
-          if (hasSource) {
-            sessionEntries = result!.entries.filter((e) => e.source === 'session')
-            workspaceEntries = result!.entries.filter((e) => e.source === 'workspace')
-          } else {
-            sessionEntries = result!.entries
-          }
+        return {
+          sessionEntries: result?.sessionEntries ?? [],
+          workspaceEntries: result?.workspaceEntries ?? [],
         }
-        return { sessionEntries, workspaceEntries }
       }
 
-      function createRenderer(props: any) {
+      function createRenderer(props: SuggestionProps<FileIndexEntry>) {
         const { sessionEntries, workspaceEntries } = splitEntries(lastResult)
         renderer = new ReactRenderer(FileMentionList, {
           props: {
