@@ -203,6 +203,16 @@ function AgentSettingsInitializer(): null {
         window.electronAPI.updateSettings({ agentChannelIds: migrated }).catch(console.error)
       }
 
+      // 兜底：agentChannelId 存在但不在 agentChannelIds 白名单中，自动修复不一致
+      if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
+        const currentIds = settings.agentChannelIds?.filter((id) => channelIds.has(id)) ?? []
+        if (!currentIds.includes(settings.agentChannelId)) {
+          const fixedIds = [...currentIds, settings.agentChannelId]
+          setAgentChannelIds(fixedIds)
+          window.electronAPI.updateSettings({ agentChannelIds: fixedIds }).catch(console.error)
+        }
+      }
+
       if (settings.agentPermissionMode) {
         // 迁移旧权限模式值（acceptEdits/smart/supervised → auto）
         setPermissionMode(migratePermissionMode(settings.agentPermissionMode))
