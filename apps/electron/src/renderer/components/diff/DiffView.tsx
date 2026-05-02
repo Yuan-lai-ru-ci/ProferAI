@@ -3,21 +3,103 @@
  *
  * 接收 unified diff 文本，使用 diff2html 渲染为 HTML，
  * 支持 split（side-by-side）和 unified（line-by-line）两种视图。
+ * 样式通过注入 <style> 标签 + !important 保证覆盖 diff2html 默认样式。
  */
 
 import * as React from 'react'
 import { html as diff2htmlHtml } from 'diff2html'
 
-// diff2html 基础样式（行号、红绿标记等）
 import 'diff2html/bundles/css/diff2html.min.css'
-// 主题适配覆盖
-import './diff-view.css'
 
 interface DiffViewProps {
-  /** Unified diff 文本 */
   diffContent: string
-  /** 视图模式 */
   viewMode: 'split' | 'unified'
+}
+
+function buildStyleTag(): string {
+  // 从 :root 拿当前主题颜色，生成带 !important 的样式
+  const s = getComputedStyle(document.documentElement)
+  const bg = s.getPropertyValue('--background').trim()
+  const border = s.getPropertyValue('--border').trim()
+  const muted = s.getPropertyValue('--muted').trim()
+  const mutedFg = s.getPropertyValue('--muted-foreground').trim()
+  const fg = s.getPropertyValue('--foreground').trim()
+
+  return `
+    /* 行号背景 — 深色不透明方块 */
+    .diff-view-container .d2h-code-linenumber,
+    .diff-view-container .d2h-code-side-linenumber {
+      background: hsl(${muted}) !important;
+      border-color: hsl(${border}) !important;
+      color: hsl(${mutedFg}) !important;
+    }
+
+    /* 行号在统一视图中 */
+    .diff-view-container .d2h-code-linenumber {
+      background: hsl(${muted}) !important;
+      border-color: hsl(${border}) !important;
+      color: hsl(${mutedFg}) !important;
+    }
+
+    /* 行号在分栏视图中 */
+    .diff-view-container .d2h-code-side-linenumber {
+      background: hsl(${muted}) !important;
+      border-color: hsl(${border}) !important;
+      color: hsl(${mutedFg}) !important;
+    }
+
+    /* 深色模式下的行号 — 覆盖 .d2h-dark-color-scheme */
+    .diff-view-container .d2h-code-linenumber,
+    .diff-view-container .d2h-code-side-linenumber {
+      background: hsl(${muted}) !important;
+      border-color: hsl(${border}) !important;
+      color: hsl(${mutedFg}) !important;
+    }
+
+    /* 新增行 */
+    .diff-view-container .d2h-ins {
+      background: rgba(34,197,94,0.1) !important;
+    }
+    .diff-view-container .d2h-ins .d2h-code-line-ctn {
+      color: rgb(34,197,94) !important;
+    }
+
+    /* 删除行 */
+    .diff-view-container .d2h-del {
+      background: rgba(239,68,68,0.1) !important;
+    }
+    .diff-view-container .d2h-del .d2h-code-line-ctn {
+      color: rgb(239,68,68) !important;
+    }
+
+    /* 代码行背景透明 */
+    .diff-view-container .d2h-code-line {
+      background: transparent !important;
+    }
+
+    /* 表格/容器背景 */
+    .diff-view-container .d2h-wrapper {
+      background: hsl(${bg}) !important;
+      color: hsl(${fg}) !important;
+    }
+
+    /* 信息行 */
+    .diff-view-container .d2h-info {
+      background: hsl(${muted} / 0.3) !important;
+      color: hsl(${mutedFg}) !important;
+      border-color: hsl(${border}) !important;
+    }
+
+    /* 表格边框 */
+    .diff-view-container .d2h-diff-table,
+    .diff-view-container .d2h-diff-tbody > tr > td {
+      border-color: hsl(${border}) !important;
+    }
+    .diff-view-container .d2h-file-side-diff,
+    .diff-view-container .d2h-file-diff {
+      border-color: hsl(${border}) !important;
+    }
+  `
 }
 
 export function DiffView({ diffContent, viewMode }: DiffViewProps): React.ReactElement {
@@ -45,7 +127,6 @@ export function DiffView({ diffContent, viewMode }: DiffViewProps): React.ReactE
     if (!container) return
 
     const sideDiffs = container.querySelectorAll<HTMLElement>('.d2h-file-side-diff')
-
     const sync = (source: HTMLElement) => {
       const sl = source.scrollLeft
       sideDiffs.forEach((el) => {
@@ -65,56 +146,6 @@ export function DiffView({ diffContent, viewMode }: DiffViewProps): React.ReactE
     }
   }, [diffHtml, viewMode])
 
-  // 后处理 DOM：raf 确保 DOM 完全渲染后直接设样式，绕过 CSS 优先级
-  React.useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    const apply = () => {
-      const rootStyle = getComputedStyle(document.documentElement)
-      const muted = rootStyle.getPropertyValue('--muted').trim()
-      const mutedFg = rootStyle.getPropertyValue('--muted-foreground').trim()
-      const border = rootStyle.getPropertyValue('--border').trim()
-
-      // 行号 — 不透明深色背景
-      container.querySelectorAll<HTMLElement>(
-        '.d2h-code-linenumber, .d2h-code-side-linenumber'
-      ).forEach((el) => {
-        el.style.setProperty('background', `hsl(${muted})`, 'important')
-        el.style.setProperty('color', `hsl(${mutedFg})`, 'important')
-        el.style.setProperty('border-color', `hsl(${border})`, 'important')
-      })
-
-      // 新增行 — 绿色背景
-      container.querySelectorAll<HTMLElement>('.d2h-ins').forEach((el) => {
-        el.style.setProperty('background', 'rgba(34,197,94,0.1)', 'important')
-      })
-
-      // 删除行 — 红色背景
-      container.querySelectorAll<HTMLElement>('.d2h-del').forEach((el) => {
-        el.style.setProperty('background', 'rgba(239,68,68,0.1)', 'important')
-      })
-
-      // 新增行代码文字颜色
-      container.querySelectorAll<HTMLElement>(
-        '.d2h-ins .d2h-code-line-ctn'
-      ).forEach((el) => {
-        el.style.setProperty('color', 'rgb(34,197,94)', 'important')
-      })
-
-      // 删除行代码文字颜色
-      container.querySelectorAll<HTMLElement>(
-        '.d2h-del .d2h-code-line-ctn'
-      ).forEach((el) => {
-        el.style.setProperty('color', 'rgb(239,68,68)', 'important')
-      })
-    }
-
-    // requestAnimationFrame 确保 DOM 已完全渲染
-    const raf = requestAnimationFrame(apply)
-    return () => cancelAnimationFrame(raf)
-  }, [diffHtml, viewMode])
-
   if (!diffHtml) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">
@@ -125,6 +156,7 @@ export function DiffView({ diffContent, viewMode }: DiffViewProps): React.ReactE
 
   return (
     <div ref={containerRef} className="diff-view-wrapper h-full overflow-auto">
+      <style dangerouslySetInnerHTML={{ __html: buildStyleTag() }} />
       <div
         className="diff-view-container"
         dangerouslySetInnerHTML={{ __html: diffHtml }}
