@@ -65,6 +65,56 @@ export function DiffView({ diffContent, viewMode }: DiffViewProps): React.ReactE
     }
   }, [diffHtml, viewMode])
 
+  // 后处理 DOM：raf 确保 DOM 完全渲染后直接设样式，绕过 CSS 优先级
+  React.useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const apply = () => {
+      const rootStyle = getComputedStyle(document.documentElement)
+      const muted = rootStyle.getPropertyValue('--muted').trim()
+      const mutedFg = rootStyle.getPropertyValue('--muted-foreground').trim()
+      const border = rootStyle.getPropertyValue('--border').trim()
+
+      // 行号 — 不透明深色背景
+      container.querySelectorAll<HTMLElement>(
+        '.d2h-code-linenumber, .d2h-code-side-linenumber'
+      ).forEach((el) => {
+        el.style.setProperty('background', `hsl(${muted})`, 'important')
+        el.style.setProperty('color', `hsl(${mutedFg})`, 'important')
+        el.style.setProperty('border-color', `hsl(${border})`, 'important')
+      })
+
+      // 新增行 — 绿色背景
+      container.querySelectorAll<HTMLElement>('.d2h-ins').forEach((el) => {
+        el.style.setProperty('background', 'rgba(34,197,94,0.1)', 'important')
+      })
+
+      // 删除行 — 红色背景
+      container.querySelectorAll<HTMLElement>('.d2h-del').forEach((el) => {
+        el.style.setProperty('background', 'rgba(239,68,68,0.1)', 'important')
+      })
+
+      // 新增行代码文字颜色
+      container.querySelectorAll<HTMLElement>(
+        '.d2h-ins .d2h-code-line-ctn'
+      ).forEach((el) => {
+        el.style.setProperty('color', 'rgb(34,197,94)', 'important')
+      })
+
+      // 删除行代码文字颜色
+      container.querySelectorAll<HTMLElement>(
+        '.d2h-del .d2h-code-line-ctn'
+      ).forEach((el) => {
+        el.style.setProperty('color', 'rgb(239,68,68)', 'important')
+      })
+    }
+
+    // requestAnimationFrame 确保 DOM 已完全渲染
+    const raf = requestAnimationFrame(apply)
+    return () => cancelAnimationFrame(raf)
+  }, [diffHtml, viewMode])
+
   if (!diffHtml) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">

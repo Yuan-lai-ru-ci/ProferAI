@@ -48,6 +48,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange }: Si
 
   // Tab 系统
   const setTabs = useSetAtom(tabsAtom)
+  const tabs = useAtomValue(tabsAtom)
+  // 当前会话的 diff tab 对应的文件路径（用于高亮）
+  const diffTab = tabs.find((t) => t.id === `diff-${sessionId}`)
+  const selectedFilePath = diffTab?.filePath
   const setActiveTabId = useSetAtom(activeTabIdAtom)
 
   const isOpen = sidePanelOpenMap.get(sessionId) ?? true
@@ -287,7 +291,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange }: Si
             <DiffChangesList
               dirPath={sessionPath || ''}
               sessionPath={sessionPath || undefined}
+              workspaceFilesPath={workspaceFilesPath || undefined}
               refreshVersion={diffRefreshVersion}
+              selectedFilePath={selectedFilePath}
               onFileClick={(filePath, _isUntracked) => {
                 const diffTabId = `diff-${sessionId}`
                 setTabs((prev) => {

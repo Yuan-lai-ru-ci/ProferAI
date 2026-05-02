@@ -43,25 +43,29 @@ function runGitCommand(args: string[], cwd: string): string | null {
 
 /**
  * 计算文件的来源标识
+ *
+ * filePath 是相对于 gitRoot 的路径，需要拼成绝对路径后再和 session/workspace 路径比较
  */
 function computeSource(
   filePath: string,
+  gitRoot: string,
   sessionPath?: string,
   workspaceFilesPath?: string,
 ): ChangeSource {
+  const absolutePath = join(gitRoot, filePath)
   let inSession = false
   let inWorkspace = false
 
   if (sessionPath) {
     const normalized = sessionPath.endsWith('/') ? sessionPath : sessionPath + '/'
-    if (filePath.startsWith(normalized)) {
+    if (absolutePath.startsWith(normalized)) {
       inSession = true
     }
   }
 
   if (workspaceFilesPath) {
     const normalized = workspaceFilesPath.endsWith('/') ? workspaceFilesPath : workspaceFilesPath + '/'
-    if (filePath.startsWith(normalized)) {
+    if (absolutePath.startsWith(normalized)) {
       inWorkspace = true
     }
   }
@@ -134,7 +138,7 @@ export async function getUnstagedChanges(
         status,
         additions,
         deletions,
-        source: computeSource(filePath, sessionPath, workspaceFilesPath),
+        source: computeSource(filePath, gitRoot, sessionPath, workspaceFilesPath),
       })
     }
   }
@@ -143,7 +147,7 @@ export async function getUnstagedChanges(
   const untrackedOutput = runGitCommand(['ls-files', '--others', '--exclude-standard'], gitRoot)
   const untrackedFiles = untrackedOutput ? untrackedOutput.split('\n').filter(Boolean) : []
 
-  return { isGitRepo: true, files, untrackedFiles }
+  return { isGitRepo: true, files, untrackedFiles, gitRootName: gitRoot.split('/').pop() || gitRoot }
 }
 
 /** 查找 Git 仓库根目录，先向上后向下搜索，失败返回 null */

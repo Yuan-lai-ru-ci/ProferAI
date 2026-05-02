@@ -124,6 +124,8 @@ export interface UnstagedChangesResult {
   files: ChangedFileEntry[]
   /** 未追踪文件路径列表 */
   untrackedFiles: string[]
+  /** Git 仓库根目录名（用于根级文件分组显示） */
+  gitRootName?: string
 }
 
 /** 获取文件 Diff 的输入 */

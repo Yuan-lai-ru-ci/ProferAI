@@ -7,7 +7,7 @@
 import * as React from 'react'
 import { ChevronRight, RotateCcw, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { ChangedFileEntry } from '@proma/shared'
+import type { ChangedFileEntry, ChangeSource } from '@proma/shared'
 
 /** 按目录分组后的数据结构 */
 interface FileGroup {
@@ -15,6 +15,7 @@ interface FileGroup {
   files: ChangedFileEntry[]
   totalAdditions: number
   totalDeletions: number
+  sources: ChangeSource[]
 }
 
 interface DiffChangesListProps {
@@ -28,6 +29,8 @@ interface DiffChangesListProps {
   onFileClick: (filePath: string, isUntracked: boolean) => void
   /** 自动刷新信号（版本号递增触发） */
   refreshVersion?: number
+  /** 当前选中的文件路径（高亮显示） */
+  selectedFilePath?: string
 }
 
 /** 文件来源 badge 的颜色和文案 */
@@ -44,10 +47,12 @@ export function DiffChangesList({
   workspaceFilesPath,
   onFileClick,
   refreshVersion,
+  selectedFilePath,
 }: DiffChangesListProps): React.ReactElement {
   const [files, setFiles] = React.useState<ChangedFileEntry[]>([])
   const [untrackedFiles, setUntrackedFiles] = React.useState<string[]>([])
   const [isGitRepo, setIsGitRepo] = React.useState(true)
+  const [gitRootName, setGitRootName] = React.useState('')
   const [collapsedDirs, setCollapsedDirs] = React.useState<Set<string>>(new Set())
 
   const fetchChanges = React.useCallback(async () => {
@@ -56,6 +61,7 @@ export function DiffChangesList({
       setIsGitRepo(result.isGitRepo)
       setFiles(result.files || [])
       setUntrackedFiles(result.untrackedFiles || [])
+      setGitRootName(result.gitRootName || '')
     } catch {
       setIsGitRepo(true) // 避免网络等错误误判
     }
@@ -116,21 +122,25 @@ export function DiffChangesList({
     )
   }
 
-  // 按目录分组
+  // 按一级目录分组（取路径第一段作为组名，根级文件用 gitRootName）
   const groups: Map<string, ChangedFileEntry[]> = new Map()
   for (const file of files) {
     const parts = file.filePath.split('/')
-    const dirName = parts.length > 1 ? parts.slice(0, -1).join('/') : '/'
+    const dirName = parts.length > 1 ? parts[0]! : (gitRootName || '/')
     if (!groups.has(dirName)) groups.set(dirName, [])
     groups.get(dirName)!.push(file)
   }
 
-  const fileGroups: FileGroup[] = Array.from(groups.entries()).map(([dirName, dirFiles]) => ({
-    dirName,
-    files: dirFiles,
-    totalAdditions: dirFiles.reduce((sum, f) => sum + f.additions, 0),
-    totalDeletions: dirFiles.reduce((sum, f) => sum + f.deletions, 0),
-  }))
+  const fileGroups: FileGroup[] = Array.from(groups.entries()).map(([dirName, dirFiles]) => {
+    const uniqueSources = [...new Set(dirFiles.map((f) => f.source))]
+    return {
+      dirName,
+      files: dirFiles,
+      totalAdditions: dirFiles.reduce((sum, f) => sum + f.additions, 0),
+      totalDeletions: dirFiles.reduce((sum, f) => sum + f.deletions, 0),
+      sources: uniqueSources,
+    }
+  })
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -142,12 +152,21 @@ export function DiffChangesList({
             <button
               type="button"
               onClick={() => toggleDir(group.dirName)}
-              className="flex items-center gap-1 w-full px-2 py-1.5 text-[12px] font-medium text-foreground/60 hover:bg-foreground/[0.04] transition-colors"
+              className="flex items-center gap-1 w-full px-2 py-2 text-[13px] font-medium text-foreground/60 hover:bg-foreground/[0.04] transition-colors"
             >
               <ChevronRight
                 className={cn('size-3 transition-transform', !isCollapsed && 'rotate-90')}
               />
               <span className="truncate">{group.dirName}</span>
+              {/* 文件夹层级的来源 badges */}
+              {group.sources.map((src) => {
+                const cfg = SOURCE_CONFIG[src] ?? SOURCE_CONFIG.none!
+                return (
+                  <span key={src} className={cn('rounded px-1 py-0.5 text-[12px] leading-none shrink-0', cfg.color)}>
+                    {cfg.label}
+                  </span>
+                )
+              })}
               <span className="text-foreground/30 ml-auto shrink-0">
                 {group.files.length} files  +{group.totalAdditions} -{group.totalDeletions}
               </span>
@@ -158,6 +177,7 @@ export function DiffChangesList({
               <FileRow
                 key={file.filePath}
                 file={file}
+                isSelected={file.filePath === selectedFilePath}
                 onClick={() => onFileClick(file.filePath, false)}
                 onRevert={() => handleRevert(file.filePath)}
                 onOpenInEditor={() => handleOpenInEditor(file.filePath)}
@@ -170,7 +190,7 @@ export function DiffChangesList({
       {/* 未追踪文件分组 */}
       {untrackedFiles.length > 0 && (
         <div>
-          <div className="flex items-center px-2 py-1.5 text-[12px] font-medium text-muted-foreground border-t border-border/30">
+          <div className="flex items-center px-2 py-2 text-[13px] font-medium text-muted-foreground border-t border-border/30">
             未追踪文件
           </div>
           {untrackedFiles.map((filePath) => (
@@ -193,19 +213,23 @@ function FileRow({
   onClick,
   onRevert,
   onOpenInEditor,
+  isSelected,
 }: {
   file: ChangedFileEntry
   onClick: () => void
   onRevert: () => void
   onOpenInEditor: () => void
+  isSelected?: boolean
 }): React.ReactElement {
   const [hovered, setHovered] = React.useState(false)
-  const sourceCfg = SOURCE_CONFIG[file.source] ?? SOURCE_CONFIG.none!
 
   return (
     <button
       type="button"
-      className="flex items-center w-full px-2 pl-6 py-1 text-[13px] hover:bg-foreground/[0.04] transition-colors group"
+      className={cn(
+        'flex items-center w-full px-2 pl-6 py-1.5 text-[14px] transition-colors group',
+        isSelected ? 'bg-primary/10' : 'hover:bg-foreground/[0.04]',
+      )}
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -214,11 +238,6 @@ function FileRow({
         className={cn('truncate', file.status === 'deleted' && 'line-through text-foreground/40')}
       >
         {file.filePath}
-      </span>
-
-      {/* Source badge */}
-      <span className={cn('ml-1.5 rounded px-1 py-0.5 text-[11px] leading-none shrink-0', sourceCfg.color)}>
-        {sourceCfg.label}
       </span>
 
       {/* +/- 行数 */}
@@ -240,7 +259,7 @@ function FileRow({
             title="还原文件变更"
             onClick={onRevert}
           >
-            <RotateCcw className="size-3.5" />
+            <RotateCcw className="size-4" />
           </span>
           {/* Open in editor 按钮 */}
           <span
@@ -248,7 +267,7 @@ function FileRow({
             title="在编辑器中打开"
             onClick={onOpenInEditor}
           >
-            <ExternalLink className="size-3.5" />
+            <ExternalLink className="size-4" />
           </span>
         </span>
       )}
@@ -271,13 +290,13 @@ function UntrackedFileRow({
   return (
     <button
       type="button"
-      className="flex items-center w-full px-2 pl-6 py-1 text-[13px] hover:bg-foreground/[0.04] transition-colors group"
+      className="flex items-center w-full px-2 pl-6 py-1.5 text-[14px] hover:bg-foreground/[0.04] transition-colors group"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       <span className="truncate">{filePath}</span>
-      <span className="ml-1.5 rounded px-1 py-0.5 text-[11px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
+      <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
         新文件
       </span>
 
@@ -288,7 +307,7 @@ function UntrackedFileRow({
             title="在编辑器中打开"
             onClick={onOpenInEditor}
           >
-            <ExternalLink className="size-3.5" />
+            <ExternalLink className="size-4" />
           </span>
         </span>
       )}
