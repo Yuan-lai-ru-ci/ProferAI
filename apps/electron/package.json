@@ -37,7 +37,8 @@
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.111"
+    "@anthropic-ai/claude-agent-sdk": "0.2.111",
+    "diff2html": "^3.4.56"
   },
   "devDependencies": {
     "@emoji-mart/data": "^1.2.1",

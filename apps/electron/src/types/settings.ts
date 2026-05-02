@@ -96,12 +96,7 @@ export interface AppSettings {
 
 /** 持久化的标签页状态 */
 export interface PersistedTabSettings {
-  tabs: Array<{
-    id: string
-    type: 'chat' | 'agent'
-    sessionId: string
-    title: string
-  }>
+  tabs: import('../renderer/atoms/tab-atoms').TabItem[]
   activeTabId: string | null
 }
 

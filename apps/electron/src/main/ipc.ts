@@ -85,6 +85,7 @@ import type {
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
+import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile } from './lib/git-diff-service'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
   listChannels,
@@ -247,6 +248,57 @@ export function registerIpcHandlers(): void {
       }
 
       return getGitRepoStatus(dirPath)
+    }
+  )
+
+  // 获取未暂存的变更文件列表
+  ipcMain.handle(
+    IPC_CHANNELS.GET_UNSTAGED_CHANGES,
+    async (_, dirPath: string, sessionPath?: string, workspaceFilesPath?: string) => {
+      if (!dirPath || typeof dirPath !== 'string') {
+        console.warn('[IPC] git:get-unstaged-changes 收到无效的目录路径')
+        return { isGitRepo: false, files: [], untrackedFiles: [] }
+      }
+      return getUnstagedChanges(dirPath, sessionPath, workspaceFilesPath)
+    }
+  )
+
+  // 获取单个文件的 diff
+  ipcMain.handle(
+    IPC_CHANNELS.GET_FILE_DIFF,
+    async (_, input: { dirPath: string; filePath: string }) => {
+      const { dirPath, filePath } = input
+      if (!dirPath || !filePath) {
+        console.warn('[IPC] git:get-file-diff 收到无效参数')
+        return ''
+      }
+      return getFileDiff(dirPath, filePath)
+    }
+  )
+
+  // 获取未追踪文件内容
+  ipcMain.handle(
+    IPC_CHANNELS.GET_UNTRACKED_CONTENT,
+    async (_, input: { dirPath: string; filePath: string }) => {
+      const { dirPath, filePath } = input
+      if (!dirPath || !filePath) {
+        console.warn('[IPC] git:get-untracked-content 收到无效参数')
+        return ''
+      }
+      return getUntrackedContent(dirPath, filePath)
+    }
+  )
+
+  // 还原文件变更
+  ipcMain.handle(
+    IPC_CHANNELS.REVERT_FILE,
+    async (_, input: { dirPath: string; filePath: string }) => {
+      const { dirPath, filePath } = input
+      if (!dirPath || !filePath) {
+        console.warn('[IPC] git:revert-file 收到无效参数')
+        return
+      }
+      await revertFile(dirPath, filePath)
     }
   )
 

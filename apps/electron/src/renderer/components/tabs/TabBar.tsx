@@ -257,7 +257,12 @@ function TabBarInner({
       <div className="absolute inset-0 titlebar-drag-region" />
 
       <div className="relative flex items-end flex-1 min-w-0 overflow-x-clip titlebar-no-drag">
-        {tabs.map((tab) => (
+        {[...tabs].sort((a, b) => {
+          // diff tab 始终排在最左侧
+          if (a.type === 'diff' && b.type !== 'diff') return -1
+          if (a.type !== 'diff' && b.type === 'diff') return 1
+          return 0
+        }).map((tab) => (
           <TabBarItem
             key={tab.id}
             id={tab.id}

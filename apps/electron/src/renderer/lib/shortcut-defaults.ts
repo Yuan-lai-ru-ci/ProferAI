@@ -145,6 +145,14 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     defaultWin: 'Ctrl+W',
     category: 'app',
   },
+  {
+    id: 'toggle-diff-panel',
+    name: '打开代码改动',
+    description: '打开/切换到右侧面板的代码改动视图',
+    defaultMac: 'Cmd+Shift+D',
+    defaultWin: 'Ctrl+Shift+D',
+    category: 'app',
+  },
 
   // 全局快捷键（由主进程 globalShortcut 注册，应用外也生效）
   {

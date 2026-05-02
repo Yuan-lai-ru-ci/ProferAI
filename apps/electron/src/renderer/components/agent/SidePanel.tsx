@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { FileBrowser, FileDropZone, FileTypeIcon } from '@/components/file-browser'
+import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
+import { DiffChangesList } from '@/components/diff/DiffChangesList'
 import {
   agentSidePanelOpenMapAtom,
   workspaceFilesVersionAtom,
@@ -26,18 +28,27 @@ import {
   agentAttachedDirectoriesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
   agentPendingFilesAtom,
+  agentDiffRefreshVersionAtom,
+  agentSessionsAtom,
 } from '@/atoms/agent-atoms'
+import { tabsAtom, activeTabIdAtom, type TabItem } from '@/atoms/tab-atoms'
 import type { FileEntry, AgentPendingFile } from '@proma/shared'
 
 interface SidePanelProps {
   sessionId: string
   sessionPath: string | null
+  activeTab: 'files' | 'changes'
+  onTabChange: (tab: 'files' | 'changes') => void
 }
 
-export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.ReactElement {
+export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange }: SidePanelProps): React.ReactElement {
   // per-session 侧面板状态（默认打开）
   const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
   const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
+
+  // Tab 系统
+  const setTabs = useSetAtom(tabsAtom)
+  const setActiveTabId = useSetAtom(activeTabIdAtom)
 
   const isOpen = sidePanelOpenMap.get(sessionId) ?? true
 
@@ -62,6 +73,9 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
 
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
+  const diffRefreshVersion = useAtomValue(agentDiffRefreshVersionAtom)
+  const agentSessions = useAtomValue(agentSessionsAtom)
+  const sessionTitle = agentSessions.find((s) => s.id === sessionId)?.title ?? ''
   const hasFileChanges = filesVersion > 0
 
   // 派生当前工作区 slug（用于 FileDropZone IPC 调用）
@@ -262,14 +276,45 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
       {/* 面板内容 */}
       <div
         className={cn(
-          'w-[320px] h-full flex flex-col titlebar-no-drag pt-0.5',
+          'w-[320px] h-full flex flex-col titlebar-no-drag',
           shouldAnimate && 'transition-opacity duration-300',
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}
         >
-          {/* 文件浏览内容 */}
-          {workspaceSlug ? (
-            <div className="flex-1 min-h-0 flex flex-col">
+          <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} />
+
+          {activeTab === 'changes' ? (
+            <DiffChangesList
+              dirPath={sessionPath || ''}
+              sessionPath={sessionPath || undefined}
+              refreshVersion={diffRefreshVersion}
+              onFileClick={(filePath, _isUntracked) => {
+                const diffTabId = `diff-${sessionId}`
+                setTabs((prev) => {
+                  const existing = prev.find((t) => t.id === diffTabId)
+                  if (existing) {
+                    // 更新已有 diff tab 的文件路径
+                    const updated = prev.map((t) =>
+                      t.id === diffTabId ? { ...t, filePath, dirPath: sessionPath || undefined } : t
+                    )
+                    setActiveTabId(diffTabId)
+                    return updated
+                  }
+                  const newTab: TabItem = {
+                    id: diffTabId,
+                    type: 'diff',
+                    sessionId,
+                    title: sessionTitle ? `代码改动 · ${sessionTitle}` : '代码改动',
+                    filePath,
+                    dirPath: sessionPath || undefined,
+                  }
+                  setActiveTabId(diffTabId)
+                  return [...prev, newTab]
+                })
+              }}
+            />
+          ) : (
+          <div className="flex-1 min-h-0 flex flex-col pt-0.5">
                   {/* ===== 会话文件区（仅当 sessionPath 存在时显示） ===== */}
                   {sessionPath && (
                     <>
@@ -357,7 +402,7 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                         </>
                         {/* 会话文件拖拽上传区域 */}
                         <FileDropZone
-                          workspaceSlug={workspaceSlug}
+                          workspaceSlug={workspaceSlug ?? ''}
                           sessionId={sessionId}
                           target="session"
                           onFilesUploaded={handleFilesUploaded}
@@ -447,38 +492,13 @@ export function SidePanel({ sessionId, sessionPath }: SidePanelProps): React.Rea
                       )}
                       {/* 工作区文件拖拽上传区域 */}
                       <FileDropZone
-                        workspaceSlug={workspaceSlug}
+                        workspaceSlug={workspaceSlug ?? ''}
                         target="workspace"
                         onFilesUploaded={handleFilesUploaded}
                         onAttachFolder={handleAttachWorkspaceFolder}
                         onFoldersDropped={handleWorkspaceFoldersDropped}
                       />
                     </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 flex flex-col">
-                  {/* 顶部关闭按钮 */}
-                  <div className="flex items-center justify-end px-3 h-[32px] flex-shrink-0">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-5 w-5 flex-shrink-0"
-                          onClick={() => setIsOpen((prev) => !prev)}
-                        >
-                          <X className="size-2.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        <p>关闭侧面板</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-                    请选择工作区
                   </div>
                 </div>
               )}

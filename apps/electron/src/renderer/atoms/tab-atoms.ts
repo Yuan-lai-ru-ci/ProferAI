@@ -21,11 +21,11 @@ import type { SessionIndicatorStatus } from './agent-atoms'
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'chat' | 'agent'
+export type TabType = 'chat' | 'agent' | 'diff'
 
 /** 标签页数据 */
 export interface TabItem {
-  /** 唯一标签 ID（直接使用 sessionId） */
+  /** 唯一标签 ID（直接使用 sessionId 或 diff 专用 ID） */
   id: string
   /** 标签页类型 */
   type: TabType
@@ -33,6 +33,12 @@ export interface TabItem {
   sessionId: string
   /** 标签页显示标题 */
   title: string
+  /** Diff 类型：对应文件路径 */
+  filePath?: string
+  /** Diff 类型：Git 仓库根目录 */
+  dirPath?: string
+  /** Diff 类型：视图模式 */
+  viewMode?: 'split' | 'unified'
 }
 
 /** Tab 持久化数据（保存到 settings.json） */

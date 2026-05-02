@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { MessageSquare, Bot, X } from 'lucide-react'
+import { MessageSquare, Bot, FileCode, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -84,7 +84,7 @@ export function TabBarItem({
     onClose()
   }
 
-  const Icon = type === 'chat' ? MessageSquare : Bot
+  const Icon = type === 'chat' ? MessageSquare : type === 'diff' ? FileCode : Bot
   const indicatorColor = isStreaming !== 'idle'
     ? isStreaming === 'completed'
       ? 'bg-green-500'

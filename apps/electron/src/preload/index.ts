@@ -118,6 +118,15 @@ export interface ElectronAPI {
    */
   getGitRepoStatus: (dirPath: string) => Promise<GitRepoStatus | null>
 
+  /** 获取未暂存的变更文件列表 */
+  getUnstagedChanges: (dirPath: string, sessionPath?: string, workspaceFilesPath?: string) => Promise<import('@proma/shared').UnstagedChangesResult>
+  /** 获取单个文件的 diff */
+  getFileDiff: (input: import('@proma/shared').GetFileDiffInput) => Promise<string>
+  /** 获取未追踪文件内容 */
+  getUntrackedContent: (input: import('@proma/shared').GetFileDiffInput) => Promise<string>
+  /** 还原文件变更 */
+  revertFile: (input: import('@proma/shared').RevertFileInput) => Promise<void>
+
   // ===== 通用工具 =====
 
   /** 在系统默认浏览器中打开外部链接 */
@@ -758,6 +767,22 @@ const electronAPI: ElectronAPI = {
 
   getGitRepoStatus: (dirPath: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_REPO_STATUS, dirPath)
+  },
+
+  getUnstagedChanges: (dirPath: string, sessionPath?: string, workspaceFilesPath?: string) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_UNSTAGED_CHANGES, dirPath, sessionPath, workspaceFilesPath)
+  },
+
+  getFileDiff: (input: { dirPath: string; filePath: string }) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_FILE_DIFF, input)
+  },
+
+  getUntrackedContent: (input: { dirPath: string; filePath: string }) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_UNTRACKED_CONTENT, input)
+  },
+
+  revertFile: (input: { dirPath: string; filePath: string }) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.REVERT_FILE, input)
   },
 
   // 通用工具

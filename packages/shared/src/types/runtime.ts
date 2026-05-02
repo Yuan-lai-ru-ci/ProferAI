@@ -96,6 +96,48 @@ export interface GitRepoStatus {
   remoteUrl: string | null
 }
 
+/** 变更文件状态 */
+export type ChangedFileStatus = 'modified' | 'deleted' | 'untracked'
+
+/** 文件来源标识 */
+export type ChangeSource = 'session' | 'workspace' | 'both' | 'none'
+
+/** 单个变更文件条目 */
+export interface ChangedFileEntry {
+  /** 文件路径（相对于仓库根） */
+  filePath: string
+  /** 变更状态 */
+  status: ChangedFileStatus
+  /** 新增行数 */
+  additions: number
+  /** 删除行数 */
+  deletions: number
+  /** 文件来源 */
+  source: ChangeSource
+}
+
+/** 未暂存变更结果 */
+export interface UnstagedChangesResult {
+  /** 是否为 Git 仓库 */
+  isGitRepo: boolean
+  /** 已追踪文件的变更列表 */
+  files: ChangedFileEntry[]
+  /** 未追踪文件路径列表 */
+  untrackedFiles: string[]
+}
+
+/** 获取文件 Diff 的输入 */
+export interface GetFileDiffInput {
+  dirPath: string
+  filePath: string
+}
+
+/** Revert 文件变更的输入 */
+export interface RevertFileInput {
+  dirPath: string
+  filePath: string
+}
+
 /**
  * Git Bash 运行时状态（Windows 平台）
  */
@@ -192,6 +234,14 @@ export const IPC_CHANNELS = {
   GET_RUNTIME_STATUS: 'runtime:get-status',
   /** 获取指定目录的 Git 仓库状态 */
   GET_GIT_REPO_STATUS: 'git:get-repo-status',
+  /** 获取未暂存的变更文件列表 */
+  GET_UNSTAGED_CHANGES: 'git:get-unstaged-changes',
+  /** 获取单个文件的 diff */
+  GET_FILE_DIFF: 'git:get-file-diff',
+  /** 获取未追踪文件内容 */
+  GET_UNTRACKED_CONTENT: 'git:get-untracked-content',
+  /** 还原文件变更 */
+  REVERT_FILE: 'git:revert-file',
   /** 在系统默认浏览器中打开外部链接 */
   OPEN_EXTERNAL: 'shell:open-external',
 } as const

@@ -287,6 +287,15 @@ export const workspaceFilesVersionAtom = atom(0)
 /** 侧面板是否打开（per-session Map） */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
+/** 侧面板当前 Tab：'files' | 'changes'（per-session Map） */
+export const agentDiffPanelTabAtom = atom<Map<string, 'files' | 'changes'>>(new Map())
+
+/** Diff 视图模式：'split' | 'unified' */
+export const agentDiffViewModeAtom = atom<'split' | 'unified'>('split')
+
+/** Diff 刷新版本号 — Agent 写工具完成时递增，触发代码改动列表重新拉取 */
+export const agentDiffRefreshVersionAtom = atom(0)
+
 /** 当前会话的侧面板是否打开（派生只读，供 AppShell 使用，避免全 Map 订阅导致无关重渲染） */
 export const currentSessionSidePanelOpenAtom = atom<boolean>((get) => {
   const currentId = get(currentAgentSessionIdAtom)

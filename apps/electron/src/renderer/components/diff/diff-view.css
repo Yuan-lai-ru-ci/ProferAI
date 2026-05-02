@@ -1,0 +1,185 @@
+/* ===== Diff 视图主题适配 ===== */
+
+/* 基础容器 */
+.diff-view-wrapper {
+  --d2h-bg: hsl(var(--background));
+  --d2h-border: hsl(var(--border));
+  --d2h-fg: hsl(var(--foreground));
+  --d2h-muted: hsl(var(--muted-foreground));
+  --d2h-ins-bg: rgba(34, 197, 94, 0.1);
+  --d2h-ins-fg: rgb(34, 197, 94);
+  --d2h-del-bg: rgba(239, 68, 68, 0.1);
+  --d2h-del-fg: rgb(239, 68, 68);
+  --d2h-highlight-bg: rgba(250, 204, 21, 0.15);
+  --d2h-info-bg: hsl(var(--muted) / 0.5);
+  --d2h-del-bg-solid: rgba(239, 68, 68, 0.12);
+  --d2h-ins-bg-solid: rgba(34, 197, 94, 0.12);
+
+  /* 覆写 diff2html 自身 CSS 变量 → 行号背景、代码背景统一 */
+  --d2h-bg-color: hsl(var(--muted) / 0.5);
+  --d2h-dim-color: hsl(var(--muted-foreground));
+  --d2h-line-border-color: hsl(var(--border));
+  --d2h-ins-bg-color: rgba(34, 197, 94, 0.1);
+  --d2h-del-bg-color: rgba(239, 68, 68, 0.1);
+  --d2h-info-bg-color: hsl(var(--muted) / 0.5);
+}
+
+/* 覆盖 diff2html 默认颜色 */
+.diff-view-container .d2h-wrapper {
+  background: var(--d2h-bg);
+  color: var(--d2h-fg);
+  font-size: 12px;
+}
+
+.diff-view-container .d2h-file-header {
+  background: var(--d2h-info-bg);
+  border-color: var(--d2h-border);
+  color: var(--d2h-muted);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.diff-view-container .d2h-code-line {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.6;
+}
+
+/* 新增行 */
+.diff-view-container .d2h-ins {
+  background: var(--d2h-ins-bg);
+  color: var(--d2h-ins-fg);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+/* 删除行 */
+.diff-view-container .d2h-del {
+  background: var(--d2h-del-bg);
+  color: var(--d2h-del-fg);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+/* 新增行代码内容 */
+.diff-view-container .d2h-code-line.d2h-ins .d2h-code-line-ctn {
+  color: var(--d2h-ins-fg);
+}
+
+/* 删除行代码内容 */
+.diff-view-container .d2h-code-line.d2h-del .d2h-code-line-ctn {
+  color: var(--d2h-del-fg);
+}
+
+/* 行号 */
+.diff-view-container .d2h-code-linenumber,
+.diff-view-container .d2h-code-side-linenumber {
+  background: var(--d2h-info-bg);
+  border-color: var(--d2h-border);
+  color: var(--d2h-muted);
+  font-size: 11px;
+  min-width: 40px;
+  text-align: right;
+  padding-right: 8px;
+}
+
+/* 高亮行内差异 */
+.diff-view-container .d2h-code-line ins,
+.diff-view-container .d2h-code-side-line ins {
+  background: var(--d2h-highlight-bg);
+  text-decoration: none;
+}
+
+.diff-view-container .d2h-code-line del,
+.diff-view-container .d2h-code-side-line del {
+  background: var(--d2h-highlight-bg);
+  text-decoration: none;
+}
+
+/* 覆盖 diff2html 里 <ins>/<del> HTML 标签的浏览器默认样式（黄色下划线/红色删除线） */
+.diff-view-container ins {
+  background: rgba(34, 197, 94, 0.25);
+  text-decoration: none;
+  color: inherit;
+}
+
+.diff-view-container del {
+  background: rgba(239, 68, 68, 0.25);
+  text-decoration: none;
+  color: inherit;
+}
+
+/* 统一视图（unified）里的增删行背景 — 和分栏视图保持一致 */
+.diff-view-container .d2h-file-diff .d2h-del {
+  background: var(--d2h-del-bg-solid);
+}
+.diff-view-container .d2h-file-diff .d2h-ins {
+  background: var(--d2h-ins-bg-solid);
+}
+
+/* 统一视图代码行内容颜色 */
+.diff-view-container .d2h-file-diff .d2h-del .d2h-code-line-ctn {
+  color: var(--d2h-del-fg);
+}
+.diff-view-container .d2h-file-diff .d2h-ins .d2h-code-line-ctn {
+  color: var(--d2h-ins-fg);
+}
+
+/* 信息行（如 "new file mode"） */
+.diff-view-container .d2h-info {
+  background: var(--d2h-info-bg);
+  color: var(--d2h-muted);
+  border-color: var(--d2h-border);
+}
+
+/* 文件列表 */
+.diff-view-container .d2h-file-list {
+  background: var(--d2h-bg);
+  border-color: var(--d2h-border);
+}
+
+.diff-view-container .d2h-file-list a {
+  color: var(--d2h-fg);
+}
+
+/* 标签（如 "changed" / "deleted"） */
+.diff-view-container .d2h-tag {
+  background: var(--d2h-info-bg);
+  color: var(--d2h-muted);
+}
+
+/* 单行代码背景 */
+.diff-view-container .d2h-code-line {
+  background: transparent;
+}
+
+/* 侧栏行号背景 */
+.diff-view-container .d2h-code-side-linenumber {
+  background: var(--d2h-info-bg);
+  color: var(--d2h-muted);
+  border-color: var(--d2h-border);
+}
+
+/* 统一视图行号 */
+.diff-view-container .d2h-code-linenumber {
+  background: var(--d2h-info-bg);
+  color: var(--d2h-muted);
+  border-color: var(--d2h-border);
+}
+
+/* context 行 */
+.diff-view-container .d2h-cntx {
+  opacity: 0.85;
+}
+
+/* 表格边框 */
+.diff-view-container .d2h-file-side-diff,
+.diff-view-container .d2h-file-diff {
+  border-color: var(--d2h-border);
+}
+
+.diff-view-container .d2h-diff-table {
+  border-color: var(--d2h-border);
+}
+
+.diff-view-container .d2h-diff-tbody > tr > td {
+  border-color: var(--d2h-border);
+}
