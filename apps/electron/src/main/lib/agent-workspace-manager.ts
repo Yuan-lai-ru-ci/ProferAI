@@ -725,6 +725,21 @@ function resolveSkillDir(workspaceSlug: string, skillSlug: string): string | nul
   return null
 }
 
+export function readWorkspaceSkillContent(workspaceSlug: string, skillSlug: string): string {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const mdPath = join(dir, 'SKILL.md')
+  if (!existsSync(mdPath)) throw new Error(`SKILL.md 不存在: ${mdPath}`)
+  return readFileSync(mdPath, 'utf-8')
+}
+
+export function writeWorkspaceSkillContent(workspaceSlug: string, skillSlug: string, content: string): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 SKILL.md: ${workspaceSlug}/${skillSlug}`)
+}
+
 /** 简单 semver 比较：a 是否比 b 更新 */
 function isNewerVersion(a: string, b: string): boolean {
   const pa = a.split('.').map(Number)

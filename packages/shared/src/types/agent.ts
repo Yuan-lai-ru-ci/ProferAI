@@ -1251,6 +1251,10 @@ export const AGENT_IPC_CHANNELS = {
   IMPORT_SKILL_FROM_WORKSPACE: 'agent:import-skill-from-workspace',
   /** 从源工作区同步更新已导入的 Skill */
   UPDATE_SKILL_FROM_SOURCE: 'agent:update-skill-from-source',
+  /** 读取 SKILL.md 全文内容 */
+  READ_SKILL_CONTENT: 'agent:read-skill-content',
+  /** 写入 SKILL.md 全文内容 */
+  WRITE_SKILL_CONTENT: 'agent:write-skill-content',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */

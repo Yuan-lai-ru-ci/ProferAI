@@ -168,6 +168,8 @@ import {
   deleteWorkspaceSkill,
   importSkillFromWorkspace,
   updateSkillFromSource,
+  readWorkspaceSkillContent,
+  writeWorkspaceSkillContent,
   toggleWorkspaceSkill,
   getWorkspacePermissionMode,
   setWorkspacePermissionMode,
@@ -1143,6 +1145,20 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_SKILL_FROM_SOURCE,
     async (_, targetSlug: string, skillSlug: string): Promise<SkillMeta> => {
       return updateSkillFromSource(targetSlug, skillSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_SKILL_CONTENT,
+    async (_, workspaceSlug: string, skillSlug: string): Promise<string> => {
+      return readWorkspaceSkillContent(workspaceSlug, skillSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
+    async (_, workspaceSlug: string, skillSlug: string, content: string): Promise<void> => {
+      writeWorkspaceSkillContent(workspaceSlug, skillSlug, content)
     }
   )
 
