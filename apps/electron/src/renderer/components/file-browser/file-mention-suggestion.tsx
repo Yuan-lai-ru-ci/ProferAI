@@ -58,6 +58,7 @@ export function createFileMentionSuggestion(
       let renderer: ReactRenderer<FileMentionRef> | null = null
       let popup: HTMLDivElement | null = null
       let resizeObserver: ResizeObserver | null = null
+      let latestClientRect: (() => DOMRect | null) | null | undefined = null
 
       function splitEntries(result: FileSearchResult | null) {
         return {
@@ -80,9 +81,9 @@ export function createFileMentionSuggestion(
         })
       }
 
-      function anchorPopup(rect?: (() => DOMRect | null) | null) {
+      function anchorPopup() {
         if (!popup) return
-        positionPopup(popup, rect?.(), { anchorBottom: true })
+        positionPopup(popup, latestClientRect?.(), { anchorBottom: true })
       }
 
       return {
@@ -91,13 +92,13 @@ export function createFileMentionSuggestion(
           if (mentionItemCountRef) mentionItemCountRef.current = props.items.length
 
           try {
+            latestClientRect = props.clientRect
             createRenderer(props)
             popup = createMentionPopup(renderer!.element)
-            anchorPopup(props.clientRect)
+            anchorPopup()
 
-            // 监听弹窗高度变化（展开/折叠文件夹时），重新定位保持底部锚定
             resizeObserver = new ResizeObserver(() => {
-              anchorPopup(props.clientRect)
+              anchorPopup()
             })
             resizeObserver.observe(popup!)
           } catch (e) {
@@ -107,6 +108,7 @@ export function createFileMentionSuggestion(
 
         onUpdate(props) {
           if (mentionItemCountRef) mentionItemCountRef.current = props.items.length
+          latestClientRect = props.clientRect
 
           const { sessionEntries, workspaceEntries } = splitEntries(lastResult)
           renderer?.updateProps({
@@ -116,7 +118,7 @@ export function createFileMentionSuggestion(
               props.command({ id: item.path, label: item.name })
             },
           })
-          anchorPopup(props.clientRect)
+          anchorPopup()
         },
 
         onKeyDown(props) {
@@ -130,6 +132,7 @@ export function createFileMentionSuggestion(
           mentionActiveRef.current = false
           if (mentionItemCountRef) mentionItemCountRef.current = 0
           lastResult = null
+          latestClientRect = null
           resizeObserver?.disconnect()
           resizeObserver = null
           popup?.remove()
