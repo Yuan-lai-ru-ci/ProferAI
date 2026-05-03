@@ -449,6 +449,12 @@ export interface ElectronAPI {
   /** 从源工作区同步更新已导入的 Skill */
   updateSkillFromSource: (targetSlug: string, skillSlug: string) => Promise<SkillMeta>
 
+  /** 读取 SKILL.md 全文内容 */
+  readSkillContent: (workspaceSlug: string, skillSlug: string) => Promise<string>
+
+  /** 写入 SKILL.md 全文内容 */
+  writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => Promise<void>
+
   /** 订阅 Agent 流式事件（返回清理函数） */
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
 
@@ -1210,6 +1216,23 @@ const electronAPI: ElectronAPI = {
       AGENT_IPC_CHANNELS.UPDATE_SKILL_FROM_SOURCE,
       targetSlug,
       skillSlug,
+    )
+  },
+
+  readSkillContent: (workspaceSlug: string, skillSlug: string) => {
+    return ipcRenderer.invoke(
+      AGENT_IPC_CHANNELS.READ_SKILL_CONTENT,
+      workspaceSlug,
+      skillSlug,
+    )
+  },
+
+  writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => {
+    return ipcRenderer.invoke(
+      AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
+      workspaceSlug,
+      skillSlug,
+      content,
     )
   },
 
