@@ -558,6 +558,8 @@ export interface AgentSessionMeta {
   manualWorking?: boolean
   /** 最后一次流式执行是否被用户主动中断 */
   stoppedByUser?: boolean
+  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时回退到 workspace 默认值 */
+  permissionMode?: PromaPermissionMode
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -1335,6 +1337,8 @@ export const AGENT_IPC_CHANNELS = {
   SET_PERMISSION_MODE: 'agent:set-permission-mode',
   /** 获取权限模式（渲染进程 → 主进程） */
   GET_PERMISSION_MODE: 'agent:get-permission-mode',
+  /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
+  UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
 
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */

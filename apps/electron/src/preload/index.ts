@@ -478,6 +478,9 @@ export interface ElectronAPI {
   /** 设置工作区权限模式 */
   setPermissionMode: (workspaceSlug: string, mode: PromaPermissionMode) => Promise<void>
 
+  /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
+  updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => Promise<void>
+
   /** 获取全局记忆配置 */
   getMemoryConfig: () => Promise<MemoryConfig>
 
@@ -1272,6 +1275,10 @@ const electronAPI: ElectronAPI = {
 
   setPermissionMode: (workspaceSlug: string, mode: PromaPermissionMode) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_PERMISSION_MODE, workspaceSlug, mode)
+  },
+
+  updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode)
   },
 
   getMemoryConfig: () => {
