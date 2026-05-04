@@ -123,6 +123,7 @@ import { extractTextFromAttachment } from './lib/document-parser'
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import { updateWindowTitleBarOverlay } from './lib/titlebar-overlay'
 import { checkEnvironment } from './lib/environment-checker'
 import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
 import {
@@ -686,6 +687,8 @@ export function registerIpcHandlers(): void {
           if (win.webContents.id !== event.sender.id) {
             win.webContents.send(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, payload)
           }
+          // Windows: 更新标题栏 overlay 颜色
+          updateWindowTitleBarOverlay(win)
         })
       }
 
@@ -721,6 +724,12 @@ export function registerIpcHandlers(): void {
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, isDark)
     })
+    // Windows: system 模式下同步更新标题栏 overlay
+    if (process.platform === 'win32' && getSettings().themeMode === 'system') {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        updateWindowTitleBarOverlay(win)
+      })
+    }
   })
 
   // ===== 应用图标切换 =====
