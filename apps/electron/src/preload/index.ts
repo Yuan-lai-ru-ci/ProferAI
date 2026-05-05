@@ -99,8 +99,15 @@ import type {
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
 } from '@proma/shared'
-import type { UserProfile, AppSettings, QuickTaskSubmitInput, QuickTaskOpenSessionData } from '../types'
-import { QUICK_TASK_IPC_CHANNELS } from '../types'
+import type {
+  UserProfile,
+  AppSettings,
+  QuickTaskSubmitInput,
+  QuickTaskOpenSessionData,
+  TrayCreateSessionData,
+  TrayOpenAgentSessionData,
+} from '../types'
+import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS } from '../types'
 
 /**
  * 暴露给渲染进程的 API 接口定义
@@ -776,6 +783,13 @@ export interface ElectronAPI {
   onQuickTaskFocus: (callback: () => void) => () => void
   /** 订阅快速任务打开会话事件（主窗口接收，由渲染进程负责创建会话） */
   onQuickTaskOpenSession: (callback: (data: QuickTaskOpenSessionData) => void) => () => void
+
+  // ===== 菜单栏 =====
+
+  /** 订阅菜单栏打开 Agent 会话事件 */
+  onTrayOpenAgentSession: (callback: (data: TrayOpenAgentSessionData) => void) => () => void
+  /** 订阅菜单栏创建会话事件 */
+  onTrayCreateSession: (callback: (data: TrayCreateSessionData) => void) => () => void
 }
 
 /**
@@ -1726,6 +1740,18 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, data: QuickTaskOpenSessionData): void => callback(data)
     ipcRenderer.on('quick-task:open-session', listener)
     return () => { ipcRenderer.removeListener('quick-task:open-session', listener) }
+  },
+
+  onTrayOpenAgentSession: (callback: (data: TrayOpenAgentSessionData) => void) => {
+    const listener = (_: unknown, data: TrayOpenAgentSessionData): void => callback(data)
+    ipcRenderer.on(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, listener)
+    return () => { ipcRenderer.removeListener(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, listener) }
+  },
+
+  onTrayCreateSession: (callback: (data: TrayCreateSessionData) => void) => {
+    const listener = (_: unknown, data: TrayCreateSessionData): void => callback(data)
+    ipcRenderer.on(TRAY_IPC_CHANNELS.CREATE_SESSION, listener)
+    return () => { ipcRenderer.removeListener(TRAY_IPC_CHANNELS.CREATE_SESSION, listener) }
   },
 }
 

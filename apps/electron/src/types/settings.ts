@@ -162,3 +162,25 @@ export interface QuickTaskOpenSessionData {
   text: string
   files?: QuickTaskFile[]
 }
+
+/** 菜单栏打开 Agent 会话事件 */
+export interface TrayOpenAgentSessionData {
+  /** Agent 会话 ID */
+  sessionId: string
+  /** 标签页标题 */
+  title: string
+}
+
+/** 菜单栏创建会话事件 */
+export interface TrayCreateSessionData {
+  /** 目标模式 */
+  mode: 'chat' | 'agent'
+}
+
+/** 菜单栏 IPC 事件通道 */
+export const TRAY_IPC_CHANNELS = {
+  /** 打开已有 Agent 会话 */
+  OPEN_AGENT_SESSION: 'tray:open-agent-session',
+  /** 创建新会话 */
+  CREATE_SESSION: 'tray:create-session',
+} as const

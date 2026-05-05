@@ -302,5 +302,55 @@ export function GlobalShortcuts(): null {
     return cleanup
   }, [store])
 
+  // ===== 菜单栏 → 打开 / 创建会话 =====
+
+  useEffect(() => {
+    const cleanupOpen = window.electronAPI.onTrayOpenAgentSession(async (data) => {
+      try {
+        const sessions = await window.electronAPI.listAgentSessions()
+        const session = sessions.find((item) => item.id === data.sessionId)
+        if (!session) return
+
+        store.set(agentSessionsAtom, sessions)
+        store.set(appModeAtom, 'agent')
+        store.set(activeViewAtom, 'conversations')
+        store.set(currentAgentSessionIdAtom, session.id)
+
+        if (session.workspaceId) {
+          store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
+          window.electronAPI.updateSettings({
+            agentWorkspaceId: session.workspaceId,
+          }).catch(console.error)
+        }
+
+        const currentTabs = store.get(tabsAtom)
+        const result = openTab(currentTabs, {
+          type: 'agent',
+          sessionId: session.id,
+          title: session.title || data.title,
+        })
+        store.set(tabsAtom, result.tabs)
+        store.set(activeTabIdAtom, result.activeTabId)
+      } catch (error) {
+        console.error('[菜单栏] 打开 Agent 会话失败:', error)
+      }
+    })
+
+    const cleanupCreate = window.electronAPI.onTrayCreateSession(async (data) => {
+      store.set(appModeAtom, data.mode)
+      store.set(activeViewAtom, 'conversations')
+      if (data.mode === 'agent') {
+        await createAgent()
+      } else {
+        await createChat()
+      }
+    })
+
+    return () => {
+      cleanupOpen()
+      cleanupCreate()
+    }
+  }, [store, createAgent, createChat])
+
   return null
 }
