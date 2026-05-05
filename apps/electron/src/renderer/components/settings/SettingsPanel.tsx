@@ -21,6 +21,7 @@ import {
   GraduationCap,
   X,
   Keyboard,
+  Mic,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom } from "@/atoms/settings-tab";
@@ -49,6 +50,7 @@ import { ToolSettings } from "./ToolSettings";
 import { BotHubSettings } from "./BotHubSettings";
 import { TutorialViewer } from "../tutorial/TutorialViewer";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { VoiceInputSettings } from "./VoiceInputSettings";
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -91,6 +93,11 @@ const SHORTCUTS_TAB: TabItem = {
   label: "快捷键管理",
   icon: <Keyboard size={16} />,
 };
+const VOICE_INPUT_TAB: TabItem = {
+  id: "voice-input",
+  label: "语音输入",
+  icon: <Mic size={16} />,
+};
 
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
@@ -123,6 +130,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <TutorialViewer />;
     case "shortcuts":
       return <ShortcutSettings />;
+    case "voice-input":
+      return <VoiceInputSettings />;
   }
 }
 
@@ -195,6 +204,7 @@ export function SettingsPanel({
         ...BASE_TABS,
         AGENT_TAB,
         TOOLS_TAB,
+        VOICE_INPUT_TAB,
         BOTS_TAB,
         TUTORIAL_TAB,
         SHORTCUTS_TAB,
@@ -204,6 +214,7 @@ export function SettingsPanel({
     return [
       ...BASE_TABS,
       TOOLS_TAB,
+      VOICE_INPUT_TAB,
       BOTS_TAB,
       TUTORIAL_TAB,
       SHORTCUTS_TAB,

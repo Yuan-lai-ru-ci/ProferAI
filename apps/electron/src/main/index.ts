@@ -57,6 +57,12 @@ import { getDingTalkMultiBotConfig } from './lib/dingtalk-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
+import {
+  createVoiceDictationWindow,
+  toggleVoiceDictationWindow,
+  destroyVoiceDictationWindow,
+  shouldSuppressVoiceDictationActivate,
+} from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 import { TRAY_IPC_CHANNELS } from '../types'
 
@@ -341,15 +347,23 @@ app.whenReady().then(async () => {
 
   // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
   createQuickTaskWindow()
+  createVoiceDictationWindow()
 
   // 注册全局快捷键
   registerGlobalShortcut('quick-task', toggleQuickTaskWindow)
   registerGlobalShortcut('show-main-window', showAndFocusMainWindow)
+  registerGlobalShortcut('voice-dictation', () => {
+    toggleVoiceDictationWindow({ targetIsProma: mainWindow?.isFocused() === true })
+  })
 
   // 启动所有已注册的 Bridge（飞书/钉钉/微信等）
   await startAllBridges()
 
   app.on('activate', () => {
+    if (shouldSuppressVoiceDictationActivate()) {
+      return
+    }
+
     // 直接检查 mainWindow 引用，避免 getAllWindows() 包含 DevTools 等其他窗口导致误判
     if (!mainWindow || mainWindow.isDestroyed()) {
       createWindow()
@@ -390,6 +404,7 @@ app.on('before-quit', () => {
   unregisterAllGlobalShortcuts()
   // 销毁快速任务窗口
   destroyQuickTaskWindow()
+  destroyVoiceDictationWindow()
   // Clean up system tray before quitting
   destroyTray()
 })

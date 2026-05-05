@@ -28,6 +28,7 @@ import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
+import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -1474,6 +1475,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     window.electronAPI.updateSettings({ agentThinking: next })
                   }}
                 />
+                <SpeechButton className="size-[36px] rounded-full" />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

@@ -23,6 +23,8 @@ import {
 import { shortcutOverridesAtom, sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import {
   agentPendingPromptAtom,
+  agentSessionDraftHtmlAtom,
+  agentSessionDraftsAtom,
   agentSessionsAtom,
   currentAgentSessionIdAtom,
   agentChannelIdAtom,
@@ -31,6 +33,7 @@ import {
 } from '@/atoms/agent-atoms'
 import {
   chatPendingMessageAtom,
+  conversationDraftsAtom,
   conversationsAtom,
   currentConversationIdAtom,
   selectedModelAtom,
@@ -302,6 +305,71 @@ export function GlobalShortcuts(): null {
     return cleanup
   }, [store])
 
+  // ===== 语音输入 → 写入当前 Proma 输入框 =====
+
+  useEffect(() => {
+    const cleanup = window.electronAPI.onVoiceDictationInsertText(({ text }) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+
+      const insertedAtCursor = !window.dispatchEvent(new CustomEvent('proma:insert-voice-dictation-text', {
+        cancelable: true,
+        detail: { text: trimmed },
+      }))
+      if (insertedAtCursor) {
+        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        return
+      }
+
+      const tabs = store.get(tabsAtom)
+      const activeTabId = store.get(activeTabIdAtom)
+      const activeTab = tabs.find((tab) => tab.id === activeTabId)
+      const currentMode = store.get(appModeAtom)
+      const fallbackTarget =
+        currentMode === 'agent'
+          ? { type: 'agent' as const, sessionId: store.get(currentAgentSessionIdAtom) }
+          : { type: 'chat' as const, sessionId: store.get(currentConversationIdAtom) }
+      const target = activeTab ?? fallbackTarget
+
+      if (!target.sessionId) return
+
+      store.set(activeViewAtom, 'conversations')
+
+      if (target.type === 'agent') {
+        const sessionId = target.sessionId
+        store.set(appModeAtom, 'agent')
+        store.set(currentAgentSessionIdAtom, sessionId)
+        store.set(agentSessionDraftsAtom, (prev) => {
+          const map = new Map(prev)
+          const current = map.get(sessionId) ?? ''
+          map.set(sessionId, current ? `${current}\n${trimmed}` : trimmed)
+          return map
+        })
+        store.set(agentSessionDraftHtmlAtom, (prev) => {
+          const map = new Map(prev)
+          map.delete(sessionId)
+          return map
+        })
+        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        return
+      }
+
+      if (target.type === 'chat') {
+        const conversationId = target.sessionId
+        store.set(appModeAtom, 'chat')
+        store.set(currentConversationIdAtom, conversationId)
+        store.set(conversationDraftsAtom, (prev) => {
+          const map = new Map(prev)
+          const current = map.get(conversationId) ?? ''
+          map.set(conversationId, current ? `${current}\n${trimmed}` : trimmed)
+          return map
+        })
+        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+      }
+    })
+    return cleanup
+  }, [store])
+
   // ===== 菜单栏 → 打开 / 创建会话 =====
 
   useEffect(() => {
@@ -351,6 +419,5 @@ export function GlobalShortcuts(): null {
       cleanupCreate()
     }
   }, [store, createAgent, createChat])
-
   return null
 }
