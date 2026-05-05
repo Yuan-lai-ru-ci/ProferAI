@@ -5,8 +5,10 @@
  */
 
 import * as React from 'react'
+import { useSetAtom } from 'jotai'
 import { ChevronRight, RotateCcw, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
 import type { ChangedFileEntry, ChangeSource } from '@proma/shared'
 
 /** 按目录分组后的数据结构 */
@@ -53,6 +55,7 @@ export function DiffChangesList({
   const [untrackedFiles, setUntrackedFiles] = React.useState<string[]>([])
   const [isGitRepo, setIsGitRepo] = React.useState(true)
   const [gitRootName, setGitRootName] = React.useState('')
+  const setUnseenChanges = useSetAtom(agentDiffUnseenChangesAtom)
   const [collapsedDirs, setCollapsedDirs] = React.useState<Set<string>>(new Set())
 
   const fetchChanges = React.useCallback(async () => {
@@ -62,6 +65,7 @@ export function DiffChangesList({
       setFiles(result.files || [])
       setUntrackedFiles(result.untrackedFiles || [])
       setGitRootName(result.gitRootName || '')
+      setUnseenChanges((result.files?.length || 0) > 0 || (result.untrackedFiles?.length || 0) > 0)
     } catch {
       setIsGitRepo(true) // 避免网络等错误误判
     }
@@ -85,11 +89,12 @@ export function DiffChangesList({
   /** Open in editor */
   const handleOpenInEditor = React.useCallback(async (filePath: string) => {
     try {
-      await window.electronAPI.openFile(filePath)
+      const absolute = `${dirPath}/${filePath}`.replace(/\/+/g, '/')
+      await window.electronAPI.openFile(absolute)
     } catch {
       // 打开失败静默处理
     }
-  }, [])
+  }, [dirPath])
 
   /** 切换文件夹折叠 */
   const toggleDir = React.useCallback((dirName: string) => {
@@ -122,25 +127,15 @@ export function DiffChangesList({
     )
   }
 
-  // 按一级目录分组（取路径第一段作为组名，根级文件用 gitRootName）
-  const groups: Map<string, ChangedFileEntry[]> = new Map()
-  for (const file of files) {
-    const parts = file.filePath.split('/')
-    const dirName = parts.length > 1 ? parts[0]! : (gitRootName || '/')
-    if (!groups.has(dirName)) groups.set(dirName, [])
-    groups.get(dirName)!.push(file)
-  }
-
-  const fileGroups: FileGroup[] = Array.from(groups.entries()).map(([dirName, dirFiles]) => {
-    const uniqueSources = [...new Set(dirFiles.map((f) => f.source))]
-    return {
-      dirName,
-      files: dirFiles,
-      totalAdditions: dirFiles.reduce((sum, f) => sum + f.additions, 0),
-      totalDeletions: dirFiles.reduce((sum, f) => sum + f.deletions, 0),
-      sources: uniqueSources,
-    }
-  })
+  // 所有文件归到 gitRootName 一个组下
+  const rootGroup = gitRootName || '/'
+  const fileGroups: FileGroup[] = [{
+    dirName: rootGroup,
+    files,
+    totalAdditions: files.reduce((sum, f) => sum + f.additions, 0),
+    totalDeletions: files.reduce((sum, f) => sum + f.deletions, 0),
+    sources: [...new Set(files.map((f) => f.source))],
+  }]
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -227,17 +222,30 @@ function FileRow({
     <button
       type="button"
       className={cn(
-        'flex items-center w-full px-2 pl-6 py-1.5 text-[14px] transition-colors group',
+        'flex items-center w-full px-2 pl-6 py-2 text-[14px] transition-colors group',
         isSelected ? 'bg-primary/10' : 'hover:bg-foreground/[0.04]',
       )}
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <span
-        className={cn('truncate', file.status === 'deleted' && 'line-through text-foreground/40')}
-      >
-        {file.filePath}
+      <span className="truncate">
+        {(() => {
+          const parts = file.filePath.split('/')
+          const fileName = parts.pop()!
+          const dirPath = parts.join('/')
+          return (
+            <>
+              {dirPath && (
+                <span className="text-foreground/40">{dirPath}/</span>
+              )}
+              <span>{fileName}</span>
+              {file.status === 'deleted' && (
+                <span className="ml-1 text-foreground/30 text-[12px]">(已删除)</span>
+              )}
+            </>
+          )
+        })()}
       </span>
 
       {/* +/- 行数 */}

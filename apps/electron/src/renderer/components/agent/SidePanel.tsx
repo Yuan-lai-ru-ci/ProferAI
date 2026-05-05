@@ -39,9 +39,10 @@ interface SidePanelProps {
   sessionPath: string | null
   activeTab: 'files' | 'changes'
   onTabChange: (tab: 'files' | 'changes') => void
+  width?: number
 }
 
-export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange }: SidePanelProps): React.ReactElement {
+export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 320 }: SidePanelProps): React.ReactElement {
   // per-session 侧面板状态（默认打开）
   const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
   const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
@@ -274,13 +275,14 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange }: Si
       className={cn(
         'relative h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area/95 backdrop-blur-xl rounded-2xl shadow-xl',
         shouldAnimate && 'transition-[width] duration-300 ease-in-out',
-        isOpen ? 'w-[320px]' : 'w-0',
+        isOpen ? '' : '!w-0',
       )}
+      style={isOpen ? { width } : undefined}
     >
       {/* 面板内容 */}
       <div
         className={cn(
-          'w-[320px] h-full flex flex-col titlebar-no-drag',
+          'w-full h-full flex flex-col titlebar-no-drag',
           shouldAnimate && 'transition-opacity duration-300',
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}

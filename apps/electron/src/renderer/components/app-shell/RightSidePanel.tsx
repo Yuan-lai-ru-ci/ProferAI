@@ -17,7 +17,7 @@ import {
 import { SidePanel } from '@/components/agent/SidePanel'
 import { registerShortcut } from '@/lib/shortcut-registry'
 
-export function RightSidePanel(): React.ReactElement | null {
+export function RightSidePanel({ width }: { width?: number }): React.ReactElement | null {
   const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
@@ -58,6 +58,7 @@ export function RightSidePanel(): React.ReactElement | null {
       sessionPath={sessionPath}
       activeTab={activeTab}
       onTabChange={setActiveTab}
+      width={width}
     />
   )
 }

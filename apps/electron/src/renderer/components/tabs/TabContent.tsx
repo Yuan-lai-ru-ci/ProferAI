@@ -44,6 +44,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
       <DiffTabContent
         filePath={tab.filePath || ''}
         dirPath={tab.dirPath || ''}
+        sessionId={tab.sessionId}
         key={tab.id}
       />
     )

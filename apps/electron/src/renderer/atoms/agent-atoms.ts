@@ -296,6 +296,9 @@ export const agentDiffViewModeAtom = atom<'split' | 'unified'>('split')
 /** Diff 刷新版本号 — Agent 写工具完成时递增，触发代码改动列表重新拉取 */
 export const agentDiffRefreshVersionAtom = atom(0)
 
+/** 是否有未查看的代码改动（用户没点进「代码改动」Tab 时的新变更） */
+export const agentDiffUnseenChangesAtom = atom(false)
+
 /** 当前会话的侧面板是否打开（派生只读，供 AppShell 使用，避免全 Map 订阅导致无关重渲染） */
 export const currentSessionSidePanelOpenAtom = atom<boolean>((get) => {
   const currentId = get(currentAgentSessionIdAtom)

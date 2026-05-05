@@ -1,28 +1,57 @@
 /**
  * DiffTabContent — 主区域 Diff Tab 的内容
  *
- * 顶部：文件路径 + Split/Unified 切换 + 复制按钮
+ * 顶部：文件路径 + 来源会话 + Split/Unified 切换 + 复制按钮
  * 下方：diff2html 渲染的 diff 视图
  */
 
 import * as React from 'react'
 import { Copy, Check } from 'lucide-react'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
-import { agentDiffViewModeAtom } from '@/atoms/agent-atoms'
+import { agentDiffViewModeAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
+import { activeTabIdAtom, tabsAtom, type TabItem } from '@/atoms/tab-atoms'
 import { DiffView } from './DiffView'
 
 interface DiffTabContentProps {
   filePath: string
   dirPath: string
+  sessionId?: string
   isUntracked?: boolean
 }
 
-export function DiffTabContent({ filePath, dirPath, isUntracked }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [diffContent, setDiffContent] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
+
+  // 来源会话信息
+  const sessions = useAtomValue(agentSessionsAtom)
+  const sessionTitle = sessionId ? sessions.find((s) => s.id === sessionId)?.title : null
+
+  // 跳转到会话
+  const setTabs = useSetAtom(tabsAtom)
+  const setActiveTabId = useSetAtom(activeTabIdAtom)
+
+  const handleGoToSession = React.useCallback(() => {
+    if (!sessionId) return
+    setTabs((prev) => {
+      const existing = prev.find((t) => t.sessionId === sessionId && t.type === 'agent')
+      if (existing) {
+        setActiveTabId(existing.id)
+        return prev
+      }
+      const newTab: TabItem = {
+        id: sessionId,
+        type: 'agent',
+        sessionId,
+        title: sessionTitle || sessionId,
+      }
+      setActiveTabId(sessionId)
+      return [...prev, newTab]
+    })
+  }, [sessionId, sessionTitle, setTabs, setActiveTabId])
 
   React.useEffect(() => {
     let cancelled = false
@@ -33,7 +62,6 @@ export function DiffTabContent({ filePath, dirPath, isUntracked }: DiffTabConten
         if (isUntracked) {
           const content = await window.electronAPI.getUntrackedContent({ dirPath, filePath })
           if (!cancelled) {
-            // 构造伪 diff：将全部行标为新增
             const lines = content.split('\n')
             const pseudoDiff = [
               `diff --git a/${filePath} b/${filePath}`,
@@ -75,39 +103,49 @@ export function DiffTabContent({ filePath, dirPath, isUntracked }: DiffTabConten
   return (
     <div className="flex flex-col h-full">
       {/* Header bar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
-        <span className="text-[12px] text-foreground/60 truncate flex-1" title={filePath}>
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border flex-shrink-0">
+        <span className="text-[12px] text-foreground/60 truncate" title={filePath}>
           {filePath}
         </span>
 
-        {/* Split / Unified 切换滑块 */}
-        <div className="relative flex rounded-lg bg-muted p-0.5 shrink-0">
+        {sessionTitle && (
+          <button
+            type="button"
+            className="text-[11px] text-primary/60 hover:text-primary truncate shrink-0 cursor-pointer"
+            title="点击以跳转对话"
+            onClick={handleGoToSession}
+          >
+            来自对话：{sessionTitle}
+          </button>
+        )}
+
+        {/* Split / Unified 切换 — 整条点击切换 */}
+        <div
+          className="relative flex rounded-lg bg-muted p-0.5 shrink-0 ml-auto cursor-pointer select-none"
+          onClick={() => setViewMode((v) => v === 'split' ? 'unified' : 'split')}
+        >
           <div
             className={cn(
               'absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-md bg-background shadow-sm transition-transform duration-200 ease-in-out',
-              viewMode === 'unified' ? 'translate-x-full' : 'translate-x-0'
+              viewMode === 'unified' ? 'translate-x-full' : 'translate-x-0',
             )}
           />
-          <button
-            type="button"
-            onClick={() => setViewMode('split')}
+          <span
             className={cn(
               'relative z-[1] rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors',
-              viewMode === 'split' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+              viewMode === 'split' ? 'text-foreground' : 'text-muted-foreground',
             )}
           >
             分栏
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('unified')}
+          </span>
+          <span
             className={cn(
               'relative z-[1] rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors',
-              viewMode === 'unified' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+              viewMode === 'unified' ? 'text-foreground' : 'text-muted-foreground',
             )}
           >
             统一
-          </button>
+          </span>
         </div>
 
         {/* 复制按钮 */}
@@ -128,7 +166,7 @@ export function DiffTabContent({ filePath, dirPath, isUntracked }: DiffTabConten
             加载中...
           </div>
         ) : (
-          <DiffView diffContent={diffContent} viewMode={viewMode} />
+          <DiffView diffContent={diffContent} viewMode={viewMode} filePath={filePath} />
         )}
       </div>
     </div>
