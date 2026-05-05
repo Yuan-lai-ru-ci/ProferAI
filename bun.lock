@@ -126,7 +126,7 @@
     },
     "packages/shared": {
       "name": "@proma/shared",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "devDependencies": {
         "typescript": "^5.0.0",
       },

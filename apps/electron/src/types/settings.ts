@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { EnvironmentCheckResult, PromaPermissionMode, ThinkingConfig, AgentEffort } from '@proma/shared'
+import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort } from '@proma/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode'
@@ -70,8 +70,6 @@ export interface AppSettings {
   notificationSounds?: NotificationSoundSettings
   /** 标签页持久化状态（重启恢复） */
   tabState?: PersistedTabSettings
-  /** Agent 权限模式（全局默认，工作区级覆盖此值） */
-  agentPermissionMode?: PromaPermissionMode
   /** Agent 思考模式 */
   agentThinking?: ThinkingConfig
   /** Agent 推理深度 */

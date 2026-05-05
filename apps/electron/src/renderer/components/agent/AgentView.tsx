@@ -70,6 +70,7 @@ import {
   agentPlanModeSessionsAtom,
   agentPermissionModeMapAtom,
   agentDefaultPermissionModeAtom,
+  sessionPersistedPermissionModeAtom,
   agentSessionPathMapAtom,
   allPendingAskUserRequestsAtom,
   allPendingExitPlanRequestsAtom,
@@ -281,7 +282,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const isPlanMode = planModeSessions.has(sessionId)
   const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)
   const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
-  const permissionMode = permissionModeMap.get(sessionId) ?? defaultPermissionMode
+  const persistedPermissionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
+  const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)

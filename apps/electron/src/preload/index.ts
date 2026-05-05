@@ -471,12 +471,6 @@ export interface ElectronAPI {
   /** 响应权限请求 */
   respondPermission: (response: PermissionResponse) => Promise<void>
 
-  /** 获取工作区权限模式 */
-  getPermissionMode: (workspaceSlug: string) => Promise<PromaPermissionMode>
-
-  /** 设置工作区权限模式 */
-  setPermissionMode: (workspaceSlug: string, mode: PromaPermissionMode) => Promise<void>
-
   /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
   updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => Promise<void>
 
@@ -1267,14 +1261,6 @@ const electronAPI: ElectronAPI = {
   // Agent 权限系统
   respondPermission: (response: PermissionResponse) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PERMISSION_RESPOND, response)
-  },
-
-  getPermissionMode: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PERMISSION_MODE, workspaceSlug)
-  },
-
-  setPermissionMode: (workspaceSlug: string, mode: PromaPermissionMode) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_PERMISSION_MODE, workspaceSlug, mode)
   },
 
   updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => {

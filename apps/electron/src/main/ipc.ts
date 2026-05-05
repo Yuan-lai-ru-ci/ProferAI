@@ -171,8 +171,6 @@ import {
   readWorkspaceSkillContent,
   writeWorkspaceSkillContent,
   toggleWorkspaceSkill,
-  getWorkspacePermissionMode,
-  setWorkspacePermissionMode,
   getWorkspaceAttachedDirectories,
   attachWorkspaceDirectory,
   detachWorkspaceDirectory,
@@ -1253,29 +1251,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 获取工作区权限模式
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_PERMISSION_MODE,
-    async (_, workspaceSlug: string): Promise<PromaPermissionMode> => {
-      return getWorkspacePermissionMode(workspaceSlug)
-    }
-  )
-
-  // 设置工作区权限模式（持久化到工作区配置）
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.SET_PERMISSION_MODE,
-    async (_, workspaceSlug: string, mode: PromaPermissionMode): Promise<void> => {
-      const validModes = new Set<string>(['auto', 'bypassPermissions', 'plan'])
-      if (!validModes.has(mode)) {
-        throw new Error(`无效的权限模式: ${mode}`)
-      }
-      // 持久化到工作区配置
-      setWorkspacePermissionMode(workspaceSlug, mode)
-      // 注意：不再广播到该工作区下其他运行中的 session，
-      // 避免跨窗口状态污染（每个 session 独立维护自己的权限模式）
-    }
-  )
-
   // 热切换指定会话的权限模式（运行中生效，不广播）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE,
@@ -1514,12 +1489,6 @@ export function registerIpcHandlers(): void {
         // 如果用户选择了新的权限模式，通知渲染进程更新 UI
         if (targetMode) {
           const meta = getAgentSessionMeta(sessionId)
-          if (meta?.workspaceId) {
-            const ws = getAgentWorkspace(meta.workspaceId)
-            if (ws) {
-              setWorkspacePermissionMode(ws.slug, targetMode)
-            }
-          }
           // 持久化到 session meta，和 cycleMode 路径保持一致（重启后该 session 能恢复）
           if (meta) {
             try {
