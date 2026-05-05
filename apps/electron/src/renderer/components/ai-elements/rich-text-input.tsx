@@ -295,6 +295,8 @@ export function RichTextInput({
       Underline,
       Link.configure({
         openOnClick: false,
+        autolink: false,
+        linkOnPaste: false,
         HTMLAttributes: {
           class: 'text-primary underline',
         },
