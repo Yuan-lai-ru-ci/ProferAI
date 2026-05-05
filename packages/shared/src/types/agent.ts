@@ -1177,8 +1177,6 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSIONS: 'agent:list-sessions',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
-  /** 获取会话消息 */
-  GET_MESSAGES: 'agent:get-messages',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
   /** 更新会话标题 */

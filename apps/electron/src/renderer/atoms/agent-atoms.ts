@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import type { AgentSessionMeta, AgentMessage, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, TaskUsage, SDKMessage } from '@proma/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, TaskUsage, SDKMessage } from '@proma/shared'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -260,7 +260,6 @@ export const agentSessionChannelMapAtom = atom<Map<string, string>>(new Map())
 /** Per-session 模型 ID Map — sessionId → modelId */
 export const agentSessionModelMapAtom = atom<Map<string, string>>(new Map())
 export const currentAgentSessionIdAtom = atom<string | null>(null)
-export const currentAgentMessagesAtom = atom<AgentMessage[]>([])
 export const agentStreamingStatesAtom = atom<Map<string, AgentStreamState>>(new Map())
 
 /**
@@ -951,7 +950,7 @@ export interface BackgroundTask {
   id: string
   /** 任务类型 */
   type: 'agent' | 'shell'
-  /** 关联的工具调用 ID（用于滚动定位到 ToolActivityItem） */
+  /** 关联的工具调用 ID（用于滚动定位到实时工具调用） */
   toolUseId: string
   /** 任务开始时间戳 */
   startTime: number

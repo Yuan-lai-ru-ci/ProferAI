@@ -28,7 +28,6 @@ import type {
   FileDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
-  AgentMessage,
   AgentSendInput,
   AgentWorkspace,
   AgentGenerateTitleInput,
@@ -137,7 +136,6 @@ import {
   listAgentSessions,
   createAgentSession,
   getAgentSessionMeta,
-  getAgentSessionMessages,
   getAgentSessionSDKMessages,
   updateAgentSessionMeta,
   deleteAgentSession,
@@ -866,14 +864,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.CREATE_SESSION,
     async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
       return createAgentSession(title, channelId, workspaceId)
-    }
-  )
-
-  // 获取 Agent 会话消息
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_MESSAGES,
-    async (_, id: string): Promise<AgentMessage[]> => {
-      return getAgentSessionMessages(id)
     }
   )
 
