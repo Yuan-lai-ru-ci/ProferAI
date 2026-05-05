@@ -8,7 +8,7 @@ import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electro
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, APP_ICON_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
 import type { QuickTaskSubmitInput } from '../types'
 import type {
   RuntimeStatus,
@@ -122,6 +122,7 @@ import { extractTextFromAttachment } from './lib/document-parser'
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import { setDockBadgeCount } from './lib/dock-badge-service'
 import { updateWindowTitleBarOverlay } from './lib/titlebar-overlay'
 import { checkEnvironment } from './lib/environment-checker'
 import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
@@ -756,6 +757,15 @@ export function registerIpcHandlers(): void {
         console.error('[图标] 切换失败:', error)
         return false
       }
+    }
+  )
+
+  // ===== Dock/Launcher 角标 =====
+
+  ipcMain.handle(
+    DOCK_BADGE_IPC_CHANNELS.SET_COUNT,
+    async (_, count: number): Promise<boolean> => {
+      return setDockBadgeCount(count)
     }
   )
 

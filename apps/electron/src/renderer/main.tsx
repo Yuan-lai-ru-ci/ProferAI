@@ -31,6 +31,8 @@ import {
   agentMaxBudgetUsdAtom,
   agentMaxTurnsAtom,
   agentSettingsReadyAtom,
+  dockBadgeCountAtom,
+  unviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import {
@@ -333,6 +335,47 @@ function NotificationsInitializer(): null {
   useEffect(() => {
     initializeNotifications(setEnabled, setSoundEnabled, setSounds)
   }, [setEnabled, setSoundEnabled, setSounds])
+
+  return null
+}
+
+/**
+ * Dock/Launcher 角标同步组件
+ *
+ * 将需要用户处理或查看的事项数量同步到系统应用图标。
+ */
+function DockBadgeInitializer(): null {
+  const count = useAtomValue(dockBadgeCountAtom)
+  const notificationsEnabled = useAtomValue(notificationsEnabledAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
+  const badgeCount = notificationsEnabled ? count : 0
+
+  useEffect(() => {
+    window.electronAPI.setDockBadgeCount(badgeCount).catch((error) => {
+      console.error('[Dock 角标] 同步失败:', error)
+    })
+  }, [badgeCount])
+
+  useEffect(() => {
+    const clearCurrentSessionBadge = (): void => {
+      if (!document.hasFocus() || !currentSessionId) return
+      setUnviewedCompleted((prev) => {
+        if (!prev.has(currentSessionId)) return prev
+        const next = new Set(prev)
+        next.delete(currentSessionId)
+        return next
+      })
+    }
+
+    clearCurrentSessionBadge()
+    window.addEventListener('focus', clearCurrentSessionBadge)
+    document.addEventListener('visibilitychange', clearCurrentSessionBadge)
+    return () => {
+      window.removeEventListener('focus', clearCurrentSessionBadge)
+      document.removeEventListener('visibilitychange', clearCurrentSessionBadge)
+    }
+  }, [currentSessionId, setUnviewedCompleted])
 
   return null
 }
@@ -693,6 +736,7 @@ if (isQuickTaskWindow) {
       <ThemeInitializer />
       <AgentSettingsInitializer />
       <NotificationsInitializer />
+      <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />

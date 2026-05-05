@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -277,6 +277,9 @@ export interface ElectronAPI {
 
   /** 设置应用图标变体（传入 variant ID，如 'blue'、'cyberpunk'，'default' 恢复默认） */
   setAppIcon: (variantId: string) => Promise<boolean>
+
+  /** 设置 Dock/Launcher 角标数量（0 表示清除） */
+  setDockBadgeCount: (count: number) => Promise<boolean>
 
   // ===== 环境检测相关 =====
 
@@ -990,6 +993,11 @@ const electronAPI: ElectronAPI = {
   // 应用图标切换
   setAppIcon: (variantId: string) => {
     return ipcRenderer.invoke(APP_ICON_IPC_CHANNELS.SET, variantId)
+  },
+
+  // Dock/Launcher 角标
+  setDockBadgeCount: (count: number) => {
+    return ipcRenderer.invoke(DOCK_BADGE_IPC_CHANNELS.SET_COUNT, count)
   },
 
   // 环境检测

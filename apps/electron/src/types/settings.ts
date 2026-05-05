@@ -122,6 +122,12 @@ export const APP_ICON_IPC_CHANNELS = {
   SET: 'app-icon:set',
 } as const
 
+/** Dock/Launcher 角标 IPC 通道 */
+export const DOCK_BADGE_IPC_CHANNELS = {
+  /** 设置系统应用角标数量 */
+  SET_COUNT: 'dock-badge:set-count',
+} as const
+
 /** 快速任务窗口 IPC 通道 */
 export const QUICK_TASK_IPC_CHANNELS = {
   /** 提交快速任务（渲染进程 → 主进程） */
