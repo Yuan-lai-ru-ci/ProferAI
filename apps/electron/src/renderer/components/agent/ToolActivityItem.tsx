@@ -46,12 +46,13 @@ const SIZE = {
 
 // ===== 状态图标 =====
 
-function StatusIcon({ status, toolName }: { status: ActivityStatus; toolName?: string }): React.ReactElement {
+function StatusIcon({ status, toolName, animate = false }: { status: ActivityStatus; toolName?: string; animate?: boolean }): React.ReactElement {
   const key = `${status}-${toolName}`
+  const motionClass = animate ? 'animate-in fade-in zoom-in-75 duration-200' : undefined
 
   if (status === 'running' || status === 'backgrounded') {
     return (
-      <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center animate-in fade-in zoom-in-75 duration-200')}>
+      <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center', motionClass)}>
         <Loader2 className={cn(SIZE.spinner, 'animate-spin', status === 'backgrounded' ? 'text-primary' : 'text-blue-500')} />
       </span>
     )
@@ -59,7 +60,7 @@ function StatusIcon({ status, toolName }: { status: ActivityStatus; toolName?: s
 
   if (status === 'error') {
     return (
-      <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center animate-in fade-in zoom-in-75 duration-200')}>
+      <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center', motionClass)}>
         <XCircle className={cn(SIZE.icon, 'text-destructive')} />
       </span>
     )
@@ -69,13 +70,13 @@ function StatusIcon({ status, toolName }: { status: ActivityStatus; toolName?: s
     const ToolIcon = toolName ? getToolIcon(toolName) : null
     if (ToolIcon && (toolName === 'Edit' || toolName === 'Write')) {
       return (
-        <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center animate-in fade-in zoom-in-75 duration-200')}>
+        <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center', motionClass)}>
           <ToolIcon className={cn(SIZE.icon, 'text-primary')} />
         </span>
       )
     }
     return (
-      <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center animate-in fade-in zoom-in-75 duration-200')}>
+      <span key={key} className={cn(SIZE.icon, 'flex items-center justify-center', motionClass)}>
         <CheckCircle2 className={cn(SIZE.icon, 'text-green-500')} />
       </span>
     )
@@ -198,7 +199,7 @@ export function ActivityRow({ activity, index = 0, animate = false, onOpenDetail
           className="group/expand shrink-0 flex items-center gap-1.5 cursor-pointer min-w-0 flex-1"
           onClick={(e) => { e.stopPropagation(); onOpenDetails(activity) }}
         >
-          <StatusIcon status={status} toolName={activity.toolName} />
+          <StatusIcon status={status} toolName={activity.toolName} animate={animate} />
           <span className="truncate text-foreground/80 group-hover/expand:text-foreground transition-colors duration-150 flex-1">{renderLabelWithDiff(displayLabel, activity.toolName)}</span>
           {activity.isError && <ErrorBadge />}
           {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
@@ -210,7 +211,7 @@ export function ActivityRow({ activity, index = 0, animate = false, onOpenDetail
         </button>
       ) : (
         <>
-          <StatusIcon status={status} toolName={activity.toolName} />
+          <StatusIcon status={status} toolName={activity.toolName} animate={animate} />
           <span className="truncate text-foreground/80">{renderLabelWithDiff(displayLabel, activity.toolName)}</span>
           {activity.isError && <ErrorBadge />}
           {activity.elapsedSeconds !== undefined && activity.elapsedSeconds > 0 && (
@@ -283,7 +284,7 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
           )}
         />
 
-        <StatusIcon status={derivedStatus} toolName={parent.toolName} />
+        <StatusIcon status={derivedStatus} toolName={parent.toolName} animate={animate} />
 
         {subagentType && (
           <span className="shrink-0 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-medium leading-none">
@@ -310,7 +311,7 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
         <div
           className={cn(
             'pl-6 pr-1 space-y-0 border-l-2 border-muted ml-[7px]',
-            'animate-in fade-in slide-in-from-top-1 duration-150',
+            animate && 'animate-in fade-in slide-in-from-top-1 duration-150',
           )}
         >
           {children.map((child, ci) => (
@@ -322,7 +323,7 @@ function ActivityGroupRow({ group, index = 0, animate = false, onOpenDetails, de
                 onOpenDetails={onOpenDetails}
               />
               {detailsId === child.toolUseId && (
-                <ActivityDetails activity={child} onClose={onCloseDetails ?? (() => {})} />
+                <ActivityDetails activity={child} onClose={onCloseDetails ?? (() => {})} animate={animate} />
               )}
             </React.Fragment>
           ))}
@@ -377,7 +378,7 @@ function ToolResultImage({ attachment }: { attachment: { localPath: string; file
 
 // ===== 详情面板（仅显示结果，使用 ToolResultRenderer） =====
 
-function ActivityDetails({ activity, onClose }: { activity: ToolActivity; onClose: () => void }): React.ReactElement {
+function ActivityDetails({ activity, onClose, animate = false }: { activity: ToolActivity; onClose: () => void; animate?: boolean }): React.ReactElement {
   const [copied, setCopied] = React.useState(false)
 
   const handleCopy = (): void => {
@@ -392,7 +393,10 @@ function ActivityDetails({ activity, onClose }: { activity: ToolActivity; onClos
   }
 
   return (
-    <div className="mt-1 rounded-md border border-border/40 bg-muted/20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300 ease-out">
+    <div className={cn(
+      'mt-1 rounded-md border border-border/40 bg-muted/20 overflow-hidden',
+      animate && 'animate-in fade-in slide-in-from-top-2 duration-300 ease-out',
+    )}>
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
         <span className="text-[11px] font-medium text-foreground/50">{getToolPhrase(activity.toolName, activity.input).label}</span>
         <button
@@ -571,7 +575,7 @@ export function ToolActivityList({ activities, animate = false }: ToolActivityLi
               onOpenDetails={handleOpenDetails}
             />
             {detailsId === activity.toolUseId && detailActivity && (
-              <ActivityDetails activity={detailActivity} onClose={() => setDetailsId(null)} />
+              <ActivityDetails activity={detailActivity} onClose={() => setDetailsId(null)} animate={animate} />
             )}
           </React.Fragment>
         )
