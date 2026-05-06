@@ -19,7 +19,7 @@
     },
     "apps/electron": {
       "name": "@proma/electron",
-      "version": "0.9.17",
+      "version": "0.9.18",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.2.129",
       },
