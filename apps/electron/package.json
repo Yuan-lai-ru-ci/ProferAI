@@ -38,8 +38,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.111",
-    "@pierre/diffs": "^1.1.20",
-    "diff2html": "^3.4.56"
+    "@pierre/diffs": "^1.1.20"
   },
   "devDependencies": {
     "@emoji-mart/data": "^1.2.1",
