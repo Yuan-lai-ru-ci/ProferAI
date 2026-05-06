@@ -5,10 +5,9 @@
  */
 
 import * as React from 'react'
-import { useSetAtom } from 'jotai'
 import { ChevronRight, RotateCcw, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { ChangedFileEntry, ChangeSource } from '@proma/shared'
 
 /** 按目录分组后的数据结构 */
@@ -55,7 +54,6 @@ export function DiffChangesList({
   const [untrackedFiles, setUntrackedFiles] = React.useState<string[]>([])
   const [isGitRepo, setIsGitRepo] = React.useState(true)
   const [gitRootName, setGitRootName] = React.useState('')
-  const setUnseenChanges = useSetAtom(agentDiffUnseenChangesAtom)
   const [collapsedDirs, setCollapsedDirs] = React.useState<Set<string>>(new Set())
 
   const fetchChanges = React.useCallback(async () => {
@@ -65,7 +63,6 @@ export function DiffChangesList({
       setFiles(result.files || [])
       setUntrackedFiles(result.untrackedFiles || [])
       setGitRootName(result.gitRootName || '')
-      setUnseenChanges((result.files?.length || 0) > 0 || (result.untrackedFiles?.length || 0) > 0)
     } catch {
       setIsGitRepo(true) // 避免网络等错误误判
     }
@@ -229,7 +226,7 @@ function FileRow({
     <button
       type="button"
       className={cn(
-        'flex items-center w-full px-2 pl-6 py-2 text-[14px] transition-colors group',
+        'flex items-center w-full px-2 pl-6 py-2.5 text-[14px] transition-colors group',
         isSelected ? 'bg-primary/10' : 'hover:bg-foreground/[0.04]',
       )}
       onClick={onClick}
@@ -256,7 +253,7 @@ function FileRow({
       </span>
 
       {/* +/- 行数 */}
-      <span className="ml-auto shrink-0 flex items-center gap-1">
+      <span className="ml-auto shrink-0 flex items-center gap-1.5">
         {file.additions > 0 && (
           <span className="text-green-500">+{file.additions}</span>
         )}
@@ -267,23 +264,31 @@ function FileRow({
 
       {/* Hover 操作按钮 */}
       {hovered && (
-        <span className="flex items-center gap-0.5 ml-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <span className="flex items-center gap-1 ml-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
           {/* Revert 按钮 */}
-          <span
-            className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
-            title="还原文件变更"
-            onClick={onRevert}
-          >
-            <RotateCcw className="size-4" />
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
+                onClick={onRevert}
+              >
+                <RotateCcw className="size-4" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">还原文件变更</TooltipContent>
+          </Tooltip>
           {/* Open in editor 按钮 */}
-          <span
-            className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
-            title="在编辑器中打开"
-            onClick={onOpenInEditor}
-          >
-            <ExternalLink className="size-4" />
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
+                onClick={onOpenInEditor}
+              >
+                <ExternalLink className="size-4" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">在编辑器中打开</TooltipContent>
+          </Tooltip>
         </span>
       )}
     </button>
@@ -317,13 +322,17 @@ function UntrackedFileRow({
 
       {hovered && (
         <span className="ml-auto flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-          <span
-            className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
-            title="在编辑器中打开"
-            onClick={onOpenInEditor}
-          >
-            <ExternalLink className="size-4" />
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
+                onClick={onOpenInEditor}
+              >
+                <ExternalLink className="size-4" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">在编辑器中打开</TooltipContent>
+          </Tooltip>
         </span>
       )}
     </button>

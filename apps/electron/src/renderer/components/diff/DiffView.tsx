@@ -122,6 +122,15 @@ function buildStyleTag(): string {
     .diff-view-container .d2h-wrapper {
       background: hsl(${bg}) !important;
       color: hsl(${fg}) !important;
+      border: none !important;
+    }
+
+    .diff-view-container .d2h-file-wrapper {
+      border-color: hsl(${border}) !important;
+    }
+
+    .diff-view-container .d2h-diff-wrapper {
+      border: none !important;
     }
 
     /* 信息行 */

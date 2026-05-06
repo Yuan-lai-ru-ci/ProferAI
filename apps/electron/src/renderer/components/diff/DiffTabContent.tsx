@@ -9,6 +9,7 @@ import * as React from 'react'
 import { Copy, Check, ArrowLeft } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { agentDiffViewModeAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeTabIdAtom, tabsAtom, type TabItem } from '@/atoms/tab-atoms'
 import { DiffView } from './DiffView'
@@ -108,17 +109,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: Di
           {filePath}
         </span>
 
-        {sessionTitle && (
-          <button
-            type="button"
-            className="text-[11px] text-primary/60 hover:text-primary truncate shrink-0 cursor-pointer"
-            title="点击以跳转对话"
-            onClick={handleGoToSession}
-          >
-            来自对话：{sessionTitle}
-          </button>
-        )}
-
         {/* Split / Unified 切换 — 整条点击切换 */}
         <div
           className="relative flex rounded-lg bg-muted p-0.5 shrink-0 ml-auto cursor-pointer select-none"
@@ -171,14 +161,18 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: Di
 
         {/* 返回对话按钮 */}
         {sessionId && (
-          <button
-            type="button"
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 p-2 rounded-full bg-content-area/90 border border-border shadow-md text-muted-foreground hover:text-foreground hover:bg-content-area transition-colors z-10"
-            title="返回对话"
-            onClick={handleGoToSession}
-          >
-            <ArrowLeft className="size-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="absolute bottom-32 left-1/2 -translate-x-1/2 p-3 rounded-full bg-content-area/90 border border-border shadow-md text-muted-foreground hover:text-foreground hover:bg-content-area transition-colors z-10"
+                onClick={handleGoToSession}
+              >
+                <ArrowLeft className="size-5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">返回对话：{sessionTitle || sessionId}</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </div>

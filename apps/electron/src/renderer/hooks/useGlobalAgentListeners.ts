@@ -46,7 +46,7 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
+import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
@@ -511,6 +511,7 @@ export function useGlobalAgentListeners(): void {
             if (pendingWriteToolIds.has(event.toolUseId)) {
               pendingWriteToolIds.delete(event.toolUseId)
               store.set(agentDiffRefreshVersionAtom, (prev) => prev + 1)
+              store.set(agentDiffUnseenChangesAtom, true)
             }
           } else if (event.type === 'shell_killed') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
