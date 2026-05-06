@@ -6,8 +6,10 @@
  */
 
 import * as React from 'react'
+import { useAtomValue } from 'jotai'
 import { MultiFileDiff } from '@pierre/diffs/react'
 import type { FileContents } from '@pierre/diffs'
+import { resolvedThemeAtom } from '@/atoms/theme'
 import './diff-scroll.css'
 
 interface DiffViewProps {
@@ -18,6 +20,8 @@ interface DiffViewProps {
 }
 
 export const DiffView = React.memo(function DiffView({ oldContent, newContent, filePath, viewMode }: DiffViewProps): React.ReactElement {
+  const theme = useAtomValue(resolvedThemeAtom)
+
   const oldFile: FileContents = React.useMemo(() => ({
     name: filePath,
     contents: oldContent,
@@ -32,10 +36,11 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     diffStyle: viewMode,
     theme: { dark: 'pierre-dark' as const, light: 'pierre-light' as const },
     disableFileHeader: true,
-    disableBackground: true,
+    diffIndicators: 'classic' as const,
     hunkSeparators: 'line-info' as const,
     overflow: 'scroll' as const,
-  }), [viewMode])
+    themeType: theme as 'light' | 'dark' | 'system',
+  }), [viewMode, theme])
 
   return (
     <div className="h-full diff-scroll bg-[hsl(var(--background))] overflow-auto">
