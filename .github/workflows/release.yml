@@ -22,28 +22,9 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macOS ARM64: Apple Silicon 产物
-          - os: macos-latest
-            platform: mac
-            arch: arm64
-            builder_arg: --arm64
-          # macOS x64: Intel 产物
-          - os: macos-15-intel
-            platform: mac
-            arch: x64
-            builder_arg: --x64
-          # Windows x64
-          - os: windows-latest
-            platform: win
-            arch: x64
-            builder_arg: --x64
-
-    runs-on: ${{ matrix.os }}
+  build-mac-arm64:
+    name: build (macos-latest, mac, arm64, --arm64)
+    runs-on: macos-latest
 
     steps:
       - name: 检出代码
@@ -64,7 +45,6 @@ jobs:
 
       # macOS 代码签名准备
       - name: 导入 macOS 签名证书
-        if: matrix.platform == 'mac'
         env:
           MAC_CERTS: ${{ secrets.MAC_CERTS }}
           MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
@@ -92,18 +72,102 @@ jobs:
 
       # 打包并发布到 GitHub Releases
       - name: 打包并发布 (macOS)
-        if: matrix.platform == 'mac'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac ${{ matrix.builder_arg }} --publish always
+        run: npx electron-builder --mac --arm64 --publish always
         working-directory: apps/electron
 
-      - name: 打包并发布 (Windows)
-        if: matrix.platform == 'win'
+  build-mac-x64:
+    name: build (macos-15-intel, mac, x64, --x64)
+    runs-on: macos-15-intel
+    # 两个 macOS 架构会写同一个 latest-mac.yml，必须串行发布，避免互相覆盖。
+    needs: build-mac-arm64
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      # macOS 代码签名准备
+      - name: 导入 macOS 签名证书
+        env:
+          MAC_CERTS: ${{ secrets.MAC_CERTS }}
+          MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+        run: |
+          # 创建临时 keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # 导入证书
+          echo "$MAC_CERTS" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$MAC_CERTS_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          rm $RUNNER_TEMP/cert.p12
+
+      # 构建应用
+      - name: 构建 Electron 应用
+        run: bun run electron:build
+        working-directory: .
+
+      # 打包并发布到 GitHub Releases
+      - name: 打包并发布 (macOS)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win ${{ matrix.builder_arg }} --publish always
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --x64 --publish always
+        working-directory: apps/electron
+
+  build-windows-x64:
+    name: build (windows-latest, win, x64, --x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      # 构建应用
+      - name: 构建 Electron 应用
+        run: bun run electron:build
+        working-directory: .
+
+      - name: 打包并发布 (Windows)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish always
         working-directory: apps/electron
