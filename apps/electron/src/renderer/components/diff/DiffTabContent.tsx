@@ -121,7 +121,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: Di
           <Tooltip>
             <TooltipTrigger asChild>
               <button type="button"
-                className="absolute bottom-32 left-1/2 -translate-x-1/2 px-5 py-2 rounded-lg bg-content-area border border-border shadow-md text-muted-foreground text-[13px] hover:text-foreground hover:bg-content-area transition-colors z-10"
+                className="absolute bottom-[112px] left-1/2 -translate-x-1/2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-[14px] shadow-sm hover:opacity-90 transition-opacity z-10"
                 onClick={handleGoToSession}>
                 返回会话
               </button>

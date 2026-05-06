@@ -40,6 +40,12 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     hunkSeparators: 'line-info' as const,
     overflow: 'scroll' as const,
     themeType: theme as 'light' | 'dark' | 'system',
+    unsafeCSS: `
+      :root, :host {
+        --diffs-addition-color-override: hsl(var(--primary));
+        --diffs-deletion-color-override: hsl(var(--destructive));
+      }
+    `,
   }), [viewMode, theme])
 
   return (
