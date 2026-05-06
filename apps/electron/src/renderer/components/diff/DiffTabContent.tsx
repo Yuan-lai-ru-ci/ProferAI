@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { Copy, Check } from 'lucide-react'
+import { Copy, Check, ArrowLeft } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { agentDiffViewModeAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
@@ -160,13 +160,25 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: Di
       </div>
 
       {/* Diff 内容 */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto relative">
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">
             加载中...
           </div>
         ) : (
           <DiffView diffContent={diffContent} viewMode={viewMode} filePath={filePath} />
+        )}
+
+        {/* 返回对话按钮 */}
+        {sessionId && (
+          <button
+            type="button"
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 p-2 rounded-full bg-content-area/90 border border-border shadow-md text-muted-foreground hover:text-foreground hover:bg-content-area transition-colors z-10"
+            title="返回对话"
+            onClick={handleGoToSession}
+          >
+            <ArrowLeft className="size-4" />
+          </button>
         )}
       </div>
     </div>

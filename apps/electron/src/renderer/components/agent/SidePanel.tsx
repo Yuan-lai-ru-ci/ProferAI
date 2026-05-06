@@ -312,7 +312,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     id: diffTabId,
                     type: 'diff',
                     sessionId,
-                    title: sessionTitle ? `代码改动 · ${sessionTitle}` : '代码改动',
+                    title: sessionTitle ? `文件改动 · ${sessionTitle}` : '文件改动',
                     filePath,
                     dirPath: sessionPath || undefined,
                   }

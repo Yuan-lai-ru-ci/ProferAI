@@ -56,7 +56,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange }: DiffPanelTabBarProps
           {unseenChanges && activeTab !== 'changes' && (
             <span className="absolute left-2 top-1/2 -translate-y-1/2 size-2 rounded-full bg-primary ring-1 ring-background" />
           )}
-          代码改动
+          文件改动
         </button>
       </div>
     </div>

@@ -75,6 +75,13 @@ export function DiffChangesList({
     fetchChanges()
   }, [fetchChanges, refreshVersion])
 
+  // 窗口重新聚焦时刷新（用户在外部编辑器改完代码切回 Proma）
+  React.useEffect(() => {
+    const onFocus = () => { fetchChanges() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [fetchChanges])
+
   /** Revert 文件 */
   const handleRevert = React.useCallback(async (filePath: string) => {
     if (!window.confirm(`确定要还原 ${filePath} 的所有变更吗？此操作不可撤销。`)) return
