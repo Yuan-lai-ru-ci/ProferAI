@@ -37,6 +37,10 @@ const COMPRESSION_GZIP = 0b0001
 
 const ASYNC_ENDPOINT = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async'
 const DUPLEX_ENDPOINT = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel'
+const DICTATION_END_WINDOW_SIZE_MS = 5000
+const DICTATION_FORCE_TO_SPEECH_TIME_MS = 1000
+const MAX_INLINE_HOTWORDS = 100
+const HOTWORD_SEPARATOR_PATTERN = /[\n,，、;；]+/u
 
 interface ServerUtterance {
   text?: string
@@ -61,6 +65,14 @@ interface ParsedServerMessage {
   isFinal: boolean
 }
 
+interface DoubaoAsrHotword {
+  word: string
+}
+
+interface DoubaoAsrCorpus {
+  context: string
+}
+
 interface ActiveSession {
   sessionId: string
   ws: WebSocket
@@ -72,6 +84,30 @@ const activeSessions = new Map<string, ActiveSession>()
 
 function getEndpoint(settings: VoiceDictationSettings): string {
   return settings.endpointMode === 'duplex' ? DUPLEX_ENDPOINT : ASYNC_ENDPOINT
+}
+
+function parseCustomHotwords(value: string): DoubaoAsrHotword[] {
+  const seen = new Set<string>()
+  const hotwords: DoubaoAsrHotword[] = []
+
+  for (const rawWord of value.split(HOTWORD_SEPARATOR_PATTERN)) {
+    const word = rawWord.trim()
+    if (!word || seen.has(word)) continue
+    seen.add(word)
+    hotwords.push({ word })
+    if (hotwords.length >= MAX_INLINE_HOTWORDS) break
+  }
+
+  return hotwords
+}
+
+function buildCorpus(settings: VoiceDictationSettings): DoubaoAsrCorpus | undefined {
+  const hotwords = parseCustomHotwords(settings.customHotwords)
+  if (hotwords.length === 0) return undefined
+
+  return {
+    context: JSON.stringify({ hotwords }),
+  }
 }
 
 function buildHeader(
@@ -113,21 +149,27 @@ function buildClientRequest(settings: VoiceDictationSettings): Buffer {
     audio.language = settings.language
   }
 
+  const corpus = buildCorpus(settings)
+  const requestOptions = {
+    model_name: 'bigmodel',
+    enable_nonstream: true,
+    show_utterances: true,
+    result_type: 'full',
+    enable_itn: true,
+    enable_punc: true,
+    enable_ddc: true,
+    // 听写场景允许用户自然停顿，避免 800ms 静音就过早切句。
+    end_window_size: DICTATION_END_WINDOW_SIZE_MS,
+    force_to_speech_time: DICTATION_FORCE_TO_SPEECH_TIME_MS,
+    ...(corpus ? { corpus } : {}),
+  }
+
   const request = {
     user: {
       uid: 'proma-desktop',
     },
     audio,
-    request: {
-      model_name: 'bigmodel',
-      enable_nonstream: true,
-      show_utterances: true,
-      result_type: 'full',
-      enable_itn: true,
-      enable_punc: true,
-      enable_ddc: true,
-      end_window_size: 800,
-    },
+    request: requestOptions,
   }
 
   const payload = gzipSync(Buffer.from(JSON.stringify(request), 'utf-8'))

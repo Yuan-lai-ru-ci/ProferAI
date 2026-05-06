@@ -12,6 +12,7 @@ import {
   SettingsSecretInput,
   SettingsSection,
   SettingsSelect,
+  SettingsTextarea,
   SettingsToggle,
 } from './primitives'
 import type { VoiceDictationSettings } from '../../../types'
@@ -174,6 +175,14 @@ export function VoiceInputSettings(): React.ReactElement {
             value={settings.language || 'auto'}
             onValueChange={(language) => update({ language: language === 'auto' ? '' : language })}
             options={LANGUAGE_OPTIONS}
+          />
+          <SettingsTextarea
+            label="自定义热词"
+            description="每行或逗号分隔一个词，会在本次识别请求中直传给豆包，用于改善产品名、技术词和人名识别。"
+            value={settings.customHotwords}
+            onChange={(customHotwords) => update({ customHotwords })}
+            placeholder={"Proma\nJotai\nShadcnUI\nClaude Code"}
+            minHeight={112}
           />
           <SettingsSelect
             label="输出方式"

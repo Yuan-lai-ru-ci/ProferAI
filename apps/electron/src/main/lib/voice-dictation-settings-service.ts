@@ -17,6 +17,7 @@ const DEFAULT_VOICE_DICTATION_SETTINGS: VoiceDictationSettings = {
   language: '',
   endpointMode: 'async',
   outputMode: 'auto',
+  customHotwords: '',
 }
 
 function encryptSecret(value: string): string {
@@ -48,6 +49,7 @@ export function getVoiceDictationSettings(): VoiceDictationSettings {
     ...raw,
     appId: raw.appId ?? raw.appKey ?? '',
     accessToken: decryptSecret(encryptedAccessToken),
+    customHotwords: typeof raw.customHotwords === 'string' ? raw.customHotwords : '',
   }
 }
 
