@@ -208,6 +208,39 @@ export async function getFileDiff(dirPath: string, filePath: string): Promise<st
 }
 
 /**
+ * 获取文件的旧版本（git HEAD）和新版本（磁盘）内容
+ */
+export async function getDiffContents(dirPath: string, filePath: string): Promise<{ oldContent: string; newContent: string } | null> {
+  const gitRoot = findGitRoot(dirPath)
+  if (!gitRoot) return null
+
+  // 旧版本从 git HEAD 读取
+  let oldContent = ''
+  try {
+    const result = spawnSync('git', ['show', `HEAD:${filePath}`], {
+      cwd: gitRoot,
+      encoding: 'utf-8',
+      timeout: 10000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    })
+    if (result.status === 0) {
+      oldContent = result.stdout
+    }
+  } catch {
+    // 文件在 HEAD 中不存在（新文件）
+  }
+
+  // 新版本从磁盘读取
+  let newContent = ''
+  const fullPath = join(gitRoot, filePath)
+  if (existsSync(fullPath)) {
+    newContent = readFileSync(fullPath, 'utf-8')
+  }
+
+  return { oldContent, newContent }
+}
+
+/**
  * 获取未追踪文件的内容（用于显示全绿新增 diff）
  */
 export async function getUntrackedContent(dirPath: string, filePath: string): Promise<string> {

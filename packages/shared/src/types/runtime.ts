@@ -244,6 +244,7 @@ export const IPC_CHANNELS = {
   GET_UNTRACKED_CONTENT: 'git:get-untracked-content',
   /** 还原文件变更 */
   REVERT_FILE: 'git:revert-file',
+  GET_DIFF_CONTENTS: 'git:get-diff-contents',
   /** 在系统默认浏览器中打开外部链接 */
   OPEN_EXTERNAL: 'shell:open-external',
 } as const

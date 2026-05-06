@@ -126,6 +126,8 @@ export interface ElectronAPI {
   getUntrackedContent: (input: import('@proma/shared').GetFileDiffInput) => Promise<string>
   /** 还原文件变更 */
   revertFile: (input: import('@proma/shared').RevertFileInput) => Promise<void>
+  /** 获取文件新旧版本内容 */
+  getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => Promise<{ oldContent: string; newContent: string } | null>
 
   // ===== 通用工具 =====
 
@@ -783,6 +785,10 @@ const electronAPI: ElectronAPI = {
 
   revertFile: (input: { dirPath: string; filePath: string }) => {
     return ipcRenderer.invoke(IPC_CHANNELS.REVERT_FILE, input)
+  },
+
+  getDiffContents: (input: { dirPath: string; filePath: string }) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_DIFF_CONTENTS, input)
   },
 
   // 通用工具
