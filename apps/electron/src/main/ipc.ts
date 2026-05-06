@@ -82,10 +82,11 @@ import type {
   WeChatConfig,
   WeChatBridgeState,
   SDKMessage,
+  GetFileDiffInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
-import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile } from './lib/git-diff-service'
+import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents } from './lib/git-diff-service'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
   listChannels,
@@ -300,6 +301,12 @@ export function registerIpcHandlers(): void {
       }
       await revertFile(dirPath, filePath)
     }
+  )
+
+  // 获取文件新旧版本内容
+  ipcMain.handle(
+    IPC_CHANNELS.GET_DIFF_CONTENTS,
+    async (_, input: GetFileDiffInput) => getDiffContents(input.dirPath, input.filePath)
   )
 
   // 在系统默认浏览器中打开外部链接
