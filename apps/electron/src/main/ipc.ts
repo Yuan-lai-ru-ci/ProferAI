@@ -1978,6 +1978,7 @@ export function registerIpcHandlers(): void {
       const safeRoot = resolve(rootPath)
       const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
       const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
+      const BROWSE_LIMIT_PER_GROUP = 5000
 
       // 按来源分组收集文件
       type Entry = { name: string; path: string; type: 'file' | 'dir'; source: 'session' | 'workspace' }
@@ -2077,16 +2078,26 @@ export function registerIpcHandlers(): void {
         })
       }
 
+      // 目录优先排序：确保截断前所有目录（特别是顶层目录）排在前面
+      function sortDirsFirst(entries: Entry[]): void {
+        entries.sort((a, b) => {
+          if (a.type === 'dir' && b.type !== 'dir') return -1
+          if (a.type !== 'dir' && b.type === 'dir') return 1
+          return a.path.length - b.path.length || a.name.localeCompare(b.name)
+        })
+      }
+
       const q = query.toLowerCase()
 
       if (!q) {
-        // 空 query：每个分组返回较多条目，避免截断
-        const perGroup = Math.max(limit, 100)
-        const sessionSlice = rootEntries.slice(0, perGroup)
-        const workspaceSlice = workspaceEntries.slice(0, perGroup)
-        const combined = [...sessionSlice, ...workspaceSlice].slice(0, perGroup * 2)
+        // 空 query：目录优先排序后再截断，保证文件夹结构完整可见
+        sortDirsFirst(rootEntries)
+        sortDirsFirst(workspaceEntries)
+        const maxPerGroup = Math.max(limit, BROWSE_LIMIT_PER_GROUP)
+        const sessionSlice = rootEntries.slice(0, maxPerGroup)
+        const workspaceSlice = workspaceEntries.slice(0, maxPerGroup)
         return {
-          entries: combined,
+          entries: [...sessionSlice, ...workspaceSlice],
           total: rootEntries.length + workspaceEntries.length,
           sessionEntries: sessionSlice,
           workspaceEntries: workspaceSlice,
@@ -2098,13 +2109,24 @@ export function registerIpcHandlers(): void {
       sortGroup(sessionMatched, q)
       sortGroup(workspaceMatched, q)
 
-      const halfLimit = Math.max(1, Math.floor(limit / 2))
-      const sessionSlice = sessionMatched.slice(0, halfLimit)
-      const workspaceSlice = workspaceMatched.slice(0, halfLimit)
-      const combined = [...sessionSlice, ...workspaceSlice].slice(0, limit)
+      const totalMatched = sessionMatched.length + workspaceMatched.length
+      let sessionSlice: Entry[]
+      let workspaceSlice: Entry[]
+      if (totalMatched <= limit) {
+        sessionSlice = sessionMatched
+        workspaceSlice = workspaceMatched
+      } else {
+        const sessionQuota = Math.max(
+          sessionMatched.length > 0 ? 1 : 0,
+          Math.round(limit * sessionMatched.length / totalMatched),
+        )
+        const workspaceQuota = limit - sessionQuota
+        sessionSlice = sessionMatched.slice(0, sessionQuota)
+        workspaceSlice = workspaceMatched.slice(0, workspaceQuota)
+      }
 
       return {
-        entries: combined,
+        entries: [...sessionSlice, ...workspaceSlice],
         total: sessionMatched.length + workspaceMatched.length,
         sessionEntries: sessionSlice,
         workspaceEntries: workspaceSlice,
