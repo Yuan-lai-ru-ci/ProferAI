@@ -83,8 +83,6 @@ jobs:
   build-mac-x64:
     name: build (macos-15-intel, mac, x64, --x64)
     runs-on: macos-15-intel
-    # 两个 macOS 架构会写同一个 latest-mac.yml，必须串行发布，避免互相覆盖。
-    needs: build-mac-arm64
 
     steps:
       - name: 检出代码
