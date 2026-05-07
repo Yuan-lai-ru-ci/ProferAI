@@ -115,6 +115,7 @@ import type {
   VoiceDictationStopInput,
   VoiceDictationTestResult,
   VoiceDictationTranscriptEvent,
+  MicPermissionResult,
   TrayCreateSessionData,
   TrayOpenAgentSessionData,
 } from '../types'
@@ -829,6 +830,11 @@ export interface ElectronAPI {
   onVoiceDictationState: (callback: (event: VoiceDictationStateEvent) => void) => () => void
   /** 订阅主窗口插入语音文本事件 */
   onVoiceDictationInsertText: (callback: (data: { text: string }) => void) => () => void
+
+  /** 检查麦克风权限状态 */
+  checkMicrophonePermission: () => Promise<MicPermissionResult>
+  /** 请求麦克风权限（仅 macOS 有效） */
+  requestMicrophonePermission: () => Promise<MicPermissionResult>
 
   // ===== 菜单栏 =====
 
@@ -1862,6 +1868,14 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, data: { text: string }): void => callback(data)
     ipcRenderer.on(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, listener)
     return () => { ipcRenderer.removeListener(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, listener) }
+  },
+
+  checkMicrophonePermission: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.CHECK_MIC_PERMISSION)
+  },
+
+  requestMicrophonePermission: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.REQUEST_MIC_PERMISSION)
   },
 
   onTrayOpenAgentSession: (callback: (data: TrayOpenAgentSessionData) => void) => {

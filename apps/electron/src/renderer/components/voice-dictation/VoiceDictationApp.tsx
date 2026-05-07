@@ -262,6 +262,22 @@ export function VoiceDictationApp(): React.ReactElement {
     setStatus('recording')
     setMessage('请开始说话')
 
+    // 预检麦克风权限
+    const permission = await window.electronAPI.checkMicrophonePermission()
+    if (permission.status === 'denied') {
+      setStatus('error')
+      setMessage('麦克风权限已被系统阻止，请在系统设置中允许 Proma 访问麦克风')
+      return
+    }
+    if (permission.status === 'not-determined') {
+      const requested = await window.electronAPI.requestMicrophonePermission()
+      if (requested.status !== 'granted') {
+        setStatus('error')
+        setMessage('需要麦克风权限才能使用语音输入')
+        return
+      }
+    }
+
     const nextSessionId = crypto.randomUUID()
     setSessionId(nextSessionId)
     sessionIdRef.current = nextSessionId
