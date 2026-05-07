@@ -34,14 +34,16 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
 
   const options = React.useMemo(() => ({
     diffStyle: viewMode,
-    theme: { dark: 'pierre-dark' as const, light: 'pierre-light' as const },
+    theme: { dark: 'one-dark-pro' as const, light: 'one-light' as const },
     disableFileHeader: true,
     diffIndicators: 'classic' as const,
     hunkSeparators: 'line-info' as const,
+    lineDiffType: 'none' as const,
     overflow: 'scroll' as const,
     themeType: theme as 'light' | 'dark' | 'system',
     unsafeCSS: `
       :root, :host {
+        --diffs-bg: hsl(var(--background));
         --diffs-addition-color-override: hsl(var(--primary));
         --diffs-deletion-color-override: hsl(var(--destructive));
       }
