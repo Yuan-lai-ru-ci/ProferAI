@@ -2,7 +2,7 @@
  * DiffView — @pierre/diffs 渲染组件
  *
  * 接收 old/new 文件内容，使用 @pierre/diffs/react 的 MultiFileDiff 渲染。
- * 禁用 pierre 内部滚动，由外层容器统一处理滚动，自定义滚动条样式。
+ * 背景使用 Proma 主题色（disableBackground），滚动条自定义样式。
  */
 
 import * as React from 'react'
@@ -39,7 +39,7 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     diffIndicators: 'bars' as const,
     hunkSeparators: 'line-info' as const,
     lineDiffType: 'none' as const,
-    overflow: 'hidden' as const,
+    overflow: 'scroll' as const,
     themeType: theme as 'light' | 'dark' | 'system',
     unsafeCSS: `
       :root, :host {
@@ -50,6 +50,26 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
         --diffs-deletion-bg: light-dark(rgb(248,231,230), rgb(39,22,20));
         --diffs-separator-bg: hsl(var(--background));
         --diffs-gap-style: 3px solid hsl(var(--content-area));
+      }
+      [data-code] {
+        overflow: overlay !important;
+      }
+      [data-code]::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      [data-code]::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      [data-code]::-webkit-scrollbar-thumb {
+        background: hsl(var(--muted-foreground) / 0.2);
+        border-radius: 3px;
+      }
+      [data-code]::-webkit-scrollbar-thumb:hover {
+        background: hsl(var(--muted-foreground) / 0.35);
+      }
+      [data-code]::-webkit-scrollbar-corner {
+        background: transparent;
       }
       [data-separator=line-info],
       [data-separator=line-info] [data-separator-wrapper],
@@ -87,7 +107,7 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
 
   return (
     <div className="h-full diff-scroll bg-content-area [overflow:overlay]">
-      <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} />
+      <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} className="h-full" />
     </div>
   )
 })
