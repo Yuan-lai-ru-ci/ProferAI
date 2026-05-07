@@ -36,22 +36,45 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     diffStyle: viewMode,
     theme: { dark: 'one-dark-pro' as const, light: 'one-light' as const },
     disableFileHeader: true,
-    diffIndicators: 'classic' as const,
+    diffIndicators: 'bars' as const,
     hunkSeparators: 'line-info' as const,
     lineDiffType: 'none' as const,
     overflow: 'scroll' as const,
     themeType: theme as 'light' | 'dark' | 'system',
     unsafeCSS: `
       :root, :host {
-        --diffs-bg: hsl(var(--background));
-        --diffs-addition-color-override: hsl(var(--primary));
-        --diffs-deletion-color-override: hsl(var(--destructive));
+        --diffs-bg: transparent;
+        --diffs-addition-base: rgb(67,167,71);
+        --diffs-deletion-base: rgb(206,66,52);
+      }
+      [data-separator=line-info],
+      [data-separator=line-info] [data-separator-wrapper],
+      [data-separator=line-info] [data-separator-content],
+      [data-separator=line-info] [data-expand-button] {
+        background-color: light-dark(hsl(0,0%,95%), hsl(0,0%,15%)) !important;
+      }
+      [data-line-type=change-addition] {
+        background-color: light-dark(rgb(228,244,233), rgb(19,34,23)) !important;
+      }
+      [data-line-type=change-deletion] {
+        background-color: light-dark(rgb(248,231,230), rgb(39,22,20)) !important;
+      }
+      [data-line-type=change-addition] [data-column-number],
+      [data-line-type=change-addition] [data-gutter-buffer] {
+        color: rgb(67,167,71) !important;
+      }
+      [data-line-type=change-deletion] [data-column-number],
+      [data-line-type=change-deletion] [data-gutter-buffer] {
+        color: rgb(206,66,52) !important;
+      }
+      [data-gutter-buffer=buffer] {
+        background: none !important;
       }
     `,
   }), [viewMode, theme])
 
   return (
-    <div className="h-full diff-scroll bg-[hsl(var(--background))] overflow-auto">
+    <div className="h-full diff-scroll [overflow:overlay]">
       <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} className="h-full" />
     </div>
   )
