@@ -77,7 +77,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             {/* 拖拽手柄 — 放在主区域和右侧面板之间的 padding 区域 */}
             {isPanelOpen && (
               <div
-                className="w-[8px] -mx-[3px] cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors shrink-0"
+                className="w-[8px] -mx-[4px] cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors shrink-0"
                 onMouseDown={handleMouseDown}
               />
             )}

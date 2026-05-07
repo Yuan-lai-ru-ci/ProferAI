@@ -2,7 +2,7 @@
  * DiffView — @pierre/diffs 渲染组件
  *
  * 接收 old/new 文件内容，使用 @pierre/diffs/react 的 MultiFileDiff 渲染。
- * 背景使用 Proma 主题色（disableBackground），滚动条自定义样式。
+ * 禁用 pierre 内部滚动，由外层容器统一处理滚动，自定义滚动条样式。
  */
 
 import * as React from 'react'
@@ -39,43 +39,55 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     diffIndicators: 'bars' as const,
     hunkSeparators: 'line-info' as const,
     lineDiffType: 'none' as const,
-    overflow: 'scroll' as const,
+    overflow: 'hidden' as const,
     themeType: theme as 'light' | 'dark' | 'system',
     unsafeCSS: `
       :root, :host {
         --diffs-bg: transparent;
         --diffs-addition-base: rgb(67,167,71);
         --diffs-deletion-base: rgb(206,66,52);
+        --diffs-addition-bg: light-dark(rgb(228,244,233), rgb(19,34,23));
+        --diffs-deletion-bg: light-dark(rgb(248,231,230), rgb(39,22,20));
+        --diffs-separator-bg: hsl(var(--background));
+        --diffs-gap-style: 3px solid hsl(var(--content-area));
       }
       [data-separator=line-info],
       [data-separator=line-info] [data-separator-wrapper],
       [data-separator=line-info] [data-separator-content],
       [data-separator=line-info] [data-expand-button] {
-        background-color: light-dark(hsl(0,0%,95%), hsl(0,0%,15%)) !important;
+        background-color: var(--diffs-separator-bg) !important;
       }
       [data-line-type=change-addition] {
-        background-color: light-dark(rgb(228,244,233), rgb(19,34,23)) !important;
+        background-color: var(--diffs-addition-bg) !important;
       }
       [data-line-type=change-deletion] {
-        background-color: light-dark(rgb(248,231,230), rgb(39,22,20)) !important;
+        background-color: var(--diffs-deletion-bg) !important;
       }
       [data-line-type=change-addition] [data-column-number],
-      [data-line-type=change-addition] [data-gutter-buffer] {
+      [data-line-type=change-addition] [data-gutter-buffer]:not([data-gutter-buffer=buffer]) {
         color: rgb(67,167,71) !important;
+        background-color: var(--diffs-addition-bg) !important;
       }
       [data-line-type=change-deletion] [data-column-number],
-      [data-line-type=change-deletion] [data-gutter-buffer] {
+      [data-line-type=change-deletion] [data-gutter-buffer]:not([data-gutter-buffer=buffer]) {
         color: rgb(206,66,52) !important;
+        background-color: var(--diffs-deletion-bg) !important;
       }
       [data-gutter-buffer=buffer] {
         background: none !important;
+      }
+      [data-line-type=context] [data-column-number],
+      [data-line-type=metadata] [data-column-number],
+      [data-line-type=expanded] [data-column-number],
+      [data-gutter] {
+        background-color: hsl(var(--content-area)) !important;
       }
     `,
   }), [viewMode, theme])
 
   return (
-    <div className="h-full diff-scroll [overflow:overlay]">
-      <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} className="h-full" />
+    <div className="h-full diff-scroll bg-content-area [overflow:overlay]">
+      <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} />
     </div>
   )
 })
