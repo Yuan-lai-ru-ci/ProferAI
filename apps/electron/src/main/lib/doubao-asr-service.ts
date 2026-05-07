@@ -399,6 +399,7 @@ export async function startDoubaoAsrSession(
     ws.on('close', () => {
       active.closed = true
       activeSessions.delete(sessionId)
+      sendState(win, { sessionId, status: 'idle', message: 'asr_session_ended' })
     })
 
     ws.once('error', (error: Error) => {
