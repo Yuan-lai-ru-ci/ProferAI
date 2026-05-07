@@ -165,9 +165,18 @@ jobs:
 
           echo "=== Fetching release info for ${TAG} ==="
 
-          # 获取 release 信息
+          # 获取 release 信息（draft release 无法通过 /releases/tags/ 获取，需遍历列表）
           RELEASE_JSON=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
-            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+            "https://api.github.com/repos/${REPO}/releases" \
+            | python3 -c "
+          import json, sys
+          releases = json.load(sys.stdin)
+          for r in releases:
+              if r.get('tag_name') == '${TAG}' or r.get('name') == '${TAG}':
+                  print(json.dumps(r)); break
+          else:
+              sys.exit('ERROR: release not found for tag ${TAG}')
+          ")
           RELEASE_ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
           echo "Release ID: ${RELEASE_ID}"
 
