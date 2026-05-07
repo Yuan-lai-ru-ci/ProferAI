@@ -77,7 +77,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --arm64 --publish always
+        run: |
+          for i in 1 2 3; do
+            npx electron-builder --mac --arm64 --publish always && break
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
         working-directory: apps/electron
 
   build-mac-x64:
@@ -135,7 +140,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --x64 --publish always
+        run: |
+          for i in 1 2 3; do
+            npx electron-builder --mac --x64 --publish always && break
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
         working-directory: apps/electron
 
   merge-mac-yml:
