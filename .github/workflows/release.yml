@@ -140,6 +140,104 @@ jobs:
         run: npx electron-builder --mac --x64 --publish always
         working-directory: apps/electron
 
+  merge-mac-yml:
+    name: Merge latest-mac.yml (arm64 + x64)
+    runs-on: ubuntu-latest
+    needs: [build-mac-arm64, build-mac-x64]
+
+    steps:
+      - name: 合并两个架构的 latest-mac.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${GITHUB_REPOSITORY}"
+          VERSION="${TAG#v}"
+
+          # 获取 release 信息
+          RELEASE_JSON=$(curl -sf -H "Authorization: token ${GH_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+          RELEASE_ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+
+          # 找到 arm64 和 x64 zip 文件名
+          ARM64_ZIP=$(echo "$RELEASE_JSON" | python3 -c "
+          import json, sys
+          for a in json.load(sys.stdin)['assets']:
+              if 'arm64-mac.zip' in a['name'] and not a['name'].endswith('.blockmap'):
+                  print(a['name']); break
+          ")
+          X64_ZIP=$(echo "$RELEASE_JSON" | python3 -c "
+          import json, sys
+          for a in json.load(sys.stdin)['assets']:
+              n = a['name']
+              if n.endswith('-mac.zip') and 'arm64' not in n and not n.endswith('.blockmap'):
+                  print(n); break
+          ")
+
+          if [ -z "$ARM64_ZIP" ] || [ -z "$X64_ZIP" ]; then
+            echo "ERROR: missing mac zip assets (arm64=${ARM64_ZIP}, x64=${X64_ZIP})"
+            exit 1
+          fi
+
+          # 下载两个 zip 并计算 sha512（base64 编码）
+          curl -sL "https://github.com/${REPO}/releases/download/${TAG}/${ARM64_ZIP}" -o arm64.zip
+          curl -sL "https://github.com/${REPO}/releases/download/${TAG}/${X64_ZIP}" -o x64.zip
+
+          ARM64_SHA=$(openssl dgst -sha512 -binary arm64.zip | base64 -w0)
+          ARM64_SIZE=$(stat --format=%s arm64.zip)
+          X64_SHA=$(openssl dgst -sha512 -binary x64.zip | base64 -w0)
+          X64_SIZE=$(stat --format=%s x64.zip)
+
+          rm -f arm64.zip x64.zip
+
+          RELEASE_DATE=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+          # 生成合并后的 latest-mac.yml
+          cat > latest-mac.yml << EOF
+          version: ${VERSION}
+          files:
+            - url: ${ARM64_ZIP}
+              sha512: ${ARM64_SHA}
+              size: ${ARM64_SIZE}
+            - url: ${X64_ZIP}
+              sha512: ${X64_SHA}
+              size: ${X64_SIZE}
+          path: ${ARM64_ZIP}
+          sha512: ${ARM64_SHA}
+          releaseDate: '${RELEASE_DATE}'
+          EOF
+
+          # 去除 heredoc 缩进
+          sed -i 's/^          //' latest-mac.yml
+
+          echo "=== Merged latest-mac.yml ==="
+          cat latest-mac.yml
+
+          # 删除旧的 latest-mac.yml asset
+          ASSET_ID=$(curl -sf -H "Authorization: token ${GH_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets" \
+            | python3 -c "
+          import json, sys
+          for a in json.load(sys.stdin):
+              if a['name'] == 'latest-mac.yml':
+                  print(a['id']); break
+          " || true)
+
+          if [ -n "$ASSET_ID" ]; then
+            curl -sf -X DELETE -H "Authorization: token ${GH_TOKEN}" \
+              "https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}"
+          fi
+
+          # 上传合并后的 latest-mac.yml
+          curl -sf -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Content-Type: text/yaml" \
+            --data-binary @latest-mac.yml \
+            "https://uploads.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?name=latest-mac.yml"
+
+          echo "✅ latest-mac.yml merged and uploaded"
+
   build-windows-x64:
     name: build (windows-latest, win, x64, --x64)
     runs-on: windows-latest
