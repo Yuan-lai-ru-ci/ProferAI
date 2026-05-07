@@ -57,7 +57,7 @@ export function UpdateDialog(): React.ReactElement | null {
     if (updateStatus.status === 'downloaded' && !open && dialogVersion) {
       setOpen(true)
     }
-  }, [updateStatus.status, updateStatus.version])
+  }, [updateStatus.status, updateStatus.version, open, dialogVersion])
 
   const handleQuitAndInstall = (): void => {
     window.electronAPI.updater?.quitAndInstall()

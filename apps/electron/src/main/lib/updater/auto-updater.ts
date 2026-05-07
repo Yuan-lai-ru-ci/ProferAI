@@ -6,7 +6,7 @@
  */
 
 import { autoUpdater } from 'electron-updater'
-import type { BrowserWindow } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 
@@ -32,7 +32,14 @@ export function getUpdateStatus(): UpdateStatus {
 
 /** 手动触发检查更新 */
 export async function checkForUpdates(): Promise<void> {
+  // 已在下载中或已下载完成，不重复检查
+  if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
+    console.log('[更新] 跳过检查：已在下载中或已下载完成')
+    return
+  }
+
   try {
+    setStatus({ status: 'checking' })
     await autoUpdater.checkForUpdates()
   } catch (err) {
     console.error('[更新] 检查更新失败:', err)
@@ -45,7 +52,15 @@ export async function checkForUpdates(): Promise<void> {
 
 /** 退出并安装已下载的更新 */
 export function quitAndInstall(): void {
-  autoUpdater.quitAndInstall(false, true)
+  // 移除所有窗口的 close 监听器，避免 preventDefault 阻止退出
+  for (const w of BrowserWindow.getAllWindows()) {
+    w.removeAllListeners('close')
+  }
+
+  // 延迟调用确保 IPC 响应已发送回渲染进程
+  setImmediate(() => {
+    autoUpdater.quitAndInstall(true, true)
+  })
 }
 
 /** 清理更新器资源（定时器等） */
