@@ -850,8 +850,12 @@ export interface ElectronAPI {
 
   /** 获取工作区导出预览信息 */
   migrationGetExportPreview: (workspaceId: string) => Promise<unknown>
+  /** 获取所有工作区的 Skills/MCP 预览（团队分发模式） */
+  migrationGetShareExportPreview: () => Promise<unknown>
   /** 执行导出 */
   migrationExport: (options: unknown) => Promise<{ success: boolean; filePath: string }>
+  /** 执行 v2 多工作区导出 */
+  migrationExportV2: (options: unknown) => Promise<{ success: boolean; filePath: string }>
   /** 解析导入文件，返回预览信息 */
   migrationParseImportFile: (filePath: string) => Promise<unknown>
   /** 确认导入 */
@@ -1915,8 +1919,16 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke('migration:getExportPreview', workspaceId)
   },
 
+  migrationGetShareExportPreview: () => {
+    return ipcRenderer.invoke('migration:getShareExportPreview')
+  },
+
   migrationExport: (options: unknown) => {
     return ipcRenderer.invoke('migration:export', options)
+  },
+
+  migrationExportV2: (options: unknown) => {
+    return ipcRenderer.invoke('migration:exportV2', options)
   },
 
   migrationParseImportFile: (filePath: string) => {

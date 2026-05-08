@@ -2768,9 +2768,19 @@ export function registerIpcHandlers(): void {
     return getExportPreview(workspaceId)
   })
 
+  ipcMain.handle('migration:getShareExportPreview', async () => {
+    const { getShareExportPreview } = await import('./lib/migration-service')
+    return getShareExportPreview()
+  })
+
   ipcMain.handle('migration:export', async (_, options) => {
     const { exportData } = await import('./lib/migration-service')
     return exportData(options)
+  })
+
+  ipcMain.handle('migration:exportV2', async (_, options) => {
+    const { exportDataV2 } = await import('./lib/migration-service')
+    return exportDataV2(options)
   })
 
   ipcMain.handle('migration:parseImportFile', async (_, filePath: string) => {

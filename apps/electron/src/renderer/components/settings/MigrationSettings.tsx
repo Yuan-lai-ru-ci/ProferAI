@@ -5,51 +5,46 @@
  * - Personal 备份（.proma-backup）：全量导出，含解密 API Key
  * - Share 分发（.proma-share）：自由选择组件，凭据自动剥离
  *
- * 功能：
- * - 导出区块：选择模式、勾选组件、选择会话
- * - 导入区块：选择文件、预览内容、路径检查、确认导入
+ * Share 模式支持多工作区导出：
+ * - 默认：导出所有工作区的 Skills + MCP
+ * - 自定义：按工作区逐个选择 Skills 和 MCP servers
  */
 
 import * as React from 'react'
 import {
   Download,
   Upload,
-  AlertTriangle,
   CheckCircle2,
   XCircle,
   Loader2,
-  FolderOpen,
-  ArrowRight,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 import { SettingsSection } from './primitives'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
+import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
 import { cn } from '@/lib/utils'
 
 type MigrationMode = 'personal' | 'share'
 type MigrationComponent = 'sessions' | 'skills' | 'mcp' | 'channels' | 'chattools'
+type ShareDetailMode = 'default' | 'custom'
 
-interface PathCheckResult {
-  path: string
-  exists: boolean
-  suggested?: string
+interface ShareExportWorkspacePreview {
+  workspace: { id: string; name: string; slug: string }
+  skills: Array<{ slug: string; name: string; enabled: boolean }>
+  mcpServers: Array<{ name: string; enabled: boolean; type: string }>
 }
 
-interface ImportPreview {
-  manifest: {
-    mode: string
-    workspaceName: string
-    sourcePlatform: string
-    exportedAt: number
-    components: MigrationComponent[]
-  }
+interface ShareExportPreview {
+  workspaces: ShareExportWorkspacePreview[]
   agentSessionCount: number
   chatConversationCount: number
-  skillNames: string[]
-  hasMcp: boolean
-  crossPlatform: boolean
-  pathCheckResults: PathCheckResult[]
-  tempDir: string
+}
+
+interface WsSelection {
+  skills: Set<string>
+  mcpServers: Set<string>
 }
 
 const COMPONENT_LABELS: Record<MigrationComponent, string> = {
@@ -69,38 +64,45 @@ export function MigrationSettings(): React.ReactElement {
   const [exporting, setExporting] = React.useState(false)
   const [exportResult, setExportResult] = React.useState<{ success: boolean; filePath?: string; error?: string } | null>(null)
 
-  // ── 导入状态 ──────────────────────────────────────
-  const [importing, setImporting] = React.useState(false)
-  const [importPreview, setImportPreview] = React.useState<ImportPreview | null>(null)
-  const [pathMappings, setPathMappings] = React.useState<Record<string, string | null>>({})
-  const [importConfirming, setImportConfirming] = React.useState(false)
-  const [importResult, setImportResult] = React.useState<{ success: boolean; error?: string } | null>(null)
+  // ── 多工作区选择状态 ──────────────────────────────
+  const [shareDetailMode, setShareDetailMode] = React.useState<ShareDetailMode>('default')
+  const [sharePreview, setSharePreview] = React.useState<ShareExportPreview | null>(null)
+  const [sharePreviewLoading, setSharePreviewLoading] = React.useState(false)
+  const [wsSelections, setWsSelections] = React.useState<Map<string, WsSelection>>(new Map())
+  const [expandedWorkspaces, setExpandedWorkspaces] = React.useState<Set<string>>(new Set())
 
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspace = workspaces[0]
+  const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
 
-  // 监听双击文件触发的导入事件
-  React.useEffect(() => {
-    const unsub = window.electronAPI.onMigrationOpenImportFile(async ({ filePath }) => {
-      setImporting(true)
-      setImportPreview(null)
-      setImportResult(null)
-      try {
-        const preview = await window.electronAPI.migrationParseImportFile(filePath) as ImportPreview
-        const initialMappings: Record<string, string | null> = {}
-        for (const r of preview.pathCheckResults) {
-          if (!r.exists) initialMappings[r.path] = null
-        }
-        setPathMappings(initialMappings)
-        setImportPreview(preview)
-      } catch (err) {
-        setImportResult({ success: false, error: err instanceof Error ? err.message : '解析文件失败' })
-      } finally {
-        setImporting(false)
+  const hasSkillsOrMcp = shareComponents.has('skills') || shareComponents.has('mcp')
+
+  // ── 加载多工作区预览 ──────────────────────────────
+  const loadSharePreview = React.useCallback(async () => {
+    setSharePreviewLoading(true)
+    try {
+      const preview = await window.electronAPI.migrationGetShareExportPreview() as ShareExportPreview
+      setSharePreview(preview)
+      const selections = new Map<string, WsSelection>()
+      for (const ws of preview.workspaces) {
+        selections.set(ws.workspace.id, {
+          skills: new Set(ws.skills.map((s) => s.slug)),
+          mcpServers: new Set(ws.mcpServers.map((m) => m.name)),
+        })
       }
-    })
-    return unsub
+      setWsSelections(selections)
+    } catch {
+      // 静默失败
+    } finally {
+      setSharePreviewLoading(false)
+    }
   }, [])
+
+  React.useEffect(() => {
+    if (exportMode === 'share' && shareDetailMode === 'custom' && !sharePreview) {
+      loadSharePreview()
+    }
+  }, [exportMode, shareDetailMode, sharePreview, loadSharePreview])
 
   // ── 导出逻辑 ──────────────────────────────────────
 
@@ -121,14 +123,41 @@ export function MigrationSettings(): React.ReactElement {
           ? ['sessions', 'skills', 'mcp', 'channels', 'chattools']
           : Array.from(shareComponents)
 
-      const result = await window.electronAPI.migrationExport({
-        mode: exportMode,
-        workspaceId: currentWorkspace.id,
-        components,
-        outputPath,
-      }) as { success: boolean; filePath: string }
+      if (exportMode === 'share') {
+        let workspaceSelections: Array<{ workspaceId: string; skillSlugs?: string[]; mcpServerNames?: string[] }> | undefined
 
-      setExportResult({ success: true, filePath: result.filePath })
+        if (shareDetailMode === 'custom' && sharePreview) {
+          workspaceSelections = []
+          for (const ws of sharePreview.workspaces) {
+            const sel = wsSelections.get(ws.workspace.id)
+            if (!sel) continue
+            const hasSkills = sel.skills.size > 0 && shareComponents.has('skills')
+            const hasMcp = sel.mcpServers.size > 0 && shareComponents.has('mcp')
+            if (!hasSkills && !hasMcp) continue
+            workspaceSelections.push({
+              workspaceId: ws.workspace.id,
+              skillSlugs: shareComponents.has('skills') ? Array.from(sel.skills) : undefined,
+              mcpServerNames: shareComponents.has('mcp') ? Array.from(sel.mcpServers) : undefined,
+            })
+          }
+        }
+
+        const result = await window.electronAPI.migrationExportV2({
+          mode: exportMode,
+          components,
+          outputPath,
+          workspaceSelections,
+        }) as { success: boolean; filePath: string }
+        setExportResult({ success: true, filePath: result.filePath })
+      } else {
+        const result = await window.electronAPI.migrationExport({
+          mode: exportMode,
+          workspaceId: currentWorkspace.id,
+          components,
+          outputPath,
+        }) as { success: boolean; filePath: string }
+        setExportResult({ success: true, filePath: result.filePath })
+      }
     } catch (err) {
       setExportResult({ success: false, error: err instanceof Error ? err.message : '导出失败' })
     } finally {
@@ -145,59 +174,52 @@ export function MigrationSettings(): React.ReactElement {
     })
   }
 
-  // ── 导入逻辑 ──────────────────────────────────────
-
-  const handleSelectImportFile = async (): Promise<void> => {
-    setImporting(true)
-    setImportPreview(null)
-    setImportResult(null)
-
-    try {
-      const filePath = await window.electronAPI.migrationOpenFileDialog()
-      if (!filePath) {
-        setImporting(false)
-        return
-      }
-
-      const preview = await window.electronAPI.migrationParseImportFile(filePath) as ImportPreview
-
-      // 初始化路径映射：存在的路径保留，不存在的默认移除
-      const initialMappings: Record<string, string | null> = {}
-      for (const r of preview.pathCheckResults) {
-        if (!r.exists) {
-          initialMappings[r.path] = null
-        }
-      }
-      setPathMappings(initialMappings)
-      setImportPreview(preview)
-    } catch (err) {
-      setImportResult({ success: false, error: err instanceof Error ? err.message : '解析文件失败' })
-    } finally {
-      setImporting(false)
-    }
+  const toggleWsExpand = (wsId: string): void => {
+    setExpandedWorkspaces((prev) => {
+      const next = new Set(prev)
+      if (next.has(wsId)) next.delete(wsId)
+      else next.add(wsId)
+      return next
+    })
   }
 
-  const handleConfirmImport = async (): Promise<void> => {
-    if (!importPreview) return
-    setImportConfirming(true)
-
-    try {
-      await window.electronAPI.migrationConfirmImport({
-        tempDir: importPreview.tempDir,
-        manifest: importPreview.manifest,
-        pathMappings,
-      })
-      setImportResult({ success: true })
-      setImportPreview(null)
-    } catch (err) {
-      setImportResult({ success: false, error: err instanceof Error ? err.message : '导入失败' })
-    } finally {
-      setImportConfirming(false)
-    }
+  const toggleWsSkill = (wsId: string, slug: string): void => {
+    setWsSelections((prev) => {
+      const next = new Map(prev)
+      const sel = { ...next.get(wsId)!, skills: new Set(next.get(wsId)!.skills), mcpServers: new Set(next.get(wsId)!.mcpServers) }
+      if (sel.skills.has(slug)) sel.skills.delete(slug)
+      else sel.skills.add(slug)
+      next.set(wsId, sel)
+      return next
+    })
   }
 
-  const handlePathMapping = (originalPath: string, newValue: string | null): void => {
-    setPathMappings((prev) => ({ ...prev, [originalPath]: newValue }))
+  const toggleWsMcp = (wsId: string, name: string): void => {
+    setWsSelections((prev) => {
+      const next = new Map(prev)
+      const sel = { ...next.get(wsId)!, skills: new Set(next.get(wsId)!.skills), mcpServers: new Set(next.get(wsId)!.mcpServers) }
+      if (sel.mcpServers.has(name)) sel.mcpServers.delete(name)
+      else sel.mcpServers.add(name)
+      next.set(wsId, sel)
+      return next
+    })
+  }
+
+  const toggleWsAll = (wsId: string, wsPreview: ShareExportWorkspacePreview): void => {
+    setWsSelections((prev) => {
+      const next = new Map(prev)
+      const sel = next.get(wsId)
+      if (!sel) return prev
+      const allSkills = wsPreview.skills.map((s) => s.slug)
+      const allMcp = wsPreview.mcpServers.map((m) => m.name)
+      const allSelected = allSkills.every((s) => sel.skills.has(s)) && allMcp.every((m) => sel.mcpServers.has(m))
+      if (allSelected) {
+        next.set(wsId, { skills: new Set(), mcpServers: new Set() })
+      } else {
+        next.set(wsId, { skills: new Set(allSkills), mcpServers: new Set(allMcp) })
+      }
+      return next
+    })
   }
 
   return (
@@ -258,6 +280,129 @@ export function MigrationSettings(): React.ReactElement {
             </div>
           )}
 
+          {/* Share 模式：多工作区选择 */}
+          {exportMode === 'share' && hasSkillsOrMcp && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">工作区范围</label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setShareDetailMode('default')}
+                  className={cn(
+                    'text-left px-3 py-2.5 rounded-lg border text-sm transition-colors',
+                    shareDetailMode === 'default'
+                      ? 'border-primary/50 bg-primary/5'
+                      : 'border-border/50 hover:border-border hover:bg-muted/30'
+                  )}
+                >
+                  <span className="font-medium text-foreground">所有工作区</span>
+                  <p className="text-xs text-muted-foreground mt-0.5">导出全部工作区的 Skills 和 MCP</p>
+                </button>
+                <button
+                  onClick={() => setShareDetailMode('custom')}
+                  className={cn(
+                    'text-left px-3 py-2.5 rounded-lg border text-sm transition-colors',
+                    shareDetailMode === 'custom'
+                      ? 'border-primary/50 bg-primary/5'
+                      : 'border-border/50 hover:border-border hover:bg-muted/30'
+                  )}
+                >
+                  <span className="font-medium text-foreground">自定义选择</span>
+                  <p className="text-xs text-muted-foreground mt-0.5">手动挑选要导出的项目</p>
+                </button>
+              </div>
+
+              {/* 自定义选择面板 */}
+              {shareDetailMode === 'custom' && (
+                <div className="rounded-lg border border-border/50">
+                  {sharePreviewLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+                      <Loader2 size={16} className="animate-spin" />
+                      加载中...
+                    </div>
+                  ) : sharePreview ? (
+                    <div className="divide-y divide-border/30">
+                      {sharePreview.workspaces.map((ws) => {
+                        const wsId = ws.workspace.id
+                        const expanded = expandedWorkspaces.has(wsId)
+                        const sel = wsSelections.get(wsId)
+                        const totalItems = ws.skills.length + ws.mcpServers.length
+                        const selectedItems = (sel?.skills.size ?? 0) + (sel?.mcpServers.size ?? 0)
+
+                        return (
+                          <div key={wsId}>
+                            <div
+                              className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors"
+                              onClick={() => toggleWsExpand(wsId)}
+                            >
+                              {expanded ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
+                              <span className="text-sm font-medium text-foreground flex-1">{ws.workspace.name}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {selectedItems}/{totalItems} 项
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  toggleWsAll(wsId, ws)
+                                }}
+                                className="text-xs text-primary hover:underline"
+                              >
+                                {selectedItems === totalItems ? '取消全选' : '全选'}
+                              </button>
+                            </div>
+
+                            {expanded && (
+                              <div className="px-4 pb-3 pl-9 space-y-1">
+                                {shareComponents.has('skills') && ws.skills.length > 0 && (
+                                  <>
+                                    <p className="text-xs font-medium text-muted-foreground pt-1">Skills</p>
+                                    {ws.skills.map((skill) => (
+                                      <label key={skill.slug} className="flex items-center gap-2 py-0.5 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={sel?.skills.has(skill.slug) ?? false}
+                                          onChange={() => toggleWsSkill(wsId, skill.slug)}
+                                          className="w-3.5 h-3.5 rounded border-border accent-primary"
+                                        />
+                                        <span className="text-sm text-foreground">{skill.name}</span>
+                                        {!skill.enabled && <span className="text-xs text-muted-foreground">(已禁用)</span>}
+                                      </label>
+                                    ))}
+                                  </>
+                                )}
+                                {shareComponents.has('mcp') && ws.mcpServers.length > 0 && (
+                                  <>
+                                    <p className="text-xs font-medium text-muted-foreground pt-1">MCP Servers</p>
+                                    {ws.mcpServers.map((server) => (
+                                      <label key={server.name} className="flex items-center gap-2 py-0.5 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={sel?.mcpServers.has(server.name) ?? false}
+                                          onChange={() => toggleWsMcp(wsId, server.name)}
+                                          className="w-3.5 h-3.5 rounded border-border accent-primary"
+                                        />
+                                        <span className="text-sm text-foreground">{server.name}</span>
+                                        <span className="text-xs text-muted-foreground">({server.type})</span>
+                                      </label>
+                                    ))}
+                                  </>
+                                )}
+                                {((!shareComponents.has('skills') || ws.skills.length === 0) && (!shareComponents.has('mcp') || ws.mcpServers.length === 0)) && (
+                                  <p className="text-xs text-muted-foreground py-1">此工作区没有可导出的项目</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground text-center py-4">加载预览失败</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {exportMode === 'personal' && (
             <div className="rounded-lg bg-muted/30 border border-border/30 px-4 py-3">
               <p className="text-sm text-muted-foreground">
@@ -304,139 +449,16 @@ export function MigrationSettings(): React.ReactElement {
         title="导入备份"
         description="从备份文件导入数据，支持 .proma-backup 和 .proma-share 格式"
       >
-        <div className="space-y-4">
-          {/* 文件选择 */}
-          {!importPreview && (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleSelectImportFile}
-                disabled={importing}
-                className={cn(
-                  'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                  'border border-border hover:bg-muted/50',
-                  'disabled:opacity-50 disabled:cursor-not-allowed'
-                )}
-              >
-                {importing ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
-                {importing ? '解析中...' : '选择迁移文件'}
-              </button>
-              <span className="text-xs text-muted-foreground">支持 .proma-backup 和 .proma-share</span>
-            </div>
+        <button
+          onClick={() => setMigrationImportDialogOpen(true)}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
+            'border border-border hover:bg-muted/50'
           )}
-
-          {importResult && !importPreview && (
-            <div className={cn('flex items-center gap-1.5 text-sm', importResult.success ? 'text-green-600' : 'text-red-500')}>
-              {importResult.success ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
-              {importResult.success ? '导入成功！请重启应用使所有更改生效。' : importResult.error}
-            </div>
-          )}
-
-          {/* 导入预览 */}
-          {importPreview && (
-            <div className="space-y-4">
-              {/* 跨平台警告 */}
-              {importPreview.crossPlatform && (
-                <div className="flex items-start gap-3 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 dark:bg-amber-950/20 dark:border-amber-800">
-                  <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
-                  <div className="text-sm text-amber-700 dark:text-amber-400">
-                    <p className="font-medium">检测到跨平台迁移（{importPreview.manifest.sourcePlatform} → 当前系统）</p>
-                    <p className="mt-0.5 text-amber-600 dark:text-amber-500">部分 Skills 和 MCP 工具可能需要手动调整命令路径。</p>
-                  </div>
-                </div>
-              )}
-
-              {/* 内容摘要 */}
-              <div className="rounded-lg border border-border/50 bg-muted/20 px-4 py-3 space-y-2">
-                <p className="text-sm font-medium text-foreground">
-                  包内容来自：{importPreview.manifest.workspaceName}（
-                  {new Date(importPreview.manifest.exportedAt).toLocaleDateString('zh-CN')}）
-                </p>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm text-muted-foreground">
-                  {importPreview.agentSessionCount > 0 && (
-                    <span>Agent 会话：{importPreview.agentSessionCount} 个</span>
-                  )}
-                  {importPreview.chatConversationCount > 0 && (
-                    <span>Chat 对话：{importPreview.chatConversationCount} 个</span>
-                  )}
-                  {importPreview.skillNames.length > 0 && (
-                    <span>Skills：{importPreview.skillNames.length} 个</span>
-                  )}
-                  {importPreview.hasMcp && <span>MCP 配置：已包含</span>}
-                </div>
-              </div>
-
-              {/* 路径检查 */}
-              {importPreview.pathCheckResults.length > 0 && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">附加目录处理</label>
-                  <div className="rounded-lg border border-border/50 divide-y divide-border/30">
-                    {importPreview.pathCheckResults.map((r) => (
-                      <div key={r.path} className="px-4 py-3 space-y-1.5">
-                        <div className="flex items-center gap-2">
-                          {r.exists ? (
-                            <CheckCircle2 size={14} className="text-green-500 flex-shrink-0" />
-                          ) : (
-                            <XCircle size={14} className="text-red-400 flex-shrink-0" />
-                          )}
-                          <span className="text-xs font-mono text-foreground truncate">{r.path}</span>
-                        </div>
-                        {!r.exists && (
-                          <div className="flex items-center gap-2 pl-5">
-                            <span className="text-xs text-muted-foreground">处理方式：</span>
-                            <select
-                              value={pathMappings[r.path] === null ? '__remove' : (pathMappings[r.path] ?? '__remove')}
-                              onChange={(e) => handlePathMapping(r.path, e.target.value === '__remove' ? null : e.target.value)}
-                              className="text-xs border border-border rounded px-2 py-1 bg-background"
-                            >
-                              <option value="__remove">移除（推荐）</option>
-                              {r.suggested && (
-                                <option value={r.suggested}>推断路径：{r.suggested}</option>
-                              )}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 确认按钮 */}
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleConfirmImport}
-                  disabled={importConfirming}
-                  className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                    'bg-primary text-primary-foreground hover:bg-primary/90',
-                    'disabled:opacity-50 disabled:cursor-not-allowed'
-                  )}
-                >
-                  {importConfirming ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <Upload size={16} />
-                  )}
-                  {importConfirming ? '导入中...' : '确认导入'}
-                </button>
-                <button
-                  onClick={() => { setImportPreview(null); setImportResult(null) }}
-                  disabled={importConfirming}
-                  className="px-4 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                >
-                  取消
-                </button>
-              </div>
-
-              {importResult && (
-                <div className={cn('flex items-center gap-1.5 text-sm', importResult.success ? 'text-green-600' : 'text-red-500')}>
-                  {importResult.success ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
-                  {importResult.success ? '导入成功！请重启应用使所有更改生效。' : importResult.error}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        >
+          <Upload size={16} />
+          打开导入
+        </button>
       </SettingsSection>
     </div>
   )
