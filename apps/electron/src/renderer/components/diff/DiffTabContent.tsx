@@ -1,16 +1,14 @@
 /**
- * DiffTabContent — 主区域 Diff Tab 的内容
+ * DiffTabContent — 单文件 Diff 内容
  *
  * 加载文件新旧版本内容，通过 @pierre/diffs 渲染 diff。
  */
 
 import * as React from 'react'
-import { Copy, Check, ArrowLeft } from 'lucide-react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { Copy, Check } from 'lucide-react'
+import { useAtom, useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { agentDiffViewModeAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
-import { activeTabIdAtom, tabsAtom, type TabItem } from '@/atoms/tab-atoms'
+import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
 import { DiffView } from './DiffView'
 
 interface DiffTabContentProps {
@@ -21,32 +19,13 @@ interface DiffTabContentProps {
   gitRoot?: string
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked, gitRoot }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, gitRoot }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
-
-  const sessions = useAtomValue(agentSessionsAtom)
-  const sessionTitle = sessionId ? sessions.find((s) => s.id === sessionId)?.title : null
-
-  const setTabs = useSetAtom(tabsAtom)
-  const setActiveTabId = useSetAtom(activeTabIdAtom)
-
-  const handleGoToSession = React.useCallback(() => {
-    if (!sessionId) return
-    setTabs((prev) => {
-      const existing = prev.find((t) => t.sessionId === sessionId && t.type === 'agent')
-      if (existing) {
-        setActiveTabId(existing.id)
-        return prev
-      }
-      const newTab: TabItem = { id: sessionId, type: 'agent', sessionId, title: sessionTitle || sessionId }
-      setActiveTabId(sessionId)
-      return [...prev, newTab]
-    })
-  }, [sessionId, sessionTitle, setTabs, setActiveTabId])
+  const refreshVersion = useAtomValue(agentDiffRefreshVersionAtom)
 
   React.useEffect(() => {
     let cancelled = false
@@ -68,7 +47,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked, gitR
 
     load()
     return () => { cancelled = true }
-  }, [filePath, dirPath, gitRoot])
+  }, [filePath, dirPath, gitRoot, refreshVersion])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -116,19 +95,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked, gitR
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
         ) : (
           <DiffView oldContent={oldContent} newContent={newContent} filePath={filePath} viewMode={viewMode} />
-        )}
-
-        {sessionId && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button type="button"
-                className="absolute bottom-[82px] left-1/2 -translate-x-1/2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-[14px] shadow-sm hover:opacity-90 transition-opacity z-10"
-                onClick={handleGoToSession}>
-                返回会话
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">返回对话：{sessionTitle || sessionId}</TooltipContent>
-          </Tooltip>
         )}
       </div>
     </div>

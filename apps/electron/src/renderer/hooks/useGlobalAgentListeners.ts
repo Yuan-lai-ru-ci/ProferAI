@@ -47,6 +47,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
+import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
@@ -54,8 +55,8 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
 
-/** 正在执行的写工具 ID 集合（tool_start 入、tool_result 出，用于触发 diff 刷新） */
-const pendingWriteToolIds = new Set<string>()
+/** 正在执行的写工具：toolUseId → targetPath（tool_start 入、tool_result 出，用于触发 diff 刷新和自动切换预览文件） */
+const pendingWriteTools = new Map<string, string>()
 
 // ============================================================================
 // Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
@@ -435,26 +436,16 @@ export function useGlobalAgentListeners(): void {
             })
           }
 
-          // 自动打开侧面板：检测到 Agent/Task 工具启动或 teammate 任务开始时
-          if (
-            (event.type === 'tool_start' && (event.toolName === 'Agent' || event.toolName === 'Task')) ||
-            event.type === 'task_started'
-          ) {
-            store.set(agentSidePanelOpenMapAtom, (prev) => {
-              const map = new Map(prev)
-              map.set(sessionId, true)
-              return map
-            })
-          }
+          // RightSidePanel 由用户完全控制，Agent 行为不影响其开关状态
 
           // Agent 修改文件时，触发右侧文件浏览器自动定位（展开父目录 + 滚动 + 高亮）
           if (event.type === 'tool_start' && WRITE_TOOLS.has(event.toolName)) {
-            pendingWriteToolIds.add(event.toolUseId)
             const input = event.input as Record<string, unknown> | undefined
             const targetPath =
               (input?.file_path as string | undefined)
               ?? (input?.path as string | undefined)
               ?? (input?.notebook_path as string | undefined)
+            pendingWriteTools.set(event.toolUseId, targetPath || '')
             if (typeof targetPath === 'string' && targetPath.length > 0) {
               const now = Date.now()
               store.set(fileBrowserAutoRevealAtom, { sessionId, path: targetPath, ts: now })
@@ -466,6 +457,18 @@ export function useGlobalAgentListeners(): void {
                 map.set(sessionId, inner)
                 return map
               })
+              // Agent 开始改文件时，自动切换预览面板到该文件
+              const autoPreview = store.get(autoPreviewEnabledAtom)
+              if (autoPreview) {
+                // 从绝对路径提取父目录作为 dirPath，便于 getDiffContents 定位 git root
+                const lastSep = targetPath.lastIndexOf('/')
+                const parentDir = lastSep > 0 ? targetPath.slice(0, lastSep) : ''
+                store.set(previewFileMapAtom, (prev) => {
+                  const m = new Map(prev)
+                  m.set(sessionId, { filePath: targetPath, dirPath: parentDir })
+                  return m
+                })
+              }
             }
           }
 
@@ -507,11 +510,27 @@ export function useGlobalAgentListeners(): void {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
               prev.filter((t) => t.toolUseId !== event.toolUseId)
             )
-            // Agent 写类工具完成时，递增 diff 刷新版本号
-            if (pendingWriteToolIds.has(event.toolUseId)) {
-              pendingWriteToolIds.delete(event.toolUseId)
+            // Agent 写类工具完成时，递增 diff 刷新版本号并切换预览文件
+            if (pendingWriteTools.has(event.toolUseId)) {
+              const writtenPath = pendingWriteTools.get(event.toolUseId)!
+              pendingWriteTools.delete(event.toolUseId)
               store.set(agentDiffRefreshVersionAtom, (prev) => prev + 1)
               store.set(agentDiffUnseenChangesAtom, true)
+              // 自动切换预览到刚写完的文件 + 弹出预览面板
+              const autoPreview = store.get(autoPreviewEnabledAtom)
+              if (autoPreview && writtenPath) {
+                const lastSep = writtenPath.lastIndexOf('/')
+                const parentDir = lastSep > 0 ? writtenPath.slice(0, lastSep) : ''
+                store.set(previewFileMapAtom, (prev) => {
+                  const m = new Map(prev)
+                  m.set(sessionId, { filePath: writtenPath, dirPath: parentDir })
+                  return m
+                })
+                store.set(previewPanelOpenMapAtom, (prev) => {
+                  if (prev.get(sessionId)) return prev
+                  const m = new Map(prev); m.set(sessionId, true); return m
+                })
+              }
             }
           } else if (event.type === 'shell_killed') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {

@@ -11,6 +11,8 @@ import { Pencil, Check, X, PanelRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { agentSessionsAtom, agentSidePanelOpenMapAtom, workspaceFilesVersionAtom } from '@/atoms/agent-atoms'
+import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
+import { registerShortcut } from '@/lib/shortcut-registry'
 
 /** AgentHeader 属性接口 */
 interface AgentHeaderProps {
@@ -29,7 +31,10 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
   const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
   const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
+  const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
+  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
   const isPanelOpen = sidePanelOpenMap.get(sessionId) ?? true
+  const previewOpen = previewOpenMap.get(sessionId) ?? false
   const hasFileChanges = filesVersion > 0
 
   const togglePanel = React.useCallback(() => {
@@ -39,6 +44,10 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
       return map
     })
   }, [sessionId, setSidePanelOpenMap])
+
+  React.useEffect(() => {
+    return registerShortcut('toggle-right-panel', togglePanel)
+  }, [togglePanel])
 
   if (!session) return null
 
@@ -124,8 +133,8 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
               <Pencil className="size-3.5" />
             </button>
           </div>
-          {/* 文件面板打开按钮（仅面板关闭时显示） */}
-          {!isPanelOpen && (
+          {/* 文件面板打开按钮（面板关闭或预览面板打开时显示） */}
+          {(!isPanelOpen || previewOpen) && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

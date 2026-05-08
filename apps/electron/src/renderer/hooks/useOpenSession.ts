@@ -34,9 +34,7 @@ export function useOpenSession(): OpenSessionFn {
       const result = openTab(tabs, { type, sessionId, title })
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
-      if (type !== 'diff') {
-        setAppMode(type)
-      }
+      setAppMode(type)
 
       if (type === 'chat') {
         setCurrentConversationId(sessionId)

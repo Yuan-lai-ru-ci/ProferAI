@@ -15,16 +15,26 @@ import type { ChangeSource, ChangedFileStatus } from '@proma/shared'
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 /**
- * 校验 filePath（相对路径）解析后是否仍位于 root 目录内。
- * 拒绝绝对路径以及 `..` 穿越。
+ * 校验并规范化 filePath，确保其位于 root 目录内。
+ * 支持相对路径和绝对路径。绝对路径会被自动转为相对路径。
+ * 拒绝 `..` 穿越和 root 外的路径。
+ * 返回安全的相对路径，或 null 表示不安全。
  */
-function isPathSafe(root: string, filePath: string): boolean {
-  if (!filePath || typeof filePath !== 'string') return false
-  if (isAbsolute(filePath)) return false
+function normalizeSafePath(root: string, filePath: string): string | null {
+  if (!filePath || typeof filePath !== 'string') return null
   const resolvedRoot = resolve(root)
-  const resolvedTarget = resolve(resolvedRoot, filePath)
   const rootWithSep = resolvedRoot.endsWith('/') ? resolvedRoot : resolvedRoot + '/'
-  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(rootWithSep)
+
+  if (isAbsolute(filePath)) {
+    const resolvedFile = resolve(filePath)
+    if (!resolvedFile.startsWith(rootWithSep)) return null
+    return resolvedFile.slice(rootWithSep.length)
+  }
+
+  if (filePath.includes('..')) return null
+  const resolvedTarget = resolve(resolvedRoot, filePath)
+  if (!resolvedTarget.startsWith(rootWithSep) && resolvedTarget !== resolvedRoot) return null
+  return filePath
 }
 
 /**
@@ -315,12 +325,12 @@ function findGitReposDown(dirPath: string, maxDepth: number): string | null {
 export async function getFileDiff(dirPath: string, filePath: string, gitRoot?: string): Promise<string> {
   const root = gitRoot || findGitRoot(dirPath)
   if (!root) return ''
-  if (!isPathSafe(root, filePath)) {
+  const safePath = normalizeSafePath(root, filePath)
+  if (!safePath) {
     console.warn('[git-diff-service] getFileDiff 拒绝不安全路径:', filePath)
     return ''
   }
-  // git diff 用 `--` 分隔避免 filePath 被识别为选项
-  const diff = runGitCommand(['diff', '--', filePath], root)
+  const diff = runGitCommand(['diff', '--', safePath], root)
   return diff || ''
 }
 
@@ -329,8 +339,33 @@ export async function getFileDiff(dirPath: string, filePath: string, gitRoot?: s
  */
 export async function getDiffContents(dirPath: string, filePath: string, gitRoot?: string): Promise<{ oldContent: string; newContent: string } | null> {
   const root = gitRoot || findGitRoot(dirPath)
-  if (!root) return null
-  if (!isPathSafe(root, filePath)) {
+
+  // 无 git root：纯文件预览（无 git HEAD 可比较），仅读磁盘文件，安全检查依赖 dirPath
+  if (!root) {
+    const safePath = normalizeSafePath(dirPath, filePath)
+    if (!safePath) {
+      console.warn('[git-diff-service] getDiffContents 拒绝不安全路径（无 git root）:', filePath)
+      return null
+    }
+    const fullPath = join(dirPath, safePath)
+    let newContent = ''
+    if (existsSync(fullPath)) {
+      try {
+        const st = statSync(fullPath)
+        if (st.size > MAX_FILE_SIZE_BYTES) {
+          console.warn('[git-diff-service] 文件超过大小上限，跳过读取:', fullPath, st.size)
+        } else {
+          newContent = readFileSync(fullPath, 'utf-8')
+        }
+      } catch {
+        // 读取失败保持空字符串
+      }
+    }
+    return { oldContent: '', newContent }
+  }
+
+  const safePath = normalizeSafePath(root, filePath)
+  if (!safePath) {
     console.warn('[git-diff-service] getDiffContents 拒绝不安全路径:', filePath)
     return null
   }
@@ -338,7 +373,7 @@ export async function getDiffContents(dirPath: string, filePath: string, gitRoot
   // 旧版本从 git HEAD 读取
   let oldContent = ''
   try {
-    const result = spawnSync('git', ['show', `HEAD:${filePath}`], {
+    const result = spawnSync('git', ['show', `HEAD:${safePath}`], {
       cwd: root,
       encoding: 'utf-8',
       timeout: 10000,
@@ -353,7 +388,7 @@ export async function getDiffContents(dirPath: string, filePath: string, gitRoot
 
   // 新版本从磁盘读取
   let newContent = ''
-  const fullPath = join(root, filePath)
+  const fullPath = join(root, safePath)
   if (existsSync(fullPath)) {
     try {
       const st = statSync(fullPath)
@@ -379,11 +414,12 @@ export async function getDiffContents(dirPath: string, filePath: string, gitRoot
 export async function getUntrackedContent(dirPath: string, filePath: string, gitRoot?: string): Promise<string> {
   if (!filePath || typeof filePath !== 'string') return ''
   const root = gitRoot || findGitRoot(dirPath) || dirPath
-  if (!isPathSafe(root, filePath)) {
+  const safePath = normalizeSafePath(root, filePath)
+  if (!safePath) {
     console.warn('[git-diff-service] getUntrackedContent 拒绝不安全路径:', filePath)
     return ''
   }
-  const fullPath = resolve(root, filePath)
+  const fullPath = resolve(root, safePath)
   try {
     const st = statSync(fullPath)
     if (st.size > MAX_FILE_SIZE_BYTES) {
@@ -402,9 +438,10 @@ export async function getUntrackedContent(dirPath: string, filePath: string, git
 export async function revertFile(dirPath: string, filePath: string, gitRoot?: string): Promise<void> {
   const root = gitRoot || findGitRoot(dirPath)
   if (!root) return
-  if (!isPathSafe(root, filePath)) {
+  const safePath = normalizeSafePath(root, filePath)
+  if (!safePath) {
     console.warn('[git-diff-service] revertFile 拒绝不安全路径:', filePath)
     return
   }
-  runGitCommand(['checkout', '--', filePath], root)
+  runGitCommand(['checkout', '--', safePath], root)
 }

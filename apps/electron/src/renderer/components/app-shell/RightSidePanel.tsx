@@ -15,7 +15,6 @@ import {
   agentDiffPanelTabAtom,
 } from '@/atoms/agent-atoms'
 import { SidePanel } from '@/components/agent/SidePanel'
-import { registerShortcut } from '@/lib/shortcut-registry'
 
 export function RightSidePanel({ width }: { width?: number }): React.ReactElement | null {
   const appMode = useAtomValue(appModeAtom)
@@ -37,18 +36,6 @@ export function RightSidePanel({ width }: { width?: number }): React.ReactElemen
       const map = new Map(prev)
       map.set(currentSessionId, tab)
       return map
-    })
-  }, [currentSessionId, setDiffPanelTabMap])
-
-  // 注册 Cmd+Shift+D 快捷键
-  React.useEffect(() => {
-    return registerShortcut('toggle-diff-panel', () => {
-      setDiffPanelTabMap((prev) => {
-        const map = new Map(prev)
-        const current = map.get(currentSessionId) ?? 'files'
-        map.set(currentSessionId, current === 'files' ? 'changes' : 'files')
-        return map
-      })
     })
   }, [currentSessionId, setDiffPanelTabMap])
 

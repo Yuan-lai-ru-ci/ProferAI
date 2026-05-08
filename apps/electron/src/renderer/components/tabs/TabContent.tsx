@@ -10,7 +10,6 @@ import { useAtomValue } from 'jotai'
 import { tabsAtom } from '@/atoms/tab-atoms'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
-import { DiffTabContent } from '@/components/diff/DiffTabContent'
 
 export interface TabContentProps {
   tabId: string
@@ -37,18 +36,6 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
 
   if (tab.type === 'chat') {
     return <ChatView conversationId={tab.sessionId} key={tab.sessionId} />
-  }
-
-  if (tab.type === 'diff') {
-    return (
-      <DiffTabContent
-        filePath={tab.filePath || ''}
-        dirPath={tab.dirPath || ''}
-        sessionId={tab.sessionId}
-        gitRoot={tab.gitRoot}
-        key={tab.id}
-      />
-    )
   }
 
   return <AgentView sessionId={tab.sessionId} key={tab.sessionId} />

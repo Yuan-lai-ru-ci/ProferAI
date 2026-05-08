@@ -45,6 +45,9 @@ import {
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
+import { registerShortcut } from '@/lib/shortcut-registry'
+import { previewPanelOpenMapAtom, previewSplitRatioAtom, autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
+import { PreviewPanel } from '@/components/diff/PreviewPanel'
 import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
@@ -61,6 +64,7 @@ import {
   agentSessionDraftHtmlAtom,
   agentPromptSuggestionsAtom,
   agentMessageRefreshAtom,
+  agentDiffRefreshVersionAtom,
   agentSessionsAtom,
   agentAttachedDirectoriesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
@@ -1262,6 +1266,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
 
+      // 刷新预览面板的 diff（文件已被回退，当前显示的内容已过期）
+      store.set(agentDiffRefreshVersionAtom, (prev) => prev + 1)
+
       if (result.fileRewind?.canRewind) {
         const fileCount = result.fileRewind.filesChanged?.length ?? 0
         toast.success('已回退到此处', {
@@ -1307,14 +1314,61 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
+  // ===== 预览面板状态 =====
+  const [previewOpenMap, setPreviewOpenMap] = useAtom(previewPanelOpenMapAtom)
+  const previewOpen = previewOpenMap.get(sessionId) ?? false
+  const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
+  const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
+  const previewDragging = React.useRef(false)
+
+  const togglePreviewPanel = React.useCallback(() => {
+    setPreviewOpenMap((prev) => {
+      const m = new Map(prev)
+      const current = m.get(sessionId) ?? false
+      m.set(sessionId, !current)
+      return m
+    })
+  }, [sessionId, setPreviewOpenMap])
+
+  React.useEffect(() => {
+    return registerShortcut('toggle-preview-panel', togglePreviewPanel)
+  }, [togglePreviewPanel])
+
+  const handlePreviewDragStart = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    previewDragging.current = true
+    const startX = e.clientX
+    const startRatio = splitRatio
+    const containerWidth = (e.currentTarget.parentElement as HTMLElement)?.clientWidth ?? 1
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!previewDragging.current) return
+      const delta = ev.clientX - startX
+      const newRatio = Math.max(0.3, Math.min(0.8, startRatio + delta / containerWidth))
+      setSplitRatio(newRatio)
+    }
+    const onMouseUp = () => {
+      previewDragging.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [splitRatio, setSplitRatio])
+
   const hasTextInput = inputContent.trim().length > 0
   const canSend = (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      {/* 主内容区域 */}
-      <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
+      {/* 分屏容器 */}
+      <div className="flex h-full w-full overflow-hidden">
+      {/* 左侧：对话 */}
+      <div
+        className={cn("flex flex-col h-full overflow-hidden", !previewOpen && "max-w-[min(72rem,100%)] mx-auto flex-1")}
+        style={previewOpen ? { flex: `0 0 ${splitRatio * 100}%` } : undefined}
+      >
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
 
@@ -1514,6 +1568,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                   onCompact={handleCompact}
                 />
                 {/* <FeishuNotifyToggle sessionId={sessionId} /> */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <label className="flex items-center gap-1 px-1.5 h-[28px] rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer select-none transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={autoPreviewEnabled}
+                        onChange={(e) => setAutoPreviewEnabled(e.target.checked)}
+                        className="size-3 accent-primary"
+                      />
+                      自动预览
+                    </label>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p>Agent 修改文件时自动打开预览面板</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
 
               <div className="flex items-center gap-1.5">
@@ -1556,6 +1626,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           </div>
         </div>
         )}
+      </div>
+
+      {/* 拖拽手柄 */}
+      {previewOpen && (
+        <div
+          className="w-[8px] cursor-col-resize bg-border/40 hover:bg-primary/30 active:bg-primary/50 transition-colors flex-shrink-0"
+          onMouseDown={handlePreviewDragStart}
+        />
+      )}
+
+      {/* 右侧：预览面板 */}
+      {previewOpen && (
+        <div className="flex-1 min-w-0 h-full overflow-hidden">
+          <PreviewPanel sessionId={sessionId} />
+        </div>
+      )}
       </div>
     </AgentSessionProvider>
 

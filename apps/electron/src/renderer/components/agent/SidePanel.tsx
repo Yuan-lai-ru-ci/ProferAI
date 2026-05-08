@@ -31,6 +31,7 @@ import {
   agentDiffRefreshVersionAtom,
   agentSessionsAtom,
 } from '@/atoms/agent-atoms'
+import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import { tabsAtom, activeTabIdAtom, type TabItem } from '@/atoms/tab-atoms'
 import type { FileEntry, AgentPendingFile } from '@proma/shared'
 
@@ -52,8 +53,22 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const tabs = useAtomValue(tabsAtom)
   // 当前会话的 diff tab 对应的文件路径（用于高亮）
   const diffTab = tabs.find((t) => t.id === `diff-${sessionId}`)
-  const selectedFilePath = diffTab?.filePath
+  const previewFileMap = useAtomValue(previewFileMapAtom)
+  const selectedFilePath = previewFileMap.get(sessionId)?.filePath
   const setActiveTabId = useSetAtom(activeTabIdAtom)
+
+  // 预览面板 atoms
+  const setPreviewFileMap = useSetAtom(previewFileMapAtom)
+  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
+
+  const handleFilePreview = React.useCallback((filePath: string) => {
+    setPreviewFileMap((prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, { filePath })
+      return m
+    })
+    setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
+  }, [sessionId, setPreviewFileMap, setPreviewOpenMap])
 
   const isOpen = sidePanelOpenMap.get(sessionId) ?? true
 
@@ -261,14 +276,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     window.electronAPI.getWorkspaceFilesPath(workspaceSlug).then(setWorkspaceFilesPath).catch(() => setWorkspaceFilesPath(null))
   }, [workspaceSlug])
 
-  // 自动打开：文件变化时（仅在有 sessionPath 时）
-  const prevFilesVersionRef = React.useRef(filesVersion)
-  React.useEffect(() => {
-    if (filesVersion > prevFilesVersionRef.current && sessionPath) {
-      setIsOpen(true)
-    }
-    prevFilesVersionRef.current = filesVersion
-  }, [filesVersion, sessionPath, setIsOpen])
+  // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开
 
   return (
     <div
@@ -298,29 +306,12 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
               refreshVersion={diffRefreshVersion}
               selectedFilePath={selectedFilePath}
               onFileClick={(filePath, _isUntracked, gitRoot) => {
-                const diffTabId = `diff-${sessionId}`
-                setTabs((prev) => {
-                  const existing = prev.find((t) => t.id === diffTabId)
-                  if (existing) {
-                    // 更新已有 diff tab 的文件路径
-                    const updated = prev.map((t) =>
-                      t.id === diffTabId ? { ...t, filePath, dirPath: sessionPath || undefined, gitRoot } : t
-                    )
-                    setActiveTabId(diffTabId)
-                    return updated
-                  }
-                  const newTab: TabItem = {
-                    id: diffTabId,
-                    type: 'diff',
-                    sessionId,
-                    title: sessionTitle ? `文件改动 · ${sessionTitle}` : '文件改动',
-                    filePath,
-                    dirPath: sessionPath || undefined,
-                    gitRoot,
-                  }
-                  setActiveTabId(diffTabId)
-                  return [...prev, newTab]
+                setPreviewFileMap((prev) => {
+                  const m = new Map(prev)
+                  m.set(sessionId, { filePath, dirPath: sessionPath || undefined, gitRoot })
+                  return m
                 })
+                setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
               }}
             />
           ) : (
@@ -408,7 +399,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                           {attachedDirs.length > 0 && (
                             <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3 pt-2">工作文件（存储于该工作区目录）</div>
                           )}
-                          <FileBrowser rootPath={sessionPath} hideToolbar embedded hideEmpty={attachedDirs.length > 0} onAddToChat={handleAddToChat} />
+                          <FileBrowser rootPath={sessionPath} hideToolbar embedded hideEmpty={attachedDirs.length > 0} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
                         </>
                         {/* 会话文件拖拽上传区域 */}
                         <FileDropZone
@@ -497,7 +488,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                           {wsAttachedDirs.length > 0 && (
                             <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3 pt-2">工作文件（存储于该工作区目录）</div>
                           )}
-                          <FileBrowser rootPath={workspaceFilesPath} hideToolbar embedded hideEmpty={wsAttachedDirs.length > 0} onAddToChat={handleAddToChat} />
+                          <FileBrowser rootPath={workspaceFilesPath} hideToolbar embedded hideEmpty={wsAttachedDirs.length > 0} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
                         </>
                       )}
                       {/* 工作区文件拖拽上传区域 */}

@@ -574,7 +574,6 @@ function TabStatePersistenceInitializer(): null {
           'sessionId' in t &&
           'type' in t &&
           'title' in t &&
-          t.type !== 'diff' &&
           validSessionIds.has(t.sessionId),
       )
       if (validTabs.length === 0) {
@@ -604,9 +603,7 @@ function TabStatePersistenceInitializer(): null {
       // 同步 appMode 和 currentSessionId
       const activeTab = validTabs.find((t) => t.id === restoredActiveTabId)
       if (activeTab) {
-        if (activeTab.type !== 'diff') {
-          store.set(appModeAtom, activeTab.type)
-        }
+        store.set(appModeAtom, activeTab.type)
         if (activeTab.type === 'chat') {
           store.set(currentConversationIdAtom, activeTab.sessionId)
         } else {
@@ -624,7 +621,7 @@ function TabStatePersistenceInitializer(): null {
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const save = (): void => {
-      const tabs = store.get(tabsAtom).filter(t => t.type !== 'diff')
+      const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
       window.electronAPI.updateSettings({
         tabState: { tabs, activeTabId },
@@ -644,7 +641,7 @@ function TabStatePersistenceInitializer(): null {
     const handleBeforeUnload = (): void => {
       if (timer) clearTimeout(timer)
       // 使用同步 IPC 确保关闭前数据写入磁盘
-      const tabs = store.get(tabsAtom).filter(t => t.type !== 'diff')
+      const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
       if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
         const ok = window.electronAPI.updateSettingsSync({ tabState: { tabs, activeTabId } })
