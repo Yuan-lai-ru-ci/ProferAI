@@ -17,15 +17,14 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { existsSync, mkdirSync, symlinkSync, readFileSync, writeFileSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@proma/shared'
 import { SAFE_TOOLS } from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
-import { isPromptTooLongError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails } from './adapters/claude-agent-adapter'
+import { isPromptTooLongError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { isTransientNetworkError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
@@ -33,7 +32,7 @@ import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk } from '@proma/
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
-import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspacePermissionMode, setWorkspacePermissionMode } from './agent-workspace-manager'
+import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName } from './config-paths'
 import { getWorkspaceAttachedDirectories } from './agent-workspace-manager'
 import { getRuntimeStatus } from './runtime-init'
@@ -204,118 +203,65 @@ function timerWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * 解析 SDK cli.js 路径
+ * 解析 SDK native CLI binary 路径
  *
- * SDK 作为 esbuild external 依赖，require.resolve 可在运行时解析实际路径。
- * 多种策略降级：createRequire → 全局 require → node_modules 手动查找
+ * 0.2.113+ 起 SDK 改为按平台分发 native binary，通过 optionalDependencies 安装到
+ * `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` 子包，与主包 `@anthropic-ai/claude-agent-sdk`
+ * 同级。binary 名 macOS/Linux 为 `claude`，Windows 为 `claude.exe`。
  *
- * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径，
- * 因为子进程 (bun) 无法读取 asar 归档内的文件。
+ * SDK 作为 esbuild external 依赖，require.resolve 可在运行时解析主包入口路径，
+ * 再沿父目录 `@anthropic-ai/` 找到同级的平台子包。
+ *
+ * 多种策略降级：createRequire → 全局 require → cwd/node_modules 手动查找
+ * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径（即便 Proma 当前 `asar: false`
+ * 兜底不伤人）。
  */
 function resolveSDKCliPath(): string {
-  let cliPath: string | null = null
+  const subpkg = `claude-agent-sdk-${process.platform}-${process.arch}`
+  const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  let binaryPath: string | null = null
 
   // 策略 1：createRequire（标准 ESM/CJS 互操作）
   try {
     const cjsRequire = createRequire(__filename)
     const sdkEntryPath = cjsRequire.resolve('@anthropic-ai/claude-agent-sdk')
-    cliPath = join(dirname(sdkEntryPath), 'cli.js')
-    console.log(`[Agent 编排] SDK CLI 路径 (createRequire): ${cliPath}`)
+    // sdkEntryPath: .../@anthropic-ai/claude-agent-sdk/sdk.mjs
+    // anthropicDir:  .../@anthropic-ai
+    const anthropicDir = dirname(dirname(sdkEntryPath))
+    binaryPath = join(anthropicDir, subpkg, binaryName)
+    console.log(`[Agent 编排] SDK binary 路径 (createRequire): ${binaryPath}`)
   } catch (e) {
     console.warn('[Agent 编排] createRequire 解析 SDK 路径失败:', e)
   }
 
   // 策略 2：全局 require（esbuild CJS bundle 可能保留）
-  if (!cliPath) {
+  if (!binaryPath) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const sdkEntryPath = require.resolve('@anthropic-ai/claude-agent-sdk')
-      cliPath = join(dirname(sdkEntryPath), 'cli.js')
-      console.log(`[Agent 编排] SDK CLI 路径 (require.resolve): ${cliPath}`)
+      const anthropicDir = dirname(dirname(sdkEntryPath))
+      binaryPath = join(anthropicDir, subpkg, binaryName)
+      console.log(`[Agent 编排] SDK binary 路径 (require.resolve): ${binaryPath}`)
     } catch (e) {
       console.warn('[Agent 编排] require.resolve 解析 SDK 路径失败:', e)
     }
   }
 
-  // 策略 3：从项目根目录手动查找
-  if (!cliPath) {
-    cliPath = join(process.cwd(), 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js')
-    console.log(`[Agent 编排] SDK CLI 路径 (手动): ${cliPath}`)
+  // 策略 3：从当前模块目录手动查找（打包后 __dirname 指向 app/dist/，上一级即 app/）
+  // 注意：不使用 process.cwd()，因为打包后的 Electron 应用 cwd 通常是 '/'
+  // 或用户主目录，与 app 安装目录无关。
+  if (!binaryPath) {
+    binaryPath = join(__dirname, '..', 'node_modules', '@anthropic-ai', subpkg, binaryName)
+    console.log(`[Agent 编排] SDK binary 路径 (手动): ${binaryPath}`)
   }
 
   // 打包环境：将 .asar/ 路径转换为 .asar.unpacked/
-  if (app.isPackaged && cliPath.includes('.asar')) {
-    cliPath = cliPath.replace(/\.asar([/\\])/, '.asar.unpacked$1')
-    console.log(`[Agent 编排] 转换为 asar.unpacked 路径: ${cliPath}`)
+  if (app.isPackaged && binaryPath.includes('.asar')) {
+    binaryPath = binaryPath.replace(/\.asar([/\\])/, '.asar.unpacked$1')
+    console.log(`[Agent 编排] 转换为 asar.unpacked 路径: ${binaryPath}`)
   }
 
-  return cliPath
-}
-
-/**
- * 获取 Agent SDK 运行时可执行文件
- *
- * 优先级：Node.js（缓存）→ which node 同步查找
- *
- * 当 runtimeStatusCache 尚未初始化时（应用启动竞态），
- * 用 which/where 同步查找作为兜底，避免 SDK spawn 失败。
- * 如果 Node.js 完全不可用，抛出明确错误。
- */
-function getAgentExecutable(): { type: 'node'; path: string } {
-  const status = getRuntimeStatus()
-
-  if (status?.node?.available && status.node.path) {
-    return { type: 'node', path: status.node.path }
-  }
-
-  // runtimeStatusCache 未就绪时，同步查找 node 路径
-  try {
-    const cmd = process.platform === 'win32' ? 'where' : 'which'
-    const nodePath = execFileSync(cmd, ['node'], { encoding: 'utf-8', timeout: 2000 })
-      .trim()
-      .split('\n')[0]
-    if (nodePath && existsSync(nodePath)) {
-      console.warn(`[Agent 编排] runtimeStatusCache 未就绪，同步查找 node: ${nodePath}`)
-      return { type: 'node', path: nodePath }
-    }
-  } catch {
-    // 忽略查找失败
-  }
-
-  throw new Error(
-    'Node.js 运行时未找到。Agent 功能需要系统安装 Node.js (v18+)。' +
-      '请访问 https://nodejs.org 下载安装后重启 Proma。',
-  )
-}
-
-/**
- * 确保打包环境下 ripgrep 可被 SDK CLI 找到
- *
- * 通过 symlink 桥接 extraResources → SDK 的 vendor 目录。
- */
-function ensureRipgrepAvailable(cliPath: string): void {
-  if (!app.isPackaged) return
-
-  try {
-    const sdkDir = dirname(cliPath)
-    const arch = process.arch
-    const platform = process.platform
-    const expectedDir = join(sdkDir, 'vendor', 'ripgrep', `${arch}-${platform}`)
-    const resourcesRipgrep = join(process.resourcesPath, 'vendor', 'ripgrep')
-
-    if (existsSync(expectedDir)) return
-
-    if (!existsSync(resourcesRipgrep)) {
-      console.warn(`[Agent 编排] ripgrep 资源不存在: ${resourcesRipgrep}`)
-      return
-    }
-
-    mkdirSync(join(sdkDir, 'vendor', 'ripgrep'), { recursive: true })
-    symlinkSync(resourcesRipgrep, expectedDir, 'junction')
-    console.log(`[Agent 编排] ripgrep symlink 创建成功: ${expectedDir} → ${resourcesRipgrep}`)
-  } catch (error) {
-    console.warn('[Agent 编排] ripgrep symlink 创建失败:', error)
-  }
+  return binaryPath
 }
 
 /** 最大回填消息条数 */
@@ -453,10 +399,12 @@ export class AgentOrchestrator {
    * 构建 SDK 环境变量
    *
    * 注入 API Key、Base URL、代理、Shell 配置等。
+   * 对 Kimi Coding Plan：使用 Bearer 认证（ANTHROPIC_AUTH_TOKEN），注入 User-Agent。
    */
   private async buildSdkEnv(
     apiKey: string,
     baseUrl: string | undefined,
+    provider: ProviderType,
   ): Promise<Record<string, string | undefined>> {
     const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
 
@@ -474,7 +422,6 @@ export class AgentOrchestrator {
 
     const sdkEnv: Record<string, string | undefined> = {
       ...cleanEnv,
-      ANTHROPIC_API_KEY: apiKey,
       // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
       // 启用 Tasks 功能
@@ -483,6 +430,18 @@ export class AgentOrchestrator {
       CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       // 配置隔离：让 SDK 使用独立的配置目录，不读取用户的 ~/.claude.json
       CLAUDE_CONFIG_DIR: getSdkConfigDir(),
+    }
+
+    // 认证方式按 provider 分支
+    // - Kimi Coding Plan：只认 Bearer，且必须伪装成 coding agent（User-Agent）
+    //   用 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer，
+    //   通过 ANTHROPIC_CUSTOM_HEADERS 注入 User-Agent
+    // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
+    if (provider === 'kimi-coding') {
+      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
+      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+    } else {
+      sdkEnv.ANTHROPIC_API_KEY = apiKey
     }
 
     // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入
@@ -807,26 +766,53 @@ export class AgentOrchestrator {
     // 0.5 清除上一轮中断标记
     try { updateAgentSessionMeta(sessionId, { stoppedByUser: false }) } catch { /* 会话可能已删除 */ }
 
+    // 环境 / 配置类错误的统一上报：持久化为 TypedError 消息，由 SDKMessageRenderer 渲染
+    const reportPreflightError = (typedError: TypedError) => {
+      const errorContent = typedError.title
+        ? `${typedError.title}: ${typedError.message}`
+        : typedError.message
+      const errorSDKMsg: SDKMessage = {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: errorContent }],
+        },
+        parent_tool_use_id: null,
+        error: { message: typedError.message, errorType: typedError.code },
+        _createdAt: Date.now(),
+        _errorCode: typedError.code,
+        _errorTitle: typedError.title,
+        _errorDetails: typedError.details,
+        _errorCanRetry: typedError.canRetry,
+        _errorActions: typedError.actions,
+      } as unknown as SDKMessage
+      try { appendSDKMessages(sessionId, [errorSDKMsg]) } catch (e) {
+        console.error('[Agent 编排] 持久化 preflight error 失败:', e)
+      }
+      callbacks.onError(errorContent)
+      callbacks.onComplete([], { startedAt: input.startedAt })
+    }
+
     // 1. Windows 平台：检查 Shell 环境可用性
     if (process.platform === 'win32') {
       const runtimeStatus = getRuntimeStatus()
       const shellStatus = runtimeStatus?.shell
 
       if (shellStatus && !shellStatus.gitBash?.available && !shellStatus.wsl?.available) {
-        const errorMsg = `Windows 平台需要 Git Bash 或 WSL 环境才能运行 Agent。
-
-当前状态：
-- Git Bash: ${shellStatus.gitBash?.error || '未检测到'}
-- WSL: ${shellStatus.wsl?.error || '未检测到'}
-
-解决方案：
-1. 安装 Git for Windows（推荐）: https://git-scm.com/download/win
-2. 或启用 WSL: https://learn.microsoft.com/zh-cn/windows/wsl/install
-
-安装完成后请重启应用。`
-
-        callbacks.onError(errorMsg)
-        callbacks.onComplete([], { startedAt: input.startedAt })
+        reportPreflightError({
+          code: 'windows_shell_missing',
+          title: 'Windows 环境未就绪',
+          message:
+            '需要 Git Bash 或 WSL 才能运行 Agent。建议安装 Git for Windows（自带 Git Bash），安装完成后点「打开环境检测」刷新状态。',
+          details: [
+            `Git Bash: ${shellStatus.gitBash?.error || '未检测到'}`,
+            `WSL: ${shellStatus.wsl?.error || '未检测到'}`,
+          ],
+          actions: [
+            { key: 'e', label: '打开环境检测', action: 'open_environment_check' },
+            { key: 'g', label: '去官方下载 Git', action: 'open_external', payload: 'https://git-scm.com/download/win' },
+          ],
+          canRetry: false,
+        })
         return
       }
     }
@@ -834,8 +820,15 @@ export class AgentOrchestrator {
     // 2. 获取渠道信息并解密 API Key
     const channel = getChannelById(channelId)
     if (!channel) {
-      callbacks.onError('渠道不存在')
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      reportPreflightError({
+        code: 'channel_not_found',
+        title: '渠道不存在',
+        message: '当前会话引用的渠道已被删除或不可用，请在设置中重新选择。',
+        actions: [
+          { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+        ],
+        canRetry: false,
+      })
       return
     }
 
@@ -843,8 +836,15 @@ export class AgentOrchestrator {
     try {
       apiKey = decryptApiKey(channelId)
     } catch {
-      callbacks.onError('解密 API Key 失败')
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      reportPreflightError({
+        code: 'api_key_decrypt_failed',
+        title: 'API Key 解密失败',
+        message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
+        actions: [
+          { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+        ],
+        canRetry: false,
+      })
       return
     }
 
@@ -863,13 +863,20 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_BASE_URL
-    process.env.ANTHROPIC_API_KEY = apiKey
+    delete process.env.ANTHROPIC_CUSTOM_HEADERS
+    if (channel.provider === 'kimi-coding') {
+      // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
+      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
+      process.env.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+    } else {
+      process.env.ANTHROPIC_API_KEY = apiKey
+    }
     // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
     if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
       process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
     }
 
-    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl)
+    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)
@@ -901,7 +908,6 @@ export class AgentOrchestrator {
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
     let titleGenerationStarted = false
-    let agentExec: { type: 'node'; path: string } | undefined
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
     let workspace: import('@proma/shared').AgentWorkspace | undefined
@@ -912,23 +918,41 @@ export class AgentOrchestrator {
 
       // 9. 构建 SDK query
       const cliPath = resolveSDKCliPath()
-      agentExec = getAgentExecutable()
 
       if (!existsSync(cliPath)) {
-        const errMsg = `SDK CLI 文件不存在: ${cliPath}`
-        console.error(`[Agent 编排] ${errMsg}`)
-        callbacks.onError(errMsg)
-        callbacks.onComplete([], { startedAt: streamStartedAt })
+        const subpkg = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`
+        console.error(`[Agent 编排] SDK native binary 不存在: ${cliPath}`)
+        reportPreflightError({
+          code: 'claude_binary_not_found',
+          title: 'Claude 核心未就绪',
+          message:
+            '应用安装包里缺少 Claude Agent SDK 的核心可执行文件（claude.exe）。这通常是打包时未包含当前平台的 SDK 组件导致。请重新下载最新安装包，或提交 issue 告知我们。',
+          details: [
+            `缺失文件: ${cliPath}`,
+            `需要的子包: ${subpkg}`,
+          ],
+          actions: [
+            {
+              key: 'd',
+              label: '下载最新安装包',
+              action: 'open_external',
+              payload: 'https://proma.cool/download',
+            },
+            {
+              key: 'i',
+              label: '报告问题',
+              action: 'open_external',
+              payload: 'https://github.com/ErlichLiu/Proma/issues/new',
+            },
+          ],
+          canRetry: false,
+        })
         return
       }
 
-      ensureRipgrepAvailable(cliPath)
-
       console.log(
-        `[Agent 编排] 启动 SDK — CLI: ${cliPath}, 运行时: ${agentExec.type} (${agentExec.path}), 模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
+        `[Agent 编排] 启动 SDK — binary: ${cliPath}, 模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
       )
-
-      const executableArgs: string[] = []
 
       // 确定 Agent 工作目录
       agentCwd = homedir()
@@ -1039,15 +1063,19 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 无 resume，已回填历史上下文（最近 ${MAX_CONTEXT_MESSAGES} 条消息）`)
       }
 
-      // 12. 读取应用设置 + 获取权限模式
+      // 12. 读取应用设置并确定权限模式
+      // 权限模式只属于当前 session；新会话默认完全自动模式。
       const appSettings = getSettings()
       const initialPermissionMode: PromaPermissionMode = permissionModeOverride
-        ?? (workspaceSlug
-          ? getWorkspacePermissionMode(workspaceSlug)
-          : (appSettings.agentPermissionMode ?? 'acceptEdits'))
+        ?? 'bypassPermissions'
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
+
+      // 当初始模式为 plan 时，通知渲染进程展示计划模式 UI（如「Agent 正在规划」横幅）
+      if (initialPermissionMode === 'plan') {
+        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+      }
 
       /** 读取当前会话的实时权限模式（支持运行中切换） */
       const getPermissionMode = (): PromaPermissionMode =>
@@ -1065,8 +1093,8 @@ export class AgentOrchestrator {
         )
       }
 
-      // 始终创建 acceptEdits 权限回调（运行中可能切换到 acceptEdits）
-      const acceptEditsCanUseTool = permissionService.createCanUseTool(
+      // 始终创建 auto 权限回调（运行中可能切换到 auto）
+      const autoCanUseTool = permissionService.createCanUseTool(
         sessionId,
         (request: PermissionRequest) => {
           this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
@@ -1193,24 +1221,15 @@ export class AgentOrchestrator {
             return { behavior: 'allow' as const, updatedInput: input }
 
           case 'plan': {
-            // Plan 模式：只允许只读工具 + Write 到 .context/plan/ 目录
+            // Plan 模式：只允许只读工具 + Write/Edit 任意 .md 文件（计划文档）
             if (PLAN_MODE_ALLOWED_TOOLS.has(toolName)) {
               return { behavior: 'allow' as const, updatedInput: input }
             }
-            // 允许 Write 到 .context/plan/ 目录（Proma 自定义路径）
-            // 以及 .context/ 下直接子文件 .md（SDK 生成的 plan 文件如 .context/<slug>.md）
-            if (toolName === 'Write') {
+            // 允许 Write/Edit 到任意 .md 文件（计划文档一定是 markdown；非 .md 仍被拒）
+            if (toolName === 'Write' || toolName === 'Edit') {
               const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-              if (filePath.includes('.context/plan/')) {
+              if (filePath.toLowerCase().endsWith('.md')) {
                 return { behavior: 'allow' as const, updatedInput: input }
-              }
-              // SDK plan 文件：.context/<slug>.md — 仅允许直接子文件，防止 path traversal
-              const ctxIdx = filePath.lastIndexOf('.context/')
-              if (ctxIdx !== -1) {
-                const afterCtx = filePath.substring(ctxIdx + '.context/'.length)
-                if (afterCtx.endsWith('.md') && !afterCtx.includes('/') && !afterCtx.includes('..')) {
-                  return { behavior: 'allow' as const, updatedInput: input }
-                }
               }
             }
             // Bash 工具：只读命令（find、grep、cat 等）允许执行，写操作拒绝
@@ -1229,8 +1248,8 @@ export class AgentOrchestrator {
             return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
           }
 
-          case 'acceptEdits':
-            return acceptEditsCanUseTool(toolName, input, options)
+          case 'auto':
+            return autoCanUseTool(toolName, input, options)
 
           default:
             return { behavior: 'allow' as const, updatedInput: input }
@@ -1249,19 +1268,17 @@ export class AgentOrchestrator {
         model: modelId || DEFAULT_MODEL_ID,
         cwd: agentCwd,
         sdkCliPath: cliPath,
-        executable: agentExec,
-        executableArgs,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
         sdkPermissionMode: initialPermissionMode,
         // 当提供 canUseTool 回调时必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
         // 两个矛盾的指令，导致 ExitPlanMode/AskUserQuestion 等交互式工具失败。
-        // canUseTool 已完整处理所有权限模式（plan/acceptEdits/bypassPermissions），
+        // canUseTool 已完整处理所有权限模式（plan/auto/bypassPermissions），
         // Worker 子代理在 bypassPermissions 模式下也会被自动放行。
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
-        ...(initialPermissionMode === 'acceptEdits' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(initialPermissionMode === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {
@@ -1604,13 +1621,19 @@ export class AgentOrchestrator {
               capturedResultSubtype = (msg as { subtype?: string }).subtype
               this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
               accumulatedMessages.length = 0
-              // 软中断（aborted_streaming / aborted_tools）场景下，adapter 保留 channel
-              // 等待队列中的后续用户消息继续 drive Query，此处跳过 drain 超时以免误关闭事件循环
+              // 软中断 / 延迟工具 / hook 暂停等场景下，adapter 保留 channel
+              // 等待队列或后续消息继续 drive Query，此处跳过 drain 超时以免误关闭事件循环。
+              // 完整白名单见 adapters/claude-agent-adapter.ts 的 CONTINUABLE_TERMINAL_REASONS。
               const resultTerminalReason = (msg as { terminal_reason?: string }).terminal_reason
-              const isAbortedByInterrupt =
-                resultTerminalReason === 'aborted_streaming' ||
-                resultTerminalReason === 'aborted_tools'
-              if (!isAbortedByInterrupt && !drainTimeoutPromise) {
+              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason)
+              // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
+              const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
+              console.log(
+                `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}, ` +
+                `terminal_reason=${resultTerminalReason ?? 'undefined'}, keepChannelOpen=${keepChannelOpen}` +
+                (hasDeferredTool ? ', hasDeferredTool=true' : ''),
+              )
+              if (!keepChannelOpen && !drainTimeoutPromise) {
                 // 启动 drain 超时安全网：adapter 层 channel.close() 应让 iterator 自然关闭，
                 // 此处仅在极端情况下（如 SDK 版本不兼容）保护事件循环不无限挂起
                 drainTimeoutPromise = new Promise((resolve) =>
@@ -1901,7 +1924,6 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] 保留 sdkSessionId (API 错误 ${apiError?.statusCode})`)
           }
 
-          throw error
         }
       }
 
@@ -2064,8 +2086,10 @@ export class AgentOrchestrator {
 
   /** 中止所有活跃的 Agent 会话（应用退出时调用） */
   stopAll(): void {
-    if (this.activeSessions.size === 0) return
-    console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
+    if (this.activeSessions.size > 0) {
+      console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
+    }
+    // 即便 activeSessions 为空，也要调 dispose 清理可能残留的 pidMap / 子进程
     this.adapter.dispose()
     this.activeSessions.clear()
     this.sessionPermissionModes.clear()

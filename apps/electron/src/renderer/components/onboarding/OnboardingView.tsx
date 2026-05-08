@@ -1,25 +1,17 @@
 /**
  * Onboarding 视图组件
  *
- * 首次启动时显示的全屏引导界面，用于检查运行环境
+ * 首次启动时显示的全屏欢迎界面。
+ *
+ * 流程：
+ *  Step 1：欢迎 + 教程入口
+ *  Step 2：Windows 环境检测（仅 Windows，其他平台自动跳过）
  */
 
-import { useState, useEffect } from 'react'
-import { useSetAtom } from 'jotai'
-import { RefreshCw, Info, GraduationCap } from 'lucide-react'
-import type { EnvironmentCheckResult } from '@proma/shared'
+import { useMemo, useState } from 'react'
+import { useAtomValue } from 'jotai'
+import { GraduationCap, ChevronRight, ChevronLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import {
   Sheet,
   SheetContent,
@@ -27,203 +19,116 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
 import { TutorialViewer } from '@/components/tutorial/TutorialViewer'
-import {
-  environmentCheckResultAtom,
-  isCheckingEnvironmentAtom,
-} from '@/atoms/environment'
+import { EnvironmentCheckPanel } from '@/components/environment/EnvironmentCheckPanel'
+import { isShellEnvironmentOkAtom } from '@/atoms/environment'
+import { detectIsWindows } from '@/lib/platform'
 
 interface OnboardingViewProps {
   /** 完成回调（进入主界面） */
   onComplete: () => void
 }
 
-/**
- * Onboarding 视图
- */
 export function OnboardingView({ onComplete }: OnboardingViewProps) {
-  const setEnvironmentResult = useSetAtom(environmentCheckResultAtom)
-  const setIsChecking = useSetAtom(isCheckingEnvironmentAtom)
-
-  const [result, setResult] = useState<EnvironmentCheckResult | null>(null)
-  const [isChecking, setCheckingState] = useState(true)
-  const [showSkipDialog, setShowSkipDialog] = useState(false)
   const [showTutorial, setShowTutorial] = useState(false)
+  const [step, setStep] = useState<'welcome' | 'environment'>('welcome')
+  const isWindows = useMemo(() => detectIsWindows(), [])
+  const shellOk = useAtomValue(isShellEnvironmentOkAtom)
 
-  // 执行环境检测
-  const checkEnvironment = async () => {
-    setCheckingState(true)
-    setIsChecking(true)
+  const handleFinish = async () => {
+    await window.electronAPI.updateSettings({
+      onboardingCompleted: true,
+    })
+    onComplete()
+  }
 
-    try {
-      const checkResult = await window.electronAPI.checkEnvironment()
-      setResult(checkResult)
-      setEnvironmentResult(checkResult)
-    } catch (error) {
-      console.error('[Onboarding] 环境检测失败:', error)
-    } finally {
-      setCheckingState(false)
-      setIsChecking(false)
+  const handleNextFromWelcome = () => {
+    if (isWindows) {
+      setStep('environment')
+    } else {
+      // 非 Windows：直接完成
+      handleFinish()
     }
   }
 
-  // 初始化时自动检测
-  useEffect(() => {
-    checkEnvironment()
-  }, [])
-
-  // 完成 Onboarding
-  const handleComplete = async () => {
-    await window.electronAPI.updateSettings({
-      onboardingCompleted: true,
-      environmentCheckSkipped: false,
-    })
-    onComplete()
-  }
-
-  // 跳过设置
-  const handleSkip = async () => {
-    await window.electronAPI.updateSettings({
-      onboardingCompleted: true,
-      environmentCheckSkipped: true,
-    })
-    setShowSkipDialog(false)
-    onComplete()
-  }
-
-  // 判断环境是否通过
-  const canComplete = result && !result.hasIssues
-
-  // Node.js 检测状态
-  const nodejsStatus = !result
-    ? 'checking'
-    : result.nodejs.installed && result.nodejs.meetsMinimum
-      ? result.nodejs.meetsRecommended
-        ? 'success'
-        : 'warning'
-      : 'error'
-
-  // Git 检测状态
-  const gitStatus = !result
-    ? 'checking'
-    : result.git.installed && result.git.meetsRequirement
-      ? 'success'
-      : 'error'
-
   return (
     <div className="flex h-screen flex-col items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-8">
-      {/* 顶部区域 */}
-      <div className="mb-12 text-center">
-        <h1 className="text-4xl font-bold mb-4">欢迎使用 Proma</h1>
-        <p className="text-lg text-muted-foreground">
-          让我们先检查运行环境，确保 Agent 模式正常工作
-        </p>
-      </div>
-
-      {/* 检测卡片区域 */}
-      <div className="w-full max-w-2xl space-y-3 mb-8">
-        {/* Node.js 检测卡片 */}
-        <EnvironmentCheckCard
-          name="Node.js"
-          status={nodejsStatus}
-          version={result?.nodejs.version}
-          requirement="推荐 22 LTS，最低 18 LTS"
-          downloadUrl={result?.nodejs.downloadUrl || 'https://nodejs.org/'}
-          statusText={
-            result && nodejsStatus === 'warning'
-              ? `v${result.nodejs.version} (建议升级到 22 LTS 以获得最佳体验)`
-              : undefined
-          }
-        />
-
-        {/* Git 检测卡片 */}
-        <EnvironmentCheckCard
-          name="Git"
-          status={gitStatus}
-          version={result?.git.version}
-          requirement="版本 >= 2.0"
-          downloadUrl={result?.git.downloadUrl || 'https://git-scm.com/'}
-        />
-
-        {/* Windows 提示 */}
-        {result?.platform === 'win32' && (
-          <Alert>
-            <Info className="h-4 w-4" />
-            <AlertDescription>
-              <strong>Windows 用户建议：</strong>
-              安装时请选择默认路径（C:\Program Files\...），并确保勾选"添加到 PATH"选项
-            </AlertDescription>
-          </Alert>
-        )}
-      </div>
-
-      {/* 教程入口 */}
-      <div className="w-full max-w-2xl mb-8">
-        <button
-          onClick={() => setShowTutorial(true)}
-          className="w-full rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-4 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
-        >
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-            <GraduationCap size={20} className="text-primary" />
+      {step === 'welcome' && (
+        <>
+          <div className="mb-12 text-center">
+            <h1 className="text-4xl font-bold mb-4">欢迎使用 Proma</h1>
+            <p className="text-lg text-muted-foreground">
+              下一代桌面 AI 软件，让通用 Agent 触手可及
+            </p>
           </div>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold text-foreground">查看使用教程</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">了解 Proma 的全部功能和使用技巧</p>
+
+          <div className="w-full max-w-2xl mb-8">
+            <button
+              onClick={() => setShowTutorial(true)}
+              className="w-full rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-4 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
+            >
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <GraduationCap size={20} className="text-primary" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-foreground">查看使用教程</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  了解 Proma 的全部功能和使用技巧
+                </p>
+              </div>
+            </button>
           </div>
-        </button>
-      </div>
 
-      {/* 底部操作栏 */}
-      <div className="flex gap-4">
-        <Button
-          variant="ghost"
-          onClick={() => setShowSkipDialog(true)}
-          disabled={isChecking}
-        >
-          稍后设置
-        </Button>
+          <div className="flex gap-4">
+            <Button onClick={handleNextFromWelcome}>
+              {isWindows ? (
+                <>
+                  下一步：环境检测
+                  <ChevronRight className="ml-1 h-4 w-4" />
+                </>
+              ) : (
+                '开始使用'
+              )}
+            </Button>
+          </div>
+        </>
+      )}
 
-        <Button
-          variant="secondary"
-          onClick={checkEnvironment}
-          disabled={isChecking}
-        >
-          {isChecking ? (
-            <>
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              检测中...
-            </>
-          ) : (
-            <>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              重新检查
-            </>
-          )}
-        </Button>
+      {step === 'environment' && isWindows && (
+        <div className="w-full max-w-2xl">
+          <div className="mb-6 text-center">
+            <h2 className="text-2xl font-semibold mb-2">先检查一下环境</h2>
+            <p className="text-sm text-muted-foreground">
+              Proma 在 Windows 上需要 Git Bash 或 WSL 才能执行命令
+            </p>
+          </div>
 
-        <Button onClick={handleComplete} disabled={!canComplete || isChecking}>
-          完成
-        </Button>
-      </div>
+          <div className="rounded-xl border bg-card p-5 mb-6">
+            <EnvironmentCheckPanel autoDetectOnMount />
+          </div>
 
-      {/* 跳过确认对话框 */}
-      <AlertDialog open={showSkipDialog} onOpenChange={setShowSkipDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确定要稍后设置吗？</AlertDialogTitle>
-            <AlertDialogDescription>
-              跳过环境检测可能导致 Agent 模式无法正常使用。你可以随时在设置中完成环境配置。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={handleSkip}>确定跳过</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+          <div className="flex items-center justify-between">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setStep('welcome')}
+              className="text-muted-foreground"
+            >
+              <ChevronLeft className="mr-1 h-4 w-4" />
+              上一步
+            </Button>
+            <div className="flex gap-3">
+              <Button
+                onClick={handleFinish}
+                variant={shellOk ? 'default' : 'outline'}
+              >
+                {shellOk ? '开始使用' : '稍后处理（进入主界面）'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* 教程 Sheet */}
       <Sheet open={showTutorial} onOpenChange={setShowTutorial}>
         <SheetContent side="right" className="w-[560px] sm:max-w-[560px] p-0">
           <SheetHeader className="px-6 pt-6 pb-4 border-b">

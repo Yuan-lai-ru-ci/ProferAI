@@ -25,12 +25,13 @@ import {
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
   workspaceFilesVersionAtom,
-  agentDefaultPermissionModeAtom,
   agentThinkingAtom,
   agentEffortAtom,
   agentMaxBudgetUsdAtom,
   agentMaxTurnsAtom,
   agentSettingsReadyAtom,
+  dockBadgeCountAtom,
+  unviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import {
@@ -55,7 +56,7 @@ import { appModeAtom } from './atoms/app-mode'
 import type { FeishuBotBridgeState, FeishuBridgeState, FeishuNotificationSentPayload, DingTalkBotBridgeState, DingTalkBridgeState } from '@proma/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
-import { diffCapabilities, migratePermissionMode } from '@proma/shared'
+import { diffCapabilities } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
@@ -66,6 +67,7 @@ import 'katex/dist/katex.min.css'
 
 // ===== 窗口类型检测 =====
 const isQuickTaskWindow = new URLSearchParams(window.location.search).get('window') === 'quick-task'
+const isVoiceDictationWindow = new URLSearchParams(window.location.search).get('window') === 'voice-dictation'
 
 /**
  * 主题初始化组件
@@ -136,7 +138,6 @@ function AgentSettingsInitializer(): null {
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
   const bumpFiles = useSetAtom(workspaceFilesVersionAtom)
-  const setPermissionMode = useSetAtom(agentDefaultPermissionModeAtom)
   const setThinking = useSetAtom(agentThinkingAtom)
   const setEffort = useSetAtom(agentEffortAtom)
   const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
@@ -203,10 +204,16 @@ function AgentSettingsInitializer(): null {
         window.electronAPI.updateSettings({ agentChannelIds: migrated }).catch(console.error)
       }
 
-      if (settings.agentPermissionMode) {
-        // 迁移旧权限模式值（auto/smart/supervised → acceptEdits/bypassPermissions/plan）
-        setPermissionMode(migratePermissionMode(settings.agentPermissionMode))
+      // 兜底：agentChannelId 存在但不在 agentChannelIds 白名单中，自动修复不一致
+      if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
+        const currentIds = settings.agentChannelIds?.filter((id) => channelIds.has(id)) ?? []
+        if (!currentIds.includes(settings.agentChannelId)) {
+          const fixedIds = [...currentIds, settings.agentChannelId]
+          setAgentChannelIds(fixedIds)
+          window.electronAPI.updateSettings({ agentChannelIds: fixedIds }).catch(console.error)
+        }
       }
+
       if (settings.agentThinking) {
         setThinking(settings.agentThinking)
       }
@@ -239,7 +246,7 @@ function AgentSettingsInitializer(): null {
       console.error(err)
       setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
     })
-  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentWorkspaces, setCurrentWorkspaceId, setPermissionMode, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded, setAgentSettingsReady])
+  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded, setAgentSettingsReady])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {
@@ -323,6 +330,47 @@ function NotificationsInitializer(): null {
   useEffect(() => {
     initializeNotifications(setEnabled, setSoundEnabled, setSounds)
   }, [setEnabled, setSoundEnabled, setSounds])
+
+  return null
+}
+
+/**
+ * Dock/Launcher 角标同步组件
+ *
+ * 将需要用户处理或查看的事项数量同步到系统应用图标。
+ */
+function DockBadgeInitializer(): null {
+  const count = useAtomValue(dockBadgeCountAtom)
+  const notificationsEnabled = useAtomValue(notificationsEnabledAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
+  const badgeCount = notificationsEnabled ? count : 0
+
+  useEffect(() => {
+    window.electronAPI.setDockBadgeCount(badgeCount).catch((error) => {
+      console.error('[Dock 角标] 同步失败:', error)
+    })
+  }, [badgeCount])
+
+  useEffect(() => {
+    const clearCurrentSessionBadge = (): void => {
+      if (!document.hasFocus() || !currentSessionId) return
+      setUnviewedCompleted((prev) => {
+        if (!prev.has(currentSessionId)) return prev
+        const next = new Set(prev)
+        next.delete(currentSessionId)
+        return next
+      })
+    }
+
+    clearCurrentSessionBadge()
+    window.addEventListener('focus', clearCurrentSessionBadge)
+    document.addEventListener('visibilitychange', clearCurrentSessionBadge)
+    return () => {
+      window.removeEventListener('focus', clearCurrentSessionBadge)
+      document.removeEventListener('visibilitychange', clearCurrentSessionBadge)
+    }
+  }, [currentSessionId, setUnviewedCompleted])
 
   return null
 }
@@ -676,6 +724,16 @@ if (isQuickTaskWindow) {
       </React.StrictMode>
     )
   })
+} else if (isVoiceDictationWindow) {
+  import('./components/voice-dictation/VoiceDictationApp').then(({ VoiceDictationApp }) => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <ThemeInitializer />
+        <VoiceDictationApp />
+        <Toaster position="top-right" />
+      </React.StrictMode>
+    )
+  })
 } else {
   // ===== 主窗口：完整渲染 =====
   ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -683,6 +741,7 @@ if (isQuickTaskWindow) {
       <ThemeInitializer />
       <AgentSettingsInitializer />
       <NotificationsInitializer />
+      <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />

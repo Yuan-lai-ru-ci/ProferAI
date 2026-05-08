@@ -331,6 +331,12 @@ export type ErrorCode =
   | 'image_too_large'
   | 'prompt_too_long'
   | 'provider_error'
+  // 环境 / 配置类错误（本地可修复）
+  | 'windows_shell_missing'
+  | 'channel_not_found'
+  | 'api_key_decrypt_failed'
+  | 'claude_binary_not_found'
+  | 'session_busy'
   | 'unknown_error'
 
 /** 恢复操作 */
@@ -340,7 +346,17 @@ export interface RecoveryAction {
   /** 操作标签 */
   label: string
   /** 操作类型 */
-  action: 'settings' | 'retry' | 'cancel' | 'compact' | string
+  action:
+    | 'settings'
+    | 'retry'
+    | 'cancel'
+    | 'compact'
+    | 'open_environment_check'
+    | 'open_channel_settings'
+    | 'open_external'
+    | (string & {})
+  /** 操作附带的载荷，例如 open_external 的 URL */
+  payload?: string
 }
 
 /** 类型化错误 */
@@ -542,6 +558,8 @@ export interface AgentSessionMeta {
   manualWorking?: boolean
   /** 最后一次流式执行是否被用户主动中断 */
   stoppedByUser?: boolean
+  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 bypassPermissions */
+  permissionMode?: PromaPermissionMode
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -870,12 +888,18 @@ export interface FileIndexEntry {
   path: string
   /** 条目类型 */
   type: 'file' | 'dir'
+  /** 来源：会话文件或工作区文件 */
+  source: 'session' | 'workspace'
 }
 
 /** 文件搜索结果 */
 export interface FileSearchResult {
   entries: FileIndexEntry[]
   total: number
+  /** 会话文件条目（来自 session 工作目录） */
+  sessionEntries: FileIndexEntry[]
+  /** 工作区文件条目（来自 workspace files + 附加目录） */
+  workspaceEntries: FileIndexEntry[]
 }
 
 // ===== Agent 附件 =====
@@ -935,6 +959,8 @@ export interface AskUserQuestionOption {
   label: string
   /** 选项说明 */
   description?: string
+  /** 选项预览内容（聚焦时展示，支持 Markdown） */
+  preview?: string
 }
 
 /** AskUserQuestion 工具的问题定义 */
@@ -965,7 +991,7 @@ export interface AskUserRequest {
 export interface AskUserResponse {
   /** 请求 ID */
   requestId: string
-  /** 用户答案（问题索引字符串 → 答案文本） */
+  /** 用户答案（问题文本 → 答案文本，与 SDK 约定一致） */
   answers: Record<string, string>
 }
 
@@ -1007,20 +1033,20 @@ export interface ExitPlanModeResponse {
 // ===== 权限系统类型 =====
 
 /** Proma 权限模式（直接映射 SDK 原生模式） */
-export type PromaPermissionMode = 'acceptEdits' | 'bypassPermissions' | 'plan'
+export type PromaPermissionMode = 'auto' | 'bypassPermissions' | 'plan'
 
 /** 权限模式定义顺序（用于循环切换） */
-export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['acceptEdits', 'bypassPermissions', 'plan']
+export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['auto', 'bypassPermissions', 'plan']
 
 /** 迁移旧权限模式值到新模式 */
 export function migratePermissionMode(mode: string): PromaPermissionMode {
-  if (mode === 'acceptEdits' || mode === 'bypassPermissions' || mode === 'plan') return mode
+  if (mode === 'auto' || mode === 'bypassPermissions' || mode === 'plan') return mode
   const migration: Record<string, PromaPermissionMode> = {
-    auto: 'bypassPermissions',
-    smart: 'acceptEdits',
-    supervised: 'acceptEdits',
+    acceptEdits: 'auto',
+    smart: 'auto',
+    supervised: 'auto',
   }
-  return migration[mode] ?? 'acceptEdits'
+  return migration[mode] ?? 'auto'
 }
 
 /** 危险等级 */
@@ -1036,14 +1062,20 @@ export interface PermissionRequest {
   toolName: string
   /** 工具输入参数 */
   toolInput: Record<string, unknown>
-  /** 操作描述（人类可读） */
+  /** 操作描述（人类可读，Proma 生成） */
   description: string
-  /** 具体命令（Bash 工具时有值） */
+  /** 具体命令（Bash 工具时有值��� */
   command?: string
   /** 危险等级 */
   dangerLevel: DangerLevel
   /** SDK 提供的原因说明 */
   decisionReason?: string
+  /** SDK 提供的工具显示名称，如 "Write" */
+  sdkDisplayName?: string
+  /** SDK 提供的操作标题，如 "Write to /path/to/file.ts" */
+  sdkTitle?: string
+  /** SDK 提供的详细描述，如 "Claude wants to write 200 lines to /path/to/file.ts" */
+  sdkDescription?: string
 }
 
 /** 权限响应（渲染进程 → 主进程） */
@@ -1145,8 +1177,6 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSIONS: 'agent:list-sessions',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
-  /** 获取会话消息 */
-  GET_MESSAGES: 'agent:get-messages',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
   /** 更新会话标题 */
@@ -1221,6 +1251,10 @@ export const AGENT_IPC_CHANNELS = {
   IMPORT_SKILL_FROM_WORKSPACE: 'agent:import-skill-from-workspace',
   /** 从源工作区同步更新已导入的 Skill */
   UPDATE_SKILL_FROM_SOURCE: 'agent:update-skill-from-source',
+  /** 读取 SKILL.md 全文内容 */
+  READ_SKILL_CONTENT: 'agent:read-skill-content',
+  /** 写入 SKILL.md 全文内容 */
+  WRITE_SKILL_CONTENT: 'agent:write-skill-content',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */
@@ -1297,10 +1331,8 @@ export const AGENT_IPC_CHANNELS = {
   // 权限系统
   /** 权限响应（渲染进程 → 主进程） */
   PERMISSION_RESPOND: 'agent:permission:respond',
-  /** 设置权限模式（渲染进程 → 主进程） */
-  SET_PERMISSION_MODE: 'agent:set-permission-mode',
-  /** 获取权限模式（渲染进程 → 主进程） */
-  GET_PERMISSION_MODE: 'agent:get-permission-mode',
+  /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
+  UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
 
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */

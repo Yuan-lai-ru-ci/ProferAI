@@ -28,6 +28,7 @@ import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
+import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -74,6 +75,7 @@ import {
   agentPlanModeSessionsAtom,
   agentPermissionModeMapAtom,
   agentDefaultPermissionModeAtom,
+  sessionPersistedPermissionModeAtom,
   agentSessionPathMapAtom,
   allPendingAskUserRequestsAtom,
   allPendingExitPlanRequestsAtom,
@@ -86,11 +88,41 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
-import type { AgentSendInput, AgentMessage, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
+import type { AgentSendInput, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
 import { fileToBase64 } from '@/lib/file-utils'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
+
+interface SDKMessageRecord {
+  type?: string
+  parent_tool_use_id?: string | null
+  isSynthetic?: boolean
+  message?: {
+    content?: unknown
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function getUserTextFromSDKMessage(message: SDKMessage): string | null {
+  const sdkMessage = message as unknown as SDKMessageRecord
+  if (sdkMessage.type !== 'user' || sdkMessage.parent_tool_use_id || sdkMessage.isSynthetic) {
+    return null
+  }
+
+  const content = sdkMessage.message?.content
+  if (!Array.isArray(content)) return null
+  if (content.some((block) => isRecord(block) && block.type === 'tool_result')) return null
+
+  const texts = content
+    .filter((block) => isRecord(block) && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => (block as { text: string }).text)
+
+  return texts.length > 0 ? texts.join('\n') : null
+}
 
 // ===== 思考模式 Hover Popover =====
 
@@ -180,7 +212,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     console.log(`[FLASH-DEBUG] AgentView(${sessionId.slice(0, 8)}) render #${renderCountRef.current}`)
   }
 
-  const [messages, setMessages] = React.useState<AgentMessage[]>([])
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
@@ -203,6 +234,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const agentChannelId = sessionChannelMap.get(sessionId) ?? defaultChannelId
   const agentModelId = sessionModelMap.get(sessionId) ?? defaultModelId
   const agentChannelIds = useAtomValue(agentChannelIdsAtom)
+  const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
@@ -255,7 +287,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const isPlanMode = planModeSessions.has(sessionId)
   const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)
   const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
-  const permissionMode = permissionModeMap.get(sessionId) ?? defaultPermissionMode
+  const persistedPermissionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
+  const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
@@ -397,19 +430,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .catch(() => setWorkspaceFilesPath(null))
   }, [workspaceSlug])
 
-  // 合并工作区文件目录、工作区级附加目录和会话级附加目录，供 @ 引用搜索
-  const allAttachedDirs = React.useMemo(() => {
-    const dirs = [...attachedDirs]
-    // 添加工作区级附加目录
+  // 工作区级目录（workspace shared files + 工作区级附加目录），@ 引用标记为工作区文件
+  const workspaceDirs = React.useMemo(() => {
+    const dirs: string[] = []
+    if (workspaceFilesPath) dirs.push(workspaceFilesPath)
     for (const d of wsAttachedDirs) {
       if (!dirs.includes(d)) dirs.push(d)
     }
-    // 添加工作区共享文件目录
-    if (workspaceFilesPath && !dirs.includes(workspaceFilesPath)) {
-      dirs.unshift(workspaceFilesPath)
-    }
     return dirs
-  }, [attachedDirs, wsAttachedDirs, workspaceFilesPath])
+  }, [workspaceFilesPath, wsAttachedDirs])
 
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
@@ -425,13 +454,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!isCurrentlyStreaming) {
       setMessagesLoaded(false)
     }
-    // 并行加载旧格式（用于 Team 数据重建）和新格式（用于 UI 渲染）
-    const loadOldMessages = window.electronAPI.getAgentSessionMessages(sessionId)
-    const loadSDKMessages = window.electronAPI.getAgentSessionSDKMessages(sessionId)
-
-    Promise.all([loadOldMessages, loadSDKMessages])
-      .then(([msgs, sdkMsgs]) => {
-        setMessages(msgs)
+    window.electronAPI.getAgentSessionSDKMessages(sessionId)
+      .then((sdkMsgs) => {
         setPersistedSDKMessages(sdkMsgs)
         setMessagesLoaded(true)
 
@@ -527,15 +551,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
 
-      // 乐观更新：显示用户消息
-      const tempUserMsg: AgentMessage = {
-        id: `temp-${Date.now()}`,
-        role: 'user',
-        content: snapshot.message,
-        createdAt: Date.now(),
-      }
-      setMessages((prev) => [...prev, tempUserMsg])
-
       // 乐观更新：SDKMessage 格式（Phase 4）
       const tempUserSDKMsg: SDKMessage = {
         type: 'user',
@@ -555,6 +570,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         modelId: snapshot.modelId,
         workspaceId: snapshot.workspaceId,
         startedAt: streamStartedAt,
+        permissionModeOverride: permissionMode,
       }
       window.electronAPI.sendAgentMessage(input).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
@@ -567,8 +583,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates])
-
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -775,6 +790,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
 
+    // 自动将选中的渠道加入 Agent 可用渠道白名单
+    const updatedChannelIds = agentChannelIds.includes(option.channelId)
+      ? agentChannelIds
+      : [...agentChannelIds, option.channelId]
+    if (updatedChannelIds !== agentChannelIds) {
+      setAgentChannelIds(updatedChannelIds)
+    }
+
     // 同时更新全局默认值（新会话继承）
     setDefaultChannelId(option.channelId)
     setDefaultModelId(option.modelId)
@@ -783,8 +806,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     window.electronAPI.updateSettings({
       agentChannelId: option.channelId,
       agentModelId: option.modelId,
+      agentChannelIds: updatedChannelIds,
     }).catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId])
+  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const externalSelectedModel = React.useMemo(() => {
@@ -928,24 +952,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // 2. 构建最终消息
     const finalMessage = fileReferences + effectiveText
 
-    // 防御性快照：将当前流式 assistant 内容保存到消息列表
-    // 避免重置流式状态时丢失前一轮回复（竞态场景：complete 事件到达但 STREAM_COMPLETE 尚未到达）
-    const prevStream = store.get(agentStreamingStatesAtom).get(sessionId)
-    if (prevStream && prevStream.content && !prevStream.running) {
-      setMessages((prev) => {
-        // 仅在最后一条不是 assistant 消息时追加（避免重复）
-        const lastMsg = prev[prev.length - 1]
-        if (lastMsg?.role === 'assistant') return prev
-        return [...prev, {
-          id: `snapshot-${Date.now()}`,
-          role: 'assistant' as const,
-          content: prevStream.content,
-          createdAt: Date.now(),
-          model: prevStream.model,
-        }]
-      })
-    }
-
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
       if (!prev.has(sessionId)) return prev
@@ -980,15 +986,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
 
-    // 乐观更新：立即显示用户消息
-    const tempUserMsg: AgentMessage = {
-      id: `temp-${Date.now()}`,
-      role: 'user',
-      content: finalMessage,
-      createdAt: Date.now(),
-    }
-    setMessages((prev) => [...prev, tempUserMsg])
-
     // 乐观更新：SDKMessage 格式的用户消息（Phase 4）
     const tempUserSDKMsg: SDKMessage = {
       type: 'user',
@@ -1007,6 +1004,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
+      permissionModeOverride: permissionMode,
       ...(attachedDirs.length > 0 && { additionalDirectories: attachedDirs }),
       // 解析用户消息中的 Skill/MCP 引用，传递结构化元数据给后端
       ...(() => {
@@ -1032,7 +1030,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap])
+  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -1098,6 +1096,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
+      permissionModeOverride: permissionMode,
     }).catch((error) => {
       console.error('[AgentView] /compact 发送失败:', error)
       // 回滚：移除合成用户消息 + 清除 isCompacting flag
@@ -1117,7 +1116,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setStreamingStates, store])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setStreamingStates, store, permissionMode])
 
   /** 复制错误信息到剪贴板 */
   const handleCopyError = React.useCallback(async (): Promise<void> => {
@@ -1137,8 +1136,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!agentChannelId || streaming) return
 
     // 找到最后一条用户消息
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
-    if (!lastUserMsg) return
+    const lastUserMessage = [...persistedSDKMessages]
+      .reverse()
+      .map(getUserTextFromSDKMessage)
+      .find((text): text is string => text !== null)
+    if (!lastUserMessage) return
 
     // 清除错误状态
     setAgentStreamErrors((prev) => {
@@ -1168,13 +1170,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     window.electronAPI.sendAgentMessage({
       sessionId,
-      userMessage: lastUserMsg.content,
+      userMessage: lastUserMessage,
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
+      permissionModeOverride: permissionMode,
     }).catch(console.error)
-  }, [messages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, permissionMode])
 
   /** 在新会话中重试：创建新会话 + 切换 tab + 发送引用旧会话的提示词 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -1212,11 +1215,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: agentChannelId,
         modelId: agentModelId || undefined,
         workspaceId: currentWorkspaceId || undefined,
+        permissionModeOverride: permissionMode,
       }).catch(console.error)
     } catch (error) {
       console.error('[AgentView] 在新会话中重试失败:', error)
     }
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates, permissionMode])
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
@@ -1376,7 +1380,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         <AgentMessages
           sessionId={sessionId}
           sessionModelId={agentModelId || undefined}
-          messages={messages}
           messagesLoaded={messagesLoaded}
           persistedSDKMessages={persistedSDKMessages}
           streaming={streaming}
@@ -1499,7 +1502,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               collapsible
               workspacePath={sessionPath}
               workspaceSlug={workspaceSlug}
-              attachedDirs={allAttachedDirs}
+              attachedDirs={workspaceDirs}
+              sessionAttachedDirs={attachedDirs}
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
@@ -1525,6 +1529,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     window.electronAPI.updateSettings({ agentThinking: next })
                   }}
                 />
+                <SpeechButton className="size-[36px] rounded-full" />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

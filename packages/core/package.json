@@ -1,6 +1,6 @@
 {
   "name": "@proma/core",
-  "version": "0.2.2",
+  "version": "0.2.9",
   "license": "Apache-2.0",
   "description": "proma core types,storage and core logic with agents",
   "type": "module",
@@ -18,7 +18,7 @@
     "shiki": "^3.22.0"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.2.9",
+    "@anthropic-ai/claude-agent-sdk": ">=0.2.123",
     "@anthropic-ai/sdk": ">=0.70.0",
     "@modelcontextprotocol/sdk": ">=1.0.0"
   },

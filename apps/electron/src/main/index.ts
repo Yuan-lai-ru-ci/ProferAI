@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 
@@ -15,6 +15,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 import { getSettings } from './lib/settings-service'
+import { resolveOverlayColors } from './lib/titlebar-overlay'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
 // 这在开发环境热重载时经常发生，不影响应用功能
@@ -42,7 +43,7 @@ import { createTray, destroyTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
-import { stopAllAgents } from './lib/agent-service'
+import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
@@ -56,7 +57,14 @@ import { getDingTalkMultiBotConfig } from './lib/dingtalk-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
+import {
+  createVoiceDictationWindow,
+  toggleVoiceDictationWindow,
+  destroyVoiceDictationWindow,
+  shouldSuppressVoiceDictationActivate,
+} from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
+import { TRAY_IPC_CHANNELS } from '../types'
 
 // ===== Bridge 注册（新增 Bridge 只需在此添加一个 registerBridge 调用） =====
 
@@ -97,6 +105,22 @@ export function getMainWindow(): BrowserWindow | null {
   return mainWindow
 }
 
+function installWindowsZoomInFallback(win: BrowserWindow): void {
+  if (process.platform !== 'win32') return
+
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
+
+    // Windows 下主键盘的 Ctrl++ 常会以 Ctrl+= 上报；小键盘加号也需要兜底。
+    const key = input.key.toLowerCase()
+    if (!['=', '+', 'numadd', 'add'].includes(key)) return
+
+    event.preventDefault()
+    const currentZoomLevel = win.webContents.getZoomLevel()
+    win.webContents.setZoomLevel(Math.min(currentZoomLevel + 0.5, 9))
+  })
+}
+
 /**
  * 检查窗口是否在可用显示器范围内
  * 处理外接显示器断开后窗口位于不可见区域的情况
@@ -127,6 +151,10 @@ function ensureWindowOnScreen(win: BrowserWindow): void {
 
 /** 显示并聚焦主窗口，确保窗口在可见区域；若窗口已销毁则重新创建 */
 function showAndFocusMainWindow(): void {
+  if (process.platform === 'darwin') {
+    app.show()
+  }
+
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow()
     return
@@ -163,23 +191,45 @@ function createWindow(): void {
     console.warn('App icon not found at:', iconPath)
   }
 
+  const isMac = process.platform === 'darwin'
+  const isWindows = process.platform === 'win32'
+
+  const titleBarOptions = isMac
+    ? {
+        titleBarStyle: 'hiddenInset' as const,
+        trafficLightPosition: { x: 18, y: 18 },
+        vibrancy: 'under-window' as const,
+        visualEffectState: 'followWindow' as const,
+      }
+    : isWindows
+      ? (() => {
+          const settings = getSettings()
+          return {
+            titleBarStyle: 'hidden' as const,
+            titleBarOverlay: resolveOverlayColors(
+              settings.themeMode,
+              settings.themeStyle,
+              nativeTheme.shouldUseDarkColors
+            ),
+          }
+        })()
+      : {}
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 800,
     minHeight: 600,
     icon: iconExists ? iconPath : undefined,
-    show: false, // Don't show until ready
+    show: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
-    titleBarStyle: 'hiddenInset', // macOS style
-    trafficLightPosition: { x: 18, y: 18 },
-    vibrancy: 'under-window', // macOS glass effect
-    visualEffectState: 'active',
+    ...titleBarOptions,
   })
+  installWindowsZoomInFallback(mainWindow)
 
   // Load the renderer
   const isDev = !app.isPackaged
@@ -231,6 +281,25 @@ function createWindow(): void {
   })
 }
 
+function sendToMainWindow(channel: string, data?: unknown): void {
+  showAndFocusMainWindow()
+
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+
+  const send = (): void => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, data)
+    }
+  }
+
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send)
+  } else {
+    send()
+  }
+}
+
 app.whenReady().then(async () => {
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
   // 必须在其他初始化之前执行，确保环境变量正确加载
@@ -263,11 +332,22 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Create system tray icon
-  createTray()
-
   // Create main window (will be shown when ready)
   createWindow()
+
+  // Create system tray icon
+  createTray({
+    showMainWindow: showAndFocusMainWindow,
+    openAgentSession: (sessionId, title) => {
+      sendToMainWindow(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, { sessionId, title })
+    },
+    createChatSession: () => {
+      sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION, { mode: 'chat' })
+    },
+    createAgentSession: () => {
+      sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION, { mode: 'agent' })
+    },
+  })
 
   // 启动工作区文件监听（Agent MCP/Skills + 文件浏览器自动刷新）
   if (mainWindow) {
@@ -284,15 +364,23 @@ app.whenReady().then(async () => {
 
   // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
   createQuickTaskWindow()
+  createVoiceDictationWindow()
 
   // 注册全局快捷键
   registerGlobalShortcut('quick-task', toggleQuickTaskWindow)
   registerGlobalShortcut('show-main-window', showAndFocusMainWindow)
+  registerGlobalShortcut('voice-dictation', () => {
+    toggleVoiceDictationWindow({ targetIsProma: mainWindow?.isFocused() === true })
+  })
 
   // 启动所有已注册的 Bridge（飞书/钉钉/微信等）
   await startAllBridges()
 
   app.on('activate', () => {
+    if (shouldSuppressVoiceDictationActivate()) {
+      return
+    }
+
     // 直接检查 mainWindow 引用，避免 getAllWindows() 包含 DevTools 等其他窗口导致误判
     if (!mainWindow || mainWindow.isDestroyed()) {
       createWindow()
@@ -318,6 +406,9 @@ app.on('before-quit', () => {
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   stopAllGenerations()
+  // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
+  // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程
+  killOrphanedClaudeSubprocesses()
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听
@@ -330,6 +421,7 @@ app.on('before-quit', () => {
   unregisterAllGlobalShortcuts()
   // 销毁快速任务窗口
   destroyQuickTaskWindow()
+  destroyVoiceDictationWindow()
   // Clean up system tray before quitting
   destroyTray()
 })

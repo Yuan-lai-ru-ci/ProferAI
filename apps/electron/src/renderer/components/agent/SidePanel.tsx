@@ -33,6 +33,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import { tabsAtom, activeTabIdAtom, type TabItem } from '@/atoms/tab-atoms'
+import { detectIsWindows } from '@/lib/platform'
 import type { FileEntry, AgentPendingFile } from '@proma/shared'
 
 interface SidePanelProps {
@@ -47,6 +48,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // per-session 侧面板状态（默认打开）
   const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
   const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   // Tab 系统
   const setTabs = useSetAtom(tabsAtom)
@@ -291,6 +293,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       <div
         className={cn(
           'w-full h-full flex flex-col titlebar-no-drag',
+          isWindows ? 'pt-[34px]' : 'pt-0.5',
           shouldAnimate && 'transition-opacity duration-300',
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}

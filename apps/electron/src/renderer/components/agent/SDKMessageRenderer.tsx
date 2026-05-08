@@ -12,8 +12,8 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2 } from 'lucide-react'
-import { useAtomValue } from 'jotai'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink } from 'lucide-react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
@@ -30,11 +30,14 @@ import {
 } from '@/components/ai-elements/message'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
+import { environmentCheckDialogOpenAtom } from '@/atoms/environment'
+import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import type {
   SDKMessage,
   SDKAssistantMessage,
@@ -45,6 +48,7 @@ import type {
   AgentEventUsage,
   SDKToolUseBlock,
   SDKToolResultBlock,
+  RecoveryAction,
 } from '@proma/shared'
 import type { ToolActivity } from '@/atoms/agent-atoms'
 
@@ -334,6 +338,12 @@ export interface AssistantTurnRendererProps {
   onFork?: (upToMessageUuid: string) => void
   /** 回退回调（传入 assistant message uuid） */
   onRewind?: (assistantMessageUuid: string) => void
+  /** 错误重试回调（仅当 turn 含错误消息时使用） */
+  onRetry?: () => void
+  /** 在新会话中重试回调（仅当 turn 含错误消息时使用） */
+  onRetryInNewSession?: () => void
+  /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
+  onCompact?: () => void
   /** 是否正在流式输出中（隐藏操作栏） */
   isStreaming?: boolean
   /** 是否被用户中断 */
@@ -342,7 +352,7 @@ export interface AssistantTurnRendererProps {
   sessionModelId?: string
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
@@ -367,14 +377,6 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       }
     }
   }
-
-  // 如果只有错误消息
-  if (enrichedBlocks.length === 0 && hasError && errorContent) {
-    return <ErrorMessage message={errorContent} />
-  }
-
-  // 如果没有任何内容
-  if (enrichedBlocks.length === 0 && !hasError) return null
 
   // 从 turnMessages 中提取 result 消息的耗时和用量
   const { durationMs, usage } = extractTurnUsage(turn.turnMessages)
@@ -511,6 +513,21 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     return { taskActivities: _taskActivities, firstTaskIndex: _firstTaskIndex, historicalTaskSubjects: _historicalTaskSubjects }
   }, [topLevelBlocks, turn.turnMessages, allMessages])
 
+  // 如果只有错误消息
+  if (enrichedBlocks.length === 0 && hasError && errorContent) {
+    return (
+      <ErrorMessage
+        message={errorContent}
+        onRetry={onRetry}
+        onRetryInNewSession={onRetryInNewSession}
+        onCompact={onCompact}
+      />
+    )
+  }
+
+  // 如果没有任何内容
+  if (enrichedBlocks.length === 0 && !hasError) return null
+
   return (
     <Message from="assistant">
       <MessageHeader
@@ -521,7 +538,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       <MessageContent>
         <div className={cn('space-y-2')}>
           {topLevelBlocks.map((block, i) => {
-              // Task 工具块：聚合为卡片（同 ToolActivityList 路径的逻辑，此处用索引定位）
+              // Task 工具块：聚合为卡片，此处用索引定位首个任务工具
               if (block.type === 'tool_use' && TASK_TOOL_NAMES.has((block as SDKToolUseBlock).name)) {
                 if (i === firstTaskIndex) {
                   return <TaskProgressCard key="task-progress-card" activities={taskActivities} streamEnded={!isStreaming} historicalTaskSubjects={historicalTaskSubjects} />
@@ -557,7 +574,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           </div>
         )}
       </MessageContent>
-      {/* 操作栏：左侧耗时标签 + 右侧操作按钮（流式输出中隐藏） */}
+      {/* 操作栏：流式输出完成后显示操作按钮 */}
       {!isStreaming && (() => {
         const textContent = topLevelBlocks
           .filter((b) => b.type === 'text' && 'text' in b)
@@ -833,17 +850,90 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
 
 // ===== 错误消息渲染 =====
 
-function ErrorMessage({ message }: { message: SDKAssistantMessage }): React.ReactElement {
+interface ErrorMessageProps {
+  message: SDKAssistantMessage
+  /** 重试回调（在当前会话内重试） */
+  onRetry?: () => void
+  /** 在新会话中重试回调（创建新会话并引用当前会话继续） */
+  onRetryInNewSession?: () => void
+  /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
+  onCompact?: () => void
+}
+
+function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: ErrorMessageProps): React.ReactElement {
   const meta = extractMeta(message as unknown as SDKMessage)
   const errorText = message.error?.message ?? '未知错误'
 
   const msgAny = message as unknown as Record<string, unknown>
   const errorTitle = typeof msgAny._errorTitle === 'string' ? msgAny._errorTitle : undefined
+  const errorCode = typeof msgAny._errorCode === 'string' ? msgAny._errorCode : undefined
+  const errorDetails = Array.isArray(msgAny._errorDetails)
+    ? (msgAny._errorDetails as string[])
+    : undefined
+  const errorActions = Array.isArray(msgAny._errorActions)
+    ? (msgAny._errorActions as RecoveryAction[])
+    : undefined
+  const isPromptTooLong = errorCode === 'prompt_too_long'
+
+  const setEnvDialogOpen = useSetAtom(environmentCheckDialogOpenAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
+  const [detailsOpen, setDetailsOpen] = React.useState(false)
 
   const contentText = message.message?.content
     ?.filter((b) => b.type === 'text' && 'text' in b)
     .map((b) => (b as { text: string }).text)
     .join('\n') ?? errorText
+
+  const handleRecoveryAction = (action: RecoveryAction) => {
+    switch (action.action) {
+      case 'open_environment_check':
+        setEnvDialogOpen(true)
+        break
+      case 'open_channel_settings':
+        setSettingsTab('channels')
+        setSettingsOpen(true)
+        break
+      case 'settings':
+        setSettingsOpen(true)
+        break
+      case 'open_external':
+        if (action.payload) {
+          window.electronAPI.openExternal(action.payload)
+        }
+        break
+      case 'retry':
+        onRetry?.()
+        break
+      case 'compact':
+        onCompact?.()
+        break
+      default:
+        console.warn('[ErrorMessage] 未处理的 recovery action:', action)
+    }
+  }
+
+  const iconForAction = (action: RecoveryAction['action']) => {
+    switch (action) {
+      case 'open_environment_check':
+        return <Wrench className="size-3.5 mr-1.5" />
+      case 'open_channel_settings':
+      case 'settings':
+        return <Settings className="size-3.5 mr-1.5" />
+      case 'open_external':
+        return <ExternalLink className="size-3.5 mr-1.5" />
+      case 'retry':
+        return <RotateCw className="size-3.5 mr-1.5" />
+      case 'compact':
+        return <Minimize2 className="size-3.5 mr-1.5" />
+      default:
+        return null
+    }
+  }
+
+  const hasStructuredActions = !!(errorActions && errorActions.length > 0)
+  const hasLegacyActions = !!(onRetry || onRetryInNewSession || (isPromptTooLong && onCompact))
+  const hasActions = hasStructuredActions || hasLegacyActions
 
   return (
     <Message from="assistant">
@@ -863,6 +953,63 @@ function ErrorMessage({ message }: { message: SDKAssistantMessage }): React.Reac
         <div className="text-destructive">
           <MessageResponse>{contentText}</MessageResponse>
         </div>
+        {errorDetails && errorDetails.length > 0 && (
+          <div className="mt-2 text-[11px] text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((v) => !v)}
+              className="underline-offset-2 hover:underline"
+            >
+              {detailsOpen ? '收起诊断详情' : '查看诊断详情'}
+            </button>
+            {detailsOpen && (
+              <ul className="mt-1.5 space-y-0.5 list-disc list-inside">
+                {errorDetails.map((d, i) => (
+                  <li key={i}>{d}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {hasActions && (
+          <div className="flex items-center flex-wrap gap-2 mt-3">
+            {hasStructuredActions &&
+              errorActions!.map((a, i) => (
+                <Button
+                  key={`${a.action}-${i}`}
+                  size="sm"
+                  variant={i === 0 ? 'default' : 'outline'}
+                  onClick={() => handleRecoveryAction(a)}
+                >
+                  {iconForAction(a.action)}
+                  {a.label}
+                </Button>
+              ))}
+            {!hasStructuredActions && isPromptTooLong && onCompact && (
+              <Button size="sm" onClick={onCompact}>
+                <Minimize2 className="size-3.5 mr-1.5" />
+                压缩上下文
+              </Button>
+            )}
+            {!hasStructuredActions && onRetry && (
+              <Button size="sm" variant={isPromptTooLong ? 'outline' : 'default'} onClick={onRetry}>
+                <RotateCw className="size-3.5 mr-1.5" />
+                重试
+              </Button>
+            )}
+            {!hasStructuredActions && onRetryInNewSession && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onRetryInNewSession}
+                title="如遇到未知错误，可点此按钮在新会话中尝试解决"
+              >
+                <Plus className="size-3.5 mr-1.5" />
+                在新会话中重试
+              </Button>
+            )}
+          </div>
+        )}
       </MessageContent>
       <MessageActions className="pl-[46px] mt-0.5">
         <CopyButton content={contentText} />
@@ -879,6 +1026,12 @@ export interface MessageGroupRendererProps {
   basePath?: string
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
+  /** 错误重试回调（仅当 turn 含错误消息时使用） */
+  onRetry?: () => void
+  /** 在新会话中重试回调（仅当 turn 含错误消息时使用） */
+  onRetryInNewSession?: () => void
+  /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
+  onCompact?: () => void
   /** 是否正在流式输出中（隐藏操作栏） */
   isStreaming?: boolean
   /** 是否被用户中断 */
@@ -953,7 +1106,7 @@ export function getGroupPreview(group: MessageGroup): string {
   return texts.join(' ').slice(0, 200)
 }
 
-export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -980,6 +1133,9 @@ export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onR
         basePath={basePath}
         onFork={onFork}
         onRewind={onRewind}
+        onRetry={onRetry}
+        onRetryInNewSession={onRetryInNewSession}
+        onCompact={onCompact}
         isStreaming={isStreaming}
         stoppedByUser={stoppedByUser}
         sessionModelId={sessionModelId}

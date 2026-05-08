@@ -28,6 +28,9 @@ import { cn } from '@/lib/utils'
 import { createFileMentionSuggestion } from '@/components/file-browser/file-mention-suggestion'
 import { createSkillMentionSuggestion, createMcpMentionSuggestion } from '@/components/agent/mention-suggestions'
 
+const VOICE_DICTATION_INSERT_EVENT = 'proma:insert-voice-dictation-text'
+let lastFocusedRichTextInputId: string | null = null
+
 // 创建 lowlight 实例，使用常见语言
 const lowlight = createLowlight(common)
 
@@ -119,7 +122,7 @@ function htmlToMarkdown(html: string): string {
         if (dataType === 'mention') {
           if (suggestionChar === '/') return `/skill:${dataId}`
           if (suggestionChar === '#') return `#mcp:${dataId}`
-          return `@file:${dataId}`
+          return `@file:${encodeURIComponent(dataId)}`
         }
         return children
       }
@@ -188,8 +191,10 @@ interface RichTextInputProps {
   workspacePath?: string | null
   /** 工作区 slug（启用 / Skill 和 # MCP 功能时需要） */
   workspaceSlug?: string | null
-  /** 附加目录路径列表（@ 引用时一并搜索） */
+  /** 附加目录路径列表（工作区级，@ 引用时标记为工作区文件） */
   attachedDirs?: string[]
+  /** 会话级附加目录路径列表（@ 引用时标记为会话文件） */
+  sessionAttachedDirs?: string[]
   /** HTML 草稿值（切换会话恢复时使用，保留 mention 等富文本结构） */
   htmlValue?: string
   /** HTML 值变更回调（用于保存富文本草稿） */
@@ -219,11 +224,13 @@ export function RichTextInput({
   workspacePath,
   workspaceSlug,
   attachedDirs = [],
+  sessionAttachedDirs = [],
   htmlValue,
   onHtmlChange,
   sendWithCmdEnter = false,
 }: RichTextInputProps): React.ReactElement {
   const [isExpanded, setIsExpanded] = useState(false)
+  const inputIdRef = useRef(`rich-text-input-${Math.random().toString(36).slice(2)}`)
   // 手动折叠状态：用户主动折叠输入框
   const [isManuallyCollapsed, setIsManuallyCollapsed] = useState(false)
   // 跟踪编辑器自己设置的值，用于区分外部设置和内部更新
@@ -249,9 +256,12 @@ export function RichTextInput({
   // 工作区路径引用（给 Suggestion 使用）
   const workspacePathRef = useRef<string | null>(workspacePath ?? null)
   workspacePathRef.current = workspacePath ?? null
-  // 附加目录路径引用（给 Suggestion 使用）
+  // 工作区级附加目录路径引用（给 Suggestion 使用，标记为 workspace）
   const attachedDirsRef = useRef<string[]>(attachedDirs)
   attachedDirsRef.current = attachedDirs
+  // 会话级附加目录路径引用（给 Suggestion 使用，标记为 session）
+  const sessionAttachedDirsRef = useRef<string[]>(sessionAttachedDirs)
+  sessionAttachedDirsRef.current = sessionAttachedDirs
   // 工作区 slug 引用（给 Skill/MCP Suggestion 使用）
   const workspaceSlugRef = useRef<string | null>(workspaceSlug ?? null)
   workspaceSlugRef.current = workspaceSlug ?? null
@@ -261,7 +271,7 @@ export function RichTextInput({
 
   // Mention Suggestion 配置（稳定引用，不随 workspacePath 变化重建）
   const mentionSuggestion = useMemo(
-    () => createFileMentionSuggestion(workspacePathRef, mentionActiveRef, attachedDirsRef, mentionItemCountRef),
+    () => createFileMentionSuggestion(workspacePathRef, mentionActiveRef, attachedDirsRef, mentionItemCountRef, sessionAttachedDirsRef),
     [],
   )
 
@@ -289,6 +299,8 @@ export function RichTextInput({
       Underline,
       Link.configure({
         openOnClick: false,
+        autolink: false,
+        linkOnPaste: false,
         HTMLAttributes: {
           class: 'text-primary underline',
         },
@@ -362,6 +374,10 @@ export function RichTextInput({
       },
       // 监听 IME 输入状态
       handleDOMEvents: {
+        focus: () => {
+          lastFocusedRichTextInputId = inputIdRef.current
+          return false
+        },
         compositionstart: () => {
           isComposingRef.current = true
           return false
@@ -572,6 +588,25 @@ export function RichTextInput({
       return () => clearTimeout(timer)
     }
   }, [editor, disabled, autoFocusTrigger])
+
+  // 语音输入回填：优先插入到当前编辑器的光标位置。
+  useEffect(() => {
+    if (!editor || disabled) return
+
+    const handler = (event: Event): void => {
+      if (lastFocusedRichTextInputId !== inputIdRef.current) return
+
+      const customEvent = event as CustomEvent<{ text?: string }>
+      const text = customEvent.detail?.text?.trim()
+      if (!text) return
+
+      editor.chain().focus().insertContent(text).run()
+      event.preventDefault()
+    }
+
+    window.addEventListener(VOICE_DICTATION_INSERT_EVENT, handler)
+    return () => window.removeEventListener(VOICE_DICTATION_INSERT_EVENT, handler)
+  }, [editor, disabled])
 
   // 是否显示折叠按钮：启用 collapsible 且内容已自动扩展
   const showCollapseToggle = collapsible && isExpanded

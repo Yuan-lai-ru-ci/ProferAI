@@ -3,7 +3,8 @@
  *
  * 分为两个区块：
  * 1. 渠道管理 — 所有渠道列表 + 添加/编辑/删除（渠道同时用于 Chat 和 Agent）
- * 2. Agent 供应商 — 从已启用的 Anthropic 渠道中通过 Switch 开关启用多个 Agent 供应商
+ * 2. Agent 供应商 — 从已启用的 Anthropic 兼容渠道（Anthropic / DeepSeek / Kimi）中
+ *    通过 Switch 开关启用多个 Agent 供应商
  */
 
 import * as React from 'react'
@@ -11,12 +12,22 @@ import { useAtom, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { PROVIDER_LABELS } from '@proma/shared'
+import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
 import type { Channel } from '@proma/shared'
 import { getChannelLogo, PromaLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { ChannelForm } from './ChannelForm'
 
 /** 组件视图模式 */
@@ -31,6 +42,7 @@ export function ChannelSettings(): React.ReactElement {
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
   const setGlobalChannels = useSetAtom(channelsAtom)
+  const [deleteTarget, setDeleteTarget] = React.useState<Channel | null>(null)
 
   /** 加载渠道列表 */
   const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
@@ -51,29 +63,35 @@ export function ChannelSettings(): React.ReactElement {
     loadChannels()
   }, [loadChannels])
 
-  /** 删除渠道 */
-  const handleDelete = async (channel: Channel): Promise<void> => {
-    if (!confirm(`确定删除渠道「${channel.name}」？此操作不可恢复。`)) return
+  /** 删除渠道（通过弹窗确认） */
+  const handleDeleteRequest = (channel: Channel): void => {
+    setDeleteTarget(channel)
+  }
 
+  /** 确认删除 */
+  const handleDeleteConfirm = async (): Promise<void> => {
+    if (!deleteTarget) return
+    const target = deleteTarget
     try {
-      await window.electronAPI.deleteChannel(channel.id)
+      await window.electronAPI.deleteChannel(target.id)
 
       // 从 Agent 渠道列表中移除
-      const newIds = agentChannelIds.filter((id) => id !== channel.id)
+      const newIds = agentChannelIds.filter((id) => id !== target.id)
       setAgentChannelIds(newIds)
 
       // 如果删除的是当前选中的 Agent 渠道，清空选择
-      if (agentChannelId === channel.id) {
+      if (agentChannelId === target.id) {
         setAgentChannelId(null)
         setAgentModelId(null)
       }
 
       await window.electronAPI.updateSettings({
         agentChannelIds: newIds,
-        ...(agentChannelId === channel.id && { agentChannelId: undefined, agentModelId: undefined }),
+        ...(agentChannelId === target.id && { agentChannelId: undefined, agentModelId: undefined }),
       })
 
       await loadChannels()
+      setDeleteTarget(null)
     } catch (error) {
       console.error('[渠道设置] 删除渠道失败:', error)
     }
@@ -151,9 +169,9 @@ export function ChannelSettings(): React.ReactElement {
     )
   }
 
-  // Anthropic 渠道（已启用）
-  const anthropicChannels = channels.filter(
-    (c) => c.provider === 'anthropic' && c.enabled
+  // Agent 兼容渠道（已启用）：Anthropic / DeepSeek / Kimi API / Kimi Coding Plan
+  const agentCapableChannels = channels.filter(
+    (c) => isAgentCompatibleProvider(c.provider) && c.enabled
   )
 
   // 列表视图
@@ -191,7 +209,7 @@ export function ChannelSettings(): React.ReactElement {
                   setEditingChannel(channel)
                   setViewMode('edit')
                 }}
-                onDelete={() => handleDelete(channel)}
+                onDelete={() => handleDeleteRequest(channel)}
                 onToggle={() => handleToggle(channel)}
               />
             ))}
@@ -209,15 +227,15 @@ export function ChannelSettings(): React.ReactElement {
         </SettingsCard>
         {loading ? (
           <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
-        ) : anthropicChannels.length === 0 ? (
+        ) : agentCapableChannels.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="text-sm text-muted-foreground py-8 text-center">
-              暂无可用的 Anthropic 兼容格式渠道，请先在上方添加 Anthropic 渠道并启用
+              暂无可用的 Anthropic 兼容渠道，请先在上方添加 Anthropic / DeepSeek / Kimi 渠道并启用
             </div>
           </SettingsCard>
         ) : (
           <SettingsCard>
-            {anthropicChannels.map((channel) => (
+            {agentCapableChannels.map((channel) => (
               <AgentProviderRow
                 key={channel.id}
                 channel={channel}
@@ -228,6 +246,22 @@ export function ChannelSettings(): React.ReactElement {
           </SettingsCard>
         )}
       </SettingsSection>
+
+      {/* 删除确认弹窗 */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确定删除渠道？</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除渠道「{deleteTarget?.name}」？此操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteTarget(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteConfirm}>确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -246,7 +280,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
-    channel.provider === 'anthropic' ? '可用于 Agent' : undefined,
+    isAgentCompatibleProvider(channel.provider) ? '可用于 Agent' : undefined,
   ]
     .filter(Boolean)
     .join(' · ')

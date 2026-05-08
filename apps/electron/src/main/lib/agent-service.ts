@@ -26,7 +26,7 @@ import type {
   AgentQueueMessageInput,
   PromaPermissionMode,
 } from '@proma/shared'
-import { ClaudeAgentAdapter } from './adapters/claude-agent-adapter'
+import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
@@ -105,6 +105,20 @@ export async function runAgent(
         }
       },
     })
+  } catch (err) {
+    console.error('[Agent 服务] runAgent 未处理异常:', err)
+    const errorMessage = err instanceof Error ? err.message : '未知错误'
+    if (!webContents.isDestroyed()) {
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_ERROR, {
+        sessionId: input.sessionId,
+        error: errorMessage,
+      })
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
+        sessionId: input.sessionId,
+        messages: [],
+        stoppedByUser: false,
+      })
+    }
   } finally {
     // 仅在 orchestrator 已完成此会话时清理映射
     // 避免被拒绝的请求误删仍在运行的会话映射
@@ -171,6 +185,15 @@ export async function runAgentHeadless(
         }
       },
     })
+  } catch (err) {
+    console.error('[Agent 服务] runAgentHeadless 未处理异常:', err)
+    const errorMessage = err instanceof Error ? err.message : '未知错误'
+    callbacks.onError(errorMessage)
+    callbacks.onComplete()
+    if (wc && !wc.isDestroyed()) {
+      wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: input.sessionId, error: errorMessage })
+      wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId: input.sessionId, messages: [], stoppedByUser: false })
+    }
   } finally {
     if (!orchestrator.isActive(input.sessionId)) {
       sessionWebContents.delete(input.sessionId)
@@ -212,6 +235,16 @@ export function isAgentSessionActive(sessionId: string): boolean {
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
 export function stopAllAgents(): void {
   orchestrator.stopAll()
+}
+
+/**
+ * 退出前最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程
+ *
+ * 必须在 stopAllAgents() 之后调用。针对 pidMap 未覆盖、dispose 漏杀等极端场景。
+ * 同步执行，不 await，确保 before-quit 能在 Electron 超时前完成。
+ */
+export function killOrphanedClaudeSubprocesses(): void {
+  scanAndKillOrphanedClaudeSubprocesses()
 }
 
 /**

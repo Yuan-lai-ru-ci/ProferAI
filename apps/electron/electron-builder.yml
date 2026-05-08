@@ -16,8 +16,11 @@ directories:
 # 压缩配置
 compression: normal
 
-# ASAR 打包配置（禁用 ASAR，避免 SDK symlink 路径越界问题）
-asar: false
+# ASAR 打包配置
+# 启用 ASAR 归档，将 SDK native binary 解压到 app.asar.unpacked/ 避免路径问题
+asar: true
+asarUnpack:
+  - "node_modules/@anthropic-ai/**"
 
 # 跳过 npm install（代码已被 esbuild/Vite 打包，npm 不识别 workspace:* 协议）
 npmRebuild: false
@@ -25,9 +28,19 @@ npmRebuild: false
 # 通用文件配置
 files:
   - dist/**/*
+  # 排除 build:resources 脚本拷到 dist/resources 的副本（electron-builder 已通过
+  # buildResources 从 resources/ 直接使用 icon/plist，避免产物里重复打包一份）
+  - "!dist/resources/**"
   - package.json
-  # 包含 SDK 到 app.asar/app 目录中（与 dist 和 package.json 同级）
+  # 包含 SDK 主包到 app/node_modules/@anthropic-ai/ 目录中（与 dist 和 package.json 同级）
   - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+  # 0.2.113+ SDK 改为按平台分发 native binary，通过 optionalDependencies 安装到
+  # @anthropic-ai/claude-agent-sdk-{platform}-{arch}/ 子包。
+  # 必须将当前 CI 构建矩阵覆盖的平台子包打入安装包，否则运行时找不到 binary。
+  # 宿主平台上 os/cpu 不匹配的包会被 bun 跳过安装，打包时 electron-builder 会对不存在的 glob 静默跳过。
+  - node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/**/*
+  - node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/**/*
+  - node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*
   # 排除 workspace 包的 symlink（代码已被 esbuild/Vite 打包到 dist/ 中）
   - "!node_modules/@proma/**"
 
@@ -57,22 +70,14 @@ mac:
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: "Proma 需要访问麦克风，用于将你的语音实时转写为文本。"
+  # 架构由 CLI 参数控制（CI 矩阵分别传 --arm64 / --x64），
+  # 每个 runner 只构建其宿主架构对应的产物，与 bun 按 os/cpu 装好的
+  # @anthropic-ai/claude-agent-sdk-darwin-{arch} native binary 对齐。
   target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
-    - target: zip
-      arch:
-        - arm64
-        - x64
-  # macOS 额外资源
-  extraResources:
-    # 根据架构选择正确的 ripgrep（实际位于 packages/core 的 node_modules 中）
-    - from: "../../packages/core/node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/${arch}-darwin"
-      to: "vendor/ripgrep"
-      filter:
-        - "**/*"
+    - dmg
+    - zip
 
 # DMG 配置
 dmg:
@@ -96,12 +101,6 @@ win:
     - target: nsis
       arch:
         - x64
-  # Windows 额外资源
-  extraResources:
-    - from: "../../packages/core/node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-win32"
-      to: "vendor/ripgrep"
-      filter:
-        - "**/*"
 
 # NSIS 安装程序配置
 nsis:
@@ -112,6 +111,8 @@ nsis:
 
 # ============================================
 # 发布配置
+# 每个平台的 build job 通过 --publish always 直接上传到 GitHub Release。
+# electron-builder 会自动创建/复用 Release，并在多架构并行上传时合并 latest-mac.yml。
 # ============================================
 publish:
   provider: github

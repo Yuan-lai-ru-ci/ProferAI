@@ -1,13 +1,15 @@
 /**
- * UpdateDialog - 新版本通知弹窗
+ * UpdateDialog - 自动更新弹窗
  *
- * 当检测到新版本时自动弹出，引导用户前往 GitHub Releases 下载。
- * 同一版本只弹一次，用户关闭后不再重复弹出。
+ * 三阶段 UI：
+ * 1. 发现新版本 → 显示版本信息和 release notes
+ * 2. 下载中 → 显示进度条
+ * 3. 下载完成 → 提供「立即重启」按钮
  */
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { ExternalLink } from 'lucide-react'
+import { RotateCw } from 'lucide-react'
 import type { GitHubRelease } from '@proma/shared'
 import {
   AlertDialog,
@@ -22,18 +24,13 @@ import {
 import { updateStatusAtom } from '@/atoms/updater'
 import { ReleaseNotesViewer } from './ReleaseNotesViewer'
 
-const GITHUB_RELEASES_URL = 'https://github.com/ErlichLiu/Proma/releases'
-
 export function UpdateDialog(): React.ReactElement | null {
   const updateStatus = useAtomValue(updateStatusAtom)
   const [open, setOpen] = React.useState(false)
   const [release, setRelease] = React.useState<GitHubRelease | null>(null)
-  // 弹窗打开时锁定的版本号，不随 atom 变化而丢失
   const [dialogVersion, setDialogVersion] = React.useState<string | null>(null)
-  // 记录已弹出过的版本号，同一版本不重复弹出
   const shownVersionRef = React.useRef<string | null>(null)
 
-  // 当状态变为 available 且是新版本时，自动弹出
   React.useEffect(() => {
     if (
       updateStatus.status === 'available' &&
@@ -44,7 +41,6 @@ export function UpdateDialog(): React.ReactElement | null {
       shownVersionRef.current = version
       setDialogVersion(version)
 
-      // 获取 Release 信息
       window.electronAPI
         .getReleaseByTag(`v${version}`)
         .then((r) => {
@@ -56,41 +52,80 @@ export function UpdateDialog(): React.ReactElement | null {
 
       setOpen(true)
     }
-  }, [updateStatus.status, updateStatus.version])
 
-  const handleGoToDownload = (e: React.MouseEvent): void => {
-    e.preventDefault()
-    const url = release?.html_url || GITHUB_RELEASES_URL
-    window.electronAPI.openExternal(url)
+    // 下载完成时如果弹窗已关闭，重新打开
+    if (updateStatus.status === 'downloaded' && !open && dialogVersion) {
+      setOpen(true)
+    }
+  }, [updateStatus.status, updateStatus.version, open, dialogVersion])
+
+  const handleQuitAndInstall = (): void => {
+    window.electronAPI.updater?.quitAndInstall()
+  }
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   }
 
   if (!dialogVersion) return null
+
+  const isDownloading = updateStatus.status === 'downloading'
+  const isDownloaded = updateStatus.status === 'downloaded'
 
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
-          <AlertDialogTitle>发现新版本</AlertDialogTitle>
+          <AlertDialogTitle>
+            {isDownloaded ? '更新已就绪' : isDownloading ? '正在下载更新' : '发现新版本'}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            v{dialogVersion} 已发布，请前往下载页面获取最新版本覆盖安装。
+            {isDownloaded
+              ? `v${dialogVersion} 已下载完成，重启应用即可完成更新。`
+              : isDownloading
+                ? `正在下载 v${dialogVersion}...`
+                : `v${dialogVersion} 已发布，正在后台下载更新。`}
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        {/* Release Notes */}
-        {release && (
+        {/* 下载进度 */}
+        {isDownloading && updateStatus.progress && (
+          <div className="space-y-2">
+            <div className="h-2 w-full rounded-full bg-secondary overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${updateStatus.progress.percent}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{formatBytes(updateStatus.progress.transferred)} / {formatBytes(updateStatus.progress.total)}</span>
+              <span>{formatBytes(updateStatus.progress.bytesPerSecond)}/s</span>
+            </div>
+          </div>
+        )}
+
+        {/* Release Notes（仅在非下载阶段显示） */}
+        {!isDownloading && release && (
           <div className="max-h-64 overflow-y-auto rounded-md border p-3">
             <ReleaseNotesViewer release={release} showHeader={false} compact />
           </div>
         )}
 
         <AlertDialogFooter>
-          <AlertDialogCancel>
-            稍后再说
-          </AlertDialogCancel>
-          <AlertDialogAction onClick={handleGoToDownload}>
-            <ExternalLink className="h-4 w-4 mr-1.5" />
-            前往下载
-          </AlertDialogAction>
+          {isDownloaded ? (
+            <>
+              <AlertDialogCancel>稍后重启</AlertDialogCancel>
+              <AlertDialogAction onClick={handleQuitAndInstall}>
+                <RotateCw className="h-4 w-4 mr-1.5" />
+                立即重启更新
+              </AlertDialogAction>
+            </>
+          ) : (
+            <AlertDialogCancel>
+              {isDownloading ? '后台下载' : '知道了'}
+            </AlertDialogCancel>
+          )}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

@@ -27,6 +27,8 @@ import {
   type FSWatcher,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { resolveOverlayColors } from './titlebar-overlay'
+import { getSettings } from './settings-service'
 
 /** 文件大小限制：50MB */
 const MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -388,16 +390,15 @@ function baseStyles(): string {
       justify-content: center;
       background: var(--content-bg);
     }
-    /* 自定义细滚动条：默认透明，hover 容器才显示 */
+    /* 自定义细滚动条 */
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb {
-      background: transparent;
+      background: var(--scrollbar);
       border-radius: 10px;
       border: 2px solid transparent;
       background-clip: content-box;
     }
-    *:hover::-webkit-scrollbar-thumb { background: var(--scrollbar); background-clip: content-box; }
     ::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar) !important; }
   `
 }
@@ -1044,7 +1045,7 @@ function markdownPreviewHtml(filePath: string, filename: string, textContent: st
     function renderMarkdown(raw) {
       var html;
       if (typeof marked !== 'undefined') {
-        marked.setOptions({ gfm: true, breaks: false });
+        marked.setOptions({ gfm: true, breaks: true });
         html = marked.parse(raw);
         // Tag task lists for styling (marked renders <input type="checkbox"> inside <li>)
         html = html.replace(/<li>(\s*<input [^>]*type="checkbox"[^>]*>)/g, '<li class="task-list-item">$1');
@@ -1310,9 +1311,30 @@ function docxPreviewHtml(filePath: string, filename: string, base64Data: string)
 /** 创建预览窗口并绑定脏状态关闭确认 */
 function createPreviewWindow(filename: string): BrowserWindow {
   const isMac = process.platform === 'darwin'
+  const isWindows = process.platform === 'win32'
   const { workArea } = screen.getPrimaryDisplay()
   const width = Math.min(1200, workArea.width)
   const height = workArea.height
+
+  const titleBarOptions = isMac
+    ? {
+        titleBarStyle: 'hiddenInset' as const,
+        trafficLightPosition: { x: 16, y: 14 },
+      }
+    : isWindows
+      ? (() => {
+          const settings = getSettings()
+          return {
+            titleBarStyle: 'hidden' as const,
+            titleBarOverlay: resolveOverlayColors(
+              settings.themeMode,
+              settings.themeStyle,
+              nativeTheme.shouldUseDarkColors
+            ),
+          }
+        })()
+      : {}
+
   const previewWindow = new BrowserWindow({
     width,
     height,
@@ -1321,8 +1343,7 @@ function createPreviewWindow(filename: string): BrowserWindow {
     minWidth: 480,
     minHeight: 360,
     title: filename,
-    titleBarStyle: isMac ? 'hiddenInset' : 'default',
-    trafficLightPosition: isMac ? { x: 16, y: 14 } : undefined,
+    ...titleBarOptions,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#fafaf8',
     webPreferences: {
       preload: join(__dirname, 'file-preview-preload.cjs'),
@@ -1435,20 +1456,91 @@ function watchExternalChange(previewWindow: BrowserWindow, state: PreviewWindowS
 }
 
 /**
+ * 在目录中递归搜索指定文件名（用于路径失效时的 fallback）
+ * 限制搜索深度和目录数量，避免阻塞主进程
+ */
+function searchFileInDir(dir: string, targetName: string, maxDepth = 8): string | null {
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache', 'target'])
+  let scanned = 0
+  const MAX_SCANNED = 500
+
+  function walk(current: string, depth: number): string | null {
+    if (depth > maxDepth || scanned > MAX_SCANNED) return null
+    try {
+      const entries = require('fs').readdirSync(current, { withFileTypes: true }) as import('fs').Dirent[]
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === targetName) {
+          return join(current, entry.name)
+        }
+      }
+      for (const entry of entries) {
+        if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+          scanned++
+          const found = walk(join(current, entry.name), depth + 1)
+          if (found) return found
+        }
+      }
+    } catch { /* permission denied etc */ }
+    return null
+  }
+
+  return walk(dir, 0)
+}
+
+/**
  * 解析待预览的文件路径
- * - 绝对路径：直接 resolve
- * - 相对路径：依次尝试 basePaths，返回第一个存在的；都不存在则返回基于第一个 base 的拼接结果
- *   （让后续 statSync 抛出更明确的错误，而不是被相对 process.cwd 误导）
+ * - 绝对路径：直接 resolve，不存在时 fallback 搜索
+ * - 相对路径：依次尝试 basePaths，返回第一个存在的；都不存在则 fallback 搜索
  */
 function resolveTargetPath(filePath: string, basePaths?: string[]): string {
+  // 直接解析
   if (filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)) {
-    return resolve(filePath)
+    const direct = resolve(filePath)
+    if (existsSync(direct)) return direct
+    // fallback: 用文件名在 basePaths 中搜索
+    const name = basename(direct)
+    if (basePaths) {
+      for (const base of basePaths) {
+        if (!base) continue
+        const found = searchFileInDir(base, name)
+        if (found) return found
+      }
+    }
+    // 从路径中提取 agent-workspaces 根目录作为搜索范围
+    const awIdx = filePath.indexOf('agent-workspaces')
+    if (awIdx !== -1) {
+      const wsRoot = filePath.slice(0, awIdx + 'agent-workspaces'.length)
+      if (existsSync(wsRoot)) {
+        const found = searchFileInDir(wsRoot, name)
+        if (found) return found
+      }
+    }
+    return direct
   }
   if (basePaths && basePaths.length > 0) {
+    // 相对路径首段若与某个 basePath 的 basename 相同，说明路径是相对于该目录的父目录写的
+    // 例如：workspace-files/.context/note.md，workspace-files 是附加目录名，应从其父目录解析
+    const firstSegment = filePath.split('/')[0]
+    if (firstSegment) {
+      for (const base of basePaths) {
+        if (!base) continue
+        if (basename(base) === firstSegment) {
+          const candidate = resolve(dirname(base), filePath)
+          if (existsSync(candidate)) return candidate
+        }
+      }
+    }
     for (const base of basePaths) {
       if (!base) continue
       const candidate = resolve(base, filePath)
       if (existsSync(candidate)) return candidate
+    }
+    // fallback: 用文件名搜索
+    const name = basename(filePath)
+    for (const base of basePaths) {
+      if (!base) continue
+      const found = searchFileInDir(base, name)
+      if (found) return found
     }
     return resolve(basePaths[0]!, filePath)
   }
@@ -1468,17 +1560,29 @@ export function openFilePreview(filePath: string, basePaths?: string[]): void {
   const ext = extname(safePath).toLowerCase()
   const previewType = getPreviewType(safePath, ext)
 
+  if (!existsSync(safePath)) {
+    dialog.showErrorBox('文件不存在', `找不到文件：\n${safePath}\n\n原始路径：${filePath}`)
+    return
+  }
+
   // 不支持的类型，直接用系统默认应用打开
   if (previewType === 'unsupported') {
-    shell.openPath(safePath)
+    shell.openPath(safePath).then(err => { if (err) console.error('[文件预览] 系统打开失败:', err) })
     return
   }
 
   // 检查文件大小
-  const stat = statSync(safePath)
+  let stat: ReturnType<typeof statSync>
+  try {
+    stat = statSync(safePath)
+  } catch (err) {
+    console.error('[文件预览] 读取文件信息失败:', err)
+    shell.openPath(safePath).then(e => { if (e) console.error('[文件预览] 系统打开失败:', e) })
+    return
+  }
   if (stat.size > MAX_FILE_SIZE) {
     console.warn(`[文件预览] 文件过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB)，使用系统应用打开`)
-    shell.openPath(safePath)
+    shell.openPath(safePath).then(err => { if (err) console.error('[文件预览] 系统打开失败:', err) })
     return
   }
 

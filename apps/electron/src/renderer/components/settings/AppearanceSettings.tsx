@@ -24,6 +24,7 @@ import {
   applyThemeToDOM,
 } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
+import { detectIsWindows } from '@/lib/platform'
 import type { ThemeMode, ThemeStyle } from '../../../types'
 
 // ===== Logo 资源导入（用于图标选择器） =====
@@ -72,7 +73,7 @@ const SPECIAL_STYLES: SpecialStyle[] = [
     id: 'ocean-light',
     name: '晴空碧海',
     variant: 'light',
-    preview: { left: '#b8d4e5', right: '#d4e5f0' },
+    preview: { left: '#c9dded', right: '#e2edf5' },
   },
   {
     id: 'forest-light',
@@ -214,7 +215,7 @@ function AppIconPicker(): React.ReactElement {
     })
   }, [])
 
-  const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   const handleIconSelect = React.useCallback(async (variantId: string) => {
     if (isWindows) {

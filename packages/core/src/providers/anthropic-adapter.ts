@@ -6,8 +6,20 @@
  * - 角色：user / assistant（不支持 system 角色，system 通过 body.system 传递）
  * - 图片格式：{ type: 'image', source: { type: 'base64', media_type, data } }
  * - SSE 解析：content_block_delta → text，thinking_delta → reasoning，tool_use 支持
- * - 认证：x-api-key + Authorization: Bearer
- * - 同时适配 Anthropic 原生 API 和 DeepSeek Anthropic 兼容 API
+ * - 认证：x-api-key + Authorization: Bearer（Kimi Coding Plan 只用 Bearer）
+ * - 同时适配 Anthropic 原生 API、DeepSeek、Kimi API、Kimi Coding Plan
+ *
+ * 思考模式按模型能力分支（见 thinking-capability.ts）：
+ * - Opus 4.7 / Mythos Preview：adaptive 唯一模式（发 `{type: 'adaptive'}`）
+ * - Opus 4.6 / Sonnet 4.6：推荐 adaptive
+ * - DeepSeek v4 系列：`{type: 'enabled'}` + `output_config.effort = 'max'`
+ * - 更老的 Claude 系列及 DeepSeek v3：manual（旧版 `{type: 'enabled', budget_tokens}`）
+ * - Kimi（kimi-api / kimi-coding）：不发 thinking 字段（K2 系列非 reasoning 模型）
+ *
+ * Kimi Coding Plan 特殊要求：
+ * - Base URL：`https://api.kimi.com/coding/v1`
+ * - 必须发送 `User-Agent: KimiCLI/1.3`，服务端会校验 coding agent 白名单
+ * - 禁止伪造 User-Agent（违反服务条款可能导致会员停权）
  */
 
 import type { ProviderType } from '@proma/shared'
@@ -22,18 +34,23 @@ import type {
   ContinuationMessage,
 } from './types.ts'
 import { normalizeAnthropicBaseUrl, normalizeBaseUrl } from './url-utils.ts'
+import { detectThinkingCapability } from './thinking-capability.ts'
 
 // ===== Anthropic 特有类型 =====
 
 /** Anthropic 内容块（扩展支持 tool_use / tool_result） */
 interface AnthropicContentBlock {
-  type: 'text' | 'image' | 'tool_use' | 'tool_result'
+  type: 'text' | 'image' | 'tool_use' | 'tool_result' | 'thinking'
   text?: string
   source?: {
     type: 'base64'
     media_type: string
     data: string
   }
+  // thinking 字段
+  thinking?: string
+  /** thinking 块签名（Anthropic 协议 + DeepSeek v4：续接回传时必须包含） */
+  signature?: string
   // tool_use 字段
   id?: string
   name?: string
@@ -65,6 +82,8 @@ interface AnthropicSSEEvent {
     text?: string
     /** 思考内容增量 (thinking_delta) */
     thinking?: string
+    /** 思考签名增量 (signature_delta) */
+    signature?: string
     /** 工具参数 JSON 增量 (input_json_delta) */
     partial_json?: string
     /** message_delta 的 stop_reason */
@@ -119,6 +138,14 @@ function buildMessageContent(
  * 将统一消息历史转换为 Anthropic 格式
  *
  * 包含历史消息附件的处理（修复了原始版本丢失历史附件的 Bug）。
+ *
+ * **为什么历史 assistant 消息不回传 thinking 块**：
+ * Anthropic 协议要求 thinking 块带 `signature`（服务端签发的加密签名）才能合法回传。
+ * 但我们持久化到 JSONL 的只有 `reasoning` 文本，签名不会持久化（也无法跨轮次保持有效）。
+ * 若把无签名的历史 thinking 块发回服务端，DeepSeek v4 / Anthropic 原生都会以
+ * "content[].thinking must be passed back" / 签名验证失败拒绝请求。
+ * 所以 history 只发 `text`；thinking 块仅在**当前这次 send 的续接消息**里回传
+ * （见 appendContinuationMessages，那里用刚抓到的带签名的块）。
  */
 function toAnthropicMessages(
   input: StreamRequestInput,
@@ -163,14 +190,41 @@ function toAnthropicTools(tools: ToolDefinition[]): Array<Record<string, unknown
 
 /**
  * 将续接消息追加到 Anthropic 消息列表
+ *
+ * 块顺序遵循 Anthropic 协议：thinking → text → tool_use。
+ *
+ * 思考块回传策略：
+ * - 优先用结构化的 `thinkingBlocks`（每块含 thinking + 可选 signature），严格对齐服务端
+ *   原始块结构，DeepSeek v4 / Anthropic 原生都要求签名匹配
+ * - 若 thinkingBlocks 缺失但有扁平 `reasoning` 文本，降级成单个无签名 thinking 块
+ * - 当前请求关闭思考时**不**回传任何 thinking 块（否则服务端判定思考仍激活）
  */
 function appendContinuationMessages(
   messages: AnthropicMessage[],
   continuationMessages: ContinuationMessage[],
+  thinkingEnabled: boolean,
 ): void {
   for (const contMsg of continuationMessages) {
     if (contMsg.role === 'assistant') {
       const content: AnthropicContentBlock[] = []
+
+      if (thinkingEnabled) {
+        if (contMsg.thinkingBlocks && contMsg.thinkingBlocks.length > 0) {
+          for (const block of contMsg.thinkingBlocks) {
+            const thinkingBlock: AnthropicContentBlock = {
+              type: 'thinking',
+              thinking: block.thinking,
+            }
+            if (block.signature) {
+              thinkingBlock.signature = block.signature
+            }
+            content.push(thinkingBlock)
+          }
+        } else if (contMsg.reasoning && contMsg.reasoning.length > 0) {
+          content.push({ type: 'thinking', thinking: contMsg.reasoning })
+        }
+      }
+
       if (contMsg.content) {
         content.push({ type: 'text', text: contMsg.content })
       }
@@ -207,19 +261,56 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /** 根据 provider 类型选择 URL 规范化方式 */
   private normalizeUrl(baseUrl: string): string {
-    if (this.providerType === 'deepseek') {
+    // DeepSeek / Kimi：baseUrl 本身已含非版本路径（如 /anthropic、/coding/v1），不追加 /v1
+    if (
+      this.providerType === 'deepseek' ||
+      this.providerType === 'kimi-api' ||
+      this.providerType === 'kimi-coding'
+    ) {
       return normalizeBaseUrl(baseUrl)
     }
     return normalizeAnthropicBaseUrl(baseUrl)
   }
 
+  /**
+   * 构造请求头
+   *
+   * Kimi Coding Plan 要求：
+   * - 只使用 Bearer（服务端会校验 User-Agent 白名单，不接受伪装为浏览器/SDK）
+   * - User-Agent 必须是真实 coding agent 身份（如 KimiCLI/1.3）
+   */
+  private buildHeaders(apiKey: string): Record<string, string> {
+    const base: Record<string, string> = {
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    }
+    if (this.providerType === 'kimi-coding') {
+      base['Authorization'] = `Bearer ${apiKey}`
+      base['User-Agent'] = 'KimiCLI/1.3'
+      return base
+    }
+    // 其它渠道：保持双认证头（Anthropic 原生 + Bearer 兼容）
+    base['x-api-key'] = apiKey
+    base['Authorization'] = `Bearer ${apiKey}`
+    return base
+  }
+
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
     const messages = toAnthropicMessages(input)
+    const capability = detectThinkingCapability(this.providerType, input.modelId)
 
-    // 启用思考时需要更大的 max_tokens（budget_tokens 必须 < max_tokens）
-    const thinkingBudget = 16384
-    const maxTokens = input.thinkingEnabled ? thinkingBudget + 16384 : 8192
+    // manual 模式：budget_tokens 必须 < max_tokens，所以开启时放大上限
+    // adaptive / effort-based 模式：max_tokens 作为「思考+回答」的总硬上限，给充足空间
+    const manualThinkingBudget = 16384
+    let maxTokens: number
+    if (!input.thinkingEnabled) {
+      maxTokens = 8192
+    } else if (capability.mode === 'manual-only') {
+      maxTokens = manualThinkingBudget + 16384
+    } else {
+      maxTokens = 32000
+    }
 
     const body: Record<string, unknown> = {
       model: input.modelId,
@@ -228,12 +319,30 @@ export class AnthropicAdapter implements ProviderAdapter {
       stream: true,
     }
 
-    // 启用 extended thinking：设置 thinking 参数
-    // 约束：启用时不能设置 temperature/top_k，budget_tokens 最小 1024
-    if (input.thinkingEnabled) {
-      body.thinking = {
-        type: 'enabled',
-        budget_tokens: thinkingBudget,
+    // 根据模型能力选择思考协议
+    // - adaptive-only / adaptive-preferred：发 { type: 'adaptive', display: 'summarized' }
+    //   （Opus 4.7 的 display 默认是 'omitted'，需显式 'summarized' 才能收到 thinking 文本流）
+    // - manual-only：发旧版 { type: 'enabled', budget_tokens }
+    // - effort-based-max（DeepSeek v4 系列）：{type: 'enabled'} + output_config.effort='max'
+    //   DeepSeek v4 默认就开启思考，所以关闭时必须显式 {type: 'disabled'}
+    if (capability.mode === 'effort-based-max') {
+      if (input.thinkingEnabled) {
+        body.thinking = { type: 'enabled' }
+        body.output_config = { effort: 'max' }
+      } else {
+        body.thinking = { type: 'disabled' }
+      }
+    } else if (input.thinkingEnabled) {
+      if (capability.mode === 'adaptive-only' || capability.mode === 'adaptive-preferred') {
+        body.thinking = {
+          type: 'adaptive',
+          display: 'summarized',
+        }
+      } else if (capability.mode === 'manual-only') {
+        body.thinking = {
+          type: 'enabled',
+          budget_tokens: manualThinkingBudget,
+        }
       }
     }
 
@@ -248,18 +357,21 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     // 工具续接消息
     if (input.continuationMessages && input.continuationMessages.length > 0) {
-      appendContinuationMessages(messages, input.continuationMessages)
+      appendContinuationMessages(messages, input.continuationMessages, !!input.thinkingEnabled)
+    }
+
+    const requestBody = JSON.stringify(body)
+
+    // 调试：开启 PROMA_DEBUG_REQUEST 时打印请求体，便于排查思考+工具场景的消息结构
+    const procReq = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+    if (procReq?.env?.PROMA_DEBUG_REQUEST) {
+      console.log('[Request]', this.providerType, input.modelId, '→', requestBody.slice(0, 4000))
     }
 
     return {
       url: `${url}/messages`,
-      headers: {
-        'x-api-key': input.apiKey,
-        'Authorization': `Bearer ${input.apiKey}`,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
+      headers: this.buildHeaders(input.apiKey),
+      body: requestBody,
     }
   }
 
@@ -268,19 +380,37 @@ export class AnthropicAdapter implements ProviderAdapter {
       const event = JSON.parse(jsonLine) as AnthropicSSEEvent
       const events: StreamEvent[] = []
 
-      // 工具调用开始
-      if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-        events.push({
-          type: 'tool_call_start',
-          toolCallId: event.content_block.id || '',
-          toolName: event.content_block.name || '',
-        })
+      // 调试：开启 PROMA_DEBUG_SSE 时打印原始事件，便于排查 Provider 的 SSE 格式差异
+      const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+      if (proc?.env?.PROMA_DEBUG_SSE) {
+        console.log('[SSE]', jsonLine.slice(0, 400))
+      }
+
+      // 内容块开始
+      if (event.type === 'content_block_start') {
+        if (event.content_block?.type === 'tool_use') {
+          events.push({
+            type: 'tool_call_start',
+            toolCallId: event.content_block.id || '',
+            toolName: event.content_block.name || '',
+          })
+        } else if (event.content_block?.type === 'thinking') {
+          events.push({ type: 'reasoning_block_start' })
+        }
+      }
+
+      if (event.type === 'content_block_stop') {
+        // 无法从 stop 事件判断具体块类型，但 sse-reader 会忽略不相关的停止
+        events.push({ type: 'reasoning_block_stop' })
       }
 
       if (event.type === 'content_block_delta') {
-        // 推理内容（thinking_delta 的内容在 delta.thinking 字段中）
+        // 推理文本增量
         if (event.delta?.type === 'thinking_delta' && event.delta?.thinking) {
           events.push({ type: 'reasoning', delta: event.delta.thinking })
+        } else if (event.delta?.type === 'signature_delta' && event.delta?.signature) {
+          // 推理签名增量（Anthropic 协议：thinking 块必须附带 signature 才能在续接里回传）
+          events.push({ type: 'reasoning_signature', signature: event.delta.signature })
         } else if (event.delta?.type === 'input_json_delta' && event.delta?.partial_json) {
           // 工具参数 JSON 增量
           events.push({
@@ -307,22 +437,25 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
+    const capability = detectThinkingCapability(this.providerType, input.modelId)
+
+    const body: Record<string, unknown> = {
+      model: input.modelId,
+      max_tokens: 50,
+      messages: [{ role: 'user', content: input.prompt }],
+    }
+
+    // 标题生成不需要思考：按模型能力选择禁用方式
+    // - Mythos Preview 不接受 disabled，省略字段即可
+    // - 其它 Claude 显式 disabled（对 manual / adaptive 模型都有效）
+    if (capability.disableStrategy === 'explicit-disabled') {
+      body.thinking = { type: 'disabled' }
+    }
 
     return {
       url: `${url}/messages`,
-      headers: {
-        'x-api-key': input.apiKey,
-        'Authorization': `Bearer ${input.apiKey}`,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: input.modelId,
-        max_tokens: 50,
-        messages: [{ role: 'user', content: input.prompt }],
-        // 禁用 extended thinking（MiniMax 等供应商也会遵循此设置）
-        thinking: { type: 'disabled' },
-      }),
+      headers: this.buildHeaders(input.apiKey),
+      body: JSON.stringify(body),
     }
   }
 

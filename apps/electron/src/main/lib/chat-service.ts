@@ -34,8 +34,8 @@ import { executeToolCalls } from './chat-tool-executor'
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
 
-/** 最大工具续接轮数（防止无限循环，每轮可含多个工具调用） */
-const MAX_TOOL_ROUNDS = 20
+/** 最大工具续接轮数（安全上限，防止极端情况下的无限循环） */
+const MAX_TOOL_ROUNDS = 999
 
 // ===== 平台相关：图片附件读取器 =====
 
@@ -323,7 +323,7 @@ export async function sendMessage(
         continuationMessages: continuationMessages.length > 0 ? continuationMessages : undefined,
       })
 
-      const { content, toolCalls, stopReason } = await streamSSE({
+      const { content, reasoning, thinkingBlocks, toolCalls, stopReason } = await streamSSE({
         request,
         adapter,
         signal: controller.signal,
@@ -368,9 +368,11 @@ export async function sendMessage(
       }
 
       // 构建续接消息
+      // thinkingBlocks 保留服务端原始的 thinking 块结构（含签名），
+      // 在思考+工具模式下必须原样回传给 Anthropic 协议家族（Anthropic/DeepSeek/Kimi）
       continuationMessages = [
         ...continuationMessages,
-        { role: 'assistant' as const, content, toolCalls },
+        { role: 'assistant' as const, content, reasoning, thinkingBlocks, toolCalls },
         { role: 'tool' as const, results: toolResults },
       ]
       pendingToolResults = true

@@ -7,9 +7,21 @@
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, APP_ICON_IPC_CHANNELS } from '../types'
-import type { QuickTaskSubmitInput } from '../types'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
+import type {
+  QuickTaskSubmitInput,
+  VoiceDictationAudioChunkInput,
+  VoiceDictationCommitInput,
+  VoiceDictationCommitResult,
+  VoiceDictationResizeInput,
+  VoiceDictationSettings,
+  VoiceDictationSettingsUpdate,
+  VoiceDictationStartInput,
+  VoiceDictationStopInput,
+  VoiceDictationTestResult,
+  MicPermissionResult,
+} from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -28,7 +40,6 @@ import type {
   FileDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
-  AgentMessage,
   AgentSendInput,
   AgentWorkspace,
   AgentGenerateTitleInput,
@@ -46,6 +57,9 @@ import type {
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
+  InstallerManifest,
+  InstallerDownloadRequest,
+  InstallerDownloadResult,
   ProxyConfig,
   SystemProxyDetectResult,
   GitHubRelease,
@@ -86,7 +100,7 @@ import type {
   RevertFileInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
-import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
+import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents } from './lib/git-diff-service'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
@@ -123,14 +137,21 @@ import { extractTextFromAttachment } from './lib/document-parser'
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import { setDockBadgeCount } from './lib/dock-badge-service'
+import { updateWindowTitleBarOverlay } from './lib/titlebar-overlay'
 import { checkEnvironment } from './lib/environment-checker'
+import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
+import {
+  cancelInstallerDownload,
+  downloadInstaller,
+  launchInstaller,
+} from './lib/installer-downloader'
 import { getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
 import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
   listAgentSessions,
   createAgentSession,
   getAgentSessionMeta,
-  getAgentSessionMessages,
   getAgentSessionSDKMessages,
   updateAgentSessionMeta,
   deleteAgentSession,
@@ -162,9 +183,9 @@ import {
   deleteWorkspaceSkill,
   importSkillFromWorkspace,
   updateSkillFromSource,
+  readWorkspaceSkillContent,
+  writeWorkspaceSkillContent,
   toggleWorkspaceSkill,
-  getWorkspacePermissionMode,
-  setWorkspacePermissionMode,
   getWorkspaceAttachedDirectories,
   attachWorkspaceDirectory,
   detachWorkspaceDirectory,
@@ -215,16 +236,23 @@ const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
  * - chat:*: 对话管理 + 消息发送 + 流式事件
  */
 /**
+ * 打包内置资源目录
+ * dev: __dirname/resources（build:resources 阶段拷贝）
+ * prod: process.resourcesPath（electron-builder extraResources 产物）
+ */
+function getBundledResourcesDir(): string {
+  return app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
+}
+
+/**
  * 解析应用图标变体的文件路径
- * dev 模式: __dirname/resources/proma-logos/proma-{id}.png
- * 生产模式: __dirname/resources/proma-logos/proma-{id}.png（build:resources 阶段已复制）
  */
 export function resolveAppIconPath(variantId: string): string | null {
+  const resourcesDir = getBundledResourcesDir()
   if (!variantId || variantId === 'default') {
-    // 默认图标
-    return join(__dirname, 'resources/icon.png')
+    return join(resourcesDir, 'icon.png')
   }
-  return join(__dirname, 'resources/proma-logos', `proma-${variantId}.png`)
+  return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
 }
 
 export function registerIpcHandlers(): void {
@@ -237,6 +265,14 @@ export function registerIpcHandlers(): void {
     IPC_CHANNELS.GET_RUNTIME_STATUS,
     async (): Promise<RuntimeStatus | null> => {
       return getRuntimeStatus()
+    }
+  )
+
+  // 重新初始化运行时（用户安装完 Git/Node 后触发，Windows 场景常用）
+  ipcMain.handle(
+    IPC_CHANNELS.REINIT_RUNTIME,
+    async (): Promise<RuntimeStatus> => {
+      return reinitializeRuntime()
     }
   )
 
@@ -675,8 +711,8 @@ export function registerIpcHandlers(): void {
       const { writeFileSync, readFileSync, existsSync } = await import('node:fs')
       const { join, normalize, sep, extname: pathExtname } = await import('node:path')
 
-      // 解析到应用内置 resources 目录
-      const resourcesDir = normalize(join(__dirname, 'resources'))
+      // 解析到应用内置 resources 目录（dev 用 __dirname/resources，prod 用 process.resourcesPath）
+      const resourcesDir = normalize(getBundledResourcesDir())
       const fullPath = normalize(join(resourcesDir, resourceRelativePath))
 
       // 安全校验：防止路径穿越（追加 sep 防止 resources-evil 绕过）
@@ -773,6 +809,8 @@ export function registerIpcHandlers(): void {
           if (win.webContents.id !== event.sender.id) {
             win.webContents.send(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, payload)
           }
+          // Windows: 更新标题栏 overlay 颜色
+          updateWindowTitleBarOverlay(win)
         })
       }
 
@@ -808,6 +846,12 @@ export function registerIpcHandlers(): void {
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, isDark)
     })
+    // Windows: system 模式下同步更新标题栏 overlay
+    if (process.platform === 'win32' && getSettings().themeMode === 'system') {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        updateWindowTitleBarOverlay(win)
+      })
+    }
   })
 
   // ===== 应用图标切换 =====
@@ -839,6 +883,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ===== Dock/Launcher 角标 =====
+
+  ipcMain.handle(
+    DOCK_BADGE_IPC_CHANNELS.SET_COUNT,
+    async (_, count: number): Promise<boolean> => {
+      return setDockBadgeCount(count)
+    }
+  )
+
   // ===== 环境检测相关 =====
 
   // 执行环境检测
@@ -851,6 +904,46 @@ export function registerIpcHandlers(): void {
         lastEnvironmentCheck: result,
       })
       return result
+    }
+  )
+
+  // ===== 第三方安装包（Git / Node.js）相关 =====
+
+  ipcMain.handle(
+    INSTALLER_IPC_CHANNELS.MANIFEST,
+    async (): Promise<InstallerManifest> => {
+      return fetchInstallerManifest()
+    }
+  )
+
+  ipcMain.handle(
+    INSTALLER_IPC_CHANNELS.DOWNLOAD,
+    async (event, req: InstallerDownloadRequest): Promise<InstallerDownloadResult> => {
+      const manifest = await fetchInstallerManifest()
+      const source = findInstallerSource(manifest, req.id, req.arch)
+      if (!source) {
+        throw new Error(`未找到安装包：id=${req.id}, arch=${req.arch}`)
+      }
+      const window = BrowserWindow.fromWebContents(event.sender)
+      if (!window) {
+        throw new Error('发起下载的窗口已关闭')
+      }
+      const key = `${req.id}:${req.arch}`
+      return downloadInstaller(source, key, window)
+    }
+  )
+
+  ipcMain.handle(
+    INSTALLER_IPC_CHANNELS.CANCEL,
+    async (_event, key: string): Promise<boolean> => {
+      return cancelInstallerDownload(key)
+    }
+  )
+
+  ipcMain.handle(
+    INSTALLER_IPC_CHANNELS.LAUNCH,
+    async (_event, filePath: string): Promise<void> => {
+      await launchInstaller(filePath)
     }
   )
 
@@ -904,14 +997,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.CREATE_SESSION,
     async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
       return createAgentSession(title, channelId, workspaceId)
-    }
-  )
-
-  // 获取 Agent 会话消息
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_MESSAGES,
-    async (_, id: string): Promise<AgentMessage[]> => {
-      return getAgentSessionMessages(id)
     }
   )
 
@@ -1195,6 +1280,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_SKILL_CONTENT,
+    async (_, workspaceSlug: string, skillSlug: string): Promise<string> => {
+      return readWorkspaceSkillContent(workspaceSlug, skillSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
+    async (_, workspaceSlug: string, skillSlug: string, content: string): Promise<void> => {
+      writeWorkspaceSkillContent(workspaceSlug, skillSlug, content)
+    }
+  )
+
   // 发送 Agent 消息（触发 Agent SDK 流式响应）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
@@ -1277,34 +1376,31 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 获取工作区权限模式
+  // 热切换指定会话的权限模式（运行中生效，不广播）
   ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_PERMISSION_MODE,
-    async (_, workspaceSlug: string): Promise<PromaPermissionMode> => {
-      return getWorkspacePermissionMode(workspaceSlug)
-    }
-  )
-
-  // 设置工作区权限模式（同时更新运行中的活跃 session）
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.SET_PERMISSION_MODE,
-    async (_, workspaceSlug: string, mode: PromaPermissionMode): Promise<void> => {
-      const validModes = new Set<string>(['acceptEdits', 'bypassPermissions', 'plan'])
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE,
+    async (_, sessionId: string, mode: PromaPermissionMode): Promise<void> => {
+      const validModes = new Set<string>(['auto', 'bypassPermissions', 'plan'])
       if (!validModes.has(mode)) {
         throw new Error(`无效的权限模式: ${mode}`)
       }
-      // 持久化到工作区配置
-      setWorkspacePermissionMode(workspaceSlug, mode)
-      // 同步更新该工作区下所有运行中的 session
-      const sessions = listAgentSessions()
-      for (const session of sessions) {
-        if (!session.workspaceId || !isAgentSessionActive(session.id)) continue
-        const sessionWs = getAgentWorkspace(session.workspaceId)
-        if (sessionWs?.slug === workspaceSlug) {
-          updateAgentPermissionMode(session.id, mode).catch((err) => {
-            console.warn(`[IPC] 运行中权限模式切换失败: sessionId=${session.id}`, err)
-          })
-        }
+      // 会话不存在时直接抛错（避免 updateAgentSessionMeta 的通用异常被降级为 warn）
+      if (!getAgentSessionMeta(sessionId)) {
+        throw new Error(`Agent 会话不存在: ${sessionId}`)
+      }
+      // 持久化到 session meta（重启后可恢复，即使 session 未运行也要写）。
+      // 这里的 catch 仅用于兜底磁盘 I/O 类异常，不影响后续热切换。
+      try {
+        updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      } catch (err) {
+        console.warn(`[IPC] 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
+      }
+      // 若 session 正在跑，同步热切换运行时模式
+      if (isAgentSessionActive(sessionId)) {
+        await updateAgentPermissionMode(sessionId, mode).catch((err) => {
+          console.warn(`[IPC] 运行中权限模式切换失败: sessionId=${sessionId}`, err)
+          throw err
+        })
       }
     }
   )
@@ -1518,10 +1614,12 @@ export function registerIpcHandlers(): void {
         // 如果用户选择了新的权限模式，通知渲染进程更新 UI
         if (targetMode) {
           const meta = getAgentSessionMeta(sessionId)
-          if (meta?.workspaceId) {
-            const ws = getAgentWorkspace(meta.workspaceId)
-            if (ws) {
-              setWorkspacePermissionMode(ws.slug, targetMode)
+          // 持久化到 session meta，和 cycleMode 路径保持一致（重启后该 session 能恢复）
+          if (meta) {
+            try {
+              updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+            } catch (err) {
+              console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
             }
           }
           event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
@@ -1987,24 +2085,26 @@ export function registerIpcHandlers(): void {
   // 搜索工作区文件（用于 @ 引用，递归扫描，支持附加目录）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES,
-    async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[]): Promise<FileSearchResult> => {
+    async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]): Promise<FileSearchResult> => {
       const { readdirSync } = await import('node:fs')
-      const { resolve, relative } = await import('node:path')
+      const { resolve, relative, basename } = await import('node:path')
 
       const safeRoot = resolve(rootPath)
       const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
       const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
 
-      // 按来源分组收集文件，用于空 query 时均衡分配结果
-      const rootEntries: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
-      const additionalEntryGroups: Array<Array<{ name: string; path: string; type: 'file' | 'dir' }>> = []
+      // 按来源分组收集文件
+      type Entry = { name: string; path: string; type: 'file' | 'dir'; source: 'session' | 'workspace' }
+      const rootEntries: Entry[] = []
+      const workspaceEntries: Entry[] = []
 
       function scan(
         dir: string,
         depth: number,
         baseRoot: string,
-        target: Array<{ name: string; path: string; type: 'file' | 'dir' }>,
+        target: Entry[],
         useAbsPath: boolean,
+        source: 'session' | 'workspace',
       ): void {
         if (depth > 10) return
         try {
@@ -2019,10 +2119,11 @@ export function registerIpcHandlers(): void {
               name: item.name,
               path: entryPath,
               type: item.isDirectory() ? 'dir' : 'file',
+              source,
             })
 
             if (item.isDirectory()) {
-              scan(fullPath, depth + 1, baseRoot, target, useAbsPath)
+              scan(fullPath, depth + 1, baseRoot, target, useAbsPath, source)
             }
           }
         } catch {
@@ -2031,70 +2132,97 @@ export function registerIpcHandlers(): void {
       }
 
       // session 目录：相对路径
-      scan(safeRoot, 0, safeRoot, rootEntries, false)
+      scan(safeRoot, 0, safeRoot, rootEntries, false, 'session')
 
-      // 附加目录：绝对路径（消除歧义，agent 可直接使用）
+      // 会话级附加目录：绝对路径，标记为 session（归入会话文件分组）
+      if (sessionPaths && sessionPaths.length > 0) {
+        for (const sp of sessionPaths) {
+          const sRoot = resolve(sp)
+          // 添加附加目录本身作为顶层条目
+          rootEntries.push({
+            name: basename(sRoot),
+            path: sRoot,
+            type: 'dir',
+            source: 'session',
+          })
+          scan(sRoot, 0, sRoot, rootEntries, true, 'session')
+        }
+      }
+
+      // 工作区文件 + 工作区级附加目录：绝对路径，标记为 workspace
       if (additionalPaths && additionalPaths.length > 0) {
         for (const addPath of additionalPaths) {
           const addRoot = resolve(addPath)
-          const group: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
-          scan(addRoot, 0, addRoot, group, true)
-          additionalEntryGroups.push(group)
+          // 添加附加目录本身作为顶层条目
+          const rootName = basename(addRoot)
+          workspaceEntries.push({
+            name: rootName === 'workspace-files' ? '工作文件' : rootName,
+            path: addRoot,
+            type: 'dir',
+            source: 'workspace',
+          })
+          scan(addRoot, 0, addRoot, workspaceEntries, true, 'workspace')
         }
       }
 
-      // 搜索匹配
+      // 组内排序：目录优先，前缀匹配优先，路径短优先
+      function sortGroup(entries: Entry[], q: string): void {
+        entries.sort((a, b) => {
+          const aStartsWith = a.name.toLowerCase().startsWith(q) ? 0 : 1
+          const bStartsWith = b.name.toLowerCase().startsWith(q) ? 0 : 1
+          if (aStartsWith !== bStartsWith) return aStartsWith - bStartsWith
+          if (a.type === 'dir' && b.type !== 'dir') return -1
+          if (a.type !== 'dir' && b.type === 'dir') return 1
+          return a.path.length - b.path.length
+        })
+      }
+
+      function matchEntries(entries: Entry[], q: string): Entry[] {
+        return entries.filter((entry) => {
+          const nameLower = entry.name.toLowerCase()
+          const pathLower = entry.path.toLowerCase()
+          if (nameLower.startsWith(q)) return true
+          if (nameLower.includes(q) || pathLower.includes(q)) return true
+          let qi = 0
+          for (let i = 0; i < nameLower.length && qi < q.length; i++) {
+            if (nameLower[i] === q[qi]) qi++
+          }
+          return qi === q.length
+        })
+      }
+
       const q = query.toLowerCase()
 
       if (!q) {
-        // 空 query：从各来源交替取结果，确保均衡展示
-        const allGroups = [rootEntries, ...additionalEntryGroups].filter((g) => g.length > 0)
-        const result: Array<{ name: string; path: string; type: 'file' | 'dir' }> = []
-        const groupCount = allGroups.length
-        if (groupCount > 0) {
-          // 每组至少分配 perGroup 条，剩余名额按需补充
-          const perGroup = Math.max(1, Math.floor(limit / groupCount))
-          for (const group of allGroups) {
-            result.push(...group.slice(0, perGroup))
-          }
-          // 如果还有剩余名额，按组顺序补充
-          if (result.length < limit) {
-            for (const group of allGroups) {
-              for (let i = perGroup; i < group.length && result.length < limit; i++) {
-                result.push(group[i]!)
-              }
-            }
-          }
+        // 空 query：每个分组返回较多条目，避免截断
+        const perGroup = Math.max(limit, 100)
+        const sessionSlice = rootEntries.slice(0, perGroup)
+        const workspaceSlice = workspaceEntries.slice(0, perGroup)
+        const combined = [...sessionSlice, ...workspaceSlice].slice(0, perGroup * 2)
+        return {
+          entries: combined,
+          total: rootEntries.length + workspaceEntries.length,
+          sessionEntries: sessionSlice,
+          workspaceEntries: workspaceSlice,
         }
-        const allEntries = [rootEntries, ...additionalEntryGroups].flat()
-        return { entries: result.slice(0, limit), total: allEntries.length }
       }
 
-      const allEntries = [rootEntries, ...additionalEntryGroups].flat()
-      const matched = allEntries.filter((entry) => {
-        const nameLower = entry.name.toLowerCase()
-        const pathLower = entry.path.toLowerCase()
-        if (nameLower.startsWith(q)) return true
-        if (nameLower.includes(q) || pathLower.includes(q)) return true
-        // 模糊匹配
-        let qi = 0
-        for (let i = 0; i < nameLower.length && qi < q.length; i++) {
-          if (nameLower[i] === q[qi]) qi++
-        }
-        return qi === q.length
-      })
+      const sessionMatched = matchEntries(rootEntries, q)
+      const workspaceMatched = matchEntries(workspaceEntries, q)
+      sortGroup(sessionMatched, q)
+      sortGroup(workspaceMatched, q)
 
-      // 排序：精确前缀优先，目录优先，路径短优先
-      matched.sort((a, b) => {
-        const aStartsWith = a.name.toLowerCase().startsWith(q) ? 0 : 1
-        const bStartsWith = b.name.toLowerCase().startsWith(q) ? 0 : 1
-        if (aStartsWith !== bStartsWith) return aStartsWith - bStartsWith
-        if (a.type === 'dir' && b.type !== 'dir') return -1
-        if (a.type !== 'dir' && b.type === 'dir') return 1
-        return a.path.length - b.path.length
-      })
+      const halfLimit = Math.max(1, Math.floor(limit / 2))
+      const sessionSlice = sessionMatched.slice(0, halfLimit)
+      const workspaceSlice = workspaceMatched.slice(0, halfLimit)
+      const combined = [...sessionSlice, ...workspaceSlice].slice(0, limit)
 
-      return { entries: matched.slice(0, limit), total: matched.length }
+      return {
+        entries: combined,
+        total: sessionMatched.length + workspaceMatched.length,
+        sessionEntries: sessionSlice,
+        workspaceEntries: workspaceSlice,
+      }
     }
   )
 
@@ -2602,6 +2730,119 @@ export function registerIpcHandlers(): void {
     async (): Promise<Record<string, boolean>> => {
       const { reregisterAllGlobalShortcuts } = await import('./lib/global-shortcut-service')
       return reregisterAllGlobalShortcuts()
+    }
+  )
+
+  // ===== 语音输入 =====
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.GET_SETTINGS,
+    async (): Promise<VoiceDictationSettings> => {
+      const { getVoiceDictationSettings } = await import('./lib/voice-dictation-settings-service')
+      return getVoiceDictationSettings()
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.UPDATE_SETTINGS,
+    async (_, updates: VoiceDictationSettingsUpdate): Promise<VoiceDictationSettings> => {
+      const { updateVoiceDictationSettings } = await import('./lib/voice-dictation-settings-service')
+      return updateVoiceDictationSettings(updates)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.TEST_CONNECTION,
+    async (_, updates?: VoiceDictationSettingsUpdate): Promise<VoiceDictationTestResult> => {
+      const { getVoiceDictationSettings } = await import('./lib/voice-dictation-settings-service')
+      const { testDoubaoAsrConnection } = await import('./lib/doubao-asr-service')
+      const settings = { ...getVoiceDictationSettings(), ...(updates ?? {}) }
+      return testDoubaoAsrConnection(settings)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.TOGGLE,
+    async (event): Promise<void> => {
+      const { toggleVoiceDictationWindow } = await import('./lib/voice-dictation-window')
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender)
+      toggleVoiceDictationWindow({ targetIsProma: !!sourceWindow })
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.START,
+    async (event, input: VoiceDictationStartInput): Promise<void> => {
+      const { getVoiceDictationSettings } = await import('./lib/voice-dictation-settings-service')
+      const { startDoubaoAsrSession } = await import('./lib/doubao-asr-service')
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) throw new Error('语音输入窗口不存在')
+      await startDoubaoAsrSession(input.sessionId, getVoiceDictationSettings(), win)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.SEND_AUDIO,
+    async (_, input: VoiceDictationAudioChunkInput): Promise<void> => {
+      const { sendDoubaoAsrAudio } = await import('./lib/doubao-asr-service')
+      sendDoubaoAsrAudio(input.sessionId, input.data)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.STOP,
+    async (_, input: VoiceDictationStopInput): Promise<void> => {
+      const { stopDoubaoAsrSession } = await import('./lib/doubao-asr-service')
+      await stopDoubaoAsrSession(input.sessionId)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.CANCEL,
+    async (_, input: VoiceDictationStopInput): Promise<void> => {
+      const { cancelDoubaoAsrSession } = await import('./lib/doubao-asr-service')
+      cancelDoubaoAsrSession(input.sessionId)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.COMMIT,
+    async (_, input: VoiceDictationCommitInput): Promise<VoiceDictationCommitResult> => {
+      const { getVoiceDictationSettings } = await import('./lib/voice-dictation-settings-service')
+      const { commitVoiceDictationText } = await import('./lib/text-output-service')
+      return commitVoiceDictationText(input.text, getVoiceDictationSettings())
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.HIDE,
+    async (): Promise<void> => {
+      const { hideVoiceDictationWindow } = await import('./lib/voice-dictation-window')
+      hideVoiceDictationWindow()
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.RESIZE,
+    async (_, input: VoiceDictationResizeInput): Promise<void> => {
+      const { resizeVoiceDictationWindow } = await import('./lib/voice-dictation-window')
+      resizeVoiceDictationWindow(input.height)
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.CHECK_MIC_PERMISSION,
+    async (): Promise<MicPermissionResult> => {
+      const { checkMicrophonePermission } = await import('./lib/microphone-permission-service')
+      return checkMicrophonePermission()
+    }
+  )
+
+  ipcMain.handle(
+    VOICE_DICTATION_IPC_CHANNELS.REQUEST_MIC_PERMISSION,
+    async (): Promise<MicPermissionResult> => {
+      const { requestMicrophonePermission } = await import('./lib/microphone-permission-service')
+      return requestMicrophonePermission()
     }
   )
 }

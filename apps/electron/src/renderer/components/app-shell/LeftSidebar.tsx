@@ -65,6 +65,7 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
 import { MoveSessionDialog } from '@/components/agent/MoveSessionDialog'
+import { detectIsMac } from '@/lib/platform'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -181,6 +182,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const selectedModel = useAtomValue(selectedModelAtom)
   const streamingIds = useAtomValue(streamingConversationIdsAtom)
   const mode = useAtomValue(appModeAtom)
+  const isMac = React.useMemo(() => detectIsMac(), [])
   const hasUpdate = useAtomValue(hasUpdateAtom)
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom)
   const promptConfig = useAtomValue(promptConfigAtom)
@@ -190,6 +192,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [agentSessions, setAgentSessions] = useAtom(agentSessionsAtom)
   const [currentAgentSessionId, setCurrentAgentSessionId] = useAtom(currentAgentSessionIdAtom)
   const agentIndicatorMap = useAtomValue(agentSessionIndicatorMapAtom)
+  const unviewedCompletedSessionIds = useAtomValue(unviewedCompletedSessionIdsAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
   const agentModelId = useAtomValue(agentModelIdAtom)
@@ -309,6 +312,12 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     if (!currentWorkspaceId) return null
     return workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
   }, [currentWorkspaceId, workspaces])
+
+  const workspaceNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const w of workspaces) map.set(w.id, w.name)
+    return map
+  }, [workspaces])
 
   React.useEffect(() => {
     if (!currentWorkspaceSlug || mode !== 'agent') {
@@ -835,8 +844,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         className="h-full flex flex-col items-center bg-background rounded-2xl shadow-xl transition-[width] duration-300"
         style={{ width: 48, flexShrink: 0 }}
       >
-        {/* 顶部留空，避开 macOS 红绿灯 */}
-        <div className="pt-[50px]" />
+        {/* macOS 需要避开左上角红绿灯，其他平台保留紧凑呼吸感。 */}
+        <div className={cn(isMac ? 'pt-[50px]' : 'pt-2')} />
 
         {/* 展开按钮 */}
         <div className="pt-2">
@@ -904,8 +913,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       className="h-full flex flex-col bg-background rounded-2xl shadow-xl transition-[width] duration-300"
       style={{ width: width ?? 280, minWidth: 180, flexShrink: 1 }}
     >
-      {/* 顶部留空，避开 macOS 红绿灯 */}
-      <div className="pt-[30px]">
+      {/* macOS 需要避开左上角红绿灯，其他平台不占用这块空间。 */}
+      <div className={cn(isMac ? 'pt-[30px]' : 'pt-1')}>
         {/* 模式切换器 + 折叠按钮 */}
         <div className="flex items-start gap-1.5 px-3">
           <div className="flex-1 min-w-0">
@@ -915,7 +924,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             <TooltipTrigger asChild>
               <button
                 onClick={() => setSidebarCollapsed(true)}
-                className="mt-2 size-[36px] flex-shrink-0 flex items-center justify-center rounded-[10px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
+                className="mt-2 size-[36px] flex-shrink-0 flex items-center justify-center rounded-[10px] bg-muted text-foreground/40 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors titlebar-no-drag"
               >
                 <PanelLeftClose size={14} />
               </button>
@@ -1060,10 +1069,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                   {agentSubTab === 'working' && (
                     <div className="pt-0.5 pb-0.5">
                       {hasWorkingSessions ? (() => {
-                        const workingItems: Array<{ session: AgentSessionMeta; accent: SessionLeftAccent; keyPrefix: string }> = [
+                        const workingItems: Array<{ session: AgentSessionMeta; accent?: SessionLeftAccent; keyPrefix: string }> = [
                           ...workingGroups.todo.map((s) => ({ session: s, accent: 'orange' as const, keyPrefix: 'working-todo' })),
                           ...workingGroups.running.map((s) => ({ session: s, accent: 'blue' as const, keyPrefix: 'working-running' })),
-                          ...workingGroups.done.map((s) => ({ session: s, accent: 'green' as const, keyPrefix: 'working-done' })),
+                          ...workingGroups.done.map((s) => ({ session: s, accent: unviewedCompletedSessionIds.has(s.id) ? 'green' as const : undefined, keyPrefix: 'working-done' })),
                         ]
                         return (
                           <div className="flex flex-col gap-0.5">
@@ -1077,6 +1086,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                                 isInWorkingSection={workingSessionIds.has(session.id)}
                                 showPinIcon={false}
                                 leftAccent={accent}
+                                workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
                                 onSelect={() => handleSelectAgentSession(session.id, session.title)}
                                 onRequestDelete={() => handleRequestDelete(session.id)}
                                 onRequestMove={() => setMoveTargetId(session.id)}
@@ -1555,6 +1565,8 @@ interface AgentSessionItemProps {
   isInWorkingSection?: boolean
   /** 行左侧状态色块；未传则不显示 */
   leftAccent?: SessionLeftAccent
+  /** 工作区名称 Badge（跨工作区列表时显示） */
+  workspaceName?: string
   onSelect: () => void
   onRequestDelete: () => void
   onRequestMove: () => void
@@ -1574,6 +1586,7 @@ function AgentSessionItem({
   showPinIcon,
   isInWorkingSection,
   leftAccent,
+  workspaceName,
   onSelect,
   onRequestDelete,
   onRequestMove,
@@ -1667,6 +1680,11 @@ function AgentSessionItem({
               <Pin size={11} className="flex-shrink-0 text-primary/60" />
             )}
             <span className="truncate">{session.title}</span>
+            {workspaceName && (
+              <span className="flex-shrink-0 px-1.5 py-0 rounded-full bg-foreground/[0.06] text-[10px] leading-4 text-foreground/40 font-medium truncate max-w-[80px]">
+                {workspaceName}
+              </span>
+            )}
           </div>
         )}
       </div>

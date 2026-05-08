@@ -6,8 +6,8 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS } from '../types'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -32,7 +32,6 @@ import type {
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
-  AgentMessage,
   SDKMessage,
   AgentSendInput,
   AgentStreamEvent,
@@ -54,6 +53,10 @@ import type {
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
+  InstallerManifest,
+  InstallerDownloadRequest,
+  InstallerDownloadResult,
+  InstallerProgressPayload,
   ProxyConfig,
   SystemProxyDetectResult,
   GitHubRelease,
@@ -96,8 +99,27 @@ import type {
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
 } from '@proma/shared'
-import type { UserProfile, AppSettings, QuickTaskSubmitInput, QuickTaskOpenSessionData } from '../types'
-import { QUICK_TASK_IPC_CHANNELS } from '../types'
+import type {
+  UserProfile,
+  AppSettings,
+  QuickTaskSubmitInput,
+  QuickTaskOpenSessionData,
+  VoiceDictationAudioChunkInput,
+  VoiceDictationCommitInput,
+  VoiceDictationCommitResult,
+  VoiceDictationResizeInput,
+  VoiceDictationSettings,
+  VoiceDictationSettingsUpdate,
+  VoiceDictationStartInput,
+  VoiceDictationStateEvent,
+  VoiceDictationStopInput,
+  VoiceDictationTestResult,
+  VoiceDictationTranscriptEvent,
+  MicPermissionResult,
+  TrayCreateSessionData,
+  TrayOpenAgentSessionData,
+} from '../types'
+import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS } from '../types'
 
 /**
  * 暴露给渲染进程的 API 接口定义
@@ -110,6 +132,12 @@ export interface ElectronAPI {
    * @returns 运行时状态，包含 Bun、Git 等信息
    */
   getRuntimeStatus: () => Promise<RuntimeStatus | null>
+
+  /**
+   * 重新初始化运行时状态（重新跑 Node / Bun / Git / Shell 检测）
+   * 用户安装完 Git / Node 后触发，强制刷新缓存
+   */
+  reinitRuntime: () => Promise<RuntimeStatus>
 
   /**
    * 获取指定目录的 Git 仓库状态
@@ -280,10 +308,32 @@ export interface ElectronAPI {
   /** 设置应用图标变体（传入 variant ID，如 'blue'、'cyberpunk'，'default' 恢复默认） */
   setAppIcon: (variantId: string) => Promise<boolean>
 
+  /** 设置 Dock/Launcher 角标数量（0 表示清除） */
+  setDockBadgeCount: (count: number) => Promise<boolean>
+
   // ===== 环境检测相关 =====
 
   /** 执行环境检测 */
   checkEnvironment: () => Promise<EnvironmentCheckResult>
+
+  // ===== 第三方安装包（Git / Node.js）相关 =====
+
+  /** 获取安装包清单（远程，失败回退内置） */
+  fetchInstallerManifest: () => Promise<InstallerManifest>
+
+  /** 开始下载指定安装包，resolve 时文件已落地并通过 sha256 校验 */
+  downloadInstaller: (req: InstallerDownloadRequest) => Promise<InstallerDownloadResult>
+
+  /** 取消指定 key 的进行中下载 */
+  cancelInstallerDownload: (key: string) => Promise<boolean>
+
+  /** 拉起已下载的安装程序（等效双击） */
+  launchInstaller: (filePath: string) => Promise<void>
+
+  /** 订阅下载进度事件，返回取消订阅函数 */
+  onInstallerProgress: (
+    callback: (payload: InstallerProgressPayload) => void,
+  ) => () => void
 
   // ===== 代理配置相关 =====
 
@@ -320,9 +370,6 @@ export interface ElectronAPI {
 
   /** 创建 Agent 会话 */
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string) => Promise<AgentSessionMeta>
-
-  /** 获取 Agent 会话消息 */
-  getAgentSessionMessages: (id: string) => Promise<AgentMessage[]>
 
   /** 获取 Agent 会话 SDKMessage（Phase 4 新格式） */
   getAgentSessionSDKMessages: (id: string) => Promise<SDKMessage[]>
@@ -431,6 +478,12 @@ export interface ElectronAPI {
   /** 从源工作区同步更新已导入的 Skill */
   updateSkillFromSource: (targetSlug: string, skillSlug: string) => Promise<SkillMeta>
 
+  /** 读取 SKILL.md 全文内容 */
+  readSkillContent: (workspaceSlug: string, skillSlug: string) => Promise<string>
+
+  /** 写入 SKILL.md 全文内容 */
+  writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => Promise<void>
+
   /** 订阅 Agent 流式事件（返回清理函数） */
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
 
@@ -448,11 +501,8 @@ export interface ElectronAPI {
   /** 响应权限请求 */
   respondPermission: (response: PermissionResponse) => Promise<void>
 
-  /** 获取工作区权限模式 */
-  getPermissionMode: (workspaceSlug: string) => Promise<PromaPermissionMode>
-
-  /** 设置工作区权限模式 */
-  setPermissionMode: (workspaceSlug: string, mode: PromaPermissionMode) => Promise<void>
+  /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
+  updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => Promise<void>
 
   /** 获取全局记忆配置 */
   getMemoryConfig: () => Promise<MemoryConfig>
@@ -596,7 +646,7 @@ export interface ElectronAPI {
   getPathForFile: (file: File) => string
 
   /** 搜索工作区文件（用于 @ 引用，支持附加目录） */
-  searchWorkspaceFiles: (rootPath: string, query: string, limit?: number, additionalPaths?: string[]) => Promise<FileSearchResult>
+  searchWorkspaceFiles: (rootPath: string, query: string, limit?: number, additionalPaths?: string[], sessionPaths?: string[]) => Promise<FileSearchResult>
 
   // ===== 系统提示词管理 =====
 
@@ -618,23 +668,26 @@ export interface ElectronAPI {
   /** 设置默认提示词 */
   setDefaultPrompt: (id: string | null) => Promise<void>
 
-  // ===== 版本检测相关（仅检测，不自动下载/安装） =====
+  // ===== 自动更新 =====
 
   /** 更新 API */
   updater?: {
     checkForUpdates: () => Promise<void>
     getStatus: () => Promise<{
-      status: 'idle' | 'checking' | 'available' | 'not-available' | 'error'
+      status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
       version?: string
       releaseNotes?: string
+      progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
       error?: string
     }>
     onStatusChanged: (callback: (status: {
-      status: 'idle' | 'checking' | 'available' | 'not-available' | 'error'
+      status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
       version?: string
       releaseNotes?: string
+      progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
       error?: string
     }) => void) => () => void
+    quitAndInstall: () => Promise<void>
   }
 
   // GitHub Release
@@ -762,6 +815,53 @@ export interface ElectronAPI {
   onQuickTaskFocus: (callback: () => void) => () => void
   /** 订阅快速任务打开会话事件（主窗口接收，由渲染进程负责创建会话） */
   onQuickTaskOpenSession: (callback: (data: QuickTaskOpenSessionData) => void) => () => void
+
+  // ===== 语音输入 =====
+
+  /** 获取语音输入设置 */
+  getVoiceDictationSettings: () => Promise<VoiceDictationSettings>
+  /** 更新语音输入设置 */
+  updateVoiceDictationSettings: (updates: VoiceDictationSettingsUpdate) => Promise<VoiceDictationSettings>
+  /** 测试语音输入连接 */
+  testVoiceDictationConnection: (updates?: VoiceDictationSettingsUpdate) => Promise<VoiceDictationTestResult>
+  /** 唤起或停止语音输入浮窗 */
+  toggleVoiceDictation: () => Promise<void>
+  /** 开始语音输入会话 */
+  startVoiceDictation: (input: VoiceDictationStartInput) => Promise<void>
+  /** 发送语音音频分片 */
+  sendVoiceDictationAudio: (input: VoiceDictationAudioChunkInput) => Promise<void>
+  /** 停止语音输入会话 */
+  stopVoiceDictation: (input: VoiceDictationStopInput) => Promise<void>
+  /** 取消语音输入会话 */
+  cancelVoiceDictation: (input: VoiceDictationStopInput) => Promise<void>
+  /** 输出最终语音文本 */
+  commitVoiceDictation: (input: VoiceDictationCommitInput) => Promise<VoiceDictationCommitResult>
+  /** 隐藏语音输入窗口 */
+  hideVoiceDictation: () => Promise<void>
+  /** 调整语音输入窗口高度 */
+  resizeVoiceDictation: (input: VoiceDictationResizeInput) => Promise<void>
+  /** 订阅语音输入窗口显示事件 */
+  onVoiceDictationShown: (callback: () => void) => () => void
+  /** 订阅语音输入停止请求事件 */
+  onVoiceDictationToggleStop: (callback: () => void) => () => void
+  /** 订阅语音输入转写事件 */
+  onVoiceDictationTranscript: (callback: (event: VoiceDictationTranscriptEvent) => void) => () => void
+  /** 订阅语音输入状态事件 */
+  onVoiceDictationState: (callback: (event: VoiceDictationStateEvent) => void) => () => void
+  /** 订阅主窗口插入语音文本事件 */
+  onVoiceDictationInsertText: (callback: (data: { text: string }) => void) => () => void
+
+  /** 检查麦克风权限状态 */
+  checkMicrophonePermission: () => Promise<MicPermissionResult>
+  /** 请求麦克风权限（仅 macOS 有效） */
+  requestMicrophonePermission: () => Promise<MicPermissionResult>
+
+  // ===== 菜单栏 =====
+
+  /** 订阅菜单栏打开 Agent 会话事件 */
+  onTrayOpenAgentSession: (callback: (data: TrayOpenAgentSessionData) => void) => () => void
+  /** 订阅菜单栏创建会话事件 */
+  onTrayCreateSession: (callback: (data: TrayCreateSessionData) => void) => () => void
 }
 
 /**
@@ -771,6 +871,10 @@ const electronAPI: ElectronAPI = {
   // 运行时
   getRuntimeStatus: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_RUNTIME_STATUS)
+  },
+
+  reinitRuntime: () => {
+    return ipcRenderer.invoke(IPC_CHANNELS.REINIT_RUNTIME)
   },
 
   getGitRepoStatus: (dirPath: string) => {
@@ -991,9 +1095,33 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(APP_ICON_IPC_CHANNELS.SET, variantId)
   },
 
+  // Dock/Launcher 角标
+  setDockBadgeCount: (count: number) => {
+    return ipcRenderer.invoke(DOCK_BADGE_IPC_CHANNELS.SET_COUNT, count)
+  },
+
   // 环境检测
   checkEnvironment: () => {
     return ipcRenderer.invoke(ENVIRONMENT_IPC_CHANNELS.CHECK)
+  },
+
+  // 第三方安装包（Git / Node.js）
+  fetchInstallerManifest: () => {
+    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.MANIFEST)
+  },
+  downloadInstaller: (req: InstallerDownloadRequest) => {
+    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.DOWNLOAD, req)
+  },
+  cancelInstallerDownload: (key: string) => {
+    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.CANCEL, key)
+  },
+  launchInstaller: (filePath: string) => {
+    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.LAUNCH, filePath)
+  },
+  onInstallerProgress: (callback: (payload: InstallerProgressPayload) => void) => {
+    const listener = (_: unknown, payload: InstallerProgressPayload) => callback(payload)
+    ipcRenderer.on(INSTALLER_IPC_CHANNELS.PROGRESS, listener)
+    return () => ipcRenderer.off(INSTALLER_IPC_CHANNELS.PROGRESS, listener)
   },
 
   // 代理配置
@@ -1047,10 +1175,6 @@ const electronAPI: ElectronAPI = {
 
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId)
-  },
-
-  getAgentSessionMessages: (id: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MESSAGES, id)
   },
 
   getAgentSessionSDKMessages: (id: string) => {
@@ -1198,6 +1322,23 @@ const electronAPI: ElectronAPI = {
     )
   },
 
+  readSkillContent: (workspaceSlug: string, skillSlug: string) => {
+    return ipcRenderer.invoke(
+      AGENT_IPC_CHANNELS.READ_SKILL_CONTENT,
+      workspaceSlug,
+      skillSlug,
+    )
+  },
+
+  writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => {
+    return ipcRenderer.invoke(
+      AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
+      workspaceSlug,
+      skillSlug,
+      content,
+    )
+  },
+
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => {
     const listener = (_: unknown, event: AgentStreamEvent): void => callback(event)
     ipcRenderer.on(AGENT_IPC_CHANNELS.STREAM_EVENT, listener)
@@ -1228,12 +1369,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PERMISSION_RESPOND, response)
   },
 
-  getPermissionMode: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PERMISSION_MODE, workspaceSlug)
-  },
-
-  setPermissionMode: (workspaceSlug: string, mode: PromaPermissionMode) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_PERMISSION_MODE, workspaceSlug, mode)
+  updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode)
   },
 
   getMemoryConfig: () => {
@@ -1430,8 +1567,8 @@ const electronAPI: ElectronAPI = {
     return webUtils.getPathForFile(file)
   },
 
-  searchWorkspaceFiles: (rootPath: string, query: string, limit = 20, additionalPaths?: string[]) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES, rootPath, query, limit, additionalPaths)
+  searchWorkspaceFiles: (rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES, rootPath, query, limit, additionalPaths, sessionPaths)
   },
 
   // 系统提示词管理
@@ -1459,7 +1596,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT, id)
   },
 
-  // 自动更新（仅版本检测，不自动下载/安装）
+  // 自动更新
   updater: {
     checkForUpdates: () => ipcRenderer.invoke('updater:check'),
     getStatus: () => ipcRenderer.invoke('updater:get-status'),
@@ -1468,6 +1605,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('updater:status-changed', listener)
       return () => { ipcRenderer.removeListener('updater:status-changed', listener) }
     },
+    quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
   },
 
   // GitHub Release
@@ -1703,6 +1841,102 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, data: QuickTaskOpenSessionData): void => callback(data)
     ipcRenderer.on('quick-task:open-session', listener)
     return () => { ipcRenderer.removeListener('quick-task:open-session', listener) }
+  },
+
+  // ===== 语音输入 =====
+
+  getVoiceDictationSettings: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.GET_SETTINGS)
+  },
+
+  updateVoiceDictationSettings: (updates: VoiceDictationSettingsUpdate) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.UPDATE_SETTINGS, updates)
+  },
+
+  testVoiceDictationConnection: (updates?: VoiceDictationSettingsUpdate) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.TEST_CONNECTION, updates)
+  },
+
+  toggleVoiceDictation: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.TOGGLE)
+  },
+
+  startVoiceDictation: (input: VoiceDictationStartInput) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.START, input)
+  },
+
+  sendVoiceDictationAudio: (input: VoiceDictationAudioChunkInput) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.SEND_AUDIO, input)
+  },
+
+  stopVoiceDictation: (input: VoiceDictationStopInput) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.STOP, input)
+  },
+
+  cancelVoiceDictation: (input: VoiceDictationStopInput) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.CANCEL, input)
+  },
+
+  commitVoiceDictation: (input: VoiceDictationCommitInput) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.COMMIT, input)
+  },
+
+  hideVoiceDictation: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.HIDE)
+  },
+
+  resizeVoiceDictation: (input: VoiceDictationResizeInput) => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.RESIZE, input)
+  },
+
+  onVoiceDictationShown: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(VOICE_DICTATION_IPC_CHANNELS.SHOWN, listener)
+    return () => { ipcRenderer.removeListener(VOICE_DICTATION_IPC_CHANNELS.SHOWN, listener) }
+  },
+
+  onVoiceDictationToggleStop: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(VOICE_DICTATION_IPC_CHANNELS.TOGGLE_STOP, listener)
+    return () => { ipcRenderer.removeListener(VOICE_DICTATION_IPC_CHANNELS.TOGGLE_STOP, listener) }
+  },
+
+  onVoiceDictationTranscript: (callback: (event: VoiceDictationTranscriptEvent) => void) => {
+    const listener = (_: unknown, event: VoiceDictationTranscriptEvent): void => callback(event)
+    ipcRenderer.on(VOICE_DICTATION_IPC_CHANNELS.TRANSCRIPT, listener)
+    return () => { ipcRenderer.removeListener(VOICE_DICTATION_IPC_CHANNELS.TRANSCRIPT, listener) }
+  },
+
+  onVoiceDictationState: (callback: (event: VoiceDictationStateEvent) => void) => {
+    const listener = (_: unknown, event: VoiceDictationStateEvent): void => callback(event)
+    ipcRenderer.on(VOICE_DICTATION_IPC_CHANNELS.STATE, listener)
+    return () => { ipcRenderer.removeListener(VOICE_DICTATION_IPC_CHANNELS.STATE, listener) }
+  },
+
+  onVoiceDictationInsertText: (callback: (data: { text: string }) => void) => {
+    const listener = (_: unknown, data: { text: string }): void => callback(data)
+    ipcRenderer.on(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, listener)
+    return () => { ipcRenderer.removeListener(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, listener) }
+  },
+
+  checkMicrophonePermission: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.CHECK_MIC_PERMISSION)
+  },
+
+  requestMicrophonePermission: () => {
+    return ipcRenderer.invoke(VOICE_DICTATION_IPC_CHANNELS.REQUEST_MIC_PERMISSION)
+  },
+
+  onTrayOpenAgentSession: (callback: (data: TrayOpenAgentSessionData) => void) => {
+    const listener = (_: unknown, data: TrayOpenAgentSessionData): void => callback(data)
+    ipcRenderer.on(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, listener)
+    return () => { ipcRenderer.removeListener(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, listener) }
+  },
+
+  onTrayCreateSession: (callback: (data: TrayCreateSessionData) => void) => {
+    const listener = (_: unknown, data: TrayCreateSessionData): void => callback(data)
+    ipcRenderer.on(TRAY_IPC_CHANNELS.CREATE_SESSION, listener)
+    return () => { ipcRenderer.removeListener(TRAY_IPC_CHANNELS.CREATE_SESSION, listener) }
   },
 }
 
