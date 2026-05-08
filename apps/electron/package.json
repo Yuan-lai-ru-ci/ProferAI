@@ -37,7 +37,8 @@
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.129"
+    "@anthropic-ai/claude-agent-sdk": "0.2.129",
+    "adm-zip": "^0.5.17"
   },
   "optionalDependencies": {
     "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.2.129",
@@ -78,6 +79,7 @@
     "@tiptap/react": "^3.19.0",
     "@tiptap/starter-kit": "^3.19.0",
     "@tiptap/suggestion": "^3.19.0",
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.0.0",
     "@types/pdf-parse": "^1.1.5",
     "@types/qrcode": "^1.5.6",

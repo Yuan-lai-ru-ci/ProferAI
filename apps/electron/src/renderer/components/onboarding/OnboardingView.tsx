@@ -9,8 +9,8 @@
  */
 
 import { useMemo, useState } from 'react'
-import { useAtomValue } from 'jotai'
-import { GraduationCap, ChevronRight, ChevronLeft } from 'lucide-react'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { GraduationCap, ChevronRight, ChevronLeft, HardDriveDownload, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Sheet,
@@ -23,6 +23,7 @@ import { TutorialViewer } from '@/components/tutorial/TutorialViewer'
 import { EnvironmentCheckPanel } from '@/components/environment/EnvironmentCheckPanel'
 import { isShellEnvironmentOkAtom } from '@/atoms/environment'
 import { detectIsWindows } from '@/lib/platform'
+import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 
 interface OnboardingViewProps {
   /** 完成回调（进入主界面） */
@@ -34,6 +35,8 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
   const [step, setStep] = useState<'welcome' | 'environment'>('welcome')
   const isWindows = useMemo(() => detectIsWindows(), [])
   const shellOk = useAtomValue(isShellEnvironmentOkAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
 
   const handleFinish = async () => {
     await window.electronAPI.updateSettings({
@@ -46,9 +49,15 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
     if (isWindows) {
       setStep('environment')
     } else {
-      // 非 Windows：直接完成
       handleFinish()
     }
+  }
+
+  const handleOpenMigration = async () => {
+    await window.electronAPI.updateSettings({ onboardingCompleted: true })
+    onComplete()
+    setSettingsTab('migration')
+    setSettingsOpen(true)
   }
 
   return (
@@ -90,6 +99,24 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
                 '开始使用'
               )}
             </Button>
+          </div>
+
+          {/* 迁移入口 */}
+          <div className="mt-6 flex items-center gap-6">
+            <button
+              onClick={handleOpenMigration}
+              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <HardDriveDownload size={15} />
+              从其他设备迁移
+            </button>
+            <button
+              onClick={handleOpenMigration}
+              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Users size={15} />
+              从同事导入环境
+            </button>
           </div>
         </>
       )}

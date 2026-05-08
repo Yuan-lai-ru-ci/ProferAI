@@ -14,6 +14,21 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0)
 }
 
+// macOS 文件关联：在 app ready 之前注册 open-file 事件
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  handleMigrationFileOpen(filePath)
+})
+
+// Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例
+app.on('second-instance', (_event, argv) => {
+  showAndFocusMainWindow()
+  const fileArg = argv.find((arg) => arg.endsWith('.proma-backup') || arg.endsWith('.proma-share'))
+  if (fileArg) {
+    handleMigrationFileOpen(fileArg)
+  }
+})
+
 import { getSettings } from './lib/settings-service'
 import { resolveOverlayColors } from './lib/titlebar-overlay'
 
@@ -65,6 +80,15 @@ import {
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 import { TRAY_IPC_CHANNELS } from '../types'
+
+const MIGRATION_IPC_OPEN = 'migration:open-import-file'
+
+/** 检查文件路径是否为迁移文件，如果是则通知渲染进程打开导入流程 */
+function handleMigrationFileOpen(filePath: string): void {
+  if (filePath.endsWith('.proma-backup') || filePath.endsWith('.proma-share')) {
+    sendToMainWindow(MIGRATION_IPC_OPEN, { filePath })
+  }
+}
 
 // ===== Bridge 注册（新增 Bridge 只需在此添加一个 registerBridge 调用） =====
 
