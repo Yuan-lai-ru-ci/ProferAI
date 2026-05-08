@@ -114,6 +114,8 @@ export interface ChangedFileEntry {
   deletions: number
   /** 文件来源 */
   source: ChangeSource
+  /** 所属 Git 仓库根目录 */
+  gitRoot: string
 }
 
 /** 未暂存变更结果 */
@@ -124,20 +126,24 @@ export interface UnstagedChangesResult {
   files: ChangedFileEntry[]
   /** 未追踪文件路径列表 */
   untrackedFiles: string[]
-  /** Git 仓库根目录名（用于根级文件分组显示） */
-  gitRootName?: string
+  /** Git 仓库根目录名数组（多仓库场景用于分组显示） */
+  gitRootNames: string[]
 }
 
 /** 获取文件 Diff 的输入 */
 export interface GetFileDiffInput {
   dirPath: string
   filePath: string
+  /** 文件所属 Git 仓库根，多仓库场景下必须传入 */
+  gitRoot?: string
 }
 
 /** Revert 文件变更的输入 */
 export interface RevertFileInput {
   dirPath: string
   filePath: string
+  /** 文件所属 Git 仓库根，多仓库场景下必须传入 */
+  gitRoot?: string
 }
 
 /**
@@ -152,6 +158,14 @@ export interface GitBashStatus {
   version: string | null
   /** 错误信息（如果不可用）*/
   error: string | null
+}
+
+/** 系统编辑器应用信息 */
+export interface EditorApp {
+  /** 显示名称，如 "Visual Studio Code" */
+  name: string
+  /** .app 路径，如 "/Applications/Visual Studio Code.app" */
+  path: string
 }
 
 /**
@@ -247,6 +261,10 @@ export const IPC_CHANNELS = {
   GET_DIFF_CONTENTS: 'git:get-diff-contents',
   /** 在系统默认浏览器中打开外部链接 */
   OPEN_EXTERNAL: 'shell:open-external',
+  /** 用系统默认应用打开任意文件 */
+  SYSTEM_OPEN_FILE: 'shell:system-open-file',
+  /** 扫描系统中可用的编辑器应用 */
+  SCAN_EDITORS: 'shell:scan-editors',
 } as const
 
 /**

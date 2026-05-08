@@ -50,25 +50,24 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
         --diffs-deletion-bg: light-dark(rgb(248,231,230), rgb(39,22,20));
         --diffs-separator-bg: hsl(var(--background));
         --diffs-gap-style: 3px solid hsl(var(--content-area));
+        --diffs-scrollbar-thumb: light-dark(hsl(var(--muted-foreground) / 0.6), hsl(var(--muted-foreground) / 0.2));
+        --diffs-scrollbar-thumb-hover: light-dark(hsl(var(--muted-foreground) / 0.8), hsl(var(--muted-foreground) / 0.35));
       }
-      [data-code] {
-        overflow: overlay !important;
-      }
-      [data-code]::-webkit-scrollbar {
+      .diff-scroll [data-code]::-webkit-scrollbar {
         width: 6px;
         height: 6px;
       }
-      [data-code]::-webkit-scrollbar-track {
+      .diff-scroll [data-code]::-webkit-scrollbar-track {
         background: transparent;
       }
-      [data-code]::-webkit-scrollbar-thumb {
-        background: hsl(var(--muted-foreground) / 0.2);
+      .diff-scroll [data-code]::-webkit-scrollbar-thumb {
+        background: var(--diffs-scrollbar-thumb);
         border-radius: 3px;
       }
-      [data-code]::-webkit-scrollbar-thumb:hover {
-        background: hsl(var(--muted-foreground) / 0.35);
+      .diff-scroll [data-code]::-webkit-scrollbar-thumb:hover {
+        background: var(--diffs-scrollbar-thumb-hover);
       }
-      [data-code]::-webkit-scrollbar-corner {
+      .diff-scroll [data-code]::-webkit-scrollbar-corner {
         background: transparent;
       }
       [data-separator=line-info],
@@ -106,7 +105,7 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
   }), [viewMode, theme])
 
   return (
-    <div className="h-full diff-scroll bg-content-area [overflow:overlay]">
+    <div className="h-full diff-scroll bg-content-area overflow-auto">
       <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} className="h-full" />
     </div>
   )

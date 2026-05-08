@@ -18,9 +18,10 @@ interface DiffTabContentProps {
   dirPath: string
   sessionId?: string
   isUntracked?: boolean
+  gitRoot?: string
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked, gitRoot }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
@@ -53,7 +54,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: Di
 
     async function load() {
       try {
-        const result = await window.electronAPI.getDiffContents({ dirPath, filePath })
+        const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot })
         if (!cancelled && result) {
           setOldContent(result.oldContent)
           setNewContent(result.newContent)
@@ -67,7 +68,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, isUntracked }: Di
 
     load()
     return () => { cancelled = true }
-  }, [filePath, dirPath])
+  }, [filePath, dirPath, gitRoot])
 
   const handleCopy = React.useCallback(async () => {
     try {

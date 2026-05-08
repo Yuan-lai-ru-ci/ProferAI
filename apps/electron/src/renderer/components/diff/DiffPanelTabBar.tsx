@@ -53,10 +53,12 @@ export function DiffPanelTabBar({ activeTab, onTabChange }: DiffPanelTabBarProps
               : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50',
           )}
         >
-          {unseenChanges && activeTab !== 'changes' && (
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 size-2 rounded-full bg-primary ring-1 ring-background" />
-          )}
-          文件改动
+          <span className="inline-flex items-center gap-1">
+            {unseenChanges && activeTab !== 'changes' && (
+              <span className="size-2 rounded-full bg-primary ring-1 ring-background shrink-0" />
+            )}
+            文件改动
+          </span>
         </button>
       </div>
     </div>

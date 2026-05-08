@@ -273,7 +273,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   return (
     <div
       className={cn(
-        'relative h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area/95 backdrop-blur-xl rounded-2xl shadow-xl',
+        'relative h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl',
         shouldAnimate && 'transition-[width] duration-300 ease-in-out',
         isOpen ? '' : '!w-0',
       )}
@@ -294,16 +294,17 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
               dirPath={sessionPath || ''}
               sessionPath={sessionPath || undefined}
               workspaceFilesPath={workspaceFilesPath || undefined}
+              extraPaths={[...attachedDirs, ...wsAttachedDirs]}
               refreshVersion={diffRefreshVersion}
               selectedFilePath={selectedFilePath}
-              onFileClick={(filePath, _isUntracked) => {
+              onFileClick={(filePath, _isUntracked, gitRoot) => {
                 const diffTabId = `diff-${sessionId}`
                 setTabs((prev) => {
                   const existing = prev.find((t) => t.id === diffTabId)
                   if (existing) {
                     // 更新已有 diff tab 的文件路径
                     const updated = prev.map((t) =>
-                      t.id === diffTabId ? { ...t, filePath, dirPath: sessionPath || undefined } : t
+                      t.id === diffTabId ? { ...t, filePath, dirPath: sessionPath || undefined, gitRoot } : t
                     )
                     setActiveTabId(diffTabId)
                     return updated
@@ -315,6 +316,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     title: sessionTitle ? `文件改动 · ${sessionTitle}` : '文件改动',
                     filePath,
                     dirPath: sessionPath || undefined,
+                    gitRoot,
                   }
                   setActiveTabId(diffTabId)
                   return [...prev, newTab]

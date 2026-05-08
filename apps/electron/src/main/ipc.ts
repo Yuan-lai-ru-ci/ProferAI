@@ -83,6 +83,7 @@ import type {
   WeChatBridgeState,
   SDKMessage,
   GetFileDiffInput,
+  RevertFileInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus } from './lib/runtime-init'
@@ -255,58 +256,65 @@ export function registerIpcHandlers(): void {
   // 获取未暂存的变更文件列表
   ipcMain.handle(
     IPC_CHANNELS.GET_UNSTAGED_CHANGES,
-    async (_, dirPath: string, sessionPath?: string, workspaceFilesPath?: string) => {
+    async (_, dirPath: string, sessionPath?: string, workspaceFilesPath?: string, extraPaths?: string[]) => {
       if (!dirPath || typeof dirPath !== 'string') {
         console.warn('[IPC] git:get-unstaged-changes 收到无效的目录路径')
-        return { isGitRepo: false, files: [], untrackedFiles: [] }
+        return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
       }
-      return getUnstagedChanges(dirPath, sessionPath, workspaceFilesPath)
+      return getUnstagedChanges(dirPath, sessionPath, workspaceFilesPath, extraPaths)
     }
   )
 
   // 获取单个文件的 diff
   ipcMain.handle(
     IPC_CHANNELS.GET_FILE_DIFF,
-    async (_, input: { dirPath: string; filePath: string }) => {
-      const { dirPath, filePath } = input
-      if (!dirPath || !filePath) {
+    async (_, input: GetFileDiffInput) => {
+      const { dirPath, filePath, gitRoot } = input
+      if (!dirPath || !filePath || typeof dirPath !== 'string' || typeof filePath !== 'string') {
         console.warn('[IPC] git:get-file-diff 收到无效参数')
         return ''
       }
-      return getFileDiff(dirPath, filePath)
+      return getFileDiff(dirPath, filePath, gitRoot)
     }
   )
 
   // 获取未追踪文件内容
   ipcMain.handle(
     IPC_CHANNELS.GET_UNTRACKED_CONTENT,
-    async (_, input: { dirPath: string; filePath: string }) => {
-      const { dirPath, filePath } = input
-      if (!dirPath || !filePath) {
+    async (_, input: GetFileDiffInput) => {
+      const { dirPath, filePath, gitRoot } = input
+      if (!dirPath || !filePath || typeof dirPath !== 'string' || typeof filePath !== 'string') {
         console.warn('[IPC] git:get-untracked-content 收到无效参数')
         return ''
       }
-      return getUntrackedContent(dirPath, filePath)
+      return getUntrackedContent(dirPath, filePath, gitRoot)
     }
   )
 
   // 还原文件变更
   ipcMain.handle(
     IPC_CHANNELS.REVERT_FILE,
-    async (_, input: { dirPath: string; filePath: string }) => {
-      const { dirPath, filePath } = input
-      if (!dirPath || !filePath) {
+    async (_, input: RevertFileInput) => {
+      const { dirPath, filePath, gitRoot } = input
+      if (!dirPath || !filePath || typeof dirPath !== 'string' || typeof filePath !== 'string') {
         console.warn('[IPC] git:revert-file 收到无效参数')
         return
       }
-      await revertFile(dirPath, filePath)
+      await revertFile(dirPath, filePath, gitRoot)
     }
   )
 
   // 获取文件新旧版本内容
   ipcMain.handle(
     IPC_CHANNELS.GET_DIFF_CONTENTS,
-    async (_, input: GetFileDiffInput) => getDiffContents(input.dirPath, input.filePath)
+    async (_, input: GetFileDiffInput) => {
+      const { dirPath, filePath, gitRoot } = input
+      if (!dirPath || !filePath || typeof dirPath !== 'string' || typeof filePath !== 'string') {
+        console.warn('[IPC] git:get-diff-contents 收到无效参数')
+        return null
+      }
+      return getDiffContents(dirPath, filePath, gitRoot)
+    }
   )
 
   // 在系统默认浏览器中打开外部链接
@@ -323,6 +331,52 @@ export function registerIpcHandlers(): void {
         return
       }
       await shell.openExternal(url)
+    }
+  )
+
+  // 用系统默认应用打开任意文件（无工作区限制）
+  ipcMain.handle(
+    IPC_CHANNELS.SYSTEM_OPEN_FILE,
+    async (_, filePath: string, appName?: string): Promise<void> => {
+      const { resolve } = await import('node:path')
+      const absPath = resolve(filePath)
+      if (process.platform === 'darwin') {
+        const { spawnSync } = await import('node:child_process')
+        if (appName) {
+          spawnSync('open', ['-a', appName, absPath], { timeout: 5000 })
+        } else {
+          spawnSync('open', [absPath], { timeout: 5000 })
+        }
+      } else {
+        await shell.openPath(absPath)
+      }
+    }
+  )
+
+  // 扫描系统中的编辑器应用（仅 macOS）
+  ipcMain.handle(
+    IPC_CHANNELS.SCAN_EDITORS,
+    async (): Promise<import('@proma/shared').EditorApp[]> => {
+      if (process.platform !== 'darwin') return []
+      const { existsSync } = await import('node:fs')
+      const { homedir } = await import('node:os')
+      const home = homedir()
+
+      const editors = [
+        { name: 'Visual Studio Code', paths: ['/Applications/Visual Studio Code.app', `${home}/Applications/Visual Studio Code.app`] },
+        { name: 'Cursor', paths: ['/Applications/Cursor.app', `${home}/Applications/Cursor.app`] },
+        { name: 'Sublime Text', paths: ['/Applications/Sublime Text.app', `${home}/Applications/Sublime Text.app`] },
+        { name: 'Windsurf', paths: ['/Applications/Windsurf.app', `${home}/Applications/Windsurf.app`] },
+        { name: 'Zed', paths: ['/Applications/Zed.app', `${home}/Applications/Zed.app`] },
+        { name: 'CotEditor', paths: ['/Applications/CotEditor.app', `${home}/Applications/CotEditor.app`] },
+        { name: 'IntelliJ IDEA', paths: ['/Applications/IntelliJ IDEA.app', `${home}/Applications/IntelliJ IDEA.app`] },
+        { name: 'Xcode', paths: ['/Applications/Xcode.app'] },
+        { name: 'TextEdit', paths: ['/Applications/TextEdit.app'] },
+      ]
+
+      return editors
+        .filter((e) => e.paths.some((p) => existsSync(p)))
+        .map((e) => ({ name: e.name, path: e.paths.find((p) => existsSync(p))! }))
     }
   )
 

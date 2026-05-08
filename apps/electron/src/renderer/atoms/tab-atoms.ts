@@ -37,6 +37,8 @@ export interface TabItem {
   filePath?: string
   /** Diff 类型：Git 仓库根目录 */
   dirPath?: string
+  /** Diff 类型：文件所属 Git 仓库根（多仓库场景） */
+  gitRoot?: string
   /** Diff 类型：视图模式 */
   viewMode?: 'split' | 'unified'
 }

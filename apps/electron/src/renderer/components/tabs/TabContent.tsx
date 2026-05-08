@@ -45,6 +45,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
         filePath={tab.filePath || ''}
         dirPath={tab.dirPath || ''}
         sessionId={tab.sessionId}
+        gitRoot={tab.gitRoot}
         key={tab.id}
       />
     )
