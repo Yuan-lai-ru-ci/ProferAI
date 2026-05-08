@@ -103,8 +103,8 @@ const VOICE_INPUT_TAB: TabItem = {
 
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
-  { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
+  { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
