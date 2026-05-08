@@ -150,9 +150,9 @@ export function MigrationSettings(): React.ReactElement {
         }) as { success: boolean; filePath: string }
         setExportResult({ success: true, filePath: result.filePath })
       } else {
-        const result = await window.electronAPI.migrationExport({
+        // personal 模式：全量备份所有工作区
+        const result = await window.electronAPI.migrationExportV2({
           mode: exportMode,
-          workspaceId: currentWorkspace.id,
           components,
           outputPath,
         }) as { success: boolean; filePath: string }
