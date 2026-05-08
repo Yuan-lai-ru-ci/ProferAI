@@ -1,8 +1,8 @@
 /**
  * FileDropZone — 文件拖拽上传区域
  *
- * 两个并排 drop zone：添加文件（回形针）+ 附加文件夹（文件夹）
- * 两个 zone 都接受文件和文件夹拖放。
+ * 两个并排 drop zone：左侧接受文件上传（回形针），右侧接受文件夹附加（文件夹）。
+ * 拖错区域会给出引导提示。
  */
 
 import * as React from 'react'
@@ -118,15 +118,17 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
         }
       } catch (error) {
         console.error('[FileDropZone] 路径检测失败，回退处理:', error)
-        // 回退：左侧按常规文件处理
         if (side === 'left') {
           await saveFiles(droppedFiles)
+        } else {
+          toast.warning('无法识别文件夹，请使用按钮选择')
         }
       }
     } else {
-      // 无路径信息回退：左侧按常规文件处理
       if (side === 'left') {
         await saveFiles(droppedFiles)
+      } else {
+        toast.warning('无法识别文件夹，请使用按钮选择')
       }
     }
   }, [saveFiles, onFoldersDropped, isUploading])
@@ -149,10 +151,6 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
   }, [])
 
   const handleSelectFiles = React.useCallback(async (): Promise<void> => {
-    if (!isWorkspace && !sessionId) {
-      console.error('[FileDropZone] session 模式下 sessionId 不能为空')
-      return
-    }
     try {
       const result = await window.electronAPI.openFileDialog()
       if (result.files.length === 0) return
