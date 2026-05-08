@@ -1979,7 +1979,8 @@ export function registerIpcHandlers(): void {
       const safeRoot = resolve(rootPath)
       const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
       const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
-      const BROWSE_LIMIT_PER_GROUP = 5000
+      const BROWSE_LIMIT_PER_GROUP = 2000
+      const BROWSE_TOTAL_CAP = 3000
 
       // 按来源分组收集文件
       type Entry = { name: string; path: string; type: 'file' | 'dir'; source: 'session' | 'workspace' }
@@ -2097,8 +2098,10 @@ export function registerIpcHandlers(): void {
         const maxPerGroup = Math.max(limit, BROWSE_LIMIT_PER_GROUP)
         const sessionSlice = rootEntries.slice(0, maxPerGroup)
         const workspaceSlice = workspaceEntries.slice(0, maxPerGroup)
+        const combined = [...sessionSlice, ...workspaceSlice]
+        const capped = combined.length > BROWSE_TOTAL_CAP ? combined.slice(0, BROWSE_TOTAL_CAP) : combined
         return {
-          entries: [...sessionSlice, ...workspaceSlice],
+          entries: capped,
           total: rootEntries.length + workspaceEntries.length,
           sessionEntries: sessionSlice,
           workspaceEntries: workspaceSlice,
@@ -2121,7 +2124,10 @@ export function registerIpcHandlers(): void {
           sessionMatched.length > 0 ? 1 : 0,
           Math.round(limit * sessionMatched.length / totalMatched),
         )
-        const workspaceQuota = limit - sessionQuota
+        const workspaceQuota = Math.max(
+          workspaceMatched.length > 0 ? 1 : 0,
+          limit - sessionQuota,
+        )
         sessionSlice = sessionMatched.slice(0, sessionQuota)
         workspaceSlice = workspaceMatched.slice(0, workspaceQuota)
       }
