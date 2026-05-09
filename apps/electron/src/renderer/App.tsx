@@ -4,6 +4,7 @@ import { AppShell } from './components/app-shell/AppShell'
 import { OnboardingView } from './components/onboarding/OnboardingView'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { EnvironmentCheckDialog } from './components/environment/EnvironmentCheckDialog'
+import { MigrationImportDialog } from './components/migration/MigrationImportDialog'
 import { TooltipProvider } from './components/ui/tooltip'
 import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
@@ -85,6 +86,7 @@ export default function App(): React.ReactElement {
     return (
       <TooltipProvider delayDuration={200}>
         <OnboardingView onComplete={handleOnboardingComplete} />
+        <MigrationImportDialog />
       </TooltipProvider>
     )
   }
@@ -98,6 +100,7 @@ export default function App(): React.ReactElement {
       <AppShell contextValue={contextValue} />
       <TutorialBanner />
       <GlobalEnvironmentCheckDialog />
+      <MigrationImportDialog />
     </TooltipProvider>
   )
 }

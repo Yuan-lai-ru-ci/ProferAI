@@ -22,6 +22,7 @@ import {
   X,
   Keyboard,
   Mic,
+  HardDriveDownload,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom } from "@/atoms/settings-tab";
@@ -51,6 +52,7 @@ import { BotHubSettings } from "./BotHubSettings";
 import { TutorialViewer } from "../tutorial/TutorialViewer";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { VoiceInputSettings } from "./VoiceInputSettings";
+import { MigrationSettings } from "./MigrationSettings";
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -101,6 +103,7 @@ const VOICE_INPUT_TAB: TabItem = {
 
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
+  { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
@@ -132,6 +135,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <ShortcutSettings />;
     case "voice-input":
       return <VoiceInputSettings />;
+    case "migration":
+      return <MigrationSettings />;
   }
 }
 
