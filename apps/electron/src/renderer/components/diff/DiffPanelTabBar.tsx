@@ -8,6 +8,7 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { PanelRightClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 
 interface DiffPanelTabBarProps {
@@ -66,14 +67,18 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
         </button>
         {/* 右侧关闭按钮（常驻，两个 tab 下都可见） */}
         {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center justify-center size-[28px] mr-1 mb-[3px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
-            title="折叠文件面板"
-          >
-            <PanelRightClose className="size-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex items-center justify-center size-[28px] mr-1 mb-[3px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
+              >
+                <PanelRightClose className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">折叠文件面板 <kbd className="ml-1 px-1 py-0.5 rounded bg-foreground/[0.06] text-[10px] font-mono">{navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'}</kbd></TooltipContent>
+          </Tooltip>
         )}
       </div>
     </div>
