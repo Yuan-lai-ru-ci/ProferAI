@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeTheme, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 
@@ -19,6 +19,12 @@ app.on('open-file', (event, filePath) => {
   event.preventDefault()
   handleMigrationFileOpen(filePath)
 })
+
+// 注册自定义协议方案为"特权"（必须在 app ready 之前）
+// 用于内联预览本地文件（renderer 用 iframe 加载 proma-file:// 资源）
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'proma-file', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
+])
 
 // Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例
 app.on('second-instance', (_event, argv) => {
@@ -325,6 +331,14 @@ function sendToMainWindow(channel: string, data?: unknown): void {
 }
 
 app.whenReady().then(async () => {
+  // 注册自定义协议 proma-file:// 用于内联预览本地文件
+  // （renderer 从 http://localhost 或 file:// 协议加载，无法直接 iframe file:// 资源）
+  protocol.registerFileProtocol('proma-file', (request, callback) => {
+    const url = request.url.replace(/^proma-file:\/\//, '')
+    const decoded = decodeURIComponent(url)
+    callback({ path: decoded })
+  })
+
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
   // 必须在其他初始化之前执行，确保环境变量正确加载
   await initializeRuntime()

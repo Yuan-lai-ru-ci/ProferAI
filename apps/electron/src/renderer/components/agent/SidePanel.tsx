@@ -365,6 +365,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                             onDetach={handleDetachDirectory}
                             refreshVersion={filesVersion}
                             onAddToChat={handleAddToChat}
+                            onFilePreview={handleFilePreview}
                           />
                         )}
                         {/* 会话文件浏览器 */}
@@ -432,6 +433,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                           onDetach={handleDetachWorkspaceDirectory}
                           refreshVersion={filesVersion}
                           onAddToChat={handleAddToChat}
+                          onFilePreview={handleFilePreview}
                         />
                       )}
                       {/* 工作区文件浏览器 */}
@@ -468,10 +470,11 @@ interface AttachedDirsSectionProps {
   /** 文件版本号，用于自动刷新已展开的目录 */
   refreshVersion: number
   onAddToChat?: (entry: FileEntry) => void
+  onFilePreview?: (filePath: string) => void
 }
 
 /** 附加目录区域：统一管理所有子项的选中状态 */
-function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToChat }: AttachedDirsSectionProps): React.ReactElement {
+function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToChat, onFilePreview }: AttachedDirsSectionProps): React.ReactElement {
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
 
   const handleSelect = React.useCallback((path: string, ctrlKey: boolean) => {
@@ -503,6 +506,7 @@ function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToCh
           onSelect={handleSelect}
           refreshVersion={refreshVersion}
           onAddToChat={onAddToChat}
+          onFilePreview={onFilePreview}
         />
       ))}
     </div>
@@ -519,10 +523,11 @@ interface AttachedDirTreeProps {
   /** 文件版本号，变化时已展开的目录自动重新加载 */
   refreshVersion: number
   onAddToChat?: (entry: FileEntry) => void
+  onFilePreview?: (filePath: string) => void
 }
 
 /** 附加目录根节点：可展开/收起，带移除按钮 */
-function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToChat }: AttachedDirTreeProps): React.ReactElement {
+function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview }: AttachedDirTreeProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
@@ -583,7 +588,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
         </div>
       )}
       {expanded && children.map((child) => (
-        <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} />
+        <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} />
       ))}
     </div>
   )
@@ -597,10 +602,11 @@ interface AttachedDirItemProps {
   /** 文件版本号，变化时已展开的目录自动重新加载 */
   refreshVersion: number
   onAddToChat?: (entry: FileEntry) => void
+  onFilePreview?: (filePath: string) => void
 }
 
 /** 附加目录子项：递归可展开，支持选中 + 三点菜单（含重命名、移动） */
-function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion, onAddToChat }: AttachedDirItemProps): React.ReactElement {
+function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview }: AttachedDirItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
@@ -646,7 +652,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
 
   const handleDoubleClick = (): void => {
     if (!entry.isDirectory) {
-      window.electronAPI.openAttachedFile(currentPath).catch(console.error)
+      onFilePreview?.(currentPath)
     }
   }
 
@@ -829,7 +835,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
         </div>
       )}
       {expanded && children.map((child) => (
-        <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} />
+        <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} />
       ))}
     </>
   )

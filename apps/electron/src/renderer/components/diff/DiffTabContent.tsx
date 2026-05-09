@@ -71,53 +71,41 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
-  // 切换文件（filePath 或上下文变化）时：清空旧内容并显示 loading
-  // refreshVersion 变化时：静默重新拉取并比较，内容相同不更新
-  const isInitialLoadRef = React.useRef(true)
+  // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
   const lastNewContentRef = React.useRef('')
   const lastOldContentRef = React.useRef('')
 
+  // 主加载 effect：上下文变化（filePath/dirPath/gitRoot/previewOnly）时触发
+  // 会清空旧内容 + 显示 loading + 重新加载
   React.useEffect(() => {
     let cancelled = false
-
-    // 区分"切文件"（首次/上下文变） 与 "刷新"（仅 refreshVersion 变）
-    // 切文件时清空 + loading；刷新时静默对比
-    const isContextChange = isInitialLoadRef.current
-    if (isContextChange) {
-      setLoading(true)
-      setOldContent('')
-      setNewContent('')
-      setHighlightedHtml('')
-      setDocxHtml('')
-      setPdfPath('')
-    }
+    setLoading(true)
+    setOldContent('')
+    setNewContent('')
+    setHighlightedHtml('')
+    setDocxHtml('')
+    setPdfPath('')
+    lastNewContentRef.current = ''
+    lastOldContentRef.current = ''
 
     async function load() {
       try {
         let content = ''
-        let oldContent = ''
+        let old = ''
 
         if (previewOnly) {
-          // 纯预览模式不响应 refreshVersion，仅首次加载
-          if (!isContextChange) return
-
-          // PDF：仅解析路径，由 iframe 加载
           if (isPdf) {
             const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
             if (cancelled) return
             setPdfPath(resolved ?? '')
             return
           }
-
-          // DOCX：主进程用 mammoth 转 HTML
           if (isDocx) {
             const result = await window.electronAPI.docxToHtml(filePath, basePaths)
             if (cancelled) return
             setDocxHtml(result?.html ?? '')
             return
           }
-
-          // 其他类型：读文本
           const result = await window.electronAPI.resolveAndReadFile(filePath, basePaths)
           if (cancelled) return
           content = result?.content ?? ''
@@ -125,19 +113,12 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot })
           if (cancelled) return
           content = result?.newContent ?? ''
-          oldContent = result?.oldContent ?? ''
-        }
-
-        // 内容未变（且不是上下文变化）则跳过 state 更新，避免 Shiki 重高亮抖动
-        if (!isContextChange &&
-            content === lastNewContentRef.current &&
-            oldContent === lastOldContentRef.current) {
-          return
+          old = result?.oldContent ?? ''
         }
 
         lastNewContentRef.current = content
-        lastOldContentRef.current = oldContent
-        setOldContent(oldContent)
+        lastOldContentRef.current = old
+        setOldContent(old)
         setNewContent(content)
 
         if (previewOnly && !MD_EXTS.has(getExtension(filePath)) && content) {
@@ -152,20 +133,25 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       } catch {
         // 加载失败静默处理
       } finally {
-        if (!cancelled && isContextChange) setLoading(false)
-        isInitialLoadRef.current = false
+        if (!cancelled) setLoading(false)
       }
     }
 
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, shikiTheme, basePaths])
+  }, [filePath, dirPath, gitRoot, previewOnly, shikiTheme, basePaths, isPdf, isDocx])
 
-  // refreshVersion 单独的 effect：只在 diff 模式下静默对比刷新
+  // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
+  const prevRefreshRef = React.useRef(refreshVersion)
   React.useEffect(() => {
     if (previewOnly) return
-    if (isInitialLoadRef.current) return // 首次加载已由上面 effect 处理
+    // 首次跳过（避免首屏加载时和主 effect 重复拉取）
+    if (prevRefreshRef.current === refreshVersion) {
+      prevRefreshRef.current = refreshVersion
+      return
+    }
+    prevRefreshRef.current = refreshVersion
 
     let cancelled = false
     async function refresh() {
@@ -186,11 +172,6 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     refresh()
     return () => { cancelled = true }
   }, [refreshVersion, previewOnly, filePath, dirPath, gitRoot])
-
-  // 切换 filePath 等上下文时，标记下次 effect 为初次加载
-  React.useEffect(() => {
-    isInitialLoadRef.current = true
-  }, [filePath, dirPath, gitRoot, previewOnly])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -241,7 +222,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           isPdf ? (
             pdfPath ? (
               <iframe
-                src={`file://${pdfPath}`}
+                src={`proma-file://${encodeURI(pdfPath)}`}
                 className="w-full h-full border-0"
                 title={filePath.split('/').pop() || 'PDF'}
               />
