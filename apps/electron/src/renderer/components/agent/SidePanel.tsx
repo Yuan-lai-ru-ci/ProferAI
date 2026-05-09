@@ -55,10 +55,14 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const setPreviewFileMap = useSetAtom(previewFileMapAtom)
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
 
+  // 用 ref 存 basePaths 相关值，避免声明顺序问题
+  const basePathsRef = React.useRef<string[]>([])
+
   const handleFilePreview = React.useCallback((filePath: string) => {
+    const bp = basePathsRef.current
     setPreviewFileMap((prev) => {
       const m = new Map(prev)
-      m.set(sessionId, { filePath, previewOnly: true })
+      m.set(sessionId, { filePath, previewOnly: true, basePaths: bp.length > 0 ? bp : undefined })
       return m
     })
     setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
@@ -263,6 +267,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   }, [workspaceSlug])
 
   // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开
+
+  // 同步 basePaths ref（供 handleFilePreview 使用，避免 hooks 声明顺序问题）
+  basePathsRef.current = [sessionPath, workspaceFilesPath, ...extraPathsMemo].filter(Boolean) as string[]
 
   return (
     <div
