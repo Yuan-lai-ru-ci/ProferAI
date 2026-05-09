@@ -6,7 +6,7 @@
  */
 
 import { atom } from 'jotai'
-import { atomFamily } from 'jotai/utils'
+import { atomFamily, atomWithStorage } from 'jotai/utils'
 import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, TaskUsage, SDKMessage } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 
@@ -284,7 +284,10 @@ export const workspaceFilesVersionAtom = atom(0)
 
 // ===== 侧面板 Atoms =====
 
-/** 侧面板是否打开（per-session Map） */
+/** 侧面板是否打开（全局共享，所有会话共用一个状态） */
+export const agentSidePanelOpenAtom = atomWithStorage<boolean>('proma-agent-sidepanel-open', true)
+
+/** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
 /** 侧面板当前 Tab：'files' | 'changes'（per-session Map） */
@@ -299,11 +302,11 @@ export const agentDiffRefreshVersionAtom = atom(0)
 /** 是否有未查看的代码改动（用户没点进「代码改动」Tab 时的新变更） */
 export const agentDiffUnseenChangesAtom = atom(false)
 
-/** 当前会话的侧面板是否打开（派生只读，供 AppShell 使用，避免全 Map 订阅导致无关重渲染） */
+/** 当前会话的侧面板是否打开（派生只读：全局共享，但仅在有当前会话且为 Agent 模式时显示） */
 export const currentSessionSidePanelOpenAtom = atom<boolean>((get) => {
   const currentId = get(currentAgentSessionIdAtom)
   if (!currentId) return false
-  return get(agentSidePanelOpenMapAtom).get(currentId) ?? true
+  return get(agentSidePanelOpenAtom)
 })
 
 /** 当前会话的工作路径 Map — sessionId → path */

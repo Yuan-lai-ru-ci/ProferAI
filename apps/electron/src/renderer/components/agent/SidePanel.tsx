@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { X, FolderOpen, ExternalLink, RefreshCw, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -21,7 +21,7 @@ import { FileBrowser, FileDropZone, FileTypeIcon } from '@/components/file-brows
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
 import {
-  agentSidePanelOpenMapAtom,
+  agentSidePanelOpenAtom,
   workspaceFilesVersionAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -46,8 +46,7 @@ interface SidePanelProps {
 
 export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 320 }: SidePanelProps): React.ReactElement {
   // per-session 侧面板状态（默认打开）
-  const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
-  const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
+  const [isOpen, setIsOpen] = useAtom(agentSidePanelOpenAtom)
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   // Tab 系统
@@ -72,26 +71,14 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
   }, [sessionId, setPreviewFileMap, setPreviewOpenMap])
 
-  const isOpen = sidePanelOpenMap.get(sessionId) ?? true
-
-  // 动画标志：渲染阶段直接计算，同一会话内 isOpen 变化时启用过渡动画，切换会话时即时显示
+  // 动画标志：isOpen 变化时启用过渡动画，切换会话时即时显示
   const prevIsOpenRef = React.useRef(isOpen)
   const prevSessionIdRef = React.useRef(sessionId)
   const shouldAnimate = prevSessionIdRef.current === sessionId && prevIsOpenRef.current !== isOpen
-  // 在渲染后更新 prev 值，以便下次渲染比较
   React.useEffect(() => {
     prevIsOpenRef.current = isOpen
     prevSessionIdRef.current = sessionId
   })
-
-  const setIsOpen = React.useCallback((value: boolean | ((prev: boolean) => boolean)) => {
-    setSidePanelOpenMap((prev) => {
-      const map = new Map(prev)
-      const current = map.get(sessionId) ?? true
-      map.set(sessionId, typeof value === 'function' ? value(current) : value)
-      return map
-    })
-  }, [sessionId, setSidePanelOpenMap])
 
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)

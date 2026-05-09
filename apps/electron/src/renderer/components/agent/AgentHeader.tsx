@@ -6,11 +6,11 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Pencil, Check, X, PanelRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { agentSessionsAtom, agentSidePanelOpenMapAtom, workspaceFilesVersionAtom } from '@/atoms/agent-atoms'
+import { agentSessionsAtom, agentSidePanelOpenAtom, workspaceFilesVersionAtom } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
 import { registerShortcut } from '@/lib/shortcut-registry'
 
@@ -27,23 +27,17 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
   const [editTitle, setEditTitle] = React.useState('')
   const inputRef = React.useRef<HTMLInputElement>(null)
 
-  // 文件面板切换状态
-  const sidePanelOpenMap = useAtomValue(agentSidePanelOpenMapAtom)
-  const setSidePanelOpenMap = useSetAtom(agentSidePanelOpenMapAtom)
+  // 文件面板切换状态（全局共享）
+  const [isPanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
-  const isPanelOpen = sidePanelOpenMap.get(sessionId) ?? true
   const previewOpen = previewOpenMap.get(sessionId) ?? false
   const hasFileChanges = filesVersion > 0
 
   const togglePanel = React.useCallback(() => {
-    setSidePanelOpenMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, !(map.get(sessionId) ?? true))
-      return map
-    })
-  }, [sessionId, setSidePanelOpenMap])
+    setSidePanelOpen((v) => !v)
+  }, [setSidePanelOpen])
 
   React.useEffect(() => {
     return registerShortcut('toggle-right-panel', togglePanel)

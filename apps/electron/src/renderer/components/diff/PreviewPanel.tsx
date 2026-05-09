@@ -35,9 +35,9 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   }, [sessionId, setOpenMap])
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-content-area">
+    <div className="flex flex-col h-full overflow-hidden bg-content-area titlebar-no-drag">
       {/* 顶部栏：文件名 + 关闭 */}
-      <div className="flex items-center h-[34px] px-3 flex-shrink-0 border-b border-border/30">
+      <div className="flex items-center h-[34px] px-3 flex-shrink-0 border-b border-border/30 titlebar-no-drag">
         <span className="text-xs text-muted-foreground truncate">
           {currentFile ? currentFile.filePath.split('/').pop() : '文件预览'}
         </span>

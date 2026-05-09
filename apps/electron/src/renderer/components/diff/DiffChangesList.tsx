@@ -310,7 +310,9 @@ function FileRow({
       tabIndex={0}
       className={cn(
         'flex items-center w-full px-2 pl-6 py-2.5 text-[14px] transition-colors group',
-        isSelected ? 'bg-primary/10' : 'hover:bg-foreground/[0.04]',
+        isSelected
+          ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+          : 'hover:bg-primary/5',
       )}
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
