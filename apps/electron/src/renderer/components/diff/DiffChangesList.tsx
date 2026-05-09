@@ -340,9 +340,9 @@ function FileRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <span className="truncate flex items-center gap-1">
+      <span className="relative truncate">
         {isUnseen && (
-          <span className="size-1.5 rounded-full bg-primary shrink-0" />
+          <span className="absolute -left-2.5 top-1/2 -translate-y-1/2 size-1.5 rounded-full bg-primary" />
         )}
         {(() => {
           const parts = file.filePath.split('/')
