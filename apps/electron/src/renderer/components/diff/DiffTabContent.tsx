@@ -65,33 +65,55 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
+  // 切换文件（filePath 或上下文变化）时：清空旧内容并显示 loading
+  // refreshVersion 变化时：静默重新拉取并比较，内容相同不更新
+  const isInitialLoadRef = React.useRef(true)
+  const lastNewContentRef = React.useRef('')
+  const lastOldContentRef = React.useRef('')
+
   React.useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setOldContent('')
-    setNewContent('')
-    setHighlightedHtml('')
+
+    // 区分"切文件"（首次/上下文变） 与 "刷新"（仅 refreshVersion 变）
+    // 切文件时清空 + loading；刷新时静默对比
+    const isContextChange = isInitialLoadRef.current
+    if (isContextChange) {
+      setLoading(true)
+      setOldContent('')
+      setNewContent('')
+      setHighlightedHtml('')
+    }
 
     async function load() {
       try {
         let content = ''
+        let oldContent = ''
 
         if (previewOnly) {
-          // 纯预览模式：用 resolveAndReadFile 解析路径并读取
+          // 纯预览模式不响应 refreshVersion，仅首次加载
+          if (!isContextChange) return
           const result = await window.electronAPI.resolveAndReadFile(filePath, basePaths)
           if (cancelled) return
           content = result?.content ?? ''
-          setNewContent(content)
         } else {
-          // Diff 模式：用 getDiffContents 获取新旧版本
           const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot })
           if (cancelled) return
           content = result?.newContent ?? ''
-          setOldContent(result?.oldContent ?? '')
-          setNewContent(content)
+          oldContent = result?.oldContent ?? ''
         }
 
-        // 代码高亮（仅 previewOnly 非 markdown）
+        // 内容未变（且不是上下文变化）则跳过 state 更新，避免 Shiki 重高亮抖动
+        if (!isContextChange &&
+            content === lastNewContentRef.current &&
+            oldContent === lastOldContentRef.current) {
+          return
+        }
+
+        lastNewContentRef.current = content
+        lastOldContentRef.current = oldContent
+        setOldContent(oldContent)
+        setNewContent(content)
+
         if (previewOnly && !MD_EXTS.has(getExtension(filePath)) && content) {
           const lang = EXT_LANG[getExtension(filePath)] || 'text'
           try {
@@ -104,13 +126,45 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       } catch {
         // 加载失败静默处理
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && isContextChange) setLoading(false)
+        isInitialLoadRef.current = false
       }
     }
 
     load()
     return () => { cancelled = true }
-  }, [filePath, dirPath, gitRoot, refreshVersion, previewOnly, shikiTheme, basePaths])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, dirPath, gitRoot, previewOnly, shikiTheme, basePaths])
+
+  // refreshVersion 单独的 effect：只在 diff 模式下静默对比刷新
+  React.useEffect(() => {
+    if (previewOnly) return
+    if (isInitialLoadRef.current) return // 首次加载已由上面 effect 处理
+
+    let cancelled = false
+    async function refresh() {
+      try {
+        const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot })
+        if (cancelled || !result) return
+        const newC = result.newContent ?? ''
+        const oldC = result.oldContent ?? ''
+        if (newC === lastNewContentRef.current && oldC === lastOldContentRef.current) return
+        lastNewContentRef.current = newC
+        lastOldContentRef.current = oldC
+        setNewContent(newC)
+        setOldContent(oldC)
+      } catch {
+        // ignore
+      }
+    }
+    refresh()
+    return () => { cancelled = true }
+  }, [refreshVersion, previewOnly, filePath, dirPath, gitRoot])
+
+  // 切换 filePath 等上下文时，标记下次 effect 为初次加载
+  React.useEffect(() => {
+    isInitialLoadRef.current = true
+  }, [filePath, dirPath, gitRoot, previewOnly])
 
   const handleCopy = React.useCallback(async () => {
     try {
