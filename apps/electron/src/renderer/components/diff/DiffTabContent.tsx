@@ -72,8 +72,6 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
-  console.log('[PDF-DEBUG] DiffTabContent render:', { filePath, ext, previewOnly, isPdf, pdfHtml: pdfHtml.length, loading })
-
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
   const lastNewContentRef = React.useRef('')
   const lastOldContentRef = React.useRef('')
@@ -98,9 +96,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
 
         if (previewOnly) {
           if (isPdf) {
-            console.log('[PDF-DEBUG] renderer: calling preparePdfPreview', { filePath, basePaths })
             const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
-            console.log('[PDF-DEBUG] renderer: got result:', result ? 'html length=' + result.html.length : null)
             if (cancelled) return
             setPdfHtml(result?.html ?? '')
             return

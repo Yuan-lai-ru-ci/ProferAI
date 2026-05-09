@@ -340,22 +340,18 @@ app.whenReady().then(async () => {
     realpathSync(resolvePath(getAgentWorkspacesDir())),
     realpathSync(previewTmpDir),
   ]
-  console.log('[PDF-DEBUG] proma-file allowedRoots:', allowedRoots)
   protocol.registerFileProtocol('proma-file', (request, callback) => {
     const url = request.url.replace(/^proma-file:\/\//, '')
     const decoded = decodeURIComponent(url)
-    console.log('[PDF-DEBUG] proma-file request:', { url: request.url, decoded })
     let resolved: string
     try {
       resolved = realpathSync(resolvePath(decoded))
-    } catch (err) {
-      console.warn('[PDF-DEBUG] proma-file realpathSync failed:', decoded, err)
+    } catch {
       callback({ statusCode: 404 })
       return
     }
-    console.log('[PDF-DEBUG] proma-file resolved:', resolved, 'match:', allowedRoots.some((root) => resolved.startsWith(root + '/') || resolved === root))
     if (!allowedRoots.some((root) => resolved.startsWith(root + '/') || resolved === root)) {
-      console.warn('[PDF-DEBUG] proma-file REJECTED:', resolved)
+      console.warn('[proma-file] 拒绝越界路径:', resolved)
       callback({ statusCode: 403 })
       return
     }
