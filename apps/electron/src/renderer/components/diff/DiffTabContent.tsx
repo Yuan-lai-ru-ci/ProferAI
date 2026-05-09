@@ -97,8 +97,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           try {
             const hl = await highlightCode({ code: content, language: lang, theme: shikiTheme })
             if (!cancelled) setHighlightedHtml(hl.html)
-          } catch {
-            // Shiki 失败时用纯文本
+          } catch (err) {
+            console.error('[DiffTabContent] Shiki highlight failed:', err)
           }
         }
       } catch {
@@ -154,7 +154,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto relative">
+      <div className="flex-1 overflow-auto scrollbar-thin relative">
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
         ) : previewOnly ? (

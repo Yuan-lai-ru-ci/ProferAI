@@ -293,7 +293,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       <div
         className={cn(
           'w-full h-full flex flex-col titlebar-no-drag',
-          isWindows ? 'pt-[34px]' : 'pt-0.5',
+          isWindows ? 'pt-[34px]' : 'pt-0',
           shouldAnimate && 'transition-opacity duration-300',
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}

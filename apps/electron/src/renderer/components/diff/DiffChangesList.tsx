@@ -51,7 +51,7 @@ const SOURCE_CONFIG: Record<string, { color: string; label: string }> = {
   session: { color: 'bg-blue-500/10 text-blue-500', label: '会话' },
   workspace: { color: 'bg-purple-500/10 text-purple-500', label: '工作区' },
   both: { color: 'bg-cyan-500/10 text-cyan-500', label: '会话+工作区' },
-  none: { color: 'bg-muted text-muted-foreground', label: '非工作区内' },
+  none: { color: 'bg-muted text-muted-foreground', label: '附加目录文件' },
 }
 
 export function DiffChangesList({
@@ -183,8 +183,10 @@ export function DiffChangesList({
                   </span>
                 )
               })}
-              <span className="text-foreground/30 ml-auto shrink-0">
-                {group.files.length} files  +{group.totalAdditions} -{group.totalDeletions}
+              <span className="ml-auto shrink-0 flex items-center gap-1.5">
+                <span className="text-foreground/30">{group.files.length} files</span>
+                {group.totalAdditions > 0 && <span className="text-green-500">+{group.totalAdditions}</span>}
+                {group.totalDeletions > 0 && <span className="text-red-500">-{group.totalDeletions}</span>}
               </span>
             </button>
 
@@ -336,10 +338,10 @@ function FileRow({
       {/* +/- 行数 */}
       <span className="ml-auto shrink-0 flex items-center gap-1.5">
         {file.additions > 0 && (
-          <span className={isSelected ? 'text-green-500' : 'text-foreground/30'}>+{file.additions}</span>
+          <span className="text-green-500">+{file.additions}</span>
         )}
         {file.deletions > 0 && (
-          <span className={isSelected ? 'text-red-500' : 'text-foreground/30'}>-{file.deletions}</span>
+          <span className="text-red-500">-{file.deletions}</span>
         )}
       </span>
 
