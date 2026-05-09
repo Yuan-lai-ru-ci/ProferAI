@@ -341,6 +341,9 @@ function FileRow({
       onMouseLeave={() => setHovered(false)}
     >
       <span className="truncate flex items-center gap-1">
+        {isUnseen && (
+          <span className="size-1.5 rounded-full bg-primary shrink-0" />
+        )}
         {(() => {
           const parts = file.filePath.split('/')
           const fileName = parts.pop()!
@@ -357,9 +360,6 @@ function FileRow({
             </>
           )
         })()}
-        {isUnseen && (
-          <span className="size-1.5 rounded-full bg-primary shrink-0" />
-        )}
       </span>
 
       {/* +/- 行数 */}
