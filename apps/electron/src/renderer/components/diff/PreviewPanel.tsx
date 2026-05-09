@@ -57,7 +57,6 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
           <DiffTabContent
             filePath={currentFile.filePath}
             dirPath={currentFile.dirPath || sessionPath}
-            sessionId={sessionId}
             gitRoot={currentFile.gitRoot}
             previewOnly={currentFile.previewOnly}
             basePaths={currentFile.basePaths}

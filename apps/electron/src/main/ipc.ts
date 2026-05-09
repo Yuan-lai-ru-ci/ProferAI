@@ -226,6 +226,33 @@ import { wechatBridge } from './lib/wechat-bridge'
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
 
+/** 检查路径是否在允许的目录范围内（解析 symlink） */
+function isPathAllowed(filePath: string, extraAllowedPaths?: string[]): boolean {
+  const { resolve } = require('node:path')
+  const { realpathSync } = require('node:fs')
+  const { tmpdir } = require('node:os')
+  let resolved: string
+  try {
+    resolved = realpathSync(resolve(filePath))
+  } catch {
+    return false
+  }
+  const allowedRoots = [
+    resolve(getAgentWorkspacesDir()),
+    resolve(tmpdir()),
+  ]
+  if (extraAllowedPaths) {
+    for (const p of extraAllowedPaths) {
+      if (p && typeof p === 'string') {
+        try {
+          allowedRoots.push(realpathSync(resolve(p)))
+        } catch { /* 目录不存在则跳过 */ }
+      }
+    }
+  }
+  return allowedRoots.some((root) => resolved === root || resolved.startsWith(root + '/'))
+}
+
 /**
  * 注册 IPC 处理器
  *
@@ -370,6 +397,12 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 已知编辑器列表（白名单）
+  const KNOWN_EDITORS = [
+    'Visual Studio Code', 'Cursor', 'Sublime Text', 'Windsurf',
+    'Zed', 'CotEditor', 'IntelliJ IDEA', 'Xcode', 'TextEdit',
+  ]
+
   // 用系统默认应用打开任意文件（无工作区限制）
   ipcMain.handle(
     IPC_CHANNELS.SYSTEM_OPEN_FILE,
@@ -379,6 +412,10 @@ export function registerIpcHandlers(): void {
       if (process.platform === 'darwin') {
         const { spawnSync } = await import('node:child_process')
         if (appName) {
+          if (!KNOWN_EDITORS.includes(appName)) {
+            console.warn('[IPC] shell:system-open-file 拒绝未知应用:', appName)
+            return
+          }
           spawnSync('open', ['-a', appName, absPath], { timeout: 5000 })
         } else {
           spawnSync('open', [absPath], { timeout: 5000 })
@@ -398,17 +435,12 @@ export function registerIpcHandlers(): void {
       const { homedir } = await import('node:os')
       const home = homedir()
 
-      const editors = [
-        { name: 'Visual Studio Code', paths: ['/Applications/Visual Studio Code.app', `${home}/Applications/Visual Studio Code.app`] },
-        { name: 'Cursor', paths: ['/Applications/Cursor.app', `${home}/Applications/Cursor.app`] },
-        { name: 'Sublime Text', paths: ['/Applications/Sublime Text.app', `${home}/Applications/Sublime Text.app`] },
-        { name: 'Windsurf', paths: ['/Applications/Windsurf.app', `${home}/Applications/Windsurf.app`] },
-        { name: 'Zed', paths: ['/Applications/Zed.app', `${home}/Applications/Zed.app`] },
-        { name: 'CotEditor', paths: ['/Applications/CotEditor.app', `${home}/Applications/CotEditor.app`] },
-        { name: 'IntelliJ IDEA', paths: ['/Applications/IntelliJ IDEA.app', `${home}/Applications/IntelliJ IDEA.app`] },
-        { name: 'Xcode', paths: ['/Applications/Xcode.app'] },
-        { name: 'TextEdit', paths: ['/Applications/TextEdit.app'] },
-      ]
+      const editors = KNOWN_EDITORS.map((name) => {
+        const searchPaths = name === 'Xcode' || name === 'TextEdit'
+          ? [`/Applications/${name}.app`]
+          : [`/Applications/${name}.app`, `${home}/Applications/${name}.app`]
+        return { name, paths: searchPaths }
+      })
 
       return editors
         .filter((e) => e.paths.some((p) => existsSync(p)))
@@ -1889,7 +1921,12 @@ export function registerIpcHandlers(): void {
     'file:resolve-and-read',
     async (_, filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; content: string } | null> => {
       const { resolveAndReadFile } = await import('./lib/file-preview-service')
-      return resolveAndReadFile(filePath, basePaths)
+      const result = resolveAndReadFile(filePath, basePaths)
+      if (result && !isPathAllowed(result.resolvedPath, basePaths)) {
+        console.warn('[IPC] file:resolve-and-read 拒绝越界路径:', result.resolvedPath)
+        return null
+      }
+      return result
     }
   )
 
@@ -1898,7 +1935,12 @@ export function registerIpcHandlers(): void {
     'file:resolve-path',
     async (_, filePath: string, basePaths?: string[]): Promise<string | null> => {
       const { resolveFilePath } = await import('./lib/file-preview-service')
-      return resolveFilePath(filePath, basePaths)
+      const result = resolveFilePath(filePath, basePaths)
+      if (result && !isPathAllowed(result, basePaths)) {
+        console.warn('[IPC] file:resolve-path 拒绝越界路径:', result)
+        return null
+      }
+      return result
     }
   )
 
@@ -1907,7 +1949,12 @@ export function registerIpcHandlers(): void {
     'file:docx-to-html',
     async (_, filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; html: string } | null> => {
       const { convertDocxToHtml } = await import('./lib/file-preview-service')
-      return convertDocxToHtml(filePath, basePaths)
+      const result = await convertDocxToHtml(filePath, basePaths)
+      if (result && !isPathAllowed(result.resolvedPath, basePaths)) {
+        console.warn('[IPC] file:docx-to-html 拒绝越界路径:', result.resolvedPath)
+        return null
+      }
+      return result
     }
   )
 

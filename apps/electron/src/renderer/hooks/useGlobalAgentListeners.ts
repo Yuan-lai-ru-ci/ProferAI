@@ -20,7 +20,6 @@ import {
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
-  agentSidePanelOpenMapAtom,
   fileBrowserAutoRevealAtom,
   recentlyModifiedPathsAtom,
   RECENTLY_MODIFIED_TTL_MS,

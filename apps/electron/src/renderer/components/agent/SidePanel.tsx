@@ -29,10 +29,8 @@ import {
   workspaceAttachedDirectoriesMapAtom,
   agentPendingFilesAtom,
   agentDiffRefreshVersionAtom,
-  agentSessionsAtom,
 } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
-import { tabsAtom, activeTabIdAtom, type TabItem } from '@/atoms/tab-atoms'
 import { detectIsWindows } from '@/lib/platform'
 import type { FileEntry, AgentPendingFile } from '@proma/shared'
 
@@ -50,13 +48,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   // Tab 系统
-  const setTabs = useSetAtom(tabsAtom)
-  const tabs = useAtomValue(tabsAtom)
-  // 当前会话的 diff tab 对应的文件路径（用于高亮）
-  const diffTab = tabs.find((t) => t.id === `diff-${sessionId}`)
   const previewFileMap = useAtomValue(previewFileMapAtom)
   const selectedFilePath = previewFileMap.get(sessionId)?.filePath
-  const setActiveTabId = useSetAtom(activeTabIdAtom)
 
   // 预览面板 atoms
   const setPreviewFileMap = useSetAtom(previewFileMapAtom)
@@ -83,8 +76,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
   const diffRefreshVersion = useAtomValue(agentDiffRefreshVersionAtom)
-  const agentSessions = useAtomValue(agentSessionsAtom)
-  const sessionTitle = agentSessions.find((s) => s.id === sessionId)?.title ?? ''
   const hasFileChanges = filesVersion > 0
 
   // 派生当前工作区 slug（用于 FileDropZone IPC 调用）
@@ -101,6 +92,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const wsAttachedDirsMap = useAtomValue(workspaceAttachedDirectoriesMapAtom)
   const setWsAttachedDirsMap = useSetAtom(workspaceAttachedDirectoriesMapAtom)
   const wsAttachedDirs = currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
+
+  const extraPathsMemo = React.useMemo(
+    () => [...attachedDirs, ...wsAttachedDirs],
+    [attachedDirs, wsAttachedDirs]
+  )
 
   // 加载工作区级附加目录
   React.useEffect(() => {
@@ -292,7 +288,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
               dirPath={sessionPath || ''}
               sessionPath={sessionPath || undefined}
               workspaceFilesPath={workspaceFilesPath || undefined}
-              extraPaths={[...attachedDirs, ...wsAttachedDirs]}
+              extraPaths={extraPathsMemo}
               refreshVersion={diffRefreshVersion}
               selectedFilePath={selectedFilePath}
               onFileClick={(filePath, _isUntracked, gitRoot) => {

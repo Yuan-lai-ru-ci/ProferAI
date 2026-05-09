@@ -45,8 +45,6 @@ function getExtension(filePath: string): string {
 interface DiffTabContentProps {
   filePath: string
   dirPath: string
-  sessionId?: string
-  isUntracked?: boolean
   gitRoot?: string
   previewOnly?: boolean
   /** 候选基础目录（previewOnly 模式下用于路径解析） */

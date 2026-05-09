@@ -1382,7 +1382,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
   // ===== 预览面板状态（仅 toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
-  const [previewOpenMap, setPreviewOpenMap] = useAtom(previewPanelOpenMapAtom)
+  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
   const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
 
   const togglePreviewPanel = React.useCallback(() => {

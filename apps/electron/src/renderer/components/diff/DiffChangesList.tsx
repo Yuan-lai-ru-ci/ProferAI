@@ -98,8 +98,8 @@ export function DiffChangesList({
     try {
       await window.electronAPI.revertFile({ dirPath, filePath, gitRoot })
       await fetchChanges()
-    } catch {
-      // Revert 失败静默处理
+    } catch (err) {
+      window.alert(`还原失败：${err instanceof Error ? err.message : '未知错误'}`)
     }
   }, [dirPath, fetchChanges])
 

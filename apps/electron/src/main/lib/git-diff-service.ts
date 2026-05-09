@@ -289,49 +289,7 @@ function findAllGitRoots(baseDir: string): string[] {
 
 /** 查找 Git 仓库根目录，先向上后向下搜索，失败返回 null */
 function findGitRoot(baseDir: string): string | null {
-  if (!existsSync(baseDir)) return null
-
-  // 1. 向上搜索（cwd 在 git 仓库内）
-  const toplevel = runGitCommand(['rev-parse', '--show-toplevel'], baseDir)
-  if (toplevel && existsSync(toplevel)) return toplevel
-
-  // 2. 向下搜索（寻找子目录中的 .git）
-  return findGitReposDown(baseDir, 3)
-}
-
-/** 向下递归搜索 .git 目录（最大深度 3），返回第一个找到的仓库根 */
-function findGitReposDown(dirPath: string, maxDepth: number): string | null {
-  if (maxDepth <= 0) return null
-
-  let entries: string[]
-  try {
-    entries = readdirSync(dirPath)
-  } catch {
-    return null
-  }
-
-  for (const name of entries) {
-    if (name === '.git') return dirPath
-    if (name.startsWith('.') || name === 'node_modules') continue
-
-    const fullPath = join(dirPath, name)
-    let st
-    try {
-      st = statSync(fullPath)
-    } catch {
-      continue
-    }
-    if (!st.isDirectory()) continue
-
-    // 检查子目录是否直接包含 .git
-    if (existsSync(join(fullPath, '.git'))) return fullPath
-
-    // 递归深入一层
-    const found = findGitReposDown(fullPath, maxDepth - 1)
-    if (found) return found
-  }
-
-  return null
+  return findAllGitRoots(baseDir)[0] ?? null
 }
 
 /**
@@ -452,11 +410,13 @@ export async function getUntrackedContent(dirPath: string, filePath: string, git
  */
 export async function revertFile(dirPath: string, filePath: string, gitRoot?: string): Promise<void> {
   const root = gitRoot || findGitRoot(dirPath)
-  if (!root) return
+  if (!root) throw new Error('未找到 Git 仓库')
   const safePath = normalizeSafePath(root, filePath)
   if (!safePath) {
-    console.warn('[git-diff-service] revertFile 拒绝不安全路径:', filePath)
-    return
+    throw new Error(`不安全的路径: ${filePath}`)
   }
-  runGitCommand(['checkout', '--', safePath], root)
+  const result = runGitCommand(['checkout', '--', safePath], root)
+  if (result === null) {
+    throw new Error(`还原失败: git checkout -- ${safePath}`)
+  }
 }

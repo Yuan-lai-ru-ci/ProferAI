@@ -333,6 +333,7 @@ function sendToMainWindow(channel: string, data?: unknown): void {
 app.whenReady().then(async () => {
   // 注册自定义协议 proma-file:// 用于内联预览本地文件
   // （renderer 从 http://localhost 或 file:// 协议加载，无法直接 iframe file:// 资源）
+  // 安全边界由 file:resolve-path IPC 层的 isPathAllowed 校验保证
   protocol.registerFileProtocol('proma-file', (request, callback) => {
     const url = request.url.replace(/^proma-file:\/\//, '')
     const decoded = decodeURIComponent(url)
