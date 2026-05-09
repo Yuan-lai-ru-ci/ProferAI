@@ -1682,40 +1682,77 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { htm
 <html><head><meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; }
+  body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; padding-top: 40px; }
   canvas { box-shadow: 0 1px 4px rgba(0,0,0,0.12); max-width: 100%; }
   .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; }
   .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; }
   .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; }
+  .zoom-bar {
+    position: fixed; top: 0; left: 0; right: 0; height: 32px; z-index: 10;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: rgba(255,255,255,0.85); backdrop-filter: blur(6px);
+    border-bottom: 1px solid rgba(0,0,0,0.06); font: 12px/1 system-ui;
+  }
+  @media (prefers-color-scheme: dark) {
+    .zoom-bar { background: rgba(30,30,30,0.85); border-color: rgba(255,255,255,0.08); color: #aaa; }
+    .zoom-btn { color: #aaa; border-color: rgba(255,255,255,0.12); }
+    .zoom-btn:hover { background: rgba(255,255,255,0.08); }
+  }
+  .zoom-btn {
+    width: 24px; height: 24px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.1);
+    background: transparent; cursor: pointer; font: 14px/1 system-ui; color: #555;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .zoom-btn:hover { background: rgba(0,0,0,0.05); }
+  .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
 </style>
 </head><body>
+  <div class="zoom-bar">
+    <button class="zoom-btn" id="zo" title="缩小">−</button>
+    <span class="zoom-label" id="zl">100%</span>
+    <button class="zoom-btn" id="zi" title="放大">+</button>
+  </div>
   <div class="loading" id="c">正在加载 PDF...</div>
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs" type="module"><\/script>
   <script type="module">
     import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs';
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
     const c = document.getElementById('c');
-    try {
-      const raw = atob(${JSON.stringify(pdfBase64)});
-      const arr = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-      const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+    const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+    let stepIdx = 2;
+    let pdfDoc = null;
+
+    async function renderAll() {
+      if (!pdfDoc) return;
       c.innerHTML = '';
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const scale = 2;
-        const vp = page.getViewport({ scale });
+      const userScale = STEPS[stepIdx];
+      const dpr = window.devicePixelRatio || 1;
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const page = await pdfDoc.getPage(i);
+        const vp = page.getViewport({ scale: userScale * dpr });
         const canvas = document.createElement('canvas');
         canvas.width = vp.width; canvas.height = vp.height;
-        canvas.style.width = (vp.width / scale) + 'px';
-        canvas.style.height = (vp.height / scale) + 'px';
+        canvas.style.width = (vp.width / dpr) + 'px';
+        canvas.style.height = (vp.height / dpr) + 'px';
         await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
         c.appendChild(canvas);
       }
       const info = document.createElement('div');
       info.className = 'page-info';
-      info.textContent = '共 ' + pdf.numPages + ' 页';
+      info.textContent = '共 ' + pdfDoc.numPages + ' 页';
       c.appendChild(info);
+      document.getElementById('zl').textContent = Math.round(userScale * 100) + '%';
+    }
+
+    document.getElementById('zi').onclick = () => { if (stepIdx < STEPS.length - 1) { stepIdx++; renderAll(); } };
+    document.getElementById('zo').onclick = () => { if (stepIdx > 0) { stepIdx--; renderAll(); } };
+
+    try {
+      const raw = atob(${JSON.stringify(pdfBase64)});
+      const arr = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      pdfDoc = await pdfjsLib.getDocument({ data: arr }).promise;
+      await renderAll();
     } catch (e) { c.innerHTML = '<div class="error">PDF 加载失败: ' + e.message + '<\/div>'; }
   <\/script>
 <\/body><\/html>`
