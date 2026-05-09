@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, nativeTheme, protocol, screen, shell } from 'electron'
-import { join } from 'path'
-import { existsSync } from 'fs'
+import { join, resolve as resolvePath } from 'path'
+import { existsSync, realpathSync } from 'fs'
+import { tmpdir } from 'os'
 
 // Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
 // 必须在任何会读取 userData 路径的模块加载之前执行
@@ -62,7 +63,7 @@ import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
-import { seedDefaultSkills } from './lib/config-paths'
+import { seedDefaultSkills, getAgentWorkspacesDir } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
@@ -333,11 +334,26 @@ function sendToMainWindow(channel: string, data?: unknown): void {
 app.whenReady().then(async () => {
   // 注册自定义协议 proma-file:// 用于内联预览本地文件
   // （renderer 从 http://localhost 或 file:// 协议加载，无法直接 iframe file:// 资源）
-  // 安全边界由 file:resolve-path IPC 层的 isPathAllowed 校验保证
+  const allowedRoots = [
+    resolvePath(getAgentWorkspacesDir()),
+    resolvePath(tmpdir()),
+  ]
   protocol.registerFileProtocol('proma-file', (request, callback) => {
     const url = request.url.replace(/^proma-file:\/\//, '')
     const decoded = decodeURIComponent(url)
-    callback({ path: decoded })
+    let resolved: string
+    try {
+      resolved = realpathSync(resolvePath(decoded))
+    } catch {
+      callback({ statusCode: 404 })
+      return
+    }
+    if (!allowedRoots.some((root) => resolved.startsWith(root + '/') || resolved === root)) {
+      console.warn('[proma-file] 拒绝越界路径:', resolved)
+      callback({ statusCode: 403 })
+      return
+    }
+    callback({ path: resolved })
   })
 
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）

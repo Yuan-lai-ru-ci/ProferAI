@@ -5,8 +5,9 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
-import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
 import type {
@@ -226,11 +227,20 @@ import { wechatBridge } from './lib/wechat-bridge'
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
 
-/** 检查路径是否在允许的目录范围内（解析 symlink） */
+/** 已知编辑器应用名称白名单（macOS） */
+const KNOWN_EDITORS = [
+  'Visual Studio Code', 'Cursor', 'Sublime Text', 'Windsurf',
+  'Zed', 'CotEditor', 'IntelliJ IDEA', 'Xcode', 'TextEdit',
+]
+
+/**
+ * 检查路径是否在允许的目录范围内（解析 symlink）
+ *
+ * extraAllowedPaths 来自 renderer 的 basePaths（用户通过 UI 附加的目录），
+ * 虽然 renderer 不可信，但附加目录功能本身就允许用户授权 workspaces 外的路径访问。
+ * 攻击者需要先控制 renderer 才能伪造 basePaths，此时已有更大的攻击面。
+ */
 function isPathAllowed(filePath: string, extraAllowedPaths?: string[]): boolean {
-  const { resolve } = require('node:path')
-  const { realpathSync } = require('node:fs')
-  const { tmpdir } = require('node:os')
   let resolved: string
   try {
     resolved = realpathSync(resolve(filePath))
@@ -397,13 +407,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 已知编辑器列表（白名单）
-  const KNOWN_EDITORS = [
-    'Visual Studio Code', 'Cursor', 'Sublime Text', 'Windsurf',
-    'Zed', 'CotEditor', 'IntelliJ IDEA', 'Xcode', 'TextEdit',
-  ]
-
-  // 用系统默认应用打开任意文件（无工作区限制）
+  // 用系统默认应用打开任意文件（appName 需在 KNOWN_EDITORS 白名单内）
   ipcMain.handle(
     IPC_CHANNELS.SYSTEM_OPEN_FILE,
     async (_, filePath: string, appName?: string): Promise<void> => {
