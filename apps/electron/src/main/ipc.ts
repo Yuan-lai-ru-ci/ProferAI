@@ -247,10 +247,9 @@ function isPathAllowed(filePath: string, extraAllowedPaths?: string[]): boolean 
   } catch {
     return false
   }
-  const allowedRoots = [
-    resolve(getAgentWorkspacesDir()),
-    resolve(join(tmpdir(), 'proma-preview')),
-  ]
+  const allowedRoots: string[] = []
+  try { allowedRoots.push(realpathSync(resolve(getAgentWorkspacesDir()))) } catch { allowedRoots.push(resolve(getAgentWorkspacesDir())) }
+  try { allowedRoots.push(realpathSync(resolve(join(tmpdir(), 'proma-preview')))) } catch { allowedRoots.push(resolve(join(tmpdir(), 'proma-preview'))) }
   if (extraAllowedPaths) {
     for (const p of extraAllowedPaths) {
       if (p && typeof p === 'string') {

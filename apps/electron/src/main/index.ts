@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, nativeTheme, protocol, screen, shell } from 'electron'
 import { join, resolve as resolvePath } from 'path'
-import { existsSync, realpathSync } from 'fs'
+import { existsSync, mkdirSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
 
 // Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
@@ -334,9 +334,11 @@ function sendToMainWindow(channel: string, data?: unknown): void {
 app.whenReady().then(async () => {
   // 注册自定义协议 proma-file:// 用于内联预览本地文件
   // （renderer 从 http://localhost 或 file:// 协议加载，无法直接 iframe file:// 资源）
+  const previewTmpDir = resolvePath(join(tmpdir(), 'proma-preview'))
+  if (!existsSync(previewTmpDir)) mkdirSync(previewTmpDir, { recursive: true })
   const allowedRoots = [
-    resolvePath(getAgentWorkspacesDir()),
-    resolvePath(join(tmpdir(), 'proma-preview')),
+    realpathSync(resolvePath(getAgentWorkspacesDir())),
+    realpathSync(previewTmpDir),
   ]
   protocol.registerFileProtocol('proma-file', (request, callback) => {
     const url = request.url.replace(/^proma-file:\/\//, '')
