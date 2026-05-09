@@ -1884,6 +1884,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 解析文件路径并读取内容（供内联预览使用）
+  ipcMain.handle(
+    'file:resolve-and-read',
+    async (_, filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; content: string } | null> => {
+      const { resolveAndReadFile } = await import('./lib/file-preview-service')
+      return resolveAndReadFile(filePath, basePaths)
+    }
+  )
+
   // 重命名文件/目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_FILE,

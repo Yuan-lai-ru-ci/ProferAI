@@ -1630,3 +1630,20 @@ export function openFilePreview(filePath: string, basePaths?: string[]): void {
 
   previewWindow.loadFile(tmpHtmlPath)
 }
+
+/**
+ * 解析文件路径并读取内容（供内联预览使用）
+ * 复用 resolveTargetPath 的搜索逻辑，确保与窗口预览一致
+ */
+export function resolveAndReadFile(filePath: string, basePaths?: string[]): { resolvedPath: string; content: string } | null {
+  const safePath = resolveTargetPath(filePath, basePaths)
+  if (!existsSync(safePath)) return null
+  try {
+    const st = statSync(safePath)
+    if (st.size > MAX_FILE_SIZE) return null
+    const content = readFileSync(safePath, 'utf-8')
+    return { resolvedPath: safePath, content }
+  } catch {
+    return null
+  }
+}

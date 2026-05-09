@@ -7,8 +7,11 @@
  */
 
 import * as React from 'react'
+import { useStore } from 'jotai'
 import { cn } from '@/lib/utils'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
+import { previewFileMapAtom, previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
+import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 
 /** 图片扩展名 */
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'])
@@ -83,6 +86,8 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const isAbsolute = cleanPath.startsWith('/') || /^[A-Z]:\\/.test(cleanPath)
 
+  const store = useStore()
+
   // 候选基础目录列表：优先使用 basePaths；否则退化到 basePath 单值
   const candidateBases = React.useMemo<string[]>(() => {
     if (basePaths && basePaths.length > 0) return basePaths.filter(Boolean)
@@ -101,11 +106,28 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   }, [trimmedPath, cleanPath, isAbsolute, candidateBases])
 
   const handleClick = React.useCallback(() => {
-    const bases = candidateBases.length > 0 ? candidateBases : undefined
-    window.electronAPI.previewFile(cleanPath, bases).catch((error: unknown) => {
-      console.error('[FilePathChip] 预览文件失败:', error)
+    const sessionId = store.get(currentAgentSessionIdAtom)
+    if (!sessionId) {
+      const bases = candidateBases.length > 0 ? candidateBases : undefined
+      window.electronAPI.previewFile(cleanPath, bases).catch(console.error)
+      return
+    }
+
+    store.set(previewFileMapAtom, (prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, {
+        filePath: cleanPath,
+        previewOnly: true,
+        basePaths: candidateBases.length > 0 ? candidateBases : undefined,
+      })
+      return m
     })
-  }, [cleanPath, candidateBases])
+    store.set(previewPanelOpenMapAtom, (prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, true)
+      return m
+    })
+  }, [store, cleanPath, isAbsolute, candidateBases])
 
   return (
     <button

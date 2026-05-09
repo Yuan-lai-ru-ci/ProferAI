@@ -59,6 +59,8 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
             dirPath={currentFile.dirPath || sessionPath}
             sessionId={sessionId}
             gitRoot={currentFile.gitRoot}
+            previewOnly={currentFile.previewOnly}
+            basePaths={currentFile.basePaths}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground text-xs">
