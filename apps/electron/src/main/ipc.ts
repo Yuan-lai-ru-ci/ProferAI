@@ -1952,6 +1952,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 为内联 PDF 预览生成 PDF.js viewer HTML，返回 HTML 文件路径
+  ipcMain.handle(
+    'file:prepare-pdf-preview',
+    async (_, filePath: string, basePaths?: string[]): Promise<string | null> => {
+      const { preparePdfPreview, resolveFilePath } = await import('./lib/file-preview-service')
+      const resolved = resolveFilePath(filePath, basePaths)
+      if (resolved && !isPathAllowed(resolved, basePaths)) {
+        console.warn('[IPC] file:prepare-pdf-preview 拒绝越界路径:', resolved)
+        return null
+      }
+      return preparePdfPreview(filePath, basePaths)
+    }
+  )
+
   // DOCX 转 HTML（内联预览使用 mammoth）
   ipcMain.handle(
     'file:docx-to-html',

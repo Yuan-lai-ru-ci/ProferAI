@@ -1669,6 +1669,55 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
 }
 
 /**
+ * 为内联 PDF 预览生成一个 PDF.js viewer HTML 文件
+ * 返回该 HTML 文件的路径（位于 tmpdir/proma-preview/）
+ */
+export function preparePdfPreview(filePath: string, basePaths?: string[]): string | null {
+  const safePath = resolveTargetPath(filePath, basePaths)
+  if (!existsSync(safePath)) return null
+  const fileUrl = `proma-file://${encodeURI(safePath).replace(/#/g, '%23')}`
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; }
+  canvas { box-shadow: 0 1px 4px rgba(0,0,0,0.12); max-width: 100%; }
+  .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; }
+  .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; }
+  .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; }
+</style>
+</head><body>
+  <div class="loading" id="c">正在加载 PDF...</div>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs" type="module"></script>
+  <script type="module">
+    import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
+    const c = document.getElementById('c');
+    try {
+      const pdf = await pdfjsLib.getDocument(${JSON.stringify(fileUrl)}).promise;
+      c.innerHTML = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const scale = 2;
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = vp.width; canvas.height = vp.height;
+        canvas.style.width = (vp.width / scale) + 'px';
+        canvas.style.height = (vp.height / scale) + 'px';
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        c.appendChild(canvas);
+      }
+      const info = document.createElement('div');
+      info.className = 'page-info';
+      info.textContent = '共 ' + pdf.numPages + ' 页';
+      c.appendChild(info);
+    } catch (e) { c.innerHTML = '<div class="error">PDF 加载失败: ' + e.message + '</div>'; }
+  </script>
+</body></html>`
+  return writeTempHtml(html)
+}
+
+/**
  * 将 DOCX 文件转换为 HTML（供内联预览使用）
  * 使用 mammoth.js 做转换
  */

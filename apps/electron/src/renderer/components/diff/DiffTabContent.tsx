@@ -96,9 +96,9 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
 
         if (previewOnly) {
           if (isPdf) {
-            const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
+            const htmlPath = await window.electronAPI.preparePdfPreview(filePath, basePaths)
             if (cancelled) return
-            setPdfPath(resolved ?? '')
+            setPdfPath(htmlPath ?? '')
             return
           }
           if (isDocx) {
