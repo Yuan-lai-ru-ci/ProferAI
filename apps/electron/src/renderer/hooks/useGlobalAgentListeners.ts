@@ -830,12 +830,19 @@ export function useGlobalAgentListeners(): void {
       })
     }, 15_000)
 
+    // 窗口重新聚焦时刷新 diff（在外部编辑器改了文件后切回 Proma）
+    const onWindowFocus = () => {
+      store.set(agentDiffRefreshVersionAtom, (prev) => prev + 1)
+    }
+    window.addEventListener('focus', onWindowFocus)
+
     return () => {
       cleanupEvent()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
       clearInterval(pruneTimer)
+      window.removeEventListener('focus', onWindowFocus)
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }
