@@ -65,7 +65,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const handleFilePreview = React.useCallback((filePath: string) => {
     setPreviewFileMap((prev) => {
       const m = new Map(prev)
-      m.set(sessionId, { filePath })
+      m.set(sessionId, { filePath, previewOnly: true })
       return m
     })
     setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
