@@ -632,17 +632,17 @@ export interface ElectronAPI {
   /** 移动文件/目录到目标目录 */
   moveFile: (filePath: string, targetDir: string) => Promise<void>
 
-  /** 列出附加目录内容（无工作区路径限制） */
-  listAttachedDirectory: (dirPath: string) => Promise<FileEntry[]>
+  /** 列出附加目录内容 */
+  listAttachedDirectory: (dirPath: string, basePaths?: string[]) => Promise<FileEntry[]>
 
-  /** 用系统默认应用打开附加目录文件（无工作区路径限制） */
-  openAttachedFile: (filePath: string) => Promise<void>
+  /** 用系统默认应用打开附加目录文件 */
+  openAttachedFile: (filePath: string, basePaths?: string[]) => Promise<void>
 
   /** 读取附加目录文件内容为 base64（限制在已附加目录范围内） */
   readAttachedFile: (filePath: string, sessionId?: string, workspaceSlug?: string) => Promise<string>
 
-  /** 在文件管理器中显示附加目录文件（无工作区路径限制） */
-  showAttachedInFolder: (filePath: string) => Promise<void>
+  /** 在文件管理器中显示附加目录文件 */
+  showAttachedInFolder: (filePath: string, basePaths?: string[]) => Promise<void>
 
   /** 重命名附加目录文件/目录（无工作区路径限制） */
   renameAttachedFile: (filePath: string, newName: string) => Promise<void>
@@ -1583,20 +1583,20 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_FILE, filePath, targetDir)
   },
 
-  listAttachedDirectory: (dirPath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY, dirPath)
+  listAttachedDirectory: (dirPath: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY, dirPath, basePaths)
   },
 
-  openAttachedFile: (filePath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE, filePath)
+  openAttachedFile: (filePath: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE, filePath, basePaths)
   },
 
   readAttachedFile: (filePath: string, sessionId?: string, workspaceSlug?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_ATTACHED_FILE, filePath, sessionId, workspaceSlug)
   },
 
-  showAttachedInFolder: (filePath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER, filePath)
+  showAttachedInFolder: (filePath: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER, filePath, basePaths)
   },
 
   renameAttachedFile: (filePath: string, newName: string) => {

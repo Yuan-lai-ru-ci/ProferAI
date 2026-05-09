@@ -2018,14 +2018,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 列出附加目录内容（无工作区路径限制，用于用户附加的外部目录）
+  // 列出附加目录内容
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY,
-    async (_, dirPath: string): Promise<FileEntry[]> => {
+    async (_, dirPath: string, basePaths?: string[]): Promise<FileEntry[]> => {
       const { readdirSync } = await import('node:fs')
       const { resolve } = await import('node:path')
 
       const safePath = resolve(dirPath)
+      if (!isPathAllowed(safePath, basePaths)) {
+        throw new Error('访问路径不在允许范围内')
+      }
       const entries: FileEntry[] = []
       const items = readdirSync(safePath, { withFileTypes: true })
 
@@ -2052,13 +2055,16 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 在 Proma 内置预览窗口打开附加目录文件（无工作区路径限制；
-  // 不支持的格式由 openFilePreview 内部 fallback 到系统默认应用）
+  // 在 Proma 内置预览窗口打开附加目录文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE,
-    async (_, filePath: string): Promise<void> => {
+    async (_, filePath: string, basePaths?: string[]): Promise<void> => {
+      if (!isPathAllowed(filePath, basePaths)) {
+        console.warn('[IPC] open-attached-file 拒绝越界路径:', filePath)
+        return
+      }
       const { openFilePreview } = await import('./lib/file-preview-service')
-      openFilePreview(filePath)
+      openFilePreview(filePath, basePaths)
     }
   )
 
@@ -2117,12 +2123,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 在文件管理器中显示附加目录文件（无工作区路径限制）
+  // 在文件管理器中显示附加目录文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER,
-    async (_, filePath: string): Promise<void> => {
+    async (_, filePath: string, basePaths?: string[]): Promise<void> => {
       const { resolve } = await import('node:path')
-      shell.showItemInFolder(resolve(filePath))
+      const safePath = resolve(filePath)
+      if (!isPathAllowed(safePath, basePaths)) {
+        console.warn('[IPC] show-attached-in-folder 拒绝越界路径:', safePath)
+        return
+      }
+      shell.showItemInFolder(safePath)
     }
   )
 
