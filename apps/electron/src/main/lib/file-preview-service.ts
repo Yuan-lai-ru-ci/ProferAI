@@ -1675,7 +1675,7 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
 export function preparePdfPreview(filePath: string, basePaths?: string[]): string | null {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
-  const fileUrl = `proma-file://${encodeURI(safePath).replace(/#/g, '%23')}`
+  const fileUrl = `file://${encodeURI(safePath).replace(/#/g, '%23')}`
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
