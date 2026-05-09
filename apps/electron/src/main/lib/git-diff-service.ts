@@ -160,6 +160,15 @@ export async function getUnstagedChanges(
   const allFiles: ChangedFileEntry[] = []
   const allUntracked: string[] = []
 
+  // 候选目录绝对路径（用于过滤：只显示落在某个候选目录内的文件）
+  const candidateRoots = candidates.map((c) => {
+    const r = c.replace(/\/+$/, '')
+    return r + '/'
+  })
+  const isUnderAnyCandidate = (absPath: string): boolean => {
+    return candidateRoots.some((root) => absPath === root.slice(0, -1) || absPath.startsWith(root))
+  }
+
   for (const gitRoot of gitRoots) {
     // 获取变更文件列表 (M=modified, D=deleted, A=added, R=renamed, C=copied, T=type)
     const nameStatus = runGitCommand(['diff', '--name-status'], gitRoot)
@@ -170,8 +179,6 @@ export async function getUnstagedChanges(
       const statusLines = nameStatus.split('\n').filter(Boolean)
 
       for (const statusLine of statusLines) {
-        // 匹配 M/D/A/T 单字符状态（带可选目标路径）
-        // 以及 R/C 带相似度评分（如 R100、C75），格式：`R100\told\tnew`
         const simpleMatch = statusLine.match(/^([MDAT])\t(.+)$/)
         const renameMatch = statusLine.match(/^([RC])\d*\t([^\t]+)\t(.+)$/)
 
@@ -184,10 +191,14 @@ export async function getUnstagedChanges(
           filePath = simpleMatch[2]!
         } else if (renameMatch) {
           status = 'modified'
-          filePath = renameMatch[3]! // 使用新路径
+          filePath = renameMatch[3]!
         } else {
           continue
         }
+
+        // 过滤：只保留落在某个 candidate 内的文件
+        const absPath = join(gitRoot, filePath)
+        if (!isUnderAnyCandidate(absPath)) continue
 
         const stats = numStatMap.get(filePath) ?? { additions: 0, deletions: 0 }
 
@@ -205,8 +216,12 @@ export async function getUnstagedChanges(
     // 获取未追踪文件
     const untrackedOutput = runGitCommand(['ls-files', '--others', '--exclude-standard'], gitRoot)
     if (untrackedOutput) {
-      // 保持相对路径，与 modified 文件一致；renderer 通过 dirPath/gitRoot 拼接绝对路径
-      allUntracked.push(...untrackedOutput.split('\n').filter(Boolean))
+      for (const rel of untrackedOutput.split('\n').filter(Boolean)) {
+        const absPath = join(gitRoot, rel)
+        if (isUnderAnyCandidate(absPath)) {
+          allUntracked.push(rel)
+        }
+      }
     }
   }
 
