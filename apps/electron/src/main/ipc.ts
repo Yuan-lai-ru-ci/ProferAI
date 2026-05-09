@@ -1955,13 +1955,13 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     'file:prepare-pdf-preview',
     async (_, filePath: string, basePaths?: string[]): Promise<{ html: string } | null> => {
-      const { preparePdfPreview, resolveFilePath } = await import('./lib/file-preview-service')
-      const resolved = resolveFilePath(filePath, basePaths)
-      if (resolved && !isPathAllowed(resolved, basePaths)) {
-        console.warn('[IPC] file:prepare-pdf-preview 拒绝越界路径:', resolved)
+      const { preparePdfPreview } = await import('./lib/file-preview-service')
+      const result = preparePdfPreview(filePath, basePaths)
+      if (result && !isPathAllowed(result.resolvedPath, basePaths)) {
+        console.warn('[IPC] file:prepare-pdf-preview 拒绝越界路径:', result.resolvedPath)
         return null
       }
-      return preparePdfPreview(filePath, basePaths)
+      return result ? { html: result.html } : null
     }
   )
 

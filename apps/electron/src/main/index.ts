@@ -24,7 +24,7 @@ app.on('open-file', (event, filePath) => {
 // 注册自定义协议方案为"特权"（必须在 app ready 之前）
 // 用于内联预览本地文件（renderer 用 iframe 加载 proma-file:// 资源）
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'proma-file', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
+  { scheme: 'proma-file', privileges: { standard: true, secure: true } },
 ])
 
 // Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例

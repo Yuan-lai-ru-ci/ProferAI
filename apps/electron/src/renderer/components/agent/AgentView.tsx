@@ -16,7 +16,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye, EyeOff } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -47,7 +47,7 @@ import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
@@ -203,78 +203,7 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
   )
 }
 
-interface AutoPreviewPopoverProps {
-  enabled: boolean
-  onToggle: () => void
-}
-
-function AutoPreviewPopover({ enabled, onToggle }: AutoPreviewPopoverProps): React.ReactElement {
-  const [open, setOpen] = React.useState(false)
-  const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const handleMouseEnter = React.useCallback(() => {
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
-    setOpen(true)
-  }, [])
-
-  const handleMouseLeave = React.useCallback(() => {
-    hoverTimeout.current = setTimeout(() => setOpen(false), 150)
-  }, [])
-
-  React.useEffect(() => {
-    return () => {
-      if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
-    }
-  }, [])
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'size-[36px] rounded-full',
-            enabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
-          )}
-          onClick={onToggle}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-        >
-          {enabled ? <Eye className="size-5" /> : <EyeOff className="size-5" />}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="center"
-        sideOffset={8}
-        className="w-auto min-w-[160px] p-2 px-2.5"
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-xs text-foreground/70">自动预览</span>
-          <Switch
-            checked={enabled}
-            onCheckedChange={onToggle}
-            className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-          />
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
-  // [FLASH-DEBUG] 渲染计数器
-  const renderCountRef = React.useRef(0)
-  renderCountRef.current++
-  if (renderCountRef.current % 50 === 0) {
-    console.log(`[FLASH-DEBUG] AgentView(${sessionId.slice(0, 8)}) render #${renderCountRef.current}`)
-  }
-
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
@@ -1383,9 +1312,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
-  // ===== 预览面板状态（仅 toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
+  // ===== 预览面板状态（仅 toggle 快捷键，分屏布局在 MainArea） =====
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
-  const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
 
   const togglePreviewPanel = React.useCallback(() => {
     setPreviewOpenMap((prev) => {
@@ -1607,10 +1535,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                   onCompact={handleCompact}
                 />
                 {/* <FeishuNotifyToggle sessionId={sessionId} /> */}
-                <AutoPreviewPopover
-                  enabled={autoPreviewEnabled}
-                  onToggle={() => setAutoPreviewEnabled(!autoPreviewEnabled)}
-                />
               </div>
 
               <div className="flex items-center gap-1.5">

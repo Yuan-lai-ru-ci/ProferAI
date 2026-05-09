@@ -1672,7 +1672,7 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
  * 为内联 PDF 预览生成一个 PDF.js viewer HTML 文件
  * 返回该 HTML 文件的路径（位于 tmpdir/proma-preview/）
  */
-export function preparePdfPreview(filePath: string, basePaths?: string[]): { html: string } | null {
+export function preparePdfPreview(filePath: string, basePaths?: string[]): { resolvedPath: string; html: string } | null {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
   const st = statSync(safePath)
@@ -1756,7 +1756,7 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { htm
     } catch (e) { c.innerHTML = '<div class="error">PDF 加载失败: ' + e.message + '<\/div>'; }
   <\/script>
 <\/body><\/html>`
-  return { html }
+  return { resolvedPath: safePath, html }
 }
 
 /**
