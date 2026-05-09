@@ -75,7 +75,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
 
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
-  const diffRefreshVersion = useAtomValue(agentDiffRefreshVersionAtom)
+  const diffRefreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
+  const diffRefreshVersion = diffRefreshVersionMap.get(sessionId) ?? 0
   const hasFileChanges = filesVersion > 0
 
   // 派生当前工作区 slug（用于 FileDropZone IPC 调用）
@@ -284,9 +285,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} onClose={() => setIsOpen(false)} />
 
           {activeTab === 'changes' ? (
+            sessionPath ? (
             <DiffChangesList
-              dirPath={sessionPath || ''}
-              sessionPath={sessionPath || undefined}
+              dirPath={sessionPath}
+              sessionPath={sessionPath}
               workspaceFilesPath={workspaceFilesPath || undefined}
               extraPaths={extraPathsMemo}
               refreshVersion={diffRefreshVersion}
@@ -300,6 +302,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                 setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
               }}
             />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
+            )
           ) : (
           <div className="flex-1 min-h-0 flex flex-col pt-0.5">
                   {/* ===== 会话文件区（仅当 sessionPath 存在时显示） ===== */}

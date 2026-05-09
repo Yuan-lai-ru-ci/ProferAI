@@ -10,8 +10,9 @@ import { Copy, Check } from 'lucide-react'
 import { useAtom, useAtomValue } from 'jotai'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import DOMPurify from 'dompurify'
 import { cn } from '@/lib/utils'
-import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
+import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import { resolvedThemeAtom } from '@/atoms/theme'
 import { highlightCode } from '@proma/core'
 import { DiffView } from './DiffView'
@@ -60,7 +61,9 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [pdfPath, setPdfPath] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
-  const refreshVersion = useAtomValue(agentDiffRefreshVersionAtom)
+  const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const refreshVersion = refreshVersionMap.get(currentSessionId ?? '') ?? 0
   const theme = useAtomValue(resolvedThemeAtom)
 
   const ext = getExtension(filePath)
@@ -101,7 +104,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           if (isDocx) {
             const result = await window.electronAPI.docxToHtml(filePath, basePaths)
             if (cancelled) return
-            setDocxHtml(result?.html ?? '')
+            setDocxHtml(DOMPurify.sanitize(result?.html ?? ''))
             return
           }
           const result = await window.electronAPI.resolveAndReadFile(filePath, basePaths)
@@ -123,7 +126,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           const lang = EXT_LANG[getExtension(filePath)] || 'text'
           try {
             const hl = await highlightCode({ code: content, language: lang, theme: shikiTheme })
-            if (!cancelled) setHighlightedHtml(hl.html)
+            if (!cancelled) setHighlightedHtml(DOMPurify.sanitize(hl.html))
           } catch (err) {
             console.error('[DiffTabContent] Shiki highlight failed:', err)
           }
@@ -141,14 +144,15 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   }, [filePath, dirPath, gitRoot, previewOnly, shikiTheme, basePaths, isPdf, isDocx])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
-  const prevRefreshRef = React.useRef(refreshVersion)
+  const prevRefreshRef = React.useRef(-1)
   React.useEffect(() => {
     if (previewOnly) return
     // 首次跳过（避免首屏加载时和主 effect 重复拉取）
-    if (prevRefreshRef.current === refreshVersion) {
+    if (prevRefreshRef.current === -1) {
       prevRefreshRef.current = refreshVersion
       return
     }
+    if (prevRefreshRef.current === refreshVersion) return
     prevRefreshRef.current = refreshVersion
 
     let cancelled = false

@@ -6,7 +6,7 @@
  */
 
 import { spawnSync } from 'child_process'
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs'
 import { isAbsolute, join, resolve } from 'path'
 import type { ChangedFileEntry, UnstagedChangesResult } from '@proma/shared'
 import type { ChangeSource, ChangedFileStatus } from '@proma/shared'
@@ -26,14 +26,25 @@ function normalizeSafePath(root: string, filePath: string): string | null {
   const rootWithSep = resolvedRoot.endsWith('/') ? resolvedRoot : resolvedRoot + '/'
 
   if (isAbsolute(filePath)) {
-    const resolvedFile = resolve(filePath)
+    let resolvedFile: string
+    try {
+      resolvedFile = realpathSync(resolve(filePath))
+    } catch {
+      return null
+    }
     if (!resolvedFile.startsWith(rootWithSep)) return null
     return resolvedFile.slice(rootWithSep.length)
   }
 
   if (filePath.includes('..')) return null
   const resolvedTarget = resolve(resolvedRoot, filePath)
-  if (!resolvedTarget.startsWith(rootWithSep) && resolvedTarget !== resolvedRoot) return null
+  let realTarget: string
+  try {
+    realTarget = realpathSync(resolvedTarget)
+  } catch {
+    realTarget = resolvedTarget
+  }
+  if (!realTarget.startsWith(rootWithSep) && realTarget !== resolvedRoot) return null
   return filePath
 }
 

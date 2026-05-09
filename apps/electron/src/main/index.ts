@@ -336,7 +336,7 @@ app.whenReady().then(async () => {
   // （renderer 从 http://localhost 或 file:// 协议加载，无法直接 iframe file:// 资源）
   const allowedRoots = [
     resolvePath(getAgentWorkspacesDir()),
-    resolvePath(tmpdir()),
+    resolvePath(join(tmpdir(), 'proma-preview')),
   ]
   protocol.registerFileProtocol('proma-file', (request, callback) => {
     const url = request.url.replace(/^proma-file:\/\//, '')

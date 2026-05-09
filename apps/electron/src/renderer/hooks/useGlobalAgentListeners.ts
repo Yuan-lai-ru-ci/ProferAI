@@ -54,9 +54,6 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
 
-/** 正在执行的写工具：toolUseId → targetPath（tool_start 入、tool_result 出，用于触发 diff 刷新和自动切换预览文件） */
-const pendingWriteTools = new Map<string, string>()
-
 // ============================================================================
 // Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
 // Phase 2 将移除此转换，直接使用 SDKMessage 渲染
@@ -285,6 +282,9 @@ export function useGlobalAgentListeners(): void {
   const store = useStore()
 
   useEffect(() => {
+    /** 正在执行的写工具：toolUseId → { path, sessionId } */
+    const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
+
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
       const tabs = store.get(tabsAtom)
@@ -444,7 +444,7 @@ export function useGlobalAgentListeners(): void {
               (input?.file_path as string | undefined)
               ?? (input?.path as string | undefined)
               ?? (input?.notebook_path as string | undefined)
-            pendingWriteTools.set(event.toolUseId, targetPath || '')
+            pendingWriteTools.set(event.toolUseId, { path: targetPath || '', sessionId })
             if (typeof targetPath === 'string' && targetPath.length > 0) {
               const now = Date.now()
               store.set(fileBrowserAutoRevealAtom, { sessionId, path: targetPath, ts: now })
@@ -511,10 +511,15 @@ export function useGlobalAgentListeners(): void {
             )
             // Agent 写类工具完成时，递增 diff 刷新版本号并切换预览文件
             if (pendingWriteTools.has(event.toolUseId)) {
-              const writtenPath = pendingWriteTools.get(event.toolUseId)!
+              const entry = pendingWriteTools.get(event.toolUseId)!
+              const writtenPath = entry.path
               pendingWriteTools.delete(event.toolUseId)
-              store.set(agentDiffRefreshVersionAtom, (prev) => prev + 1)
-              store.set(agentDiffUnseenChangesAtom, true)
+              store.set(agentDiffRefreshVersionAtom, (prev) => {
+                const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
+              })
+              store.set(agentDiffUnseenChangesAtom, (prev) => {
+                const m = new Map(prev); m.set(sessionId, true); return m
+              })
               // 自动切换预览到刚写完的文件 + 弹出预览面板
               const autoPreview = store.get(autoPreviewEnabledAtom)
               if (autoPreview && writtenPath) {
@@ -738,6 +743,13 @@ export function useGlobalAgentListeners(): void {
           // 清理后台任务
           store.set(backgroundTasksAtomFamily(data.sessionId), [])
 
+          // 清理该 session 关联的未完成写工具记录，防止内存泄漏
+          for (const [toolId, entry] of pendingWriteTools) {
+            if (entry.sessionId === data.sessionId) {
+              pendingWriteTools.delete(toolId)
+            }
+          }
+
           // 注意：liveMessages 的清理已移至 AgentView 消息加载完成后执行，
           // 与 streamingState 清理同步，避免「实时消息已清 → 持久化消息未到」的空档闪烁
 
@@ -831,7 +843,11 @@ export function useGlobalAgentListeners(): void {
 
     // 窗口重新聚焦时刷新 diff（在外部编辑器改了文件后切回 Proma）
     const onWindowFocus = () => {
-      store.set(agentDiffRefreshVersionAtom, (prev) => prev + 1)
+      const activeSessionId = store.get(currentAgentSessionIdAtom)
+      if (!activeSessionId) return
+      store.set(agentDiffRefreshVersionAtom, (prev) => {
+        const m = new Map(prev); m.set(activeSessionId, (prev.get(activeSessionId) ?? 0) + 1); return m
+      })
     }
     window.addEventListener('focus', onWindowFocus)
 

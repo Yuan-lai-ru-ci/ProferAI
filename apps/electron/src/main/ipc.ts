@@ -249,7 +249,7 @@ function isPathAllowed(filePath: string, extraAllowedPaths?: string[]): boolean 
   }
   const allowedRoots = [
     resolve(getAgentWorkspacesDir()),
-    resolve(tmpdir()),
+    resolve(join(tmpdir(), 'proma-preview')),
   ]
   if (extraAllowedPaths) {
     for (const p of extraAllowedPaths) {
@@ -410,9 +410,13 @@ export function registerIpcHandlers(): void {
   // 用系统默认应用打开任意文件（appName 需在 KNOWN_EDITORS 白名单内）
   ipcMain.handle(
     IPC_CHANNELS.SYSTEM_OPEN_FILE,
-    async (_, filePath: string, appName?: string): Promise<void> => {
+    async (_, filePath: string, appName?: string, basePaths?: string[]): Promise<void> => {
       const { resolve } = await import('node:path')
       const absPath = resolve(filePath)
+      if (!isPathAllowed(absPath, basePaths)) {
+        console.warn('[IPC] shell:system-open-file 拒绝越界路径:', absPath)
+        return
+      }
       if (process.platform === 'darwin') {
         const { spawnSync } = await import('node:child_process')
         if (appName) {
@@ -2109,29 +2113,39 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 重命名附加目录文件/目录（无工作区路径限制）
+  // 重命名附加目录文件/目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE,
-    async (_, filePath: string, newName: string): Promise<void> => {
+    async (_, filePath: string, newName: string, basePaths?: string[]): Promise<void> => {
       const { renameSync } = await import('node:fs')
-      const { resolve, dirname, join } = await import('node:path')
+      const { resolve, dirname, join, sep } = await import('node:path')
 
+      if (newName.includes('/') || newName.includes('\\') || newName.includes('..') || newName.includes(sep)) {
+        throw new Error('文件名不能包含路径分隔符或 ".."')
+      }
       const safePath = resolve(filePath)
+      if (!isPathAllowed(safePath, basePaths)) {
+        throw new Error('访问路径不在允许范围内')
+      }
       const newPath = join(dirname(safePath), newName)
       renameSync(safePath, newPath)
       console.log(`[附加目录] 已重命名: ${safePath} → ${newPath}`)
     }
   )
 
-  // 移动附加目录文件/目录（无工作区路径限制）
+  // 移动附加目录文件/目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE,
-    async (_, filePath: string, targetDir: string): Promise<void> => {
+    async (_, filePath: string, targetDir: string, basePaths?: string[]): Promise<void> => {
       const { renameSync } = await import('node:fs')
       const { resolve, basename, join } = await import('node:path')
 
       const safePath = resolve(filePath)
-      const newPath = join(resolve(targetDir), basename(safePath))
+      const safeTarget = resolve(targetDir)
+      if (!isPathAllowed(safePath, basePaths) || !isPathAllowed(safeTarget, basePaths)) {
+        throw new Error('访问路径不在允许范围内')
+      }
+      const newPath = join(safeTarget, basename(safePath))
       renameSync(safePath, newPath)
       console.log(`[附加目录] 已移动: ${safePath} → ${newPath}`)
     }

@@ -296,11 +296,11 @@ export const agentDiffPanelTabAtom = atom<Map<string, 'files' | 'changes'>>(new 
 /** Diff 视图模式：'split' | 'unified' */
 export const agentDiffViewModeAtom = atom<'split' | 'unified'>('split')
 
-/** Diff 刷新版本号 — Agent 写工具完成时递增，触发代码改动列表重新拉取 */
-export const agentDiffRefreshVersionAtom = atom(0)
+/** Diff 刷新版本号 — 按 session 隔离，Agent 写工具完成时递增 */
+export const agentDiffRefreshVersionAtom = atom(new Map<string, number>())
 
-/** 是否有未查看的代码改动（用户没点进「代码改动」Tab 时的新变更） */
-export const agentDiffUnseenChangesAtom = atom(false)
+/** 是否有未查看的代码改动 — 按 session 隔离 */
+export const agentDiffUnseenChangesAtom = atom(new Map<string, boolean>())
 
 /** 当前会话的侧面板是否打开（派生只读：全局共享，但仅在有当前会话且为 Agent 模式时显示） */
 export const currentSessionSidePanelOpenAtom = atom<boolean>((get) => {

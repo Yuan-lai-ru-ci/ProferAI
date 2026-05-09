@@ -43,9 +43,12 @@ import {
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
-  agentSidePanelOpenMapAtom,
+  agentDiffPanelTabAtom,
+  agentDiffRefreshVersionAtom,
+  agentDiffUnseenChangesAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
+import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -287,7 +290,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setConvThinking = useSetAtom(conversationThinkingEnabledAtom)
   const setConvParallel = useSetAtom(conversationParallelModeAtom)
   const setConvPromptId = useSetAtom(conversationPromptIdAtom)
-  const setAgentSidePanelOpen = useSetAtom(agentSidePanelOpenMapAtom)
+  const setPreviewPanelOpen = useSetAtom(previewPanelOpenMapAtom)
+  const setPreviewFile = useSetAtom(previewFileMapAtom)
+  const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
+  const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
+  const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
   const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
@@ -303,10 +310,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setConvThinking(deleteKey)
     setConvParallel(deleteKey)
     setConvPromptId(deleteKey)
-    setAgentSidePanelOpen(deleteKey)
+    setPreviewPanelOpen(deleteKey)
+    setPreviewFile(deleteKey)
+    setDiffPanelTab(deleteKey)
+    setDiffRefreshVersion(deleteKey)
+    setDiffUnseen(deleteKey)
     setSessionChannelMap(deleteKey)
     setSessionModelMap(deleteKey)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setAgentSidePanelOpen, setSessionChannelMap, setSessionModelMap])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setSessionChannelMap, setSessionModelMap])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null

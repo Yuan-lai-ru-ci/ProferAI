@@ -8,7 +8,7 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { PanelRightClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
+import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 
 interface DiffPanelTabBarProps {
   activeTab: 'files' | 'changes'
@@ -17,11 +17,15 @@ interface DiffPanelTabBarProps {
 }
 
 export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTabBarProps): React.ReactElement {
-  const unseenChanges = useAtomValue(agentDiffUnseenChangesAtom)
-  const setUnseenChanges = useSetAtom(agentDiffUnseenChangesAtom)
+  const unseenMap = useAtomValue(agentDiffUnseenChangesAtom)
+  const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
 
   const handleChangesClick = () => {
-    setUnseenChanges(false)
+    if (currentSessionId) {
+      setUnseenMap((prev) => { const m = new Map(prev); m.set(currentSessionId, false); return m })
+    }
     onTabChange('changes')
   }
 

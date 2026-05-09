@@ -23,21 +23,21 @@ export function RightSidePanel({ width }: { width?: number }): React.ReactElemen
   const diffPanelTabMap = useAtomValue(agentDiffPanelTabAtom)
   const setDiffPanelTabMap = useSetAtom(agentDiffPanelTabAtom)
 
-  // 仅在 Agent 模式且有当前会话时显示
-  if (appMode !== 'agent' || !currentSessionId) {
-    return null
-  }
-
-  const sessionPath = sessionPathMap.get(currentSessionId) ?? null
-  const activeTab = diffPanelTabMap.get(currentSessionId) ?? 'files'
-
   const setActiveTab = React.useCallback((tab: 'files' | 'changes') => {
+    if (!currentSessionId) return
     setDiffPanelTabMap((prev) => {
       const map = new Map(prev)
       map.set(currentSessionId, tab)
       return map
     })
   }, [currentSessionId, setDiffPanelTabMap])
+
+  if (appMode !== 'agent' || !currentSessionId) {
+    return null
+  }
+
+  const sessionPath = sessionPathMap.get(currentSessionId) ?? null
+  const activeTab = diffPanelTabMap.get(currentSessionId) ?? 'files'
 
   return (
     <SidePanel
