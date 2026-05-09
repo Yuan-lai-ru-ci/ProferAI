@@ -1,22 +1,22 @@
 /**
  * DiffPanelTabBar — 右侧面板顶部 Tab 栏
  *
- * 切换「工作区文件」和「代码改动」两个视图。
- * 样式完全复用主 TabBar 的浏览器标签页风格。
- * 「代码改动」Tab 有未暂存变更时显示小圆点提示。
+ * 切换「工作区文件」和「代码改动」两个视图。最右侧有关闭按钮。
  */
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
+import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
 
 interface DiffPanelTabBarProps {
   activeTab: 'files' | 'changes'
   onTabChange: (tab: 'files' | 'changes') => void
+  onClose?: () => void
 }
 
-export function DiffPanelTabBar({ activeTab, onTabChange }: DiffPanelTabBarProps): React.ReactElement {
+export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTabBarProps): React.ReactElement {
   const unseenChanges = useAtomValue(agentDiffUnseenChangesAtom)
   const setUnseenChanges = useSetAtom(agentDiffUnseenChangesAtom)
 
@@ -60,6 +60,17 @@ export function DiffPanelTabBar({ activeTab, onTabChange }: DiffPanelTabBarProps
             文件改动
           </span>
         </button>
+        {/* 右侧关闭按钮（常驻，两个 tab 下都可见） */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex items-center justify-center size-[28px] mr-1 mb-[3px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
+            title="关闭文件面板"
+          >
+            <X className="size-4" />
+          </button>
+        )}
       </div>
     </div>
   )

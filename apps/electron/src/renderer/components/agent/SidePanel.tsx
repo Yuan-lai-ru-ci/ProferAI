@@ -285,7 +285,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}
         >
-          <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} />
+          <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} onClose={() => setIsOpen(false)} />
 
           {activeTab === 'changes' ? (
             <DiffChangesList
@@ -355,23 +355,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                             <p>刷新文件列表</p>
                           </TooltipContent>
                         </Tooltip>
-                        {/* 关闭面板按钮 */}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 flex-shrink-0"
-                              onClick={() => setIsOpen((prev) => !prev)}
-                            >
-                              <X className="size-2.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            <p>关闭侧面板</p>
-                          </TooltipContent>
-                        </Tooltip>
                       </div>
                       {/* 会话文件内容区（独立滚动） */}
                       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -406,27 +389,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     </>
                   )}
 
-                  {/* ===== 顶部关闭按钮（仅在无 sessionPath 时显示，有 sessionPath 时关闭按钮在会话文件区标题栏） ===== */}
-                  {!sessionPath && (
-                    <div className="flex items-center justify-end px-3 h-[32px] flex-shrink-0">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-5 w-5 flex-shrink-0"
-                            onClick={() => setIsOpen((prev) => !prev)}
-                          >
-                            <X className="size-2.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          <p>关闭侧面板</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  )}
 
                   {/* ===== 工作区文件区 ===== */}
                   <div className="flex-1 min-h-0 flex flex-col mx-2 mb-2">

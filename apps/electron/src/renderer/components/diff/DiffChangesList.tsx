@@ -340,10 +340,10 @@ function FileRow({
       {/* +/- 行数 */}
       <span className="ml-auto shrink-0 flex items-center gap-1.5">
         {file.additions > 0 && (
-          <span className="text-green-500">+{file.additions}</span>
+          <span className="!text-green-500">+{file.additions}</span>
         )}
         {file.deletions > 0 && (
-          <span className="text-red-500">-{file.deletions}</span>
+          <span className="!text-red-500">-{file.deletions}</span>
         )}
       </span>
 
