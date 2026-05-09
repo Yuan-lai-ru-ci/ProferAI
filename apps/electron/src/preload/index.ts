@@ -620,8 +620,8 @@ export interface ElectronAPI {
   /** 仅解析文件路径（供 PDF/图片等用 file:// 加载） */
   resolveFilePath: (filePath: string, basePaths?: string[]) => Promise<string | null>
 
-  /** 为内联 PDF 预览生成 PDF.js viewer HTML，返回 HTML 文件路径 */
-  preparePdfPreview: (filePath: string, basePaths?: string[]) => Promise<string | null>
+  /** 为内联 PDF 预览生成 PDF.js viewer HTML，返回 HTML 内容 */
+  preparePdfPreview: (filePath: string, basePaths?: string[]) => Promise<{ html: string } | null>
 
   /** DOCX 转 HTML（内联预览） */
   docxToHtml: (filePath: string, basePaths?: string[]) => Promise<{ resolvedPath: string; html: string } | null>
@@ -1568,7 +1568,7 @@ const electronAPI: ElectronAPI = {
   },
 
   preparePdfPreview: (filePath: string, basePaths?: string[]) => {
-    return ipcRenderer.invoke('file:prepare-pdf-preview', filePath, basePaths) as Promise<string | null>
+    return ipcRenderer.invoke('file:prepare-pdf-preview', filePath, basePaths) as Promise<{ html: string } | null>
   },
 
   docxToHtml: (filePath: string, basePaths?: string[]) => {

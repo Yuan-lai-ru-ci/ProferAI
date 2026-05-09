@@ -1672,10 +1672,12 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
  * 为内联 PDF 预览生成一个 PDF.js viewer HTML 文件
  * 返回该 HTML 文件的路径（位于 tmpdir/proma-preview/）
  */
-export function preparePdfPreview(filePath: string, basePaths?: string[]): string | null {
+export function preparePdfPreview(filePath: string, basePaths?: string[]): { html: string } | null {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
-  const fileUrl = `file://${encodeURI(safePath).replace(/#/g, '%23')}`
+  const st = statSync(safePath)
+  if (st.size > MAX_FILE_SIZE) return null
+  const pdfBase64 = readFileSync(safePath).toString('base64')
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
@@ -1688,13 +1690,16 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): strin
 </style>
 </head><body>
   <div class="loading" id="c">正在加载 PDF...</div>
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs" type="module"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs" type="module"><\/script>
   <script type="module">
     import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs';
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
     const c = document.getElementById('c');
     try {
-      const pdf = await pdfjsLib.getDocument(${JSON.stringify(fileUrl)}).promise;
+      const raw = atob(${JSON.stringify(pdfBase64)});
+      const arr = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
       c.innerHTML = '';
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
@@ -1711,10 +1716,10 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): strin
       info.className = 'page-info';
       info.textContent = '共 ' + pdf.numPages + ' 页';
       c.appendChild(info);
-    } catch (e) { c.innerHTML = '<div class="error">PDF 加载失败: ' + e.message + '</div>'; }
-  </script>
-</body></html>`
-  return writeTempHtml(html)
+    } catch (e) { c.innerHTML = '<div class="error">PDF 加载失败: ' + e.message + '<\/div>'; }
+  <\/script>
+<\/body><\/html>`
+  return { html }
 }
 
 /**

@@ -58,7 +58,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [newContent, setNewContent] = React.useState('')
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [docxHtml, setDocxHtml] = React.useState('')
-  const [pdfPath, setPdfPath] = React.useState('')
+  const [pdfHtml, setPdfHtml] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
@@ -71,6 +71,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isPdf = previewOnly && PDF_EXTS.has(ext)
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
+
+  console.log('[PDF-DEBUG] DiffTabContent render:', { filePath, ext, previewOnly, isPdf, pdfHtml: pdfHtml.length, loading })
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
   const lastNewContentRef = React.useRef('')
@@ -85,7 +87,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     setNewContent('')
     setHighlightedHtml('')
     setDocxHtml('')
-    setPdfPath('')
+    setPdfHtml('')
     lastNewContentRef.current = ''
     lastOldContentRef.current = ''
 
@@ -96,9 +98,11 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
 
         if (previewOnly) {
           if (isPdf) {
-            const htmlPath = await window.electronAPI.preparePdfPreview(filePath, basePaths)
+            console.log('[PDF-DEBUG] renderer: calling preparePdfPreview', { filePath, basePaths })
+            const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
+            console.log('[PDF-DEBUG] renderer: got result:', result ? 'html length=' + result.html.length : null)
             if (cancelled) return
-            setPdfPath(htmlPath ?? '')
+            setPdfHtml(result?.html ?? '')
             return
           }
           if (isDocx) {
@@ -222,11 +226,12 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
         ) : previewOnly ? (
           isPdf ? (
-            pdfPath ? (
+            pdfHtml ? (
               <iframe
-                src={`proma-file://${encodeURI(pdfPath)}`}
+                srcDoc={pdfHtml}
                 className="w-full h-full border-0"
                 title={filePath.split('/').pop() || 'PDF'}
+                sandbox="allow-scripts"
               />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 PDF</div>
