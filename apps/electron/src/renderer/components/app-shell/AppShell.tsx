@@ -77,7 +77,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
             {isPanelOpen && (
               <div
-                className="absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+                className="absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors z-10"
                 onMouseDown={handleMouseDown}
               />
             )}

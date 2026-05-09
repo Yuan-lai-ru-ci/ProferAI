@@ -46,7 +46,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
-import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
@@ -457,17 +457,13 @@ export function useGlobalAgentListeners(): void {
                 return map
               })
               // Agent 开始改文件时，自动切换预览面板到该文件
-              const autoPreview = store.get(autoPreviewEnabledAtom)
-              if (autoPreview) {
-                // 从绝对路径提取父目录作为 dirPath，便于 getDiffContents 定位 git root
-                const lastSep = targetPath.lastIndexOf('/')
-                const parentDir = lastSep > 0 ? targetPath.slice(0, lastSep) : ''
-                store.set(previewFileMapAtom, (prev) => {
-                  const m = new Map(prev)
-                  m.set(sessionId, { filePath: targetPath, dirPath: parentDir })
-                  return m
-                })
-              }
+              const lastSep = targetPath.lastIndexOf('/')
+              const parentDir = lastSep > 0 ? targetPath.slice(0, lastSep) : ''
+              store.set(previewFileMapAtom, (prev) => {
+                const m = new Map(prev)
+                m.set(sessionId, { filePath: targetPath, dirPath: parentDir })
+                return m
+              })
             }
           }
 
@@ -521,8 +517,7 @@ export function useGlobalAgentListeners(): void {
                 const m = new Map(prev); m.set(sessionId, true); return m
               })
               // 自动切换预览到刚写完的文件 + 弹出预览面板
-              const autoPreview = store.get(autoPreviewEnabledAtom)
-              if (autoPreview && writtenPath) {
+              if (writtenPath) {
                 const lastSep = writtenPath.lastIndexOf('/')
                 const parentDir = lastSep > 0 ? writtenPath.slice(0, lastSep) : ''
                 store.set(previewFileMapAtom, (prev) => {
