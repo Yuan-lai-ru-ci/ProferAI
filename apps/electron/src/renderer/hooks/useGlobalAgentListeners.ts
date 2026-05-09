@@ -45,7 +45,7 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom } from '@/atoms/agent-atoms'
+import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
@@ -518,6 +518,15 @@ export function useGlobalAgentListeners(): void {
               store.set(agentDiffUnseenChangesAtom, (prev) => {
                 const m = new Map(prev); m.set(sessionId, true); return m
               })
+              if (writtenPath) {
+                store.set(agentDiffUnseenFilesAtom, (prev) => {
+                  const m = new Map(prev)
+                  const s = new Set(m.get(sessionId) ?? [])
+                  s.add(writtenPath)
+                  m.set(sessionId, s)
+                  return m
+                })
+              }
               // 自动切换预览到刚写完的文件 + 弹出预览面板
               if (store.get(autoPreviewEnabledAtom) && writtenPath) {
                 const lastSep = writtenPath.lastIndexOf('/')

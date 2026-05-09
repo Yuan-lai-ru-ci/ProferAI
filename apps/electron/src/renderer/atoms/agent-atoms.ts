@@ -302,6 +302,9 @@ export const agentDiffRefreshVersionAtom = atom(new Map<string, number>())
 /** 是否有未查看的代码改动 — 按 session 隔离 */
 export const agentDiffUnseenChangesAtom = atom(new Map<string, boolean>())
 
+/** Agent 本轮刚修改但用户尚未查看的文件路径 — 按 session 隔离，Map<sessionId, Set<filePath>> */
+export const agentDiffUnseenFilesAtom = atom(new Map<string, Set<string>>())
+
 /** 当前会话的侧面板是否打开（派生只读：全局共享，但仅在有当前会话且为 Agent 模式时显示） */
 export const currentSessionSidePanelOpenAtom = atom<boolean>((get) => {
   const currentId = get(currentAgentSessionIdAtom)

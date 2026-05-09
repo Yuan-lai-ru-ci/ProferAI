@@ -23,6 +23,7 @@ import {
   agentDiffPanelTabAtom,
   agentDiffRefreshVersionAtom,
   agentDiffUnseenChangesAtom,
+  agentDiffUnseenFilesAtom,
 } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import {
@@ -63,6 +64,7 @@ export function useCloseTab(): UseCloseTabReturn {
   const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
   const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
   const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
+  const setDiffUnseenFiles = useSetAtom(agentDiffUnseenFilesAtom)
 
   const cleanupMapAtoms = React.useCallback((tabId: string) => {
     const deleteKey = <T,>(prev: Map<string, T>): Map<string, T> => {
@@ -81,7 +83,8 @@ export function useCloseTab(): UseCloseTabReturn {
     setDiffPanelTab(deleteKey)
     setDiffRefreshVersion(deleteKey)
     setDiffUnseen(deleteKey)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen])
+    setDiffUnseenFiles(deleteKey)
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles])
 
   const executeClose = React.useCallback((tabId: string) => {
     const tab = tabs.find((t) => t.id === tabId)

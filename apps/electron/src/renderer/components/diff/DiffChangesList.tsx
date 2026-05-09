@@ -6,6 +6,7 @@
 
 import * as React from 'react'
 import { ChevronRight, Undo2, ExternalLink } from 'lucide-react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -15,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { agentDiffUnseenFilesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { ChangedFileEntry, ChangeSource, EditorApp } from '@proma/shared'
 
 /** 按目录分组后的数据结构 */
@@ -69,6 +71,25 @@ export function DiffChangesList({
   const [collapsedDirs, setCollapsedDirs] = React.useState<Set<string>>(new Set())
   /** 单调递增的 fetch 序号，用于丢弃乱序到达的旧响应 */
   const fetchSeqRef = React.useRef(0)
+
+  // Agent 本轮刚修改但尚未查看的文件
+  const unseenFilesMap = useAtomValue(agentDiffUnseenFilesAtom)
+  const setUnseenFilesMap = useSetAtom(agentDiffUnseenFilesAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const unseenFiles = unseenFilesMap.get(currentSessionId ?? '') ?? new Set<string>()
+
+  const markFileAsSeen = React.useCallback((filePath: string) => {
+    if (!currentSessionId) return
+    setUnseenFilesMap((prev) => {
+      const s = prev.get(currentSessionId)
+      if (!s?.has(filePath)) return prev
+      const m = new Map(prev)
+      const next = new Set(s)
+      next.delete(filePath)
+      m.set(currentSessionId, next)
+      return m
+    })
+  }, [currentSessionId, setUnseenFilesMap])
 
   const fetchChanges = React.useCallback(async () => {
     if (!dirPath) return // sessionPath 为空时跳过，避免空字符串被过滤导致找不到仓库
@@ -186,16 +207,20 @@ export function DiffChangesList({
             </button>
 
             {/* 文件列表 */}
-            {!isCollapsed && group.files.map((file) => (
+            {!isCollapsed && group.files.map((file) => {
+              const absPath = `${file.gitRoot || dirPath}/${file.filePath}`.replace(/\/+/g, '/')
+              return (
               <FileRow
                 key={`${file.gitRoot}:${file.filePath}`}
                 file={file}
                 isSelected={file.filePath === selectedFilePath}
-                onClick={() => onFileClick(file.filePath, false, file.gitRoot)}
+                isUnseen={unseenFiles.has(absPath)}
+                onClick={() => { markFileAsSeen(absPath); onFileClick(file.filePath, false, file.gitRoot) }}
                 onRevert={() => handleRevert(file.filePath, file.gitRoot)}
                 dirPath={dirPath}
               />
-            ))}
+              )
+            })}
           </div>
         )
       })}
@@ -289,12 +314,14 @@ function FileRow({
   onClick,
   onRevert,
   isSelected,
+  isUnseen,
   dirPath,
 }: {
   file: ChangedFileEntry
   onClick: () => void
   onRevert: () => void
   isSelected?: boolean
+  isUnseen?: boolean
   dirPath: string
 }): React.ReactElement {
   const [hovered, setHovered] = React.useState(false)
@@ -313,7 +340,7 @@ function FileRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <span className="truncate">
+      <span className="truncate flex items-center gap-1">
         {(() => {
           const parts = file.filePath.split('/')
           const fileName = parts.pop()!
@@ -330,6 +357,9 @@ function FileRow({
             </>
           )
         })()}
+        {isUnseen && (
+          <span className="size-1.5 rounded-full bg-primary shrink-0" />
+        )}
       </span>
 
       {/* +/- 行数 */}
