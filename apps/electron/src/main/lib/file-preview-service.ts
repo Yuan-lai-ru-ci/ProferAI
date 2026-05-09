@@ -1659,3 +1659,30 @@ export function resolveAndReadFile(filePath: string, basePaths?: string[]): { re
     return null
   }
 }
+
+/**
+ * 仅解析文件路径（不读取内容），供 PDF/图片等用 file:// 协议加载的场景使用
+ */
+export function resolveFilePath(filePath: string, basePaths?: string[]): string | null {
+  const safePath = resolveTargetPath(filePath, basePaths)
+  return existsSync(safePath) ? safePath : null
+}
+
+/**
+ * 将 DOCX 文件转换为 HTML（供内联预览使用）
+ * 使用 mammoth.js 做转换
+ */
+export async function convertDocxToHtml(filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; html: string } | null> {
+  const safePath = resolveTargetPath(filePath, basePaths)
+  if (!existsSync(safePath)) return null
+  try {
+    const st = statSync(safePath)
+    if (st.size > MAX_FILE_SIZE) return null
+    const mammoth = await import('mammoth')
+    const result = await mammoth.convertToHtml({ path: safePath })
+    return { resolvedPath: safePath, html: result.value }
+  } catch (err) {
+    console.error('[file-preview] convertDocxToHtml failed:', err)
+    return null
+  }
+}

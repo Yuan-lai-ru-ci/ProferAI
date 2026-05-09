@@ -1893,6 +1893,24 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 仅解析文件路径（供 PDF/图片等用 file:// 加载）
+  ipcMain.handle(
+    'file:resolve-path',
+    async (_, filePath: string, basePaths?: string[]): Promise<string | null> => {
+      const { resolveFilePath } = await import('./lib/file-preview-service')
+      return resolveFilePath(filePath, basePaths)
+    }
+  )
+
+  // DOCX 转 HTML（内联预览使用 mammoth）
+  ipcMain.handle(
+    'file:docx-to-html',
+    async (_, filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; html: string } | null> => {
+      const { convertDocxToHtml } = await import('./lib/file-preview-service')
+      return convertDocxToHtml(filePath, basePaths)
+    }
+  )
+
   // 重命名文件/目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_FILE,

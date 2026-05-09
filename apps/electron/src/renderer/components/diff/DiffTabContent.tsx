@@ -34,6 +34,8 @@ const EXT_LANG: Record<string, string> = {
 }
 
 const MD_EXTS = new Set(['.md', '.markdown'])
+const PDF_EXTS = new Set(['.pdf'])
+const DOCX_EXTS = new Set(['.docx'])
 
 function getExtension(filePath: string): string {
   const dot = filePath.lastIndexOf('.')
@@ -56,6 +58,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
+  const [docxHtml, setDocxHtml] = React.useState('')
+  const [pdfPath, setPdfPath] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersion = useAtomValue(agentDiffRefreshVersionAtom)
@@ -63,6 +67,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
 
   const ext = getExtension(filePath)
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
+  const isPdf = previewOnly && PDF_EXTS.has(ext)
+  const isDocx = previewOnly && DOCX_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
   // 切换文件（filePath 或上下文变化）时：清空旧内容并显示 loading
@@ -82,6 +88,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setOldContent('')
       setNewContent('')
       setHighlightedHtml('')
+      setDocxHtml('')
+      setPdfPath('')
     }
 
     async function load() {
@@ -92,6 +100,24 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
         if (previewOnly) {
           // 纯预览模式不响应 refreshVersion，仅首次加载
           if (!isContextChange) return
+
+          // PDF：仅解析路径，由 iframe 加载
+          if (isPdf) {
+            const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
+            if (cancelled) return
+            setPdfPath(resolved ?? '')
+            return
+          }
+
+          // DOCX：主进程用 mammoth 转 HTML
+          if (isDocx) {
+            const result = await window.electronAPI.docxToHtml(filePath, basePaths)
+            if (cancelled) return
+            setDocxHtml(result?.html ?? '')
+            return
+          }
+
+          // 其他类型：读文本
           const result = await window.electronAPI.resolveAndReadFile(filePath, basePaths)
           if (cancelled) return
           content = result?.content ?? ''
@@ -212,7 +238,26 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
         ) : previewOnly ? (
-          isMarkdown ? (
+          isPdf ? (
+            pdfPath ? (
+              <iframe
+                src={`file://${pdfPath}`}
+                className="w-full h-full border-0"
+                title={filePath.split('/').pop() || 'PDF'}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 PDF</div>
+            )
+          ) : isDocx ? (
+            docxHtml ? (
+              <div
+                className="prose prose-sm dark:prose-invert max-w-none px-4 py-3"
+                dangerouslySetInnerHTML={{ __html: docxHtml }}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 DOCX</div>
+            )
+          ) : isMarkdown ? (
             <div className="prose prose-sm dark:prose-invert max-w-none px-4 py-3">
               <Markdown remarkPlugins={[remarkGfm]}>{newContent}</Markdown>
             </div>

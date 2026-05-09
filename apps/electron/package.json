@@ -39,7 +39,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.129",
     "@pierre/diffs": "^1.1.20",
-    "adm-zip": "^0.5.17"
+    "adm-zip": "^0.5.17",
+    "mammoth": "^1.12.0"
   },
   "optionalDependencies": {
     "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.2.129",

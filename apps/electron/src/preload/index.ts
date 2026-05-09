@@ -617,6 +617,12 @@ export interface ElectronAPI {
   /** 解析文件路径并读取内容（供内联预览使用） */
   resolveAndReadFile: (filePath: string, basePaths?: string[]) => Promise<{ resolvedPath: string; content: string } | null>
 
+  /** 仅解析文件路径（供 PDF/图片等用 file:// 加载） */
+  resolveFilePath: (filePath: string, basePaths?: string[]) => Promise<string | null>
+
+  /** DOCX 转 HTML（内联预览） */
+  docxToHtml: (filePath: string, basePaths?: string[]) => Promise<{ resolvedPath: string; html: string } | null>
+
   /** 重命名文件/目录 */
   renameFile: (filePath: string, newName: string) => Promise<void>
 
@@ -1552,6 +1558,14 @@ const electronAPI: ElectronAPI = {
 
   resolveAndReadFile: (filePath: string, basePaths?: string[]) => {
     return ipcRenderer.invoke('file:resolve-and-read', filePath, basePaths) as Promise<{ resolvedPath: string; content: string } | null>
+  },
+
+  resolveFilePath: (filePath: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke('file:resolve-path', filePath, basePaths) as Promise<string | null>
+  },
+
+  docxToHtml: (filePath: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke('file:docx-to-html', filePath, basePaths) as Promise<{ resolvedPath: string; html: string } | null>
   },
 
   renameFile: (filePath: string, newName: string) => {
