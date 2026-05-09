@@ -331,7 +331,7 @@ function FileRow({
       role="button"
       tabIndex={0}
       className={cn(
-        'flex items-center w-full px-2 pl-6 py-2.5 text-[14px] transition-colors group',
+        'flex items-center w-full px-2 pl-3 py-2.5 text-[14px] transition-colors group',
         isSelected
           ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
           : 'hover:bg-primary/5',
@@ -340,10 +340,10 @@ function FileRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
+      <span className="w-3 shrink-0 flex items-center justify-center">
+        {isUnseen && <span className="size-1.5 rounded-full bg-primary" />}
+      </span>
       <span className="truncate">
-        {isUnseen && (
-          <span className="inline-block size-1.5 rounded-full bg-primary mr-1.5 align-middle" />
-        )}
         {(() => {
           const parts = file.filePath.split('/')
           const fileName = parts.pop()!
