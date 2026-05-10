@@ -37,6 +37,7 @@ const EXT_LANG: Record<string, string> = {
 const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
 const DOCX_EXTS = new Set(['.docx'])
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
 
 /**
  * 简易 LRU 缓存：保留最近访问的 N 个 entries。
@@ -87,6 +88,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [docxHtml, setDocxHtml] = React.useState('')
   const [pdfHtml, setPdfHtml] = React.useState('')
+  const [imagePath, setImagePath] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
@@ -98,6 +100,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isPdf = previewOnly && PDF_EXTS.has(ext)
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
+  const isImage = previewOnly && IMAGE_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
@@ -110,7 +113,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     let cancelled = false
 
     // PDF / DOCX 不走文本缓存（HTML 体积大、解析过程也不轻）
-    const cacheable = !isPdf && !isDocx
+    const cacheable = !isPdf && !isDocx && !isImage
     const cacheKey = cacheable
       ? (previewOnly ? `preview:${filePath}` : `diff:${filePath}@v${refreshVersion}`)
       : null
@@ -125,6 +128,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setHighlightedHtml('')
       setDocxHtml('')
       setPdfHtml('')
+      setImagePath('')
       setLoading(false)
     } else {
       setLoading(true)
@@ -133,6 +137,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setHighlightedHtml('')
       setDocxHtml('')
       setPdfHtml('')
+      setImagePath('')
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
     }
@@ -148,6 +153,12 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
               const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
               if (cancelled) return
               setPdfHtml(result?.html ?? '')
+              return
+            }
+            if (isImage) {
+              const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
+              if (cancelled) return
+              setImagePath(resolved ?? '')
               return
             }
             if (isDocx) {
@@ -285,6 +296,18 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
               />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 PDF</div>
+            )
+          ) : isImage ? (
+            imagePath ? (
+              <div className="flex items-center justify-center h-full p-4">
+                <img
+                  src={`proma-file://${encodeURI(imagePath)}`}
+                  alt={filePath.split('/').pop() || 'Image'}
+                  className="max-w-full max-h-full object-contain"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载图片</div>
             )
           ) : isDocx ? (
             docxHtml ? (
