@@ -7,6 +7,7 @@
 import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { VOICE_DICTATION_IPC_CHANNELS } from '../../types'
+import { getSettings } from './settings-service'
 import { captureVoiceDictationTarget } from './text-output-service'
 
 let voiceDictationWindow: BrowserWindow | null = null
@@ -85,19 +86,31 @@ export function createVoiceDictationWindow(): void {
 }
 
 export function toggleVoiceDictationWindow(options: VoiceDictationToggleOptions = {}): void {
-  if (!voiceDictationWindow || voiceDictationWindow.isDestroyed()) {
+  const win = voiceDictationWindow && !voiceDictationWindow.isDestroyed() ? voiceDictationWindow : null
+
+  if (win?.isVisible()) {
+    win.webContents.send(VOICE_DICTATION_IPC_CHANNELS.TOGGLE_STOP)
+    return
+  }
+
+  if (!isVoiceDictationEnabled()) {
+    console.log('[语音输入] 功能未启用，忽略唤起请求')
+    return
+  }
+
+  if (!win) {
     captureTargetForNextSession(options.targetIsProma)
     createVoiceDictationWindow()
     requestPositionAndShow()
     return
   }
 
-  if (voiceDictationWindow.isVisible()) {
-    voiceDictationWindow.webContents.send(VOICE_DICTATION_IPC_CHANNELS.TOGGLE_STOP)
-  } else {
-    captureTargetForNextSession(options.targetIsProma)
-    requestPositionAndShow()
-  }
+  captureTargetForNextSession(options.targetIsProma)
+  requestPositionAndShow()
+}
+
+function isVoiceDictationEnabled(): boolean {
+  return getSettings().voiceDictation?.enabled === true
 }
 
 function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
