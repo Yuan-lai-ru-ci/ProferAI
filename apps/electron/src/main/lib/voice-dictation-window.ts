@@ -13,12 +13,15 @@ let voiceDictationWindow: BrowserWindow | null = null
 let voiceDictationTargetIsProma = false
 let voiceDictationTargetCaptured = false
 let suppressMainWindowActivateUntil = 0
+let voiceDictationWindowReady = false
+let voiceDictationShowPending = false
 
 const WINDOW_WIDTH = 480
 const WINDOW_HEIGHT = 160
 const MIN_WINDOW_HEIGHT = 148
 const WINDOW_MARGIN = 12
 const ACTIVATE_SUPPRESSION_MS = 1800
+const VOICE_DICTATION_PARTITION = 'voice-dictation'
 
 interface VoiceDictationToggleOptions {
   targetIsProma?: boolean
@@ -27,6 +30,7 @@ interface VoiceDictationToggleOptions {
 export function createVoiceDictationWindow(): void {
   if (voiceDictationWindow && !voiceDictationWindow.isDestroyed()) return
 
+  voiceDictationWindowReady = false
   voiceDictationWindow = new BrowserWindow({
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
@@ -48,8 +52,10 @@ export function createVoiceDictationWindow(): void {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      partition: VOICE_DICTATION_PARTITION,
     },
   })
+  installVoiceDictationMediaPermissions(voiceDictationWindow)
 
   const isDev = !app.isPackaged
   if (isDev) {
@@ -62,6 +68,17 @@ export function createVoiceDictationWindow(): void {
 
   voiceDictationWindow.on('closed', () => {
     voiceDictationWindow = null
+    voiceDictationWindowReady = false
+    voiceDictationShowPending = false
+  })
+
+  voiceDictationWindow.once('ready-to-show', () => {
+    voiceDictationWindowReady = true
+    flushPendingShowIfReady()
+  })
+
+  voiceDictationWindow.webContents.on('did-finish-load', () => {
+    flushPendingShowIfReady()
   })
 
   console.log('[语音输入] 浮窗预创建完成')
@@ -71,9 +88,7 @@ export function toggleVoiceDictationWindow(options: VoiceDictationToggleOptions 
   if (!voiceDictationWindow || voiceDictationWindow.isDestroyed()) {
     captureTargetForNextSession(options.targetIsProma)
     createVoiceDictationWindow()
-    voiceDictationWindow?.once('ready-to-show', () => {
-      positionAndShow()
-    })
+    requestPositionAndShow()
     return
   }
 
@@ -81,8 +96,81 @@ export function toggleVoiceDictationWindow(options: VoiceDictationToggleOptions 
     voiceDictationWindow.webContents.send(VOICE_DICTATION_IPC_CHANNELS.TOGGLE_STOP)
   } else {
     captureTargetForNextSession(options.targetIsProma)
-    positionAndShow()
+    requestPositionAndShow()
   }
+}
+
+function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
+  const voiceSession = win.webContents.session
+
+  voiceSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (permission !== 'media') return false
+    if (details.mediaType === 'video') return false
+
+    return isTrustedVoiceDictationUrl(
+      details.requestingUrl ??
+      details.securityOrigin ??
+      webContents?.getURL() ??
+      requestingOrigin,
+    )
+  })
+
+  voiceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (permission !== 'media') {
+      callback(false)
+      return
+    }
+
+    const mediaDetails = details as Electron.MediaAccessPermissionRequest
+    const requestsVideo = mediaDetails.mediaTypes?.includes('video') ?? false
+    const isTrustedRequest = isTrustedVoiceDictationUrl(
+      mediaDetails.requestingUrl ??
+      mediaDetails.securityOrigin ??
+      webContents.getURL(),
+    )
+
+    callback(isTrustedRequest && !requestsVideo)
+  })
+}
+
+function isTrustedVoiceDictationUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false
+
+  try {
+    const parsed = new URL(rawUrl)
+    if (!app.isPackaged && parsed.origin === 'http://localhost:5173') {
+      return true
+    }
+    return parsed.protocol === 'file:'
+  } catch {
+    return false
+  }
+}
+
+function requestPositionAndShow(): void {
+  if (!voiceDictationWindow || voiceDictationWindow.isDestroyed()) return
+
+  if (!voiceDictationWindowReady || voiceDictationWindow.webContents.isLoading()) {
+    voiceDictationShowPending = true
+    return
+  }
+
+  positionAndShow()
+}
+
+function flushPendingShowIfReady(): void {
+  if (
+    !voiceDictationWindow ||
+    voiceDictationWindow.isDestroyed() ||
+    !voiceDictationShowPending ||
+    !voiceDictationWindowReady ||
+    voiceDictationWindow.webContents.isLoading()
+  ) {
+    return
+  }
+
+  voiceDictationShowPending = false
+  positionAndShow()
 }
 
 function captureTargetForNextSession(targetIsProma?: boolean): void {
