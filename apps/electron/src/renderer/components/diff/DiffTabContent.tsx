@@ -104,6 +104,10 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
   const [imageZoom, setImageZoom] = React.useState(1)
+  const [imageNaturalSize, setImageNaturalSize] = React.useState({ w: 0, h: 0 })
+  const imageContainerRef = React.useRef<HTMLDivElement>(null)
+  const imageDragging = React.useRef(false)
+  const imageDragStart = React.useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 })
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
@@ -116,6 +120,20 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isPdf = previewOnly && PDF_EXTS.has(ext)
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
   const isImage = previewOnly && IMAGE_EXTS.has(ext)
+
+  // non-passive wheel listener for pinch-to-zoom on image
+  React.useEffect(() => {
+    const el = imageContainerRef.current
+    if (!el || !isImage) return
+    const handler = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        setImageZoom((z) => Math.max(0.25, Math.min(5, z * (e.deltaY < 0 ? 1.1 : 1 / 1.1))))
+      }
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [isImage])
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
@@ -146,6 +164,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setImagePath('')
       setImageDataUrl('')
       setImageZoom(1)
+      setImageNaturalSize({ w: 0, h: 0 })
       setLoading(false)
     } else {
       setLoading(true)
@@ -157,6 +176,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setImagePath('')
       setImageDataUrl('')
       setImageZoom(1)
+      setImageNaturalSize({ w: 0, h: 0 })
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
     }
@@ -340,13 +360,43 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
                     onClick={() => setImageZoom((z) => Math.min(5, z * 1.5))}
                   >+</button>
                 </div>
-                <div className="flex items-center justify-center h-full overflow-auto p-4 pt-12">
-                  <img
-                    src={imageDataUrl}
-                    alt={filePath.split('/').pop() || 'Image'}
-                    className="object-contain"
-                    style={{ width: `${imageZoom * 100}%`, maxWidth: 'none' }}
-                  />
+                <div
+                  ref={imageContainerRef}
+                  className="h-full overflow-auto p-4 pt-12"
+                  style={{ cursor: imageZoom > 1 ? (imageDragging.current ? 'grabbing' : 'grab') : 'default' }}
+                  onMouseDown={(e) => {
+                    if (imageZoom <= 1 || e.button !== 0) return
+                    imageDragging.current = true
+                    imageDragStart.current = { x: e.clientX, y: e.clientY, scrollLeft: e.currentTarget.scrollLeft, scrollTop: e.currentTarget.scrollTop }
+                    e.currentTarget.style.cursor = 'grabbing'
+                    const target = e.currentTarget
+                    const onMove = (ev: MouseEvent) => {
+                      if (!imageDragging.current) return
+                      target.scrollLeft = imageDragStart.current.scrollLeft - (ev.clientX - imageDragStart.current.x)
+                      target.scrollTop = imageDragStart.current.scrollTop - (ev.clientY - imageDragStart.current.y)
+                    }
+                    const onUp = () => {
+                      imageDragging.current = false
+                      target.style.cursor = 'grab'
+                      document.removeEventListener('mousemove', onMove)
+                      document.removeEventListener('mouseup', onUp)
+                    }
+                    document.addEventListener('mousemove', onMove)
+                    document.addEventListener('mouseup', onUp)
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: '100%', minHeight: '100%', width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : undefined, height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : undefined }}>
+                    <img
+                      src={imageDataUrl}
+                      alt={filePath.split('/').pop() || 'Image'}
+                      draggable={false}
+                      onLoad={(e) => {
+                        const img = e.currentTarget
+                        setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
+                      }}
+                      style={{ width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : '100%', height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : 'auto', maxWidth: imageZoom <= 1 ? '100%' : 'none' }}
+                    />
+                  </div>
                 </div>
               </div>
             ) : (
