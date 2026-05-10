@@ -37,6 +37,20 @@ const EXT_LANG: Record<string, string> = {
 const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
 const DOCX_EXTS = new Set(['.docx'])
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
+
+/** 将绝对路径转为 proma-file:// URL（保留开头的 /，只编码特殊字符） */
+function toPromaFileUrl(absPath: string): string {
+  const encoded = absPath.split('/').map(encodeURIComponent).join('/')
+  return 'proma-file://' + encoded
+}
+
+/** 扩展名 → MIME type */
+const EXT_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+}
 
 /**
  * 简易 LRU 缓存：保留最近访问的 N 个 entries。
@@ -87,6 +101,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [docxHtml, setDocxHtml] = React.useState('')
   const [pdfHtml, setPdfHtml] = React.useState('')
+  const [imagePath, setImagePath] = React.useState('')
+  const [imageDataUrl, setImageDataUrl] = React.useState('')
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
@@ -98,6 +114,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isPdf = previewOnly && PDF_EXTS.has(ext)
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
+  const isImage = previewOnly && IMAGE_EXTS.has(ext)
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
@@ -110,7 +127,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     let cancelled = false
 
     // PDF / DOCX 不走文本缓存（HTML 体积大、解析过程也不轻）
-    const cacheable = !isPdf && !isDocx
+    const cacheable = !isPdf && !isDocx && !isImage
     const cacheKey = cacheable
       ? (previewOnly ? `preview:${filePath}` : `diff:${filePath}@v${refreshVersion}`)
       : null
@@ -125,6 +142,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setHighlightedHtml('')
       setDocxHtml('')
       setPdfHtml('')
+      setImagePath('')
+      setImageDataUrl('')
       setLoading(false)
     } else {
       setLoading(true)
@@ -133,6 +152,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setHighlightedHtml('')
       setDocxHtml('')
       setPdfHtml('')
+      setImagePath('')
+      setImageDataUrl('')
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
     }
@@ -148,6 +169,20 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
               const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
               if (cancelled) return
               setPdfHtml(result?.html ?? '')
+              return
+            }
+            if (isImage) {
+              const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
+              if (cancelled || !resolved) { setImagePath(''); return }
+              setImagePath(resolved)
+              try {
+                const b64 = await window.electronAPI.readAttachment(resolved)
+                if (cancelled) return
+                const mime = EXT_MIME[ext] || 'image/png'
+                setImageDataUrl(`data:${mime};base64,${b64}`)
+              } catch {
+                setImageDataUrl('')
+              }
               return
             }
             if (isDocx) {
@@ -193,7 +228,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, shikiTheme, basePaths, isPdf, isDocx])
+  }, [filePath, dirPath, gitRoot, previewOnly, shikiTheme, basePaths, isPdf, isDocx, isImage])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
   const prevRefreshRef = React.useRef(-1)
@@ -285,6 +320,18 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
               />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 PDF</div>
+            )
+          ) : isImage ? (
+            imageDataUrl ? (
+              <div className="flex items-center justify-center h-full p-4">
+                <img
+                  src={imageDataUrl}
+                  alt={filePath.split('/').pop() || 'Image'}
+                  className="max-w-full max-h-full object-contain"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">{imagePath ? '加载中...' : '无法加载图片'}</div>
             )
           ) : isDocx ? (
             docxHtml ? (
