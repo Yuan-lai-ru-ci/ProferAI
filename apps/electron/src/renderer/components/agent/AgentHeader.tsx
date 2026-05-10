@@ -145,7 +145,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                <p>打开文件面板 <kbd className="ml-1 px-1 py-0.5 rounded bg-foreground/[0.06] text-[10px] font-mono">{navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'}</kbd></p>
+                <p>打开文件面板 <kbd className="ml-1 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded border border-border/60 bg-background/80 text-[10px] font-medium text-foreground/80 shadow-sm">{navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'}</kbd></p>
               </TooltipContent>
             </Tooltip>
           )}

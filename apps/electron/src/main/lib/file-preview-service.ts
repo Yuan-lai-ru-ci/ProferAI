@@ -1683,7 +1683,7 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; padding-top: 40px; }
-  canvas { box-shadow: 0 1px 4px rgba(0,0,0,0.12); max-width: 100%; }
+  canvas { box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
   .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; }
   .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; }
   .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; }
