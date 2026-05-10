@@ -38,6 +38,34 @@ const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
 const DOCX_EXTS = new Set(['.docx'])
 
+/**
+ * 简易 LRU 缓存：保留最近访问的 N 个 entries。
+ * key 设计：
+ * - diff 模式：`diff:${filePath}@v${refreshVersion}`
+ * - preview 模式：`preview:${filePath}`
+ * refreshVersion 变化时（agent 写文件、git 突变、窗口聚焦）key 自然变化，
+ * 老 entry 不会被命中，最终被 LRU 淘汰；无需主动失效。
+ */
+type CacheEntry = { oldContent: string; newContent: string }
+const CACHE_MAX = 50
+const contentCache = new Map<string, CacheEntry>()
+function cacheGet(key: string): CacheEntry | undefined {
+  const v = contentCache.get(key)
+  if (!v) return undefined
+  // 重新插入到末尾，更新 LRU 位置
+  contentCache.delete(key)
+  contentCache.set(key, v)
+  return v
+}
+function cacheSet(key: string, value: CacheEntry): void {
+  if (contentCache.has(key)) contentCache.delete(key)
+  contentCache.set(key, value)
+  if (contentCache.size > CACHE_MAX) {
+    const oldestKey = contentCache.keys().next().value
+    if (oldestKey !== undefined) contentCache.delete(oldestKey)
+  }
+}
+
 function getExtension(filePath: string): string {
   const dot = filePath.lastIndexOf('.')
   return dot >= 0 ? filePath.slice(dot).toLowerCase() : ''
@@ -77,50 +105,74 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const lastOldContentRef = React.useRef('')
 
   // 主加载 effect：上下文变化（filePath/dirPath/gitRoot/previewOnly）时触发
-  // 会清空旧内容 + 显示 loading + 重新加载
+  // 命中缓存时跳过 loading 闪烁直接渲染；未命中走 IPC 拉取
   React.useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setOldContent('')
-    setNewContent('')
-    setHighlightedHtml('')
-    setDocxHtml('')
-    setPdfHtml('')
-    lastNewContentRef.current = ''
-    lastOldContentRef.current = ''
+
+    // PDF / DOCX 不走文本缓存（HTML 体积大、解析过程也不轻）
+    const cacheable = !isPdf && !isDocx
+    const cacheKey = cacheable
+      ? (previewOnly ? `preview:${filePath}` : `diff:${filePath}@v${refreshVersion}`)
+      : null
+    const cached = cacheKey ? cacheGet(cacheKey) : undefined
+
+    if (cached) {
+      // 命中：直接同步渲染，不闪
+      lastNewContentRef.current = cached.newContent
+      lastOldContentRef.current = cached.oldContent
+      setOldContent(cached.oldContent)
+      setNewContent(cached.newContent)
+      setHighlightedHtml('')
+      setDocxHtml('')
+      setPdfHtml('')
+      setLoading(false)
+    } else {
+      setLoading(true)
+      setOldContent('')
+      setNewContent('')
+      setHighlightedHtml('')
+      setDocxHtml('')
+      setPdfHtml('')
+      lastNewContentRef.current = ''
+      lastOldContentRef.current = ''
+    }
 
     async function load() {
       try {
-        let content = ''
-        let old = ''
+        let content = cached?.newContent ?? ''
+        let old = cached?.oldContent ?? ''
 
-        if (previewOnly) {
-          if (isPdf) {
-            const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
+        if (!cached) {
+          if (previewOnly) {
+            if (isPdf) {
+              const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
+              if (cancelled) return
+              setPdfHtml(result?.html ?? '')
+              return
+            }
+            if (isDocx) {
+              const result = await window.electronAPI.docxToHtml(filePath, basePaths)
+              if (cancelled) return
+              setDocxHtml(DOMPurify.sanitize(result?.html ?? ''))
+              return
+            }
+            const result = await window.electronAPI.resolveAndReadFile(filePath, basePaths)
             if (cancelled) return
-            setPdfHtml(result?.html ?? '')
-            return
-          }
-          if (isDocx) {
-            const result = await window.electronAPI.docxToHtml(filePath, basePaths)
+            content = result?.content ?? ''
+          } else {
+            const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot })
             if (cancelled) return
-            setDocxHtml(DOMPurify.sanitize(result?.html ?? ''))
-            return
+            content = result?.newContent ?? ''
+            old = result?.oldContent ?? ''
           }
-          const result = await window.electronAPI.resolveAndReadFile(filePath, basePaths)
-          if (cancelled) return
-          content = result?.content ?? ''
-        } else {
-          const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot })
-          if (cancelled) return
-          content = result?.newContent ?? ''
-          old = result?.oldContent ?? ''
+
+          lastNewContentRef.current = content
+          lastOldContentRef.current = old
+          setOldContent(old)
+          setNewContent(content)
+
+          if (cacheKey) cacheSet(cacheKey, { oldContent: old, newContent: content })
         }
-
-        lastNewContentRef.current = content
-        lastOldContentRef.current = old
-        setOldContent(old)
-        setNewContent(content)
 
         if (previewOnly && !MD_EXTS.has(getExtension(filePath)) && content) {
           const lang = EXT_LANG[getExtension(filePath)] || 'text'
@@ -162,6 +214,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
         if (cancelled || !result) return
         const newC = result.newContent ?? ''
         const oldC = result.oldContent ?? ''
+        // 用新 refreshVersion 写入缓存，让后续切走再切回来能命中
+        cacheSet(`diff:${filePath}@v${refreshVersion}`, { oldContent: oldC, newContent: newC })
         if (newC === lastNewContentRef.current && oldC === lastOldContentRef.current) return
         lastNewContentRef.current = newC
         lastOldContentRef.current = oldC

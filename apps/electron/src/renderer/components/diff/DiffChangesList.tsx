@@ -324,21 +324,17 @@ function FileRow({
   isUnseen?: boolean
   dirPath: string
 }): React.ReactElement {
-  const [hovered, setHovered] = React.useState(false)
-
   return (
     <div
       role="button"
       tabIndex={0}
       className={cn(
-        'flex items-center w-full px-2 pl-3 py-2.5 text-[14px] transition-colors group',
+        'flex items-center w-full px-2 pl-3 h-[36px] text-[14px] transition-colors group',
         isSelected
           ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
           : 'hover:bg-primary/5',
       )}
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <span className="w-3 shrink-0 flex items-center justify-center">
         {isUnseen && <span className="size-1.5 rounded-full bg-primary" />}
@@ -362,8 +358,8 @@ function FileRow({
         })()}
       </span>
 
-      {/* +/- 行数 */}
-      <span className="ml-auto shrink-0 flex items-center gap-1.5">
+      {/* +/- 行数 — hover 时隐藏让位给操作按钮（同位置，不撑大行） */}
+      <span className="ml-auto shrink-0 flex items-center gap-1.5 group-hover:hidden">
         {file.additions > 0 && (
           <span className="!text-green-500">+{file.additions}</span>
         )}
@@ -372,25 +368,21 @@ function FileRow({
         )}
       </span>
 
-      {/* Hover 操作按钮 */}
-      {hovered && (
-        <span className="flex items-center gap-1 ml-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-          {/* Revert 按钮 */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
-                onClick={onRevert}
-              >
-                <Undo2 className="size-4" />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">还原文件变更</TooltipContent>
-          </Tooltip>
-          {/* 编辑器选择按钮 */}
-          <EditorPickerButton filePath={file.filePath} gitRoot={file.gitRoot} dirPath={dirPath} />
-        </span>
-      )}
+      {/* Hover 操作按钮 — 替代 +/- 行数显示 */}
+      <span className="ml-auto shrink-0 hidden group-hover:flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer"
+              onClick={onRevert}
+            >
+              <Undo2 className="size-4" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">还原文件变更</TooltipContent>
+        </Tooltip>
+        <EditorPickerButton filePath={file.filePath} gitRoot={file.gitRoot} dirPath={dirPath} />
+      </span>
     </div>
   )
 }
@@ -405,27 +397,20 @@ function UntrackedFileRow({
   onClick: () => void
   dirPath: string
 }): React.ReactElement {
-  const [hovered, setHovered] = React.useState(false)
-
   return (
     <div
       role="button"
       tabIndex={0}
-      className="flex items-center w-full px-2 pl-6 py-1.5 text-[14px] hover:bg-foreground/[0.04] transition-colors group"
+      className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors group"
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <span className="truncate">{filePath}</span>
-      <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
+      <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500 group-hover:hidden">
         新文件
       </span>
-
-      {hovered && (
-        <span className="ml-auto flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-          <EditorPickerButton filePath={filePath} dirPath={dirPath} />
-        </span>
-      )}
+      <span className="ml-auto hidden group-hover:flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <EditorPickerButton filePath={filePath} dirPath={dirPath} />
+      </span>
     </div>
   )
 }

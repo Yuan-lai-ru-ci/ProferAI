@@ -45,7 +45,7 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
+import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
@@ -474,6 +474,15 @@ export function useGlobalAgentListeners(): void {
             }
           }
 
+          // Bash 工具执行 git 突变命令时，标记为待刷新（完成后刷新 diff 列表）
+          if (event.type === 'tool_start' && event.toolName === 'Bash') {
+            const input = event.input as Record<string, unknown> | undefined
+            const command = typeof input?.command === 'string' ? input.command : ''
+            if (command && GIT_MUTATING_SUBCOMMANDS.test(command)) {
+              pendingGitMutateTools.set(event.toolUseId, sessionId)
+            }
+          }
+
           // 处理后台任务事件
           if (event.type === 'task_backgrounded') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
@@ -545,6 +554,13 @@ export function useGlobalAgentListeners(): void {
                   if (prev.get(sessionId)) return prev
                   const m = new Map(prev); m.set(sessionId, true); return m
                 })
+                // 侧边栏未折叠时，把 tab 切到「文件改动」
+                if (store.get(agentSidePanelOpenAtom)) {
+                  store.set(agentDiffPanelTabAtom, (prev) => {
+                    if (prev.get(sessionId) === 'changes') return prev
+                    const m = new Map(prev); m.set(sessionId, 'changes'); return m
+                  })
+                }
                 // auto-preview 已展示该文件，标记为已查看
                 store.set(agentDiffUnseenFilesAtom, (prev) => {
                   const s = prev.get(sessionId)
@@ -556,6 +572,13 @@ export function useGlobalAgentListeners(): void {
                   return m
                 })
               }
+            }
+            // Bash git 突变命令完成时，仅刷新 diff 列表（不标记 unseen，避免红点）
+            if (pendingGitMutateTools.has(event.toolUseId)) {
+              pendingGitMutateTools.delete(event.toolUseId)
+              store.set(agentDiffRefreshVersionAtom, (prev) => {
+                const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
+              })
             }
           } else if (event.type === 'shell_killed') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
@@ -768,6 +791,11 @@ export function useGlobalAgentListeners(): void {
           for (const [toolId, entry] of pendingWriteTools) {
             if (entry.sessionId === data.sessionId) {
               pendingWriteTools.delete(toolId)
+            }
+          }
+          for (const [toolId, sid] of pendingGitMutateTools) {
+            if (sid === data.sessionId) {
+              pendingGitMutateTools.delete(toolId)
             }
           }
 
