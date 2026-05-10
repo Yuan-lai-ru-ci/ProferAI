@@ -40,6 +40,10 @@ export function MainArea(): React.ReactElement {
     const containerWidth = containerEl?.clientWidth ?? 1
     let rafId = 0
 
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    document.querySelectorAll('iframe').forEach((f) => { (f as HTMLElement).style.pointerEvents = 'none' })
+
     const onMouseMove = (ev: MouseEvent) => {
       if (!previewDragging.current) return
       if (rafId) return
@@ -53,6 +57,9 @@ export function MainArea(): React.ReactElement {
     const onMouseUp = () => {
       previewDragging.current = false
       if (rafId) cancelAnimationFrame(rafId)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      document.querySelectorAll('iframe').forEach((f) => { (f as HTMLElement).style.pointerEvents = '' })
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
