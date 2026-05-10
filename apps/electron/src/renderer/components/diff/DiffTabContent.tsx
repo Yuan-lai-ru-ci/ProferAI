@@ -330,7 +330,10 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
                 sandbox="allow-scripts"
               />
             ) : (
-              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 PDF</div>
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[12px] gap-1 px-4 text-center">
+                <p>该 PDF 文件过大，无法在此预览</p>
+                <p className="text-[11px] text-muted-foreground/60">请在系统中打开查看</p>
+              </div>
             )
           ) : isImage ? (
             imageDataUrl ? (
@@ -388,7 +391,14 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
                 </div>
               </div>
             ) : (
-              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">{imagePath ? '加载中...' : '无法加载图片'}</div>
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[12px] gap-1 px-4 text-center">
+                {imagePath ? <p>加载中...</p> : (
+                  <>
+                    <p>该图片文件过大，无法在此预览</p>
+                    <p className="text-[11px] text-muted-foreground/60">请在系统中打开查看</p>
+                  </>
+                )}
+              </div>
             )
           ) : isDocx ? (
             docxHtml ? (
