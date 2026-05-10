@@ -103,7 +103,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [pdfHtml, setPdfHtml] = React.useState('')
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
-  const [imageZoom, setImageZoom] = React.useState(1)
+  const [imageZoom, setImageZoom] = React.useState(0.25)
   const [imageNaturalSize, setImageNaturalSize] = React.useState({ w: 0, h: 0 })
   const imageContainerRef = React.useRef<HTMLDivElement>(null)
   const imageDragging = React.useRef(false)
@@ -128,7 +128,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     const handler = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
-        setImageZoom((z) => Math.max(0.25, Math.min(5, z * (e.deltaY < 0 ? 1.1 : 1 / 1.1))))
+        setImageZoom((z) => Math.max(0.1, Math.min(5, z * (e.deltaY < 0 ? 1.1 : 1 / 1.1))))
       }
     }
     el.addEventListener('wheel', handler, { passive: false })
@@ -163,7 +163,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setPdfHtml('')
       setImagePath('')
       setImageDataUrl('')
-      setImageZoom(1)
+      setImageZoom(0.25)
       setImageNaturalSize({ w: 0, h: 0 })
       setLoading(false)
     } else {
@@ -175,7 +175,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setPdfHtml('')
       setImagePath('')
       setImageDataUrl('')
-      setImageZoom(1)
+      setImageZoom(0.25)
       setImageNaturalSize({ w: 0, h: 0 })
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
@@ -351,7 +351,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
                   <button
                     type="button"
                     className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => setImageZoom((z) => Math.max(0.25, z / 1.5))}
+                    onClick={() => setImageZoom((z) => Math.max(0.1, z / 1.5))}
                   >−</button>
                   <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
                   <button
