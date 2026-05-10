@@ -59,8 +59,8 @@ import QwenDarkLogo from '@/assets/models/qwen_dark.png'
 import GrokLogo from '@/assets/models/grok.png'
 import GrokDarkLogo from '@/assets/models/grok_dark.png'
 
-// Moonshot / Kimi
-import MoonshotLogo from '@/assets/models/moonshot.png'
+// Kimi
+import KimiLogo from '@/assets/models/moonshot.png'
 
 // Doubao / 豆包
 import DoubaoLogo from '@/assets/models/doubao.png'
@@ -171,9 +171,8 @@ const MODEL_LOGO_MAP: Record<string, string> = {
   // === Grok / xAI ===
   grok: GrokLogo,
 
-  // === Moonshot / Kimi ===
-  moonshot: MoonshotLogo,
-  kimi: MoonshotLogo,
+  // === Kimi ===
+  kimi: KimiLogo,
 
   // === Doubao / 豆包 ===
   doubao: DoubaoLogo,
@@ -234,9 +233,8 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   openai: OpenAILogo,
   deepseek: DeepSeekLogo,
   google: GeminiLogo,
-  moonshot: MoonshotLogo,
-  'kimi-api': MoonshotLogo,
-  'kimi-coding': MoonshotLogo,
+  'kimi-api': KimiLogo,
+  'kimi-coding': KimiLogo,
   zhipu: ZhipuLogo,
   minimax: MiniMaxLogo,
   doubao: DoubaoLogo,
@@ -252,7 +250,7 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
  */
 const URL_LOGO_MAP: Array<[RegExp, string]> = [
   [/proma\.cool/i, PromaLogo],
-  [/moonshot\.cn|kimi/i, MoonshotLogo],
+  [/moonshot\.cn|kimi/i, KimiLogo],
   [/bigmodel\.cn|zhipuai/i, ZhipuLogo],
   [/minimax/i, MiniMaxLogo],
   [/volces\.com|volcengine/i, DoubaoLogo],
