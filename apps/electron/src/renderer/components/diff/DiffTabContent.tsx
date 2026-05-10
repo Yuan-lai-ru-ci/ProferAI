@@ -38,19 +38,7 @@ const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
 const DOCX_EXTS = new Set(['.docx'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
-
-/** 将绝对路径转为 proma-file:// URL（保留开头的 /，只编码特殊字符） */
-function toPromaFileUrl(absPath: string): string {
-  const encoded = absPath.split('/').map(encodeURIComponent).join('/')
-  return 'proma-file://' + encoded
-}
-
-/** 扩展名 → MIME type */
-const EXT_MIME: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp', '.ico': 'image/x-icon',
-}
+const IMAGE_MAX_SIZE = 20 * 1024 * 1024
 
 /**
  * 简易 LRU 缓存：保留最近访问的 N 个 entries。
@@ -103,6 +91,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [pdfHtml, setPdfHtml] = React.useState('')
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
+  // 默认 25%：预览面板空间有限，先展示缩略全貌，用户可手动放大查看细节
   const [imageZoom, setImageZoom] = React.useState(0.25)
   const [imageNaturalSize, setImageNaturalSize] = React.useState({ w: 0, h: 0 })
   const imageContainerRef = React.useRef<HTMLDivElement>(null)
@@ -133,7 +122,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     }
     el.addEventListener('wheel', handler, { passive: false })
     return () => el.removeEventListener('wheel', handler)
-  }, [isImage])
+  }, [isImage, imageDataUrl])
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
@@ -195,15 +184,14 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
               return
             }
             if (isImage) {
-              const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
-              if (cancelled || !resolved) { setImagePath(''); return }
-              setImagePath(resolved)
-              try {
-                const b64 = await window.electronAPI.readAttachment(resolved)
-                if (cancelled) return
-                const mime = EXT_MIME[ext] || 'image/png'
-                setImageDataUrl(`data:${mime};base64,${b64}`)
-              } catch {
+              const b64 = await window.electronAPI.readBinaryBase64(filePath, basePaths, IMAGE_MAX_SIZE)
+              if (cancelled) return
+              if (b64) {
+                setImagePath(filePath)
+                const mimeMap: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.ico': 'image/x-icon' }
+                setImageDataUrl(`data:${mimeMap[ext] || 'image/png'};base64,${b64}`)
+              } else {
+                setImagePath('')
                 setImageDataUrl('')
               }
               return

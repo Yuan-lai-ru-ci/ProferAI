@@ -1979,6 +1979,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 读取文件为 base64（带路径校验，供内联图片预览等使用）
+  ipcMain.handle(
+    'file:read-binary-base64',
+    async (_, filePath: string, basePaths?: string[], maxSize?: number): Promise<string | null> => {
+      const { readFileSync, statSync } = await import('node:fs')
+      const { resolveFilePath } = await import('./lib/file-preview-service')
+      const resolved = resolveFilePath(filePath, basePaths)
+      if (!resolved || !isPathAllowed(resolved, basePaths)) return null
+      const st = statSync(resolved)
+      if (maxSize && st.size > maxSize) return null
+      return readFileSync(resolved).toString('base64')
+    }
+  )
+
   // 重命名文件/目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_FILE,
