@@ -77,7 +77,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
                 <PanelRightClose className="size-4" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">折叠文件面板 <kbd className="ml-1 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded border border-border/60 bg-background/80 text-[10px] font-medium text-foreground/80 shadow-sm">{navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'}</kbd></TooltipContent>
+            <TooltipContent side="bottom">折叠文件面板 ({navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'})</TooltipContent>
           </Tooltip>
         )}
       </div>

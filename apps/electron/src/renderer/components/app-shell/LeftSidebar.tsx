@@ -872,7 +872,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 <PanelLeftOpen size={18} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">展开侧边栏 <kbd className="ml-1 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded border border-border/60 bg-background/80 text-[10px] font-medium text-foreground/80 shadow-sm">{navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'}</kbd></TooltipContent>
+            <TooltipContent side="right">展开侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'})</TooltipContent>
           </Tooltip>
         </div>
 
@@ -943,7 +943,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 <PanelLeftClose size={14} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">收起侧边栏 <kbd className="ml-1 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded border border-border/60 bg-background/80 text-[10px] font-medium text-foreground/80 shadow-sm">{navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'}</kbd></TooltipContent>
+            <TooltipContent side="right">收起侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'})</TooltipContent>
           </Tooltip>
         </div>
       </div>
