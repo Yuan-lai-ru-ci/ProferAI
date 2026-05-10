@@ -1676,7 +1676,7 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
   const st = statSync(safePath)
-  if (st.size > MAX_FILE_SIZE) return null
+  if (st.size > 10 * 1024 * 1024) return null
   const pdfBase64 = readFileSync(safePath).toString('base64')
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
