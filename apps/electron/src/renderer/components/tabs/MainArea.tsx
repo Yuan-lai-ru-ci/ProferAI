@@ -36,18 +36,23 @@ export function MainArea(): React.ReactElement {
     previewDragging.current = true
     const startX = e.clientX
     const startRatio = splitRatio
-    // 取最近的分屏容器宽度
     const containerEl = (e.currentTarget as HTMLElement).closest('[data-split-container]') as HTMLElement | null
     const containerWidth = containerEl?.clientWidth ?? 1
+    let rafId = 0
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!previewDragging.current) return
-      const delta = ev.clientX - startX
-      const newRatio = Math.max(0.3, Math.min(0.8, startRatio + delta / containerWidth))
-      setSplitRatio(newRatio)
+      if (rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        const delta = ev.clientX - startX
+        const newRatio = Math.max(0.3, Math.min(0.8, startRatio + delta / containerWidth))
+        setSplitRatio(newRatio)
+      })
     }
     const onMouseUp = () => {
       previewDragging.current = false
+      if (rafId) cancelAnimationFrame(rafId)
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }

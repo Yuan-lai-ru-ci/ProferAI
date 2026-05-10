@@ -36,16 +36,22 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     dragging.current = true
     const startX = e.clientX
     const startWidth = rightPanelWidth
+    let rafId = 0
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!dragging.current) return
-      const delta = startX - ev.clientX
-      const newWidth = Math.max(200, Math.min(500, startWidth + delta))
-      setRightPanelWidth(newWidth)
+      if (rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        const delta = startX - ev.clientX
+        const newWidth = Math.max(200, Math.min(500, startWidth + delta))
+        setRightPanelWidth(newWidth)
+      })
     }
 
     const onMouseUp = () => {
       dragging.current = false
+      if (rafId) cancelAnimationFrame(rafId)
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
