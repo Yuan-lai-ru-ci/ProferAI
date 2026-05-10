@@ -444,7 +444,7 @@ export function VoiceDictationApp(): React.ReactElement {
   return (
     <div ref={rootRef} className="box-border flex h-screen w-screen flex-col overflow-hidden rounded-xl bg-background px-2 pt-2 pb-1.5">
       <div ref={panelRef} className="flex min-h-0 w-full flex-col overflow-hidden">
-        <div ref={headerRef} className="flex shrink-0 items-center justify-between px-2 pt-0.5 pb-2">
+        <div ref={headerRef} className="voice-dictation-drag-region flex shrink-0 items-center justify-between px-2 pt-0.5 pb-2">
           <div className="flex items-center gap-3 min-w-0">
             <div
               className={`relative flex size-8 items-center justify-center rounded-full ${status === 'error' ? 'bg-destructive/12 text-destructive' : 'bg-primary/12 text-primary'}`}
@@ -473,13 +473,13 @@ export function VoiceDictationApp(): React.ReactElement {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="voice-dictation-no-drag flex items-center gap-1.5">
             {busy && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-8 rounded-full text-destructive"
+                className="voice-dictation-no-drag size-8 rounded-full text-destructive"
                 onClick={() => stopRecording().catch(console.error)}
               >
                 <Square className="size-3.5" fill="currentColor" strokeWidth={0} />
@@ -489,7 +489,7 @@ export function VoiceDictationApp(): React.ReactElement {
               type="button"
               variant="ghost"
               size="icon"
-              className="size-8 rounded-full text-muted-foreground"
+              className="voice-dictation-no-drag size-8 rounded-full text-muted-foreground"
               onClick={cancelAndHide}
             >
               <X className="size-4" />
