@@ -558,7 +558,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
   const toggleExpand = async (): Promise<void> => {
     if (!expanded && !loaded) {
       try {
-        const items = await window.electronAPI.listAttachedDirectory(dirPath)
+        const items = await window.electronAPI.listAttachedDirectory(dirPath, allowedPaths)
         setChildren(items)
         setLoaded(true)
       } catch (err) {
@@ -644,7 +644,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
     if (!entry.isDirectory) return
     if (!expanded && !loaded) {
       try {
-        const items = await window.electronAPI.listAttachedDirectory(currentPath)
+        const items = await window.electronAPI.listAttachedDirectory(currentPath, allowedPaths)
         setChildren(items)
         setLoaded(true)
       } catch (err) {
