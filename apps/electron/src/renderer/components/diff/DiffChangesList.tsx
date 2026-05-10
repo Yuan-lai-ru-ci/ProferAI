@@ -160,7 +160,7 @@ export function DiffChangesList({
   if (!isGitRepo) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
-        <p className="text-[12px] text-center">当前目录不是 Git 仓库</p>
+        <p className="text-[12px] text-center">当前目录不是 Git 仓库或暂无改动</p>
       </div>
     )
   }
@@ -213,7 +213,7 @@ export function DiffChangesList({
               <FileRow
                 key={`${file.gitRoot}:${file.filePath}`}
                 file={file}
-                isSelected={file.filePath === selectedFilePath}
+                isSelected={absPath === selectedFilePath || file.filePath === selectedFilePath}
                 isUnseen={unseenFiles.has(absPath)}
                 onClick={() => { markFileAsSeen(absPath); onFileClick(file.filePath, false, file.gitRoot) }}
                 onRevert={() => handleRevert(file.filePath, file.gitRoot)}

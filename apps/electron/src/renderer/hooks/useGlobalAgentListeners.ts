@@ -54,6 +54,9 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
 
+/** 会改变 git 工作树状态的子命令（用于识别 Bash 中触发 diff 刷新的 git 操作） */
+const GIT_MUTATING_SUBCOMMANDS = /\bgit\s+(commit|checkout|reset|restore|stash|clean|add|rm|mv|pull|merge|rebase|cherry-pick|revert|switch|am|apply)\b/
+
 // ============================================================================
 // Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
 // Phase 2 将移除此转换，直接使用 SDKMessage 渲染
@@ -284,6 +287,8 @@ export function useGlobalAgentListeners(): void {
   useEffect(() => {
     /** 正在执行的写工具：toolUseId → { path, sessionId } */
     const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
+    /** 正在执行的 git 突变 Bash 命令：toolUseId → sessionId（完成后触发 diff 刷新） */
+    const pendingGitMutateTools = new Map<string, string>()
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
@@ -539,6 +544,16 @@ export function useGlobalAgentListeners(): void {
                 store.set(previewPanelOpenMapAtom, (prev) => {
                   if (prev.get(sessionId)) return prev
                   const m = new Map(prev); m.set(sessionId, true); return m
+                })
+                // auto-preview 已展示该文件，标记为已查看
+                store.set(agentDiffUnseenFilesAtom, (prev) => {
+                  const s = prev.get(sessionId)
+                  if (!s?.has(writtenPath)) return prev
+                  const m = new Map(prev)
+                  const next = new Set(s)
+                  next.delete(writtenPath)
+                  m.set(sessionId, next)
+                  return m
                 })
               }
             }

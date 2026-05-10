@@ -1984,7 +1984,11 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.RENAME_FILE,
     async (_, filePath: string, newName: string): Promise<void> => {
       const { renameSync } = await import('node:fs')
-      const { resolve, dirname, join } = await import('node:path')
+      const { resolve, dirname, join, sep } = await import('node:path')
+
+      if (newName.includes('/') || newName.includes('\\') || newName.includes('..') || newName.includes(sep)) {
+        throw new Error('文件名不能包含路径分隔符或 ".."')
+      }
 
       const safePath = resolve(filePath)
       const workspacesRoot = resolve(getAgentWorkspacesDir())

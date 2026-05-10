@@ -604,7 +604,7 @@ export interface ElectronAPI {
   openFile: (filePath: string) => Promise<void>
 
   /** 用系统默认应用打开任意文件（无工作区限制） */
-  systemOpenFile: (filePath: string, appName?: string) => Promise<void>
+  systemOpenFile: (filePath: string, appName?: string, basePaths?: string[]) => Promise<void>
 
   /** 扫描系统中可用的编辑器应用（仅 macOS） */
   scanEditors: () => Promise<import('@proma/shared').EditorApp[]>
@@ -1543,8 +1543,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FILE, filePath)
   },
 
-  systemOpenFile: (filePath: string, appName?: string) => {
-    return ipcRenderer.invoke(IPC_CHANNELS.SYSTEM_OPEN_FILE, filePath, appName)
+  systemOpenFile: (filePath: string, appName?: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.SYSTEM_OPEN_FILE, filePath, appName, basePaths)
   },
 
   scanEditors: () => {
@@ -1599,12 +1599,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER, filePath, basePaths)
   },
 
-  renameAttachedFile: (filePath: string, newName: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE, filePath, newName)
+  renameAttachedFile: (filePath: string, newName: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE, filePath, newName, basePaths)
   },
 
-  moveAttachedFile: (filePath: string, targetDir: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE, filePath, targetDir)
+  moveAttachedFile: (filePath: string, targetDir: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE, filePath, targetDir, basePaths)
   },
 
   checkPathsType: (paths: string[]) => {
