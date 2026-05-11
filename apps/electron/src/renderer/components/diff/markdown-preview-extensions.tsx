@@ -1,15 +1,12 @@
-import * as React from 'react'
 import { Node, mergeAttributes } from '@tiptap/core'
-import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react'
-import type { NodeViewProps } from '@tiptap/react'
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
 import { highlightCode, highlightCodeSync } from '@proma/core'
 import type { FileAccessOptions } from '@proma/shared'
-import { cn } from '@/lib/utils'
 
-type FileAccessRef = React.MutableRefObject<FileAccessOptions | undefined>
-type ThemeRef = React.MutableRefObject<string>
+type FileAccessRef = { current: FileAccessOptions | undefined }
+type ThemeRef = { current: string }
 
 function isExternalUrl(src: string): boolean {
   return /^(?:https?:|data:|blob:|file:|proma-file:)/i.test(src)
@@ -19,189 +16,264 @@ function sanitizeHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     ADD_TAGS: ['iframe', 'video', 'source', 'summary', 'details'],
     ADD_ATTR: [
+      'align',
       'allow',
       'allowfullscreen',
+      'colspan',
       'controls',
       'frameborder',
       'loading',
       'poster',
+      'rowspan',
       'src',
       'target',
     ],
   })
 }
 
-function useResolvedMediaSrc(src: string, fileAccessRef: FileAccessRef): string {
-  const [resolvedSrc, setResolvedSrc] = React.useState(src)
+function setClass(el: HTMLElement, className: string): void {
+  el.className = className
+}
 
-  React.useEffect(() => {
-    if (!src || isExternalUrl(src)) {
-      setResolvedSrc(src)
-      return
+function resolveMediaSrc(src: string, fileAccessRef: FileAccessRef, apply: (src: string) => void): () => void {
+  if (!src || isExternalUrl(src)) {
+    apply(src)
+    return () => {}
+  }
+
+  let cancelled = false
+  apply(src)
+  window.electronAPI
+    .resolveFilePath(src, fileAccessRef.current)
+    .then((result) => {
+      if (!cancelled) apply(result?.url ?? src)
+    })
+    .catch(() => {
+      if (!cancelled) apply(src)
+    })
+
+  return () => { cancelled = true }
+}
+
+function createStaticHtmlView(
+  initialNode: ProseMirrorNode,
+  options: {
+    className: string
+    getHtml: (node: ProseMirrorNode) => string
+    inline?: boolean
+  },
+) {
+  const dom = document.createElement(options.inline ? 'span' : 'div')
+  dom.contentEditable = 'false'
+  setClass(dom, options.className)
+
+  const render = (node: ProseMirrorNode) => {
+    dom.innerHTML = sanitizeHtml(options.getHtml(node))
+  }
+
+  render(initialNode)
+
+  return {
+    dom,
+    update(nextNode: ProseMirrorNode) {
+      if (nextNode.type !== initialNode.type) return false
+      render(nextNode)
+      return true
+    },
+    ignoreMutation() {
+      return true
+    },
+  }
+}
+
+function createMarkdownImageView(initialNode: ProseMirrorNode, fileAccessRef: FileAccessRef) {
+  const figure = document.createElement('figure')
+  figure.contentEditable = 'false'
+  setClass(figure, 'not-prose my-3')
+
+  const img = document.createElement('img')
+  img.draggable = false
+  setClass(img, 'max-w-full rounded-md border border-border/30 bg-muted/20')
+  figure.appendChild(img)
+
+  const caption = document.createElement('figcaption')
+  setClass(caption, 'mt-1 text-center text-xs text-muted-foreground')
+
+  let cleanup = () => {}
+
+  const render = (node: ProseMirrorNode) => {
+    cleanup()
+    const src = String(node.attrs.src ?? '')
+    const alt = String(node.attrs.alt ?? '')
+    const title = String(node.attrs.title ?? '')
+    img.alt = alt
+    img.title = title
+    cleanup = resolveMediaSrc(src, fileAccessRef, (resolvedSrc) => { img.src = resolvedSrc })
+
+    if (title) {
+      caption.textContent = title
+      if (!caption.parentElement) figure.appendChild(caption)
+    } else {
+      caption.remove()
     }
+  }
 
-    let cancelled = false
-    window.electronAPI
-      .resolveFilePath(src, fileAccessRef.current)
-      .then((result) => {
-        if (!cancelled) setResolvedSrc(result?.url ?? src)
-      })
-      .catch(() => {
-        if (!cancelled) setResolvedSrc(src)
-      })
+  render(initialNode)
 
-    return () => { cancelled = true }
-  }, [fileAccessRef, src])
-
-  return resolvedSrc
+  return {
+    dom: figure,
+    update(nextNode: ProseMirrorNode) {
+      if (nextNode.type !== initialNode.type) return false
+      render(nextNode)
+      return true
+    },
+    destroy() {
+      cleanup()
+    },
+    ignoreMutation() {
+      return true
+    },
+  }
 }
 
-function MarkdownImageView({ node }: NodeViewProps, fileAccessRef: FileAccessRef): React.ReactElement {
-  const src = String(node.attrs.src ?? '')
-  const alt = String(node.attrs.alt ?? '')
-  const title = String(node.attrs.title ?? '')
-  const resolvedSrc = useResolvedMediaSrc(src, fileAccessRef)
+function createMarkdownVideoView(initialNode: ProseMirrorNode, fileAccessRef: FileAccessRef) {
+  const figure = document.createElement('figure')
+  figure.contentEditable = 'false'
+  setClass(figure, 'not-prose my-3')
 
-  return (
-    <NodeViewWrapper as="figure" className="not-prose my-3">
-      <img
-        src={resolvedSrc}
-        alt={alt}
-        title={title || undefined}
-        draggable={false}
-        className="max-w-full rounded-md border border-border/30 bg-muted/20"
-      />
-      {title && <figcaption className="mt-1 text-center text-xs text-muted-foreground">{title}</figcaption>}
-    </NodeViewWrapper>
-  )
-}
+  const video = document.createElement('video')
+  video.controls = true
+  setClass(video, 'max-h-[520px] max-w-full rounded-md border border-border/30 bg-black')
+  figure.appendChild(video)
 
-function MarkdownVideoView({ node }: NodeViewProps, fileAccessRef: FileAccessRef): React.ReactElement {
-  const src = String(node.attrs.src ?? '')
-  const title = String(node.attrs.title ?? '')
-  const poster = String(node.attrs.poster ?? '')
-  const resolvedSrc = useResolvedMediaSrc(src, fileAccessRef)
-  const resolvedPoster = useResolvedMediaSrc(poster, fileAccessRef)
+  const caption = document.createElement('figcaption')
+  setClass(caption, 'mt-1 text-center text-xs text-muted-foreground')
 
-  return (
-    <NodeViewWrapper as="figure" className="not-prose my-3">
-      <video
-        src={resolvedSrc}
-        poster={resolvedPoster || undefined}
-        title={title || undefined}
-        controls
-        className="max-h-[520px] max-w-full rounded-md border border-border/30 bg-black"
-      />
-      {title && <figcaption className="mt-1 text-center text-xs text-muted-foreground">{title}</figcaption>}
-    </NodeViewWrapper>
-  )
-}
+  let cleanupSrc = () => {}
+  let cleanupPoster = () => {}
 
-function RawHtmlBlockView({ node }: NodeViewProps): React.ReactElement {
-  const html = String(node.attrs.html ?? '')
-  return (
-    <NodeViewWrapper
-      className="not-prose my-3 overflow-auto"
-      dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
-    />
-  )
-}
+  const render = (node: ProseMirrorNode) => {
+    cleanupSrc()
+    cleanupPoster()
+    const src = String(node.attrs.src ?? '')
+    const poster = String(node.attrs.poster ?? '')
+    const title = String(node.attrs.title ?? '')
+    video.title = title
+    cleanupSrc = resolveMediaSrc(src, fileAccessRef, (resolvedSrc) => { video.src = resolvedSrc })
+    cleanupPoster = resolveMediaSrc(poster, fileAccessRef, (resolvedPoster) => {
+      if (resolvedPoster) video.poster = resolvedPoster
+      else video.removeAttribute('poster')
+    })
 
-function RawHtmlInlineView({ node }: NodeViewProps): React.ReactElement {
-  const html = String(node.attrs.html ?? '')
-  return (
-    <NodeViewWrapper
-      as="span"
-      className="not-prose inline-block align-baseline"
-      dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
-    />
-  )
-}
-
-function MathInlineView({ node }: NodeViewProps): React.ReactElement {
-  const latex = String(node.attrs.latex ?? '')
-  const html = React.useMemo(() => {
-    try {
-      return katex.renderToString(latex, { throwOnError: false })
-    } catch {
-      return latex
+    if (title) {
+      caption.textContent = title
+      if (!caption.parentElement) figure.appendChild(caption)
+    } else {
+      caption.remove()
     }
-  }, [latex])
+  }
 
-  return (
-    <NodeViewWrapper
-      as="span"
-      className="not-prose inline-block align-baseline"
-      data-latex={latex}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  )
+  render(initialNode)
+
+  return {
+    dom: figure,
+    update(nextNode: ProseMirrorNode) {
+      if (nextNode.type !== initialNode.type) return false
+      render(nextNode)
+      return true
+    },
+    destroy() {
+      cleanupSrc()
+      cleanupPoster()
+    },
+    ignoreMutation() {
+      return true
+    },
+  }
 }
 
-function MathBlockView({ node }: NodeViewProps): React.ReactElement {
-  const latex = String(node.attrs.latex ?? '')
-  const html = React.useMemo(() => {
-    try {
-      return katex.renderToString(latex, { displayMode: true, throwOnError: false })
-    } catch {
-      return latex
-    }
-  }, [latex])
-
-  return (
-    <NodeViewWrapper
-      className="not-prose my-4 overflow-x-auto text-center"
-      data-latex={latex}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  )
-}
-
-function ShikiCodeBlockView({ node }: NodeViewProps, themeRef: ThemeRef): React.ReactElement {
-  const code = node.textContent
-  const language = String(node.attrs.language ?? 'text') || 'text'
-  const [highlightedHtml, setHighlightedHtml] = React.useState(() => {
-    const result = highlightCodeSync({ code, language, theme: themeRef.current })
-    return result ? sanitizeHtml(result.html) : ''
+function createMathView(initialNode: ProseMirrorNode, displayMode: boolean) {
+  return createStaticHtmlView(initialNode, {
+    inline: !displayMode,
+    className: displayMode
+      ? 'not-prose my-4 overflow-x-auto text-center'
+      : 'not-prose inline-block align-baseline',
+    getHtml: (node) => {
+      const latex = String(node.attrs.latex ?? '')
+      try {
+        return katex.renderToString(latex, { displayMode, throwOnError: false })
+      } catch {
+        return latex
+      }
+    },
   })
+}
 
-  React.useEffect(() => {
-    let cancelled = false
+function createShikiCodeBlockView(initialNode: ProseMirrorNode, themeRef: ThemeRef) {
+  const dom = document.createElement('div')
+  dom.contentEditable = 'false'
+  setClass(dom, 'not-prose my-3 overflow-hidden rounded-md border border-border/40 bg-muted/30')
+
+  const header = document.createElement('div')
+  setClass(header, 'flex h-8 items-center justify-between border-b border-border/30 px-3 text-xs text-muted-foreground')
+  const label = document.createElement('span')
+  header.appendChild(label)
+
+  const body = document.createElement('div')
+  setClass(body, '[&_.shiki]:!m-0 [&_.shiki]:!rounded-none [&_.shiki]:!bg-transparent [&_.shiki]:overflow-x-auto [&_.shiki]:p-4 [&_.shiki_code]:text-[13px] [&_.shiki_code]:leading-[1.6]')
+
+  dom.appendChild(header)
+  dom.appendChild(body)
+
+  let generation = 0
+
+  const renderFallback = (code: string) => {
+    const pre = document.createElement('pre')
+    pre.className = 'm-0 overflow-x-auto p-4 text-[13px] leading-[1.6]'
+    const codeEl = document.createElement('code')
+    codeEl.textContent = code
+    pre.appendChild(codeEl)
+    body.replaceChildren(pre)
+  }
+
+  const render = (node: ProseMirrorNode) => {
+    const currentGeneration = ++generation
+    const code = node.textContent
+    const language = String(node.attrs.language ?? 'text') || 'text'
+    label.textContent = language === 'text' ? 'Code' : language
+
     const sync = highlightCodeSync({ code, language, theme: themeRef.current })
     if (sync) {
-      setHighlightedHtml(sanitizeHtml(sync.html))
+      body.innerHTML = sanitizeHtml(sync.html)
       return
     }
 
+    renderFallback(code)
     highlightCode({ code, language, theme: themeRef.current })
       .then((result) => {
-        if (!cancelled) setHighlightedHtml(sanitizeHtml(result.html))
+        if (currentGeneration === generation) body.innerHTML = sanitizeHtml(result.html)
       })
       .catch(() => {
-        if (!cancelled) setHighlightedHtml('')
+        if (currentGeneration === generation) renderFallback(code)
       })
+  }
 
-    return () => { cancelled = true }
-  }, [code, language, themeRef])
+  render(initialNode)
 
-  return (
-    <NodeViewWrapper className="not-prose my-3 overflow-hidden rounded-md border border-border/40 bg-muted/30">
-      <div className="flex h-8 items-center justify-between border-b border-border/30 px-3 text-xs text-muted-foreground">
-        <span>{language === 'text' ? 'Code' : language}</span>
-      </div>
-      {highlightedHtml ? (
-        <div
-          className={cn(
-            '[&_.shiki]:!m-0 [&_.shiki]:!rounded-none [&_.shiki]:!bg-transparent',
-            '[&_.shiki]:overflow-x-auto [&_.shiki]:p-4 [&_.shiki_code]:text-[13px] [&_.shiki_code]:leading-[1.6]',
-          )}
-          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-        />
-      ) : (
-        <pre className="m-0 overflow-x-auto p-4 text-[13px] leading-[1.6]"><code>{code}</code></pre>
-      )}
-    </NodeViewWrapper>
-  )
+  return {
+    dom,
+    update(nextNode: ProseMirrorNode) {
+      if (nextNode.type !== initialNode.type) return false
+      render(nextNode)
+      return true
+    },
+    destroy() {
+      generation += 1
+    },
+    ignoreMutation() {
+      return true
+    },
+  }
 }
 
 export function createMarkdownImage(fileAccessRef: FileAccessRef): Node {
@@ -238,7 +310,7 @@ export function createMarkdownImage(fileAccessRef: FileAccessRef): Node {
     },
 
     addNodeView() {
-      return ReactNodeViewRenderer((props) => MarkdownImageView(props, fileAccessRef))
+      return ({ node }) => createMarkdownImageView(node, fileAccessRef)
     },
   })
 }
@@ -278,7 +350,7 @@ export function createMarkdownVideo(fileAccessRef: FileAccessRef): Node {
     },
 
     addNodeView() {
-      return ReactNodeViewRenderer((props) => MarkdownVideoView(props, fileAccessRef))
+      return ({ node }) => createMarkdownVideoView(node, fileAccessRef)
     },
   })
 }
@@ -304,7 +376,10 @@ export const RawHtmlBlock = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(RawHtmlBlockView)
+    return ({ node }) => createStaticHtmlView(node, {
+      className: 'not-prose my-3 overflow-auto',
+      getHtml: (nextNode) => String(nextNode.attrs.html ?? ''),
+    })
   },
 })
 
@@ -330,7 +405,11 @@ export const RawHtmlInline = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(RawHtmlInlineView)
+    return ({ node }) => createStaticHtmlView(node, {
+      inline: true,
+      className: 'not-prose inline-block align-baseline',
+      getHtml: (nextNode) => String(nextNode.attrs.html ?? ''),
+    })
   },
 })
 
@@ -356,7 +435,7 @@ export const MathInline = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(MathInlineView)
+    return ({ node }) => createMathView(node, false)
   },
 })
 
@@ -381,7 +460,7 @@ export const MathBlock = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(MathBlockView)
+    return ({ node }) => createMathView(node, true)
   },
 })
 
@@ -419,7 +498,7 @@ export function createShikiCodeBlock(themeRef: ThemeRef): Node {
     },
 
     addNodeView() {
-      return ReactNodeViewRenderer((props) => ShikiCodeBlockView(props, themeRef))
+      return ({ node }) => createShikiCodeBlockView(node, themeRef)
     },
   })
 }
@@ -469,58 +548,36 @@ export const TaskItem = Node.create({
   },
 })
 
-export const MarkdownTable = Node.create({
-  name: 'markdownTable',
+export const MarkdownTableBlock = Node.create({
+  name: 'markdownTableBlock',
   group: 'block',
-  content: 'markdownTableRow+',
-  isolating: true,
+  atom: true,
+
+  addAttributes() {
+    return { html: { default: '' } }
+  },
 
   parseHTML() {
-    return [{ tag: 'table' }]
+    return [{
+      tag: 'div[data-type="markdown-table"]',
+      getAttrs: (node) => node instanceof HTMLElement ? { html: node.dataset.html || '' } : false,
+    }]
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ['table', mergeAttributes(HTMLAttributes, { class: 'not-prose my-3 w-full border-collapse text-sm' }), ['tbody', 0]]
-  },
-})
-
-export const MarkdownTableRow = Node.create({
-  name: 'markdownTableRow',
-  content: '(markdownTableCell | markdownTableHeader)+',
-
-  parseHTML() {
-    return [{ tag: 'tr' }]
+  renderHTML({ node }) {
+    return ['div', { 'data-type': 'markdown-table', 'data-html': node.attrs.html }]
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ['tr', mergeAttributes(HTMLAttributes), 0]
-  },
-})
-
-export const MarkdownTableCell = Node.create({
-  name: 'markdownTableCell',
-  content: 'block+',
-  isolating: true,
-
-  parseHTML() {
-    return [{ tag: 'td' }]
-  },
-
-  renderHTML({ HTMLAttributes }) {
-    return ['td', mergeAttributes(HTMLAttributes, { class: 'border border-border/50 px-2 py-1 align-top' }), 0]
-  },
-})
-
-export const MarkdownTableHeader = Node.create({
-  name: 'markdownTableHeader',
-  content: 'block+',
-  isolating: true,
-
-  parseHTML() {
-    return [{ tag: 'th' }]
-  },
-
-  renderHTML({ HTMLAttributes }) {
-    return ['th', mergeAttributes(HTMLAttributes, { class: 'border border-border/60 bg-muted/50 px-2 py-1 text-left font-medium align-top' }), 0]
+  addNodeView() {
+    return ({ node }) => createStaticHtmlView(node, {
+      className: [
+        'not-prose my-3 overflow-x-auto',
+        '[&_table]:w-full [&_table]:border-collapse [&_table]:text-sm',
+        '[&_th]:border [&_th]:border-border/60 [&_th]:bg-muted/50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-medium [&_th]:align-top',
+        '[&_td]:border [&_td]:border-border/50 [&_td]:px-2 [&_td]:py-1 [&_td]:align-top',
+        '[&_tr:nth-child(even)_td]:bg-muted/20',
+      ].join(' '),
+      getHtml: (nextNode) => String(nextNode.attrs.html ?? ''),
+    })
   },
 })

@@ -139,7 +139,7 @@ markdownIt.renderer.rules.image = (tokens, idx) => {
   return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}"${titleAttr}>`
 }
 
-function enhanceTaskLists(html: string): string {
+function enhanceMarkdownHtml(html: string): string {
   if (typeof document === 'undefined') return html
 
   const root = document.createElement('div')
@@ -162,12 +162,19 @@ function enhanceTaskLists(html: string): string {
     li.parentElement?.setAttribute('data-type', 'taskList')
   }
 
+  for (const table of Array.from(root.querySelectorAll('table'))) {
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('data-type', 'markdown-table')
+    wrapper.dataset.html = table.outerHTML
+    table.replaceWith(wrapper)
+  }
+
   return root.innerHTML
 }
 
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return ''
-  return enhanceTaskLists(markdownIt.render(markdown))
+  return enhanceMarkdownHtml(markdownIt.render(markdown))
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */
@@ -192,6 +199,13 @@ export function htmlToMarkdown(html: string): string {
 
     switch (tagName) {
       case 'div':
+        if (el.getAttribute('data-type') === 'markdown-table') {
+          const tableHtml = el.getAttribute('data-html') || ''
+          const holder = document.createElement('div')
+          holder.innerHTML = tableHtml
+          const table = holder.querySelector('table')
+          return table ? processNode(table) : ''
+        }
         if (el.getAttribute('data-type') === 'raw-html-block') {
           return `${el.getAttribute('data-html') || ''}\n`
         }

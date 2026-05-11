@@ -8,10 +8,7 @@ import type { FileAccessOptions } from '@proma/shared'
 import { cn } from '@/lib/utils'
 import { htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
 import {
-  MarkdownTable,
-  MarkdownTableCell,
-  MarkdownTableHeader,
-  MarkdownTableRow,
+  MarkdownTableBlock,
   MathBlock,
   MathInline,
   RawHtmlBlock,
@@ -75,10 +72,7 @@ export function MarkdownRichEditor({
     MathInline,
     TaskList,
     TaskItem,
-    MarkdownTable,
-    MarkdownTableRow,
-    MarkdownTableHeader,
-    MarkdownTableCell,
+    MarkdownTableBlock,
     createShikiCodeBlock(shikiThemeRef),
     StarterKit.configure({
       codeBlock: false,
