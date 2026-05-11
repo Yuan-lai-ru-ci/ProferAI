@@ -193,9 +193,9 @@ export function DiffChangesList({
                 )
               })}
               <span className="ml-auto shrink-0 flex items-center gap-1.5">
-                <span className="text-foreground/30">{group.files.length} files</span>
-                {group.totalAdditions > 0 && <span className="text-green-500">+{group.totalAdditions}</span>}
-                {group.totalDeletions > 0 && <span className="text-red-500">-{group.totalDeletions}</span>}
+                <span className="text-foreground/30">{group.files.length} changed files</span>
+                {group.totalAdditions > 0 && <span className="text-foreground/30">+{group.totalAdditions}</span>}
+                {group.totalDeletions > 0 && <span className="text-foreground/30">-{group.totalDeletions}</span>}
               </span>
             </button>
 
@@ -290,10 +290,10 @@ function FileRow({
       {/* +/- 行数 — hover 时隐藏让位给操作按钮（同位置，不撑大行） */}
       <span className="ml-auto shrink-0 flex items-center gap-1.5 group-hover:hidden">
         {file.additions > 0 && (
-          <span className="!text-green-500">+{file.additions}</span>
+          <span style={{ color: 'rgb(34 197 94)' }}>+{file.additions}</span>
         )}
         {file.deletions > 0 && (
-          <span className="!text-red-500">-{file.deletions}</span>
+          <span style={{ color: 'rgb(239 68 68)' }}>-{file.deletions}</span>
         )}
       </span>
 
