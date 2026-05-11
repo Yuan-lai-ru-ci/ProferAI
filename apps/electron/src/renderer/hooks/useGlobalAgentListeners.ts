@@ -417,9 +417,9 @@ export function useGlobalAgentListeners(): void {
     const setAutoPreviewFile = (sid: string, targetPath: string, openPanel: boolean) => {
       const seq = (autoPreviewSeq.get(sid) ?? 0) + 1
       autoPreviewSeq.set(sid, seq)
-      buildAutoPreviewFile(sid, targetPath)
+      return buildAutoPreviewFile(sid, targetPath)
         .then((previewFile) => {
-          if (autoPreviewSeq.get(sid) !== seq) return
+          if (autoPreviewSeq.get(sid) !== seq) return null
           store.set(previewFileMapAtom, (prev) => {
             const m = new Map(prev)
             m.set(sid, previewFile)
@@ -431,8 +431,9 @@ export function useGlobalAgentListeners(): void {
               const m = new Map(prev); m.set(sid, true); return m
             })
           }
+          return previewFile
         })
-        .catch(() => { /* auto preview should never break streaming */ })
+        .catch(() => null)
     }
 
     // ===== 0. 初始化：从持久化 meta 恢复 stoppedByUser 状态 =====
@@ -628,38 +629,47 @@ export function useGlobalAgentListeners(): void {
               store.set(agentDiffRefreshVersionAtom, (prev) => {
                 const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
               })
-              store.set(agentDiffUnseenChangesAtom, (prev) => {
-                const m = new Map(prev); m.set(sessionId, true); return m
-              })
               if (writtenPath) {
-                store.set(agentDiffUnseenFilesAtom, (prev) => {
-                  const m = new Map(prev)
-                  const s = new Set(m.get(sessionId) ?? [])
-                  s.add(writtenPath)
-                  m.set(sessionId, s)
-                  return m
-                })
-              }
-              // 自动切换预览到刚写完的文件 + 弹出预览面板
-              if (store.get(autoPreviewEnabledAtom) && writtenPath) {
-                setAutoPreviewFile(sessionId, writtenPath, true)
-                // 侧边栏未折叠时，把 tab 切到「文件改动」
-                if (store.get(agentSidePanelOpenAtom)) {
-                  store.set(agentDiffPanelTabAtom, (prev) => {
-                    if (prev.get(sessionId) === 'changes') return prev
-                    const m = new Map(prev); m.set(sessionId, 'changes'); return m
+                const autoPreviewEnabled = store.get(autoPreviewEnabledAtom)
+                const previewPromise = autoPreviewEnabled
+                  ? setAutoPreviewFile(sessionId, writtenPath, true)
+                  : buildAutoPreviewFile(sessionId, writtenPath)
+
+                previewPromise.then((previewFile) => {
+                  if (!previewFile || previewFile.previewOnly) return
+
+                  store.set(agentDiffUnseenChangesAtom, (prev) => {
+                    const m = new Map(prev); m.set(sessionId, true); return m
                   })
-                }
-                // auto-preview 已展示该文件，标记为已查看
-                store.set(agentDiffUnseenFilesAtom, (prev) => {
-                  const s = prev.get(sessionId)
-                  if (!s?.has(writtenPath)) return prev
-                  const m = new Map(prev)
-                  const next = new Set(s)
-                  next.delete(writtenPath)
-                  m.set(sessionId, next)
-                  return m
-                })
+                  store.set(agentDiffUnseenFilesAtom, (prev) => {
+                    const m = new Map(prev)
+                    const s = new Set(m.get(sessionId) ?? [])
+                    s.add(writtenPath)
+                    m.set(sessionId, s)
+                    return m
+                  })
+
+                  // 只有当前文件确实能显示 git diff 时，才切到「文件改动」。
+                  if (autoPreviewEnabled && store.get(agentSidePanelOpenAtom)) {
+                    store.set(agentDiffPanelTabAtom, (prev) => {
+                      if (prev.get(sessionId) === 'changes') return prev
+                      const m = new Map(prev); m.set(sessionId, 'changes'); return m
+                    })
+                  }
+
+                  // auto-preview 已展示该文件，标记为已查看
+                  if (autoPreviewEnabled) {
+                    store.set(agentDiffUnseenFilesAtom, (prev) => {
+                      const s = prev.get(sessionId)
+                      if (!s?.has(writtenPath)) return prev
+                      const m = new Map(prev)
+                      const next = new Set(s)
+                      next.delete(writtenPath)
+                      m.set(sessionId, next)
+                      return m
+                    })
+                  }
+                }).catch(() => { /* auto preview should never break streaming */ })
               }
             }
             // Bash git 突变命令完成时，仅刷新 diff 列表（不标记 unseen，避免红点）
