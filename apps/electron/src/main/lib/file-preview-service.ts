@@ -1680,28 +1680,31 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; padding-top: 44px; }
-  canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-width: 100%; }
+  canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
   .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; }
   .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; }
   .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; }
   .zoom-bar {
-    position: fixed; top: 0; left: 0; right: 0; height: 32px; z-index: 10;
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-    background: rgba(255,255,255,0.85); backdrop-filter: blur(6px);
-    border-bottom: 1px solid rgba(0,0,0,0.06); font: 12px/1 system-ui;
+    position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 8px; border-radius: 8px;
+    background: rgba(255,255,255,0.8); backdrop-filter: blur(8px);
+    border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    font: 12px/1 system-ui;
   }
   @media (prefers-color-scheme: dark) {
-    .zoom-bar { background: rgba(30,30,30,0.85); border-color: rgba(255,255,255,0.08); color: #aaa; }
+    .zoom-bar { background: rgba(30,30,30,0.8); border-color: rgba(255,255,255,0.08); }
     .zoom-btn { color: #aaa; border-color: rgba(255,255,255,0.12); }
     .zoom-btn:hover { background: rgba(255,255,255,0.08); }
+    .zoom-label { color: #aaa; }
   }
   .zoom-btn {
-    width: 24px; height: 24px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.1);
-    background: transparent; cursor: pointer; font: 14px/1 system-ui; color: #555;
+    width: 24px; height: 24px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);
+    background: transparent; cursor: pointer; font: 14px/1 system-ui; color: #666;
     display: flex; align-items: center; justify-content: center;
   }
   .zoom-btn:hover { background: rgba(0,0,0,0.05); }
-  .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+  .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: #666; font-size: 12px; font-family: ui-monospace, monospace; }
 </style>
 </head><body>
   <div class="zoom-bar">
