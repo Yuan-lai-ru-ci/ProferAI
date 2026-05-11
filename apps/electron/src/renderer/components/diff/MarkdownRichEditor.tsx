@@ -3,31 +3,44 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
+import { TextSelection } from '@tiptap/pm/state'
 import { cn } from '@/lib/utils'
 import { htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
 
 interface MarkdownRichEditorProps {
   value: string
+  editing: boolean
   onChange: (value: string) => void
   onSave: () => void
   onCancel: () => void
+  onRequestEdit?: () => void
   disabled?: boolean
 }
 
 export function MarkdownRichEditor({
   value,
+  editing,
   onChange,
   onSave,
   onCancel,
+  onRequestEdit,
   disabled,
 }: MarkdownRichEditorProps): React.ReactElement {
+  const isEditable = editing && !disabled
   const onChangeRef = React.useRef(onChange)
   const onSaveRef = React.useRef(onSave)
   const onCancelRef = React.useRef(onCancel)
+  const onRequestEditRef = React.useRef(onRequestEdit)
+  const isEditableRef = React.useRef(isEditable)
+  const disabledRef = React.useRef(disabled)
   const localMarkdownRef = React.useRef(value)
+  const pendingFocusPosRef = React.useRef<number | null>(null)
   onChangeRef.current = onChange
   onSaveRef.current = onSave
   onCancelRef.current = onCancel
+  onRequestEditRef.current = onRequestEdit
+  isEditableRef.current = isEditable
+  disabledRef.current = disabled
 
   const initialHtml = React.useMemo(() => markdownToHtml(value), [value])
   const editor = useEditor({
@@ -47,11 +60,11 @@ export function MarkdownRichEditor({
       }),
     ],
     content: initialHtml,
-    editable: !disabled,
+    editable: isEditable,
     editorProps: {
       attributes: {
         class: cn(
-          'prose prose-sm dark:prose-invert max-w-none min-h-full focus:outline-none',
+          'prose prose-sm dark:prose-invert max-w-none min-h-full cursor-text focus:outline-none',
           'px-4 py-3 text-[13px] leading-relaxed',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_pre]:rounded-md [&_pre]:p-3',
@@ -60,6 +73,7 @@ export function MarkdownRichEditor({
         ),
       },
       handleKeyDown: (_view, event) => {
+        if (!isEditableRef.current) return false
         if (event.key === 'Escape') {
           event.preventDefault()
           onCancelRef.current()
@@ -72,8 +86,15 @@ export function MarkdownRichEditor({
         }
         return false
       },
+      handleDoubleClick: (_view, pos) => {
+        if (isEditableRef.current || disabledRef.current || !onRequestEditRef.current) return false
+        pendingFocusPosRef.current = pos
+        onRequestEditRef.current()
+        return true
+      },
     },
     onUpdate: ({ editor: ed }) => {
+      if (!isEditableRef.current) return
       const markdown = htmlToMarkdown(ed.getHTML())
       localMarkdownRef.current = markdown
       onChangeRef.current(markdown)
@@ -81,8 +102,8 @@ export function MarkdownRichEditor({
   })
 
   React.useEffect(() => {
-    editor?.setEditable(!disabled)
-  }, [disabled, editor])
+    editor?.setEditable(isEditable)
+  }, [editor, isEditable])
 
   React.useEffect(() => {
     if (!editor) return
@@ -93,10 +114,17 @@ export function MarkdownRichEditor({
   }, [editor, value])
 
   React.useEffect(() => {
-    if (!editor || disabled) return
-    const timer = setTimeout(() => editor.commands.focus('end'), 50)
+    if (!editor || !isEditable || pendingFocusPosRef.current === null) return
+    const pos = pendingFocusPosRef.current
+    pendingFocusPosRef.current = null
+    const timer = setTimeout(() => {
+      const safePos = Math.max(0, Math.min(pos, editor.state.doc.content.size))
+      const selection = TextSelection.near(editor.state.doc.resolve(safePos))
+      editor.view.dispatch(editor.state.tr.setSelection(selection))
+      editor.view.focus()
+    }, 0)
     return () => clearTimeout(timer)
-  }, [disabled, editor])
+  }, [editor, isEditable])
 
-  return <EditorContent editor={editor} className="h-full overflow-auto" />
+  return <EditorContent editor={editor} className="min-h-full" />
 }

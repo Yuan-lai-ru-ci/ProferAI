@@ -8,8 +8,6 @@
 import * as React from 'react'
 import { Code2, Copy, Check, Eye, Pencil, Save, X } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import DOMPurify from 'dompurify'
 import { cn } from '@/lib/utils'
 import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
@@ -541,41 +539,34 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 DOCX</div>
             )
           ) : isMarkdown ? (
-            markdownEditing ? (
-              markdownSourceMode ? (
-                <textarea
-                  value={markdownDraft}
-                  onChange={(e) => setMarkdownDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      e.preventDefault()
-                      cancelMarkdownEdit()
-                    }
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault()
-                      void saveMarkdownEdit()
-                    }
-                  }}
-                  autoFocus
-                  spellCheck={false}
-                  className="w-full h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
-                />
-              ) : (
-                <MarkdownRichEditor
-                  value={markdownDraft}
-                  onChange={setMarkdownDraft}
-                  onSave={() => void saveMarkdownEdit()}
-                  onCancel={cancelMarkdownEdit}
-                  disabled={markdownSaving}
-                />
-              )
+            markdownEditing && markdownSourceMode ? (
+              <textarea
+                value={markdownDraft}
+                onChange={(e) => setMarkdownDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancelMarkdownEdit()
+                  }
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    void saveMarkdownEdit()
+                  }
+                }}
+                autoFocus
+                spellCheck={false}
+                className="w-full min-h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
+              />
             ) : (
-              <div
-                className="prose prose-sm dark:prose-invert max-w-none px-4 py-3 min-h-full cursor-text"
-                onDoubleClick={startMarkdownEdit}
-              >
-                <Markdown remarkPlugins={[remarkGfm]}>{newContent}</Markdown>
-              </div>
+              <MarkdownRichEditor
+                value={markdownEditing ? markdownDraft : newContent}
+                editing={markdownEditing}
+                onChange={setMarkdownDraft}
+                onSave={() => void saveMarkdownEdit()}
+                onCancel={cancelMarkdownEdit}
+                onRequestEdit={startMarkdownEdit}
+                disabled={markdownSaving}
+              />
             )
           ) : highlightedHtml ? (
             <div
