@@ -118,7 +118,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     const handler = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
-        setImageZoom((z) => Math.max(0.1, Math.min(5, z * (e.deltaY < 0 ? 1.1 : 1 / 1.1))))
+        setImageZoom((z) => Math.max(0.1, Math.min(5, z * (e.deltaY < 0 ? 1.04 : 1 / 1.04))))
       }
     }
     el.addEventListener('wheel', handler, { passive: false })
