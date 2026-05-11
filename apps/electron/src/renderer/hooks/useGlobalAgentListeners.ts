@@ -33,6 +33,9 @@ import {
   finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
+  agentWorkspacesAtom,
+  agentAttachedDirectoriesMapAtom,
+  workspaceAttachedDirectoriesMapAtom,
   unviewedCompletedSessionIdsAtom,
   workingDoneSessionIdsAtom,
   agentSessionPathMapAtom,
@@ -57,6 +60,21 @@ const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Upda
 
 /** 会改变 git 工作树状态的子命令（用于识别 Bash 中触发 diff 刷新的 git 操作） */
 const GIT_MUTATING_SUBCOMMANDS = /\bgit\s+(commit|checkout|reset|restore|stash|clean|add|rm|mv|pull|merge|rebase|cherry-pick|revert|switch|am|apply)\b/
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
+}
+
+function getParentDir(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const idx = normalized.lastIndexOf('/')
+  if (idx <= 0) return ''
+  return normalized.slice(0, idx)
+}
+
+function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(paths.filter((p): p is string => typeof p === 'string' && p.length > 0)))
+}
 
 // ============================================================================
 // Phase 1 临时兼容层：将 AgentStreamPayload 转换为旧 AgentEvent
@@ -331,6 +349,92 @@ export function useGlobalAgentListeners(): void {
         }
       )
     }
+
+    const workspaceFilesPathCache = new Map<string, string>()
+    const autoPreviewSeq = new Map<string, number>()
+
+    const getWorkspaceIdForSession = (sid: string): string | null => {
+      const session = store.get(agentSessionsAtom).find((s) => s.id === sid)
+      return session?.workspaceId ?? store.get(currentAgentWorkspaceIdAtom)
+    }
+
+    const getWorkspaceSlugForSession = (sid: string): string | null => {
+      const workspaceId = getWorkspaceIdForSession(sid)
+      if (!workspaceId) return null
+      return store.get(agentWorkspacesAtom).find((w) => w.id === workspaceId)?.slug ?? null
+    }
+
+    const getWorkspaceFilesPathForSession = async (sid: string): Promise<string | null> => {
+      const slug = getWorkspaceSlugForSession(sid)
+      if (!slug) return null
+      const cached = workspaceFilesPathCache.get(slug)
+      if (cached) return cached
+      try {
+        const path = await window.electronAPI.getWorkspaceFilesPath(slug)
+        workspaceFilesPathCache.set(slug, path)
+        return path
+      } catch {
+        return null
+      }
+    }
+
+    const buildAutoPreviewFile = async (sid: string, targetPath: string) => {
+      const sessionPath = store.get(agentSessionPathMapAtom).get(sid) ?? ''
+      const parentDir = getParentDir(targetPath)
+      const dirPath = isAbsolutePath(targetPath) ? parentDir : (sessionPath || parentDir)
+      const workspaceId = getWorkspaceIdForSession(sid)
+      const workspaceFilesPath = await getWorkspaceFilesPathForSession(sid)
+      const sessionAttachedDirs = store.get(agentAttachedDirectoriesMapAtom).get(sid) ?? []
+      const workspaceAttachedDirs = workspaceId
+        ? (store.get(workspaceAttachedDirectoriesMapAtom).get(workspaceId) ?? [])
+        : []
+      const basePaths = uniqueTruthyPaths([
+        sessionPath,
+        workspaceFilesPath,
+        dirPath,
+        ...sessionAttachedDirs,
+        ...workspaceAttachedDirs,
+      ])
+
+      let previewOnly = true
+      if (dirPath) {
+        try {
+          const status = await window.electronAPI.getGitRepoStatus(dirPath)
+          previewOnly = status?.isRepo !== true
+        } catch {
+          previewOnly = true
+        }
+      }
+
+      return {
+        filePath: targetPath,
+        dirPath: dirPath || undefined,
+        previewOnly,
+        basePaths: basePaths.length > 0 ? basePaths : undefined,
+      }
+    }
+
+    const setAutoPreviewFile = (sid: string, targetPath: string, openPanel: boolean) => {
+      const seq = (autoPreviewSeq.get(sid) ?? 0) + 1
+      autoPreviewSeq.set(sid, seq)
+      buildAutoPreviewFile(sid, targetPath)
+        .then((previewFile) => {
+          if (autoPreviewSeq.get(sid) !== seq) return
+          store.set(previewFileMapAtom, (prev) => {
+            const m = new Map(prev)
+            m.set(sid, previewFile)
+            return m
+          })
+          if (openPanel) {
+            store.set(previewPanelOpenMapAtom, (prev) => {
+              if (prev.get(sid)) return prev
+              const m = new Map(prev); m.set(sid, true); return m
+            })
+          }
+        })
+        .catch(() => { /* auto preview should never break streaming */ })
+    }
+
     // ===== 0. 初始化：从持久化 meta 恢复 stoppedByUser 状态 =====
     window.electronAPI.listAgentSessions().then((sessions) => {
       const stoppedIds = new Set<string>(
@@ -464,14 +568,7 @@ export function useGlobalAgentListeners(): void {
               })
               // Agent 开始改文件时，自动切换预览面板到该文件
               if (store.get(autoPreviewEnabledAtom)) {
-                const lastSep = targetPath.lastIndexOf('/')
-                const parentDir = lastSep > 0 ? targetPath.slice(0, lastSep) : ''
-                const sessionPath = store.get(agentSessionPathMapAtom).get(sessionId)
-                store.set(previewFileMapAtom, (prev) => {
-                  const m = new Map(prev)
-                  m.set(sessionId, { filePath: targetPath, dirPath: sessionPath || parentDir })
-                  return m
-                })
+                setAutoPreviewFile(sessionId, targetPath, false)
               }
             }
           }
@@ -545,18 +642,7 @@ export function useGlobalAgentListeners(): void {
               }
               // 自动切换预览到刚写完的文件 + 弹出预览面板
               if (store.get(autoPreviewEnabledAtom) && writtenPath) {
-                const lastSep = writtenPath.lastIndexOf('/')
-                const parentDir = lastSep > 0 ? writtenPath.slice(0, lastSep) : ''
-                const sessionPath = store.get(agentSessionPathMapAtom).get(sessionId)
-                store.set(previewFileMapAtom, (prev) => {
-                  const m = new Map(prev)
-                  m.set(sessionId, { filePath: writtenPath, dirPath: sessionPath || parentDir })
-                  return m
-                })
-                store.set(previewPanelOpenMapAtom, (prev) => {
-                  if (prev.get(sessionId)) return prev
-                  const m = new Map(prev); m.set(sessionId, true); return m
-                })
+                setAutoPreviewFile(sessionId, writtenPath, true)
                 // 侧边栏未折叠时，把 tab 切到「文件改动」
                 if (store.get(agentSidePanelOpenAtom)) {
                   store.set(agentDiffPanelTabAtom, (prev) => {
