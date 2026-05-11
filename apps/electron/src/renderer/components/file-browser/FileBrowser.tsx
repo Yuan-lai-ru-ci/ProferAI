@@ -86,9 +86,11 @@ interface FileBrowserProps {
   hideEmpty?: boolean
   /** 点击添加到聊天（非文件夹文件悬浮时显示按钮） */
   onAddToChat?: (entry: FileEntry) => void
+  /** 双击文件时在内联预览面板中显示（替代外部窗口预览） */
+  onFilePreview?: (filePath: string) => void
 }
 
-export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddToChat }: FileBrowserProps): React.ReactElement {
+export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
   const [entries, setEntries] = React.useState<FileEntry[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -311,6 +313,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           onMove={handleMove}
           onRefresh={loadRoot}
           onAddToChat={onAddToChat}
+          onFilePreview={onFilePreview}
         />
       ))}
     </div>
@@ -411,6 +414,7 @@ interface FileTreeItemProps {
   onMove: (entry: FileEntry) => void
   onRefresh: () => Promise<void>
   onAddToChat?: (entry: FileEntry) => void
+  onFilePreview?: (filePath: string) => void
 }
 
 function FileTreeItem({
@@ -434,6 +438,7 @@ function FileTreeItem({
   onMove,
   onRefresh,
   onAddToChat,
+  onFilePreview,
 }: FileTreeItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
@@ -533,8 +538,8 @@ function FileTreeItem({
 
   /** 双击预览文件 */
   const handleDoubleClick = (): void => {
-    if (!entry.isDirectory) {
-      window.electronAPI.previewFile(entry.path).catch(console.error)
+    if (!entry.isDirectory && onFilePreview) {
+      onFilePreview(entry.path)
     }
   }
 
@@ -786,6 +791,7 @@ function FileTreeItem({
           onMove={onMove}
           onRefresh={handleRefreshAfterDelete}
           onAddToChat={onAddToChat}
+          onFilePreview={onFilePreview}
         />
       ))}
     </>

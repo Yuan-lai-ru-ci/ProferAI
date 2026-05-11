@@ -16,7 +16,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye, EyeOff } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -46,6 +46,8 @@ import {
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
+import { registerShortcut } from '@/lib/shortcut-registry'
+import { previewPanelOpenMapAtom, autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
@@ -62,6 +64,7 @@ import {
   agentSessionDraftHtmlAtom,
   agentPromptSuggestionsAtom,
   agentMessageRefreshAtom,
+  agentDiffRefreshVersionAtom,
   agentSessionsAtom,
   agentAttachedDirectoriesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
@@ -200,14 +203,71 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
   )
 }
 
-export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
-  // [FLASH-DEBUG] 渲染计数器
-  const renderCountRef = React.useRef(0)
-  renderCountRef.current++
-  if (renderCountRef.current % 50 === 0) {
-    console.log(`[FLASH-DEBUG] AgentView(${sessionId.slice(0, 8)}) render #${renderCountRef.current}`)
-  }
+interface AutoPreviewPopoverProps {
+  enabled: boolean
+  onToggle: () => void
+}
 
+function AutoPreviewPopover({ enabled, onToggle }: AutoPreviewPopoverProps): React.ReactElement {
+  const [open, setOpen] = React.useState(false)
+  const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleMouseEnter = React.useCallback(() => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
+    setOpen(true)
+  }, [])
+
+  const handleMouseLeave = React.useCallback(() => {
+    hoverTimeout.current = setTimeout(() => setOpen(false), 150)
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
+    }
+  }, [])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'size-[36px] rounded-full',
+            enabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+          )}
+          onClick={onToggle}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          {enabled ? <Eye className="size-5" /> : <EyeOff className="size-5" />}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="center"
+        sideOffset={8}
+        className="w-auto min-w-[160px] p-2 px-2.5"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-xs text-foreground/70">自动预览</span>
+          <Switch
+            checked={enabled}
+            onCheckedChange={onToggle}
+            className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
@@ -1275,6 +1335,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
 
+      // 刷新预览面板的 diff（文件已被回退，当前显示的内容已过期）
+      store.set(agentDiffRefreshVersionAtom, (prev) => {
+        const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
+      })
+
       if (result.fileRewind?.canRewind) {
         const fileCount = result.fileRewind.filesChanged?.length ?? 0
         toast.success('已回退到此处', {
@@ -1320,13 +1385,29 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
+  // ===== 预览面板状态（toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
+  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
+  const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
+
+  const togglePreviewPanel = React.useCallback(() => {
+    setPreviewOpenMap((prev) => {
+      const m = new Map(prev)
+      const current = m.get(sessionId) ?? false
+      m.set(sessionId, !current)
+      return m
+    })
+  }, [sessionId, setPreviewOpenMap])
+
+  React.useEffect(() => {
+    return registerShortcut('toggle-preview-panel', togglePreviewPanel)
+  }, [togglePreviewPanel])
+
   const hasTextInput = inputContent.trim().length > 0
   const canSend = (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      {/* 主内容区域 */}
       <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
@@ -1528,6 +1609,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                   onCompact={handleCompact}
                 />
                 {/* <FeishuNotifyToggle sessionId={sessionId} /> */}
+                <AutoPreviewPopover
+                  enabled={autoPreviewEnabled}
+                  onToggle={() => setAutoPreviewEnabled(!autoPreviewEnabled)}
+                />
               </div>
 
               <div className="flex items-center gap-1.5">

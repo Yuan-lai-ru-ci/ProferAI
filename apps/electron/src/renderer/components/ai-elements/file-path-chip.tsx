@@ -3,12 +3,15 @@
  *
  * 在 Agent 消息中检测到文件路径时，渲染为可点击的芯片。
  * 支持绝对路径和相对路径（相对于 basePath 解析）。
- * 点击后通过 IPC 在新窗口中预览文件。
+ * 点击后在右侧内联面板中预览文件。
  */
 
 import * as React from 'react'
+import { useStore } from 'jotai'
 import { cn } from '@/lib/utils'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
+import { previewFileMapAtom, previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
+import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 
 /** 文件存在性缓存（模块级共享，避免重复 IPC）。key = filePath + basePaths */
 const fileExistsCache = new Map<string, boolean>()
@@ -91,6 +94,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
+  const store = useStore()
 
   // 候选基础目录列表：优先使用 basePaths；否则退化到 basePath 单值
   const candidateBases = React.useMemo<string[]>(() => {
@@ -137,7 +141,8 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
         if (!entries[0]?.isIntersecting) return
         observer.disconnect()
         const bases = candidateBases.length > 0 ? candidateBases : undefined
-        window.electronAPI.resolveFilePath(cleanPath, bases)
+        const sessionId = store.get(currentAgentSessionIdAtom)
+        window.electronAPI.resolveFilePath(cleanPath, { sessionId: sessionId ?? undefined, candidateBasePaths: bases })
           .then((resolved) => {
             const exists = resolved !== null
             fileExistsCache.set(key, exists)
@@ -149,14 +154,27 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [cleanPath, candidateBases])
+  }, [cleanPath, candidateBases, store])
 
   const handleClick = React.useCallback(() => {
-    const bases = candidateBases.length > 0 ? candidateBases : undefined
-    window.electronAPI.previewFile(cleanPath, bases).catch((error: unknown) => {
-      console.error('[FilePathChip] 预览文件失败:', error)
+    const sessionId = store.get(currentAgentSessionIdAtom)
+    if (!sessionId) return
+
+    store.set(previewFileMapAtom, (prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, {
+        filePath: cleanPath,
+        previewOnly: true,
+        basePaths: candidateBases.length > 0 ? candidateBases : undefined,
+      })
+      return m
     })
-  }, [cleanPath, candidateBases])
+    store.set(previewPanelOpenMapAtom, (prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, true)
+      return m
+    })
+  }, [store, cleanPath, candidateBases])
 
   return (
     <button
