@@ -662,14 +662,12 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
   }
 
   const handleClick = (e: React.MouseEvent): void => {
-    onSelect(currentPath, e.ctrlKey || e.metaKey)
+    const isMulti = e.ctrlKey || e.metaKey
+    onSelect(currentPath, isMulti)
+    if (isMulti) return
     if (entry.isDirectory) {
-      toggleDir()
-    }
-  }
-
-  const handleDoubleClick = (): void => {
-    if (!entry.isDirectory) {
+      void toggleDir()
+    } else {
       onFilePreview?.(currentPath)
     }
   }
@@ -735,7 +733,6 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
         )}
         style={{ paddingLeft }}
         onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
       >
         {entry.isDirectory ? (
           <ChevronRight
@@ -770,31 +767,25 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
 
         {/* 右侧操作按钮占位 */}
         <div
-          className={cn(
-            'flex-shrink-0',
-            !(isSelected && !isRenaming) && !(onAddToChat && !entry.isDirectory && !isRenaming) && 'invisible',
-          )}
+          className="flex-shrink-0"
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {/* 非文件夹未选中：添加到聊天按钮（悬浮时显示） */}
-          {onAddToChat && !entry.isDirectory && !isRenaming && !(isSelected && !isRenaming) && (
-            <button
-              type="button"
-              className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70 text-muted-foreground hover:text-foreground invisible group-hover:visible"
-              title="添加到聊天"
-              onClick={() => onAddToChat({ ...entry, path: currentPath, name: currentName })}
-            >
-              <MessageSquarePlus className="size-3.5" />
-            </button>
-          )}
-          {/* 选中状态：三点菜单 */}
-          {isSelected && !isRenaming && (
+          {/* 悬浮/选中状态：三点菜单 */}
+          {!isRenaming && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70"
+                className={cn(
+                  'h-6 w-6 rounded flex items-center justify-center hover:bg-accent/70 text-muted-foreground hover:text-foreground',
+                  !isSelected && 'invisible group-hover:visible focus-visible:visible data-[state=open]:visible',
+                )}
+                title="更多操作"
+                aria-label="更多操作"
+                onClick={() => {
+                  if (!isSelected) onSelect(currentPath, false)
+                }}
               >
                 <MoreHorizontal className="size-3.5" />
               </button>
