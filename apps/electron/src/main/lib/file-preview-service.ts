@@ -1678,38 +1678,15 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
-  :root { --bg: rgba(255,255,255,0.8); --border: rgba(0,0,0,0.06); --shadow: rgba(0,0,0,0.08); --text: hsl(0 0% 45%); --btn-border: rgba(0,0,0,0.08); --btn-hover: rgba(0,0,0,0.05); }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: rgba(30,30,30,0.8); --border: rgba(255,255,255,0.08); --shadow: rgba(0,0,0,0.3); --text: hsl(0 0% 64%); --btn-border: rgba(255,255,255,0.12); --btn-hover: rgba(255,255,255,0.08); }
-  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; overflow: auto; padding: 16px; padding-top: 44px; }
+  body { background: transparent; overflow: auto; padding: 16px; }
   #c { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; width: fit-content; min-width: 100%; }
   #c canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); margin: 0 auto; display: block; }
-  .loading { color: var(--text); font: 12px/1.5 system-ui; padding: 40px; text-align: center; width: 100%; }
+  .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; width: 100%; }
   .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; width: 100%; }
-  .page-info { color: var(--text); font: 11px/1.5 system-ui; text-align: center; padding: 4px; width: 100%; }
-  .zoom-bar {
-    position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
-    display: flex; align-items: center; gap: 8px;
-    padding: 4px 8px; border-radius: 8px;
-    background: var(--bg); backdrop-filter: blur(8px);
-    border: 1px solid var(--border); box-shadow: 0 1px 3px var(--shadow);
-  }
-  .zoom-btn {
-    width: 24px; height: 24px; border-radius: 4px; border: 1px solid var(--btn-border);
-    background: transparent; cursor: pointer; font: 14px/1 system-ui; color: var(--text);
-    display: flex; align-items: center; justify-content: center;
-  }
-  .zoom-btn:hover { background: var(--btn-hover); }
-  .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text); font: 12px/1 ui-monospace, monospace; }
+  .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; width: 100%; }
 </style>
 </head><body>
-  <div class="zoom-bar">
-    <button class="zoom-btn" id="zo" title="缩小">−</button>
-    <span class="zoom-label" id="zl">100%</span>
-    <button class="zoom-btn" id="zi" title="放大">+</button>
-  </div>
   <div class="loading" id="c">正在加载 PDF...</div>
   <script type="module">
     const container = document.getElementById('c');
@@ -1717,6 +1694,10 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
     const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
     let stepIdx = 2;
     let pdfDoc = null;
+
+    function notifyZoom() {
+      window.parent.postMessage({ type: 'pdf-zoom-changed', zoom: Math.round(STEPS[stepIdx] * 100) }, '*');
+    }
 
     async function renderAll() {
       if (!pdfDoc) return;
@@ -1737,11 +1718,15 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
       info.className = 'page-info';
       info.textContent = '共 ' + pdfDoc.numPages + ' 页';
       container.appendChild(info);
-      document.getElementById('zl').textContent = Math.round(userScale * 100) + '%';
+      notifyZoom();
     }
 
-    document.getElementById('zi').onclick = () => { if (stepIdx < STEPS.length - 1) { stepIdx++; renderAll(); } };
-    document.getElementById('zo').onclick = () => { if (stepIdx > 0) { stepIdx--; renderAll(); } };
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === 'pdf-zoom') {
+        if (e.data.direction === 'in' && stepIdx < STEPS.length - 1) { stepIdx++; renderAll(); }
+        if (e.data.direction === 'out' && stepIdx > 0) { stepIdx--; renderAll(); }
+      }
+    });
 
     try {
       const pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs');

@@ -89,6 +89,8 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [docxHtml, setDocxHtml] = React.useState('')
   const [pdfSrc, setPdfSrc] = React.useState('')
+  const [pdfZoom, setPdfZoom] = React.useState(100)
+  const pdfIframeRef = React.useRef<HTMLIFrameElement>(null)
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
   // 默认 25%：预览面板空间有限，先展示缩略全貌，用户可手动放大查看细节
@@ -123,6 +125,17 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
     el.addEventListener('wheel', handler, { passive: false })
     return () => el.removeEventListener('wheel', handler)
   }, [isImage, imageDataUrl])
+
+  // 监听 PDF iframe 发回的缩放百分比
+  React.useEffect(() => {
+    if (!isPdf) return
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'pdf-zoom-changed') setPdfZoom(e.data.zoom)
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [isPdf])
+
   const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
@@ -150,6 +163,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setHighlightedHtml('')
       setDocxHtml('')
       setPdfSrc('')
+      setPdfZoom(100)
       setImagePath('')
       setImageDataUrl('')
       setImageZoom(0.25)
@@ -162,6 +176,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setHighlightedHtml('')
       setDocxHtml('')
       setPdfSrc('')
+      setPdfZoom(100)
       setImagePath('')
       setImageDataUrl('')
       setImageZoom(0.25)
@@ -180,7 +195,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
             if (isPdf) {
               const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
               if (cancelled) return
-              setPdfSrc(result?.tmpHtmlPath ? `proma-file://${result.tmpHtmlPath}?theme=${theme}` : '')
+              setPdfSrc(result?.tmpHtmlPath ? `proma-file://${result.tmpHtmlPath}` : '')
               return
             }
             if (isImage) {
@@ -323,11 +338,27 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
         ) : previewOnly ? (
           isPdf ? (
             pdfSrc ? (
-              <iframe
-                src={pdfSrc}
-                className="w-full h-full border-0"
-                title={filePath.split('/').pop() || 'PDF'}
-              />
+              <div className="relative h-full">
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-filter backdrop-blur-sm border border-border/30 shadow-sm">
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                    onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'out' }, '*')}
+                  >−</button>
+                  <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{pdfZoom}%</span>
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                    onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'in' }, '*')}
+                  >+</button>
+                </div>
+                <iframe
+                  ref={pdfIframeRef}
+                  src={pdfSrc}
+                  className="w-full h-full border-0"
+                  title={filePath.split('/').pop() || 'PDF'}
+                />
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[12px] gap-1 px-4 text-center">
                 <p>该 PDF 文件过大，无法在此预览</p>
