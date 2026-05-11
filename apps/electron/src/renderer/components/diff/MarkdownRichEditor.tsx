@@ -44,6 +44,7 @@ export function MarkdownRichEditor({
   shikiTheme = 'one-light',
 }: MarkdownRichEditorProps): React.ReactElement {
   const isEditable = editing && !disabled
+  const markdownRendererVersion = MARKDOWN_RENDERER_VERSION
   const onChangeRef = React.useRef(onChange)
   const onSaveRef = React.useRef(onSave)
   const onCancelRef = React.useRef(onCancel)
@@ -53,7 +54,7 @@ export function MarkdownRichEditor({
   const isEditableRef = React.useRef(isEditable)
   const disabledRef = React.useRef(disabled)
   const localMarkdownRef = React.useRef(value)
-  const rendererVersionRef = React.useRef(MARKDOWN_RENDERER_VERSION)
+  const rendererVersionRef = React.useRef(markdownRendererVersion)
   const pendingFocusPosRef = React.useRef<number | null>(null)
   onChangeRef.current = onChange
   onSaveRef.current = onSave
@@ -144,13 +145,13 @@ export function MarkdownRichEditor({
 
   React.useEffect(() => {
     if (!editor) return
-    const rendererChanged = rendererVersionRef.current !== MARKDOWN_RENDERER_VERSION
+    const rendererChanged = rendererVersionRef.current !== markdownRendererVersion
     if (!rendererChanged && value === localMarkdownRef.current) return
     const html = markdownToHtml(value)
     localMarkdownRef.current = value
-    rendererVersionRef.current = MARKDOWN_RENDERER_VERSION
+    rendererVersionRef.current = markdownRendererVersion
     editor.commands.setContent(html, { emitUpdate: false })
-  }, [editor, value, MARKDOWN_RENDERER_VERSION])
+  }, [editor, value, markdownRendererVersion])
 
   React.useEffect(() => {
     if (!editor || !isEditable || pendingFocusPosRef.current === null) return
