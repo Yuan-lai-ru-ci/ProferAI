@@ -5,110 +5,12 @@
  * 供 PreviewPanel 内联面板使用。
  */
 
-import { basename, extname, join, dirname, resolve } from 'node:path'
-import { readFileSync, statSync, mkdirSync, existsSync, writeFileSync } from 'node:fs'
+import { basename, join, dirname, resolve } from 'node:path'
+import { readFileSync, readdirSync, statSync, mkdirSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 
 /** 文件大小限制：50MB */
 const MAX_FILE_SIZE = 50 * 1024 * 1024
-
-/** 支持预览的图片扩展名 */
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'])
-
-/** 支持预览的视频扩展名 */
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov'])
-
-/** 支持代码/纯文本预览的扩展名 */
-const CODE_EXTENSIONS = new Set([
-  '.json', '.jsonc', '.json5',
-  '.xml', '.html', '.htm', '.svg',
-  '.txt', '.log', '.csv',
-  '.yaml', '.yml', '.toml', '.ini', '.env', '.lock',
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
-  '.py', '.go', '.rs', '.java', '.kt', '.swift',
-  '.c', '.h', '.cpp', '.hpp', '.cs',
-  '.sh', '.bash', '.zsh', '.fish',
-  '.css', '.scss', '.less',
-  '.sql', '.rb', '.php',
-  '.diff', '.patch',
-])
-
-/** 支持 Markdown 渲染预览的扩展名 */
-const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown'])
-
-/** 支持 PDF 预览的扩展名 */
-const PDF_EXTENSIONS = new Set(['.pdf'])
-
-/** 支持 DOCX 预览的扩展名 */
-const DOCX_EXTENSIONS = new Set(['.docx'])
-
-/**
- * 特殊文件名（无扩展名或扩展名不能代表语言）→ 高亮语言映射
- */
-const SPECIAL_FILENAME_LANG: Record<string, string> = {
-  '.gitignore': 'bash',
-  '.dockerignore': 'bash',
-  '.npmignore': 'bash',
-  '.eslintignore': 'bash',
-  '.prettierignore': 'bash',
-  '.gitattributes': 'bash',
-  '.gitconfig': 'ini',
-  '.editorconfig': 'ini',
-  '.npmrc': 'ini',
-  '.yarnrc': 'ini',
-  'dockerfile': 'dockerfile',
-  'makefile': 'makefile',
-  'bun.lock': 'yaml',
-  'pnpm-lock.yaml': 'yaml',
-  'cargo.lock': 'ini',
-  'gemfile': 'ruby',
-  'rakefile': 'ruby',
-  'procfile': 'yaml',
-}
-
-/** 扩展名 → 语言 ID 映射 */
-const EXT_LANG_MAP: Record<string, string> = {
-  '.md': 'markdown', '.markdown': 'markdown',
-  '.json': 'json', '.jsonc': 'json', '.json5': 'json',
-  '.xml': 'xml', '.html': 'html', '.htm': 'html', '.svg': 'xml',
-  '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'ini', '.ini': 'ini', '.env': 'bash', '.lock': 'yaml',
-  '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
-  '.mjs': 'javascript', '.cjs': 'javascript',
-  '.py': 'python', '.go': 'go', '.rs': 'rust', '.java': 'java', '.kt': 'kotlin', '.swift': 'swift',
-  '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.hpp': 'cpp', '.cs': 'csharp',
-  '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell', '.fish': 'shell',
-  '.css': 'css', '.scss': 'scss', '.less': 'less',
-  '.sql': 'sql', '.rb': 'ruby', '.php': 'php',
-  '.diff': 'diff', '.patch': 'diff',
-  '.txt': 'plaintext', '.log': 'plaintext', '.csv': 'plaintext',
-}
-
-/** 通用语言 ID */
-function detectLanguage(filePath: string, ext: string): string {
-  const base = basename(filePath).toLowerCase()
-  if (isEnvFile(base)) return 'bash'
-  if (SPECIAL_FILENAME_LANG[base]) return SPECIAL_FILENAME_LANG[base]
-  return EXT_LANG_MAP[ext] || 'plaintext'
-}
-
-function isEnvFile(filename: string): boolean {
-  const lower = filename.toLowerCase()
-  return lower === '.env' || lower.startsWith('.env.')
-}
-
-/** 获取预览类型 */
-function getPreviewType(filePath: string, ext: string): 'image' | 'video' | 'markdown' | 'code' | 'pdf' | 'docx' | 'unsupported' {
-  if (IMAGE_EXTENSIONS.has(ext)) return 'image'
-  if (VIDEO_EXTENSIONS.has(ext)) return 'video'
-  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown'
-  if (CODE_EXTENSIONS.has(ext)) return 'code'
-  if (PDF_EXTENSIONS.has(ext)) return 'pdf'
-  if (DOCX_EXTENSIONS.has(ext)) return 'docx'
-  const base = basename(filePath).toLowerCase()
-  if (isEnvFile(base)) return 'code'
-  if (SPECIAL_FILENAME_LANG[base]) return 'code'
-  return 'unsupported'
-}
 
 // ─── 临时文件 ───
 
@@ -140,7 +42,7 @@ function searchFileInDir(dir: string, targetName: string, maxDepth = 8): string 
   function walk(current: string, depth: number): string | null {
     if (depth > maxDepth || scanned > MAX_SCANNED) return null
     try {
-      const entries = require('fs').readdirSync(current, { withFileTypes: true }) as import('fs').Dirent[]
+      const entries = readdirSync(current, { withFileTypes: true })
       for (const entry of entries) {
         if (entry.isFile() && entry.name === targetName) {
           return join(current, entry.name)
