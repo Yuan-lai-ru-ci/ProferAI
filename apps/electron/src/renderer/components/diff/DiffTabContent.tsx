@@ -180,7 +180,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
             if (isPdf) {
               const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
               if (cancelled) return
-              setPdfSrc(result?.tmpHtmlPath ? `proma-file://${result.tmpHtmlPath}` : '')
+              setPdfSrc(result?.tmpHtmlPath ? `proma-file://${result.tmpHtmlPath}?theme=${theme}` : '')
               return
             }
             if (isImage) {
