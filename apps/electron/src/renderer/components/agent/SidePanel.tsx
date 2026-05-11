@@ -809,10 +809,10 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                   <FolderSearch />
                   在文件夹中显示
                 </DropdownMenuItem>
-                {!entry.isDirectory && (
+                {!entry.isDirectory && onFilePreview && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
-                    onSelect={() => window.electronAPI.openAttachedFile(currentPath, allowedPaths).catch(console.error)}
+                    onSelect={() => onFilePreview(currentPath)}
                   >
                     <ExternalLink />
                     打开文件

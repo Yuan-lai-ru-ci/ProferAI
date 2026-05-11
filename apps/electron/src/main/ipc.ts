@@ -1914,15 +1914,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 在新窗口中预览文件（允许任意绝对路径；相对路径按 basePaths 依次解析）
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.PREVIEW_FILE,
-    async (_, filePath: string, basePaths?: string[]): Promise<void> => {
-      const { openFilePreview } = await import('./lib/file-preview-service')
-      openFilePreview(filePath, basePaths)
-    }
-  )
-
   // 解析文件路径并读取内容（供内联预览使用）
   ipcMain.handle(
     'file:resolve-and-read',
@@ -2070,19 +2061,6 @@ export function registerIpcHandlers(): void {
       })
 
       return entries
-    }
-  )
-
-  // 在 Proma 内置预览窗口打开附加目录文件
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE,
-    async (_, filePath: string, basePaths?: string[]): Promise<void> => {
-      if (!isPathAllowed(filePath, basePaths)) {
-        console.warn('[IPC] open-attached-file 拒绝越界路径:', filePath)
-        return
-      }
-      const { openFilePreview } = await import('./lib/file-preview-service')
-      openFilePreview(filePath, basePaths)
     }
   )
 

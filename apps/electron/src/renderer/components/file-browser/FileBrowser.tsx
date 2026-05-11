@@ -538,12 +538,8 @@ function FileTreeItem({
 
   /** 双击预览文件 */
   const handleDoubleClick = (): void => {
-    if (!entry.isDirectory) {
-      if (onFilePreview) {
-        onFilePreview(entry.path)
-      } else {
-        window.electronAPI.previewFile(entry.path).catch(console.error)
-      }
+    if (!entry.isDirectory && onFilePreview) {
+      onFilePreview(entry.path)
     }
   }
 

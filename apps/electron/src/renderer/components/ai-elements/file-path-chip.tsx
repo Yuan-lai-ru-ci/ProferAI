@@ -107,11 +107,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const handleClick = React.useCallback(() => {
     const sessionId = store.get(currentAgentSessionIdAtom)
-    if (!sessionId) {
-      const bases = candidateBases.length > 0 ? candidateBases : undefined
-      window.electronAPI.previewFile(cleanPath, bases).catch(console.error)
-      return
-    }
+    if (!sessionId) return
 
     store.set(previewFileMapAtom, (prev) => {
       const m = new Map(prev)

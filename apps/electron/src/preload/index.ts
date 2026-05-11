@@ -612,8 +612,6 @@ export interface ElectronAPI {
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
 
-  /** 在新窗口中预览文件（相对路径会按 basePaths 依次解析） */
-  previewFile: (filePath: string, basePaths?: string[]) => Promise<void>
   /** 解析文件路径并读取内容（供内联预览使用） */
   resolveAndReadFile: (filePath: string, basePaths?: string[]) => Promise<{ resolvedPath: string; content: string } | null>
 
@@ -637,9 +635,6 @@ export interface ElectronAPI {
 
   /** 列出附加目录内容 */
   listAttachedDirectory: (dirPath: string, basePaths?: string[]) => Promise<FileEntry[]>
-
-  /** 用系统默认应用打开附加目录文件 */
-  openAttachedFile: (filePath: string, basePaths?: string[]) => Promise<void>
 
   /** 读取附加目录文件内容为 base64（限制在已附加目录范围内） */
   readAttachedFile: (filePath: string, sessionId?: string, workspaceSlug?: string) => Promise<string>
@@ -1558,10 +1553,6 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_IN_FOLDER, filePath)
   },
 
-  previewFile: (filePath: string, basePaths?: string[]) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PREVIEW_FILE, filePath, basePaths)
-  },
-
   resolveAndReadFile: (filePath: string, basePaths?: string[]) => {
     return ipcRenderer.invoke('file:resolve-and-read', filePath, basePaths) as Promise<{ resolvedPath: string; content: string } | null>
   },
@@ -1592,10 +1583,6 @@ const electronAPI: ElectronAPI = {
 
   listAttachedDirectory: (dirPath: string, basePaths?: string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY, dirPath, basePaths)
-  },
-
-  openAttachedFile: (filePath: string, basePaths?: string[]) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_ATTACHED_FILE, filePath, basePaths)
   },
 
   readAttachedFile: (filePath: string, sessionId?: string, workspaceSlug?: string) => {
