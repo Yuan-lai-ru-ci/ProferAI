@@ -23,6 +23,7 @@ function sanitizeHtml(html: string): string {
       'controls',
       'frameborder',
       'loading',
+      'open',
       'poster',
       'rowspan',
       'src',
@@ -361,18 +362,30 @@ export const RawHtmlBlock = Node.create({
   atom: true,
 
   addAttributes() {
-    return { html: { default: '' } }
+    return {
+      html: { default: '' },
+      markdown: { default: '' },
+    }
   },
 
   parseHTML() {
     return [{
       tag: 'div[data-type="raw-html-block"]',
-      getAttrs: (node) => node instanceof HTMLElement ? { html: node.dataset.html || '' } : false,
+      getAttrs: (node) => node instanceof HTMLElement
+        ? { html: node.dataset.html || '', markdown: node.dataset.markdown || '' }
+        : false,
     }]
   },
 
   renderHTML({ node }) {
-    return ['div', { 'data-type': 'raw-html-block', 'data-html': node.attrs.html }]
+    return [
+      'div',
+      {
+        'data-type': 'raw-html-block',
+        'data-html': node.attrs.html,
+        'data-markdown': node.attrs.markdown || undefined,
+      },
+    ]
   },
 
   addNodeView() {
@@ -554,18 +567,30 @@ export const MarkdownTableBlock = Node.create({
   atom: true,
 
   addAttributes() {
-    return { html: { default: '' } }
+    return {
+      html: { default: '' },
+      markdown: { default: '' },
+    }
   },
 
   parseHTML() {
     return [{
       tag: 'div[data-type="markdown-table"]',
-      getAttrs: (node) => node instanceof HTMLElement ? { html: node.dataset.html || '' } : false,
+      getAttrs: (node) => node instanceof HTMLElement
+        ? { html: node.dataset.html || '', markdown: node.dataset.markdown || '' }
+        : false,
     }]
   },
 
   renderHTML({ node }) {
-    return ['div', { 'data-type': 'markdown-table', 'data-html': node.attrs.html }]
+    return [
+      'div',
+      {
+        'data-type': 'markdown-table',
+        'data-html': node.attrs.html,
+        'data-markdown': node.attrs.markdown || undefined,
+      },
+    ]
   },
 
   addNodeView() {

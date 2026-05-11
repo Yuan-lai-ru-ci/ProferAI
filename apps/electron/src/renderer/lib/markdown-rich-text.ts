@@ -1,6 +1,10 @@
 import MarkdownIt from 'markdown-it'
 
 const VIDEO_EXT_RE = /\.(mp4|webm|ogg|ogv|mov|m4v)(?:[?#].*)?$/i
+const PREVIEW_BLOCK_RE = /^<div\s+[^>]*data-type=(["'])(?:markdown-table|raw-html-block|math-block)\1/i
+const DETAILS_BLOCK_RE = /<details(\s[^>]*)?>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gi
+
+export const MARKDOWN_RENDERER_VERSION = 2
 
 const EMOJI_SHORTCODES: Record<string, string> = {
   '+1': '👍',
@@ -24,10 +28,16 @@ const EMOJI_SHORTCODES: Record<string, string> = {
 
 function escapeAttr(value: string): string {
   return value
+    .replace(/\r\n?/g, '\n')
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+    .replace(/\n/g, '&#10;')
+}
+
+function isPreviewBlockHtml(value: string): boolean {
+  return PREVIEW_BLOCK_RE.test(value.trim())
 }
 
 function addMathSupport(md: MarkdownIt): void {
@@ -116,9 +126,12 @@ markdownIt.core.ruler.after('inline', 'emoji_shortcode', (state: any) => {
   }
 })
 
-markdownIt.renderer.rules.html_block = (tokens, idx) => (
-  `<div data-type="raw-html-block" data-html="${escapeAttr((tokens[idx]?.content ?? '').trim())}"></div>\n`
-)
+markdownIt.renderer.rules.html_block = (tokens, idx) => {
+  const content = (tokens[idx]?.content ?? '').trim()
+  if (!content) return ''
+  if (isPreviewBlockHtml(content)) return `${content}\n`
+  return `<div data-type="raw-html-block" data-markdown="${escapeAttr(content)}" data-html="${escapeAttr(content)}"></div>\n`
+}
 
 markdownIt.renderer.rules.html_inline = (tokens, idx) => (
   `<span data-type="raw-html-inline" data-html="${escapeAttr(tokens[idx]?.content ?? '')}"></span>`
@@ -137,6 +150,65 @@ markdownIt.renderer.rules.image = (tokens, idx) => {
 
   const titleAttr = title ? ` title="${escapeAttr(title)}"` : ''
   return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}"${titleAttr}>`
+}
+
+function isMarkdownTableDelimiter(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed.includes('|')) return false
+
+  const cells = trimmed
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim())
+
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+}
+
+function isMarkdownTableHeader(line: string, nextLine?: string): boolean {
+  return Boolean(nextLine && line.includes('|') && isMarkdownTableDelimiter(nextLine))
+}
+
+function wrapMarkdownTables(markdown: string): string {
+  const lines = markdown.split('\n')
+  const nextLines: string[] = []
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? ''
+    if (!isMarkdownTableHeader(line, lines[i + 1])) {
+      nextLines.push(line)
+      continue
+    }
+
+    const tableLines = [line, lines[i + 1] ?? '']
+    i += 2
+    while (i < lines.length && (lines[i] ?? '').trim() && (lines[i] ?? '').includes('|')) {
+      tableLines.push(lines[i] ?? '')
+      i += 1
+    }
+    i -= 1
+
+    const tableMarkdown = tableLines.join('\n')
+    const tableHtml = markdownIt.render(tableMarkdown).trim()
+    nextLines.push(
+      `<div data-type="markdown-table" data-markdown="${escapeAttr(tableMarkdown)}" data-html="${escapeAttr(tableHtml)}"></div>`,
+    )
+  }
+
+  return nextLines.join('\n')
+}
+
+function wrapMarkdownDetailsBlocks(markdown: string): string {
+  return markdown.replace(DETAILS_BLOCK_RE, (raw: string, attrs = '', summary: string, body: string) => {
+    const bodyMarkdown = body.trim()
+    const bodyHtml = bodyMarkdown ? markdownIt.render(bodyMarkdown) : ''
+    const detailsHtml = `<details${attrs}><summary>${summary.trim()}</summary>${bodyHtml}</details>`
+    return `<div data-type="raw-html-block" data-markdown="${escapeAttr(raw.trim())}" data-html="${escapeAttr(detailsHtml)}"></div>`
+  })
+}
+
+function preprocessMarkdown(markdown: string): string {
+  return wrapMarkdownTables(wrapMarkdownDetailsBlocks(markdown))
 }
 
 function enhanceMarkdownHtml(html: string): string {
@@ -174,7 +246,7 @@ function enhanceMarkdownHtml(html: string): string {
 
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return ''
-  return enhanceMarkdownHtml(markdownIt.render(markdown))
+  return enhanceMarkdownHtml(markdownIt.render(preprocessMarkdown(markdown)))
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */
@@ -200,6 +272,9 @@ export function htmlToMarkdown(html: string): string {
     switch (tagName) {
       case 'div':
         if (el.getAttribute('data-type') === 'markdown-table') {
+          const tableMarkdown = el.getAttribute('data-markdown')
+          if (tableMarkdown !== null) return `${tableMarkdown}\n`
+
           const tableHtml = el.getAttribute('data-html') || ''
           const holder = document.createElement('div')
           holder.innerHTML = tableHtml
@@ -207,6 +282,9 @@ export function htmlToMarkdown(html: string): string {
           return table ? processNode(table) : ''
         }
         if (el.getAttribute('data-type') === 'raw-html-block') {
+          const htmlMarkdown = el.getAttribute('data-markdown')
+          if (htmlMarkdown !== null) return `${htmlMarkdown}\n`
+
           return `${el.getAttribute('data-html') || ''}\n`
         }
         if (el.getAttribute('data-type') === 'math-block') {

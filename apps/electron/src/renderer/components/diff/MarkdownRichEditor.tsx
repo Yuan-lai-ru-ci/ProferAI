@@ -6,7 +6,7 @@ import Link from '@tiptap/extension-link'
 import { TextSelection } from '@tiptap/pm/state'
 import type { FileAccessOptions } from '@proma/shared'
 import { cn } from '@/lib/utils'
-import { htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
+import { MARKDOWN_RENDERER_VERSION, htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
 import {
   MarkdownTableBlock,
   MathBlock,
@@ -53,6 +53,7 @@ export function MarkdownRichEditor({
   const isEditableRef = React.useRef(isEditable)
   const disabledRef = React.useRef(disabled)
   const localMarkdownRef = React.useRef(value)
+  const rendererVersionRef = React.useRef(MARKDOWN_RENDERER_VERSION)
   const pendingFocusPosRef = React.useRef<number | null>(null)
   onChangeRef.current = onChange
   onSaveRef.current = onSave
@@ -143,11 +144,13 @@ export function MarkdownRichEditor({
 
   React.useEffect(() => {
     if (!editor) return
-    if (value === localMarkdownRef.current) return
+    const rendererChanged = rendererVersionRef.current !== MARKDOWN_RENDERER_VERSION
+    if (!rendererChanged && value === localMarkdownRef.current) return
     const html = markdownToHtml(value)
     localMarkdownRef.current = value
+    rendererVersionRef.current = MARKDOWN_RENDERER_VERSION
     editor.commands.setContent(html, { emitUpdate: false })
-  }, [editor, value])
+  }, [editor, value, MARKDOWN_RENDERER_VERSION])
 
   React.useEffect(() => {
     if (!editor || !isEditable || pendingFocusPosRef.current === null) return
