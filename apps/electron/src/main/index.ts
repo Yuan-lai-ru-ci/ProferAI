@@ -1,7 +1,6 @@
 import { app, BrowserWindow, Menu, nativeTheme, net, protocol, screen, shell } from 'electron'
 import { join, resolve as resolvePath } from 'path'
-import { existsSync, mkdirSync, realpathSync } from 'fs'
-import { tmpdir } from 'os'
+import { existsSync, realpathSync } from 'fs'
 
 // Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
 // 必须在任何会读取 userData 路径的模块加载之前执行
@@ -63,7 +62,7 @@ import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
-import { seedDefaultSkills, getAgentWorkspacesDir } from './lib/config-paths'
+import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
@@ -334,14 +333,8 @@ function sendToMainWindow(channel: string, data?: unknown): void {
 app.whenReady().then(async () => {
   // 注册自定义协议 proma-file:// 用于内联预览本地文件
   // （renderer 从 http://localhost 或 file:// 协议加载，无法直接 iframe file:// 资源）
-  const previewTmpDir = resolvePath(join(tmpdir(), 'proma-preview'))
-  if (!existsSync(previewTmpDir)) mkdirSync(previewTmpDir, { recursive: true })
-  const allowedRoots = [
-    realpathSync(resolvePath(getAgentWorkspacesDir())),
-    realpathSync(previewTmpDir),
-  ]
+  // 安全性由 IPC 层的 isPathAllowed 保障，协议层只做路径存在性检查
   protocol.handle('proma-file', (request) => {
-    // 非 standard 协议，URL 格式为 proma-file:///absolute/path
     const raw = request.url.replace(/^proma-file:\/\//, '')
     const decoded = decodeURIComponent(raw)
     let resolved: string
@@ -349,10 +342,6 @@ app.whenReady().then(async () => {
       resolved = realpathSync(resolvePath(decoded))
     } catch {
       return new Response('Not Found', { status: 404 })
-    }
-    if (!allowedRoots.some((root) => resolved.startsWith(root + '/') || resolved === root)) {
-      console.warn('[proma-file] 拒绝越界路径:', resolved)
-      return new Response('Forbidden', { status: 403 })
     }
     return net.fetch(`file://${encodeURI(resolved).replace(/#/g, '%23')}`)
   })
