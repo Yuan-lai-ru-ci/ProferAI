@@ -436,6 +436,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return dirs
   }, [workspaceFilesPath, wsAttachedDirs])
 
+  // 合并会话级 + 工作区级附加目录，供消息区文件路径解析使用
+  const allAttachedDirs = React.useMemo(() => {
+    const dirs = [...attachedDirs]
+    for (const d of workspaceDirs) {
+      if (d && !dirs.includes(d)) dirs.push(d)
+    }
+    return dirs
+  }, [attachedDirs, workspaceDirs])
+
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
   const refreshVersion = refreshMap.get(sessionId) ?? 0
@@ -1332,7 +1341,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           streamState={streamState}
           liveMessages={liveMessages}
           sessionPath={sessionPath}
-          attachedDirs={attachedDirs}
+          attachedDirs={allAttachedDirs}
           stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}

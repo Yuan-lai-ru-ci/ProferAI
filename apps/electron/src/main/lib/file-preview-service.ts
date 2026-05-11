@@ -1642,3 +1642,11 @@ export function openFilePreview(filePath: string, basePaths?: string[]): void {
 
   previewWindow.loadFile(tmpHtmlPath)
 }
+
+/**
+ * 仅解析文件路径（不读取内容），用于检查文件是否存在
+ */
+export function resolveFilePath(filePath: string, basePaths?: string[]): string | null {
+  const safePath = resolveTargetPath(filePath, basePaths)
+  return existsSync(safePath) ? safePath : null
+}

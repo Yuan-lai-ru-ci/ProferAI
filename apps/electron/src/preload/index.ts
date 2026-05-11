@@ -598,6 +598,9 @@ export interface ElectronAPI {
   /** 在新窗口中预览文件（相对路径会按 basePaths 依次解析） */
   previewFile: (filePath: string, basePaths?: string[]) => Promise<void>
 
+  /** 仅解析文件路径，检查文件是否存在。返回解析后的绝对路径或 null */
+  resolveFilePath: (filePath: string, basePaths?: string[]) => Promise<string | null>
+
   /** 重命名文件/目录 */
   renameFile: (filePath: string, newName: string) => Promise<void>
 
@@ -1501,6 +1504,10 @@ const electronAPI: ElectronAPI = {
 
   previewFile: (filePath: string, basePaths?: string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PREVIEW_FILE, filePath, basePaths)
+  },
+
+  resolveFilePath: (filePath: string, basePaths?: string[]) => {
+    return ipcRenderer.invoke('file:resolve-path', filePath, basePaths) as Promise<string | null>
   },
 
   renameFile: (filePath: string, newName: string) => {
