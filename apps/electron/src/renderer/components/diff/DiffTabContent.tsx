@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { Copy, Check, Pencil, Save, X } from 'lucide-react'
+import { Code2, Copy, Check, Eye, Pencil, Save, X } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -16,6 +16,7 @@ import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom, currentAgentSession
 import { resolvedThemeAtom } from '@/atoms/theme'
 import { highlightCode } from '@proma/core'
 import { DiffView } from './DiffView'
+import { MarkdownRichEditor } from './MarkdownRichEditor'
 
 /** 扩展名 → Shiki 语言 ID */
 const EXT_LANG: Record<string, string> = {
@@ -88,6 +89,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [newContent, setNewContent] = React.useState('')
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [markdownEditing, setMarkdownEditing] = React.useState(false)
+  const [markdownSourceMode, setMarkdownSourceMode] = React.useState(false)
   const [markdownDraft, setMarkdownDraft] = React.useState('')
   const [markdownSaving, setMarkdownSaving] = React.useState(false)
   const [docxHtml, setDocxHtml] = React.useState('')
@@ -122,6 +124,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   React.useEffect(() => {
     setMarkdownEditing(false)
+    setMarkdownSourceMode(false)
     setMarkdownDraft('')
     setMarkdownSaving(false)
   }, [filePath, previewOnly])
@@ -316,11 +319,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const startMarkdownEdit = React.useCallback(() => {
     if (!isMarkdown) return
     setMarkdownDraft(newContent)
+    setMarkdownSourceMode(false)
     setMarkdownEditing(true)
   }, [isMarkdown, newContent])
 
   const cancelMarkdownEdit = React.useCallback(() => {
     setMarkdownDraft(newContent)
+    setMarkdownSourceMode(false)
     setMarkdownEditing(false)
   }, [newContent])
 
@@ -343,6 +348,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
         return m
       })
+      setMarkdownSourceMode(false)
       setMarkdownEditing(false)
     } catch (err) {
       console.error('[DiffTabContent] Markdown save failed:', err)
@@ -380,6 +386,15 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         {previewOnly && isMarkdown && (
           markdownEditing ? (
             <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setMarkdownSourceMode((v) => !v)}
+                disabled={markdownSaving}
+                className="p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 disabled:opacity-50 shrink-0"
+                title={markdownSourceMode ? '切换到富文本编辑' : '切换到源码编辑'}
+              >
+                {markdownSourceMode ? <Eye className="size-3.5" /> : <Code2 className="size-3.5" />}
+              </button>
               <button
                 type="button"
                 onClick={cancelMarkdownEdit}
@@ -527,23 +542,33 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             )
           ) : isMarkdown ? (
             markdownEditing ? (
-              <textarea
-                value={markdownDraft}
-                onChange={(e) => setMarkdownDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
-                    cancelMarkdownEdit()
-                  }
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault()
-                    void saveMarkdownEdit()
-                  }
-                }}
-                autoFocus
-                spellCheck={false}
-                className="w-full h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
-              />
+              markdownSourceMode ? (
+                <textarea
+                  value={markdownDraft}
+                  onChange={(e) => setMarkdownDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      cancelMarkdownEdit()
+                    }
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault()
+                      void saveMarkdownEdit()
+                    }
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                  className="w-full h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
+                />
+              ) : (
+                <MarkdownRichEditor
+                  value={markdownDraft}
+                  onChange={setMarkdownDraft}
+                  onSave={() => void saveMarkdownEdit()}
+                  onCancel={cancelMarkdownEdit}
+                  disabled={markdownSaving}
+                />
+              )
             ) : (
               <div
                 className="prose prose-sm dark:prose-invert max-w-none px-4 py-3 min-h-full cursor-text"
