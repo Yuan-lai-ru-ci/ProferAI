@@ -5,19 +5,12 @@
  */
 
 import * as React from 'react'
-import { ChevronRight, Undo2, ExternalLink } from 'lucide-react'
+import { ChevronRight, Undo2 } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { agentDiffUnseenFilesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
-import type { ChangedFileEntry, ChangeSource, EditorApp } from '@proma/shared'
+import type { ChangedFileEntry, ChangeSource } from '@proma/shared'
 
 /** 按目录分组后的数据结构 */
 interface FileGroup {
@@ -236,75 +229,11 @@ export function DiffChangesList({
               key={filePath}
               filePath={filePath}
               onClick={() => onFileClick(filePath, true)}
-              dirPath={dirPath}
             />
           ))}
         </div>
       )}
     </div>
-  )
-}
-
-/** 编辑器选择按钮（下拉菜单） */
-function EditorPickerButton({
-  filePath,
-  gitRoot,
-  dirPath,
-}: {
-  filePath: string
-  gitRoot?: string
-  dirPath: string
-}): React.ReactElement {
-  const [editors, setEditors] = React.useState<EditorApp[]>([])
-  const [loaded, setLoaded] = React.useState(false)
-
-  const onOpenChange = React.useCallback((open: boolean) => {
-    if (open && !loaded) {
-      window.electronAPI.scanEditors().then(setEditors).catch(() => setEditors([]))
-      setLoaded(true)
-    }
-  }, [loaded])
-
-  const handlePick = React.useCallback((editorName?: string) => {
-    const base = gitRoot || dirPath
-    const absolute = `${base}/${filePath}`.replace(/\/+/g, '/')
-    window.electronAPI.systemOpenFile(absolute, editorName).catch(() => {})
-    if (editorName) {
-      try { localStorage.setItem('proma-last-editor', editorName) } catch {}
-    }
-  }, [dirPath, filePath, gitRoot])
-
-  const lastEditor = React.useMemo(() => {
-    try { return localStorage.getItem('proma-last-editor') } catch { return null }
-  }, [])
-
-  return (
-    <span onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <DropdownMenu onOpenChange={onOpenChange}>
-        <DropdownMenuTrigger className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/40 hover:text-foreground/70 cursor-pointer">
-          <ExternalLink className="size-4" />
-        </DropdownMenuTrigger>
-      <DropdownMenuContent side="bottom" align="end" className="min-w-[180px]">
-        <DropdownMenuItem onClick={() => handlePick()}>系统默认</DropdownMenuItem>
-        {editors.length > 0 && <DropdownMenuSeparator />}
-        {/* 上次选择排在前面 */}
-        {editors
-          .filter((e) => e.name === lastEditor)
-          .map((e) => (
-            <DropdownMenuItem key={`last-${e.name}`} onClick={() => handlePick(e.name)}>
-              {e.name}
-            </DropdownMenuItem>
-          ))}
-        {editors
-          .filter((e) => e.name !== lastEditor)
-          .map((e) => (
-            <DropdownMenuItem key={e.name} onClick={() => handlePick(e.name)}>
-              {e.name}
-            </DropdownMenuItem>
-          ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-    </span>
   )
 }
 
@@ -381,7 +310,6 @@ function FileRow({
           </TooltipTrigger>
           <TooltipContent side="bottom">还原文件变更</TooltipContent>
         </Tooltip>
-        <EditorPickerButton filePath={file.filePath} gitRoot={file.gitRoot} dirPath={dirPath} />
       </span>
     </div>
   )
@@ -391,25 +319,20 @@ function FileRow({
 function UntrackedFileRow({
   filePath,
   onClick,
-  dirPath,
 }: {
   filePath: string
   onClick: () => void
-  dirPath: string
 }): React.ReactElement {
   return (
     <div
       role="button"
       tabIndex={0}
-      className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors group"
+      className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
       onClick={onClick}
     >
       <span className="truncate">{filePath}</span>
-      <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500 group-hover:hidden">
+      <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
         新文件
-      </span>
-      <span className="ml-auto hidden group-hover:flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-        <EditorPickerButton filePath={filePath} dirPath={dirPath} />
       </span>
     </div>
   )
