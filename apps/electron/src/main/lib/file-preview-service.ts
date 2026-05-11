@@ -1745,11 +1745,10 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
 
     try {
       const pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
       pdfDoc = await pdfjsLib.getDocument({
         url: fileUrl,
         standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/standard_fonts/',
-        isEvalSupported: false,
       }).promise;
       await renderAll();
     } catch (err) {
