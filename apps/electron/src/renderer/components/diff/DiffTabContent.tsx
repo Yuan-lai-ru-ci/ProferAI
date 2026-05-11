@@ -38,7 +38,6 @@ const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
 const DOCX_EXTS = new Set(['.docx'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
-const IMAGE_MAX_SIZE = 20 * 1024 * 1024
 
 /**
  * 简易 LRU 缓存：保留最近访问的 N 个 entries。
@@ -199,12 +198,11 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
               return
             }
             if (isImage) {
-              const b64 = await window.electronAPI.readBinaryBase64(filePath, basePaths, IMAGE_MAX_SIZE)
+              const resolved = await window.electronAPI.resolveFilePath(filePath, basePaths)
               if (cancelled) return
-              if (b64) {
+              if (resolved) {
                 setImagePath(filePath)
-                const mimeMap: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.ico': 'image/x-icon' }
-                setImageDataUrl(`data:${mimeMap[ext] || 'image/png'};base64,${b64}`)
+                setImageDataUrl(`proma-file://${resolved}`)
               } else {
                 setImagePath('')
                 setImageDataUrl('')
