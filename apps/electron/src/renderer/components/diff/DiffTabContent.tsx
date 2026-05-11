@@ -6,8 +6,8 @@
  */
 
 import * as React from 'react'
-import { Copy, Check } from 'lucide-react'
-import { useAtom, useAtomValue } from 'jotai'
+import { Copy, Check, Pencil, Save, X } from 'lucide-react'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import DOMPurify from 'dompurify'
@@ -87,6 +87,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
+  const [markdownEditing, setMarkdownEditing] = React.useState(false)
+  const [markdownDraft, setMarkdownDraft] = React.useState('')
+  const [markdownSaving, setMarkdownSaving] = React.useState(false)
   const [docxHtml, setDocxHtml] = React.useState('')
   const [pdfSrc, setPdfSrc] = React.useState('')
   const [pdfZoom, setPdfZoom] = React.useState(100)
@@ -102,6 +105,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
+  const setRefreshVersionMap = useSetAtom(agentDiffRefreshVersionAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const refreshVersion = refreshVersionMap.get(currentSessionId ?? '') ?? 0
   const theme = useAtomValue(resolvedThemeAtom)
@@ -115,6 +119,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     sessionId,
     candidateBasePaths: basePaths,
   }), [sessionId, basePaths])
+
+  React.useEffect(() => {
+    setMarkdownEditing(false)
+    setMarkdownDraft('')
+    setMarkdownSaving(false)
+  }, [filePath, previewOnly])
 
   // non-passive wheel listener for pinch-to-zoom on image
   React.useEffect(() => {
@@ -295,13 +305,52 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   const handleCopy = React.useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(newContent)
+      await navigator.clipboard.writeText(markdownEditing ? markdownDraft : newContent)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
       // 复制失败
     }
+  }, [markdownDraft, markdownEditing, newContent])
+
+  const startMarkdownEdit = React.useCallback(() => {
+    if (!isMarkdown) return
+    setMarkdownDraft(newContent)
+    setMarkdownEditing(true)
+  }, [isMarkdown, newContent])
+
+  const cancelMarkdownEdit = React.useCallback(() => {
+    setMarkdownDraft(newContent)
+    setMarkdownEditing(false)
   }, [newContent])
+
+  const saveMarkdownEdit = React.useCallback(async () => {
+    if (!isMarkdown || markdownSaving) return
+    setMarkdownSaving(true)
+    try {
+      const ok = await window.electronAPI.writeTextFile(filePath, markdownDraft, fileAccess)
+      if (!ok) {
+        window.alert('保存失败：没有写入权限或文件不存在')
+        return
+      }
+      lastNewContentRef.current = markdownDraft
+      lastOldContentRef.current = ''
+      setOldContent('')
+      setNewContent(markdownDraft)
+      cacheSet(`preview:${filePath}`, { oldContent: '', newContent: markdownDraft })
+      setRefreshVersionMap((prev) => {
+        const m = new Map(prev)
+        m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+        return m
+      })
+      setMarkdownEditing(false)
+    } catch (err) {
+      console.error('[DiffTabContent] Markdown save failed:', err)
+      window.alert('保存失败')
+    } finally {
+      setMarkdownSaving(false)
+    }
+  }, [fileAccess, filePath, isMarkdown, markdownDraft, markdownSaving, sessionId, setRefreshVersionMap])
 
   return (
     <div className="flex flex-col h-full">
@@ -328,8 +377,42 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           </div>
         )}
 
+        {previewOnly && isMarkdown && (
+          markdownEditing ? (
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={cancelMarkdownEdit}
+                disabled={markdownSaving}
+                className="p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 disabled:opacity-50 shrink-0"
+                title="取消编辑"
+              >
+                <X className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveMarkdownEdit()}
+                disabled={markdownSaving}
+                className="p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 disabled:opacity-50 shrink-0"
+                title="保存"
+              >
+                <Save className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={startMarkdownEdit}
+              className="ml-auto p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0"
+              title="编辑 Markdown"
+            >
+              <Pencil className="size-3.5" />
+            </button>
+          )
+        )}
+
         <button type="button" onClick={handleCopy}
-          className={cn("p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0", previewOnly && "ml-auto")}
+          className={cn("p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0", previewOnly && !isMarkdown && "ml-auto")}
           title="复制文件内容">
           {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
         </button>
@@ -443,9 +526,32 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 DOCX</div>
             )
           ) : isMarkdown ? (
-            <div className="prose prose-sm dark:prose-invert max-w-none px-4 py-3">
-              <Markdown remarkPlugins={[remarkGfm]}>{newContent}</Markdown>
-            </div>
+            markdownEditing ? (
+              <textarea
+                value={markdownDraft}
+                onChange={(e) => setMarkdownDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancelMarkdownEdit()
+                  }
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    void saveMarkdownEdit()
+                  }
+                }}
+                autoFocus
+                spellCheck={false}
+                className="w-full h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
+              />
+            ) : (
+              <div
+                className="prose prose-sm dark:prose-invert max-w-none px-4 py-3 min-h-full cursor-text"
+                onDoubleClick={startMarkdownEdit}
+              >
+                <Markdown remarkPlugins={[remarkGfm]}>{newContent}</Markdown>
+              </div>
+            )
           ) : highlightedHtml ? (
             <div
               className="p-3 text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:!m-0 [&_pre]:!p-0 [&_code]:!text-[13px]"

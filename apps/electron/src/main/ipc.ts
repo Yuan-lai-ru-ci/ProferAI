@@ -2004,6 +2004,25 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 写入文本文件（供 Markdown 内联编辑使用）
+  ipcMain.handle(
+    'file:write-text',
+    async (_, filePath: string, content: string, access?: FileAccessOptions | string[]): Promise<boolean> => {
+      if (typeof content !== 'string') return false
+      const { writeFileSync } = await import('node:fs')
+      const { resolveFilePath } = await import('./lib/file-preview-service')
+      const options = normalizeFileAccessOptions(access)
+      const allowedBasePaths = getAllowedCandidateBasePaths(options)
+      const resolved = resolveFilePath(filePath, allowedBasePaths)
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:write-text 拒绝越界路径:', resolved ?? filePath)
+        return false
+      }
+      writeFileSync(resolved, content, 'utf-8')
+      return true
+    }
+  )
+
   // 仅解析文件路径（供 PDF/图片等用 file:// 加载）
   ipcMain.handle(
     'file:resolve-path',
