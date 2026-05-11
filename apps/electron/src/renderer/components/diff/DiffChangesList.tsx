@@ -270,23 +270,27 @@ function FileRow({
           : 'hover:bg-primary/5',
       )}
       onClick={onClick}
-      title={fullPath}
     >
       <span className="w-3 shrink-0 flex items-center justify-center">
         {isUnseen && <span className="size-1.5 rounded-full bg-primary" />}
       </span>
       <FileTypeIcon name={fileName} isDirectory={false} size={16} />
-      <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
-        <span className="shrink-0">
-          {fileName}
-          {file.status === 'deleted' && (
-            <span className="ml-1 text-foreground/30 text-[12px]">(已删除)</span>
-          )}
-        </span>
-        {dir && (
-          <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
-        )}
-      </span>
+      <Tooltip delayDuration={900}>
+        <TooltipTrigger asChild>
+          <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+            <span className="shrink-0">
+              {fileName}
+              {file.status === 'deleted' && (
+                <span className="ml-1 text-foreground/30 text-[12px]">(已删除)</span>
+              )}
+            </span>
+            {dir && (
+              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+            )}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-[400px] break-all">{fullPath}</TooltipContent>
+      </Tooltip>
 
       {/* +/- 行数 — hover 时隐藏让位给操作按钮 */}
       <span className="ml-auto shrink-0 flex items-center gap-1.5 text-[13px] group-hover:hidden">
@@ -334,15 +338,19 @@ function UntrackedFileRow({
       tabIndex={0}
       className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
       onClick={onClick}
-      title={filePath}
     >
       <FileTypeIcon name={fileName} isDirectory={false} size={16} />
-      <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
-        <span className="shrink-0">{fileName}</span>
-        {dir && (
-          <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
-        )}
-      </span>
+      <Tooltip delayDuration={900}>
+        <TooltipTrigger asChild>
+          <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+            <span className="shrink-0">{fileName}</span>
+            {dir && (
+              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+            )}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-[400px] break-all">{filePath}</TooltipContent>
+      </Tooltip>
       <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
         新文件
       </span>
