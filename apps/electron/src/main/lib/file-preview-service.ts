@@ -1679,7 +1679,9 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
 <html><head><meta charset="utf-8">
 <style>
   :root { --bg: rgba(255,255,255,0.8); --border: rgba(0,0,0,0.06); --shadow: rgba(0,0,0,0.08); --text: hsl(0 0% 45%); --btn-border: rgba(0,0,0,0.08); --btn-hover: rgba(0,0,0,0.05); }
-  :root.dark { --bg: rgba(30,30,30,0.8); --border: rgba(255,255,255,0.08); --shadow: rgba(0,0,0,0.3); --text: hsl(0 0% 64%); --btn-border: rgba(255,255,255,0.12); --btn-hover: rgba(255,255,255,0.08); }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: rgba(30,30,30,0.8); --border: rgba(255,255,255,0.08); --shadow: rgba(0,0,0,0.3); --text: hsl(0 0% 64%); --btn-border: rgba(255,255,255,0.12); --btn-hover: rgba(255,255,255,0.08); }
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: transparent; overflow: auto; padding: 16px; padding-top: 44px; }
   #c { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; width: fit-content; min-width: 100%; }
@@ -1702,10 +1704,6 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
   .zoom-btn:hover { background: var(--btn-hover); }
   .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text); font: 12px/1 ui-monospace, monospace; }
 </style>
-<script>
-  const params = new URLSearchParams(location.search);
-  if (params.get('theme') === 'dark') document.documentElement.classList.add('dark');
-<\/script>
 </head><body>
   <div class="zoom-bar">
     <button class="zoom-btn" id="zo" title="缩小">−</button>
@@ -1751,6 +1749,7 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
       pdfDoc = await pdfjsLib.getDocument({
         url: fileUrl,
         standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/standard_fonts/',
+        isEvalSupported: false,
       }).promise;
       await renderAll();
     } catch (err) {
