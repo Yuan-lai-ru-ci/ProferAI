@@ -9,6 +9,7 @@ import { ChevronRight, Undo2 } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { agentDiffUnseenFilesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { ChangedFileEntry, ChangeSource } from '@proma/shared'
 
@@ -43,9 +44,9 @@ interface DiffChangesListProps {
 
 /** 文件来源 badge 的颜色和文案 */
 const SOURCE_CONFIG: Record<string, { color: string; label: string }> = {
-  session: { color: 'bg-blue-500/10 text-blue-500', label: '会话' },
+  session: { color: 'bg-blue-500/10 text-blue-500', label: '会话文件' },
   workspace: { color: 'bg-purple-500/10 text-purple-500', label: '工作区' },
-  both: { color: 'bg-cyan-500/10 text-cyan-500', label: '会话+工作区' },
+  both: { color: 'bg-cyan-500/10 text-cyan-500', label: '会话+工作区文件' },
   none: { color: 'bg-muted text-muted-foreground', label: '附加目录文件' },
 }
 
@@ -253,6 +254,11 @@ function FileRow({
   isUnseen?: boolean
   dirPath: string
 }): React.ReactElement {
+  const parts = file.filePath.split('/')
+  const fileName = parts.pop()!
+  const dir = parts.join('/')
+  const fullPath = `${file.gitRoot || dirPath}/${file.filePath}`.replace(/\/+/g, '/')
+
   return (
     <div
       role="button"
@@ -264,31 +270,26 @@ function FileRow({
           : 'hover:bg-primary/5',
       )}
       onClick={onClick}
+      title={fullPath}
     >
       <span className="w-3 shrink-0 flex items-center justify-center">
         {isUnseen && <span className="size-1.5 rounded-full bg-primary" />}
       </span>
-      <span className="truncate">
-        {(() => {
-          const parts = file.filePath.split('/')
-          const fileName = parts.pop()!
-          const dir = parts.join('/')
-          return (
-            <>
-              {dir && (
-                <span className="text-foreground/40">{dir}/</span>
-              )}
-              <span>{fileName}</span>
-              {file.status === 'deleted' && (
-                <span className="ml-1 text-foreground/30 text-[12px]">(已删除)</span>
-              )}
-            </>
-          )
-        })()}
+      <FileTypeIcon name={fileName} isDirectory={false} size={16} />
+      <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+        <span className="shrink-0">
+          {fileName}
+          {file.status === 'deleted' && (
+            <span className="ml-1 text-foreground/30 text-[12px]">(已删除)</span>
+          )}
+        </span>
+        {dir && (
+          <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+        )}
       </span>
 
-      {/* +/- 行数 — hover 时隐藏让位给操作按钮（同位置，不撑大行） */}
-      <span className="ml-auto shrink-0 flex items-center gap-1.5 group-hover:hidden">
+      {/* +/- 行数 — hover 时隐藏让位给操作按钮 */}
+      <span className="ml-auto shrink-0 flex items-center gap-1.5 text-[13px] group-hover:hidden">
         {file.additions > 0 && (
           <span style={{ color: 'rgb(34 197 94)' }}>+{file.additions}</span>
         )}
@@ -297,7 +298,7 @@ function FileRow({
         )}
       </span>
 
-      {/* Hover 操作按钮 — 替代 +/- 行数显示 */}
+      {/* Hover 操作按钮 */}
       <span className="ml-auto shrink-0 hidden group-hover:flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -323,14 +324,25 @@ function UntrackedFileRow({
   filePath: string
   onClick: () => void
 }): React.ReactElement {
+  const parts = filePath.split('/')
+  const fileName = parts.pop()!
+  const dir = parts.join('/')
+
   return (
     <div
       role="button"
       tabIndex={0}
       className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
       onClick={onClick}
+      title={filePath}
     >
-      <span className="truncate">{filePath}</span>
+      <FileTypeIcon name={fileName} isDirectory={false} size={16} />
+      <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+        <span className="shrink-0">{fileName}</span>
+        {dir && (
+          <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+        )}
+      </span>
       <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
         新文件
       </span>
