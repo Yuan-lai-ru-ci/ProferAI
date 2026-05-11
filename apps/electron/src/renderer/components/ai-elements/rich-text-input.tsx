@@ -89,6 +89,8 @@ interface RichTextInputProps {
   autoFocusTrigger?: string | null
   /** 是否支持手动折叠（内容较长时显示折叠按钮） */
   collapsible?: boolean
+  /** 是否启用 Mention 功能（@ 文件、/ Skill、# MCP） */
+  enableMentions?: boolean
   /** 工作区根路径（启用 @ 引用文件功能时需要） */
   workspacePath?: string | null
   /** 工作区 slug（启用 / Skill 和 # MCP 功能时需要） */
@@ -123,6 +125,7 @@ export function RichTextInput({
   disabled = false,
   autoFocusTrigger,
   collapsible = false,
+  enableMentions,
   workspacePath,
   workspaceSlug,
   attachedDirs = [],
@@ -168,8 +171,8 @@ export function RichTextInput({
   const workspaceSlugRef = useRef<string | null>(workspaceSlug ?? null)
   workspaceSlugRef.current = workspaceSlug ?? null
 
-  // 是否启用 Mention 功能（需要工作区路径或 slug）
-  const hasMentionSupport = !!(workspacePath || workspaceSlug)
+  // 是否启用 Mention 功能：Agent 首帧可能尚未拿到路径/slug，但扩展必须先注册。
+  const hasMentionSupport = enableMentions ?? (workspacePath !== undefined || workspaceSlug !== undefined)
 
   // Mention Suggestion 配置（稳定引用，不随 workspacePath 变化重建）
   const mentionSuggestion = useMemo(
@@ -217,7 +220,7 @@ export function RichTextInput({
         placeholder,
         emptyEditorClass: 'is-editor-empty',
       }),
-      // Mention 扩展：仅在 Agent 模式（有工作区）时启用
+      // Mention 扩展：启用时注册，路径/slug 后续通过 ref 异步更新
       // @ 引用文件、/ 触发 Skill、# 触发 MCP
       ...(hasMentionSupport ? [
         Mention.extend({

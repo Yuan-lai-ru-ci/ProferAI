@@ -1536,6 +1536,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               disabled={!agentChannelId || !hasAvailableModel}
               autoFocusTrigger={sessionId}
               collapsible
+              enableMentions
               workspacePath={sessionPath}
               workspaceSlug={workspaceSlug}
               attachedDirs={workspaceDirs}
