@@ -4,8 +4,24 @@ import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import { TextSelection } from '@tiptap/pm/state'
+import type { FileAccessOptions } from '@proma/shared'
 import { cn } from '@/lib/utils'
 import { htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
+import {
+  MarkdownTable,
+  MarkdownTableCell,
+  MarkdownTableHeader,
+  MarkdownTableRow,
+  MathBlock,
+  MathInline,
+  RawHtmlBlock,
+  RawHtmlInline,
+  TaskItem,
+  TaskList,
+  createMarkdownImage,
+  createMarkdownVideo,
+  createShikiCodeBlock,
+} from './markdown-preview-extensions'
 
 interface MarkdownRichEditorProps {
   value: string
@@ -15,6 +31,8 @@ interface MarkdownRichEditorProps {
   onCancel: () => void
   onRequestEdit?: () => void
   disabled?: boolean
+  fileAccess?: FileAccessOptions
+  shikiTheme?: string
 }
 
 export function MarkdownRichEditor({
@@ -25,12 +43,16 @@ export function MarkdownRichEditor({
   onCancel,
   onRequestEdit,
   disabled,
+  fileAccess,
+  shikiTheme = 'one-light',
 }: MarkdownRichEditorProps): React.ReactElement {
   const isEditable = editing && !disabled
   const onChangeRef = React.useRef(onChange)
   const onSaveRef = React.useRef(onSave)
   const onCancelRef = React.useRef(onCancel)
   const onRequestEditRef = React.useRef(onRequestEdit)
+  const fileAccessRef = React.useRef(fileAccess)
+  const shikiThemeRef = React.useRef(shikiTheme)
   const isEditableRef = React.useRef(isEditable)
   const disabledRef = React.useRef(disabled)
   const localMarkdownRef = React.useRef(value)
@@ -39,26 +61,44 @@ export function MarkdownRichEditor({
   onSaveRef.current = onSave
   onCancelRef.current = onCancel
   onRequestEditRef.current = onRequestEdit
+  fileAccessRef.current = fileAccess
+  shikiThemeRef.current = shikiTheme
   isEditableRef.current = isEditable
   disabledRef.current = disabled
 
+  const extensions = React.useMemo(() => [
+    createMarkdownImage(fileAccessRef),
+    createMarkdownVideo(fileAccessRef),
+    RawHtmlBlock,
+    RawHtmlInline,
+    MathBlock,
+    MathInline,
+    TaskList,
+    TaskItem,
+    MarkdownTable,
+    MarkdownTableRow,
+    MarkdownTableHeader,
+    MarkdownTableCell,
+    createShikiCodeBlock(shikiThemeRef),
+    StarterKit.configure({
+      codeBlock: false,
+      link: false,
+      underline: false,
+    }),
+    Underline,
+    Link.configure({
+      openOnClick: false,
+      autolink: true,
+      linkOnPaste: true,
+      HTMLAttributes: {
+        class: 'text-primary underline',
+      },
+    }),
+  ], [])
+
   const initialHtml = React.useMemo(() => markdownToHtml(value), [value])
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        link: false,
-        underline: false,
-      }),
-      Underline,
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        linkOnPaste: true,
-        HTMLAttributes: {
-          class: 'text-primary underline',
-        },
-      }),
-    ],
+    extensions,
     content: initialHtml,
     editable: isEditable,
     editorProps: {
@@ -70,6 +110,8 @@ export function MarkdownRichEditor({
           '[&_pre]:rounded-md [&_pre]:p-3',
           '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px]',
           '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
+          '[&_table_p]:my-0',
+          '[&_input[type=checkbox]]:accent-primary',
         ),
       },
       handleKeyDown: (_view, event) => {

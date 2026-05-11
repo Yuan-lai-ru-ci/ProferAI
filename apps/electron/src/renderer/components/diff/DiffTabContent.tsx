@@ -119,6 +119,16 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     sessionId,
     candidateBasePaths: basePaths,
   }), [sessionId, basePaths])
+  const markdownFileAccess = React.useMemo(() => {
+    const candidateBasePaths: string[] = []
+    const slash = filePath.lastIndexOf('/')
+    if (slash > 0) candidateBasePaths.push(filePath.slice(0, slash))
+    if (dirPath) candidateBasePaths.push(dirPath)
+    for (const basePath of basePaths ?? []) {
+      if (basePath && !candidateBasePaths.includes(basePath)) candidateBasePaths.push(basePath)
+    }
+    return { sessionId, candidateBasePaths }
+  }, [basePaths, dirPath, filePath, sessionId])
 
   React.useEffect(() => {
     setMarkdownEditing(false)
@@ -566,6 +576,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 onCancel={cancelMarkdownEdit}
                 onRequestEdit={startMarkdownEdit}
                 disabled={markdownSaving}
+                fileAccess={markdownFileAccess}
+                shikiTheme={shikiTheme}
               />
             )
           ) : highlightedHtml ? (
