@@ -1668,22 +1668,19 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
   return existsSync(safePath) ? safePath : null
 }
 
-/**
- * 为内联 PDF 预览生成一个 PDF.js viewer HTML 文件
- * 返回该 HTML 文件的路径（位于 tmpdir/proma-preview/）
- */
-export function preparePdfPreview(filePath: string, basePaths?: string[]): { resolvedPath: string; html: string } | null {
+/** 为内联 PDF 预览生成临时 HTML 文件（使用 proma-file:// 加载 PDF，无体积膨胀） */
+export function preparePdfPreview(filePath: string, basePaths?: string[]): { resolvedPath: string; tmpHtmlPath: string } | null {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
   const st = statSync(safePath)
-  if (st.size > 10 * 1024 * 1024) return null
-  const pdfBase64 = readFileSync(safePath).toString('base64')
+  if (st.size > MAX_FILE_SIZE) return null
+  const fileUrl = `proma-file://${encodeURI(safePath).replace(/#/g, '%23')}`
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; padding-top: 40px; }
-  canvas { box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
+  body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; padding-top: 44px; }
+  canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-width: 100%; }
   .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; }
   .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; }
   .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; }
@@ -1713,18 +1710,16 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
     <button class="zoom-btn" id="zi" title="放大">+</button>
   </div>
   <div class="loading" id="c">正在加载 PDF...</div>
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs" type="module"><\/script>
   <script type="module">
-    import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs';
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
-    const c = document.getElementById('c');
+    const container = document.getElementById('c');
+    const fileUrl = ${JSON.stringify(fileUrl)};
     const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
     let stepIdx = 2;
     let pdfDoc = null;
 
     async function renderAll() {
       if (!pdfDoc) return;
-      c.innerHTML = '';
+      container.innerHTML = '';
       const userScale = STEPS[stepIdx];
       const dpr = window.devicePixelRatio || 1;
       for (let i = 1; i <= pdfDoc.numPages; i++) {
@@ -1735,12 +1730,12 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
         canvas.style.width = (vp.width / dpr) + 'px';
         canvas.style.height = (vp.height / dpr) + 'px';
         await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-        c.appendChild(canvas);
+        container.appendChild(canvas);
       }
       const info = document.createElement('div');
       info.className = 'page-info';
       info.textContent = '共 ' + pdfDoc.numPages + ' 页';
-      c.appendChild(info);
+      container.appendChild(info);
       document.getElementById('zl').textContent = Math.round(userScale * 100) + '%';
     }
 
@@ -1748,15 +1743,17 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
     document.getElementById('zo').onclick = () => { if (stepIdx > 0) { stepIdx--; renderAll(); } };
 
     try {
-      const raw = atob(${JSON.stringify(pdfBase64)});
-      const arr = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-      pdfDoc = await pdfjsLib.getDocument({ data: arr }).promise;
+      const pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
+      pdfDoc = await pdfjsLib.getDocument(fileUrl).promise;
       await renderAll();
-    } catch (e) { c.innerHTML = '<div class="error">PDF 加载失败: ' + e.message + '<\/div>'; }
+    } catch (err) {
+      container.innerHTML = '<div class="error">PDF 加载失败: ' + err.message + '<\\/div>';
+    }
   <\/script>
 <\/body><\/html>`
-  return { resolvedPath: safePath, html }
+  const tmpHtmlPath = writeTempHtml(html)
+  return { resolvedPath: safePath, tmpHtmlPath }
 }
 
 /**

@@ -1951,17 +1951,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 为内联 PDF 预览生成 PDF.js viewer HTML，返回 HTML 内容
+  // 为内联 PDF 预览生成临时 HTML 文件，返回文件路径
   ipcMain.handle(
     'file:prepare-pdf-preview',
-    async (_, filePath: string, basePaths?: string[]): Promise<{ html: string } | null> => {
+    async (_, filePath: string, basePaths?: string[]): Promise<{ tmpHtmlPath: string } | null> => {
       const { preparePdfPreview } = await import('./lib/file-preview-service')
       const result = preparePdfPreview(filePath, basePaths)
       if (result && !isPathAllowed(result.resolvedPath, basePaths)) {
         console.warn('[IPC] file:prepare-pdf-preview 拒绝越界路径:', result.resolvedPath)
         return null
       }
-      return result ? { html: result.html } : null
+      return result ? { tmpHtmlPath: result.tmpHtmlPath } : null
     }
   )
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeTheme, protocol, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, net, protocol, screen, shell } from 'electron'
 import { join, resolve as resolvePath } from 'path'
 import { existsSync, mkdirSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
@@ -24,7 +24,7 @@ app.on('open-file', (event, filePath) => {
 // 注册自定义协议方案为"特权"（必须在 app ready 之前）
 // 用于内联预览本地文件（renderer 用 iframe 加载 proma-file:// 资源）
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'proma-file', privileges: { standard: true, secure: true } },
+  { scheme: 'proma-file', privileges: { secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ])
 
 // Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例
@@ -340,22 +340,21 @@ app.whenReady().then(async () => {
     realpathSync(resolvePath(getAgentWorkspacesDir())),
     realpathSync(previewTmpDir),
   ]
-  protocol.registerFileProtocol('proma-file', (request, callback) => {
-    const url = request.url.replace(/^proma-file:\/\//, '')
-    const decoded = decodeURIComponent(url)
+  protocol.handle('proma-file', (request) => {
+    // 非 standard 协议，URL 格式为 proma-file:///absolute/path
+    const raw = request.url.replace(/^proma-file:\/\//, '')
+    const decoded = decodeURIComponent(raw)
     let resolved: string
     try {
       resolved = realpathSync(resolvePath(decoded))
     } catch {
-      callback({ statusCode: 404 })
-      return
+      return new Response('Not Found', { status: 404 })
     }
     if (!allowedRoots.some((root) => resolved.startsWith(root + '/') || resolved === root)) {
       console.warn('[proma-file] 拒绝越界路径:', resolved)
-      callback({ statusCode: 403 })
-      return
+      return new Response('Forbidden', { status: 403 })
     }
-    callback({ path: resolved })
+    return net.fetch(`file://${encodeURI(resolved).replace(/#/g, '%23')}`)
   })
 
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）

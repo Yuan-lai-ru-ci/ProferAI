@@ -88,7 +88,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
   const [newContent, setNewContent] = React.useState('')
   const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [docxHtml, setDocxHtml] = React.useState('')
-  const [pdfHtml, setPdfHtml] = React.useState('')
+  const [pdfSrc, setPdfSrc] = React.useState('')
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
   // 默认 25%：预览面板空间有限，先展示缩略全貌，用户可手动放大查看细节
@@ -149,7 +149,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setNewContent(cached.newContent)
       setHighlightedHtml('')
       setDocxHtml('')
-      setPdfHtml('')
+      setPdfSrc('')
       setImagePath('')
       setImageDataUrl('')
       setImageZoom(0.25)
@@ -161,7 +161,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
       setNewContent('')
       setHighlightedHtml('')
       setDocxHtml('')
-      setPdfHtml('')
+      setPdfSrc('')
       setImagePath('')
       setImageDataUrl('')
       setImageZoom(0.25)
@@ -180,7 +180,7 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
             if (isPdf) {
               const result = await window.electronAPI.preparePdfPreview(filePath, basePaths)
               if (cancelled) return
-              setPdfHtml(result?.html ?? '')
+              setPdfSrc(result?.tmpHtmlPath ? `proma-file://${result.tmpHtmlPath}` : '')
               return
             }
             if (isImage) {
@@ -322,12 +322,11 @@ export function DiffTabContent({ filePath, dirPath, gitRoot, previewOnly, basePa
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
         ) : previewOnly ? (
           isPdf ? (
-            pdfHtml ? (
+            pdfSrc ? (
               <iframe
-                srcDoc={pdfHtml}
+                src={pdfSrc}
                 className="w-full h-full border-0"
                 title={filePath.split('/').pop() || 'PDF'}
-                sandbox="allow-scripts"
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[12px] gap-1 px-4 text-center">
