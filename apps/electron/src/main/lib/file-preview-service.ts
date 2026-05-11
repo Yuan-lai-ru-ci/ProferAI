@@ -1678,33 +1678,31 @@ export function preparePdfPreview(filePath: string, basePaths?: string[]): { res
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
+  :root { --bg: rgba(255,255,255,0.8); --border: rgba(0,0,0,0.06); --shadow: rgba(0,0,0,0.08); --text: hsl(0 0% 45%); --btn-border: rgba(0,0,0,0.08); --btn-hover: rgba(0,0,0,0.05); }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: rgba(30,30,30,0.8); --border: rgba(255,255,255,0.08); --shadow: rgba(0,0,0,0.3); --text: hsl(0 0% 64%); --btn-border: rgba(255,255,255,0.12); --btn-hover: rgba(255,255,255,0.08); }
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; padding-top: 44px; }
-  canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-  .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; }
-  .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; }
-  .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; }
+  body { background: transparent; overflow: auto; padding: 16px; padding-top: 44px; }
+  #c { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; width: fit-content; min-width: 100%; }
+  #c canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); margin: 0 auto; display: block; }
+  .loading { color: var(--text); font: 12px/1.5 system-ui; padding: 40px; text-align: center; width: 100%; }
+  .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; width: 100%; }
+  .page-info { color: var(--text); font: 11px/1.5 system-ui; text-align: center; padding: 4px; width: 100%; }
   .zoom-bar {
     position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
     display: flex; align-items: center; gap: 8px;
     padding: 4px 8px; border-radius: 8px;
-    background: rgba(255,255,255,0.8); backdrop-filter: blur(8px);
-    border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    font: 12px/1 system-ui;
-  }
-  @media (prefers-color-scheme: dark) {
-    .zoom-bar { background: rgba(30,30,30,0.8); border-color: rgba(255,255,255,0.08); }
-    .zoom-btn { color: #aaa; border-color: rgba(255,255,255,0.12); }
-    .zoom-btn:hover { background: rgba(255,255,255,0.08); }
-    .zoom-label { color: #aaa; }
+    background: var(--bg); backdrop-filter: blur(8px);
+    border: 1px solid var(--border); box-shadow: 0 1px 3px var(--shadow);
   }
   .zoom-btn {
-    width: 24px; height: 24px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08);
-    background: transparent; cursor: pointer; font: 14px/1 system-ui; color: #666;
+    width: 24px; height: 24px; border-radius: 4px; border: 1px solid var(--btn-border);
+    background: transparent; cursor: pointer; font: 14px/1 system-ui; color: var(--text);
     display: flex; align-items: center; justify-content: center;
   }
-  .zoom-btn:hover { background: rgba(0,0,0,0.05); }
-  .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: #666; font-size: 12px; font-family: ui-monospace, monospace; }
+  .zoom-btn:hover { background: var(--btn-hover); }
+  .zoom-label { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text); font: 12px/1 ui-monospace, monospace; }
 </style>
 </head><body>
   <div class="zoom-bar">
