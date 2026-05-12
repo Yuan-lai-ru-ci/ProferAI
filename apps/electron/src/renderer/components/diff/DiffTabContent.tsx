@@ -48,8 +48,15 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.
  * refreshVersion 变化时（agent 写文件、git 突变、窗口聚焦）key 自然变化，
  * 老 entry 不会被命中，最终被 LRU 淘汰；无需主动失效。
  */
-type CacheEntry = { oldContent: string; newContent: string }
+type CacheEntry = {
+  oldContent: string
+  newContent: string
+  highlightedHtml?: string
+  highlightedLanguage?: string
+  highlightedTheme?: string
+}
 const CACHE_MAX = 50
+const MAX_HIGHLIGHT_CHARS = 200_000
 const contentCache = new Map<string, CacheEntry>()
 function cacheGet(key: string): CacheEntry | undefined {
   const v = contentCache.get(key)
@@ -178,6 +185,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   // 命中缓存时跳过 loading 闪烁直接渲染；未命中走 IPC 拉取
   React.useEffect(() => {
     let cancelled = false
+    const lang = EXT_LANG[ext] || 'text'
 
     // PDF / DOCX / Office 不走文本缓存（HTML 体积大、解析过程也不轻）
     const cacheable = !isPdf && !isDocx && !isOfficePreview && !isLegacyOffice && !isImage
@@ -192,7 +200,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       lastOldContentRef.current = cached.oldContent
       setOldContent(cached.oldContent)
       setNewContent(cached.newContent)
-      setHighlightedHtml('')
+      setHighlightedHtml(
+        cached.highlightedHtml &&
+          cached.highlightedLanguage === lang &&
+          cached.highlightedTheme === shikiTheme
+          ? cached.highlightedHtml
+          : ''
+      )
       setDocxHtml('')
       setOfficeHtml('')
       setOfficeText('')
@@ -280,11 +294,37 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           if (cacheKey) cacheSet(cacheKey, { oldContent: old, newContent: content })
         }
 
-        if (previewOnly && !MD_EXTS.has(getExtension(filePath)) && content) {
-          const lang = EXT_LANG[getExtension(filePath)] || 'text'
+        if (previewOnly && !MD_EXTS.has(ext) && content) {
+          if (!cancelled) setLoading(false)
+
+          if (
+            cached?.highlightedHtml &&
+            cached.highlightedLanguage === lang &&
+            cached.highlightedTheme === shikiTheme
+          ) {
+            if (!cancelled) setHighlightedHtml(cached.highlightedHtml)
+            return
+          }
+
+          if (content.length > MAX_HIGHLIGHT_CHARS) {
+            if (!cancelled) setHighlightedHtml('')
+            return
+          }
+
           try {
             const hl = await highlightCode({ code: content, language: lang, theme: shikiTheme })
-            if (!cancelled) setHighlightedHtml(DOMPurify.sanitize(hl.html))
+            if (cancelled) return
+            const sanitizedHtml = DOMPurify.sanitize(hl.html)
+            setHighlightedHtml(sanitizedHtml)
+            if (cacheKey) {
+              cacheSet(cacheKey, {
+                oldContent: old,
+                newContent: content,
+                highlightedHtml: sanitizedHtml,
+                highlightedLanguage: lang,
+                highlightedTheme: shikiTheme,
+              })
+            }
           } catch (err) {
             console.error('[DiffTabContent] Shiki highlight failed:', err)
           }
@@ -299,7 +339,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, shikiTheme, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId])
+  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, shikiTheme, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId, ext])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
   const prevRefreshRef = React.useRef(-1)
