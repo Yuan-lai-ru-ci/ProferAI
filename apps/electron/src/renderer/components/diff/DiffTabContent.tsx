@@ -36,6 +36,8 @@ const EXT_LANG: Record<string, string> = {
 const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
 const DOCX_EXTS = new Set(['.docx'])
+const OFFICE_PREVIEW_EXTS = new Set(['.xlsx', '.pptx'])
+const LEGACY_OFFICE_EXTS = new Set(['.doc', '.xls', '.ppt'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
 
 /**
@@ -91,6 +93,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [markdownDraft, setMarkdownDraft] = React.useState('')
   const [markdownSaving, setMarkdownSaving] = React.useState(false)
   const [docxHtml, setDocxHtml] = React.useState('')
+  const [officeHtml, setOfficeHtml] = React.useState('')
+  const [officeText, setOfficeText] = React.useState('')
   const [pdfSrc, setPdfSrc] = React.useState('')
   const [pdfZoom, setPdfZoom] = React.useState(100)
   const pdfIframeRef = React.useRef<HTMLIFrameElement>(null)
@@ -114,6 +118,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isPdf = previewOnly && PDF_EXTS.has(ext)
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
+  const isOfficePreview = previewOnly && OFFICE_PREVIEW_EXTS.has(ext)
+  const isLegacyOffice = previewOnly && LEGACY_OFFICE_EXTS.has(ext)
   const isImage = previewOnly && IMAGE_EXTS.has(ext)
   const fileAccess = React.useMemo(() => ({
     sessionId,
@@ -173,8 +179,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   React.useEffect(() => {
     let cancelled = false
 
-    // PDF / DOCX 不走文本缓存（HTML 体积大、解析过程也不轻）
-    const cacheable = !isPdf && !isDocx && !isImage
+    // PDF / DOCX / Office 不走文本缓存（HTML 体积大、解析过程也不轻）
+    const cacheable = !isPdf && !isDocx && !isOfficePreview && !isLegacyOffice && !isImage
     const cacheKey = cacheable
       ? (previewOnly ? `preview:${filePath}@v${previewContentVersion}` : `diff:${filePath}@v${refreshVersion}`)
       : null
@@ -188,6 +194,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setNewContent(cached.newContent)
       setHighlightedHtml('')
       setDocxHtml('')
+      setOfficeHtml('')
+      setOfficeText('')
       setPdfSrc('')
       setPdfZoom(100)
       setImagePath('')
@@ -201,6 +209,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setNewContent('')
       setHighlightedHtml('')
       setDocxHtml('')
+      setOfficeHtml('')
+      setOfficeText('')
       setPdfSrc('')
       setPdfZoom(100)
       setImagePath('')
@@ -242,6 +252,16 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               setDocxHtml(DOMPurify.sanitize(result?.html ?? ''))
               return
             }
+            if (isOfficePreview) {
+              const result = await window.electronAPI.officeToHtml(filePath, fileAccess)
+              if (cancelled) return
+              setOfficeHtml(DOMPurify.sanitize(result?.html ?? ''))
+              setOfficeText(result?.text ?? '')
+              return
+            }
+            if (isLegacyOffice) {
+              return
+            }
             const result = await window.electronAPI.resolveAndReadFile(filePath, fileAccess)
             if (cancelled) return
             content = result?.content ?? ''
@@ -279,7 +299,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, shikiTheme, fileAccess, isPdf, isDocx, isImage, sessionId])
+  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, shikiTheme, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
   const prevRefreshRef = React.useRef(-1)
@@ -317,13 +337,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   const handleCopy = React.useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(markdownEditing ? markdownDraft : newContent)
+      const copyText = markdownEditing ? markdownDraft : (isOfficePreview ? officeText : newContent)
+      await navigator.clipboard.writeText(copyText)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
       // 复制失败
     }
-  }, [markdownDraft, markdownEditing, newContent])
+  }, [isOfficePreview, markdownDraft, markdownEditing, newContent, officeText])
 
   const startMarkdownEdit = React.useCallback(() => {
     if (!isMarkdown) return
@@ -549,6 +570,22 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">无法加载 DOCX</div>
             )
+          ) : isOfficePreview ? (
+            officeHtml ? (
+              <div
+                className="office-preview-host"
+                dangerouslySetInnerHTML={{ __html: officeHtml }}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">
+                无法加载 {ext === '.pptx' ? 'PPTX' : 'Excel'} 预览
+              </div>
+            )
+          ) : isLegacyOffice ? (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[12px] gap-1 px-4 text-center">
+              <p>暂不支持旧版 {ext.toUpperCase().slice(1)} 内联预览</p>
+              <p className="text-[11px] text-muted-foreground/60">请在系统中打开，或转换为 {ext === '.xls' ? 'XLSX' : ext === '.ppt' ? 'PPTX' : 'DOCX'} 后预览</p>
+            </div>
           ) : isMarkdown ? (
             markdownEditing && markdownSourceMode ? (
               <textarea
