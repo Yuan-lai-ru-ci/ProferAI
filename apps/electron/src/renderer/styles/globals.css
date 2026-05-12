@@ -315,6 +315,17 @@
   app-region: drag;
 }
 
+/* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */
+.sidebar-window-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
 /* 深色特殊主题 dialog 光晕效果 */
 .theme-ocean-dark [data-radix-dialog-content],
 .theme-forest-dark [data-radix-dialog-content],
