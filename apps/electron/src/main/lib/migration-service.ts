@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync, readdirSync, rmSync, type Dirent } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, relative, isAbsolute, sep } from 'node:path'
 import { homedir, platform, arch, tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import AdmZip from 'adm-zip'
@@ -1321,7 +1321,8 @@ function _safeExtractAll(zip: AdmZip, targetDir: string): void {
   const resolvedTarget = resolve(targetDir)
   for (const entry of zip.getEntries()) {
     const entryPath = resolve(targetDir, entry.entryName)
-    if (!entryPath.startsWith(resolvedTarget + '/') && entryPath !== resolvedTarget) {
+    const relativeEntryPath = relative(resolvedTarget, entryPath)
+    if (relativeEntryPath === '..' || relativeEntryPath.startsWith(`..${sep}`) || isAbsolute(relativeEntryPath)) {
       throw new Error(`迁移文件包含非法路径，已拒绝解压: ${entry.entryName}`)
     }
   }
