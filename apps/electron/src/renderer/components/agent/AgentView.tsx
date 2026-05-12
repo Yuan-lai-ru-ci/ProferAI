@@ -1012,41 +1012,63 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     let fileReferences = ''
     if (pendingFiles.length > 0) {
       const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
-      if (workspace) {
-        // 区分：已有 sourcePath 的文件（从侧面板添加）直接引用，其余需要保存
-        const existingFiles = pendingFiles.filter((f) => f.sourcePath)
-        const newFiles = pendingFiles.filter((f) => !f.sourcePath)
+      if (!workspace) {
+        toast.warning('暂时无法发送附件', {
+          description: '当前 Agent 会话没有绑定有效工作区。请在顶部选择工作区，或新建 Agent 会话后重新上传。',
+        })
+        return
+      }
 
-        const allRefs: Array<{ filename: string; targetPath: string }> = []
+      // 区分：已有 sourcePath 的文件（从侧面板添加）直接引用，其余需要保存
+      const existingFiles = pendingFiles.filter((f) => f.sourcePath)
+      const newFiles = pendingFiles.filter((f) => !f.sourcePath)
 
-        // 已有路径的文件直接引用
-        for (const f of existingFiles) {
-          allRefs.push({ filename: f.filename, targetPath: f.sourcePath! })
+      const allRefs: Array<{ filename: string; targetPath: string }> = []
+
+      // 已有路径的文件直接引用
+      for (const f of existingFiles) {
+        allRefs.push({ filename: f.filename, targetPath: f.sourcePath! })
+      }
+
+      // 新上传的文件保存到 session 目录
+      if (newFiles.length > 0) {
+        const filesToSave = newFiles.map((f) => ({
+          filename: f.filename,
+          data: window.__pendingAgentFileData?.get(f.id) || '',
+        }))
+        const missingDataFiles = filesToSave.filter((f) => !f.data).map((f) => f.filename)
+        if (missingDataFiles.length > 0) {
+          toast.error('附件数据已失效', {
+            description: `请移除后重新添加文件：${missingDataFiles.join('、')}`,
+          })
+          return
         }
 
-        // 新上传的文件保存到 session 目录
-        if (newFiles.length > 0) {
-          const filesToSave = newFiles.map((f) => ({
-            filename: f.filename,
-            data: window.__pendingAgentFileData?.get(f.id) || '',
-          }))
-          try {
-            const saved = await window.electronAPI.saveFilesToAgentSession({
-              workspaceSlug: workspace.slug,
-              sessionId,
-              files: filesToSave,
-            })
-            allRefs.push(...saved)
-          } catch (error) {
-            console.error('[AgentView] 保存附件到 session 失败:', error)
-          }
-        }
-
-        if (allRefs.length > 0) {
-          const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
-          fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
+        try {
+          const saved = await window.electronAPI.saveFilesToAgentSession({
+            workspaceSlug: workspace.slug,
+            sessionId,
+            files: filesToSave,
+          })
+          allRefs.push(...saved)
+        } catch (error) {
+          console.error('[AgentView] 保存附件到 session 失败:', error)
+          toast.error('附件保存失败', {
+            description: '请确认当前工作区可用，或新建 Agent 会话后重新上传。',
+          })
+          return
         }
       }
+
+      if (allRefs.length === 0) {
+        toast.error('附件没有成功加入消息', {
+          description: '请重新上传文件，或切换到有效工作区后再试。',
+        })
+        return
+      }
+
+      const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
+      fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
 
       // 清理
       for (const f of pendingFiles) {
@@ -1288,7 +1310,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }).catch(console.error)
   }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, permissionMode])
 
-  /** 在新会话中重试：创建新会话 + 切换 tab + 发送引用旧会话的提示词 */
+  /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
     if (!agentChannelId) return
 
@@ -1301,8 +1323,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       // 切换到新会话 tab
       openSession('agent', meta.id, meta.title)
 
-      // 发送引用旧会话的默认提示词
-      const prompt = `上个会话的 id 是 ${sessionId}，可以参考同工作区下的会话继续完成工作`
+      // 发送引用旧会话的默认提示词，并通过 mentionedSessionIds 触发结构化会话引用注入
+      const prompt = `请读取 &session:${sessionId} 的历史，然后从上个会话停止的位置继续。`
+      const streamStartedAt = Date.now()
 
       // 初始化新会话流式状态
       setStreamingStates((prev) => {
@@ -1313,7 +1336,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           toolActivities: [],
           teammates: [],
           model: agentModelId || undefined,
-          startedAt: Date.now(),
+          startedAt: streamStartedAt,
         })
         return map
       })
@@ -1324,6 +1347,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: agentChannelId,
         modelId: agentModelId || undefined,
         workspaceId: currentWorkspaceId || undefined,
+        mentionedSessionIds: [sessionId],
+        startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
       }).catch(console.error)
     } catch (error) {

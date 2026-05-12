@@ -330,6 +330,7 @@ export type ErrorCode =
   | 'invalid_request'
   | 'image_too_large'
   | 'prompt_too_long'
+  | 'thinking_signature_invalid'
   | 'provider_error'
   // 环境 / 配置类错误（本地可修复）
   | 'windows_shell_missing'
