@@ -81,6 +81,8 @@ import type {
   RewindSessionInput,
   RewindSessionResult,
   AgentMessageSearchResult,
+  AgentSessionReferenceSearchInput,
+  AgentSessionReferenceSearchResult,
   DetachedPreviewWindowData,
   DetachedPreviewWindowInput,
   FeishuConfig,
@@ -400,6 +402,9 @@ export interface ElectronAPI {
 
   /** 搜索 Agent 会话消息内容 */
   searchAgentSessionMessages: (query: string) => Promise<AgentMessageSearchResult[]>
+
+  /** 搜索当前工作区可引用的 Agent 会话 */
+  searchAgentSessionReferences: (input: AgentSessionReferenceSearchInput) => Promise<AgentSessionReferenceSearchResult[]>
 
   /** 迁移 Agent 会话到另一个工作区 */
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
@@ -1263,6 +1268,10 @@ const electronAPI: ElectronAPI = {
 
   searchAgentSessionMessages: (query: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_MESSAGES, query)
+  },
+
+  searchAgentSessionReferences: (input: AgentSessionReferenceSearchInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_SESSION_REFERENCES, input)
   },
 
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => {

@@ -349,6 +349,46 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string, sessi
   return `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
 }
 
+function escapeContextAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function buildReferencedSessionsPrompt(
+  currentSessionId: string,
+  mentionedSessionIds?: string[],
+  workspaceId?: string,
+): string {
+  const uniqueIds = [...new Set((mentionedSessionIds ?? []).filter(Boolean))]
+  if (uniqueIds.length === 0) return ''
+
+  const currentWorkspaceId = workspaceId ?? getAgentSessionMeta(currentSessionId)?.workspaceId
+  const sessionBlocks: string[] = []
+
+  for (const referencedSessionId of uniqueIds) {
+    if (referencedSessionId === currentSessionId) continue
+
+    const meta = getAgentSessionMeta(referencedSessionId)
+    if (!meta || meta.archived) continue
+    if (currentWorkspaceId && meta.workspaceId !== currentWorkspaceId) continue
+
+    const title = escapeContextAttr(meta.title)
+    const historyPath = `~/${getConfigDirName()}/agent-sessions/${referencedSessionId}.jsonl`
+    sessionBlocks.push(
+      `<session id="${referencedSessionId}" title="${title}" updatedAt="${meta.updatedAt}">\n` +
+      `History path: ${historyPath}\n` +
+      '</session>',
+    )
+  }
+
+  if (sessionBlocks.length === 0) return ''
+
+  return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。不要假设这些会话的内容；需要上下文时，请先读取对应的 History path，再基于读取结果继续完成任务。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
+}
+
 /** 标题生成 Prompt */
 const TITLE_PROMPT = '根据用户的第一条消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。\n\n用户消息：'
 
@@ -763,7 +803,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -1045,8 +1085,13 @@ export class AgentOrchestrator {
         agentCwd,
       })
 
-      // 11.5 注入 mention 引用指令（Skill/MCP）— 仅影响 prompt，不影响持久化
+      // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅影响 prompt，不影响持久化
       let enrichedMessage = userMessage
+      const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
+      if (referencedSessionsBlock) {
+        enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
+        console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
+      }
       if (mentionedSkills?.length || mentionedMcpServers?.length) {
         const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
         for (const slug of mentionedSkills ?? []) {

@@ -1113,13 +1113,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
       ...(attachedDirs.length > 0 && { additionalDirectories: attachedDirs }),
-      // 解析用户消息中的 Skill/MCP 引用，传递结构化元数据给后端
+      // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
         const skills = [...effectiveText.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
         const mcps = [...effectiveText.matchAll(/#mcp:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const sessionIds = [...effectiveText.matchAll(/&session:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
         return {
           ...(skills.length > 0 && { mentionedSkills: skills }),
           ...(mcps.length > 0 && { mentionedMcpServers: mcps }),
+          ...(sessionIds.length > 0 && { mentionedSessionIds: sessionIds }),
         }
       })(),
     }
@@ -1571,8 +1573,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               placeholder={
                 agentChannelId && hasAvailableModel
                   ? sendWithCmdEnter
-                    ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP)'
-                    : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP)'
+                    ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
+                    : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
                   : !agentChannelId
                     ? '请先在设置中选择 Agent 供应商'
                     : '暂无可用模型，请先在设置中启用渠道'
@@ -1582,7 +1584,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               collapsible
               enableMentions
               workspacePath={sessionPath}
+              workspaceId={currentWorkspaceId}
               workspaceSlug={workspaceSlug}
+              sessionId={sessionId}
               attachedDirs={workspaceDirs}
               sessionAttachedDirs={attachedDirs}
               htmlValue={inputHtmlContent}

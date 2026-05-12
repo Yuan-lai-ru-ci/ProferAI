@@ -82,6 +82,7 @@ import type {
   ForkSessionInput,
   RewindSessionInput,
   RewindSessionResult,
+  AgentSessionReferenceSearchInput,
   FeishuConfigInput,
   FeishuConfig,
   FeishuBridgeState,
@@ -165,6 +166,7 @@ import {
   forkAgentSession,
   autoArchiveAgentSessions,
   searchAgentSessionMessages,
+  searchAgentSessionReferences,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
@@ -1239,6 +1241,14 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.SEARCH_MESSAGES,
     async (_, query: string) => {
       return searchAgentSessionMessages(query)
+    }
+  )
+
+  // 搜索当前工作区可引用的 Agent 会话
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SEARCH_SESSION_REFERENCES,
+    async (_, input: AgentSessionReferenceSearchInput) => {
+      return searchAgentSessionReferences(input)
     }
   )
 
