@@ -9,7 +9,7 @@ import { join, resolve, sep } from 'node:path'
 import { existsSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
   VoiceDictationAudioChunkInput,
@@ -173,7 +173,8 @@ import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveF
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir } from './lib/config-paths'
+import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
 import {
@@ -1001,6 +1002,55 @@ export function registerIpcHandlers(): void {
       })
     }
   })
+
+  // ===== Scratch Pad 持久化 =====
+
+  // 从磁盘加载 scratch-pad.md
+  ipcMain.handle(
+    SCRATCH_PAD_IPC_CHANNELS.LOAD,
+    async (): Promise<string> => {
+      const path = getScratchPadPath()
+      try {
+        if (!existsSync(path)) return ''
+        const { readFileSync } = require('node:fs')
+        return readFileSync(path, 'utf-8')
+      } catch (err) {
+        console.error('[ScratchPad] 加载失败:', err)
+        return ''
+      }
+    }
+  )
+
+  // 异步保存 scratch-pad.md
+  ipcMain.handle(
+    SCRATCH_PAD_IPC_CHANNELS.SAVE,
+    async (_, content: string): Promise<boolean> => {
+      const path = getScratchPadPath()
+      try {
+        const { writeFile } = require('node:fs/promises')
+        await writeFile(path, content, 'utf-8')
+        return true
+      } catch (err) {
+        console.error('[ScratchPad] 保存失败:', err)
+        return false
+      }
+    }
+  )
+
+  // 同步保存 scratch-pad.md（beforeunload 场景）
+  ipcMain.on(
+    SCRATCH_PAD_IPC_CHANNELS.SAVE_SYNC,
+    (event, content: string) => {
+      try {
+        const { writeFileSync } = require('node:fs')
+        writeFileSync(getScratchPadPath(), content, 'utf-8')
+        event.returnValue = true
+      } catch (err) {
+        console.error('[ScratchPad] 同步保存失败:', err)
+        event.returnValue = false
+      }
+    }
+  )
 
   // ===== 应用图标切换 =====
 
