@@ -448,6 +448,48 @@ export function deleteAgentSession(id: string): void {
 
   // 清理 Nano Banana 生图历史
   clearNanoBananaAgentHistory(id)
+
+  // 清理 SDK 关联数据（file-history 和 projects 下的 session JSONL）
+  const sdkSessionIds = [removed.sdkSessionId, removed.forkSourceSdkSessionId].filter(Boolean) as string[]
+  if (sdkSessionIds.length > 0) {
+    const sdkConfigDir = getSdkConfigDir()
+
+    const fileHistoryDir = join(sdkConfigDir, 'file-history')
+    for (const sid of sdkSessionIds) {
+      const histDir = join(fileHistoryDir, sid)
+      if (existsSync(histDir)) {
+        try {
+          rmSync(histDir, { recursive: true, force: true })
+          console.log(`[Agent 会话] 已清理 file-history: ${sid}`)
+        } catch (e) {
+          console.warn(`[Agent 会话] 清理 file-history 失败 (${sid}):`, e)
+        }
+      }
+    }
+
+    const projectsDir = join(sdkConfigDir, 'projects')
+    if (existsSync(projectsDir)) {
+      try {
+        for (const hashDir of readdirSync(projectsDir)) {
+          const projPath = join(projectsDir, hashDir)
+          for (const sid of sdkSessionIds) {
+            const sessionFile = join(projPath, `${sid}.jsonl`)
+            if (existsSync(sessionFile)) {
+              try {
+                unlinkSync(sessionFile)
+                console.log(`[Agent 会话] 已清理 SDK session 文件: ${sessionFile}`)
+              } catch (e) {
+                console.warn('[Agent 会话] 清理 SDK session 文件失败:', e)
+              }
+            }
+          }
+          try {
+            if (readdirSync(projPath).length === 0) rmSync(projPath, { recursive: true })
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    }
+  }
 }
 
 /**
