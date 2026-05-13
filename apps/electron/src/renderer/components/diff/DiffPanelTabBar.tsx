@@ -22,12 +22,27 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
+  const prevTabRef = React.useRef(activeTab)
 
-  const handleChangesClick = () => {
+  const clearUnseen = React.useCallback(() => {
     if (currentSessionId) {
       setUnseenMap((prev) => { const m = new Map(prev); m.set(currentSessionId, false); return m })
     }
-    onTabChange('changes')
+  }, [currentSessionId, setUnseenMap])
+
+  // 当用户正在「文件改动」标签页时（已看到改动内容），切走时自动清除未读标记
+  React.useEffect(() => {
+    if (prevTabRef.current === 'changes' && activeTab !== 'changes') {
+      clearUnseen()
+    }
+    prevTabRef.current = activeTab
+  }, [activeTab, clearUnseen])
+
+  const handleChangesClick = () => {
+    clearUnseen()
+    if (activeTab !== 'changes') {
+      onTabChange('changes')
+    }
   }
 
   return (
