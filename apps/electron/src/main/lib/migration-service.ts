@@ -722,12 +722,13 @@ function _checkAttachedDirectories(tempDir: string, manifest: MigrationManifest)
   const configPath = join(tempDir, 'config/workspace-config.json')
   if (!existsSync(configPath)) return []
 
-  const config = readJsonSafe<{ attachedDirectories?: string[] }>(configPath)
-  if (!config?.attachedDirectories?.length) return []
+  const config = readJsonSafe<{ attachedDirectories?: string[]; attachedFiles?: string[] }>(configPath)
+  const attachedPaths = [...(config?.attachedDirectories ?? []), ...(config?.attachedFiles ?? [])]
+  if (attachedPaths.length === 0) return []
 
   const currentHome = homedir()
 
-  return config.attachedDirectories.map((p) => {
+  return attachedPaths.map((p) => {
     let suggested: string | undefined
     if (manifest.sourceHomeDir && p.startsWith(manifest.sourceHomeDir)) {
       suggested = join(currentHome, p.slice(manifest.sourceHomeDir.length))
@@ -751,10 +752,11 @@ function _checkAttachedDirectoriesV2(tempDir: string, manifest: MigrationManifes
     const configPath = join(tempDir, `workspaces/${wsEntry.workspaceSlug}/config/workspace-config.json`)
     if (!existsSync(configPath)) continue
 
-    const config = readJsonSafe<{ attachedDirectories?: string[] }>(configPath)
-    if (!config?.attachedDirectories?.length) continue
+    const config = readJsonSafe<{ attachedDirectories?: string[]; attachedFiles?: string[] }>(configPath)
+    const attachedPaths = [...(config?.attachedDirectories ?? []), ...(config?.attachedFiles ?? [])]
+    if (attachedPaths.length === 0) continue
 
-    for (const p of config.attachedDirectories) {
+    for (const p of attachedPaths) {
       if (seen.has(p)) continue
       seen.add(p)
 
@@ -1064,12 +1066,12 @@ function _importWorkspaceConfig(tempDir: string, targetWorkspace: AgentWorkspace
   const srcConfig = join(tempDir, 'config/workspace-config.json')
   if (!existsSync(srcConfig)) return
 
-  const config = readJsonSafe<{ attachedDirectories?: string[] }>(srcConfig)
-  if (!config?.attachedDirectories) return
+  const config = readJsonSafe<{ attachedDirectories?: string[]; attachedFiles?: string[] }>(srcConfig)
+  if (!config?.attachedDirectories && !config?.attachedFiles) return
 
   // 应用路径映射
   const newDirs: string[] = []
-  for (const dir of config.attachedDirectories) {
+  for (const dir of config.attachedDirectories ?? []) {
     const mapped = pathMappings[dir]
     if (mapped === null) continue // 用户选择移除
     if (mapped !== undefined) {
@@ -1079,13 +1081,27 @@ function _importWorkspaceConfig(tempDir: string, targetWorkspace: AgentWorkspace
     }
     // 路径不存在且无映射：跳过（移除）
   }
+  const newFiles: string[] = []
+  for (const file of config.attachedFiles ?? []) {
+    const mapped = pathMappings[file]
+    if (mapped === null) continue
+    if (mapped !== undefined) {
+      newFiles.push(mapped)
+    } else if (existsSync(file)) {
+      newFiles.push(file)
+    }
+  }
 
   // 写入目标工作区 config
   const destConfigPath = join(getAgentWorkspacePath(targetWorkspace.slug), 'config.json')
   const existingConfig = existsSync(destConfigPath)
-    ? readJsonSafe<{ attachedDirectories?: string[] }>(destConfigPath) ?? {}
+    ? readJsonSafe<{ attachedDirectories?: string[]; attachedFiles?: string[] }>(destConfigPath) ?? {}
     : {}
-  const merged = { ...existingConfig, attachedDirectories: [...new Set([...(existingConfig.attachedDirectories ?? []), ...newDirs])] }
+  const merged = {
+    ...existingConfig,
+    attachedDirectories: [...new Set([...(existingConfig.attachedDirectories ?? []), ...newDirs])],
+    attachedFiles: [...new Set([...(existingConfig.attachedFiles ?? []), ...newFiles])],
+  }
   writeFileSync(destConfigPath, JSON.stringify(merged, null, 2), 'utf-8')
 }
 
@@ -1165,11 +1181,11 @@ function _importWorkspaceConfigV2(
   const srcConfig = join(tempDir, `workspaces/${sourceSlug}/config/workspace-config.json`)
   if (!existsSync(srcConfig)) return
 
-  const config = readJsonSafe<{ attachedDirectories?: string[] }>(srcConfig)
-  if (!config?.attachedDirectories) return
+  const config = readJsonSafe<{ attachedDirectories?: string[]; attachedFiles?: string[] }>(srcConfig)
+  if (!config?.attachedDirectories && !config?.attachedFiles) return
 
   const newDirs: string[] = []
-  for (const dir of config.attachedDirectories) {
+  for (const dir of config.attachedDirectories ?? []) {
     const mapped = pathMappings[dir]
     if (mapped === null) continue
     if (mapped !== undefined) {
@@ -1178,12 +1194,26 @@ function _importWorkspaceConfigV2(
       newDirs.push(dir)
     }
   }
+  const newFiles: string[] = []
+  for (const file of config.attachedFiles ?? []) {
+    const mapped = pathMappings[file]
+    if (mapped === null) continue
+    if (mapped !== undefined) {
+      newFiles.push(mapped)
+    } else if (existsSync(file)) {
+      newFiles.push(file)
+    }
+  }
 
   const destConfigPath = join(getAgentWorkspacePath(targetWorkspace.slug), 'config.json')
   const existingConfig = existsSync(destConfigPath)
-    ? readJsonSafe<{ attachedDirectories?: string[] }>(destConfigPath) ?? {}
+    ? readJsonSafe<{ attachedDirectories?: string[]; attachedFiles?: string[] }>(destConfigPath) ?? {}
     : {}
-  const merged = { ...existingConfig, attachedDirectories: [...new Set([...(existingConfig.attachedDirectories ?? []), ...newDirs])] }
+  const merged = {
+    ...existingConfig,
+    attachedDirectories: [...new Set([...(existingConfig.attachedDirectories ?? []), ...newDirs])],
+    attachedFiles: [...new Set([...(existingConfig.attachedFiles ?? []), ...newFiles])],
+  }
   writeFileSync(destConfigPath, JSON.stringify(merged, null, 2), 'utf-8')
 }
 

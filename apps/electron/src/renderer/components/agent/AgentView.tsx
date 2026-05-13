@@ -67,7 +67,9 @@ import {
   agentDiffRefreshVersionAtom,
   agentSessionsAtom,
   agentAttachedDirectoriesMapAtom,
+  agentAttachedFilesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
+  workspaceAttachedFilesMapAtom,
   liveMessagesMapAtom,
   agentThinkingAtom,
   stoppedByUserSessionsAtom,
@@ -87,8 +89,9 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
-import type { AgentSendInput, AgentPendingFile, ModelOption, SDKMessage } from '@proma/shared'
-import { fileToBase64 } from '@/lib/file-utils'
+import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
+import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -355,8 +358,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
   const attachedDirs = attachedDirsMap.get(sessionId) ?? []
+  const setAttachedFilesMap = useSetAtom(agentAttachedFilesMapAtom)
+  const attachedFilesMap = useAtomValue(agentAttachedFilesMapAtom)
+  const attachedFiles = attachedFilesMap.get(sessionId) ?? []
   const wsAttachedDirsMap = useAtomValue(workspaceAttachedDirectoriesMapAtom)
   const wsAttachedDirs = currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
+  const setWsAttachedFilesMap = useSetAtom(workspaceAttachedFilesMapAtom)
+  const wsAttachedFilesMap = useAtomValue(workspaceAttachedFilesMapAtom)
+  const wsAttachedFiles = currentWorkspaceId ? (wsAttachedFilesMap.get(currentWorkspaceId) ?? []) : []
 
   const draftsMap = useAtomValue(agentSessionDraftsAtom)
   const setDraftsMap = useSetAtom(agentSessionDraftsAtom)
@@ -486,6 +495,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       .catch(() => setWorkspaceFilesPath(null))
   }, [workspaceSlug])
 
+  // 获取工作区级附加文件（@ 引用和路径解析都需要）
+  React.useEffect(() => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    window.electronAPI
+      .getWorkspaceAttachedFiles(workspaceSlug)
+      .then((files) => {
+        setWsAttachedFilesMap((prev) => {
+          const map = new Map(prev)
+          map.set(currentWorkspaceId, files)
+          return map
+        })
+      })
+      .catch(console.error)
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedFilesMap])
+
   // 工作区级目录（workspace shared files + 工作区级附加目录），@ 引用标记为工作区文件
   const workspaceDirs = React.useMemo(() => {
     const dirs: string[] = []
@@ -496,14 +520,44 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return dirs
   }, [workspaceFilesPath, wsAttachedDirs])
 
+  const attachedFileDirectories = React.useMemo(() => {
+    const dirs: string[] = []
+    for (const filePath of [...attachedFiles, ...wsAttachedFiles]) {
+      const parent = getFileParentPath(filePath)
+      if (parent && !dirs.includes(parent)) dirs.push(parent)
+    }
+    return dirs
+  }, [attachedFiles, wsAttachedFiles])
+
+  const workspaceMentionPaths = React.useMemo(() => {
+    const paths = [...workspaceDirs]
+    for (const filePath of wsAttachedFiles) {
+      if (!paths.includes(filePath)) paths.push(filePath)
+    }
+    return paths
+  }, [workspaceDirs, wsAttachedFiles])
+
+  const sessionMentionPaths = React.useMemo(() => {
+    const paths = [...attachedDirs]
+    for (const filePath of attachedFiles) {
+      if (!paths.includes(filePath)) paths.push(filePath)
+    }
+    return paths
+  }, [attachedDirs, attachedFiles])
+
   // 合并会话级 + 工作区级附加目录，供消息区文件路径解析使用
   const allAttachedDirs = React.useMemo(() => {
     const dirs = [...attachedDirs]
     for (const d of workspaceDirs) {
       if (d && !dirs.includes(d)) dirs.push(d)
     }
+    for (const filePath of [...attachedFiles, ...wsAttachedFiles]) {
+      if (filePath && !dirs.includes(filePath)) dirs.push(filePath)
+      const parent = getFileParentPath(filePath)
+      if (parent && !dirs.includes(parent)) dirs.push(parent)
+    }
     return dirs
-  }, [attachedDirs, workspaceDirs])
+  }, [attachedDirs, workspaceDirs, attachedFiles, wsAttachedFiles])
 
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
@@ -579,6 +633,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
   }, [sessionId, sessions, setAttachedDirsMap])
 
+  // 从会话元数据初始化附加文件（仅冷启动水合，后续由 attachFile/detachFile 实时写入）
+  React.useEffect(() => {
+    const meta = sessions.find((s) => s.id === sessionId)
+    const files = meta?.attachedFiles ?? []
+    setAttachedFilesMap((prev) => {
+      const existing = prev.get(sessionId)
+      if (existing != null) return prev
+      const map = new Map(prev)
+      if (files.length > 0) {
+        map.set(sessionId, files)
+      }
+      return map
+    })
+  }, [sessionId, sessions, setAttachedFilesMap])
+
   // 自动发送 pending prompt（从快速任务窗口或设置页触发）
   // 等待 messagesLoaded 确保消息加载完成后再插入乐观消息，避免被加载结果覆盖。
   // 使用 queueMicrotask 延迟发送：避免 setState → 重渲染 → cleanup 取消 timer 的竞态。
@@ -594,6 +663,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      additionalDirectories: Array.from(new Set([...attachedDirs, ...attachedFileDirectories, ...(pendingPrompt.additionalDirectories ?? [])])),
     }
     setPendingPrompt(null)
 
@@ -636,6 +706,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         workspaceId: snapshot.workspaceId,
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
+        ...(snapshot.additionalDirectories && snapshot.additionalDirectories.length > 0 && {
+          additionalDirectories: snapshot.additionalDirectories,
+        }),
       }
       window.electronAPI.sendAgentMessage(input).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
@@ -648,7 +721,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -664,13 +737,51 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return `${baseName}-${counter}${ext}`
   }, [])
 
+  const attachSessionFile = React.useCallback(async (filePath: string): Promise<void> => {
+    const updated = await window.electronAPI.attachFile({ sessionId, filePath })
+    setAttachedFilesMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, updated)
+      return map
+    })
+  }, [sessionId, setAttachedFilesMap])
+
   /** 将 File 对象列表添加为待发送附件 */
-  const addFilesAsAttachments = React.useCallback(async (files: File[]): Promise<void> => {
+  const addFilesAsAttachments = React.useCallback(async (files: File[], sourcePaths?: Map<File, string>): Promise<void> => {
     // 收集已有的 pending 文件名，用于去重
     const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
 
+    const pathBackedFiles: string[] = []
+    const rejectedLargeFiles: string[] = []
+
     for (const file of files) {
       try {
+        if (file.size > MAX_ATTACHMENT_SIZE) {
+          const sourcePath = sourcePaths?.get(file)
+          if (!sourcePath) {
+            rejectedLargeFiles.push(file.name)
+            continue
+          }
+          await attachSessionFile(sourcePath)
+
+          const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
+          const uniqueFilename = makeUniqueFilename(file.name, usedNames)
+          usedNames.push(uniqueFilename)
+
+          const pending: AgentPendingFile = {
+            id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            filename: uniqueFilename,
+            mediaType: file.type || 'application/octet-stream',
+            size: file.size,
+            previewUrl,
+            sourcePath,
+          }
+
+          setPendingFiles((prev) => [...prev, pending])
+          pathBackedFiles.push(uniqueFilename)
+          continue
+        }
+
         const base64 = await fileToBase64(file)
         const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
         const uniqueFilename = makeUniqueFilename(file.name, usedNames)
@@ -694,15 +805,66 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         console.error('[AgentView] 添加附件失败:', error)
       }
     }
-  }, [makeUniqueFilename, setPendingFiles])
+
+    if (pathBackedFiles.length > 0) {
+      toast.success(`已将大文件作为附加文件引用：${formatFileNames(pathBackedFiles)}`)
+    }
+    if (rejectedLargeFiles.length > 0) {
+      toast.error(`以下文件超过 100MB 且无法取得本地路径，已跳过：${formatFileNames(rejectedLargeFiles)}`)
+    }
+  }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
+
+  const addLargeDialogFilesAsReferences = React.useCallback(async (files: FileDialogLargeFile[]): Promise<void> => {
+    if (files.length === 0) return
+    const usedNames: string[] = pendingFilesRef.current.map((f) => f.filename)
+    const added: string[] = []
+    const rejected: string[] = []
+
+    for (const file of files) {
+      try {
+        await attachSessionFile(file.path)
+        const uniqueFilename = makeUniqueFilename(file.filename, usedNames)
+        usedNames.push(uniqueFilename)
+
+        const pending: AgentPendingFile = {
+          id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          filename: uniqueFilename,
+          mediaType: file.mediaType,
+          size: file.size,
+          sourcePath: file.path,
+        }
+
+        setPendingFiles((prev) => [...prev, pending])
+        added.push(uniqueFilename)
+      } catch (error) {
+        console.error('[AgentView] 附加大文件失败:', error)
+        rejected.push(file.filename)
+      }
+    }
+
+    if (added.length > 0) {
+      toast.success(`已将大文件作为附加文件引用：${formatFileNames(added)}`)
+    }
+    if (rejected.length > 0) {
+      toast.error(`以下文件附加失败，已跳过：${formatFileNames(rejected)}`)
+    }
+  }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
 
   /** 打开文件选择对话框 */
   const handleOpenFileDialog = React.useCallback(async (): Promise<void> => {
     try {
       const result = await window.electronAPI.openFileDialog()
-      if (result.files.length === 0) return
+      const largeFiles = result.largeFiles ?? []
+      const skippedFiles = result.skippedFiles ?? []
+      if (result.files.length === 0 && largeFiles.length === 0 && skippedFiles.length === 0) return
+
+      const oversized: string[] = []
 
       for (const fileInfo of result.files) {
+        if (fileInfo.size > MAX_ATTACHMENT_SIZE) {
+          oversized.push(fileInfo.filename)
+          continue
+        }
         const previewUrl = fileInfo.mediaType.startsWith('image/')
           ? `data:${fileInfo.mediaType};base64,${fileInfo.data}`
           : undefined
@@ -722,10 +884,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         setPendingFiles((prev) => [...prev, pending])
       }
+
+      if (oversized.length > 0) {
+        toast.error(`以下文件超过 100MB 且无法取得本地路径，已跳过：${formatFileNames(oversized)}`)
+      }
+      await addLargeDialogFilesAsReferences(largeFiles)
+      if (skippedFiles.length > 0) {
+        toast.warning(`以下文件无法读取，已跳过：${formatFileNames(skippedFiles.map((f) => f.filename))}`)
+      }
     } catch (error) {
       console.error('[AgentView] 文件选择对话框失败:', error)
     }
-  }, [setPendingFiles])
+  }, [addLargeDialogFilesAsReferences, setPendingFiles])
 
   /** 附加文件夹（不复制，仅记录路径） */
   const handleAttachFolder = React.useCallback(async (): Promise<void> => {
@@ -829,7 +999,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         // 普通文件作为附件
         const regularFiles = filePaths.map((p) => pathMap.get(p)!).filter(Boolean)
         if (regularFiles.length > 0) {
-          addFilesAsAttachments(regularFiles)
+          const fileSourcePaths = new Map<File, string>()
+          for (const path of filePaths) {
+            const file = pathMap.get(path)
+            if (file) fileSourcePaths.set(file, path)
+          }
+          addFilesAsAttachments(regularFiles, fileSourcePaths)
         }
       } catch (error) {
         console.error('[AgentView] 路径检测失败，回退处理:', error)
@@ -887,6 +1062,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // 如果输入为空但有建议，使用建议内容
     const effectiveText = text || suggestion || ''
     if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId || !hasAvailableModel) return
+    const additionalDirectoriesForRun = new Set(attachedDirs)
+    for (const dir of attachedFileDirectories) {
+      additionalDirectoriesForRun.add(dir)
+    }
 
     // 上一条消息仍在处理中，直接追加发送
     if (streaming) {
@@ -979,7 +1158,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         // 已有路径的文件直接引用
         for (const f of existingFiles) {
-          allRefs.push({ filename: f.filename, targetPath: f.sourcePath! })
+          const sourcePath = f.sourcePath!
+          allRefs.push({ filename: f.filename, targetPath: sourcePath })
+          const parentPath = getFileParentPath(sourcePath)
+          if (parentPath) additionalDirectoriesForRun.add(parentPath)
         }
 
         // 新上传的文件保存到 session 目录
@@ -1070,7 +1252,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
-      ...(attachedDirs.length > 0 && { additionalDirectories: attachedDirs }),
+      ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP 引用，传递结构化元数据给后端
       ...(() => {
         const skills = [...effectiveText.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
@@ -1095,7 +1277,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, pendingFiles, attachedDirs, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
+  }, [inputContent, pendingFiles, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -1539,8 +1721,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               enableMentions
               workspacePath={sessionPath}
               workspaceSlug={workspaceSlug}
-              attachedDirs={workspaceDirs}
-              sessionAttachedDirs={attachedDirs}
+              attachedDirs={workspaceMentionPaths}
+              sessionAttachedDirs={sessionMentionPaths}
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
