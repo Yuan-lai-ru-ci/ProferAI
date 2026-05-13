@@ -46,6 +46,9 @@ type CacheEntry = {
 const CACHE_MAX = 50
 const contentCache = new Map<string, CacheEntry>()
 
+/** 超过此字符数的文本文件将跳过 PierreFile 高亮，直接以纯文本展示，避免大文件卡顿 */
+const MAX_PREVIEW_CHARS = 500_000
+
 /** 滚动位置持久化：key = `${sessionId}:${filePath}` */
 const scrollPositionCache = new Map<string, { top: number; left: number }>()
 
@@ -146,6 +149,21 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     sessionId,
     candidateBasePaths: basePaths,
   }), [sessionId, basePaths])
+
+  // PierreFile props 缓存，避免每次渲染创建新对象导致内部重新高亮
+  const pierreFile = React.useMemo(() => ({
+    name: filePath.split('/').pop() ?? filePath,
+    contents: newContent,
+    cacheKey: `${filePath}:${newContent.length}:${previewContentVersion}`,
+  }), [filePath, newContent, previewContentVersion])
+
+  const pierreOptions = React.useMemo(() => ({
+    theme: { dark: 'one-dark-pro' as const, light: 'one-light' as const },
+    disableFileHeader: true,
+    overflow: 'scroll' as const,
+    themeType: theme as 'light' | 'dark' | 'system',
+    unsafeCSS: PIERRE_FILE_CSS,
+  }), [theme])
   const markdownFileAccess = React.useMemo(() => {
     const candidateBasePaths: string[] = []
     const slash = filePath.lastIndexOf('/')
@@ -719,18 +737,18 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               />
             )
           ) : newContent ? (
-            <div className="h-full">
-              <PierreFile
-                file={{ name: filePath.split('/').pop() ?? filePath, contents: newContent }}
-                options={{
-                  theme: { dark: 'one-dark-pro' as const, light: 'one-light' as const },
-                  disableFileHeader: true,
-                  overflow: 'scroll' as const,
-                  themeType: theme as 'light' | 'dark' | 'system',
-                  unsafeCSS: PIERRE_FILE_CSS,
-                }}
-              />
-            </div>
+            newContent.length > MAX_PREVIEW_CHARS ? (
+              <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap break-words">
+                {newContent.slice(0, MAX_PREVIEW_CHARS)}
+                <span className="text-muted-foreground block mt-2">
+                  （文件过大，仅显示前 {MAX_PREVIEW_CHARS.toLocaleString()} 字符）
+                </span>
+              </pre>
+            ) : (
+              <div className="h-full">
+                <PierreFile file={pierreFile} options={pierreOptions} />
+              </div>
+            )
           ) : (
             <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
               <span className="text-muted-foreground">（文件为空）</span>
