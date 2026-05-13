@@ -121,10 +121,6 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         return [{ type: 'model_resolved', model: evt.model }]
       case 'permission_mode_changed':
         return [{ type: 'permission_mode_changed', mode: evt.mode }]
-      case 'waiting_resume':
-        return [{ type: 'waiting_resume', message: evt.message }]
-      case 'resume_start':
-        return [{ type: 'resume_start', messageId: evt.messageId }]
       case 'retry': {
         const events: AgentEvent[] = []
         if (evt.status === 'starting' && evt.attempt != null && evt.maxAttempts != null) {
@@ -541,7 +537,6 @@ export function useGlobalAgentListeners(): void {
                 running: true,
                 content: '',
                 toolActivities: [],
-                teammates: [],
                 model: undefined,
                 // startedAt 留空：让 STREAM_COMPLETE 竞态保护跳过时间戳比较，
                 // 正常流程中 handleSend 已设置了正确的 startedAt，此 fallback 仅在极端情况下触发
@@ -821,7 +816,7 @@ export function useGlobalAgentListeners(): void {
           map.set(data.sessionId, {
             ...current,
             running: false,
-            ...finalizeStreamingActivities(current.toolActivities, current.teammates),
+            ...finalizeStreamingActivities(current.toolActivities),
           })
           return map
         })

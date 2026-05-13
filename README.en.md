@@ -12,7 +12,7 @@ It is not just another chat box. Proma is meant to become a long-lived Agent wor
 
 - **Chat mode**: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.
 - **Agent mode**: general-purpose Agent powered by `@anthropic-ai/claude-agent-sdk`, with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions.
-- **Agent Teams / Tasks**: complex tasks can be split into multiple sub-agents or tasks, with the right-side panel showing team progress and task output.
+- **SubAgents / Tasks**: complex tasks can be delegated through the Claude Agent SDK Agent tool, with sub-agent calls and results shown in the message stream.
 - **Skills & MCP**: each workspace can manage its own Skills, MCP servers, and workspace files.
 - **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
 - **Memory and tools**: Chat and Agent can share memory, with web search, built-in Chat tools, and Agent recommendation helpers.

@@ -14,6 +14,7 @@
  */
 
 import * as React from 'react'
+import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye, EyeOff } from 'lucide-react'
@@ -592,57 +593,64 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
   const [messagesLoaded, setMessagesLoaded] = React.useState(false)
+  const loadingSessionIdRef = React.useRef<string | null>(null)
 
   // 加载当前会话消息
   React.useEffect(() => {
-    // 流式运行中不重置 messagesLoaded，避免 streaming UI 消失后出现空窗闪烁
-    const isCurrentlyStreaming = store.get(agentStreamingStatesAtom).get(sessionId)?.running ?? false
-    if (!isCurrentlyStreaming) {
+    // 只有切换会话时才进入 loading 态；同一会话在流式完成后的刷新要保留当前
+    // persisted/live 消息，避免“助手气泡先消失、持久化消息再恢复”的空窗跳动。
+    if (loadingSessionIdRef.current !== sessionId) {
+      loadingSessionIdRef.current = sessionId
+      setPersistedSDKMessages([])
       setMessagesLoaded(false)
     }
+    let cancelled = false
     window.electronAPI.getAgentSessionSDKMessages(sessionId)
       .then((sdkMsgs) => {
-        setPersistedSDKMessages(sdkMsgs)
-        setMessagesLoaded(true)
+        if (cancelled) return
+        unstable_batchedUpdates(() => {
+          setPersistedSDKMessages(sdkMsgs)
+          setMessagesLoaded(true)
 
-        // 消息加载完成后，同步清除流式展示状态和实时消息，
-        // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
-        // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
-        // 注意：保留 inputTokens/contextWindow 以维持上下文用量圆环显示
-        setStreamingStates((prev) => {
-          const state = prev.get(sessionId)
-          if (!state || state.running) return prev  // 仍在运行中，不清除
-          const map = new Map(prev)
-          if (state.inputTokens !== undefined) {
-            // 保留 usage 数据，仅清除流式展示字段
-            map.set(sessionId, {
-              running: false,
-              content: '',
-              toolActivities: [],
-              teammates: [],
-              inputTokens: state.inputTokens,
-              outputTokens: state.outputTokens,
-              cacheReadTokens: state.cacheReadTokens,
-              cacheCreationTokens: state.cacheCreationTokens,
-              contextWindow: state.contextWindow,
-              model: state.model,
-            })
-          } else {
+          // 消息加载完成后，同步清除流式展示状态和实时消息，
+          // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
+          // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
+          // 注意：保留 inputTokens/contextWindow 以维持上下文用量圆环显示
+          setStreamingStates((prev) => {
+            const state = prev.get(sessionId)
+            if (!state || state.running) return prev  // 仍在运行中，不清除
+            const map = new Map(prev)
+            if (state.inputTokens !== undefined) {
+              // 保留 usage 数据，仅清除流式展示字段
+              map.set(sessionId, {
+                running: false,
+                content: '',
+                toolActivities: [],
+                inputTokens: state.inputTokens,
+                outputTokens: state.outputTokens,
+                cacheReadTokens: state.cacheReadTokens,
+                cacheCreationTokens: state.cacheCreationTokens,
+                contextWindow: state.contextWindow,
+                model: state.model,
+              })
+            } else {
+              map.delete(sessionId)
+            }
+            return map
+          })
+          setLiveMessagesMap((prev) => {
+            if (!prev.has(sessionId)) return prev
+            // 仍在运行中，不清除实时消息（与 streamingStates 保护逻辑一致）
+            const streamingState = store.get(agentStreamingStatesAtom).get(sessionId)
+            if (streamingState?.running) return prev
+            const map = new Map(prev)
             map.delete(sessionId)
-          }
-          return map
-        })
-        setLiveMessagesMap((prev) => {
-          if (!prev.has(sessionId)) return prev
-          // 仍在运行中，不清除实时消息（与 streamingStates 保护逻辑一致）
-          const streamingState = store.get(agentStreamingStatesAtom).get(sessionId)
-          if (streamingState?.running) return prev
-          const map = new Map(prev)
-          map.delete(sessionId)
-          return map
+            return map
+          })
         })
       })
       .catch(console.error)
+    return () => { cancelled = true }
   }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, store])
 
   // 从会话元数据初始化附加目录（仅冷启动水合，后续由 handleAttachFolder/handleDetachDirectory 实时写入）
@@ -704,7 +712,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           running: true,
           content: '',
           toolActivities: [],
-          teammates: [],
           model: snapshot.modelId,
           startedAt: streamStartedAt,
           inputTokens: existing?.inputTokens,
@@ -1288,7 +1295,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         running: true,
         content: '',
         toolActivities: [],
-        teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
@@ -1354,7 +1360,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       map.set(sessionId, {
         ...current,
         running: false,
-        ...finalizeStreamingActivities(current.toolActivities, current.teammates),
+        ...finalizeStreamingActivities(current.toolActivities),
       })
       return map
     })
@@ -1394,7 +1400,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         running: true,
         content: '',
         toolActivities: [],
-        teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
       }
@@ -1472,7 +1477,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         running: true,
         content: '',
         toolActivities: [],
-        teammates: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
@@ -1516,7 +1520,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           running: true,
           content: '',
           toolActivities: [],
-          teammates: [],
           model: agentModelId || undefined,
           startedAt: streamStartedAt,
         })

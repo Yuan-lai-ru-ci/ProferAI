@@ -77,7 +77,6 @@ import type {
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
-  AgentTeamData,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
   RewindSessionInput,
@@ -564,14 +563,6 @@ export interface ElectronAPI {
 
   /** 获取所有待处理的交互请求快照（渲染进程重载后恢复状态） */
   getPendingRequests: () => Promise<PendingRequestsSnapshot>
-
-  // ===== Agent Teams 数据 =====
-
-  /** 获取 Team 聚合数据（团队配置 + 任务列表 + 收件箱） */
-  getAgentTeamData: (sdkSessionId: string) => Promise<AgentTeamData | null>
-
-  /** 读取 Teammate 输出文件内容 */
-  getAgentOutput: (filePath: string) => Promise<string>
 
   // ===== Agent 附件 =====
 
@@ -1526,15 +1517,6 @@ const electronAPI: ElectronAPI = {
   // 待处理请求恢复
   getPendingRequests: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PENDING_REQUESTS)
-  },
-
-  // Agent Teams 数据
-  getAgentTeamData: (sdkSessionId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TEAM_DATA, sdkSessionId)
-  },
-
-  getAgentOutput: (filePath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_AGENT_OUTPUT, filePath)
   },
 
   // 工作区文件变化通知
