@@ -797,7 +797,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!base64) return
 
     try {
-      const text = atob(base64)
+      // atob 解码得到二进制字符串，需用 TextDecoder 正确还原 UTF-8 文本
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+      const text = new TextDecoder('utf-8').decode(bytes)
       const tmpPath = await window.electronAPI.writeClipboardPreview(file.filename, text)
       const tmpDir = tmpPath.substring(0, tmpPath.lastIndexOf('/'))
       setPreviewFileMap((prev) => {
