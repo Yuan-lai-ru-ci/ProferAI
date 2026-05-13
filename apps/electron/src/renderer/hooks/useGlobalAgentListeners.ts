@@ -1010,21 +1010,38 @@ export function useGlobalAgentListeners(): void {
     const fileContentHashMap = new Map<string, string>()
     const HASH_MAX = 100
     let focusCheckSeq = 0
+    const bumpDiffRefresh = (sessionId: string) => {
+      store.set(agentDiffRefreshVersionAtom, (prev) => {
+        const m = new Map(prev)
+        m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+        return m
+      })
+    }
 
     const onWindowFocus = async () => {
       const activeSessionId = store.get(currentAgentSessionIdAtom)
       if (!activeSessionId) return
 
       const previewFile = store.get(previewFileMapAtom).get(activeSessionId)
-      if (!previewFile) return
+      if (!previewFile || previewFile.previewOnly !== true) {
+        bumpDiffRefresh(activeSessionId)
+        return
+      }
 
-      const hashKey = `${activeSessionId}:${previewFile.filePath}`
+      const candidateBasePaths = uniqueTruthyPaths([
+        ...(previewFile.basePaths ?? []),
+        previewFile.dirPath,
+        previewFile.gitRoot,
+        getParentDir(previewFile.filePath),
+        store.get(agentSessionPathMapAtom).get(activeSessionId),
+      ])
+      const hashKey = `${activeSessionId}:${previewFile.filePath}:${candidateBasePaths.join('\u001f')}`
       const seq = ++focusCheckSeq
 
       try {
         const result = await window.electronAPI.resolveAndReadFile(previewFile.filePath, {
           sessionId: activeSessionId,
-          candidateBasePaths: previewFile.basePaths,
+          candidateBasePaths: candidateBasePaths.length > 0 ? candidateBasePaths : undefined,
         })
 
         // 丢弃过期结果（快速切换窗口时）
@@ -1035,13 +1052,9 @@ export function useGlobalAgentListeners(): void {
         const hash = cyrb53(content)
         const prevHash = fileContentHashMap.get(hashKey)
 
-        if (prevHash !== undefined && prevHash !== hash) {
-          // 内容有变化，刷新 diff/preview
-          store.set(agentDiffRefreshVersionAtom, (prev) => {
-            const m = new Map(prev)
-            m.set(activeSessionId, (prev.get(activeSessionId) ?? 0) + 1)
-            return m
-          })
+        if (prevHash === undefined || prevHash !== hash) {
+          // 首次建立 hash 基准时也刷新一次，避免用户离开窗口后首次外部修改被吞掉。
+          bumpDiffRefresh(activeSessionId)
         }
         fileContentHashMap.set(hashKey, hash)
 
@@ -1051,8 +1064,9 @@ export function useGlobalAgentListeners(): void {
           if (oldestKey !== undefined) fileContentHashMap.delete(oldestKey)
         }
       } catch {
-        // 读取失败时删除旧 hash，下次成功读取时必定触发刷新
+        // 读取失败时删除旧 hash，并触发一次刷新让预览进入真实失败/空状态。
         fileContentHashMap.delete(hashKey)
+        bumpDiffRefresh(activeSessionId)
       }
     }
     window.addEventListener('focus', onWindowFocus)

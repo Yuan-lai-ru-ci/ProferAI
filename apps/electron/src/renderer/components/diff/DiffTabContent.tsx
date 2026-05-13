@@ -27,8 +27,8 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.
 /**
  * 简易 LRU 缓存：保留最近访问的 N 个 entries。
  * key 设计：
- * - diff 模式：`diff:${filePath}@v${refreshVersion}`
- * - preview 模式：`preview:${filePath}@v${refreshVersion}`
+ * - diff 模式：`${sessionId}:diff:${filePath}@v${refreshVersion}:${scope}`
+ * - preview 模式：`${sessionId}:preview:${filePath}@v${refreshVersion}:${scope}`
  * refreshVersion 变化时（agent 写文件、git 突变）key 自然变化，
  * 老 entry 不会被命中，最终被 LRU 淘汰；无需主动失效。
  */
@@ -62,15 +62,15 @@ export function getPreviewScrollPosition(sessionId: string, filePath: string): {
 }
 
 /**
- * 清除指定 session 的滚动位置缓存，供 useCloseTab 调用。
- *
- * 注意：contentCache 不包含 sessionId，依赖 LRU 自动淘汰（CACHE_MAX=50）。
- * 如需主动清理内容缓存，需将 key 格式改为 `${sessionId}:${mode}:${filePath}@v${version}`。
+ * 清除指定 session 的预览缓存，供 useCloseTab 调用。
  */
 export function clearPreviewCacheForSession(sessionId: string): void {
   const prefix = `${sessionId}:`
   for (const key of scrollPositionCache.keys()) {
     if (key.startsWith(prefix)) scrollPositionCache.delete(key)
+  }
+  for (const key of contentCache.keys()) {
+    if (key.startsWith(prefix)) contentCache.delete(key)
   }
 }
 function cacheGet(key: string): CacheEntry | undefined {
@@ -149,6 +149,16 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     sessionId,
     candidateBasePaths: basePaths,
   }), [sessionId, basePaths])
+
+  const contentCacheScope = React.useMemo(() => JSON.stringify({
+    dirPath,
+    gitRoot: gitRoot ?? '',
+    basePaths: basePaths ?? [],
+  }), [basePaths, dirPath, gitRoot])
+
+  const getContentCacheKey = React.useCallback((mode: 'preview' | 'diff', version: number) => (
+    `${sessionId}:${mode}:${filePath}@v${version}:${contentCacheScope}`
+  ), [contentCacheScope, filePath, sessionId])
 
   // PierreFile props 缓存，避免每次渲染创建新对象导致内部重新高亮
   const pierreFile = React.useMemo(() => ({
@@ -231,8 +241,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
     // 所有文件类型均可缓存（含 PDF/DOCX/Office/Image）
     const cacheKey = previewOnly
-      ? `preview:${filePath}@v${previewContentVersion}`
-      : `diff:${filePath}@v${refreshVersion}`
+      ? getContentCacheKey('preview', previewContentVersion)
+      : getContentCacheKey('diff', refreshVersion)
     const cached = cacheGet(cacheKey)
 
     if (cached) {
@@ -351,7 +361,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId, ext])
+  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId, ext, getContentCacheKey])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
   const prevRefreshRef = React.useRef(-1)
@@ -373,7 +383,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         const newC = result.newContent ?? ''
         const oldC = result.oldContent ?? ''
         // 用新 refreshVersion 写入缓存，让后续切走再切回来能命中
-        cacheSet(`diff:${filePath}@v${refreshVersion}`, { oldContent: oldC, newContent: newC })
+        cacheSet(getContentCacheKey('diff', refreshVersion), { oldContent: oldC, newContent: newC })
         if (newC === lastNewContentRef.current && oldC === lastOldContentRef.current) return
         lastNewContentRef.current = newC
         lastOldContentRef.current = oldC
@@ -385,7 +395,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     }
     refresh()
     return () => { cancelled = true }
-  }, [refreshVersion, previewOnly, filePath, dirPath, gitRoot, sessionId])
+  }, [refreshVersion, previewOnly, filePath, dirPath, gitRoot, sessionId, getContentCacheKey])
 
   // scrollPosition persistent: module-level Map keyed by sessionId:filePath
   // content changes (refreshVersion bump) → delete stored position;
@@ -473,7 +483,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       lastOldContentRef.current = ''
       setOldContent('')
       setNewContent(markdownDraft)
-      cacheSet(`preview:${filePath}@v${refreshVersion + 1}`, { oldContent: '', newContent: markdownDraft })
+      cacheSet(getContentCacheKey('preview', refreshVersion + 1), { oldContent: '', newContent: markdownDraft })
       setRefreshVersionMap((prev) => {
         const m = new Map(prev)
         m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
@@ -487,7 +497,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     } finally {
       setMarkdownSaving(false)
     }
-  }, [fileAccess, filePath, isMarkdown, markdownDraft, markdownSaving, refreshVersion, sessionId, setRefreshVersionMap])
+  }, [fileAccess, filePath, getContentCacheKey, isMarkdown, markdownDraft, markdownSaving, refreshVersion, sessionId, setRefreshVersionMap])
 
   const handleManualRefresh = React.useCallback(() => {
     setRefreshVersionMap((prev) => {
@@ -738,7 +748,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             )
           ) : newContent ? (
             newContent.length > MAX_PREVIEW_CHARS ? (
-              <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap break-words">
+              <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {newContent.slice(0, MAX_PREVIEW_CHARS)}
                 <span className="text-muted-foreground block mt-2">
                   （文件过大，仅显示前 {MAX_PREVIEW_CHARS.toLocaleString()} 字符）
