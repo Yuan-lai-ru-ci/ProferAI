@@ -262,6 +262,16 @@ Proma currently has a PR bounty program. You can leave your email in the PR desc
 
 ![Proma PR Bounty](https://img.erlich.fun/personal-blog/uPic/PR%20%E8%B5%A0%E9%87%91%201.png)
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=ErlichLiu%2FProma&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ErlichLiu/Proma&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ErlichLiu/Proma&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ErlichLiu/Proma&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## Credits
 
 - [Shiki](https://shiki.style/): code highlighting.
