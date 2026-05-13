@@ -2077,8 +2077,7 @@ export function registerIpcHandlers(): void {
         throw new Error('content 必须是字符串')
       }
 
-      const { resolve } = await import('node:path')
-      const { join } = await import('node:path')
+      const { isAbsolute, join, relative, resolve } = await import('node:path')
       const { tmpdir } = await import('node:os')
       const { existsSync, mkdirSync } = await import('node:fs')
       const { writeFile } = await import('node:fs/promises')
@@ -2092,8 +2091,9 @@ export function registerIpcHandlers(): void {
       const safeFilename = filename.replace(/[<>:"/\\|?*]/g, '_').replace(/^\.+/, '_')
       const tmpPath = resolve(tmpDir, safeFilename)
 
-      // 确保 resolve 后的路径仍在 tmpDir 内，防止 .. 穿越
-      if (!tmpPath.startsWith(tmpDir + '/') && tmpPath !== tmpDir) {
+      // 确保 resolve 后的路径仍在 tmpDir 内，兼容 Windows 路径分隔符
+      const relativePath = relative(tmpDir, tmpPath)
+      if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
         throw new Error('文件名越界')
       }
 

@@ -86,11 +86,13 @@ interface DiffTabContentProps {
   sessionId: string
   gitRoot?: string
   previewOnly?: boolean
+  /** 禁用预览内编辑，适用于 clipboard 等临时快照 */
+  readOnly?: boolean
   /** 候选基础目录（previewOnly 模式下用于路径解析） */
   basePaths?: string[]
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, basePaths }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
@@ -453,7 +455,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           </div>
         )}
 
-        {previewOnly && isMarkdown && (
+        {previewOnly && isMarkdown && !readOnly && (
           markdownEditing ? (
             <div className="ml-auto flex items-center gap-1">
               <button

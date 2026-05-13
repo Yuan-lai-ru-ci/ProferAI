@@ -981,7 +981,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const tmpDir = tmpPath.substring(0, tmpPath.lastIndexOf('/'))
       setPreviewFileMap((prev) => {
         const m = new Map(prev)
-        m.set(sessionId, { filePath: tmpPath, previewOnly: true, basePaths: [tmpDir] })
+        m.set(sessionId, { filePath: tmpPath, previewOnly: true, readOnly: true, basePaths: [tmpDir] })
         return m
       })
       store.set(previewPanelOpenMapAtom, (prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
