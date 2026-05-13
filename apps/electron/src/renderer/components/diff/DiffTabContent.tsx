@@ -660,11 +660,11 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             )
           ) : highlightedHtml ? (
             <div
-              className="p-3 text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:!m-0 [&_pre]:!p-0 [&_code]:!text-[13px]"
+              className="p-3 text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:!m-0 [&_pre]:!p-0 [&_code]:!text-[13px] [&_pre]:!whitespace-pre-wrap [&_pre]:![overflow-wrap:anywhere]"
               dangerouslySetInnerHTML={{ __html: highlightedHtml }}
             />
           ) : (
-            <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap break-words">
+            <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
               {newContent || <span className="text-muted-foreground">（文件为空）</span>}
             </pre>
           )
