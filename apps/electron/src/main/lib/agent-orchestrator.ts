@@ -39,7 +39,7 @@ import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName } from './config-paths'
-import { getWorkspaceAttachedDirectories } from './agent-workspace-manager'
+import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext, buildBuiltinAgents } from './agent-prompt-builder'
@@ -1426,11 +1426,21 @@ export class AgentOrchestrator {
         // 合并用户附加目录 + 工作区附加目录 + 工作区文件目录
         ...(() => {
           const allDirs = [...(additionalDirectories || [])]
+          for (const file of sessionMeta?.attachedFiles ?? []) {
+            const parentDir = dirname(file)
+            if (parentDir && !allDirs.includes(parentDir)) allDirs.push(parentDir)
+          }
           if (workspaceSlug) {
             // 工作区级附加目录
             const workspaceDirs = getWorkspaceAttachedDirectories(workspaceSlug)
             for (const dir of workspaceDirs) {
               if (!allDirs.includes(dir)) allDirs.push(dir)
+            }
+            // 工作区级附加文件：SDK 只接受目录，因此传入其父目录
+            const workspaceFiles = getWorkspaceAttachedFiles(workspaceSlug)
+            for (const file of workspaceFiles) {
+              const parentDir = dirname(file)
+              if (parentDir && !allDirs.includes(parentDir)) allDirs.push(parentDir)
             }
             // 工作区文件目录
             const wsFilesDir = getWorkspaceFilesDir(workspaceSlug)

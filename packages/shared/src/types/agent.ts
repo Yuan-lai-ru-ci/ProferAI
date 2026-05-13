@@ -549,6 +549,8 @@ export interface AgentSessionMeta {
   archived?: boolean
   /** 附加的外部目录路径列表（绝对路径，作为 SDK additionalDirectories 传递） */
   attachedDirectories?: string[]
+  /** 附加的外部文件路径列表（绝对路径，发送时以父目录作为 SDK additionalDirectories） */
+  attachedFiles?: string[]
   /** 分叉来源：源会话的 Proma 工作目录（SDK session 文件在此目录的项目空间中，首次 resume 后清除） */
   forkSourceDir?: string
   /** 分叉来源：源会话的 SDK session ID（用于 rewind 时读取源会话的 file-history-snapshot 和备份文件） */
@@ -909,6 +911,8 @@ export interface FileEntry {
   path: string
   /** 是否为目录 */
   isDirectory: boolean
+  /** 文件大小（字节）。目录为空 */
+  size?: number
   /** 子条目（懒加载，仅目录展开时填充） */
   children?: FileEntry[]
 }
@@ -976,12 +980,28 @@ export interface AgentAttachDirectoryInput {
   directoryPath: string
 }
 
+/** 附加/分离文件的输入参数 */
+export interface AgentAttachFileInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 文件的绝对路径 */
+  filePath: string
+}
+
 /** 工作区级附加/分离目录的输入参数 */
 export interface WorkspaceAttachDirectoryInput {
   /** 工作区 slug */
   workspaceSlug: string
   /** 目录的绝对路径 */
   directoryPath: string
+}
+
+/** 工作区级附加/分离文件的输入参数 */
+export interface WorkspaceAttachFileInput {
+  /** 工作区 slug */
+  workspaceSlug: string
+  /** 文件的绝对路径 */
+  filePath: string
 }
 
 // ===== AskUserQuestion 交互式问答类型 =====
@@ -1312,12 +1332,22 @@ export const AGENT_IPC_CHANNELS = {
   ATTACH_DIRECTORY: 'agent:attach-directory',
   /** 移除会话的附加目录 */
   DETACH_DIRECTORY: 'agent:detach-directory',
+  /** 附加外部文件到 Agent 会话 */
+  ATTACH_FILE: 'agent:attach-file',
+  /** 移除会话的附加文件 */
+  DETACH_FILE: 'agent:detach-file',
   /** 附加外部目录到工作区（所有会话共享） */
   ATTACH_WORKSPACE_DIRECTORY: 'agent:attach-workspace-directory',
   /** 移除工作区的附加目录 */
   DETACH_WORKSPACE_DIRECTORY: 'agent:detach-workspace-directory',
+  /** 附加外部文件到工作区（所有会话共享） */
+  ATTACH_WORKSPACE_FILE: 'agent:attach-workspace-file',
+  /** 移除工作区的附加文件 */
+  DETACH_WORKSPACE_FILE: 'agent:detach-workspace-file',
   /** 获取工作区附加目录列表 */
   GET_WORKSPACE_DIRECTORIES: 'agent:get-workspace-directories',
+  /** 获取工作区附加文件列表 */
+  GET_WORKSPACE_ATTACHED_FILES: 'agent:get-workspace-attached-files',
 
   // 文件系统操作
   /** 获取 session 工作路径 */

@@ -35,7 +35,9 @@ import {
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
   agentAttachedDirectoriesMapAtom,
+  agentAttachedFilesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
+  workspaceAttachedFilesMapAtom,
   unviewedCompletedSessionIdsAtom,
   workingDoneSessionIdsAtom,
   agentSessionPathMapAtom,
@@ -385,15 +387,21 @@ export function useGlobalAgentListeners(): void {
       const workspaceId = getWorkspaceIdForSession(sid)
       const workspaceFilesPath = await getWorkspaceFilesPathForSession(sid)
       const sessionAttachedDirs = store.get(agentAttachedDirectoriesMapAtom).get(sid) ?? []
+      const sessionAttachedFiles = store.get(agentAttachedFilesMapAtom).get(sid) ?? []
       const workspaceAttachedDirs = workspaceId
         ? (store.get(workspaceAttachedDirectoriesMapAtom).get(workspaceId) ?? [])
+        : []
+      const workspaceAttachedFiles = workspaceId
+        ? (store.get(workspaceAttachedFilesMapAtom).get(workspaceId) ?? [])
         : []
       const basePaths = uniqueTruthyPaths([
         sessionPath,
         workspaceFilesPath,
         dirPath,
         ...sessionAttachedDirs,
+        ...sessionAttachedFiles,
         ...workspaceAttachedDirs,
+        ...workspaceAttachedFiles,
       ])
 
       let previewOnly = true
