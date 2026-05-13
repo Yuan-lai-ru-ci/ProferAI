@@ -48,7 +48,7 @@ import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, previewFileMapAtom, autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
@@ -378,6 +378,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
+  const setPreviewFileMap = useSetAtom(previewFileMapAtom)
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
   const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
@@ -966,6 +967,28 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return prev.filter((f) => f.id !== id)
     })
   }, [setPendingFiles])
+
+  /** 点击 clipboard 附件时，在右侧预览面板中显示内容 */
+  const handleClipboardPreview = React.useCallback(async (file: AgentPendingFile) => {
+    const base64 = window.__pendingAgentFileData?.get(file.id)
+    if (!base64) return
+
+    try {
+      // atob 解码得到二进制字符串，需用 TextDecoder 正确还原 UTF-8 文本
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+      const text = new TextDecoder('utf-8').decode(bytes)
+      const tmpPath = await window.electronAPI.writeClipboardPreview(file.filename, text)
+      const tmpDir = tmpPath.substring(0, tmpPath.lastIndexOf('/'))
+      setPreviewFileMap((prev) => {
+        const m = new Map(prev)
+        m.set(sessionId, { filePath: tmpPath, previewOnly: true, basePaths: [tmpDir] })
+        return m
+      })
+      store.set(previewPanelOpenMapAtom, (prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
+    } catch (error) {
+      console.error('[AgentView] clipboard 预览写入失败:', error)
+    }
+  }, [sessionId, setPreviewFileMap, store])
 
   /** 粘贴文件处理 */
   const handlePasteFiles = React.useCallback((files: File[]): void => {
@@ -1742,6 +1765,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     mediaType={file.mediaType}
                     previewUrl={file.previewUrl}
                     onRemove={() => handleRemoveFile(file.id)}
+                    onClick={file.filename.startsWith('clipboard-') ? () => handleClipboardPreview(file) : undefined}
                   />
                 ))}
               </div>
