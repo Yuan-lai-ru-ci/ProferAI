@@ -45,6 +45,13 @@ export function AttachmentPreviewItem({
   className,
 }: AttachmentPreviewItemProps): React.ReactElement {
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
+  const handleRemoveClick = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    onRemove()
+  }, [onRemove])
+  const handleRemoveKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+  }, [])
 
   if (isImage(mediaType) && previewUrl) {
     // 图片预览 — 紧凑缩略图，点击可预览大图
@@ -64,7 +71,8 @@ export function AttachmentPreviewItem({
         {/* hover 关闭按钮 */}
         <button
           type="button"
-          onClick={onRemove}
+          onClick={handleRemoveClick}
+          onKeyDown={handleRemoveKeyDown}
           className={cn(
             'absolute top-1 right-1 size-[18px] rounded-full',
             'bg-black/50 text-white backdrop-blur-sm',
@@ -99,14 +107,20 @@ export function AttachmentPreviewItem({
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+      onKeyDown={onClick ? (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick()
+        }
+      } : undefined}
     >
       <Paperclip className="size-4 shrink-0" />
       <span className="max-w-[160px] truncate">{truncateName(filename)}</span>
       {/* 关闭按钮 */}
       <button
         type="button"
-        onClick={onRemove}
+        onClick={handleRemoveClick}
+        onKeyDown={handleRemoveKeyDown}
         className={cn(
           'absolute top-1/2 right-1.5 -translate-y-1/2 size-[18px] rounded-full',
           'flex items-center justify-center',

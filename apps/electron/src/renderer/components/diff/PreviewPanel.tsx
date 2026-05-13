@@ -46,6 +46,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
       dirPath: currentFile.dirPath || sessionPath || fallbackDirPath,
       gitRoot: currentFile.gitRoot,
       previewOnly: currentFile.previewOnly,
+      readOnly: currentFile.readOnly,
       basePaths: currentFile.basePaths,
       title: currentFile.filePath.split('/').pop(),
     }).catch((err) => {
@@ -105,6 +106,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
             sessionId={sessionId}
             gitRoot={currentFile.gitRoot}
             previewOnly={currentFile.previewOnly}
+            readOnly={currentFile.readOnly}
             basePaths={currentFile.basePaths}
           />
         ) : (
