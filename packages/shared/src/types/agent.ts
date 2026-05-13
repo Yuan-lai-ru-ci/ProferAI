@@ -277,7 +277,7 @@ export interface SDKToolProgressMessage {
   tool_name: string
   parent_tool_use_id: string | null
   elapsed_time_seconds?: number
-  /** Agent Teams: 所属 teammate 任务 ID */
+  /** 所属 SDK 子任务 / SubAgent 任务 ID */
   task_id?: string
   session_id?: string
 }
@@ -390,7 +390,7 @@ export interface AgentEventUsage {
   contextWindow?: number
 }
 
-/** Teammate 任务用量统计 */
+/** SDK 子任务 / SubAgent 用量统计 */
 export interface TaskUsage {
   /** 总 Token 数 */
   totalTokens: number
@@ -495,9 +495,6 @@ export type AgentEvent =
   | { type: 'prompt_suggestion'; suggestion: string }
   // 模型确认（SDK 确认实际使用的模型）
   | { type: 'model_resolved'; model: string }
-  // Auto-Resume（Teams 完成后自动收集结果）
-  | { type: 'waiting_resume'; message: string }
-  | { type: 'resume_start'; messageId: string }
   // 权限模式变更（Plan → bypassPermissions 等）
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
 
@@ -514,8 +511,6 @@ export type PromaEvent =
   | { type: 'enter_plan_mode'; sessionId: string }
   | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
   | { type: 'model_resolved'; model: string }
-  | { type: 'waiting_resume'; message: string }
-  | { type: 'resume_start'; messageId: string }
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
 
 
@@ -1139,86 +1134,6 @@ export interface PermissionResponse {
   alwaysAllow: boolean
 }
 
-// ===== Agent Teams 数据类型 =====
-
-/** Team 配置（~/.claude/teams/{name}/config.json） */
-export interface TeamConfig {
-  /** 团队名称 */
-  name: string
-  /** 团队描述 */
-  description?: string
-  /** 创建时间戳 */
-  createdAt: number
-  /** 领导 Agent ID */
-  leadAgentId?: string
-  /** 领导 Agent 的 SDK 会话 ID */
-  leadSessionId?: string
-  /** 团队成员列表 */
-  members: TeamMember[]
-}
-
-/** Team 成员 */
-export interface TeamMember {
-  /** Agent ID */
-  agentId: string
-  /** 显示名称 */
-  name: string
-  /** Agent 类型（如 'general-purpose', 'Explore'） */
-  agentType: string
-  /** 使用的模型 */
-  model?: string
-  /** 颜色标识 */
-  color?: string
-  /** 加入时间戳 */
-  joinedAt?: number
-}
-
-/** 任务项（~/.claude/tasks/{teamName}/） */
-export interface TaskItem {
-  /** 任务 ID */
-  id: string
-  /** 任务标题 */
-  subject: string
-  /** 任务描述 */
-  description?: string
-  /** 进行中的显示文本 */
-  activeForm?: string
-  /** 负责人 Agent 名称 */
-  owner?: string
-  /** 任务状态 */
-  status: 'pending' | 'in_progress' | 'completed'
-  /** 阻塞的任务 ID 列表 */
-  blocks: string[]
-  /** 被阻塞的任务 ID 列表 */
-  blockedBy: string[]
-}
-
-/** 解析后的收件箱消息 */
-export interface ParsedMailboxMessage {
-  /** 发送者名称 */
-  from: string
-  /** 消息文本 */
-  text: string
-  /** 摘要 */
-  summary?: string
-  /** 时间戳 */
-  timestamp?: string
-  /** 解析后的消息类型 */
-  parsedType: 'idle_notification' | 'shutdown_request' | 'shutdown_approved' | 'task_assignment' | 'text'
-}
-
-/** Agent Team 聚合数据（IPC 返回） */
-export interface AgentTeamData {
-  /** 团队名称 */
-  teamName: string
-  /** 团队配置 */
-  team: TeamConfig
-  /** 任务列表 */
-  tasks: TaskItem[]
-  /** 收件箱消息（agent 名称 → 消息列表） */
-  inboxes: Record<string, ParsedMailboxMessage[]>
-}
-
 // ===== IPC 通道常量 =====
 
 /**
@@ -1402,12 +1317,6 @@ export const AGENT_IPC_CHANNELS = {
   // ExitPlanMode 计划审批
   /** ExitPlanMode 响应（渲染进程 → 主进程） */
   EXIT_PLAN_MODE_RESPOND: 'agent:exit-plan-mode:respond',
-
-  // Agent Teams 数据
-  /** 获取 Team 聚合数据（sdkSessionId → AgentTeamData | null） */
-  GET_TEAM_DATA: 'agent:get-team-data',
-  /** 读取 Teammate 输出文件（filePath → string） */
-  GET_AGENT_OUTPUT: 'agent:get-agent-output',
 
   // 队列消息（Agent 运行中排队发送）
   /** 排队发送消息 */

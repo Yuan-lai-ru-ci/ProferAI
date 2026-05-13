@@ -79,7 +79,6 @@ import type {
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
-  AgentTeamData,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
   RewindSessionInput,
@@ -174,7 +173,6 @@ import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveF
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
-import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -1801,24 +1799,6 @@ export function registerIpcHandlers(): void {
         askUsers: askUserService.getPendingRequests(),
         exitPlans: exitPlanService.getPendingRequests(),
       }
-    }
-  )
-
-  // ===== Agent Teams 数据 =====
-
-  // 获取 Team 聚合数据（团队配置 + 任务列表 + 收件箱）
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_TEAM_DATA,
-    async (_, sdkSessionId: string): Promise<AgentTeamData | null> => {
-      return getAgentTeamData(sdkSessionId)
-    }
-  )
-
-  // 读取 Teammate 输出文件内容
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_AGENT_OUTPUT,
-    async (_, filePath: string): Promise<string> => {
-      return readAgentOutputFile(filePath)
     }
   )
 
