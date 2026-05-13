@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -83,6 +83,10 @@ import type {
   RewindSessionInput,
   RewindSessionResult,
   AgentMessageSearchResult,
+  AgentSessionReferenceSearchInput,
+  AgentSessionReferenceSearchResult,
+  DetachedPreviewWindowData,
+  DetachedPreviewWindowInput,
   FeishuConfig,
   FeishuConfigInput,
   FeishuBridgeState,
@@ -158,6 +162,10 @@ export interface ElectronAPI {
   revertFile: (input: import('@proma/shared').RevertFileInput) => Promise<void>
   /** 获取文件新旧版本内容 */
   getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => Promise<{ oldContent: string; newContent: string } | null>
+  /** 在独立窗口打开当前文件预览 */
+  openDetachedPreview: (input: DetachedPreviewWindowInput) => Promise<string | null>
+  /** 获取独立预览窗口数据 */
+  getDetachedPreviewData: (previewId: string) => Promise<DetachedPreviewWindowData | null>
 
   // ===== 通用工具 =====
 
@@ -396,6 +404,9 @@ export interface ElectronAPI {
 
   /** 搜索 Agent 会话消息内容 */
   searchAgentSessionMessages: (query: string) => Promise<AgentMessageSearchResult[]>
+
+  /** 搜索当前工作区可引用的 Agent 会话 */
+  searchAgentSessionReferences: (input: AgentSessionReferenceSearchInput) => Promise<AgentSessionReferenceSearchResult[]>
 
   /** 迁移 Agent 会话到另一个工作区 */
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
@@ -646,6 +657,9 @@ export interface ElectronAPI {
 
   /** DOCX 转 HTML（内联预览） */
   docxToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ resolvedPath: string; html: string } | null>
+
+  /** XLSX/PPTX 转 HTML（内联预览） */
+  officeToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').OfficePreviewResult | null>
 
   /** 重命名文件/目录 */
   renameFile: (filePath: string, newName: string) => Promise<void>
@@ -899,9 +913,9 @@ export interface ElectronAPI {
   /** 获取所有工作区的 Skills/MCP 预览（团队分发模式） */
   migrationGetShareExportPreview: () => Promise<unknown>
   /** 执行导出 */
-  migrationExport: (options: unknown) => Promise<{ success: boolean; filePath: string }>
+  migrationExport: (options: unknown) => Promise<MigrationExportResult>
   /** 执行 v2 多工作区导出 */
-  migrationExportV2: (options: unknown) => Promise<{ success: boolean; filePath: string }>
+  migrationExportV2: (options: unknown) => Promise<MigrationExportResult>
   /** 解析导入文件，返回预览信息 */
   migrationParseImportFile: (filePath: string) => Promise<unknown>
   /** 确认导入 */
@@ -912,6 +926,23 @@ export interface ElectronAPI {
   migrationSaveFileDialog: (mode: string) => Promise<string | null>
   /** 订阅双击迁移文件触发的导入事件 */
   onMigrationOpenImportFile: (callback: (data: { filePath: string }) => void) => () => void
+
+  // ===== 存储管理 =====
+
+  /** 获取各目录存储统计 */
+  getStorageStats: () => Promise<unknown>
+  /** 按选项清理存储 */
+  cleanupStorage: (options: unknown) => Promise<unknown>
+  /** 清理临时文件（快速） */
+  cleanupTempStorage: () => Promise<unknown>
+  /** 取消迁移导入（清理临时解压目录） */
+  migrationCancelImport: (tempDir: string) => Promise<void>
+}
+
+interface MigrationExportResult {
+  success: boolean
+  filePath: string
+  warnings?: string[]
 }
 
 /**
@@ -949,6 +980,14 @@ const electronAPI: ElectronAPI = {
 
   getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DIFF_CONTENTS, input)
+  },
+
+  openDetachedPreview: (input: DetachedPreviewWindowInput) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.OPEN_DETACHED_PREVIEW, input) as Promise<string | null>
+  },
+
+  getDetachedPreviewData: (previewId: string) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_DETACHED_PREVIEW_DATA, previewId) as Promise<DetachedPreviewWindowData | null>
   },
 
   // 通用工具
@@ -1257,6 +1296,10 @@ const electronAPI: ElectronAPI = {
 
   searchAgentSessionMessages: (query: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_MESSAGES, query)
+  },
+
+  searchAgentSessionReferences: (input: AgentSessionReferenceSearchInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_SESSION_REFERENCES, input)
   },
 
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => {
@@ -1615,6 +1658,10 @@ const electronAPI: ElectronAPI = {
 
   docxToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:docx-to-html', filePath, access) as Promise<{ resolvedPath: string; html: string } | null>
+  },
+
+  officeToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke('file:office-to-html', filePath, access) as Promise<import('@proma/shared').OfficePreviewResult | null>
   },
 
   renameFile: (filePath: string, newName: string) => {
@@ -2061,6 +2108,24 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, data: { filePath: string }): void => callback(data)
     ipcRenderer.on('migration:open-import-file', listener)
     return () => { ipcRenderer.removeListener('migration:open-import-file', listener) }
+  },
+
+  // ===== 存储管理 =====
+
+  getStorageStats: () => {
+    return ipcRenderer.invoke(STORAGE_IPC_CHANNELS.GET_STATS)
+  },
+
+  cleanupStorage: (options: unknown) => {
+    return ipcRenderer.invoke(STORAGE_IPC_CHANNELS.CLEANUP, options)
+  },
+
+  cleanupTempStorage: () => {
+    return ipcRenderer.invoke(STORAGE_IPC_CHANNELS.CLEANUP_TEMP)
+  },
+
+  migrationCancelImport: (tempDir: string) => {
+    return ipcRenderer.invoke('migration:cancelImport', tempDir)
   },
 }
 

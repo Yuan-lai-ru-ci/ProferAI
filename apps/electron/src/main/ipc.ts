@@ -6,10 +6,10 @@
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
 import { join, resolve, sep } from 'node:path'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
   VoiceDictationAudioChunkInput,
@@ -84,6 +84,7 @@ import type {
   ForkSessionInput,
   RewindSessionInput,
   RewindSessionResult,
+  AgentSessionReferenceSearchInput,
   FeishuConfigInput,
   FeishuConfig,
   FeishuBridgeState,
@@ -100,6 +101,7 @@ import type {
   WeChatBridgeState,
   SDKMessage,
   GetFileDiffInput,
+  DetachedPreviewWindowInput,
   RevertFileInput,
   FileAccessOptions,
   ResolvedFileUrl,
@@ -166,6 +168,7 @@ import {
   forkAgentSession,
   autoArchiveAgentSessions,
   searchAgentSessionMessages,
+  searchAgentSessionReferences,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
@@ -173,6 +176,8 @@ import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { getAgentTeamData, readAgentOutputFile } from './lib/agent-team-reader'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir } from './lib/config-paths'
+import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
+import type { CleanupOptions } from './lib/storage-service'
 import {
   listAgentWorkspaces,
   createAgentWorkspace,
@@ -467,6 +472,30 @@ export function registerIpcHandlers(): void {
       const access = normalizeFileAccessOptions({ sessionId })
       if (!ensurePathAllowed(dirPath, access) || (gitRoot && !ensurePathAllowed(gitRoot, access))) return null
       return getDiffContents(dirPath, filePath, gitRoot)
+    }
+  )
+
+  // 打开独立预览窗口
+  ipcMain.handle(
+    IPC_CHANNELS.OPEN_DETACHED_PREVIEW,
+    async (event, input: DetachedPreviewWindowInput): Promise<string | null> => {
+      if (!input || typeof input.sessionId !== 'string' || typeof input.filePath !== 'string' || typeof input.dirPath !== 'string') {
+        console.warn('[IPC] preview:open-detached 收到无效参数')
+        return null
+      }
+      const { openDetachedPreviewWindow } = await import('./lib/detached-preview-window')
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender)
+      return openDetachedPreviewWindow(input, sourceWindow)
+    }
+  )
+
+  // 获取独立预览窗口数据
+  ipcMain.handle(
+    IPC_CHANNELS.GET_DETACHED_PREVIEW_DATA,
+    async (_, previewId: string) => {
+      if (!previewId || typeof previewId !== 'string') return null
+      const { getDetachedPreviewWindowData } = await import('./lib/detached-preview-window')
+      return getDetachedPreviewWindowData(previewId)
     }
   )
 
@@ -1223,6 +1252,14 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.SEARCH_MESSAGES,
     async (_, query: string) => {
       return searchAgentSessionMessages(query)
+    }
+  )
+
+  // 搜索当前工作区可引用的 Agent 会话
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SEARCH_SESSION_REFERENCES,
+    async (_, input: AgentSessionReferenceSearchInput) => {
+      return searchAgentSessionReferences(input)
     }
   )
 
@@ -2128,7 +2165,7 @@ export function registerIpcHandlers(): void {
         console.warn('[IPC] file:prepare-pdf-preview 拒绝越界路径:', resolved ?? filePath)
         return null
       }
-      const result = preparePdfPreview(resolved)
+      const result = await preparePdfPreview(resolved)
       return result ? { tmpHtmlUrl: result.tmpHtmlUrl } : null
     }
   )
@@ -2147,6 +2184,22 @@ export function registerIpcHandlers(): void {
       }
       const result = await convertDocxToHtml(resolved)
       return result
+    }
+  )
+
+  // XLSX/PPTX 转 HTML（内联预览使用 OOXML 解析）
+  ipcMain.handle(
+    'file:office-to-html',
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<import('@proma/shared').OfficePreviewResult | null> => {
+      const { convertOfficeToHtml, resolveFilePath } = await import('./lib/file-preview-service')
+      const options = normalizeFileAccessOptions(access)
+      const allowedBasePaths = getAllowedCandidateBasePaths(options)
+      const resolved = resolveFilePath(filePath, allowedBasePaths)
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:office-to-html 拒绝越界路径:', resolved ?? filePath)
+        return null
+      }
+      return convertOfficeToHtml(resolved)
     }
   )
 
@@ -3042,6 +3095,55 @@ export function registerIpcHandlers(): void {
 
   runAutoArchive()
   setInterval(runAutoArchive, 24 * 60 * 60 * 1000)
+
+  // ===== 存储管理 =====
+
+  ipcMain.handle(STORAGE_IPC_CHANNELS.GET_STATS, async () => {
+    return calculateStorageStats()
+  })
+
+  ipcMain.handle(STORAGE_IPC_CHANNELS.CLEANUP, async (_, options: CleanupOptions) => {
+    return cleanupStorage(options)
+  })
+
+  ipcMain.handle(STORAGE_IPC_CHANNELS.CLEANUP_TEMP, async () => {
+    return cleanupTempFiles()
+  })
+
+  // 迁移取消时清理临时解压目录
+  ipcMain.handle('migration:cancelImport', async (_, tempDir: string) => {
+    if (tempDir && existsSync(tempDir) && tempDir.includes('proma-import-')) {
+      rmSync(tempDir, { recursive: true, force: true })
+      console.log(`[迁移] 已清理临时目录: ${tempDir}`)
+    }
+  })
+
+  // 启动时自动清理临时文件
+  const runStartupCleanup = async (): Promise<void> => {
+    try {
+      const settings = getSettings()
+      if (settings.autoCleanupTempOnStart !== false) {
+        const result = await cleanupTempFiles()
+        if (result.freedBytes > 0) {
+          console.log(`[存储清理] 启动时清理了 ${(result.freedBytes / 1024 / 1024).toFixed(1)} MB 临时文件`)
+        }
+      }
+      const archiveDays = settings.autoCleanupArchivedDays ?? 0
+      if (archiveDays > 0) {
+        const result = await cleanupStorage({
+          categories: ['agent-sessions', 'sdk-config'],
+          orphansOnly: false,
+          archivedBeforeDays: archiveDays,
+        })
+        if (result.freedBytes > 0) {
+          console.log(`[存储清理] 启动时清理了 ${(result.freedBytes / 1024 / 1024).toFixed(1)} MB 归档数据`)
+        }
+      }
+    } catch (e) {
+      console.error('[存储清理] 启动时清理失败:', e)
+    }
+  }
+  runStartupCleanup()
 
   // ===== 快速任务窗口 =====
 

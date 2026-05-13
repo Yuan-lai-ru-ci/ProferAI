@@ -21,10 +21,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@proma/shared'
-import { SAFE_TOOLS } from '@proma/shared'
+import {
+  SAFE_TOOLS,
+  THINKING_SIGNATURE_ERROR_CODE,
+  THINKING_SIGNATURE_ERROR_MESSAGE,
+  THINKING_SIGNATURE_ERROR_TITLE,
+} from '@proma/shared'
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
-import { isPromptTooLongError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
+import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { isTransientNetworkError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
@@ -171,22 +176,28 @@ function isSessionNotFoundError(errorMessage: string, stderr?: string): boolean 
 }
 
 /** 最大自动重试次数 */
-const MAX_AUTO_RETRIES = 8
+const MAX_AUTO_RETRIES = 25
+
+/** 自动重试累计等待预算（毫秒） */
+const MAX_AUTO_RETRY_WAIT_MS = 5 * 60_000
 
 /** 重试单次延迟上限（毫秒） */
-const RETRY_MAX_DELAY_MS = 10_000
+const RETRY_MAX_DELAY_MS = 15_000
 
 /**
  * 计算重试延迟（指数退避 + ±20% jitter）
  *
- * 基础序列：1s, 2s, 4s, 8s, 10s, 10s, 10s, 10s（cap = 10s）
+ * 基础序列：1s, 2s, 4s, 8s, 15s, 15s...（cap = 15s）
  * 叠加 ±20% 随机抖动，避免大量 session 同时重试造成惊群。
- * 最坏情况累计等待 ≈ 55s。
+ * 累计等待会被限制在 5 分钟以内。
  */
-function getRetryDelayMs(attempt: number): number {
+function getRetryDelayMs(attempt: number, elapsedRetryDelayMs: number): number {
+  const remainingMs = MAX_AUTO_RETRY_WAIT_MS - elapsedRetryDelayMs
+  if (remainingMs <= 0) return 0
+
   const base = Math.min(1000 * Math.pow(2, attempt - 1), RETRY_MAX_DELAY_MS)
   const jitter = base * (Math.random() * 0.4 - 0.2)
-  return Math.max(0, Math.round(base + jitter))
+  return Math.min(remainingMs, Math.max(0, Math.round(base + jitter)))
 }
 
 /**
@@ -341,6 +352,75 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string, sessi
 
   console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
   return `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
+}
+
+/**
+ * 构建 Session 恢复 prompt
+ *
+ * 当 SDK resume 失败（session 过期、thinking signature 不兼容等）时，
+ * 注入 <session_recovery> 标签指向当前会话的完整 JSONL 历史文件，
+ * 让 Agent 自己读取完整历史后无缝继续工作。
+ */
+function buildRecoveryPrompt(
+  sessionId: string,
+  currentUserMessage: string,
+  sessionHint: { agentCwd: string },
+): string {
+  const meta = getAgentSessionMeta(sessionId)
+  const title = meta ? escapeContextAttr(meta.title) : sessionId
+  const historyPath = `~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl`
+
+  const recoveryBlock =
+    `<session_recovery>\n` +
+    `你正在接续一个已有的 Agent 会话（因模型切换等原因需要重新建立连接）。\n` +
+    `当前会话的完整历史记录在下方路径中，请先读取它以恢复上下文，然后继续处理用户的最新请求。\n` +
+    `<session id="${sessionId}" title="${title}" cwd="${sessionHint.agentCwd}">\n` +
+    `History path: ${historyPath}\n` +
+    `</session>\n` +
+    `</session_recovery>`
+
+  console.log(`[Agent 编排] buildRecoveryPrompt: 注入 session 自引用 → ${historyPath}`)
+  return `${recoveryBlock}\n\n${currentUserMessage}`
+}
+
+function escapeContextAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function buildReferencedSessionsPrompt(
+  currentSessionId: string,
+  mentionedSessionIds?: string[],
+  workspaceId?: string,
+): string {
+  const uniqueIds = [...new Set((mentionedSessionIds ?? []).filter(Boolean))]
+  if (uniqueIds.length === 0) return ''
+
+  const currentWorkspaceId = workspaceId ?? getAgentSessionMeta(currentSessionId)?.workspaceId
+  const sessionBlocks: string[] = []
+
+  for (const referencedSessionId of uniqueIds) {
+    if (referencedSessionId === currentSessionId) continue
+
+    const meta = getAgentSessionMeta(referencedSessionId)
+    if (!meta || meta.archived) continue
+    if (currentWorkspaceId && meta.workspaceId !== currentWorkspaceId) continue
+
+    const title = escapeContextAttr(meta.title)
+    const historyPath = `~/${getConfigDirName()}/agent-sessions/${referencedSessionId}.jsonl`
+    sessionBlocks.push(
+      `<session id="${referencedSessionId}" title="${title}" updatedAt="${meta.updatedAt}">\n` +
+      `History path: ${historyPath}\n` +
+      '</session>',
+    )
+  }
+
+  if (sessionBlocks.length === 0) return ''
+
+  return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。不要假设这些会话的内容；需要上下文时，请先读取对应的 History path，再基于读取结果继续完成任务。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
 }
 
 /** 标题生成 Prompt */
@@ -698,13 +778,45 @@ export class AgentOrchestrator {
     accumulatedMessages: SDKMessage[],
     queryStartedAt: number,
   ): string {
-    console.log(`[Agent 编排] 检测到 session-not-found 错误，清除 sdkSessionId 并切换到上下文回填模式`)
-    try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
-    queryOptions.resumeSessionId = undefined
-    queryOptions.prompt = buildContextPrompt(sessionId, contextualMessage, { agentCwd })
+    return this.prepareResumeFallbackRecovery(
+      sessionId,
+      queryOptions,
+      contextualMessage,
+      agentCwd,
+      accumulatedMessages,
+      queryStartedAt,
+      '检测到 session-not-found 错误，清除 sdkSessionId 并切换到上下文回填模式',
+      'Session 已失效，切换到上下文回填模式',
+    )
+  }
+
+  /**
+   * Resume 失败恢复：清除 SDK resume 关系，注入 session 自引用让 Agent 读取完整历史继续工作。
+   *
+   * 适用于 SDK session 过期、thinking signature 跨模型不兼容等场景。
+   * 使用 <session_recovery> 标签指向当前会话的 JSONL 历史文件，Agent 会自动读取并恢复上下文，
+   * 比 buildContextPrompt（仅注入 20 条摘要）提供完整得多的上下文连续性。
+   */
+  private prepareResumeFallbackRecovery(
+    sessionId: string,
+    queryOptions: ClaudeAgentQueryOptions,
+    contextualMessage: string,
+    agentCwd: string,
+    accumulatedMessages: SDKMessage[],
+    queryStartedAt: number,
+    logMessage: string,
+    retryReason: string,
+  ): string {
+    console.log(`[Agent 编排] ${logMessage}`)
+    // 先持久化当前已累积的消息，确保 JSONL 文件包含最新内容
     this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
     accumulatedMessages.length = 0
-    return 'Session 已失效，切换到上下文回填模式'
+    // 清除失效的 SDK session，新 SDK 会话产生的 sdkSessionId 会通过 onSessionId 回调自动保存
+    try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
+    queryOptions.resumeSessionId = undefined
+    queryOptions.resumeSessionAt = undefined
+    queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, { agentCwd })
+    return retryReason
   }
 
   /**
@@ -757,7 +869,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -1039,8 +1151,13 @@ export class AgentOrchestrator {
         agentCwd,
       })
 
-      // 11.5 注入 mention 引用指令（Skill/MCP）— 仅影响 prompt，不影响持久化
+      // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅影响 prompt，不影响持久化
       let enrichedMessage = userMessage
+      const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
+      if (referencedSessionsBlock) {
+        enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
+        console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
+      }
       if (mentionedSkills?.length || mentionedMcpServers?.length) {
         const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
         for (const slug of mentionedSkills ?? []) {
@@ -1389,7 +1506,14 @@ export class AgentOrchestrator {
 
       // 14. 遍历 Adapter 产出的 AgentEvent 流（含自动重试 + Watchdog 死锁检测）
       let lastRetryableError: string | undefined
+      let retryDelayElapsedMs = 0
+      let retryAttemptsScheduled = 0
       let retrySucceeded = false
+      let skipNextRetryDelay = false
+      let thinkingSignatureRecoveryAttempted = false
+      let invisibleRecoveryAttempts = 0
+      const canAutoRetry = (attempt: number): boolean =>
+        attempt <= MAX_AUTO_RETRIES && retryDelayElapsedMs < MAX_AUTO_RETRY_WAIT_MS
 
       // Agent Teams 追踪
       const startedTaskIds = new Set<string>()
@@ -1399,39 +1523,55 @@ export class AgentOrchestrator {
       let capturedSdkSessionId = existingSdkSessionId
       /** Watchdog 触发标记（死锁被检测到时设为 true） */
       let abortedByWatchdog = false
+      const canTryThinkingSignatureRecovery = (attempt: number): boolean =>
+        !thinkingSignatureRecoveryAttempted &&
+        canAutoRetry(attempt) &&
+        !!(existingSdkSessionId || capturedSdkSessionId || queryOptions.resumeSessionId)
 
       const queryStartedAt = Date.now()
 
       for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
         // 非首次尝试：等待 + 发送重试事件到 UI
         if (attempt > 1) {
-          const delayMs = getRetryDelayMs(attempt - 1)
-          const delaySec = delayMs / 1000
-          const attemptData: RetryAttempt = {
-            attempt: attempt - 1,
-            timestamp: Date.now(),
-            reason: lastRetryableError ?? '未知错误',
-            errorMessage: lastRetryableError ?? '',
-            delaySeconds: delaySec,
-          }
+          if (skipNextRetryDelay) {
+            skipNextRetryDelay = false
+            console.log(`[Agent 编排] 已切换到上下文回填模式，立即重试`)
+          } else {
+            const retryAttempt = Math.max(1, attempt - 1 - invisibleRecoveryAttempts)
+            const delayMs = getRetryDelayMs(retryAttempt, retryDelayElapsedMs)
+            if (delayMs <= 0) {
+              console.log(`[Agent 编排] 自动重试等待预算已耗尽 (${MAX_AUTO_RETRY_WAIT_MS}ms)，停止重试`)
+              break
+            }
+            retryDelayElapsedMs += delayMs
+            retryAttemptsScheduled = retryAttempt
+            const delaySec = delayMs / 1000
+            const attemptData: RetryAttempt = {
+              attempt: retryAttempt,
+              timestamp: Date.now(),
+              reason: lastRetryableError ?? '未知错误',
+              errorMessage: lastRetryableError ?? '',
+              delaySeconds: delaySec,
+            }
 
-          this.eventBus.emit(sessionId, {
-            kind: 'proma_event',
-            event: { type: 'retry', status: 'starting', attempt: attempt - 1, maxAttempts: MAX_AUTO_RETRIES, delaySeconds: delaySec, reason: lastRetryableError ?? '未知错误' },
-          })
-          this.eventBus.emit(sessionId, {
-            kind: 'proma_event',
-            event: { type: 'retry', status: 'attempt', attemptData },
-          })
+            this.eventBus.emit(sessionId, {
+              kind: 'proma_event',
+              event: { type: 'retry', status: 'starting', attempt: retryAttempt, maxAttempts: MAX_AUTO_RETRIES, delaySeconds: delaySec, reason: lastRetryableError ?? '未知错误' },
+            })
+            this.eventBus.emit(sessionId, {
+              kind: 'proma_event',
+              event: { type: 'retry', status: 'attempt', attemptData },
+            })
 
-          console.log(`[Agent 编排] 第 ${attempt - 1} 次重试，等待 ${delaySec}s...`)
-          await new Promise((r) => setTimeout(r, delayMs))
+            console.log(`[Agent 编排] 第 ${retryAttempt} 次重试，等待 ${delaySec}s...`)
+            await new Promise((r) => setTimeout(r, delayMs))
 
-          // 等待期间如果会话被中止，退出
-          if (!this.activeSessions.has(sessionId)) {
-            this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
-            callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
-            return
+            // 等待期间如果会话被中止，退出
+            if (!this.activeSessions.has(sessionId)) {
+              this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+              callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+              return
+            }
           }
         }
 
@@ -1544,15 +1684,42 @@ export class AgentOrchestrator {
                 const typedError = mapSDKErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError)
 
                 // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
-                if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && attempt <= MAX_AUTO_RETRIES) {
+                if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && canAutoRetry(attempt)) {
                   existingSdkSessionId = undefined
+                  capturedSdkSessionId = undefined
                   lastRetryableError = this.prepareSessionNotFoundRecovery(sessionId, queryOptions, contextualMessage, agentCwd, accumulatedMessages, queryStartedAt)
                   shouldRetryFromError = true
                   break
                 }
 
+                // Thinking signature 不兼容：通常由跨模型 resume 触发。
+                // 先自动清除 SDK resume 关系，改用 Proma 已持久化上下文重跑一次；再失败才展示用户提示。
+                if (
+                  typedError.code === THINKING_SIGNATURE_ERROR_CODE &&
+                  canTryThinkingSignatureRecovery(attempt)
+                ) {
+                  thinkingSignatureRecoveryAttempted = true
+                  invisibleRecoveryAttempts += 1
+                  existingSdkSessionId = undefined
+                  capturedSdkSessionId = undefined
+                  skipNextRetryDelay = true
+                  lastRetryableError = this.prepareResumeFallbackRecovery(
+                    sessionId,
+                    queryOptions,
+                    contextualMessage,
+                    agentCwd,
+                    accumulatedMessages,
+                    queryStartedAt,
+                    '检测到 thinking signature 不兼容，清除 sdkSessionId 并切换到上下文回填模式',
+                    '思考签名不兼容，切换到上下文回填模式',
+                  )
+                  stderrChunks.length = 0
+                  shouldRetryFromError = true
+                  break
+                }
+
                 // 判断是否可自动重试
-                if (isAutoRetryableTypedError(typedError) && attempt <= MAX_AUTO_RETRIES) {
+                if (isAutoRetryableTypedError(typedError) && canAutoRetry(attempt)) {
                   lastRetryableError = typedError.title
                     ? `${typedError.title}: ${typedError.message}`
                     : typedError.message
@@ -1587,15 +1754,15 @@ export class AgentOrchestrator {
                 console.log(`[Agent 编排] 已保存 TypedError 消息: ${typedError.code} - ${typedError.title}`)
 
                 // 如果之前有重试记录，发送 retry_failed
-                if (attempt > 1 && lastRetryableError) {
+                if (retryAttemptsScheduled > 0 && lastRetryableError) {
                   this.eventBus.emit(sessionId, {
                     kind: 'proma_event',
-                    event: { type: 'retry', status: 'failed', attemptData: { attempt: attempt - 1, timestamp: Date.now(), reason: lastRetryableError, errorMessage: typedError.message, delaySeconds: 0 } },
+                    event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: typedError.message, delaySeconds: 0 } },
                   })
                 }
 
-                // 透传错误消息到前端
-                this.eventBus.emit(sessionId, { kind: 'sdk_message', message: msg })
+                // 透传归一化后的错误消息到前端，避免 SDK 原始 API Error 直接暴露给用户。
+                this.eventBus.emit(sessionId, { kind: 'sdk_message', message: errorSDKMsg })
                 // 清理 Watchdog
                 if (!loopAbort.signal.aborted) loopAbort.abort()
                 await watchdogDone
@@ -1719,7 +1886,7 @@ export class AgentOrchestrator {
           }
 
           // 正常完成 — 如果之前有重试，发送 retry_cleared
-          if (attempt > 1) {
+          if (retryAttemptsScheduled > 0) {
             this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
             console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
           }
@@ -1851,15 +2018,40 @@ export class AgentOrchestrator {
           const rawErrorMessage = error instanceof Error ? error.message : ''
 
           // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
-          if (isSessionNotFoundError(rawErrorMessage, stderrOutput) && existingSdkSessionId && attempt <= MAX_AUTO_RETRIES) {
+          if (isSessionNotFoundError(rawErrorMessage, stderrOutput) && existingSdkSessionId && canAutoRetry(attempt)) {
             existingSdkSessionId = undefined
+            capturedSdkSessionId = undefined
             lastRetryableError = this.prepareSessionNotFoundRecovery(sessionId, queryOptions, contextualMessage, agentCwd, accumulatedMessages, queryStartedAt)
             stderrChunks.length = 0
             continue  // 进入下一次 retry 循环
           }
 
+          // Thinking signature 不兼容：先自动清除 SDK resume 关系并用上下文回填重跑一次。
+          if (
+            isThinkingSignatureError(apiError?.message ?? '', rawErrorMessage, stderrOutput) &&
+            canTryThinkingSignatureRecovery(attempt)
+          ) {
+            thinkingSignatureRecoveryAttempted = true
+            invisibleRecoveryAttempts += 1
+            existingSdkSessionId = undefined
+            capturedSdkSessionId = undefined
+            skipNextRetryDelay = true
+            lastRetryableError = this.prepareResumeFallbackRecovery(
+              sessionId,
+              queryOptions,
+              contextualMessage,
+              agentCwd,
+              accumulatedMessages,
+              queryStartedAt,
+              '检测到 thinking signature 不兼容，清除 sdkSessionId 并切换到上下文回填模式',
+              '思考签名不兼容，切换到上下文回填模式',
+            )
+            stderrChunks.length = 0
+            continue  // 进入下一次 retry 循环
+          }
+
           // 判断是否可重试
-          if (isAutoRetryableCatchError(apiError, rawErrorMessage, stderrOutput) && attempt <= MAX_AUTO_RETRIES) {
+          if (isAutoRetryableCatchError(apiError, rawErrorMessage, stderrOutput) && canAutoRetry(attempt)) {
             lastRetryableError = apiError
               ? `API Error ${apiError.statusCode}: ${apiError.message}`
               : (error instanceof Error ? error.message : '未知错误')
@@ -1900,19 +2092,47 @@ export class AgentOrchestrator {
               error instanceof Error ? (error.stack ?? error.message) : String(error),
               stderrOutput,
             )
+            const isThinkingSignature = isThinkingSignatureError(
+              apiError?.message ?? '',
+              userFacingError,
+              rawErrorMessage,
+              error instanceof Error ? (error.stack ?? error.message) : String(error),
+              stderrOutput,
+            )
+            const errorCode = isPromptTooLong
+              ? 'prompt_too_long'
+              : isThinkingSignature
+                ? THINKING_SIGNATURE_ERROR_CODE
+                : 'unknown_error'
+            const errorTitle = isPromptTooLong
+              ? '上下文过长'
+              : isThinkingSignature
+                ? THINKING_SIGNATURE_ERROR_TITLE
+                : '执行错误'
+            const errorContent = isPromptTooLong
+              ? '上下文过长：当前对话的上下文已超出模型限制，请压缩上下文或开启新会话'
+              : isThinkingSignature
+                ? `${THINKING_SIGNATURE_ERROR_TITLE}：${THINKING_SIGNATURE_ERROR_MESSAGE}`
+                : userFacingError
+            const errorActions = isThinkingSignature
+              ? [
+                  { key: 'n', label: '在新对话继续', action: 'retry_in_new_session' },
+                  { key: 'r', label: '重试', action: 'retry' },
+                ]
+              : undefined
+            userFacingError = errorContent
 
             const errMsg: SDKMessage = {
               type: 'assistant',
               message: {
-                content: [{ type: 'text', text: isPromptTooLong
-                  ? '上下文过长：当前对话的上下文已超出模型限制，请压缩上下文或开启新会话'
-                  : userFacingError }],
+                content: [{ type: 'text', text: errorContent }],
               },
               parent_tool_use_id: null,
-              error: { message: userFacingError, errorType: isPromptTooLong ? 'prompt_too_long' : 'unknown_error' },
+              error: { message: errorContent, errorType: errorCode },
               _createdAt: Date.now(),
-              _errorCode: isPromptTooLong ? 'prompt_too_long' : 'unknown_error',
-              _errorTitle: isPromptTooLong ? '上下文过长' : '执行错误',
+              _errorCode: errorCode,
+              _errorTitle: errorTitle,
+              _errorActions: errorActions,
             } as unknown as SDKMessage
             appendSDKMessages(sessionId, [errMsg])
             console.log(`[Agent 编排] 已保存错误消息到 JSONL`)
@@ -1921,10 +2141,10 @@ export class AgentOrchestrator {
           }
 
           // 如果之前有重试记录，发送 retry_failed
-          if (attempt > 1 && lastRetryableError) {
+          if (retryAttemptsScheduled > 0 && lastRetryableError) {
             this.eventBus.emit(sessionId, {
               kind: 'proma_event',
-              event: { type: 'retry', status: 'failed', attemptData: { attempt: attempt - 1, timestamp: Date.now(), reason: lastRetryableError, errorMessage: userFacingError, delaySeconds: 0 } },
+              event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: userFacingError, delaySeconds: 0 } },
             })
           }
 
@@ -1942,18 +2162,22 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] 保留 sdkSessionId (API 错误 ${apiError?.statusCode})`)
           }
 
+          return
         }
       }
 
       // 重试循环结束（达到最大次数仍失败）
       if (!retrySucceeded && lastRetryableError) {
+        const retryFailureMessage = retryDelayElapsedMs >= MAX_AUTO_RETRY_WAIT_MS
+          ? '重试等待已达到 5 分钟后仍然失败'
+          : `重试 ${retryAttemptsScheduled || MAX_AUTO_RETRIES} 次后仍然失败`
         this.eventBus.emit(sessionId, {
           kind: 'proma_event',
-          event: { type: 'retry', status: 'failed', attemptData: { attempt: MAX_AUTO_RETRIES, timestamp: Date.now(), reason: lastRetryableError, errorMessage: `重试 ${MAX_AUTO_RETRIES} 次后仍然失败`, delaySeconds: 0 } },
+          event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled || MAX_AUTO_RETRIES, timestamp: Date.now(), reason: lastRetryableError, errorMessage: retryFailureMessage, delaySeconds: 0 } },
         })
 
         // 保存错误消息
-        const retryErrorContent = `重试 ${MAX_AUTO_RETRIES} 次后仍然失败: ${lastRetryableError}`
+        const retryErrorContent = `${retryFailureMessage}: ${lastRetryableError}`
         const retryErrorSDKMsg: SDKMessage = {
           type: 'assistant',
           message: {
@@ -1967,7 +2191,7 @@ export class AgentOrchestrator {
         } as unknown as SDKMessage
         appendSDKMessages(sessionId, [retryErrorSDKMsg])
 
-        callbacks.onError(`重试 ${MAX_AUTO_RETRIES} 次后仍然失败: ${lastRetryableError}`)
+        callbacks.onError(`${retryFailureMessage}: ${lastRetryableError}`)
         callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
       }
 

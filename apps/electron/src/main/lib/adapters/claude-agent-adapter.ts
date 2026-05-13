@@ -18,6 +18,11 @@ import type {
   JsonSchemaOutputFormat,
   SDKMessage,
 } from '@proma/shared'
+import {
+  THINKING_SIGNATURE_ERROR_MESSAGE,
+  THINKING_SIGNATURE_ERROR_TITLE,
+  isThinkingSignatureError as matchesThinkingSignatureError,
+} from '@proma/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN } from '../error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
@@ -189,14 +194,25 @@ const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
     pattern: /not logged in|please run \/login/i,
     message: '请检查是否选择了正确的 Proma 供应渠道和模型',
   },
+  {
+    pattern: /validation error/i,
+    message: 'API 请求格式校验失败，请重试或开启新会话',
+  },
 ]
+
+/** 错误消息最大保留长度（超出部分截断，防止存储膨胀） */
+const MAX_ERROR_MESSAGE_LENGTH = 5000
 
 /** 将 SDK 原始错误消息转换为用户友好的提示（无匹配则返回原文） */
 export function friendlyErrorMessage(raw: string): string {
+  const isLong = raw.length > MAX_ERROR_MESSAGE_LENGTH
+  const sample = isLong ? raw.slice(0, MAX_ERROR_MESSAGE_LENGTH) : raw
   for (const { pattern, message } of FRIENDLY_ERROR_MESSAGES) {
-    if (pattern.test(raw)) return message
+    if (pattern.test(sample)) return message
   }
-  return raw
+  return isLong
+    ? sample + `\n\n[错误详情过长 (${(raw.length / 1024).toFixed(0)}KB)，已截断]`
+    : raw
 }
 
 // ============================================================================
@@ -249,12 +265,50 @@ export function isPromptTooLongError(...messages: string[]): boolean {
   return PROMPT_TOO_LONG_PATTERNS.some((p) => combined.includes(p))
 }
 
+export function isThinkingSignatureError(...messages: string[]): boolean {
+  return matchesThinkingSignatureError(...messages)
+}
+
+/** 从 assistant.error 文本中兜底提取 HTTP 状态码 */
+function extractHttpStatusFromErrorText(...messages: string[]): number | null {
+  const combined = messages.filter(Boolean).join('\n')
+  const patterns = [
+    /API Error:\s*(\d{3})/i,
+    /API error[^:]*:\s+(\d{3})/i,
+    /\b(?:HTTP|status|statusCode)\s*[:=]?\s*(\d{3})\b/i,
+    /\b(\d{3})\s+\{[^}]*"error"/is,
+  ]
+
+  for (const pattern of patterns) {
+    const match = combined.match(pattern)
+    const statusCode = match?.[1] ? parseInt(match[1], 10) : NaN
+    if (statusCode >= 400 && statusCode < 600) return statusCode
+  }
+
+  return null
+}
+
 /** 将 SDK 错误映射为 TypedError */
 export function mapSDKErrorToTypedError(
   errorCode: string,
   detailedMessage: string,
   originalError: string,
 ): TypedError {
+  if (isThinkingSignatureError(detailedMessage, originalError)) {
+    return {
+      code: 'thinking_signature_invalid',
+      title: THINKING_SIGNATURE_ERROR_TITLE,
+      message: THINKING_SIGNATURE_ERROR_MESSAGE,
+      actions: [
+        { key: 'n', label: '在新对话继续', action: 'retry_in_new_session' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: true,
+      retryDelayMs: 1000,
+      originalError,
+    }
+  }
+
   const errorMap: Record<string, { code: ErrorCode; title: string; message: string; canRetry: boolean }> = {
     'authentication_failed': {
       code: 'invalid_api_key',
@@ -280,6 +334,30 @@ export function mapSDKErrorToTypedError(
       message: 'API 服务当前过载，请稍后再试',
       canRetry: true,
     },
+    'provider_error': {
+      code: 'provider_error',
+      title: '服务繁忙',
+      message: 'API 服务当前过载或暂时异常，请稍后再试',
+      canRetry: true,
+    },
+    'service_error': {
+      code: 'service_error',
+      title: '服务错误',
+      message: 'API 服务暂时异常，请稍后再试',
+      canRetry: true,
+    },
+    'api_error': {
+      code: 'service_error',
+      title: '服务错误',
+      message: 'API 服务暂时异常，请稍后再试',
+      canRetry: true,
+    },
+    'service_unavailable': {
+      code: 'service_unavailable',
+      title: '服务暂时不可用',
+      message: 'API 服务暂时不可用，请稍后再试',
+      canRetry: true,
+    },
     'prompt_too_long': {
       code: 'prompt_too_long',
       title: '上下文过长',
@@ -299,6 +377,32 @@ export function mapSDKErrorToTypedError(
       code: 'network_error',
       title: '网络异常',
       message: detailedMessage || '上游 API 连接中断',
+      actions: [
+        { key: 's', label: '设置', action: 'settings' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: true,
+      retryDelayMs: 1000,
+      originalError,
+    }
+  }
+
+  const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
+  if (httpStatus != null && (httpStatus === 429 || httpStatus >= 500)) {
+    const isRateLimited = httpStatus === 429
+    const isUnavailable = httpStatus === 503
+    return {
+      code: isRateLimited
+        ? 'rate_limited'
+        : (isUnavailable ? 'service_unavailable' : 'service_error'),
+      title: isRateLimited
+        ? '请求频率限制'
+        : (isUnavailable ? '服务暂时不可用' : '服务错误'),
+      message: detailedMessage || (
+        isRateLimited
+          ? '请求过于频繁，请稍后再试'
+          : `API 服务暂时异常 (${httpStatus})，请稍后再试`
+      ),
       actions: [
         { key: 's', label: '设置', action: 'settings' },
         { key: 'r', label: '重试', action: 'retry' },

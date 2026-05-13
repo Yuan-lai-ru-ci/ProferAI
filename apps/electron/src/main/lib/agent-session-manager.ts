@@ -27,7 +27,15 @@ import { getAgentWorkspace } from './agent-workspace-manager'
 if (!process.env.CLAUDE_CONFIG_DIR) {
   process.env.CLAUDE_CONFIG_DIR = getSdkConfigDir()
 }
-import type { AgentSessionMeta, AgentMessage, SDKMessage, ForkSessionInput, AgentMessageSearchResult } from '@proma/shared'
+import type {
+  AgentSessionMeta,
+  AgentMessage,
+  SDKMessage,
+  ForkSessionInput,
+  AgentMessageSearchResult,
+  AgentSessionReferenceSearchInput,
+  AgentSessionReferenceSearchResult,
+} from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
 
@@ -192,10 +200,16 @@ export function appendAgentMessage(id: string, message: AgentMessage): void {
   }
 }
 
+/** 单条 SDKMessage 序列化后最大长度（UTF-16 code units，超出则截断内容） */
+const MAX_SDK_MESSAGE_LENGTH = 256 * 1024 // ~256K chars
+/** 截断后保留的预览文本长度 */
+const TRUNCATED_PREVIEW_LENGTH = 2000
+
 /**
  * 追加 SDKMessage 到会话的 JSONL 文件（Phase 4 新持久化格式）
  *
  * 每条 SDKMessage 单独一行 JSON。读取时通过 `type` 字段区分新旧格式。
+ * 超过 256K chars 的消息会被自动截断以防止存储膨胀。
  */
 export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
   if (messages.length === 0) return
@@ -203,12 +217,68 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
   const filePath = getAgentSessionMessagesPath(id)
 
   try {
-    const lines = messages.map((m) => JSON.stringify(m)).join('\n') + '\n'
+    const lines = messages.map((m) => {
+      const serialized = JSON.stringify(m)
+      if (serialized.length <= MAX_SDK_MESSAGE_LENGTH) return serialized
+      const sanitized = JSON.stringify(sanitizeOversizedMessage(m, serialized.length))
+      if (sanitized.length > MAX_SDK_MESSAGE_LENGTH) {
+        console.warn(`[Agent 会话] 消息截断后仍超限 (${(sanitized.length / 1024).toFixed(0)}K chars), session=${id}`)
+      }
+      return sanitized
+    }).join('\n') + '\n'
     appendFileSync(filePath, lines, 'utf-8')
   } catch (error) {
     console.error(`[Agent 会话] 追加 SDKMessage 失败 (${id}):`, error)
     throw new Error('追加 SDKMessage 失败')
   }
+}
+
+/**
+ * 截断超大 SDKMessage 的内容，保留元数据结构。
+ * 处理三类膨胀源：超长 text block、超大 tool_result、内嵌 base64 图片。
+ */
+function sanitizeOversizedMessage(msg: SDKMessage, originalLength: number): SDKMessage {
+  const truncationNote = `\n[内容已截断: 原始 ${(originalLength / 1024).toFixed(0)}K chars 超出存储限制]`
+  const truncationThreshold = MAX_SDK_MESSAGE_LENGTH / 2
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clone: any = JSON.parse(JSON.stringify(msg))
+  const content = clone.message?.content
+  if (Array.isArray(content)) {
+    for (let i = 0; i < content.length; i++) {
+      const block = content[i]
+      if (!block || typeof block !== 'object') continue
+
+      // 截断超长 text block
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.length > truncationThreshold) {
+        block.text = block.text.slice(0, TRUNCATED_PREVIEW_LENGTH) + truncationNote
+      }
+
+      // 截断超大 tool_result
+      if (block.type === 'tool_result') {
+        if (typeof block.content === 'string' && block.content.length > truncationThreshold) {
+          block.content = block.content.slice(0, TRUNCATED_PREVIEW_LENGTH) + truncationNote
+        }
+        // 剥离 base64 图片数据
+        if (Array.isArray(block.content)) {
+          block.content = block.content.map((item: Record<string, unknown>) => {
+            if (item?.type === 'image' && (item.source as Record<string, unknown>)?.data) {
+              const dataLen = String((item.source as Record<string, unknown>).data).length
+              return { type: 'image', _truncated: true, _originalLength: dataLen }
+            }
+            return item
+          })
+        }
+      }
+    }
+  }
+
+  // 截断 error.message
+  if (clone.error && typeof clone.error === 'object' && typeof clone.error.message === 'string' && clone.error.message.length > truncationThreshold) {
+    clone.error.message = clone.error.message.slice(0, TRUNCATED_PREVIEW_LENGTH) + truncationNote
+  }
+
+  return clone as SDKMessage
 }
 
 /**
@@ -378,6 +448,48 @@ export function deleteAgentSession(id: string): void {
 
   // 清理 Nano Banana 生图历史
   clearNanoBananaAgentHistory(id)
+
+  // 清理 SDK 关联数据（file-history 和 projects 下的 session JSONL）
+  const sdkSessionIds = [removed.sdkSessionId, removed.forkSourceSdkSessionId].filter(Boolean) as string[]
+  if (sdkSessionIds.length > 0) {
+    const sdkConfigDir = getSdkConfigDir()
+
+    const fileHistoryDir = join(sdkConfigDir, 'file-history')
+    for (const sid of sdkSessionIds) {
+      const histDir = join(fileHistoryDir, sid)
+      if (existsSync(histDir)) {
+        try {
+          rmSync(histDir, { recursive: true, force: true })
+          console.log(`[Agent 会话] 已清理 file-history: ${sid}`)
+        } catch (e) {
+          console.warn(`[Agent 会话] 清理 file-history 失败 (${sid}):`, e)
+        }
+      }
+    }
+
+    const projectsDir = join(sdkConfigDir, 'projects')
+    if (existsSync(projectsDir)) {
+      try {
+        for (const hashDir of readdirSync(projectsDir)) {
+          const projPath = join(projectsDir, hashDir)
+          for (const sid of sdkSessionIds) {
+            const sessionFile = join(projPath, `${sid}.jsonl`)
+            if (existsSync(sessionFile)) {
+              try {
+                unlinkSync(sessionFile)
+                console.log(`[Agent 会话] 已清理 SDK session 文件: ${sessionFile}`)
+              } catch (e) {
+                console.warn('[Agent 会话] 清理 SDK session 文件失败:', e)
+              }
+            }
+          }
+          try {
+            if (readdirSync(projPath).length === 0) rmSync(projPath, { recursive: true })
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    }
+  }
 }
 
 /**
@@ -1113,6 +1225,121 @@ export function searchAgentSessionMessages(query: string): AgentMessageSearchRes
       }
     } catch {
       // 跳过读取失败的文件
+    }
+  }
+
+  return results
+}
+
+function extractTextFromPersistedMessage(parsed: unknown): string {
+  if (!parsed || typeof parsed !== 'object') return ''
+  const record = parsed as {
+    content?: unknown
+    message?: { content?: Array<{ type: string; text?: string }> }
+  }
+
+  if (typeof record.content === 'string') {
+    return record.content
+  }
+
+  if (Array.isArray(record.message?.content)) {
+    return record.message.content
+      .filter((b) => b.type === 'text' && b.text)
+      .map((b) => b.text!)
+      .join('\n')
+  }
+
+  return ''
+}
+
+function createSnippet(text: string, matchIndex: number, matchLength: number): string {
+  const snippetStart = Math.max(0, matchIndex - 48)
+  const snippetEnd = Math.min(text.length, matchIndex + matchLength + 48)
+  return (snippetStart > 0 ? '...' : '') +
+    text.slice(snippetStart, snippetEnd) +
+    (snippetEnd < text.length ? '...' : '')
+}
+
+function findSessionMessageSnippet(sessionId: string, query: string): string | undefined {
+  if (!query || query.length < 2) return undefined
+
+  const filePath = getAgentSessionMessagesPath(sessionId)
+  if (!existsSync(filePath)) return undefined
+
+  const queryLower = query.toLowerCase()
+  try {
+    const raw = readFileSync(filePath, 'utf-8')
+    const lines = raw.split('\n').filter((line) => line.trim())
+
+    for (const line of lines) {
+      const textContent = extractTextFromPersistedMessage(JSON.parse(line))
+      if (!textContent) continue
+
+      const matchIndex = textContent.toLowerCase().indexOf(queryLower)
+      if (matchIndex === -1) continue
+
+      return createSnippet(textContent, matchIndex, query.length)
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
+
+/**
+ * 搜索当前工作区可引用的 Agent 会话。
+ *
+ * 仅返回当前工作区、未归档、非当前会话的结果；无关键词时返回最近更新的会话。
+ */
+export function searchAgentSessionReferences(input: AgentSessionReferenceSearchInput): AgentSessionReferenceSearchResult[] {
+  const workspaceId = input?.workspaceId?.trim()
+  if (!workspaceId) return []
+
+  const query = (input?.query ?? '').trim()
+  const queryLower = query.toLowerCase()
+  const requestedLimit = Number.isFinite(input?.limit) ? input.limit! : 20
+  const limit = Math.min(Math.max(requestedLimit, 1), 50)
+
+  const candidates = listAgentSessions()
+    .filter((session) => session.workspaceId === workspaceId)
+    .filter((session) => !session.archived)
+    .filter((session) => session.id !== input?.excludeSessionId)
+
+  const results: AgentSessionReferenceSearchResult[] = []
+
+  for (const session of candidates) {
+    if (results.length >= limit) break
+
+    if (!queryLower) {
+      results.push({
+        sessionId: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        matchSource: 'recent',
+      })
+      continue
+    }
+
+    if (session.title.toLowerCase().includes(queryLower)) {
+      results.push({
+        sessionId: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        matchSource: 'title',
+      })
+      continue
+    }
+
+    const snippet = findSessionMessageSnippet(session.id, query)
+    if (snippet) {
+      results.push({
+        sessionId: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        snippet,
+        matchSource: 'message',
+      })
     }
   }
 
