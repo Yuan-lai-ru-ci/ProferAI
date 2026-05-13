@@ -50,6 +50,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { clearPreviewCacheForSession } from '@/components/diff/DiffTabContent'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -363,6 +364,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setDiffUnseenFiles(deleteKey)
     setSessionChannelMap(deleteKey)
     setSessionModelMap(deleteKey)
+    clearPreviewCacheForSession(id)
   }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setSessionChannelMap, setSessionModelMap])
 
   const currentWorkspaceSlug = React.useMemo(() => {

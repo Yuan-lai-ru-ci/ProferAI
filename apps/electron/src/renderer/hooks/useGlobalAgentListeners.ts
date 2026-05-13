@@ -41,6 +41,7 @@ import {
   unviewedCompletedSessionIdsAtom,
   workingDoneSessionIdsAtom,
   agentSessionPathMapAtom,
+  agentDiffRefreshVersionAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -51,7 +52,7 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { agentDiffRefreshVersionAtom, agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
+import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
@@ -72,6 +73,20 @@ function getParentDir(path: string): string {
   const idx = normalized.lastIndexOf('/')
   if (idx <= 0) return ''
   return normalized.slice(0, idx)
+}
+
+/** cyrb53: 快速字符串 hash，遍历完整内容避免边缘碰撞 */
+function cyrb53(str: string): string {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 2654435761)
+    h2 = Math.imul(h2 ^ ch, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16)
 }
 
 function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
@@ -990,13 +1005,55 @@ export function useGlobalAgentListeners(): void {
       })
     }, 15_000)
 
-    // 窗口重新聚焦时刷新 diff（在外部编辑器改了文件后切回 Proma）
-    const onWindowFocus = () => {
+    // 窗口重新聚焦时检测当前预览文件是否有外部修改，有变化才刷新
+    /** sessionId:filePath → 内容 hash（用于检测外部编辑器修改） */
+    const fileContentHashMap = new Map<string, string>()
+    const HASH_MAX = 100
+    let focusCheckSeq = 0
+
+    const onWindowFocus = async () => {
       const activeSessionId = store.get(currentAgentSessionIdAtom)
       if (!activeSessionId) return
-      store.set(agentDiffRefreshVersionAtom, (prev) => {
-        const m = new Map(prev); m.set(activeSessionId, (prev.get(activeSessionId) ?? 0) + 1); return m
-      })
+
+      const previewFile = store.get(previewFileMapAtom).get(activeSessionId)
+      if (!previewFile) return
+
+      const hashKey = `${activeSessionId}:${previewFile.filePath}`
+      const seq = ++focusCheckSeq
+
+      try {
+        const result = await window.electronAPI.resolveAndReadFile(previewFile.filePath, {
+          sessionId: activeSessionId,
+          candidateBasePaths: previewFile.basePaths,
+        })
+
+        // 丢弃过期结果（快速切换窗口时）
+        if (seq !== focusCheckSeq) return
+
+        const content = result?.content ?? ''
+        // cyrb53 hash：遍历完整内容，避免边缘碰撞
+        const hash = cyrb53(content)
+        const prevHash = fileContentHashMap.get(hashKey)
+
+        if (prevHash !== undefined && prevHash !== hash) {
+          // 内容有变化，刷新 diff/preview
+          store.set(agentDiffRefreshVersionAtom, (prev) => {
+            const m = new Map(prev)
+            m.set(activeSessionId, (prev.get(activeSessionId) ?? 0) + 1)
+            return m
+          })
+        }
+        fileContentHashMap.set(hashKey, hash)
+
+        // LRU 淘汰：限制 Map 大小
+        if (fileContentHashMap.size > HASH_MAX) {
+          const oldestKey = fileContentHashMap.keys().next().value
+          if (oldestKey !== undefined) fileContentHashMap.delete(oldestKey)
+        }
+      } catch {
+        // 读取失败时删除旧 hash，下次成功读取时必定触发刷新
+        fileContentHashMap.delete(hashKey)
+      }
     }
     window.addEventListener('focus', onWindowFocus)
 

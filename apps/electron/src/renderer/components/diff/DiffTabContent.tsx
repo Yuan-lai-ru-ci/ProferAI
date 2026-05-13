@@ -1,37 +1,21 @@
 /**
  * DiffTabContent — 单文件 Diff 或纯文件预览内容
  *
- * previewOnly=true 时：代码高亮预览（Shiki）或 Markdown 渲染
+ * previewOnly=true 时：代码高亮预览（@pierre/diffs File）或 Markdown 渲染
  * previewOnly=false（默认）：显示 git diff（旧版本 vs 磁盘）
  */
 
 import * as React from 'react'
-import { Code2, Copy, Check, Eye, Pencil, Save, X } from 'lucide-react'
+import { Code2, Copy, Check, Eye, Pencil, RefreshCw, Save, X } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import DOMPurify from 'dompurify'
+import { File as PierreFile } from '@pierre/diffs/react'
 import { cn } from '@/lib/utils'
 import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
 import { resolvedThemeAtom } from '@/atoms/theme'
-import { highlightCode } from '@proma/core'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
-
-/** 扩展名 → Shiki 语言 ID */
-const EXT_LANG: Record<string, string> = {
-  '.md': 'markdown', '.markdown': 'markdown',
-  '.json': 'json', '.jsonc': 'json', '.json5': 'json',
-  '.xml': 'xml', '.html': 'html', '.htm': 'html', '.svg': 'xml',
-  '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml', '.ini': 'ini', '.env': 'bash',
-  '.ts': 'typescript', '.tsx': 'tsx', '.js': 'javascript', '.jsx': 'jsx',
-  '.mjs': 'javascript', '.cjs': 'javascript',
-  '.py': 'python', '.go': 'go', '.rs': 'rust', '.java': 'java', '.kt': 'kotlin', '.swift': 'swift',
-  '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.hpp': 'cpp', '.cs': 'csharp',
-  '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash', '.fish': 'fish',
-  '.css': 'css', '.scss': 'scss', '.less': 'less',
-  '.sql': 'sql', '.rb': 'ruby', '.php': 'php',
-  '.diff': 'diff', '.patch': 'diff',
-  '.txt': 'text', '.log': 'text', '.csv': 'text',
-}
+import { PIERRE_FILE_CSS } from '@/components/agent/tool-result-renderers/pierre-styles'
 
 const MD_EXTS = new Set(['.md', '.markdown'])
 const PDF_EXTS = new Set(['.pdf'])
@@ -45,19 +29,47 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.
  * key 设计：
  * - diff 模式：`diff:${filePath}@v${refreshVersion}`
  * - preview 模式：`preview:${filePath}@v${refreshVersion}`
- * refreshVersion 变化时（agent 写文件、git 突变、窗口聚焦）key 自然变化，
+ * refreshVersion 变化时（agent 写文件、git 突变）key 自然变化，
  * 老 entry 不会被命中，最终被 LRU 淘汰；无需主动失效。
  */
 type CacheEntry = {
   oldContent: string
   newContent: string
-  highlightedHtml?: string
-  highlightedLanguage?: string
-  highlightedTheme?: string
+  /** 非文本文件预览数据 */
+  pdfSrc?: string
+  imageDataUrl?: string
+  imagePath?: string
+  docxHtml?: string
+  officeHtml?: string
+  officeText?: string
 }
 const CACHE_MAX = 50
-const MAX_HIGHLIGHT_CHARS = 200_000
 const contentCache = new Map<string, CacheEntry>()
+
+/** 滚动位置持久化：key = `${sessionId}:${filePath}` */
+const scrollPositionCache = new Map<string, { top: number; left: number }>()
+
+function scrollCacheKey(sessionId: string, filePath: string): string {
+  return `${sessionId}:${filePath}`
+}
+
+/** 获取缓存的滚动位置 */
+export function getPreviewScrollPosition(sessionId: string, filePath: string): { top: number; left: number } | undefined {
+  return scrollPositionCache.get(scrollCacheKey(sessionId, filePath))
+}
+
+/**
+ * 清除指定 session 的滚动位置缓存，供 useCloseTab 调用。
+ *
+ * 注意：contentCache 不包含 sessionId，依赖 LRU 自动淘汰（CACHE_MAX=50）。
+ * 如需主动清理内容缓存，需将 key 格式改为 `${sessionId}:${mode}:${filePath}@v${version}`。
+ */
+export function clearPreviewCacheForSession(sessionId: string): void {
+  const prefix = `${sessionId}:`
+  for (const key of scrollPositionCache.keys()) {
+    if (key.startsWith(prefix)) scrollPositionCache.delete(key)
+  }
+}
 function cacheGet(key: string): CacheEntry | undefined {
   const v = contentCache.get(key)
   if (!v) return undefined
@@ -96,7 +108,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
-  const [highlightedHtml, setHighlightedHtml] = React.useState('')
   const [markdownEditing, setMarkdownEditing] = React.useState(false)
   const [markdownSourceMode, setMarkdownSourceMode] = React.useState(false)
   const [markdownDraft, setMarkdownDraft] = React.useState('')
@@ -115,6 +126,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const imageContainerRef = React.useRef<HTMLDivElement>(null)
   const imageDragging = React.useRef(false)
   const imageDragStart = React.useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 })
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
@@ -145,12 +157,25 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     return { sessionId, candidateBasePaths }
   }, [basePaths, dirPath, filePath, sessionId])
 
+  // props 变化时立即清空内容状态，避免在 useEffect 执行前渲染旧数据
   React.useEffect(() => {
+    setOldContent('')
+    setNewContent('')
+    setDocxHtml('')
+    setOfficeHtml('')
+    setOfficeText('')
+    setPdfSrc('')
+    setPdfZoom(100)
+    setImagePath('')
+    setImageDataUrl('')
+    setImageZoom(0.25)
+    setImageNaturalSize({ w: 0, h: 0 })
+    setLoading(true)
     setMarkdownEditing(false)
     setMarkdownSourceMode(false)
     setMarkdownDraft('')
     setMarkdownSaving(false)
-  }, [filePath, previewOnly])
+  }, [filePath, sessionId, previewOnly])
 
   // non-passive wheel listener for pinch-to-zoom on image
   React.useEffect(() => {
@@ -176,8 +201,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     return () => window.removeEventListener('message', handler)
   }, [isPdf])
 
-  const shikiTheme = theme === 'dark' ? 'one-dark-pro' : 'one-light'
-
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
   const lastNewContentRef = React.useRef('')
   const lastOldContentRef = React.useRef('')
@@ -187,43 +210,35 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   // 命中缓存时跳过 loading 闪烁直接渲染；未命中走 IPC 拉取
   React.useEffect(() => {
     let cancelled = false
-    const lang = EXT_LANG[ext] || 'text'
 
-    // PDF / DOCX / Office 不走文本缓存（HTML 体积大、解析过程也不轻）
-    const cacheable = !isPdf && !isDocx && !isOfficePreview && !isLegacyOffice && !isImage
-    const cacheKey = cacheable
-      ? (previewOnly ? `preview:${filePath}@v${previewContentVersion}` : `diff:${filePath}@v${refreshVersion}`)
-      : null
-    const cached = cacheKey ? cacheGet(cacheKey) : undefined
+    // 所有文件类型均可缓存（含 PDF/DOCX/Office/Image）
+    const cacheKey = previewOnly
+      ? `preview:${filePath}@v${previewContentVersion}`
+      : `diff:${filePath}@v${refreshVersion}`
+    const cached = cacheGet(cacheKey)
 
     if (cached) {
       // 命中：直接同步渲染，不闪
+      restoreScrollRef.current = true
       lastNewContentRef.current = cached.newContent
       lastOldContentRef.current = cached.oldContent
       setOldContent(cached.oldContent)
       setNewContent(cached.newContent)
-      setHighlightedHtml(
-        cached.highlightedHtml &&
-          cached.highlightedLanguage === lang &&
-          cached.highlightedTheme === shikiTheme
-          ? cached.highlightedHtml
-          : ''
-      )
-      setDocxHtml('')
-      setOfficeHtml('')
-      setOfficeText('')
-      setPdfSrc('')
+      setDocxHtml(cached.docxHtml ?? '')
+      setOfficeHtml(cached.officeHtml ?? '')
+      setOfficeText(cached.officeText ?? '')
+      setPdfSrc(cached.pdfSrc ?? '')
       setPdfZoom(100)
-      setImagePath('')
-      setImageDataUrl('')
+      setImagePath(cached.imagePath ?? '')
+      setImageDataUrl(cached.imageDataUrl ?? '')
       setImageZoom(0.25)
       setImageNaturalSize({ w: 0, h: 0 })
       setLoading(false)
+      return // 缓存命中，直接返回，不执行 load()
     } else {
       setLoading(true)
       setOldContent('')
       setNewContent('')
-      setHighlightedHtml('')
       setDocxHtml('')
       setOfficeHtml('')
       setOfficeText('')
@@ -247,7 +262,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             if (isPdf) {
               const result = await window.electronAPI.preparePdfPreview(filePath, fileAccess)
               if (cancelled) return
-              setPdfSrc(result?.tmpHtmlUrl ?? '')
+              const src = result?.tmpHtmlUrl ?? ''
+              setPdfSrc(src)
+              cacheSet(cacheKey, { oldContent: '', newContent: '', pdfSrc: src })
               return
             }
             if (isImage) {
@@ -256,23 +273,30 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               if (resolved) {
                 setImagePath(filePath)
                 setImageDataUrl(resolved.url)
+                cacheSet(cacheKey, { oldContent: '', newContent: '', imagePath: filePath, imageDataUrl: resolved.url })
               } else {
                 setImagePath('')
                 setImageDataUrl('')
+                cacheSet(cacheKey, { oldContent: '', newContent: '', imagePath: '', imageDataUrl: '' })
               }
               return
             }
             if (isDocx) {
               const result = await window.electronAPI.docxToHtml(filePath, fileAccess)
               if (cancelled) return
-              setDocxHtml(DOMPurify.sanitize(result?.html ?? ''))
+              const html = DOMPurify.sanitize(result?.html ?? '')
+              setDocxHtml(html)
+              cacheSet(cacheKey, { oldContent: '', newContent: '', docxHtml: html })
               return
             }
             if (isOfficePreview) {
               const result = await window.electronAPI.officeToHtml(filePath, fileAccess)
               if (cancelled) return
-              setOfficeHtml(DOMPurify.sanitize(result?.html ?? ''))
-              setOfficeText(result?.text ?? '')
+              const html = DOMPurify.sanitize(result?.html ?? '')
+              const text = result?.text ?? ''
+              setOfficeHtml(html)
+              setOfficeText(text)
+              cacheSet(cacheKey, { oldContent: '', newContent: '', officeHtml: html, officeText: text })
               return
             }
             if (isLegacyOffice) {
@@ -298,38 +322,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
         if (previewOnly && !MD_EXTS.has(ext) && content) {
           if (!cancelled) setLoading(false)
-
-          if (
-            cached?.highlightedHtml &&
-            cached.highlightedLanguage === lang &&
-            cached.highlightedTheme === shikiTheme
-          ) {
-            if (!cancelled) setHighlightedHtml(cached.highlightedHtml)
-            return
-          }
-
-          if (content.length > MAX_HIGHLIGHT_CHARS) {
-            if (!cancelled) setHighlightedHtml('')
-            return
-          }
-
-          try {
-            const hl = await highlightCode({ code: content, language: lang, theme: shikiTheme })
-            if (cancelled) return
-            const sanitizedHtml = DOMPurify.sanitize(hl.html)
-            setHighlightedHtml(sanitizedHtml)
-            if (cacheKey) {
-              cacheSet(cacheKey, {
-                oldContent: old,
-                newContent: content,
-                highlightedHtml: sanitizedHtml,
-                highlightedLanguage: lang,
-                highlightedTheme: shikiTheme,
-              })
-            }
-          } catch (err) {
-            console.error('[DiffTabContent] Shiki highlight failed:', err)
-          }
         }
       } catch {
         // 加载失败静默处理
@@ -341,7 +333,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, shikiTheme, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId, ext])
+  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId, ext])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
   const prevRefreshRef = React.useRef(-1)
@@ -376,6 +368,55 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     refresh()
     return () => { cancelled = true }
   }, [refreshVersion, previewOnly, filePath, dirPath, gitRoot, sessionId])
+
+  // scrollPosition persistent: module-level Map keyed by sessionId:filePath
+  // content changes (refreshVersion bump) → delete stored position;
+  // cached mount → restore; scroll → save.
+  const scrollKey = scrollCacheKey(sessionId, filePath)
+  const prevRefreshVersionRef = React.useRef(refreshVersion)
+
+  // WHEN content version changes (refreshVersion bump): delete stored scroll position
+  // 只在内容变化时清除，切换文件时保留位置以支持返回导航
+  React.useEffect(() => {
+    if (loading) return // still loading, don't clear yet
+    if (prevRefreshVersionRef.current !== refreshVersion) {
+      // refreshVersion changed for current file → content updated, clear position
+      scrollPositionCache.delete(scrollKey)
+      prevRefreshVersionRef.current = refreshVersion
+    }
+  }, [scrollKey, refreshVersion, loading])
+
+  // RESTORE scroll position after cached content renders
+  const restoreScrollRef = React.useRef(false)
+  React.useEffect(() => {
+    if (loading || !restoreScrollRef.current) return
+    restoreScrollRef.current = false
+    const pos = scrollPositionCache.get(scrollKey)
+    if (pos && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = pos.top
+      scrollContainerRef.current.scrollLeft = pos.left
+    }
+  }, [loading, scrollKey])
+
+  // SAVE scroll position on scroll (throttled via rAF)
+  const scrollRafRef = React.useRef(0)
+  const handleScroll = React.useCallback(() => {
+    if (scrollRafRef.current) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0
+      const el = scrollContainerRef.current
+      if (el) {
+        scrollPositionCache.set(scrollKey, { top: el.scrollTop, left: el.scrollLeft })
+      }
+    })
+  }, [scrollKey])
+
+  // Cleanup rAF on unmount to prevent stale writes
+  React.useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
+    }
+  }, [])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -429,6 +470,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setMarkdownSaving(false)
     }
   }, [fileAccess, filePath, isMarkdown, markdownDraft, markdownSaving, refreshVersion, sessionId, setRefreshVersionMap])
+
+  const handleManualRefresh = React.useCallback(() => {
+    setRefreshVersionMap((prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+      return m
+    })
+  }, [sessionId, setRefreshVersionMap])
 
   return (
     <div className="flex flex-col h-full">
@@ -503,9 +552,18 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           title="复制文件内容">
           {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
         </button>
+
+        <button
+          type="button"
+          onClick={handleManualRefresh}
+          className="p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0"
+          title="刷新文件内容（检测外部编辑器的修改）"
+        >
+          <RefreshCw className="size-3.5" />
+        </button>
       </div>
 
-      <div className="flex-1 overflow-auto scrollbar-thin relative">
+      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto scrollbar-thin relative">
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
         ) : previewOnly ? (
@@ -657,17 +715,25 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 onRequestEdit={startMarkdownEdit}
                 disabled={markdownSaving}
                 fileAccess={markdownFileAccess}
-                shikiTheme={shikiTheme}
+                shikiTheme={theme === 'dark' ? 'one-dark-pro' : 'one-light'}
               />
             )
-          ) : highlightedHtml ? (
-            <div
-              className="p-3 text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:!m-0 [&_pre]:!p-0 [&_code]:!text-[13px] [&_pre]:!whitespace-pre-wrap [&_pre]:![overflow-wrap:anywhere]"
-              dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-            />
+          ) : newContent ? (
+            <div className="h-full">
+              <PierreFile
+                file={{ name: filePath.split('/').pop() ?? filePath, contents: newContent }}
+                options={{
+                  theme: { dark: 'one-dark-pro' as const, light: 'one-light' as const },
+                  disableFileHeader: true,
+                  overflow: 'scroll' as const,
+                  themeType: theme as 'light' | 'dark' | 'system',
+                  unsafeCSS: PIERRE_FILE_CSS,
+                }}
+              />
+            </div>
           ) : (
             <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {newContent || <span className="text-muted-foreground">（文件为空）</span>}
+              <span className="text-muted-foreground">（文件为空）</span>
             </pre>
           )
         ) : (
