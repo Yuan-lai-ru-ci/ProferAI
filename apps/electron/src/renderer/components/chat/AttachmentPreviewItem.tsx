@@ -21,6 +21,8 @@ interface AttachmentPreviewItemProps {
   previewUrl?: string
   /** 删除回调 */
   onRemove: () => void
+  /** 点击回调（用于打开文件预览等） */
+  onClick?: () => void
   className?: string
 }
 
@@ -39,6 +41,7 @@ export function AttachmentPreviewItem({
   mediaType,
   previewUrl,
   onRemove,
+  onClick,
   className,
 }: AttachmentPreviewItemProps): React.ReactElement {
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
@@ -90,8 +93,13 @@ export function AttachmentPreviewItem({
         'rounded-lg bg-[#37a5aa]/10 border border-[#37a5aa]/20',
         'pl-2.5 pr-7 py-1.5 text-[13px] text-[#37a5aa]',
         'transition-colors hover:bg-[#37a5aa]/15',
+        onClick && 'cursor-pointer',
         className
       )}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
     >
       <Paperclip className="size-4 shrink-0" />
       <span className="max-w-[160px] truncate">{truncateName(filename)}</span>

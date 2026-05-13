@@ -614,6 +614,9 @@ export interface ElectronAPI {
   /** 用系统默认应用打开文件 */
   openFile: (filePath: string) => Promise<void>
 
+  /** 将剪贴板文本写入临时预览文件并返回绝对路径 */
+  writeClipboardPreview: (filename: string, content: string) => Promise<string>
+
   /** 用系统默认应用打开任意文件（无工作区限制） */
   systemOpenFile: (filePath: string, appName?: string, access?: import('@proma/shared').FileAccessOptions) => Promise<void>
 
@@ -1585,6 +1588,10 @@ const electronAPI: ElectronAPI = {
 
   openFile: (filePath: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FILE, filePath)
+  },
+
+  writeClipboardPreview: (filename: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_CLIPBOARD_PREVIEW, filename, content)
   },
 
   systemOpenFile: (filePath: string, appName?: string, access?: import('@proma/shared').FileAccessOptions) => {

@@ -2008,6 +2008,43 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 将剪贴板文本写入临时预览文件
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_CLIPBOARD_PREVIEW,
+    async (_, filename: string, content: string): Promise<string> => {
+      if (typeof filename !== 'string' || !filename) {
+        throw new Error('filename 必须是非空字符串')
+      }
+      if (typeof content !== 'string') {
+        throw new Error('content 必须是字符串')
+      }
+
+      const { resolve } = await import('node:path')
+      const { join } = await import('node:path')
+      const { tmpdir } = await import('node:os')
+      const { existsSync, mkdirSync } = await import('node:fs')
+      const { writeFile } = await import('node:fs/promises')
+
+      const tmpDir = join(tmpdir(), 'proma-preview')
+      if (!existsSync(tmpDir)) {
+        mkdirSync(tmpDir, { recursive: true })
+      }
+
+      // 安全文件名：替换路径分隔符和特殊字符，防止目录穿越
+      const safeFilename = filename.replace(/[<>:"/\\|?*]/g, '_').replace(/^\.+/, '_')
+      const tmpPath = resolve(tmpDir, safeFilename)
+
+      // 确保 resolve 后的路径仍在 tmpDir 内，防止 .. 穿越
+      if (!tmpPath.startsWith(tmpDir + '/') && tmpPath !== tmpDir) {
+        throw new Error('文件名越界')
+      }
+
+      await writeFile(tmpPath, content, 'utf-8')
+      console.log(`[IPC] clipboard 预览文件已写入: ${tmpPath}`)
+      return tmpPath
+    }
+  )
+
   // 在系统文件管理器中显示文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SHOW_IN_FOLDER,

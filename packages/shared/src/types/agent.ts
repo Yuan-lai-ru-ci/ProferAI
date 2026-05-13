@@ -1348,6 +1348,8 @@ export const AGENT_IPC_CHANNELS = {
   READ_ATTACHED_FILE: 'agent:read-attached-file',
   /** 搜索工作区文件（用于 @ 引用） */
   SEARCH_WORKSPACE_FILES: 'agent:search-workspace-files',
+  /** 将文本内容写入临时预览文件并返回绝对路径 */
+  WRITE_CLIPBOARD_PREVIEW: 'agent:write-clipboard-preview',
 
   // 标题自动生成通知（主进程 → 渲染进程推送）
   /** 标题已更新（首次对话完成后自动生成） */
