@@ -16,6 +16,7 @@ import {
 import {
   agentSessionPathMapAtom,
 } from '@/atoms/agent-atoms'
+import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { DiffTabContent } from './DiffTabContent'
 
 interface PreviewPanelProps {
@@ -89,7 +90,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>关闭预览面板</p>
+              <p>关闭预览面板 ({getAcceleratorDisplay(getActiveAccelerator('toggle-preview-panel'))})</p>
             </TooltipContent>
           </Tooltip>
         </div>
