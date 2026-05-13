@@ -349,7 +349,8 @@ export function RichTextInput({
         const threshold = longTextPasteThresholdRef.current
         const plainText = event.clipboardData?.getData('text/plain') ?? ''
         const html = event.clipboardData?.getData('text/html') ?? ''
-        const text = html ? (htmlToMarkdown(html).trim() || plainText) : plainText
+        // 优先使用纯文本：保留原始换行符，htmlToMarkdown 对 <div> 块不添加换行会丢失换行
+        const text = plainText || (html ? htmlToMarkdown(html).trim() : '')
         if (
           threshold &&
           threshold > 0 &&
