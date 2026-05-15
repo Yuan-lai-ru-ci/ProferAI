@@ -5,7 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
-import { join, resolve, sep } from 'node:path'
+import { join, resolve, sep, dirname } from 'node:path'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -1053,10 +1053,20 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     SCRATCH_PAD_IPC_CHANNELS.EXPORT,
     async (_, markdown: string, dirPath: string, filename: string): Promise<string> => {
-      if (!existsSync(dirPath)) {
-        mkdirSync(dirPath, { recursive: true })
+      let filePath: string
+      if (!filename) {
+        // 完整文件路径模式（来自保存对话框）
+        filePath = dirPath
+        const dir = dirname(filePath)
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true })
+        }
+      } else {
+        if (!existsSync(dirPath)) {
+          mkdirSync(dirPath, { recursive: true })
+        }
+        filePath = join(dirPath, filename)
       }
-      const filePath = join(dirPath, filename)
       writeFileSync(filePath, markdown, 'utf-8')
       console.log('[ScratchPad] 已导出:', filePath)
       return filePath

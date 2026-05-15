@@ -84,9 +84,8 @@ export function ScratchPadView(): React.ReactElement {
 
   const handleExport = React.useCallback(
     async (target: 'session' | 'workspace') => {
-      if (!editor) return
+      if (!editor || editor.isEmpty) return
       const html = editor.getHTML()
-      if (!html || html === '<p></p>') return
 
       const markdownContent = turndown.turndown(html)
       const filename = makeFilename()
@@ -108,22 +107,16 @@ export function ScratchPadView(): React.ReactElement {
   )
 
   const handleBrowseExport = React.useCallback(async () => {
-    if (!editor) return
-    const html = editor.getHTML()
-    if (!html || html === '<p></p>') return
+    if (!editor || editor.isEmpty) return
 
     const filename = makeFilename()
     const filePath = await window.electronAPI.chooseExportPath(filename)
     if (!filePath) return
 
     try {
-      const markdownContent = turndown.turndown(html)
-      // 从完整路径中分离目录和文件名
-      const sep = filePath.includes('\\') ? '\\' : '/'
-      const lastSep = filePath.lastIndexOf(sep)
-      const dirPath = filePath.slice(0, lastSep)
-      const chosenFilename = filePath.slice(lastSep + 1)
-      await window.electronAPI.exportScratchPad(markdownContent, dirPath, chosenFilename)
+      const markdownContent = turndown.turndown(editor.getHTML())
+      // 传空 filename 触发 IPC 的完整路径模式，由 Node.js path.dirname 安全处理
+      await window.electronAPI.exportScratchPad(markdownContent, filePath, '')
     } catch (err) {
       console.error('[ScratchPad] 导出失败:', err)
     }
