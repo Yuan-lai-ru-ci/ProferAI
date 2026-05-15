@@ -41,7 +41,7 @@ export function ScratchPadView(): React.ReactElement {
     if (loaded && editor && content) {
       editor.commands.setContent(content)
     }
-  }, [loaded, editor])
+  }, [loaded, editor, content])
 
   // 粘贴时自动将 Markdown 转为 HTML 插入
   React.useEffect(() => {

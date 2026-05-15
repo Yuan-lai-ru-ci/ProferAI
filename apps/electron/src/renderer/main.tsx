@@ -776,7 +776,9 @@ function ScratchPadPersistence(): null {
       const html = store.get(scratchPadContentAtom)
       if (window.electronAPI.saveScratchPad) {
         const md = htmlToMarkdown(html)
-        window.electronAPI.saveScratchPad(md).catch(console.error)
+        window.electronAPI.saveScratchPad(md).then((ok) => {
+          if (!ok) console.error('[ScratchPad] 保存失败')
+        }).catch(console.error)
       }
     }
 
