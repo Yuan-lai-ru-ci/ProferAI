@@ -1501,7 +1501,7 @@ export class AgentOrchestrator {
 
       console.log(`[Agent 编排] 开始通过 Adapter 遍历事件流...`)
 
-      // 14. 遍历 Adapter 产出的 AgentEvent 流（含自动重试 + Watchdog 死锁检测）
+      // 14. 遍历 Adapter 产出的 AgentEvent 流（含自动重试）
       let lastRetryableError: string | undefined
       let retryDelayElapsedMs = 0
       let retryAttemptsScheduled = 0
