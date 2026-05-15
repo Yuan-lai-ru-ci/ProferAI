@@ -80,7 +80,7 @@ export function ScratchPadView(): React.ReactElement {
 
   return (
     <div ref={containerRef} className="flex flex-col h-full">
-      <div className="flex-1 overflow-auto px-8 py-6">
+      <div className="flex-1 overflow-auto scrollbar-thin px-8 py-6">
         <div className="max-w-3xl mx-auto h-full">
           {loaded ? (
             <EditorContent
