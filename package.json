@@ -30,6 +30,8 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "jotai": "^2.17.1"
+    "@types/turndown": "^5.0.6",
+    "jotai": "^2.17.1",
+    "turndown": "^7.2.4"
   }
 }

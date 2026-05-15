@@ -10,10 +10,23 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import MarkdownIt from 'markdown-it'
+import TurndownService from 'turndown'
 import { useAtom, useAtomValue } from 'jotai'
-import { scratchPadContentAtom, scratchPadLoadedAtom } from '@/atoms/tab-atoms'
+import { FileDown } from 'lucide-react'
+import { scratchPadContentAtom, scratchPadLoadedAtom, tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
+import { currentAgentWorkspaceIdAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 
 const md = new MarkdownIt({ breaks: true, linkify: true })
+const turndown = new TurndownService()
 
 export function ScratchPadView(): React.ReactElement {
   const [content, setContent] = useAtom(scratchPadContentAtom)
@@ -39,6 +52,82 @@ export function ScratchPadView(): React.ReactElement {
     },
     immediatelyRender: false,
   })
+
+  // 导出目标上下文
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const tabs = useAtomValue(tabsAtom)
+  const activeTabId = useAtomValue(activeTabIdAtom)
+
+  const currentWorkspace = React.useMemo(
+    () => workspaces.find((w) => w.id === currentWorkspaceId) ?? null,
+    [workspaces, currentWorkspaceId],
+  )
+
+  const activeSessionId = React.useMemo(() => {
+    const activeTab = tabs.find((t) => t.id === activeTabId)
+    if (activeTab?.type === 'agent') return activeTab.sessionId
+    const agentTab = [...tabs].reverse().find((t) => t.type === 'agent')
+    return agentTab?.sessionId ?? null
+  }, [tabs, activeTabId])
+
+  const activeSessionTitle = React.useMemo(() => {
+    const agentTab = tabs.find((t) => t.sessionId === activeSessionId && t.type === 'agent')
+    return agentTab?.title ?? null
+  }, [tabs, activeSessionId])
+
+  const makeFilename = () => {
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `scratch-pad-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.md`
+  }
+
+  const handleExport = React.useCallback(
+    async (target: 'session' | 'workspace') => {
+      if (!editor) return
+      const html = editor.getHTML()
+      if (!html || html === '<p></p>') return
+
+      const markdownContent = turndown.turndown(html)
+      const filename = makeFilename()
+
+      try {
+        let dirPath: string | null = null
+        if (target === 'session' && activeSessionId && currentWorkspaceId) {
+          dirPath = await window.electronAPI.getAgentSessionPath(currentWorkspaceId, activeSessionId)
+        } else if (target === 'workspace' && currentWorkspace?.slug) {
+          dirPath = await window.electronAPI.getWorkspaceFilesPath(currentWorkspace.slug)
+        }
+        if (!dirPath) return
+        await window.electronAPI.exportScratchPad(markdownContent, dirPath, filename)
+      } catch (err) {
+        console.error('[ScratchPad] 导出失败:', err)
+      }
+    },
+    [editor, activeSessionId, currentWorkspaceId, currentWorkspace],
+  )
+
+  const handleBrowseExport = React.useCallback(async () => {
+    if (!editor) return
+    const html = editor.getHTML()
+    if (!html || html === '<p></p>') return
+
+    const filename = makeFilename()
+    const filePath = await window.electronAPI.chooseExportPath(filename)
+    if (!filePath) return
+
+    try {
+      const markdownContent = turndown.turndown(html)
+      // 从完整路径中分离目录和文件名
+      const sep = filePath.includes('\\') ? '\\' : '/'
+      const lastSep = filePath.lastIndexOf(sep)
+      const dirPath = filePath.slice(0, lastSep)
+      const chosenFilename = filePath.slice(lastSep + 1)
+      await window.electronAPI.exportScratchPad(markdownContent, dirPath, chosenFilename)
+    } catch (err) {
+      console.error('[ScratchPad] 导出失败:', err)
+    }
+  }, [editor])
 
   // 仅在初始加载或编辑器重新挂载时同步内容到编辑器。
   // content 不加入 deps：用户每次输入都会更新 atom，若加入 deps 会导致
@@ -94,10 +183,53 @@ export function ScratchPadView(): React.ReactElement {
           )}
         </div>
       </div>
-      <div className="h-[28px] border-t border-border/40 px-4 flex items-center">
+      <div className="h-[28px] border-t border-border/40 px-4 flex items-center justify-between">
         <span className="text-[11px] text-muted-foreground/60">
           Scratch Pad — 内容自动保存到本地
         </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="text-[11px] text-muted-foreground/60 hover:text-foreground flex items-center gap-1 transition-colors"
+              title="导出为 Markdown"
+            >
+              <FileDown className="w-3 h-3" />
+              导出
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuPortal>
+          <DropdownMenuContent align="end" side="top" className="min-w-[240px] z-[9999]">
+            <DropdownMenuLabel className="text-[11px] text-muted-foreground font-normal">
+              导出为 Markdown
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => handleExport('session')}
+              disabled={!activeSessionId}
+              className="flex flex-col items-start"
+            >
+              <span className="text-xs">保存到会话目录</span>
+              <span className="text-[10px] text-muted-foreground">
+                {activeSessionTitle ?? '无活跃会话'}
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => handleExport('workspace')}
+              disabled={!currentWorkspace}
+              className="flex flex-col items-start"
+            >
+              <span className="text-xs">保存到工作区目录</span>
+              <span className="text-[10px] text-muted-foreground">
+                {currentWorkspace?.name ?? '无当前工作区'}
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={handleBrowseExport}>
+              浏览选择位置...
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+          </DropdownMenuPortal>
+        </DropdownMenu>
       </div>
     </div>
   )
