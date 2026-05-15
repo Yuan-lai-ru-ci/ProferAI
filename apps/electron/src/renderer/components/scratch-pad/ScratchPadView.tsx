@@ -20,6 +20,10 @@ export function ScratchPadView(): React.ReactElement {
   const loaded = useAtomValue(scratchPadLoadedAtom)
   const containerRef = React.useRef<HTMLDivElement>(null)
 
+  // 用 ref 追踪最新内容，避免在 useEffect deps 里包含 content 导致循环
+  const contentRef = React.useRef(content)
+  contentRef.current = content
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -36,12 +40,18 @@ export function ScratchPadView(): React.ReactElement {
     immediatelyRender: false,
   })
 
-  // 内容从磁盘加载或编辑器重新挂载（切 tab 回来）时同步
+  // 仅在初始加载或编辑器重新挂载时同步内容到编辑器。
+  // content 不加入 deps：用户每次输入都会更新 atom，若加入 deps 会导致
+  // setContent → onUpdate → atom 变化 → setContent 死循环，
+  // HTML 规范化解析会吞掉尾部空格和空段落，并重置光标位置。
   React.useEffect(() => {
-    if (loaded && editor && content) {
-      editor.commands.setContent(content)
+    if (!loaded || !editor) return
+    const latestContent = contentRef.current
+    if (latestContent && editor.getHTML() !== latestContent) {
+      editor.commands.setContent(latestContent)
     }
-  }, [loaded, editor, content])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, editor])
 
   // 粘贴时自动将 Markdown 转为 HTML 插入
   React.useEffect(() => {
@@ -75,7 +85,7 @@ export function ScratchPadView(): React.ReactElement {
           {loaded ? (
             <EditorContent
               editor={editor}
-              className="prose prose-sm dark:prose-invert max-w-none h-full [&_.ProseMirror]:min-h-[200px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-sm [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground/50 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
+              className="prose prose-sm dark:prose-invert max-w-none h-full [&_.ProseMirror]:min-h-full [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-sm [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground/50 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
             />
           ) : (
             <div className="min-h-[200px] flex items-center justify-center">
