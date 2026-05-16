@@ -36,7 +36,6 @@ app.on('second-instance', (_event, argv) => {
 })
 
 import { getSettings } from './lib/settings-service'
-import { resolveOverlayColors } from './lib/titlebar-overlay'
 import { handlePromaFileRequest } from './lib/local-file-protocol'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
@@ -233,17 +232,7 @@ function createWindow(): void {
         visualEffectState: 'followWindow' as const,
       }
     : isWindows
-      ? (() => {
-          const settings = getSettings()
-          return {
-            titleBarStyle: 'hidden' as const,
-            titleBarOverlay: resolveOverlayColors(
-              settings.themeMode,
-              settings.themeStyle,
-              nativeTheme.shouldUseDarkColors
-            ),
-          }
-        })()
+      ? { titleBarStyle: 'hidden' as const }
       : {}
 
   mainWindow = new BrowserWindow({
