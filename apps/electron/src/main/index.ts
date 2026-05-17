@@ -26,6 +26,12 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'proma-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ])
 
+// Windows: 禁用 LCD 次像素抗锯齿（ClearType），改用灰度 AA。
+// ClearType 是为浅色背景+深色文字设计的，在深色代码块背景下会产生彩色边缘，导致文字模糊。
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-lcd-text')
+}
+
 // Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例
 app.on('second-instance', (_event, argv) => {
   showAndFocusMainWindow()
