@@ -6,7 +6,55 @@
 
 import { execSync, spawnSync } from 'child_process'
 import { existsSync } from 'fs'
+import { join } from 'path'
 import type { NodeRuntimeStatus } from '@proma/shared'
+
+/**
+ * 从 Windows 注册表读取 Node.js 安装路径
+ *
+ * @returns Node.js 安装目录路径，失败返回 null
+ */
+function getNodePathFromRegistry(): string | null {
+  if (process.platform !== 'win32') return null
+
+  try {
+    // 尝试从 HKLM（系统级安装）读取
+    const hklmOutput = execSync(
+      'reg query "HKLM\\SOFTWARE\\Node.js" /v InstallPath',
+      {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
+
+    const match = hklmOutput.match(/InstallPath\s+REG_\w+\s+(.+)/)
+    if (match?.[1]) {
+      return match[1].trim()
+    }
+  } catch {
+    // HKLM 失败，尝试 HKCU（用户级安装）
+    try {
+      const hkcuOutput = execSync(
+        'reg query "HKCU\\SOFTWARE\\Node.js" /v InstallPath',
+        {
+          encoding: 'utf-8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      )
+
+      const match = hkcuOutput.match(/InstallPath\s+REG_\w+\s+(.+)/)
+      if (match?.[1]) {
+        return match[1].trim()
+      }
+    } catch {
+      // 注册表读取失败，可能不是官方安装器安装
+    }
+  }
+
+  return null
+}
 
 /**
  * 从系统 PATH 查找 Node.js
@@ -32,12 +80,45 @@ function findNodePath(): string | null {
     // Node.js 未安装
   }
 
-  // Windows 上额外检查常见安装位置
+  // Windows 上额外检查其他安装位置
   if (process.platform === 'win32') {
-    const commonPaths = [
-      'C:\\Program Files\\nodejs\\node.exe',
+    const commonPaths: string[] = []
+
+    // 从注册表读取 Node.js 安装路径
+    const regInstallPath = getNodePathFromRegistry()
+    if (regInstallPath) {
+      commonPaths.push(join(regInstallPath, 'node.exe'))
+    }
+
+    // 常见包管理器的默认安装位置
+    const scoop = process.env.SCOOP
+    const localAppData = process.env.LOCALAPPDATA
+    const programFiles = process.env.ProgramFiles || 'C:\\Program Files'
+
+    if (scoop) {
+      commonPaths.push(
+        join(scoop, 'apps', 'nodejs', 'current', 'node.exe'),
+        join(scoop, 'apps', 'nodejs-lts', 'current', 'node.exe'),
+        join(scoop, 'shims', 'node.exe'),
+      )
+    }
+    if (localAppData) {
+      commonPaths.push(
+        join(localAppData, 'scoop', 'apps', 'nodejs', 'current', 'node.exe'),
+        join(localAppData, 'scoop', 'apps', 'nodejs-lts', 'current', 'node.exe'),
+      )
+    }
+
+    // Chocolatey 默认位置
+    commonPaths.push(
+      'C:\\ProgramData\\chocolatey\\bin\\node.exe',
+    )
+
+    // 官方安装器默认位置
+    commonPaths.push(
+      join(programFiles, 'nodejs', 'node.exe'),
       'C:\\Program Files (x86)\\nodejs\\node.exe',
-    ]
+    )
 
     for (const path of commonPaths) {
       if (existsSync(path)) {
