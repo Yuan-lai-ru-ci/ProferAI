@@ -19,9 +19,11 @@ import type { GitBashStatus } from '@proma/shared'
 import { getGitForWindowsInstallPath } from './windows-env'
 
 /**
- * Git for Windows 常见安装路径
+ * 获取 Git for Windows 常见安装路径列表
+ *
+ * 在调用时读取 process.env，确保 loadWindowsEnv() 已执行后路径完整。
  */
-const COMMON_GIT_BASH_PATHS: string[] = (() => {
+function getCommonGitBashPaths(): string[] {
   const paths: string[] = []
   const scoop = process.env.SCOOP
   const localAppData = process.env.LOCALAPPDATA
@@ -50,7 +52,7 @@ const COMMON_GIT_BASH_PATHS: string[] = (() => {
   )
 
   return paths
-})()
+}
 
 /**
  * 验证 bash.exe 路径并获取版本
@@ -135,7 +137,7 @@ export async function detectGitBash(): Promise<GitBashStatus> {
   }
 
   // 策略 1：检查常见安装路径
-  for (const path of COMMON_GIT_BASH_PATHS) {
+  for (const path of getCommonGitBashPaths()) {
     const version = verifyBashPath(path)
     if (version) {
       console.log(`[Git Bash 检测] 找到 Git Bash (常见路径): ${path} (${version})`)

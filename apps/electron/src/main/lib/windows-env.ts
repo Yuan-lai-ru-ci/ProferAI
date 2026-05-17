@@ -40,7 +40,7 @@ export function readRegistryValue(key: string, valueName: string): string | null
     )
 
     const escaped = valueName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const match = output.match(new RegExp(`${escaped}\\s+REG_\\w+\\s+(.+)`))
+    const match = output.match(new RegExp(`${escaped}\\s+REG_\\w+\\s+(.+)`, 'i'))
     return match?.[1]?.trim() || null
   } catch {
     return null
@@ -61,6 +61,25 @@ export function getGitForWindowsInstallPath(): string | null {
 
   // HKCU
   path = readRegistryValue('HKCU\\SOFTWARE\\GitForWindows', 'InstallPath')
+  return path
+}
+
+/**
+ * 从注册表读取 Node.js 安装路径
+ *
+ * 检测顺序：HKLM（系统级） → HKCU（用户级）
+ *
+ * @returns Node.js 安装目录路径，失败返回 null
+ */
+export function getNodeInstallPathFromRegistry(): string | null {
+  if (process.platform !== 'win32') return null
+
+  // HKLM
+  let path = readRegistryValue('HKLM\\SOFTWARE\\Node.js', 'InstallPath')
+  if (path) return path
+
+  // HKCU
+  path = readRegistryValue('HKCU\\SOFTWARE\\Node.js', 'InstallPath')
   return path
 }
 
