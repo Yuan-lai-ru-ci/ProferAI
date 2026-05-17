@@ -306,6 +306,9 @@
   }
   body {
     @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 }
 
@@ -716,8 +719,12 @@
 }
 
 .code-block-wrapper pre.shiki {
-  font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  /* Cascadia Code 是 Windows 11 预装字体，优先级提高；Courier New 作为 Windows 10 最终兜底 */
+  font-family: 'Fira Code', 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
   background-color: hsl(var(--code-bg)) !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .code-block-wrapper pre.shiki code {
