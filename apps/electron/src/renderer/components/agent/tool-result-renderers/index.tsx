@@ -17,7 +17,6 @@ import { WebFetchResultRenderer } from './web-fetch-result'
 import { TaskGetResultRenderer } from './task-get-result'
 import { TaskListResultRenderer } from './task-list-result'
 import { DefaultResultRenderer } from './default-result'
-import type { TaskItem } from '../task-progress'
 
 export interface ToolResultRendererProps {
   toolName: string
@@ -25,10 +24,9 @@ export interface ToolResultRendererProps {
   result: string
   isError: boolean
   basePath?: string
-  latestTaskItems?: TaskItem[]
 }
 
-export function ToolResultRenderer({ toolName, input, result, isError, basePath, latestTaskItems }: ToolResultRendererProps): React.ReactElement {
+export function ToolResultRenderer({ toolName, input, result, isError, basePath }: ToolResultRendererProps): React.ReactElement {
   switch (toolName) {
     case 'Bash':
       return <BashResultRenderer result={result} isError={isError} input={input} />
@@ -49,7 +47,7 @@ export function ToolResultRenderer({ toolName, input, result, isError, basePath,
     case 'TaskGet':
       return <TaskGetResultRenderer result={result} isError={isError} />
     case 'TaskList':
-      return <TaskListResultRenderer result={result} isError={isError} latestTaskItems={latestTaskItems} />
+      return <TaskListResultRenderer result={result} isError={isError} />
     default:
       return <DefaultResultRenderer result={result} isError={isError} />
   }

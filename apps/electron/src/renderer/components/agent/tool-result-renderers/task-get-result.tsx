@@ -184,9 +184,9 @@ function statusMeta(status: string | undefined): {
 }
 
 export function TaskGetResultRenderer({ result, isError }: TaskGetResultRendererProps): React.ReactElement {
-  if (isError) return <DefaultResultRenderer result={result} isError />
-
   const task = React.useMemo(() => parseTaskGetResult(result), [result])
+
+  if (isError) return <DefaultResultRenderer result={result} isError />
   if (!task) return <DefaultResultRenderer result={result} isError={false} />
 
   const meta = statusMeta(task.status)

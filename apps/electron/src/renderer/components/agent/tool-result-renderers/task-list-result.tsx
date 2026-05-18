@@ -6,12 +6,10 @@ import * as React from 'react'
 import { CheckCircle2, Circle, Clock3, ListTodo, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DefaultResultRenderer } from './default-result'
-import type { TaskItem } from '../task-progress'
 
 interface TaskListResultRendererProps {
   result: string
   isError: boolean
-  latestTaskItems?: TaskItem[]
 }
 
 export interface ParsedTaskListItem {
@@ -80,38 +78,6 @@ export function parseTaskListResult(text: string): ParsedTaskListItem[] | null {
   return parseJsonTaskList(trimmed) ?? parseTextTaskList(trimmed)
 }
 
-function normalizeTaskId(id: string): string {
-  return id.trim().replace(/^#/, '')
-}
-
-function isPlaceholderSubject(subject: string, taskId: string): boolean {
-  const normalized = normalizeTaskId(taskId)
-  return subject === `任务 #${taskId}` || subject === `任务 #${normalized}`
-}
-
-export function mergeTaskListWithLatestItems(
-  tasks: ParsedTaskListItem[],
-  latestTaskItems: TaskItem[] | undefined,
-): ParsedTaskListItem[] {
-  if (!latestTaskItems || latestTaskItems.length === 0) return tasks
-
-  const latestById = new Map<string, TaskItem>()
-  for (const item of latestTaskItems) {
-    latestById.set(normalizeTaskId(item.id), item)
-  }
-
-  return tasks.map((task) => {
-    const latest = latestById.get(normalizeTaskId(task.id))
-    if (!latest) return task
-
-    return {
-      ...task,
-      status: latest.status,
-      subject: isPlaceholderSubject(latest.subject, latest.id) ? task.subject : latest.subject,
-    }
-  })
-}
-
 function statusMeta(status: string): {
   label: string
   className: string
@@ -159,13 +125,10 @@ function statusMeta(status: string): {
   }
 }
 
-export function TaskListResultRenderer({ result, isError, latestTaskItems }: TaskListResultRendererProps): React.ReactElement {
-  if (isError) return <DefaultResultRenderer result={result} isError />
+export function TaskListResultRenderer({ result, isError }: TaskListResultRendererProps): React.ReactElement {
+  const tasks = React.useMemo(() => parseTaskListResult(result), [result])
 
-  const tasks = React.useMemo(() => {
-    const parsed = parseTaskListResult(result)
-    return parsed ? mergeTaskListWithLatestItems(parsed, latestTaskItems) : null
-  }, [result, latestTaskItems])
+  if (isError) return <DefaultResultRenderer result={result} isError />
   if (!tasks) return <DefaultResultRenderer result={result} isError={false} />
 
   const completedCount = tasks.filter((task) => task.status === 'completed').length

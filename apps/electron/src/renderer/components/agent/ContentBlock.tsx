@@ -26,8 +26,8 @@ import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
+import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
 import { formatDuration } from './AgentMessages'
-import type { TaskItem } from './task-progress'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -207,8 +207,6 @@ export interface ContentBlockProps {
   dimmed?: boolean
   /** 子代理的内容块（Agent/Task 工具调用的嵌套子块） */
   childBlocks?: SDKContentBlock[]
-  /** 当前 turn 中 task 工具聚合出的最新状态，用于修正只读任务查询的快照延迟 */
-  latestTaskItems?: TaskItem[]
   /** 是否正在流式输出中（仅流式中的未完成工具调用才显示 spinner） */
   isStreaming?: boolean
 }
@@ -311,6 +309,31 @@ function TaskGetCollapsedSummary({ task }: { task: ParsedTaskGetResult }): React
   )
 }
 
+function TaskListCollapsedSummary({ tasks }: { tasks: ParsedTaskListItem[] }): React.ReactElement {
+  const completedCount = tasks.filter((task) => task.status === 'completed').length
+  const activeCount = tasks.filter((task) => task.status === 'in_progress').length
+  const pendingCount = tasks.filter((task) => task.status === 'pending').length
+
+  return (
+    <>
+      <span className="shrink-0 text-muted-foreground/35">·</span>
+      <span className="shrink-0 rounded-full bg-muted/50 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground/75">
+        {completedCount}/{tasks.length} 已完成
+      </span>
+      {activeCount > 0 && (
+        <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+          {activeCount} 进行中
+        </span>
+      )}
+      {pendingCount > 0 && (
+        <span className="hidden shrink-0 rounded-full bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground/65 sm:inline">
+          {pendingCount} 待处理
+        </span>
+      )}
+    </>
+  )
+}
+
 // ===== 工具调用块 =====
 
 interface ToolUseBlockProps {
@@ -321,21 +344,23 @@ interface ToolUseBlockProps {
   dimmed?: boolean
   childBlocks?: SDKContentBlock[]
   basePath?: string
-  latestTaskItems?: TaskItem[]
   /** 是否正在流式输出中 */
   isStreaming?: boolean
 }
 
-function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, latestTaskItems, isStreaming }: ToolUseBlockProps): React.ReactElement {
+function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, isStreaming }: ToolUseBlockProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const toolResult = useToolResult(block.id, allMessages)
   const resultText = toolResult?.result
   const isError = toolResult?.isError === true
-  const isInlineResultTool = block.name === 'TaskList'
   const shouldShowResult = !!resultText
   const taskGetSummary = React.useMemo(() => {
     if (block.name !== 'TaskGet' || !resultText || isError) return null
     return parseTaskGetResult(resultText)
+  }, [block.name, resultText, isError])
+  const taskListSummary = React.useMemo(() => {
+    if (block.name !== 'TaskList' || !resultText || isError) return null
+    return parseTaskListResult(resultText)
   }, [block.name, resultText, isError])
   const isAgentTool = block.name === 'Agent' || block.name === 'Task'
   const hasChildren = isAgentTool && childBlocks && childBlocks.length > 0
@@ -431,7 +456,6 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
                 animate={animate}
                 index={ci}
                 dimmed
-                latestTaskItems={latestTaskItems}
                 isStreaming={isStreaming}
               />
             ))}
@@ -471,9 +495,9 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         type="button"
         className={cn(
           'flex w-full max-w-full items-center gap-2 py-0.5 text-left transition-opacity group',
-          isInlineResultTool ? 'cursor-default' : 'hover:opacity-70',
+          'hover:opacity-70',
         )}
-        onClick={isInlineResultTool ? undefined : () => setExpanded(!expanded)}
+        onClick={() => setExpanded(!expanded)}
       >
         {!isCompleted && isStreaming ? (
           <Loader2 className="size-3.5 animate-spin text-primary/50 shrink-0" />
@@ -485,7 +509,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
 
         <span className={cn(
           'truncate text-[14px]',
-          taskGetSummary ? 'shrink-0' : 'min-w-0 flex-1',
+          taskGetSummary || taskListSummary ? 'shrink-0' : 'min-w-0 flex-1',
           dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground',
         )}>{renderLabelWithDiffColors(displayLabel, block.name)}</span>
 
@@ -495,25 +519,27 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           </span>
         )}
 
-        {!isInlineResultTool && (
-          <ChevronRight
-            className={cn(
-              'ml-auto shrink-0 size-3 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-all duration-150',
-              expanded && 'rotate-90 opacity-100',
-            )}
-          />
+        {taskListSummary && (
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <TaskListCollapsedSummary tasks={taskListSummary} />
+          </span>
         )}
+
+        <ChevronRight
+          className={cn(
+            'ml-auto shrink-0 size-3 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-all duration-150',
+            expanded && 'rotate-90 opacity-100',
+          )}
+        />
 
         {isPreviewable && (
           <PreviewOpenButton filePath={filePath} expanded={expanded} />
         )}
       </button>
 
-      {shouldShowResult && resultText && (expanded || isInlineResultTool) && (
+      {shouldShowResult && resultText && expanded && (
         <div className={cn(
-          isInlineResultTool
-            ? 'mt-1 mb-2 w-full'
-            : 'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
+          'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
           animate && 'animate-in fade-in slide-in-from-top-1 duration-150',
         )}>
           <ToolResultRenderer
@@ -522,7 +548,6 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
             result={resultText}
             isError={isError}
             basePath={basePath}
-            latestTaskItems={latestTaskItems}
           />
         </div>
       )}
@@ -623,7 +648,7 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
 
 // ===== ContentBlock 主组件 =====
 
-export function ContentBlock({ block, allMessages, basePath, animate = false, index = 0, dimmed = false, childBlocks, latestTaskItems, isStreaming }: ContentBlockProps): React.ReactElement | null {
+export function ContentBlock({ block, allMessages, basePath, animate = false, index = 0, dimmed = false, childBlocks, isStreaming }: ContentBlockProps): React.ReactElement | null {
   // text 块 — 主要内容，不受 dimmed 影响
   if (block.type === 'text') {
     const textBlock = block as SDKTextBlock
@@ -645,7 +670,6 @@ export function ContentBlock({ block, allMessages, basePath, animate = false, in
         dimmed={dimmed}
         childBlocks={childBlocks}
         basePath={basePath}
-        latestTaskItems={latestTaskItems}
         isStreaming={isStreaming}
       />
     )

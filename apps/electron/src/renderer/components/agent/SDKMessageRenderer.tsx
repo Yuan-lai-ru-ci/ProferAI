@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
-import { aggregateTaskItems, extractToolResultText, parseTaskCreateResult, TASK_TOOL_NAMES } from './task-progress'
+import { extractToolResultText, parseTaskCreateResult, TASK_TOOL_NAMES } from './task-progress'
 import { DurationBadge } from './AgentMessages'
 import {
   Message,
@@ -537,10 +537,6 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     return buildTaskProgressData(topLevelBlocks, turn.turnMessages, allMessages)
   }, [topLevelBlocks, turn.turnMessages, allMessages])
 
-  const latestTaskItemsForToolResults = React.useMemo(() => {
-    return aggregateTaskItems(taskActivities, false, historicalTaskSubjects)
-  }, [taskActivities, historicalTaskSubjects])
-
   // 如果只有错误消息
   if (enrichedBlocks.length === 0 && hasError && errorContent) {
     return (
@@ -590,7 +586,6 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                   index={i}
                   dimmed={hasTextContent && block.type !== 'text'}
                   childBlocks={childBlocks}
-                  latestTaskItems={latestTaskItemsForToolResults}
                   isStreaming={isStreaming}
                 />
               )
