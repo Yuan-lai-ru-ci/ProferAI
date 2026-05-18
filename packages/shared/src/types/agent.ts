@@ -1121,21 +1121,14 @@ export const PROMA_PERMISSION_MODE_CONFIG = {
 /** 权限模式定义顺序（用于循环切换） */
 export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = PROMA_PERMISSION_MODES
 
-/** 旧版权限模式迁移表。不要把这些旧值重新暴露为当前产品模式。 */
-export const PROMA_LEGACY_PERMISSION_MODE_MIGRATIONS: Readonly<Record<string, PromaPermissionMode>> = {
-  acceptEdits: 'auto',
-  smart: 'auto',
-  supervised: 'auto',
-}
-
 export function isPromaPermissionMode(mode: string): mode is PromaPermissionMode {
   return (PROMA_PERMISSION_MODES as readonly string[]).includes(mode)
 }
 
-/** 迁移旧权限模式值到新模式 */
+/** 规范化权限模式：不匹配当前三种模式时统一回到默认自动审批 */
 export function migratePermissionMode(mode: string): PromaPermissionMode {
   if (isPromaPermissionMode(mode)) return mode
-  return PROMA_LEGACY_PERMISSION_MODE_MIGRATIONS[mode] ?? PROMA_DEFAULT_PERMISSION_MODE
+  return PROMA_DEFAULT_PERMISSION_MODE
 }
 
 /** 危险等级 */
