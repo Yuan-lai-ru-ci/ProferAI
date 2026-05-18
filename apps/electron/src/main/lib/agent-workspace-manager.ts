@@ -760,7 +760,8 @@ function resolveSkillChildPath(skillDir: string, relativePath: string, opts: { a
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error('非法路径：禁止访问 Skill 目录外')
   }
-  if (!opts.allowSkillMd && rel.split(/[\\/]/).join('/') === 'SKILL.md') {
+  // 用 lowercase 比较，避免 macOS/Windows 的大小写不敏感文件系统上 skill.md/Skill.MD 绕过保护
+  if (!opts.allowSkillMd && rel.split(/[\\/]/).join('/').toLowerCase() === 'skill.md') {
     throw new Error('SKILL.md 由专用接口管理，请通过 readWorkspaceSkillContent / writeWorkspaceSkillContent')
   }
   return resolved
@@ -862,6 +863,11 @@ export function writeSkillFile(workspaceSlug: string, skillSlug: string, relativ
   const dir = resolveSkillDir(workspaceSlug, skillSlug)
   if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
   const abs = resolveSkillChildPath(dir, relativePath)
+
+  const byteLen = Buffer.byteLength(content, 'utf-8')
+  if (byteLen > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
 
   if (existsSync(abs) && statSync(abs).isDirectory()) {
     throw new Error(`目标是目录，无法写入文件内容: ${relativePath}`)
