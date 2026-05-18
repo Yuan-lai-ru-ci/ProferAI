@@ -196,6 +196,12 @@ import {
   readWorkspaceSkillContent,
   writeWorkspaceSkillContent,
   toggleWorkspaceSkill,
+  listSkillFiles,
+  readSkillFile,
+  writeSkillFile,
+  createSkillEntry,
+  deleteSkillEntry,
+  renameSkillEntry,
   getWorkspaceAttachedDirectories,
   getWorkspaceAttachedFiles,
   attachWorkspaceDirectory,
@@ -1528,6 +1534,50 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
     async (_, workspaceSlug: string, skillSlug: string, content: string): Promise<void> => {
       writeWorkspaceSkillContent(workspaceSlug, skillSlug, content)
+    }
+  )
+
+  // ===== Skill 子文件管理 =====
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_SKILL_FILES,
+    async (_, workspaceSlug: string, skillSlug: string) => {
+      return listSkillFiles(workspaceSlug, skillSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_SKILL_FILE,
+    async (_, workspaceSlug: string, skillSlug: string, relativePath: string) => {
+      return readSkillFile(workspaceSlug, skillSlug, relativePath)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_SKILL_FILE,
+    async (_, workspaceSlug: string, skillSlug: string, relativePath: string, content: string): Promise<void> => {
+      writeSkillFile(workspaceSlug, skillSlug, relativePath, content)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CREATE_SKILL_ENTRY,
+    async (_, workspaceSlug: string, skillSlug: string, relativePath: string, type: 'file' | 'directory'): Promise<void> => {
+      createSkillEntry(workspaceSlug, skillSlug, relativePath, type)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.DELETE_SKILL_ENTRY,
+    async (_, workspaceSlug: string, skillSlug: string, relativePath: string): Promise<void> => {
+      deleteSkillEntry(workspaceSlug, skillSlug, relativePath)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RENAME_SKILL_ENTRY,
+    async (_, workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string): Promise<void> => {
+      renameSkillEntry(workspaceSlug, skillSlug, fromRelative, toRelative)
     }
   )
 
