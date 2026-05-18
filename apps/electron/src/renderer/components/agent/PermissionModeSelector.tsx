@@ -23,7 +23,7 @@ const MODE_CONFIG: Record<PromaPermissionMode, {
 }> = {
   auto: {
     icon: Compass,
-    label: '自动模式',
+    label: '自动审批',
     description: 'SDK 内置审批器自动判断，危险操作才需确认',
   },
   bypassPermissions: {
@@ -51,7 +51,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
 
   // 初始化：如果当前 session 不在 Map 中，按以下优先级读回：
   // 1. session meta.permissionMode（每个 tab 独立持久化，重启恢复各自的值）
-  // 2. 默认完全自动模式
+  // 2. 默认自动审批
   // 注意：只写入当前 session，不回写到 agentDefaultPermissionModeAtom，避免跨会话污染。
   React.useEffect(() => {
     if (!sessionExistsInList) return
@@ -102,6 +102,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
             type="button"
             variant="ghost"
             size="icon"
+            aria-label={config.label}
             onClick={() => { cycleMode(); requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus()) }}
             className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
           >
@@ -109,7 +110,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-[200px]">
-          <p className="font-medium">{config.label}模式</p>
+          <p className="font-medium">{config.label}</p>
           <p className="text-xs text-muted-foreground mt-0.5">{config.description}</p>
           <p className="text-xs text-muted-foreground mt-1">点击切换模式</p>
         </TooltipContent>

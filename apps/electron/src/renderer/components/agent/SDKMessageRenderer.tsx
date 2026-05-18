@@ -88,6 +88,44 @@ function CompactBoundaryDivider(): React.ReactElement {
   )
 }
 
+function formatSystemToolName(toolName: string): string {
+  const parts = toolName.split('__')
+  if (parts[0] === 'mcp' && parts.length >= 3) {
+    return `${parts[1]} / ${parts.slice(2).join('__')}`
+  }
+  return toolName
+}
+
+function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
+  const toolName = typeof message.tool_name === 'string' ? formatSystemToolName(message.tool_name) : undefined
+  const denialMessage = typeof message.message === 'string' ? message.message : undefined
+  const reason = typeof message.decision_reason === 'string' ? message.decision_reason : undefined
+
+  return (
+    <div className="my-3 px-1">
+      <div className="flex items-start gap-2.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-foreground/80">
+        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-foreground">自动审批已拒绝操作</span>
+            {toolName && (
+              <span className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                {toolName}
+              </span>
+            )}
+          </div>
+          {denialMessage && (
+            <p className="break-words text-muted-foreground">{denialMessage}</p>
+          )}
+          {reason && reason !== denialMessage && (
+            <p className="break-words text-muted-foreground/70">{reason}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ===== system 消息：正在压缩指示器（与 CompactBoundaryDivider 同款横线样式，pill 内带 spinner） =====
 
 export function CompactingIndicator(): React.ReactElement {
@@ -234,7 +272,7 @@ export type MessageGroup =
  * 规则：
  * 1. user（真正用户输入）→ 单独的 user group
  * 2. assistant + user(tool_result) + assistant... → 合并为一个 assistant-turn
- * 3. system（compact_boundary / compacting）→ 独立渲染，其他归入当前 turn
+ * 3. system（compact_boundary / compacting / permission_denied）→ 独立渲染，其他归入当前 turn
  * 4. 其他类型（result, tool_progress 等）→ 归入当前 assistant-turn
  * 5. 后处理：合并相邻同模型的 assistant-turn（处理子代理切换模型导致的碎片化）
  */
@@ -284,9 +322,9 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       }
     } else if (msg.type === 'system') {
       const sysMsg = msg as SDKSystemMessage
-      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting）
+      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting') {
+      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (currentTurn) {
@@ -331,7 +369,7 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
     for (let i = result.length - 1; i >= 0; i--) {
       const prev = result[i]!
       if (prev.type === 'user') break // 真正的用户输入阻断合并
-      if (prev.type === 'system' && (prev.message as SDKSystemMessage).subtype === 'compact_boundary') break // 压缩边界阻断合并
+      if (prev.type === 'system' && ['compact_boundary', 'permission_denied'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
       if (prev.type === 'assistant-turn') {
         if (prev.model === group.model) {
           mergeTargetIdx = i
@@ -716,6 +754,9 @@ export function SDKMessageRenderer({
 
     if (subtype === 'compact_boundary') {
       return <CompactBoundaryDivider />
+    }
+    if (subtype === 'permission_denied') {
+      return <PermissionDeniedNotice message={sysMsg} />
     }
 
     // compacting 事件已由 isCompacting flag 驱动的尾部指示器接管（见 AgentMessages），此处不再渲染持久条目
@@ -1145,6 +1186,7 @@ export function getGroupPreview(group: MessageGroup): string {
   if (group.type === 'system') {
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
+    if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
     return ''
   }
   // assistant-turn：收集所有 text 块
@@ -1176,6 +1218,7 @@ export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onR
     const subtype = group.message.subtype
     if (subtype === 'compact_boundary') return <div data-message-id={groupId}><CompactBoundaryDivider /></div>
     if (subtype === 'compacting') return <div data-message-id={groupId}><CompactingIndicator /></div>
+    if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
     return null
   }
 

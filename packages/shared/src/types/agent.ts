@@ -250,7 +250,7 @@ export interface SDKResultMessage {
   session_id?: string
 }
 
-/** SDK system 消息（init / compact_boundary / task_started / task_progress / task_notification） */
+/** SDK system 消息（init / compact_boundary / permission_denied / task_started / task_progress / task_notification） */
 export interface SDKSystemMessage {
   type: 'system'
   subtype?: string
@@ -266,6 +266,11 @@ export interface SDKSystemMessage {
   summary?: string
   output_file?: string
   last_tool_name?: string
+  /** permission_denied 相关字段 */
+  tool_name?: string
+  message?: string
+  decision_reason_type?: string
+  decision_reason?: string
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
   [key: string]: unknown
 }
@@ -556,7 +561,7 @@ export interface AgentSessionMeta {
   manualWorking?: boolean
   /** 最后一次流式执行是否被用户主动中断 */
   stoppedByUser?: boolean
-  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 bypassPermissions */
+  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: PromaPermissionMode
   /** 创建时间戳 */
   createdAt: number
@@ -1118,6 +1123,10 @@ export interface PermissionRequest {
   dangerLevel: DangerLevel
   /** SDK 提供的原因说明 */
   decisionReason?: string
+  /** SDK 提供的原因分类，如 classifier / safetyCheck / rule */
+  decisionReasonType?: string
+  /** SDK auto safety check 是否允许交给 classifier 审批 */
+  classifierApprovable?: boolean
   /** SDK 提供的工具显示名称，如 "Write" */
   sdkDisplayName?: string
   /** SDK 提供的操作标题，如 "Write to /path/to/file.ts" */

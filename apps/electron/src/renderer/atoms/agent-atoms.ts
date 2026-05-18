@@ -289,7 +289,7 @@ export const RECENTLY_MODIFIED_TTL_MS = 60_000
 // ===== 权限系统 Atoms =====
 
 /** 新会话默认权限模式 */
-export const agentDefaultPermissionModeAtom = atom<PromaPermissionMode>('bypassPermissions')
+export const agentDefaultPermissionModeAtom = atom<PromaPermissionMode>('auto')
 
 /** Per-session 权限模式 Map — sessionId → PromaPermissionMode */
 export const agentPermissionModeMapAtom = atom<Map<string, PromaPermissionMode>>(new Map())
