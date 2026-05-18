@@ -33,24 +33,22 @@ interface SkillFilesPanelProps {
   onFileCountChange?: (count: number) => void
 }
 
-function countFiles(nodes: SkillFileNode[]): number {
-  let n = 0
+function countTree(nodes: SkillFileNode[]): { files: number; dirs: number } {
+  let files = 0
+  let dirs = 0
   for (const node of nodes) {
-    if (node.type === 'file') n += 1
-    else if (node.children) n += countFiles(node.children)
-  }
-  return n
-}
-
-function countDirs(nodes: SkillFileNode[]): number {
-  let n = 0
-  for (const node of nodes) {
-    if (node.type === 'directory') {
-      n += 1
-      if (node.children) n += countDirs(node.children)
+    if (node.type === 'file') {
+      files += 1
+    } else {
+      dirs += 1
+      if (node.children) {
+        const sub = countTree(node.children)
+        files += sub.files
+        dirs += sub.dirs
+      }
     }
   }
-  return n
+  return { files, dirs }
 }
 
 export function SkillFilesPanel({ workspaceSlug, skillSlug, onFileCountChange }: SkillFilesPanelProps): React.ReactElement {
@@ -76,7 +74,7 @@ export function SkillFilesPanel({ workspaceSlug, skillSlug, onFileCountChange }:
     try {
       const nodes = await window.electronAPI.listSkillFiles(workspaceSlug, skillSlug)
       setTree(nodes)
-      onFileCountChange?.(countFiles(nodes))
+      onFileCountChange?.(countTree(nodes).files)
     } catch (err) {
       console.error('[SkillFiles] 加载文件树失败:', err)
       toast.error('加载文件树失败')
@@ -226,33 +224,36 @@ export function SkillFilesPanel({ workspaceSlug, skillSlug, onFileCountChange }:
         <div className="text-xs text-muted-foreground">
           {loading
             ? '加载中...'
-            : `共 ${countFiles(tree)} 个文件${tree.length === 0 ? '' : `，${countDirs(tree)} 个目录`}`}
+            : (() => {
+                const { files, dirs } = countTree(tree)
+                return `共 ${files} 个文件${tree.length === 0 ? '' : `，${dirs} 个目录`}`
+              })()}
         </div>
         <div className="flex items-center gap-1">
-          <Tooltip text="新建文件（根目录）">
-            <button
-              onClick={() => startCreate('file', '')}
-              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <FilePlus size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip text="新建目录（根目录）">
-            <button
-              onClick={() => startCreate('directory', '')}
-              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <FolderPlus size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip text="刷新">
-            <button
-              onClick={() => void refreshTree()}
-              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <RefreshCw size={14} />
-            </button>
-          </Tooltip>
+          <button
+            type="button"
+            title="新建文件（根目录）"
+            onClick={() => startCreate('file', '')}
+            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <FilePlus size={14} />
+          </button>
+          <button
+            type="button"
+            title="新建目录（根目录）"
+            onClick={() => startCreate('directory', '')}
+            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <FolderPlus size={14} />
+          </button>
+          <button
+            type="button"
+            title="刷新"
+            onClick={() => void refreshTree()}
+            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <RefreshCw size={14} />
+          </button>
         </div>
       </div>
 
@@ -582,14 +583,6 @@ function CreatePlaceholder({
         />
       </div>
     </li>
-  )
-}
-
-function Tooltip({ text, children }: { text: string; children: React.ReactNode }): React.ReactElement {
-  return (
-    <span title={text} className="inline-flex">
-      {children}
-    </span>
   )
 }
 

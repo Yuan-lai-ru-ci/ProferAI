@@ -6,7 +6,7 @@
  * - 工作区目录：~/.proma/agent-workspaces/{slug}/（Agent 的 cwd）
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync } from 'node:fs'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import { join, resolve, relative, isAbsolute, dirname } from 'node:path'
@@ -767,18 +767,19 @@ function resolveSkillChildPath(skillDir: string, relativePath: string, opts: { a
   return resolved
 }
 
-/** 用文件头判断是否为二进制文件（粗略：含 NUL 字节即视为二进制） */
+/** 用文件头判断是否为二进制文件（粗略：含 NUL 字节即视为二进制）。只读前 8KB，避免把大文件全量读入内存 */
 function isLikelyBinaryFile(absPath: string, size: number): boolean {
+  if (size === 0) return false
+  let fd: number | undefined
   try {
-    const sampleSize = Math.min(size, 8192)
-    if (sampleSize === 0) return false
-    const buf = readFileSync(absPath).subarray(0, sampleSize)
-    for (let i = 0; i < buf.length; i++) {
-      if (buf[i] === 0) return true
-    }
-    return false
+    fd = openSync(absPath, 'r')
+    const buf = Buffer.alloc(Math.min(size, 8192))
+    const n = readSync(fd, buf, 0, buf.length, 0)
+    return buf.subarray(0, n).includes(0)
   } catch {
     return true
+  } finally {
+    if (fd !== undefined) closeSync(fd)
   }
 }
 
