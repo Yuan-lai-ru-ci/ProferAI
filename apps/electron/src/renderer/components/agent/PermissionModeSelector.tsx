@@ -13,29 +13,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Button } from '@/components/ui/button'
 import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom } from '@/atoms/agent-atoms'
 import type { PromaPermissionMode } from '@proma/shared'
-import { PROMA_PERMISSION_MODE_ORDER } from '@proma/shared'
+import { PROMA_PERMISSION_MODE_CONFIG, PROMA_PERMISSION_MODE_ORDER } from '@proma/shared'
 
-/** 模式配置 */
-const MODE_CONFIG: Record<PromaPermissionMode, {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  description: string
-}> = {
-  auto: {
-    icon: Compass,
-    label: '自动审批',
-    description: 'SDK 内置审批器自动判断，危险操作才需确认',
-  },
-  bypassPermissions: {
-    icon: Zap,
-    label: '完全自动',
-    description: '所有工具调用自动允许',
-  },
-  plan: {
-    icon: MapIcon,
-    label: '计划模式',
-    description: '仅规划不执行，查看工具使用计划',
-  },
+const MODE_ICONS: Record<PromaPermissionMode, React.ComponentType<{ className?: string }>> = {
+  auto: Compass,
+  bypassPermissions: Zap,
+  plan: MapIcon,
 }
 
 interface PermissionModeSelectorProps {
@@ -91,8 +74,8 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
     }
   }, [mode, sessionId, setModeMap])
 
-  const config = MODE_CONFIG[mode]
-  const Icon = config.icon
+  const config = PROMA_PERMISSION_MODE_CONFIG[mode]
+  const Icon = MODE_ICONS[mode]
 
   return (
     <TooltipProvider delayDuration={300}>

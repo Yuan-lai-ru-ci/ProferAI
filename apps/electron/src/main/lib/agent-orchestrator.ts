@@ -22,6 +22,8 @@ import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@proma/shared'
 import {
+  PROMA_DEFAULT_PERMISSION_MODE,
+  PROMA_PERMISSION_MODE_CONFIG,
   SAFE_TOOLS,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
@@ -1207,7 +1209,7 @@ export class AgentOrchestrator {
       // 权限模式只属于当前 session；新会话默认自动审批模式。
       const appSettings = getSettings()
       const initialPermissionMode: PromaPermissionMode = permissionModeOverride
-        ?? 'auto'
+        ?? PROMA_DEFAULT_PERMISSION_MODE
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
@@ -1410,7 +1412,7 @@ export class AgentOrchestrator {
         sdkCliPath: cliPath,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
-        sdkPermissionMode: initialPermissionMode,
+        sdkPermissionMode: PROMA_PERMISSION_MODE_CONFIG[initialPermissionMode].sdkMode,
         // 当提供 canUseTool 回调时必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
         // 两个矛盾的指令，导致 ExitPlanMode/AskUserQuestion 等交互式工具失败。

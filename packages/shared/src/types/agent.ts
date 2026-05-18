@@ -1085,21 +1085,57 @@ export interface ExitPlanModeResponse {
 
 // ===== 权限系统类型 =====
 
-/** Proma 权限模式（直接映射 SDK 原生模式） */
-export type PromaPermissionMode = 'auto' | 'bypassPermissions' | 'plan'
+/** 当前 Proma 支持的权限模式，值直接映射 SDK 原生 permissionMode */
+export const PROMA_PERMISSION_MODES = ['auto', 'bypassPermissions', 'plan'] as const
+
+export type PromaPermissionMode = typeof PROMA_PERMISSION_MODES[number]
+
+export const PROMA_DEFAULT_PERMISSION_MODE: PromaPermissionMode = 'auto'
+
+export interface PromaPermissionModeConfig {
+  /** 对应 Claude Agent SDK 的 permissionMode */
+  sdkMode: PromaPermissionMode
+  label: string
+  description: string
+}
+
+/** Proma 权限模式的单一配置来源 */
+export const PROMA_PERMISSION_MODE_CONFIG = {
+  auto: {
+    sdkMode: 'auto',
+    label: '自动审批',
+    description: 'SDK 内置审批器自动判断，危险操作才需确认',
+  },
+  bypassPermissions: {
+    sdkMode: 'bypassPermissions',
+    label: '完全自动',
+    description: '所有工具调用自动允许',
+  },
+  plan: {
+    sdkMode: 'plan',
+    label: '计划模式',
+    description: '仅规划不执行，查看工具使用计划',
+  },
+} as const satisfies Record<PromaPermissionMode, PromaPermissionModeConfig>
 
 /** 权限模式定义顺序（用于循环切换） */
-export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = ['auto', 'bypassPermissions', 'plan']
+export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = PROMA_PERMISSION_MODES
+
+/** 旧版权限模式迁移表。不要把这些旧值重新暴露为当前产品模式。 */
+export const PROMA_LEGACY_PERMISSION_MODE_MIGRATIONS: Readonly<Record<string, PromaPermissionMode>> = {
+  acceptEdits: 'auto',
+  smart: 'auto',
+  supervised: 'auto',
+}
+
+export function isPromaPermissionMode(mode: string): mode is PromaPermissionMode {
+  return (PROMA_PERMISSION_MODES as readonly string[]).includes(mode)
+}
 
 /** 迁移旧权限模式值到新模式 */
 export function migratePermissionMode(mode: string): PromaPermissionMode {
-  if (mode === 'auto' || mode === 'bypassPermissions' || mode === 'plan') return mode
-  const migration: Record<string, PromaPermissionMode> = {
-    acceptEdits: 'auto',
-    smart: 'auto',
-    supervised: 'auto',
-  }
-  return migration[mode] ?? 'auto'
+  if (isPromaPermissionMode(mode)) return mode
+  return PROMA_LEGACY_PERMISSION_MODE_MIGRATIONS[mode] ?? PROMA_DEFAULT_PERMISSION_MODE
 }
 
 /** 危险等级 */
