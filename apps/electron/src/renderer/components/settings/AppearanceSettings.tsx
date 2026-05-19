@@ -80,7 +80,7 @@ const SPECIAL_STYLES: readonly SpecialStyle[] = [
     name: '云朵舞者',
     variant: 'light',
     image: themeCloudDancer,
-    imageScale: 1.2,
+    imageScale: 1.3,
   },
   {
     id: 'ocean-light',
@@ -93,6 +93,7 @@ const SPECIAL_STYLES: readonly SpecialStyle[] = [
     name: '森息晨光',
     variant: 'light',
     image: themeForestMorning,
+    imageScale: 1.45,
   },
   {
     id: 'ocean-dark',
@@ -111,7 +112,8 @@ const SPECIAL_STYLES: readonly SpecialStyle[] = [
     name: '莫兰迪夜',
     variant: 'dark',
     image: themeMorandiNight,
-    objectPosition: '60% center',
+    imageScale: 1.15,
+    objectPosition: '44% 58%',
   },
 ]
 
@@ -356,7 +358,7 @@ function StyleCard({
         onClick={onSelect}
         className={cn(
           'relative rounded-lg transition-all overflow-hidden',
-          'w-[90px] h-[260px]',
+          'w-[99px] h-[183px]',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1',
           isSelected
             ? 'ring-2 ring-primary shadow-lg shadow-primary/20'
@@ -383,7 +385,7 @@ function StyleCard({
           </div>
         )}
       </button>
-      <span className="text-sm font-medium text-foreground">
+      <span className="text-base font-medium text-foreground">
         {style.name}
       </span>
     </div>
