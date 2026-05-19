@@ -698,56 +698,67 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   newMeta.forkSourceDir = sourceDir
   newMeta.forkSourceSdkSessionId = forkSourceSdkSessionId
 
+  // 4.4 计算 fork 目标会话的 cwd（新会话目录），后续多个步骤需要用到
+  let destDir: string | undefined
+  if (sourceDir && sourceMeta.workspaceId) {
+    const ws = getAgentWorkspace(sourceMeta.workspaceId)
+    if (ws) {
+      destDir = getAgentSessionWorkspacePath(ws.slug, newMeta.id)
+    }
+  }
+
   // 4.5 将 SDK session JSONL 复制到 fork 自己的 project-hash 目录
   // SDK forkSession() 在源 cwd 的 project-hash 下创建 JSONL（如 projects/<hash-of-sourceDir>/<newId>.jsonl），
   // 但 fork 会话的 cwd 是新的 session 目录（不同 project-hash），resume 时 SDK 会找不到。
   // 这里直接将 JSONL 复制到 fork 目标 cwd 的 project-hash 下，让后续每轮 resume 都能直接命中。
-  if (sourceDir && sourceMeta.workspaceId) {
-    const ws = getAgentWorkspace(sourceMeta.workspaceId)
-    if (ws) {
-      const destCwd = getAgentSessionWorkspacePath(ws.slug, newMeta.id)
-      const sourceJsonl = findSdkSessionJsonl(forkResult.sessionId)
-      if (sourceJsonl) {
-        // SDK 使用简单的字符替换计算 project-hash：path.replace(/[^a-zA-Z0-9]/g, '-')
-        const destProjectHash = destCwd.replace(/[^a-zA-Z0-9]/g, '-')
-        const sdkProjectsDir = join(getSdkConfigDir(), 'projects', destProjectHash)
-        if (!existsSync(sdkProjectsDir)) mkdirSync(sdkProjectsDir, { recursive: true })
-        const destJsonl = join(sdkProjectsDir, `${forkResult.sessionId}.jsonl`)
-        try {
-          copyFileSync(sourceJsonl, destJsonl)
-          console.log(`[Agent 会话] 已将 SDK session JSONL 复制到 fork 目标目录: ${destJsonl}`)
-        } catch (err) {
-          console.warn(`[Agent 会话] 复制 SDK session JSONL 失败，fork 后首轮可能触发上下文回填:`, err)
-        }
-      } else {
-        console.warn(`[Agent 会话] 未找到 SDK session JSONL (${forkResult.sessionId})，fork 后首轮可能触发上下文回填`)
+  // 同时把 JSONL 内容中所有源目录路径改写为目标目录路径，避免历史中的绝对路径误导 Claude
+  // 继续在源目录下读写文件。
+  if (sourceDir && destDir) {
+    const sourceJsonl = findSdkSessionJsonl(forkResult.sessionId)
+    if (sourceJsonl) {
+      // SDK 使用简单的字符替换计算 project-hash：path.replace(/[^a-zA-Z0-9]/g, '-')
+      const destProjectHash = destDir.replace(/[^a-zA-Z0-9]/g, '-')
+      const sdkProjectsDir = join(getSdkConfigDir(), 'projects', destProjectHash)
+      if (!existsSync(sdkProjectsDir)) mkdirSync(sdkProjectsDir, { recursive: true })
+      const destJsonl = join(sdkProjectsDir, `${forkResult.sessionId}.jsonl`)
+      try {
+        copyFileSync(sourceJsonl, destJsonl)
+        rewritePathsInJsonlFile(destJsonl, sourceDir, destDir)
+        console.log(`[Agent 会话] 已将 SDK session JSONL 复制到 fork 目标目录并改写路径: ${destJsonl}`)
+      } catch (err) {
+        console.warn(`[Agent 会话] 复制 SDK session JSONL 失败，fork 后首轮可能触发上下文回填:`, err)
       }
+    } else {
+      console.warn(`[Agent 会话] 未找到 SDK session JSONL (${forkResult.sessionId})，fork 后首轮可能触发上下文回填`)
     }
   }
 
-  // 5. 复制源会话工作区文件到新会话目录（排除 .claude/ 和 .context/，它们会自动创建）
-  if (sourceDir && sourceMeta.workspaceId) {
-    const ws = getAgentWorkspace(sourceMeta.workspaceId)
-    if (ws) {
-      const destDir = getAgentSessionWorkspacePath(ws.slug, newMeta.id)
-      if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
-      try {
-        const entries = readdirSync(sourceDir)
-        for (const entry of entries) {
-          if (entry === '.claude' || entry === '.context' || entry === '.DS_Store' || entry === '.git') continue
-          const srcPath = join(sourceDir, entry)
-          const destPath = join(destDir, entry)
-          cpSync(srcPath, destPath, { recursive: true })
-        }
-        const copiedCount = entries.filter(e => e !== '.claude' && e !== '.context' && e !== '.DS_Store' && e !== '.git').length
-        console.log(`[Agent 会话] 已复制工作区文件: ${sourceDir} → ${destDir} (${copiedCount} 个条目)`)
-      } catch (err) {
-        console.warn(`[Agent 会话] 复制工作区文件失败:`, err)
+  // 5. 复制源会话工作区文件到新会话目录
+  // 仅排除 .claude/（settings.json 启动时会重建）、.DS_Store、.git。
+  // .context/ 必须保留 — Proma 约定 .context/note.md、todo.md、plan/ 等是会话上下文，
+  // 如果不复制，fork 后这些参考资料会丢失或被 Claude 误回源目录读取。
+  if (sourceDir && destDir) {
+    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+    try {
+      const entries = readdirSync(sourceDir)
+      const skip = (entry: string) => entry === '.claude' || entry === '.DS_Store' || entry === '.git'
+      let copiedCount = 0
+      for (const entry of entries) {
+        if (skip(entry)) continue
+        const srcPath = join(sourceDir, entry)
+        const destPath = join(destDir, entry)
+        cpSync(srcPath, destPath, { recursive: true })
+        copiedCount += 1
       }
+      console.log(`[Agent 会话] 已复制工作区文件: ${sourceDir} → ${destDir} (${copiedCount} 个条目)`)
+    } catch (err) {
+      console.warn(`[Agent 会话] 复制工作区文件失败:`, err)
     }
   }
 
   // 6. 复制截断后的 SDKMessages 到新会话的 JSONL（用于 UI 展示历史）
+  // 同时改写消息中所有源目录绝对路径为目标目录路径 — 否则 Claude 在历史里看到的所有
+  // Read/Edit/Bash 工具调用都指向源会话目录，会继续在源目录而非新 cwd 下操作文件。
   const sourceMessages = getAgentSessionSDKMessages(sessionId)
   let messagesToCopy: SDKMessage[]
 
@@ -760,12 +771,76 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     messagesToCopy = sourceMessages
   }
 
+  if (sourceDir && destDir && messagesToCopy.length > 0) {
+    messagesToCopy = messagesToCopy.map((m) => rewritePathsInSDKMessage(m, sourceDir, destDir!))
+  }
+
   if (messagesToCopy.length > 0) {
     appendSDKMessages(newMeta.id, messagesToCopy)
   }
 
   console.log(`[Agent 会话] 分叉会话已创建（SDK 原生 fork）: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息, sdkSessionId=${forkResult.sessionId})`)
   return newMeta
+}
+
+/**
+ * 将一段字符串中所有出现的 sourceDir 替换为 destDir。
+ *
+ * 用于 fork 会话时把历史中嵌入的源会话绝对路径迁移到新会话目录。
+ * 处理 JSON 字符串中可能出现的两种编码形式：
+ * 1. 原始路径（如 /Users/a/b）
+ * 2. JSON 字符串编码后的形式（路径中的 `/` JSON 标准下不会转义，所以通常与 1 一致；
+ *    但保留对反斜杠的处理以兼容 Windows 路径）
+ *
+ * sourceDir 和 destDir 都会规范化去除末尾斜杠，避免不同形式导致漏替换。
+ */
+function rewriteSourceToDest(content: string, sourceDir: string, destDir: string): string {
+  const normalizedSource = sourceDir.replace(/[\\/]+$/, '')
+  const normalizedDest = destDir.replace(/[\\/]+$/, '')
+  if (!normalizedSource || normalizedSource === normalizedDest) return content
+  let rewritten = content.split(normalizedSource).join(normalizedDest)
+  // Windows 路径在 JSON 中会被转义为双反斜杠，单独处理一次
+  if (normalizedSource.includes('\\')) {
+    const sourceEscaped = normalizedSource.replace(/\\/g, '\\\\')
+    const destEscaped = normalizedDest.replace(/\\/g, '\\\\')
+    rewritten = rewritten.split(sourceEscaped).join(destEscaped)
+  }
+  return rewritten
+}
+
+/**
+ * 改写 SDK JSONL 文件中所有出现的源目录路径为目标目录路径。
+ * 文件不存在或读写失败时静默忽略（fork 仍可继续，只是 resume 时可能触发上下文回填）。
+ */
+function rewritePathsInJsonlFile(filePath: string, sourceDir: string, destDir: string): void {
+  try {
+    const content = readFileSync(filePath, 'utf-8')
+    const rewritten = rewriteSourceToDest(content, sourceDir, destDir)
+    if (rewritten !== content) {
+      writeFileSync(filePath, rewritten)
+    }
+  } catch (err) {
+    console.warn(`[Agent 会话] 改写 SDK JSONL 路径失败 (${filePath}):`, err)
+  }
+}
+
+/**
+ * 改写 SDKMessage 中所有嵌入的源目录路径为目标目录路径。
+ *
+ * 通过 JSON 序列化 → 字符串替换 → 反序列化实现深度替换，
+ * 覆盖 user/assistant/tool_use/tool_result 等任意嵌套结构中的绝对路径字段。
+ * 失败时返回原消息，保证 fork 整体不被打断。
+ */
+function rewritePathsInSDKMessage(msg: SDKMessage, sourceDir: string, destDir: string): SDKMessage {
+  try {
+    const json = JSON.stringify(msg)
+    const rewritten = rewriteSourceToDest(json, sourceDir, destDir)
+    if (rewritten === json) return msg
+    return JSON.parse(rewritten) as SDKMessage
+  } catch (err) {
+    console.warn(`[Agent 会话] 改写 SDKMessage 路径失败，使用原消息:`, err)
+    return msg
+  }
 }
 
 /**
