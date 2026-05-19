@@ -393,19 +393,22 @@ export function mapSDKErrorToTypedError(
     const isRateLimited = httpStatus === 429
     const isUnavailable = httpStatus === 503
     const isOverloaded = httpStatus === 529
+    const isBadGateway = httpStatus === 502
     return {
       code: isRateLimited
         ? 'rate_limited'
         : (isOverloaded ? 'provider_error' : (isUnavailable ? 'service_unavailable' : 'service_error')),
       title: isRateLimited
         ? '请求频率限制'
-        : (isOverloaded ? '服务繁忙' : (isUnavailable ? '服务暂时不可用' : '服务错误')),
+        : (isOverloaded ? '服务繁忙' : (isUnavailable ? '服务暂时不可用' : (isBadGateway ? '网关异常' : '服务错误'))),
       message: detailedMessage || (
         isRateLimited
           ? '请求过于频繁，请稍后再试'
           : isOverloaded
             ? 'API 服务当前过载 (529)，通常很快恢复'
-            : `API 服务暂时异常 (${httpStatus})，请稍后再试`
+            : isBadGateway
+              ? 'API 网关暂时异常 (502)，通常很快恢复'
+              : `API 服务暂时异常 (${httpStatus})，请稍后再试`
       ),
       actions: [
         { key: 's', label: '设置', action: 'settings' },

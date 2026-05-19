@@ -152,9 +152,10 @@ function isAutoRetryableCatchError(
   if (rawErrorMessage) {
     if (rawErrorMessage.includes('context_management')) return true
   }
-  // 兜底：extractApiError 未识别但 stderr / 错误文本中包含 529 或 overloaded 关键字时也视为可重试
+  // 兜底：extractApiError 未识别但 stderr / 错误文本中包含 502 / 529 或 overloaded 关键字时也视为可重试
+  // 502 (Bad Gateway) 通常是上游网关瞬时异常，与 529 一样很快自行恢复
   const text = `${rawErrorMessage ?? ''}\n${stderr ?? ''}`
-  if (/\b529\b|overloaded/i.test(text)) return true
+  if (/\b502\b|\b529\b|overloaded/i.test(text)) return true
   // 瞬时网络错误（terminated / ECONNRESET / socket hang up 等）
   if (isTransientNetworkError(rawErrorMessage, stderr)) return true
   return false
