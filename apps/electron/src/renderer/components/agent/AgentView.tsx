@@ -286,7 +286,7 @@ function AutoPreviewPopover({ enabled, onToggle }: AutoPreviewPopoverProps): Rea
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex items-center justify-between gap-4">
-          <span className="text-xs text-foreground/70">自动预览</span>
+          <span className="text-xs text-foreground/70">自动预览修改中文件</span>
           <Switch
             checked={enabled}
             onCheckedChange={onToggle}
