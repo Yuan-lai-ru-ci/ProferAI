@@ -28,6 +28,7 @@ import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
+import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { Button } from '@/components/ui/button'
@@ -48,7 +49,7 @@ import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { FeishuNotifyToggle } from '@/components/chat/FeishuNotifyToggle'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, previewFileMapAtom, autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, previewFileMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentChannelIdAtom,
@@ -378,6 +379,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const store = useStore()
+  const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
+  const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
+
+  /** 移除当前引用选中文本 */
+  const handleRemoveQuotedSelection = React.useCallback(() => {
+    setQuotedSelectionMap((prev) => {
+      const m = new Map(prev)
+      m.delete(sessionId)
+      return m
+    })
+  }, [sessionId, setQuotedSelectionMap])
+
   const setPreviewFileMap = useSetAtom(previewFileMapAtom)
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
@@ -1290,6 +1303,28 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       setPendingFiles([])
     }
 
+    // 构建引用选中文本：内联 XML 拼入 prompt，对话框不展示（parseAttachedFiles 剥离）
+    const quotedSelection = store.get(quotedSelectionMapAtom).get(sessionId)
+    if (quotedSelection) {
+      const capturedAt = quotedSelection.capturedAt
+      // XML 转义：path 走完整实体编码（&, <, >, "），text 仅需防误闭合外层标签
+      const safePath = quotedSelection.filePath
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+      const safeText = quotedSelection.text.replace(/<\/quoted_file>/gi, '</quoted_file_>')
+      const quotedBlock = `<quoted_file path="${safePath}">\n${safeText}\n</quoted_file>\n\n`
+      fileReferences = fileReferences + quotedBlock
+
+      store.set(quotedSelectionMapAtom, (prev) => {
+        const m = new Map(prev)
+        const current = m.get(sessionId)
+        if (current && current.capturedAt === capturedAt) m.delete(sessionId)
+        return m
+      })
+    }
+
     // 2. 构建最终消息
     const finalMessage = fileReferences + effectiveText
 
@@ -1755,8 +1790,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               </div>
             )}
 
-            {/* 附件预览区域 */}
-            {pendingFiles.length > 0 && (
+            {/* 附件 + 引用选中文本 Chip（同排并排） */}
+            {(pendingFiles.length > 0 || currentQuotedSelection) && (
               <div className="flex flex-wrap gap-2 px-3 pt-2.5 pb-1.5">
                 {pendingFiles.map((file) => (
                   <AttachmentPreviewItem
@@ -1768,6 +1803,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     onClick={file.filename.startsWith('clipboard-') ? () => handleClipboardPreview(file) : undefined}
                   />
                 ))}
+                {currentQuotedSelection && (
+                  <QuotedSelectionChip
+                    text={currentQuotedSelection.text}
+                    filePath={currentQuotedSelection.filePath}
+                    onRemove={handleRemoveQuotedSelection}
+                  />
+                )}
               </div>
             )}
 
