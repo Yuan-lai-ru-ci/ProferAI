@@ -673,19 +673,25 @@ function SkillListPanel({ skills, selectedSlug, onSelect, onDelete, onToggle, on
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider truncate flex-1">{group.prefix}</span>
               <span className="text-[10px] tabular-nums text-muted-foreground flex-shrink-0">{group.skills.length}</span>
             </button>
-            {expandedGroups.has(group.prefix) && group.skills.map((skill) => (
-              <SkillCompactItem
-                key={skill.slug}
-                skill={skill}
-                displayName={shortName(skill.slug, group.prefix)}
-                selected={selectedSlug === skill.slug}
-                onSelect={() => onSelect(skill.slug)}
-                onDelete={() => onDelete(skill.slug, skill.name)}
-                onToggle={(enabled) => onToggle(skill.slug, enabled)}
-                onOpenFolder={() => openSkillFolder(skill.slug)}
-                onUpdate={skill.hasUpdate ? () => onUpdate(skill.slug) : undefined}
-              />
-            ))}
+            {expandedGroups.has(group.prefix) && (
+              <div className="relative">
+                <div className="absolute left-3 top-0 bottom-0 w-px bg-border/60 pointer-events-none z-10" />
+                {group.skills.map((skill) => (
+                  <SkillCompactItem
+                    key={skill.slug}
+                    skill={skill}
+                    displayName={shortName(skill.slug, group.prefix)}
+                    selected={selectedSlug === skill.slug}
+                    onSelect={() => onSelect(skill.slug)}
+                    onDelete={() => onDelete(skill.slug, skill.name)}
+                    onToggle={(enabled) => onToggle(skill.slug, enabled)}
+                    onOpenFolder={() => openSkillFolder(skill.slug)}
+                    onUpdate={skill.hasUpdate ? () => onUpdate(skill.slug) : undefined}
+                    indented
+                  />
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           group.skills.map((skill) => (
@@ -718,14 +724,16 @@ interface SkillCompactItemProps {
   onToggle: (enabled: boolean) => void
   onOpenFolder: () => void
   onUpdate?: () => void
+  indented?: boolean
 }
 
-function SkillCompactItem({ skill, displayName, selected, onSelect, onDelete, onToggle, onOpenFolder, onUpdate }: SkillCompactItemProps): React.ReactElement {
+function SkillCompactItem({ skill, displayName, selected, onSelect, onDelete, onToggle, onOpenFolder, onUpdate, indented }: SkillCompactItemProps): React.ReactElement {
   return (
     <button
       onClick={onSelect}
       className={cn(
-        'group w-full flex items-center gap-2 px-3 py-2 text-left transition-colors',
+        'group w-full flex items-center gap-2 py-2 pr-3 text-left transition-colors',
+        indented ? 'pl-5' : 'pl-3',
         selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40',
         !skill.enabled && 'opacity-50',
       )}
@@ -782,7 +790,6 @@ function SkillDetailPanel({ skill, workspaceSlug, onSaved }: SkillDetailPanelPro
 
   const [isEditingMeta, setIsEditingMeta] = React.useState(false)
   const [isEditingBody, setIsEditingBody] = React.useState(false)
-  const [metaExpanded, setMetaExpanded] = React.useState(false)
   const [editName, setEditName] = React.useState('')
   const [editDescription, setEditDescription] = React.useState('')
   const [editBody, setEditBody] = React.useState('')
@@ -795,7 +802,6 @@ function SkillDetailPanel({ skill, workspaceSlug, onSaved }: SkillDetailPanelPro
     currentSlugRef.current = skill.slug
     setIsEditingMeta(false)
     setIsEditingBody(false)
-    setMetaExpanded(false)
     setDetailTab('body')
     setFileCount(null)
     setLoadingContent(true)
@@ -872,76 +878,42 @@ function SkillDetailPanel({ skill, workspaceSlug, onSaved }: SkillDetailPanelPro
 
   return (
     <div className="flex flex-col h-full p-5 gap-4 min-h-0">
-      {/* Header */}
-      <div className="flex items-start gap-3 shrink-0">
-        <div className="rounded-xl bg-amber-500/12 p-2.5 text-amber-500 shrink-0">
-          <Sparkles size={20} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-base font-semibold text-foreground">{skill.name}</h3>
-          {skill.description && (
-            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
+      {/* Metadata：直接展示 */}
+      <div className="shrink-0 space-y-2">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">元数据</h4>
+          {!isEditingMeta ? (
+            <button onClick={startEditMeta} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+              <Pencil size={12} /> 编辑
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setIsEditingMeta(false)} disabled={saving}>
+                <X size={14} /> 取消
+              </Button>
+              <Button size="sm" onClick={() => void saveMeta()} disabled={saving}>
+                <Save size={14} /> {saving ? '保存中...' : '保存'}
+              </Button>
+            </div>
           )}
         </div>
-      </div>
-
-      {/* Metadata：折叠摘要 + 可展开完整编辑 */}
-      <div className="shrink-0 space-y-2">
-        <button
-          type="button"
-          onClick={() => setMetaExpanded((v) => !v)}
-          className="w-full flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-2 rounded-md bg-muted/40 hover:bg-muted/60"
-        >
-          {metaExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <span className="font-mono text-foreground/80">skills/{skill.slug}</span>
-          <span className="text-muted-foreground/70">·</span>
-          <span>{sourceLabel}</span>
-          {skill.version && (
+        <SettingsCard divided>
+          <MetadataRow label="标识符" value={skill.slug} />
+          {isEditingMeta ? (
             <>
-              <span className="text-muted-foreground/70">·</span>
-              <span>v{skill.version}</span>
+              <MetadataEditRow label="名称" value={editName} onChange={setEditName} />
+              <MetadataEditRow label="描述" value={editDescription} onChange={setEditDescription} multiline />
+            </>
+          ) : (
+            <>
+              <MetadataRow label="名称" value={skill.name} />
+              <MetadataRow label="描述" value={skill.description ?? '无描述'} />
             </>
           )}
-          <span className="ml-auto">{metaExpanded ? '收起' : '展开元数据'}</span>
-        </button>
-
-        {metaExpanded && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-end">
-              {!isEditingMeta ? (
-                <button onClick={startEditMeta} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-                  <Pencil size={12} /> 编辑
-                </button>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => setIsEditingMeta(false)} disabled={saving}>
-                    <X size={14} /> 取消
-                  </Button>
-                  <Button size="sm" onClick={() => void saveMeta()} disabled={saving}>
-                    <Save size={14} /> {saving ? '保存中...' : '保存'}
-                  </Button>
-                </div>
-              )}
-            </div>
-            <SettingsCard divided>
-              <MetadataRow label="标识符" value={skill.slug} />
-              {isEditingMeta ? (
-                <>
-                  <MetadataEditRow label="名称" value={editName} onChange={setEditName} />
-                  <MetadataEditRow label="描述" value={editDescription} onChange={setEditDescription} multiline />
-                </>
-              ) : (
-                <>
-                  <MetadataRow label="名称" value={skill.name} />
-                  <MetadataRow label="描述" value={skill.description ?? '无描述'} />
-                </>
-              )}
-              <MetadataRow label="数据源" value={sourceLabel} />
-              <MetadataRow label="位置" value={`skills/${skill.slug}`} />
-              {skill.version && <MetadataRow label="版本" value={skill.version} />}
-            </SettingsCard>
-          </div>
-        )}
+          <MetadataRow label="数据源" value={sourceLabel} />
+          <MetadataRow label="位置" value={`skills/${skill.slug}`} />
+          {skill.version && <MetadataRow label="版本" value={skill.version} />}
+        </SettingsCard>
       </div>
 
       {/* Tab: 说明 / 资源文件 */}
@@ -963,22 +935,30 @@ function SkillDetailPanel({ skill, workspaceSlug, onSaved }: SkillDetailPanelPro
         </TabsList>
 
         <TabsContent value="body" className="flex-1 mt-3 min-h-0 overflow-auto">
-          <div className="space-y-2">
-            <div className="flex items-center justify-end">
-              {!isEditingBody ? (
-                <button onClick={startEditBody} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-                  <Pencil size={12} /> 编辑
-                </button>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => setIsEditingBody(false)} disabled={saving}>
-                    <X size={14} /> 取消
-                  </Button>
-                  <Button size="sm" onClick={() => void saveBody()} disabled={saving}>
-                    <Save size={14} /> {saving ? '保存中...' : '保存'}
-                  </Button>
-                </div>
-              )}
+          <div className="flex flex-col h-full">
+            <div className="flex items-center justify-between px-1 pb-2 shrink-0 min-h-[28px]">
+              <div className="text-xs text-muted-foreground font-mono">SKILL.md</div>
+              <div className="flex items-center gap-1">
+                {!isEditingBody ? (
+                  <button
+                    type="button"
+                    title="编辑"
+                    onClick={startEditBody}
+                    className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 text-xs"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                ) : (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => setIsEditingBody(false)} disabled={saving}>
+                      <X size={14} /> 取消
+                    </Button>
+                    <Button size="sm" onClick={() => void saveBody()} disabled={saving}>
+                      <Save size={14} /> {saving ? '保存中...' : '保存'}
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
             <SettingsCard divided={false}>
               <div className="p-4">

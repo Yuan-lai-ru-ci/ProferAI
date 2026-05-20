@@ -220,7 +220,7 @@ export function SkillFilesPanel({ workspaceSlug, skillSlug, onFileCountChange }:
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-1 pb-2 shrink-0">
+      <div className="flex items-center justify-between px-1 pb-2 shrink-0 min-h-[28px]">
         <div className="text-xs text-muted-foreground">
           {loading
             ? '加载中...'
