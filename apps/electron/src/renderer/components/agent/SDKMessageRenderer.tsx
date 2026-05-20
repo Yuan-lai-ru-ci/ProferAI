@@ -644,8 +644,12 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           .filter((b) => b.type === 'text' && 'text' in b)
           .map((b) => (b as { text: string }).text)
           .join('\n\n')
-        const lastUuid = turn.assistantMessages.length > 0
-          ? turn.assistantMessages[turn.assistantMessages.length - 1]?.uuid
+        // 仅取主线 assistant 消息的 uuid 作为 fork/rewind 截断点。
+        // SDK forkSession 内部会过滤掉 sidechain（parent_tool_use_id 非空的子代理消息），
+        // 若把子代理 uuid 传过去会触发 "Message <uuid> not found in session" 错误。
+        const mainlineAssistants = turn.assistantMessages.filter((m) => !m.parent_tool_use_id)
+        const lastUuid = mainlineAssistants.length > 0
+          ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
           : undefined
         const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
         const hasDuration = durationMs != null

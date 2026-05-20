@@ -639,23 +639,65 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     }
   }
 
-  // 2.5 确定目标消息所属的 SDK session ID
-  // 当会话经历过 "session not found" 恢复后，sdkSessionId 会被替换为新的，
-  // 但旧消息仍保留在 Proma JSONL 中，其 session_id 指向旧的 SDK session。
-  // 这里从 JSONL 中查找目标消息的实际 session_id，确保 fork 调用使用正确的 SDK session。
+  // 2.5 校验目标消息并确定其所属的 SDK session ID
+  // - 当会话经历过 "session not found" 恢复后，sdkSessionId 会被替换为新的，
+  //   但旧消息仍保留在 Proma JSONL 中，其 session_id 指向旧的 SDK session。
+  // - 若目标消息是 sub-agent 输出（parent_tool_use_id 非空），SDK forkSession
+  //   会过滤掉 sidechain 后再查 upToMessageId，必然报 "not found"，
+  //   这里自动回溯到最近的主线 assistant uuid。
   let forkSourceSdkSessionId = sourceMeta.sdkSessionId
+  let effectiveUpToMessageUuid = upToMessageUuid
   if (upToMessageUuid) {
     const allMessages = getAgentSessionSDKMessages(sessionId)
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      const m = allMessages[i]!
-      if ('uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid) {
-        const msgSessionId = (m as { session_id?: string }).session_id
-        if (msgSessionId && msgSessionId !== sourceMeta.sdkSessionId) {
-          console.log(`[Agent 会话] fork 目标消息属于旧 SDK session ${msgSessionId}（当前为 ${sourceMeta.sdkSessionId}），使用消息所属 session 进行 fork`)
-          forkSourceSdkSessionId = msgSessionId
+    const targetIdx = allMessages.findLastIndex(
+      (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid,
+    )
+
+    if (targetIdx < 0) {
+      throw new Error('未在会话历史中找到指定的消息，可能消息已被清理或截断')
+    }
+
+    const targetMsg = allMessages[targetIdx]!
+    const isSidechain =
+      targetMsg.type === 'assistant' &&
+      Boolean((targetMsg as { parent_tool_use_id?: string | null }).parent_tool_use_id)
+
+    if (isSidechain) {
+      // 向前回溯，寻找最近的主线 assistant 消息（parent_tool_use_id 为空）
+      let fallbackUuid: string | undefined
+      for (let i = targetIdx - 1; i >= 0; i--) {
+        const m = allMessages[i]!
+        if (m.type !== 'assistant') continue
+        if ((m as { parent_tool_use_id?: string | null }).parent_tool_use_id) continue
+        const u = (m as { uuid?: string }).uuid
+        if (u) {
+          fallbackUuid = u
+          break
         }
-        break
       }
+      if (!fallbackUuid) {
+        throw new Error('选中的是子代理执行过程中的消息，且向前找不到可分叉的主对话消息')
+      }
+      console.log(
+        `[Agent 会话] fork 目标消息 ${upToMessageUuid} 属于 sub-agent，自动回溯到主线消息 ${fallbackUuid}`,
+      )
+      effectiveUpToMessageUuid = fallbackUuid
+    }
+
+    // 重新定位 effectiveUpToMessageUuid 所在消息，取其 session_id
+    // 与上面的 findLastIndex 保持一致语义（重复 uuid 时取最后一条）
+    const effectiveMsg =
+      effectiveUpToMessageUuid === upToMessageUuid
+        ? targetMsg
+        : allMessages.findLast(
+            (m) => 'uuid' in m && (m as { uuid?: string }).uuid === effectiveUpToMessageUuid,
+          )
+    const msgSessionId = (effectiveMsg as { session_id?: string } | undefined)?.session_id
+    if (msgSessionId && msgSessionId !== sourceMeta.sdkSessionId) {
+      console.log(
+        `[Agent 会话] fork 目标消息属于旧 SDK session ${msgSessionId}（当前为 ${sourceMeta.sdkSessionId}），使用消息所属 session 进行 fork`,
+      )
+      forkSourceSdkSessionId = msgSessionId
     }
   }
 
@@ -665,7 +707,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   let forkResult: Awaited<ReturnType<typeof sdk.forkSession>>
   try {
     forkResult = await sdk.forkSession(forkSourceSdkSessionId, {
-      upToMessageId: upToMessageUuid,
+      upToMessageId: effectiveUpToMessageUuid,
       dir: sourceDir,
     })
   } catch (err) {
@@ -673,7 +715,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     if (sourceDir) {
       console.warn(`[Agent 会话] forkSession 指定 dir 失败，改用全局搜索:`, err)
       forkResult = await sdk.forkSession(forkSourceSdkSessionId, {
-        upToMessageId: upToMessageUuid,
+        upToMessageId: effectiveUpToMessageUuid,
       })
     } else {
       throw err
@@ -759,6 +801,9 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   // 6. 复制截断后的 SDKMessages 到新会话的 JSONL（用于 UI 展示历史）
   // 同时改写消息中所有源目录绝对路径为目标目录路径 — 否则 Claude 在历史里看到的所有
   // Read/Edit/Bash 工具调用都指向源会话目录，会继续在源目录而非新 cwd 下操作文件。
+  //
+  // 注意：UI 截断点用原始 upToMessageUuid，保留用户实际看到的所有内容（包括 sub-agent
+  // 过程消息），与 SDK forkSession 用 effectiveUpToMessageUuid（主线 uuid）解耦。
   const sourceMessages = getAgentSessionSDKMessages(sessionId)
   let messagesToCopy: SDKMessage[]
 

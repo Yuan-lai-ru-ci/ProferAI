@@ -1616,8 +1616,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       })
     } catch (error) {
       console.error('[AgentView] 分叉会话失败:', error)
+      const rawMsg = error instanceof Error ? error.message : '未知错误'
+      // SDK 偶尔会因为 sidechain/消息归属问题抛 "not found in session"，
+      // 这里给出更可操作的中文提示，而不是把 SDK 内部英文报错直接透传给用户
+      const friendlyDesc = /not found in session/i.test(rawMsg)
+        ? '该消息无法作为分叉起点（可能属于子代理执行过程或已被清理）。请选择主对话中的其他消息再试。'
+        : rawMsg
       toast.error('分叉会话失败', {
-        description: error instanceof Error ? error.message : '未知错误',
+        description: friendlyDesc,
       })
     }
   }, [sessionId, openSession, setAgentSessions])
