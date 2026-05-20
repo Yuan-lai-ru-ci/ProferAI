@@ -25,10 +25,45 @@ const SCREENSHOT_PADDING_TOP = 24
 
 /* ── 离屏窗口单例 ── */
 
+/** 空闲多久后自动销毁离屏窗口，释放内存 */
+const SCREENSHOT_IDLE_TTL_MS = 5 * 60 * 1000
+
 let _screenshotWin: BrowserWindow | null = null
 let _screenshotScale = 0
+let _idleTimer: ReturnType<typeof setTimeout> | null = null
+let _appQuitHookRegistered = false
+
+function destroyScreenshotWindow(): void {
+  if (_idleTimer) {
+    clearTimeout(_idleTimer)
+    _idleTimer = null
+  }
+  if (_screenshotWin && !_screenshotWin.isDestroyed()) {
+    _screenshotWin.destroy()
+  }
+  _screenshotWin = null
+  _screenshotScale = 0
+}
+
+function scheduleIdleDestroy(): void {
+  if (_idleTimer) clearTimeout(_idleTimer)
+  _idleTimer = setTimeout(destroyScreenshotWindow, SCREENSHOT_IDLE_TTL_MS)
+}
+
+function ensureAppQuitHook(): void {
+  if (_appQuitHookRegistered) return
+  _appQuitHookRegistered = true
+  // 进程退出前清理离屏窗口，避免 BrowserWindow 残留。lazy require 避免与 main 启动顺序耦合。
+  const { app } = require('electron') as typeof import('electron')
+  app.on('before-quit', destroyScreenshotWindow)
+}
 
 function getScreenshotWindow(scale: number): BrowserWindow {
+  ensureAppQuitHook()
+  if (_idleTimer) {
+    clearTimeout(_idleTimer)
+    _idleTimer = null
+  }
   if (_screenshotWin && !_screenshotWin.isDestroyed() && _screenshotScale === scale) return _screenshotWin
   if (_screenshotWin && !_screenshotWin.isDestroyed()) {
     _screenshotWin.destroy()
@@ -56,13 +91,15 @@ function getScreenshotWindow(scale: number): BrowserWindow {
 
 /* ── 串行锁（防并发截图） ── */
 
-let _lock = Promise.resolve()
+let _lock: Promise<unknown> = Promise.resolve()
 
 function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  let resolve: () => void
+  let resolve: (value?: unknown) => void
   const prev = _lock
   _lock = new Promise((r) => { resolve = r })
-  return prev.then(() => fn().finally(() => resolve!()))
+  // prev 即便已 rejected（fn 自身的 try/catch 兜底下不应发生，但加固调用方意外抛错路径），
+  // 也用 .catch 吞掉以确保后续锁能继续推进。
+  return prev.catch(() => undefined).then(() => fn().finally(() => resolve!()))
 }
 
 /* ── 最大分段高度（参考屏幕工作区） ── */
@@ -326,6 +363,8 @@ export function captureScreenshot(input: ScreenshotInput): Promise<ScreenshotRes
       const msg = err instanceof Error ? err.message : '截图失败'
       console.error('[截图服务]', err)
       return { success: false, message: msg }
+    } finally {
+      scheduleIdleDestroy()
     }
   })
 }

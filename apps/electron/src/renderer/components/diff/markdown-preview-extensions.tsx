@@ -11,7 +11,7 @@ import { TableCell } from '@tiptap/extension-table-cell'
 import { TableHeader } from '@tiptap/extension-table-header'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
-import { highlightCode, highlightToTokens } from '@proma/core'
+import { highlightCode, highlightToTokens, getDisplayName } from '@proma/core'
 import type { HighlightTokensResult } from '@proma/core'
 import type { FileAccessOptions } from '@proma/shared'
 
@@ -162,29 +162,31 @@ function buildShikiDecorations(doc: ProseMirrorNode, theme: string): DecorationS
 }
 
 function requestMissingShikiLanguages(view: EditorView, theme: string, pending: Set<string>): void {
-  const requests: Array<Promise<void>> = []
-
+  // 同一文档可能含多个相同 language 的代码块，先按 language 去重再判定，
+  // 避免重复同步调用 highlightToTokens（每个 codeBlock 一次）。
+  const languages = new Set<string>()
   view.state.doc.descendants((node) => {
     if (node.type.name !== 'codeBlock') return true
+    languages.add(normalizeCodeLanguage(node.attrs.language))
+    return false
+  })
 
-    const language = normalizeCodeLanguage(node.attrs.language)
-    const code = node.textContent || ' '
-    const syncResult = highlightToTokens({ code, language, theme })
-    if (syncResult && !shouldLoadShikiLanguage(language, syncResult.language)) return false
+  const requests: Array<Promise<void>> = []
+  for (const language of languages) {
+    const syncResult = highlightToTokens({ code: ' ', language, theme })
+    if (syncResult && !shouldLoadShikiLanguage(language, syncResult.language)) continue
 
     const key = `${theme}:${language}`
-    if (pending.has(key)) return false
+    if (pending.has(key)) continue
 
     pending.add(key)
     requests.push(
-      highlightCode({ code, language, theme })
+      highlightCode({ code: ' ', language, theme })
         .then(() => {})
         .catch((error) => console.error('[MarkdownRichEditor] Shiki 高亮失败:', error))
         .finally(() => pending.delete(key)),
     )
-
-    return false
-  })
+  }
 
   if (requests.length === 0) return
 
@@ -517,7 +519,7 @@ function createShikiCodeBlockView(initialNode: ProseMirrorNode, _themeRef: Theme
   const render = (node: ProseMirrorNode) => {
     const language = String(node.attrs.language ?? 'text') || 'text'
     currentCode = node.textContent
-    label.textContent = language === 'text' ? 'Code' : language
+    label.textContent = language === 'text' ? 'Code' : getDisplayName(language)
   }
 
   render(initialNode)
