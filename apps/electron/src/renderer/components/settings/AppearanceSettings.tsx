@@ -357,7 +357,7 @@ function StyleCard({
         type="button"
         onClick={onSelect}
         className={cn(
-          'relative rounded-lg transition-all overflow-hidden',
+          'relative rounded-lg overflow-hidden',
           'w-[99px] h-[183px]',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1',
           isSelected
