@@ -984,7 +984,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 onRequestEdit={startMarkdownEdit}
                 disabled={markdownSaving}
                 fileAccess={markdownFileAccess}
-                shikiTheme="github-dark"
+                shikiTheme={theme === 'dark' ? 'github-dark' : 'github-light'}
               />
             )
           ) : newContent ? (

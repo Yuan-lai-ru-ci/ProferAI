@@ -28,13 +28,13 @@ import {
 import { lowlight } from '@/lib/lowlight'
 import { htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
 import {
-  MarkdownTableBlock,
   MathBlock,
   MathInline,
   RawHtmlBlock,
   RawHtmlInline,
   TaskItem,
   TaskList,
+  tableExtensions,
   createMarkdownImage,
   createMarkdownVideo,
 } from '@/components/diff/markdown-preview-extensions'
@@ -73,7 +73,7 @@ export function ScratchPadView(): React.ReactElement {
     MathInline,
     TaskList,
     TaskItem,
-    MarkdownTableBlock,
+    ...tableExtensions,
   ], [])
 
   const editor = useEditor({

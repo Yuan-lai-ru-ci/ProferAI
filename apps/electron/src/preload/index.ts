@@ -703,6 +703,9 @@ export interface ElectronAPI {
   /** XLSX/PPTX 转 HTML（内联预览） */
   officeToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').OfficePreviewResult | null>
 
+  /** 截图导出：将 HTML 渲染为 PNG 并复制到剪贴板或保存文件 */
+  screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => Promise<{ success: boolean; message: string; filePath?: string }>
+
   /** 重命名文件/目录 */
   renameFile: (filePath: string, newName: string) => Promise<void>
 
@@ -1767,6 +1770,10 @@ const electronAPI: ElectronAPI = {
 
   officeToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:office-to-html', filePath, access) as Promise<import('@proma/shared').OfficePreviewResult | null>
+  },
+
+  screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.SCREENSHOT_CAPTURE, input) as Promise<{ success: boolean; message: string; filePath?: string }>
   },
 
   renameFile: (filePath: string, newName: string) => {
