@@ -185,6 +185,13 @@ const SIDEBAR_DRAG_STRIP_HEIGHT = {
   expanded: 4,
 } as const
 
+const AGENT_TOP_MIN_HEIGHT = 80
+const AGENT_TOP_MAX_RATIO = 0.7
+
+function computeAgentTopMaxHeight(containerHeight: number): number {
+  return Math.max(AGENT_TOP_MIN_HEIGHT, Math.floor(containerHeight * AGENT_TOP_MAX_RATIO))
+}
+
 function getRailInitial(title: string): string {
   return title.trim().slice(0, 1).toUpperCase() || '·'
 }
@@ -285,6 +292,28 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     }
   }, [agentTopHeight, setAgentTopHeight, mode, viewMode])
 
+  // 容器尺寸变化时（窗口缩放、Sidebar 宽度变化等），把上区高度 clamp 到允许范围内，
+  // 避免持久化的高度值在小屏幕下溢出导致分割线与"最近会话"等下方区域重合。
+  React.useEffect(() => {
+    const el = agentSplitContainerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      if (agentTopResizing.current) return
+      const entry = entries[0]
+      if (!entry) return
+      const containerHeight = entry.contentRect.height
+      if (containerHeight <= 0) return
+      const maxH = computeAgentTopMaxHeight(containerHeight)
+      setAgentTopHeight((prev) => {
+        if (prev <= 0) return prev
+        if (prev <= maxH) return prev
+        return maxH
+      })
+    })
+    ro.observe(el)
+    return () => { ro.disconnect() }
+  }, [setAgentTopHeight, mode, viewMode])
+
   const handleAgentTopResizeStart = React.useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
@@ -294,8 +323,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       const startY = e.clientY
       const startH = Math.max(0, agentTopHeight)
       const containerHeight = container.getBoundingClientRect().height
-      const minH = 80
-      const maxH = Math.max(minH, Math.floor(containerHeight * 0.7))
+      const minH = AGENT_TOP_MIN_HEIGHT
+      const maxH = computeAgentTopMaxHeight(containerHeight)
 
       const onMove = (ev: MouseEvent): void => {
         if (!agentTopResizing.current) return
