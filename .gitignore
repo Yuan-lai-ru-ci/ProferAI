@@ -41,3 +41,6 @@ what_are_humans_thinking
 
 # vendor binaries
 vendor
+
+# git worktrees (managed by proma-worktree skill)
+.worktrees
