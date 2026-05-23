@@ -43,7 +43,7 @@ export function CollapsedWorkspacePopover({
     closeTimerRef.current = window.setTimeout(() => setOpen(false), HOVER_CLOSE_DELAY)
   }, [cancelClose])
 
-  React.useEffect(() => cancelClose, [cancelClose])
+  React.useEffect(() => () => cancelClose(), [cancelClose])
 
   // 新建状态
   const [creating, setCreating] = React.useState(false)
@@ -104,6 +104,12 @@ export function CollapsedWorkspacePopover({
             setOpen(true)
           }}
           onMouseLeave={scheduleClose}
+          onClickCapture={() => {
+            // 点击触发元素（如 Agent 模式按钮）时关闭弹层，
+            // 避免切换模式后弹层因 hover 状态滞留 150ms
+            cancelClose()
+            setOpen(false)
+          }}
         >
           {children}
         </span>
