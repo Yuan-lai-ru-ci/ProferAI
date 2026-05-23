@@ -69,6 +69,7 @@ import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { WorkspaceSelector } from '@/components/agent/WorkspaceSelector'
+import { CollapsedWorkspacePopover } from '@/components/agent/CollapsedWorkspacePopover'
 import { MoveSessionDialog } from '@/components/agent/MoveSessionDialog'
 import { detectIsMac } from '@/lib/platform'
 import {
@@ -1072,24 +1073,21 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
         {/* 模式切换 */}
         <div className="flex flex-col items-center gap-1.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label="切换到 Agent 模式"
-                onClick={() => handleRailModeSwitch('agent')}
-                className={cn(
-                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag',
-                  mode === 'agent'
-                    ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
-                    : 'text-foreground/45 hover:bg-foreground/[0.06] hover:text-foreground/75'
-                )}
-              >
-                <Bot size={18} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Agent 模式</TooltipContent>
-          </Tooltip>
+          <CollapsedWorkspacePopover>
+            <button
+              type="button"
+              aria-label="切换到 Agent 模式（悬停查看工作区）"
+              onClick={() => handleRailModeSwitch('agent')}
+              className={cn(
+                'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag',
+                mode === 'agent'
+                  ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                  : 'text-foreground/45 hover:bg-foreground/[0.06] hover:text-foreground/75'
+              )}
+            >
+              <Bot size={18} />
+            </button>
+          </CollapsedWorkspacePopover>
 
           <Tooltip>
             <TooltipTrigger asChild>
