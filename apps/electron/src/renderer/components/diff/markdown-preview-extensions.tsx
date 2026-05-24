@@ -15,6 +15,7 @@ import katex from 'katex'
 import { highlightCode, highlightToTokens, getDisplayName } from '@proma/core'
 import type { HighlightTokensResult } from '@proma/core'
 import type { FileAccessOptions } from '@proma/shared'
+import { extractCodeText } from '../../lib/markdown-rich-text'
 
 type FileAccessRef = { current: FileAccessOptions | undefined }
 /** 传 null 表示当前编辑器无会话/文件上下文（如 ScratchPad），跳过路径解析。 */
@@ -882,20 +883,7 @@ export function createShikiCodeBlock(themeRef: ThemeRef): Node {
         preserveWhitespace: 'full',
         getContent: (element, schema) => {
           const code = (element as Element).querySelector('code')
-          if (code) {
-            // 遍历子节点，将 <br> 还原为 \n，避免浏览器解析时规范化空白导致空行丢失
-            const parts: string[] = []
-            for (const child of Array.from(code.childNodes)) {
-              if (child.nodeType === globalThis.Node.TEXT_NODE) {
-                parts.push(child.nodeValue || '')
-              } else if (child.nodeType === globalThis.Node.ELEMENT_NODE && (child as Element).tagName.toLowerCase() === 'br') {
-                parts.push('\n')
-              }
-            }
-            const text = parts.join('')
-            return text ? Fragment.from(schema.text(text)) : Fragment.empty
-          }
-          const text = element.textContent
+          const text = code ? extractCodeText(code) : (element.textContent || '')
           return text ? Fragment.from(schema.text(text)) : Fragment.empty
         },
       }]

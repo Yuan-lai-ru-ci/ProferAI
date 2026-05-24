@@ -37,6 +37,23 @@ function escapeAttr(value: string): string {
     .replace(/\n/g, '&#10;')
 }
 
+export function extractCodeText(codeEl: Element): string {
+  const parts: string[] = []
+  for (const child of Array.from(codeEl.childNodes)) {
+    if (child.nodeType === globalThis.Node.TEXT_NODE) {
+      parts.push(child.nodeValue || '')
+    } else if (child.nodeType === globalThis.Node.ELEMENT_NODE) {
+      const el = child as Element
+      if (el.tagName.toLowerCase() === 'br') {
+        parts.push('\n')
+      } else {
+        parts.push(el.textContent || '')
+      }
+    }
+  }
+  return parts.join('')
+}
+
 function escapeMarkdownText(value: string): string {
   // /m 让 ^ 匹配每行行首，确保多行文本节点中每一行的块级标记都被转义。
   // 这是必须的：在 markdown 中，行首的 # > + - 和有序列表标记会被解析为块级元素。
@@ -174,6 +191,19 @@ markdownIt.renderer.rules.image = (tokens, idx) => {
   return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}"${titleAttr}>`
 }
 
+markdownIt.renderer.rules.fence = (tokens, idx) => {
+  const token = tokens[idx]
+  if (!token) return ''
+  const info = token.info ? token.info.trim() : ''
+  const langName = info.split(/\s+/)[0] || ''
+  const escaped = markdownIt.utils.escapeHtml(token.content)
+  // 浏览器解析 <pre> 时会规范化连续换行符（\n\n → \n），导致空行丢失。
+  // 用 <br> 作为独立 DOM 节点不会被规范化，由 extractCodeText 在解析侧还原为 \n。
+  const preserved = escaped.replace(/\n\n/g, '<br>\n')
+  const classAttr = langName ? ` class="language-${markdownIt.utils.escapeHtml(langName)}"` : ''
+  return `<pre><code${classAttr}>${preserved}</code></pre>\n`
+}
+
 function wrapMarkdownDetailsBlocks(markdown: string): string {
   return markdown.replace(DETAILS_BLOCK_RE, (raw: string, attrs = '', summary: string, body: string) => {
     const bodyMarkdown = body.trim()
@@ -276,13 +306,7 @@ function enhanceMarkdownHtml(html: string): string {
 
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return ''
-  let html = markdownIt.render(preprocessMarkdown(markdown))
-  // 浏览器解析 <pre> 时可能规范化连续换行符，将 \n\n 替换为 <br>\n 确保空行保留
-  html = html.replace(/<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/g, (match, attrs, content) => {
-    const newContent = content.replace(/\n\n/g, '<br>\n')
-    return `<pre><code${attrs}>${newContent}</code></pre>`
-  })
-  return enhanceMarkdownHtml(html)
+  return enhanceMarkdownHtml(markdownIt.render(preprocessMarkdown(markdown)))
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */
@@ -356,19 +380,7 @@ export function htmlToMarkdown(html: string): string {
         const langClass = codeEl?.className || ''
         const langMatch = langClass.match(/language-(\S+)/)
         const lang = langMatch ? langMatch[1] : ''
-        // 提取代码内容，将 <br> 还原为 \n
-        let codeContent = ''
-        if (codeEl) {
-          for (const child of Array.from(codeEl.childNodes)) {
-            if (child.nodeType === Node.TEXT_NODE) {
-              codeContent += child.textContent || ''
-            } else if (child.nodeType === Node.ELEMENT_NODE && (child as Element).tagName.toLowerCase() === 'br') {
-              codeContent += '\n'
-            }
-          }
-        } else {
-          codeContent = children
-        }
+        const codeContent = codeEl ? extractCodeText(codeEl) : children
         return `\`\`\`${lang}\n${codeContent}\n\`\`\`\n`
       }
       case 'a': {
