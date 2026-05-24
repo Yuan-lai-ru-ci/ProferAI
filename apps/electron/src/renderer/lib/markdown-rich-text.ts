@@ -276,7 +276,13 @@ function enhanceMarkdownHtml(html: string): string {
 
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return ''
-  return enhanceMarkdownHtml(markdownIt.render(preprocessMarkdown(markdown)))
+  let html = markdownIt.render(preprocessMarkdown(markdown))
+  // 浏览器解析 <pre> 时可能规范化连续换行符，将 \n\n 替换为 <br>\n 确保空行保留
+  html = html.replace(/<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/g, (match, attrs, content) => {
+    const newContent = content.replace(/\n\n/g, '<br>\n')
+    return `<pre><code${attrs}>${newContent}</code></pre>`
+  })
+  return enhanceMarkdownHtml(html)
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */
@@ -348,9 +354,21 @@ export function htmlToMarkdown(html: string): string {
       case 'pre': {
         const codeEl = el.querySelector('code')
         const langClass = codeEl?.className || ''
-        const langMatch = langClass.match(/language-(\w+)/)
+        const langMatch = langClass.match(/language-(\S+)/)
         const lang = langMatch ? langMatch[1] : ''
-        const codeContent = codeEl ? processNode(codeEl) : children
+        // 提取代码内容，将 <br> 还原为 \n
+        let codeContent = ''
+        if (codeEl) {
+          for (const child of Array.from(codeEl.childNodes)) {
+            if (child.nodeType === Node.TEXT_NODE) {
+              codeContent += child.textContent || ''
+            } else if (child.nodeType === Node.ELEMENT_NODE && (child as Element).tagName.toLowerCase() === 'br') {
+              codeContent += '\n'
+            }
+          }
+        } else {
+          codeContent = children
+        }
         return `\`\`\`${lang}\n${codeContent}\n\`\`\`\n`
       }
       case 'a': {

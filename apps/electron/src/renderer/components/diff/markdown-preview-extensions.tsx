@@ -1,5 +1,6 @@
 import { Node, mergeAttributes, nodeInputRule } from '@tiptap/core'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
+import { Fragment } from '@tiptap/pm/model'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { EditorView, ViewMutationRecord } from '@tiptap/pm/view'
@@ -539,9 +540,11 @@ function createShikiCodeBlockView(initialNode: ProseMirrorNode, _themeRef: Theme
 
   const editPre = document.createElement('pre')
   setClass(editPre, 'markdown-code-edit-layer m-0 min-h-[3.2em] overflow-x-auto bg-transparent p-4 font-mono text-[13px] leading-[1.6]')
+  editPre.style.whiteSpace = 'pre'
 
   const contentDOM = document.createElement('code')
   setClass(contentDOM, 'block min-h-[1.6em] whitespace-pre bg-transparent p-0 font-mono text-[13px] leading-[1.6]')
+  contentDOM.style.whiteSpace = 'pre'
   editPre.appendChild(contentDOM)
   body.appendChild(editPre)
 
@@ -874,7 +877,28 @@ export function createShikiCodeBlock(themeRef: ThemeRef): Node {
     },
 
     parseHTML() {
-      return [{ tag: 'pre', preserveWhitespace: 'full' }]
+      return [{
+        tag: 'pre',
+        preserveWhitespace: 'full',
+        getContent: (element, schema) => {
+          const code = (element as Element).querySelector('code')
+          if (code) {
+            // 遍历子节点，将 <br> 还原为 \n，避免浏览器解析时规范化空白导致空行丢失
+            const parts: string[] = []
+            for (const child of Array.from(code.childNodes)) {
+              if (child.nodeType === globalThis.Node.TEXT_NODE) {
+                parts.push(child.nodeValue || '')
+              } else if (child.nodeType === globalThis.Node.ELEMENT_NODE && (child as Element).tagName.toLowerCase() === 'br') {
+                parts.push('\n')
+              }
+            }
+            const text = parts.join('')
+            return text ? Fragment.from(schema.text(text)) : Fragment.empty
+          }
+          const text = element.textContent
+          return text ? Fragment.from(schema.text(text)) : Fragment.empty
+        },
+      }]
     },
 
     addCommands() {
