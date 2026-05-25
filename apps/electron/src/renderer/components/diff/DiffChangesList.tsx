@@ -134,17 +134,19 @@ export const DiffChangesList = React.memo(function DiffChangesList({
   }, [])
 
   // 按 Git 仓库分组（在所有 hooks 之后、条件返回之前调用）
-  const fileGroups: FileGroup[] = React.useMemo(() => {
+  const { fileGroups, matchedFilesCount } = React.useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
     // 用完整 gitRoot 做 key，避免同名目录冲突
     const groups = new Map<string, ChangedFileEntry[]>()
+    let matched = 0
     for (const f of files) {
       if (q && !f.filePath.toLowerCase().includes(q)) continue
       const key = f.gitRoot || ''
       if (!groups.has(key)) groups.set(key, [])
       groups.get(key)!.push(f)
+      matched++
     }
-    return [...groups.entries()].map(([gitRoot, groupFiles]) => ({
+    const result: FileGroup[] = [...groups.entries()].map(([gitRoot, groupFiles]) => ({
       gitRoot,
       dirName: gitRoot ? gitRoot.split('/').pop() || gitRoot : '/',
       files: groupFiles,
@@ -152,6 +154,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
       totalDeletions: groupFiles.reduce((sum, f) => sum + f.deletions, 0),
       sources: [...new Set(groupFiles.map((f) => f.source))],
     }))
+    return { fileGroups: result, matchedFilesCount: matched }
   }, [files, searchQuery])
 
   const filteredUntrackedFiles = React.useMemo(() => {
@@ -197,7 +200,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
           {searchQuery && (
             <>
               <span className="text-[10px] text-muted-foreground/50 flex-shrink-0 tabular-nums">
-                {fileGroups.reduce((sum, g) => sum + g.files.length, 0) + filteredUntrackedFiles.length}
+                {matchedFilesCount + filteredUntrackedFiles.length}
               </span>
               <button
                 type="button"
@@ -219,70 +222,70 @@ export const DiffChangesList = React.memo(function DiffChangesList({
       )}
       {!isEmpty && (
         <>
-      {fileGroups.map((group) => {
-        const isCollapsed = collapsedDirs.has(group.gitRoot)
-        return (
-          <div key={group.gitRoot}>
-            {/* 文件夹 bar */}
-            <button
-              type="button"
-              onClick={() => toggleDir(group.gitRoot)}
-              className="flex items-center gap-1 w-full px-2 py-2 text-[13px] font-medium text-foreground/60 hover:bg-foreground/[0.04] transition-colors"
-            >
-              <ChevronRight
-                className={cn('size-3 transition-transform', !isCollapsed && 'rotate-90')}
-              />
-              <span className="truncate">{group.dirName}</span>
-              {/* 文件夹层级的来源 badges */}
-              {group.sources.map((src) => {
-                const cfg = SOURCE_CONFIG[src] ?? SOURCE_CONFIG.none!
-                return (
-                  <span key={src} className={cn('rounded px-1 py-0.5 text-[12px] leading-none shrink-0', cfg.color)}>
-                    {cfg.label}
+          {fileGroups.map((group) => {
+            const isCollapsed = collapsedDirs.has(group.gitRoot)
+            return (
+              <div key={group.gitRoot}>
+                {/* 文件夹 bar */}
+                <button
+                  type="button"
+                  onClick={() => toggleDir(group.gitRoot)}
+                  className="flex items-center gap-1 w-full px-2 py-2 text-[13px] font-medium text-foreground/60 hover:bg-foreground/[0.04] transition-colors"
+                >
+                  <ChevronRight
+                    className={cn('size-3 transition-transform', !isCollapsed && 'rotate-90')}
+                  />
+                  <span className="truncate">{group.dirName}</span>
+                  {/* 文件夹层级的来源 badges */}
+                  {group.sources.map((src) => {
+                    const cfg = SOURCE_CONFIG[src] ?? SOURCE_CONFIG.none!
+                    return (
+                      <span key={src} className={cn('rounded px-1 py-0.5 text-[12px] leading-none shrink-0', cfg.color)}>
+                        {cfg.label}
+                      </span>
+                    )
+                  })}
+                  <span className="ml-auto shrink-0 flex items-center gap-1.5">
+                    <span className="text-foreground/30">{group.files.length} changed files</span>
+                    {group.totalAdditions > 0 && <span className="text-foreground/30">+{group.totalAdditions}</span>}
+                    {group.totalDeletions > 0 && <span className="text-foreground/30">-{group.totalDeletions}</span>}
                   </span>
-                )
-              })}
-              <span className="ml-auto shrink-0 flex items-center gap-1.5">
-                <span className="text-foreground/30">{group.files.length} changed files</span>
-                {group.totalAdditions > 0 && <span className="text-foreground/30">+{group.totalAdditions}</span>}
-                {group.totalDeletions > 0 && <span className="text-foreground/30">-{group.totalDeletions}</span>}
-              </span>
-            </button>
+                </button>
 
-            {/* 文件列表 */}
-            {!isCollapsed && group.files.map((file) => {
-              const absPath = `${file.gitRoot || dirPath}/${file.filePath}`.replace(/\/+/g, '/')
-              return (
-              <FileRow
-                key={`${file.gitRoot}:${file.filePath}`}
-                file={file}
-                isSelected={absPath === selectedFilePath || file.filePath === selectedFilePath}
-                isUnseen={unseenFiles.has(absPath)}
-                onClick={() => { markFileAsSeen(absPath); onFileClick(file.filePath, false, file.gitRoot) }}
-                onRevert={() => handleRevert(file.filePath, file.gitRoot)}
-                dirPath={dirPath}
-              />
-              )
-            })}
-          </div>
-        )
-      })}
+                {/* 文件列表 */}
+                {!isCollapsed && group.files.map((file) => {
+                  const absPath = `${file.gitRoot || dirPath}/${file.filePath}`.replace(/\/+/g, '/')
+                  return (
+                    <FileRow
+                      key={`${file.gitRoot}:${file.filePath}`}
+                      file={file}
+                      isSelected={absPath === selectedFilePath || file.filePath === selectedFilePath}
+                      isUnseen={unseenFiles.has(absPath)}
+                      onClick={() => { markFileAsSeen(absPath); onFileClick(file.filePath, false, file.gitRoot) }}
+                      onRevert={() => handleRevert(file.filePath, file.gitRoot)}
+                      dirPath={dirPath}
+                    />
+                  )
+                })}
+              </div>
+            )
+          })}
 
-      {/* 未追踪文件分组 */}
-      {filteredUntrackedFiles.length > 0 && (
-        <div>
-          <div className="flex items-center px-2 py-2 text-[13px] font-medium text-muted-foreground border-t border-border/30">
-            未追踪文件
-          </div>
-          {filteredUntrackedFiles.map((file) => (
-            <UntrackedFileRow
-              key={`${file.gitRoot}:${file.filePath}`}
-              file={file}
-              onClick={() => onFileClick(file.filePath, true, file.gitRoot)}
-            />
-          ))}
-        </div>
-      )}
+          {/* 未追踪文件分组 */}
+          {filteredUntrackedFiles.length > 0 && (
+            <div>
+              <div className="flex items-center px-2 py-2 text-[13px] font-medium text-muted-foreground border-t border-border/30">
+                未追踪文件
+              </div>
+              {filteredUntrackedFiles.map((file) => (
+                <UntrackedFileRow
+                  key={`${file.gitRoot}:${file.filePath}`}
+                  file={file}
+                  onClick={() => onFileClick(file.filePath, true, file.gitRoot)}
+                />
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

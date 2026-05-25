@@ -82,6 +82,15 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
   }, [sessionId, setPreviewFileMap, setPreviewOpenMap])
 
+  const handleDiffFileClick = React.useCallback((filePath: string, _isUntracked: boolean, gitRoot?: string) => {
+    setPreviewFileMap((prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, { filePath, dirPath: sessionPath || undefined, gitRoot })
+      return m
+    })
+    setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
+  }, [sessionId, sessionPath, setPreviewFileMap, setPreviewOpenMap])
+
   // 动画标志：isOpen 变化时启用过渡动画，切换会话时即时显示
   const prevIsOpenRef = React.useRef(isOpen)
   const prevSessionIdRef = React.useRef(sessionId)
@@ -385,14 +394,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
               extraPaths={extraPathsMemo}
               refreshVersion={diffRefreshVersion}
               selectedFilePath={selectedFilePath}
-              onFileClick={(filePath, _isUntracked, gitRoot) => {
-                setPreviewFileMap((prev) => {
-                  const m = new Map(prev)
-                  m.set(sessionId, { filePath, dirPath: sessionPath || undefined, gitRoot })
-                  return m
-                })
-                setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, true); return m })
-              }}
+              onFileClick={handleDiffFileClick}
             />
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
