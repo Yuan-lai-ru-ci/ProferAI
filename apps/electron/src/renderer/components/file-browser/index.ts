@@ -5,3 +5,4 @@
 export * from './FileBrowser'
 export * from './FileDropZone'
 export * from './FileTypeIcon'
+export * from './tree-row-layout'

@@ -898,6 +898,16 @@
   animation: file-browser-flash 1.2s ease-out;
 }
 
+/* ===== FileBrowser sticky 目录行：每条 sticky 链路最末一行加一道软扩散阴影 =====
+   :has() 选择器只能向后看 sticky 行同一父级内的兄弟，所以 "栈最末" 实际语义是
+   "本节点子树内不再有更深的 sticky 子行"。
+   - 单棵展开链路：只有最深一层 sticky 子行有阴影（父行的子项容器内含子 sticky，被规则排除）。
+   - 多个平行展开（多个根目录同时打开）：每条链路各自一道阴影——这里把每棵独立树视为独立视觉单元。
+   要做到全局唯一一道阴影需要 JS 监听滚动 + 展开状态动态打标记，目前不做。 */
+[data-sticky-row="true"]:not(:has(~ * [data-sticky-row="true"])) {
+  box-shadow: 0 2px 4px -1px hsl(var(--foreground) / 0.08);
+}
+
 /* ===== Office 内联预览 ===== */
 .office-preview-host {
   min-height: 100%;
