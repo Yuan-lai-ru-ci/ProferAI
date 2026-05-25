@@ -425,10 +425,27 @@ export function useGlobalAgentListeners(): void {
         }
       }
 
+      // 检查文件是否落在当前会话的 diff scope 内（与 getUnstagedChanges 的 candidates 对齐）
+      // 注：未纳入 dirPath，因为 DiffChangesList 调用时 dirPath 始终等于 sessionPath
+      const sessionScopePaths = uniqueTruthyPaths([
+        sessionPath,
+        workspaceFilesPath,
+        ...sessionAttachedDirs,
+        ...workspaceAttachedDirs,
+      ])
+      const absTarget = isAbsolutePath(targetPath)
+        ? targetPath
+        : (sessionPath ? `${sessionPath.replace(/[/\\]+$/, '')}/${targetPath}` : targetPath)
+      const inDiffScope = sessionScopePaths.some((root) => {
+        const r = root.replace(/[/\\]+$/, '') + '/'
+        return absTarget === root || absTarget.startsWith(r)
+      })
+
       return {
         filePath: targetPath,
         dirPath: dirPath || undefined,
         previewOnly,
+        inDiffScope,
         basePaths: basePaths.length > 0 ? basePaths : undefined,
       }
     }
@@ -654,7 +671,7 @@ export function useGlobalAgentListeners(): void {
                   : buildAutoPreviewFile(sessionId, writtenPath)
 
                 previewPromise.then((previewFile) => {
-                  if (!previewFile || previewFile.previewOnly) return
+                  if (!previewFile || previewFile.previewOnly || !previewFile.inDiffScope) return
 
                   store.set(agentDiffUnseenChangesAtom, (prev) => {
                     const m = new Map(prev); m.set(sessionId, true); return m
