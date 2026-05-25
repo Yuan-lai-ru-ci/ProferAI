@@ -29,7 +29,7 @@ import {
   agentAttachedFilesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
   workspaceAttachedFilesMapAtom,
-  agentPendingFilesAtom,
+  agentPendingFilesAtomFamily,
   agentDiffRefreshVersionAtom,
 } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -322,8 +322,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   }, [setFilesVersion])
 
   // 添加文件到聊天
-  const pendingFiles = useAtomValue(agentPendingFilesAtom)
-  const setPendingFiles = useSetAtom(agentPendingFilesAtom)
+  const pendingFiles = useAtomValue(agentPendingFilesAtomFamily(sessionId))
+  const setPendingFiles = useSetAtom(agentPendingFilesAtomFamily(sessionId))
   const handleAddToChat = React.useCallback((entry: FileEntry) => {
     // 先在 setter 外部检查去重，避免在 updater 函数内执行不可逆副作用
     if (pendingFiles.some((f) => f.sourcePath === entry.path)) return
