@@ -24,6 +24,7 @@ import {
   agentDiffRefreshVersionAtom,
   agentDiffUnseenChangesAtom,
   agentDiffUnseenFilesAtom,
+  agentDiffDataAtom,
   agentStreamingStatesAtom,
   liveMessagesMapAtom,
   agentSessionStreamingStateAtomFamily,
@@ -76,6 +77,7 @@ export function useCloseTab(): UseCloseTabReturn {
   const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
   const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
   const setDiffUnseenFiles = useSetAtom(agentDiffUnseenFilesAtom)
+  const setDiffData = useSetAtom(agentDiffDataAtom)
 
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
@@ -100,6 +102,7 @@ export function useCloseTab(): UseCloseTabReturn {
     setDiffRefreshVersion(deleteKey)
     setDiffUnseen(deleteKey)
     setDiffUnseenFiles(deleteKey)
+    setDiffData(deleteKey)
     // tab.id === sessionId（见 tab-atoms.ts openTab）
     // 清理重型流式数据：streamingStates（含累积 content 与 toolActivities）和 liveMessages（SDK 消息数组）
     // 不清 agentSessionDraftsAtom / agentSessionDraftHtmlAtom / agentStreamErrorsAtom 这些
@@ -127,7 +130,7 @@ export function useCloseTab(): UseCloseTabReturn {
     sessionPersistedPermissionModeAtom.remove(tabId)
     sessionExistsAtom.remove(tabId)
     clearPreviewCacheForSession(tabId)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
 
   const executeClose = React.useCallback((tabId: string) => {
     const tab = tabs.find((t) => t.id === tabId)

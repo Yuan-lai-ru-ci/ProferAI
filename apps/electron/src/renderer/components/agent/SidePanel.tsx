@@ -388,6 +388,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           {activeTab === 'changes' ? (
             sessionPath ? (
             <DiffChangesList
+              key={sessionId}
               dirPath={sessionPath}
               sessionId={sessionId}
               sessionPath={sessionPath}

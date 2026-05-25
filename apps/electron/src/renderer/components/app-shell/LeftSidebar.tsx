@@ -47,6 +47,7 @@ import {
   agentDiffRefreshVersionAtom,
   agentDiffUnseenChangesAtom,
   agentDiffUnseenFilesAtom,
+  agentDiffDataAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -363,6 +364,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
   const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
   const setDiffUnseenFiles = useSetAtom(agentDiffUnseenFilesAtom)
+  const setDiffData = useSetAtom(agentDiffDataAtom)
   const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
@@ -384,10 +386,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setDiffRefreshVersion(deleteKey)
     setDiffUnseen(deleteKey)
     setDiffUnseenFiles(deleteKey)
+    setDiffData(deleteKey)
     setSessionChannelMap(deleteKey)
     setSessionModelMap(deleteKey)
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setSessionChannelMap, setSessionModelMap])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null

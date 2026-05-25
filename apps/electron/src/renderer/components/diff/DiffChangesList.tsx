@@ -10,7 +10,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
-import { agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
+import { agentDiffUnseenFilesAtom, agentDiffDataAtom } from '@/atoms/agent-atoms'
 import type { ChangedFileEntry, ChangeSource, UntrackedFileEntry } from '@proma/shared'
 
 /** 按目录分组后的数据结构 */
@@ -62,9 +62,15 @@ export const DiffChangesList = React.memo(function DiffChangesList({
   selectedFilePath,
   extraPaths,
 }: DiffChangesListProps): React.ReactElement {
-  const [files, setFiles] = React.useState<ChangedFileEntry[]>([])
-  const [untrackedFiles, setUntrackedFiles] = React.useState<UntrackedFileEntry[]>([])
-  const [isGitRepo, setIsGitRepo] = React.useState(true)
+  // Diff 数据缓存：mount 时若已有上次结果，立即用作初值，避免空数组闪 1s "没有代码改动"
+  const diffDataMap = useAtomValue(agentDiffDataAtom)
+  const setDiffDataMap = useSetAtom(agentDiffDataAtom)
+  const cached = diffDataMap.get(sessionId)
+  const [files, setFiles] = React.useState<ChangedFileEntry[]>(() => cached?.files ?? [])
+  const [untrackedFiles, setUntrackedFiles] = React.useState<UntrackedFileEntry[]>(() => cached?.untrackedFiles ?? [])
+  const [isGitRepo, setIsGitRepo] = React.useState(() => cached?.isGitRepo ?? true)
+  /** 首次 fetch 是否已返回——区分 loading 与真·空，避免 "没有代码改动" 误闪 */
+  const [hasFetched, setHasFetched] = React.useState<boolean>(() => cached !== undefined)
   const [collapsedDirs, setCollapsedDirs] = React.useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = React.useState('')
   /** 单调递增的 fetch 序号，用于丢弃乱序到达的旧响应 */
@@ -97,11 +103,19 @@ export const DiffChangesList = React.memo(function DiffChangesList({
       setIsGitRepo(result.isGitRepo)
       setFiles(result.files || [])
       setUntrackedFiles(result.untrackedFiles || [])
+      setHasFetched(true)
+      // 写回 atom 缓存：下一次 mount 可直接拿到旧值跳过空闪烁
+      setDiffDataMap((prev) => {
+        const next = new Map(prev)
+        next.set(sessionId, result)
+        return next
+      })
     } catch {
       if (requestId !== fetchSeqRef.current) return
       setIsGitRepo(true) // 避免网络等错误误判
+      setHasFetched(true)
     }
-  }, [dirPath, sessionPath, workspaceFilesPath, extraPaths, sessionId])
+  }, [dirPath, sessionPath, workspaceFilesPath, extraPaths, sessionId, setDiffDataMap])
 
   React.useEffect(() => {
     fetchChanges()
@@ -174,11 +188,11 @@ export const DiffChangesList = React.memo(function DiffChangesList({
     )
   }
 
-  // 空状态
+  // 空状态：首次 fetch 未完成时显示加载占位，避免误显示 "没有代码改动"
   if (files.length === 0 && untrackedFiles.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
-        <p className="text-[12px] text-center">没有代码改动</p>
+        <p className="text-[12px] text-center">{hasFetched ? '没有代码改动' : '加载中…'}</p>
       </div>
     )
   }
