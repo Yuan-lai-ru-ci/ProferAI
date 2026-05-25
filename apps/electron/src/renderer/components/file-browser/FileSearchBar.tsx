@@ -56,10 +56,11 @@ export function FileSearchBar({
 
   /** 将搜索结果的相对路径转为绝对路径，供 FileBrowser 自动定位使用 */
   const resolveAbsolutePath = React.useCallback((entry: FileIndexEntry): string => {
-    if (entry.path.startsWith('/')) return entry.path
+    if (entry.path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(entry.path)) return entry.path
     const base = entry.source === 'workspace' ? workspaceFilesPath : sessionPath
     if (!base) return entry.path
-    return `${base.replace(/\/$/, '')}/${entry.path}`
+    const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+    return `${base.replace(/[\\/]+$/, '')}${sep}${entry.path}`
   }, [workspaceFilesPath, sessionPath])
 
   // 防抖搜索 — 分别搜索两个目录
@@ -150,6 +151,7 @@ export function FileSearchBar({
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
+      abortRef.current?.abort()
     }
   }, [query, workspaceFilesPath, sessionPath, sessionAttachedDirs, workspaceAttachedDirs, hasAnyRoot])
 
@@ -211,10 +213,10 @@ export function FileSearchBar({
     inputRef.current?.blur()
   }, [onFilePreview, sessionId, setAutoReveal, resolveAbsolutePath])
 
-  if (!hasAnyRoot) return null
+  const sessionResults = React.useMemo(() => results.filter((e) => e.source === 'session'), [results])
+  const workspaceResults = React.useMemo(() => results.filter((e) => e.source === 'workspace'), [results])
 
-  const sessionResults = results.filter((e) => e.source === 'session')
-  const workspaceResults = results.filter((e) => e.source === 'workspace')
+  if (!hasAnyRoot) return null
 
   return (
     <div ref={containerRef} className="relative mx-2 flex-shrink-0">
@@ -306,12 +308,17 @@ function ResultItem({
   onClick: (entry: FileIndexEntry) => void
   onHover: () => void
 }): React.ReactElement {
-  // 从完整路径中提取父目录（去掉文件名），避免路径里重复显示文件名
-  const dirPath = entry.path === entry.name
-    ? ''
-    : entry.path.endsWith(`/${entry.name}`)
-      ? entry.path.slice(0, -(entry.name.length + 1))
-      : entry.path
+  // 从完整路径中提取父目录（去掉文件名），避免路径里重复显示文件名。
+  // 兼容 POSIX (`/`) 与 Windows (`\`) 分隔符。
+  const dirPath = React.useMemo(() => {
+    if (entry.path === entry.name) return ''
+    const sepLen = entry.name.length + 1
+    const tail = entry.path.slice(-sepLen)
+    if (tail === `/${entry.name}` || tail === `\\${entry.name}`) {
+      return entry.path.slice(0, -sepLen)
+    }
+    return entry.path
+  }, [entry.path, entry.name])
 
   return (
     <Tooltip delayDuration={500}>
