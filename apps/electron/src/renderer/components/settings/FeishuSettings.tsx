@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Loader2, CheckCircle2, XCircle, ExternalLink, Users, User, Trash2, RefreshCw, Copy, Check, Power, PowerOff, Plus, ChevronRight, PlayCircle } from 'lucide-react'
+import { Loader2, CheckCircle2, XCircle, ExternalLink, Users, User, Trash2, RefreshCw, Copy, Check, Power, PowerOff, Plus, ChevronRight, PlayCircle, QrCode } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -29,6 +29,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
 import { SettingsInput } from './primitives/SettingsInput'
@@ -37,7 +45,7 @@ import { SettingsRow } from './primitives/SettingsRow'
 import { feishuBotStatesAtom, feishuBindingsAtom } from '@/atoms/feishu-atoms'
 import { agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
-import type { FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState } from '@proma/shared'
+import type { FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState, FeishuRegisterAppQRCode, FeishuRegisterAppStatus } from '@proma/shared'
 
 // ===== 常量 =====
 
@@ -627,6 +635,205 @@ function FeishuBindingsTab(): React.ReactElement {
   )
 }
 
+// ===== 扫码注册 Dialog =====
+
+/** 扫码成功页底部的"下一步推荐"：把 CLI 提示词一键复制，让用户去 Agent 会话里跑 */
+function CliRecommendationCard(): React.ReactElement {
+  const [copied, setCopied] = React.useState(false)
+
+  const handleCopy = React.useCallback(() => {
+    navigator.clipboard.writeText(FEISHU_CLI_PROMPT).then(() => {
+      setCopied(true)
+      toast.success('提示词已复制，前往 Agent 对话粘贴发送')
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(() => {
+      toast.error('复制失败')
+    })
+  }, [])
+
+  return (
+    <div className="w-full rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-3 space-y-2">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 text-xs text-foreground/80 leading-relaxed">
+          <div className="font-medium text-foreground mb-0.5">想要更完整的飞书生态体验？</div>
+          补全飞书 CLI 后 Proma Agent 还可以直接读写你的文档、查日历、发邮件等。
+          复制下方提示词到任意工作区的新对话发送即可，Agent 会全程引导完成。
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleCopy}
+        className="gap-1.5 w-full"
+      >
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+        <span>{copied ? '已复制至剪贴板' : '复制配置提示词'}</span>
+      </Button>
+    </div>
+  )
+}
+
+interface RegisterFeishuDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** 注册成功后回调，返回主进程拿到的 App ID/Secret；上层应在此处保存配置并启动 Bot */
+  onSuccess: (result: { appId: string; appSecret: string }) => void
+}
+
+/** 扫码注册飞书 Bot：弹窗内全程引导，扫码成功后自动保存配置并启动 Bot */
+function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuDialogProps): React.ReactElement {
+  const [qrcode, setQrcode] = React.useState<FeishuRegisterAppQRCode | null>(null)
+  const [status, setStatus] = React.useState<FeishuRegisterAppStatus | null>(null)
+  const [phase, setPhase] = React.useState<'idle' | 'qrcode' | 'success' | 'error'>('idle')
+  const [errorMsg, setErrorMsg] = React.useState<string>('')
+
+  // 用 ref 持有最新的 onSuccess，避免依赖 onSuccess 后回调引用变化触发整个 effect 重启
+  // 重启会调 cancelFeishuRegistration 中断当前正在等待扫码的流程
+  const onSuccessRef = React.useRef(onSuccess)
+  React.useLayoutEffect(() => {
+    onSuccessRef.current = onSuccess
+  })
+
+  // 弹窗打开 → 监听推送 + 启动注册；关闭 → 解监听 + 取消
+  React.useEffect(() => {
+    if (!open) return
+
+    let cancelled = false
+    setPhase('idle')
+    setErrorMsg('')
+    setQrcode(null)
+    setStatus(null)
+
+    const offQr = window.electronAPI.onFeishuRegisterQrcode((payload) => {
+      setQrcode(payload)
+      setPhase('qrcode')
+    })
+    const offStatus = window.electronAPI.onFeishuRegisterStatus((payload) => {
+      setStatus(payload)
+    })
+
+    window.electronAPI.registerFeishuApp()
+      .then((result) => {
+        if (cancelled) return
+        setPhase('success')
+        onSuccessRef.current({ appId: result.appId, appSecret: result.appSecret })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        const msg = err instanceof Error ? err.message : String(err)
+        // SDK 在 abort 时抛出的错误，关闭弹窗时不显示
+        if (msg.includes('aborted') || msg.includes('Abort')) return
+        setPhase('error')
+        setErrorMsg(msg)
+      })
+
+    return () => {
+      cancelled = true
+      offQr()
+      offStatus()
+      window.electronAPI.cancelFeishuRegistration().catch(() => {})
+    }
+  }, [open])
+
+  const handleOpenInBrowser = React.useCallback(() => {
+    if (qrcode?.url) {
+      window.electronAPI.openExternal(qrcode.url)
+    }
+  }, [qrcode])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <QrCode size={18} className="text-primary" />
+            扫码创建飞书 Bot
+          </DialogTitle>
+          <DialogDescription>
+            飞书后端将自动创建一个 PersonalAgent 应用，扫码完成后 Proma 会自动保存凭证并启动 Bot，整个过程无需手动复制 App ID / Secret。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col items-center gap-3 py-2">
+          {phase === 'idle' && (
+            <div className="flex flex-col items-center gap-2 py-12 text-sm text-muted-foreground">
+              <Loader2 size={24} className="animate-spin" />
+              <span>正在向飞书申请二维码…</span>
+            </div>
+          )}
+
+          {phase === 'qrcode' && qrcode && (
+            <>
+              <div className="bg-white rounded-lg p-3 shadow-sm">
+                {qrcode.dataUrl ? (
+                  <img
+                    src={qrcode.dataUrl}
+                    alt="飞书扫码注册二维码"
+                    className="w-[240px] h-[240px] block"
+                  />
+                ) : (
+                  <div className="w-[240px] h-[240px] flex items-center justify-center text-xs text-muted-foreground">
+                    二维码生成失败，请用浏览器打开
+                  </div>
+                )}
+              </div>
+              <div className="text-sm text-foreground text-center">
+                用飞书 App 「扫一扫」，按提示完成应用创建
+              </div>
+              <div className="text-xs text-muted-foreground text-center">
+                {status?.status === 'polling' && '等待扫码确认中…'}
+                {status?.status === 'slow_down' && '轮询节奏已自动放慢'}
+                {status?.status === 'domain_switched' && '已切换到国际版域名'}
+                {!status && '二维码已就绪'}
+              </div>
+              <Button
+                variant="link"
+                size="sm"
+                onClick={handleOpenInBrowser}
+                className="h-auto p-0 text-xs"
+              >
+                或在浏览器中打开链接
+              </Button>
+            </>
+          )}
+
+          {phase === 'success' && (
+            <div className="w-full flex flex-col items-center gap-4 py-2">
+              <div className="flex flex-col items-center gap-2 text-sm">
+                <CheckCircle2 size={32} className="text-green-600" />
+                <span className="text-foreground font-medium">应用创建成功</span>
+                <span className="text-xs text-muted-foreground">已自动保存配置，正在启动 Bot…</span>
+              </div>
+
+              {/* 推荐：补全飞书 CLI 获得完整生态体验 */}
+              <CliRecommendationCard />
+            </div>
+          )}
+
+          {phase === 'error' && (
+            <div className="flex flex-col items-center gap-2 py-8 text-sm">
+              <XCircle size={32} className="text-red-600" />
+              <span className="text-foreground font-medium">创建失败</span>
+              <span className="text-xs text-muted-foreground text-center max-w-[300px]">{errorMsg || '未知错误，请稍后重试'}</span>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {phase === 'success' ? '关闭' : '取消'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// 用于将新名称生成的占位符（参考 handleAddBot 的命名规则保持一致）
+function defaultBotName(index: number): string {
+  return `飞书助手 ${index + 1}`
+}
+
 // ===== 单个 Bot 配置卡片 =====
 
 interface BotConfigCardProps {
@@ -912,7 +1119,7 @@ function FeishuConfigTab(): React.ReactElement {
   const handleAddBot = React.useCallback(async () => {
     try {
       const saved = await window.electronAPI.saveFeishuBotConfig({
-        name: `飞书助手 ${bots.length + 1}`,
+        name: defaultBotName(bots.length),
         enabled: false,
         appId: '',
         appSecret: '',
@@ -923,6 +1130,31 @@ function FeishuConfigTab(): React.ReactElement {
       setBots((prev) => [...prev, saved])
     } catch {
       toast.error('创建 Bot 失败')
+    }
+  }, [bots.length])
+
+  const [registerOpen, setRegisterOpen] = React.useState(false)
+
+  /** 扫码成功后：保存配置 + 自动启动 Bot */
+  const handleRegisterSuccess = React.useCallback(async (result: { appId: string; appSecret: string }) => {
+    try {
+      const saved = await window.electronAPI.saveFeishuBotConfig({
+        name: defaultBotName(bots.length),
+        enabled: true,
+        appId: result.appId,
+        appSecret: result.appSecret,
+        defaultWorkspaceId: undefined,
+        defaultChannelId: undefined,
+        defaultModelId: undefined,
+      })
+      setBots((prev) => [...prev, saved])
+      toast.success(`Bot "${saved.name}" 已创建`)
+      // 自动启动 Bot（不阻塞 UI）
+      window.electronAPI.startFeishuBot(saved.id).catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : '自动启动失败，请手动启动')
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存配置失败')
     }
   }, [bots.length])
 
@@ -939,21 +1171,33 @@ function FeishuConfigTab(): React.ReactElement {
       {/* 视频教程（顶部最显眼处，未配置 URL 时自动隐藏） */}
       <FeishuTutorialVideo />
 
+      <RegisterFeishuDialog
+        open={registerOpen}
+        onOpenChange={setRegisterOpen}
+        onSuccess={handleRegisterSuccess}
+      />
+
       {/* Bot 列表 */}
       <SettingsSection
         title="飞书 Bot 列表"
         description="管理多个飞书机器人，每个 Bot 可绑定不同的工作区和模型"
         action={
-          <Button size="sm" variant="outline" onClick={handleAddBot}>
-            <Plus size={14} className="mr-1.5" />
-            添加 Bot
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setRegisterOpen(true)}>
+              <QrCode size={14} className="mr-1.5" />
+              扫码创建
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleAddBot}>
+              <Plus size={14} className="mr-1.5" />
+              手动添加
+            </Button>
+          </div>
         }
       >
         {bots.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              还没有配置飞书 Bot。点击「添加 Bot」开始。
+              还没有配置飞书 Bot。点击「扫码创建」一键接入，或「手动添加」用已有 App ID。
             </div>
           </SettingsCard>
         ) : (
