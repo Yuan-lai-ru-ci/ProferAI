@@ -97,9 +97,11 @@ const FEISHU_SCOPES_JSON = JSON.stringify({
  * 支持 B 站 / YouTube 等任意 iframe 嵌入地址，例如：
  *   B 站：//player.bilibili.com/player.html?bvid=BVxxxxxx&autoplay=0
  *   YouTube：https://www.youtube.com/embed/VIDEO_ID
+ *
+ * TODO: 教程视频录制完成后，把 url 填回（之前测试用过 'https://www.bilibili.com/video/BV1z8G867Epv'）。
  */
 const FEISHU_TUTORIAL_VIDEO = {
-  url: 'https://www.bilibili.com/video/BV1z8G867Epv',
+  url: '',
   title: '飞书 Bot 配置视频教程',
   description: '跟着视频一步步配，3 分钟内完成飞书 Bot 接入',
 } as const
