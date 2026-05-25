@@ -313,6 +313,8 @@ export interface FileBrowserAutoReveal {
   sessionId: string
   path: string
   ts: number
+  /** 是否同时将文件设为选中态 */
+  select?: boolean
 }
 export const fileBrowserAutoRevealAtom = atom<FileBrowserAutoReveal | null>(null)
 

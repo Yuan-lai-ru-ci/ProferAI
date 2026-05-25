@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { FileBrowser, FileDropZone, FileTypeIcon, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
+import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
 import {
@@ -31,6 +31,7 @@ import {
   workspaceAttachedFilesMapAtom,
   agentPendingFilesAtomFamily,
   agentDiffRefreshVersionAtom,
+  fileBrowserAutoRevealAtom,
 } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import { detectIsWindows } from '@/lib/platform'
@@ -451,6 +452,16 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                           </TooltipContent>
                         </Tooltip>
                       </div>
+                      {/* ===== 文件搜索栏 ===== */}
+                      <FileSearchBar
+                        workspaceFilesPath={null}
+                        sessionPath={sessionPath}
+                        sessionAttachedDirs={attachedDirs}
+                        workspaceAttachedDirs={[]}
+                        placeholder="搜索会话文件..."
+                        sessionId={sessionId}
+                        onFilePreview={handleFilePreview}
+                      />
                       {/* 会话文件内容区（独立滚动） */}
                       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
                         {/* 附加文件列表 */}
@@ -494,11 +505,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                           onFoldersDropped={handleSessionFoldersDropped}
                         />
                       </div>
-                      {/* ===== 分隔线 ===== */}
-                      <div className="mx-3 my-3 border-t border-muted-foreground/20" />
                     </>
                   )}
-
+                  {/* ===== 分隔线 ===== */}
+                  <div className="mx-3 my-3 border-t border-muted-foreground/20" />
 
                   {/* ===== 工作区文件区 ===== */}
                   <div className="flex-1 min-h-0 flex flex-col mx-2 mb-2">
@@ -533,6 +543,16 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         </Tooltip>
                       )}
                     </div>
+                    {/* ===== 文件搜索栏（工作区） ===== */}
+                    <FileSearchBar
+                      workspaceFilesPath={workspaceFilesPath}
+                      sessionPath={null}
+                      sessionAttachedDirs={[]}
+                      workspaceAttachedDirs={wsAttachedDirs}
+                      placeholder="搜索工作区文件..."
+                      sessionId={sessionId}
+                      onFilePreview={handleFilePreview}
+                    />
                     {/* 工作区文件内容区（独立滚动） */}
                     <div className="flex-1 min-h-0 overflow-y-auto pb-1 scrollbar-thin">
                       {/* 工作区级附加文件 */}
@@ -689,6 +709,32 @@ interface AttachedDirsSectionProps {
 function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedDirsSectionProps): React.ReactElement {
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
 
+  // ===== 接入搜索点击触发的 reveal：附加目录文件搜到后，需要展开/选中目标 =====
+  const autoReveal = useAtomValue(fileBrowserAutoRevealAtom)
+  // 找到 reveal target 命中的那个附加目录根。如果用户附加了嵌套目录（如同时附加 /a 和 /a/b），
+  // 取"最深匹配"——只让真正包含该文件的最近一棵树展开，避免外层 /a 树被无谓打开。
+  const revealRoot = React.useMemo(() => {
+    if (!autoReveal) return null
+    let best: string | null = null
+    for (const dir of attachedDirs) {
+      if (!isPathUnderRoot(dir, autoReveal.path)) continue
+      if (!best || dir.length > best.length) best = dir
+    }
+    return best
+  }, [autoReveal, attachedDirs])
+  const revealTarget = revealRoot ? autoReveal!.path : null
+  const revealTs = revealRoot ? autoReveal!.ts : 0
+  const revealSelect = revealRoot ? !!autoReveal!.select : false
+
+  // 命中本区域 + select=true：把目标加入选中态（与 FileBrowser 行为对齐）
+  const consumedSelectTsRef = React.useRef(0)
+  React.useEffect(() => {
+    if (!revealSelect || !revealTarget || revealTs === 0) return
+    if (revealTs <= consumedSelectTsRef.current) return
+    consumedSelectTsRef.current = revealTs
+    setSelectedPaths(new Set([revealTarget]))
+  }, [revealTs, revealSelect, revealTarget])
+
   const handleSelect = React.useCallback((path: string, ctrlKey: boolean) => {
     setSelectedPaths((prev) => {
       if (ctrlKey) {
@@ -709,20 +755,25 @@ function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToCh
   return (
     <div className="pt-2.5 pb-1 flex-shrink-0">
       <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3">附加目录（Agent 可以读取并操作此外部文件夹）</div>
-      {attachedDirs.map((dir) => (
-        <AttachedDirTree
-          key={dir}
-          dirPath={dir}
-          onDetach={() => onDetach(dir)}
-          selectedPaths={selectedPaths}
-          onSelect={handleSelect}
-          refreshVersion={refreshVersion}
-          onAddToChat={onAddToChat}
-          onFilePreview={onFilePreview}
-          allowedPaths={allowedPaths}
-          sessionId={sessionId}
-        />
-      ))}
+      {attachedDirs.map((dir) => {
+        const isRevealRoot = dir === revealRoot
+        return (
+          <AttachedDirTree
+            key={dir}
+            dirPath={dir}
+            onDetach={() => onDetach(dir)}
+            selectedPaths={selectedPaths}
+            onSelect={handleSelect}
+            refreshVersion={refreshVersion}
+            onAddToChat={onAddToChat}
+            onFilePreview={onFilePreview}
+            allowedPaths={allowedPaths}
+            sessionId={sessionId}
+            revealTarget={isRevealRoot ? revealTarget : null}
+            revealTs={isRevealRoot ? revealTs : 0}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -739,14 +790,24 @@ interface AttachedDirTreeProps {
   onFilePreview?: (filePath: string) => void
   allowedPaths?: string[]
   sessionId: string
+  /** 自动定位目标（仅当落在此 dirPath 之下时由父级传入，否则为 null） */
+  revealTarget?: string | null
+  /** 自动定位脉冲时间戳，变化时重新触发 */
+  revealTs?: number
 }
 
-function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedDirTreeProps): React.ReactElement {
+function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId, revealTarget = null, revealTs = 0 }: AttachedDirTreeProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
 
   const dirName = dirPath.split('/').filter(Boolean).pop() || dirPath
+
+  // 计算从 dirPath 到 revealTarget 之间的祖先目录集合（用于子项决定是否自动展开）
+  const revealAncestors = React.useMemo(
+    () => revealTarget ? computeRevealAncestors(dirPath, revealTarget) : new Set<string>(),
+    [dirPath, revealTarget],
+  )
 
   // 当 refreshVersion 变化时，已展开的目录自动重新加载
   React.useEffect(() => {
@@ -756,6 +817,29 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
         .catch((err) => console.error('[AttachedDirTree] 刷新失败:', err))
     }
   }, [refreshVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ===== 自动定位：reveal target 命中时自动加载子项 + 展开 =====
+  React.useEffect(() => {
+    if (revealTs === 0 || !revealTarget) return
+    let cancelled = false
+    const run = async (): Promise<void> => {
+      if (!loaded) {
+        try {
+          const items = await window.electronAPI.listAttachedDirectory(dirPath, { sessionId, candidateBasePaths: allowedPaths })
+          if (!cancelled) {
+            setChildren(items)
+            setLoaded(true)
+          }
+        } catch (err) {
+          console.error('[AttachedDirTree] reveal 加载失败:', err)
+          return
+        }
+      }
+      if (!cancelled) setExpanded(true)
+    }
+    void run()
+    return () => { cancelled = true }
+  }, [revealTs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleExpand = async (): Promise<void> => {
     if (!expanded && !loaded) {
@@ -823,7 +907,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
             </div>
           )}
           {children.map((child) => (
-            <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} />
+            <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} revealTarget={revealTarget} revealTs={revealTs} revealAncestors={revealAncestors} />
           ))}
         </div>
       )}
@@ -841,9 +925,15 @@ interface AttachedDirItemProps {
   onFilePreview?: (filePath: string) => void
   allowedPaths?: string[]
   sessionId: string
+  /** 自动定位目标路径，命中则滚动到中心 */
+  revealTarget?: string | null
+  /** 自动定位脉冲时间戳，变化时重新触发 */
+  revealTs?: number
+  /** 祖先目录集合，命中则自动展开 */
+  revealAncestors?: Set<string>
 }
 
-function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedDirItemProps): React.ReactElement {
+function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId, revealTarget = null, revealTs = 0, revealAncestors }: AttachedDirItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
@@ -854,6 +944,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
   // 当前显示的名称和路径（重命名后更新）
   const [currentName, setCurrentName] = React.useState(entry.name)
   const [currentPath, setCurrentPath] = React.useState(entry.path)
+  const rowRef = React.useRef<HTMLDivElement>(null)
 
   const isSelected = selectedPaths.has(currentPath)
 
@@ -865,6 +956,50 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
         .catch((err) => console.error('[AttachedDirItem] 刷新子目录失败:', err))
     }
   }, [refreshVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ===== 自动定位：祖先目录自动展开 + 目标行滚动到中心 =====
+  React.useEffect(() => {
+    if (revealTs === 0 || !revealTarget) return
+
+    const isAncestor = !!revealAncestors && revealAncestors.has(currentPath)
+    const isTarget = currentPath === revealTarget
+
+    const scrollToTarget = (): void => {
+      requestAnimationFrame(() => {
+        rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+    }
+
+    // 自身需要展开：祖先目录 OR 目标本身就是目录
+    const willExpand = entry.isDirectory && (isAncestor || isTarget) && !expanded
+    if (willExpand) {
+      let cancelled = false
+      const run = async (): Promise<void> => {
+        if (!loaded) {
+          try {
+            const items = await window.electronAPI.listAttachedDirectory(currentPath, { sessionId, candidateBasePaths: allowedPaths })
+            if (!cancelled) {
+              setChildren(items)
+              setLoaded(true)
+            }
+          } catch (err) {
+            console.error('[AttachedDirItem] reveal 加载子目录失败:', err)
+            return
+          }
+        }
+        if (cancelled) return
+        setExpanded(true)
+        // 目标自身就是这个目录时，等展开成功后再滚动，避免子项渲染改变行高使
+        // smooth scroll 偏离；加载失败路径自然跳过滚动。
+        if (isTarget) scrollToTarget()
+      }
+      void run()
+      return () => { cancelled = true }
+    }
+
+    // 目标行：滚动到可视区中心（不打 flash，直接靠选中态高亮）
+    if (isTarget) scrollToTarget()
+  }, [revealTs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleDir = async (): Promise<void> => {
     if (!entry.isDirectory) return
@@ -947,6 +1082,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
   return (
     <>
       <div
+        ref={rowRef}
         data-sticky-row={isSticky ? 'true' : undefined}
         className={cn(
           'relative flex h-8 items-center gap-1 pr-2 text-sm cursor-pointer group transition-colors',
@@ -1085,7 +1221,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
             </div>
           )}
           {children.map((child) => (
-            <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} />
+            <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} revealTarget={revealTarget} revealTs={revealTs} revealAncestors={revealAncestors} />
           ))}
         </div>
       )}
