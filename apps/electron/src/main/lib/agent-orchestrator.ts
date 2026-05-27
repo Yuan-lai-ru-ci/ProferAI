@@ -69,6 +69,8 @@ export interface SessionCallbacks {
   onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string }) => void
   /** 发送标题更新 */
   onTitleUpdated: (title: string) => void
+  /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
+  onRunStarted?: (opts: { startedAt: number }) => void
 }
 
 // ===== 工具函数 =====
@@ -1069,6 +1071,7 @@ export class AgentOrchestrator {
       _createdAt: Date.now(),
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])
+    callbacks.onRunStarted?.({ startedAt: streamStartedAt })
 
     // 6. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
