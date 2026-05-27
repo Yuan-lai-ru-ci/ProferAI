@@ -91,7 +91,6 @@ import type {
   FeishuTestResult,
   FeishuChatBinding,
   FeishuPresenceReport,
-  FeishuNotifyMode,
   FeishuUpdateBindingInput,
   FeishuRegisterAppQRCode,
   FeishuRegisterAppStatus,
@@ -1498,7 +1497,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
     async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
-      return createAgentSession(title, channelId, workspaceId)
+      const session = createAgentSession(title, channelId, workspaceId)
+      feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
+        console.error('[飞书 Session 镜像] 新会话建群失败:', error)
+      })
+      return session
     }
   )
 
@@ -1852,6 +1855,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
+      const session = getAgentSessionMeta(input.sessionId)
+      if (session) {
+        await feishuBridgeManager.startSessionMirrorRun(session).catch((error) => {
+          console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error)
+        })
+      }
       await runAgent(input, event.sender)
     }
   )
@@ -1860,6 +1869,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (_, sessionId: string): Promise<void> => {
+      feishuBridgeManager.stopSessionMirrorRun(sessionId)
       stopAgent(sessionId)
     }
   )
@@ -3293,17 +3303,6 @@ export function registerIpcHandlers(): void {
     FEISHU_IPC_CHANNELS.REPORT_PRESENCE,
     async (_, report: FeishuPresenceReport): Promise<void> => {
       presenceService.updatePresence(report)
-    }
-  )
-
-  // 设置会话通知模式
-  ipcMain.handle(
-    FEISHU_IPC_CHANNELS.SET_SESSION_NOTIFY,
-    async (_, sessionId: string, mode: FeishuNotifyMode): Promise<void> => {
-      // 通知模式需要发到所有 Bridge（不确定哪个 Bridge 持有该 session）
-      for (const bridge of feishuBridgeManager.getAllBridges().values()) {
-        bridge.setSessionNotifyMode(sessionId, mode)
-      }
     }
   )
 

@@ -92,8 +92,6 @@ import type {
   FeishuTestResult,
   FeishuChatBinding,
   FeishuPresenceReport,
-  FeishuNotifyMode,
-  FeishuNotificationSentPayload,
   FeishuUpdateBindingInput,
   DingTalkConfig,
   DingTalkConfigInput,
@@ -814,12 +812,8 @@ export interface ElectronAPI {
   removeFeishuBinding: (chatId: string) => Promise<boolean>
   /** 上报用户在场状态 */
   reportFeishuPresence: (report: FeishuPresenceReport) => Promise<void>
-  /** 设置会话通知模式 */
-  setFeishuSessionNotify: (sessionId: string, mode: FeishuNotifyMode) => Promise<void>
   /** 订阅飞书 Bridge 状态变化 */
   onFeishuStatusChanged: (callback: (state: FeishuBridgeState) => void) => () => void
-  /** 订阅飞书通知已发送事件 */
-  onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => () => void
 
   // --- 多 Bot v2 API ---
 
@@ -1930,20 +1924,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REPORT_PRESENCE, report)
   },
 
-  setFeishuSessionNotify: (sessionId: string, mode: FeishuNotifyMode) => {
-    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.SET_SESSION_NOTIFY, sessionId, mode)
-  },
-
   onFeishuStatusChanged: (callback: (state: FeishuBridgeState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: FeishuBridgeState): void => callback(state)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.STATUS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.STATUS_CHANGED, listener) }
-  },
-
-  onFeishuNotificationSent: (callback: (payload: FeishuNotificationSentPayload) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: FeishuNotificationSentPayload): void => callback(payload)
-    ipcRenderer.on(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener)
-    return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.NOTIFICATION_SENT, listener) }
   },
 
   // --- 多 Bot v2 API ---
