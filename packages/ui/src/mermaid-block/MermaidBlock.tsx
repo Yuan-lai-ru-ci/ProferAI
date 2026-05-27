@@ -11,6 +11,9 @@
  *   失败 → 保持源码展示
  *
  * 防竞态：generation 计数器，只有最新一代的渲染结果才会生效
+ *
+ * 缩放交互：仅头部按钮（缩小 / 重置 / 放大）。不响应滚轮和拖拽，
+ * 让滚轮事件正常冒泡到页面滚动；放大后用容器原生 overflow scrollbar 浏览。
  */
 
 import * as React from 'react'
@@ -27,6 +30,7 @@ const DEBOUNCE_MS = 350
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.15
+const INITIAL_SCALE = 1
 let mermaidRenderId = 0
 
 function isDarkMode(): boolean {
@@ -117,28 +121,17 @@ const zoomOutPath = (
   </>
 )
 
-// ===== 缩放平移 =====
-
-interface ViewTransform {
-  scale: number
-  translateX: number
-  translateY: number
-}
-const INITIAL_TRANSFORM: ViewTransform = { scale: 1, translateX: 0, translateY: 0 }
-
 // ===== 主组件 =====
 
 export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState(false)
-  const [transform, setTransform] = React.useState<ViewTransform>(INITIAL_TRANSFORM)
+  const [scale, setScale] = React.useState<number>(INITIAL_SCALE)
 
   const codeRef = React.useRef(code)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** generation 计数器：每次 code 变化递增，防止异步竞态 */
   const generationRef = React.useRef(0)
-  const dragRef = React.useRef<{ startX: number; startY: number; startTx: number; startTy: number } | null>(null)
-  const svgContainerRef = React.useRef<HTMLDivElement>(null)
 
   codeRef.current = code
 
@@ -160,7 +153,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
 
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setRenderedSvg(null)
-    setTransform(INITIAL_TRANSFORM)
+    setScale(INITIAL_SCALE)
     debounceRef.current = setTimeout(() => {
       void renderCurrentCode(currentGen)
     }, DEBOUNCE_MS)
@@ -180,53 +173,13 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     return () => observer.disconnect()
   }, [renderCurrentCode])
 
-  // ---- 滚轮缩放 ----
-  React.useEffect(() => {
-    const el = svgContainerRef.current
-    if (!el) return
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      setTransform((prev) => ({
-        ...prev,
-        scale: clamp(prev.scale + (e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP), ZOOM_MIN, ZOOM_MAX),
-      }))
-    }
-    el.addEventListener('wheel', handleWheel, { passive: false })
-    return () => el.removeEventListener('wheel', handleWheel)
-  }, [renderedSvg])
-
-  // ---- 拖拽平移 ----
-  const handleMouseDown = React.useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return
-    e.preventDefault()
-    dragRef.current = {
-      startX: e.clientX, startY: e.clientY,
-      startTx: transform.translateX, startTy: transform.translateY,
-    }
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current) return
-      setTransform((prev) => ({
-        ...prev,
-        translateX: dragRef.current!.startTx + ev.clientX - dragRef.current!.startX,
-        translateY: dragRef.current!.startTy + ev.clientY - dragRef.current!.startY,
-      }))
-    }
-    const onUp = () => {
-      dragRef.current = null
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [transform.translateX, transform.translateY])
-
   const handleZoomIn = React.useCallback(() => {
-    setTransform((prev) => ({ ...prev, scale: clamp(prev.scale + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX) }))
+    setScale((prev) => clamp(prev + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
   }, [])
   const handleZoomOut = React.useCallback(() => {
-    setTransform((prev) => ({ ...prev, scale: clamp(prev.scale - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX) }))
+    setScale((prev) => clamp(prev - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
   }, [])
-  const handleZoomReset = React.useCallback(() => setTransform(INITIAL_TRANSFORM), [])
+  const handleZoomReset = React.useCallback(() => setScale(INITIAL_SCALE), [])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -238,7 +191,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     }
   }, [code])
 
-  const zoomPercent = Math.round(transform.scale * 100)
+  const zoomPercent = Math.round(scale * 100)
 
   return (
     <div className="mermaid-block-wrapper group/mermaid rounded-lg overflow-hidden my-2 border border-border/50">
@@ -274,17 +227,10 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
             <code>{code}</code>
           </pre>
         ) : (
-          <div
-            ref={svgContainerRef}
-            className="bg-background overflow-auto select-none min-h-[180px]"
-            style={{ cursor: 'grab' }}
-            onMouseDown={handleMouseDown}
-          >
+          <div className="bg-background overflow-auto min-h-[180px]">
             <div
               className="flex justify-center items-center p-4 min-h-[180px] origin-center"
-              style={{
-                transform: `translate(${transform.translateX}px, ${transform.translateY}px) scale(${transform.scale})`,
-              }}
+              style={{ transform: `scale(${scale})` }}
             >
               <div
                 className="mermaid-svg [&>svg]:max-w-full [&>svg]:h-auto"
