@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye, EyeOff } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -86,6 +86,7 @@ import {
   allPendingAskUserRequestsAtom,
   allPendingExitPlanRequestsAtom,
   finalizeStreamingActivities,
+  agentProcessGroupsKeepExpandedAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
@@ -238,13 +239,21 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
   )
 }
 
-interface AutoPreviewPopoverProps {
-  enabled: boolean
-  onToggle: () => void
+interface DisplayOptionsPopoverProps {
+  autoPreviewEnabled: boolean
+  processGroupsKeepExpanded: boolean
+  onAutoPreviewChange: (enabled: boolean) => void
+  onProcessGroupsKeepExpandedChange: (expanded: boolean) => void
 }
 
-function AutoPreviewPopover({ enabled, onToggle }: AutoPreviewPopoverProps): React.ReactElement {
+function DisplayOptionsPopover({
+  autoPreviewEnabled,
+  processGroupsKeepExpanded,
+  onAutoPreviewChange,
+  onProcessGroupsKeepExpandedChange,
+}: DisplayOptionsPopoverProps): React.ReactElement {
   const [open, setOpen] = React.useState(false)
+  const hasEnabledOption = autoPreviewEnabled || processGroupsKeepExpanded
   const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleMouseEnter = React.useCallback(() => {
@@ -271,31 +280,42 @@ function AutoPreviewPopover({ enabled, onToggle }: AutoPreviewPopoverProps): Rea
           size="icon"
           className={cn(
             'size-[36px] rounded-full',
-            enabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+            hasEnabledOption ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
           )}
-          onClick={onToggle}
+          aria-label="显示选项"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          {enabled ? <Eye className="size-5" /> : <EyeOff className="size-5" />}
+          <Eye className="size-5" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         side="top"
         align="center"
         sideOffset={8}
-        className="w-auto min-w-[160px] p-2 px-2.5"
+        className="w-auto min-w-[190px] p-2 px-2.5"
+        onOpenAutoFocus={(e) => e.preventDefault()}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-xs text-foreground/70">自动预览修改中文件</span>
-          <Switch
-            checked={enabled}
-            onCheckedChange={onToggle}
-            className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-          />
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-xs text-foreground/70">自动预览修改中文件</span>
+            <Switch
+              checked={autoPreviewEnabled}
+              onCheckedChange={onAutoPreviewChange}
+              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+            />
+          </div>
+          <div className="h-px bg-border" />
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-xs text-foreground/70">输出完保持展开</span>
+            <Switch
+              checked={processGroupsKeepExpanded}
+              onCheckedChange={onProcessGroupsKeepExpandedChange}
+              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+            />
+          </div>
         </div>
       </PopoverContent>
     </Popover>
@@ -1717,6 +1737,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   // ===== 预览面板状态（toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
   const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
+  const [processGroupsKeepExpanded, setProcessGroupsKeepExpanded] = useAtom(agentProcessGroupsKeepExpandedAtom)
 
   const togglePreviewPanel = React.useCallback(() => {
     setPreviewOpenMap((prev) => {
@@ -1822,9 +1843,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     {
       key: 'auto-preview',
       node: (
-        <AutoPreviewPopover
-          enabled={autoPreviewEnabled}
-          onToggle={() => setAutoPreviewEnabled(!autoPreviewEnabled)}
+        <DisplayOptionsPopover
+          autoPreviewEnabled={autoPreviewEnabled}
+          processGroupsKeepExpanded={processGroupsKeepExpanded}
+          onAutoPreviewChange={setAutoPreviewEnabled}
+          onProcessGroupsKeepExpandedChange={setProcessGroupsKeepExpanded}
         />
       ),
     },
@@ -1846,7 +1869,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     streaming,
     handleCompact,
     autoPreviewEnabled,
+    processGroupsKeepExpanded,
     setAutoPreviewEnabled,
+    setProcessGroupsKeepExpanded,
   ])
 
   const inputTrailingNode = streaming && !hasTextInput ? (
