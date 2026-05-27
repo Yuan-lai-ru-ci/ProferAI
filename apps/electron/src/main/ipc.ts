@@ -238,6 +238,7 @@ import {
   getDecryptedBotAppSecret,
 } from './lib/feishu-config'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
+import { syncFeishuSyncSleepBlocker } from './lib/feishu-sleep-blocker'
 import { presenceService } from './lib/feishu-presence'
 import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret, getDingTalkMultiBotConfig, saveDingTalkBotConfig, removeDingTalkBot, getDecryptedBotClientSecret } from './lib/dingtalk-config'
 import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
@@ -1329,6 +1330,10 @@ export function registerIpcHandlers(): void {
     async (event, updates: Partial<AppSettings>): Promise<AppSettings> => {
       const result = await updateSettings(updates)
 
+      if (updates.feishuSessionMirror !== undefined) {
+        syncFeishuSyncSleepBlocker(result)
+      }
+
       // 主题相关设置变化时，广播给所有窗口（跨窗口同步，如 Quick Task 面板）
       if (updates.themeMode !== undefined || updates.themeStyle !== undefined) {
         const payload = { themeMode: result.themeMode, themeStyle: result.themeStyle }
@@ -1349,7 +1354,10 @@ export function registerIpcHandlers(): void {
     SETTINGS_IPC_CHANNELS.UPDATE_SYNC,
     (event, updates: Partial<AppSettings>) => {
       try {
-        updateSettings(updates)
+        const result = updateSettings(updates)
+        if (updates.feishuSessionMirror !== undefined) {
+          syncFeishuSyncSleepBlocker(result)
+        }
         event.returnValue = true
       } catch {
         event.returnValue = false
