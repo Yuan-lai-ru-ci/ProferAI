@@ -1,28 +1,20 @@
 /**
  * MermaidBlock - Mermaid 图表渲染组件
  *
- * 使用 beautiful-mermaid 将 mermaid 源码渲染为 SVG 图表。
- *
- * 核心策略 —— "源码优先，SVG 覆盖淡入"：
- *
- * 布局结构（关键：源码层永远在文档流中，SVG 层永远 absolute）：
- *   <div relative>
- *     <pre>源码（始终 static，提供稳定高度）</pre>
- *     <div absolute inset-0>SVG 覆盖层（不参与布局）</div>
- *   </div>
+ * 优先使用 beautiful-mermaid 渲染，遇到 beautiful-mermaid 不支持的图型时
+ * 自动回退到官方 mermaid 渲染器。
  *
  * 渲染时序：
  *   流式输出 → 源码自然增长（零跳动）
  *   code 稳定 350ms → 后台 renderMermaid
- *   成功 → SVG 淡入覆盖，源码淡出（一次性过渡）
+ *   成功 → SVG 替换源码展示
  *   失败 → 保持源码展示
  *
  * 防竞态：generation 计数器，只有最新一代的渲染结果才会生效
  */
 
 import * as React from 'react'
-import { renderMermaid, THEMES } from 'beautiful-mermaid'
-import type { RenderOptions } from 'beautiful-mermaid'
+import type { DiagramColors, RenderOptions } from 'beautiful-mermaid'
 
 interface MermaidBlockProps {
   /** mermaid 源码 */
@@ -31,20 +23,61 @@ interface MermaidBlockProps {
 
 /** 防抖间隔（ms） */
 const DEBOUNCE_MS = 350
-/** 淡入淡出时长（ms） */
-const FADE_MS = 250
 /** 缩放范围 */
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.15
+let mermaidRenderId = 0
 
 function isDarkMode(): boolean {
   return document.documentElement.classList.contains('dark')
 }
 
-function getThemeOptions(): RenderOptions {
-  const colors = isDarkMode() ? THEMES['github-dark'] : THEMES['github-light']
+function getThemeOptions(themes: Record<string, DiagramColors>): RenderOptions {
+  const colors = isDarkMode() ? themes['github-dark'] : themes['github-light']
   return colors ? { ...colors } : {}
+}
+
+function isUsableSvg(svg: unknown): svg is string {
+  return typeof svg === 'string' &&
+    svg.includes('<svg') &&
+    !/(?:^|[^a-z])(?:NaN|Infinity|-Infinity)(?:[^a-z]|$)/i.test(svg)
+}
+
+async function renderWithOfficialMermaid(code: string): Promise<string> {
+  const { default: mermaid } = await import('mermaid')
+  const dark = isDarkMode()
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: dark ? 'dark' : 'default',
+    themeVariables: {
+      background: dark ? '#0f172a' : '#ffffff',
+      mainBkg: dark ? '#1e293b' : '#f8fafc',
+      primaryColor: dark ? '#1e293b' : '#f8fafc',
+      primaryTextColor: dark ? '#e2e8f0' : '#0f172a',
+      primaryBorderColor: dark ? '#475569' : '#cbd5e1',
+      lineColor: dark ? '#94a3b8' : '#64748b',
+      textColor: dark ? '#e2e8f0' : '#0f172a',
+    },
+  })
+
+  const id = `proma-mermaid-${Date.now()}-${mermaidRenderId++}`
+  const { svg } = await mermaid.render(id, code)
+  if (!isUsableSvg(svg)) throw new Error('Mermaid 输出了无效 SVG')
+  return svg
+}
+
+async function renderMermaidSvg(code: string): Promise<string> {
+  try {
+    const { renderMermaidSVGAsync, THEMES } = await import('beautiful-mermaid')
+    const svg = await renderMermaidSVGAsync(code, getThemeOptions(THEMES))
+    if (isUsableSvg(svg)) return svg
+  } catch {
+    // beautiful-mermaid 只覆盖部分图型，不支持时交给官方 mermaid 兜底。
+  }
+
+  return renderWithOfficialMermaid(code)
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -93,8 +126,7 @@ const INITIAL_TRANSFORM: ViewTransform = { scale: 1, translateX: 0, translateY: 
 // ===== 主组件 =====
 
 export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
-  const [svgHtml, setSvgHtml] = React.useState<string | null>(null)
-  const [svgVisible, setSvgVisible] = React.useState(false)
+  const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState(false)
   const [transform, setTransform] = React.useState<ViewTransform>(INITIAL_TRANSFORM)
 
@@ -107,6 +139,16 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
 
   codeRef.current = code
 
+  const renderCurrentCode = React.useCallback(async (generation: number) => {
+    try {
+      const svg = await renderMermaidSvg(codeRef.current)
+      if (generationRef.current !== generation) return
+      setRenderedSvg(svg)
+    } catch {
+      if (generationRef.current === generation) setRenderedSvg(null)
+    }
+  }, [])
+
   // ==== 唯一的渲染 effect：全部走防抖，generation 防竞态 ====
   React.useEffect(() => {
     // 每次 code 变化递增 generation，作废所有旧的异步渲染
@@ -114,42 +156,26 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     const currentGen = generationRef.current
 
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const svg = await renderMermaid(codeRef.current, getThemeOptions())
-        // 只有最新一代的结果才生效，旧的全部丢弃
-        if (generationRef.current !== currentGen) return
-        if (typeof svg === 'string' && svg.length > 0) {
-          setSvgHtml(svg)
-          requestAnimationFrame(() => setSvgVisible(true))
-        }
-      } catch {
-        // 渲染失败 → 保持源码展示（不做任何操作）
-      }
+    setRenderedSvg(null)
+    setTransform(INITIAL_TRANSFORM)
+    debounceRef.current = setTimeout(() => {
+      void renderCurrentCode(currentGen)
     }, DEBOUNCE_MS)
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [code])
+  }, [code, renderCurrentCode])
 
   // ---- 主题变化：重新渲染当前 code ----
   React.useEffect(() => {
-    const observer = new MutationObserver(async () => {
+    const observer = new MutationObserver(() => {
       generationRef.current++
-      const gen = generationRef.current
-      try {
-        const svg = await renderMermaid(codeRef.current, getThemeOptions())
-        if (generationRef.current !== gen) return
-        if (typeof svg === 'string' && svg.length > 0) {
-          setSvgHtml(svg)
-          setSvgVisible(true)
-        }
-      } catch { /* 忽略 */ }
+      void renderCurrentCode(generationRef.current)
     })
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
     return () => observer.disconnect()
-  }, [])
+  }, [renderCurrentCode])
 
   // ---- 滚轮缩放 ----
   React.useEffect(() => {
@@ -164,7 +190,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     }
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
-  }, [svgVisible])
+  }, [renderedSvg])
 
   // ---- 拖拽平移 ----
   const handleMouseDown = React.useCallback((e: React.MouseEvent) => {
@@ -217,7 +243,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
       <div className="flex items-center justify-between h-[34px] px-2 py-1 bg-muted/60 text-muted-foreground text-xs">
         <span className="font-medium select-none">Mermaid</span>
         <div className="flex items-center gap-1">
-          {svgVisible && (
+          {renderedSvg && (
             <div className="flex items-center gap-0.5 mr-2">
               <button type="button" onClick={handleZoomOut} className="p-0.5 rounded hover:bg-foreground/10 transition-colors" title="缩小">
                 <svg {...ICON_ATTRS}>{zoomOutPath}</svg>
@@ -237,46 +263,29 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
         </div>
       </div>
 
-      {/*
-        内容区 —— 双层叠加，永不切换 position
-        源码层：永远 static（提供稳定高度，零跳动）
-        SVG 层：永远 absolute（不影响布局）
-        两层只通过 opacity 交叉淡入淡出
-      */}
-      <div className="relative overflow-hidden">
-        {/* 源码层 —— 始终在文档流中，流式输出时自然增长 */}
-        <pre
-          className="overflow-x-auto p-4 m-0 text-[13px] leading-[1.6] bg-muted/30 text-foreground/80"
-          style={{
-            opacity: svgVisible ? 0 : 1,
-            transition: `opacity ${FADE_MS}ms ease`,
-          }}
-        >
-          <code>{code}</code>
-        </pre>
-
-        {/* SVG 层 —— absolute 覆盖，渲染成功后淡入，不影响文档流 */}
-        {svgHtml && (
+      <div className="overflow-hidden">
+        {!renderedSvg ? (
+          <pre
+            className="overflow-x-auto p-4 m-0 text-[13px] leading-[1.6] bg-muted/30 text-foreground/80"
+          >
+            <code>{code}</code>
+          </pre>
+        ) : (
           <div
             ref={svgContainerRef}
-            className="absolute inset-0 bg-background overflow-hidden select-none"
-            style={{
-              opacity: svgVisible ? 1 : 0,
-              transition: `opacity ${FADE_MS}ms ease`,
-              cursor: svgVisible ? 'grab' : 'default',
-              pointerEvents: svgVisible ? 'auto' : 'none',
-            }}
-            onMouseDown={svgVisible ? handleMouseDown : undefined}
+            className="bg-background overflow-auto select-none min-h-[180px]"
+            style={{ cursor: 'grab' }}
+            onMouseDown={handleMouseDown}
           >
             <div
-              className="flex justify-center items-center p-4 min-h-full origin-center"
+              className="flex justify-center items-center p-4 min-h-[180px] origin-center"
               style={{
                 transform: `translate(${transform.translateX}px, ${transform.translateY}px) scale(${transform.scale})`,
               }}
             >
               <div
                 className="mermaid-svg [&>svg]:max-w-full [&>svg]:h-auto"
-                dangerouslySetInnerHTML={{ __html: svgHtml }}
+                dangerouslySetInnerHTML={{ __html: renderedSvg }}
               />
             </div>
           </div>

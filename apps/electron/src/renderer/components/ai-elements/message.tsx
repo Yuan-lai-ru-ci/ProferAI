@@ -24,6 +24,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@/lib/mermaid-detection'
 import { Button } from '@/components/ui/button'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import {
@@ -450,9 +451,11 @@ const MarkdownPre = React.memo(function MarkdownPre({
 
   if (codeChild) {
     const codeProps = codeChild.props as { className?: string; children?: React.ReactNode }
-    if (codeProps.className?.includes('language-mermaid')) {
+    if (shouldInspectMermaidCodeBlock(codeProps.className)) {
       const mermaidCode = extractText(codeProps.children).replace(/\n$/, '')
-      return <MermaidBlock code={mermaidCode} />
+      if (shouldRenderMermaidCodeBlock(codeProps.className, mermaidCode)) {
+        return <MermaidBlock code={mermaidCode} />
+      }
     }
   }
 
