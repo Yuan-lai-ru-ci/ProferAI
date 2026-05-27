@@ -1767,7 +1767,7 @@ const ConversationItem = React.memo(function ConversationItem({
           {/* 流式状态左侧竖线条（与 Agent 保持一致） */}
           {streaming && (
             <span
-              className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-emerald-500 animate-pulse pointer-events-none"
+              className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-blue-500 animate-pulse pointer-events-none"
               aria-hidden="true"
             />
           )}
