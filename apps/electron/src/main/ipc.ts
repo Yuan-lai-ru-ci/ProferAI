@@ -581,7 +581,7 @@ async function getWindowsDefaultAppInfo(filePath: string): Promise<{ appPath: st
       // AppUserModelId 形如 "Microsoft.ZuneVideo_8wekyb3d8bbwe!Microsoft.ZuneVideo"
       // 取 ! 之后的部分作为名字，再去掉前缀
       const parts = appUserModelId.split('!')
-      appName = (parts[1] || parts[0]).replace(/^Microsoft\./, '').replace(/^Windows\./, '') || 'UWP App'
+      appName = (parts[1] ?? parts[0] ?? '').replace(/^Microsoft\./, '').replace(/^Windows\./, '') || 'UWP App'
     }
     console.log('[DefaultApp] UWP app, appName=%s', appName)
     return { appPath: '', appName, isUwp: true }
