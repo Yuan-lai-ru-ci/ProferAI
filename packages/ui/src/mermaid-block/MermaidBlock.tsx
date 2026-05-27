@@ -39,9 +39,12 @@ function getThemeOptions(themes: Record<string, DiagramColors>): RenderOptions {
 }
 
 function isUsableSvg(svg: unknown): svg is string {
-  return typeof svg === 'string' &&
-    svg.includes('<svg') &&
-    !/(?:^|[^a-z])(?:NaN|Infinity|-Infinity)(?:[^a-z]|$)/i.test(svg)
+  if (typeof svg !== 'string' || !svg.includes('<svg')) return false
+  if (/(?:^|[^a-z])(?:NaN|Infinity|-Infinity)(?:[^a-z]|$)/i.test(svg)) return false
+  // mermaid 解析失败时会返回带错误标记的 SVG，需要识别后走兜底
+  if (svg.includes('aria-roledescription="error"')) return false
+  if (svg.includes('class="error-text"')) return false
+  return true
 }
 
 async function renderWithOfficialMermaid(code: string): Promise<string> {

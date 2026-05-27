@@ -22,7 +22,7 @@
     },
     "apps/electron": {
       "name": "@proma/electron",
-      "version": "0.10.6",
+      "version": "0.10.8",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.143",
         "@anthropic-ai/sdk": "^0.93.0",
@@ -136,9 +136,10 @@
     },
     "packages/core": {
       "name": "@proma/core",
-      "version": "0.2.9",
+      "version": "0.2.10",
       "dependencies": {
         "@proma/shared": "workspace:*",
+        "highlight.js": "^11.11.1",
         "shiki": "^3.22.0",
       },
       "devDependencies": {
@@ -153,14 +154,14 @@
     },
     "packages/shared": {
       "name": "@proma/shared",
-      "version": "0.1.20",
+      "version": "0.1.22",
       "devDependencies": {
         "typescript": "^5.0.0",
       },
     },
     "packages/ui": {
       "name": "@proma/ui",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "dependencies": {
         "@proma/core": "workspace:*",
         "beautiful-mermaid": "1.1.3",
