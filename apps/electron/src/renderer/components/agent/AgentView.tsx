@@ -95,6 +95,7 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
+import { activeTabIdAtom, getPreviewTabTitle, openTab, tabsAtom } from '@/atoms/tab-atoms'
 import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
 import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
@@ -993,12 +994,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
     store.set(previewPanelOpenMapAtom, (prev) => {
       const m = new Map(prev)
-      m.set(sessionId, true)
+      m.set(sessionId, false)
       return m
     })
+    const result = openTab(store.get(tabsAtom), {
+      type: 'preview',
+      sessionId,
+      title: getPreviewTabTitle(filePath),
+    })
+    store.set(tabsAtom, result.tabs)
+    store.set(activeTabIdAtom, result.activeTabId)
   }, [sessionId, setPreviewFileMap, store])
 
-  /** 点击 clipboard 附件时，在右侧预览面板中显示内容 */
+  /** 点击 clipboard 附件时，在当前会话的临时预览标签页中显示内容 */
   const handleClipboardPreview = React.useCallback(async (file: AgentPendingFile) => {
     if (file.sourcePath) {
       openClipboardPreviewFile(file.sourcePath)

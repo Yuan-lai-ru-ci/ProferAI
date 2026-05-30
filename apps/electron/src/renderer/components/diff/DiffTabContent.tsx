@@ -189,9 +189,11 @@ interface DiffTabContentProps {
   basePaths?: string[]
   /** diff 模式下检测到内容为空（无差异）时回调，用于自动关闭预览面板 */
   onEmptyDiff?: () => void
+  /** 由外层场景注入的额外工具按钮，例如默认应用打开、返回会话 */
+  toolbarActions?: React.ReactNode
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
@@ -1017,6 +1019,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         >
           <RefreshCw className="size-3.5" />
         </button>
+
+        {toolbarActions}
       </div>
 
       <div className="relative flex-1 min-h-0">
