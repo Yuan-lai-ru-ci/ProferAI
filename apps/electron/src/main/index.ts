@@ -359,6 +359,22 @@ function createWindow(): void {
     })
   }
 
+  // Windows: 点击关闭按钮时隐藏窗口到托盘，而不是退出
+  if (process.platform === 'win32') {
+    mainWindow.on('close', (event) => {
+      if (!getIsQuitting()) {
+        // 隐藏前先刷新挂起的窗口状态保存
+        if (windowStateSaveTimer) {
+          clearTimeout(windowStateSaveTimer)
+          windowStateSaveTimer = null
+        }
+        saveMainWindowState()
+        event.preventDefault()
+        mainWindow?.hide()
+      }
+    })
+  }
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
