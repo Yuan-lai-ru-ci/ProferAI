@@ -657,6 +657,12 @@ export interface ElectronAPI {
 
   /** 获取工作区附加文件列表 */
   getWorkspaceAttachedFiles: (workspaceSlug: string) => Promise<string[]>
+  /** 获取工作区 worktree 仓库配置列表 */
+  getWorktreeRepos: (workspaceSlug: string) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  /** 添加 worktree 仓库到工作区配置 */
+  addWorktreeRepo: (workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  /** 从工作区配置移除 worktree 仓库 */
+  removeWorktreeRepo: (workspaceSlug: string, repoPath: string) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
 
   // ===== Agent 文件系统操作 =====
 
@@ -1729,6 +1735,18 @@ const electronAPI: ElectronAPI = {
 
   getWorkspaceAttachedFiles: (workspaceSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_ATTACHED_FILES, workspaceSlug)
+  },
+
+  getWorktreeRepos: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKTREE_REPOS, workspaceSlug)
+  },
+
+  addWorktreeRepo: (workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_WORKTREE_REPO, workspaceSlug, repo)
+  },
+
+  removeWorktreeRepo: (workspaceSlug: string, repoPath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_WORKTREE_REPO, workspaceSlug, repoPath)
   },
 
   // Agent 文件系统操作

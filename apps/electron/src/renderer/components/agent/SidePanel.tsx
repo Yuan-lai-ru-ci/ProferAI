@@ -107,7 +107,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // Worktree 选择状态
   const [selectedWorktreeMap, setSelectedWorktreeMap] = useAtom(agentSelectedWorktreeAtom)
   const selectedWorktreePath = selectedWorktreeMap.get(sessionId) ?? null
-  const PROMA_DEV_REPO_PATH = '/Users/erlich/proma-dev/repo'
 
   const handleWorktreeSelect = React.useCallback((worktree: import('@proma/shared').WorktreeInfo | null) => {
     setSelectedWorktreeMap((prev) => {
@@ -422,7 +421,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             <>
               <WorktreeSelector
                 sessionId={sessionId}
-                repoPath={PROMA_DEV_REPO_PATH}
+                workspaceSlug={workspaceSlug || ''}
                 selectedPath={selectedWorktreePath}
                 onSelect={handleWorktreeSelect}
               />

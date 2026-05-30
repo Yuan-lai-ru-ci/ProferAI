@@ -210,6 +210,9 @@ import {
   attachWorkspaceFile,
   detachWorkspaceDirectory,
   detachWorkspaceFile,
+  getWorktreeRepos,
+  addWorktreeRepo,
+  removeWorktreeRepo,
 } from './lib/agent-workspace-manager'
 import { getMemoryConfig, setMemoryConfig } from './lib/memory-service'
 import { getAllToolInfos } from './lib/chat-tool-registry'
@@ -2524,6 +2527,29 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_WORKSPACE_ATTACHED_FILES,
     async (_, workspaceSlug: string): Promise<string[]> => {
       return getWorkspaceAttachedFiles(workspaceSlug)
+    }
+  )
+
+  // ===== Worktree 仓库配置管理 =====
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_WORKTREE_REPOS,
+    async (_, workspaceSlug: string) => {
+      return getWorktreeRepos(workspaceSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.ADD_WORKTREE_REPO,
+    async (_, workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => {
+      return addWorktreeRepo(workspaceSlug, repo)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.REMOVE_WORKTREE_REPO,
+    async (_, workspaceSlug: string, repoPath: string) => {
+      return removeWorktreeRepo(workspaceSlug, repoPath)
     }
   )
 
