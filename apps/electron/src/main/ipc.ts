@@ -1732,6 +1732,21 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 确认 Agent 会话已完成（清除 completedButUnconfirmed 和 manualWorking）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CONFIRM_WORKING_DONE,
+    async (_, id: string): Promise<AgentSessionMeta> => {
+      const sessions = listAgentSessions()
+      const current = sessions.find((s) => s.id === id)
+      if (!current) throw new Error(`Agent session not found: ${id}`)
+      const updates: Partial<AgentSessionMeta> = {}
+      if (current.manualWorking) updates.manualWorking = false
+      if (current.completedButUnconfirmed) updates.completedButUnconfirmed = false
+      if (Object.keys(updates).length === 0) return current
+      return updateAgentSessionMeta(id, updates)
+    }
+  )
+
   // 切换 Agent 会话归档状态
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TOGGLE_ARCHIVE,

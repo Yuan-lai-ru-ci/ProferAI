@@ -31,7 +31,7 @@ import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './ada
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
-import { getAgentSessionMeta } from './agent-session-manager'
+import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 
 // ===== 实例创建 =====
 
@@ -120,6 +120,10 @@ export async function runAgent(
 ): Promise<void> {
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
+  // 开始新一轮执行时清除"完成未确认"标记
+  try {
+    updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
+  } catch { /* 新会话可能尚未写入索引 */ }
   try {
     await orchestrator.sendMessage(input, {
       onError: (error) => {
@@ -131,6 +135,10 @@ export async function runAgent(
         }
       },
       onComplete: (messages, opts) => {
+        // 持久化"完成但未确认"状态，确保重启后仍显示在工作中列表
+        try {
+          updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: true })
+        } catch { /* 会话可能已被删除 */ }
         if (!webContents.isDestroyed()) {
           webContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
             sessionId: input.sessionId,
