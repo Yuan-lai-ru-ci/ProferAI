@@ -512,6 +512,18 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 消费一次用户手动停止标记。
+   *
+   * SDK 在 query.close() 后不一定走异常路径：某些版本会先正常 yield result 再结束迭代。
+   * 因此停止标记必须在所有终态路径统一消费，而不能只依赖 catch 块。
+   */
+  private consumeStoppedByUser(sessionId: string): boolean {
+    const stoppedByUser = this.stoppedBySessions.has(sessionId)
+    this.stoppedBySessions.delete(sessionId)
+    return stoppedByUser
+  }
+
+  /**
    * 构建 SDK 环境变量
    *
    * 注入 API Key、Base URL、代理、Shell 配置等。
@@ -1612,8 +1624,10 @@ export class AgentOrchestrator {
 
             // 等待期间如果会话被中止，退出
             if (!this.activeSessions.has(sessionId)) {
+              const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
               this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
-              completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+              try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
+              completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
               return
             }
           }
@@ -1843,8 +1857,10 @@ export class AgentOrchestrator {
             continue
           }
 
+          const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
+
           // 正常完成 — 如果之前有重试，发送 retry_cleared
-          if (retryAttemptsScheduled > 0) {
+          if (!wasStoppedByUser && retryAttemptsScheduled > 0) {
             this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
             console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
           }
@@ -1853,7 +1869,7 @@ export class AgentOrchestrator {
           // 15. 持久化 assistant 消息
           this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
 
-          try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+          try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
           // Plan 模式：Agent 完成规划后注入"接受计划"建议
           if (initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.has(sessionId)) {
@@ -1865,7 +1881,7 @@ export class AgentOrchestrator {
           }
 
           // 发送完成信号
-          completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
+          completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
 
           break  // 成功完成，退出重试循环
 
@@ -1881,7 +1897,7 @@ export class AgentOrchestrator {
 
           // 用户主动中止
           if (!this.activeSessions.has(sessionId)) {
-            const wasStoppedByUser = this.stoppedBySessions.delete(sessionId)
+            const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
             console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             // 持久化中断状态到会话 meta

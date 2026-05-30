@@ -547,14 +547,9 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   // 从 turnMessages 中提取 result 消息的耗时和用量
   const { durationMs, usage } = extractTurnUsage(turn.turnMessages)
 
-  // 该 turn 是否被软中断（aborted_streaming / aborted_tools）
-  // 用于在消息底部显示“已被用户中断”徽章，独立于会话级 stoppedByUser 标记
-  const isInterruptedTurn = turn.turnMessages.some((m) => {
-    if (m.type !== 'result') return false
-    const reason = (m as { terminal_reason?: string }).terminal_reason
-    return reason === 'aborted_streaming' || reason === 'aborted_tools'
-  })
-  const showStoppedBadge = stoppedByUser || isInterruptedTurn
+  // 只在用户点击停止时显示中断徽章。
+  // aborted_streaming / aborted_tools 是流式追加消息时的软中断，语义是继续补充信息。
+  const showStoppedBadge = !!stoppedByUser
 
   // 构建 Agent/Task tool_use → 子代理内容块映射
   const agentToolIds = new Set<string>()
