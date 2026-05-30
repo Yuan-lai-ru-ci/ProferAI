@@ -158,6 +158,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
             previewOnly={currentFile.previewOnly}
             readOnly={currentFile.readOnly}
             basePaths={currentFile.basePaths}
+            baseRef={currentFile.baseRef}
             onEmptyDiff={handleClosePanel}
           />
         ) : (

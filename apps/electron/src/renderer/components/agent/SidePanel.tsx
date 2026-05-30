@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
+import { WorktreeSelector } from '@/components/diff/WorktreeSelector'
 import {
   agentSidePanelOpenAtom,
   workspaceFilesVersionAtom,
@@ -32,6 +33,7 @@ import {
   agentPendingFilesAtomFamily,
   agentDiffRefreshVersionAtom,
   fileBrowserAutoRevealAtom,
+  agentSelectedWorktreeAtom,
 } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom, type PreviewFile } from '@/atoms/preview-atoms'
 import { activeTabIdAtom, getPreviewTabTitle, openTab, tabsAtom } from '@/atoms/tab-atoms'
@@ -102,13 +104,30 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     })
   }, [openPreviewTabForFile])
 
+  // Worktree 选择状态
+  const [selectedWorktreeMap, setSelectedWorktreeMap] = useAtom(agentSelectedWorktreeAtom)
+  const selectedWorktreePath = selectedWorktreeMap.get(sessionId) ?? null
+  const PROMA_DEV_REPO_PATH = '/Users/erlich/proma-dev/repo'
+
+  const handleWorktreeSelect = React.useCallback((worktree: import('@proma/shared').WorktreeInfo | null) => {
+    setSelectedWorktreeMap((prev) => {
+      const m = new Map(prev)
+      m.set(sessionId, worktree?.path ?? null)
+      return m
+    })
+    if (worktree) {
+      window.electronAPI.attachDirectory({ sessionId, directoryPath: worktree.path })
+    }
+  }, [sessionId, setSelectedWorktreeMap])
+
   const handleDiffFileClick = React.useCallback((filePath: string, _isUntracked: boolean, gitRoot?: string) => {
     openPreviewTabForFile({
       filePath,
       dirPath: sessionPath || undefined,
       gitRoot,
+      baseRef: selectedWorktreePath ? 'origin/main' : undefined,
     })
-  }, [openPreviewTabForFile, sessionPath])
+  }, [openPreviewTabForFile, sessionPath, selectedWorktreePath])
 
   // 动画标志：isOpen 变化时启用过渡动画，切换会话时即时显示
   const prevIsOpenRef = React.useRef(isOpen)
@@ -400,17 +419,26 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
 
           {activeTab === 'changes' ? (
             sessionPath ? (
-            <DiffChangesList
-              key={sessionId}
-              dirPath={sessionPath}
-              sessionId={sessionId}
-              sessionPath={sessionPath}
-              workspaceFilesPath={workspaceFilesPath || undefined}
-              extraPaths={extraPathsMemo}
-              refreshVersion={diffRefreshVersion}
-              selectedFilePath={selectedFilePath}
-              onFileClick={handleDiffFileClick}
-            />
+            <>
+              <WorktreeSelector
+                sessionId={sessionId}
+                repoPath={PROMA_DEV_REPO_PATH}
+                selectedPath={selectedWorktreePath}
+                onSelect={handleWorktreeSelect}
+              />
+              <DiffChangesList
+                key={sessionId}
+                dirPath={sessionPath}
+                sessionId={sessionId}
+                sessionPath={sessionPath}
+                workspaceFilesPath={workspaceFilesPath || undefined}
+                extraPaths={extraPathsMemo}
+                refreshVersion={diffRefreshVersion}
+                selectedFilePath={selectedFilePath}
+                onFileClick={handleDiffFileClick}
+                worktreeMode={selectedWorktreePath ? { path: selectedWorktreePath, baseBranch: 'origin/main' } : undefined}
+              />
+            </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
             )

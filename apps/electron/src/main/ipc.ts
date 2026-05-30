@@ -110,7 +110,7 @@ import type {
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
-import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents } from './lib/git-diff-service'
+import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges } from './lib/git-diff-service'
 import { registerPromaFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
@@ -824,7 +824,31 @@ export function registerIpcHandlers(): void {
       }
       const access = normalizeFileAccessOptions({ sessionId })
       if (!ensurePathAllowed(dirPath, access) || (gitRoot && !ensurePathAllowed(gitRoot, access))) return null
-      return getDiffContents(dirPath, filePath, gitRoot)
+      return getDiffContents(dirPath, filePath, gitRoot, input.baseRef)
+    }
+  )
+
+  // 列出 Git Worktree（只读取 worktree 元信息，不涉及文件内容，跳过路径安全检查）
+  ipcMain.handle(
+    IPC_CHANNELS.LIST_WORKTREES,
+    async (_, repoPath: string, _sessionId: string) => {
+      if (!repoPath || typeof repoPath !== 'string') return []
+      return listWorktrees(repoPath)
+    }
+  )
+
+  // 获取 Worktree 相对于基准分支的全量变更
+  ipcMain.handle(
+    IPC_CHANNELS.GET_WORKTREE_CHANGES,
+    async (_, worktreePath: string, baseBranch: string, sessionId: string) => {
+      if (!worktreePath || typeof worktreePath !== 'string') {
+        return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
+      }
+      const access = normalizeFileAccessOptions({ sessionId })
+      if (!ensurePathAllowed(worktreePath, access)) {
+        return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
+      }
+      return getWorktreeChanges(worktreePath, baseBranch)
     }
   )
 

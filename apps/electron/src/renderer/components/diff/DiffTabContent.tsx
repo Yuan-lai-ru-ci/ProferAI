@@ -191,9 +191,11 @@ interface DiffTabContentProps {
   onEmptyDiff?: () => void
   /** 由外层场景注入的额外工具按钮，例如默认应用打开、返回会话 */
   toolbarActions?: React.ReactNode
+  /** 基准 ref（如 "origin/main"），用于 worktree vs main 模式 */
+  baseRef?: string
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, baseRef }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
@@ -607,7 +609,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             if (cancelled) return
             content = result?.content ?? ''
           } else {
-            const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot, sessionId })
+            const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot, sessionId, baseRef })
             if (cancelled) return
             content = result?.newContent ?? ''
             old = result?.oldContent ?? ''

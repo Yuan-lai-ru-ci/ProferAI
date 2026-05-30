@@ -91,6 +91,7 @@ export function PreviewTabContent({ sessionId }: PreviewTabContentProps): React.
           previewOnly={currentFile.previewOnly}
           readOnly={currentFile.readOnly}
           basePaths={currentFile.basePaths}
+          baseRef={currentFile.baseRef}
           toolbarActions={toolbarActions}
         />
       </div>
