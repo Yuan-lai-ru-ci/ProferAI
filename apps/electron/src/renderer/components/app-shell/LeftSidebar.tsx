@@ -48,6 +48,16 @@ import {
   agentDiffUnseenChangesAtom,
   agentDiffUnseenFilesAtom,
   agentDiffDataAtom,
+  agentStreamingStatesAtom,
+  liveMessagesMapAtom,
+  agentSessionPendingFilesAtom,
+  agentSessionStreamingStateAtomFamily,
+  agentSessionDraftAtomFamily,
+  agentSessionDraftHtmlAtomFamily,
+  agentPendingFilesAtomFamily,
+  backgroundTasksAtomFamily,
+  sessionPersistedPermissionModeAtom,
+  sessionExistsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -441,6 +451,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setDiffUnseenFiles = useSetAtom(agentDiffUnseenFilesAtom)
   const setDiffData = useSetAtom(agentDiffDataAtom)
   const setWorkingDone = useSetAtom(workingDoneSessionIdsAtom)
+  const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
+  const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
+  const setSessionPendingFiles = useSetAtom(agentSessionPendingFilesAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
   const cleanupMapAtoms = React.useCallback((id: string) => {
@@ -464,8 +477,34 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setDiffData(deleteKey)
     setSessionChannelMap(deleteKey)
     setSessionModelMap(deleteKey)
+
+    // 重型流式数据：streamingStates（累积 content + toolActivities）与 liveMessages（SDK 消息数组）
+    setStreamingStates(deleteKey)
+    setLiveMessagesMap(deleteKey)
+
+    // 待发送附件：先释放 blob URL 和 window 缓存中的 base64，再删 base map entry。
+    // 与文字草稿不同，附件涉及 ObjectURL 和大体积二进制数据，删除/归档时不保留。
+    const sessionPending = store.get(agentSessionPendingFilesAtom).get(id)
+    if (sessionPending && sessionPending.length > 0) {
+      for (const f of sessionPending) {
+        if (f.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(f.previewUrl)
+        window.__pendingAgentFileData?.delete(f.id)
+      }
+      setSessionPendingFiles(deleteKey)
+    }
+
+    // atomFamily 内部缓存（Jotai 对 string key 强引用 Map，不显式 remove 永不释放）。
+    // 删除/归档是会话的终态，连同草稿一起清理，无需像关闭 Tab 那样保留可恢复输入。
+    agentSessionStreamingStateAtomFamily.remove(id)
+    agentSessionDraftAtomFamily.remove(id)
+    agentSessionDraftHtmlAtomFamily.remove(id)
+    agentPendingFilesAtomFamily.remove(id)
+    backgroundTasksAtomFamily.remove(id)
+    sessionPersistedPermissionModeAtom.remove(id)
+    sessionExistsAtom.remove(id)
+
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
