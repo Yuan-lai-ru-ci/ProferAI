@@ -13,6 +13,7 @@ import type { PromaPermissionMode, AgentDefinition } from '@proma/shared'
 import { getUserProfile } from './user-profile-service'
 import { getWorkspaceMcpConfig, getWorkspaceSkills } from './agent-workspace-manager'
 import { getConfigDirName } from './config-paths'
+import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 
 // ===== 内置 SubAgent 定义 =====
 
@@ -90,6 +91,8 @@ interface SystemPromptContext {
   memoryEnabled: boolean
   /** 用户选用的模型是否为 Claude 系列（影响 SubAgent 模型策略描述，缺省视为 true） */
   claudeAvailable?: boolean
+  /** DeepSeek 系列主模型下，运行时固定注入给 SubAgent 的模型 */
+  deepSeekSubagentModel?: string
 }
 
 /**
@@ -131,7 +134,51 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   // SubAgent 委派策略（根据用户选用的模型是否为 Claude 动态调整）
   const claudeAvailable = ctx.claudeAvailable !== false
-  if (claudeAvailable) {
+  if (ctx.deepSeekSubagentModel === DEEPSEEK_SUBAGENT_MODEL_ID) {
+    sections.push(`## SubAgent 委派策略
+
+**核心原则：先探索再行动，用 SubAgent 保持主上下文干净。**
+
+当前使用的是 DeepSeek 系列模型，Proma 已在运行时将所有 SubAgent 固定到 \`${DEEPSEEK_SUBAGENT_MODEL_ID}\`。调用 SubAgent 时不要通过 \`model\` 参数指定模型，也不要使用 haiku/sonnet/opus 等 Claude 模型别名，否则可能导致兼容端点调用失败。
+
+### 内置 SubAgent
+
+系统已预定义以下子代理，可直接通过 Agent 工具按名称调用：
+
+- **explorer**（${DEEPSEEK_SUBAGENT_MODEL_ID}）：代码库探索。快速搜索文件、理解项目结构、收集相关上下文。动手修改前优先调用
+- **researcher**（${DEEPSEEK_SUBAGENT_MODEL_ID}）：技术调研。方案对比、依赖评估、架构分析，输出结构化调研报告
+- **code-reviewer**（${DEEPSEEK_SUBAGENT_MODEL_ID}）：代码审查。任务完成后调用，检查代码质量和规范一致性
+
+### 何时委派 SubAgent
+
+- 需要探索代码库、搜索多个文件、理解项目结构时 → 委派 \`explorer\`
+- 需要调研技术方案、对比多个选项时 → 委派 \`researcher\`
+- 代码修改完成后做质量检查 → 委派 \`code-reviewer\`
+- 需要并行处理多个独立子任务时 → 同时委派多个 SubAgent
+- 以上内置 SubAgent 不满足需求时，也可以自行定义临时 SubAgent，但不要指定 \`model\` 参数
+
+### 不需要委派的场景
+
+- 简单的单文件读取或编辑
+- 用户明确指定了操作目标
+- 任务本身就很简单直接
+
+### 委派时的要求
+
+- 给 SubAgent 清晰的任务描述，说明要收集什么信息、返回什么格式
+- 可以同时启动多个 SubAgent 并行工作
+- SubAgent 返回结果后，在主上下文中整合并做决策
+
+### 典型工作流（复杂任务）
+
+1. 委派 \`explorer\` 探索代码库、收集上下文
+2. 根据探索结果，委派 \`researcher\` 分析方案
+3. 整合所有信息，将调研结果输出到 \`.context/note.md\`
+4. 不确定的部分调用头脑风暴 Skill 与用户确认
+5. 对于重大架构变更或不确定的决策点，通过 AskUserQuestion 与用户确认；其他步骤直接执行，不要逐步等待确认
+6. 执行实施，将进度更新到 \`.context/todo.md\`
+7. 完成后委派 \`code-reviewer\` 做最终质量检查`)
+  } else if (claudeAvailable) {
     sections.push(`## SubAgent 委派策略
 
 **核心原则：先探索再行动，用 SubAgent 保持主上下文干净。根据任务复杂度选择合适的模型。**

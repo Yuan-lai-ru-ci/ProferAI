@@ -49,6 +49,7 @@ import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
+import { applyAgentModelRoutingToEnv, resolveAgentModelRouting } from './agent-model-routing'
 import { getMemoryConfig } from './memory-service'
 import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import { validateToolInput } from './agent-tool-input-validator'
@@ -1068,7 +1069,9 @@ export class AgentOrchestrator {
       process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
     }
 
+    const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
     const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
+    applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)
@@ -1496,6 +1499,7 @@ export class AgentOrchestrator {
             permissionMode: initialPermissionMode,
             memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
             claudeAvailable,
+            deepSeekSubagentModel: modelRouting.subagentModel,
           }),
         },
         resumeSessionId: existingSdkSessionId,
@@ -1526,7 +1530,8 @@ export class AgentOrchestrator {
           betas: ['context-1m-2025-08-07'] as SdkBeta[],
         }),
         // 内置 SubAgent 定义（code-reviewer / explorer / researcher）
-        // claudeAvailable=false 时 SubAgent 省略 model 字段，自动继承主 Agent 模型
+        // SubAgent 模型最终由 CLAUDE_CODE_SUBAGENT_MODEL 兜底控制：
+        // DeepSeek 系列固定 deepseek-v4-flash，其它模型删除该 env，保留 SDK 默认解析。
         agents: buildBuiltinAgents(claudeAvailable),
         onStderr: (data: string) => {
           stderrChunks.push(data)
