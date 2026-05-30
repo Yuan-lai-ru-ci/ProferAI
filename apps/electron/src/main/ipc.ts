@@ -169,6 +169,7 @@ import {
   moveSessionToWorkspace,
   forkAgentSession,
   autoArchiveAgentSessions,
+  cleanupStaleAttachedPaths,
   searchAgentSessionMessages,
   searchAgentSessionReferences,
 } from './lib/agent-session-manager'
@@ -213,6 +214,7 @@ import {
   getWorktreeRepos,
   addWorktreeRepo,
   removeWorktreeRepo,
+  cleanupStaleWorkspaceAttachedPaths,
 } from './lib/agent-workspace-manager'
 import { getMemoryConfig, setMemoryConfig } from './lib/memory-service'
 import { getAllToolInfos } from './lib/chat-tool-registry'
@@ -3767,6 +3769,14 @@ export function registerIpcHandlers(): void {
 
   runAutoArchive()
   setInterval(runAutoArchive, 24 * 60 * 60 * 1000)
+
+  // 启动时清理不存在的附加目录/文件（如已删除的 worktree）
+  try {
+    cleanupStaleAttachedPaths()
+    cleanupStaleWorkspaceAttachedPaths()
+  } catch (error) {
+    console.error('[启动清理] 清理失效附加路径失败:', error)
+  }
 
   // ===== 存储管理 =====
 
