@@ -399,7 +399,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   return (
     <div
       className={cn(
-        'relative h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl',
+        'relative z-0 h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl',
         shouldAnimate && 'transition-[width] duration-300 ease-in-out',
         isOpen ? '' : '!w-0',
       )}
