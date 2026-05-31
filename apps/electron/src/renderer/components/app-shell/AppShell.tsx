@@ -18,7 +18,7 @@ import { WindowControls } from '@/components/WindowControls'
 import { detectIsWindows } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 
-const MIN_RIGHT_PANEL_WIDTH = 220
+const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 420
 
 function clampRightPanelWidth(width: number): number {
