@@ -24,7 +24,7 @@ import type {
 import { PROVIDER_DEFAULT_URLS } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { normalizeAnthropicBaseUrl, normalizeBaseUrl, normalizeVersionedAnthropicBaseUrl } from '@proma/core'
+import { normalizeBaseUrl, normalizeAnthropicProviderUrl } from '@proma/core'
 
 /** 当前配置版本 */
 const CONFIG_VERSION = 1
@@ -302,11 +302,7 @@ async function testAnthropicCompatible(
   proxyUrl?: string,
   provider: ProviderType = 'anthropic',
 ): Promise<ChannelTestResult> {
-  const isNonVersionedPath =
-    provider === 'deepseek' || provider === 'kimi-api' || provider === 'kimi-coding'
-  const url = (provider === 'minimax' || provider === 'anthropic-compatible')
-    ? normalizeVersionedAnthropicBaseUrl(baseUrl)
-    : isNonVersionedPath ? normalizeBaseUrl(baseUrl) : normalizeAnthropicBaseUrl(baseUrl)
+  const url = normalizeAnthropicProviderUrl(baseUrl, provider)
   const fetchFn = getFetchFn(proxyUrl)
 
   let testModel: string
@@ -510,11 +506,7 @@ async function fetchAnthropicCompatibleModels(
   proxyUrl?: string,
   provider: ProviderType = 'anthropic',
 ): Promise<FetchModelsResult> {
-  const isNonVersionedPath =
-    provider === 'deepseek' || provider === 'kimi-api' || provider === 'kimi-coding'
-  const url = (provider === 'minimax' || provider === 'anthropic-compatible')
-    ? normalizeVersionedAnthropicBaseUrl(baseUrl)
-    : isNonVersionedPath ? normalizeBaseUrl(baseUrl) : normalizeAnthropicBaseUrl(baseUrl)
+  const url = normalizeAnthropicProviderUrl(baseUrl, provider)
   const fetchFn = getFetchFn(proxyUrl)
 
   const headers: Record<string, string> = {
