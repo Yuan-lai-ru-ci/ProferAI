@@ -256,6 +256,17 @@ export async function getUnstagedChanges(
   }
 }
 
+/**
+ * 归一化仓库根路径，用于去重。
+ *
+ * 两个数据源的分隔符风格不一致：`git rev-parse --show-toplevel` 在 Windows 返回正斜杠
+ * （`C:/.../repo`），而 Node `path.join` 返回反斜杠（`C:\...\repo`）。统一用 resolve
+ * 规范化并转为正斜杠，确保同一仓库的两种写法被识别为同一个根，避免重复跑 git diff。
+ */
+function normalizeGitRoot(p: string): string {
+  return resolve(p).replace(/\\/g, '/')
+}
+
 /** 向下递归搜索所有 .git 目录，返回所有找到的仓库根（不提前停止） */
 function findAllGitRootsDown(dirPath: string, maxDepth: number): string[] {
   if (maxDepth <= 0) return []
@@ -298,13 +309,15 @@ function findAllGitRoots(baseDir: string): string[] {
   // 1. 向上搜索：git rev-parse --show-toplevel
   const toplevel = runGitCommand(['rev-parse', '--show-toplevel'], baseDir)
   const roots: string[] = []
-  if (toplevel && existsSync(toplevel) && !roots.includes(toplevel)) {
-    roots.push(toplevel)
+  if (toplevel && existsSync(toplevel)) {
+    const normalized = normalizeGitRoot(toplevel)
+    if (!roots.includes(normalized)) roots.push(normalized)
   }
 
   // 2. 向下搜索所有子 .git
   for (const r of findAllGitRootsDown(baseDir, 3)) {
-    if (!roots.includes(r)) roots.push(r)
+    const normalized = normalizeGitRoot(r)
+    if (!roots.includes(normalized)) roots.push(normalized)
   }
 
   return roots
@@ -508,7 +521,7 @@ export async function getWorktreeChanges(
     return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
   }
 
-  const gitRoot = toplevel
+  const gitRoot = normalizeGitRoot(toplevel)
   const allFiles: import('@proma/shared').ChangedFileEntry[] = []
   const fileMap = new Map<string, import('@proma/shared').ChangedFileEntry>()
 
