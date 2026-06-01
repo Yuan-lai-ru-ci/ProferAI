@@ -320,7 +320,7 @@ async function testAnthropicCompatible(
       testModel = 'kimi-for-coding'
       break
     case 'minimax':
-      testModel = 'MiniMax-M2.7'
+      testModel = 'MiniMax-M3'
       break
     default:
       testModel = 'claude-sonnet-4-6'

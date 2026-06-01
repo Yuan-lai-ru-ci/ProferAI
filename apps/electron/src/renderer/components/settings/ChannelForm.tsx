@@ -279,6 +279,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         ])
       } else if (p === 'minimax') {
         setModels([
+          { id: 'MiniMax-M3', name: 'MiniMax-M3', enabled: true },
           { id: 'MiniMax-M2.7', name: 'MiniMax-M2.7', enabled: true },
         ])
       }

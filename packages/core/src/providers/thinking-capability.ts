@@ -74,7 +74,7 @@ export function detectThinkingCapability(
   }
 
   // Kimi / MiniMax 的 Anthropic 协议渠道：
-  // Kimi K2 系列非 reasoning 模型不支持 thinking 参数；MiniMax M2 会默认返回 thinking 块，
+  // Kimi K2 系列非 reasoning 模型不支持 thinking 参数；MiniMax M2/M3 会默认返回 thinking 块，
   // 官方文档中 thinking 请求参数存在兼容差异，这里直接省略以保持连接稳定。
   if (providerType === 'kimi-api' || providerType === 'kimi-coding' || providerType === 'minimax') {
     return { mode: 'none', disableStrategy: 'omit-field' }
