@@ -81,7 +81,7 @@ export function detectThinkingCapability(
   }
 
   // 其它非 Anthropic 供应商：不发 thinking
-  if (providerType !== 'anthropic') {
+  if (providerType !== 'anthropic' && providerType !== 'anthropic-compatible') {
     return { mode: 'manual-only', disableStrategy: 'explicit-disabled' }
   }
 

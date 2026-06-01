@@ -262,8 +262,8 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /** 根据 provider 类型选择 URL 规范化方式 */
   private normalizeUrl(baseUrl: string): string {
-    // MiniMax：baseUrl 是 /anthropic 协议根路径，实际请求需要 /v1/messages。
-    if (this.providerType === 'minimax') {
+    // MiniMax / Anthropic 兼容格式：baseUrl 是 /anthropic 协议根路径，实际请求需要 /v1/messages。
+    if (this.providerType === 'minimax' || this.providerType === 'anthropic-compatible') {
       return normalizeVersionedAnthropicBaseUrl(baseUrl)
     }
     // DeepSeek / Kimi：baseUrl 本身已含非版本路径（如 /anthropic、/coding/v1），不追加 /v1

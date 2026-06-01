@@ -267,6 +267,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
   try {
     switch (channel.provider) {
       case 'anthropic':
+      case 'anthropic-compatible':
       case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
@@ -303,7 +304,7 @@ async function testAnthropicCompatible(
 ): Promise<ChannelTestResult> {
   const isNonVersionedPath =
     provider === 'deepseek' || provider === 'kimi-api' || provider === 'kimi-coding'
-  const url = provider === 'minimax'
+  const url = (provider === 'minimax' || provider === 'anthropic-compatible')
     ? normalizeVersionedAnthropicBaseUrl(baseUrl)
     : isNonVersionedPath ? normalizeBaseUrl(baseUrl) : normalizeAnthropicBaseUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
@@ -426,6 +427,7 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
   try {
     switch (input.provider) {
       case 'anthropic':
+      case 'anthropic-compatible':
       case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
@@ -462,6 +464,7 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
   try {
     switch (input.provider) {
       case 'anthropic':
+      case 'anthropic-compatible':
       case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
@@ -509,7 +512,7 @@ async function fetchAnthropicCompatibleModels(
 ): Promise<FetchModelsResult> {
   const isNonVersionedPath =
     provider === 'deepseek' || provider === 'kimi-api' || provider === 'kimi-coding'
-  const url = provider === 'minimax'
+  const url = (provider === 'minimax' || provider === 'anthropic-compatible')
     ? normalizeVersionedAnthropicBaseUrl(baseUrl)
     : isNonVersionedPath ? normalizeBaseUrl(baseUrl) : normalizeAnthropicBaseUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
