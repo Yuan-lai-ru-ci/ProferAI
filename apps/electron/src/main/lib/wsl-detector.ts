@@ -11,6 +11,7 @@
  */
 
 import { execSync } from 'node:child_process'
+import iconv from 'iconv-lite'
 import type { WslStatus } from '@proma/shared'
 
 /**
@@ -100,12 +101,17 @@ export async function detectWsl(): Promise<WslStatus> {
 
   try {
     // 执行 wsl.exe --list --verbose
-    // 使用 chcp 65001 确保输出为 UTF-8 编码，避免中文乱码
-    const output = execSync('chcp 65001 > nul && wsl.exe --list --verbose', {
-      encoding: 'utf-8',
+    // 不指定 encoding，接收原始 Buffer，然后用 iconv-lite 做编码转换
+    const buffer = execSync('wsl.exe --list --verbose', {
       timeout: 10000,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+
+    // 尝试用 UTF-8 解码，如果包含替换字符（乱码特征）则用 GBK 解码
+    let output = iconv.decode(buffer, 'utf-8')
+    if (output.includes('�')) {
+      output = iconv.decode(buffer, 'gbk')
+    }
 
     const parsed = parseWslListOutput(output)
 
@@ -134,6 +140,19 @@ export async function detectWsl(): Promise<WslStatus> {
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
+
+    // 检测乱码（替换字符或不可见控制字符）
+    const hasGarbledText = errorMessage.includes('�') || /[\x00-\x08\x0b-\x0c\x0e-\x1f]/.test(errorMessage)
+    if (hasGarbledText) {
+      console.warn('[WSL 检测] 检测到编码乱码，推测 WSL 未安装')
+      return {
+        available: false,
+        version: null,
+        defaultDistro: null,
+        distros: [],
+        error: 'WSL 未安装',
+      }
+    }
 
     // 判断是否为 WSL 未安装的错误
     if (
