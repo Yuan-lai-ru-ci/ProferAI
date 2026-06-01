@@ -105,9 +105,9 @@ export async function detectWsl(): Promise<WslStatus> {
     const buffer = execSync('wsl.exe --list --verbose', {
       timeout: 10000,
       stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    }) as Buffer
 
-    // 尝试用 UTF-8 解码，如果包含替换字符（乱码特征）则用 GBK 解码
+    // 先尝试 UTF-8 解码；若结果含替换字符（U+FFFD），说明原始数据非 UTF-8，回退 GBK
     let output = iconv.decode(buffer, 'utf-8')
     if (output.includes('�')) {
       output = iconv.decode(buffer, 'gbk')
@@ -141,16 +141,16 @@ export async function detectWsl(): Promise<WslStatus> {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
 
-    // 检测乱码（替换字符或不可见控制字符）
+    // 检测乱码（替换字符或不可见控制字符）— 无法确定具体原因，报告编码异常
     const hasGarbledText = errorMessage.includes('�') || /[\x00-\x08\x0b-\x0c\x0e-\x1f]/.test(errorMessage)
     if (hasGarbledText) {
-      console.warn('[WSL 检测] 检测到编码乱码，推测 WSL 未安装')
+      console.warn('[WSL 检测] 检测到编码乱码，无法解析命令输出')
       return {
         available: false,
         version: null,
         defaultDistro: null,
         distros: [],
-        error: 'WSL 未安装',
+        error: 'WSL 检测失败: 命令输出编码异常',
       }
     }
 
