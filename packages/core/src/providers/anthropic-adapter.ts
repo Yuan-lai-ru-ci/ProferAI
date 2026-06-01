@@ -19,8 +19,8 @@
  *
  * Kimi Coding Plan 特殊要求：
  * - Base URL：`https://api.kimi.com/coding/v1`
- * - 必须发送 `User-Agent: KimiCLI/1.3`，服务端会校验 coding agent 白名单
- * - 禁止伪造 User-Agent（违反服务条款可能导致会员停权）
+ * - 必须发送 Proma 自有 User-Agent（服务端白名单校验）
+ * - UA 格式：`Proma/<version> (+https://github.com/ErlichLiu/Proma)`
  */
 
 import type { ProviderType } from '@proma/shared'
@@ -36,6 +36,7 @@ import type {
 } from './types.ts'
 import { normalizeAnthropicProviderUrl } from './url-utils.ts'
 import { detectThinkingCapability } from './thinking-capability.ts'
+import { getPromaUserAgent } from './user-agent.ts'
 
 // ===== Anthropic 特有类型 =====
 
@@ -269,8 +270,8 @@ export class AnthropicAdapter implements ProviderAdapter {
    * 构造请求头
    *
    * Kimi Coding Plan 要求：
-   * - 只使用 Bearer（服务端会校验 User-Agent 白名单，不接受伪装为浏览器/SDK）
-   * - User-Agent 必须是真实 coding agent 身份（如 KimiCLI/1.3）
+   * - 只使用 Bearer（服务端校验 User-Agent 白名单）
+   * - User-Agent 使用 Proma 自有标识（通过 setPromaVersion 初始化）
    */
   private buildHeaders(apiKey: string): Record<string, string> {
     const base: Record<string, string> = {
@@ -279,7 +280,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
     if (this.providerType === 'kimi-coding') {
       base['Authorization'] = `Bearer ${apiKey}`
-      base['User-Agent'] = 'KimiCLI/1.3'
+      base['User-Agent'] = getPromaUserAgent()
       return base
     }
     if (this.providerType === 'minimax') {
