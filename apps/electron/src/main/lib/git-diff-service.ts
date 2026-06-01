@@ -15,6 +15,18 @@ import type { ChangeSource, ChangedFileStatus } from '@proma/shared'
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 /**
+ * 归一化换行符为 LF。
+ *
+ * diff 两侧内容来源不同：旧版本来自 `git show`（读对象库 blob，换行符为 LF），
+ * 新版本来自磁盘工作区文件（Windows 在 core.autocrlf=true 下检出为 CRLF）。
+ * 若不归一化，逐行 diff 会把每一行都判定为变更，导致整文件「全删全增」。
+ * 此处只影响 diff 显示比较，不改写磁盘文件。
+ */
+function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n/g, '\n')
+}
+
+/**
  * 校验并规范化 filePath，确保其位于 root 目录内。
  * 支持相对路径和绝对路径。绝对路径会被自动转为相对路径。
  * 拒绝 `..` 穿越和 root 外的路径。
@@ -345,7 +357,7 @@ export async function getDiffContents(dirPath: string, filePath: string, gitRoot
         // 读取失败保持空字符串
       }
     }
-    return { oldContent: '', newContent }
+    return { oldContent: '', newContent: normalizeLineEndings(newContent) }
   }
 
   const safePath = normalizeSafePath(root, filePath)
@@ -387,7 +399,7 @@ export async function getDiffContents(dirPath: string, filePath: string, gitRoot
     }
   }
 
-  return { oldContent, newContent }
+  return { oldContent: normalizeLineEndings(oldContent), newContent: normalizeLineEndings(newContent) }
 }
 
 /**
@@ -411,7 +423,7 @@ export async function getUntrackedContent(dirPath: string, filePath: string, git
       console.warn('[git-diff-service] 未追踪文件超过大小上限:', fullPath, st.size)
       return ''
     }
-    return readFileSync(fullPath, 'utf-8')
+    return normalizeLineEndings(readFileSync(fullPath, 'utf-8'))
   } catch {
     return ''
   }
