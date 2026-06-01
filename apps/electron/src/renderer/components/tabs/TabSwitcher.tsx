@@ -4,7 +4,7 @@
  * 列表按 MRU（最近访问）顺序排列，键盘和鼠标共享同一套选择模型。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import type { AgentSessionMeta, ConversationMeta } from '@proma/shared'
@@ -85,6 +85,7 @@ export function TabSwitcher(): ReactElement | null {
   const [mouseActivated, setMouseActivated] = useState(false)
   const mouseActivatedRef = useRef(false)
   const initialMousePosRef = useRef({ x: 0, y: 0 })
+  const listRef = useRef<HTMLDivElement>(null)
 
   const switcherModel = useMemo<SwitcherModel>(() => {
     const workspaceNameById = new Map(agentWorkspaces.map((workspace) => [workspace.id, workspace.name]))
@@ -330,6 +331,18 @@ export function TabSwitcher(): ReactElement | null {
     }
   }, [activateCandidate, closeSwitcher])
 
+  useLayoutEffect(() => {
+    if (!isOpen) return
+
+    const safeIndex = Math.min(selectedIndex, switcherModel.candidates.length - 1)
+    if (safeIndex < 0) return
+
+    const selectedRow = listRef.current?.querySelector<HTMLElement>(
+      `[data-switcher-index="${safeIndex}"]`,
+    )
+    selectedRow?.scrollIntoView({ block: 'nearest' })
+  }, [isOpen, selectedIndex, switcherModel.candidates.length])
+
   if (!isOpen || switcherModel.candidates.length === 0) return null
 
   const safeIndex = Math.min(selectedIndex, switcherModel.candidates.length - 1)
@@ -352,7 +365,7 @@ export function TabSwitcher(): ReactElement | null {
           </div>
         </div>
 
-        <div className="py-1.5 max-h-[420px] overflow-y-auto scrollbar-thin">
+        <div ref={listRef} className="py-1.5 max-h-[420px] overflow-y-auto scrollbar-thin">
           {switcherModel.sections.map((section, sectionIndex) => (
             <div key={section.id}>
               {sectionIndex > 0 && (
@@ -369,6 +382,7 @@ export function TabSwitcher(): ReactElement | null {
                   <SwitcherCandidateRow
                     key={`${candidate.type}-${candidate.id}`}
                     candidate={candidate}
+                    index={index}
                     active={index === safeIndex}
                     hoverEnabled={mouseActivated}
                     onMouseEnter={() => {
@@ -398,12 +412,14 @@ export function TabSwitcher(): ReactElement | null {
 
 function SwitcherCandidateRow({
   candidate,
+  index,
   active,
   hoverEnabled,
   onMouseEnter,
   onClick,
 }: {
   candidate: SwitchCandidate
+  index: number
   active: boolean
   hoverEnabled: boolean
   onMouseEnter: () => void
@@ -415,6 +431,7 @@ function SwitcherCandidateRow({
   return (
     <button
       type="button"
+      data-switcher-index={index}
       className={cn(
         'relative flex items-center gap-3 w-full pl-5 pr-5 py-2.5 text-[15px] text-left cursor-default transition-colors',
         active ? 'bg-primary/15 text-foreground font-medium' : hoverEnabled ? 'text-muted-foreground hover:bg-muted/40' : 'text-muted-foreground',
