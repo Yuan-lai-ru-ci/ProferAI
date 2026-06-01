@@ -32,6 +32,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { Bot, MessageSquare } from 'lucide-react'
 
 type SwitchSectionId = 'recent'
 type SwitchCandidateType = 'chat' | 'agent'
@@ -452,8 +453,18 @@ function SwitcherCandidateRow({
           aria-hidden="true"
         />
       )}
-      <span className="w-10 shrink-0 text-[10px] leading-4 text-center rounded-full bg-foreground/[0.06] text-foreground/45 font-medium">
-        {candidate.type === 'agent' ? 'Agent' : 'Chat'}
+      <span className="w-auto px-2 shrink-0 text-[10px] leading-4 rounded-full bg-foreground/[0.06] text-foreground/45 font-medium flex items-center gap-1">
+        {candidate.type === 'agent' ? (
+          <>
+            <Bot className="size-2.5" />
+            Agent
+          </>
+        ) : (
+          <>
+            <MessageSquare className="size-2.5" />
+            Chat
+          </>
+        )}
       </span>
       <span className="flex-1 min-w-0 truncate">{candidate.title}</span>
       {candidate.workspaceName && (
