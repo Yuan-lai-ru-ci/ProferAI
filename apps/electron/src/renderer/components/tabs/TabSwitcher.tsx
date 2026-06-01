@@ -435,7 +435,7 @@ function SwitcherCandidateRow({
       data-switcher-index={index}
       className={cn(
         'relative flex items-center gap-3 w-full pl-5 pr-5 py-2.5 text-[15px] text-left cursor-default transition-colors',
-        active ? 'bg-primary/15 text-foreground font-medium' : hoverEnabled ? 'text-muted-foreground hover:bg-muted/40' : 'text-muted-foreground',
+        active ? 'bg-primary/15 text-foreground' : hoverEnabled ? 'text-muted-foreground hover:bg-muted/40' : 'text-muted-foreground',
       )}
       onMouseEnter={onMouseEnter}
       onMouseDown={(event) => {
