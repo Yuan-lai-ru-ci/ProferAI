@@ -106,6 +106,9 @@ import StepDarkLogo from '@/assets/models/step_dark.png'
 // MiniMax
 import MiniMaxLogo from '@/assets/models/minimax.png'
 
+// Xiaomi / MiMo
+import XiaomiLogo from '@/assets/models/xiaomi.png'
+
 // Proma
 import PromaLogo from '@/assets/models/proma.png'
 
@@ -214,6 +217,9 @@ const MODEL_LOGO_MAP: Record<string, string> = {
   // === MiniMax ===
   minimax: MiniMaxLogo,
 
+  // === Xiaomi / MiMo ===
+  mimo: XiaomiLogo,
+
   // === Cohere ===
   cohere: CohereLogo,
   command: CohereLogo,
@@ -240,6 +246,8 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   minimax: MiniMaxLogo,
   doubao: DoubaoLogo,
   qwen: QwenLogo,
+  xiaomi: XiaomiLogo,
+  'xiaomi-token-plan': XiaomiLogo,
   custom: DefaultLogo,
 }
 
@@ -305,6 +313,7 @@ const URL_LOGO_MAP: Array<[RegExp, string]> = [
   [/moonshot\.cn|kimi/i, KimiLogo],
   [/bigmodel\.cn|zhipuai/i, ZhipuLogo],
   [/minimax/i, MiniMaxLogo],
+  [/xiaomimimo|mimo/i, XiaomiLogo],
   [/volces\.com|volcengine/i, DoubaoLogo],
   [/dashscope|aliyuncs/i, QwenLogo],
   [/deepseek/i, DeepSeekLogo],

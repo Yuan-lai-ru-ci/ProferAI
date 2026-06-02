@@ -70,7 +70,9 @@ function normalizeSafePath(root: string, filePath: string): string | null {
 function runGitCommand(args: string[], cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     try {
-      const child = spawn('git', args, {
+      // -c core.quotePath=false：禁用 git 对非 ASCII 路径的八进制转义（如中文文件名
+      // 默认会输出为 "\347\250\213.md" 并加引号），保证 diff/ls-files 等输出原始 UTF-8 路径
+      const child = spawn('git', ['-c', 'core.quotePath=false', ...args], {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
