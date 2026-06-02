@@ -517,6 +517,10 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const lastNewContentRef = React.useRef('')
   const lastOldContentRef = React.useRef('')
 
+  // 滚动位置持久化 key（sessionId:filePath）。主加载 effect 在缓存未命中时
+  // 也会读它判断是否需要恢复滚动，故声明须早于该 effect。
+  const scrollKey = scrollCacheKey(sessionId, filePath)
+
   // 主加载 effect：上下文变化（filePath/dirPath/gitRoot/previewOnly）时触发；
   // 纯预览模式也跟随 refreshVersion 失效，保证同一文件二次写入后重新读盘。
   // 命中缓存时跳过 loading 闪烁直接渲染；未命中走 IPC 拉取
@@ -562,6 +566,11 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setImageNaturalSize({ w: 0, h: 0 })
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
+      // 内容缓存被 LRU 淘汰但滚动位置仍在时（如切走会话后预览 Tab 重建），
+      // 也标记需要恢复，待 load() 重新拉取渲染后回到上次滚动位置。
+      if (scrollPositionCache.has(scrollKey)) {
+        restoreScrollRef.current = true
+      }
     }
 
     async function load() {
@@ -721,7 +730,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   // scrollPosition persistent: module-level Map keyed by sessionId:filePath
   // content changes (refreshVersion bump) → delete stored position;
   // cached mount → restore; scroll → save.
-  const scrollKey = scrollCacheKey(sessionId, filePath)
   const prevRefreshVersionRef = React.useRef(refreshVersion)
 
   // WHEN content version changes (refreshVersion bump): delete stored scroll position
