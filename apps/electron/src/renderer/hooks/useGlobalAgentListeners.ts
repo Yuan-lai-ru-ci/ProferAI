@@ -120,6 +120,8 @@ function inferContextWindow(model?: string): number | undefined {
   if (m.includes('deepseek-v4')) return 1_000_000
   // MiniMax M3 为 1M 上下文
   if (m.includes('minimax-m3')) return 1_000_000
+  // 小米 MiMo：v2.5 / v2.5-pro / v2-pro 为 1M（omni / flash 仍走默认 200k）
+  if (m.includes('mimo-v2.5') || m.includes('mimo-v2-pro')) return 1_000_000
   return 200_000
 }
 
