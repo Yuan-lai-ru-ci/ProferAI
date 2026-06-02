@@ -79,39 +79,43 @@ function runGitCommand(args: string[], cwd: string): Promise<string | null> {
         },
       })
 
+      // 显式指定 UTF-8 编码：由 StringDecoder 正确处理跨 chunk 的多字节字符边界，
+      // 避免中文文件名/内容在 chunk 切分处出现乱码（逐块 data.toString() 会损坏）
+      child.stdout?.setEncoding('utf-8')
+      child.stderr?.setEncoding('utf-8')
+
       let stdout = ''
       let stderr = ''
 
       child.stdout?.on('data', (data) => {
-        stdout += data.toString()
+        stdout += data
       })
 
       child.stderr?.on('data', (data) => {
-        stderr += data.toString()
-      })
-
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve(stdout.trim())
-        } else {
-          resolve(null)
-        }
-      })
-
-      child.on('error', (err) => {
-        console.error('[git-diff-service] git 命令错误:', err)
-        resolve(null)
+        stderr += data
       })
 
       // 10 秒超时
       const timeout = setTimeout(() => {
         child.kill('SIGTERM')
-        console.warn('[git-diff-service] git 命令超时')
+        console.warn('[git-diff-service] git 命令超时:', args.join(' '))
         resolve(null)
       }, 10000)
 
-      child.on('close', () => {
+      child.on('close', (code) => {
         clearTimeout(timeout)
+        if (code === 0) {
+          resolve(stdout.trim())
+        } else {
+          console.error('[git-diff-service] git 命令失败:', args.join(' '), stderr.trim())
+          resolve(null)
+        }
+      })
+
+      child.on('error', (err) => {
+        clearTimeout(timeout)
+        console.error('[git-diff-service] git 命令错误:', err)
+        resolve(null)
       })
     } catch {
       resolve(null)
