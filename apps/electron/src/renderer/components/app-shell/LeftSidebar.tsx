@@ -32,6 +32,7 @@ import {
 } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
+  agentSDKMessagesCacheAtom,
   currentAgentSessionIdAtom,
   agentSessionIndicatorMapAtom,
   unviewedCompletedSessionIdsAtom,
@@ -305,6 +306,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [currentConversationId, setCurrentConversationId] = useAtom(currentConversationIdAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
+  const setAgentMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
 
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
@@ -794,6 +796,13 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         // 即使后端报错，也从本地列表移除（可能是会话已不存在）
         setAgentSessions((prev) => prev.filter((s) => s.id !== pendingDeleteId))
       } finally {
+        // 清理该会话的消息缓存，避免已删除会话的消息数组滞留内存
+        setAgentMessagesCache((prev) => {
+          if (!prev.has(pendingDeleteId)) return prev
+          const next = new Map(prev)
+          next.delete(pendingDeleteId)
+          return next
+        })
         setPendingDeleteId(null)
       }
       return
