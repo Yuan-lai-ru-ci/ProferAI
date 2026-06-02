@@ -1836,9 +1836,11 @@ const ConversationItem = React.memo(function ConversationItem({
 }: ConversationItemProps): React.ReactElement {
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
+  const [menuOpen, setMenuOpen] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
-  const preview = useSessionMiniMapHover()
+  // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
+  const preview = useSessionMiniMapHover(300, menuOpen)
 
   /** 进入编辑模式 */
   const startEdit = (): void => {
@@ -1963,7 +1965,7 @@ const ConversationItem = React.memo(function ConversationItem({
               className="flex-shrink-0"
               onClick={(e) => e.stopPropagation()}
             >
-              <DropdownMenu>
+              <DropdownMenu onOpenChange={setMenuOpen}>
                 <DropdownMenuTrigger asChild>
                   <button
                     className={cn(
@@ -2059,9 +2061,11 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
 }: AgentSessionItemProps): React.ReactElement {
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
+  const [menuOpen, setMenuOpen] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
-  const preview = useSessionMiniMapHover(300, disableMiniMap)
+  // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
+  const preview = useSessionMiniMapHover(300, disableMiniMap || menuOpen)
 
   const startEdit = (): void => {
     setEditTitle(session.title)
@@ -2228,7 +2232,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
               className="flex-shrink-0"
               onClick={(e) => e.stopPropagation()}
             >
-              <DropdownMenu>
+              <DropdownMenu onOpenChange={setMenuOpen}>
                 <DropdownMenuTrigger asChild>
                   <button
                     className={cn(
