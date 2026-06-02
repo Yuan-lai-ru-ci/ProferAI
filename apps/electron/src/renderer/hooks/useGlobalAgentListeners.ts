@@ -940,6 +940,7 @@ export function useGlobalAgentListeners(): void {
           activeTabId: store.get(activeTabIdAtom),
           currentAgentSessionId: currentSessionId,
           sessionId: data.sessionId,
+          documentHasFocus: document.hasFocus(),
         })
         if (completionMarkers.markUnviewedCompleted) {
           store.set(unviewedCompletedSessionIdsAtom, (prev: Set<string>) => {
