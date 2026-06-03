@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -1988,15 +1988,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         {/* AskUserQuestion 交互式问答横幅 */}
         <AskUserBanner sessionId={sessionId} />
-
-        {/* Plan 模式指示条 */}
-        {isPlanMode && (
-          <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 text-primary text-sm animate-in fade-in slide-in-from-bottom-1 duration-200">
-            <MapIcon className="size-4 animate-pulse" />
-            <span className="font-medium">Agent 正在规划中...</span>
-            <span className="text-xs text-muted-foreground">完成后将请求你的审批</span>
-          </div>
-        )}
 
         {/* ExitPlanMode 计划审批横幅 */}
         <ExitPlanModeBanner sessionId={sessionId} />
