@@ -35,7 +35,8 @@ import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, m
 import { isTransientNetworkError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
-import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk } from '@proma/core'
+import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
+import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
@@ -442,7 +443,8 @@ const DEFAULT_MODEL_ID = 'claude-sonnet-4-6'
 
 /**
  * 判断模型是否支持 1M context window beta（context-1m-2025-08-07）
- * 当前支持：Claude Sonnet 4 / 4.5 / 4.6、Opus 4.6 / 4.7 / 4.8、DeepSeek V4 系列
+ * 当前支持：Claude Sonnet 4 / 4.5 / 4.6、Opus 4.6 / 4.7 / 4.8、DeepSeek V4 系列、
+ * 小米 MiMo V2.5 / V2.5 Pro / V2 Pro
  * 参考：https://docs.anthropic.com/en/docs/build-with-claude/context-windows
  */
 function supports1MContext(modelId: string): boolean {
@@ -456,6 +458,8 @@ function supports1MContext(modelId: string): boolean {
   }
   // DeepSeek V4 系列（deepseek-v4-pro、deepseek-v4-flash）
   if (m.includes('deepseek-v4')) return true
+  // 小米 MiMo：v2.5 / v2.5-pro / v2-pro 为 1M（omni / flash 不支持）
+  if (m.includes('mimo-v2.5') || m.includes('mimo-v2-pro')) return true
   return false
 }
 
@@ -568,14 +572,16 @@ export class AgentOrchestrator {
     }
 
     // 认证方式按 provider 分支
-    // - Kimi Coding Plan：只认 Bearer，且必须伪装成 coding agent（User-Agent）
+    // - Kimi Coding Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Proma UA
     // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
-    // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer；
-    //   Kimi 额外通过 ANTHROPIC_CUSTOM_HEADERS 注入 User-Agent
+    // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
     // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
     if (provider === 'kimi-coding') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
+    } else if (provider === 'xiaomi-token-plan') {
+      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
+      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
     } else if (provider === 'minimax') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
       sdkEnv.API_TIMEOUT_MS = '3000000'
@@ -1063,7 +1069,11 @@ export class AgentOrchestrator {
     if (channel.provider === 'kimi-coding') {
       // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = 'User-Agent: KimiCLI/1.3'
+      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
+    } else if (channel.provider === 'xiaomi-token-plan') {
+      // 小米 Token Plan：Bearer + 必须带 User-Agent
+      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
+      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
     } else if (channel.provider === 'minimax') {
       // MiniMax Coding Plan：Claude Code 兼容配置使用 Bearer
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey

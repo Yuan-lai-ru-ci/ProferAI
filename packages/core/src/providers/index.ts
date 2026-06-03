@@ -16,6 +16,7 @@ export * from './types.ts'
 export * from './sse-reader.ts'
 export * from './url-utils.ts'
 export * from './thinking-capability.ts'
+export * from './user-agent.ts'
 
 // 导出适配器类
 export { AnthropicAdapter } from './anthropic-adapter.ts'
@@ -25,6 +26,7 @@ export { GoogleAdapter } from './google-adapter.ts'
 /** 供应商适配器注册表 */
 const adapterRegistry = new Map<ProviderType, ProviderAdapter>([
   ['anthropic', new AnthropicAdapter()],
+  ['anthropic-compatible', new AnthropicAdapter('anthropic-compatible')],
   ['openai', new OpenAIAdapter()],
   ['deepseek', new AnthropicAdapter('deepseek')],   // DeepSeek 使用 Anthropic 兼容协议
   ['kimi-api', new AnthropicAdapter('kimi-api')],       // Kimi API 的 Anthropic 协议端点
@@ -33,6 +35,8 @@ const adapterRegistry = new Map<ProviderType, ProviderAdapter>([
   ['minimax', new AnthropicAdapter('minimax')], // MiniMax 使用 Anthropic 兼容协议
   ['doubao', new OpenAIAdapter()],        // 豆包使用 OpenAI 兼容协议
   ['qwen', new OpenAIAdapter()],          // 通义千问使用 OpenAI 兼容协议
+  ['xiaomi', new AnthropicAdapter('xiaomi')],                       // 小米 MiMo API 使用 Anthropic 兼容协议
+  ['xiaomi-token-plan', new AnthropicAdapter('xiaomi-token-plan')], // 小米 Token Plan 订阅制（强制 User-Agent）
   ['custom', new OpenAIAdapter()],        // 自定义也使用 OpenAI 兼容协议
   ['google', new GoogleAdapter()],
 ])

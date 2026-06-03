@@ -323,7 +323,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   return (
     <SettingsRow
       label={channel.name}
-      icon={<img src={getChannelLogo(channel.baseUrl)} alt="" className="w-8 h-8 rounded" />}
+      icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
       description={description}
       className="group"
     >
@@ -374,7 +374,7 @@ function AgentProviderRow({ channel, enabled, onToggle }: AgentProviderRowProps)
   return (
     <SettingsRow
       label={channel.name}
-      icon={<img src={getChannelLogo(channel.baseUrl)} alt="" className="w-8 h-8 rounded" />}
+      icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
       description={description}
     >
       <Switch
@@ -396,7 +396,7 @@ function PromaProviderCard(): React.ReactElement {
     <SettingsRow
       label="Proma"
       icon={<img src={PromaLogo} alt="Proma" className="w-8 h-8 rounded" />}
-      description="Proma 官方供应｜稳定｜靠谱｜丝滑｜简单｜优惠套餐｜可用于 Agent"
+      description="Proma 官方供应｜稳定｜靠谱｜丝滑｜简单｜可用于 Agent"
     >
       <Button size="sm" variant="outline" className="gap-1.5" onClick={handleDownload}>
         <ExternalLink size={13} />

@@ -106,6 +106,9 @@ import StepDarkLogo from '@/assets/models/step_dark.png'
 // MiniMax
 import MiniMaxLogo from '@/assets/models/minimax.png'
 
+// Xiaomi / MiMo
+import XiaomiLogo from '@/assets/models/xiaomi.png'
+
 // Proma
 import PromaLogo from '@/assets/models/proma.png'
 
@@ -214,6 +217,9 @@ const MODEL_LOGO_MAP: Record<string, string> = {
   // === MiniMax ===
   minimax: MiniMaxLogo,
 
+  // === Xiaomi / MiMo ===
+  mimo: XiaomiLogo,
+
   // === Cohere ===
   cohere: CohereLogo,
   command: CohereLogo,
@@ -230,6 +236,7 @@ const MODEL_LOGO_MAP: Record<string, string> = {
  */
 const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   anthropic: ClaudeLogo,
+  'anthropic-compatible': DefaultLogo,
   openai: OpenAILogo,
   deepseek: DeepSeekLogo,
   google: GeminiLogo,
@@ -239,34 +246,10 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   minimax: MiniMaxLogo,
   doubao: DoubaoLogo,
   qwen: QwenLogo,
+  xiaomi: XiaomiLogo,
+  'xiaomi-token-plan': XiaomiLogo,
   custom: DefaultLogo,
 }
-
-/**
- * Base URL 域名 → Logo 映射
- *
- * key 为正则表达式（忽略大小写），匹配 Base URL 域名部分。
- * 优先级高于 ProviderType，用于识别用户通过兼容格式接入的实际供应商。
- */
-const URL_LOGO_MAP: Array<[RegExp, string]> = [
-  [/proma\.cool/i, PromaLogo],
-  [/moonshot\.cn|kimi/i, KimiLogo],
-  [/bigmodel\.cn|zhipuai/i, ZhipuLogo],
-  [/minimax/i, MiniMaxLogo],
-  [/volces\.com|volcengine/i, DoubaoLogo],
-  [/dashscope|aliyuncs/i, QwenLogo],
-  [/deepseek/i, DeepSeekLogo],
-  [/anthropic/i, ClaudeLogo],
-  [/openai\.com/i, OpenAILogo],
-  [/googleapis|generativelanguage/i, GeminiLogo],
-  [/grok|x\.ai/i, GrokLogo],
-  [/stepfun/i, StepLogo],
-  [/cohere/i, CohereLogo],
-  [/spark-api|xfyun/i, SparkDeskLogo],
-  [/hunyuan/i, HunyuanLogo],
-  [/ernie|baidu/i, WenxinLogo],
-  [/yi\.com|lingyiwanwu/i, YiLogo],
-]
 
 // ===== 公共 API =====
 
@@ -316,22 +299,62 @@ export function getProviderLogo(provider: ProviderType): string {
 }
 
 /**
- * 根据 Base URL 获取渠道 Logo
+ * Base URL 域名 → Logo 映射
  *
- * 按 URL 域名匹配实际供应商，未匹配到则返回默认图标。
- * 适用于渠道列表展示，即使用户用兼容格式接入也能识别真实供应商。
+ * 仅用于「泛化」provider 类型（anthropic / anthropic-compatible / custom），
+ * 这些类型无法从类型本身判断真实品牌，需要按 Base URL 域名识别。
  *
- * @param baseUrl 渠道的 Base URL
+ * 注意：故意不包含 anthropic 域名规则——真 Anthropic 渠道会通过
+ * getProviderLogo('anthropic') 回退到 Claude；而第三方 anthropic-compatible
+ * 服务（常以 /anthropic 结尾）不应被误判为 Claude（见 #659）。
  */
-export function getChannelLogo(baseUrl: string): string {
-  if (baseUrl) {
+const URL_LOGO_MAP: Array<[RegExp, string]> = [
+  [/proma\.cool/i, PromaLogo],
+  [/moonshot\.cn|kimi/i, KimiLogo],
+  [/bigmodel\.cn|zhipuai/i, ZhipuLogo],
+  [/minimax/i, MiniMaxLogo],
+  [/xiaomimimo|mimo/i, XiaomiLogo],
+  [/volces\.com|volcengine/i, DoubaoLogo],
+  [/dashscope|aliyuncs/i, QwenLogo],
+  [/deepseek/i, DeepSeekLogo],
+  [/openai\.com/i, OpenAILogo],
+  [/googleapis|generativelanguage/i, GeminiLogo],
+  [/grok|x\.ai/i, GrokLogo],
+  [/stepfun/i, StepLogo],
+  [/cohere/i, CohereLogo],
+  [/spark-api|xfyun/i, SparkDeskLogo],
+  [/hunyuan/i, HunyuanLogo],
+  [/ernie|baidu/i, WenxinLogo],
+  [/yi\.com|lingyiwanwu/i, YiLogo],
+]
+
+/** provider 类型本身无法判断真实品牌、需按 URL 识别的「泛化」类型 */
+const GENERIC_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
+  'anthropic',
+  'anthropic-compatible',
+  'custom',
+])
+
+/**
+ * 获取渠道（Channel）的 Logo
+ *
+ * 识别策略：
+ * 1. 明确品牌的 provider 类型（deepseek/openai/google/...）→ 直接信任 provider Logo
+ * 2. 泛化类型（anthropic/anthropic-compatible/custom）→ 先按 Base URL 域名识别真实品牌，
+ *    识别不到再回退到 provider 默认 Logo
+ *
+ * 这样既能识别「用 Anthropic 协议接入第三方品牌」的渠道，又不会把第三方
+ * anthropic-compatible 服务误判为 Claude。
+ */
+export function getChannelLogo(channel: { provider: ProviderType; baseUrl: string }): string {
+  if (GENERIC_PROVIDERS.has(channel.provider) && channel.baseUrl) {
     for (const [regex, logo] of URL_LOGO_MAP) {
-      if (regex.test(baseUrl)) {
+      if (regex.test(channel.baseUrl)) {
         return logo
       }
     }
   }
-  return DefaultLogo
+  return getProviderLogo(channel.provider)
 }
 
 /**

@@ -4,17 +4,21 @@
  * 列表按 MRU（最近访问）顺序排列，键盘和鼠标共享同一套选择模型。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import type { AgentSessionMeta, ConversationMeta } from '@proma/shared'
 import { cn } from '@/lib/utils'
 import {
   activeTabIdAtom,
+  activeSessionIdAtom,
   openTab,
+  buildOpenTabRestore,
+  sessionViewStateMapAtom,
   tabMruAtom,
   tabsAtom,
 } from '@/atoms/tab-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { getInitialTabSwitchIndex, promoteTabMru } from '@/lib/tab-switching'
 import { appModeAtom } from '@/atoms/app-mode'
 import {
@@ -32,6 +36,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { Bot, MessageSquare } from 'lucide-react'
 
 type SwitchSectionId = 'recent'
 type SwitchCandidateType = 'chat' | 'agent'
@@ -59,10 +64,14 @@ interface SwitcherModel {
 }
 
 export function TabSwitcher(): ReactElement | null {
+  const store = useStore()
   const tabs = useAtomValue(tabsAtom)
   const setTabs = useSetAtom(tabsAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
+  // MRU 与 Ctrl+Tab 起始定位均按会话 ID 归一化：预览 Tab 复用其 owner 会话 ID，
+  // 与候选列表（会话 ID）对齐，避免处于预览 Tab 时需按两下才能切换。
+  const activeSessionId = useAtomValue(activeSessionIdAtom)
   const tabMru = useAtomValue(tabMruAtom)
   const setTabMru = useSetAtom(tabMruAtom)
 
@@ -85,6 +94,7 @@ export function TabSwitcher(): ReactElement | null {
   const [mouseActivated, setMouseActivated] = useState(false)
   const mouseActivatedRef = useRef(false)
   const initialMousePosRef = useRef({ x: 0, y: 0 })
+  const listRef = useRef<HTMLDivElement>(null)
 
   const switcherModel = useMemo<SwitcherModel>(() => {
     const workspaceNameById = new Map(agentWorkspaces.map((workspace) => [workspace.id, workspace.name]))
@@ -158,7 +168,7 @@ export function TabSwitcher(): ReactElement | null {
   // Refs 用于事件回调中读取最新值，避免全局键盘监听闭包过期。
   const isOpenRef = useRef(false)
   const selectedIndexRef = useRef(0)
-  const activeTabIdRef = useRef<string | null>(activeTabId)
+  const activeSessionIdRef = useRef<string | null>(activeSessionId)
   const candidatesRef = useRef<SwitchCandidate[]>(switcherModel.candidates)
   const tabMruRef = useRef<string[]>(tabMru)
   const tabsRef = useRef(tabs)
@@ -166,18 +176,18 @@ export function TabSwitcher(): ReactElement | null {
 
   isOpenRef.current = isOpen
   selectedIndexRef.current = selectedIndex
-  activeTabIdRef.current = activeTabId
+  activeSessionIdRef.current = activeSessionId
   candidatesRef.current = switcherModel.candidates
   tabMruRef.current = tabMru
   tabsRef.current = tabs
 
   useEffect(() => {
     setTabMru((prev) => {
-      const next = promoteTabMru(prev, activeTabId)
+      const next = promoteTabMru(prev, activeSessionId)
       tabMruRef.current = next
       return next
     })
-  }, [activeTabId, setTabMru])
+  }, [activeSessionId, setTabMru])
 
   const closeSwitcher = useCallback((): void => {
     setIsOpen(false)
@@ -188,16 +198,26 @@ export function TabSwitcher(): ReactElement | null {
 
   const activateCandidate = useCallback(
     (candidate: SwitchCandidate): void => {
+      // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图
+      const restore = candidate.type === 'agent'
+        ? buildOpenTabRestore(
+            candidate.id,
+            store.get(sessionViewStateMapAtom),
+            store.get(previewFileMapAtom),
+          )
+        : undefined
       const nextTab = openTab(tabsRef.current, {
         type: candidate.type,
         sessionId: candidate.id,
         title: candidate.title,
-      })
+      }, restore)
       setTabs(nextTab.tabs)
       setActiveTabId(nextTab.activeTabId)
-      activeTabIdRef.current = nextTab.activeTabId
+      // MRU/起始定位按会话 ID 归一化：即使 restore 后激活的是预览 Tab，
+      // 也以 candidate.id（会话 ID）记账，保证与候选列表对齐。
+      activeSessionIdRef.current = candidate.id
       setTabMru((prev) => {
-        const next = promoteTabMru(prev, nextTab.activeTabId)
+        const next = promoteTabMru(prev, candidate.id)
         tabMruRef.current = next
         return next
       })
@@ -249,7 +269,7 @@ export function TabSwitcher(): ReactElement | null {
       const candidates = candidatesRef.current
       return getInitialTabSwitchIndex(
         candidates,
-        activeTabIdRef.current,
+        activeSessionIdRef.current,
         tabMruRef.current,
         direction,
       )
@@ -257,7 +277,7 @@ export function TabSwitcher(): ReactElement | null {
 
     const hasAlternateTarget = (): boolean => {
       const candidates = candidatesRef.current
-      return candidates.some((candidate) => candidate.id !== activeTabIdRef.current)
+      return candidates.some((candidate) => candidate.id !== activeSessionIdRef.current)
     }
 
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -330,6 +350,18 @@ export function TabSwitcher(): ReactElement | null {
     }
   }, [activateCandidate, closeSwitcher])
 
+  useLayoutEffect(() => {
+    if (!isOpen) return
+
+    const safeIndex = Math.min(selectedIndex, switcherModel.candidates.length - 1)
+    if (safeIndex < 0) return
+
+    const selectedRow = listRef.current?.querySelector<HTMLElement>(
+      `[data-switcher-index="${safeIndex}"]`,
+    )
+    selectedRow?.scrollIntoView({ block: 'nearest' })
+  }, [isOpen, selectedIndex, switcherModel.candidates.length])
+
   if (!isOpen || switcherModel.candidates.length === 0) return null
 
   const safeIndex = Math.min(selectedIndex, switcherModel.candidates.length - 1)
@@ -352,7 +384,7 @@ export function TabSwitcher(): ReactElement | null {
           </div>
         </div>
 
-        <div className="py-1.5 max-h-[420px] overflow-y-auto scrollbar-thin">
+        <div ref={listRef} className="py-1.5 max-h-[420px] overflow-y-auto scrollbar-thin">
           {switcherModel.sections.map((section, sectionIndex) => (
             <div key={section.id}>
               {sectionIndex > 0 && (
@@ -369,6 +401,7 @@ export function TabSwitcher(): ReactElement | null {
                   <SwitcherCandidateRow
                     key={`${candidate.type}-${candidate.id}`}
                     candidate={candidate}
+                    index={index}
                     active={index === safeIndex}
                     hoverEnabled={mouseActivated}
                     onMouseEnter={() => {
@@ -398,12 +431,14 @@ export function TabSwitcher(): ReactElement | null {
 
 function SwitcherCandidateRow({
   candidate,
+  index,
   active,
   hoverEnabled,
   onMouseEnter,
   onClick,
 }: {
   candidate: SwitchCandidate
+  index: number
   active: boolean
   hoverEnabled: boolean
   onMouseEnter: () => void
@@ -415,9 +450,10 @@ function SwitcherCandidateRow({
   return (
     <button
       type="button"
+      data-switcher-index={index}
       className={cn(
         'relative flex items-center gap-3 w-full pl-5 pr-5 py-2.5 text-[15px] text-left cursor-default transition-colors',
-        active ? 'bg-primary/15 text-foreground font-medium' : hoverEnabled ? 'text-muted-foreground hover:bg-muted/40' : 'text-muted-foreground',
+        active ? 'bg-primary/15 text-foreground' : hoverEnabled ? 'text-muted-foreground hover:bg-muted/40' : 'text-muted-foreground',
       )}
       onMouseEnter={onMouseEnter}
       onMouseDown={(event) => {
@@ -435,8 +471,18 @@ function SwitcherCandidateRow({
           aria-hidden="true"
         />
       )}
-      <span className="w-10 shrink-0 text-[10px] leading-4 text-center rounded-full bg-foreground/[0.06] text-foreground/45 font-medium">
-        {candidate.type === 'agent' ? 'Agent' : 'Chat'}
+      <span className="w-auto px-2 shrink-0 text-[10px] leading-4 rounded-full bg-foreground/[0.06] text-foreground/45 font-medium flex items-center gap-1">
+        {candidate.type === 'agent' ? (
+          <>
+            <Bot className="size-2.5" />
+            Agent
+          </>
+        ) : (
+          <>
+            <MessageSquare className="size-2.5" />
+            Chat
+          </>
+        )}
       </span>
       <span className="flex-1 min-w-0 truncate">{candidate.title}</span>
       {candidate.workspaceName && (

@@ -147,8 +147,6 @@ export interface FeishuChatBinding {
   channelId: string
   /** 模型 ID */
   modelId?: string
-  /** 会话模式 */
-  mode: 'agent' | 'chat'
   /** 绑定来源：飞书主动绑定或 Proma 桌面 Session 镜像 */
   source?: 'feishu' | 'session-mirror'
   /** 聊天类型（单聊或群聊） */
@@ -203,6 +201,8 @@ export interface FeishuGroupInfo {
   description?: string
   /** 群成员列表 */
   members?: FeishuGroupMember[]
+  /** 群内真人数量（来自 chat.get 的 user_count，不含机器人）。免 @ 续聊判定的权威依据。 */
+  userCount?: number
   /** 缓存时间戳 */
   cachedAt: number
 }
