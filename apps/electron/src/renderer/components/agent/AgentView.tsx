@@ -302,6 +302,8 @@ function DisplayOptionsPopover({
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
+  const persistedSDKMessagesRef = React.useRef<SDKMessage[]>(EMPTY_SDK_MESSAGES)
+  persistedSDKMessagesRef.current = persistedSDKMessages
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
   // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
@@ -616,6 +618,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   // 持久化消息缓存 setter — 仅写入，读取时用 store.get 同步取值避免订阅触发重渲染
   const setMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
+  const appendOptimisticPersistedMessage = React.useCallback((message: SDKMessage) => {
+    // 切会话时优先命中内存缓存，因此乐观插入的用户消息也要同步写入缓存，
+    // 否则“发送后立刻切走再切回”会短暂回退到旧消息数组。
+    const next = [...persistedSDKMessagesRef.current, message]
+    persistedSDKMessagesRef.current = next
+    setPersistedSDKMessages(next)
+    setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, next))
+  }, [sessionId, setMessagesCache])
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
   const [messagesLoaded, setMessagesLoaded] = React.useState(false)
@@ -768,7 +778,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         parent_tool_use_id: null,
         _createdAt: Date.now(),
       } as unknown as SDKMessage
-      setPersistedSDKMessages((prev) => [...prev, tempUserSDKMsg])
+      appendOptimisticPersistedMessage(tempUserSDKMsg)
 
       // 发送消息
       const input: AgentSendInput = {
@@ -1467,7 +1477,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       parent_tool_use_id: null,
       _createdAt: Date.now(),
     } as unknown as SDKMessage
-    setPersistedSDKMessages((prev) => [...prev, tempUserSDKMsg])
+    appendOptimisticPersistedMessage(tempUserSDKMsg)
 
     const input: AgentSendInput = {
       sessionId,
