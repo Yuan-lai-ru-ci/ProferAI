@@ -302,7 +302,7 @@ function DisplayOptionsPopover({
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
-  const persistedSDKMessagesRef = React.useRef<SDKMessage[]>(EMPTY_SDK_MESSAGES)
+  const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
