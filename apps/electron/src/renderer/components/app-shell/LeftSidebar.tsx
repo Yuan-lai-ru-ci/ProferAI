@@ -2069,10 +2069,18 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const [confirmingDone, setConfirmingDone] = React.useState(false)
+  const confirmingDoneTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
   // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
   const preview = useSessionMiniMapHover(300, disableMiniMap || menuOpen)
+
+  React.useEffect(() => {
+    return () => {
+      if (confirmingDoneTimer.current) clearTimeout(confirmingDoneTimer.current)
+    }
+  }, [])
 
   const startEdit = (): void => {
     setEditTitle(session.title)
@@ -2211,24 +2219,43 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  aria-label="标记为完成"
+                  aria-label={confirmingDone ? '确认完成' : '标记为完成'}
                   className={cn(
-                    'flex-shrink-0 p-1 rounded-md bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary transition-colors',
-                    'opacity-0 pointer-events-none',
-                    'group-hover:opacity-100 group-hover:pointer-events-auto',
-                    'group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
+                    'flex-shrink-0 p-1 rounded-md transition-colors',
+                    confirmingDone
+                      ? 'bg-destructive/15 text-destructive hover:bg-destructive/25 opacity-100 pointer-events-auto'
+                      : cn(
+                          'bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary',
+                          'opacity-0 pointer-events-none',
+                          'group-hover:opacity-100 group-hover:pointer-events-auto',
+                          'group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
+                        ),
                   )}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {
                     e.stopPropagation()
-                    void onConfirmDone(session.id)
+                    if (!confirmingDone) {
+                      setConfirmingDone(true)
+                      if (confirmingDoneTimer.current) clearTimeout(confirmingDoneTimer.current)
+                      confirmingDoneTimer.current = setTimeout(() => setConfirmingDone(false), 3000)
+                    } else {
+                      setConfirmingDone(false)
+                      if (confirmingDoneTimer.current) clearTimeout(confirmingDoneTimer.current)
+                      void onConfirmDone(session.id)
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    if (confirmingDone) {
+                      if (confirmingDoneTimer.current) clearTimeout(confirmingDoneTimer.current)
+                      confirmingDoneTimer.current = setTimeout(() => setConfirmingDone(false), 1500)
+                    }
                   }}
                 >
-                  <Check size={14} />
+                  {confirmingDone ? <Check size={14} strokeWidth={3} /> : <Check size={14} />}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right" className="max-w-[220px]">
-                标记为完成。之后可以随时通过搜索或最近工作找到这个会话。
+                {confirmingDone ? '再次点击确认完成' : '标记为完成。之后可以随时通过搜索或最近工作找到这个会话。'}
               </TooltipContent>
             </Tooltip>
           )}
