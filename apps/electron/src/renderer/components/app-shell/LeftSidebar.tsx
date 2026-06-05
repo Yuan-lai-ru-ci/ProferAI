@@ -198,9 +198,9 @@ function groupByDate<T extends { updatedAt: number }>(items: T[]): Array<{ label
 
 const RAIL_STATUS_CLASS: Record<SessionIndicatorStatus, string> = {
   idle: 'hidden',
-  running: 'bg-blue-500 animate-pulse',
-  blocked: 'bg-orange-500',
-  completed: 'bg-emerald-500',
+  running: 'border-blue-500 animate-pulse',
+  blocked: 'border-orange-500',
+  completed: 'border-emerald-500',
 }
 
 const SIDEBAR_DRAG_STRIP_HEIGHT = {
@@ -261,7 +261,7 @@ function RailRecentButton({
           >
             <span
               className={cn(
-                'absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full pointer-events-none',
+                'absolute inset-y-0 left-0 w-0 border-l-[3px] rounded-l-[12px] pointer-events-none',
                 RAIL_STATUS_CLASS[item.status]
               )}
             />
@@ -2017,9 +2017,9 @@ const ConversationItem = React.memo(function ConversationItem({
 /** 会话行左侧状态色块的颜色 — 与 SessionIndicatorStatus 呼应 */
 type SessionLeftAccent = 'orange' | 'blue' | 'green'
 const SESSION_LEFT_ACCENT_CLASS: Record<SessionLeftAccent, string> = {
-  orange: 'bg-orange-500',
-  blue: 'bg-blue-500',
-  green: 'bg-green-500',
+  orange: 'border-orange-500',
+  blue: 'border-blue-500',
+  green: 'border-green-500',
 }
 
 interface AgentSessionItemProps {
@@ -2179,7 +2179,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
           {leftAccent && (
             <span
               className={cn(
-                'absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full pointer-events-none',
+                'absolute inset-y-0 left-0 w-0 border-l-[3px] rounded-l-md pointer-events-none',
                 SESSION_LEFT_ACCENT_CLASS[leftAccent]
               )}
             />
