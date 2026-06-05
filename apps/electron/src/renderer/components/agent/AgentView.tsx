@@ -698,7 +698,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           })
         })
       })
-      .catch(console.error)
+      .catch((error) => {
+        if (cancelled) return
+        console.error(error)
+        setMessagesLoaded(true)
+      })
     return () => { cancelled = true }
   }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, setMessagesCache, store])
 
