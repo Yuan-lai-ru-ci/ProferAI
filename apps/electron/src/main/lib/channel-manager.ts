@@ -272,6 +272,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
+      case 'zhipu-coding':
       case 'minimax':
       case 'xiaomi':
       case 'xiaomi-token-plan':
@@ -319,6 +320,9 @@ async function testAnthropicCompatible(
     case 'kimi-coding':
       testModel = 'kimi-for-coding'
       break
+    case 'zhipu-coding':
+      testModel = 'glm-5.1'
+      break
     case 'minimax':
       testModel = 'MiniMax-M3'
       break
@@ -334,7 +338,7 @@ async function testAnthropicCompatible(
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
   }
-  if (provider === 'kimi-coding') {
+  if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
     headers.Authorization = `Bearer ${apiKey}`
     headers['User-Agent'] = getPromaUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
@@ -437,6 +441,7 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
       case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
+      case 'zhipu-coding':
       case 'minimax':
       case 'xiaomi':
       case 'xiaomi-token-plan':
@@ -476,6 +481,7 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
+      case 'zhipu-coding':
       case 'minimax':
       case 'xiaomi':
       case 'xiaomi-token-plan':
@@ -526,7 +532,7 @@ async function fetchAnthropicCompatibleModels(
   const headers: Record<string, string> = {
     'anthropic-version': '2023-06-01',
   }
-  if (provider === 'kimi-coding') {
+  if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
     headers.Authorization = `Bearer ${apiKey}`
     headers['User-Agent'] = getPromaUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
