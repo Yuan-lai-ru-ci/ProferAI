@@ -174,6 +174,19 @@ interface AgentProjectGroup {
 const PROJECT_SESSION_PREVIEW_LIMIT = 5
 const PROJECT_SESSION_RECENT_WINDOW_MS = 3 * 86_400_000
 
+const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionIndicatorStatus> = new Set([
+  'blocked',
+  'running',
+  'completed',
+])
+
+const ACTIVE_SESSION_STATUS_PRIORITY: Record<SessionIndicatorStatus, number> = {
+  blocked: 0,
+  running: 1,
+  completed: 2,
+  idle: 3,
+}
+
 function formatRelativeUpdatedAt(updatedAt: number, now: number): string {
   const diff = Math.max(0, now - updatedAt)
   const minute = 60_000
@@ -2242,9 +2255,27 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
 }: AgentProjectGroupItemProps): React.ReactElement {
   const isCurrent = group.workspace.id === currentWorkspaceId
   const recentCutoff = relativeTimeNow - PROJECT_SESSION_RECENT_WINDOW_MS
-  const collapsedSessions = group.sessions
-    .filter((session) => session.updatedAt >= recentCutoff)
+  // 折叠时：所有"活跃"会话（运行中 / 阻塞 / 未查看的已完成）必须展示，
+  // 不受 PROJECT_SESSION_PREVIEW_LIMIT 与 3 天窗口限制；活跃部分内部按
+  // blocked > running > completed 优先级排序（与 railRecentItems 对齐），
+  // 同优先级保留 group.sessions 的 updatedAt 倒序。
+  // 非活跃部分仍保留原"最近 3 天 + 至多 5 条"预览策略，作为额外补充展示。
+  const getStatus = (sessionId: string): SessionIndicatorStatus =>
+    agentIndicatorMap.get(sessionId) ?? 'idle'
+  const activeSessions = group.sessions
+    .filter((session) => ACTIVE_SESSION_STATUSES.has(getStatus(session.id)))
+    .slice()
+    .sort((a, b) => {
+      const delta = ACTIVE_SESSION_STATUS_PRIORITY[getStatus(a.id)]
+        - ACTIVE_SESSION_STATUS_PRIORITY[getStatus(b.id)]
+      if (delta !== 0) return delta
+      return b.updatedAt - a.updatedAt
+    })
+  const activeIds = new Set(activeSessions.map((s) => s.id))
+  const fillSessions = group.sessions
+    .filter((session) => !activeIds.has(session.id) && session.updatedAt >= recentCutoff)
     .slice(0, PROJECT_SESSION_PREVIEW_LIMIT)
+  const collapsedSessions = [...activeSessions, ...fillSessions]
   const sessions = expanded
     ? group.sessions
     : collapsedSessions
