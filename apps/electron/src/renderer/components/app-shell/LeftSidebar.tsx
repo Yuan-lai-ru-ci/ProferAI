@@ -1796,6 +1796,10 @@ function SessionItemActions({
   onMenuOpenChange,
 }: SessionItemActionsProps): React.ReactElement {
   const [archiveConfirming, setArchiveConfirming] = React.useState(false)
+  // 菜单打开时强制保持按钮组挂载且可见：否则鼠标移开后父级 group:hover 失效，
+  // 外层包装变 display:none，Radix Popper 拿不到 trigger 的位置矩形（getBoundingClientRect 全是 0），
+  // 浮层就漂到视口左上角 (0,0)。
+  const [menuOpen, setMenuOpen] = React.useState(false)
 
   React.useEffect(() => {
     if (!archiveConfirming) return
@@ -1816,6 +1820,13 @@ function SessionItemActions({
     setArchiveConfirming(true)
   }
 
+  const handleMenuOpenChange = (open: boolean): void => {
+    setMenuOpen(open)
+    onMenuOpenChange?.(open)
+  }
+
+  const forceVisible = archiveConfirming || menuOpen
+
   return (
     <div
       className="flex-shrink-0 flex items-center h-[18px]"
@@ -1825,7 +1836,7 @@ function SessionItemActions({
         title={`最后更新：${new Date(updatedAt).toLocaleString('zh-CN')}`}
         className={cn(
           'min-w-[42px] text-right text-[11px] leading-[18px] tabular-nums text-foreground/35',
-          archiveConfirming ? 'hidden' : 'group-hover:hidden',
+          forceVisible ? 'hidden' : 'group-hover:hidden',
         )}
       >
         {formatRelativeUpdatedAt(updatedAt, relativeTimeNow)}
@@ -1833,7 +1844,7 @@ function SessionItemActions({
       <div
         className={cn(
           'items-center gap-0.5',
-          archiveConfirming ? 'flex' : 'hidden group-hover:flex',
+          forceVisible ? 'flex' : 'hidden group-hover:flex',
         )}
       >
         <Tooltip>
@@ -1872,7 +1883,7 @@ function SessionItemActions({
             {archiveConfirming ? '再次点击确认归档' : archived ? '取消归档' : '归档'}
           </TooltipContent>
         </Tooltip>
-        <DropdownMenu onOpenChange={onMenuOpenChange}>
+        <DropdownMenu onOpenChange={handleMenuOpenChange}>
           <DropdownMenuTrigger asChild>
             <button
               className={cn(
