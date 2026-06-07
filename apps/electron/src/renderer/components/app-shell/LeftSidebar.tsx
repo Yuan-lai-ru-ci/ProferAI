@@ -2376,7 +2376,10 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
             active && 'agent-session-item-active',
             leftAccent
               ? SESSION_ACCENT_ROW_CLASS[leftAccent]
-              : 'hover:bg-foreground/[0.03]'
+              : 'hover:bg-foreground/[0.03]',
+            // 选中态背景：浅色叠加深色变深、深色叠加浅色变浅，自动适配主题。
+            // orange accent 自带橙色底色，不再叠加，避免视觉过重。
+            active && leftAccent !== 'orange' && 'bg-foreground/[0.08]',
           )}
         >
           {(leftAccent || active) && (
