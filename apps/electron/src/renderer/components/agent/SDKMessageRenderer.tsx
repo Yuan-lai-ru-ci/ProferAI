@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
@@ -41,6 +41,9 @@ import { getModelLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
+import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import { activeSessionIdAtom } from '@/atoms/tab-atoms'
+import { automationsAtom, automationFormAtom } from '@/atoms/automation-atoms'
 import { environmentCheckDialogOpenAtom } from '@/atoms/environment'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import type {
@@ -970,10 +973,59 @@ function QuoteChip({ quote }: { quote: QuotedFileRef }): React.ReactElement {
 
 // ===== 用户输入消息渲染 =====
 
+
+const SCHEDULED_RUN_MARKER = '<!--PROMA_SCHEDULED_RUN-->'
+
+function ScheduledRunBadge(): React.ReactElement {
+  const activeSessionId = useAtomValue(activeSessionIdAtom)
+  const sessions = useAtomValue(agentSessionsAtom)
+  const automations = useAtomValue(automationsAtom)
+  const setForm = useSetAtom(automationFormAtom)
+
+  const session = sessions.find((s) => s.id === activeSessionId)
+  const automation = session?.sourceAutomationId
+    ? automations.find((a) => a.id === session.sourceAutomationId)
+    : undefined
+
+  const handleClick = (): void => {
+    if (!automation) return
+    setForm({
+      open: true,
+      draft: {
+        id: automation.id,
+        name: automation.name,
+        prompt: automation.prompt,
+        scheduleType: automation.scheduleType,
+        intervalMinutes: automation.intervalMinutes,
+        timeOfDay: automation.timeOfDay,
+        dayOfWeek: automation.dayOfWeek,
+        channelId: automation.channelId,
+        modelId: automation.modelId,
+        workspaceId: automation.workspaceId,
+        permissionMode: automation.permissionMode ?? 'bypassPermissions',
+        active: automation.active,
+      },
+    })
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="inline-flex items-center gap-1 text-[10px] text-primary/70 hover:text-primary transition-colors"
+      title="来自 Proma 定时任务，点击查看设置"
+    >
+      <Clock className="size-3" />
+      <span>来自 Proma 定时任务</span>
+    </button>
+  )
+}
+
 function UserInputMessage({ message }: { message: SDKUserMessage }): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
-  const { files: attachedFiles, quotes, text } = parseAttachedFiles(rawText)
+  const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
+  const { files: attachedFiles, quotes, text } = parseAttachedFiles(rawText.replace(SCHEDULED_RUN_MARKER, '').trim())
   const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
   const nonImageFiles = attachedFiles.filter((f) => !isImageFile(f.filename))
   const meta = extractMeta(message as unknown as SDKMessage)
@@ -985,7 +1037,12 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
         <div className="flex flex-col justify-between h-[35px]">
           <span className="text-sm font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
           {meta.createdAt && (
-            <span className="text-[10px] text-foreground/[0.38] leading-none">{formatMessageTime(meta.createdAt)}</span>
+            <span className="flex items-center gap-2 leading-none">
+              <span className="text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
+              {isScheduledRun && (
+                <ScheduledRunBadge />
+              )}
+            </span>
           )}
         </div>
       </div>

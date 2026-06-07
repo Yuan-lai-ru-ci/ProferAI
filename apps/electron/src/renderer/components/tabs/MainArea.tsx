@@ -16,6 +16,10 @@ import { PreviewPanel } from '@/components/diff/PreviewPanel'
 import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
+import { AutomationFormView } from '@/components/automation/AutomationFormView'
+import { AutomationsListView } from '@/components/automation/AutomationsListView'
+import { automationFormAtom } from '@/atoms/automation-atoms'
+import { activeViewAtom } from '@/atoms/active-view'
 
 export function MainArea(): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
@@ -25,6 +29,8 @@ export function MainArea(): React.ReactElement {
   const activeTabId = useAtomValue(activeTabIdAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const activeTab = useAtomValue(activeTabAtom)
+  const automationFormOpen = useAtomValue(automationFormAtom).open
+  const activeView = useAtomValue(activeViewAtom)
 
   // Tab 内容渲染降级为非紧急：TabBar 立即高亮新 tab，主区域昂贵渲染（含 PreviewPanel 中
   // DiffTabContent → ProseMirror editor mount + Shiki tokenize）让出主线程，避免点击 tab
@@ -143,17 +149,27 @@ export function MainArea(): React.ReactElement {
               视觉上像"内容从右向左推送"。让左侧瞬间变宽，由右侧 absolute 滑出动画
               覆盖期内呈现"被剥离"的视觉效果。 */}
           <div
-            className="flex flex-col min-w-0 h-full"
+            className="flex flex-col min-w-0 h-full relative"
             style={leftFlexStyle}
           >
-            <TabBar />
-            {tabs.length === 0 ? (
-              <WelcomeView />
-            ) : deferredActiveTabId ? (
-              <div className="flex-1 min-h-0 titlebar-no-drag">
-                <TabContent tabId={deferredActiveTabId} />
-              </div>
-            ) : null}
+            {activeView === 'automations' && !automationFormOpen ? (
+              // Automations 列表视图：全屏取代 TabBar + TabContent
+              <AutomationsListView />
+            ) : (
+              <>
+                <TabBar />
+                {automationFormOpen ? (
+                  // 定时任务编辑表单：替换 TabContent，但保留 TabBar 让用户能点 tab 切走
+                  <AutomationFormView />
+                ) : tabs.length === 0 ? (
+                  <WelcomeView />
+                ) : deferredActiveTabId ? (
+                  <div className="flex-1 min-h-0 titlebar-no-drag">
+                    <TabContent tabId={deferredActiveTabId} />
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
 
           {/* 右侧：预览面板。关闭动画期间脱离 flex 流，向右滑出 */}

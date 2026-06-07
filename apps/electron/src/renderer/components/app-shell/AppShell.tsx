@@ -14,6 +14,8 @@ import { MainArea } from '@/components/tabs/MainArea'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
 import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom } from '@/atoms/agent-atoms'
+import { automationFormAtom } from '@/atoms/automation-atoms'
+import { activeViewAtom } from '@/atoms/active-view'
 import { WindowControls } from '@/components/WindowControls'
 import { detectIsWindows } from '@/lib/platform'
 import { cn } from '@/lib/utils'
@@ -34,7 +36,10 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
-  const showRightPanel = appMode === 'agent' && !!currentSessionId
+  const automationForm = useAtomValue(automationFormAtom)
+  // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
+  const activeView = useAtomValue(activeViewAtom)
+  const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'automations'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   // 右侧面板可拖拽宽度

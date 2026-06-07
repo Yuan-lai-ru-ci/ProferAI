@@ -50,3 +50,6 @@ export * from './dingtalk'
 
 // 微信集成相关类型
 export * from './wechat'
+
+// 定时任务（Automation）相关类型
+export * from './automation'

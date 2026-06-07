@@ -35,6 +35,8 @@ import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, m
 import { isTransientNetworkError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
+import { createAutomation, listAutomations, deleteAutomation, updateAutomation } from './automation-manager'
+import { broadcastChanged as broadcastAutomationsChanged } from './automation-scheduler'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
@@ -819,6 +821,83 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 扫描 Agent 回复中的 Proma 定时任务指令（HTML 注释块 <!--PROMA_AUTOMATION:...-->）
+   *
+   * 在 completeRun 时 fire-and-forget 调用。从 JSONL 读最近的 assistant 文本，
+   * 解析 JSON 指令，执行对应操作（create/delete/toggle/list），广播变更。
+   */
+  private async processAutomationCommands(sessionId: string, channelId: string, workspaceId?: string): Promise<void> {
+    try {
+      // 快速跳过：由定时任务触发的会话不会产生新的 automation 指令（系统提示词已明确禁止）
+      const meta = getAgentSessionMeta(sessionId)
+      if (meta?.sourceAutomationId) return
+
+      const sdkMessages = getAgentSessionSDKMessages(sessionId)
+      if (!sdkMessages || sdkMessages.length === 0) return
+
+      // 取最后几条 assistant 消息的文本
+      let fullText = ''
+      for (let i = sdkMessages.length - 1; i >= Math.max(0, sdkMessages.length - 5); i--) {
+        const msg = sdkMessages[i] as Record<string, unknown>
+        if (msg.type !== 'assistant') continue
+        const content = (msg.message as Record<string, unknown>)?.content
+        if (!Array.isArray(content)) continue
+        for (const block of content) {
+          if ((block as Record<string, unknown>).type === 'text') {
+            fullText += (block as Record<string, unknown>).text as string
+          }
+        }
+      }
+
+      // 短路：绝大多数回复不含 marker，跳过正则编译/扫描
+      if (!fullText.includes('<!--PROMA_AUTOMATION:')) return
+
+      // 匹配所有 <!--PROMA_AUTOMATION:{...}-->
+      const pattern = /<!--PROMA_AUTOMATION:([\s\S]*?)-->/g
+      let match: RegExpExecArray | null
+      let acted = false
+      while ((match = pattern.exec(fullText)) !== null) {
+        try {
+          const cmd = JSON.parse(match[1]!) as Record<string, unknown>
+          const action = cmd.action as string
+          if (action === 'create') {
+            createAutomation({
+              name: (cmd.name as string) || '未命名任务',
+              prompt: (cmd.prompt as string) || '',
+              scheduleType: (cmd.scheduleType as 'interval' | 'daily' | 'weekly') || 'interval',
+              intervalMinutes: (cmd.intervalMinutes as number) || 10,
+              timeOfDay: cmd.timeOfDay as string | undefined,
+              dayOfWeek: cmd.dayOfWeek as number | undefined,
+              channelId,
+              workspaceId,
+              sourceSessionId: sessionId,
+              active: true,
+            })
+            console.log(`[Agent 编排] Agent 创建了定时任务: ${cmd.name}`)
+            acted = true
+          } else if (action === 'delete' && cmd.id) {
+            deleteAutomation(cmd.id as string)
+            console.log(`[Agent 编排] Agent 删除了定时任务: ${cmd.id}`)
+            acted = true
+          } else if (action === 'toggle' && cmd.id) {
+            updateAutomation({ id: cmd.id as string, active: cmd.active as boolean })
+            console.log(`[Agent 编排] Agent 切换了定时任务: ${cmd.id} → ${cmd.active}`)
+            acted = true
+          } else if (action === 'list') {
+            const all = listAutomations()
+            console.log(`[Agent 编排] Agent 查询定时任务列表: ${all.length} 条`)
+          }
+        } catch (parseErr) {
+          console.warn('[Agent 编排] 定时任务指令解析失败:', parseErr)
+        }
+      }
+      if (acted) broadcastAutomationsChanged()
+    } catch (err) {
+      console.warn('[Agent 编排] processAutomationCommands 失败:', err)
+    }
+  }
+
+  /**
    * Session-not-found 恢复：清除失效的 sdkSessionId，切换到上下文回填模式
    *
    * 当 resume 的目标 session 已过期/被清理时，SDK 会抛出 "No conversation found" 错误。
@@ -925,7 +1004,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, automationContext } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -1029,6 +1108,7 @@ export class AgentOrchestrator {
     // 否则用本地 runGeneration 作为回退（headless 模式等无渲染进程场景）
     const streamStartedAt = input.startedAt ?? runGeneration
     this.activeSessions.set(sessionId, runGeneration)
+
     const releaseActiveRun = (): void => {
       // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
       // 主进程仍在 finally 前短暂拒绝下一条消息。
@@ -1042,6 +1122,8 @@ export class AgentOrchestrator {
       opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
     ): void => {
       releaseActiveRun()
+      // 扫描 Agent 回复中的 Proma 定时任务指令（HTML 注释块）
+      void this.processAutomationCommands(sessionId, channelId, workspaceId).catch(() => {})
       callbacks.onComplete(messages, opts)
     }
     const failRun = (
@@ -1537,7 +1619,7 @@ export class AgentOrchestrator {
             memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
             claudeAvailable,
             deepSeekSubagentModel: modelRouting.subagentModel,
-          }),
+          }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : ''),
         },
         resumeSessionId: existingSdkSessionId,
         // 回退后 resume：从指定消息处继续（SDK 在同一 JSONL 内创建分支）

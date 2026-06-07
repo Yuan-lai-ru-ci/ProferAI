@@ -2021,6 +2021,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         {/* AskUserQuestion 交互式问答横幅 */}
         <AskUserBanner sessionId={sessionId} />
 
+
         {/* ExitPlanMode 计划审批横幅 */}
         <ExitPlanModeBanner sessionId={sessionId} />
 

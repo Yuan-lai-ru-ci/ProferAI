@@ -611,6 +611,8 @@ export interface AgentSessionMeta {
   stoppedByUser?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: PromaPermissionMode
+  /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
+  sourceAutomationId?: string
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -850,6 +852,10 @@ export interface AgentSendInput {
   mentionedSessionIds?: string[]
   /** 渲染进程生成的流式开始时间戳，主进程原样回传到 STREAM_COMPLETE，确保竞态保护比较的是同一个值 */
   startedAt?: number
+  /** 触发来源：用户手动 vs 定时任务自动触发（用于 UI 区分标记） */
+  triggeredBy?: 'user' | 'automation'
+  /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
+  automationContext?: string
 }
 
 // ===== Agent 队列消息 =====

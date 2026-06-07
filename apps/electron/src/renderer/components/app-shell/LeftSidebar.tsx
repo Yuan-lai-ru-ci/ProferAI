@@ -11,13 +11,14 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
 import { SearchDialog } from './SearchDialog'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { activeViewAtom } from '@/atoms/active-view'
+import { automationFormAtom, automationsAtom } from '@/atoms/automation-atoms'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import {
@@ -259,6 +260,7 @@ interface RailRecentItem {
   status: SessionIndicatorStatus
   pinned: boolean
   workspaceName?: string
+  isAutomation?: boolean
 }
 
 function RailRecentButton({
@@ -294,7 +296,10 @@ function RailRecentButton({
                 RAIL_STATUS_CLASS[item.status]
               )}
             />
-            <span className="text-[13px] font-semibold leading-none">{item.initial}</span>
+            {item.isAutomation
+              ? <Clock size={14} className="text-foreground/40" />
+              : <span className="text-[13px] font-semibold leading-none">{item.initial}</span>
+            }
           </button>
         </TooltipTrigger>
         <TooltipContent side="right">
@@ -330,6 +335,9 @@ function SidebarWindowDragStrip({ height }: { height: number }): React.ReactElem
 
 export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
+  const setAutomationForm = useSetAtom(automationFormAtom)
+  const automations = useAtomValue(automationsAtom)
+  const activeAutomationCount = automations.filter((a) => a.active).length
   const setSettingsTab = useSetAtom(settingsTabAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const [activeItem, setActiveItem] = React.useState<SidebarItemId>('all-chats')
@@ -593,6 +601,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   /** 创建新对话（继承当前选中的模型/渠道） */
   const handleNewConversation = async (): Promise<void> => {
+    setActiveView('conversations')
     try {
       const meta = await window.electronAPI.createConversation(
         undefined,
@@ -805,8 +814,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   /** 创建新 Agent 会话 */
   const handleNewAgentSession = React.useCallback(async (): Promise<void> => {
+    setActiveView('conversations')
     await createAgentSessionInWorkspace()
-  }, [createAgentSessionInWorkspace])
+  }, [createAgentSessionInWorkspace, setActiveView])
 
   /** 切换当前项目 */
   const handleSelectProject = React.useCallback((workspaceId: string): void => {
@@ -1202,6 +1212,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         status: agentIndicatorMap.get(session.id) ?? (unviewedCompletedSessionIds.has(session.id) ? 'completed' as const : 'idle' as const),
         pinned: !!session.pinned,
         workspaceName: session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined,
+        isAutomation: !!session.sourceAutomationId,
       }))
   }, [
     mode,
@@ -1365,6 +1376,30 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             </TooltipTrigger>
             <TooltipContent side="right">搜索</TooltipContent>
           </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="定时任务"
+                onClick={() => { setAutomationForm({ open: false, draft: null }); setActiveView('automations') }}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border border-dashed',
+                  activeView === 'automations'
+                    ? 'bg-primary/10 text-foreground/70 border-[hsl(var(--dashed-border-hover))]'
+                    : 'bg-primary/5 hover:bg-primary/10 text-foreground/45 hover:text-foreground/70 border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]',
+                )}
+              >
+                <Clock size={16} />
+                {activeAutomationCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
+                    {activeAutomationCount}
+                  </span>
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">定时任务</TooltipContent>
+          </Tooltip>
         </div>
 
         <div className="my-3 h-px w-8 bg-border/70" />
@@ -1465,6 +1500,29 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">搜索 ({getAcceleratorDisplay(getActiveAccelerator('global-search'))})</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="定时任务"
+              onClick={() => { setAutomationForm({ open: false, draft: null }); setActiveView('automations') }}
+              className={cn(
+                'relative flex-shrink-0 size-[36px] flex items-center justify-center rounded-[10px] transition-colors duration-100 titlebar-no-drag border border-dashed',
+                activeView === 'automations'
+                  ? 'bg-primary/10 text-foreground/70 border-[hsl(var(--dashed-border-hover))]'
+                  : 'bg-primary/5 hover:bg-primary/10 text-foreground/40 hover:text-foreground/60 border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]',
+              )}
+            >
+              <Clock size={14} />
+              {activeAutomationCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
+                  {activeAutomationCount}
+                </span>
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">定时任务</TooltipContent>
         </Tooltip>
       </div>
 
@@ -2304,6 +2362,9 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
               )}>
                 {showPinIcon && (
                   <Pin size={11} className="flex-shrink-0 text-primary/60" />
+                )}
+                {session.sourceAutomationId && (
+                  <Clock size={11} className="flex-shrink-0 text-foreground/40" />
                 )}
                 <span className="truncate">{session.title}</span>
                 {workspaceName && (
