@@ -266,7 +266,7 @@ export function setNextRunAt(id: string, nextRunAt: number): void {
   writeIndex(index)
 }
 
-/** 记录本任务复用的目标会话 ID */
+/** 记录本任务最近一次运行创建的会话 ID */
 export function setLastSessionId(id: string, sessionId: string): void {
   const index = readIndex()
   const target = index.automations.find((a) => a.id === id)

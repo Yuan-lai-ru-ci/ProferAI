@@ -25,7 +25,7 @@ import {
   setLastSessionId,
   computeNextRunAt,
 } from './automation-manager'
-import { createAgentSession, getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
+import { createAgentSession, updateAgentSessionMeta } from './agent-session-manager'
 import { runAgentHeadless, isAgentSessionActive } from './agent-service'
 
 /** tick 周期：每 30s 检查一次到期任务（短轮询，抗休眠漂移） */
@@ -82,19 +82,12 @@ export async function runAutomation(automation: Automation, manual = false): Pro
   const runAt = Date.now()
 
   try {
-    // 复用同一会话：仅当上次会话存在且未归档时复用，否则新建。
+    // 每次触发都创建新的会话，避免自动运行在旧上下文上继续导致结果被历史对话污染。
     // 标题直接用任务名（不加时间戳），并标记 sourceAutomationId 供侧栏显示钟表图标 + 跳转。
-    let targetSessionId: string
-    const existingId = automation.lastSessionId
-    const existing = existingId ? getAgentSessionMeta(existingId) : undefined
-    if (existingId && existing && !existing.archived) {
-      targetSessionId = existingId
-    } else {
-      const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId)
-      updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id })
-      targetSessionId = created.id
-      setLastSessionId(automation.id, created.id)
-    }
+    const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId)
+    updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id })
+    const targetSessionId = created.id
+    setLastSessionId(automation.id, created.id)
 
     await new Promise<void>((resolveRun) => {
       let settled = false
@@ -134,7 +127,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
         {
           sessionId: targetSessionId,
           userMessage: automation.prompt + '\n<!--PROMA_SCHEDULED_RUN-->',
-          automationContext: `这是 Proma 定时任务「${automation.name}」的自动执行（${formatScheduleLabel(automation)}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。`,
+          automationContext: `这是 Proma 定时任务「${automation.name}」的自动执行（ID: ${automation.id}，${formatScheduleLabel(automation)}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。如发现本任务连续失败、输出价值低、频率不合适或提示词不完整，可以使用 automation 工具读取并更新当前任务。`,
           channelId: automation.channelId,
           modelId: automation.modelId,
           workspaceId: automation.workspaceId,
@@ -170,7 +163,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
 /** 立即运行一次（手动触发，不影响调度计时之外的逻辑） */
 export async function runAutomationNow(id: string): Promise<void> {
   const automation = getAutomation(id)
-  if (!automation) return
+  if (!automation) throw new Error(`定时任务不存在: ${id}`)
   await runAutomation(automation, true)
 }
 

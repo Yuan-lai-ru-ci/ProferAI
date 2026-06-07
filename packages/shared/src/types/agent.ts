@@ -773,6 +773,8 @@ export interface SkillMeta {
   slug: string
   name: string
   description?: string
+  /** UI 分组名，用于把 Proma 内嵌 Skills 收拢到同一组 */
+  group?: string
   icon?: string
   version?: string
   enabled: boolean

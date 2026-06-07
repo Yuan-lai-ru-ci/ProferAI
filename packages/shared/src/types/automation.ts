@@ -68,7 +68,7 @@ export interface Automation {
   updatedAt: number
   /** 下次应触发的绝对时间戳（调度核心，避免长 interval 漂移） */
   nextRunAt: number
-  /** 复用的目标会话 ID（同一任务始终跑在此会话，被删除/归档后才新建） */
+  /** 最近一次运行创建的会话 ID（每次运行都会新建会话，此字段仅用于跳转和排查） */
   lastSessionId?: string
   /** 上次运行时间 */
   lastRunAt?: number

@@ -268,6 +268,9 @@ export function AutomationFormView(): React.ReactElement | null {
     }
 
     setRunningNow(true)
+    toast.success('已开始运行定时任务', {
+      description: '本次任务会创建新的 Agent 会话，可在左侧会话列表查看',
+    })
     try {
       const automationId = await persistDraft(latest)
       if (!automationId) throw new Error('任务尚未创建')
@@ -275,7 +278,6 @@ export function AutomationFormView(): React.ReactElement | null {
       await refreshAutomations()
       const sessions = await window.electronAPI.listAgentSessions()
       setAgentSessions(sessions)
-      toast.success('已完成一次测试运行')
     } catch (err) {
       console.error('[定时任务] 立即运行失败:', err)
       toast.error('立即运行失败')
