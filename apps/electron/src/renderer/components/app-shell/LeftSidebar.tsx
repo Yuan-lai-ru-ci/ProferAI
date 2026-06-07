@@ -1820,10 +1820,30 @@ function SessionItemActions({
     setArchiveConfirming(true)
   }
 
+  const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const handleMenuOpenChange = (open: boolean): void => {
-    setMenuOpen(open)
+    if (open) {
+      if (closeTimerRef.current !== null) {
+        clearTimeout(closeTimerRef.current)
+        closeTimerRef.current = null
+      }
+      setMenuOpen(true)
+    } else {
+      // Delay hiding the trigger so Radix Popper can still read its rect during the close animation (~150ms).
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null
+        setMenuOpen(false)
+      }, 200)
+    }
     onMenuOpenChange?.(open)
   }
+
+  React.useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current)
+    }
+  }, [])
 
   const forceVisible = archiveConfirming || menuOpen
 
@@ -1937,7 +1957,7 @@ const ConversationItem = React.memo(function ConversationItem({
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
   // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
-  const preview = useSessionMiniMapHover(300, menuOpen)
+  const preview = useSessionMiniMapHover(600, menuOpen)
 
   /** 进入编辑模式 */
   const startEdit = (): void => {
@@ -2156,7 +2176,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
   // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
-  const preview = useSessionMiniMapHover(300, disableMiniMap || menuOpen)
+  const preview = useSessionMiniMapHover(600, disableMiniMap || menuOpen)
 
   const startEdit = (): void => {
     setEditTitle(session.title)
