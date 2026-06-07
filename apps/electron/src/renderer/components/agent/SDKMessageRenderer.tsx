@@ -267,6 +267,11 @@ export interface AssistantTurn {
   model?: string
   /** 创建时间（取首条 assistant 消息的时间） */
   createdAt?: number
+  /**
+   * 该 turn 由后台任务完成通知（task_notification）唤醒后开始。
+   * 用于阻断与前一 turn 的合并，让自动唤醒的新输出独立成块，而不是被追加进上一轮的消息块。
+   */
+  startsAfterWake?: boolean
 }
 
 export type MessageGroup =
@@ -287,6 +292,10 @@ export type MessageGroup =
 export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string): MessageGroup[] {
   const groups: MessageGroup[] = []
   let currentTurn: AssistantTurn | null = null
+  // 收到后台任务完成通知（task_notification）后，若没有用户输入就直接出现新的 assistant 输出，
+  // 说明这是自动唤醒的新一轮，应另起独立消息块，而不是续接上一轮。
+  // 注意：不能用 result 做信号——正常对话每轮也以 result 结束，会误伤普通回复。
+  let pendingWakeBoundary = false
 
   const flushTurn = (): void => {
     if (currentTurn && currentTurn.assistantMessages.length > 0) {
@@ -302,6 +311,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
         // 真正的用户输入 → 结束当前 turn，开始新段落
         flushTurn()
         groups.push({ type: 'user', message: userMsg })
+        pendingWakeBoundary = false
       } else {
         // tool_result 消息 → 归入当前 turn
         if (currentTurn) {
@@ -322,7 +332,10 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
           turnMessages: [msg],
           model: aMsg._channelModelId || aMsg.message?.model || sessionModelId,
           createdAt: meta.createdAt,
+          // 紧跟在后台任务唤醒之后的新 turn：阻断与上一轮的合并
+          startsAfterWake: pendingWakeBoundary || undefined,
         }
+        pendingWakeBoundary = false
       } else {
         // 继续当前 turn
         currentTurn.assistantMessages.push(aMsg)
@@ -337,6 +350,12 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
         groups.push({ type: 'system', message: sysMsg })
       } else if (currentTurn) {
         currentTurn.turnMessages.push(msg)
+        // 后台任务完成通知：标志一次自动唤醒。当前 turn 收尾后，
+        // 后续新出现的 assistant 输出应独立成块。
+        if (sysMsg.subtype === 'task_notification') {
+          flushTurn()
+          pendingWakeBoundary = true
+        }
       }
     } else {
       // result, tool_progress 等 → 归入当前 turn
@@ -368,6 +387,12 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
 
   for (const group of groups) {
     if (group.type !== 'assistant-turn') {
+      result.push(group)
+      continue
+    }
+
+    // 后台任务唤醒后开始的 turn：独立成块，不向前合并。
+    if (group.startsAfterWake) {
       result.push(group)
       continue
     }
