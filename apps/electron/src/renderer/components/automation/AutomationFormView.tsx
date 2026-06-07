@@ -9,13 +9,12 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Clock, AlertTriangle, X, CheckCircle2, XCircle, MinusCircle, Pencil, Check } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, Clock, Loader2, Pencil, Play, X } from 'lucide-react'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
-import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectTrigger,
@@ -29,12 +28,14 @@ import {
   automationsAtom,
   AUTOMATION_INTERVAL_OPTIONS,
   AUTOMATION_WEEKDAY_OPTIONS,
+  automationToDraft,
   type AutomationDraft,
 } from '@/atoms/automation-atoms'
 import { agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
+import { activeViewAtom } from '@/atoms/active-view'
 import { useOpenSession } from '@/hooks/useOpenSession'
-import type { AutomationRun } from '@proma/shared'
+import type { AutomationRun, CreateAutomationInput, UpdateAutomationInput } from '@proma/shared'
 
 const NO_WORKSPACE = '__none__'
 
@@ -43,24 +44,86 @@ function formatTime(ts?: number): string {
   return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function RunStatusIcon({ status }: { status: AutomationRun['status'] }): React.ReactElement {
-  if (status === 'success') return <CheckCircle2 className="size-3 text-emerald-500" />
-  if (status === 'error') return <XCircle className="size-3 text-destructive" />
-  return <MinusCircle className="size-3 text-muted-foreground/50" />
+function formatRunStatus(status: AutomationRun['status']): string {
+  if (status === 'success') return '完成'
+  if (status === 'error') return '失败'
+  return '跳过'
+}
+
+function canPersistDraft(draft: AutomationDraft): boolean {
+  return !!(draft.name.trim() && draft.prompt.trim() && draft.channelId)
+}
+
+function getDraftSignature(draft: AutomationDraft): string {
+  return JSON.stringify({
+    id: draft.id ?? '',
+    name: draft.name.trim(),
+    prompt: draft.prompt.trim(),
+    scheduleType: draft.scheduleType,
+    intervalMinutes: draft.intervalMinutes,
+    timeOfDay: draft.timeOfDay ?? '',
+    dayOfWeek: draft.dayOfWeek ?? '',
+    channelId: draft.channelId,
+    modelId: draft.modelId ?? '',
+    workspaceId: draft.workspaceId ?? '',
+    permissionMode: draft.permissionMode,
+    active: draft.active,
+  })
+}
+
+function draftToCreateInput(draft: AutomationDraft): CreateAutomationInput {
+  return {
+    name: draft.name.trim(),
+    prompt: draft.prompt.trim(),
+    scheduleType: draft.scheduleType,
+    intervalMinutes: draft.intervalMinutes,
+    timeOfDay: draft.timeOfDay,
+    dayOfWeek: draft.dayOfWeek,
+    channelId: draft.channelId,
+    modelId: draft.modelId,
+    workspaceId: draft.workspaceId,
+    permissionMode: draft.permissionMode,
+    sourceSessionId: draft.sourceSessionId,
+    active: draft.active,
+  }
+}
+
+function draftToUpdateInput(draft: AutomationDraft): UpdateAutomationInput {
+  return {
+    id: draft.id ?? '',
+    name: draft.name.trim(),
+    prompt: draft.prompt.trim(),
+    scheduleType: draft.scheduleType,
+    intervalMinutes: draft.intervalMinutes,
+    timeOfDay: draft.timeOfDay,
+    dayOfWeek: draft.dayOfWeek,
+    channelId: draft.channelId,
+    modelId: draft.modelId,
+    workspaceId: draft.workspaceId ?? '',
+    permissionMode: draft.permissionMode,
+    active: draft.active,
+  }
 }
 
 export function AutomationFormView(): React.ReactElement | null {
   const [formState, setFormState] = useAtom(automationFormAtom)
+  const setAutomations = useSetAtom(automationsAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const automations = useAtomValue(automationsAtom)
-  const agentSessions = useAtomValue(agentSessionsAtom)
+  const [agentSessions, setAgentSessions] = useAtom(agentSessionsAtom)
   const activeSessionId = useAtomValue(activeSessionIdAtom)
+  const setActiveView = useSetAtom(activeViewAtom)
   const openSession = useOpenSession()
 
   const [form, setForm] = React.useState<AutomationDraft | null>(null)
-  const [saving, setSaving] = React.useState(false)
   const [editingName, setEditingName] = React.useState(false)
+  const [runningNow, setRunningNow] = React.useState(false)
   const nameInputRef = React.useRef<HTMLInputElement>(null)
+  const saveTimerRef = React.useRef<number | undefined>(undefined)
+  const lastSavedSignatureRef = React.useRef('')
+  const latestFormRef = React.useRef<AutomationDraft | null>(null)
+  // 串行化保存，避免新建草稿在首次 create 返回前被重复创建。
+  const persistInFlightRef = React.useRef<Promise<string | null> | null>(null)
 
   // 卸载/关闭过程中不再 setState（保存 IPC 是异步的，结束时表单可能已经被关掉了）
   const isMountedRef = React.useRef(true)
@@ -72,8 +135,98 @@ export function AutomationFormView(): React.ReactElement | null {
   React.useEffect(() => {
     if (formState.open && formState.draft) {
       setForm({ ...formState.draft })
+      lastSavedSignatureRef.current = formState.draft.id && canPersistDraft(formState.draft)
+        ? getDraftSignature(formState.draft)
+        : ''
     }
   }, [formState.open, formState.draft])
+
+  React.useEffect(() => {
+    latestFormRef.current = form
+  }, [form])
+
+  React.useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== undefined) {
+        window.clearTimeout(saveTimerRef.current)
+      }
+    }
+  }, [])
+
+  const refreshAutomations = React.useCallback(async () => {
+    const list = await window.electronAPI.listAutomations()
+    setAutomations(list)
+    return list
+  }, [setAutomations])
+
+  const persistDraft = React.useCallback((draft: AutomationDraft): Promise<string | null> => {
+    if (!canPersistDraft(draft)) return Promise.resolve(draft.id ?? null)
+
+    const previousPersist = persistInFlightRef.current
+    const persistTask = (async (): Promise<string | null> => {
+      const previousId = previousPersist ? await previousPersist.catch(() => null) : null
+      const latestDraft = latestFormRef.current
+      const draftToSave = latestDraft
+        ? { ...latestDraft, id: latestDraft.id ?? previousId ?? draft.id }
+        : { ...draft, id: draft.id ?? previousId ?? undefined }
+
+      if (!canPersistDraft(draftToSave)) return draftToSave.id ?? null
+
+      const signature = getDraftSignature(draftToSave)
+      if (signature === lastSavedSignatureRef.current) return draftToSave.id ?? null
+
+      try {
+        if (draftToSave.id) {
+          const updated = await window.electronAPI.updateAutomation(draftToUpdateInput(draftToSave))
+          if (!updated) throw new Error('定时任务不存在')
+          lastSavedSignatureRef.current = signature
+          setAutomations((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+          setForm((prev) => (prev ? { ...prev, id: updated.id, name: updated.name } : prev))
+          return updated.id
+        } else {
+          const created = await window.electronAPI.createAutomation(draftToCreateInput(draftToSave))
+          const createdDraft = automationToDraft(created)
+          lastSavedSignatureRef.current = getDraftSignature(createdDraft)
+          setAutomations((prev) => [created, ...prev.filter((a) => a.id !== created.id)])
+          setForm((prev) => (prev ? { ...prev, id: created.id, name: created.name } : prev))
+          return created.id
+        }
+      } catch (err) {
+        console.error('[定时任务] 自动保存失败:', err)
+        if (isMountedRef.current) toast.error('自动保存失败')
+        return null
+      }
+    })()
+
+    persistInFlightRef.current = persistTask
+    void persistTask.finally(() => {
+      if (persistInFlightRef.current === persistTask) {
+        persistInFlightRef.current = null
+      }
+    })
+    return persistTask
+  }, [setAutomations])
+
+  React.useEffect(() => {
+    if (!formState.open || !form || !canPersistDraft(form)) return
+
+    const signature = getDraftSignature(form)
+    if (signature === lastSavedSignatureRef.current) return
+
+    if (saveTimerRef.current !== undefined) {
+      window.clearTimeout(saveTimerRef.current)
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      void persistDraft(form)
+    }, 500)
+
+    return () => {
+      if (saveTimerRef.current !== undefined) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = undefined
+      }
+    }
+  }, [form, formState.open, persistDraft])
 
   // 切换会话/Tab 时自动关闭表单
   const initialSessionRef = React.useRef<string | null | undefined>(undefined)
@@ -87,28 +240,73 @@ export function AutomationFormView(): React.ReactElement | null {
       return
     }
     if (activeSessionId !== initialSessionRef.current) {
+      const latest = latestFormRef.current
+      if (latest) void persistDraft(latest)
       setFormState({ open: false, draft: null })
     }
-  }, [activeSessionId, formState.open, setFormState])
+  }, [activeSessionId, formState.open, persistDraft, setFormState])
 
   if (!formState.open || !form) return null
 
   // 编辑模式下取实时的 automation（用于状态信息 + 运行历史，订阅 changed 后会刷新）
   const live = form.id ? automations.find((a) => a.id === form.id) : undefined
 
-  const close = (): void => setFormState({ open: false, draft: null })
+  const close = (): void => {
+    const latest = latestFormRef.current
+    if (latest) void persistDraft(latest)
+    setFormState({ open: false, draft: null })
+  }
   const update = (patch: Partial<AutomationDraft>): void => {
     setForm((prev) => (prev ? { ...prev, ...patch } : prev))
   }
 
+  const handleRunNow = async (): Promise<void> => {
+    const latest = latestFormRef.current
+    if (!latest || !canPersistDraft(latest)) {
+      toast.error('请先填写任务名称、任务描述并选择模型')
+      return
+    }
+
+    setRunningNow(true)
+    try {
+      const automationId = await persistDraft(latest)
+      if (!automationId) throw new Error('任务尚未创建')
+      await window.electronAPI.runAutomationNow(automationId)
+      await refreshAutomations()
+      const sessions = await window.electronAPI.listAgentSessions()
+      setAgentSessions(sessions)
+      toast.success('已完成一次测试运行')
+    } catch (err) {
+      console.error('[定时任务] 立即运行失败:', err)
+      toast.error('立即运行失败')
+    } finally {
+      if (isMountedRef.current) setRunningNow(false)
+    }
+  }
+
   /** 跳到运行历史中的某次子会话，先关掉表单 overlay 再 openSession */
-  const handleOpenRunSession = (run: AutomationRun): void => {
-    const session = agentSessions.find((s) => s.id === run.sessionId)
+  const handleOpenRunSession = async (run: AutomationRun): Promise<void> => {
+    if (!run.sessionId) {
+      toast.error('这条记录没有可打开的会话')
+      return
+    }
+
+    let session = agentSessions.find((s) => s.id === run.sessionId)
+    if (!session) {
+      const sessions = await window.electronAPI.listAgentSessions()
+      setAgentSessions(sessions)
+      session = sessions.find((s) => s.id === run.sessionId)
+    }
+
     if (!session) {
       toast.error('该会话已不存在')
       return
     }
+
+    const latest = latestFormRef.current
+    if (latest) void persistDraft(latest)
     setFormState({ open: false, draft: null })
+    setActiveView('conversations')
     openSession('agent', session.id, session.title)
   }
 
@@ -116,65 +314,28 @@ export function AutomationFormView(): React.ReactElement | null {
     setEditingName(true)
     requestAnimationFrame(() => nameInputRef.current?.focus())
   }
+  const commitName = async (): Promise<void> => {
+    const name = form.name.trim()
+    if (!name) {
+      toast.error('任务名称不能为空')
+      nameInputRef.current?.focus()
+      return
+    }
+    setEditingName(false)
+    update({ name })
+    void persistDraft({ ...form, name })
+  }
   const handleNameKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      setEditingName(false)
+      void commitName()
     } else if (e.key === 'Escape') {
+      setForm((prev) => (prev ? { ...prev, name: live?.name ?? formState.draft?.name ?? prev.name } : prev))
       setEditingName(false)
     }
   }
 
   const isEdit = !!form.id
-  const canSave = !!(form.name.trim() && form.prompt.trim() && form.channelId)
-
-  const handleSave = async (): Promise<void> => {
-    if (!canSave) return
-    setSaving(true)
-    try {
-      const common = {
-        scheduleType: form.scheduleType,
-        intervalMinutes: form.intervalMinutes,
-        timeOfDay: form.timeOfDay,
-        dayOfWeek: form.dayOfWeek,
-        permissionMode: form.permissionMode,
-      }
-      if (isEdit && form.id) {
-        await window.electronAPI.updateAutomation({
-          id: form.id,
-          name: form.name.trim(),
-          prompt: form.prompt.trim(),
-          ...common,
-          channelId: form.channelId,
-          modelId: form.modelId,
-          workspaceId: form.workspaceId ?? '',
-          active: form.active,
-        })
-        if (isMountedRef.current) toast.success('已保存')
-      } else {
-        const created = await window.electronAPI.createAutomation({
-          name: form.name.trim(),
-          prompt: form.prompt.trim(),
-          ...common,
-          channelId: form.channelId,
-          modelId: form.modelId,
-          workspaceId: form.workspaceId,
-          sourceSessionId: form.sourceSessionId,
-          active: form.active,
-        })
-        // 不关闭页面：转为编辑模式，便于继续调整
-        if (isMountedRef.current && created?.id) {
-          setForm((prev) => (prev ? { ...prev, id: created.id } : prev))
-        }
-        if (isMountedRef.current) toast.success('定时任务已创建')
-      }
-    } catch (err) {
-      console.error('[定时任务] 保存失败:', err)
-      if (isMountedRef.current) toast.error('保存失败')
-    } finally {
-      if (isMountedRef.current) setSaving(false)
-    }
-  }
 
   const selectedModel = form.channelId && form.modelId
     ? { channelId: form.channelId, modelId: form.modelId }
@@ -185,6 +346,15 @@ export function AutomationFormView(): React.ReactElement | null {
       {/* 左栏：自然语言任务描述（主角） */}
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center gap-2 px-6 py-4 flex-shrink-0">
+          <button
+            type="button"
+            onClick={close}
+            className="titlebar-no-drag mr-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+            aria-label="返回任务列表"
+          >
+            <ArrowLeft className="size-3.5" />
+            <span>自动任务</span>
+          </button>
           <Clock className="size-4 text-primary flex-shrink-0" />
           {editingName ? (
             <div className="flex items-center gap-1.5 flex-1 min-w-0">
@@ -193,7 +363,7 @@ export function AutomationFormView(): React.ReactElement | null {
                 value={form.name}
                 onChange={(e) => update({ name: e.target.value })}
                 onKeyDown={handleNameKeyDown}
-                onBlur={() => setEditingName(false)}
+                onBlur={() => { void commitName() }}
                 placeholder="未命名任务"
                 className="flex-1 bg-transparent text-sm font-semibold text-foreground border-b border-primary/50 outline-none px-0 py-0.5 min-w-0"
                 maxLength={100}
@@ -201,7 +371,7 @@ export function AutomationFormView(): React.ReactElement | null {
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setEditingName(false)}
+                onClick={() => { void commitName() }}
                 className="p-1 text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
               >
                 <Check className="size-3.5" />
@@ -237,14 +407,25 @@ export function AutomationFormView(): React.ReactElement | null {
 
       {/* 右栏：配置 sidebar */}
       <div className="w-[340px] flex-shrink-0 border-l border-border/50 flex flex-col bg-content-area">
-        <div className="flex items-center justify-between px-4 py-4 flex-shrink-0">
+        <div className="flex items-center justify-between gap-2 px-4 py-4 flex-shrink-0">
           <span className="text-sm font-semibold text-foreground">配置</span>
-          <button
-            onClick={close}
-            className="titlebar-no-drag p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => { void handleRunNow() }}
+              disabled={runningNow || !canPersistDraft(form)}
+              className="titlebar-no-drag h-7 px-2.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 transition-colors flex items-center gap-1.5 shadow-sm"
+            >
+              {runningNow ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+              <span>{runningNow ? '运行中' : '运行一次'}</span>
+            </button>
+            <button
+              onClick={close}
+              className="titlebar-no-drag p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-5">
@@ -414,18 +595,18 @@ export function AutomationFormView(): React.ReactElement | null {
               ) : (
                 <div className="flex flex-col gap-1">
                   {live.runHistory.slice(0, 10).map((run, i) => {
-                    const sessionExists = agentSessions.some((s) => s.id === run.sessionId)
+                    const hasSessionId = !!run.sessionId
                     return (
                       <button
                         key={`${run.runAt}-${i}`}
                         type="button"
-                        onClick={() => handleOpenRunSession(run)}
-                        disabled={!sessionExists}
-                        title={sessionExists ? '查看本次执行的会话' : '该会话已不存在'}
-                        className="flex items-center gap-1.5 px-1.5 py-1 -mx-1.5 rounded-md text-[11px] text-foreground/60 text-left transition-colors enabled:hover:bg-foreground/[0.04] enabled:hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => { void handleOpenRunSession(run) }}
+                        disabled={!hasSessionId}
+                        title={hasSessionId ? '查看本次执行的会话' : '这条记录没有可打开的会话'}
+                        className="flex items-center gap-2 px-1.5 py-1 -mx-1.5 rounded-md text-[11px] text-foreground/60 text-left transition-colors enabled:hover:bg-foreground/[0.04] enabled:hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <RunStatusIcon status={run.status} />
                         <span className="tabular-nums">{formatTime(run.runAt)}</span>
+                        <span className="shrink-0 text-foreground/45">{formatRunStatus(run.status)}</span>
                         <span className="text-foreground/35 truncate">
                           {run.status === 'success' && run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : ''}
                           {run.status === 'error' ? (run.error ?? '失败') : ''}
@@ -438,13 +619,6 @@ export function AutomationFormView(): React.ReactElement | null {
               )}
             </div>
           )}
-        </div>
-
-        <div className="flex justify-end gap-2 px-4 py-4 border-t border-border/50 flex-shrink-0">
-          <Button variant="ghost" onClick={close} disabled={saving}>取消</Button>
-          <Button onClick={handleSave} disabled={!canSave || saving}>
-            {saving ? '保存中…' : isEdit ? '保存' : '创建'}
-          </Button>
         </div>
       </div>
     </div>

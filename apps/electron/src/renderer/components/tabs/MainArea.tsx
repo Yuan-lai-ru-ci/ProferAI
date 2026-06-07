@@ -152,14 +152,19 @@ export function MainArea(): React.ReactElement {
             className="flex flex-col min-w-0 h-full relative"
             style={leftFlexStyle}
           >
-            {activeView === 'automations' && !automationFormOpen ? (
-              // Automations 列表视图：全屏取代 TabBar + TabContent
-              <AutomationsListView />
+            {activeView === 'automations' ? (
+              automationFormOpen ? (
+                // 定时任务设置页：与列表同层级替换中间区，不经过 TabBar，避免切换时闪出会话 Tab。
+                <AutomationFormView />
+              ) : (
+                // Automations 列表视图：全屏取代 TabBar + TabContent
+                <AutomationsListView />
+              )
             ) : (
               <>
                 <TabBar />
                 {automationFormOpen ? (
-                  // 定时任务编辑表单：替换 TabContent，但保留 TabBar 让用户能点 tab 切走
+                  // 兼容从会话内入口打开任务设置的场景。
                   <AutomationFormView />
                 ) : tabs.length === 0 ? (
                   <WelcomeView />

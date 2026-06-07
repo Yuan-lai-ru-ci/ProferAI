@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -146,6 +146,49 @@ function SidebarItem({ icon, label, active, suffix, onClick }: SidebarItemProps)
         <span>{label}</span>
       </div>
       {suffix}
+    </button>
+  )
+}
+
+function formatAutomationCount(count: number): string {
+  return count > 99 ? '99+' : String(count)
+}
+
+interface AutomationSidebarEntryProps {
+  count: number
+  active: boolean
+  onClick: () => void
+}
+
+function AutomationSidebarEntry({ count, active, onClick }: AutomationSidebarEntryProps): React.ReactElement {
+  return (
+    <button
+      type="button"
+      aria-label={`自动任务，${count} 个任务已创建`}
+      onClick={onClick}
+      className={cn(
+        'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
+        active
+          ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+          : 'text-foreground/60 hover:bg-primary/5 hover:text-foreground',
+      )}
+    >
+      <span className="flex items-center gap-3 min-w-0">
+        <span className="flex-shrink-0 w-[18px] h-[18px]">
+          <AlarmClock size={16} className={cn('block', active ? 'text-primary' : 'text-foreground/45')} />
+        </span>
+        <span className="truncate">自动任务</span>
+      </span>
+      <span
+        className={cn(
+          'ml-2 flex h-5 min-w-[22px] flex-shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums',
+          active
+            ? 'bg-primary/[0.14] text-primary'
+            : 'bg-foreground/[0.045] text-foreground/[0.42] group-hover:text-foreground/65',
+        )}
+      >
+        {formatAutomationCount(count)}
+      </span>
     </button>
   )
 }
@@ -337,7 +380,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
   const automations = useAtomValue(automationsAtom)
-  const activeAutomationCount = automations.filter((a) => a.active).length
+  const automationCount = automations.length
   const setSettingsTab = useSetAtom(settingsTabAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const [activeItem, setActiveItem] = React.useState<SidebarItemId>('all-chats')
@@ -593,6 +636,12 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setActiveItem(item)
     setActiveView(ITEM_TO_VIEW[item])
   }
+
+  /** 打开自动任务列表 */
+  const handleOpenAutomations = React.useCallback((): void => {
+    setAutomationForm({ open: false, draft: null })
+    setActiveView('automations')
+  }, [setAutomationForm, setActiveView])
 
   // 切换模式时重置归档视图
   React.useEffect(() => {
@@ -1381,24 +1430,33 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label="定时任务"
-                onClick={() => { setAutomationForm({ open: false, draft: null }); setActiveView('automations') }}
+                aria-label={`自动任务，${automationCount} 个任务已创建`}
+                onClick={handleOpenAutomations}
                 className={cn(
-                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border border-dashed',
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
                   activeView === 'automations'
-                    ? 'bg-primary/10 text-foreground/70 border-[hsl(var(--dashed-border-hover))]'
-                    : 'bg-primary/5 hover:bg-primary/10 text-foreground/45 hover:text-foreground/70 border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]',
+                    ? 'border-primary/80 bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border/45 bg-foreground/[0.025] text-foreground/45 hover:border-border/70 hover:bg-foreground/[0.045] hover:text-primary',
                 )}
               >
-                <Clock size={16} />
-                {activeAutomationCount > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
-                    {activeAutomationCount}
+                <AlarmClock size={16} />
+                {automationCount > 0 && (
+                  <span
+                    className={cn(
+                      'absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums',
+                      activeView === 'automations'
+                        ? 'bg-primary-foreground text-primary'
+                        : 'bg-primary text-primary-foreground',
+                    )}
+                  >
+                    {formatAutomationCount(automationCount)}
                   </span>
                 )}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">定时任务</TooltipContent>
+            <TooltipContent side="right">
+              自动任务（{automationCount} 个任务已创建）
+            </TooltipContent>
           </Tooltip>
         </div>
 
@@ -1501,34 +1559,20 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
           </TooltipTrigger>
           <TooltipContent side="bottom">搜索 ({getAcceleratorDisplay(getActiveAccelerator('global-search'))})</TooltipContent>
         </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label="定时任务"
-              onClick={() => { setAutomationForm({ open: false, draft: null }); setActiveView('automations') }}
-              className={cn(
-                'relative flex-shrink-0 size-[36px] flex items-center justify-center rounded-[10px] transition-colors duration-100 titlebar-no-drag border border-dashed',
-                activeView === 'automations'
-                  ? 'bg-primary/10 text-foreground/70 border-[hsl(var(--dashed-border-hover))]'
-                  : 'bg-primary/5 hover:bg-primary/10 text-foreground/40 hover:text-foreground/60 border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]',
-              )}
-            >
-              <Clock size={14} />
-              {activeAutomationCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
-                  {activeAutomationCount}
-                </span>
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">定时任务</TooltipContent>
-        </Tooltip>
+      </div>
+
+      {/* 自动任务入口：作为任务中心入口放在置顶区上方，不参与置顶列表层级。 */}
+      <div className="px-3 pt-2 pb-0.5">
+        <AutomationSidebarEntry
+          count={automationCount}
+          active={activeView === 'automations'}
+          onClick={handleOpenAutomations}
+        />
       </div>
 
       {/* Chat 模式：导航菜单（置顶区域） */}
       {mode === 'chat' && (
-        <div className="flex flex-col gap-1 pt-3 px-3">
+        <div className="flex flex-col gap-1 pt-1 px-3">
           <SidebarItem
             icon={<Pin size={16} />}
             label="置顶对话"

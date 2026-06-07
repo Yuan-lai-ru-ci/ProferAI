@@ -826,7 +826,7 @@ export class AgentOrchestrator {
    * 在 completeRun 时 fire-and-forget 调用。从 JSONL 读最近的 assistant 文本，
    * 解析 JSON 指令，执行对应操作（create/delete/toggle/list），广播变更。
    */
-  private async processAutomationCommands(sessionId: string, channelId: string, workspaceId?: string): Promise<void> {
+  private async processAutomationCommands(sessionId: string, channelId: string, modelId?: string, workspaceId?: string): Promise<void> {
     try {
       // 快速跳过：由定时任务触发的会话不会产生新的 automation 指令（系统提示词已明确禁止）
       const meta = getAgentSessionMeta(sessionId)
@@ -869,6 +869,7 @@ export class AgentOrchestrator {
               timeOfDay: cmd.timeOfDay as string | undefined,
               dayOfWeek: cmd.dayOfWeek as number | undefined,
               channelId,
+              modelId: modelId || undefined,
               workspaceId,
               sourceSessionId: sessionId,
               active: true,
@@ -1123,7 +1124,7 @@ export class AgentOrchestrator {
     ): void => {
       releaseActiveRun()
       // 扫描 Agent 回复中的 Proma 定时任务指令（HTML 注释块）
-      void this.processAutomationCommands(sessionId, channelId, workspaceId).catch(() => {})
+      void this.processAutomationCommands(sessionId, channelId, modelId, workspaceId).catch(() => {})
       callbacks.onComplete(messages, opts)
     }
     const failRun = (

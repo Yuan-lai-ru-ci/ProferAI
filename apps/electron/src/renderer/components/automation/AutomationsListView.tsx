@@ -8,15 +8,16 @@
  * - 内容：分组列表
  *   - Current（启用中）：active=true
  *   - Paused（已暂停 / 草稿）：active=false
- * - 每行：状态点 + 名称 + prompt 摘要 + 调度文案
+ * - 每行：名称 + prompt 摘要 + 调度文案
  * - 点击行 → 通过 automationFormAtom 打开编辑表单 overlay
  */
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Clock, Plus, Play, Trash2 } from 'lucide-react'
+import { Clock, Pause, Play, Power, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   automationsAtom,
   automationFormAtom,
@@ -75,7 +76,7 @@ export function AutomationsListView(): React.ReactElement {
         <button
           type="button"
           onClick={handleCreate}
-          className="titlebar-no-drag flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors duration-100 border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+	          className="titlebar-no-drag flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors duration-100 shadow-sm"
         >
           <Plus size={14} />
           <span>新建定时任务</span>
@@ -151,7 +152,7 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
       <div className="text-[13px] font-medium text-foreground/55 px-1">{title}</div>
       <div className="rounded-xl border border-border/50 overflow-hidden bg-content-area">
         {automations.map((a, i) => (
-          // 行容器：用 div + role=button，避免与内部 button（立即运行/删除/状态灯）
+          // 行容器：用 div + role=button，避免与内部 button（立即运行/删除/暂停）
           // 形成嵌套 button 的非法 HTML，同时通过 keyDown 维持键盘可达。
           <div
             key={a.id}
@@ -169,10 +170,6 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
               i > 0 && 'border-t border-border/40',
             )}
           >
-            <Clock className={cn(
-              'size-4 shrink-0',
-              variant === 'active' ? 'text-emerald-500' : 'text-foreground/30',
-            )} />
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
                 <span className="text-[14px] font-medium text-foreground truncate">{a.name}</span>
@@ -181,49 +178,63 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
                 </span>
               </div>
             </div>
-            {/* hover 操作按钮（立即运行 + 删除） */}
-            <div className="hidden group-hover:flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                aria-label={`立即运行 ${a.name}`}
-                title="立即运行一次"
-                onClick={(e) => { void handleRunNow(e, a) }}
-                className="p-1.5 rounded-md text-foreground/40 hover:text-foreground/80 hover:bg-foreground/[0.06] transition-colors"
-              >
-                <Play className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label={`删除 ${a.name}`}
-                title="删除"
-                onClick={(e) => { void handleDelete(e, a) }}
-                className="p-1.5 rounded-md text-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                <Trash2 className="size-3.5" />
-              </button>
-            </div>
-            {/* 非 hover 时显示调度文案 */}
-            <span className={cn(
-              'text-[12px] tabular-nums shrink-0 group-hover:hidden',
-              variant === 'active' ? 'text-foreground/55' : 'text-foreground/35',
-            )}>
-              {variant === 'paused' ? '已暂停' : formatSchedule(a)}
-            </span>
-            {/* 状态灯：常驻显示，绿=启用/红=暂停，点击切换。外层 padding 扩大点击区域 */}
-            <button
-              type="button"
-              aria-label={a.active ? `暂停 ${a.name}` : `启用 ${a.name}`}
-              title={a.active ? '点击暂停' : '点击启用'}
-              onClick={(e) => { void handleToggle(e, a) }}
-              className="p-2 -m-2 shrink-0 flex items-center justify-center"
-            >
+            {/* 右侧槽位固定宽度，只切透明度，避免 hover 时列表行横向跳动。 */}
+            <div className="relative h-7 w-24 shrink-0">
               <span className={cn(
-                'size-2.5 rounded-full transition-colors',
-                a.active
-                  ? 'bg-emerald-500 hover:bg-red-400'
-                  : 'bg-red-400 hover:bg-emerald-500',
-              )} />
-            </button>
+                'absolute right-0 top-1/2 -translate-y-1/2 text-[12px] tabular-nums whitespace-nowrap transition-opacity group-hover:opacity-0',
+                variant === 'active' ? 'text-foreground/55' : 'text-foreground/35',
+              )}>
+                {variant === 'paused' ? '已暂停' : formatSchedule(a)}
+              </span>
+              <div className="pointer-events-none absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`立即运行 ${a.name}`}
+                      onClick={(e) => { void handleRunNow(e, a) }}
+                      className="p-1.5 rounded-md text-foreground/40 hover:text-foreground/80 hover:bg-foreground/[0.06] transition-colors"
+                    >
+                      <Play className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">立即运行一次</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`删除 ${a.name}`}
+                      onClick={(e) => { void handleDelete(e, a) }}
+                      className="p-1.5 rounded-md text-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">删除任务</TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={a.active ? `暂停 ${a.name}` : `启用 ${a.name}`}
+                  onClick={(e) => { void handleToggle(e, a) }}
+                  className={cn(
+                    'p-1.5 -m-1.5 shrink-0 flex items-center justify-center rounded-md transition-colors',
+                    a.active
+                      ? 'text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/70'
+                      : 'text-foreground/30 hover:bg-emerald-500/10 hover:text-emerald-500',
+                  )}
+                >
+                  {a.active ? <Pause className="size-3.5" /> : <Power className="size-3.5" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {a.active ? '暂停任务：从当前开始不再继续后续自动处理' : '启用任务'}
+              </TooltipContent>
+            </Tooltip>
           </div>
         ))}
       </div>
@@ -247,7 +258,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement 
       <button
         type="button"
         onClick={onCreate}
-        className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-md text-[13px] font-medium text-foreground/80 bg-primary/10 hover:bg-primary/20 transition-colors"
+	        className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
       >
         <Plus size={14} />
         <span>新建定时任务</span>

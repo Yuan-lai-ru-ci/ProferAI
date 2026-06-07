@@ -43,7 +43,8 @@ import { channelsAtom } from '@/atoms/chat-atoms'
 import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
-import { automationsAtom, automationFormAtom } from '@/atoms/automation-atoms'
+import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
+import { activeViewAtom } from '@/atoms/active-view'
 import { environmentCheckDialogOpenAtom } from '@/atoms/environment'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import type {
@@ -976,11 +977,16 @@ function QuoteChip({ quote }: { quote: QuotedFileRef }): React.ReactElement {
 
 const SCHEDULED_RUN_MARKER = '<!--PROMA_SCHEDULED_RUN-->'
 
+function stripScheduledRunMarker(text: string): string {
+  return text.replaceAll(SCHEDULED_RUN_MARKER, '').trim()
+}
+
 function ScheduledRunBadge(): React.ReactElement {
   const activeSessionId = useAtomValue(activeSessionIdAtom)
   const sessions = useAtomValue(agentSessionsAtom)
   const automations = useAtomValue(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
+  const setActiveView = useSetAtom(activeViewAtom)
 
   const session = sessions.find((s) => s.id === activeSessionId)
   const automation = session?.sourceAutomationId
@@ -989,22 +995,10 @@ function ScheduledRunBadge(): React.ReactElement {
 
   const handleClick = (): void => {
     if (!automation) return
+    setActiveView('automations')
     setForm({
       open: true,
-      draft: {
-        id: automation.id,
-        name: automation.name,
-        prompt: automation.prompt,
-        scheduleType: automation.scheduleType,
-        intervalMinutes: automation.intervalMinutes,
-        timeOfDay: automation.timeOfDay,
-        dayOfWeek: automation.dayOfWeek,
-        channelId: automation.channelId,
-        modelId: automation.modelId,
-        workspaceId: automation.workspaceId,
-        permissionMode: automation.permissionMode ?? 'bypassPermissions',
-        active: automation.active,
-      },
+      draft: automationToDraft(automation),
     })
   }
 
@@ -1025,7 +1019,7 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
-  const { files: attachedFiles, quotes, text } = parseAttachedFiles(rawText.replace(SCHEDULED_RUN_MARKER, '').trim())
+  const { files: attachedFiles, quotes, text } = parseAttachedFiles(stripScheduledRunMarker(rawText))
   const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
   const nonImageFiles = attachedFiles.filter((f) => !isImageFile(f.filename))
   const meta = extractMeta(message as unknown as SDKMessage)
@@ -1036,9 +1030,11 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
         <UserAvatar avatar={userProfile.avatar} size={35} />
         <div className="flex flex-col justify-between h-[35px]">
           <span className="text-sm font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
-          {meta.createdAt && (
+          {(meta.createdAt || isScheduledRun) && (
             <span className="flex items-center gap-2 leading-none">
-              <span className="text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
+              {meta.createdAt && (
+                <span className="text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
+              )}
               {isScheduledRun && (
                 <ScheduledRunBadge />
               )}
@@ -1350,7 +1346,7 @@ export function getGroupId(group: MessageGroup): string {
  */
 export function getGroupPreview(group: MessageGroup): string {
   if (group.type === 'user') {
-    return (extractUserText(group.message) ?? '')
+    return stripScheduledRunMarker(extractUserText(group.message) ?? '')
       .replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '')
       .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
       .slice(0, 200)
