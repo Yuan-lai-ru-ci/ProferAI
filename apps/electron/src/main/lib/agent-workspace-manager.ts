@@ -628,6 +628,20 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
   return skills
 }
 
+/** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+export function getDefaultSkillSlugs(): string[] {
+  const dir = getDefaultSkillsDir()
+  if (!existsSync(dir)) return []
+
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+  } catch {
+    return []
+  }
+}
+
 /** 获取工作区所有 Skills（含活跃和不活跃），用于设置页 UI */
 export function getAllWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
   const activeSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)

@@ -201,6 +201,7 @@ import {
   saveWorkspaceMcpConfig,
   getAllWorkspaceSkills,
   getOtherWorkspaceSkills,
+  getDefaultSkillSlugs,
   getWorkspaceCapabilities,
   getAgentWorkspace,
   deleteWorkspaceSkill,
@@ -1965,6 +1966,14 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_OTHER_WORKSPACE_SKILLS,
     async (_, currentSlug: string) => {
       return getOtherWorkspaceSkills(currentSlug)
+    }
+  )
+
+  // 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS,
+    async () => {
+      return getDefaultSkillSlugs()
     }
   )
 
