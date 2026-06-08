@@ -219,6 +219,10 @@ const PROJECT_SESSION_PREVIEW_LIMIT = 5
 const PROJECT_SESSION_RECENT_WINDOW_MS = 3 * 86_400_000
 /** 点击"显示更多"时每次额外展开的会话数量 */
 const PROJECT_SESSION_EXPAND_STEP = 10
+/** 置顶区最多占用约 6 条会话的高度，超过后在置顶区内部滚动 */
+const PINNED_SESSION_VISIBLE_LIMIT = 6
+const PINNED_SESSION_ROW_HEIGHT_PX = 32
+const PINNED_SESSION_MAX_HEIGHT = PINNED_SESSION_VISIBLE_LIMIT * PINNED_SESSION_ROW_HEIGHT_PX
 
 const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionIndicatorStatus> = new Set([
   'blocked',
@@ -1590,8 +1594,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
       {/* Chat 模式：置顶对话区域 */}
       {mode === 'chat' && pinnedExpanded && pinnedConversations.length > 0 && (
-        <div className="px-3 pt-1 pb-1">
-          <div className="flex flex-col gap-0.5 pl-1 border-l-2 border-primary/20 ml-2">
+        <div className="px-3 pt-1 pb-1 flex-shrink-0">
+          <div
+            className="flex flex-col gap-0.5 pl-1 border-l-2 border-primary/20 ml-2 overflow-y-auto scrollbar-thin titlebar-no-drag"
+            style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
+          >
             {pinnedConversations.map((conv) => (
               <ConversationItem
                 key={`pinned-${conv.id}`}
@@ -1615,29 +1622,36 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       {mode === 'agent' && viewMode === 'active' ? (
         <div className="flex-1 flex flex-col min-h-0">
           {pinnedAgentSessions.length > 0 && (
-            <div className="px-2 pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
-              <div className="px-1.5 pb-1 text-[11px] font-medium text-foreground/40 select-none">
+            <div className="pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
+              <div className="px-3.5 pb-1 text-[11px] font-medium text-foreground/40 select-none">
                 置顶
               </div>
-              <div className="flex flex-col gap-0.5">
-                {pinnedAgentSessions.map((session) => (
-                  <AgentSessionItem
-                    key={`pinned-${session.id}`}
-                    session={session}
-                    active={session.id === activeSessionId}
-                    indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
-                    showPinIcon={false}
-                    leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
-                    workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
-                    relativeTimeNow={relativeTimeNow}
-                    onSelect={handleSelectAgentSession}
-                    onRequestDelete={handleRequestDelete}
-                    onRequestMove={handleRequestMove}
-                    onRename={handleAgentRename}
-                    onTogglePin={handleTogglePinAgent}
-                    onToggleArchive={handleToggleArchiveAgent}
-                  />
-                ))}
+              <div
+                className="overflow-y-auto scrollbar-thin"
+                style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
+              >
+                <div className="px-2">
+                  <div className="ml-4 flex flex-col gap-0.5">
+                    {pinnedAgentSessions.map((session) => (
+                      <AgentSessionItem
+                        key={`pinned-${session.id}`}
+                        session={session}
+                        active={session.id === activeSessionId}
+                        indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                        showPinIcon={false}
+                        leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
+                        workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
+                        relativeTimeNow={relativeTimeNow}
+                        onSelect={handleSelectAgentSession}
+                        onRequestDelete={handleRequestDelete}
+                        onRequestMove={handleRequestMove}
+                        onRename={handleAgentRename}
+                        onTogglePin={handleTogglePinAgent}
+                        onToggleArchive={handleToggleArchiveAgent}
+                      />
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           )}
