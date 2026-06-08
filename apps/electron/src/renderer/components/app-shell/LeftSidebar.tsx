@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -118,37 +118,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import type { ActiveView } from '@/atoms/active-view'
 import type { ConversationMeta, AgentSessionMeta, AgentWorkspace, WorkspaceCapabilities } from '@proma/shared'
-
-interface SidebarItemProps {
-  icon: React.ReactNode
-  label: string
-  active?: boolean
-  /** 右侧额外元素（如展开/收起箭头） */
-  suffix?: React.ReactNode
-  onClick?: () => void
-}
-
-function SidebarItem({ icon, label, active, suffix, onClick }: SidebarItemProps): React.ReactElement {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
-        active
-          ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
-          : 'text-foreground/60 hover:bg-primary/5 hover:text-foreground'
-      )}
-    >
-      <div className="flex items-center gap-3">
-        <span className="flex-shrink-0 w-[18px] h-[18px]">{icon}</span>
-        <span>{label}</span>
-      </div>
-      {suffix}
-    </button>
-  )
-}
 
 function formatAutomationCount(count: number): string {
   return count > 99 ? '99+' : String(count)
@@ -196,15 +166,6 @@ function AutomationSidebarEntry({ count, active, onClick }: AutomationSidebarEnt
 export interface LeftSidebarProps {
   /** 可选固定宽度，默认使用 CSS 响应式宽度 */
   width?: number
-}
-
-/** 侧边栏导航项标识 */
-type SidebarItemId = 'pinned' | 'all-chats'
-
-/** 导航项到视图的映射 */
-const ITEM_TO_VIEW: Record<SidebarItemId, ActiveView> = {
-  pinned: 'conversations',
-  'all-chats': 'conversations',
 }
 
 /** 日期分组标签 */
@@ -388,7 +349,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const automationCount = automations.length
   const setSettingsTab = useSetAtom(settingsTabAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
-  const [activeItem, setActiveItem] = React.useState<SidebarItemId>('all-chats')
   const [conversations, setConversations] = useAtom(conversationsAtom)
   const [currentConversationId, setCurrentConversationId] = useAtom(currentConversationIdAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
@@ -402,8 +362,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [deletingWorkspaceId, setDeletingWorkspaceId] = React.useState<string | null>(null)
   /** 待迁移会话 ID，非空时显示迁移对话框 */
   const [moveTargetId, setMoveTargetId] = React.useState<string | null>(null)
-  /** 置顶区域展开/收起 */
-  const [pinnedExpanded, setPinnedExpanded] = React.useState(true)
   /** 每个项目额外展开显示的会话数量（每次点击"显示更多" +10），未点击则为 0 或无值 */
   const [expandedExtraCountMap, setExpandedExtraCountMap] = React.useState<Map<string, number>>(new Map())
   /** 项目拖拽排序状态 */
@@ -639,17 +597,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     return () => window.removeEventListener('focus', handleFocus)
   }, [setConversations, setAgentSessions])
 
-  /** 处理导航项点击 */
-  const handleItemClick = (item: SidebarItemId): void => {
-    if (item === 'pinned') {
-      // 置顶按钮仅切换展开/收起，不改变 activeView
-      setPinnedExpanded((prev) => !prev)
-      return
-    }
-    setActiveItem(item)
-    setActiveView(ITEM_TO_VIEW[item])
-  }
-
   /** 打开自动任务列表 */
   const handleOpenAutomations = React.useCallback((): void => {
     setAutomationForm({ open: false, draft: null })
@@ -675,7 +622,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       openSession('chat', meta.id, meta.title)
       // 确保在对话视图
       setActiveView('conversations')
-      setActiveItem('all-chats')
       // 根据默认提示词重置选中
       if (promptConfig.defaultPromptId) {
         setSelectedPromptId(promptConfig.defaultPromptId)
@@ -689,7 +635,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const handleSelectConversation = React.useCallback((id: string, title: string): void => {
     openSession('chat', id, title)
     setActiveView('conversations')
-    setActiveItem('all-chats')
   }, [openSession, setActiveView])
 
   /** 请求删除对话（弹出确认框） */
@@ -868,7 +813,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       // 打开新标签页
       openSession('agent', meta.id, meta.title)
       setActiveView('conversations')
-      setActiveItem('all-chats')
     } catch (error) {
       console.error('[侧边栏] 创建 Agent 会话失败:', error)
     }
@@ -1152,7 +1096,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const handleSelectAgentSession = React.useCallback((id: string, title: string): void => {
     openSession('agent', id, title)
     setActiveView('conversations')
-    setActiveItem('all-chats')
     // 清除该会话的"已完成未查看"标记
     setUnviewedCompleted((prev: Set<string>) => {
       if (!prev.has(id)) return prev
@@ -1743,52 +1686,73 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         />
       </div>
 
-      {/* Chat 模式：导航菜单（置顶区域） */}
-      {mode === 'chat' && (
-        <div className="flex flex-col gap-1 pt-1 px-3">
-          <SidebarItem
-            icon={<Pin size={16} />}
-            label="置顶对话"
-            suffix={
-              pinnedConversations.length > 0 ? (
-                pinnedExpanded
-                  ? <ChevronDown size={14} className="text-foreground/40" />
-                  : <ChevronRight size={14} className="text-foreground/40" />
-              ) : undefined
-            }
-            onClick={() => handleItemClick('pinned')}
-          />
-        </div>
-      )}
+      {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
+      {mode === 'chat' && viewMode === 'active' ? (
+        <div className="flex-1 flex flex-col min-h-0">
+          {pinnedConversations.length > 0 && (
+            <div className="pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
+              <div className="px-3.5 pb-1 text-[11px] font-medium text-foreground/40 select-none">
+                置顶
+              </div>
+              <div
+                className="overflow-y-auto scrollbar-thin"
+                style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
+              >
+                <div className="px-2">
+                  <div className="ml-4 flex flex-col gap-0.5">
+                    {pinnedConversations.map((conv) => (
+                      <ConversationItem
+                        key={`pinned-${conv.id}`}
+                        conversation={conv}
+                        active={conv.id === activeSessionId}
+                        streaming={streamingIds.has(conv.id)}
+                        showPinIcon={false}
+                        relativeTimeNow={relativeTimeNow}
+                        onSelect={handleSelectConversation}
+                        onRequestDelete={handleRequestDelete}
+                        onRename={handleRename}
+                        onTogglePin={handleTogglePin}
+                        onToggleArchive={handleToggleArchive}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
-      {/* Chat 模式：置顶对话区域 */}
-      {mode === 'chat' && pinnedExpanded && pinnedConversations.length > 0 && (
-        <div className="px-3 pt-1 pb-1 flex-shrink-0">
-          <div
-            className="flex flex-col gap-0.5 pl-1 border-l-2 border-primary/20 ml-2 overflow-y-auto scrollbar-thin titlebar-no-drag"
-            style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
-          >
-            {pinnedConversations.map((conv) => (
-              <ConversationItem
-                key={`pinned-${conv.id}`}
-                conversation={conv}
-                active={conv.id === activeSessionId}
-                streaming={streamingIds.has(conv.id)}
-                showPinIcon={false}
-                relativeTimeNow={relativeTimeNow}
-                onSelect={handleSelectConversation}
-                onRequestDelete={handleRequestDelete}
-                onRename={handleRename}
-                onTogglePin={handleTogglePin}
-                onToggleArchive={handleToggleArchive}
-              />
+          <div className="px-2 pt-2 pb-1 flex-shrink-0">
+            <span className="px-1.5 text-[11px] font-medium text-foreground/40 select-none">对话</span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-2 pb-3 scrollbar-thin min-h-0 titlebar-no-drag">
+            {conversationGroups.map((group) => (
+              <div key={group.label} className="mb-1">
+                <div className="px-1.5 pt-2 pb-1 text-[11px] font-medium text-foreground/40 select-none">
+                  {group.label}
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {group.items.map((conv) => (
+                    <ConversationItem
+                      key={conv.id}
+                      conversation={conv}
+                      active={conv.id === activeSessionId}
+                      streaming={streamingIds.has(conv.id)}
+                      showPinIcon={!!conv.pinned}
+                      relativeTimeNow={relativeTimeNow}
+                      onSelect={handleSelectConversation}
+                      onRequestDelete={handleRequestDelete}
+                      onRename={handleRename}
+                      onTogglePin={handleTogglePin}
+                      onToggleArchive={handleToggleArchive}
+                    />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </div>
-      )}
-
-      {/* Agent 模式 active 视图：置顶 + 项目历史 */}
-      {mode === 'agent' && viewMode === 'active' ? (
+      ) : mode === 'agent' && viewMode === 'active' ? (
         <div className="flex-1 flex flex-col min-h-0">
           {pinnedAgentSessions.length > 0 && (
             <div className="pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
@@ -1916,10 +1880,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             </div>
           )}
 
-          {/* Chat 模式 / 归档视图：单列表布局 */}
+          {/* 归档视图：单列表布局 */}
           <div className="flex-1 overflow-y-auto px-3 pt-2 pb-3 scrollbar-thin titlebar-no-drag">
             {mode === 'chat' ? (
-              /* Chat 模式：对话按日期分组 */
+              /* Chat 归档：对话按日期分组 */
               conversationGroups.map((group) => (
                 <div key={group.label} className="mb-1">
                   <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-foreground/40 select-none">
@@ -2338,16 +2302,20 @@ const ConversationItem = React.memo(function ConversationItem({
             startEdit()
           }}
           className={cn(
-            'group relative w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors duration-100 titlebar-no-drag text-left',
-            active
-              ? 'session-item-selected bg-foreground/[0.055]'
-              : 'hover:bg-foreground/[0.035]'
+            'group relative w-full flex items-center gap-1.5 rounded-md py-1 pl-2.5 pr-1.5 transition-colors duration-100 titlebar-no-drag text-left',
+            active && 'session-item-selected',
+            streaming
+              ? 'text-foreground font-medium hover:bg-foreground/[0.03]'
+              : 'hover:bg-foreground/[0.03]',
+            active && 'bg-foreground/[0.08]',
           )}
         >
-          {/* 流式状态左侧竖线条（与 Agent 保持一致） */}
-          {streaming && (
+          {(streaming || active) && (
             <span
-              className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-blue-500 animate-pulse pointer-events-none"
+              className={cn(
+                'absolute inset-y-0 left-0 w-[3px] rounded-l-md pointer-events-none',
+                streaming ? 'bg-blue-500 animate-pulse' : 'bg-primary',
+              )}
               aria-hidden="true"
             />
           )}
