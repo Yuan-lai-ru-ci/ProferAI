@@ -99,16 +99,16 @@ function groupSkillsByPrefix(skills: SkillMeta[], defaultSlugs: Set<string>): Sk
     groups.push({ prefix: '', skills: standalone })
   }
 
-  // built-in 分组放在最前面
+  // built-in 分组放在最前面（用 proma-built-in 作为内部哨兵，避免与用户 skill 的 slug 前缀碰撞）
   if (builtinSkills.length > 0) {
-    groups.unshift({ prefix: 'built-in', skills: builtinSkills, isBuiltin: true })
+    groups.unshift({ prefix: 'proma-built-in', skills: builtinSkills, isBuiltin: true })
   }
 
   return groups
 }
 
 function shortName(slug: string, prefix: string): string {
-  if (!prefix || prefix === 'built-in') return slug
+  if (!prefix || prefix === 'proma-built-in') return slug
   return slug.startsWith(prefix + '-') ? slug.slice(prefix.length + 1) : slug
 }
 
@@ -700,7 +700,7 @@ function SkillListPanel({ skills, defaultSkillSlugs, selectedSlug, onSelect, onD
                 ? <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" />
                 : <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />}
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider truncate flex-1">
-                {group.prefix === 'built-in' ? 'built-in' : group.prefix}
+                {group.isBuiltin ? 'built-in' : group.prefix}
               </span>
               {group.isBuiltin && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium flex-shrink-0">
