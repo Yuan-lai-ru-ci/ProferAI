@@ -4095,7 +4095,27 @@ export function registerIpcHandlers(): void {
     v === 'interval' || v === 'daily' || v === 'weekly'
   const validPermissionMode = (v: unknown): v is 'auto' | 'bypassPermissions' =>
     v === 'auto' || v === 'bypassPermissions'
+  const validAutomationNotificationTrigger = (v: unknown): v is 'always' | 'success' | 'error' =>
+    v === 'always' || v === 'success' || v === 'error'
   const validTimeOfDay = (v: unknown): boolean => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
+
+  const validateAutomationNotificationTargets = (targets: unknown): void => {
+    if (targets === undefined) return
+    if (!Array.isArray(targets)) throw new Error('notificationTargets 必须是数组')
+    if (targets.length > 5) throw new Error('notificationTargets 最多 5 个')
+
+    for (const target of targets) {
+      if (!target || typeof target !== 'object') throw new Error('notificationTargets 包含非法目标')
+      const t = target as Record<string, unknown>
+      if (t.type !== 'feishu') throw new Error(`不支持的通知目标: ${String(t.type)}`)
+      if (typeof t.enabled !== 'boolean') throw new Error('notificationTargets.enabled 必须是 boolean')
+      if (!validAutomationNotificationTrigger(t.trigger)) {
+        throw new Error(`非法的 notificationTargets.trigger: ${String(t.trigger)}`)
+      }
+      if (!isNonEmptyString(t.botId)) throw new Error('notificationTargets.botId 必填')
+      if (!isNonEmptyString(t.chatId)) throw new Error('notificationTargets.chatId 必填')
+    }
+  }
 
   const validateAutomationFields = (i: Partial<CreateAutomationInput | UpdateAutomationInput>): void => {
     if (i.scheduleType !== undefined && !validScheduleType(i.scheduleType)) {
@@ -4113,6 +4133,7 @@ export function registerIpcHandlers(): void {
     if (i.permissionMode !== undefined && !validPermissionMode(i.permissionMode)) {
       throw new Error(`非法的 permissionMode: ${String(i.permissionMode)}`)
     }
+    validateAutomationNotificationTargets(i.notificationTargets)
   }
 
   ipcMain.handle(
