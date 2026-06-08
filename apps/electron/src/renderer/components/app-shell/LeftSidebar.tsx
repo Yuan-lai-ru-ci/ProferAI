@@ -167,23 +167,23 @@ function AutomationSidebarEntry({ count, active, onClick }: AutomationSidebarEnt
       aria-label={`自动任务，${count} 个任务已创建`}
       onClick={onClick}
       className={cn(
-        'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
+        'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag automation-entry',
         active
-          ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
-          : 'text-foreground/60 hover:bg-primary/5 hover:text-foreground',
+          ? 'automation-entry-selected bg-accent-foreground/[0.10] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+          : 'text-foreground/60 hover:bg-accent-foreground/[0.08] hover:text-foreground',
       )}
     >
       <span className="flex items-center gap-3 min-w-0">
-        <span className="flex-shrink-0 w-[18px] h-[18px]">
-          <AlarmClock size={16} className={cn('block', active ? 'text-primary' : 'text-foreground/45')} />
+        <span className={cn('flex-shrink-0 w-[18px] h-[18px] automation-entry-icon', active ? 'text-accent-foreground' : 'text-foreground/45')}>
+          <AlarmClock size={16} className="block" />
         </span>
         <span className="truncate">自动任务</span>
       </span>
       <span
         className={cn(
-          'ml-2 flex h-5 min-w-[22px] flex-shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums',
+          'ml-2 flex h-5 min-w-[22px] flex-shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums automation-entry-badge',
           active
-            ? 'bg-primary/[0.14] text-primary'
+            ? 'bg-accent-foreground/[0.26] text-primary-foreground'
             : 'bg-foreground/[0.045] text-foreground/[0.42] group-hover:text-foreground/65',
         )}
       >

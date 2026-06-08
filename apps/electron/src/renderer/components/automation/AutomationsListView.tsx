@@ -168,7 +168,7 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
               }
             }}
             className={cn(
-              'group w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-foreground/[0.03] cursor-pointer focus:outline-none focus-visible:bg-foreground/[0.05]',
+              'group w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-foreground/[0.15] cursor-pointer focus:outline-none focus-visible:bg-foreground/[0.18]',
               i > 0 && 'border-t border-border/40',
             )}
           >
@@ -195,7 +195,7 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
                       type="button"
                       aria-label={`立即运行 ${a.name}`}
                       onClick={(e) => { void handleRunNow(e, a) }}
-                      className="p-1.5 rounded-md text-foreground/40 hover:text-foreground/80 hover:bg-foreground/[0.06] transition-colors"
+                      className="p-1.5 rounded-md text-foreground/50 hover:text-foreground/85 hover:bg-foreground/[0.08] transition-colors"
                     >
                       <Play className="size-3.5" />
                     </button>
@@ -208,7 +208,7 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
                       type="button"
                       aria-label={`删除 ${a.name}`}
                       onClick={(e) => { void handleDelete(e, a) }}
-                      className="p-1.5 rounded-md text-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      className="p-1.5 rounded-md text-foreground/50 hover:text-destructive hover:bg-destructive/10 transition-colors"
                     >
                       <Trash2 className="size-3.5" />
                     </button>
@@ -226,8 +226,8 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
                   className={cn(
                     'p-1.5 -m-1.5 shrink-0 flex items-center justify-center rounded-md transition-colors',
                     a.active
-                      ? 'text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/70'
-                      : 'text-foreground/30 hover:bg-emerald-500/10 hover:text-emerald-500',
+                      ? 'text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/70 group-hover:text-foreground/55'
+                      : 'text-foreground/30 hover:bg-emerald-500/10 hover:text-emerald-500 group-hover:text-foreground/45',
                   )}
                 >
                   {a.active ? <Pause className="size-3.5" /> : <Power className="size-3.5" />}
