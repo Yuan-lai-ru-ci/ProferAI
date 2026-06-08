@@ -12,6 +12,8 @@ import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { AlertTriangle, ArrowLeft, Bell, Check, Clock, Loader2, Pencil, Play, Settings, X } from 'lucide-react'
+import { detectIsWindows } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -166,6 +168,7 @@ function AutomationPromptEmptyGuide(): React.ReactElement {
 }
 
 export function AutomationFormView(): React.ReactElement | null {
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
   const [formState, setFormState] = useAtom(automationFormAtom)
   const setAutomations = useSetAtom(automationsAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
@@ -508,7 +511,10 @@ export function AutomationFormView(): React.ReactElement | null {
 
       {/* 右栏：配置 sidebar */}
       <div className="w-[340px] flex-shrink-0 border-l border-border/50 flex flex-col bg-content-area">
-        <div className="flex items-center justify-between gap-2 px-4 py-4 flex-shrink-0">
+        <div className={cn(
+          "flex items-center justify-between gap-2 px-4 py-4 flex-shrink-0",
+          isWindows && "pr-[140px]"
+        )}>
           <span className="text-sm font-semibold text-foreground">配置</span>
           <div className="flex items-center gap-1">
             <button
