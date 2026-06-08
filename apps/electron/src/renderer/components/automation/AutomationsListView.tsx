@@ -71,16 +71,19 @@ export function AutomationsListView(): React.ReactElement {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* 标题栏 */}
+      {/* 空列表时隐藏右上角「新建」按钮，避免与空状态中心按钮重复 */}
       <div className="titlebar-drag-region flex items-center justify-between max-w-5xl w-full mx-auto px-8 pt-8 pb-6 flex-shrink-0">
         <h1 className="text-2xl font-semibold text-foreground">定时任务</h1>
-        <button
-          type="button"
-          onClick={handleCreate}
-	          className="titlebar-no-drag flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors duration-100 shadow-sm"
-        >
-          <Plus size={14} />
-          <span>新建定时任务</span>
-        </button>
+        {automations.length > 0 && (
+          <button
+            type="button"
+            onClick={handleCreate}
+            className="titlebar-no-drag flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors duration-100 shadow-sm"
+          >
+            <Plus size={14} />
+            <span>新建定时任务</span>
+          </button>
+        )}
       </div>
 
       {/* 列表内容 */}
