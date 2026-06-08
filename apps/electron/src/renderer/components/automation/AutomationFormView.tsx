@@ -21,6 +21,7 @@ import {
   SelectContent,
   SelectItem,
 } from '@/components/ui/select'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import {
   automationFormAtom,
@@ -770,22 +771,28 @@ export function AutomationFormView(): React.ReactElement | null {
                   {live.runHistory.slice(0, 10).map((run, i) => {
                     const hasSessionId = !!run.sessionId
                     return (
-                      <button
-                        key={`${run.runAt}-${i}`}
-                        type="button"
-                        onClick={() => { void handleOpenRunSession(run) }}
-                        disabled={!hasSessionId}
-                        title={hasSessionId ? '查看本次执行的会话' : '这条记录没有可打开的会话'}
-                        className="flex items-center gap-2 px-1.5 py-1 -mx-1.5 rounded-md text-[11px] text-foreground/60 text-left transition-colors enabled:hover:bg-foreground/[0.04] enabled:hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <span className="tabular-nums">{formatTime(run.runAt)}</span>
-                        <span className="shrink-0 text-foreground/45">{formatRunStatus(run.status)}</span>
-                        <span className="text-foreground/35 truncate">
-                          {run.status === 'success' && run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : ''}
-                          {run.status === 'error' ? (run.error ?? '失败') : ''}
-                          {run.status === 'skipped' ? (run.skipReason ?? '跳过') : ''}
-                        </span>
-                      </button>
+                      <Tooltip key={`${run.runAt}-${i}`}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => { void handleOpenRunSession(run) }}
+                            disabled={!hasSessionId}
+                            title={hasSessionId ? undefined : '这条记录没有可打开的会话'}
+                            className="flex items-center gap-2 px-1.5 py-1 -mx-1.5 rounded-md text-[11px] text-foreground/60 text-left transition-colors enabled:hover:bg-foreground/[0.04] enabled:hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <span className="tabular-nums">{formatTime(run.runAt)}</span>
+                            <span className="shrink-0 text-foreground/45">{formatRunStatus(run.status)}</span>
+                            <span className="text-foreground/35 truncate">
+                              {run.status === 'success' && run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : ''}
+                              {run.status === 'error' ? (run.error ?? '失败') : ''}
+                              {run.status === 'skipped' ? (run.skipReason ?? '跳过') : ''}
+                            </span>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="left">
+                          {hasSessionId ? '点击以跳转到该次会话' : '这条记录没有可打开的会话'}
+                        </TooltipContent>
+                      </Tooltip>
                     )
                   })}
                 </div>
