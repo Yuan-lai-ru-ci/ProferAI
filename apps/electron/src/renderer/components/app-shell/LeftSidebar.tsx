@@ -167,23 +167,23 @@ function AutomationSidebarEntry({ count, active, onClick }: AutomationSidebarEnt
       aria-label={`自动任务，${count} 个任务已创建`}
       onClick={onClick}
       className={cn(
-        'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
+        'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag automation-entry',
         active
-          ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
-          : 'text-foreground/60 hover:bg-primary/5 hover:text-foreground',
+          ? 'automation-entry-selected bg-accent-foreground/[0.10] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+          : 'text-foreground/60 hover:bg-accent-foreground/[0.08] hover:text-foreground',
       )}
     >
       <span className="flex items-center gap-3 min-w-0">
-        <span className="flex-shrink-0 w-[18px] h-[18px]">
-          <AlarmClock size={16} className={cn('block', active ? 'text-primary' : 'text-foreground/45')} />
+        <span className={cn('flex-shrink-0 w-[18px] h-[18px] automation-entry-icon', active ? 'text-accent-foreground' : 'text-foreground/45')}>
+          <AlarmClock size={16} className="block" />
         </span>
         <span className="truncate">自动任务</span>
       </span>
       <span
         className={cn(
-          'ml-2 flex h-5 min-w-[22px] flex-shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums',
+          'ml-2 flex h-5 min-w-[22px] flex-shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums automation-entry-badge',
           active
-            ? 'bg-primary/[0.14] text-primary'
+            ? 'bg-accent-foreground/[0.26] text-primary-foreground'
             : 'bg-foreground/[0.045] text-foreground/[0.42] group-hover:text-foreground/65',
         )}
       >
@@ -219,6 +219,10 @@ const PROJECT_SESSION_PREVIEW_LIMIT = 5
 const PROJECT_SESSION_RECENT_WINDOW_MS = 3 * 86_400_000
 /** 点击"显示更多"时每次额外展开的会话数量 */
 const PROJECT_SESSION_EXPAND_STEP = 10
+/** 置顶区最多占用约 6 条会话的高度，超过后在置顶区内部滚动 */
+const PINNED_SESSION_VISIBLE_LIMIT = 6
+const PINNED_SESSION_ROW_HEIGHT_PX = 32
+const PINNED_SESSION_MAX_HEIGHT = PINNED_SESSION_VISIBLE_LIMIT * PINNED_SESSION_ROW_HEIGHT_PX
 
 const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionIndicatorStatus> = new Set([
   'blocked',
@@ -1590,8 +1594,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
       {/* Chat 模式：置顶对话区域 */}
       {mode === 'chat' && pinnedExpanded && pinnedConversations.length > 0 && (
-        <div className="px-3 pt-1 pb-1">
-          <div className="flex flex-col gap-0.5 pl-1 border-l-2 border-primary/20 ml-2">
+        <div className="px-3 pt-1 pb-1 flex-shrink-0">
+          <div
+            className="flex flex-col gap-0.5 pl-1 border-l-2 border-primary/20 ml-2 overflow-y-auto scrollbar-thin titlebar-no-drag"
+            style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
+          >
             {pinnedConversations.map((conv) => (
               <ConversationItem
                 key={`pinned-${conv.id}`}
@@ -1615,29 +1622,36 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       {mode === 'agent' && viewMode === 'active' ? (
         <div className="flex-1 flex flex-col min-h-0">
           {pinnedAgentSessions.length > 0 && (
-            <div className="px-2 pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
-              <div className="px-1.5 pb-1 text-[11px] font-medium text-foreground/40 select-none">
+            <div className="pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
+              <div className="px-3.5 pb-1 text-[11px] font-medium text-foreground/40 select-none">
                 置顶
               </div>
-              <div className="flex flex-col gap-0.5">
-                {pinnedAgentSessions.map((session) => (
-                  <AgentSessionItem
-                    key={`pinned-${session.id}`}
-                    session={session}
-                    active={session.id === activeSessionId}
-                    indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
-                    showPinIcon={false}
-                    leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
-                    workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
-                    relativeTimeNow={relativeTimeNow}
-                    onSelect={handleSelectAgentSession}
-                    onRequestDelete={handleRequestDelete}
-                    onRequestMove={handleRequestMove}
-                    onRename={handleAgentRename}
-                    onTogglePin={handleTogglePinAgent}
-                    onToggleArchive={handleToggleArchiveAgent}
-                  />
-                ))}
+              <div
+                className="overflow-y-auto scrollbar-thin"
+                style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
+              >
+                <div className="px-2">
+                  <div className="ml-4 flex flex-col gap-0.5">
+                    {pinnedAgentSessions.map((session) => (
+                      <AgentSessionItem
+                        key={`pinned-${session.id}`}
+                        session={session}
+                        active={session.id === activeSessionId}
+                        indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                        showPinIcon={false}
+                        leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
+                        workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
+                        relativeTimeNow={relativeTimeNow}
+                        onSelect={handleSelectAgentSession}
+                        onRequestDelete={handleRequestDelete}
+                        onRequestMove={handleRequestMove}
+                        onRename={handleAgentRename}
+                        onTogglePin={handleTogglePinAgent}
+                        onToggleArchive={handleToggleArchiveAgent}
+                      />
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           )}

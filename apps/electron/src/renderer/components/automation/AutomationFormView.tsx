@@ -13,7 +13,6 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { AlertTriangle, ArrowLeft, Bell, Check, Clock, Loader2, Pencil, Play, X } from 'lucide-react'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import {
   Select,
@@ -35,6 +34,7 @@ import { agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import type {
   AutomationFeishuNotificationTarget,
   AutomationNotificationTarget,
@@ -139,6 +139,28 @@ function createFeishuTarget(binding: FeishuChatBinding): AutomationFeishuNotific
     botId: binding.botId,
     chatId: binding.chatId,
   }
+}
+
+function AutomationPromptEmptyGuide(): React.ReactElement {
+  return (
+    <div className="rounded-xl bg-foreground/[0.035] p-4 shadow-inner">
+      <div className="flex flex-col gap-3">
+        <div>
+          <div className="text-[13px] font-semibold text-foreground">推荐：让 Proma Agent 创建</div>
+          <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            在左侧会话里说清目标，并明确表示要求创建定时任务，Proma Agent 会生成任务描述，并补全周期、工作区和模型等配置，手动编辑更适合微调任务描述。
+          </div>
+        </div>
+        <div className="h-px bg-border/50" />
+        <div>
+          <div className="text-[13px] font-medium text-foreground/85">手动编写时，只写任务本身</div>
+          <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            例：检查 Proma 仓库新增 issue，主动回复问答类问题，不清楚的部分整理到工作区目录下的 .context/issue-faq.md 文档；真正的 Bug 或请求罗列后发给我，不要记录任何重复的信息。
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export function AutomationFormView(): React.ReactElement | null {
@@ -453,14 +475,29 @@ export function AutomationFormView(): React.ReactElement | null {
             </div>
           )}
         </div>
-        <div className="flex-1 min-h-0 px-6 pb-6">
-          <Textarea
-            value={form.prompt}
-            onChange={(e) => update({ prompt: e.target.value })}
-            placeholder="用自然语言描述要重复执行的任务，例如：&#10;&#10;查看 Proma 仓库最近 10 分钟的新 issue，总结其中状态有变化的，输出一句话摘要。"
-            className="w-full h-full resize-none text-[15px] leading-relaxed border-none shadow-none focus-visible:ring-0 bg-transparent px-0"
-            autoFocus
-          />
+        <div className="flex-1 min-h-0 px-6 pb-6 flex flex-col gap-3">
+          <div className="flex items-center">
+            <Label htmlFor="automation-prompt" className="text-xs font-medium text-muted-foreground">
+              任务编写
+            </Label>
+          </div>
+          <div className="min-h-0 flex-1">
+            <div className="flex h-full min-h-0 flex-col gap-3">
+              <AutomationPromptEmptyGuide />
+              <div
+                id="automation-prompt"
+                className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-foreground/[0.03] shadow-inner scrollbar-thin"
+              >
+                <MarkdownRichEditor
+                  value={form.prompt}
+                  editing
+                  onChange={(value) => update({ prompt: value })}
+                  onSave={() => undefined}
+                  onCancel={() => undefined}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
