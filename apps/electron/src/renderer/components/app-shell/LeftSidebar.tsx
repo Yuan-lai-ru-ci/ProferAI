@@ -384,6 +384,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
   const automations = useAtomValue(automationsAtom)
+  const setAutomations = useSetAtom(automationsAtom)
   const automationCount = automations.length
   const setSettingsTab = useSetAtom(settingsTabAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
@@ -396,6 +397,9 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
+  /** 待删除项目 ID，非空时显示项目删除确认弹窗 */
+  const [pendingDeleteWorkspaceId, setPendingDeleteWorkspaceId] = React.useState<string | null>(null)
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = React.useState<string | null>(null)
   /** 待迁移会话 ID，非空时显示迁移对话框 */
   const [moveTargetId, setMoveTargetId] = React.useState<string | null>(null)
   /** 置顶区域展开/收起 */
@@ -547,6 +551,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     for (const w of workspaces) map.set(w.id, w.name)
     return map
   }, [workspaces])
+
+  const pendingDeleteWorkspace = React.useMemo(
+    () => workspaces.find((workspace) => workspace.id === pendingDeleteWorkspaceId) ?? null,
+    [pendingDeleteWorkspaceId, workspaces],
+  )
 
   React.useEffect(() => {
     if (!currentWorkspaceSlug || mode !== 'agent') {
@@ -877,6 +886,128 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setCurrentWorkspaceId(workspaceId)
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
   }, [currentWorkspaceId, setCurrentWorkspaceId])
+
+  const canDeleteWorkspace = React.useCallback(
+    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
+    [workspaces.length],
+  )
+
+  /** 请求删除项目（弹出二次确认框） */
+  const handleRequestDeleteWorkspace = React.useCallback((workspaceId: string): void => {
+    setPendingDeleteWorkspaceId(workspaceId)
+  }, [])
+
+  /** 确认删除项目及其绑定资源 */
+  const handleConfirmDeleteWorkspace = React.useCallback(async (): Promise<void> => {
+    const workspaceId = pendingDeleteWorkspaceId
+    const workspace = workspaces.find((item) => item.id === workspaceId)
+    if (!workspaceId || !workspace) return
+
+    if (!canDeleteWorkspace(workspace)) {
+      toast.error(workspace.slug === 'default' ? '默认项目不能删除' : '至少需要保留一个项目')
+      setPendingDeleteWorkspaceId(null)
+      return
+    }
+
+    const deletedSessionIds = new Set(
+      agentSessions
+        .filter((session) => session.workspaceId === workspaceId)
+        .map((session) => session.id),
+    )
+
+    try {
+      setDeletingWorkspaceId(workspaceId)
+
+      await window.electronAPI.deleteAgentWorkspace(workspaceId)
+
+      for (const sessionId of deletedSessionIds) {
+        cleanupMapAtoms(sessionId)
+      }
+
+      setDraftSessionIds((prev: Set<string>) => {
+        let changed = false
+        const next = new Set(prev)
+        for (const sessionId of deletedSessionIds) {
+          if (next.delete(sessionId)) changed = true
+        }
+        return changed ? next : prev
+      })
+
+      setAgentMessagesCache((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        for (const sessionId of deletedSessionIds) {
+          if (next.delete(sessionId)) changed = true
+        }
+        return changed ? next : prev
+      })
+      setAutomations((prev) => prev.filter((automation) => automation.workspaceId !== workspaceId))
+
+      const currentTabs = store.get(tabsAtom)
+      const currentActiveTabId = store.get(activeTabIdAtom)
+      const nextTabs = currentTabs.filter((tab) => (
+        (tab.type !== 'agent' && tab.type !== 'preview') || !deletedSessionIds.has(tab.sessionId)
+      ))
+      const nextActiveTabId = currentActiveTabId && nextTabs.some((tab) => tab.id === currentActiveTabId)
+        ? currentActiveTabId
+        : nextTabs[0]?.id ?? null
+
+      setTabs(nextTabs)
+      setActiveTabId(nextActiveTabId)
+      syncActiveTabSideEffects(nextActiveTabId ? nextTabs.find((tab) => tab.id === nextActiveTabId) ?? null : null)
+
+      const [remainingWorkspaces, sessions] = await Promise.all([
+        window.electronAPI.listAgentWorkspaces(),
+        window.electronAPI.listAgentSessions(),
+      ])
+
+      setWorkspaces(remainingWorkspaces)
+      setAgentSessions(sessions)
+
+      setExpandedExtraCountMap((prev) => {
+        if (!prev.has(workspaceId)) return prev
+        const next = new Map(prev)
+        next.delete(workspaceId)
+        return next
+      })
+
+      if (workspaceId === currentWorkspaceId) {
+        const fallback = remainingWorkspaces.find((item) => item.slug === 'default') ?? remainingWorkspaces[0] ?? null
+        setCurrentWorkspaceId(fallback?.id ?? null)
+        if (fallback) {
+          window.electronAPI.updateSettings({ agentWorkspaceId: fallback.id }).catch(console.error)
+        }
+      }
+
+      toast.success('项目已删除', {
+        description: `已删除「${workspace.name}」及其绑定资源`,
+      })
+    } catch (error) {
+      console.error('[侧边栏] 删除项目失败:', error)
+      const msg = error instanceof Error ? error.message : '删除项目失败'
+      toast.error(msg)
+    } finally {
+      setDeletingWorkspaceId(null)
+      setPendingDeleteWorkspaceId(null)
+    }
+  }, [
+    pendingDeleteWorkspaceId,
+    workspaces,
+    canDeleteWorkspace,
+    agentSessions,
+    cleanupMapAtoms,
+    setDraftSessionIds,
+    setAgentMessagesCache,
+    setAutomations,
+    store,
+    setTabs,
+    setActiveTabId,
+    syncActiveTabSideEffects,
+    setWorkspaces,
+    setAgentSessions,
+    currentWorkspaceId,
+    setCurrentWorkspaceId,
+  ])
 
   /** 展开某个项目时每次额外显示的会话数量 */
   const handleShowMoreSessions = React.useCallback((workspaceId: string): void => {
@@ -1313,6 +1444,43 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     </AlertDialog>
   )
 
+  // 项目删除确认弹窗（会同时删除项目下的会话与工作区资源）
+  const projectDeleteDialog = (
+    <AlertDialog
+      open={pendingDeleteWorkspaceId !== null}
+      onOpenChange={(open) => {
+        if (!open && !deletingWorkspaceId) setPendingDeleteWorkspaceId(null)
+      }}
+    >
+      <AlertDialogContent
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !deletingWorkspaceId) {
+            e.preventDefault()
+            void handleConfirmDeleteWorkspace()
+          }
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>确认删除项目</AlertDialogTitle>
+          <AlertDialogDescription>
+            将删除「{pendingDeleteWorkspace?.name ?? '该项目'}」及其绑定的所有会话、自动任务、MCP、Skills、工作区文件和本地项目目录。附加目录和附加文件只会移除引用，不会删除原始文件。删除后无法恢复。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={!!deletingWorkspaceId}>取消</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={!!deletingWorkspaceId}
+            onClick={handleConfirmDeleteWorkspace}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            {deletingWorkspaceId ? '删除中...' : '删除项目'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
   // 迁移会话对话框（collapsed/expanded 共享）
   const moveDialog = (
     <MoveSessionDialog
@@ -1506,6 +1674,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </div>
 
         {deleteDialog}
+        {projectDeleteDialog}
         {moveDialog}
         <SearchDialog />
       </div>
@@ -1723,6 +1892,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                     setSettingsOpen(true)
                   }}
                   onRenameWorkspace={handleWorkspaceRename}
+                  onRequestDeleteWorkspace={handleRequestDeleteWorkspace}
+                  canDeleteWorkspace={canDeleteWorkspace(group.workspace)}
                   onSelectSession={handleSelectAgentSession}
                   onRequestDelete={handleRequestDelete}
                   onRequestMove={handleRequestMove}
@@ -1888,6 +2059,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       </div>
 
       {deleteDialog}
+      {projectDeleteDialog}
       {moveDialog}
       <SearchDialog />
     </div>
@@ -2497,6 +2669,8 @@ interface AgentProjectGroupItemProps {
   onDragEnd: () => void
   onConfigureProject: (workspaceId: string) => void
   onRenameWorkspace: (workspaceId: string, newName: string) => Promise<void>
+  onRequestDeleteWorkspace: (workspaceId: string) => void
+  canDeleteWorkspace: boolean
   onSelectSession: (id: string, title: string) => void
   onRequestDelete: (id: string) => void
   onRequestMove: (id: string) => void
@@ -2526,6 +2700,8 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   onDragEnd,
   onConfigureProject,
   onRenameWorkspace,
+  onRequestDeleteWorkspace,
+  canDeleteWorkspace,
   onSelectSession,
   onRequestDelete,
   onRequestMove,
@@ -2709,6 +2885,18 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
             >
               <Settings size={14} />
               配置 MCP 与 Skills
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-0.5" />
+            <DropdownMenuItem
+              disabled={!canDeleteWorkspace}
+              className={cn(
+                'text-xs py-1 [&>svg]:size-3.5',
+                canDeleteWorkspace && 'text-destructive focus:text-destructive',
+              )}
+              onSelect={() => onRequestDeleteWorkspace(group.workspace.id)}
+            >
+              <Trash2 size={14} />
+              删除项目
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
