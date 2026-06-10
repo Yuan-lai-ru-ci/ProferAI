@@ -511,17 +511,16 @@ export function AutomationFormView(): React.ReactElement | null {
 
       {/* 右栏：配置 sidebar */}
       <div className="w-[340px] flex-shrink-0 border-l border-border/50 flex flex-col bg-content-area">
-        <div className={cn(
-          "flex items-center justify-between gap-2 px-4 py-4 flex-shrink-0",
-          isWindows && "pr-[140px]"
-        )}>
+        <div className="flex items-center justify-between gap-2 px-4 py-4 flex-shrink-0">
           <span className="text-sm font-semibold text-foreground">配置</span>
-          <button
-            onClick={close}
-            className="titlebar-no-drag p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
-          >
-            <X className="size-4" />
-          </button>
+          {!isWindows && (
+            <button
+              onClick={close}
+              className="titlebar-no-drag p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-5">
