@@ -516,23 +516,14 @@ export function AutomationFormView(): React.ReactElement | null {
           isWindows && "pr-[140px]"
         )}>
           <span className="text-sm font-semibold text-foreground">配置</span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => { void handleRunNow() }}
-              disabled={runningNow || !canPersistDraft(form)}
-              className="titlebar-no-drag h-7 px-2.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 transition-colors flex items-center gap-1.5 shadow-sm"
-            >
-              {runningNow ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-              <span>{runningNow ? '运行中' : '运行一次'}</span>
-            </button>
+          {!isWindows && (
             <button
               onClick={close}
               className="titlebar-no-drag p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
             >
               <X className="size-4" />
             </button>
-          </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-5">
@@ -827,6 +818,18 @@ export function AutomationFormView(): React.ReactElement | null {
               )}
             </div>
           )}
+        </div>
+        {/* 底部运行测试按钮 */}
+        <div className="flex-shrink-0 px-4 py-3 border-t border-border/50 bg-content-area">
+          <button
+            type="button"
+            onClick={() => { void handleRunNow() }}
+            disabled={runningNow || !canPersistDraft(form)}
+            className="titlebar-no-drag w-full h-8 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            {runningNow ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+            <span>{runningNow ? '运行中' : '运行测试'}</span>
+          </button>
         </div>
       </div>
     </div>
