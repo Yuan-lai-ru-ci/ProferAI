@@ -691,6 +691,14 @@ export function applyAgentEvent(
         ...prev,
         retrying: undefined,
         ...finalizeStreamingActivities(prev.toolActivities),
+        ...(event.usage && {
+          inputTokens: event.usage.inputTokens,
+          ...(event.usage.outputTokens != null && { outputTokens: event.usage.outputTokens }),
+          ...(event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
+          ...(event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
+          ...(event.usage.costUsd != null && { costUsd: event.usage.costUsd }),
+          ...(event.usage.contextWindow != null && { contextWindow: event.usage.contextWindow }),
+        }),
       }
 
     case 'run_resumed':
@@ -715,7 +723,9 @@ export function applyAgentEvent(
         ...(event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
         ...(event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
         ...(event.usage.costUsd != null && { costUsd: event.usage.costUsd }),
-        ...(event.usage.contextWindow && { contextWindow: event.usage.contextWindow }),
+        // 流式中 assistant 消息的 usage_update 可能携带推断的 contextWindow，
+        // 若已有 result 消息提供的真实值，则不再覆盖
+        ...(event.usage.contextWindow && !prev.contextWindow && { contextWindow: event.usage.contextWindow }),
       }
 
     case 'compacting':

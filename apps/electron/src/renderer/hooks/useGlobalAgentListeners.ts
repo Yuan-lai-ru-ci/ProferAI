@@ -101,9 +101,10 @@ function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
 // ============================================================================
 
 /**
- * 按模型名推断 contextWindow。SDK 流式过程中不返回此字段，
- * 只有 result 消息的 modelUsage 才带（且部分渠道不返回）。
- * 这里提供一个按模型家族的 fallback，保证进度环永远有分母可用。
+ * 按模型名推断 contextWindow。
+ *
+ * @deprecated 仅作为 fallback 在 SDK 未返回 contextWindow 时启用。
+ * result 消息中的 modelUsage.contextWindow 是权威来源，优先使用。
  */
 function inferContextWindow(model?: string): number | undefined {
   if (!model) return undefined
