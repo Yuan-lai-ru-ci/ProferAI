@@ -113,7 +113,7 @@ import type {
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
-import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges } from './lib/git-diff-service'
+import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerPromaFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
@@ -353,6 +353,21 @@ function getAllowedCandidateBasePaths(options?: FileAccessOptions): string[] | u
 
 function ensurePathAllowed(filePath: string, options?: FileAccessOptions): boolean {
   if (isPathAllowed(filePath, options)) return true
+  console.warn('[IPC] 拒绝越界路径:', filePath)
+  return false
+}
+
+/**
+ * 在 ensurePathAllowed 基础上，额外放行「已授权仓库的 worktree」。
+ *
+ * worktree 常被放在主仓库之外（如 ~/proma-dev/worktrees/xxx），其路径不在任何
+ * 授权根下，会被 ensurePathAllowed 拒绝。但只要它回溯到的主仓库已被授权，就应放行。
+ * 用 git 自身背书（--git-common-dir），避免粗暴跳过安全检查。
+ */
+async function ensurePathAllowedWithWorktree(filePath: string, options?: FileAccessOptions): Promise<boolean> {
+  if (isPathAllowed(filePath, options)) return true
+  const mainRepo = await getMainRepoRoot(filePath)
+  if (mainRepo && isPathAllowed(mainRepo, options)) return true
   console.warn('[IPC] 拒绝越界路径:', filePath)
   return false
 }
@@ -794,7 +809,7 @@ export function registerIpcHandlers(): void {
         return ''
       }
       const access = normalizeFileAccessOptions({ sessionId })
-      if (!ensurePathAllowed(dirPath, access) || (gitRoot && !ensurePathAllowed(gitRoot, access))) return ''
+      if (!(await ensurePathAllowedWithWorktree(dirPath, access)) || (gitRoot && !(await ensurePathAllowedWithWorktree(gitRoot, access)))) return ''
       return getFileDiff(dirPath, filePath, gitRoot)
     }
   )
@@ -809,7 +824,7 @@ export function registerIpcHandlers(): void {
         return ''
       }
       const access = normalizeFileAccessOptions({ sessionId })
-      if (!ensurePathAllowed(dirPath, access) || (gitRoot && !ensurePathAllowed(gitRoot, access))) return ''
+      if (!(await ensurePathAllowedWithWorktree(dirPath, access)) || (gitRoot && !(await ensurePathAllowedWithWorktree(gitRoot, access)))) return ''
       return getUntrackedContent(dirPath, filePath, gitRoot)
     }
   )
@@ -824,7 +839,7 @@ export function registerIpcHandlers(): void {
         return
       }
       const access = normalizeFileAccessOptions({ sessionId })
-      if (!ensurePathAllowed(dirPath, access) || (gitRoot && !ensurePathAllowed(gitRoot, access))) return
+      if (!(await ensurePathAllowedWithWorktree(dirPath, access)) || (gitRoot && !(await ensurePathAllowedWithWorktree(gitRoot, access)))) return
       await revertFile(dirPath, filePath, gitRoot)
     }
   )
@@ -839,7 +854,7 @@ export function registerIpcHandlers(): void {
         return null
       }
       const access = normalizeFileAccessOptions({ sessionId })
-      if (!ensurePathAllowed(dirPath, access) || (gitRoot && !ensurePathAllowed(gitRoot, access))) return null
+      if (!(await ensurePathAllowedWithWorktree(dirPath, access)) || (gitRoot && !(await ensurePathAllowedWithWorktree(gitRoot, access)))) return null
       return getDiffContents(dirPath, filePath, gitRoot, input.baseRef)
     }
   )
@@ -861,7 +876,7 @@ export function registerIpcHandlers(): void {
         return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
       }
       const access = normalizeFileAccessOptions({ sessionId })
-      if (!ensurePathAllowed(worktreePath, access)) {
+      if (!(await ensurePathAllowedWithWorktree(worktreePath, access))) {
         return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
       }
       return getWorktreeChanges(worktreePath, baseBranch)
@@ -2588,7 +2603,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_WORKTREE_REPOS,
     async (_, workspaceSlug: string) => {
-      return getWorktreeRepos(workspaceSlug)
+      return await getWorktreeRepos(workspaceSlug)
     }
   )
 
@@ -2622,7 +2637,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_DIRECTORY,
     async (_, dirPath: string): Promise<FileEntry[]> => {
-      const { readdirSync, statSync } = await import('node:fs')
+      const { existsSync, readdirSync, statSync } = await import('node:fs')
       const { resolve } = await import('node:path')
 
       // 安全校验：路径必须在 agent-workspaces 目录下
@@ -2630,6 +2645,11 @@ export function registerIpcHandlers(): void {
       const workspacesRoot = resolve(getAgentWorkspacesDir())
       if (!safePath.startsWith(workspacesRoot)) {
         throw new Error('访问路径超出 Agent 工作区范围')
+      }
+
+      // 目录可能已被删除（如删除 Agent 会话后面板仍持有旧路径），优雅返回空列表
+      if (!existsSync(safePath)) {
+        return []
       }
 
       const entries: FileEntry[] = []

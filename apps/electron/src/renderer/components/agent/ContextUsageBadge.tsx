@@ -263,13 +263,13 @@ export function ContextUsageBadge({
                   emphasized={isWarning}
                 />
               )}
-              {ageText ? (
-                <DetailRow
-                  label=""
-                  value={`数据${ageText}`}
-                />
-              ) : null}
             </>
+          ) : null}
+
+          {ageText ? (
+            <div className="text-[11px] text-center text-foreground/50 pt-0.5">
+              数据{ageText}
+            </div>
           ) : null}
 
           <div className="h-px bg-border my-0.5" />
