@@ -2637,7 +2637,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_DIRECTORY,
     async (_, dirPath: string): Promise<FileEntry[]> => {
-      const { readdirSync, statSync } = await import('node:fs')
+      const { existsSync, readdirSync, statSync } = await import('node:fs')
       const { resolve } = await import('node:path')
 
       // 安全校验：路径必须在 agent-workspaces 目录下
@@ -2645,6 +2645,11 @@ export function registerIpcHandlers(): void {
       const workspacesRoot = resolve(getAgentWorkspacesDir())
       if (!safePath.startsWith(workspacesRoot)) {
         throw new Error('访问路径超出 Agent 工作区范围')
+      }
+
+      // 目录可能已被删除（如删除 Agent 会话后面板仍持有旧路径），优雅返回空列表
+      if (!existsSync(safePath)) {
+        return []
       }
 
       const entries: FileEntry[] = []
