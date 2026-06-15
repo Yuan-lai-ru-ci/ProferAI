@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/select'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import {
   automationFormAtom,
@@ -666,6 +665,7 @@ export function AutomationFormView(): React.ReactElement | null {
               <X className="size-4" />
             </button>
           )}
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-5">
