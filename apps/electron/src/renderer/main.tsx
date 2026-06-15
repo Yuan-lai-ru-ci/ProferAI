@@ -4,6 +4,10 @@
  * 挂载 React 应用，初始化主题系统。
  */
 
+// 引入 Inter Variable 自托管字体（含 400/500/600/700 等所有字重）
+// 仅引入英文子集 latin，避免拖入西里尔等不必要的字符集增大体积
+import '@fontsource-variable/inter/index.css'
+
 import React, { useEffect, useMemo, useRef } from 'react'
 import ReactDOM from 'react-dom/client'
 import { useSetAtom, useAtomValue, useStore } from 'jotai'
