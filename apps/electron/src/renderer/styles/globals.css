@@ -204,7 +204,7 @@
     --accent: 210 14% 22%;
     --accent-foreground: 210 35% 70%;     /* 高亮态：雾蓝灰偏亮（选区色源） */
     --ring: 210 35% 60%;                  /* focus：略亮于 primary，保持反馈感 */
-    --card: 210 12% 16%;                  /* 卡片浮 +3% */
+    --card: 210 8% 18%;                   /* 卡片：sat 12→8 更中性，亮度 +2 浮起更明显 */
     --card-foreground: 210 14% 92%;
     --input: 210 12% 17%;
     --popover: 210 12% 18%;                /* 弹出层浮 +5% */
@@ -504,10 +504,10 @@
   color: #ffffff !important;
 }
 
-/* 森息夜语：mode-slider 保留上游原色（深森林绿） */
+/* 森息夜语：mode-slider 雾绿灰（饱和度 55→18，逃出 muddy 区） */
 .theme-forest-dark .mode-slider {
-  background: hsl(151 55% 21%) !important;  /* #185337 上游原值 */
-  box-shadow: 0 2px 4px rgba(24, 83, 55, 0.3);
+  background: hsl(150 18% 28%) !important;
+  box-shadow: 0 2px 4px rgba(59, 84, 71, 0.3);
 }
 .theme-forest-dark .mode-btn-selected {
   color: #ffffff !important;
