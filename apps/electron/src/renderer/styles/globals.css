@@ -186,39 +186,42 @@
     --dashed-border-hover: 205 50% 50% / 0.45;
   }
 
-  /* 苍穹暮色 (ocean-dark) */
+  /* 苍穹暮色 (ocean-dark) v3 — "干净的深海玻璃"
+   * 把"色彩个性"从背景搬到 ring/primary：背景饱和度 30-40% → 12-14%，逃出"湿牛仔布"
+   * 泥潭区；primary/ring 提到 90% 饱和 + 62% 亮度，按钮/焦点真正"蓝起来"。
+   */
   .theme-ocean-dark {
-    --background: 210 35% 13%;            /* #182434 背景（侧边栏） */
-    --foreground: 210 20% 92%;            /* #e7ebef 前景文字 */
-    --content-area: 210 40% 8%;           /* #0c141d 内容区域 */
-    --muted: 210 30% 14%;                 /* #19242e 次要背景 */
-    --muted-foreground: 210 15% 55%;      /* #7b8c9d 次要文字 */
-    --border: 210 30% 18%;                /* #202e3c 边框 */
-    --primary: 205 87% 24%;               /* #084672 主色（与 mode-slider 一致） */
-    --primary-foreground: 0 0% 100%;      /* #ffffff 主色前景 */
-    --secondary: 210 30% 16%;             /* #1d2935 二级背景 */
-    --secondary-foreground: 210 20% 90%;  /* #e0e6eb 二级前景 */
-    --accent: 210 40% 22%;                /* #22384f 强调背景 */
-    --accent-foreground: 205 60% 70%;     /* #85bae0 强调文字 */
-    --ring: 205 87% 24%;                  /* #084672 聚焦环（与主色一致） */
-    --card: 210 35% 11%;                  /* #121c26 卡片背景 */
-    --card-foreground: 210 20% 92%;       /* #e7ebef 卡片前景 */
-    --input: 210 30% 14%;                 /* #19242e 输入框背景 */
-    --popover: 210 35% 13%;               /* #16212d 弹出层 */
-    --popover-foreground: 210 20% 92%;    /* #e7ebef 弹出前景 */
-    --dialog: 210 25% 16%;                /* #1f2933 弹窗背景 */
-    --dialog-foreground: 210 20% 92%;     /* #e7ebef 弹窗前景 */
-    --destructive: 0 55% 45%;              /* 中饱和度红 */
-    --destructive-foreground: 0 0% 98%;   /* #fafafa 危险前景 */
+    --background: 210 12% 13%;            /* 侧边栏：深海玻璃，色相微存 */
+    --foreground: 210 14% 92%;
+    --content-area: 210 14% 9%;           /* 内容区：最深，专注 */
+    --muted: 210 12% 17%;
+    --muted-foreground: 210 10% 60%;
+    --border: 210 14% 24%;                /* 与背景拉开 11% 亮度，hairline 后可见 */
+    --primary: 210 90% 62%;               /* 明亮天空蓝（替代深海军） */
+    --primary-foreground: 210 18% 12%;    /* 深色文字配亮蓝按钮 */
+    --secondary: 210 12% 17%;
+    --secondary-foreground: 210 14% 92%;
+    --accent: 210 14% 22%;
+    --accent-foreground: 205 90% 75%;     /* 高亮态：饱和天空蓝（选区色源） */
+    --ring: 210 95% 65%;                  /* focus 反馈：真正的亮蓝"一闪" */
+    --card: 210 12% 16%;                  /* 卡片浮 +3% */
+    --card-foreground: 210 14% 92%;
+    --input: 210 12% 17%;
+    --popover: 210 12% 18%;                /* 弹出层浮 +5% */
+    --popover-foreground: 210 14% 92%;
+    --dialog: 210 12% 21%;                 /* 弹窗最高 +8% */
+    --dialog-foreground: 210 14% 92%;
+    --destructive: 0 55% 50%;
+    --destructive-foreground: 0 0% 98%;
     --stop-hover-bg: hsl(0, 35%, 18%);
-    --tooltip: 210 40% 22%;               /* #22384f Tooltip */
-    --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
-    --tooltip-muted: 210 20% 70%;         /* #a3b3c2 Tooltip弱 */
-    /* 代码块背景 - 深海蓝 */
-    --code-bg: 210 50% 6%;                /* #081219 更深的海蓝 */
+    --tooltip: 210 14% 24%;
+    --tooltip-foreground: 0 0% 98%;
+    --tooltip-muted: 210 14% 72%;
+    /* 代码块背景 - 深海蓝调（保留饱和） */
+    --code-bg: 210 30% 8%;
     /* 虚线边框色 */
-    --dashed-border: 205 60% 55% / 0.35;
-    --dashed-border-hover: 205 60% 55% / 0.50;
+    --dashed-border: 210 90% 62% / 0.35;
+    --dashed-border-hover: 210 90% 62% / 0.55;
   }
 
   /* ===== 森系色系 ===== */
@@ -258,39 +261,42 @@
     --dashed-border-hover: 150 35% 38% / 0.50;
   }
 
-  /* 森息夜语（深色） */
+  /* 森息夜语（深色）v3 — "雾林清晨"
+   * 同样的"调灰"策略：背景饱和度 14-20% → 8-12%，逃出"发霉薄荷"区；
+   * primary/ring 提到 60-70% 饱和 + 50-60% 亮度，按钮像"森林里的萤火虫"。
+   */
   .theme-forest-dark {
-    --background: 147 14% 15%;            /* #212c26 背景（侧边栏） */
-    --foreground: 140 10% 90%;            /* #e3e8e5 前景文字 */
-    --content-area: 150 20% 8%;           /* #101814 内容区域 */
-    --muted: 150 18% 13%;                 /* #1b2721 次要背景 */
-    --muted-foreground: 140 10% 55%;      /* #819888 次要文字 */
-    --border: 150 18% 17%;                /* #24332b 边框 */
-    --primary: 151 55% 21%;               /* #185337 主色 */
-    --primary-foreground: 0 0% 100%;      /* #ffffff 主色前景 */
-    --secondary: 150 16% 15%;             /* #202c26 二级背景 */
-    --secondary-foreground: 140 10% 88%;  /* #dde3df 二级前景 */
-    --accent: 155 25% 18%;                /* #223930 强调背景 */
-    --accent-foreground: 150 30% 65%;     /* #8bc1a6 强调文字 */
-    --ring: 150 35% 42%;                  /* #46916b 聚焦环 */
-    --card: 150 18% 11%;                  /* #17211c 卡片背景 */
-    --card-foreground: 140 10% 90%;       /* #e3e8e5 卡片前景 */
-    --input: 150 18% 13%;                 /* #1b2721 输入框背景 */
-    --popover: 150 18% 13%;               /* #1b2721 弹出层 */
-    --popover-foreground: 140 10% 90%;    /* #e3e8e5 弹出前景 */
-    --dialog: 150 15% 15%;                /* #212c26 弹窗背景 */
-    --dialog-foreground: 140 10% 90%;     /* #e3e8e5 弹窗前景 */
-    --destructive: 0 55% 45%;              /* 中饱和度红 */
-    --destructive-foreground: 0 0% 98%;   /* #fafafa 危险前景 */
+    --background: 150 8% 14%;             /* 侧边栏：近中性灰 + 微微森绿余韵 */
+    --foreground: 140 10% 92%;
+    --content-area: 150 10% 9%;           /* 内容区：深林泥土 */
+    --muted: 150 10% 17%;
+    --muted-foreground: 145 8% 60%;
+    --border: 150 12% 25%;
+    --primary: 145 60% 50%;               /* 嫩绿萤火（替代腐烂水草） */
+    --primary-foreground: 150 25% 10%;    /* 深绿黑文字 */
+    --secondary: 150 10% 17%;
+    --secondary-foreground: 140 10% 92%;
+    --accent: 150 12% 22%;
+    --accent-foreground: 145 70% 72%;     /* 高亮态：明亮森绿 */
+    --ring: 145 70% 60%;                   /* focus：森林里的"一缕光" */
+    --card: 150 10% 17%;
+    --card-foreground: 140 10% 92%;
+    --input: 150 10% 17%;
+    --popover: 150 10% 19%;
+    --popover-foreground: 140 10% 92%;
+    --dialog: 150 10% 22%;
+    --dialog-foreground: 140 10% 92%;
+    --destructive: 0 55% 50%;
+    --destructive-foreground: 0 0% 98%;
     --stop-hover-bg: hsl(0, 35%, 18%);
-    --tooltip: 150 25% 20%;               /* #264033 Tooltip */
-    --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
-    --tooltip-muted: 140 10% 65%;         /* #9dafa3 Tooltip弱 */
-    /* 代码块背景 - 深绿调 */
-    --code-bg: 150 25% 8%;                /* #0f1a14 深林绿 */
+    --tooltip: 150 14% 24%;
+    --tooltip-foreground: 0 0% 98%;
+    --tooltip-muted: 140 10% 70%;
+    /* 代码块背景 - 深森绿 */
+    --code-bg: 150 20% 8%;
     /* 虚线边框色 */
-    --dashed-border: 150 35% 45% / 0.35;
-    --dashed-border-hover: 150 35% 45% / 0.50;
+    --dashed-border: 145 60% 50% / 0.35;
+    --dashed-border-hover: 145 60% 50% / 0.55;
   }
 
   /* ===== 赛博朋克色系 ===== */
@@ -344,7 +350,7 @@
     /* 次要色 - 淡紫灰调 */
     --muted: 260 6% 16%;                  /* #272429 次要背景 */
     --muted-foreground: 30 8% 60%;        /* #9f9690 次要文字 */
-    --border: 260 8% 20%;                 /* #322e36 边框 */
+    --border: 260 8% 26%;                 /* 26% 与 12% 背景拉开 14%，hairline 后可见 */
     /* 交互色 - 莫兰迪粉 */
     --primary: 15 25% 68%;                /* #c9a89e 淡杏粉主色 */
     --primary-foreground: 270 8% 9%;      /* #161418 主色前景 */
@@ -352,7 +358,7 @@
     --secondary-foreground: 30 10% 88%;   /* #e5e1dc 二级前景 */
     --accent: 200 12% 22%;                /* #303740 淡蓝灰强调背景 */
     --accent-foreground: 200 25% 75%;     /* #a5c4d1 淡天蓝强调文字 */
-    --ring: 15 25% 68%;                   /* #c9a89e 聚焦环 */
+    --ring: 15 45% 72%;                   /* 焦点：稍鲜活的莫兰迪粉（保留克制感） */
     /* 组件色 */
     --card: 260 6% 13%;                   /* #201e22 卡片背景 */
     --card-foreground: 30 10% 90%;        /* #e9e6e3 卡片前景 */
@@ -464,9 +470,9 @@
 
 /* 特殊主题外层缝隙背景色覆盖 */
 .theme-ocean-light .shell-bg { background: linear-gradient(135deg, hsl(205 35% 88%) 0%, hsl(205 30% 91%) 100%); }
-.theme-ocean-dark .shell-bg  { background: linear-gradient(135deg, hsl(210 45% 5%) 0%, hsl(210 35% 7%) 100%); }
+.theme-ocean-dark .shell-bg  { background: linear-gradient(135deg, hsl(210 14% 5%) 0%, hsl(210 12% 7%) 100%); }
 .theme-forest-light .shell-bg { background: linear-gradient(135deg, hsl(140 15% 90%) 0%, hsl(140 15% 92%) 100%); }
-.theme-forest-dark .shell-bg { background: linear-gradient(135deg, hsl(150 20% 5%) 0%, hsl(150 18% 7%) 100%); }
+.theme-forest-dark .shell-bg { background: linear-gradient(135deg, hsl(150 10% 5%) 0%, hsl(150 10% 7%) 100%); }
 .theme-slate-light .shell-bg { background: linear-gradient(135deg, hsl(40 6% 84%) 0%, hsl(40 6% 86%) 100%); }
 .theme-slate-dark .shell-bg  { background: linear-gradient(135deg, hsl(270 10% 7%) 0%, hsl(260 8% 9%) 100%); }
 
@@ -480,13 +486,13 @@
   color: #ffffff !important;
 }
 
-/* 苍穹暮色：深蓝背景滑块 + 白色文字 */
+/* 苍穹暮色：亮蓝滑块（v3 调灰后主色变亮） + 深色文字 */
 .theme-ocean-dark .mode-slider {
-  background: #084672 !important;  /* 深蓝主色 */
-  box-shadow: 0 2px 4px rgba(8, 70, 114, 0.4);
+  background: hsl(210 90% 62%) !important;  /* 新主色 - 亮蓝 */
+  box-shadow: 0 2px 4px rgba(78, 158, 251, 0.4);
 }
 .theme-ocean-dark .mode-btn-selected {
-  color: #ffffff !important;
+  color: hsl(210 18% 12%) !important;       /* 深色文字配亮蓝 */
 }
 
 /* 森息晨光主题 */
@@ -498,13 +504,13 @@
   color: #ffffff !important;
 }
 
-/* 森息夜语主题 */
+/* 森息夜语：亮绿滑块（v3 调灰后主色更萤火） + 深色文字 */
 .theme-forest-dark .mode-slider {
-  background: hsl(151 55% 21%) !important;  /* #185337 主色 */
-  box-shadow: 0 2px 4px rgba(24, 83, 55, 0.3);
+  background: hsl(145 60% 50%) !important;  /* 新主色 - 嫩绿萤火 */
+  box-shadow: 0 2px 4px rgba(51, 204, 102, 0.3);
 }
 .theme-forest-dark .mode-btn-selected {
-  color: #ffffff !important;
+  color: hsl(150 25% 10%) !important;       /* 深绿黑文字 */
 }
 
 /* 云朵舞者主题 */
@@ -530,12 +536,12 @@
   color: inherit !important;
 }
 
-/* 苍穹暮色：深蓝背景 + 亮蓝文字 */
+/* 苍穹暮色：低饱和深蓝背景 + 亮蓝文字（v3 调灰对齐） */
 .theme-ocean-dark .session-item-selected.session-item-selected,
 .theme-ocean-dark .workspace-item-selected.workspace-item-selected,
 .theme-ocean-dark .tab-item-selected.tab-item-selected {
-  background-color: hsl(210 40% 18%) !important;  /* 深蓝色背景 */
-  color: hsl(205 70% 75%) !important;       /* 亮蓝色文字 */
+  background-color: hsl(210 14% 22%) !important;  /* 低饱和背景，不抢戏 */
+  color: hsl(205 90% 75%) !important;             /* 亮天蓝文字 */
 }
 .theme-ocean-dark .session-item-selected *,
 .theme-ocean-dark .workspace-item-selected *,
@@ -545,14 +551,14 @@
 
 /* 苍穹暮色：自动化入口选中状态 */
 .theme-ocean-dark .automation-entry-selected.automation-entry-selected {
-  background-color: hsl(210 40% 18%) !important;
+  background-color: hsl(210 14% 22%) !important;
 }
 .theme-ocean-dark .automation-entry-selected .automation-entry-icon {
-  color: hsl(205 70% 75%) !important;
+  color: hsl(205 90% 75%) !important;
 }
 .theme-ocean-dark .automation-entry-selected .automation-entry-badge {
-  background-color: hsl(205 70% 75% / 0.20) !important;
-  color: hsl(205 70% 75%) !important;
+  background-color: hsl(205 90% 75% / 0.20) !important;
+  color: hsl(205 90% 75%) !important;
 }
 
 /* ===== 森系主题：会话/工作区选中状态 ===== */
@@ -569,12 +575,12 @@
   color: inherit !important;
 }
 
-/* 森息夜语：深绿背景 + 亮绿文字 */
+/* 森息夜语：低饱和深绿背景 + 亮绿文字（v3 调灰对齐） */
 .theme-forest-dark .session-item-selected.session-item-selected,
 .theme-forest-dark .workspace-item-selected.workspace-item-selected,
 .theme-forest-dark .tab-item-selected.tab-item-selected {
-  background-color: hsl(150 25% 18%) !important;  /* 深绿色背景 */
-  color: hsl(150 40% 70%) !important;       /* 亮绿色文字 */
+  background-color: hsl(150 12% 22%) !important;
+  color: hsl(145 70% 72%) !important;
 }
 .theme-forest-dark .session-item-selected *,
 .theme-forest-dark .workspace-item-selected *,
@@ -584,14 +590,14 @@
 
 /* 森息夜语：自动化入口选中状态 */
 .theme-forest-dark .automation-entry-selected.automation-entry-selected {
-  background-color: hsl(150 25% 18%) !important;
+  background-color: hsl(150 12% 22%) !important;
 }
 .theme-forest-dark .automation-entry-selected .automation-entry-icon {
-  color: hsl(150 40% 70%) !important;
+  color: hsl(145 70% 72%) !important;
 }
 .theme-forest-dark .automation-entry-selected .automation-entry-badge {
-  background-color: hsl(150 40% 70% / 0.20) !important;
-  color: hsl(150 40% 70%) !important;
+  background-color: hsl(145 70% 72% / 0.20) !important;
+  color: hsl(145 70% 72%) !important;
 }
 
 /* ===== 莫兰迪主题：模式切换器选中状态 ===== */
@@ -681,12 +687,12 @@
 
 /* 苍穹暮色：底部浅色阴影勾勒轮廓 */
 .theme-ocean-dark .tabbar-bg {
-  box-shadow: inset 0 -1px 0 0 hsl(210 30% 20% / 0.6);
+  box-shadow: inset 0 -1px 0 0 hsl(210 14% 24% / 0.6);
 }
 
 /* 森息夜语：底部浅色阴影勾勒轮廓 */
 .theme-forest-dark .tabbar-bg {
-  box-shadow: inset 0 -1px 0 0 hsl(150 20% 18% / 0.6);
+  box-shadow: inset 0 -1px 0 0 hsl(150 12% 22% / 0.6);
 }
 
 /* 莫兰迪夜：底部浅色阴影勾勒轮廓 */
