@@ -486,13 +486,13 @@
   color: #ffffff !important;
 }
 
-/* 苍穹暮色：亮蓝滑块（v3 调灰后主色变亮） + 深色文字 */
+/* 苍穹暮色：mode-slider 调灰 — 不再用饱和度 90% 的亮蓝，改为低饱和的"雾蓝" */
 .theme-ocean-dark .mode-slider {
-  background: hsl(210 90% 62%) !important;  /* 新主色 - 亮蓝 */
-  box-shadow: 0 2px 4px rgba(78, 158, 251, 0.4);
+  background: hsl(210 28% 38%) !important;  /* 雾蓝灰，沉静 */
+  box-shadow: 0 2px 4px rgba(64, 88, 116, 0.35);
 }
 .theme-ocean-dark .mode-btn-selected {
-  color: hsl(210 18% 12%) !important;       /* 深色文字配亮蓝 */
+  color: #ffffff !important;
 }
 
 /* 森息晨光主题 */
@@ -504,13 +504,13 @@
   color: #ffffff !important;
 }
 
-/* 森息夜语：亮绿滑块（v3 调灰后主色更萤火） + 深色文字 */
+/* 森息夜语：mode-slider 保留上游原色（深森林绿） */
 .theme-forest-dark .mode-slider {
-  background: hsl(145 60% 50%) !important;  /* 新主色 - 嫩绿萤火 */
-  box-shadow: 0 2px 4px rgba(51, 204, 102, 0.3);
+  background: hsl(151 55% 21%) !important;  /* #185337 上游原值 */
+  box-shadow: 0 2px 4px rgba(24, 83, 55, 0.3);
 }
 .theme-forest-dark .mode-btn-selected {
-  color: hsl(150 25% 10%) !important;       /* 深绿黑文字 */
+  color: #ffffff !important;
 }
 
 /* 云朵舞者主题 */
