@@ -108,7 +108,7 @@ const SPECIAL_STYLES: readonly SpecialStyle[] = [
   },
   {
     id: 'ocean-dark',
-    name: '苍穹暮色',
+    name: '远山暮霭',
     variant: 'dark',
     image: themeOceanDark,
   },
