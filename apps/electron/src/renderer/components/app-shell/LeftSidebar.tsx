@@ -1521,7 +1521,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 type="button"
                 aria-label={mode === 'agent' ? '新建 Agent 会话' : '新建 Chat 对话'}
                 onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
-                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/70 bg-primary/5 hover:bg-primary/10 hover:text-foreground transition-[background-color,border-color,color] duration-150 titlebar-no-drag border border-border/60 hover:border-border"
               >
                 <Plus size={16} />
               </button>
@@ -1537,7 +1537,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                 type="button"
                 aria-label="搜索"
                 onClick={() => setSearchDialogOpen(true)}
-                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/45 bg-primary/5 hover:bg-primary/10 hover:text-foreground/70 transition-colors titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+                className="size-10 flex items-center justify-center rounded-[12px] text-foreground/45 bg-primary/5 hover:bg-primary/10 hover:text-foreground/70 transition-[background-color,border-color,color] duration-150 titlebar-no-drag border border-border/60 hover:border-border"
               >
                 <Search size={16} />
               </button>
@@ -1663,16 +1663,19 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       <div className="px-3 pt-2 flex items-center gap-1.5">
         <button
           onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
-          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-[10px] text-[13px] font-medium text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors duration-100 titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-[10px] text-[13px] font-medium text-foreground/70 bg-primary/5 hover:bg-primary/10 hover:text-foreground transition-[background-color,border-color,color] duration-150 titlebar-no-drag border border-border/60 hover:border-border"
         >
           <Plus size={14} />
           <span>{mode === 'agent' ? '新会话' : '新对话'}</span>
+          <span className="ml-auto text-[11px] text-foreground/40 font-mono leading-none">
+            {getAcceleratorDisplay(getActiveAccelerator('new-session'))}
+          </span>
         </button>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               onClick={() => setSearchDialogOpen(true)}
-              className="flex-shrink-0 size-[36px] flex items-center justify-center rounded-[10px] text-foreground/40 bg-primary/5 hover:bg-primary/10 hover:text-foreground/60 transition-colors duration-100 titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
+              className="flex-shrink-0 size-[36px] flex items-center justify-center rounded-[10px] text-foreground/40 bg-primary/5 hover:bg-primary/10 hover:text-foreground/60 transition-[background-color,border-color,color] duration-150 titlebar-no-drag border border-border/60 hover:border-border"
             >
               <Search size={14} />
             </button>
