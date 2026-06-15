@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -35,8 +35,8 @@ import {
   fileBrowserAutoRevealAtom,
   agentSelectedWorktreeAtom,
 } from '@/atoms/agent-atoms'
-import { previewPanelOpenMapAtom, previewFileMapAtom, type PreviewFile } from '@/atoms/preview-atoms'
-import { activeTabIdAtom, getPreviewTabTitle, openTab, tabsAtom } from '@/atoms/tab-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
+import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@/lib/platform'
 import type { FileEntry, AgentPendingFile } from '@proma/shared'
 
@@ -70,39 +70,20 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // Tab 系统
   const previewFileMap = useAtomValue(previewFileMapAtom)
   const selectedFilePath = previewFileMap.get(sessionId)?.filePath
-  const store = useStore()
 
-  // 预览面板 atoms
-  const setPreviewFileMap = useSetAtom(previewFileMapAtom)
-  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
+  const openPreview = useOpenPreview()
 
   // 用 ref 存 basePaths 相关值，避免声明顺序问题
   const basePathsRef = React.useRef<string[]>([])
 
-  const openPreviewTabForFile = React.useCallback((file: PreviewFile) => {
-    setPreviewFileMap((prev) => {
-      const m = new Map(prev)
-      m.set(sessionId, file)
-      return m
-    })
-    setPreviewOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, false); return m })
-    const result = openTab(store.get(tabsAtom), {
-      type: 'preview',
-      sessionId,
-      title: getPreviewTabTitle(file.filePath),
-    })
-    store.set(tabsAtom, result.tabs)
-    store.set(activeTabIdAtom, result.activeTabId)
-  }, [sessionId, setPreviewFileMap, setPreviewOpenMap, store])
-
   const handleFilePreview = React.useCallback((filePath: string) => {
     const bp = basePathsRef.current
-    openPreviewTabForFile({
+    openPreview(sessionId, {
       filePath,
       previewOnly: true,
       basePaths: bp.length > 0 ? bp : undefined,
     })
-  }, [openPreviewTabForFile])
+  }, [sessionId, openPreview])
 
   // Worktree 选择状态
   const [selectedWorktreeMap, setSelectedWorktreeMap] = useAtom(agentSelectedWorktreeAtom)
@@ -120,13 +101,13 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   }, [sessionId, setSelectedWorktreeMap])
 
   const handleDiffFileClick = React.useCallback((filePath: string, _isUntracked: boolean, gitRoot?: string) => {
-    openPreviewTabForFile({
+    openPreview(sessionId, {
       filePath,
       dirPath: sessionPath || undefined,
       gitRoot,
       baseRef: selectedWorktreePath ? 'origin/main' : undefined,
     })
-  }, [openPreviewTabForFile, sessionPath, selectedWorktreePath])
+  }, [openPreview, sessionId, sessionPath, selectedWorktreePath])
 
   // 动画标志：isOpen 变化时启用过渡动画，切换会话时即时显示
   const prevIsOpenRef = React.useRef(isOpen)
