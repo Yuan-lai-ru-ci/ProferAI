@@ -32,14 +32,14 @@
 }
 
 /* 暗色特殊主题：--primary 太暗，改用 --accent-foreground（明亮的强调文字色）
- * ocean-dark / forest-dark：把不透明度提到 55%，且不再叠加文字色，确保暗背景下肉眼可辨；
- * slate-dark（莫兰迪夜）：保持柔和 35%（莫兰迪粉本来就柔和）。
+ * 远山暮霭 / 森息夜语：把不透明度提到 75%（v3 调灰后 accent-foreground 本身就柔，
+ * 必须靠 opacity 把对比拉回来才看得清）；slate-dark（莫兰迪夜）保持柔和。
  */
 .theme-ocean-dark ::selection,
 .theme-ocean-dark ::-moz-selection,
 .theme-forest-dark ::selection,
 .theme-forest-dark ::-moz-selection {
-  background-color: hsl(var(--accent-foreground) / 0.55);
+  background-color: hsl(var(--accent-foreground) / 0.75);
   color: hsl(var(--background));
 }
 
@@ -48,10 +48,10 @@
   background-color: hsl(var(--accent-foreground) / 0.4);
 }
 
-/* 云朵舞者（slate-light）：--primary 是淡杏粉，亮背景下 25% 看不清，提到 42% */
+/* 云朵舞者（slate-light）：--primary 是淡杏粉，亮背景下需要更高不透明度才看得见 */
 .theme-slate-light ::selection,
 .theme-slate-light ::-moz-selection {
-  background-color: hsl(var(--primary) / 0.42);
+  background-color: hsl(var(--primary) / 0.6);
 }
 
 @layer base {
@@ -186,7 +186,7 @@
     --dashed-border-hover: 205 50% 50% / 0.45;
   }
 
-  /* 苍穹暮色 (ocean-dark) v3 — "干净的深海玻璃"
+  /* 远山暮霭 (ocean-dark) v3 — "干净的深海玻璃"
    * 把"色彩个性"从背景搬到 ring/primary：背景饱和度 30-40% → 12-14%，逃出"湿牛仔布"
    * 泥潭区；primary/ring 提到 90% 饱和 + 62% 亮度，按钮/焦点真正"蓝起来"。
    */
@@ -486,7 +486,7 @@
   color: #ffffff !important;
 }
 
-/* 苍穹暮色：mode-slider 调灰 — 不再用饱和度 90% 的亮蓝，改为低饱和的"雾蓝" */
+/* 远山暮霭：mode-slider 调灰 — 不再用饱和度 90% 的亮蓝，改为低饱和的"雾蓝" */
 .theme-ocean-dark .mode-slider {
   background: hsl(210 28% 38%) !important;  /* 雾蓝灰，沉静 */
   box-shadow: 0 2px 4px rgba(64, 88, 116, 0.35);
@@ -536,7 +536,7 @@
   color: inherit !important;
 }
 
-/* 苍穹暮色：低饱和深蓝背景 + 亮蓝文字（v3 调灰对齐） */
+/* 远山暮霭：低饱和深蓝背景 + 亮蓝文字（v3 调灰对齐） */
 .theme-ocean-dark .session-item-selected.session-item-selected,
 .theme-ocean-dark .workspace-item-selected.workspace-item-selected,
 .theme-ocean-dark .tab-item-selected.tab-item-selected {
@@ -549,7 +549,7 @@
   color: inherit !important;
 }
 
-/* 苍穹暮色：自动化入口选中状态 */
+/* 远山暮霭：自动化入口选中状态 */
 .theme-ocean-dark .automation-entry-selected.automation-entry-selected {
   background-color: hsl(210 14% 22%) !important;
 }
@@ -658,7 +658,7 @@
 .theme-ocean-light .workspace-badge {
   color: hsl(205 50% 25%);
 }
-/* 苍穹暮色 */
+/* 远山暮霭 */
 .theme-ocean-dark .workspace-badge {
   color: hsl(210 35% 70%);
 }
@@ -685,7 +685,7 @@
   background-color: hsl(var(--muted) / 0.5);
 }
 
-/* 苍穹暮色：底部浅色阴影勾勒轮廓 */
+/* 远山暮霭：底部浅色阴影勾勒轮廓 */
 .theme-ocean-dark .tabbar-bg {
   box-shadow: inset 0 -1px 0 0 hsl(210 14% 24% / 0.6);
 }
@@ -728,7 +728,7 @@
 }
 
 /* ===== 深色主题：代码块标题栏 ===== */
-/* 苍穹暮色: RGB 26 34 43 */
+/* 远山暮霭: RGB 26 34 43 */
 .theme-ocean-dark .code-block-wrapper > div:first-child {
   background: rgb(26, 34, 43) !important;
 }
@@ -964,7 +964,7 @@
   background-color: hsl(205 50% 50% / 0.40) !important;
 }
 
-/* 苍穹暮色 ocean-dark */
+/* 远山暮霭 ocean-dark */
 .theme-ocean-dark .scroll-progress-thumb {
   background-color: hsl(210 30% 50% / 0.20);
 }
