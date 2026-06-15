@@ -1667,9 +1667,6 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         >
           <Plus size={14} />
           <span>{mode === 'agent' ? '新会话' : '新对话'}</span>
-          <span className="ml-auto text-[11px] text-foreground/40 font-mono leading-none">
-            {getAcceleratorDisplay(getActiveAccelerator('new-session'))}
-          </span>
         </button>
         <Tooltip>
           <TooltipTrigger asChild>
