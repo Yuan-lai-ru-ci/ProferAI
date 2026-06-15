@@ -1,9 +1,9 @@
 /**
  * 上下文占用率计算工具 — 主进程与渲染进程共用的纯函数。
  *
- * `usedTokens` 通常对应 SDK 在 `usage.input_tokens` 中返回的值
- * （已经包含 cache_read_input_tokens 和 cache_creation_input_tokens 部分），
- * 由 SDK 在 result 或 assistant message 的 usage 字段中提供。
+ * `usedTokens` 是"已占用上下文"的 token 总量，调用方需自行按
+ * input_tokens + cache_read_input_tokens + cache_creation_input_tokens 聚合后传入
+ * （SDK 的 usage 中这三者是分开计数的，input_tokens 不含 cache 部分）。
  */
 
 /**
