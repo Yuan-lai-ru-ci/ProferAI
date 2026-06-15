@@ -197,13 +197,13 @@
     --muted: 210 12% 17%;
     --muted-foreground: 210 10% 60%;
     --border: 210 14% 24%;                /* 与背景拉开 11% 亮度，hairline 后可见 */
-    --primary: 210 90% 62%;               /* 明亮天空蓝（替代深海军） */
-    --primary-foreground: 210 18% 12%;    /* 深色文字配亮蓝按钮 */
+    --primary: 210 28% 48%;               /* 雾蓝灰主色，对齐 mode-slider 灰度 */
+    --primary-foreground: 0 0% 100%;      /* 白字配中性灰蓝 */
     --secondary: 210 12% 17%;
     --secondary-foreground: 210 14% 92%;
     --accent: 210 14% 22%;
-    --accent-foreground: 205 90% 75%;     /* 高亮态：饱和天空蓝（选区色源） */
-    --ring: 210 95% 65%;                  /* focus 反馈：真正的亮蓝"一闪" */
+    --accent-foreground: 210 35% 70%;     /* 高亮态：雾蓝灰偏亮（选区色源） */
+    --ring: 210 35% 60%;                  /* focus：略亮于 primary，保持反馈感 */
     --card: 210 12% 16%;                  /* 卡片浮 +3% */
     --card-foreground: 210 14% 92%;
     --input: 210 12% 17%;
@@ -220,8 +220,8 @@
     /* 代码块背景 - 深海蓝调（保留饱和） */
     --code-bg: 210 30% 8%;
     /* 虚线边框色 */
-    --dashed-border: 210 90% 62% / 0.35;
-    --dashed-border-hover: 210 90% 62% / 0.55;
+    --dashed-border: 210 28% 48% / 0.35;
+    --dashed-border-hover: 210 28% 48% / 0.55;
   }
 
   /* ===== 森系色系 ===== */
@@ -272,13 +272,13 @@
     --muted: 150 10% 17%;
     --muted-foreground: 145 8% 60%;
     --border: 150 12% 25%;
-    --primary: 145 60% 50%;               /* 嫩绿萤火（替代腐烂水草） */
-    --primary-foreground: 150 25% 10%;    /* 深绿黑文字 */
+    --primary: 145 25% 42%;               /* 雾绿灰主色，沉静的森林背影 */
+    --primary-foreground: 0 0% 100%;      /* 白字配中性灰绿 */
     --secondary: 150 10% 17%;
     --secondary-foreground: 140 10% 92%;
     --accent: 150 12% 22%;
-    --accent-foreground: 145 70% 72%;     /* 高亮态：明亮森绿 */
-    --ring: 145 70% 60%;                   /* focus：森林里的"一缕光" */
+    --accent-foreground: 145 35% 65%;     /* 高亮态：雾绿灰偏亮 */
+    --ring: 145 35% 55%;                   /* focus：略亮于 primary */
     --card: 150 10% 17%;
     --card-foreground: 140 10% 92%;
     --input: 150 10% 17%;
@@ -295,8 +295,8 @@
     /* 代码块背景 - 深森绿 */
     --code-bg: 150 20% 8%;
     /* 虚线边框色 */
-    --dashed-border: 145 60% 50% / 0.35;
-    --dashed-border-hover: 145 60% 50% / 0.55;
+    --dashed-border: 145 25% 42% / 0.35;
+    --dashed-border-hover: 145 25% 42% / 0.55;
   }
 
   /* ===== 赛博朋克色系 ===== */
@@ -541,7 +541,7 @@
 .theme-ocean-dark .workspace-item-selected.workspace-item-selected,
 .theme-ocean-dark .tab-item-selected.tab-item-selected {
   background-color: hsl(210 14% 22%) !important;  /* 低饱和背景，不抢戏 */
-  color: hsl(205 90% 75%) !important;             /* 亮天蓝文字 */
+  color: hsl(210 35% 70%) !important;             /* 雾蓝灰文字 */
 }
 .theme-ocean-dark .session-item-selected *,
 .theme-ocean-dark .workspace-item-selected *,
@@ -554,11 +554,11 @@
   background-color: hsl(210 14% 22%) !important;
 }
 .theme-ocean-dark .automation-entry-selected .automation-entry-icon {
-  color: hsl(205 90% 75%) !important;
+  color: hsl(210 35% 70%) !important;
 }
 .theme-ocean-dark .automation-entry-selected .automation-entry-badge {
-  background-color: hsl(205 90% 75% / 0.20) !important;
-  color: hsl(205 90% 75%) !important;
+  background-color: hsl(210 35% 70% / 0.20) !important;
+  color: hsl(210 35% 70%) !important;
 }
 
 /* ===== 森系主题：会话/工作区选中状态 ===== */
@@ -580,7 +580,7 @@
 .theme-forest-dark .workspace-item-selected.workspace-item-selected,
 .theme-forest-dark .tab-item-selected.tab-item-selected {
   background-color: hsl(150 12% 22%) !important;
-  color: hsl(145 70% 72%) !important;
+  color: hsl(145 35% 65%) !important;
 }
 .theme-forest-dark .session-item-selected *,
 .theme-forest-dark .workspace-item-selected *,
@@ -593,11 +593,11 @@
   background-color: hsl(150 12% 22%) !important;
 }
 .theme-forest-dark .automation-entry-selected .automation-entry-icon {
-  color: hsl(145 70% 72%) !important;
+  color: hsl(145 35% 65%) !important;
 }
 .theme-forest-dark .automation-entry-selected .automation-entry-badge {
-  background-color: hsl(145 70% 72% / 0.20) !important;
-  color: hsl(145 70% 72%) !important;
+  background-color: hsl(145 35% 65% / 0.20) !important;
+  color: hsl(145 35% 65%) !important;
 }
 
 /* ===== 莫兰迪主题：模式切换器选中状态 ===== */
@@ -660,7 +660,7 @@
 }
 /* 苍穹暮色 */
 .theme-ocean-dark .workspace-badge {
-  color: hsl(205 70% 75%);
+  color: hsl(210 35% 70%);
 }
 /* 森息晨光 */
 .theme-forest-light .workspace-badge {
@@ -668,7 +668,7 @@
 }
 /* 森息夜语 */
 .theme-forest-dark .workspace-badge {
-  color: hsl(150 40% 70%);
+  color: hsl(145 35% 65%);
 }
 /* 云朵舞者 */
 .theme-slate-light .workspace-badge {
@@ -923,10 +923,10 @@
 
 /* ===== 深色主题：迷你导航当前可见范围指示器 — 加亮 ===== */
 .theme-ocean-dark .minimap-visible-indicator {
-  background-color: hsl(205 60% 55%) !important;   /* 更亮的蓝 */
+  background-color: hsl(210 30% 50%) !important;   /* 雾蓝灰，对齐主色 */
 }
 .theme-forest-dark .minimap-visible-indicator {
-  background-color: hsl(151 40% 45%) !important;   /* 更亮的绿 */
+  background-color: hsl(145 25% 45%) !important;   /* 雾绿灰，对齐主色 */
 }
 
 /* ===== 滚动进度条 — 适配所有主题（无轨道背景，仅滑块） ===== */
@@ -966,13 +966,13 @@
 
 /* 苍穹暮色 ocean-dark */
 .theme-ocean-dark .scroll-progress-thumb {
-  background-color: hsl(205 60% 55% / 0.20);
+  background-color: hsl(210 30% 50% / 0.20);
 }
 .theme-ocean-dark .scroll-progress-thumb:hover {
-  background-color: hsl(205 60% 55% / 0.32);
+  background-color: hsl(210 30% 50% / 0.32);
 }
 .theme-ocean-dark .scroll-progress-thumb-active {
-  background-color: hsl(205 60% 55% / 0.42) !important;
+  background-color: hsl(210 30% 50% / 0.42) !important;
 }
 
 /* 森息晨光 forest-light */
@@ -988,13 +988,13 @@
 
 /* 森息夜语 forest-dark */
 .theme-forest-dark .scroll-progress-thumb {
-  background-color: hsl(151 40% 45% / 0.20);
+  background-color: hsl(145 25% 45% / 0.20);
 }
 .theme-forest-dark .scroll-progress-thumb:hover {
-  background-color: hsl(151 40% 45% / 0.32);
+  background-color: hsl(145 25% 45% / 0.32);
 }
 .theme-forest-dark .scroll-progress-thumb-active {
-  background-color: hsl(151 40% 45% / 0.42) !important;
+  background-color: hsl(145 25% 45% / 0.42) !important;
 }
 
 /* 云朵舞者 slate-light */
@@ -1025,10 +1025,10 @@
 }
 /* 深色主题 plan 虚线颜色加亮 */
 .theme-ocean-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(205 60% 55% / 0.7);
+  stroke: hsl(210 30% 50% / 0.7);
 }
 .theme-forest-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(151 40% 45% / 0.7);
+  stroke: hsl(145 25% 45% / 0.7);
 }
 
 /* ===== prose inline code：移除 Tailwind Typography 默认的前后反引号伪元素 ===== */
