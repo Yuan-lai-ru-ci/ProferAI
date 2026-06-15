@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
   // 基础：更柔顺的圆角、全属性过渡、按下回弹、聚焦双层光晕；保留原 svg 尺寸约定
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[8px] text-sm font-medium transition-[transform,background-color,box-shadow,border-color,color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 active:scale-[0.97] [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 select-none",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[transform,background-color,box-shadow,border-color,color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 active:scale-[0.97] [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 select-none",
   {
     variants: {
       variant: {
@@ -27,10 +27,10 @@ const buttonVariants = cva(
       },
       size: {
         default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-[6px] px-3 text-xs",
-        lg: "h-10 rounded-[10px] px-8",
+        sm: "h-8 rounded-sm px-3 text-xs",
+        lg: "h-10 rounded-lg px-8",
         icon: "h-9 w-9 focus-visible:ring-0",
-        "icon-sm": "h-7 w-7 rounded-[6px] focus-visible:ring-0",
+        "icon-sm": "h-7 w-7 rounded-sm focus-visible:ring-0",
       },
     },
     defaultVariants: {
