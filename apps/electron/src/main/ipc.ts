@@ -2769,6 +2769,23 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 在系统文件管理器中显示任意路径（无工作区限制，用户主动点击触发）
+  ipcMain.handle(
+    IPC_CHANNELS.SHOW_ITEM_IN_FOLDER,
+    async (_, filePath: string, candidateBasePaths?: string[]): Promise<void> => {
+      const { resolve } = await import('node:path')
+      const { existsSync } = await import('node:fs')
+      const { resolveTargetPath } = await import('./lib/file-preview-service')
+
+      const resolvedPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
+      if (!existsSync(resolvedPath)) {
+        console.warn('[IPC] shell:show-item-in-folder 路径不存在:', resolvedPath)
+        return
+      }
+      shell.showItemInFolder(resolve(resolvedPath))
+    }
+  )
+
   // 解析文件路径并读取内容（供内联预览使用）
   ipcMain.handle(
     'file:resolve-and-read',
@@ -4202,7 +4219,7 @@ export function registerIpcHandlers(): void {
       if (!input || typeof input !== 'object') throw new Error('input 必须是对象')
       if (!isNonEmptyString(input.name)) throw new Error('name 必填')
       if (!isNonEmptyString(input.prompt)) throw new Error('prompt 必填')
-      if (!isNonEmptyString(input.channelId)) throw new Error('channelId 必填')
+      // channelId / workspaceId 允许为空（草稿态），但此时任务不能被启用
       validateAutomationFields(input)
       if (input.scheduleType === 'interval' && !isFiniteInt(input.intervalMinutes)) throw new Error('scheduleType=interval 时 intervalMinutes 必填')
       if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !validTimeOfDay(input.timeOfDay)) throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填')
