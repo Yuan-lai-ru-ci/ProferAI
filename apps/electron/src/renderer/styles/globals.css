@@ -197,13 +197,13 @@
     --muted: 210 12% 17%;
     --muted-foreground: 210 10% 60%;
     --border: 210 14% 24%;                /* 与背景拉开 11% 亮度，hairline 后可见 */
-    --primary: 218 80% 42%;               /* 深邃晚空蓝 - GitHub/Tailwind blue-700 风格 */
-    --primary-foreground: 0 0% 100%;
+    --primary: 210 90% 62%;               /* 明亮天空蓝（替代深海军） */
+    --primary-foreground: 210 18% 12%;    /* 深色文字配亮蓝按钮 */
     --secondary: 210 12% 17%;
     --secondary-foreground: 210 14% 92%;
     --accent: 210 14% 22%;
-    --accent-foreground: 215 65% 70%;     /* 高亮态：柔和深空蓝（略提亮以对比新深主色） */
-    --ring: 218 85% 58%;                  /* focus：比 primary 亮一档，深底亮环 */
+    --accent-foreground: 205 90% 75%;     /* 高亮态：饱和天空蓝（选区色源） */
+    --ring: 210 95% 65%;                  /* focus 反馈：真正的亮蓝"一闪" */
     --card: 210 12% 16%;                  /* 卡片浮 +3% */
     --card-foreground: 210 14% 92%;
     --input: 210 12% 17%;
@@ -220,8 +220,8 @@
     /* 代码块背景 - 深海蓝调（保留饱和） */
     --code-bg: 210 30% 8%;
     /* 虚线边框色 */
-    --dashed-border: 218 80% 42% / 0.4;
-    --dashed-border-hover: 218 80% 42% / 0.6;
+    --dashed-border: 210 90% 62% / 0.35;
+    --dashed-border-hover: 210 90% 62% / 0.55;
   }
 
   /* ===== 森系色系 ===== */
@@ -272,13 +272,13 @@
     --muted: 150 10% 17%;
     --muted-foreground: 145 8% 60%;
     --border: 150 12% 25%;
-    --primary: 155 55% 30%;               /* 深森林绿 - Whole Foods 风格沉稳绿 */
-    --primary-foreground: 0 0% 100%;
+    --primary: 145 60% 50%;               /* 嫩绿萤火（替代腐烂水草） */
+    --primary-foreground: 150 25% 10%;    /* 深绿黑文字 */
     --secondary: 150 10% 17%;
     --secondary-foreground: 140 10% 92%;
     --accent: 150 12% 22%;
-    --accent-foreground: 150 50% 70%;     /* 高亮态：柔和森林绿 */
-    --ring: 155 60% 48%;                   /* focus：比 primary 亮一档 */
+    --accent-foreground: 145 70% 72%;     /* 高亮态：明亮森绿 */
+    --ring: 145 70% 60%;                   /* focus：森林里的"一缕光" */
     --card: 150 10% 17%;
     --card-foreground: 140 10% 92%;
     --input: 150 10% 17%;
@@ -295,8 +295,8 @@
     /* 代码块背景 - 深森绿 */
     --code-bg: 150 20% 8%;
     /* 虚线边框色 */
-    --dashed-border: 155 55% 30% / 0.4;
-    --dashed-border-hover: 155 55% 30% / 0.6;
+    --dashed-border: 145 60% 50% / 0.35;
+    --dashed-border-hover: 145 60% 50% / 0.55;
   }
 
   /* ===== 赛博朋克色系 ===== */
@@ -486,13 +486,13 @@
   color: #ffffff !important;
 }
 
-/* 苍穹暮色：深邃晚空蓝滑块 + 白色文字（v3.2 再深一档） */
+/* 苍穹暮色：亮蓝滑块（v3 调灰后主色变亮） + 深色文字 */
 .theme-ocean-dark .mode-slider {
-  background: hsl(218 80% 42%) !important;
-  box-shadow: 0 2px 4px rgba(25, 98, 208, 0.5);
+  background: hsl(210 90% 62%) !important;  /* 新主色 - 亮蓝 */
+  box-shadow: 0 2px 4px rgba(78, 158, 251, 0.4);
 }
 .theme-ocean-dark .mode-btn-selected {
-  color: #ffffff !important;
+  color: hsl(210 18% 12%) !important;       /* 深色文字配亮蓝 */
 }
 
 /* 森息晨光主题 */
@@ -504,13 +504,13 @@
   color: #ffffff !important;
 }
 
-/* 森息夜语：深森林绿滑块 + 白色文字（v3.2 再深一档） */
+/* 森息夜语：亮绿滑块（v3 调灰后主色更萤火） + 深色文字 */
 .theme-forest-dark .mode-slider {
-  background: hsl(155 55% 30%) !important;
-  box-shadow: 0 2px 4px rgba(34, 111, 76, 0.4);
+  background: hsl(145 60% 50%) !important;  /* 新主色 - 嫩绿萤火 */
+  box-shadow: 0 2px 4px rgba(51, 204, 102, 0.3);
 }
 .theme-forest-dark .mode-btn-selected {
-  color: #ffffff !important;
+  color: hsl(150 25% 10%) !important;       /* 深绿黑文字 */
 }
 
 /* 云朵舞者主题 */
@@ -536,12 +536,12 @@
   color: inherit !important;
 }
 
-/* 苍穹暮色：低饱和深蓝背景 + 柔和深空蓝文字（v3.1 调深对齐） */
+/* 苍穹暮色：低饱和深蓝背景 + 亮蓝文字（v3 调灰对齐） */
 .theme-ocean-dark .session-item-selected.session-item-selected,
 .theme-ocean-dark .workspace-item-selected.workspace-item-selected,
 .theme-ocean-dark .tab-item-selected.tab-item-selected {
-  background-color: hsl(210 14% 22%) !important;
-  color: hsl(215 65% 70%) !important;
+  background-color: hsl(210 14% 22%) !important;  /* 低饱和背景，不抢戏 */
+  color: hsl(205 90% 75%) !important;             /* 亮天蓝文字 */
 }
 .theme-ocean-dark .session-item-selected *,
 .theme-ocean-dark .workspace-item-selected *,
@@ -554,11 +554,11 @@
   background-color: hsl(210 14% 22%) !important;
 }
 .theme-ocean-dark .automation-entry-selected .automation-entry-icon {
-  color: hsl(215 65% 70%) !important;
+  color: hsl(205 90% 75%) !important;
 }
 .theme-ocean-dark .automation-entry-selected .automation-entry-badge {
-  background-color: hsl(215 65% 70% / 0.20) !important;
-  color: hsl(215 65% 70%) !important;
+  background-color: hsl(205 90% 75% / 0.20) !important;
+  color: hsl(205 90% 75%) !important;
 }
 
 /* ===== 森系主题：会话/工作区选中状态 ===== */
@@ -575,12 +575,12 @@
   color: inherit !important;
 }
 
-/* 森息夜语：低饱和深绿背景 + 柔和森林绿文字（v3.1 调深对齐） */
+/* 森息夜语：低饱和深绿背景 + 亮绿文字（v3 调灰对齐） */
 .theme-forest-dark .session-item-selected.session-item-selected,
 .theme-forest-dark .workspace-item-selected.workspace-item-selected,
 .theme-forest-dark .tab-item-selected.tab-item-selected {
   background-color: hsl(150 12% 22%) !important;
-  color: hsl(150 50% 70%) !important;
+  color: hsl(145 70% 72%) !important;
 }
 .theme-forest-dark .session-item-selected *,
 .theme-forest-dark .workspace-item-selected *,
@@ -593,11 +593,11 @@
   background-color: hsl(150 12% 22%) !important;
 }
 .theme-forest-dark .automation-entry-selected .automation-entry-icon {
-  color: hsl(150 50% 70%) !important;
+  color: hsl(145 70% 72%) !important;
 }
 .theme-forest-dark .automation-entry-selected .automation-entry-badge {
-  background-color: hsl(150 50% 70% / 0.20) !important;
-  color: hsl(150 50% 70%) !important;
+  background-color: hsl(145 70% 72% / 0.20) !important;
+  color: hsl(145 70% 72%) !important;
 }
 
 /* ===== 莫兰迪主题：模式切换器选中状态 ===== */
