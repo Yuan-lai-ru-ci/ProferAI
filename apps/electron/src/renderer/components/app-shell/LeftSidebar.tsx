@@ -1522,7 +1522,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   if (sidebarCollapsed) {
     return (
       <div
-        className="relative h-full flex flex-col items-center bg-background rounded-2xl shadow-xl transition-[width] duration-300 px-2"
+        className="relative h-full flex flex-col items-center bg-background rounded-2xl shadow-xl dark:shadow-md transition-[width] duration-300 px-2"
         style={{ width: 60, flexShrink: 0 }}
       >
         <SidebarWindowDragStrip
@@ -1733,7 +1733,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   // ===== 展开状态：完整侧边栏 =====
   return (
     <div
-      className="relative h-full flex flex-col bg-background rounded-2xl shadow-xl transition-[width] duration-300"
+      className="relative h-full flex flex-col bg-background rounded-2xl shadow-xl dark:shadow-md transition-[width] duration-300"
       style={{ width: width ?? 300, minWidth: 200, flexShrink: 1 }}
     >
       <SidebarWindowDragStrip
