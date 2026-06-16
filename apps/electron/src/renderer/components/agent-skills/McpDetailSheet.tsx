@@ -20,7 +20,7 @@ interface McpDetailSheetProps {
 export function McpDetailSheet({ open, server, workspaceSlug, onOpenChange, onSaved }: McpDetailSheetProps): React.ReactElement {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[560px] sm:max-w-[560px] overflow-y-auto scrollbar-thin pt-12" aria-describedby={undefined}>
+      <SheetContent hideClose side="right" className="w-[560px] sm:max-w-[560px] overflow-y-auto scrollbar-thin pt-5" aria-describedby={undefined}>
         <SheetTitle className="sr-only">{server ? `编辑 MCP 服务器 ${server.name}` : '添加 MCP 服务器'}</SheetTitle>
         {open && (
           <McpServerForm

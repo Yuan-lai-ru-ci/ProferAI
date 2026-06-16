@@ -7,6 +7,7 @@
 
 import * as React from 'react'
 import { ArrowLeft, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { McpServerEntry, McpTransportType, WorkspaceMcpConfig } from '@proma/shared'
@@ -71,6 +72,53 @@ function serializeKeyValueText(record: Record<string, string> | undefined, separ
     .join('\n')
 }
 
+interface McpFormValues {
+  transportType: McpTransportType
+  enabled: boolean
+  testResult: { success: boolean; message: string; timestamp?: number } | null
+  isBuiltin: boolean
+  command: string
+  argsText: string
+  envText: string
+  timeoutStr: string
+  url: string
+  headersText: string
+}
+
+/** 根据当前表单值构建 McpServerEntry */
+function buildEntryFromValues(values: McpFormValues, includeTestResult = false): McpServerEntry {
+  const base: McpServerEntry = {
+    type: values.transportType,
+    enabled: values.enabled && values.testResult?.success === true,
+    ...(values.isBuiltin && { isBuiltin: true }),
+    ...(includeTestResult && values.testResult && {
+      lastTestResult: {
+        ...values.testResult,
+        timestamp: values.testResult.timestamp ?? Date.now(),
+      },
+    }),
+  }
+
+  if (values.transportType === 'stdio') {
+    base.command = values.command.trim()
+    const args = values.argsText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (args.length > 0) base.args = args
+    const env = parseKeyValueText(values.envText, '=')
+    if (Object.keys(env).length > 0) base.env = env
+    const timeout = parseInt(values.timeoutStr, 10)
+    if (!isNaN(timeout) && timeout > 0) base.timeout = timeout
+  } else {
+    base.url = values.url.trim()
+    const headers = parseKeyValueText(values.headersText, ':')
+    if (Object.keys(headers).length > 0) base.headers = headers
+  }
+
+  return base
+}
+
 export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpServerFormProps): React.ReactElement {
   const isEdit = server !== null
   const isBuiltin = server?.entry.isBuiltin === true
@@ -95,9 +143,26 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
   // UI 状态
   const [saving, setSaving] = React.useState(false)
   const [testing, setTesting] = React.useState(false)
-  const [testResult, setTestResult] = React.useState<{ success: boolean; message: string } | null>(
+  const [testResult, setTestResult] = React.useState<{ success: boolean; message: string; timestamp?: number } | null>(
     server?.entry.lastTestResult ?? null
   )
+
+  // 自动保存状态（仅编辑模式）
+  const AUTO_SAVE_DELAY = 600
+  const autoSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isFirstRenderRef = React.useRef(true)
+  const mountedRef = React.useRef(true)
+  const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  // 保留最新表单值，供 unmount 时 flush 待保存变更
+  const latestValuesRef = React.useRef({
+    name, transportType, command, url, argsText, envText, headersText, timeoutStr, enabled, testResult, isBuiltin,
+  })
+  React.useEffect(() => {
+    latestValuesRef.current = {
+      name, transportType, command, url, argsText, envText, headersText, timeoutStr, enabled, testResult, isBuiltin,
+    }
+  }, [name, transportType, command, url, argsText, envText, headersText, timeoutStr, enabled, testResult, isBuiltin])
 
   // 监听配置改变，清空测试结果（避免使用过期的测试结果）
   React.useEffect(() => {
@@ -120,42 +185,110 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
 
   /** 构建 McpServerEntry */
   const buildEntry = (includeTestResult = false): McpServerEntry => {
-    const base: McpServerEntry = {
-      type: transportType,
-      // 关键保护：只有测试成功才能启用
-      enabled: enabled && testResult?.success === true,
-      // 保留内置标记
-      ...(isBuiltin && { isBuiltin: true }),
-      // 保存测试结果
-      ...(includeTestResult && testResult && {
-        lastTestResult: {
-          ...testResult,
-          timestamp: Date.now(),
-        },
-      }),
-    }
-
-    if (transportType === 'stdio') {
-      base.command = command.trim()
-      const args = argsText
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-      if (args.length > 0) base.args = args
-      const env = parseKeyValueText(envText, '=')
-      if (Object.keys(env).length > 0) base.env = env
-      const timeout = parseInt(timeoutStr, 10)
-      if (!isNaN(timeout) && timeout > 0) base.timeout = timeout
-    } else {
-      base.url = url.trim()
-      const headers = parseKeyValueText(headersText, ':')
-      if (Object.keys(headers).length > 0) base.headers = headers
-    }
-
-    return base
+    return buildEntryFromValues(
+      {
+        transportType,
+        enabled,
+        testResult,
+        isBuiltin,
+        command,
+        argsText,
+        envText,
+        timeoutStr,
+        url,
+        headersText,
+      },
+      includeTestResult,
+    )
   }
 
-  /** 测试连接 */
+  const saveGenerationRef = React.useRef(0)
+
+  /** 执行自动保存 */
+  const doSaveEntry = React.useCallback(async (serverName: string, entry: McpServerEntry) => {
+    const generation = ++saveGenerationRef.current
+    setSaveStatus('saving')
+    try {
+      const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
+      const newConfig: WorkspaceMcpConfig = {
+        servers: { ...config.servers, [serverName]: entry },
+      }
+      await window.electronAPI.saveWorkspaceMcpConfig(workspaceSlug, newConfig)
+      if (generation === saveGenerationRef.current && mountedRef.current) {
+        setSaveStatus('saved')
+        setTimeout(() => {
+          if (generation === saveGenerationRef.current && mountedRef.current) {
+            setSaveStatus('idle')
+          }
+        }, 2000)
+      }
+    } catch (error) {
+      console.error('[MCP 表单] 自动保存失败:', error)
+      if (generation === saveGenerationRef.current && mountedRef.current) {
+        toast.error('自动保存失败')
+        setSaveStatus('error')
+      }
+    }
+  }, [workspaceSlug])
+
+  const doSaveEntryRef = React.useRef(doSaveEntry)
+  React.useEffect(() => { doSaveEntryRef.current = doSaveEntry }, [doSaveEntry])
+
+  // 编辑模式下监听字段变化，防抖自动保存
+  React.useEffect(() => {
+    if (!isEdit) return
+    // 首次渲染跳过，避免加载时触发 auto-save
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false
+      return
+    }
+    const serverName = name.trim()
+    if (!serverName) return
+    if (transportType === 'stdio' && !command.trim()) return
+    if (transportType !== 'stdio' && !url.trim()) return
+    setSaveStatus('idle')
+    autoSaveTimerRef.current = setTimeout(() => {
+      const vals = latestValuesRef.current
+      const entry = buildEntryFromValues(vals, true)
+      void doSaveEntryRef.current(vals.name.trim(), entry)
+    }, AUTO_SAVE_DELAY)
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current)
+        autoSaveTimerRef.current = null
+      }
+    }
+  }, [
+    isEdit,
+    name,
+    transportType,
+    command,
+    url,
+    argsText,
+    envText,
+    headersText,
+    timeoutStr,
+    enabled,
+    testResult,
+  ])
+
+  // 组件卸载时 flush 待保存的变更，并标记 unmounted
+  React.useEffect(() => {
+    return () => {
+      mountedRef.current = false
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current)
+        autoSaveTimerRef.current = null
+        const vals = latestValuesRef.current
+        const serverName = vals.name.trim()
+        if (!serverName) return
+        if (vals.transportType === 'stdio' && !vals.command.trim()) return
+        if (vals.transportType !== 'stdio' && !vals.url.trim()) return
+        const entry = buildEntryFromValues(vals, true)
+        void doSaveEntryRef.current(serverName, entry)
+      }
+    }
+  }, [])
   const handleTest = async (): Promise<void> => {
     const serverName = name.trim()
     if (!serverName) return
@@ -173,20 +306,23 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
       setTestResult({
         success: result.success,
         message: result.message,
+        timestamp: Date.now(),
       })
     } catch (error) {
       setTestResult({
         success: false,
         message: error instanceof Error ? error.message : '测试失败',
+        timestamp: Date.now(),
       })
     } finally {
       setTesting(false)
     }
   }
 
-  /** 提交表单 */
+  /** 提交表单（仅创建模式） */
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
+    if (isEdit) return
 
     const serverName = name.trim()
     if (!serverName) return
@@ -247,15 +383,27 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
         <h3 className="text-lg font-medium text-foreground flex-1">
           {isEdit ? '编辑 MCP 服务器' : '添加 MCP 服务器'}
         </h3>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" type="button" onClick={onCancel}>
-            取消
-          </Button>
+        {isEdit && saveStatus !== 'idle' && (
+          <div className={cn(
+            'flex items-center gap-1.5 text-xs',
+            saveStatus === 'error' ? 'text-destructive' : 'text-muted-foreground',
+          )}>
+            {saveStatus === 'saving' && <Loader2 size={12} className="animate-spin" />}
+            {saveStatus === 'saved' && <CheckCircle2 size={12} className="text-emerald-600" />}
+            {saveStatus === 'error' && <XCircle size={12} />}
+            <span>
+              {saveStatus === 'saving' && '保存中...'}
+              {saveStatus === 'saved' && '已保存'}
+              {saveStatus === 'error' && '保存失败'}
+            </span>
+          </div>
+        )}
+        {!isEdit && (
           <Button size="sm" type="submit" disabled={saving || !canSubmit()}>
             {saving && <Loader2 size={14} className="animate-spin" />}
-            <span>{isEdit ? '保存修改' : '创建服务器'}</span>
+            <span>创建服务器</span>
           </Button>
-        </div>
+        )}
       </div>
 
       {/* 基本信息 */}
