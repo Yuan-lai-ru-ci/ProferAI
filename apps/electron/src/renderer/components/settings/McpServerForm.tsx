@@ -31,6 +31,7 @@ interface McpServerFormProps {
   /** 当前工作区 slug */
   workspaceSlug: string
   onSaved: () => void
+  onChanged?: () => void
   onCancel: () => void
 }
 
@@ -119,7 +120,7 @@ function buildEntryFromValues(values: McpFormValues, includeTestResult = false):
   return base
 }
 
-export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpServerFormProps): React.ReactElement {
+export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCancel }: McpServerFormProps): React.ReactElement {
   const isEdit = server !== null
   const isBuiltin = server?.entry.isBuiltin === true
 
@@ -153,6 +154,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
   const isFirstRenderRef = React.useRef(true)
   const mountedRef = React.useRef(true)
   const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const lastSavedEnabledRef = React.useRef(server?.entry.enabled ?? false)
 
   // 保留最新表单值，供 unmount 时 flush 待保存变更
   const latestValuesRef = React.useRef({
@@ -169,10 +171,11 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
     if (!server) return // 新建时不需要清空
 
     // 检查关键配置是否改变（包括连接相关的所有字段）
+    // 注意：server.entry.command/url 可能为 undefined，需要与空字符串统一比较
     const configChanged =
       transportType !== server.entry.type ||
-      (transportType === 'stdio' && command !== server.entry.command) ||
-      (transportType !== 'stdio' && url !== server.entry.url) ||
+      (transportType === 'stdio' && command !== (server.entry.command ?? '')) ||
+      (transportType !== 'stdio' && url !== (server.entry.url ?? '')) ||
       argsText !== (server.entry.args?.join(', ') ?? '') ||
       envText !== serializeKeyValueText(server.entry.env, '=') ||
       headersText !== serializeKeyValueText(server.entry.headers, ':')
@@ -207,7 +210,6 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
   /** 执行自动保存 */
   const doSaveEntry = React.useCallback(async (serverName: string, entry: McpServerEntry) => {
     const generation = ++saveGenerationRef.current
-    setSaveStatus('saving')
     try {
       const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
       const newConfig: WorkspaceMcpConfig = {
@@ -215,12 +217,16 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
       }
       await window.electronAPI.saveWorkspaceMcpConfig(workspaceSlug, newConfig)
       if (generation === saveGenerationRef.current && mountedRef.current) {
+        if (entry.enabled !== lastSavedEnabledRef.current) {
+          lastSavedEnabledRef.current = entry.enabled
+          onChanged?.()
+        }
         setSaveStatus('saved')
         setTimeout(() => {
           if (generation === saveGenerationRef.current && mountedRef.current) {
             setSaveStatus('idle')
           }
-        }, 2000)
+        }, 3000)
       }
     } catch (error) {
       console.error('[MCP 表单] 自动保存失败:', error)
@@ -229,7 +235,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
         setSaveStatus('error')
       }
     }
-  }, [workspaceSlug])
+  }, [workspaceSlug, onChanged])
 
   const doSaveEntryRef = React.useRef(doSaveEntry)
   React.useEffect(() => { doSaveEntryRef.current = doSaveEntry }, [doSaveEntry])
@@ -373,26 +379,44 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
     return canSubmit()
   }
 
+  /** 返回/关闭：编辑模式下先 flush 待保存变更 */
+  const handleCancel = async (): Promise<void> => {
+    if (isEdit && autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+      const vals = latestValuesRef.current
+      const serverName = vals.name.trim()
+      if (serverName) {
+        const isValid =
+          (vals.transportType === 'stdio' && vals.command.trim()) ||
+          (vals.transportType !== 'stdio' && vals.url.trim())
+        if (isValid) {
+          const entry = buildEntryFromValues(vals, true)
+          await doSaveEntryRef.current(serverName, entry)
+        }
+      }
+    }
+    onCancel()
+  }
+
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {/* 标题栏 + 操作按钮 */}
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" className="h-8 w-8" type="button" onClick={onCancel}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" type="button" onClick={() => void handleCancel()}>
           <ArrowLeft size={18} />
         </Button>
         <h3 className="text-lg font-medium text-foreground flex-1">
           {isEdit ? '编辑 MCP 服务器' : '添加 MCP 服务器'}
         </h3>
-        {isEdit && saveStatus !== 'idle' && (
+        {isEdit && (saveStatus === 'saved' || saveStatus === 'error') && (
           <div className={cn(
             'flex items-center gap-1.5 text-xs',
             saveStatus === 'error' ? 'text-destructive' : 'text-muted-foreground',
           )}>
-            {saveStatus === 'saving' && <Loader2 size={12} className="animate-spin" />}
             {saveStatus === 'saved' && <CheckCircle2 size={12} className="text-emerald-600" />}
             {saveStatus === 'error' && <XCircle size={12} />}
             <span>
-              {saveStatus === 'saving' && '保存中...'}
               {saveStatus === 'saved' && '已保存'}
               {saveStatus === 'error' && '保存失败'}
             </span>
@@ -516,7 +540,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
               <div>
                 <div className="text-sm font-medium text-foreground">连接测试</div>
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  必须测试成功后才能启用
+                  必须测试成功后才能启用；测试失败的 MCP 可能导致整个 Agent 运行失败
                 </div>
               </div>
               <Button
@@ -572,7 +596,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onCancel }: McpS
             description={
               testResult?.success
                 ? '开启后该 MCP 服务器将在 Agent 会话中加载'
-                : '只有测试成功后才能启用'
+                : '只有测试成功后才能启用，否则可能导致整个 Agent 运行失败'
             }
             checked={enabled}
             onCheckedChange={setEnabled}

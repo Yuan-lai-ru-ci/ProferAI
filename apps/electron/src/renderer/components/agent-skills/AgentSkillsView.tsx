@@ -314,6 +314,7 @@ export function AgentSkillsView(): React.ReactElement {
         workspaceSlug={data.workspaceSlug}
         onOpenChange={(open) => { setMcpSheetOpen(open); if (!open) bumpCapabilities((v) => v + 1) }}
         onSaved={() => setMcpSheetOpen(false)}
+        onChanged={() => bumpCapabilities((v) => v + 1)}
       />
 
       <ImportSkillDialog
