@@ -32,6 +32,13 @@ export function getUpdateStatus(): UpdateStatus {
 
 /** 手动触发检查更新 */
 export async function checkForUpdates(): Promise<void> {
+  // 开发模式不检查更新（electron-updater 的 feed URL 仅在打包后嵌入）
+  if (!app.isPackaged) {
+    console.log('[更新] 开发模式，跳过更新检查')
+    setStatus({ status: 'not-available' })
+    return
+  }
+
   // 已在下载中或已下载完成，不重复检查
   if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
     console.log('[更新] 跳过检查：已在下载中或已下载完成')
@@ -40,7 +47,16 @@ export async function checkForUpdates(): Promise<void> {
 
   try {
     setStatus({ status: 'checking' })
-    await autoUpdater.checkForUpdates()
+
+    // 30 秒超时兜底，防止网络不通时永久卡在 checking
+    const result = await Promise.race([
+      autoUpdater.checkForUpdates(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('检查更新超时（30 秒），请检查网络连接')), 30_000)
+      ),
+    ])
+    // checkForUpdates 可能通过事件而非 resolve 返回结果，这里主要靠事件驱动
+    void result
   } catch (err) {
     console.error('[更新] 检查更新失败:', err)
     setStatus({
@@ -78,6 +94,12 @@ export function cleanupUpdater(): void {
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   win = mainWindow
+
+  // 开发模式不初始化更新检查（feed URL 仅在 electron-builder 打包后嵌入）
+  if (!app.isPackaged) {
+    console.log('[更新] 开发模式，自动更新模块未启用')
+    return
+  }
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),
