@@ -26,7 +26,7 @@ interface FilePreviewDialogProps {
 
 type PreviewState =
   | { status: 'loading' }
-  | { status: 'image'; dataUrl: string }
+  | { status: 'image'; src: string }
   | { status: 'html'; html: string }
   | { status: 'iframe'; src: string }
   | { status: 'text'; content: string; language: string }
@@ -82,9 +82,9 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       setResolvedPath(localPath)
 
       if (IMAGE_EXTS.has(e)) {
-        const b64 = await window.electronAPI.readBinaryBase64(localPath, undefined, 50 * 1024 * 1024)
-        if (b64) setState({ status: 'image', dataUrl: `data:image/${e === 'svg' ? 'svg+xml' : e === 'jpeg' ? 'jpeg' : e};base64,${b64}` })
-        else setState({ status: 'error', message: '无法读取图片（文件可能过大或已损坏）' })
+        const resolved = await window.electronAPI.resolveFilePath(localPath)
+        if (resolved?.url) setState({ status: 'image', src: resolved.url })
+        else setState({ status: 'error', message: '无法读取图片' })
       } else if (e === 'pdf') {
         const result = await window.electronAPI.preparePdfPreview(localPath)
         if (result?.tmpHtmlUrl) setState({ status: 'iframe', src: result.tmpHtmlUrl })
@@ -151,7 +151,7 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
           )}
           {state.status === 'image' && (
             <div className="flex items-center justify-center h-full bg-black/5">
-              <img src={state.dataUrl} alt={fileName} className="max-w-full max-h-full object-contain" />
+              <img src={state.src} alt={fileName} className="max-w-full max-h-full object-contain" />
             </div>
           )}
           {state.status === 'html' && (
