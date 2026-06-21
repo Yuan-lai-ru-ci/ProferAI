@@ -30,6 +30,15 @@ export function getUpdateStatus(): UpdateStatus {
   return currentStatus
 }
 
+/** 重试配置 */
+const RETRY_DELAYS = [5_000, 15_000, 45_000] // 指数退避：5s → 15s → 45s
+
+/** 判断是否为可重试的网络错误 */
+function isRetryableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|EPIPE|socket|network|proxy|tunnel|超时/.test(msg)
+}
+
 /** 手动触发检查更新 */
 export async function checkForUpdates(): Promise<void> {
   // 开发模式不检查更新（electron-updater 的 feed URL 仅在打包后嵌入）
@@ -45,25 +54,36 @@ export async function checkForUpdates(): Promise<void> {
     return
   }
 
-  try {
-    setStatus({ status: 'checking' })
+  setStatus({ status: 'checking' })
 
-    // 30 秒超时兜底，防止网络不通时永久卡在 checking
-    const result = await Promise.race([
-      autoUpdater.checkForUpdates(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('检查更新超时（30 秒），请检查网络连接')), 30_000)
-      ),
-    ])
-    // checkForUpdates 可能通过事件而非 resolve 返回结果，这里主要靠事件驱动
-    void result
-  } catch (err) {
-    console.error('[更新] 检查更新失败:', err)
-    setStatus({
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-    })
+  let lastError: unknown
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    try {
+      // 30 秒超时兜底
+      const result = await Promise.race([
+        autoUpdater.checkForUpdates(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('检查更新超时（30 秒），请检查网络连接')), 30_000)
+        ),
+      ])
+      void result
+      return // 成功，事件驱动后续状态
+    } catch (err) {
+      lastError = err
+      if (attempt < RETRY_DELAYS.length && isRetryableError(err)) {
+        console.log(`[更新] 检查失败，${RETRY_DELAYS[attempt]! / 1000}s 后重试 (${attempt + 1}/${RETRY_DELAYS.length})...`)
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]!))
+      } else {
+        break
+      }
+    }
   }
+
+  console.error('[更新] 检查更新失败（已重试）:', lastError)
+  setStatus({
+    status: 'error',
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  })
 }
 
 /** 退出并安装已下载的更新 */
@@ -100,6 +120,21 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     console.log('[更新] 开发模式，自动更新模块未启用')
     return
   }
+
+  // 应用代理设置 — electron-updater 底层用 Electron net 模块，遵循 HTTPS_PROXY 环境变量
+  try {
+    // 延迟导入避免循环依赖
+    const { getEffectiveProxyUrl } = require('../proxy-settings-service') as {
+      getEffectiveProxyUrl: () => Promise<string | undefined>
+    }
+    getEffectiveProxyUrl().then((proxyUrl: string | undefined) => {
+      if (proxyUrl) {
+        process.env.HTTPS_PROXY = proxyUrl
+        process.env.HTTP_PROXY = proxyUrl
+        console.log('[更新] 已应用代理:', proxyUrl)
+      }
+    }).catch(() => {})
+  } catch { /* 代理模块不可用时跳过 */ }
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),

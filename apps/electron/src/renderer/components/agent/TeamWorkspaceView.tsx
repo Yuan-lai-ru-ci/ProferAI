@@ -173,13 +173,14 @@ export function TeamWorkspaceView(): React.ReactElement {
     }
   }, [teamId])
 
+  const initialLoadDoneRef = React.useRef(false)
+
   // 加载文件清单
-  const loadFiles = React.useCallback(async () => {
+  const loadFiles = React.useCallback(async (silent = false) => {
     if (!filesPath || !teamId) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     try {
       const manifest = await window.electronAPI.teamFile.getManifest(teamId, workspace?.slug).catch(() => [] as Awaited<ReturnType<typeof window.electronAPI.teamFile.getManifest>>)
-      // 服务器清单是唯一数据源；本地文件仅做"是否已下载"标记
       const items: FileEntry[] = manifest.map((f: Record<string, unknown>) => {
         return {
           name: f.name as string, path: f.path as string, isDirectory: (f.isDirectory as boolean) ?? false, size: f.size as number,
@@ -190,10 +191,16 @@ export function TeamWorkspaceView(): React.ReactElement {
       })
       setEntries(items)
     } catch (e) { /* ignore */ }
-    finally { setLoading(false) }
+    finally {
+      if (!silent) setLoading(false)
+      initialLoadDoneRef.current = true
+    }
   }, [filesPath, teamId, workspace?.slug])
 
-  React.useEffect(() => { loadFiles() }, [loadFiles, filesVersion])
+  // 首次加载显示 loading；后续 filesVersion 变化时静默刷新，避免闪烁
+  React.useEffect(() => {
+    loadFiles(!initialLoadDoneRef.current)
+  }, [loadFiles, filesVersion])
 
   const [failedUploads, setFailedUploads] = React.useState<Array<{ name: string; size: number }>>([])
   const failedDataRef = React.useRef<Map<string, ArrayBuffer>>(new Map())
