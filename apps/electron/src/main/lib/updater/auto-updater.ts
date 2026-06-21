@@ -123,7 +123,6 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
 
   // 应用代理设置 — electron-updater 底层用 Electron net 模块，遵循 HTTPS_PROXY 环境变量
   try {
-    // 延迟导入避免循环依赖
     const { getEffectiveProxyUrl } = require('../proxy-settings-service') as {
       getEffectiveProxyUrl: () => Promise<string | undefined>
     }
@@ -135,6 +134,16 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
       }
     }).catch(() => {})
   } catch { /* 代理模块不可用时跳过 */ }
+
+  // 设置更新源：优先国内服务器（无需科学上网），环境变量可覆盖
+  const updateFeedUrl =
+    process.env.PROFER_UPDATE_FEED_URL ||
+    'http://47.109.108.57/profer-updates/'
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: updateFeedUrl,
+  })
+  console.log('[更新] 更新源:', updateFeedUrl)
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),
