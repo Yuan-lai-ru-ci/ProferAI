@@ -2013,7 +2013,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           ? 'text-primary hover:bg-primary/10'
           : 'text-foreground/30 cursor-not-allowed'
       )}
-      onClick={handleSend}
+      onClick={() => handleSend()}
       disabled={!canSend}
     >
       <CornerDownLeft className="size-[22px]" />
