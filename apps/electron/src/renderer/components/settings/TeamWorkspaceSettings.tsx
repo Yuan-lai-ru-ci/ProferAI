@@ -100,11 +100,25 @@ export function TeamWorkspaceSettings(): React.ReactElement {
 
   const selectedWs = teamWorkspaces.find((w) => w.id === selectedWsId)
 
-  // 加载团队工作区列表
+  // 加载团队工作区列表（优先远程 API，失败时回退到本地索引）
   React.useEffect(() => {
     window.electronAPI.team.listWorkspaces().then((list) => {
-      if (Array.isArray(list)) setTeamWorkspaces(list)
-    }).catch(() => { /* 未登录或网络错误 */ })
+      if (Array.isArray(list) && list.length > 0) {
+        setTeamWorkspaces(list)
+      } else {
+        // 远程 API 返回空或失败 → 回退到本地 agent workspace 索引
+        window.electronAPI.listAgentWorkspaces().then((all) => {
+          const team = all.filter((w) => w.type === 'team')
+          if (team.length > 0) setTeamWorkspaces(team)
+        }).catch(() => {})
+      }
+    }).catch(() => {
+      // HTTP 请求失败 → 回退本地索引
+      window.electronAPI.listAgentWorkspaces().then((all) => {
+        const team = all.filter((w) => w.type === 'team')
+        if (team.length > 0) setTeamWorkspaces(team)
+      }).catch(() => {})
+    })
   }, [setTeamWorkspaces])
 
   // 加载成员列表
