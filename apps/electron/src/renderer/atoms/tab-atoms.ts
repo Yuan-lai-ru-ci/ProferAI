@@ -29,7 +29,7 @@ export const SCRATCH_PAD_ID = '__scratch-pad__'
 
 /** 教程 Tab 固定 ID */
 export const TUTORIAL_TAB_ID = '__tutorial__'
-export const TUTORIAL_TAB_TITLE = 'Proma 使用教程'
+export const TUTORIAL_TAB_TITLE = 'Profer 使用教程'
 
 /** 会话预览 Tab 的 ID 前缀：运行时临时入口，不参与持久化 */
 const PREVIEW_TAB_PREFIX = '__preview__:'

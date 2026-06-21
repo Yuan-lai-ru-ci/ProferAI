@@ -30,7 +30,7 @@ export function buildAgentReplyCard(result: FormattedAgentResult, subtitle?: str
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: 'plain_text', content: 'Proma Agent' },
+      title: { tag: 'plain_text', content: 'Profer Agent' },
       ...(subtitle ? { subtitle: { tag: 'plain_text', content: subtitle } } : {}),
       template: 'blue',
     },
@@ -54,7 +54,7 @@ export function buildErrorCard(errorMessage: string): Record<string, unknown> {
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: 'plain_text', content: 'Proma 错误' },
+      title: { tag: 'plain_text', content: 'Profer 错误' },
       template: 'red',
     },
     elements: [
@@ -217,7 +217,7 @@ export function buildHelpCard(): Record<string, unknown> {
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: 'plain_text', content: 'Proma Bot 命令' },
+      title: { tag: 'plain_text', content: 'Profer Bot 命令' },
       template: 'blue',
     },
     elements: [
@@ -360,7 +360,7 @@ function formatToolSummaryLine(summaries: ToolSummary[], durationSeconds: number
  */
 function truncateForFeishu(text: string, maxLength = 25000): string {
   if (text.length <= maxLength) return text
-  return text.slice(0, maxLength) + '\n\n... [内容过长，请在 Proma 中查看完整回复]'
+  return text.slice(0, maxLength) + '\n\n... [内容过长，请在 Profer 中查看完整回复]'
 }
 
 /**

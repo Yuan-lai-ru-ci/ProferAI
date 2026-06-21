@@ -58,7 +58,7 @@ function applyBrandToDOM(brand: WorkspaceBrand | null): void {
   if (brand?.appName) {
     document.title = brand.appName
   } else {
-    document.title = 'Proma'
+    document.title = 'Profer'
   }
 
   if (brand?.customCss) {

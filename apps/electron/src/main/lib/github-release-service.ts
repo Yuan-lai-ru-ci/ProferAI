@@ -1,4 +1,4 @@
-/**
+﻿/**
  * GitHub Release 服务
  *
  * 从 GitHub API 获取项目的发布日志（Release Notes）
@@ -54,7 +54,7 @@ async function fetchFromGitHub<T>(endpoint: string): Promise<T> {
   const response = await fetch(url, {
     headers: {
       'Accept': 'application/vnd.github+json',
-      'User-Agent': 'Proma-Desktop-App',
+      'User-Agent': 'Profer-Desktop-App',
     },
   })
 
