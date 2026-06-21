@@ -26,7 +26,6 @@ import {
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
-  workspaceFilesVersionAtom,
 } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { automationFormAtom } from '@/atoms/automation-atoms'
@@ -407,7 +406,7 @@ function TabBarInner({
   )
 }
 
-/** 打开 Agent 文件面板按钮：独立订阅 workspaceFilesVersionAtom，避免文件变更时重渲染整个 TabBar。 */
+/** 打开 Agent 文件面板按钮。 */
 function AgentPanelOpenButton({
   isWindows,
   onToggle,
@@ -415,9 +414,6 @@ function AgentPanelOpenButton({
   isWindows: boolean
   onToggle: () => void
 }): React.ReactElement {
-  const filesVersion = useAtomValue(workspaceFilesVersionAtom)
-  const hasFileChanges = filesVersion > 0
-
   return (
     <div
       className={cn(
@@ -435,9 +431,6 @@ function AgentPanelOpenButton({
             onClick={onToggle}
           >
             <PanelRight className="size-3.5" />
-            {hasFileChanges && (
-              <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" />
-            )}
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">
