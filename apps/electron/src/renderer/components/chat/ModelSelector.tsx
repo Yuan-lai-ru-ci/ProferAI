@@ -228,11 +228,14 @@ export function ModelSelector({
 
   return (
     <>
-      {/* 触发按钮 */}
+      {/* 触发按钮 — 圆形，仅显示模型 logo */}
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        className="model-selector-trigger flex items-center justify-center rounded-full size-7 hover:bg-accent transition-colors"
+        title={displayModelInfo
+          ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
+          : '选择模型'}
       >
         {displayModelInfo ? (
           <img
@@ -241,14 +244,8 @@ export function ModelSelector({
             className="size-4 rounded object-cover"
           />
         ) : (
-          <Cpu className="size-3.5" />
+          <Cpu className="size-3.5 text-muted-foreground" />
         )}
-        <span className="max-w-[200px] truncate">
-          {displayModelInfo
-            ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
-            : '选择模型'}
-        </span>
-        <ChevronDown className="size-3" />
       </button>
 
       {/* 模型选择 Dialog */}
