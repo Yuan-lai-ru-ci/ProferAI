@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, Store, FolderOpen, Check } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -186,21 +186,6 @@ export function AgentSkillsView(): React.ReactElement {
             className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
           />
         </div>
-
-        {/* 社区市场（占位） */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              disabled
-              className="flex h-8 cursor-not-allowed items-center gap-1.5 rounded-lg border border-dashed border-border/60 px-3 text-[13px] font-medium text-foreground/35"
-            >
-              <Store size={14} />
-              <span>社区市场</span>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">即将上线：一键浏览、安装与更新社区 Skills</TooltipContent>
-        </Tooltip>
 
         {/* Skills：从其他工作区导入 */}
         {tab === 'skills' && (

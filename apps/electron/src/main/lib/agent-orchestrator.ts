@@ -16,14 +16,11 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
-  PROMA_PERMISSION_MODE_CONFIG,
   SAFE_TOOLS,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
@@ -33,7 +30,6 @@ import {
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
-import { isTransientNetworkError, isMalformedResponseError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { injectAutomationMcpServer } from './automation-agent-tools'
@@ -41,10 +37,9 @@ import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAg
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName } from './config-paths'
-import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
@@ -57,6 +52,12 @@ import { getMemoryConfig } from './memory-service'
 import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
+
+// 已提取的工具模块
+import { sdkPermissionModeForPromaMode, extractApiError, isAutoRetryableTypedError, isAutoRetryableCatchError, isSessionNotFoundError, getRetryDelayMs, MAX_AUTO_RETRIES, MAX_AUTO_RETRY_WAIT_MS } from './agent-retry-utils'
+import { extractSDKToolSummary, buildContextPrompt, buildRecoveryPrompt, escapeContextAttr, buildReferencedSessionsPrompt, TITLE_PROMPT, MAX_TITLE_LENGTH, DEFAULT_SESSION_TITLE, DEFAULT_MODEL_ID, MAX_CONTEXT_MESSAGES } from './agent-prompt-utils'
+import { resolveSDKCliPath } from './agent-sdk-cli-path'
+import { collectAttachedDirectories } from './agent-directory-utils'
 
 // ===== 类型定义 =====
 
@@ -75,410 +76,6 @@ export interface SessionCallbacks {
   onTitleUpdated: (title: string) => void
   /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
   onRunStarted?: (opts: { startedAt: number }) => void
-}
-
-// ===== 工具函数 =====
-
-function sdkPermissionModeForPromaMode(mode: PromaPermissionMode): PromaPermissionMode {
-  return PROMA_PERMISSION_MODE_CONFIG[mode].sdkMode
-}
-
-/**
- * 从 stderr 中提取 API 错误信息
- *
- * 解析类似这样的错误：
- * "401 {\"error\":{\"message\":\"...\"}}"
- * "API error: 400 Bad Request ..."
- */
-function extractApiError(stderr: string): { statusCode: number; message: string } | null {
-  if (!stderr) return null
-
-  // 模式 1：JSON 错误格式 - "401 {...}"
-  const jsonMatch = stderr.match(/(\d{3})\s+(\{[^}]*"error"[^}]*\})/s)
-  if (jsonMatch) {
-    try {
-      const statusCode = parseInt(jsonMatch[1]!)
-      const errorObj = JSON.parse(jsonMatch[2]!)
-      const message = errorObj.error?.message || errorObj.message || '未知错误'
-      return { statusCode, message }
-    } catch {
-      // JSON 解析失败，继续尝试其他模式
-    }
-  }
-
-  // 模式 2：API error 格式 - "API error (attempt X/Y): 401 401 {...}"
-  const apiErrorMatch = stderr.match(/API error[^:]*:\s+(\d{3})\s+\d{3}\s+(\{.*?\})/s)
-  if (apiErrorMatch) {
-    try {
-      const statusCode = parseInt(apiErrorMatch[1]!)
-      const errorObj = JSON.parse(apiErrorMatch[2]!)
-      const message = errorObj.error?.message || errorObj.message || '未知错误'
-      return { statusCode, message }
-    } catch {
-      // JSON 解析失败
-    }
-  }
-
-  // 模式 3：直接的状态码 + 消息
-  const simpleMatch = stderr.match(/(\d{3})[:\s]+(.+?)(?:\n|$)/i)
-  if (simpleMatch) {
-    const statusCode = parseInt(simpleMatch[1]!)
-    const message = simpleMatch[2]!.trim()
-    if (statusCode >= 400 && statusCode < 600) {
-      return { statusCode, message }
-    }
-  }
-
-  return null
-}
-
-// ===== 自动重试工具函数 =====
-
-/** 可自动重试的 TypedError 错误码 */
-const AUTO_RETRYABLE_ERROR_CODES: ReadonlySet<string> = new Set([
-  'rate_limited',
-  'provider_error',      // overloaded 映射为 provider_error
-  'service_error',
-  'service_unavailable',
-  'network_error',
-])
-
-/** 判断 typed_error 事件是否可自动重试 */
-function isAutoRetryableTypedError(error: TypedError): boolean {
-  return AUTO_RETRYABLE_ERROR_CODES.has(error.code)
-}
-
-/** 判断 catch 块中的 API 错误是否可自动重试（HTTP 429 / 5xx / 已知可恢复错误模式 / 瞬时网络错误） */
-function isAutoRetryableCatchError(
-  apiError: { statusCode: number; message: string } | null,
-  rawErrorMessage?: string,
-  stderr?: string,
-): boolean {
-  if (apiError) {
-    // 529 是 Anthropic 的过载状态码，通常很快恢复；与 429 / 5xx 一并重试。
-    if (apiError.statusCode === 429 || apiError.statusCode >= 500) return true
-  }
-  // 已知的可恢复错误模式（无 HTTP 状态码但可重试）
-  if (rawErrorMessage) {
-    if (rawErrorMessage.includes('context_management')) return true
-  }
-  // 兜底：extractApiError 未识别但 stderr / 错误文本中包含 502 / 529 或 overloaded 关键字时也视为可重试
-  // 502 (Bad Gateway) 通常是上游网关瞬时异常，与 529 一样很快自行恢复
-  const text = `${rawErrorMessage ?? ''}\n${stderr ?? ''}`
-  if (/\b502\b|\b529\b|overloaded/i.test(text)) return true
-  // 瞬时网络错误（terminated / ECONNRESET / socket hang up 等）
-  if (isTransientNetworkError(rawErrorMessage, stderr)) return true
-  // 上游响应体解析失败（JSON Parse error 等）：网关瞬时异常返回非 JSON 体，重试通常即可恢复
-  if (isMalformedResponseError(rawErrorMessage, stderr)) return true
-  return false
-}
-
-/**
- * 判断错误是否为 SDK session 不存在（"No conversation found with session ID"）
- *
- * 当 resume 目标 session 已过期或被清理时，SDK 会抛出此错误。
- * 此类错误可通过清除 sdkSessionId 并切换到上下文回填模式来恢复。
- */
-function isSessionNotFoundError(errorMessage: string, stderr?: string): boolean {
-  const pattern = /No conversation found.*with session/i
-  return pattern.test(errorMessage) || (!!stderr && pattern.test(stderr))
-}
-
-/** 最大自动重试次数 */
-const MAX_AUTO_RETRIES = 25
-
-/** 自动重试累计等待预算（毫秒） */
-const MAX_AUTO_RETRY_WAIT_MS = 5 * 60_000
-
-/** 重试单次延迟上限（毫秒） */
-const RETRY_MAX_DELAY_MS = 15_000
-
-/**
- * 计算重试延迟（指数退避 + ±20% jitter）
- *
- * 基础序列：1s, 2s, 4s, 8s, 15s, 15s...（cap = 15s）
- * 叠加 ±20% 随机抖动，避免大量 session 同时重试造成惊群。
- * 累计等待会被限制在 5 分钟以内。
- */
-function getRetryDelayMs(attempt: number, elapsedRetryDelayMs: number): number {
-  const remainingMs = MAX_AUTO_RETRY_WAIT_MS - elapsedRetryDelayMs
-  if (remainingMs <= 0) return 0
-
-  const base = Math.min(1000 * Math.pow(2, attempt - 1), RETRY_MAX_DELAY_MS)
-  const jitter = base * (Math.random() * 0.4 - 0.2)
-  return Math.min(remainingMs, Math.max(0, Math.round(base + jitter)))
-}
-
-/**
- * 解析 SDK native CLI binary 路径
- *
- * 0.2.113+ 起 SDK 改为按平台分发 native binary，通过 optionalDependencies 安装到
- * `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` 子包，与主包 `@anthropic-ai/claude-agent-sdk`
- * 同级。binary 名 macOS/Linux 为 `claude`，Windows 为 `claude.exe`。
- *
- * SDK 作为 esbuild external 依赖，require.resolve 可在运行时解析主包入口路径，
- * 再沿父目录 `@anthropic-ai/` 找到同级的平台子包。
- *
- * 多种策略降级：createRequire → 全局 require → cwd/node_modules 手动查找
- * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径（即便 Proma 当前 `asar: false`
- * 兜底不伤人）。
- */
-function resolveSDKCliPath(): string {
-  const subpkg = `claude-agent-sdk-${process.platform}-${process.arch}`
-  const scopedSubpkg = `@anthropic-ai/${subpkg}`
-  const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude'
-  let binaryPath: string | null = null
-
-  // 策略 1：createRequire（标准 ESM/CJS 互操作）
-  try {
-    const cjsRequire = createRequire(__filename)
-    const sdkEntryPath = cjsRequire.resolve('@anthropic-ai/claude-agent-sdk')
-    // sdkEntryPath: .../@anthropic-ai/claude-agent-sdk/sdk.mjs
-    // anthropicDir:  .../@anthropic-ai
-    const anthropicDir = dirname(dirname(sdkEntryPath))
-    binaryPath = join(anthropicDir, subpkg, binaryName)
-    console.log(`[Agent 编排] SDK binary 路径 (createRequire): ${binaryPath}`)
-    if (!existsSync(binaryPath)) {
-      const subpkgPackagePath = cjsRequire.resolve(`${scopedSubpkg}/package.json`)
-      binaryPath = join(dirname(subpkgPackagePath), binaryName)
-      console.log(`[Agent 编排] SDK binary 路径 (platform package): ${binaryPath}`)
-    }
-  } catch (e) {
-    console.warn('[Agent 编排] createRequire 解析 SDK 路径失败:', e)
-  }
-
-  // 策略 2：全局 require（esbuild CJS bundle 可能保留）
-  if (!binaryPath || !existsSync(binaryPath)) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const sdkEntryPath = require.resolve('@anthropic-ai/claude-agent-sdk')
-      const anthropicDir = dirname(dirname(sdkEntryPath))
-      binaryPath = join(anthropicDir, subpkg, binaryName)
-      console.log(`[Agent 编排] SDK binary 路径 (require.resolve): ${binaryPath}`)
-      if (!existsSync(binaryPath)) {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const subpkgPackagePath = require.resolve(`${scopedSubpkg}/package.json`)
-        binaryPath = join(dirname(subpkgPackagePath), binaryName)
-        console.log(`[Agent 编排] SDK binary 路径 (require platform package): ${binaryPath}`)
-      }
-    } catch (e) {
-      console.warn('[Agent 编排] require.resolve 解析 SDK 路径失败:', e)
-    }
-  }
-
-  // 策略 3：从当前模块目录手动查找（打包后 __dirname 指向 app/dist/，上一级即 app/）
-  // 注意：不使用 process.cwd()，因为打包后的 Electron 应用 cwd 通常是 '/'
-  // 或用户主目录，与 app 安装目录无关。
-  if (!binaryPath || !existsSync(binaryPath)) {
-    binaryPath = join(__dirname, '..', 'node_modules', '@anthropic-ai', subpkg, binaryName)
-    console.log(`[Agent 编排] SDK binary 路径 (手动): ${binaryPath}`)
-  }
-
-  // 打包环境：将 .asar/ 路径转换为 .asar.unpacked/
-  if (app.isPackaged && binaryPath.includes('.asar')) {
-    binaryPath = binaryPath.replace(/\.asar([/\\])/, '.asar.unpacked$1')
-    console.log(`[Agent 编排] 转换为 asar.unpacked 路径: ${binaryPath}`)
-  }
-
-  return binaryPath
-}
-
-/** 最大回填消息条数 */
-const MAX_CONTEXT_MESSAGES = 20
-
-/** 单条工具摘要最大字符数 */
-const MAX_TOOL_SUMMARY_LENGTH = 200
-
-/**
- * 从 SDKMessage assistant 消息的 content 中提取工具活动摘要
- *
- * 扫描 tool_use 块，提取工具名称和关键参数，帮助新 SDK 会话理解之前做过什么。
- */
-function extractSDKToolSummary(content: Array<{ type: string; name?: string; input?: Record<string, unknown> }>): string {
-  const summaries: string[] = []
-  for (const block of content) {
-    if (block.type === 'tool_use' && block.name) {
-      const input = block.input ?? {}
-      const keyParam = input.file_path ?? input.command ?? input.path ?? input.query ?? ''
-      const paramStr = keyParam ? `: ${String(keyParam).slice(0, 100)}` : ''
-      summaries.push(`[tool: ${block.name}${paramStr}]`)
-    }
-  }
-  if (summaries.length === 0) return ''
-  const joined = summaries.join(' ')
-  return joined.length > MAX_TOOL_SUMMARY_LENGTH
-    ? joined.slice(0, MAX_TOOL_SUMMARY_LENGTH) + '...'
-    : joined
-}
-
-/**
- * 构建带历史上下文的 prompt
- *
- * 当 resume 不可用时，将最近消息拼接为上下文注入 prompt，
- * 让新 SDK 会话保留对话记忆。包含文本内容和工具活动摘要。
- */
-function buildContextPrompt(sessionId: string, currentUserMessage: string, sessionHint?: { agentCwd: string }): string {
-  const allMessages = getAgentSessionSDKMessages(sessionId)
-  if (allMessages.length === 0) return currentUserMessage
-
-  // 排除最后一条（当前用户消息，刚刚才 append 的）
-  const history = allMessages.slice(0, -1)
-  if (history.length === 0) return currentUserMessage
-
-  const recent = history.slice(-MAX_CONTEXT_MESSAGES)
-  const lines = recent
-    .filter((m) => (m.type === 'user' || m.type === 'assistant'))
-    .map((m) => {
-      // 从 SDKMessage 的 message.content 中提取文本
-      const content = (m as { message?: { content?: Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }> } }).message?.content
-      if (!Array.isArray(content)) return null
-
-      const textParts = content
-        .filter((b) => b.type === 'text' && b.text)
-        .map((b) => b.text!)
-      const text = textParts.join('\n')
-      if (!text) return null
-
-      let line = `[${m.type}]: ${text}`
-      // assistant 消息附带工具活动摘要
-      if (m.type === 'assistant') {
-        const toolSummary = extractSDKToolSummary(content)
-        if (toolSummary) {
-          line += `\n  工具活动: ${toolSummary}`
-        }
-      }
-      return line
-    })
-    .filter(Boolean)
-
-  if (lines.length === 0) return currentUserMessage
-
-  // 注入 session 元信息，便于 Agent 在需要时读取完整历史
-  const sessionInfoBlock = sessionHint
-    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: 上方为近期对话摘要。如需更多上下文，可读取 ~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl 获取完整历史。\n</session_info>\n`
-    : ''
-
-  console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
-  return `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
-}
-
-/**
- * 构建 Session 恢复 prompt
- *
- * 当 SDK resume 失败（session 过期、thinking signature 不兼容等）时，
- * 注入 <session_recovery> 标签指向当前会话的完整 JSONL 历史文件，
- * 让 Agent 自己读取完整历史后无缝继续工作。
- */
-function buildRecoveryPrompt(
-  sessionId: string,
-  currentUserMessage: string,
-  sessionHint: { agentCwd: string },
-): string {
-  const meta = getAgentSessionMeta(sessionId)
-  const title = meta ? escapeContextAttr(meta.title) : sessionId
-  const historyPath = `~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl`
-
-  const recoveryBlock =
-    `<session_recovery>\n` +
-    `你正在接续一个已有的 Agent 会话（因模型切换等原因需要重新建立连接）。\n` +
-    `当前会话的完整历史记录在下方路径中，请先读取它以恢复上下文，然后继续处理用户的最新请求。\n` +
-    `<session id="${sessionId}" title="${title}" cwd="${sessionHint.agentCwd}">\n` +
-    `History path: ${historyPath}\n` +
-    `</session>\n` +
-    `</session_recovery>`
-
-  console.log(`[Agent 编排] buildRecoveryPrompt: 注入 session 自引用 → ${historyPath}`)
-  return `${recoveryBlock}\n\n${currentUserMessage}`
-}
-
-function escapeContextAttr(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-function buildReferencedSessionsPrompt(
-  currentSessionId: string,
-  mentionedSessionIds?: string[],
-  workspaceId?: string,
-): string {
-  const uniqueIds = [...new Set((mentionedSessionIds ?? []).filter(Boolean))]
-  if (uniqueIds.length === 0) return ''
-
-  const currentWorkspaceId = workspaceId ?? getAgentSessionMeta(currentSessionId)?.workspaceId
-  const sessionBlocks: string[] = []
-
-  for (const referencedSessionId of uniqueIds) {
-    if (referencedSessionId === currentSessionId) continue
-
-    const meta = getAgentSessionMeta(referencedSessionId)
-    if (!meta || meta.archived) continue
-    if (currentWorkspaceId && meta.workspaceId !== currentWorkspaceId) continue
-
-    const title = escapeContextAttr(meta.title)
-    const historyPath = `~/${getConfigDirName()}/agent-sessions/${referencedSessionId}.jsonl`
-    sessionBlocks.push(
-      `<session id="${referencedSessionId}" title="${title}" updatedAt="${meta.updatedAt}">\n` +
-      `History path: ${historyPath}\n` +
-      '</session>',
-    )
-  }
-
-  if (sessionBlocks.length === 0) return ''
-
-  return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。不要假设这些会话的内容；需要上下文时，请先读取对应的 History path，再基于读取结果继续完成任务。\n\n重要提示：会话历史文件（.jsonl）可能包含大量消息和 tool results，文件较大。请优先使用 Grep 搜索关键词定位相关消息片段，再局部读取。避免一次性 Read 整个大文件。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
-}
-
-/** 标题生成 Prompt */
-const TITLE_PROMPT = '根据用户的第一条消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。\n\n用户消息：'
-
-/** 标题最大长度 */
-const MAX_TITLE_LENGTH = 20
-
-/** 默认会话标题（用于判断是否需要自动生成） */
-const DEFAULT_SESSION_TITLE = '新 Agent 会话'
-
-/** 默认模型 ID */
-const DEFAULT_MODEL_ID = 'claude-sonnet-4-6'
-
-/**
- * 聚合一次 SDK 调用涉及的所有附加目录（去重，保持插入顺序）。
- *
- * 发消息（sendMessage）和回退恢复文件（rewindSession）必须使用同一份聚合结果，
- * 否则 SDK 写入 file-history-snapshot 时使用的目录范围，与回退时校验路径越界的目录范围不一致，
- * 会导致 attachedDirectories 内的文件在回退时被静默跳过（"会话回退、代码不回退"）。
- *
- * 来源：
- *   1. extraDirs：调用方传入的临时附加目录（例如 sendMessage 时用户当次提交的目录）
- *   2. 会话级 attachedDirectories + attachedFiles 的父目录
- *   3. 工作区级 attachedDirectories + attachedFiles 的父目录
- *   4. 工作区文件目录 workspace-files/
- */
-function collectAttachedDirectories(params: {
-  sessionMeta?: AgentSessionMeta
-  workspaceSlug?: string
-  extraDirs?: string[]
-}): string[] {
-  const { sessionMeta, workspaceSlug, extraDirs } = params
-  const result: string[] = []
-  const push = (dir: string | undefined | null) => {
-    if (!dir) return
-    if (!result.includes(dir)) result.push(dir)
-  }
-
-  for (const d of extraDirs ?? []) push(d)
-  for (const d of sessionMeta?.attachedDirectories ?? []) push(d)
-  for (const file of sessionMeta?.attachedFiles ?? []) push(dirname(file))
-
-  if (workspaceSlug) {
-    for (const d of getWorkspaceAttachedDirectories(workspaceSlug)) push(d)
-    for (const f of getWorkspaceAttachedFiles(workspaceSlug)) push(dirname(f))
-    push(getWorkspaceFilesDir(workspaceSlug))
-  }
-
-  return result
 }
 
 // ===== AgentOrchestrator =====

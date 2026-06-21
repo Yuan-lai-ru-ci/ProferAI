@@ -22,6 +22,11 @@ import {
   FolderInput,
   Pencil,
   MessageSquarePlus,
+  Upload,
+  Download,
+  Eye,
+  LayoutList,
+  LayoutGrid,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -85,22 +90,73 @@ export function isPathUnderRoot(rootPath: string, targetPath: string): boolean {
 
 interface FileBrowserProps {
   rootPath: string
-  /** 隐藏内置顶部工具栏（面包屑 + 按钮），由外部自行渲染 */
   hideToolbar?: boolean
-  /** 嵌入模式：不使用内部 ScrollArea 和 h-full，由外部容器控制布局和滚动 */
   embedded?: boolean
-  /** 隐藏"目录为空"提示（当外部已有附加目录等内容时使用） */
   hideEmpty?: boolean
-  /** 点击添加到聊天（在文件操作菜单中显示） */
   onAddToChat?: (entry: FileEntry) => void
-  /** 单击文件时在内联预览面板中显示（替代外部窗口预览） */
   onFilePreview?: (filePath: string) => void
+  /** 团队工作区 ID（有值时启用团队网盘模式，从服务器拉清单） */
+  workspaceId?: string
+  workspaceSlug?: string
 }
 
-export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
+/**
+ * 将扁平的文件清单构建为树状结构
+ *
+ * 服务端返回扁平的 FileEntry[]，通过 path 字段（如 "a/b/c.txt"）推断层级。
+ * 文件夹节点自动聚合子节点到 children 数组。
+ */
+function buildFileTree(flatEntries: FileEntry[]): FileEntry[] {
+  const root: FileEntry[] = []
+  const dirMap = new Map<string, FileEntry>()
+
+  // 按路径深度排序，确保父目录先于子文件
+  const sorted = [...flatEntries].sort((a, b) => a.path.split('/').length - b.path.split('/').length)
+
+  for (const entry of sorted) {
+    const parts = entry.path.split('/')
+    if (parts.length === 1) {
+      // 根级条目
+      root.push({ ...entry, children: (entry.isDirectory ? [] : undefined) })
+      if (entry.isDirectory) dirMap.set(entry.path, root[root.length - 1]!)
+    } else {
+      // 有父目录的子条目
+      const parentPath = parts.slice(0, -1).join('/')
+      const parent = dirMap.get(parentPath)
+      if (parent?.children) {
+        const node: FileEntry = { ...entry, children: (entry.isDirectory ? [] : undefined) }
+        parent.children.push(node)
+        if (entry.isDirectory) dirMap.set(entry.path, node)
+      } else {
+        // 父目录不在清单中（异常情况），放到根级
+        root.push({ ...entry, children: (entry.isDirectory ? [] : undefined) })
+        if (entry.isDirectory) dirMap.set(entry.path, root[root.length - 1]!)
+      }
+    }
+  }
+
+  // 排序：目录在前，文件在后，同类按名称排序
+  const sortEntries = (items: FileEntry[]) => {
+    items.sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    for (const item of items) {
+      if (item.children) sortEntries(item.children)
+    }
+  }
+  sortEntries(root)
+  return root
+}
+
+export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddToChat, onFilePreview, workspaceId, workspaceSlug }: FileBrowserProps): React.ReactElement {
   const [entries, setEntries] = React.useState<FileEntry[]>([])
   const [loading, setLoading] = React.useState(false)
+  const [uploading, setUploading] = React.useState(false)
+  const [dragOver, setDragOver] = React.useState(false)
+  const [viewMode, setViewMode] = React.useState<'list' | 'grid'>('list')
   const [error, setError] = React.useState<string | null>(null)
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
 
   // ===== Agent 写入文件时的自动定位 =====
@@ -157,13 +213,28 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
   const selectedCount = selectedPaths.size
 
   /** 加载根目录 */
+  const isTeamMode = !!(workspaceId && workspaceSlug)
+
   const loadRoot = React.useCallback(async () => {
     if (!rootPath) return
     setLoading(true)
     setError(null)
     try {
-      const items = await window.electronAPI.listDirectory(rootPath)
-      setEntries(items)
+      if (isTeamMode) {
+        const manifest = await window.electronAPI.teamFile.getManifest(workspaceId!, workspaceSlug).catch(() => [] as Awaited<ReturnType<typeof window.electronAPI.teamFile.getManifest>>)
+        const serverItems: FileEntry[] = manifest.map((f: { name: string; path: string; isDirectory: boolean; size: number; syncStatus?: FileEntry['syncStatus']; localExists?: boolean; uploadedBy?: string; uploadedByName?: string }) => ({
+          name: f.name, path: f.path, isDirectory: f.isDirectory, size: f.size,
+          syncStatus: f.syncStatus ?? (f.localExists ? 'synced' : 'cloud-only'),
+          uploadedBy: f.uploadedBy ?? '',
+          uploadedByName: f.uploadedByName ?? '',
+        }))
+        // 构建树状结构：目录可折叠展开
+        const tree = buildFileTree(serverItems)
+        setEntries(tree)
+      } else {
+        const items = await window.electronAPI.listDirectory(rootPath)
+        setEntries(items)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       setError(msg)
@@ -171,7 +242,118 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     } finally {
       setLoading(false)
     }
-  }, [rootPath])
+  }, [rootPath, isTeamMode, workspaceId, workspaceSlug])
+
+  /** 处理文件上传（拖拽或按钮触发） */
+  const handleFileUpload = React.useCallback(async (files: File[]) => {
+    setUploading(true)
+    let count = 0
+    for (const file of files) {
+      try {
+        const buffer = await file.arrayBuffer()
+        if (isTeamMode) {
+          // 团队模式：上传到服务器
+          const data = new Uint8Array(buffer)
+          let sourcePath = ''
+          try {
+            sourcePath = window.electronAPI.getPathForFile(file)
+          } catch {
+            sourcePath = ''
+          }
+          await window.electronAPI.teamFile.upload({
+            workspaceId: workspaceId!,
+            workspaceSlug: workspaceSlug!,
+            fileName: file.name,
+            fileData: data,
+            sourcePath: sourcePath || undefined,
+          })
+        } else {
+          // 个人模式：保存到本地工作区
+          await window.electronAPI.saveFilesToWorkspaceFiles({
+            workspaceSlug: workspaceSlug || 'default',
+            files: [{ filename: file.name, data: new Uint8Array(buffer) }],
+          })
+        }
+        count++
+      } catch (err) {
+        console.error('文件上传失败:', file.name, err)
+      }
+    }
+    setUploading(false)
+    if (count > 0) loadRoot()
+  }, [isTeamMode, workspaceId, workspaceSlug, loadRoot])
+
+  /** 网格视图删除文件 */
+  const handleDeleteGrid = React.useCallback(async (entry: FileEntry) => {
+    if (isTeamMode && workspaceId && workspaceSlug) {
+      const ok = await window.electronAPI.teamFile.delete({
+        workspaceId, workspaceSlug, filePath: entry.path,
+      }).catch(() => false)
+      if (ok) {
+        // 同步删除本地文件/文件夹
+        const localPath = `${rootPath}/${entry.path}`
+        window.electronAPI.deleteFile(localPath).catch(() => {})
+        loadRoot()
+      }
+    }
+  }, [isTeamMode, workspaceId, workspaceSlug, rootPath, loadRoot])
+
+  /** 下载云端文件到本地 */
+  const handleDownload = React.useCallback(async (entry: FileEntry): Promise<string | null> => {
+    if (!isTeamMode || !workspaceId || !workspaceSlug) return null
+    const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+    if (local) loadRoot()
+    return local
+  }, [isTeamMode, workspaceId, workspaceSlug, loadRoot])
+
+  /** 团队文件预览前必须先落到本地缓存，Office/PDF 等预览器只能读取本地文件。 */
+  const ensureTeamFileLocal = React.useCallback(async (entry: FileEntry): Promise<string | null> => {
+    if (!isTeamMode || !workspaceId || !workspaceSlug) return null
+    const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+    if (local && entry.syncStatus === 'cloud-only') void loadRoot()
+    return local
+  }, [isTeamMode, workspaceId, workspaceSlug, loadRoot])
+
+  const handlePreviewFile = React.useCallback(async (entry: FileEntry): Promise<void> => {
+    if (entry.isDirectory) return
+    if (isTeamMode) {
+      const local = await ensureTeamFileLocal(entry)
+      if (local) {
+        onFilePreview?.(local)
+      } else {
+        window.dispatchEvent(new CustomEvent('proma:file-preview', {
+          detail: { path: entry.path, name: entry.name, download: () => ensureTeamFileLocal(entry) },
+        }))
+      }
+      return
+    }
+
+    onFilePreview?.(entry.path)
+  }, [ensureTeamFileLocal, isTeamMode, onFilePreview])
+
+  const dispatchInlinePreview = React.useCallback((entry: FileEntry): void => {
+    if (entry.isDirectory) return
+    window.dispatchEvent(new CustomEvent('proma:file-preview', {
+      detail: {
+        path: isTeamMode ? entry.path : entry.path,
+        name: entry.name,
+        download: isTeamMode ? () => ensureTeamFileLocal(entry) : undefined,
+      },
+    }))
+  }, [ensureTeamFileLocal, isTeamMode])
+
+  /** 拖拽事件 */
+  const handleDragOver = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation(); setDragOver(true)
+  }, [])
+  const handleDragLeave = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation(); setDragOver(false)
+  }, [])
+  const handleDrop = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation(); setDragOver(false)
+    const files = e.dataTransfer.files
+    if (files.length > 0) handleFileUpload(Array.from(files))
+  }, [handleFileUpload])
 
   React.useEffect(() => {
     loadRoot()
@@ -192,8 +374,12 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       })
     } else {
       setSelectedPaths(new Set([entry.path]))
+      // 单击非目录文件 → 预览
+      if (!entry.isDirectory) {
+        dispatchInlinePreview(entry)
+      }
     }
-  }, [])
+  }, [dispatchInlinePreview])
 
   /** 点击空白区域清空选中 */
   const handleBackgroundClick = React.useCallback((e: React.MouseEvent) => {
@@ -204,9 +390,22 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
   }, [])
 
   /** 在文件夹中显示 */
-  const handleShowInFolder = React.useCallback((entry: FileEntry) => {
+  const handleShowInFolder = React.useCallback(async (entry: FileEntry) => {
+    if (isTeamMode) {
+      if (!entry.isDirectory && workspaceId && workspaceSlug) {
+        const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+        if (local) {
+          window.electronAPI.showItemInFolder(local).catch(console.error)
+          await loadRoot()
+        }
+        return
+      }
+      const localPath = `${rootPath}/${entry.path}`
+      window.electronAPI.showItemInFolder(localPath).catch(console.error)
+      return
+    }
     window.electronAPI.showInFolder(entry.path).catch(console.error)
-  }, [])
+  }, [isTeamMode, loadRoot, rootPath, workspaceId, workspaceSlug])
 
   /** 开始重命名 */
   const handleStartRename = React.useCallback((entry: FileEntry) => {
@@ -223,6 +422,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     // 同名检查
     const parentDir = filePath.substring(0, filePath.lastIndexOf('/'))
     try {
+      if (isTeamMode) return '团队文件暂不支持在侧栏重命名'
       const siblings = await window.electronAPI.listDirectory(parentDir)
       const conflict = siblings.some((s) => s.name === newName && s.path !== filePath)
       if (conflict) {
@@ -241,7 +441,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     } catch (err) {
       return err instanceof Error ? err.message : '重命名失败'
     }
-  }, [loadRoot])
+  }, [isTeamMode, loadRoot])
 
   /** 触发删除（支持多选） */
   const handleRequestDelete = React.useCallback((entry: FileEntry) => {
@@ -253,13 +453,17 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
   const handleDelete = React.useCallback(async () => {
     if (!deleteTarget) return
     try {
-      if (selectedPaths.size > 1) {
-        // 批量删除
-        for (const path of selectedPaths) {
-          await window.electronAPI.deleteFile(path)
+      const paths = selectedPaths.size > 1 ? [...selectedPaths] : [deleteTarget.path]
+      for (const filePath of paths) {
+        if (isTeamMode && workspaceId && workspaceSlug) {
+          const ok = await window.electronAPI.teamFile.delete({ workspaceId, workspaceSlug, filePath }).catch(() => false)
+          if (ok) {
+            // 同步删除本地文件/文件夹
+            window.electronAPI.deleteFile(`${rootPath}/${filePath}`).catch(() => {})
+          }
+        } else {
+          await window.electronAPI.deleteFile(filePath)
         }
-      } else {
-        await window.electronAPI.deleteFile(deleteTarget.path)
       }
       setSelectedPaths(new Set())
       await loadRoot()
@@ -267,7 +471,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       console.error('[FileBrowser] 删除失败:', err)
     }
     setDeleteTarget(null)
-  }, [deleteTarget, selectedPaths, loadRoot])
+  }, [deleteTarget, selectedPaths, loadRoot, isTeamMode, workspaceId, workspaceSlug])
 
   /** 移动文件 */
   const handleMove = React.useCallback(async (entry: FileEntry) => {
@@ -276,6 +480,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       const result = await window.electronAPI.openFolderDialog()
       if (!result) return
 
+      if (isTeamMode) return
       if (selectedPaths.size > 1) {
         for (const path of selectedPaths) {
           await window.electronAPI.moveFile(path, result.path)
@@ -290,7 +495,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     } finally {
       setMoving(false)
     }
-  }, [selectedPaths, loadRoot])
+  }, [isTeamMode, selectedPaths, loadRoot])
 
   // 显示根路径最后两段作为面包屑
   const breadcrumb = React.useMemo(() => {
@@ -333,14 +538,20 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           onRefresh={loadRoot}
           onClearSelection={() => setSelectedPaths(new Set())}
           onAddToChat={onAddToChat}
-          onFilePreview={onFilePreview}
+          onFilePreview={handlePreviewFile}
+          onDownload={handleDownload}
         />
       ))}
     </div>
   )
 
   return (
-    <div className={cn('flex flex-col', !embedded && 'h-full')}>
+    <div
+      className={cn('relative flex flex-col', !embedded && 'h-full', dragOver && 'ring-2 ring-primary/50')}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* 顶部工具栏（可由外部接管） */}
       {!hideToolbar && (
         <div className="flex items-center gap-1 px-3 pr-10 h-[48px] border-b flex-shrink-0">
@@ -367,14 +578,52 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           >
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
           </Button>
+          {/* 上传按钮 */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 flex-shrink-0"
+            onClick={() => fileInputRef.current?.click()}
+            title="上传文件"
+          >
+            <Upload className="size-3.5" />
+          </Button>
+          {uploading && <span className="text-[10px] text-muted-foreground">上传中...</span>}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const files = e.target.files
+              if (files) handleFileUpload(Array.from(files))
+              e.target.value = ''
+            }}
+          />
+          {/* 视图切换 */}
+          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0"
+            onClick={() => setViewMode(viewMode === 'list' ? 'grid' : 'list')}
+            title={viewMode === 'list' ? '切换为卡片视图' : '切换为列表视图'}>
+            {viewMode === 'list' ? <LayoutGrid className="size-3.5" /> : <LayoutList className="size-3.5" />}
+          </Button>
         </div>
       )}
 
-      {/* 文件树 */}
-      {embedded ? fileTree : (
-        <ScrollArea className="flex-1">
-          {fileTree}
-        </ScrollArea>
+      {/* 拖拽上传提示 */}
+      {dragOver && (
+        <div className="absolute inset-0 bg-primary/10 z-50 flex items-center justify-center pointer-events-none">
+          <span className="text-sm font-medium text-primary">释放文件以上传</span>
+        </div>
+      )}
+
+      {/* 文件列表 / 卡片视图 */}
+      {embedded ? (
+        viewMode === 'grid' ? <FileGridView entries={entries} loading={loading} error={error} onSelect={handleSelect} onDelete={handleDeleteGrid} onDownload={handleDownload} /> : fileTree
+      ) : viewMode === 'grid' ? (
+        <ScrollArea className="flex-1"><FileGridView entries={entries} loading={loading} error={error} onSelect={handleSelect} onDelete={handleDeleteGrid} onDownload={handleDownload} /></ScrollArea>
+      ) : (
+        <ScrollArea className="flex-1">{fileTree}</ScrollArea>
       )}
 
       {/* 删除确认对话框 */}
@@ -404,6 +653,111 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       </AlertDialog>
     </div>
   )
+}
+
+// ===== FileGridView 卡片视图 =====
+
+function FileGridView({ entries, loading, error, onSelect, onDelete, onDownload }: {
+  entries: FileEntry[]
+  loading: boolean
+  error: string | null
+  onSelect: (entry: FileEntry, event: React.MouseEvent) => void
+  onDelete?: (entry: FileEntry) => void
+  onDownload?: (entry: FileEntry) => Promise<string | null>
+}): React.ReactElement {
+  const [menuOpen, setMenuOpen] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (!menuOpen) return
+    const close = () => setMenuOpen(null)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [menuOpen])
+  if (loading) return <div className="flex items-center justify-center h-full text-muted-foreground text-xs">加载中...</div>
+  if (error) return <div className="px-3 py-2 text-xs text-destructive">{error}</div>
+  if (entries.length === 0) return <div className="px-3 py-4 text-xs text-muted-foreground text-center">目录为空</div>
+
+  return (
+    <div className="p-2 grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(125px, 1fr))' }}>
+      {entries.map((entry) => (
+        <div
+          key={entry.path}
+          onClick={(e) => { if (menuOpen !== entry.path) onSelect(entry, e) }}
+          className={cn(
+            'group relative flex flex-col items-center gap-1.5 p-4 rounded-lg border border-transparent cursor-pointer',
+            'hover:bg-accent/50 hover:border-border/60 transition-colors',
+          )}
+          style={{ aspectRatio: '3/4' }}
+        >
+          {/* 三点菜单（自定义实现，避免 Radix portal 被拦截） */}
+          <div className="absolute top-1.5 right-1.5 z-20" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <button
+              className="h-7 w-7 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 bg-background/80 hover:bg-accent text-muted-foreground hover:text-foreground transition-opacity"
+              onClick={() => setMenuOpen(menuOpen === entry.path ? null : entry.path)}
+            >
+              <MoreHorizontal size={14} />
+            </button>
+            {menuOpen === entry.path && (
+              <div className="absolute right-0 top-8 w-36 bg-popover border rounded-md shadow-md py-1 z-50" onClick={(e) => e.stopPropagation()}>
+                <button
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left"
+                  onClick={() => { setMenuOpen(null); onSelect(entry, { metaKey: false, ctrlKey: false } as React.MouseEvent) }}
+                >
+                  <Eye size={14} />预览
+                </button>
+                {onDownload && entry.syncStatus === 'cloud-only' && (
+                  <button
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left"
+                    onClick={() => { setMenuOpen(null); onDownload(entry) }}
+                  >
+                    <Download size={14} />下载到本地
+                  </button>
+                )}
+                {onDelete && (
+                  <button
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-destructive text-left"
+                    onClick={() => { setMenuOpen(null); onDelete(entry) }}
+                  >
+                    <Trash2 size={14} />删除
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <FileTypeIcon name={entry.name} isDirectory={entry.isDirectory} size={36} />
+          <span className="text-[11px] text-center leading-tight line-clamp-2 break-all w-full">
+            {entry.name}
+          </span>
+
+          {/* 底部信息行：同步状态 + 上传者 + 大小 */}
+          <div className="flex items-center gap-1.5 w-full justify-center flex-wrap">
+            {entry.syncStatus && entry.syncStatus !== 'synced' && (
+              <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', {
+                'bg-blue-400 animate-pulse': entry.syncStatus === 'syncing',
+                'bg-amber-400': entry.syncStatus === 'cloud-only' || entry.syncStatus === 'local-only',
+                'bg-red-400': entry.syncStatus === 'conflict',
+              })} />
+            )}
+            {entry.uploadedByName && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted/60 text-muted-foreground truncate max-w-[72px]" title={entry.uploadedByName}>
+                {entry.uploadedByName}
+              </span>
+            )}
+            {!entry.isDirectory && entry.size != null && (
+              <span className="text-[10px] text-muted-foreground/60">{formatSize(entry.size)}</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
 // ===== FileTreeItem 子组件 =====
@@ -437,7 +791,8 @@ interface FileTreeItemProps {
   onRefresh: () => Promise<void>
   onClearSelection: () => void
   onAddToChat?: (entry: FileEntry) => void
-  onFilePreview?: (filePath: string) => void
+  onFilePreview?: (entry: FileEntry) => void
+  onDownload?: (entry: FileEntry) => Promise<string | null>
 }
 
 function FileTreeItem({
@@ -464,6 +819,7 @@ function FileTreeItem({
   onClearSelection,
   onAddToChat,
   onFilePreview,
+  onDownload,
 }: FileTreeItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
@@ -554,6 +910,12 @@ function FileTreeItem({
     if (!entry.isDirectory) return
 
     if (!expanded && !childrenLoaded) {
+      if (entry.children) {
+        setChildren(entry.children)
+        setChildrenLoaded(true)
+        setExpanded(true)
+        return
+      }
       try {
         const items = await window.electronAPI.listDirectory(entry.path)
         setChildren(items)
@@ -585,7 +947,7 @@ function FileTreeItem({
     if (entry.isDirectory) {
       void toggleDir()
     } else {
-      onFilePreview?.(entry.path)
+      onFilePreview?.(entry)
     }
   }
 
@@ -748,6 +1110,23 @@ function FileTreeItem({
           <span className="truncate text-xs flex-1">{entry.name}</span>
         )}
 
+        {/* 文件同步状态指示（团队工作区） */}
+        {entry.syncStatus && entry.syncStatus !== 'synced' && (
+          <span
+            className={cn('flex-shrink-0 w-2 h-2 rounded-full', {
+              'bg-blue-400 animate-pulse': entry.syncStatus === 'syncing',
+              'bg-amber-400': entry.syncStatus === 'cloud-only' || entry.syncStatus === 'local-only',
+              'bg-red-400': entry.syncStatus === 'conflict',
+            })}
+            title={
+              entry.syncStatus === 'syncing' ? '同步中' :
+              entry.syncStatus === 'cloud-only' ? '仅云端' :
+              entry.syncStatus === 'local-only' ? '仅本地' :
+              entry.syncStatus === 'conflict' ? '有冲突' : ''
+            }
+          />
+        )}
+
         {/* 右侧操作按钮占位（始终占位，避免行宽跳动） */}
         <div
           className="flex-shrink-0"
@@ -774,6 +1153,15 @@ function FileTreeItem({
               </button>
             </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+                {onDownload && entry.syncStatus === 'cloud-only' && menuSelectedCount === 1 && (
+                  <DropdownMenuItem
+                    className="text-xs py-1 [&>svg]:size-3.5"
+                    onSelect={() => onDownload(entry)}
+                  >
+                    <Download />
+                    下载到本地
+                  </DropdownMenuItem>
+                )}
                 {onAddToChat && !entry.isDirectory && menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
@@ -795,6 +1183,8 @@ function FileTreeItem({
                 {menuSelectedCount === 1 && !entry.isDirectory && (
                   <DefaultAppMenuItem
                     filePath={entry.path}
+                    probePath={entry.name}
+                    resolveFilePath={onDownload && entry.syncStatus ? () => onDownload(entry) : undefined}
                     className="text-xs py-1 [&>svg]:size-3.5"
                   />
                 )}
@@ -871,10 +1261,12 @@ function FileTreeItem({
               onClearSelection={onClearSelection}
               onAddToChat={onAddToChat}
               onFilePreview={onFilePreview}
+              onDownload={onDownload}
             />
           ))}
         </div>
       )}
+
     </div>
   )
 }

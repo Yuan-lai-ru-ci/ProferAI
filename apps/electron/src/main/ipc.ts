@@ -9,7 +9,7 @@ import { join, resolve, sep, dirname } from 'node:path'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -2749,6 +2749,76 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 递归读取目录中所有文件（用于文件夹上传）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_DIRECTORY_RECURSIVE,
+    async (_, dirPath: string): Promise<Array<{ relativePath: string; data: Uint8Array }>> => {
+      const { readdirSync, statSync, readFileSync } = await import('node:fs')
+      const { resolve, relative, join } = await import('node:path')
+
+      const safePath = resolve(dirPath)
+      const workspacesRoot = resolve(getAgentWorkspacesDir())
+      if (!safePath.startsWith(workspacesRoot)) {
+        throw new Error('路径超出工作区范围')
+      }
+
+      const results: Array<{ relativePath: string; data: Uint8Array }> = []
+      const walk = (currentDir: string) => {
+        const items = readdirSync(currentDir, { withFileTypes: true })
+        for (const item of items) {
+          const full = join(currentDir, item.name)
+          if (item.isDirectory()) {
+            walk(full)
+          } else {
+            const relPath = relative(safePath, full)
+            const buffer = readFileSync(full)
+            results.push({ relativePath: relPath, data: new Uint8Array(buffer) })
+          }
+        }
+      }
+      walk(safePath)
+      return results
+    }
+  )
+
+  // 打开原生文件夹选择对话框，递归读取所有文件内容
+  ipcMain.handle(
+    'agent:select-and-upload-folder',
+    async (): Promise<Array<{ relativePath: string; data: Uint8Array; sourcePath: string }> | null> => {
+      const { readdirSync, readFileSync } = await import('node:fs')
+      const { resolve, relative, join } = await import('node:path')
+      const { BrowserWindow, dialog } = await import('electron')
+
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      if (!win) return null
+
+      const result = await dialog.showOpenDialog(win, {
+        properties: ['openDirectory'],
+        title: '选择要上传的文件夹',
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+
+      const dirPath = resolve(result.filePaths[0]!)
+      const results: Array<{ relativePath: string; data: Uint8Array; sourcePath: string }> = []
+
+      const walk = (currentDir: string) => {
+        const items = readdirSync(currentDir, { withFileTypes: true })
+        for (const item of items) {
+          const full = join(currentDir, item.name)
+          if (item.isDirectory()) {
+            walk(full)
+          } else {
+            const relPath = relative(dirPath, full)
+            const buffer = readFileSync(full)
+            results.push({ relativePath: relPath, data: new Uint8Array(buffer), sourcePath: full })
+          }
+        }
+      }
+      walk(dirPath)
+      return results
+    }
+  )
+
   // 用系统默认应用打开文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_FILE,
@@ -4321,5 +4391,362 @@ export function registerIpcHandlers(): void {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
       await runAutomationNow(id)
     }
+  )
+
+  // ===== 身份认证 =====
+
+  const { getOrCreateDeviceIdentity, getUserIdentity } = require('./lib/identity-service')
+  const { login, register, logout, getAuthStatus, getServerInfoList } = require('./lib/auth-service')
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.GET_DEVICE_IDENTITY,
+    async () => getOrCreateDeviceIdentity()
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.GET_USER_IDENTITY,
+    async () => getUserIdentity()
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.UPDATE_PROFILE,
+    async (_, updates: Record<string, unknown>) => {
+      // Phase 3: 更新远程档案
+      return getUserIdentity()
+    }
+  )
+
+  /** 将品牌配置应用到所有窗口（图标 + 标题） */
+  function applyBrandToWindows(brand: import('@proma/shared').WorkspaceBrand) {
+    const windows = BrowserWindow.getAllWindows()
+    if (brand.appName) {
+      for (const w of windows) w.setTitle(brand.appName)
+    }
+
+    if (brand.logoUrl) {
+      try {
+        const iconPath = resolveBrandIconPath(brand.logoUrl)
+        if (iconPath) {
+          for (const w of windows) w.setIcon(iconPath)
+          if (process.platform === 'darwin') app.dock?.setIcon(iconPath)
+        }
+      } catch (err) {
+        console.error('[品牌] 设置窗口图标失败:', err)
+      }
+    }
+  }
+
+  let _brandIconDir: string | null = null
+  function resolveBrandIconPath(logoUrl: string): string | null {
+    if (!_brandIconDir) {
+      _brandIconDir = join(tmpdir(), 'proma-brand-icons')
+      if (!existsSync(_brandIconDir)) mkdirSync(_brandIconDir, { recursive: true })
+    }
+    const iconPath = join(_brandIconDir, 'brand-logo.png')
+    if (logoUrl.startsWith('data:')) {
+      const b64 = logoUrl.replace(/^data:image\/\w+;base64,/, '')
+      writeFileSync(iconPath, Buffer.from(b64, 'base64'))
+      return iconPath
+    }
+    // 如果是文件路径且存在
+    if (existsSync(logoUrl)) return logoUrl
+    return null
+  }
+
+  /** 登录/注册成功后同步团队工作区到本地索引，并通知渲染进程刷新 */
+  async function syncTeamWorkspacesToSidebar() {
+    try {
+      const { listTeamWorkspaces } = require('./lib/team-manager')
+      const { syncTeamWorkspacesToIndex } = require('./lib/agent-workspace-manager')
+      const teamWs = await listTeamWorkspaces()
+      if (teamWs.length > 0) {
+        syncTeamWorkspacesToIndex(teamWs)
+        // 通知所有窗口刷新工作区列表
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.send('team:workspaces-synced')
+        }
+      }
+    } catch (err) {
+      console.error('[IPC] 同步团队工作区失败:', err)
+    }
+  }
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.LOGIN,
+    async (_, credentials: { serverUrl: string; email: string; password: string }) => {
+      const result = await login(credentials.serverUrl, credentials.email, credentials.password)
+      if (result.success) {
+        const { startSyncEngine } = require('./lib/sync-manager')
+        startSyncEngine()
+        // 同步团队工作区到侧边栏
+        syncTeamWorkspacesToSidebar()
+      }
+      return result
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.LOGOUT,
+    async () => { await logout() }
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.GET_SERVER_INFO,
+    async () => getServerInfoList()
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.REGISTER,
+    async (_, credentials: { serverUrl: string; email: string; password: string; displayName: string; invitationToken?: string }) => {
+      const result = await register(credentials.serverUrl, credentials.email, credentials.password, credentials.displayName, credentials.invitationToken)
+      if (result.success) {
+        const { startSyncEngine } = require('./lib/sync-manager')
+        startSyncEngine()
+        // 同步团队工作区到侧边栏
+        syncTeamWorkspacesToSidebar()
+      }
+      return result
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.GET_AUTH_STATUS,
+    async () => getAuthStatus()
+  )
+
+  // ===== 同步 =====
+
+  const {
+    getSyncStatus,
+    triggerSync,
+    getPendingChanges,
+    discardPendingChanges,
+  } = require('./lib/sync-manager')
+
+  ipcMain.handle(
+    SYNC_IPC_CHANNELS.GET_STATUS,
+    async () => getSyncStatus()
+  )
+
+  ipcMain.handle(
+    SYNC_IPC_CHANNELS.TRIGGER_SYNC,
+    async (_, workspaceId: string) => { await triggerSync(workspaceId) }
+  )
+
+  ipcMain.handle(
+    SYNC_IPC_CHANNELS.GET_PENDING_CHANGES,
+    async (_, workspaceId: string) => getPendingChanges(workspaceId)
+  )
+
+  ipcMain.handle(
+    SYNC_IPC_CHANNELS.DISCARD_PENDING_CHANGES,
+    async (_, workspaceId: string) => { discardPendingChanges(workspaceId) }
+  )
+
+  // ===== 团队管理 =====
+
+  const {
+    listTeamWorkspaces,
+    createTeamWorkspace,
+    deleteTeamWorkspace,
+    getMembers,
+    createInvitation,
+    verifyInvitation,
+    acceptInvitation,
+    declineInvitation,
+    listInvitations,
+    cancelInvitation,
+    getWorkspaceStats,
+    updateMemberRole,
+    removeMember,
+    leaveWorkspace,
+    transferOwnership,
+  } = require('./lib/team-manager')
+  const { getWorkspaceBrand, setWorkspaceBrand } = require('./lib/agent-workspace-manager')
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.LIST_WORKSPACES,
+    async () => listTeamWorkspaces()
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.CREATE_WORKSPACE,
+    async (_, name: string) => {
+      const result = await createTeamWorkspace(name)
+      syncTeamWorkspacesToSidebar()
+      return result
+    }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.DELETE_WORKSPACE,
+    async (_, workspaceId: string) => { await deleteTeamWorkspace(workspaceId) }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.GET_MEMBERS,
+    async (_, workspaceId: string) => getMembers(workspaceId)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.CREATE_INVITATION,
+    async (_, input: { workspaceId: string; email: string; role: string }) =>
+      createInvitation(input)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.LIST_INVITATIONS,
+    async (_, workspaceId: string) => listInvitations(workspaceId)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.CANCEL_INVITATION,
+    async (_, input: { workspaceId: string; invitationId: string }) =>
+      cancelInvitation(input.workspaceId, input.invitationId)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.GET_STATS,
+    async (_, workspaceId: string) => getWorkspaceStats(workspaceId)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.VERIFY_INVITATION,
+    async (_, token: string) => verifyInvitation(token)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.ACCEPT_INVITATION,
+    async (_, token: string) => {
+      const result = await acceptInvitation(token)
+      // 接受邀请后同步工作区到侧边栏
+      syncTeamWorkspacesToSidebar()
+      return result
+    }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.DECLINE_INVITATION,
+    async (_, token: string) => { await declineInvitation(token) }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.UPDATE_MEMBER_ROLE,
+    async (_, input: { workspaceId: string; userId: string; role: string }) =>
+      { await updateMemberRole(input.workspaceId, input.userId, input.role) }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.REMOVE_MEMBER,
+    async (_, input: { workspaceId: string; userId: string }) =>
+      { await removeMember(input.workspaceId, input.userId) }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.APPLY_BRANDING,
+    async (_, workspaceId: string) => {
+      const brand = getWorkspaceBrand(workspaceId)
+      if (!brand) return
+      applyBrandToWindows(brand)
+    }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.SET_WORKSPACE_BRAND,
+    async (_, workspaceId: string, brand: import('@proma/shared').WorkspaceBrand) => {
+      setWorkspaceBrand(workspaceId, brand)
+      applyBrandToWindows(brand)
+    }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.GET_BRANDING,
+    async (_, workspaceId: string) => getWorkspaceBrand(workspaceId)
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.LEAVE_WORKSPACE,
+    async (_, workspaceId: string) => { await leaveWorkspace(workspaceId) }
+  )
+
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.TRANSFER_OWNERSHIP,
+    async (_, input: { workspaceId: string; targetUserId: string }) =>
+      { await transferOwnership(input.workspaceId, input.targetUserId) }
+  )
+
+  // ===== 技能市场（Phase 3 实现）=====
+
+  ipcMain.handle(
+    SKILL_MARKETPLACE_IPC_CHANNELS.PUBLISH,
+    async (_) => { throw new Error('技能市场功能将在下一版本中提供') }
+  )
+
+  ipcMain.handle(
+    SKILL_MARKETPLACE_IPC_CHANNELS.UNPUBLISH,
+    async (_) => { throw new Error('技能市场功能将在下一版本中提供') }
+  )
+
+  ipcMain.handle(
+    SKILL_MARKETPLACE_IPC_CHANNELS.LIST_TEAM_SKILLS,
+    async (_) => []
+  )
+
+  ipcMain.handle(
+    SKILL_MARKETPLACE_IPC_CHANNELS.INSTALL_TEAM_SKILL,
+    async (_) => { throw new Error('技能市场功能将在下一版本中提供') }
+  )
+
+  ipcMain.handle(
+    SKILL_MARKETPLACE_IPC_CHANNELS.CHECK_FOR_UPDATES,
+    async (_) => []
+  )
+
+  // ===== 团队文件操作 =====
+
+  const {
+    uploadFile,
+    downloadFile,
+    deleteRemoteFile,
+    fetchFileManifest,
+    createRemoteDirectory,
+    moveRemoteFile,
+  } = require('./lib/team-file-service')
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.CREATE_DIRECTORY,
+    async (_, input: { workspaceId: string; dirPath: string }) =>
+      createRemoteDirectory(input.workspaceId, input.dirPath)
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.UPLOAD,
+    async (_, input: { workspaceId: string; workspaceSlug: string; fileName: string; fileData: Uint8Array; sourcePath?: string }) => {
+      const buffer = Buffer.from(input.fileData)
+      return uploadFile(input.workspaceId, input.workspaceSlug, input.fileName, buffer, input.sourcePath)
+    }
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.DOWNLOAD,
+    async (_, input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) =>
+      downloadFile(input.workspaceId, input.workspaceSlug, input.filePath, input.uploadedBy)
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.DELETE,
+    async (_, input: { workspaceId: string; workspaceSlug: string; filePath: string }) =>
+      deleteRemoteFile(input.workspaceId, input.workspaceSlug, input.filePath)
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.GET_MANIFEST,
+    async (_, workspaceId: string, workspaceSlug?: string) => fetchFileManifest(workspaceId, workspaceSlug)
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.MOVE,
+    async (_, input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) =>
+      moveRemoteFile(input.workspaceId, input.fromPath, input.toDir)
   )
 }

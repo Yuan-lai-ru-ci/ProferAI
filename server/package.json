@@ -1,0 +1,12 @@
+{
+  "name": "proma-team-server",
+  "version": "0.1.1",
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^1.0.0",
+    "better-sqlite3": "^11.0.0",
+    "hono": "^4.0.0",
+    "jsonwebtoken": "^9.0.0",
+    "uuid": "^10.0.0"
+  }
+}

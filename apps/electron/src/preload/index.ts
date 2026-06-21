@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -681,6 +681,12 @@ export interface ElectronAPI {
   /** 删除文件/目录 */
   deleteFile: (filePath: string) => Promise<void>
 
+  /** 递归读取目录中所有文件 */
+  readDirectoryRecursive: (dirPath: string) => Promise<Array<{ relativePath: string; data: Uint8Array }>>
+
+  /** 打开原生文件夹选择对话框，递归读取所有文件并返回 */
+  selectAndUploadFolder: () => Promise<Array<{ relativePath: string; data: Uint8Array; sourcePath?: string }> | null>
+
   /** 用系统默认应用打开文件 */
   openFile: (filePath: string) => Promise<void>
 
@@ -1025,6 +1031,69 @@ export interface ElectronAPI {
   runAutomationNow: (id: string) => Promise<void>
   /** 订阅任务列表变更事件 */
   onAutomationChanged: (callback: () => void) => () => void
+
+  // ===== 身份认证（Phase 1: 占位类型）=====
+  auth: {
+    getDeviceIdentity: () => Promise<import('../types/identity').DeviceIdentity>
+    getUserIdentity: () => Promise<import('../types/identity').UserIdentity>
+    updateProfile: (updates: Record<string, unknown>) => Promise<import('../types/identity').UserIdentity>
+    login: (credentials: Record<string, unknown>) => Promise<unknown>
+    register: (credentials: Record<string, unknown>) => Promise<unknown>
+    logout: () => Promise<void>
+    getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string }>
+    getServerInfo: () => Promise<Array<{ baseUrl: string; email: string; isLoggedIn: boolean }>>
+  }
+
+  // ===== 同步（Phase 1: 占位类型）=====
+  sync: {
+    getStatus: (workspaceId?: string) => Promise<{ workspaces: unknown[] }>
+    triggerSync: (workspaceId: string) => Promise<void>
+    getPendingChanges: (workspaceId: string) => Promise<unknown[]>
+    discardPendingChanges: (workspaceId: string) => Promise<void>
+    onStatusChanged: (callback: (data: unknown) => void) => () => void
+  }
+
+  // ===== 团队管理（Phase 1: 占位类型）=====
+  team: {
+    listWorkspaces: () => Promise<import('@proma/shared').AgentWorkspace[]>
+    onWorkspacesSynced: (callback: () => void) => () => void
+    createWorkspace: (name: string) => Promise<import('@proma/shared').AgentWorkspace>
+    deleteWorkspace: (workspaceId: string) => Promise<void>
+    getMembers: (workspaceId: string) => Promise<unknown[]>
+    createInvitation: (input: { workspaceId: string; email: string; role: string }) => Promise<unknown>
+    listInvitations: (workspaceId: string) => Promise<unknown[]>
+    cancelInvitation: (input: { workspaceId: string; invitationId: string }) => Promise<void>
+    getStats: (workspaceId: string) => Promise<{ totalSize: number; fileCount: number; dirCount: number; memberCount: number; onlineCount: number; pendingInvites: number } | null>
+    verifyInvitation: (token: string) => Promise<unknown>
+    acceptInvitation: (token: string) => Promise<import('@proma/shared').AgentWorkspace>
+    declineInvitation: (token: string) => Promise<void>
+    updateMemberRole: (input: { workspaceId: string; userId: string; role: string }) => Promise<void>
+    removeMember: (input: { workspaceId: string; userId: string }) => Promise<void>
+    applyBranding: (workspaceId: string) => Promise<void>
+    getBranding: (workspaceId: string) => Promise<unknown>
+    setWorkspaceBrand: (workspaceId: string, brand: import('@proma/shared').WorkspaceBrand) => Promise<void>
+    leaveWorkspace: (workspaceId: string) => Promise<void>
+    transferOwnership: (input: { workspaceId: string; targetUserId: string }) => Promise<void>
+  }
+
+  // ===== 技能市场（Phase 1: 占位类型）=====
+  skillMarketplace: {
+    publish: (input: { workspaceSlug: string; skillSlug: string }) => Promise<unknown>
+    unpublish: (input: { workspaceSlug: string; skillSlug: string }) => Promise<void>
+    listTeamSkills: (workspaceId: string) => Promise<unknown[]>
+    installTeamSkill: (input: { workspaceId: string; skillSlug: string }) => Promise<unknown>
+    checkForUpdates: (workspaceSlug: string) => Promise<unknown[]>
+  }
+
+  // ===== 团队文件操作 =====
+  teamFile: {
+    upload: (input: { workspaceId: string; workspaceSlug: string; fileName: string; fileData: Uint8Array; sourcePath?: string }) => Promise<{ success: boolean; path: string; size: number; error?: string }>
+    download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) => Promise<string | null>
+    delete: (input: { workspaceId: string; workspaceSlug: string; filePath: string }) => Promise<boolean>
+    getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }>>
+    createDirectory: (input: { workspaceId: string; dirPath: string }) => Promise<boolean>
+    move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }>
+  }
 }
 
 interface MigrationExportResult {
@@ -1791,6 +1860,16 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_FILE, filePath)
   },
 
+  /** 打开文件夹选择对话框，递归读取所有文件 */
+  selectAndUploadFolder: async (): Promise<Array<{ relativePath: string; data: Uint8Array; sourcePath?: string }> | null> => {
+    return ipcRenderer.invoke('agent:select-and-upload-folder')
+  },
+
+  /** 递归读取目录中所有文件 */
+  readDirectoryRecursive: (dirPath: string): Promise<Array<{ relativePath: string; data: Uint8Array }>> => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_DIRECTORY_RECURSIVE, dirPath)
+  },
+
   openFile: (filePath: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FILE, filePath)
   },
@@ -2344,6 +2423,111 @@ const electronAPI: ElectronAPI = {
     const listener = (): void => callback()
     ipcRenderer.on(AUTOMATION_IPC_CHANNELS.CHANGED, listener)
     return () => { ipcRenderer.removeListener(AUTOMATION_IPC_CHANNELS.CHANGED, listener) }
+  },
+
+  // ===== 身份认证（Phase 1: 占位）=====
+  auth: {
+    getDeviceIdentity: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_DEVICE_IDENTITY),
+    getUserIdentity: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_USER_IDENTITY),
+    updateProfile: (updates: Record<string, unknown>) =>
+      ipcRenderer.invoke(AUTH_IPC_CHANNELS.UPDATE_PROFILE, updates),
+    login: (credentials: Record<string, unknown>) =>
+      ipcRenderer.invoke(AUTH_IPC_CHANNELS.LOGIN, credentials),
+    register: (credentials: Record<string, unknown>) =>
+      ipcRenderer.invoke(AUTH_IPC_CHANNELS.REGISTER, credentials),
+    logout: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.LOGOUT),
+    getAuthStatus: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_AUTH_STATUS),
+    getServerInfo: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_SERVER_INFO),
+  },
+
+  // ===== 同步（Phase 1: 占位）=====
+  sync: {
+    getStatus: (workspaceId?: string) =>
+      ipcRenderer.invoke(SYNC_IPC_CHANNELS.GET_STATUS, workspaceId),
+    triggerSync: (workspaceId: string) =>
+      ipcRenderer.invoke(SYNC_IPC_CHANNELS.TRIGGER_SYNC, workspaceId),
+    getPendingChanges: (workspaceId: string) =>
+      ipcRenderer.invoke(SYNC_IPC_CHANNELS.GET_PENDING_CHANGES, workspaceId),
+    discardPendingChanges: (workspaceId: string) =>
+      ipcRenderer.invoke(SYNC_IPC_CHANNELS.DISCARD_PENDING_CHANGES, workspaceId),
+    onStatusChanged: (callback: (data: unknown) => void) => {
+      const listener = (_: unknown, data: unknown): void => callback(data)
+      ipcRenderer.on(SYNC_IPC_CHANNELS.STATUS_CHANGED, listener)
+      return () => { ipcRenderer.removeListener(SYNC_IPC_CHANNELS.STATUS_CHANGED, listener) }
+    },
+  },
+
+  // ===== 团队管理（Phase 1: 占位）=====
+  team: {
+    onWorkspacesSynced: (callback: () => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('team:workspaces-synced', listener)
+      return () => { ipcRenderer.removeListener('team:workspaces-synced', listener) }
+    },
+    listWorkspaces: () => ipcRenderer.invoke(TEAM_IPC_CHANNELS.LIST_WORKSPACES),
+    createWorkspace: (name: string) => ipcRenderer.invoke(TEAM_IPC_CHANNELS.CREATE_WORKSPACE, name),
+    deleteWorkspace: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.DELETE_WORKSPACE, workspaceId),
+    getMembers: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.GET_MEMBERS, workspaceId),
+    createInvitation: (input: { workspaceId: string; email: string; role: string }) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.CREATE_INVITATION, input),
+    listInvitations: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.LIST_INVITATIONS, workspaceId),
+    cancelInvitation: (input: { workspaceId: string; invitationId: string }) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.CANCEL_INVITATION, input),
+    getStats: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.GET_STATS, workspaceId),
+    verifyInvitation: (token: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.VERIFY_INVITATION, token),
+    acceptInvitation: (token: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.ACCEPT_INVITATION, token),
+    declineInvitation: (token: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.DECLINE_INVITATION, token),
+    updateMemberRole: (input: { workspaceId: string; userId: string; role: string }) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.UPDATE_MEMBER_ROLE, input),
+    removeMember: (input: { workspaceId: string; userId: string }) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.REMOVE_MEMBER, input),
+    applyBranding: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.APPLY_BRANDING, workspaceId),
+    getBranding: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.GET_BRANDING, workspaceId),
+    setWorkspaceBrand: (workspaceId: string, brand: import('@proma/shared').WorkspaceBrand) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.SET_WORKSPACE_BRAND, workspaceId, brand),
+    leaveWorkspace: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.LEAVE_WORKSPACE, workspaceId),
+    transferOwnership: (input: { workspaceId: string; targetUserId: string }) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.TRANSFER_OWNERSHIP, input),
+  },
+
+  // ===== 技能市场（Phase 1: 占位）=====
+  skillMarketplace: {
+    publish: (input: { workspaceSlug: string; skillSlug: string }) =>
+      ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.PUBLISH, input),
+    unpublish: (input: { workspaceSlug: string; skillSlug: string }) =>
+      ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.UNPUBLISH, input),
+    listTeamSkills: (workspaceId: string) =>
+      ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.LIST_TEAM_SKILLS, workspaceId),
+    installTeamSkill: (input: { workspaceId: string; skillSlug: string }) =>
+      ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.INSTALL_TEAM_SKILL, input),
+    checkForUpdates: (workspaceSlug: string) =>
+      ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.CHECK_FOR_UPDATES, workspaceSlug),
+  },
+
+  // ===== 团队文件操作 =====
+  teamFile: {
+    upload: (input: { workspaceId: string; workspaceSlug: string; fileName: string; fileData: Uint8Array; sourcePath?: string }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.UPLOAD, input),
+    download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.DOWNLOAD, input),
+    delete: (input: { workspaceId: string; workspaceSlug: string; filePath: string }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.DELETE, input),
+    getManifest: (workspaceId: string, workspaceSlug?: string) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.GET_MANIFEST, workspaceId, workspaceSlug),
+    createDirectory: (input: { workspaceId: string; dirPath: string }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.CREATE_DIRECTORY, input),
+    move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.MOVE, input),
   },
 }
 

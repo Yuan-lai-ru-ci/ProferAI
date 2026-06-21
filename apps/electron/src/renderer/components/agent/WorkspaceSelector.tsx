@@ -331,6 +331,15 @@ export function WorkspaceSelector(): React.ReactElement {
               ) : (
                 <>
                   <span className="flex-1 min-w-0 truncate">{ws.name}</span>
+                  {ws.type === 'team' ? (
+                    <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium">
+                      团队
+                    </span>
+                  ) : (
+                    <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-muted/60 text-muted-foreground/70">
+                      个人
+                    </span>
+                  )}
 
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                     <button
