@@ -960,6 +960,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       setActiveView('conversations')
     } catch (error) {
       console.error('[侧边栏] 创建 Agent 会话失败:', error)
+      toast.error(error instanceof Error ? error.message : '创建会话失败')
     }
   }, [agentChannelId, agentModelId, currentWorkspaceId, openSession, setActiveView, setAgentSessions, setCurrentWorkspaceId, setSessionChannelMap, setSessionModelMap])
 
