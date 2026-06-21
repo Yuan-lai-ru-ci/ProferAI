@@ -82,9 +82,9 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       setResolvedPath(localPath)
 
       if (IMAGE_EXTS.has(e)) {
-        // 用 file:// 协议直接加载本地文件，绕过 IPC 路径校验
-        const fileUrl = localPath.replace(/\\/g, '/')
-        setState({ status: 'image', src: `file:///${fileUrl.replace(/^\//, '')}` })
+        const url = await window.electronAPI.registerPreviewPath(localPath)
+        if (url) setState({ status: 'image', src: url })
+        else setState({ status: 'error', message: '无法读取图片' })
       } else if (e === 'pdf') {
         const result = await window.electronAPI.preparePdfPreview(localPath)
         if (result?.tmpHtmlUrl) setState({ status: 'iframe', src: result.tmpHtmlUrl })

@@ -3006,6 +3006,19 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 注册文件路径到 proma-file:// 协议（不做路径校验，供团队文件预览等内部场景使用）
+  ipcMain.handle(
+    'file:register-preview-path',
+    async (_, filePath: string): Promise<string | null> => {
+      const { statSync } = await import('node:fs')
+      const { registerPromaFilePath } = await import('./lib/local-file-protocol')
+      try {
+        if (!statSync(filePath).isFile()) return null
+        return registerPromaFilePath(filePath)
+      } catch { return null }
+    }
+  )
+
   // 读取文件为 base64（带路径校验，供内联图片预览等使用）
   ipcMain.handle(
     'file:read-binary-base64',
