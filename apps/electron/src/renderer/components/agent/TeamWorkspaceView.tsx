@@ -24,6 +24,7 @@ import {
   workspaceFilesVersionAtom,
 } from '@/atoms/agent-atoms'
 import { TabContent } from '@/components/tabs/TabContent'
+import { CompactModelSelectorCtx } from '@/components/chat/ModelSelector'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
@@ -1430,7 +1431,9 @@ export function TeamWorkspaceView(): React.ReactElement {
           </div>
           <div className="flex-1 min-h-0 flex flex-col titlebar-no-drag">
             {teamAgentTabId ? (
-              <div className="flex-1 min-h-0"><TabContent tabId={teamAgentTabId} /></div>
+              <CompactModelSelectorCtx.Provider value={true}>
+                <div className="flex-1 min-h-0"><TabContent tabId={teamAgentTabId} /></div>
+              </CompactModelSelectorCtx.Provider>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground p-4">
                 <MessageSquareIcon size={24} strokeWidth={1} />
