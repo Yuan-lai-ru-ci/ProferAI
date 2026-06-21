@@ -82,9 +82,9 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       setResolvedPath(localPath)
 
       if (IMAGE_EXTS.has(e)) {
-        const b64 = await window.electronAPI.readBinaryBase64(localPath)
-        if (b64) setState({ status: 'image', dataUrl: `data:image/${e === 'svg' ? 'svg+xml' : e};base64,${b64}` })
-        else setState({ status: 'error', message: '无法读取图片' })
+        const b64 = await window.electronAPI.readBinaryBase64(localPath, undefined, 50 * 1024 * 1024)
+        if (b64) setState({ status: 'image', dataUrl: `data:image/${e === 'svg' ? 'svg+xml' : e === 'jpeg' ? 'jpeg' : e};base64,${b64}` })
+        else setState({ status: 'error', message: '无法读取图片（文件可能过大或已损坏）' })
       } else if (e === 'pdf') {
         const result = await window.electronAPI.preparePdfPreview(localPath)
         if (result?.tmpHtmlUrl) setState({ status: 'iframe', src: result.tmpHtmlUrl })
