@@ -978,10 +978,28 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     }
     setCurrentWorkspaceId(workspaceId)
     setActiveView('conversations')
-    // 切换到新工作区时，自动展开该工作区
     setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, workspaceId))
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
-  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView])
+
+    // 团队工作区：自动选中或创建一个 Agent 会话
+    const ws = workspaces.find((w) => w.id === workspaceId)
+    if (ws?.type === 'team') {
+      setCurrentAgentSessionId((prev) => {
+        // 已有一个属于该工作区的 Agent 会话 → 直接选中
+        const existing = agentSessions.find((s) => !s.archived && s.workspaceId === workspaceId)
+        if (existing) {
+          // 延迟打开 tab，等 currentWorkspaceId 更新生效
+          setTimeout(() => {
+            const result = openTab(tabs, { type: 'agent', sessionId: existing.id, title: existing.title })
+            setTabs(result.tabs)
+            setActiveTabId(result.activeTabId)
+          }, 50)
+          return existing.id
+        }
+        return prev
+      })
+    }
+  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView, workspaces, agentSessions, setCurrentAgentSessionId, tabs, setTabs, setActiveTabId])
 
   const canDeleteWorkspace = React.useCallback(
     (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
