@@ -4,8 +4,8 @@
   "description": "Proma next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",
   "author": {
-    "name": "ErlichLiu",
-    "email": "erlichliu@gmail.com"
+    "name": "Yuan-lai-ru-ci",
+    "email": "yuanlairuci@users.noreply.github.com"
   },
   "private": true,
   "type": "module",

@@ -88,7 +88,7 @@ import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
-// auto-updater disabled — updates managed by our own channel
+import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
@@ -570,6 +570,11 @@ async function bootstrap(): Promise<void> {
   // 启动定时任务调度器（恢复持久化的 active 任务）
   safeRun('startScheduler', startScheduler)
 
+  // 初始化自动更新（启动后 10s 首次检查，之后每 4 小时检查一次）
+  if (mainWindow) {
+    safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
+  }
+
   app.on('activate', () => {
     if (shouldSuppressVoiceDictationActivate()) {
       return
@@ -653,7 +658,8 @@ app.on('before-quit', () => {
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
   // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程
   killOrphanedClaudeSubprocesses()
-  // 更新器已禁用，无需清理定时器
+  // 清理自动更新定时器
+  cleanupUpdater()
   // 停止工作区文件监听
   stopWorkspaceWatcher()
   // 停止 Chat 工具配置文件监听
