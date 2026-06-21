@@ -23,11 +23,11 @@ Bun workspace monorepo：
 ```
 proma-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.15)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.2)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.3)
+│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.31)
+│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.11)
+│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.9.5)
+    └── electron/   # Electron 桌面应用 (v0.12.26)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -40,26 +40,26 @@ proma-v2/
 
 ### 包职责详解
 
-#### @proma/shared (v0.1.15)
+#### @proma/shared (v0.1.31)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @proma/core (v0.2.2)
+#### @proma/core (v0.2.11)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
 - **依赖**：`@proma/shared`、`shiki`
 - **Peer 依赖**：`@anthropic-ai/claude-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
-#### @proma/ui (v0.1.3)
+#### @proma/ui (v0.1.9)
 - **关键组件**：共享 React UI 组件库
-- **依赖**：`@proma/core`、`beautiful-mermaid`、`shiki`、Radix UI
+- **依赖**：`@proma/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.9.5)
+#### @proma/electron (v0.12.26)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
-  - `@anthropic-ai/claude-agent-sdk@0.3.143` - Agent SDK
+  - `@anthropic-ai/claude-agent-sdk@0.3.153` - Agent SDK
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -135,7 +135,7 @@ bun run generate:icons    # 生成应用图标
 | **构建工具** | Vite | 6.0.3 |
 | **打包工具** | esbuild | 0.24.0+ |
 | **分发工具** | Electron Builder | 25.1.8 |
-| **Agent SDK** | @anthropic-ai/claude-agent-sdk | 0.3.143 |
+| **Agent SDK** | @anthropic-ai/claude-agent-sdk | 0.3.153 |
 | **飞书 SDK** | @larksuiteoapi/node-sdk | 最新 |
 
 ## 核心架构
@@ -178,6 +178,7 @@ bun run generate:icons    # 生成应用图标
 | `agent-ask-user-service.ts` | Agent 用户交互：AskUser 请求处理 |
 | `agent-exit-plan-service.ts` | Agent 退出计划服务 |
 | `agent-workspace-manager.ts` | 工作区管理（16KB）：MCP Server 配置、Skills 配置、工作区 CRUD |
+| `team-manager.ts` / `team-file-service.ts` | 团队工作区与团队文件：远程 CRUD、邀请成员、文件上传 / 下载 / 删除 / 移动、本地缓存 |
 | `chat-service.ts` | Chat 流式调用编排（20KB）：Provider 适配器集成、消息持久化、AbortController |
 | `conversation-manager.ts` | 对话管理（13KB）：对话 CRUD、JSONL 消息存储、置顶、上下文分割 |
 | `channel-manager.ts` | 渠道管理（16KB）：渠道 CRUD、API Key AES-256-GCM 加密（safeStorage）、连接测试、模型获取 |
@@ -306,6 +307,7 @@ bun run generate:icons    # 生成应用图标
 - JSON 配置 + JSONL 追加日志，无本地数据库，文件可移植
 - Agent 工作区按 slug 隔离，每个会话独立目录
 - MCP 配置和 Skills 按工作区管理
+- 团队文件以服务器清单为唯一数据源，本地 `workspace-files/` 仅作为预览、打开和 Agent 解读的按需缓存
 
 ## 构建工具
 
@@ -390,7 +392,7 @@ bun run generate:icons    # 生成应用图标
 
 ## Agent SDK 集成架构
 
-基于 `@anthropic-ai/claude-agent-sdk@0.3.143` 实现 Agent 模式，与 Chat 模式并行。
+基于 `@anthropic-ai/claude-agent-sdk@0.3.153` 实现 Agent 模式，与 Chat 模式并行。
 
 ### 核心流程
 
@@ -489,8 +491,9 @@ React UI 更新
 - ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Kimi、智谱、MiniMax、豆包、通义千问、Google、自定义端点
 - ✅ **Agent SDK 集成**：基于 Claude Agent SDK 的完整 Agent 模式
 - ✅ **飞书集成**：消息同步、任务通知、OAuth 认证（68KB 核心服务）
-- ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Skills 管理
+- ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Agent 技能全屏管理、团队文件管理
 - ✅ **权限系统**：工具权限检查、用户确认流程
+- ✅ **Automation 定时任务**：持久化调度、运行历史、手动运行、失败保护、飞书通知
 - ✅ **记忆系统**：跨会话记忆存储与检索
 - ✅ **自动更新**：Electron Updater 集成
 - ✅ **代理支持**：系统代理检测与配置
@@ -506,3 +509,64 @@ React UI 更新
 - **文件监听**：工作区文件、MCP 配置、Chat 工具实时监控
 - **事件流处理**：SDK 消息流式转换与累积
 - **错误映射**：SDK 错误统一转换为应用错误
+
+## 更新日志
+
+> 2026-06-20
+
+### 安全修复
+- JWT_SECRET 改为强制要求环境变量（`server/src/config.js`），拒绝默认值
+- Admin 密码改为 `ADMIN_PASSWORD` 环境变量，未设置则随机生成（`server/src/db.js`）
+- 文件上传增加 `MAX_FILE_SIZE` 上限（默认 500MB），Content-Length 预检 + buffer 双校验（`server/src/routes/files.js`）
+
+### 服务端模块化
+- `server/index.js` 拆分为 `src/{config,db,utils,middleware,routes/{auth,workspaces,invitations,sync,files,heartbeat}}`
+- 修复 `safePath()` 跨平台路径分隔符 bug（Windows `\` 不兼容 `root + '/'` 前缀检查，改用 `pathSep`）
+
+### Agent 编排层拆分
+- `agent-orchestrator.ts` 提取 `agent-retry-utils.ts`、`agent-prompt-utils.ts`、`agent-sdk-cli-path.ts`、`agent-directory-utils.ts`
+- `feishu-bridge.ts` 补充提取 `feishu/group-utils.ts`
+
+### 团队文件管理体验收尾
+- 团队模式主界面改为文件管理主区 + 可收起 Agent 侧栏，窗口控制按钮嵌入文件管理顶栏，保留可拖动标题栏区域
+- 上传按钮改为稳定的分裂按钮，支持上传文件和上传文件夹，修复窄宽度下顶栏文字换行与展开菜单点击问题
+- 团队文件预览优先使用本地 `workspace-files/` 缓存；自己上传的文件直接使用本地路径，缓存缺失或其他成员文件再下载
+- 拖拽导入遵循目标目录：拖到当前目录空白处进入当前目录，拖到文件夹卡片 / 列表行 / 树节点直接进入该文件夹
+- 团队文件可拖入右侧 Agent 面板解读，并使用专用拖拽类型避免和普通本地文件拖拽冲突
+
+### Bug 修复
+- Hono v4 `*` 通配符 `c.req.param('*')` 返回 undefined，DELETE/DOWNLOAD 改为 `:path{.+}` 命名通配符
+- 删除团队文件时间步清理本地 `workspace-files/` 副本
+- Electron 拖拽兼容：`dataTransfer.items` 为空时回退到 `dataTransfer.files`
+- `<input webkitdirectory>` 在 Electron 不工作，改用 `dialog.showOpenDialog` + `readDirectoryRecursive` 原生方案
+- 服务端上传自动补齐父目录 `is_directory=1` 条目（确保客户端 `buildFileTree` 正确构建树）
+
+### 测试
+- 新增 `agent-retry-utils.test.ts`、`agent-directory-utils.test.ts`、`server/src/utils.test.js`（37 用例）
+
+### 部署
+- 服务器：`ecs-user@47.109.108.57:~/proma-team-server/`，端口 3456，nginx 反代 `/proma/` → `:3456`
+
+## 后续计划
+
+### 高优先级
+- HTTPS + 域名（nginx + Let's Encrypt）
+- 数据库定期备份（SQLite 单文件）
+- 注册限流（防暴力注册）
+- 工作区解散/恢复机制（冷静期 + 到期清理）
+- 邀请列表管理（pending/accepted/expired）
+- 文件搜索功能
+
+### 中优先级
+- PC 客户端自动更新（electron-updater）
+- 邀请过期自动清理（定时任务）
+- 拖动稳定性优化
+- feishu-bridge 继续拆分（command-handlers、chat-history）
+- 错误监控（服务端日志收集）
+
+### 低优先级
+- Skill 市场（Phase 3）
+- 审计日志、使用统计
+- 多团队服务器配置
+- E2E 测试（多客户端完整流程）
+- 客户端签名（Windows/macOS）

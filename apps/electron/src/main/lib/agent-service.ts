@@ -432,12 +432,14 @@ export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): 
 
     mkdirSync(dirname(targetPath), { recursive: true })
 
-    if (file.data.length * 0.75 > MAX_ATTACHMENT_SIZE) {
-      console.warn(`[Agent 服务] 工作区文件超过 100MB 限制，跳过: ${file.filename} (预估 ${(file.data.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`)
+    const buffer = typeof file.data === 'string'
+      ? Buffer.from(file.data, 'base64')
+      : Buffer.from(file.data)
+
+    if (buffer.length > MAX_ATTACHMENT_SIZE) {
+      console.warn(`[Agent 服务] 工作区文件超过 100MB 限制，跳过: ${file.filename} (${(buffer.length / 1024 / 1024).toFixed(1)}MB)`)
       continue
     }
-
-    const buffer = Buffer.from(file.data, 'base64')
     writeFileSync(targetPath, buffer)
 
     const actualFilename = targetPath.slice(wsFilesDir.length + 1)

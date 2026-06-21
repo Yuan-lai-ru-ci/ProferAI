@@ -88,7 +88,7 @@ import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
-import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
+// auto-updater disabled — updates managed by our own channel
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
@@ -290,8 +290,11 @@ function showAndFocusMainWindow(): void {
  * Get the appropriate app icon path for the current platform
  */
 function getIconPath(): string {
-  // resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
-  const resourcesDir = join(__dirname, 'resources')
+  // 开发模式：resources/ 在 dist/ 下，通过 build:resources 复制
+  // 打包模式：resources/ 在 process.resourcesPath（app.asar 同级）
+  const resourcesDir = app.isPackaged
+    ? process.resourcesPath
+    : join(__dirname, 'resources')
 
   if (process.platform === 'darwin') {
     return join(resourcesDir, 'icon.icns')
@@ -364,7 +367,6 @@ function createWindow(): void {
   const isDev = !app.isPackaged
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
   }
@@ -538,11 +540,7 @@ async function bootstrap(): Promise<void> {
   // 启动 Chat 工具配置文件监听（Agent 创建工具后自动通知渲染进程）
   safeRun('startChatToolsWatcher', startChatToolsWatcher)
 
-  // 生产环境下初始化自动更新
-  if (app.isPackaged && mainWindow) {
-    safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
-  }
-
+  // 自动更新已禁用 — 通过自有渠道管控版本发布
   // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
   safeRun('createQuickTaskWindow', createQuickTaskWindow)
   if (getSettings().voiceDictation?.enabled === true) {
@@ -655,8 +653,7 @@ app.on('before-quit', () => {
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
   // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程
   killOrphanedClaudeSubprocesses()
-  // 清理更新器定时器
-  cleanupUpdater()
+  // 更新器已禁用，无需清理定时器
   // 停止工作区文件监听
   stopWorkspaceWatcher()
   // 停止 Chat 工具配置文件监听
@@ -666,6 +663,9 @@ app.on('before-quit', () => {
   stopAllBridges()
   // 停止定时任务调度器
   stopScheduler()
+  // 停止同步引擎
+  const { stopSyncEngine } = require('./lib/sync-manager')
+  stopSyncEngine()
   // 释放飞书同步防休眠
   stopFeishuSyncSleepBlocker()
   // 注销全局快捷键

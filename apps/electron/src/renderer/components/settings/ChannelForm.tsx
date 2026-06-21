@@ -71,15 +71,24 @@ interface ChannelFormProps {
   onCancel: () => void
 }
 
+/** 国内供应商（优先推荐） */
+const CN_PROVIDERS: ProviderType[] = ['deepseek', 'qwen', 'zhipu', 'doubao', 'kimi-api', 'kimi-coding', 'zhipu-coding', 'minimax', 'xiaomi', 'xiaomi-token-plan']
+
+/** 境外供应商 */
+const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'google', 'anthropic-compatible', 'custom']
+
 /** 所有可选供应商 */
-const PROVIDER_OPTIONS: ProviderType[] = ['anthropic', 'anthropic-compatible', 'openai', 'deepseek', 'google', 'kimi-api', 'kimi-coding', 'zhipu', 'zhipu-coding', 'minimax', 'doubao', 'qwen', 'xiaomi', 'xiaomi-token-plan', 'custom']
+const PROVIDER_OPTIONS: ProviderType[] = [...CN_PROVIDERS, ...GLOBAL_PROVIDERS]
 
 /** 供应商选项（用于 SettingsSelect） */
-const PROVIDER_SELECT_OPTIONS = PROVIDER_OPTIONS.map((p) => ({
-  value: p,
-  label: PROVIDER_LABELS[p],
-  icon: getProviderLogo(p),
-}))
+const PROVIDER_SELECT_OPTIONS = PROVIDER_OPTIONS.map((p) => {
+  const label = PROVIDER_LABELS[p]
+  const icon = getProviderLogo(p)
+  if (CN_PROVIDERS.includes(p)) {
+    return { value: p, label: `${label}（国内 · 推荐）`, icon }
+  }
+  return { value: p, label, icon }
+})
 
 /** 各供应商的 Chat 端点路径，用于 Base URL 预览 */
 const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {

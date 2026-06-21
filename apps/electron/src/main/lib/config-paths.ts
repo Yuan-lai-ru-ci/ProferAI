@@ -640,3 +640,45 @@ export function getScratchPadPath(): string {
 export function getAutomationsPath(): string {
   return join(getConfigDir(), 'automations.json')
 }
+
+/**
+ * 获取设备身份文件路径
+ *
+ * @returns ~/.proma/device.json
+ */
+export function getDeviceIdentityPath(): string {
+  return join(getConfigDir(), 'device.json')
+}
+
+/**
+ * 获取团队服务器配置文件路径
+ *
+ * @returns ~/.proma/team-servers.json
+ */
+export function getTeamServersConfigPath(): string {
+  return join(getConfigDir(), 'team-servers.json')
+}
+
+/**
+ * 获取同步状态文件路径
+ *
+ * @returns ~/.proma/sync-state.json
+ */
+export function getSyncStatePath(): string {
+  return join(getConfigDir(), 'sync-state.json')
+}
+
+/**
+ * 获取团队 Skills 缓存目录路径
+ *
+ * @returns ~/.proma/team-skills-cache/
+ */
+export function getTeamSkillsCacheDir(): string {
+  const dir = join(getConfigDir(), 'team-skills-cache')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
+}

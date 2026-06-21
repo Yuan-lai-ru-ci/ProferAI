@@ -5,8 +5,17 @@
 
 import * as React from 'react'
 import { detectIsWindows } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 
-export function WindowControls(): React.ReactElement | null {
+interface WindowControlsProps {
+  variant?: 'fixed' | 'inline'
+  className?: string
+}
+
+export function WindowControls({
+  variant = 'fixed',
+  className,
+}: WindowControlsProps): React.ReactElement | null {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const [isMaximized, setIsMaximized] = React.useState(false)
 
@@ -28,7 +37,11 @@ export function WindowControls(): React.ReactElement | null {
   if (!isWindows) return null
 
   return (
-    <div className="window-controls fixed top-[8px] right-[8px] z-[100] flex select-none">
+    <div className={cn(
+      'window-controls flex select-none',
+      variant === 'fixed' ? 'fixed top-[8px] right-[8px] z-[100]' : 'relative z-10 shrink-0',
+      className,
+    )}>
       {/* 最小化 */}
       <button
         type="button"

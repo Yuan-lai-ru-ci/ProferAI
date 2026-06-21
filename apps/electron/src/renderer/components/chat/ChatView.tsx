@@ -15,6 +15,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
+import { toast } from 'sonner'
 import { AlertCircle, X } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
 import { ChatMessages } from './ChatMessages'
@@ -214,7 +215,10 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
       contextDividersOverride?: string[]
     },
   ): Promise<void> => {
-    if (!selectedModel) return
+    if (!selectedModel) {
+      toast.error('暂无可用模型，请先在设置中添加 AI 渠道')
+      return
+    }
 
     const consumePending = options?.consumePendingAttachments ?? true
 
