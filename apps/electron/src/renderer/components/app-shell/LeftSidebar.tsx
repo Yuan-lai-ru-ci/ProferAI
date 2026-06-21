@@ -726,8 +726,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   }, [setWorkspaces])
 
   // authStatus 变化时刷新工作区（登录/登出）
+  // 立即刷新 + 500ms 后二次刷新兜底，防止 syncTeamWorkspacesToIndex 未完成导致的短暂空窗
   React.useEffect(() => {
     window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
+    if (authStatus.isLoggedIn) {
+      const timer = setTimeout(() => {
+        window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
+      }, 500)
+      return () => clearTimeout(timer)
+    }
   }, [authStatus.isLoggedIn, setWorkspaces])
 
   /** 打开自动任务列表 */

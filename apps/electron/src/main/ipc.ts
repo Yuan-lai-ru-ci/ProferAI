@@ -4459,12 +4459,11 @@ export function registerIpcHandlers(): void {
       const { listTeamWorkspaces } = require('./lib/team-manager')
       const { syncTeamWorkspacesToIndex } = require('./lib/agent-workspace-manager')
       const teamWs = await listTeamWorkspaces()
-      if (teamWs.length > 0) {
-        syncTeamWorkspacesToIndex(teamWs)
-        // 通知所有窗口刷新工作区列表
-        for (const w of BrowserWindow.getAllWindows()) {
-          w.webContents.send('team:workspaces-synced')
-        }
+      // 始终同步到本地索引（即使为空也更新，避免残留已删除的工作区）
+      syncTeamWorkspacesToIndex(teamWs)
+      // 通知所有窗口刷新工作区列表
+      for (const w of BrowserWindow.getAllWindows()) {
+        w.webContents.send('team:workspaces-synced')
       }
     } catch (err) {
       console.error('[IPC] 同步团队工作区失败:', err)
@@ -4478,8 +4477,8 @@ export function registerIpcHandlers(): void {
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
         startSyncEngine()
-        // 同步团队工作区到侧边栏
-        syncTeamWorkspacesToSidebar()
+        // 同步团队工作区到侧边栏（await 确保渲染进程拿到结果前索引已更新）
+        await syncTeamWorkspacesToSidebar()
       }
       return result
     }
@@ -4502,8 +4501,8 @@ export function registerIpcHandlers(): void {
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
         startSyncEngine()
-        // 同步团队工作区到侧边栏
-        syncTeamWorkspacesToSidebar()
+        // 同步团队工作区到侧边栏（await 确保渲染进程拿到结果前索引已更新）
+        await syncTeamWorkspacesToSidebar()
       }
       return result
     }
