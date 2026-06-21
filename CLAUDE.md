@@ -14,7 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Proma 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Electron 桌面应用架构。
+Profer 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Electron 桌面应用架构。脱胎于开源项目 Proma (github.com/ErlichLiu/Proma)，经深度改造而来。
+
+> **改名记录**：2026-06-21 从 Proma 改名为 Profer。应用名/数据目录/GitHub 仓库均已更名。代码包名 `@proma/*` 保持不变。
 
 ## Monorepo 结构
 
@@ -388,6 +390,24 @@ bun run generate:icons    # 生成应用图标
 
 **早期实现曾用"无条件 cpSync"绕开这个约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`、`agent-workspace-manager.ts:upgradeDefaultSkillsInWorkspaces`）。
 
+### 自动发版流程
+
+push main → `auto-version.yml` bump patch 版本 → 打 tag → `release.yml` 构建发布。
+
+```bash
+# 国内版（更新源：47.109.108.57）
+bun run dist:win
+
+# GitHub 版（更新源：GitHub Releases）
+bun run dist:win-github
+
+# 上传国内更新服务器
+scp "out/Profer Setup *.exe" out/latest.yml out/*.blockmap ecs-user@47.109.108.57:/home/ecs-user/profer-updates/
+ssh ecs-user@47.109.108.57 "sudo cp /home/ecs-user/profer-updates/* /usr/share/nginx/html/profer-updates/"
+```
+
+两个渠道编译时注入 `__UPDATE_CHANNEL__`，互不串扰。
+
 **新增 Skill 不需要先注入 default-skills 目录的旧版本**——`upgradeDefaultSkillsInWorkspaces` 会通过"目标缺失即注入"路径让所有老工作区自动获得。
 
 ## Agent SDK 集成架构
@@ -558,7 +578,7 @@ React UI 更新
 - 文件搜索功能
 
 ### 中优先级
-- PC 客户端自动更新（electron-updater）
+- ~~PC 客户端自动更新（electron-updater）~~ ✅ 已完成（v0.12.27+，双渠道：国内服务器 + GitHub）
 - 邀请过期自动清理（定时任务）
 - 拖动稳定性优化
 - feishu-bridge 继续拆分（command-handlers、chat-history）
