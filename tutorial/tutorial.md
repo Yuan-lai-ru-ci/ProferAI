@@ -1,4 +1,4 @@
-# Proma 教程
+﻿# Proma 教程
 
 编辑时间：2026年3月9日
 编辑时版本：v0.7.0
@@ -32,7 +32,7 @@ Proma 希望能在 3 月结束前实现 Pro Active Agent，白话讲就是更主
 
 ### 项目地址
 
-Proma 是一个开源的软件，我们的所有的代码都是公开的，`Proma 开源地址`：https://github.com/Yuan-lai-ru-ci/Proma.git 
+Proma 是一个开源的软件，我们的所有的代码都是公开的，`Proma 开源地址`：https://github.com/Yuan-lai-ru-ci/Profer.git 
 
 ### 版本（开源版本和商业运行版本）
 
@@ -42,7 +42,7 @@ Proma 是一个开源的软件，我们的所有的代码都是公开的，`Prom
 
 ### 下载和安装
 
-`开源版本下载地址`：https://github.com/Yuan-lai-ru-ci/Proma/releases 
+`开源版本下载地址`：https://github.com/Yuan-lai-ru-ci/Profer/releases 
 
 `商业版本下载地址`：https://proma.cool/download
 

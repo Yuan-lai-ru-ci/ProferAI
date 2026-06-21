@@ -1,4 +1,4 @@
-const PROMA_REPO_URL = 'https://github.com/Yuan-lai-ru-ci/Proma'
+﻿const PROMA_REPO_URL = 'https://github.com/Yuan-lai-ru-ci/Profer'
 
 let _promaVersion = '0.0.0'
 

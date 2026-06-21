@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AgentOrchestrator — Agent 编排层
  *
  * 从 agent-service.ts 提取的核心业务逻辑，负责：
@@ -741,7 +741,7 @@ export class AgentOrchestrator {
               key: 'i',
               label: '报告问题',
               action: 'open_external',
-              payload: 'https://github.com/Yuan-lai-ru-ci/Proma/issues/new',
+              payload: 'https://github.com/Yuan-lai-ru-ci/Profer/issues/new',
             },
           ],
           canRetry: false,

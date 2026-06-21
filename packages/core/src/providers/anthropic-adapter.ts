@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Anthropic 供应商适配器
  *
  * 实现 Anthropic Messages API 的消息转换、请求构建和 SSE 解析。
@@ -20,7 +20,7 @@
  * Kimi Coding Plan 特殊要求：
  * - Base URL：`https://api.kimi.com/coding/v1`
  * - 必须发送 Proma 自有 User-Agent（服务端白名单校验）
- * - UA 格式：`Profer/<version> (+https://github.com/Yuan-lai-ru-ci/Proma)`
+ * - UA 格式：`Profer/<version> (+https://github.com/Yuan-lai-ru-ci/Profer)`
  */
 
 import type { ProviderType } from '@proma/shared'
