@@ -10,6 +10,9 @@ import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 
+/** 编译时注入的更新渠道：server=国内服务器, github=GitHub Releases */
+declare const __UPDATE_CHANNEL__: 'server' | 'github'
+
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
 
@@ -135,15 +138,21 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     }).catch(() => {})
   } catch { /* 代理模块不可用时跳过 */ }
 
-  // 设置更新源：优先国内服务器（无需科学上网），环境变量可覆盖
-  const updateFeedUrl =
-    process.env.PROFER_UPDATE_FEED_URL ||
-    'http://47.109.108.57/profer-updates/'
-  autoUpdater.setFeedURL({
-    provider: 'generic',
-    url: updateFeedUrl,
-  })
-  console.log('[更新] 更新源:', updateFeedUrl)
+  // 更新源：编译时注入，server 渠道走国内服务器，github 渠道走 GitHub Releases
+  if (__UPDATE_CHANNEL__ === 'github') {
+    // 使用 electron-builder.yml 中配置的 GitHub publisher
+    console.log('[更新] 更新源: GitHub Releases')
+  } else {
+    // 默认 server 渠道：直连国内服务器
+    const updateFeedUrl =
+      process.env.PROFER_UPDATE_FEED_URL ||
+      'http://47.109.108.57/profer-updates/'
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: updateFeedUrl,
+    })
+    console.log('[更新] 更新源:', updateFeedUrl)
+  }
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),
