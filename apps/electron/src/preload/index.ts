@@ -717,6 +717,9 @@ export interface ElectronAPI {
   /** 仅解析文件路径（供 PDF/图片等用 file:// 加载） */
   resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').ResolvedFileUrl | null>
 
+  /** 注册文件路径到 proma-file:// 协议（不做路径校验，供团队文件预览） */
+  registerPreviewPath: (filePath: string) => Promise<string | null>
+
   /** 为内联 PDF 预览生成临时 HTML 文件，返回文件路径 */
   preparePdfPreview: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ tmpHtmlUrl: string } | null>
 
@@ -1909,6 +1912,10 @@ const electronAPI: ElectronAPI = {
 
   resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@proma/shared').ResolvedFileUrl | null>
+  },
+
+  registerPreviewPath: (filePath: string) => {
+    return ipcRenderer.invoke('file:register-preview-path', filePath) as Promise<string | null>
   },
 
   preparePdfPreview: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
