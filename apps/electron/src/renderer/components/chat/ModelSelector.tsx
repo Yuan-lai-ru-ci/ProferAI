@@ -29,6 +29,9 @@ import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
 import type { Channel, ModelOption } from '@proma/shared'
 
+/** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
+export const CompactModelSelectorCtx = React.createContext(false)
+
 /** 从渠道列表构建扁平化的模型选项 */
 function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[]): ModelOption[] {
   const options: ModelOption[] = []
@@ -80,6 +83,8 @@ interface ModelSelectorProps {
   onModelSelect?: (option: ModelOption) => void
   /** 触发按钮是否显示「渠道 · 模型」（默认只显示模型名） */
   showChannelInTrigger?: boolean
+  /** 紧凑模式：只显示圆形 logo，不显示文字（窄面板用） */
+  compact?: boolean
 }
 
 export function ModelSelector({
@@ -88,7 +93,10 @@ export function ModelSelector({
   externalSelectedModel,
   onModelSelect,
   showChannelInTrigger = false,
+  compact: compactProp,
 }: ModelSelectorProps = {}): React.ReactElement {
+  const compactCtx = React.useContext(CompactModelSelectorCtx)
+  const compact = compactProp ?? compactCtx
   const [conversationModel, setConversationModel] = useConversationModelOptional()
   const conversationId = useConversationIdOptional()
   const setConversations = useSetAtom(conversationsAtom)
@@ -228,11 +236,14 @@ export function ModelSelector({
 
   return (
     <>
-      {/* 触发按钮 — 圆形，仅显示模型 logo */}
+      {/* 触发按钮 */}
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="model-selector-trigger flex items-center justify-center rounded-full size-7 hover:bg-accent transition-colors"
+        className={cn(
+          'model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
+          compact && 'justify-center rounded-full size-7 px-0',
+        )}
         title={displayModelInfo
           ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
           : '选择模型'}
@@ -244,7 +255,17 @@ export function ModelSelector({
             className="size-4 rounded object-cover"
           />
         ) : (
-          <Cpu className="size-3.5 text-muted-foreground" />
+          <Cpu className={cn('size-3.5', !compact && '')} />
+        )}
+        {!compact && (
+          <>
+            <span className="max-w-[200px] truncate">
+              {displayModelInfo
+                ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
+                : '选择模型'}
+            </span>
+            <ChevronDown className="size-3" />
+          </>
         )}
       </button>
 
