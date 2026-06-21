@@ -88,7 +88,7 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
 
   // 自动下载，退出时自动安装
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
 
   // 监听更新事件
   autoUpdater.on('checking-for-update', () => {
