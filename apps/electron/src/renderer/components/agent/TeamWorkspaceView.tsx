@@ -177,6 +177,9 @@ export function TeamWorkspaceView(): React.ReactElement {
   const initialLoadDoneRef = React.useRef(false)
 
   // 加载文件清单
+  const entriesRef = React.useRef(entries)
+  entriesRef.current = entries
+
   const loadFiles = React.useCallback(async (silent = false) => {
     if (!filesPath || !teamId) return
     if (!silent) setLoading(true)
@@ -190,6 +193,8 @@ export function TeamWorkspaceView(): React.ReactElement {
           remoteModifiedAt: (f.modifiedAt as number) ?? undefined,
         }
       })
+      // 静默刷新返回空且已有旧数据 → 保留旧数据，防止 token 过期导致清空
+      if (silent && items.length === 0 && entriesRef.current.length > 0) return
       setEntries(items)
     } catch (e) { /* ignore */ }
     finally {
