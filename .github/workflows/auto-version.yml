@@ -1,0 +1,76 @@
+# GitHub Actions: 自动版本管理与发版
+#
+# 触发条件：推送到 main 分支（排除 [auto-release] 提交和 tag 推送，避免循环）
+# 行为：自动 bump patch 版本号 → 打 tag → 推送
+#       → tag 推送触发 release.yml 自动构建发布
+#
+# 版本规则：
+#   - 普通 push → bump patch（0.12.26 → 0.12.27）
+#   - 需要 bump minor/major 时，手动改 apps/electron/package.json 版本号再 push
+
+name: Auto Version
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  auto-version:
+    name: Bump Version & Tag
+    runs-on: ubuntu-latest
+    # 跳过 [auto-release] 提交和 tag 推送，防止循环触发
+    if: |
+      !contains(github.event.head_commit.message, '[auto-release]') &&
+      !startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 计算并更新版本号
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./apps/electron/package.json').version")
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT" | cut -d. -f3)
+          NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "next=$NEXT" >> $GITHUB_OUTPUT
+
+          echo "当前版本: v$CURRENT → 新版本: v$NEXT"
+
+          # 更新 apps/electron/package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('./apps/electron/package.json', 'utf8'));
+            pkg.version = '$NEXT';
+            fs.writeFileSync('./apps/electron/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: 提交版本并推送 tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add apps/electron/package.json
+          git commit -m "release: v${{ steps.version.outputs.next }} [auto-release]"
+
+          git tag -a "v${{ steps.version.outputs.next }}" -m "Proma v${{ steps.version.outputs.next }}"
+
+          git push origin main --tags
+
+          echo "✅ 已推送 v${{ steps.version.outputs.next }}，Release 工作流将自动构建"
