@@ -1,4 +1,4 @@
-# Profer
+﻿# Profer
 
 Proma is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client.
 
@@ -6,7 +6,7 @@ It is not just another chat box. Proma is meant to become a long-lived Agent wor
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
-[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/Proma/releases) | [Commercial Version](https://proma.cool/download)
+[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/Profer/releases) | [Commercial Version](https://proma.cool/download)
 
 ## What Proma Can Do
 
@@ -26,7 +26,7 @@ It is not just another chat box. Proma is meant to become a long-lived Agent wor
 
 ### Download
 
-Download the open-source version from [GitHub Releases](https://github.com/Yuan-lai-ru-ci/Proma/releases). This README is synchronized with the `v0.12.26` state; macOS Apple Silicon, macOS Intel, and Windows builds are provided on the Releases page.
+Download the open-source version from [GitHub Releases](https://github.com/Yuan-lai-ru-ci/Profer/releases). This README is synchronized with the `v0.12.26` state; macOS Apple Silicon, macOS Intel, and Windows builds are provided on the Releases page.
 
 If you want fewer API setup steps, you can also use the [Proma commercial version](https://proma.cool/download). The commercial and open-source versions run in parallel; the commercial version mainly adds built-in model channels and subscription options.
 
@@ -274,9 +274,9 @@ Proma currently has a PR bounty program. You can leave your email in the PR desc
 
 <a href="https://www.star-history.com/?repos=Yuan-lai-ru-ci%2FProma&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Proma&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Proma&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Proma&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
  </picture>
 </a>
 

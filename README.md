@@ -1,4 +1,4 @@
-# Profer
+﻿# Profer
 
 Profer 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agent、工作区、Skills、MCP、远程机器人和记忆能力放在同一个开源客户端里。
 
@@ -10,7 +10,7 @@ Profer 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Age
   <source src="https://img.erlich.fun/personal-blog/uPic/%E7%AE%80%E5%8D%95%E4%BB%8B%E7%BB%8D%20Proma.mp4" type="video/mp4">
 </video>
 
-[English README](./README.en.md) | [新手教程](./tutorial/tutorial.md) | [下载开源版](https://github.com/Yuan-lai-ru-ci/Proma/releases) | [下载商业版](https://proma.cool/download)
+[English README](./README.en.md) | [新手教程](./tutorial/tutorial.md) | [下载开源版](https://github.com/Yuan-lai-ru-ci/Profer/releases) | [下载商业版](https://proma.cool/download)
 
 > **最新思考 ｜ 2026 Q2–Q3**：[勇敢地解决真实的问题 — Proactive · 个人注意力 · 团队协作](./proma-thinking/proma-2026-q2-q3-thinking.md) ｜ 往期思考：[2026 Q1](./proma-thinking/proma-2026-q1-thinking.md)
 
@@ -32,7 +32,7 @@ Profer 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Age
 
 ### 下载安装
 
-从 [GitHub Releases](https://github.com/Yuan-lai-ru-ci/Proma/releases) 下载开源版本。当前文档按 `v0.12.26` 状态同步，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包，具体下载文件以 Releases 页面为准。
+从 [GitHub Releases](https://github.com/Yuan-lai-ru-ci/Profer/releases) 下载开源版本。当前文档按 `v0.12.26` 状态同步，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包，具体下载文件以 Releases 页面为准。
 
 如果你希望开箱即用、减少 API 配置成本，也可以使用 [Proma 商业版](https://proma.cool/download)。商业版和开源版并行运行，主要区别是商业版提供内置渠道和订阅方案。
 
@@ -282,9 +282,9 @@ Proma 目前设有 PR 赠金计划。提交 PR 时可以在描述中留下邮箱
 
 <a href="https://www.star-history.com/?repos=Yuan-lai-ru-ci%2FProma&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Proma&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Proma&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Proma&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
  </picture>
 </a>
 

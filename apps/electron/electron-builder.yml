@@ -142,4 +142,4 @@ nsis:
 publish:
   provider: github
   owner: Yuan-lai-ru-ci
-  repo: Proma
+  repo: Profer
