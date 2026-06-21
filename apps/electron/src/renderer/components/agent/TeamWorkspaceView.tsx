@@ -1416,7 +1416,9 @@ export function TeamWorkspaceView(): React.ReactElement {
           )}
           <div className="titlebar-drag-region relative flex h-11 items-center gap-2 border-b border-border/50 bg-background px-3 flex-shrink-0">
             <div className="pointer-events-none absolute inset-0 titlebar-drag-region" />
-            <span className="flex-1 text-xs font-medium text-muted-foreground">AI 对话</span>
+            <span className="flex-1 text-xs font-medium text-muted-foreground truncate">
+              {workspace ? `${workspace.name} · Agent` : 'AI 对话'}
+            </span>
             <button
               type="button"
               className="titlebar-no-drag flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
