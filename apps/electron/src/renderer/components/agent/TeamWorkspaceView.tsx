@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai'
 import { toast } from 'sonner'
 import {
   Upload, RefreshCw, LayoutGrid, LayoutList,
@@ -83,12 +83,27 @@ export function TeamWorkspaceView(): React.ReactElement {
   const activeTabAgentSessionId = activeTab && (activeTab.type === 'agent' || activeTab.type === 'preview')
     ? activeTab.sessionId
     : null
+
+  // 团队工作区专属：从 tabs 中找第一场属于本工作区的 Agent 会话
+  const teamAgentTab = React.useMemo(() => {
+    if (!teamId) return null
+    return tabs.find((t) => {
+      if (t.type !== 'agent' && t.type !== 'preview') return false
+      const session = agentSessions.find((s) => s.id === (t as { sessionId?: string }).sessionId)
+      return session?.workspaceId === teamId
+    }) ?? null
+  }, [tabs, agentSessions, teamId])
+
+  const teamAgentTabId = (teamAgentTab as { id?: string })?.id ?? null
+
   const currentTeamSessionId = currentAgentSessionId && agentSessions.some((session) => (
     session.id === currentAgentSessionId && session.workspaceId === teamId
   ))
     ? currentAgentSessionId
     : null
-  const activeAgentSessionId = activeTabAgentSessionId ?? currentTeamSessionId
+
+  // 优先团队 Agent Tab，其次当前团队会话
+  const activeAgentSessionId = activeTabAgentSessionId ?? (currentTeamSessionId ?? (teamAgentTab ? (teamAgentTab as { sessionId: string }).sessionId : null))
   const setActiveAgentPendingFiles = useSetAtom(agentPendingFilesAtomFamily(activeAgentSessionId ?? '__team-agent-drop__'))
 
   // 文件状态
@@ -522,14 +537,23 @@ export function TeamWorkspaceView(): React.ReactElement {
   ])
 
   const addTeamFileToAgent = React.useCallback(async (entry: FileEntry): Promise<void> => {
-    if (!activeAgentSessionId) {
-      toast.info('请先打开一个 Agent 对话')
-      return
-    }
     if (!teamId || !workspace?.slug) return
     if (entry.isDirectory) {
       toast.info('文件夹暂不支持直接拖入 Agent，请拖入具体文件')
       return
+    }
+
+    // 没有活跃 Agent 会话时自动创建一个
+    let targetSessionId = activeAgentSessionId
+    if (!targetSessionId) {
+      try {
+        const session = await window.electronAPI.createAgentSession(undefined, undefined, teamId)
+        showAgentSession(session.id)
+        targetSessionId = session.id
+      } catch {
+        toast.error('创建 Agent 对话失败')
+        return
+      }
     }
 
     const local = await window.electronAPI.teamFile.download({
@@ -551,19 +575,20 @@ export function TeamWorkspaceView(): React.ReactElement {
       sourcePath: local,
     }
 
-    setActiveAgentPendingFiles((prev) => {
+    // 自动创建会话后，用 getDefaultStore 直接写入 pending files
+    getDefaultStore().set(agentPendingFilesAtomFamily(targetSessionId), (prev) => {
       if (prev.some((file) => file.sourcePath === local)) return prev
       return [...prev, pending]
     })
-    showAgentSession(activeAgentSessionId)
+    showAgentSession(targetSessionId)
     toast.success(`已添加到 Agent：${entry.name}`)
-  }, [activeAgentSessionId, setActiveAgentPendingFiles, showAgentSession, teamId, workspace?.slug])
+  }, [activeAgentSessionId, showAgentSession, teamId, workspace?.slug])
 
   const handleAgentDragOver = React.useCallback((e: React.DragEvent): void => {
     if (!isTeamFileTransfer(e.dataTransfer)) return
     e.preventDefault()
     e.stopPropagation()
-    e.dataTransfer.dropEffect = activeAgentSessionId ? 'copy' : 'none'
+    e.dataTransfer.dropEffect = 'copy'
     setDragOver(false)
     setDragOverFolder(null)
     setAgentDropOver(true)
@@ -1402,14 +1427,30 @@ export function TeamWorkspaceView(): React.ReactElement {
             </button>
           </div>
           <div className="flex-1 min-h-0 flex flex-col titlebar-no-drag">
-            {tabs.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+            {teamAgentTabId ? (
+              <div className="flex-1 min-h-0"><TabContent tabId={teamAgentTabId} /></div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground p-4">
                 <MessageSquareIcon size={24} strokeWidth={1} />
-                <p className="text-xs">在侧边栏新建对话</p>
+                <p className="text-xs text-center">暂无 Agent 对话</p>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                  onClick={async () => {
+                    if (!teamId) return
+                    try {
+                      const session = await window.electronAPI.createAgentSession(undefined, undefined, teamId)
+                      showAgentSession(session.id)
+                    } catch (err) {
+                      toast.error('创建 Agent 对话失败')
+                    }
+                  }}
+                >
+                  <MessageSquarePlus size={13} />
+                  新建 Agent 对话
+                </button>
               </div>
-            ) : deferredActiveTabId ? (
-              <div className="flex-1 min-h-0"><TabContent tabId={deferredActiveTabId} /></div>
-            ) : null}
+            )}
           </div>
         </div>
         )}
