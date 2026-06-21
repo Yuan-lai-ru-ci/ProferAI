@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Proma</title>
+    <title>Profer</title>
     <script>
       // 品牌初始化（在 React 加载前执行，避免标题闪烁）
       ;(function() {
         try {
-          var brand = JSON.parse(localStorage.getItem('proma-brand-overrides') || 'null')
+          var brand = JSON.parse(localStorage.getItem('profer-brand-overrides') || 'null')
           if (brand && brand.appName) {
             document.title = brand.appName
           }
@@ -22,8 +22,8 @@
       // 主题初始化脚本（在 React 加载前执行，避免闪烁）
       // 从 localStorage 缓存读取主题模式和特殊风格，立即应用类名
       ;(function() {
-        var mode = localStorage.getItem('proma-theme-mode') || 'dark'
-        var style = localStorage.getItem('proma-theme-style')
+        var mode = localStorage.getItem('profer-theme-mode') || 'dark'
+        var style = localStorage.getItem('profer-theme-style')
         var html = document.documentElement
 
         if (mode === 'special' && style && style !== 'default') {

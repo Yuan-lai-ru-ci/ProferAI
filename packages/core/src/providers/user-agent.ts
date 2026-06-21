@@ -12,5 +12,5 @@ export function getPromaVersion(): string {
 
 export function getPromaUserAgent(version?: string): string {
   const v = version ?? _promaVersion
-  return `Proma/${v} (+${PROMA_REPO_URL})`
+  return `Profer/${v} (+${PROMA_REPO_URL})`
 }

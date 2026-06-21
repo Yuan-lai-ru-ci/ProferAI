@@ -1,4 +1,4 @@
-# Proma
+# Profer
 
 Proma is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client.
 

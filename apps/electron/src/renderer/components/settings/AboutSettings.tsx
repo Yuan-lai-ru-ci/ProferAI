@@ -440,11 +440,11 @@ function ShellEnvironmentCard(): React.ReactElement | null {
 }
 
 export function AboutSettings(): React.ReactElement {
-  const [appName, setAppName] = React.useState('Proma')
+  const [appName, setAppName] = React.useState('Profer')
 
   React.useEffect(() => {
     try {
-      const raw = localStorage.getItem('proma-brand-overrides')
+      const raw = localStorage.getItem('profer-brand-overrides')
       if (raw) {
         const brand = JSON.parse(raw)
         if (brand.appName) setAppName(brand.appName)
@@ -455,7 +455,7 @@ export function AboutSettings(): React.ReactElement {
   return (
     <SettingsSection
       title={`关于 ${appName}`}
-      description="集成通用 AI Agent 的下一代人工智能软件"
+      description="集成通用 AI Agent 的下一代人工智能软件 — Profer"
     >
       <SettingsCard>
         <SettingsRow label="版本">
