@@ -575,6 +575,30 @@ async function bootstrap(): Promise<void> {
     safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
   }
 
+  // 启动时恢复团队会话：如果已登录，启动同步引擎并刷新工作区索引
+  safeRun('restoreTeamSession', () => {
+    const { getAuthStatus } = require('./lib/auth-service')
+    if (getAuthStatus().isLoggedIn) {
+      console.log('[启动] 检测到已登录，恢复团队同步...')
+      const { startSyncEngine } = require('./lib/sync-manager')
+      startSyncEngine()
+      // 延迟 3 秒同步团队工作区，等窗口 IPC 就绪
+      setTimeout(() => {
+        const { listTeamWorkspaces } = require('./lib/team-manager')
+        const { syncTeamWorkspacesToIndex } = require('./lib/agent-workspace-manager')
+        listTeamWorkspaces().then((teamWs: unknown[]) => {
+          syncTeamWorkspacesToIndex(teamWs)
+          for (const w of BrowserWindow.getAllWindows()) {
+            w.webContents.send('team:workspaces-synced')
+          }
+          console.log(`[启动] 团队工作区同步完成: ${(teamWs as unknown[]).length} 个`)
+        }).catch((err: unknown) => {
+          console.error('[启动] 团队工作区同步失败:', err)
+        })
+      }, 3000)
+    }
+  })
+
   app.on('activate', () => {
     if (shouldSuppressVoiceDictationActivate()) {
       return
