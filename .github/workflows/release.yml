@@ -67,7 +67,7 @@ jobs:
 
       # 构建应用
       - name: 构建 Electron 应用
-        run: bun run electron:build
+        run: bun run electron:build:github
         working-directory: .
 
       # 打包并发布到 GitHub Releases
@@ -130,7 +130,7 @@ jobs:
 
       # 构建应用
       - name: 构建 Electron 应用
-        run: bun run electron:build
+        run: bun run electron:build:github
         working-directory: .
 
       # 打包并发布到 GitHub Releases
@@ -307,7 +307,7 @@ jobs:
 
       # 构建应用
       - name: 构建 Electron 应用
-        run: bun run electron:build
+        run: bun run electron:build:github
         working-directory: .
 
       - name: 打包并发布 (Windows)
