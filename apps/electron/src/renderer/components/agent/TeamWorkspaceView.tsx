@@ -67,6 +67,7 @@ export function TeamWorkspaceView(): React.ReactElement {
   const workspace = workspaces.find((w) => w.id === currentId)
   const teamId = workspace?.type === 'team' ? workspace.id : undefined
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const tabs = useAtomValue(tabsAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -85,7 +86,16 @@ export function TeamWorkspaceView(): React.ReactElement {
     ? activeTab.sessionId
     : null
 
-  // 团队工作区专属：从 tabs 中找第一场属于本工作区的 Agent 会话
+  // 团队工作区专属：该工作区下最近的 Agent 会话
+  const latestTeamSession = React.useMemo(() => {
+    if (!teamId) return null
+    const sessions = agentSessions
+      .filter((s) => !s.archived && s.workspaceId === teamId)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    return sessions[0] ?? null
+  }, [agentSessions, teamId])
+
+  // 从 tabs 中找已打开的本工作区 Agent tab
   const teamAgentTab = React.useMemo(() => {
     if (!teamId) return null
     return tabs.find((t) => {
@@ -96,6 +106,20 @@ export function TeamWorkspaceView(): React.ReactElement {
   }, [tabs, agentSessions, teamId])
 
   const teamAgentTabId = (teamAgentTab as { id?: string })?.id ?? null
+
+  // 进入团队工作区时，若有会话但无 tab，自动打开最近一个
+  React.useEffect(() => {
+    if (!teamId || teamAgentTabId) return
+    const latest = latestTeamSession
+    if (latest) {
+      const existingTab = tabs.find((t) => t.sessionId === latest.id && t.type === 'agent')
+      if (!existingTab) {
+        // 延迟一帧确保 currentWorkspaceId 已更新
+        const id = requestAnimationFrame(() => showAgentSession(latest.id))
+        return () => cancelAnimationFrame(id)
+      }
+    }
+  }, [teamId, teamAgentTabId, latestTeamSession, showAgentSession, tabs])
 
   const currentTeamSessionId = currentAgentSessionId && agentSessions.some((session) => (
     session.id === currentAgentSessionId && session.workspaceId === teamId
@@ -1452,6 +1476,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                     if (!teamId) return
                     try {
                       const session = await window.electronAPI.createAgentSession(undefined, undefined, teamId)
+                      setAgentSessions((prev) => [session, ...prev])
                       showAgentSession(session.id)
                     } catch (err) {
                       toast.error('创建 Agent 对话失败')
