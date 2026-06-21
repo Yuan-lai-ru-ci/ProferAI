@@ -67,6 +67,7 @@ export function TeamWorkspaceView(): React.ReactElement {
   const workspace = workspaces.find((w) => w.id === currentId)
   const teamId = workspace?.type === 'team' ? workspace.id : undefined
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const tabs = useAtomValue(tabsAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -1452,6 +1453,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                     if (!teamId) return
                     try {
                       const session = await window.electronAPI.createAgentSession(undefined, undefined, teamId)
+                      setAgentSessions((prev) => [session, ...prev])
                       showAgentSession(session.id)
                     } catch (err) {
                       toast.error('创建 Agent 对话失败')
