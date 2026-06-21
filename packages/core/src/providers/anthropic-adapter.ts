@@ -20,7 +20,7 @@
  * Kimi Coding Plan 特殊要求：
  * - Base URL：`https://api.kimi.com/coding/v1`
  * - 必须发送 Proma 自有 User-Agent（服务端白名单校验）
- * - UA 格式：`Proma/<version> (+https://github.com/ErlichLiu/Proma)`
+ * - UA 格式：`Proma/<version> (+https://github.com/Yuan-lai-ru-ci/Proma)`
  */
 
 import type { ProviderType } from '@proma/shared'
