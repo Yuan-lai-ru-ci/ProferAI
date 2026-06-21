@@ -101,12 +101,12 @@ function buildTrayMenu(actions: TrayActions): Menu {
     },
     { type: 'separator' },
     {
-      label: '打开 Proma',
+      label: '打开 Profer',
       click: () => actions.showMainWindow(),
     },
     { type: 'separator' },
     {
-      label: '退出 Proma',
+      label: '退出 Profer',
       click: () => {
         app.quit()
       },
@@ -148,7 +148,7 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
     tray = new Tray(image)
 
     // 设置 tooltip
-    tray.setToolTip('Proma')
+    tray.setToolTip('Profer')
 
     updateTrayMenu(actions)
 

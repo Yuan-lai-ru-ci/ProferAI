@@ -49,9 +49,12 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
       {step === 'welcome' && (
         <>
           <div className="mb-12 text-center">
-            <h1 className="text-4xl font-bold mb-4">欢迎使用 Proma</h1>
+            <h1 className="text-4xl font-bold mb-4">欢迎使用 Profer</h1>
             <p className="text-lg text-muted-foreground">
               下一代桌面 AI 软件，让通用 Agent 触手可及
+            </p>
+            <p className="text-sm text-muted-foreground/60 mt-2">
+              基于开源项目 <a href="https://github.com/ErlichLiu/Proma" className="underline hover:text-foreground" target="_blank">Proma</a> 深度改造
             </p>
           </div>
 
