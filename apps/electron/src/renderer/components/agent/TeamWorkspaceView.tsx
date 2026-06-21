@@ -108,18 +108,27 @@ export function TeamWorkspaceView(): React.ReactElement {
   const teamAgentTabId = (teamAgentTab as { id?: string })?.id ?? null
 
   // 进入团队工作区时，若有会话但无 tab，自动打开最近一个
+  const showAgentSessionRef = React.useRef(showAgentSession)
+  showAgentSessionRef.current = showAgentSession
+  const tabsRef = React.useRef(tabs)
+  tabsRef.current = tabs
+
   React.useEffect(() => {
-    if (!teamId || teamAgentTabId) return
-    const latest = latestTeamSession
-    if (latest) {
-      const existingTab = tabs.find((t) => t.sessionId === latest.id && t.type === 'agent')
-      if (!existingTab) {
-        // 延迟一帧确保 currentWorkspaceId 已更新
-        const id = requestAnimationFrame(() => showAgentSession(latest.id))
-        return () => cancelAnimationFrame(id)
+    if (!teamId) return
+    // 延迟等 teamAgentTabId 更新
+    const timer = setTimeout(() => {
+      // 已有打开的 tab → 跳过
+      if (teamAgentTabId) return
+      const latest = latestTeamSession
+      if (latest) {
+        const existingTab = tabsRef.current.find((t) => t.sessionId === latest.id && t.type === 'agent')
+        if (!existingTab) {
+          showAgentSessionRef.current(latest.id)
+        }
       }
-    }
-  }, [teamId, teamAgentTabId, latestTeamSession, showAgentSession, tabs])
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [teamId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentTeamSessionId = currentAgentSessionId && agentSessions.some((session) => (
     session.id === currentAgentSessionId && session.workspaceId === teamId
