@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import { fetch as undiciFetch } from 'undici'
 import { getSyncStatePath } from './config-paths'
-import { getTeamAuth } from './auth-service'
+import { getTeamAuth, refreshAuthToken } from './auth-service'
 import { listAgentWorkspaces, readIndex, writeIndex, getWorkspaceBrand, setWorkspaceBrand } from './agent-workspace-manager'
 import { AGENT_IPC_CHANNELS, SYNC_IPC_CHANNELS } from '@proma/shared'
 import type { SyncEnvelope, SyncStateIndex, WorkspaceSyncState } from './sync-types'
@@ -142,7 +142,25 @@ async function pushEnvelopes(serverBaseUrl: string, token: string): Promise<bool
 
     if (!response.ok) {
       if (response.status === 401) {
-        console.warn('[同步] 令牌过期，跳过本次推送')
+        console.warn('[同步] 令牌过期，尝试刷新...')
+        const ok = await refreshAuthToken().catch(() => false)
+        if (ok) {
+          const newAuth = getTeamAuth()
+          if (newAuth) {
+            const retryRes = await (undiciFetch as unknown as typeof fetch)(`${newAuth.baseUrl}/v1/sync/push`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${newAuth.token}` },
+              body: JSON.stringify({ envelopes: toSend }),
+            })
+            if (retryRes.ok) {
+              const sentIds = new Set(toSend.map((e) => e.id))
+              _pendingEnvelopes = _pendingEnvelopes.filter((e) => !sentIds.has(e.id))
+              saveEnvelopeQueue()
+              return true
+            }
+          }
+        }
+        console.warn('[同步] 令牌刷新失败，跳过本次推送')
         return false
       }
       throw new Error(`HTTP ${response.status}`)
@@ -308,8 +326,13 @@ let _syncTimer: ReturnType<typeof setInterval> | null = null
 
 /** 执行一次完整的同步周期 */
 async function syncCycle(): Promise<void> {
-  const auth = getTeamAuth()
-  if (!auth) return // 未登录，跳过
+  let auth = getTeamAuth()
+  // token 过期时主动尝试刷新
+  if (!auth) {
+    const ok = await refreshAuthToken().catch(() => false)
+    if (ok) auth = getTeamAuth()
+    if (!auth) return
+  }
 
   // 1. 推送待发送的变更
   await pushEnvelopes(auth.baseUrl, auth.token)
