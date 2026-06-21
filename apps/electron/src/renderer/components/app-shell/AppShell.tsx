@@ -11,9 +11,10 @@ import { useAtom, useAtomValue } from 'jotai'
 import { LeftSidebar } from './LeftSidebar'
 import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
+import { TeamWorkspaceView } from '@/components/agent/TeamWorkspaceView'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { WindowControls } from '@/components/WindowControls'
@@ -37,10 +38,40 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
   const automationForm = useAtomValue(automationFormAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId)
+  const isTeamWorkspace = currentWorkspace?.type === 'team'
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'automations' && activeView !== 'agent-skills'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
+  const showTeamWorkspaceView = isTeamWorkspace && appMode === 'agent' && activeView !== 'agent-skills'
+
+  // 品牌 CSS 注入：从 localStorage 读取品牌配置并应用 CSS 变量
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('proma-brand-overrides')
+      if (raw) {
+        const brand = JSON.parse(raw)
+        if (brand.primaryColor) {
+          document.documentElement.style.setProperty('--primary', brand.primaryColor)
+        }
+        if (brand.appName) {
+          document.title = brand.appName
+        }
+        if (brand.customCss) {
+          let styleEl = document.getElementById('brand-custom-css') as HTMLStyleElement | null
+          if (!styleEl) {
+            styleEl = document.createElement('style')
+            styleEl.id = 'brand-custom-css'
+            document.head.appendChild(styleEl)
+          }
+          styleEl.textContent = brand.customCss
+        }
+      }
+    } catch { /* ignore */ }
+  }, [])
 
   // 右侧面板可拖拽宽度
   const [rightPanelWidth, setRightPanelWidth] = useAtom(agentSidePanelWidthAtom)
@@ -95,8 +126,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         )}
       />
 
-      {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭） */}
-      <WindowControls />
+      {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭）。
+          团队工作区会把按钮嵌入文件管理顶栏，避免右侧 Agent 收起条被覆盖。 */}
+      {!showTeamWorkspaceView && <WindowControls />}
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
         {/* 左侧边栏：可折叠，带圆角和内边距 */}
@@ -104,14 +136,18 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           <LeftSidebar />
         </div>
 
-        {/* 中间容器：relative z-[60] 使其在 z-50 拖动区域之上 */}
+        {/* 中间容器 */}
         <div className="flex-1 min-w-0 p-2 relative z-[60]">
-          {/* 主内容区域（TabBar + TabContent） */}
-          <MainArea />
+          {/* 团队工作区：文件主区 + AI 侧栏；Skill 市场等视图切到 MainArea */}
+          {showTeamWorkspaceView ? (
+            <TeamWorkspaceView />
+          ) : (
+            <MainArea />
+          )}
         </div>
 
-        {/* 右侧边栏：Agent 文件面板，拖拽手柄在间距中间 */}
-        {showRightPanel && (
+        {/* 右侧边栏：个人模式显示文件面板；团队模式文件已在主区域 */}
+        {!isTeamWorkspace && showRightPanel && (
           <div className={cn('relative z-[60] flex items-stretch transition-[padding] duration-300 ease-in-out crt-sidebar', isPanelOpen ? 'p-2 pl-0' : 'p-0')}>
             {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
             {isPanelOpen && (

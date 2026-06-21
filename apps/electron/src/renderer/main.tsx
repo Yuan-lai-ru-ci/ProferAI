@@ -70,6 +70,7 @@ import { diffCapabilities } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
+import { FilePreviewContainer } from './components/file-browser/FilePreviewContainer'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
@@ -276,6 +277,15 @@ function AgentSettingsInitializer(): null {
         suppressToastRef.current = false
       })
       .catch(console.error)
+
+    // 加载品牌配置并应用到窗口图标
+    if (ws.type === 'team') {
+      window.electronAPI.team.getBranding(currentWorkspaceId).then((b) => {
+        if (b && Object.keys(b as object).length > 0) {
+          window.electronAPI.team.applyBranding(currentWorkspaceId)
+        }
+      }).catch(() => {})
+    }
   }, [currentWorkspaceId, workspaces])
 
   // 订阅主进程文件监听推送
@@ -908,6 +918,7 @@ if (isQuickTaskWindow) {
       <TabSwitcher />
       <App />
       <UpdateDialog />
+      <FilePreviewContainer />
       <Toaster position="top-right" />
     </React.StrictMode>
   )

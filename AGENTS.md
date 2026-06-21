@@ -23,11 +23,11 @@ Bun workspace monorepo：
 ```
 proma-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.20)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.9)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.6)
+│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.31)
+│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.11)
+│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.10.7)
+    └── electron/   # Electron 桌面应用 (v0.12.26)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -40,26 +40,26 @@ proma-v2/
 
 ### 包职责详解
 
-#### @proma/shared (v0.1.20)
+#### @proma/shared (v0.1.31)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @proma/core (v0.2.9)
+#### @proma/core (v0.2.11)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
 - **依赖**：`@proma/shared`、`shiki`
-- **Peer 依赖**：`@anthropic-ai/Codex-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
+- **Peer 依赖**：`@anthropic-ai/claude-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
-#### @proma/ui (v0.1.6)
+#### @proma/ui (v0.1.9)
 - **关键组件**：共享 React UI 组件库
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.10.7)
+#### @proma/electron (v0.12.26)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
-  - `@anthropic-ai/Codex-agent-sdk@0.2.120` - Agent SDK
+  - `@anthropic-ai/claude-agent-sdk@0.3.153` - Agent SDK
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -135,7 +135,7 @@ bun run generate:icons    # 生成应用图标
 | **构建工具** | Vite | 6.0.3 |
 | **打包工具** | esbuild | 0.24.0+ |
 | **分发工具** | Electron Builder | 25.1.8 |
-| **Agent SDK** | @anthropic-ai/Codex-agent-sdk | 0.2.120 |
+| **Agent SDK** | @anthropic-ai/claude-agent-sdk | 0.3.153 |
 | **飞书 SDK** | @larksuiteoapi/node-sdk | 最新 |
 
 ## 核心架构
@@ -178,6 +178,7 @@ bun run generate:icons    # 生成应用图标
 | `agent-ask-user-service.ts` | Agent 用户交互：AskUser 请求处理 |
 | `agent-exit-plan-service.ts` | Agent 退出计划服务 |
 | `agent-workspace-manager.ts` | 工作区管理（16KB）：MCP Server 配置、Skills 配置、工作区 CRUD |
+| `team-manager.ts` / `team-file-service.ts` | 团队工作区与团队文件：远程 CRUD、邀请成员、文件上传 / 下载 / 删除 / 移动、本地缓存 |
 | `chat-service.ts` | Chat 流式调用编排（20KB）：Provider 适配器集成、消息持久化、AbortController |
 | `conversation-manager.ts` | 对话管理（13KB）：对话 CRUD、JSONL 消息存储、置顶、上下文分割 |
 | `channel-manager.ts` | 渠道管理（16KB）：渠道 CRUD、API Key AES-256-GCM 加密（safeStorage）、连接测试、模型获取 |
@@ -306,10 +307,11 @@ bun run generate:icons    # 生成应用图标
 - JSON 配置 + JSONL 追加日志，无本地数据库，文件可移植
 - Agent 工作区按 slug 隔离，每个会话独立目录
 - MCP 配置和 Skills 按工作区管理
+- 团队文件以服务器清单为唯一数据源，本地 `workspace-files/` 仅作为预览、打开和 Agent 解读的按需缓存
 
 ## 构建工具
 
-- **主进程/Preload**：esbuild (`--bundle --platform=node --format=cjs --external:electron --external:@anthropic-ai/Codex-agent-sdk`)
+- **主进程/Preload**：esbuild (`--bundle --platform=node --format=cjs --external:electron --external:@anthropic-ai/claude-agent-sdk`)
 - **渲染进程**：Vite + React 插件 + Tailwind CSS + HMR
 - **开发热重载**：渲染进程 Vite HMR 即时生效；主进程/Preload 通过 electronmon 监听 dist 文件变化自动重启
 - **打包分发**：electron-builder（配置见 `electron-builder.yml`）
@@ -317,22 +319,22 @@ bun run generate:icons    # 生成应用图标
 ### 重要：打包配置注意事项
 
 **Agent SDK 打包要求（必须遵守）：**
-- `@anthropic-ai/Codex-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
-- **0.2.113+ 架构变化**：SDK 主包已不再携带 JS CLI 入口（`cli.js`）和 `vendor/ripgrep/`，改为按平台分发 native binary（`Codex` / `Codex.exe`，单文件 214-252 MB），通过 `optionalDependencies` 安装到 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}/` 子包
+- `@anthropic-ai/claude-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
+- **0.2.113+ 架构变化**：SDK 主包已不再携带 JS CLI 入口（`cli.js`）和 `vendor/ripgrep/`，改为按平台分发 native binary（`claude` / `claude.exe`，单文件 214-252 MB），通过 `optionalDependencies` 安装到 `@anthropic-ai/claude-agent-sdk-{platform}-{arch}/` 子包
 - `apps/electron/package.json` 必须显式声明当前 CI 矩阵覆盖的平台子包为 `optionalDependencies`（darwin-arm64 / darwin-x64 / win32-x64），否则 bun workspace 不会把它们链接到 `apps/electron/node_modules/`
 - `electron-builder.yml` 的 `files` 配置要同时包含主包和所有平台子包：
   ```yaml
   files:
     - dist/**/*
     - package.json
-    - node_modules/@anthropic-ai/Codex-agent-sdk/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-arm64/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-x64/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-win32-x64/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*
     - "!node_modules/@proma/**"
   ```
 - SDK 主包和同级平台子包会被复制到 `app/node_modules/@anthropic-ai/`，Node.js 的模块解析能从 `app/dist/main.cjs` 找到
-- `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `Codex-agent-sdk-${platform}-${arch}/{Codex|Codex.exe}` 得到 binary 路径
+- `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `claude-agent-sdk-${platform}-${arch}/{claude|claude.exe}` 得到 binary 路径
 
 **跨平台打包限制：**
 - optionalDependencies 的平台子包由包管理器按 `os`/`cpu` 字段筛选：Apple Silicon runner 只会装 darwin-arm64，不会装 darwin-x64（cpu 不匹配）
@@ -348,13 +350,13 @@ bun run generate:icons    # 生成应用图标
 1. ✅ 确认 SDK 在 esbuild 中使用 `--external` 参数
 2. ✅ 确认 SDK 主包 + 所有目标平台子包都在 `files` 配置中
 3. ✅ 确认 `apps/electron/package.json` 的 `optionalDependencies` 列出了所有目标平台子包
-4. ✅ `bun install` 后验证 `apps/electron/node_modules/@anthropic-ai/Codex-agent-sdk-{platform}-{arch}/` symlink 存在且 binary 可执行
+4. ✅ `bun install` 后验证 `apps/electron/node_modules/@anthropic-ai/claude-agent-sdk-{platform}-{arch}/` symlink 存在且 binary 可执行
 5. ✅ 本地测试打包后的应用 Agent 功能（`CSC_IDENTITY_AUTO_DISCOVERY=false bun run dist:fast`）
 
 **其他依赖的打包策略：**
-- **原则**：只有 `electron` 和 `@anthropic-ai/Codex-agent-sdk` 需要标记为 `--external`
+- **原则**：只有 `electron` 和 `@anthropic-ai/claude-agent-sdk` 需要标记为 `--external`
 - `electron`：由 Electron 运行时提供，必须 external
-- `@anthropic-ai/Codex-agent-sdk`：有特殊打包要求（含 214 MB native binary），必须 external + 在 files 中包含主包和平台子包
+- `@anthropic-ai/claude-agent-sdk`：有特殊打包要求（含 214 MB native binary），必须 external + 在 files 中包含主包和平台子包
 - **所有其他依赖**（如 `electron-updater`、`undici`、`chokidar` 等）：应该让 esbuild 打包进 `main.cjs`
   - ✅ 优点：避免遗漏子依赖，简化 electron-builder 配置
   - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖
@@ -390,7 +392,7 @@ bun run generate:icons    # 生成应用图标
 
 ## Agent SDK 集成架构
 
-基于 `@anthropic-ai/Codex-agent-sdk@0.2.120` 实现 Agent 模式，与 Chat 模式并行。
+基于 `@anthropic-ai/claude-agent-sdk@0.3.153` 实现 Agent 模式，与 Chat 模式并行。
 
 ### 核心流程
 
@@ -440,7 +442,7 @@ React UI 更新
 
 ### SDK 版本升级注意事项
 
-**`@anthropic-ai/Codex-agent-sdk` 0.2.113+ `options.env` 语义为"替换"**
+**`@anthropic-ai/claude-agent-sdk` 0.2.113+ `options.env` 语义为"替换"**
 
 - SDK 将 `options.env` **替换** 传递给子进程（0.2.111/0.2.112 短暂改为叠加，0.2.113 恢复替换）
 - 如果传 `env` 时只给 `ANTHROPIC_*` 相关变量，子进程会丢失 `PATH` / `HOME` / `SHELL` 等关键变量，导致 SDK 调用 `npx` / `git` 等命令失败
@@ -456,9 +458,11 @@ React UI 更新
 - `0.2.111`: `options.env` 从"替换"变为"叠加"
 - `0.2.113`:
   - `options.env` 回退为"替换"
-  - **SDK 包结构重构**：删除 `cli.js`，改为平台 native binary（通过 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}` optionalDependency 分发），ripgrep 编译进 binary
+  - **SDK 包结构重构**：删除 `cli.js`，改为平台 native binary（通过 `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` optionalDependency 分发），ripgrep 编译进 binary
   - 详见上方"打包配置注意事项"段落
 - `0.2.120`: `query()` 省略 `settingSources` 时默认加载所有来源（Proma 已显式传 `['user', 'project']`，不受影响）
+- `0.3.142`: SDK/headless 默认使用 Task 工具（`TaskCreate` / `TaskUpdate` / `TaskGet` / `TaskList`）替代已废弃的 `TodoWrite`；MCP server 默认后台连接，慢连接会在 `init` 中呈现 `pending`
+- `0.3.143`: `@anthropic-ai/sdk` 与 `@modelcontextprotocol/sdk` 改为 peerDependencies；bun/npm/pnpm 会自动安装
 
 ### 共享类型（`@proma/shared`）
 
@@ -475,7 +479,7 @@ React UI 更新
 
 - **会话管理**：收件箱/归档工作流
 - **权限模式**：safe / ask / allow-all
-- **Agent SDK**：@anthropic-ai/Codex-agent-sdk（[v1 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript-v2-preview)）
+- **Agent SDK**：@anthropic-ai/claude-agent-sdk（[v1 文档](https://platform.claude.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)）
 - **MCP 集成**：Model Context Protocol 用于外部数据源
 - **凭证存储**：AES-256-GCM 加密
 - **配置位置**：`~/.proma/`（类似 `~/.craft-agent/`）
@@ -485,10 +489,11 @@ React UI 更新
 ### 已实现功能
 
 - ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Kimi、智谱、MiniMax、豆包、通义千问、Google、自定义端点
-- ✅ **Agent SDK 集成**：基于 Codex Agent SDK 的完整 Agent 模式
+- ✅ **Agent SDK 集成**：基于 Claude Agent SDK 的完整 Agent 模式
 - ✅ **飞书集成**：消息同步、任务通知、OAuth 认证（68KB 核心服务）
-- ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Skills 管理
+- ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Agent 技能全屏管理、团队文件管理
 - ✅ **权限系统**：工具权限检查、用户确认流程
+- ✅ **Automation 定时任务**：持久化调度、运行历史、手动运行、失败保护、飞书通知
 - ✅ **记忆系统**：跨会话记忆存储与检索
 - ✅ **自动更新**：Electron Updater 集成
 - ✅ **代理支持**：系统代理检测与配置
@@ -504,3 +509,64 @@ React UI 更新
 - **文件监听**：工作区文件、MCP 配置、Chat 工具实时监控
 - **事件流处理**：SDK 消息流式转换与累积
 - **错误映射**：SDK 错误统一转换为应用错误
+
+## 更新日志
+
+> 2026-06-20
+
+### 安全修复
+- JWT_SECRET 改为强制要求环境变量（`server/src/config.js`），拒绝默认值
+- Admin 密码改为 `ADMIN_PASSWORD` 环境变量，未设置则随机生成（`server/src/db.js`）
+- 文件上传增加 `MAX_FILE_SIZE` 上限（默认 500MB），Content-Length 预检 + buffer 双校验（`server/src/routes/files.js`）
+
+### 服务端模块化
+- `server/index.js` 拆分为 `src/{config,db,utils,middleware,routes/{auth,workspaces,invitations,sync,files,heartbeat}}`
+- 修复 `safePath()` 跨平台路径分隔符 bug（Windows `\` 不兼容 `root + '/'` 前缀检查，改用 `pathSep`）
+
+### Agent 编排层拆分
+- `agent-orchestrator.ts` 提取 `agent-retry-utils.ts`、`agent-prompt-utils.ts`、`agent-sdk-cli-path.ts`、`agent-directory-utils.ts`
+- `feishu-bridge.ts` 补充提取 `feishu/group-utils.ts`
+
+### 团队文件管理体验收尾
+- 团队模式主界面改为文件管理主区 + 可收起 Agent 侧栏，窗口控制按钮嵌入文件管理顶栏，保留可拖动标题栏区域
+- 上传按钮改为稳定的分裂按钮，支持上传文件和上传文件夹，修复窄宽度下顶栏文字换行与展开菜单点击问题
+- 团队文件预览优先使用本地 `workspace-files/` 缓存；自己上传的文件直接使用本地路径，缓存缺失或其他成员文件再下载
+- 拖拽导入遵循目标目录：拖到当前目录空白处进入当前目录，拖到文件夹卡片 / 列表行 / 树节点直接进入该文件夹
+- 团队文件可拖入右侧 Agent 面板解读，并使用专用拖拽类型避免和普通本地文件拖拽冲突
+
+### Bug 修复
+- Hono v4 `*` 通配符 `c.req.param('*')` 返回 undefined，DELETE/DOWNLOAD 改为 `:path{.+}` 命名通配符
+- 删除团队文件时间步清理本地 `workspace-files/` 副本
+- Electron 拖拽兼容：`dataTransfer.items` 为空时回退到 `dataTransfer.files`
+- `<input webkitdirectory>` 在 Electron 不工作，改用 `dialog.showOpenDialog` + `readDirectoryRecursive` 原生方案
+- 服务端上传自动补齐父目录 `is_directory=1` 条目（确保客户端 `buildFileTree` 正确构建树）
+
+### 测试
+- 新增 `agent-retry-utils.test.ts`、`agent-directory-utils.test.ts`、`server/src/utils.test.js`（37 用例）
+
+### 部署
+- 服务器：`ecs-user@47.109.108.57:~/proma-team-server/`，端口 3456，nginx 反代 `/proma/` → `:3456`
+
+## 后续计划
+
+### 高优先级
+- HTTPS + 域名（nginx + Let's Encrypt）
+- 数据库定期备份（SQLite 单文件）
+- 注册限流（防暴力注册）
+- 工作区解散/恢复机制（冷静期 + 到期清理）
+- 邀请列表管理（pending/accepted/expired）
+- 文件搜索功能
+
+### 中优先级
+- PC 客户端自动更新（electron-updater）
+- 邀请过期自动清理（定时任务）
+- 拖动稳定性优化
+- feishu-bridge 继续拆分（command-handlers、chat-history）
+- 错误监控（服务端日志收集）
+
+### 低优先级
+- Skill 市场（Phase 3）
+- 审计日志、使用统计
+- 多团队服务器配置
+- E2E 测试（多客户端完整流程）
+- 客户端签名（Windows/macOS）

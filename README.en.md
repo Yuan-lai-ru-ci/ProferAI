@@ -14,6 +14,9 @@ It is not just another chat box. Proma is meant to become a long-lived Agent wor
 - **Agent mode**: general-purpose Agent powered by `@anthropic-ai/claude-agent-sdk`, with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions.
 - **SubAgents / Tasks**: complex tasks can be delegated through the Claude Agent SDK Agent tool, with sub-agent calls and results shown in the message stream.
 - **Skills & MCP**: each workspace can manage its own Skills, MCP servers, and workspace files.
+- **Agent Skills management**: Skills and MCP are now managed in a dedicated full-screen Agent Skills view, with search, enable toggles, updates, import, uninstall, and workspace switching.
+- **Automation**: Proma has a durable local automation system for interval / daily / weekly / monthly schedules, run history, manual runs, failure protection, and Feishu notifications.
+- **Team file management**: team workspaces support remote file manifests, file / folder upload, drag-and-drop moves, target-directory imports, local-cache-first preview, and dragging team files into Agent.
 - **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
 - **Memory and tools**: Chat and Agent can share memory, with web search, built-in Chat tools, and Agent recommendation helpers.
 - **Local-first data**: conversations, workspaces, attachments, settings, and Skills are stored under `~/.proma/` as JSON / JSONL files, without a local database.
@@ -23,7 +26,7 @@ It is not just another chat box. Proma is meant to become a long-lived Agent wor
 
 ### Download
 
-Download the open-source version from [GitHub Releases](https://github.com/ErlichLiu/Proma/releases). The current release notes are for `v0.9.12`, with builds for macOS Apple Silicon, macOS Intel, and Windows.
+Download the open-source version from [GitHub Releases](https://github.com/ErlichLiu/Proma/releases). This README is synchronized with the `v0.12.26` state; macOS Apple Silicon, macOS Intel, and Windows builds are provided on the Releases page.
 
 If you want fewer API setup steps, you can also use the [Proma commercial version](https://proma.cool/download). The commercial and open-source versions run in parallel; the commercial version mainly adds built-in model channels and subscription options.
 
@@ -122,6 +125,7 @@ Proma stores data in local files so it is easy to back up, migrate, and inspect.
 ├── agent-sessions.json
 ├── agent-sessions/
 │   └── {session-id}.jsonl
+├── automations.json
 ├── agent-workspaces/
 │   └── {workspace-slug}/
 │       ├── workspace-files/
@@ -153,10 +157,10 @@ Current package versions:
 
 | Package | Version | Responsibility |
 | --- | --- | --- |
-| `@proma/electron` | `0.9.12` | Electron desktop app |
-| `@proma/shared` | `0.1.17` | shared types, IPC constants, config, utilities |
-| `@proma/core` | `0.2.9` | Provider Adapters, SSE, Shiki highlighting |
-| `@proma/ui` | `0.1.3` | shared React UI components |
+| `@proma/electron` | `0.12.26` | Electron desktop app |
+| `@proma/shared` | `0.1.31` | shared types, IPC constants, config, utilities |
+| `@proma/core` | `0.2.11` | Provider Adapters, SSE, Shiki highlighting |
+| `@proma/ui` | `0.1.9` | shared React UI components |
 
 Common commands:
 
@@ -207,7 +211,7 @@ bun run dist:fast
 | Code highlighting | Shiki |
 | Build | Vite + esbuild |
 | Distribution | electron-builder |
-| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.143` |
+| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.153` |
 
 ## Architecture
 
@@ -225,6 +229,8 @@ Main-process services live in `apps/electron/src/main/lib/`:
 - `agent-orchestrator.ts`: Agent orchestration, environment variables, SDK calls, event streams, error handling.
 - `agent-session-manager.ts`: Agent session index and JSONL message persistence.
 - `agent-workspace-manager.ts`: workspaces, MCP, Skills, and workspace files.
+- `team-manager.ts` / `team-file-service.ts`: team workspaces, invitations, team file upload / download / delete / move, and local cache.
+- `automation-manager.ts` / `automation-scheduler.ts`: durable automations, scheduler recovery, run history, failure protection, and notifications.
 - `chat-service.ts`: Chat streaming, Provider Adapters, tool activity.
 - `conversation-manager.ts`: Chat session index and message storage.
 - `channel-manager.ts`: channel CRUD, API key encryption, connection tests, model fetching.

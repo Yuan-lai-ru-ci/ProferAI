@@ -32,6 +32,39 @@ export const MEMORY_IPC_CHANNELS = {
 
 // ===== Agent 工作区 =====
 
+/** 工作区类型 */
+export type WorkspaceType = 'personal' | 'team'
+
+/** 用户在团队工作区中的角色 */
+export type WorkspaceRole = 'owner' | 'admin' | 'member' | 'viewer'
+
+/** 工作区可见性 */
+export type WorkspaceVisibility = 'private' | 'team' | 'public'
+
+/** 团队工作区品牌定制 */
+export interface WorkspaceBrand {
+  /** 工作区图标（emoji 或 data URL） */
+  icon?: string
+  /** 品牌色（HSL 格式，如 "220 15% 30%"） */
+  primaryColor?: string
+  /** 品牌 Logo URL */
+  logoUrl?: string
+  /** 自定义应用名称（替换 "Proma"） */
+  appName?: string
+  /** 自定义 CSS 注入 */
+  customCss?: string
+}
+
+/** 团队成员摘要（仅缓存展示用） */
+export interface WorkspaceMemberSummary {
+  userId: string
+  displayName: string
+  avatar: string
+  role: WorkspaceRole
+  joinedAt: number
+  isOnline?: boolean
+}
+
 /** Agent 工作区 */
 export interface AgentWorkspace {
   /** 工作区唯一标识 */
@@ -44,6 +77,27 @@ export interface AgentWorkspace {
   createdAt: number
   /** 更新时间戳 */
   updatedAt: number
+
+  /** 工作区类型（个人/团队） */
+  type?: WorkspaceType
+  /** 软删除标记 */
+  isDeleted?: boolean
+
+  // 团队工作区专属字段（type === 'team' 时有效）
+  /** 团队 ID */
+  teamId?: string
+  /** 当前用户在此工作区的角色 */
+  role?: WorkspaceRole
+  /** 工作区可见性 */
+  visibility?: WorkspaceVisibility
+  /** 最后同步时间戳 */
+  lastSyncedAt?: number
+  /** 待同步变更数 */
+  pendingSyncCount?: number
+  /** 工作区品牌配置 */
+  brand?: WorkspaceBrand
+  /** 团队成员摘要 */
+  memberSummary?: WorkspaceMemberSummary[]
 }
 
 // ===== SDK 新增类型声明（0.2.52 ~ 0.2.63） =====
@@ -787,7 +841,29 @@ export interface SkillMeta {
   importSource?: SkillImportSource
   /** 是否有可用更新（源 Skill 版本 > importSource.sourceVersion） */
   hasUpdate?: boolean
+
+  // 团队共享字段
+  /** 此技能的存储域 */
+  domain?: SkillDomain
+  /** 发布状态（仅团队技能相关） */
+  publishState?: SkillPublishState
+  /** 发布者用户 ID */
+  publishedBy?: string
+  /** 发布者显示名称 */
+  publishedByName?: string
+  /** 发布时间 */
+  publishedAt?: string
+  /** 安装计数（仅团队市场展示） */
+  installCount?: number
+  /** 来源团队工作区 ID */
+  sourceWorkspaceId?: string
 }
+
+/** 技能存储域 */
+export type SkillDomain = 'local' | 'workspace-team' | 'global'
+
+/** 技能发布状态 */
+export type SkillPublishState = 'draft' | 'pending-review' | 'published' | 'deprecated'
 
 /** 其他工作区 Skill 分组（导入对话框用） */
 export interface OtherWorkspaceSkillsGroup {
@@ -1005,6 +1081,14 @@ export interface FileEntry {
   size?: number
   /** 子条目（懒加载，仅目录展开时填充） */
   children?: FileEntry[]
+  /** 文件同步状态（团队工作区文件） */
+  syncStatus?: 'synced' | 'syncing' | 'cloud-only' | 'local-only' | 'conflict'
+  /** 远程版本修改时间（用于冲突检测） */
+  remoteModifiedAt?: number
+  /** 上传者 ID */
+  uploadedBy?: string
+  /** 上传者显示名称 */
+  uploadedByName?: string
 }
 
 /** 文件索引条目（用于 @ 引用搜索） */
@@ -1065,7 +1149,7 @@ export interface AgentSavedFile {
 /** Agent 文件保存到工作区文件目录的输入 */
 export interface AgentSaveWorkspaceFilesInput {
   workspaceSlug: string
-  files: Array<{ filename: string; data: string }>
+  files: Array<{ filename: string; data: string | Uint8Array }>
 }
 
 /** 附加/分离目录的输入参数 */
@@ -1437,6 +1521,8 @@ export const AGENT_IPC_CHANNELS = {
   LIST_DIRECTORY: 'agent:list-directory',
   /** 删除文件/空目录 */
   DELETE_FILE: 'agent:delete-file',
+  /** 递归读取目录中所有文件（含相对路径和内容） */
+  READ_DIRECTORY_RECURSIVE: 'agent:read-directory-recursive',
   /** 用系统默认应用打开文件 */
   OPEN_FILE: 'agent:open-file',
   /** 在系统文件管理器中显示文件 */
@@ -1511,4 +1597,109 @@ export interface PendingRequestsSnapshot {
   askUsers: AskUserRequest[]
   /** 待处理的 ExitPlanMode 请求 */
   exitPlans: ExitPlanModeRequest[]
+}
+
+// ===== 团队协作 IPC 通道 =====
+
+/** 身份认证 IPC 通道 */
+export const AUTH_IPC_CHANNELS = {
+  GET_DEVICE_IDENTITY: 'auth:get-device-identity',
+  GET_USER_IDENTITY: 'auth:get-user-identity',
+  UPDATE_PROFILE: 'auth:update-profile',
+  LOGIN: 'auth:login',
+  LOGOUT: 'auth:logout',
+  GET_AUTH_STATUS: 'auth:get-auth-status',
+  REGISTER: 'auth:register',
+  GET_SERVER_INFO: 'auth:get-server-info',
+} as const
+
+/** 同步 IPC 通道 */
+export const SYNC_IPC_CHANNELS = {
+  GET_STATUS: 'sync:get-status',
+  TRIGGER_SYNC: 'sync:trigger-sync',
+  GET_PENDING_CHANGES: 'sync:get-pending-changes',
+  DISCARD_PENDING_CHANGES: 'sync:discard-pending-changes',
+  /** 同步状态变更推送（主进程 → 渲染进程） */
+  STATUS_CHANGED: 'sync:status-changed',
+} as const
+
+/** 团队管理 IPC 通道 */
+export const TEAM_IPC_CHANNELS = {
+  LIST_WORKSPACES: 'team:list-workspaces',
+  CREATE_WORKSPACE: 'team:create-workspace',
+  DELETE_WORKSPACE: 'team:delete-workspace',
+  GET_MEMBERS: 'team:get-members',
+  CREATE_INVITATION: 'team:create-invitation',
+  LIST_INVITATIONS: 'team:list-invitations',
+  CANCEL_INVITATION: 'team:cancel-invitation',
+  GET_STATS: 'team:get-stats',
+  VERIFY_INVITATION: 'team:verify-invitation',
+  ACCEPT_INVITATION: 'team:accept-invitation',
+  DECLINE_INVITATION: 'team:decline-invitation',
+  UPDATE_MEMBER_ROLE: 'team:update-member-role',
+  REMOVE_MEMBER: 'team:remove-member',
+  APPLY_BRANDING: 'team:apply-branding',
+  GET_BRANDING: 'team:get-branding',
+  SET_WORKSPACE_BRAND: 'team:set-workspace-brand',
+  LEAVE_WORKSPACE: 'team:leave-workspace',
+  TRANSFER_OWNERSHIP: 'team:transfer-ownership',
+} as const
+
+/** 技能市场 IPC 通道 */
+export const SKILL_MARKETPLACE_IPC_CHANNELS = {
+  PUBLISH: 'skill:publish',
+  UNPUBLISH: 'skill:unpublish',
+  LIST_TEAM_SKILLS: 'skill:list-team-skills',
+  INSTALL_TEAM_SKILL: 'skill:install-team-skill',
+  CHECK_FOR_UPDATES: 'skill:check-for-updates',
+} as const
+
+/** 文件同步 IPC 通道（废弃，保留向后兼容） */
+export const FILE_SYNC_IPC_CHANNELS = {
+  GET_FILE_MANIFEST: 'file-sync:get-manifest',
+  DOWNLOAD_FILE: 'file-sync:download-file',
+  GET_FILE_STATUS: 'file-sync:get-file-status',
+  RESOLVE_CONFLICT: 'file-sync:resolve-conflict',
+} as const
+
+/** 团队文件操作 IPC 通道（用户主动上传/下载） */
+export const TEAM_FILE_IPC_CHANNELS = {
+  UPLOAD: 'team-file:upload',
+  DOWNLOAD: 'team-file:download',
+  DELETE: 'team-file:delete',
+  GET_MANIFEST: 'team-file:get-manifest',
+  CREATE_DIRECTORY: 'team-file:create-directory',
+  MOVE: 'team-file:move',
+} as const
+
+/** 团队服务器配置 */
+export interface TeamServerConfig {
+  id: string
+  name: string
+  baseUrl: string
+  authEndpoint: string
+  syncEndpoint: string
+  provider: 'self-hosted' | 'proma-cloud'
+  enabled: boolean
+  lastHealthCheck?: {
+    ok: boolean
+    checkedAt: number
+    error?: string
+  }
+}
+
+/** 工作区邀请 */
+export interface WorkspaceInvitation {
+  id: string
+  workspaceId: string
+  workspaceName: string
+  inviterId: string
+  inviterName: string
+  inviteeEmail: string
+  role: WorkspaceRole
+  token: string
+  status: 'pending' | 'accepted' | 'declined' | 'expired'
+  createdAt: number
+  expiresAt: number
+  acceptedAt?: number
 }

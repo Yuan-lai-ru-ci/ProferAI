@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Proma</title>
     <script>
+      // 品牌初始化（在 React 加载前执行，避免标题闪烁）
+      ;(function() {
+        try {
+          var brand = JSON.parse(localStorage.getItem('proma-brand-overrides') || 'null')
+          if (brand && brand.appName) {
+            document.title = brand.appName
+          }
+          if (brand && brand.primaryColor) {
+            document.documentElement.style.setProperty('--primary', brand.primaryColor)
+          }
+        } catch(e) { /* ignore */ }
+      })()
+    </script>
+    <script>
       // 主题初始化脚本（在 React 加载前执行，避免闪烁）
       // 从 localStorage 缓存读取主题模式和特殊风格，立即应用类名
       ;(function() {

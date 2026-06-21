@@ -112,10 +112,13 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const diffRefreshVersion = diffRefreshVersionMap.get(sessionId) ?? 0
   const hasFileChanges = filesVersion > 0
 
-  // 派生当前工作区 slug（用于 FileDropZone IPC 调用）
+  // 派生当前工作区信息
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
-  const workspaceSlug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
+  const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId)
+  const workspaceSlug = currentWorkspace?.slug
+  const isTeamWorkspace = currentWorkspace?.type === 'team'
+  const teamWorkspaceId = isTeamWorkspace ? (currentWorkspaceId ?? undefined) : undefined
 
   // 附加目录列表（会话级）
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
@@ -589,7 +592,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       {hasWorkspaceAttachedItems && (
                         <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3 pt-2">工作文件（存储于该工作区目录）</div>
                       )}
-                      <FileBrowser rootPath={workspaceFilesPath} hideToolbar embedded hideEmpty={hasWorkspaceAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
+                      <FileBrowser rootPath={workspaceFilesPath!} hideToolbar embedded hideEmpty={hasWorkspaceAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} workspaceId={teamWorkspaceId} workspaceSlug={workspaceSlug as string | undefined} />
                     </>
                   )}
                   <FileDropZone

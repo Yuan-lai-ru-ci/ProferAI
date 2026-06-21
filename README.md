@@ -20,6 +20,9 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 - **Agent 模式**：基于 `@anthropic-ai/claude-agent-sdk` 的通用 Agent，支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。
 - **SubAgent / Tasks**：复杂任务可以通过 Claude Agent SDK 的 Agent 工具拆分为子 Agent / Task，并在消息流中展示调用过程和结果。
 - **Skills & MCP**：每个工作区可以独立配置 Skills、MCP Server 和工作区文件，适合沉淀可复用能力。
+- **Agent 技能管理**：Skills 与 MCP 已升级为独立的「Agent 技能」全屏视图，支持搜索、启用切换、更新、导入、卸载和工作区切换。
+- **Automation 定时任务**：Proma 内置持久化定时任务系统，支持 interval / daily / weekly / monthly 调度、运行历史、手动运行、失败保护和飞书通知。
+- **团队文件管理**：团队工作区支持远程文件清单、文件 / 文件夹上传、拖拽移动、目录定向导入、本地缓存优先预览，以及把团队文件拖入 Agent 解读。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
 - **记忆与工具**：Chat 和 Agent 可共享记忆能力，并支持联网搜索、内置 Chat 工具、Agent 推荐等辅助能力。
 - **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.proma/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
@@ -29,7 +32,7 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 
 ### 下载安装
 
-从 [GitHub Releases](https://github.com/ErlichLiu/Proma/releases) 下载开源版本。当前 release notes 以 `v0.9.12` 为准，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包。
+从 [GitHub Releases](https://github.com/ErlichLiu/Proma/releases) 下载开源版本。当前文档按 `v0.12.26` 状态同步，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包，具体下载文件以 Releases 页面为准。
 
 如果你希望开箱即用、减少 API 配置成本，也可以使用 [Proma 商业版](https://proma.cool/download)。商业版和开源版并行运行，主要区别是商业版提供内置渠道和订阅方案。
 
@@ -126,6 +129,7 @@ Proma 采用本地文件存储，方便备份、迁移和排查问题。
 ├── agent-sessions.json
 ├── agent-sessions/
 │   └── {session-id}.jsonl
+├── automations.json
 ├── agent-workspaces/
 │   └── {workspace-slug}/
 │       ├── workspace-files/
@@ -157,10 +161,10 @@ proma-v2/
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@proma/electron` | `0.10.7` | Electron 桌面应用 |
-| `@proma/shared` | `0.1.20` | 共享类型、IPC 常量、配置和工具 |
-| `@proma/core` | `0.2.9` | Provider Adapter、SSE、Shiki 高亮 |
-| `@proma/ui` | `0.1.6` | 共享 React UI 组件 |
+| `@proma/electron` | `0.12.26` | Electron 桌面应用 |
+| `@proma/shared` | `0.1.31` | 共享类型、IPC 常量、配置和工具 |
+| `@proma/core` | `0.2.11` | Provider Adapter、SSE、Shiki 高亮 |
+| `@proma/ui` | `0.1.9` | 共享 React UI 组件 |
 
 常用命令：
 
@@ -211,7 +215,7 @@ bun run dist:fast
 | 代码高亮 | Shiki |
 | 构建 | Vite + esbuild |
 | 分发 | electron-builder |
-| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.143` |
+| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.153` |
 
 ## 架构概览
 
@@ -229,6 +233,8 @@ shared 类型和 IPC 常量
 - `agent-orchestrator.ts`：Agent 编排、环境变量、SDK 调用、事件流、错误处理。
 - `agent-session-manager.ts`：Agent 会话索引和 JSONL 消息持久化。
 - `agent-workspace-manager.ts`：工作区、MCP、Skills 和工作区文件管理。
+- `team-manager.ts` / `team-file-service.ts`：团队工作区、邀请成员、团队文件上传 / 下载 / 删除 / 移动和本地缓存。
+- `automation-manager.ts` / `automation-scheduler.ts`：持久化定时任务、调度恢复、运行历史、失败保护和通知。
 - `chat-service.ts`：Chat 流式调用、Provider Adapter、工具活动。
 - `conversation-manager.ts`：Chat 会话索引和消息存储。
 - `channel-manager.ts`：渠道 CRUD、API Key 加密、连接测试、模型获取。

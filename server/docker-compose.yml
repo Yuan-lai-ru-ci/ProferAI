@@ -1,0 +1,34 @@
+# Proma Team Server — Docker Compose
+# 启动:  docker compose up -d
+# 查看:  docker compose logs -f
+# 重启:  docker compose restart
+# 停止:  docker compose down
+
+services:
+  proma-team:
+    build: .
+    container_name: proma-team
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    volumes:
+      # 持久化数据：数据库 + 上传文件
+      - promadata:/app/data
+    environment:
+      # === 必填 ===
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # === 可选 ===
+      - PORT=3456
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@proma.local}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-524288000}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3456/health',r=>{process.exit(r.statusCode===200?0:1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  promadata:
+    driver: local

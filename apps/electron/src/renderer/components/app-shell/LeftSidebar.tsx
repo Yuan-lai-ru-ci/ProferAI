@@ -11,12 +11,13 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock, ChevronRight, Blocks } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, LogIn, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
 import { SearchDialog } from './SearchDialog'
 import { UserAvatar } from '@/components/chat/UserAvatar'
+import { LoginDialog } from '@/components/auth/LoginDialog'
 import { activeViewAtom } from '@/atoms/active-view'
 import { automationFormAtom, automationsAtom } from '@/atoms/automation-atoms'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
@@ -74,6 +75,7 @@ import {
   sessionViewStateMapAtom,
 } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { authStatusAtom } from '@/atoms/identity-atoms'
 import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { hasUpdateAtom } from '@/atoms/updater'
@@ -404,8 +406,56 @@ function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
   return next
 }
 
+/** 侧边栏底部的登录/注销按钮 */
+function AuthButton(): React.ReactElement {
+  const [loginOpen, setLoginOpen] = React.useState(false)
+  const [authStatus, setAuthStatus] = useAtom(authStatusAtom)
+
+  // 启动时验证登录状态（token 可能已过期）
+  React.useEffect(() => {
+    window.electronAPI.auth.getAuthStatus().then((status) => {
+      if (!status.isLoggedIn && authStatus.isLoggedIn) {
+        setAuthStatus({ isLoggedIn: false })
+      }
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleLogout = React.useCallback(() => {
+    window.electronAPI.auth.logout().catch(() => {})
+    setAuthStatus({ isLoggedIn: false })
+  }, [setAuthStatus])
+
+  if (authStatus.isLoggedIn) {
+    return (
+      <button
+        onClick={handleLogout}
+        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-[8px] text-[12px] text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground transition-colors titlebar-no-drag"
+        title={`已登录: ${authStatus.teamEmail}`}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+        <span className="truncate">{authStatus.teamEmail}</span>
+        <LogOut size={12} className="ml-auto flex-shrink-0" />
+      </button>
+    )
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setLoginOpen(true)}
+        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-[8px] text-[12px] text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground transition-colors titlebar-no-drag"
+      >
+        <LogIn size={13} />
+        <span>登录团队账户</span>
+      </button>
+      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+    </>
+  )
+}
+
 export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
+  const authStatus = useAtomValue(authStatusAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
@@ -436,6 +486,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [creatingProject, setCreatingProject] = React.useState(false)
   const [newProjectName, setNewProjectName] = React.useState('')
   const newProjectInputRef = React.useRef<HTMLInputElement>(null)
+  const [showJoinDialog, setShowJoinDialog] = React.useState(false)
+  const [inviteCode, setInviteCode] = React.useState('')
   const [relativeTimeNow, setRelativeTimeNow] = React.useState(() => Date.now())
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
   const selectedModel = useAtomValue(selectedModelAtom)
@@ -664,6 +716,19 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
   }, [setConversations, setAgentSessions])
+
+  // 监听团队工作区同步事件，登录/注册成功后自动刷新侧边栏
+  React.useEffect(() => {
+    const unsub = window.electronAPI.team.onWorkspacesSynced(() => {
+      window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
+    })
+    return unsub
+  }, [setWorkspaces])
+
+  // authStatus 变化时刷新工作区（登录/登出）
+  React.useEffect(() => {
+    window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
+  }, [authStatus.isLoggedIn, setWorkspaces])
 
   /** 打开自动任务列表 */
   const handleOpenAutomations = React.useCallback((): void => {
@@ -1131,6 +1196,32 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setDragProjectId(null)
     setProjectDropIndicator(null)
   }, [])
+
+  /** 打开加入工作区对话框 */
+  const handleStartJoinWorkspace = React.useCallback((): void => {
+    setInviteCode('')
+    setShowJoinDialog(true)
+  }, [])
+
+  /** 通过邀请码加入团队工作区 */
+  const handleJoinWorkspace = React.useCallback(async (): Promise<void> => {
+    const code = inviteCode.trim()
+    if (!code) {
+      toast.error('请输入邀请码')
+      return
+    }
+    try {
+      const workspace = await window.electronAPI.team.acceptInvitation(code)
+      toast.success(`已加入工作区「${workspace.name}」`)
+      setShowJoinDialog(false)
+      // 刷新工作区列表
+      const workspaces = await window.electronAPI.listAgentWorkspaces()
+      setWorkspaces(workspaces)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '加入失败'
+      toast.error(msg)
+    }
+  }, [inviteCode, setWorkspaces])
 
   /** 开始创建新项目 */
   const handleStartCreateProject = React.useCallback((): void => {
@@ -1910,19 +2001,36 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
           {/* 下区标题：项目历史 */}
           <div className="px-2 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
             <span className="px-1.5 text-[11px] font-medium text-foreground/40 select-none">项目</span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleStartCreateProject}
-                  className="size-6 flex items-center justify-center rounded-md text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/60 transition-colors titlebar-no-drag"
-                  aria-label="新建项目"
-                >
-                  <Plus size={13} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">新建项目</TooltipContent>
-            </Tooltip>
+            <div className="flex items-center gap-0.5">
+              {authStatus.isLoggedIn && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleStartJoinWorkspace}
+                      className="size-6 flex items-center justify-center rounded-md text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/60 transition-colors titlebar-no-drag"
+                      aria-label="加入工作区"
+                    >
+                      <LogIn size={12} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">加入团队工作区</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleStartCreateProject}
+                    className="size-6 flex items-center justify-center rounded-md text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/60 transition-colors titlebar-no-drag"
+                    aria-label="新建项目"
+                  >
+                    <Plus size={13} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">新建项目</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
 
           {/* 下区：项目分组历史 */}
@@ -2096,7 +2204,10 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       </div>
 
       {/* 底部：用户资料 + 设置入口 */}
-      <div className="px-3 pb-3">
+      <div className="px-3 pb-3 space-y-1.5">
+        {/* 登录/账户按钮 */}
+        <AuthButton />
+
         <button
           onClick={() => setSettingsOpen(true)}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-[10px] transition-colors titlebar-no-drag text-foreground/70 hover:bg-foreground/[0.04] hover:text-foreground"
@@ -2115,6 +2226,32 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       {deleteDialog}
       {projectDeleteDialog}
       {moveDialog}
+      {showJoinDialog && (
+        <AlertDialog open={showJoinDialog} onOpenChange={setShowJoinDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>加入团队工作区</AlertDialogTitle>
+              <AlertDialogDescription>
+                输入管理员分享的邀请码，加入团队工作区
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <input
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleJoinWorkspace() }}
+              placeholder="粘贴邀请码..."
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30"
+              autoFocus
+            />
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => setShowJoinDialog(false)}>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={handleJoinWorkspace} disabled={!inviteCode.trim()}>
+                加入
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
       <SearchDialog />
     </div>
   )

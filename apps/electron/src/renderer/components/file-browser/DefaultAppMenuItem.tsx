@@ -11,14 +11,18 @@ import { useDefaultAppForFile } from '@/hooks/useDefaultAppForFile'
 
 interface DefaultAppMenuItemProps {
   filePath: string
+  probePath?: string
   className?: string
+  resolveFilePath?: () => Promise<string | null>
 }
 
 export function DefaultAppMenuItem({
   filePath,
+  probePath,
   className,
+  resolveFilePath,
 }: DefaultAppMenuItemProps): React.ReactElement | null {
-  const info = useDefaultAppForFile(filePath)
+  const info = useDefaultAppForFile(probePath ?? filePath)
 
   if (!info) return null
 
@@ -26,7 +30,11 @@ export function DefaultAppMenuItem({
     <DropdownMenuItem
       className={className}
       onSelect={() => {
-        window.electronAPI.systemOpenFile(filePath).catch((err) => {
+        void (async () => {
+          const targetPath = resolveFilePath ? await resolveFilePath() : filePath
+          if (!targetPath) return
+          await window.electronAPI.systemOpenFile(targetPath)
+        })().catch((err) => {
           console.error('[DefaultAppMenuItem] 打开文件失败:', err)
         })
       }}

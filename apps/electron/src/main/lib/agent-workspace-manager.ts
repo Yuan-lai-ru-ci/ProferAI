@@ -21,24 +21,26 @@ import {
   parseSkillVersion,
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
-import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@proma/shared'
+import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceBrand, WorkspaceType } from '@proma/shared'
 
 interface AgentWorkspacesIndex {
   version: number
   workspaces: AgentWorkspace[]
 }
 
-const INDEX_VERSION = 2
+const INDEX_VERSION = 3
 
 /** 读取工作区索引文件，自动执行版本迁移 */
-function readIndex(): AgentWorkspacesIndex {
+/** @internal 供同步/团队管理器使用，普通调用方用 listAgentWorkspaces() */
+export function readIndex(): AgentWorkspacesIndex {
   const indexPath = getAgentWorkspacesIndexPath()
   const data = readJsonFileSafe<AgentWorkspacesIndex>(indexPath)
 
   if (data) {
-    // 版本迁移
-    if ((data.version ?? 1) < INDEX_VERSION) {
-      migrateIndex(data)
+    // 版本迁移（幂等，顺序执行）
+    const currentVersion = data.version ?? 1
+    if (currentVersion < INDEX_VERSION) {
+      migrateIndex(data, currentVersion)
     }
     return data
   }
@@ -46,12 +48,19 @@ function readIndex(): AgentWorkspacesIndex {
   return { version: INDEX_VERSION, workspaces: [] }
 }
 
-function migrateIndex(index: AgentWorkspacesIndex): void {
-  const oldVersion = index.version ?? 1
-
+function migrateIndex(index: AgentWorkspacesIndex, oldVersion: number): void {
   // v1 → v2: 为所有工作区默认启用 skill-creator
   if (oldVersion < 2) {
     activateSkillCreatorInAllWorkspaces(index)
+  }
+
+  // v2 → v3: 为所有工作区添加 type 字段（向后兼容）
+  if (oldVersion < 3) {
+    for (const workspace of index.workspaces) {
+      if (!workspace.type) {
+        workspace.type = 'personal'
+      }
+    }
   }
 
   index.version = INDEX_VERSION
@@ -82,7 +91,8 @@ function activateSkillCreatorInAllWorkspaces(index: AgentWorkspacesIndex): void 
   }
 }
 
-function writeIndex(index: AgentWorkspacesIndex): void {
+/** @internal 供同步/团队管理器使用 */
+export function writeIndex(index: AgentWorkspacesIndex): void {
   const indexPath = getAgentWorkspacesIndexPath()
 
   try {
@@ -174,7 +184,10 @@ function copyDefaultSkills(workspaceSlug: string): void {
   }
 }
 
-export function createAgentWorkspace(name: string): AgentWorkspace {
+export function createAgentWorkspace(
+  name: string,
+  opts?: { type?: WorkspaceType },
+): AgentWorkspace {
   const index = readIndex()
 
   const duplicate = index.workspaces.find((w) => w.name === name)
@@ -192,6 +205,7 @@ export function createAgentWorkspace(name: string): AgentWorkspace {
     slug,
     createdAt: now,
     updatedAt: now,
+    type: opts?.type ?? 'personal',
   }
 
   getAgentWorkspacePath(slug)
@@ -201,7 +215,8 @@ export function createAgentWorkspace(name: string): AgentWorkspace {
   index.workspaces.unshift(workspace)
   writeIndex(index)
 
-  console.log(`[Agent 工作区] 已创建工作区: ${name} (slug: ${slug})`)
+  const typeLabel = workspace.type === 'team' ? '团队' : '个人'
+  console.log(`[Agent 工作区] 已创建${typeLabel}工作区: ${name} (slug: ${slug})`)
   return workspace
 }
 
@@ -292,6 +307,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
       slug: 'default',
       createdAt: now,
       updatedAt: now,
+      type: 'personal',
     }
 
     getAgentWorkspacePath('default')
@@ -1082,6 +1098,75 @@ function isNewerVersion(a: string, b: string): boolean {
     if (diff !== 0) return diff > 0
   }
   return false
+}
+
+// ===== 团队工作区同步 =====
+
+/** 将远程团队工作区合并到本地索引，侧边栏即可展示 */
+export function syncTeamWorkspacesToIndex(teamWorkspaces: AgentWorkspace[]): void {
+  const index = readIndex()
+  let changed = false
+
+  for (const tw of teamWorkspaces) {
+    const existing = index.workspaces.find((w) => w.id === tw.id)
+    if (!existing) {
+      // 新建团队工作区到本地索引
+      index.workspaces.unshift({
+        ...tw,
+        type: 'team',
+      })
+      getAgentWorkspacePath(tw.slug)
+      ensurePluginManifest(tw.slug, tw.name)
+      changed = true
+    } else if (existing.type !== 'team') {
+      existing.type = 'team'
+      changed = true
+    }
+  }
+
+  if (changed) {
+    writeIndex(index)
+    console.log(`[Agent 工作区] 已同步 ${teamWorkspaces.length} 个团队工作区到本地索引`)
+  }
+}
+
+// ===== 品牌管理 =====
+
+/** 获取工作区品牌配置 */
+export function getWorkspaceBrand(workspaceId: string): WorkspaceBrand | undefined {
+  const index = readIndex()
+  const ws = index.workspaces.find((w) => w.id === workspaceId)
+  return ws?.brand
+}
+
+/** 设置工作区品牌配置 */
+export function setWorkspaceBrand(
+  workspaceId: string,
+  brand: WorkspaceBrand,
+): void {
+  const index = readIndex()
+  const idx = index.workspaces.findIndex((w) => w.id === workspaceId)
+
+  if (idx === -1) {
+    throw new Error(`Agent 工作区不存在: ${workspaceId}`)
+  }
+
+  index.workspaces[idx] = {
+    ...index.workspaces[idx]!,
+    brand,
+    updatedAt: Date.now(),
+  }
+
+  writeIndex(index)
+  console.log(`[Agent 工作区] 已更新品牌配置: ${index.workspaces[idx]!.name}`)
+}
+
+// ===== 工作区类型筛选 =====
+
+/** 列出指定类型的工作区 */
+export function listWorkspacesByType(type: WorkspaceType): AgentWorkspace[] {
+  const index = readIndex()
+  return index.workspaces.filter((w) => w.type === type && !w.isDeleted)
 }
 
 // ===== 工作区配置管理 =====

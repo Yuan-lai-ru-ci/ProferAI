@@ -16,6 +16,9 @@ directories:
 # 压缩配置
 compression: normal
 
+# 打包后钩子（修补 Windows exe 图标）
+afterPack: scripts/after-pack.cjs
+
 # ASAR 打包配置
 # 启用 ASAR 归档，将 SDK native binary 解压到 app.asar.unpacked/ 避免路径问题
 asar: true
@@ -62,7 +65,9 @@ extraResources:
     to: proma-logos
     filter:
       - "**/*"
-  # 默认 Dock 图标（macOS app.dock.setIcon 使用）
+  # 窗口图标（Windows 任务栏 / Linux 标题栏 / macOS Dock 使用）
+  - from: resources/icon.ico
+    to: icon.ico
   - from: resources/icon.png
     to: icon.png
 
@@ -109,7 +114,7 @@ dmg:
 # Windows 配置
 # ============================================
 win:
-  icon: resources/icon.ico
+  icon: icon.ico
   fileAssociations:
     - ext: proma-backup
       name: Proma Personal Backup
