@@ -985,22 +985,13 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     // 团队工作区：自动选中或创建一个 Agent 会话
     const ws = workspaces.find((w) => w.id === workspaceId)
     if (ws?.type === 'team') {
-      setCurrentAgentSessionId((prev) => {
-        // 已有一个属于该工作区的 Agent 会话 → 直接选中
-        const existing = agentSessions.find((s) => !s.archived && s.workspaceId === workspaceId)
-        if (existing) {
-          // 延迟打开 tab，等 currentWorkspaceId 更新生效
-          setTimeout(() => {
-            const result = openTab(tabs, { type: 'agent', sessionId: existing.id, title: existing.title })
-            setTabs(result.tabs)
-            setActiveTabId(result.activeTabId)
-          }, 50)
-          return existing.id
-        }
-        return prev
-      })
+      const existing = agentSessions.find((s) => !s.archived && s.workspaceId === workspaceId)
+      if (existing) {
+        setCurrentAgentSessionId(existing.id)
+        setTimeout(() => openSession('agent', existing.id, existing.title), 50)
+      }
     }
-  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView, workspaces, agentSessions, setCurrentAgentSessionId, tabs, setTabs, setActiveTabId])
+  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView, workspaces, agentSessions, setCurrentAgentSessionId, openSession])
 
   const canDeleteWorkspace = React.useCallback(
     (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
