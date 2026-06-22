@@ -618,6 +618,11 @@ export interface AgentSessionMeta {
   permissionMode?: PromaPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
+  /**
+   * 自动任务会话是否已被用户手动接管而"毕业"：true 时该会话回到普通项目会话列表，
+   * 且调度器不再复用它注入新的定时运行（避免污染用户已接管的会话）。默认 undefined/false。
+   */
+  automationGraduated?: boolean
   /** 父 Agent 会话 ID（该会话由父 Agent 委派创建时标记） */
   parentSessionId?: string
   /** 根 Agent 会话 ID（多层委派时用于追溯；当前仅允许一层，预留字段） */

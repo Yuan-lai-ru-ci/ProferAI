@@ -35,6 +35,7 @@ import {
   agentMaxBudgetUsdAtom,
   agentMaxTurnsAtom,
   agentSettingsReadyAtom,
+  automationGroupOrderAtom,
   dockBadgeCountAtom,
   unviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
@@ -154,6 +155,7 @@ function AgentSettingsInitializer(): null {
   const setEffort = useSetAtom(agentEffortAtom)
   const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
   const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
+  const setAutomationGroupOrder = useSetAtom(automationGroupOrderAtom)
 
   const setAgentSettingsReady = useSetAtom(agentSettingsReadyAtom)
   const setChannels = useSetAtom(channelsAtom)
@@ -238,6 +240,9 @@ function AgentSettingsInitializer(): null {
       if (settings.agentMaxTurns != null) {
         setMaxTurns(settings.agentMaxTurns)
       }
+      if (typeof settings.agentAutomationGroupOrder === 'number') {
+        setAutomationGroupOrder(settings.agentAutomationGroupOrder)
+      }
 
       // 加载工作区列表并恢复上次选中的工作区
       window.electronAPI.listAgentWorkspaces().then((workspaces) => {
@@ -258,7 +263,7 @@ function AgentSettingsInitializer(): null {
       console.error(err)
       setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
     })
-  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded, setAgentSettingsReady])
+  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setAutomationGroupOrder, setChannels, setChannelsLoaded, setAgentSettingsReady])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {
