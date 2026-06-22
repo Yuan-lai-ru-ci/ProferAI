@@ -13,40 +13,38 @@ import { getAgentWorkspacePath } from './config-paths'
 import { enqueueChange } from './sync-manager'
 import type { AgentWorkspace, WorkspaceRole } from '@proma/shared'
 
-/** 带认证的 fetch 封装（401 自动刷新重试一次） */
+/** 带认证的 fetch 封装（token 过期自动刷新重试） */
 async function authedFetch(
   path: string,
   options: RequestInit = {},
 ): Promise<Response> {
-  const auth = getTeamAuth()
+  let auth = getTeamAuth()
+  // token 过期时先尝试刷新
+  if (!auth) {
+    await refreshAuthToken().catch(() => {})
+    auth = getTeamAuth()
+  }
   if (!auth) throw new Error('未登录')
 
-  const doFetch = () =>
-    (undiciFetch as unknown as typeof fetch)(`${auth.baseUrl}${path}`, {
+  const doFetch = (t: typeof auth) =>
+    (undiciFetch as unknown as typeof fetch)(`${t.baseUrl}${path}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${auth.token}`,
+        Authorization: `Bearer ${t.token}`,
         ...(options.headers as Record<string, string>),
       },
     })
 
-  const res = await doFetch()
+  const res = await doFetch(auth)
   if (res.status !== 401) return res
 
-  // 尝试刷新令牌后重试一次
+  // 401 → 尝试刷新令牌后重试一次
   const refreshed = await refreshAuthToken()
   if (refreshed) {
     const auth2 = getTeamAuth()
     if (auth2 && auth2.token !== auth.token) {
-      return (undiciFetch as unknown as typeof fetch)(`${auth2.baseUrl}${path}`, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${auth2.token}`,
-          ...(options.headers as Record<string, string>),
-        },
-      })
+      return doFetch(auth2)
     }
   }
 

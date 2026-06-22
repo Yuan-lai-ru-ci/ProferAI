@@ -1611,6 +1611,7 @@ export const AUTH_IPC_CHANNELS = {
   GET_AUTH_STATUS: 'auth:get-auth-status',
   REGISTER: 'auth:register',
   GET_SERVER_INFO: 'auth:get-server-info',
+  GET_TEAM_AUTH: 'auth:get-team-auth',
 } as const
 
 /** 同步 IPC 通道 */

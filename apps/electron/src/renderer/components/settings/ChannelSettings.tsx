@@ -9,7 +9,7 @@
 
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
@@ -38,6 +38,7 @@ export function ChannelSettings(): React.ReactElement {
   const [viewMode, setViewMode] = React.useState<ViewMode>('list')
   const [editingChannel, setEditingChannel] = React.useState<Channel | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [commercialMode, setCommercialMode] = React.useState(false)
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
@@ -53,6 +54,11 @@ export function ChannelSettings(): React.ReactElement {
   React.useEffect(() => {
     agentChannelIdRef.current = agentChannelId
   }, [agentChannelId])
+
+  // 检测商业模式
+  React.useEffect(() => {
+    window.electronAPI.getCommercialMode().then(setCommercialMode).catch(() => setCommercialMode(false))
+  }, [])
 
   /** 加载渠道列表 */
   const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
@@ -192,8 +198,12 @@ export function ChannelSettings(): React.ReactElement {
     setEditingChannel(null)
   }
 
-  // 表单视图
+  // 表单视图 — 商业模式下禁止访问
   if (viewMode === 'create' || viewMode === 'edit') {
+    if (commercialMode) {
+      setViewMode('list')
+      return null
+    }
     return (
       <ChannelForm
         channel={editingChannel}
@@ -215,14 +225,27 @@ export function ChannelSettings(): React.ReactElement {
       {/* 区块一：模型配置 */}
       <SettingsSection
         title="模型配置"
-        description="管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式"
+        description={commercialMode ? '渠道由团队服务器统一管理，无需手动配置' : '管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式'}
         action={
-          <Button size="sm" onClick={() => setViewMode('create')}>
-            <Plus size={16} />
-            <span>添加配置</span>
-          </Button>
+          commercialMode ? null : (
+            <Button size="sm" onClick={() => setViewMode('create')}>
+              <Plus size={16} />
+              <span>添加配置</span>
+            </Button>
+          )
         }
       >
+        {commercialMode && (
+          <SettingsCard>
+            <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
+              <Server size={18} className="text-primary shrink-0" />
+              <div>
+                <div className="text-sm font-medium">渠道由服务端统一管理</div>
+                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端，无需手动添加或修改 API Key</div>
+              </div>
+            </div>
+          </SettingsCard>
+        )}
         {loading ? (
           <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
         ) : channels.length === 0 ? (
@@ -237,6 +260,7 @@ export function ChannelSettings(): React.ReactElement {
               <ChannelRow
                 key={channel.id}
                 channel={channel}
+                commercialMode={commercialMode}
                 onEdit={() => {
                   setEditingChannel(channel)
                   setViewMode('edit')
@@ -302,9 +326,10 @@ interface ChannelRowProps {
   onEdit: () => void
   onDelete: () => void
   onToggle: () => void
+  commercialMode?: boolean
 }
 
-function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): React.ReactElement {
+function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode }: ChannelRowProps): React.ReactElement {
   const enabledCount = channel.models.filter((m) => m.enabled).length
   const description = [
     PROVIDER_LABELS[channel.provider],
@@ -322,21 +347,25 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
       className="group"
     >
       <div className="flex items-center gap-2">
-        {/* 操作按钮 */}
-        <button
-          onClick={onEdit}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors opacity-0 group-hover:opacity-100"
-          title="编辑"
-        >
-          <Pencil size={14} />
-        </button>
-        <button
-          onClick={onDelete}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
-          title="删除"
-        >
-          <Trash2 size={14} />
-        </button>
+        {/* 操作按钮 — 商业模式下隐藏 */}
+        {!commercialMode && (
+          <>
+            <button
+              onClick={onEdit}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors opacity-0 group-hover:opacity-100"
+              title="编辑"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              onClick={onDelete}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+              title="删除"
+            >
+              <Trash2 size={14} />
+            </button>
+          </>
+        )}
 
         {/* 启用/关闭开关 */}
         <Switch

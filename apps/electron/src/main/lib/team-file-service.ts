@@ -8,7 +8,7 @@ import { existsSync, writeFileSync, mkdirSync, statSync, readFileSync } from 'no
 import { join, dirname, resolve, relative, isAbsolute, sep } from 'node:path'
 import { fetch as undiciFetch } from 'undici'
 import { getConfigDir, getWorkspaceFilesDir } from './config-paths'
-import { getTeamAuth, getAuthStatus } from './auth-service'
+import { getTeamAuth, getAuthStatus, refreshAuthToken } from './auth-service'
 
 export interface TeamFileManifestEntry {
   name: string
@@ -355,7 +355,12 @@ export async function fetchFileManifest(
   workspaceId: string,
   workspaceSlug?: string,
 ): Promise<TeamFileManifestEntry[]> {
-  const auth = getTeamAuth()
+  let auth = getTeamAuth()
+  // token 过期时先尝试刷新
+  if (!auth) {
+    await refreshAuthToken().catch(() => {})
+    auth = getTeamAuth()
+  }
   if (!auth) return []
 
   try {
