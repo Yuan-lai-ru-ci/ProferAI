@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Profer Admin</title>
+<style>
+:root{--bg:#f0f4f8;--card:#fff;--border:#e2e8f0;--text:#1a202c;--muted:#718096;--primary:#4f46e5;--primary-hover:#4338ca;--danger:#ef4444;--danger-hover:#dc2626;--success:#10b981;--warn:#f59e0b;--info:#3b82f6}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:linear-gradient(180deg,#1e1b4b 0%,#312e81 100%);color:#e0e7ff;padding:0;display:flex;flex-direction:column}
+.sidebar-brand{padding:24px 20px 20px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sidebar-brand h2{font-size:17px;font-weight:700;color:#fff;letter-spacing:-.3px}.sidebar-brand p{font-size:11px;color:#a5b4fc;margin-top:2px}
+.sidebar-nav{flex:1;padding:12px 10px;display:flex;flex-direction:column;gap:2px}
+.sidebar-nav a{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;font-size:13.5px;color:#c7d2fe;text-decoration:none;cursor:pointer;transition:all .15s;font-weight:450}
+.sidebar-nav a:hover{background:rgba(255,255,255,.08);color:#fff}
+.sidebar-nav a.on{background:rgba(255,255,255,.14);color:#fff;font-weight:600}
+.sidebar-nav .nav-icon{font-size:16px;width:20px;text-align:center;opacity:.7}
+.sidebar-nav a.on .nav-icon{opacity:1}
+.sidebar-footer{padding:16px;border-top:1px solid rgba(255,255,255,.08)}
+.sidebar-footer a{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:13px;color:#a5b4fc;text-decoration:none;cursor:pointer;transition:all .15s}
+.sidebar-footer a:hover{background:rgba(239,68,68,.15);color:#fca5a5}
+.main{flex:1;padding:32px;overflow-y:auto}
+.card{background:var(--card);border-radius:14px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.04),0 1px 2px rgba(0,0,0,.03);margin-bottom:20px;border:1px solid var(--border)}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.card-header h2{font-size:15px;font-weight:600;color:var(--text)}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.stat-card{background:var(--card);border-radius:14px;padding:22px 24px;box-shadow:0 1px 3px rgba(0,0,0,.04);border:1px solid var(--border);transition:box-shadow .2s}
+.stat-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.06)}
+.stat-card .stat-icon{font-size:22px;margin-bottom:8px}
+.stat-card .stat-val{font-size:30px;font-weight:700;letter-spacing:-.5px;color:var(--text)}
+.stat-card .stat-lbl{font-size:13px;color:var(--muted);margin-top:4px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13.5px;font-weight:500;cursor:pointer;border:none;transition:all .15s;white-space:nowrap}
+.btn-primary{background:var(--primary);color:#fff;box-shadow:0 1px 2px rgba(79,70,229,.3)}.btn-primary:hover{background:var(--primary-hover);box-shadow:0 2px 6px rgba(79,70,229,.4)}
+.btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:var(--danger-hover)}
+.btn-outline{background:var(--card);color:var(--text);border:1px solid var(--border)}.btn-outline:hover{background:#f8fafc;border-color:#cbd5e1}
+.btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+.btn-ghost{padding:5px 10px;font-size:12px;border-radius:6px;background:transparent;color:var(--info);border:none}.btn-ghost:hover{background:#eff6ff}
+input,select{width:100%;padding:9px 14px;border:1px solid var(--border);border-radius:8px;font-size:13.5px;outline:none;background:var(--card);color:var(--text);transition:border-color .15s}
+input:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+label{display:block;font-size:13px;font-weight:500;margin-bottom:5px;color:var(--text)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.form-row-3{grid-template-columns:1fr 1fr 1fr}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:12px 14px;border-bottom:1px solid #f1f5f9;font-size:13px}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:#fafbfc}
+tr:hover td{background:#f8fafc}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:100px;font-size:11.5px;font-weight:500}
+.badge-success{background:#ecfdf5;color:#065f46}.badge-danger{background:#fef2f2;color:#991b1b}.badge-warn{background:#fffbeb;color:#92400e}.badge-info{background:#eff6ff;color:#1e40af}
+.toast{position:fixed;top:20px;right:20px;padding:14px 24px;border-radius:10px;color:#fff;font-size:13.5px;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.15);animation:in .25s ease-out;font-weight:500}
+@keyframes in{from{transform:translateY(-10px);opacity:0}to{transform:translateY(0);opacity:1}}
+.empty-state{text-align:center;padding:48px 24px;color:var(--muted)}.empty-state .empty-icon{font-size:40px;margin-bottom:12px}
+.page-title{font-size:22px;font-weight:700;margin-bottom:24px;color:var(--text);letter-spacing:-.3px}
+.login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}
+.login-card{background:#fff;border-radius:18px;padding:40px;width:400px;box-shadow:0 20px 60px rgba(0,0,0,.12)}
+.login-card h1{font-size:22px;font-weight:700;margin-bottom:6px;letter-spacing:-.3px}
+.login-card .login-sub{font-size:13px;color:var(--muted);margin-bottom:28px}
+.login-err{background:#fef2f2;color:#991b1b;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:16px;display:none}
+@media(max-width:768px){.app{flex-direction:column}.sidebar{width:100%}.stat-grid{grid-template-columns:1fr 1fr}.login-card{width:90%;padding:28px}.form-row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function(){
+var TOKEN=sessionStorage.getItem('at')||'';
+var PREFIX=(function(){var p=location.pathname;return p.substring(0,p.indexOf('/admin'))})();
+var API=PREFIX+'/v1';
+
+function toast(m,ok){var t=document.createElement('div');t.className='toast';t.style.background=ok===false?'#ef4444':'#10b981';t.textContent=m;document.body.appendChild(t);setTimeout(function(){t.remove()},2800)}
+
+async function api(path,opts){
+  opts=opts||{};opts.headers=opts.headers||{};opts.headers['Content-Type']='application/json';
+  if(TOKEN)opts.headers['Authorization']='Bearer '+TOKEN;
+  var r=await fetch(API+path,opts);
+  if(r.status===401){TOKEN='';sessionStorage.removeItem('at');location.hash='login';throw new Error('unauthorized')}
+  var d=await r.json().catch(function(){return{}});
+  if(!r.ok)throw new Error(d.error||'请求失败 ('+r.status+')');
+  return d;
+}
+
+// ---- Router ----
+function route(){
+  var h=location.hash.slice(1)||(TOKEN?'dashboard':'login');
+  if(!TOKEN&&h!=='login'){location.hash='login';return}
+  if(TOKEN&&h==='login'){location.hash='dashboard';return}
+  var c=document.querySelector('.main-content');if(!c)return;
+  c.innerHTML='';
+  document.querySelectorAll('.sidebar-nav a').forEach(function(a){a.className=a.getAttribute('href')==='#'+h?'on':''});
+  switch(h){
+    case'login':renderLogin(c);break;
+    case'dashboard':renderDashboard(c);break;
+    case'users':renderUsers(c);break;
+    case'channels':renderChannels(c);break;
+    case'credits':renderCredits(c);break;
+  }
+}
+
+// ---- Login ----
+function renderLogin(c){
+  document.querySelector('.sidebar').style.display='none';
+  c.parentElement.style.padding='0';
+  c.parentElement.style.display='flex';c.parentElement.style.alignItems='center';c.parentElement.style.justifyContent='center';
+  c.parentElement.style.background='linear-gradient(135deg,#667eea 0%,#764ba2 100%)';
+  var em='',pw='',err='';
+  c.innerHTML='<div class="login-card">'+
+    '<h1>Profer Admin</h1><div class="login-sub">团队管理后台</div>'+
+    '<div class="login-err"></div>'+
+    '<div style="margin-bottom:16px"><label>邮箱</label><input class="login-em" type="email" placeholder="admin@example.com"></div>'+
+    '<div style="margin-bottom:20px"><label>密码</label><input class="login-pw" type="password" placeholder="输入密码" onkeydown="if(event.key===\'Enter\')this.parentElement.parentElement.querySelector(\'button\').click()"></div>'+
+    '<button class="btn btn-primary" style="width:100%;justify-content:center;padding:12px;font-size:15px">登 录</button></div>';
+  var el=c.querySelector('.login-em');el.addEventListener('input',function(e){em=e.target.value});
+  var pl=c.querySelector('.login-pw');pl.addEventListener('input',function(e){pw=e.target.value});
+  c.querySelector('button').addEventListener('click',function(){
+    errEl=c.querySelector('.login-err');
+    if(!em||!pw){errEl.textContent='请输入邮箱和密码';errEl.style.display='block';return}
+    errEl.style.display='none';
+    fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,password:pw})})
+    .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d}})})
+    .then(function(r){
+      if(!r.ok){errEl.textContent=r.d.error||'登录失败';errEl.style.display='block';return}
+      if(!r.d.isAdmin){errEl.textContent='此账户不是管理员';errEl.style.display='block';return}
+      TOKEN=r.d.accessToken;sessionStorage.setItem('at',TOKEN);
+      location.reload();
+    })
+    .catch(function(e){errEl.textContent='无法连接服务器: '+e.message;errEl.style.display='block'});
+  });
+}
+
+// ---- Dashboard ----
+function renderDashboard(c){
+  c.innerHTML='<h1 class="page-title">仪表盘</h1><div class="card"><span class="muted">加载中...</span></div>';
+  api('/admin/dashboard/stats').then(function(s){
+    c.innerHTML='<h1 class="page-title">仪表盘</h1>'+
+      '<div class="stat-grid mb">'+
+      '<div class="stat-card"><div class="stat-icon">👥</div><div class="stat-val">'+s.totalUsers+'</div><div class="stat-lbl">总用户</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">🟢</div><div class="stat-val">'+s.activeToday+'</div><div class="stat-lbl">今日活跃</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">🔌</div><div class="stat-val">'+s.activeChannels+'</div><div class="stat-lbl">活跃渠道</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📁</div><div class="stat-val">'+s.totalWorkspaces+'</div><div class="stat-lbl">总工作区</div></div></div>'+
+      '<div class="card"><div class="card-header"><h2>额度概览</h2></div>'+
+      '<div class="stat-grid"><div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+(s.totalBalance||0).toLocaleString()+'</div><div class="stat-lbl">总余额</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+(s.totalConsumed||0).toLocaleString()+'</div><div class="stat-lbl">累计消耗</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+(s.consumedThisMonth||0).toLocaleString()+'</div><div class="stat-lbl">本月消耗</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">⭐</div><div class="stat-val">'+(s.topUsers&&s.topUsers[0]?s.topUsers[0].email:'-')+'</div><div class="stat-lbl">最高用量用户</div></div></div></div>';
+  }).catch(function(e){c.innerHTML='<h1 class="page-title">仪表盘</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+}
+
+// ---- Users ----
+function renderUsers(c){var page=1,search='';
+  function load(){
+    c.innerHTML='<h1 class="page-title">用户管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+    api('/admin/users?page='+page+'&limit=30&search='+encodeURIComponent(search)).then(function(d){
+      var rows=d.users.map(function(u){
+        var role=u.is_admin?'<span class="badge badge-info">管理员</span>':'<span class="badge badge-success">用户</span>';
+        var status=u.is_suspended?'<span class="badge badge-danger">已封禁</span>':'<span class="badge badge-success">正常</span>';
+        var act='';act+='<button class="btn btn-ghost copy-btn" data-uid="'+u.id+'" style="font-size:11px" title="复制ID">📋</button> ';
+        if(!u.is_admin)act+='<button class="btn btn-ghost promote-btn" data-uid="'+u.id+'">⬆ 提权</button>';
+        if(u.is_suspended){act+='<button class="btn btn-ghost unsuspend-btn" data-uid="'+u.id+'" style="color:var(--success)">✅ 解封</button>'}else{act+='<button class="btn btn-ghost suspend-btn" data-uid="'+u.id+'" style="color:var(--danger)">⛔ 封禁</button>'};
+        return'<tr><td><strong>'+esc(u.email)+'</strong></td><td>'+esc(u.display_name||'')+'</td><td>'+role+'</td><td>'+status+'</td><td>'+(u.credit_balance||0).toLocaleString()+'</td><td>'+fmtDate(u.created_at)+'</td><td>'+act+'</td></tr>';
+      }).join('');
+      var pager=d.total>30?'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px"><span style="color:var(--muted);font-size:13px">共 '+d.total+' 个用户</span><div style="display:flex;gap:8px">'+
+        (page>1?'<button class="btn btn-outline btn-sm prev-btn">上一页</button>':'')+
+        '<span style="font-size:13px;color:var(--muted);padding:5px 8px">'+page+' / '+Math.ceil(d.total/30)+'</span>'+
+        (page*30<d.total?'<button class="btn btn-outline btn-sm next-btn">下一页</button>':'')+'</div></div>':'';
+      c.innerHTML='<h1 class="page-title">用户管理</h1>'+
+        '<div class="card" style="margin-bottom:16px"><input class="search-inp" placeholder="🔍 搜索邮箱或名称..." value="'+esc(search)+'" style="max-width:400px"></div>'+
+        '<div class="card" style="overflow:auto"><table><thead><tr><th>邮箱</th><th>名称</th><th>角色</th><th>状态</th><th>余额</th><th>注册时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>'+pager+'</div>';
+      c.querySelector('.search-inp').addEventListener('input',function(e){search=e.target.value;page=1;load()});
+      c.querySelectorAll('.promote-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid+'/promote',{method:'POST'}).then(function(){toast('已提升为管理员');load()})})});
+      c.querySelectorAll('.suspend-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定封禁该用户？'))return;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:1})}).then(function(){toast('已封禁');load()})})});c.querySelectorAll('.unsuspend-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:0})}).then(function(){toast('已解封');load()})})});c.querySelectorAll('.copy-btn').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();navigator.clipboard.writeText(b.dataset.uid).then(function(){toast('已复制用户ID')})})});
+      var pb=c.querySelector('.prev-btn');if(pb)pb.addEventListener('click',function(){page--;load()});
+      var nb=c.querySelector('.next-btn');if(nb)nb.addEventListener('click',function(){page++;load()});
+    }).catch(function(e){c.innerHTML='<h1 class="page-title">用户管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+  }
+  load();
+}
+
+// ---- Channels ----
+function renderChannels(c){
+  var show=false,nm='',prov='deepseek',url='',key='';
+  function load(){
+    c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+    api('/admin/channels').then(function(chs){
+      var rows=chs.length?chs.map(function(ch){return'<tr><td><strong>'+esc(ch.name)+'</strong></td><td>'+ch.provider+'</td><td>'+(ch.is_active?'<span class="badge badge-success">活跃</span>':'<span class="badge badge-danger">停用</span>')+'</td><td>'+fmtDate(ch.created_at)+'</td><td><button class="btn btn-ghost del-btn" data-cid="'+ch.id+'" style="color:var(--danger)">🗑 删除</button></td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📡</div>还没有配置渠道</div></td></tr>';
+      c.innerHTML='<h1 class="page-title">渠道管理</h1>';
+      c.insertAdjacentHTML('beforeend','<div style="margin-bottom:16px"><button class="btn btn-primary toggle-btn">'+(show?'✕ 取消':'＋ 创建渠道')+'</button></div>');
+      if(show){
+        c.insertAdjacentHTML('beforeend','<div class="card form-card" style="max-width:560px">'+
+          '<div class="card-header"><h2>创建渠道</h2></div>'+
+          '<div class="form-row"><div><label>名称</label><input class="ch-name" value="'+esc(nm)+'"></div><div><label>供应商</label><select class="ch-provider"><option value="deepseek"'+(prov==='deepseek'?' selected':'')+'>DeepSeek</option><option value="anthropic"'+(prov==='anthropic'?' selected':'')+'>Anthropic</option><option value="openai"'+(prov==='openai'?' selected':'')+'>OpenAI</option><option value="qwen"'+(prov==='qwen'?' selected':'')+'>通义千问</option><option value="kimi-api"'+(prov==='kimi-api'?' selected':'')+'>Kimi</option><option value="zhipu"'+(prov==='zhipu'?' selected':'')+'>智谱</option><option value="minimax"'+(prov==='minimax'?' selected':'')+'>MiniMax</option><option value="doubao"'+(prov==='doubao'?' selected':'')+'>豆包</option></select></div></div>'+
+          '<div class="form-row"><div><label>Base URL</label><input class="ch-url" value="'+esc(url)+'" placeholder="自动填充"></div><div><label>API Key</label><div style="display:flex;gap:8px"><input class="ch-key" type="password" value="'+esc(key)+'"><button class="btn btn-outline test-btn">测试</button></div></div></div>'+
+          '<div class="test-msg" style="font-size:13px;margin-bottom:12px"></div>'+
+          '<button class="btn btn-primary create-btn">创建渠道</button></div>');
+        c.querySelector('.test-btn').addEventListener('click',function(){
+          var k=c.querySelector('.ch-key').value,u=c.querySelector('.ch-url').value||'https://api.deepseek.com',p=c.querySelector('.ch-provider').value;
+          c.querySelector('.test-msg').innerHTML='<span style="color:var(--muted)">测试中...</span>';
+          api('/admin/channels/test',{method:'POST',body:JSON.stringify({apiKey:k,baseUrl:u,provider:p})}).then(function(r){c.querySelector('.test-msg').innerHTML=r.success?'<span style="color:#10b981">✅ 连接成功</span>':'<span style="color:#ef4444">❌ '+esc(r.error||'失败')+'</span>'}).catch(function(e){c.querySelector('.test-msg').innerHTML='<span style="color:#ef4444">❌ '+esc(e.message)+'</span>'});
+        });
+        c.querySelector('.create-btn').addEventListener('click',function(){
+          var n=c.querySelector('.ch-name').value,k=c.querySelector('.ch-key').value,u=c.querySelector('.ch-url').value,p=c.querySelector('.ch-provider').value;
+          if(!n||!k){toast('名称和 API Key 必填',false);return}
+          api('/admin/channels',{method:'POST',body:JSON.stringify({name:n,provider:p,apiKey:k,baseUrl:u})}).then(function(){toast('渠道创建成功');show=false;load()}).catch(function(e){toast(e.message,false)});
+        });
+      }
+      c.insertAdjacentHTML('beforeend','<div class="card" style="overflow:auto"><table><thead><tr><th>名称</th><th>供应商</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>');
+      c.querySelector('.toggle-btn').addEventListener('click',function(){show=!show;load()});
+      c.querySelectorAll('.del-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除该渠道？'))return;api('/admin/channels/'+b.dataset.cid,{method:'DELETE'}).then(function(){toast('已删除');load()})})});
+    }).catch(function(e){c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+  }
+  load();
+}
+
+// ---- Credits ----
+function renderCredits(c){api('/admin/users?limit=200').then(function(ud){var dl=document.getElementById('user-datalist');if(dl&&ud.users){ud.users.forEach(function(u){dl.insertAdjacentHTML('beforeend','<option value="'+u.id+'">'+esc(u.email)+' ('+esc(u.display_name||'')+')</option>')})}}).catch(function(){});
+  c.innerHTML='<h1 class="page-title">额度管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+  api('/admin/credits/transactions?limit=50').then(function(d){
+    var rows=d.transactions.length?d.transactions.map(function(tx){return'<tr><td><strong>'+esc(tx.user_email||tx.user_id)+'</strong></td><td style="color:'+(tx.amount>=0?'var(--success)':'var(--danger)')+';font-weight:600">'+(tx.amount>=0?'+':'')+tx.amount.toLocaleString()+'</td><td><span class="badge '+(tx.type==='grant'?'badge-success':tx.type==='consumption'?'badge-warn':'badge-info')+'">'+tx.type+'</span></td><td>'+esc(tx.description||'-')+'</td><td>'+fmtDateTime(tx.created_at)+'</td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📭</div>暂无交易记录</div></td></tr>';
+    c.innerHTML='<h1 class="page-title">额度管理</h1>'+
+      '<div class="card" style="max-width:560px">'+
+      '<div class="card-header"><h2>💳 手动充值</h2></div>'+
+      '<div class="form-row form-row-3"><div><label>用户 ID</label><input class="grant-uid" placeholder="从用户管理页面复制"></div><div><label>数量</label><input class="grant-amt" type="number" min="1" placeholder="credits"></div><div><label>备注</label><input class="grant-desc" placeholder="充值说明"></div></div>'+
+      '<div class="grant-msg" style="font-size:13px;margin-bottom:12px"></div>'+
+      '<button class="btn btn-primary grant-btn">确认充值</button></div>'+
+      '<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 最近交易</h2></div><table><thead><tr><th>用户</th><th>数量</th><th>类型</th><th>说明</th><th>时间</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    c.querySelector('.grant-btn').addEventListener('click',function(){
+      var uid=c.querySelector('.grant-uid').value,amt=c.querySelector('.grant-amt').value,desc=c.querySelector('.grant-desc').value;
+      if(!uid||!amt||parseInt(amt)<=0){toast('请填写用户ID和有效数量',false);return}
+      c.querySelector('.grant-msg').innerHTML='<span style="color:var(--muted)">处理中...</span>';
+      api('/admin/credits/grant',{method:'POST',body:JSON.stringify({userId:uid,amount:parseInt(amt),description:desc})}).then(function(r){toast('✅ 已充值 '+parseInt(amt).toLocaleString()+' credits');renderCredits(c)}).catch(function(e){c.querySelector('.grant-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>'});
+    });
+  }).catch(function(e){c.innerHTML='<h1 class="page-title">额度管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+}
+
+function esc(s){s=s||'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function fmtDate(t){return new Date(t).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})}
+function fmtDateTime(t){return new Date(t).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+
+// ---- Init ----
+function init(){
+  var root=document.getElementById('root');
+  root.innerHTML='<div class="app">'+
+    '<nav class="sidebar">'+
+      '<div class="sidebar-brand"><h2>⚡ Profer Admin</h2><p>团队管理控制台</p></div>'+
+      '<div class="sidebar-nav">'+
+        '<a href="#dashboard" class="on"><span class="nav-icon">📊</span> 仪表盘</a>'+
+        '<a href="#users"><span class="nav-icon">👥</span> 用户管理</a>'+
+        '<a href="#channels"><span class="nav-icon">🔌</span> 渠道管理</a>'+
+        '<a href="#credits"><span class="nav-icon">💰</span> 额度管理</a>'+
+      '</div>'+
+      '<div class="sidebar-footer"><a href="#" id="logout-btn">🚪 退出登录</a></div>'+
+    '</nav>'+
+    '<main class="main"><div class="main-content"></div></main>'+
+  '</div>';
+  document.getElementById('logout-btn').addEventListener('click',function(){TOKEN='';sessionStorage.removeItem('at');location.hash='login';route()});
+  window.addEventListener('hashchange',route);
+  route();
+}
+init();
+})();
+</script>
+</body>
+</html>

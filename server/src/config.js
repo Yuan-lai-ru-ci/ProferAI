@@ -37,3 +37,26 @@ export const ONLINE_THRESHOLD = 120_000
 
 // 邀请有效期（7 天）
 export const INVITATION_TTL = 7 * 86400 * 1000
+
+// ===== 商业模式 =====
+// COMMERCIAL_MODE=true 时启用额度扣除、渠道统配、管理后台
+export const COMMERCIAL_MODE = process.env.COMMERCIAL_MODE === 'true'
+
+// 渠道 API Key 加密密钥（AES-256-GCM，64 字符 hex）
+export const CHANNEL_ENCRYPTION_KEY = (() => {
+  const key = process.env.CHANNEL_ENCRYPTION_KEY
+  if (COMMERCIAL_MODE && !key) {
+    console.error('[Profer] 致命错误: COMMERCIAL_MODE=true 但 CHANNEL_ENCRYPTION_KEY 未设置')
+    console.error('  请设置: export CHANNEL_ENCRYPTION_KEY="<64位随机hex>"')
+    console.error('  生成: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"')
+    process.exit(1)
+  }
+  return key || ''
+})()
+
+// 新用户注册时赠送的默认额度
+export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '1000000', 10)
+
+// New API 中继站地址（额度代理转发目标）
+export const RELAY_BASE_URL = process.env.RELAY_BASE_URL || 'http://127.0.0.1:3080'
+export const RELAY_API_KEY = process.env.RELAY_API_KEY || ''

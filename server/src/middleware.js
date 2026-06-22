@@ -25,18 +25,23 @@ export function authMiddleware(c) {
   const token = auth.slice(7)
   try {
     const payload = jwt.verify(token, JWT_SECRET)
-
-    // 检查黑名单
     const h = hashToken(token)
     const blacklisted = db.prepare('SELECT 1 FROM token_blacklist WHERE token_hash = ?').get(h)
     if (blacklisted) {
       return c.json({ error: '令牌已注销' }, 401)
     }
-
     c.set('userId', payload.sub)
     c.set('userEmail', payload.email)
-    c.set('accessToken', token) // 供 logout 使用
+    c.set('accessToken', token)
+    c.set('jwtPayload', payload)
   } catch {
     return c.json({ error: '令牌无效或已过期' }, 401)
   }
+}
+
+// Hono 标准中间件版本 — 供 app.use() 使用
+export async function honoAuthMiddleware(c, next) {
+  const result = authMiddleware(c)
+  if (result) return result
+  await next()
 }

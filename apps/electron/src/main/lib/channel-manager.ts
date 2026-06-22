@@ -105,6 +105,69 @@ function decryptKey(encryptedKey: string): string {
 }
 
 /**
+ * 从服务端同步渠道到本地
+ *
+ * 仅商业模式下调用。拉取服务端渠道 → 加密 API Key → 覆盖本地 channels.json。
+ * 同时备份旧配置到 channels.json.server-backup。
+ */
+export async function syncChannelsFromServer(serverBaseUrl: string, accessToken: string): Promise<void> {
+  const fetchFn = await getFetchFn()
+  const url = `${serverBaseUrl}/v1/account/channels`
+
+  const resp = await fetchFn(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+
+  if (!resp.ok) {
+    throw new Error(`渠道同步失败: HTTP ${resp.status}`)
+  }
+
+  const data = await resp.json() as { commercialMode: boolean; channels: Array<{ id: string; name: string; provider: string; apiKey: string; baseUrl: string; models: ChannelModel[] }> }
+
+  if (!data.commercialMode || !data.channels) return
+
+  // 备份旧配置
+  const configPath = getChannelsPath()
+  if (existsSync(configPath)) {
+    try {
+      const backupPath = configPath + '.server-backup'
+      writeFileSync(backupPath, readFileSync(configPath))
+    } catch { /* 备份失败不致命 */ }
+  }
+
+  // 将服务端渠道写入本地，API Key 用本地 safeStorage 加密
+  const now = Date.now()
+  const config: ChannelsConfig = { version: 1, channels: [] }
+
+  for (const ch of data.channels) {
+    config.channels.push({
+      id: ch.id,
+      name: ch.name,
+      provider: ch.provider as ProviderType,
+      baseUrl: ch.baseUrl,
+      apiKey: encryptApiKey(ch.apiKey),
+      models: ch.models,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
+
+  writeConfig(config)
+  console.log(`[渠道管理] 已从服务端同步 ${config.channels.length} 个渠道`)
+}
+
+/** 当前是否处于商业模式（渠道由服务端统一管理） */
+export function isCommercialMode(): boolean {
+  try {
+    const { getCommercialMode } = require('./auth-service')
+    return getCommercialMode()
+  } catch {
+    return false
+  }
+}
+
+/**
  * 获取所有渠道
  *
  * 返回的渠道中 apiKey 保持加密状态。
@@ -159,6 +222,7 @@ export function getChannelById(id: string): Channel | undefined {
  * @returns 创建后的渠道（apiKey 为加密态）
  */
 export function createChannel(input: ChannelCreateInput): Channel {
+  if (isCommercialMode()) throw new Error('商业模式下不允许手动创建渠道，渠道由服务端统一管理')
   const config = readConfig()
   const now = Date.now()
 
@@ -189,6 +253,7 @@ export function createChannel(input: ChannelCreateInput): Channel {
  * @returns 更新后的渠道
  */
 export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
+  if (isCommercialMode()) throw new Error('商业模式下不允许修改渠道，渠道由服务端统一管理')
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
 
@@ -220,6 +285,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
  * 删除渠道
  */
 export function deleteChannel(id: string): void {
+  if (isCommercialMode()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
 

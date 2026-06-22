@@ -25,13 +25,22 @@ import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
-import { corsMiddleware } from './src/middleware.js'
+import { corsMiddleware, authMiddleware, honoAuthMiddleware } from './src/middleware.js'
+import { adminMiddleware } from './src/middleware/admin.js'
 import { authRoutes } from './src/routes/auth.js'
 import { workspaceRoutes } from './src/routes/workspaces.js'
 import { invitationRoutes } from './src/routes/invitations.js'
 import { syncRoutes } from './src/routes/sync.js'
 import { fileRoutes } from './src/routes/files.js'
 import { heartbeatRoutes } from './src/routes/heartbeat.js'
+import { adminUsers } from './src/routes/admin/users.js'
+import { adminChannels } from './src/routes/admin/channels.js'
+import { adminCredits } from './src/routes/admin/credits.js'
+import { adminDashboard } from './src/routes/admin/dashboard.js'
+import { accountChannels } from './src/routes/account/channels.js'
+import { accountCredits } from './src/routes/account/credits.js'
+import { proxyRoutes } from './src/routes/proxy/chat.js'
+import { creditCheckMiddleware } from './src/middleware/credits.js'
 
 // ===== 初始化 =====
 initAdmin()
@@ -54,6 +63,43 @@ app.route('/v1/invitations', invitationRoutes)
 app.route('/v1/sync', syncRoutes)
 app.route('/v1/workspaces', fileRoutes)
 app.route('/v1/heartbeat', heartbeatRoutes)
+
+// Admin 路由（需要 auth + admin 双重鉴权）
+const adminApp = new Hono()
+adminApp.use('*', honoAuthMiddleware)
+adminApp.use('*', adminMiddleware)
+adminApp.route('/users', adminUsers)
+adminApp.route('/channels', adminChannels)
+adminApp.route('/credits', adminCredits)
+adminApp.route('/dashboard', adminDashboard)
+app.route('/v1/admin', adminApp)
+
+// Account 路由（需要 auth）
+const accountApp = new Hono()
+accountApp.use('*', honoAuthMiddleware)
+accountApp.route('/channels', accountChannels)
+accountApp.route('/credits', accountCredits)
+app.route('/v1/account', accountApp)
+
+// Proxy 路由（需要 auth + 额度检查）
+const proxyApp = new Hono()
+proxyApp.use('*', honoAuthMiddleware)
+proxyApp.use('*', creditCheckMiddleware)
+proxyApp.route('/', proxyRoutes)
+app.route('/v1/proxy', proxyApp)
+
+// Admin SPA — 管理后台
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+const adminHtmlPath = join(import.meta.dirname, 'src', 'admin-ui', 'index.html')
+app.get('/admin', (c) => {
+  if (!existsSync(adminHtmlPath)) return c.text('Admin UI not found', 404)
+  return c.html(readFileSync(adminHtmlPath, 'utf-8'))
+})
+app.get('/admin/*', (c) => {
+  if (!existsSync(adminHtmlPath)) return c.text('Admin UI not found', 404)
+  return c.html(readFileSync(adminHtmlPath, 'utf-8'))
+})
 
 // Health check
 app.get('/health', (c) => c.json({ status: 'ok', time: Date.now() }))

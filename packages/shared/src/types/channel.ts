@@ -220,4 +220,8 @@ export const CHANNEL_IPC_CHANNELS = {
   FETCH_MODELS: 'channel:fetch-models',
   /** 直接测试连接（无需已保存渠道，传入明文凭证） */
   TEST_DIRECT: 'channel:test-direct',
+  /** 从服务端同步渠道 */
+  SYNC_FROM_SERVER: 'channel:sync-from-server',
+  /** 检查是否处于商业模式 */
+  GET_COMMERCIAL_MODE: 'channel:get-commercial-mode',
 } as const

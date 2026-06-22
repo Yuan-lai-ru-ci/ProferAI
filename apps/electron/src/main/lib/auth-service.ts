@@ -69,11 +69,13 @@ export function removeTeamServer(id: string): void {
 
 interface AuthTokenStore {
   [serverId: string]: {
-    accessToken: string     // 加密后的 JWT（base64）
-    refreshToken: string    // 加密后的刷新令牌（base64）
+    accessToken: string
+    refreshToken: string
     tokenExpiresAt: number
     teamAccountId: string
     teamEmail: string
+    commercialMode: boolean
+    isAdmin: boolean
   }
 }
 
@@ -198,6 +200,8 @@ export async function login(
       expiresAt: number
       userId: string
       email: string
+      isAdmin?: boolean
+      commercialMode?: boolean
     }
 
     // 加密存储令牌
@@ -208,10 +212,23 @@ export async function login(
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
+      commercialMode: !!data.commercialMode,
+      isAdmin: !!data.isAdmin,
     }
     writeTokens(tokens)
 
-    console.log(`[认证] 登录成功: ${data.email} (${data.userId})`)
+    console.log(`[认证] 登录成功: ${data.email} (${data.userId}), commercialMode=${!!data.commercialMode}`)
+
+    // 商业模式下自动同步渠道
+    if (data.commercialMode) {
+      try {
+        const { syncChannelsFromServer } = require('./channel-manager')
+        await syncChannelsFromServer(server.baseUrl, data.accessToken)
+      } catch (err) {
+        console.warn('[认证] 渠道同步失败（非致命）:', err)
+      }
+    }
+
     return {
       success: true,
       teamAccountId: data.userId,
@@ -269,6 +286,8 @@ export async function register(
       expiresAt: number
       userId: string
       email: string
+      isAdmin?: boolean
+      commercialMode?: boolean
     }
 
     // 自动注册服务器配置（复用 login 的模式）
@@ -295,10 +314,22 @@ export async function register(
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
+      commercialMode: !!data.commercialMode,
+      isAdmin: !!data.isAdmin,
     }
     writeTokens(tokens)
 
-    console.log(`[认证] 注册成功: ${data.email} (${data.userId})`)
+    console.log(`[认证] 注册成功: ${data.email} (${data.userId}), commercialMode=${!!data.commercialMode}`)
+
+    // 商业模式下自动同步渠道
+    if (data.commercialMode) {
+      try {
+        const { syncChannelsFromServer } = require('./channel-manager')
+        await syncChannelsFromServer(server.baseUrl, data.accessToken)
+      } catch (err) {
+        console.warn('[认证] 渠道同步失败（非致命）:', err)
+      }
+    }
     return {
       success: true,
       teamAccountId: data.userId,
@@ -395,6 +426,30 @@ export async function refreshAuthToken(): Promise<boolean> {
     } catch { /* 网络错误，继续尝试下一个 */ }
   }
 
+  return false
+}
+
+/** 当前会话是否处于商业模式 */
+export function getCommercialMode(): boolean {
+  const tokens = readTokens()
+  const serverIds = Object.keys(tokens)
+  for (const id of serverIds) {
+    if (tokens[id]!.tokenExpiresAt > Date.now()) {
+      return tokens[id]!.commercialMode === true
+    }
+  }
+  return false
+}
+
+/** 当前用户是否为管理员 */
+export function getIsAdmin(): boolean {
+  const tokens = readTokens()
+  const serverIds = Object.keys(tokens)
+  for (const id of serverIds) {
+    if (tokens[id]!.tokenExpiresAt > Date.now()) {
+      return tokens[id]!.isAdmin === true
+    }
+  }
   return false
 }
 

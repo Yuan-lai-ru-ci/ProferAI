@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import jwt from 'jsonwebtoken'
 import { v4 as uuidv4 } from 'uuid'
-import { db } from '../db.js'
-import { JWT_SECRET, JWT_EXPIRES, ACCESS_TOKEN_EXPIRES, MAX_LOGIN_ATTEMPTS, ACCOUNT_LOCK_MINUTES } from '../config.js'
+import { db, ensureCreditRow, getUserByEmail } from '../db.js'
+import { JWT_SECRET, JWT_EXPIRES, ACCESS_TOKEN_EXPIRES, MAX_LOGIN_ATTEMPTS, ACCOUNT_LOCK_MINUTES, COMMERCIAL_MODE } from '../config.js'
 import { hashPassword, verifyPassword, validatePassword, validateEmail } from '../utils.js'
 import { rateLimit } from '../rate-limiter.js'
 import { logAudit } from '../audit.js'
@@ -98,15 +98,17 @@ authRoutes.post('/register', async (c) => {
   })
   tx()
 
-  const accessToken = jwt.sign({ sub: id, email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
+  const accessToken = jwt.sign({ sub: id, email, is_admin: false, commercial_mode: COMMERCIAL_MODE }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
   const tokenExpiresAt = now + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000
-  logAudit({ action: 'register', workspaceId: inv.workspace_id, userId: id, userEmail: email, entityType: 'workspace', entityId: inv.workspace_id, detail: `joined workspace: ${inv.workspace_name}` })
+  ensureCreditRow(id)
+	  logAudit({ action: 'register', workspaceId: inv.workspace_id, userId: id, userEmail: email, entityType: 'workspace', entityId: inv.workspace_id, detail: `joined workspace: ${inv.workspace_name}` })
   return c.json({
     accessToken,
     refreshToken,
     expiresAt: tokenExpiresAt,
     userId: id,
     email,
+    commercialMode: COMMERCIAL_MODE,
     joinedWorkspace: inv.workspace_name,
   })
 })
@@ -149,7 +151,7 @@ authRoutes.post('/login', async (c) => {
 
   // 生成新的 refreshToken，旧 refreshToken 自动失效
   const refreshToken = uuidv4() + '.' + uuidv4()
-  const accessToken = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
+  const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
   db.prepare('UPDATE users SET refresh_token = ? WHERE id = ?').run(refreshToken, user.id)
   logAudit({ action: 'login', userId: user.id, userEmail: user.email })
 
@@ -159,6 +161,8 @@ authRoutes.post('/login', async (c) => {
     expiresAt: Date.now() + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000,
     userId: user.id,
     email: user.email,
+    isAdmin: !!user.is_admin,
+    commercialMode: COMMERCIAL_MODE,
   })
 })
 
@@ -167,7 +171,7 @@ authRoutes.post('/refresh', async (c) => {
   const { refreshToken } = await c.req.json()
   if (!refreshToken) return c.json({ error: 'refreshToken 必填' }, 400)
 
-  const user = db.prepare('SELECT id, email FROM users WHERE refresh_token = ?').get(refreshToken)
+  const user = db.prepare('SELECT id, email, is_admin FROM users WHERE refresh_token = ?').get(refreshToken)
   if (!user) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
 
   // 检查账户锁定（refresh 期间也能感知）
@@ -176,7 +180,7 @@ authRoutes.post('/refresh', async (c) => {
     return c.json({ error: '账户已锁定' }, 423)
   }
 
-  const accessToken = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
+  const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
   return c.json({
     accessToken,
     expiresAt: Date.now() + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000,

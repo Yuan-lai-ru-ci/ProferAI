@@ -125,6 +125,8 @@ import {
   testChannel,
   testChannelDirect,
   fetchModels,
+  syncChannelsFromServer,
+  isCommercialMode,
 } from './lib/channel-manager'
 import {
   listConversations,
@@ -1117,6 +1119,22 @@ export function registerIpcHandlers(): void {
     CHANNEL_IPC_CHANNELS.FETCH_MODELS,
     async (_, input: FetchModelsInput): Promise<FetchModelsResult> => {
       return fetchModels(input)
+    }
+  )
+
+  // 从服务端同步渠道
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.SYNC_FROM_SERVER,
+    async (_, serverBaseUrl: string, accessToken: string): Promise<void> => {
+      return syncChannelsFromServer(serverBaseUrl, accessToken)
+    }
+  )
+
+  // 检查商业模式
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE,
+    async (): Promise<boolean> => {
+      return isCommercialMode()
     }
   )
 
@@ -4409,7 +4427,7 @@ export function registerIpcHandlers(): void {
   // ===== 身份认证 =====
 
   const { getOrCreateDeviceIdentity, getUserIdentity } = require('./lib/identity-service')
-  const { login, register, logout, getAuthStatus, getServerInfoList } = require('./lib/auth-service')
+  const { login, register, logout, getAuthStatus, getServerInfoList, getTeamAuth } = require('./lib/auth-service')
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_DEVICE_IDENTITY,
@@ -4524,6 +4542,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_AUTH_STATUS,
     async () => getAuthStatus()
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.GET_TEAM_AUTH,
+    async () => getTeamAuth()
   )
 
   // ===== 同步 =====

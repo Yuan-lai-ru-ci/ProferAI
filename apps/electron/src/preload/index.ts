@@ -215,6 +215,12 @@ export interface ElectronAPI {
   /** 从供应商拉取可用模型列表（直接传入凭证，无需已保存渠道） */
   fetchModels: (input: FetchModelsInput) => Promise<FetchModelsResult>
 
+  /** 从服务端同步渠道到本地 */
+  syncChannelsFromServer: (serverBaseUrl: string, accessToken: string) => Promise<void>
+
+  /** 检查是否处于商业模式 */
+  getCommercialMode: () => Promise<boolean>
+
   // ===== 对话管理相关 =====
 
   /** 获取对话列表 */
@@ -1045,6 +1051,7 @@ export interface ElectronAPI {
     logout: () => Promise<void>
     getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string }>
     getServerInfo: () => Promise<Array<{ baseUrl: string; email: string; isLoggedIn: boolean }>>
+    getTeamAuth: () => Promise<{ baseUrl: string; token: string } | null>
   }
 
   // ===== 同步（Phase 1: 占位类型）=====
@@ -1217,6 +1224,14 @@ const electronAPI: ElectronAPI = {
 
   fetchModels: (input: FetchModelsInput) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.FETCH_MODELS, input)
+  },
+
+  syncChannelsFromServer: (serverBaseUrl: string, accessToken: string) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.SYNC_FROM_SERVER, serverBaseUrl, accessToken)
+  },
+
+  getCommercialMode: () => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE)
   },
 
   // 对话管理
@@ -2445,6 +2460,7 @@ const electronAPI: ElectronAPI = {
     logout: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.LOGOUT),
     getAuthStatus: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_AUTH_STATUS),
     getServerInfo: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_SERVER_INFO),
+    getTeamAuth: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_TEAM_AUTH) as Promise<{ baseUrl: string; token: string } | null>,
   },
 
   // ===== 同步（Phase 1: 占位）=====

@@ -26,6 +26,7 @@ import {
   HardDrive,
   Paintbrush,
   Users,
+  Coins,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
@@ -59,6 +60,7 @@ import { MigrationSettings } from "./MigrationSettings";
 import { StorageSettings } from "./StorageSettings";
 import { BrandManager } from "./BrandManager";
 import { TeamWorkspaceSettings } from "./TeamWorkspaceSettings";
+import { CreditsSettings } from "./CreditsSettings";
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -111,6 +113,7 @@ const VOICE_INPUT_TAB: TabItem = {
 const TAIL_TABS: TabItem[] = [
   { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
   { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
+  { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "brand", label: "品牌定制", icon: <Paintbrush size={16} /> },
   { id: "team", label: "团队管理", icon: <Users size={16} /> },
@@ -150,6 +153,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <BrandManager />;
     case "team":
       return <TeamWorkspaceSettings />;
+    case "credits":
+      return <CreditsSettings />;
     default:
       // tutorial 等特殊 tab 由 handleTabChange 拦截打开主区 Tab，不会在此渲染
       return <GeneralSettings />;
