@@ -178,6 +178,16 @@ function rememberLocalSource(
 }
 
 /** 上传文件到团队服务器 */
+/** 获取认证，token 过期时自动刷新 */
+async function getOrRefreshAuth() {
+  let auth = getTeamAuth()
+  if (!auth) {
+    await refreshAuthToken().catch(() => {})
+    auth = getTeamAuth()
+  }
+  return auth
+}
+
 export async function uploadFile(
   workspaceId: string,
   workspaceSlug: string,
@@ -185,7 +195,7 @@ export async function uploadFile(
   fileBuffer: Buffer,
   sourcePath?: string,
 ): Promise<{ success: boolean; path: string; size: number; error?: string }> {
-  const auth = getTeamAuth()
+  const auth = await getOrRefreshAuth()
   if (!auth) return { success: false, path: fileName, size: 0, error: '未登录' }
 
   try {
@@ -250,7 +260,7 @@ export async function downloadFile(
   const existingLocal = getExistingLocalFile(workspaceSlug, filePath)
   if (existingLocal) return existingLocal
 
-  const auth = getTeamAuth()
+  const auth = await getOrRefreshAuth()
   if (!auth) return null
 
   try {
@@ -276,7 +286,7 @@ export async function deleteRemoteFile(
   workspaceSlug: string,
   filePath: string,
 ): Promise<boolean> {
-  const auth = getTeamAuth()
+  const auth = await getOrRefreshAuth()
   if (!auth) return false
 
   try {
@@ -297,7 +307,7 @@ export async function moveRemoteFile(
   fromPath: string,
   toDir: string,
 ): Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }> {
-  const auth = getTeamAuth()
+  const auth = await getOrRefreshAuth()
   if (!auth) return { success: false, fromPath, error: '未登录' }
 
   try {
@@ -329,7 +339,7 @@ export async function createRemoteDirectory(
   workspaceId: string,
   dirPath: string,
 ): Promise<boolean> {
-  const auth = getTeamAuth()
+  const auth = await getOrRefreshAuth()
   if (!auth) return false
 
   try {
@@ -355,12 +365,7 @@ export async function fetchFileManifest(
   workspaceId: string,
   workspaceSlug?: string,
 ): Promise<TeamFileManifestEntry[]> {
-  let auth = getTeamAuth()
-  // token 过期时先尝试刷新
-  if (!auth) {
-    await refreshAuthToken().catch(() => {})
-    auth = getTeamAuth()
-  }
+  const auth = await getOrRefreshAuth()
   if (!auth) return []
 
   try {
