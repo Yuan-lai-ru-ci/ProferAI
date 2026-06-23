@@ -41,6 +41,7 @@ import {
   unviewedCompletedSessionIdsAtom,
   agentSessionPathMapAtom,
   agentDiffRefreshVersionAtom,
+  askUserDraftsAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -797,6 +798,25 @@ export function useGlobalAgentListeners(): void {
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               'permissionRequest'
             )
+          } else if (event.type === 'ask_user_resolved') {
+            // AskUser 可能由协作父会话代答，收到 resolved 后清理所有会话中的残留请求和草稿
+            store.set(allPendingAskUserRequestsAtom, (prev) => {
+              let changed = false
+              const map = new Map(prev)
+              prev.forEach((requests, pendingSessionId) => {
+                const nextRequests = requests.filter((request) => request.requestId !== event.requestId)
+                if (nextRequests.length !== requests.length) changed = true
+                if (nextRequests.length === 0) map.delete(pendingSessionId)
+                else map.set(pendingSessionId, nextRequests)
+              })
+              return changed ? map : prev
+            })
+            store.set(askUserDraftsAtom, (prev) => {
+              if (!prev.has(event.requestId)) return prev
+              const map = new Map(prev)
+              map.delete(event.requestId)
+              return map
+            })
           } else if (event.type === 'exit_plan_mode_request') {
             // ExitPlanMode 请求入队
             store.set(allPendingExitPlanRequestsAtom, (prev) => {
