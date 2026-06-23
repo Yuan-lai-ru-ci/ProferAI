@@ -144,3 +144,4 @@ publish:
   provider: github
   owner: Yuan-lai-ru-ci
   repo: Profer
+  releaseType: release
