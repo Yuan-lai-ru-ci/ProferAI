@@ -102,11 +102,13 @@ export async function listReleases(
     perPage = 10,
     page = 1,
     includePrerelease = false,
+    forceRefresh = false,
   } = options
 
   try {
     // 检查缓存
     if (
+      !forceRefresh &&
       releaseCache &&
       Date.now() - releaseCache.timestamp < CACHE_TTL &&
       page === 1

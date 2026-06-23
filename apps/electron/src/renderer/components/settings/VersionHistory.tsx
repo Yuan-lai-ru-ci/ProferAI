@@ -20,7 +20,7 @@ export function VersionHistory(): React.ReactElement {
   const [expandedIds, setExpandedIds] = React.useState<Set<number>>(new Set())
 
   // 加载 releases
-  const loadReleases = React.useCallback(async () => {
+  const loadReleases = React.useCallback(async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
 
@@ -28,6 +28,7 @@ export function VersionHistory(): React.ReactElement {
       const data = await window.electronAPI.listReleases({
         perPage: 3,
         includePrerelease: false,
+        forceRefresh,
       })
       setReleases(data)
     } catch (err) {
@@ -70,7 +71,7 @@ export function VersionHistory(): React.ReactElement {
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium">版本历史</h3>
           <button
-            onClick={loadReleases}
+            onClick={() => loadReleases(true)}
             disabled={loading}
             className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
           >

@@ -32,6 +32,8 @@ export interface GitHubReleaseListOptions {
   page?: number
   /** 是否包含草稿和预发布版本（默认 false） */
   includePrerelease?: boolean
+  /** 是否跳过本地缓存，直接请求 GitHub */
+  forceRefresh?: boolean
 }
 
 /** GitHub Release IPC 通道常量 */
