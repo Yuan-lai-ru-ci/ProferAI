@@ -71,8 +71,13 @@ jobs:
         shell: pwsh
         working-directory: apps/electron
         run: |
-          gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false 2>$null
-          if ($LASTEXITCODE -ne 0) {
+          gh release view "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } else {
             Write-Host "No existing release to delete for $env:GITHUB_REF_NAME"
           }
 
