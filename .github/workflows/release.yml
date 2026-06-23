@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-windows-x64:
     name: build (windows-latest, win, x64)
@@ -34,10 +38,15 @@ jobs:
         run: bun run electron:build:github
         working-directory: .
 
-      - name: Remove stale draft release
+      - name: Package Windows release
+        run: npx electron-builder --win --x64 --publish never
+        working-directory: apps/electron
+
+      - name: Upload GitHub release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
+        working-directory: apps/electron
         run: |
           $headers = @{
             Authorization = "Bearer $env:GH_TOKEN"
@@ -45,41 +54,49 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
           }
           $tag = $env:GITHUB_REF_NAME
+          $version = $tag.TrimStart("v")
           $repo = $env:GITHUB_REPOSITORY
+
+          $assets = @(
+            Get-ChildItem -Path "out" -File -Filter "latest.yml"
+            Get-ChildItem -Path "out" -File -Filter "*.exe"
+            Get-ChildItem -Path "out" -File -Filter "*.exe.blockmap"
+          )
+          if ($assets.Count -lt 3) {
+            Write-Host "Files in apps/electron/out:"
+            Get-ChildItem -Path "out" -Recurse | Select-Object FullName, Length
+            throw "Missing required Windows release assets"
+          }
+
           $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases?per_page=100"
-          $drafts = @($releases | Where-Object { $_.tag_name -eq $tag -and $_.draft })
-          foreach ($release in $drafts) {
-            Write-Host "Deleting stale draft release $($release.id) for $tag"
+          $existingReleases = @($releases | Where-Object { $_.tag_name -eq $tag })
+          foreach ($release in $existingReleases) {
+            Write-Host "Deleting existing release $($release.id) for $tag"
             Invoke-RestMethod -Method Delete -Headers $headers -Uri "https://api.github.com/repos/$repo/releases/$($release.id)"
           }
 
-      - name: Publish Windows release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --x64 --publish always
-        working-directory: apps/electron
-
-      - name: Publish release metadata
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          $headers = @{
-            Authorization = "Bearer $env:GH_TOKEN"
-            Accept = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          $tag = $env:GITHUB_REF_NAME
-          $repo = $env:GITHUB_REPOSITORY
-          $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases?per_page=100"
-          $release = $releases | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
-          if (-not $release) {
-            throw "Release for $tag was not found after publishing"
-          }
-          $body = @{
-            name = $tag
+          $releaseBody = @{
+            tag_name = $tag
+            target_commitish = $env:GITHUB_SHA
+            name = "Profer $tag"
             draft = $false
             prerelease = $false
             make_latest = "true"
+            generate_release_notes = $true
           } | ConvertTo-Json
-          Invoke-RestMethod -Method Patch -Headers $headers -ContentType "application/json" -Uri "https://api.github.com/repos/$repo/releases/$($release.id)" -Body $body
+          $release = Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/json" -Uri "https://api.github.com/repos/$repo/releases" -Body $releaseBody
+          $uploadBase = $release.upload_url -replace "\{\?name,label\}$", ""
+
+          foreach ($asset in $assets) {
+            $assetName = [uri]::EscapeDataString($asset.Name)
+            Write-Host "Uploading $($asset.Name) ($($asset.Length) bytes)"
+            Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/octet-stream" -InFile $asset.FullName -Uri "$uploadBase?name=$assetName"
+          }
+
+          $uploaded = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases/$($release.id)/assets?per_page=100"
+          $uploadedNames = @($uploaded | ForEach-Object { $_.name })
+          foreach ($required in @("latest.yml", "Profer-Setup-$version.exe", "Profer-Setup-$version.exe.blockmap")) {
+            if ($uploadedNames -notcontains $required) {
+              throw "Uploaded release is missing required asset: $required"
+            }
+          }
