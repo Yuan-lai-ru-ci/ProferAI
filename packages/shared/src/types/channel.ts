@@ -118,8 +118,10 @@ export interface Channel {
   name: string
   /** AI 供应商类型 */
   provider: ProviderType
-  /** API Base URL */
+  /** API Base URL（Chat 模式 / OpenAI 兼容端点） */
   baseUrl: string
+  /** Agent 模式 Anthropic 兼容端点（为空则自动推导） */
+  agentBaseUrl?: string
   /** 加密后的 API Key（base64 编码） */
   apiKey: string
   /** 可用模型列表 */
@@ -139,6 +141,7 @@ export interface ChannelCreateInput {
   name: string
   provider: ProviderType
   baseUrl: string
+  agentBaseUrl?: string
   /** 明文 API Key，主进程会加密后存储 */
   apiKey: string
   models: ChannelModel[]
@@ -152,6 +155,7 @@ export interface ChannelUpdateInput {
   name?: string
   provider?: ProviderType
   baseUrl?: string
+  agentBaseUrl?: string
   /** 明文 API Key，为空字符串表示不更新 */
   apiKey?: string
   models?: ChannelModel[]

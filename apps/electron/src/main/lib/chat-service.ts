@@ -209,6 +209,21 @@ export async function sendMessage(
     })
     return
   }
+  if (!channel.enabled) {
+    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+      conversationId,
+      error: '当前渠道已停用，请重新选择可用模型',
+    })
+    return
+  }
+  const selectedChannelModel = channel.models.find((m) => m.id === modelId)
+  if (!selectedChannelModel || !selectedChannelModel.enabled) {
+    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+      conversationId,
+      error: '当前模型配置已失效，请在模型选择器中重新选择',
+    })
+    return
+  }
 
   // 2. 解密 API Key
   let apiKey: string

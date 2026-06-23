@@ -1183,7 +1183,7 @@ export function registerIpcHandlers(): void {
   // 更新对话使用的模型/渠道
   ipcMain.handle(
     CHAT_IPC_CHANNELS.UPDATE_MODEL,
-    async (_, id: string, modelId: string, channelId: string): Promise<ConversationMeta> => {
+    async (_, id: string, modelId?: string, channelId?: string): Promise<ConversationMeta> => {
       return updateConversationMeta(id, { modelId, channelId })
     }
   )

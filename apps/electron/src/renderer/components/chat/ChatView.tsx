@@ -31,6 +31,7 @@ import {
   pendingAgentRecommendationAtom,
   conversationModelsAtom,
   chatPendingMessageAtom,
+  channelsAtom,
   INITIAL_MESSAGE_LIMIT,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment, ChatPendingMessage } from '@/atoms/chat-atoms'
@@ -93,6 +94,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const refreshMap = useAtomValue(chatMessageRefreshAtom)
   const promptConfig = useAtomValue(promptConfigAtom)
   const userProfile = useAtomValue(userProfileAtom)
+  const channels = useAtomValue(channelsAtom)
   const promptSidebarOpen = useAtomValue(promptSidebarOpenAtom)
   const activeToolIds = useAtomValue(activeToolIdsAtom)
   const setPendingRecommendation = useSetAtom(pendingAgentRecommendationAtom)
@@ -217,6 +219,27 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   ): Promise<void> => {
     if (!selectedModel) {
       toast.error('暂无可用模型，请先在设置中添加 AI 渠道')
+      return
+    }
+    const channel = channels.find((c) => c.id === selectedModel.channelId)
+    const model = channel?.models.find((m) => m.id === selectedModel.modelId)
+    if (!channel?.enabled || !model?.enabled) {
+      toast.error('当前模型配置已失效，请重新选择可用模型')
+      setSelectedModel(null)
+      setConversationModels((prev) => {
+        if (!prev.has(conversationId)) return prev
+        const map = new Map(prev)
+        map.delete(conversationId)
+        return map
+      })
+      window.electronAPI
+        .updateConversationModel(conversationId, undefined, undefined)
+        .then((updated) => {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c))
+          )
+        })
+        .catch(console.error)
       return
     }
 
@@ -360,6 +383,9 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     promptConfig,
     userProfile.userName,
     activeToolIds,
+    channels,
+    setSelectedModel,
+    setConversationModels,
     setChatStreamErrors,
     setStreamingStates,
     setConversations,

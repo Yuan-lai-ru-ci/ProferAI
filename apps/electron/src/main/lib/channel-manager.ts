@@ -128,7 +128,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
     throw new Error(`渠道同步失败: HTTP ${resp.status}`)
   }
 
-  const data = await resp.json() as { commercialMode: boolean; channels: Array<{ id: string; name: string; provider: string; apiKey: string; baseUrl: string; models: ChannelModel[] }> }
+  const data = await resp.json() as { commercialMode: boolean; channels: Array<{ id: string; name: string; provider: string; apiKey: string; baseUrl: string; agentBaseUrl?: string; models: ChannelModel[] }> }
 
   if (!data.commercialMode || !data.channels) return
 
@@ -151,6 +151,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
       name: ch.name,
       provider: ch.provider as ProviderType,
       baseUrl: ch.baseUrl,
+      agentBaseUrl: ch.agentBaseUrl || '',
       apiKey: encryptApiKey(ch.apiKey),
       models: ch.models,
       enabled: true,
@@ -239,6 +240,7 @@ export function createChannel(input: ChannelCreateInput): Channel {
     name: input.name,
     provider: input.provider,
     baseUrl: input.baseUrl,
+    agentBaseUrl: input.agentBaseUrl,
     apiKey: encryptApiKey(input.apiKey),
     models: input.models,
     enabled: input.enabled,
@@ -276,6 +278,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
     name: input.name ?? existing.name,
     provider: input.provider ?? existing.provider,
     baseUrl: input.baseUrl ?? existing.baseUrl,
+    agentBaseUrl: input.agentBaseUrl !== undefined ? input.agentBaseUrl : existing.agentBaseUrl,
     apiKey: input.apiKey ? encryptApiKey(input.apiKey) : existing.apiKey,
     models: input.models ?? existing.models,
     enabled: input.enabled ?? existing.enabled,

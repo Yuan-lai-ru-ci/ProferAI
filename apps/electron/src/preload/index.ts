@@ -239,7 +239,7 @@ export interface ElectronAPI {
   updateConversationTitle: (id: string, title: string) => Promise<ConversationMeta>
 
   /** 更新对话使用的模型/渠道 */
-  updateConversationModel: (id: string, modelId: string, channelId: string) => Promise<ConversationMeta>
+  updateConversationModel: (id: string, modelId?: string, channelId?: string) => Promise<ConversationMeta>
 
   /** 删除对话 */
   deleteConversation: (id: string) => Promise<void>
@@ -1255,7 +1255,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_TITLE, id, title)
   },
 
-  updateConversationModel: (id: string, modelId: string, channelId: string) => {
+  updateConversationModel: (id: string, modelId?: string, channelId?: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_MODEL, id, modelId, channelId)
   },
 

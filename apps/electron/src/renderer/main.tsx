@@ -77,6 +77,15 @@ import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import './styles/globals.css'
 import 'katex/dist/katex.min.css'
 
+function hasEnabledModel(
+  channels: Awaited<ReturnType<typeof window.electronAPI.listChannels>>,
+  selection: { channelId: string; modelId: string } | null,
+): boolean {
+  if (!selection) return false
+  const channel = channels.find((c) => c.id === selection.channelId)
+  return !!channel?.enabled && !!channel.models.find((m) => m.id === selection.modelId && m.enabled)
+}
+
 // ===== 窗口类型检测 =====
 const isQuickTaskWindow = new URLSearchParams(window.location.search).get('window') === 'quick-task'
 const isVoiceDictationWindow = new URLSearchParams(window.location.search).get('window') === 'voice-dictation'
@@ -184,8 +193,8 @@ function AgentSettingsInitializer(): null {
 
       // 验证 Chat 模式的全局默认模型（localStorage 持久化的可能指向已删除渠道）
       const chatModel = store.get(selectedModelAtom)
-      if (chatModel && !channelIds.has(chatModel.channelId)) {
-        console.warn('[AgentSettings] Chat selectedModel 指向已删除的渠道，清除')
+      if (chatModel && !hasEnabledModel(channels, chatModel)) {
+        console.warn('[AgentSettings] Chat selectedModel 指向已删除、停用或无效的模型配置，清除')
         store.set(selectedModelAtom, null)
       }
 
