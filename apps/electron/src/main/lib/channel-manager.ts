@@ -425,7 +425,8 @@ async function testAnthropicCompatible(
     headers.Authorization = `Bearer ${apiKey}`
   }
 
-  const response = await fetchFn(`${url}/messages`, {
+  const endpoint = `${url}/messages`
+  const response = await fetchFn(endpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -439,13 +440,18 @@ async function testAnthropicCompatible(
     return { success: true, message: '连接成功' }
   }
 
+  const text = await response.text().catch(() => '')
+
   if (response.status === 401) {
-    const text = await response.text().catch(() => '')
     return { success: false, message: `API Key 无效${text ? `: ${text.slice(0, 150)}` : ''}` }
   }
 
-  // 如果能收到 API 的响应（即使是错误），说明连接是通的
-  return { success: true, message: '连接成功' }
+  const detail = text ? `: ${text.slice(0, 200)}` : ''
+  const endpointHint = provider === 'deepseek'
+    ? `；当前测试端点为 ${endpoint}。DeepSeek 内置渠道使用 Anthropic 协议，Base URL 应为 https://api.deepseek.com/anthropic，而不是 OpenAI 兼容的 /v1`
+    : `；当前测试端点为 ${endpoint}`
+
+  return { success: false, message: `请求失败 (${response.status})${detail}${endpointHint}` }
 }
 
 /**
