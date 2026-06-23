@@ -49,7 +49,7 @@ import {
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentSessionStreamingStateAtomFamily,
@@ -218,20 +218,15 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
 }
 
 interface DisplayOptionsPopoverProps {
-  autoPreviewEnabled: boolean
   processGroupsKeepExpanded: boolean
-  onAutoPreviewChange: (enabled: boolean) => void
   onProcessGroupsKeepExpandedChange: (expanded: boolean) => void
 }
 
 function DisplayOptionsPopover({
-  autoPreviewEnabled,
   processGroupsKeepExpanded,
-  onAutoPreviewChange,
   onProcessGroupsKeepExpandedChange,
 }: DisplayOptionsPopoverProps): React.ReactElement {
   const [open, setOpen] = React.useState(false)
-  const hasEnabledOption = autoPreviewEnabled || processGroupsKeepExpanded
   const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleMouseEnter = React.useCallback(() => {
@@ -258,13 +253,13 @@ function DisplayOptionsPopover({
           size="icon"
           className={cn(
             'size-[36px] rounded-full',
-            hasEnabledOption ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+            processGroupsKeepExpanded ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
           )}
           aria-label="显示选项"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          <Eye className="size-5" />
+          <Eye className={cn('size-5', processGroupsKeepExpanded && 'text-green-500')} />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -277,15 +272,6 @@ function DisplayOptionsPopover({
         onMouseLeave={handleMouseLeave}
       >
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-xs text-foreground/70">自动预览修改中文件</span>
-            <Switch
-              checked={autoPreviewEnabled}
-              onCheckedChange={onAutoPreviewChange}
-              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-            />
-          </div>
-          <div className="h-px bg-border" />
           <div className="flex items-center justify-between gap-4">
             <span className="text-xs text-foreground/70">输出完保持展开</span>
             <Switch
@@ -1877,9 +1863,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
-  // ===== 预览面板状态（toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
+  // ===== 预览面板状态（toggle 快捷键，分屏布局在 MainArea） =====
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
-  const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
   const [processGroupsKeepExpanded, setProcessGroupsKeepExpanded] = useAtom(agentProcessGroupsKeepExpandedAtom)
 
   const togglePreviewPanel = React.useCallback(() => {
@@ -1986,12 +1971,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       ),
     },
     {
-      key: 'auto-preview',
+      key: 'display-options',
       node: (
         <DisplayOptionsPopover
-          autoPreviewEnabled={autoPreviewEnabled}
           processGroupsKeepExpanded={processGroupsKeepExpanded}
-          onAutoPreviewChange={setAutoPreviewEnabled}
           onProcessGroupsKeepExpandedChange={setProcessGroupsKeepExpanded}
         />
       ),
@@ -2014,9 +1997,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     contextStatus.isCompacting,
     streaming,
     handleCompact,
-    autoPreviewEnabled,
     processGroupsKeepExpanded,
-    setAutoPreviewEnabled,
     setProcessGroupsKeepExpanded,
   ])
 

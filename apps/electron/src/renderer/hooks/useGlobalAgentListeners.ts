@@ -51,8 +51,8 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
-import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta } from '@proma/shared'
@@ -443,7 +443,6 @@ export function useGlobalAgentListeners(): void {
     }
 
     const workspaceFilesPathCache = new Map<string, string>()
-    const autoPreviewSeq = new Map<string, number>()
 
     const getWorkspaceIdForSession = (sid: string): string | null => {
       const session = store.get(agentSessionsAtom).find((s) => s.id === sid)
@@ -470,7 +469,7 @@ export function useGlobalAgentListeners(): void {
       }
     }
 
-    const buildAutoPreviewFile = async (sid: string, targetPath: string) => {
+    const buildWrittenFilePreviewInfo = async (sid: string, targetPath: string) => {
       const sessionPath = store.get(agentSessionPathMapAtom).get(sid) ?? ''
       const parentDir = getParentDir(targetPath)
       const dirPath = isAbsolutePath(targetPath) ? parentDir : (sessionPath || parentDir)
@@ -531,28 +530,6 @@ export function useGlobalAgentListeners(): void {
         inDiffScope,
         basePaths: basePaths.length > 0 ? basePaths : undefined,
       }
-    }
-
-    const setAutoPreviewFile = (sid: string, targetPath: string, openPanel: boolean) => {
-      const seq = (autoPreviewSeq.get(sid) ?? 0) + 1
-      autoPreviewSeq.set(sid, seq)
-      return buildAutoPreviewFile(sid, targetPath)
-        .then((previewFile) => {
-          if (autoPreviewSeq.get(sid) !== seq) return null
-          store.set(previewFileMapAtom, (prev) => {
-            const m = new Map(prev)
-            m.set(sid, previewFile)
-            return m
-          })
-          if (openPanel) {
-            store.set(previewPanelOpenMapAtom, (prev) => {
-              if (prev.get(sid)) return prev
-              const m = new Map(prev); m.set(sid, true); return m
-            })
-          }
-          return previewFile
-        })
-        .catch(() => null)
     }
 
     // ===== 0. 初始化：从持久化 meta 恢复 stoppedByUser 状态 =====
@@ -691,10 +668,6 @@ export function useGlobalAgentListeners(): void {
                 map.set(sessionId, inner)
                 return map
               })
-              // Agent 开始改文件时，自动切换预览面板到该文件
-              if (store.get(autoPreviewEnabledAtom)) {
-                setAutoPreviewFile(sessionId, targetPath, false)
-              }
             }
           }
 
@@ -745,7 +718,7 @@ export function useGlobalAgentListeners(): void {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
               prev.filter((t) => t.toolUseId !== event.toolUseId)
             )
-            // Agent 写类工具完成时，递增 diff 刷新版本号并切换预览文件
+            // Agent 写类工具完成时，递增 diff 刷新版本号并标记未查看改动
             if (pendingWriteTools.has(event.toolUseId)) {
               const entry = pendingWriteTools.get(event.toolUseId)!
               const writtenPath = entry.path
@@ -754,12 +727,7 @@ export function useGlobalAgentListeners(): void {
                 const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
               })
               if (writtenPath) {
-                const autoPreviewEnabled = store.get(autoPreviewEnabledAtom)
-                const previewPromise = autoPreviewEnabled
-                  ? setAutoPreviewFile(sessionId, writtenPath, true)
-                  : buildAutoPreviewFile(sessionId, writtenPath)
-
-                previewPromise.then((previewFile) => {
+                buildWrittenFilePreviewInfo(sessionId, writtenPath).then((previewFile) => {
                   if (!previewFile || previewFile.previewOnly || !previewFile.inDiffScope) return
 
                   store.set(agentDiffUnseenChangesAtom, (prev) => {
@@ -773,27 +741,7 @@ export function useGlobalAgentListeners(): void {
                     return m
                   })
 
-                  // 只有当前文件确实能显示 git diff 时，才切到「文件改动」。
-                  if (autoPreviewEnabled && store.get(agentSidePanelOpenAtom)) {
-                    store.set(agentDiffPanelTabAtom, (prev) => {
-                      if (prev.get(sessionId) === 'changes') return prev
-                      const m = new Map(prev); m.set(sessionId, 'changes'); return m
-                    })
-                  }
-
-                  // auto-preview 已展示该文件，标记为已查看
-                  if (autoPreviewEnabled) {
-                    store.set(agentDiffUnseenFilesAtom, (prev) => {
-                      const s = prev.get(sessionId)
-                      if (!s?.has(writtenPath)) return prev
-                      const m = new Map(prev)
-                      const next = new Set(s)
-                      next.delete(writtenPath)
-                      m.set(sessionId, next)
-                      return m
-                    })
-                  }
-                }).catch(() => { /* auto preview should never break streaming */ })
+                }).catch(() => { /* 改动提示不应影响流式输出 */ })
               }
             }
             // Bash git 突变命令完成时，仅刷新 diff 列表（不标记 unseen，避免红点）
