@@ -129,6 +129,7 @@ win:
 
 # NSIS 安装程序配置
 nsis:
+  artifactName: Profer-Setup-${version}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
