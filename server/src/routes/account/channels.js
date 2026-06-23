@@ -34,6 +34,7 @@ accountChannels.get('/', (c) => {
       provider: ch.provider,
       apiKey: decryptApiKey(ch.api_key_encrypted),
       baseUrl: ch.base_url,
+      agentBaseUrl: ch.agent_base_url || '',
       models,
     }
   })

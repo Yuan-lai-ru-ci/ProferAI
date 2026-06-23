@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   PROVIDER_DEFAULT_URLS,
+  PROVIDER_DEFAULT_AGENT_URLS,
   PROVIDER_LABELS,
   isAgentCompatibleProvider,
 } from '@proma/shared'
@@ -42,7 +43,7 @@ import type {
   FetchModelsResult,
   ProviderType,
 } from '@proma/shared'
-import { normalizeAnthropicProviderUrl } from '@proma/core'
+import { normalizeAnthropicProviderUrl, normalizeAnthropicBaseUrlForSdk } from '@proma/core'
 import { getProviderLogo } from '@/lib/model-logo'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -95,7 +96,7 @@ const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
   anthropic: '/v1/messages',
   'anthropic-compatible': '/v1/messages',
   openai: '/chat/completions',
-  deepseek: '/messages',
+  deepseek: '/chat/completions',
   google: '/v1beta/models/{model}:generateContent',
   'kimi-api': '/messages',
   'kimi-coding': '/messages',
@@ -113,7 +114,6 @@ const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
 const ANTHROPIC_PROTOCOL_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'anthropic',
   'anthropic-compatible',
-  'deepseek',
   'kimi-api',
   'kimi-coding',
   'zhipu-coding',
@@ -134,6 +134,19 @@ function buildPreviewUrl(baseUrl: string, provider: ProviderType): string {
   }
   const trimmed = baseUrl.trim().replace(/\/+$/, '')
   return `${trimmed}${PROVIDER_CHAT_PATHS[provider]}`
+}
+
+function inferAgentBaseUrl(provider: ProviderType, baseUrl: string, agentBaseUrl: string): string {
+  const explicit = agentBaseUrl.trim()
+  if (explicit) return explicit
+  if (provider === 'anthropic-compatible') return baseUrl.trim()
+  return PROVIDER_DEFAULT_AGENT_URLS[provider] ?? ''
+}
+
+function buildAgentPreviewUrl(provider: ProviderType, baseUrl: string, agentBaseUrl: string): string | undefined {
+  const resolvedBaseUrl = inferAgentBaseUrl(provider, baseUrl, agentBaseUrl)
+  if (!resolvedBaseUrl) return undefined
+  return `${normalizeAnthropicBaseUrlForSdk(resolvedBaseUrl)}/v1/messages`
 }
 
 function getPresetModelsForProvider(provider: ProviderType): ChannelModel[] {
@@ -315,7 +328,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
     setProvider(p)
     setBaseUrl(PROVIDER_DEFAULT_URLS[p])
-    setAgentBaseUrl('')
+    setAgentBaseUrl(PROVIDER_DEFAULT_AGENT_URLS[p] ?? '')
     setTestResult(null)
     setFetchResult(null)
     setModelFilter('')
@@ -563,8 +576,19 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             value={baseUrl}
             onChange={setBaseUrl}
             placeholder="https://api.example.com"
-            description={baseUrl.trim() ? `预览：${buildPreviewUrl(baseUrl, provider)}` : undefined}
+            description={baseUrl.trim() ? `Chat 预览：${buildPreviewUrl(baseUrl, provider)}` : undefined}
           />
+          {isAgentCompatibleProvider(provider) && (
+            <SettingsInput
+              label="Agent Base URL"
+              value={agentBaseUrl}
+              onChange={setAgentBaseUrl}
+              placeholder={PROVIDER_DEFAULT_AGENT_URLS[provider] ?? 'https://api.example.com'}
+              description={buildAgentPreviewUrl(provider, baseUrl, agentBaseUrl)
+                ? `Agent 预览：${buildAgentPreviewUrl(provider, baseUrl, agentBaseUrl)}`
+                : '仅 Agent 模式使用；留空时会按供应商自动推导'}
+            />
+          )}
           {/* API Key + 测试连接同行 */}
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">

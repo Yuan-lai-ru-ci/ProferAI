@@ -31,7 +31,7 @@ import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanMo
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
-import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
+import { decryptApiKey, getChannelById, listChannels, resolveChannelAgentBaseUrl } from './channel-manager'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
@@ -668,12 +668,13 @@ export class AgentOrchestrator {
       process.env.ANTHROPIC_API_KEY = apiKey
     }
     // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
-    if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
-      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
+    const agentBaseUrl = resolveChannelAgentBaseUrl(channel)
+    if (agentBaseUrl && agentBaseUrl !== 'https://api.anthropic.com') {
+      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(agentBaseUrl)
     }
 
     const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
-    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
+    const sdkEnv = await this.buildSdkEnv(apiKey, agentBaseUrl, channel.provider)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
     // 4. 读取已有的 SDK session ID（用于 resume）

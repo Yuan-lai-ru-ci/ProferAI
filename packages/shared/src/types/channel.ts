@@ -32,7 +32,7 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   anthropic: 'https://api.anthropic.com',
   'anthropic-compatible': '',
   openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com/anthropic',
+  deepseek: 'https://api.deepseek.com',
   google: 'https://generativelanguage.googleapis.com',
   'kimi-api': 'https://api.moonshot.cn/anthropic',
   'kimi-coding': 'https://api.kimi.com/coding/v1',
@@ -44,6 +44,23 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   xiaomi: 'https://api.xiaomimimo.com/anthropic',
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   custom: '',
+}
+
+/**
+ * Agent 模式使用的 Anthropic 兼容 Base URL。
+ *
+ * `PROVIDER_DEFAULT_URLS` 永远表示 Chat / 模型列表使用的 Base URL；
+ * 这里单独维护 Agent SDK 入口，避免 DeepSeek 这类双协议供应商混用端点。
+ */
+export const PROVIDER_DEFAULT_AGENT_URLS: Partial<Record<ProviderType, string>> = {
+  anthropic: 'https://api.anthropic.com',
+  deepseek: 'https://api.deepseek.com/anthropic',
+  'kimi-api': 'https://api.moonshot.cn/anthropic',
+  'kimi-coding': 'https://api.kimi.com/coding/v1',
+  'zhipu-coding': 'https://open.bigmodel.cn/api/anthropic',
+  minimax: 'https://api.minimaxi.com/anthropic',
+  xiaomi: 'https://api.xiaomimimo.com/anthropic',
+  'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
 }
 
 /**

@@ -20,6 +20,7 @@ import type {
   ToolDefinition,
   ContinuationMessage,
 } from './types.ts'
+import type { ProviderType } from '@proma/shared'
 import { normalizeBaseUrl } from './url-utils.ts'
 
 // ===== OpenAI 特有类型 =====
@@ -185,7 +186,11 @@ function appendContinuationMessages(
 // ===== 适配器实现 =====
 
 export class OpenAIAdapter implements ProviderAdapter {
-  readonly providerType = 'openai' as const
+  readonly providerType: ProviderType
+
+  constructor(providerType: ProviderType = 'openai') {
+    this.providerType = providerType
+  }
 
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
     const url = normalizeBaseUrl(input.baseUrl)
@@ -195,6 +200,13 @@ export class OpenAIAdapter implements ProviderAdapter {
       model: input.modelId,
       messages,
       stream: true,
+    }
+
+    if (this.providerType === 'deepseek') {
+      bodyObj.thinking = { type: input.thinkingEnabled ? 'enabled' : 'disabled' }
+      if (input.thinkingEnabled) {
+        bodyObj.reasoning_effort = 'high'
+      }
     }
 
     // 工具定义

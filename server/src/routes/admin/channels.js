@@ -12,6 +12,38 @@ export const adminChannels = new Hono()
 
 const ALGO = 'aes-256-gcm'
 
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || '').trim().replace(/\/+$/, '')
+}
+
+function buildTestRequest(provider, baseUrl, apiKey) {
+  const url = normalizeBaseUrl(baseUrl)
+
+  if (provider === 'anthropic' || provider === 'anthropic-compatible') {
+    return {
+      url: `${url}/v1/messages`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+    }
+  }
+
+  if (provider === 'kimi-api' || provider === 'kimi-coding') {
+    return {
+      url: `${url}/messages`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: provider === 'kimi-coding' ? 'kimi-for-coding' : 'kimi-k2.6', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+    }
+  }
+
+  return {
+    url: `${url}/models`,
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKey}` },
+  }
+}
+
 function encryptApiKey(plaintext) {
   const key = Buffer.from(CHANNEL_ENCRYPTION_KEY, 'hex')
   const iv = randomBytes(16)
@@ -42,6 +74,7 @@ adminChannels.get('/', (c) => {
   const channels = listAllChannels()
   const masked = channels.map(ch => ({
     ...ch,
+    agentBaseUrl: ch.agent_base_url || '',
     api_key_encrypted: maskKey(ch.api_key_encrypted),
     models_json: undefined,
     models: JSON.parse(ch.models_json || '[]'),
@@ -54,12 +87,12 @@ adminChannels.post('/', async (c) => {
   if (!CHANNEL_ENCRYPTION_KEY) return c.json({ error: 'CHANNEL_ENCRYPTION_KEY 未配置' }, 500)
 
   const body = await c.req.json()
-  const { name, provider, apiKey, baseUrl, models } = body || {}
+  const { name, provider, apiKey, baseUrl, agentBaseUrl, models } = body || {}
   if (!name || !provider || !apiKey) return c.json({ error: 'name, provider, apiKey 必填' }, 400)
 
   const id = uuidv4()
   const encrypted = encryptApiKey(apiKey)
-  createChannel({ id, name, provider, apiKeyEncrypted: encrypted, baseUrl, modelsJson: JSON.stringify(models || []), createdBy: c.get('userId') })
+  createChannel({ id, name, provider, apiKeyEncrypted: encrypted, baseUrl, agentBaseUrl, modelsJson: JSON.stringify(models || []), createdBy: c.get('userId') })
 
   logAudit({ action: 'admin.create_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id, detail: `provider=${provider} name=${name}` })
   return c.json({ id, name, provider }, 201)
@@ -69,7 +102,7 @@ adminChannels.post('/', async (c) => {
 adminChannels.get('/:id', (c) => {
   const ch = getChannelById(c.req.param('id'))
   if (!ch) return c.json({ error: '渠道不存在' }, 404)
-  return c.json({ ...ch, api_key_encrypted: maskKey(ch.api_key_encrypted), models: JSON.parse(ch.models_json || '[]'), models_json: undefined })
+  return c.json({ ...ch, agentBaseUrl: ch.agent_base_url || '', api_key_encrypted: maskKey(ch.api_key_encrypted), models: JSON.parse(ch.models_json || '[]'), models_json: undefined })
 })
 
 // PATCH /v1/admin/channels/:id — 编辑渠道
@@ -80,6 +113,7 @@ adminChannels.patch('/:id', async (c) => {
   if (body.name !== undefined) fields.name = body.name
   if (body.provider !== undefined) fields.provider = body.provider
   if (body.baseUrl !== undefined) fields.base_url = body.baseUrl
+  if (body.agentBaseUrl !== undefined) fields.agent_base_url = body.agentBaseUrl
   if (body.models !== undefined) fields.models_json = JSON.stringify(body.models)
   if (body.is_active !== undefined) fields.is_active = body.is_active ? 1 : 0
   if (body.apiKey) fields.api_key_encrypted = encryptApiKey(body.apiKey)
@@ -104,11 +138,8 @@ adminChannels.post('/test', async (c) => {
   if (!apiKey || !baseUrl) return c.json({ error: 'apiKey 和 baseUrl 必填' }, 400)
 
   try {
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
-    const url = provider === 'anthropic' || provider === 'anthropic-compatible'
-      ? `${baseUrl}/v1/messages`
-      : `${baseUrl}/models`
-    const resp = await fetch(url, { method: provider === 'anthropic' || provider === 'anthropic-compatible' ? 'POST' : 'GET', headers, body: provider === 'anthropic' || provider === 'anthropic-compatible' ? JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) : undefined, signal: AbortSignal.timeout(15000) })
+    const request = buildTestRequest(provider, baseUrl, apiKey)
+    const resp = await fetch(request.url, { method: request.method, headers: request.headers, body: request.body, signal: AbortSignal.timeout(15000) })
     if (resp.ok) return c.json({ success: true, status: resp.status })
     const text = await resp.text()
     return c.json({ success: false, status: resp.status, error: text.slice(0, 200) })

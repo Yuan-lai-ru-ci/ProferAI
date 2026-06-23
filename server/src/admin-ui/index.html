@@ -177,7 +177,7 @@ function renderUsers(c){var page=1,search='';
 
 // ---- Channels ----
 function renderChannels(c){
-  var show=false,nm='',prov='deepseek',url='',key='';
+  var show=false,nm='',prov='deepseek',url='https://api.deepseek.com',agentUrl='https://api.deepseek.com/anthropic',key='';
   function load(){
     c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
     api('/admin/channels').then(function(chs){
@@ -188,7 +188,8 @@ function renderChannels(c){
         c.insertAdjacentHTML('beforeend','<div class="card form-card" style="max-width:560px">'+
           '<div class="card-header"><h2>创建渠道</h2></div>'+
           '<div class="form-row"><div><label>名称</label><input class="ch-name" value="'+esc(nm)+'"></div><div><label>供应商</label><select class="ch-provider"><option value="deepseek"'+(prov==='deepseek'?' selected':'')+'>DeepSeek</option><option value="anthropic"'+(prov==='anthropic'?' selected':'')+'>Anthropic</option><option value="openai"'+(prov==='openai'?' selected':'')+'>OpenAI</option><option value="qwen"'+(prov==='qwen'?' selected':'')+'>通义千问</option><option value="kimi-api"'+(prov==='kimi-api'?' selected':'')+'>Kimi</option><option value="zhipu"'+(prov==='zhipu'?' selected':'')+'>智谱</option><option value="minimax"'+(prov==='minimax'?' selected':'')+'>MiniMax</option><option value="doubao"'+(prov==='doubao'?' selected':'')+'>豆包</option></select></div></div>'+
-          '<div class="form-row"><div><label>Base URL</label><input class="ch-url" value="'+esc(url)+'" placeholder="自动填充"></div><div><label>API Key</label><div style="display:flex;gap:8px"><input class="ch-key" type="password" value="'+esc(key)+'"><button class="btn btn-outline test-btn">测试</button></div></div></div>'+
+          '<div class="form-row"><div><label>Chat Base URL</label><input class="ch-url" value="'+esc(url)+'" placeholder="https://api.deepseek.com"><div style="font-size:12px;color:var(--muted);margin-top:4px">Chat/模型列表使用；DeepSeek 填 OpenAI 格式根地址</div></div><div><label>Agent Base URL</label><input class="ch-agent-url" value="'+esc(agentUrl)+'" placeholder="https://api.deepseek.com/anthropic"><div style="font-size:12px;color:var(--muted);margin-top:4px">Agent 使用；DeepSeek 填 Anthropic 兼容地址</div></div></div>'+
+          '<div class="form-row"><div><label>API Key</label><input class="ch-key" type="password" value="'+esc(key)+'"></div><div style="display:flex;align-items:flex-end"><button class="btn btn-outline test-btn">测试 Chat 连接</button></div></div>'+
           '<div class="test-msg" style="font-size:13px;margin-bottom:12px"></div>'+
           '<button class="btn btn-primary create-btn">创建渠道</button></div>');
         c.querySelector('.test-btn').addEventListener('click',function(){
@@ -197,9 +198,9 @@ function renderChannels(c){
           api('/admin/channels/test',{method:'POST',body:JSON.stringify({apiKey:k,baseUrl:u,provider:p})}).then(function(r){c.querySelector('.test-msg').innerHTML=r.success?'<span style="color:#10b981">✅ 连接成功</span>':'<span style="color:#ef4444">❌ '+esc(r.error||'失败')+'</span>'}).catch(function(e){c.querySelector('.test-msg').innerHTML='<span style="color:#ef4444">❌ '+esc(e.message)+'</span>'});
         });
         c.querySelector('.create-btn').addEventListener('click',function(){
-          var n=c.querySelector('.ch-name').value,k=c.querySelector('.ch-key').value,u=c.querySelector('.ch-url').value,p=c.querySelector('.ch-provider').value;
+          var n=c.querySelector('.ch-name').value,k=c.querySelector('.ch-key').value,u=c.querySelector('.ch-url').value,a=c.querySelector('.ch-agent-url').value,p=c.querySelector('.ch-provider').value;
           if(!n||!k){toast('名称和 API Key 必填',false);return}
-          api('/admin/channels',{method:'POST',body:JSON.stringify({name:n,provider:p,apiKey:k,baseUrl:u})}).then(function(){toast('渠道创建成功');show=false;load()}).catch(function(e){toast(e.message,false)});
+          api('/admin/channels',{method:'POST',body:JSON.stringify({name:n,provider:p,apiKey:k,baseUrl:u,agentBaseUrl:a})}).then(function(){toast('渠道创建成功');show=false;load()}).catch(function(e){toast(e.message,false)});
         });
       }
       c.insertAdjacentHTML('beforeend','<div class="card" style="overflow:auto"><table><thead><tr><th>名称</th><th>供应商</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>');

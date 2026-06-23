@@ -124,6 +124,7 @@ db.exec(`
     provider TEXT NOT NULL,
     api_key_encrypted TEXT NOT NULL,
     base_url TEXT DEFAULT '',
+    agent_base_url TEXT DEFAULT '',
     models_json TEXT DEFAULT '[]',
     is_active INTEGER NOT NULL DEFAULT 1,
     created_by TEXT,
@@ -131,6 +132,31 @@ db.exec(`
     updated_at INTEGER NOT NULL
   )
 `)
+try { db.exec("ALTER TABLE channels ADD COLUMN agent_base_url TEXT DEFAULT ''") } catch (_) {}
+try {
+  db.exec(`
+    UPDATE channels
+    SET agent_base_url = CASE
+        WHEN COALESCE(agent_base_url, '') = '' THEN rtrim(base_url, '/')
+        ELSE agent_base_url
+      END,
+      base_url = 'https://api.deepseek.com'
+    WHERE provider = 'deepseek'
+      AND lower(base_url) LIKE '%/anthropic%'
+  `)
+  db.exec(`
+    UPDATE channels
+    SET base_url = 'https://api.deepseek.com',
+      agent_base_url = CASE
+        WHEN COALESCE(agent_base_url, '') = '' THEN 'https://api.deepseek.com/anthropic'
+        ELSE agent_base_url
+      END
+    WHERE provider = 'deepseek'
+      AND rtrim(base_url, '/') = 'https://api.deepseek.com/v1'
+  `)
+} catch (err) {
+  console.warn('[数据库] DeepSeek 渠道 URL 迁移失败:', err)
+}
 
 // 额度表
 db.exec(`
@@ -264,16 +290,16 @@ export function getChannelById(id) {
   return db.prepare('SELECT * FROM channels WHERE id = ?').get(id)
 }
 
-export function createChannel({ id, name, provider, apiKeyEncrypted, baseUrl, modelsJson, createdBy }) {
+export function createChannel({ id, name, provider, apiKeyEncrypted, baseUrl, agentBaseUrl, modelsJson, createdBy }) {
   const now = Date.now()
   return db.prepare(`
-    INSERT INTO channels (id, name, provider, api_key_encrypted, base_url, models_json, is_active, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-  `).run(id, name, provider, apiKeyEncrypted, baseUrl || '', modelsJson || '[]', createdBy || '', now, now)
+    INSERT INTO channels (id, name, provider, api_key_encrypted, base_url, agent_base_url, models_json, is_active, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+  `).run(id, name, provider, apiKeyEncrypted, baseUrl || '', agentBaseUrl || '', modelsJson || '[]', createdBy || '', now, now)
 }
 
 export function updateChannel(id, fields) {
-  const allowed = ['name', 'provider', 'api_key_encrypted', 'base_url', 'models_json', 'is_active']
+  const allowed = ['name', 'provider', 'api_key_encrypted', 'base_url', 'agent_base_url', 'models_json', 'is_active']
   const sets = []
   const vals = []
   for (const [k, v] of Object.entries(fields)) {
