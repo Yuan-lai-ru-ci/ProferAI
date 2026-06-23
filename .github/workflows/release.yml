@@ -42,61 +42,52 @@ jobs:
         run: npx electron-builder --win --x64 --publish never
         working-directory: apps/electron
 
-      - name: Upload GitHub release assets
+      - name: Collect Windows release assets
+        shell: pwsh
+        working-directory: apps/electron
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag.TrimStart("v")
+          $required = @(
+            "latest.yml"
+            "Profer-Setup-$version.exe"
+            "Profer-Setup-$version.exe.blockmap"
+          )
+
+          New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
+          foreach ($name in $required) {
+            $source = Join-Path "out" $name
+            if (-not (Test-Path -LiteralPath $source)) {
+              Write-Host "Files in apps/electron/out:"
+              Get-ChildItem -Path "out" -Recurse | Select-Object FullName, Length
+              throw "Missing required Windows release asset: $name"
+            }
+            Copy-Item -LiteralPath $source -Destination "release-assets/$name" -Force
+          }
+
+      - name: Remove stale release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         working-directory: apps/electron
         run: |
-          $headers = @{
-            Authorization = "Bearer $env:GH_TOKEN"
-            Accept = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          $tag = $env:GITHUB_REF_NAME
-          $version = $tag.TrimStart("v")
-          $repo = $env:GITHUB_REPOSITORY
-
-          $assets = @(
-            Get-ChildItem -Path "out" -File -Filter "latest.yml"
-            Get-ChildItem -Path "out" -File -Filter "*.exe"
-            Get-ChildItem -Path "out" -File -Filter "*.exe.blockmap"
-          )
-          if ($assets.Count -lt 3) {
-            Write-Host "Files in apps/electron/out:"
-            Get-ChildItem -Path "out" -Recurse | Select-Object FullName, Length
-            throw "Missing required Windows release assets"
+          gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No existing release to delete for $env:GITHUB_REF_NAME"
           }
 
-          $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases?per_page=100"
-          $existingReleases = @($releases | Where-Object { $_.tag_name -eq $tag })
-          foreach ($release in $existingReleases) {
-            Write-Host "Deleting existing release $($release.id) for $tag"
-            Invoke-RestMethod -Method Delete -Headers $headers -Uri "https://api.github.com/repos/$repo/releases/$($release.id)"
-          }
-
-          $releaseBody = @{
-            tag_name = $tag
-            target_commitish = $env:GITHUB_SHA
-            name = "Profer $tag"
-            draft = $false
-            prerelease = $false
-            make_latest = "true"
-            generate_release_notes = $true
-          } | ConvertTo-Json
-          $release = Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/json" -Uri "https://api.github.com/repos/$repo/releases" -Body $releaseBody
-          $uploadBase = $release.upload_url -replace "\{\?name,label\}$", ""
-
-          foreach ($asset in $assets) {
-            $assetName = [uri]::EscapeDataString($asset.Name)
-            Write-Host "Uploading $($asset.Name) ($($asset.Length) bytes)"
-            Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/octet-stream" -InFile $asset.FullName -Uri "$uploadBase?name=$assetName"
-          }
-
-          $uploaded = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/releases/$($release.id)/assets?per_page=100"
-          $uploadedNames = @($uploaded | ForEach-Object { $_.name })
-          foreach ($required in @("latest.yml", "Profer-Setup-$version.exe", "Profer-Setup-$version.exe.blockmap")) {
-            if ($uploadedNames -notcontains $required) {
-              throw "Uploaded release is missing required asset: $required"
-            }
-          }
+      - name: Upload GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Profer ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          files: |
+            apps/electron/release-assets/latest.yml
+            apps/electron/release-assets/*.exe
+            apps/electron/release-assets/*.exe.blockmap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
