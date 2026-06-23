@@ -9,9 +9,7 @@ import { autoUpdater } from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
-
-/** 编译时注入的更新渠道：server=国内服务器, github=GitHub Releases */
-declare const __UPDATE_CHANNEL__: 'server' | 'github'
+import { getBuildTarget } from '../build-target'
 
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
@@ -138,12 +136,12 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     }).catch(() => {})
   } catch { /* 代理模块不可用时跳过 */ }
 
-  // 更新源：编译时注入，server 渠道走国内服务器，github 渠道走 GitHub Releases
-  if (__UPDATE_CHANNEL__ === 'github') {
+  // 更新源：编译时注入，oss 走 GitHub Releases，commercial 走国内服务器
+  if (getBuildTarget() === 'oss') {
     // 使用 electron-builder.yml 中配置的 GitHub publisher
     console.log('[更新] 更新源: GitHub Releases')
   } else {
-    // 默认 server 渠道：直连国内服务器
+    // commercial：直连国内服务器
     const updateFeedUrl =
       process.env.PROFER_UPDATE_FEED_URL ||
       'http://47.109.108.57/profer-updates/'
