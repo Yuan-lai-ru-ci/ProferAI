@@ -1509,14 +1509,18 @@ export class AgentOrchestrator {
           console.error(`[Agent SDK stderr] ${data}`)
         },
         onSessionId: (sdkSessionId: string) => {
+          // 仅在 session_id 真正变化时才持久化。SDK v2 几乎每条消息都会回调 onSessionId，
+          // 旧逻辑误用「初始快照后永不更新」的 existingSdkSessionId 作比较（回调里更新的是
+          // capturedSdkSessionId），导致新会话每条消息都全量读写会话索引（readIndex + 原子写 +
+          // 备份），再叠加一次读回验证。历史会话多 + 多会话并发时引发同步 fsync 风暴，周期性
+          // 卡死主进程事件循环。capturedSdkSessionId 已初始化为 existingSdkSessionId，并在
+          // session-not-found 重试时与其同步重置，比较它即可正确判定「真正变化」。
+          const isNewSessionId = sdkSessionId !== capturedSdkSessionId
           capturedSdkSessionId = sdkSessionId
-          if (sdkSessionId !== existingSdkSessionId) {
+          if (isNewSessionId) {
             try {
               updateAgentSessionMeta(sessionId, { sdkSessionId })
               console.log(`[Agent 编排] 已保存 SDK session_id: ${sdkSessionId}`)
-              // 验证保存是否成功
-              const verifyMeta = getAgentSessionMeta(sessionId)
-              console.log(`[Agent 编排] 验证读回: sdkSessionId=${verifyMeta?.sdkSessionId || '空'}`)
             } catch (err) {
               console.error(`[Agent 编排] 保存 SDK session_id 失败:`, err)
             }
