@@ -66,25 +66,13 @@ jobs:
           }
 
       - name: Remove stale release
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         working-directory: apps/electron
         run: |
-          $ErrorActionPreference = "Continue"
-          $PSNativeCommandUseErrorActionPreference = $false
-
-          gh release view "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "Failed to delete existing release for $env:GITHUB_REF_NAME, continuing so upload can decide"
-              exit 0
-            }
-            Write-Host "Deleted existing release for $env:GITHUB_REF_NAME"
-          } else {
-            Write-Host "No existing release to delete for $env:GITHUB_REF_NAME"
-          }
+          gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false
 
       - name: Upload GitHub release assets
         uses: softprops/action-gh-release@v2
