@@ -25,6 +25,7 @@ import { PROVIDER_DEFAULT_URLS } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@proma/core'
+import { isCommercialBuild } from './build-target'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** 当前配置版本 */
@@ -111,6 +112,11 @@ function decryptKey(encryptedKey: string): string {
  * 同时备份旧配置到 channels.json.server-backup。
  */
 export async function syncChannelsFromServer(serverBaseUrl: string, accessToken: string): Promise<void> {
+  if (!isCommercialBuild()) {
+    console.log('[渠道管理] 当前为开源构建，跳过服务端渠道同步')
+    return
+  }
+
   const fetchFn = await getFetchFn()
   const url = `${serverBaseUrl}/v1/account/channels`
 
@@ -159,6 +165,8 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
 
 /** 当前是否处于商业模式（渠道由服务端统一管理） */
 export function isCommercialMode(): boolean {
+  if (!isCommercialBuild()) return false
+
   try {
     const { getCommercialMode } = require('./auth-service')
     return getCommercialMode()

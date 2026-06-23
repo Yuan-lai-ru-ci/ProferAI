@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { fetch as undiciFetch } from 'undici'
 import { getTeamServersConfigPath } from './config-paths'
+import { isCommercialBuild } from './build-target'
 import type { TeamServerConfig } from '@proma/shared'
 
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
@@ -143,6 +144,10 @@ interface LoginResult {
   error?: string
 }
 
+function resolveCommercialMode(serverCommercialMode?: boolean): boolean {
+  return isCommercialBuild() && serverCommercialMode === true
+}
+
 /**
  * 登录团队服务器（自动注册服务器配置）
  *
@@ -204,6 +209,8 @@ export async function login(
       commercialMode?: boolean
     }
 
+    const commercialMode = resolveCommercialMode(data.commercialMode)
+
     // 加密存储令牌
     const tokens = readTokens()
     tokens[server.id] = {
@@ -212,15 +219,17 @@ export async function login(
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
-      commercialMode: !!data.commercialMode,
+      commercialMode,
       isAdmin: !!data.isAdmin,
     }
     writeTokens(tokens)
 
-    console.log(`[认证] 登录成功: ${data.email} (${data.userId}), commercialMode=${!!data.commercialMode}`)
+    console.log(
+      `[认证] 登录成功: ${data.email} (${data.userId}), serverCommercialMode=${!!data.commercialMode}, effectiveCommercialMode=${commercialMode}`,
+    )
 
     // 商业模式下自动同步渠道
-    if (data.commercialMode) {
+    if (commercialMode) {
       try {
         const { syncChannelsFromServer } = require('./channel-manager')
         await syncChannelsFromServer(server.baseUrl, data.accessToken)
@@ -307,6 +316,7 @@ export async function register(
       writeTeamServers(servers)
     }
 
+    const commercialMode = resolveCommercialMode(data.commercialMode)
     const tokens = readTokens()
     tokens[server.id] = {
       accessToken: data.accessToken,
@@ -314,15 +324,17 @@ export async function register(
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
-      commercialMode: !!data.commercialMode,
+      commercialMode,
       isAdmin: !!data.isAdmin,
     }
     writeTokens(tokens)
 
-    console.log(`[认证] 注册成功: ${data.email} (${data.userId}), commercialMode=${!!data.commercialMode}`)
+    console.log(
+      `[认证] 注册成功: ${data.email} (${data.userId}), serverCommercialMode=${!!data.commercialMode}, effectiveCommercialMode=${commercialMode}`,
+    )
 
     // 商业模式下自动同步渠道
-    if (data.commercialMode) {
+    if (commercialMode) {
       try {
         const { syncChannelsFromServer } = require('./channel-manager')
         await syncChannelsFromServer(server.baseUrl, data.accessToken)
@@ -414,11 +426,16 @@ export async function refreshAuthToken(): Promise<boolean> {
       clearTimeout(timeout)
 
       if (response.ok) {
-        const data = await response.json() as { accessToken: string; expiresAt: number }
+        const data = await response.json() as { accessToken: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean }
+        const commercialMode = data.commercialMode === undefined
+          ? resolveCommercialMode(token.commercialMode)
+          : resolveCommercialMode(data.commercialMode)
         tokens[server.id] = {
           ...token,
           accessToken: data.accessToken,
           tokenExpiresAt: data.expiresAt,
+          commercialMode,
+          isAdmin: data.isAdmin ?? token.isAdmin,
         }
         writeTokens(tokens)
         return true
@@ -431,6 +448,8 @@ export async function refreshAuthToken(): Promise<boolean> {
 
 /** 当前会话是否处于商业模式 */
 export function getCommercialMode(): boolean {
+  if (!isCommercialBuild()) return false
+
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   for (const id of serverIds) {
