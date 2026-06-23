@@ -352,9 +352,15 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string, sessi
 
   if (lines.length === 0) return currentUserMessage
 
-  // 注入 session 元信息，便于 Agent 在需要时读取完整历史
+  // 注入 session 元信息 + 强指令：兜底场景（resume 指针丢失）下，仅靠最近
+  // MAX_CONTEXT_MESSAGES 条摘要不足以让长任务无缝接续，必须引导模型先读取完整 JSONL，
+  // 避免「从零重新执行整个任务」（#903）。
   const sessionInfoBlock = sessionHint
-    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: 上方为近期对话摘要。如需更多上下文，可读取 ~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl 获取完整历史。\n</session_info>\n`
+    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\n` +
+      `完整历史: ~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl\n` +
+      `重要：上方仅为最近 ${MAX_CONTEXT_MESSAGES} 条对话摘要，可能不完整。在继续之前，` +
+      `请先读取上述完整历史文件，确认「已经完成了哪些工作、进行到哪一步」，` +
+      `然后从中断处继续，切勿重复执行已完成的步骤。\n</session_info>\n`
     : ''
 
   console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
@@ -733,10 +739,12 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Session-not-found 恢复：清除失效的 sdkSessionId，切换到上下文回填模式
+   * Session-not-found 恢复：保留磁盘 sdkSessionId，本轮切换到上下文回填模式
    *
-   * 当 resume 的目标 session 已过期/被清理时，SDK 会抛出 "No conversation found" 错误。
-   * 此方法执行恢复的公共逻辑，调用方负责设置 existingSdkSessionId = undefined 和流程控制（break/continue）。
+   * 当 resume 的目标 session 报 "No conversation found" 时触发。注意该错误可能是
+   * listSessions 路径哈希不匹配导致的误检（见步骤 9.6 注释），不代表会话真正失效，
+   * 因此不清除磁盘 meta：本轮以非 resume 模式恢复，若失败下一轮仍可尝试 resume（#903）。
+   * 调用方负责设置本地 existingSdkSessionId = undefined 和流程控制（break/continue）。
    *
    * @returns lastRetryableError 描述字符串
    */
@@ -755,17 +763,22 @@ export class AgentOrchestrator {
       agentCwd,
       accumulatedMessages,
       queryStartedAt,
-      '检测到 session-not-found 错误，清除 sdkSessionId 并切换到上下文回填模式',
-      'Session 已失效，切换到上下文回填模式',
+      '检测到 session-not-found（可能为误检），保留 sdkSessionId 并切换到上下文回填模式',
+      'Session 暂不可 resume，切换到上下文回填模式',
     )
   }
 
   /**
-   * Resume 失败恢复：清除 SDK resume 关系，注入 session 自引用让 Agent 读取完整历史继续工作。
-   *
-   * 适用于 SDK session 过期、thinking signature 跨模型不兼容等场景。
-   * 使用 <session_recovery> 标签指向当前会话的 JSONL 历史文件，Agent 会自动读取并恢复上下文，
+   * Resume 失败恢复：本轮切到「非 resume + 读 JSONL 恢复」模式，注入 session 自引用让 Agent
+   * 读取完整历史继续工作。使用 <session_recovery> 标签指向当前会话的 JSONL 历史文件，
    * 比 buildContextPrompt（仅注入 20 条摘要）提供完整得多的上下文连续性。
+   *
+   * 关于磁盘 meta 的 sdkSessionId（由 clearPersistedSession 控制，默认 false 即保留）：
+   * - 默认保留：本轮恢复只改本地 queryOptions，不动磁盘；若本轮成功，SDK 新会话的 ID 会经
+   *   onSessionId 回调自动覆盖 meta；若本轮失败到终止，下一轮仍可尝试 resume 旧 ID（#903）。
+   *   这是「迷了就别删」的安全默认，适用于 session-not-found（可能为误检）等不确定场景。
+   * - 仅 thinking-signature 跨模型不兼容时传 true：旧 ID 指向的 JSONL 焊死了旧模型思考块，
+   *   当前模型 resume 必然再次失败，此时主动清除可避免下一轮无谓的失败往返。
    */
   private prepareResumeFallbackRecovery(
     sessionId: string,
@@ -776,13 +789,17 @@ export class AgentOrchestrator {
     queryStartedAt: number,
     logMessage: string,
     retryReason: string,
+    clearPersistedSession = false,
   ): string {
     console.log(`[Agent 编排] ${logMessage}`)
     // 先持久化当前已累积的消息，确保 JSONL 文件包含最新内容
     this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
     accumulatedMessages.length = 0
-    // 清除失效的 SDK session，新 SDK 会话产生的 sdkSessionId 会通过 onSessionId 回调自动保存
-    try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
+    // 仅在确定旧会话永久无效时（thinking-signature）才清除磁盘 meta；
+    // 其余场景保留，新 SDK 会话产生的 sdkSessionId 会通过 onSessionId 回调自动覆盖。
+    if (clearPersistedSession) {
+      try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
+    }
     queryOptions.resumeSessionId = undefined
     queryOptions.resumeSessionAt = undefined
     queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, { agentCwd })
@@ -1731,6 +1748,7 @@ export class AgentOrchestrator {
                     queryStartedAt,
                     '检测到 thinking signature 不兼容，清除 sdkSessionId 并切换到上下文回填模式',
                     '思考签名不兼容，切换到上下文回填模式',
+                    true,  // 跨模型签名不兼容是唯一确定永久无效的场景，清除磁盘 sdkSessionId
                   )
                   stderrChunks.length = 0
                   shouldRetryFromError = true
@@ -1961,6 +1979,7 @@ export class AgentOrchestrator {
               queryStartedAt,
               '检测到 thinking signature 不兼容，清除 sdkSessionId 并切换到上下文回填模式',
               '思考签名不兼容，切换到上下文回填模式',
+              true,  // 跨模型签名不兼容是唯一确定永久无效的场景，清除磁盘 sdkSessionId
             )
             stderrChunks.length = 0
             continue  // 进入下一次 retry 循环
@@ -2066,15 +2085,15 @@ export class AgentOrchestrator {
 
           failRun(userFacingError, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
-          // 根据错误类型决定是否保留 sdkSessionId
-          const shouldClearSession = !apiError || apiError.statusCode >= 500
-          if (existingSdkSessionId && shouldClearSession) {
-            try {
-              updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
-              console.log(`[Agent 编排] 已清除失效的 sdkSessionId`)
-            } catch { /* 忽略 */ }
-          } else if (existingSdkSessionId && !shouldClearSession) {
-            console.log(`[Agent 编排] 保留 sdkSessionId (API 错误 ${apiError?.statusCode})`)
+          // 保留 sdkSessionId，确保下一轮能继续 resume（修复 #903）。
+          // 此终止分支只会被「非 session-not-found」的错误命中（session 失效已在上文
+          // isSessionNotFoundError 分支单独处理并切到恢复模式）。网络断连、服务端 5xx、
+          // 未知错误都不代表 SDK 会话本身失效——其完整历史 JSONL 仍保存在
+          // ~/.proma/sdk-config/projects/.../{sdkSessionId}.jsonl 中，依旧可 resume。
+          // 此前这里对 `!apiError`（如普通断连解析不出状态码）一律清除指针，导致下一轮
+          // 退化为「仅回填最近 N 条」的冷启动，上下文从满载骤降（#903）。
+          if (existingSdkSessionId) {
+            console.log(`[Agent 编排] 保留 sdkSessionId 以便下一轮 resume（错误未表明会话失效）`)
           }
 
           return
