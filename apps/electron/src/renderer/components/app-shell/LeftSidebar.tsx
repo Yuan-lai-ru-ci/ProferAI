@@ -556,6 +556,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = React.useState<Set<string>>(new Set())
   /** 记录已展开的委派母会话；默认收起，避免批量派遣后撑满侧栏 */
   const [expandedDelegationParentIds, setExpandedDelegationParentIds] = React.useState<Set<string>>(new Set())
+  /** 记录用户手动收起的委派母会话；用于覆盖“当前子会话自动展开”的兜底可见性 */
+  const [collapsedDelegationParentIds, setCollapsedDelegationParentIds] = React.useState<Set<string>>(new Set())
   /** 项目拖拽排序状态 */
   const [dragProjectId, setDragProjectId] = React.useState<string | null>(null)
   const [projectDropIndicator, setProjectDropIndicator] = React.useState<{ id: string; position: 'before' | 'after' } | null>(null)
@@ -1066,8 +1068,25 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setCollapsedWorkspaceIds((prev) => toggleSetEntry(prev, groupId))
   }, [])
 
-  const handleToggleDelegationParent = React.useCallback((sessionId: string): void => {
-    setExpandedDelegationParentIds((prev) => toggleSetEntry(prev, sessionId))
+  const handleToggleDelegationParent = React.useCallback((sessionId: string, expanded: boolean): void => {
+    if (expanded) {
+      setExpandedDelegationParentIds((prev) => deleteSetEntry(prev, sessionId))
+      setCollapsedDelegationParentIds((prev) => {
+        if (prev.has(sessionId)) return prev
+        const next = new Set(prev)
+        next.add(sessionId)
+        return next
+      })
+      return
+    }
+
+    setCollapsedDelegationParentIds((prev) => deleteSetEntry(prev, sessionId))
+    setExpandedDelegationParentIds((prev) => {
+      if (prev.has(sessionId)) return prev
+      const next = new Set(prev)
+      next.add(sessionId)
+      return next
+    })
   }, [])
 
   const canDeleteWorkspace = React.useCallback(
@@ -2212,7 +2231,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                       const rowStatus = getSessionTreeStatus(item, agentIndicatorMap)
                       const treeActive = treeContainsSessionId(item, activeSessionId)
                       const activeChildVisible = item.childSessions.some((child) => child.id === activeSessionId)
-                      const expandedChildren = expandedDelegationParentIds.has(item.session.id) || activeChildVisible
+                      const expandedChildren = expandedDelegationParentIds.has(item.session.id)
+                        || (activeChildVisible && !collapsedDelegationParentIds.has(item.session.id))
 
                       return (
                         <div key={`pinned-${item.session.id}`} className="flex flex-col gap-0.5">
@@ -2226,7 +2246,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                                 total: childCount,
                                 completed: countCompletedDelegatedChildren(item.childSessions),
                                 expanded: expandedChildren,
-                                onToggle: () => handleToggleDelegationParent(item.session.id),
+                                onToggle: () => handleToggleDelegationParent(item.session.id, expandedChildren),
                               }
                               : undefined}
                             leftAccent={getSessionLeftAccent(rowStatus)}
@@ -2324,6 +2344,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                     activeSessionId={activeSessionId}
                     agentIndicatorMap={agentIndicatorMap}
                     expandedDelegationParentIds={expandedDelegationParentIds}
+                    collapsedDelegationParentIds={collapsedDelegationParentIds}
                     relativeTimeNow={relativeTimeNow}
                     dragging={dragProjectId === group.workspace.id}
                     dropPosition={projectDropIndicator?.id === group.workspace.id ? projectDropIndicator.position : null}
@@ -3067,10 +3088,6 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
           onClick={() => onSelect(session.id, session.title)}
           onMouseEnter={preview.handleMouseEnter}
           onMouseLeave={preview.handleMouseLeave}
-          onDoubleClick={(e) => {
-            e.stopPropagation()
-            startEdit()
-          }}
           className={cn(
             'group relative w-full flex items-center gap-1.5 rounded-md py-1 pl-2.5 pr-1.5 transition-colors duration-100 titlebar-no-drag text-left',
             active && 'agent-session-item-active',
@@ -3120,11 +3137,22 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                   <button
                     type="button"
                     aria-label={`${delegationSummary.expanded ? '收起' : '展开'}子会话`}
+                    onMouseEnter={preview.closeNow}
+                    onFocus={preview.closeNow}
+                    onMouseDown={(event) => {
+                      event.stopPropagation()
+                      preview.closeNow()
+                    }}
                     onClick={(event) => {
                       event.stopPropagation()
+                      preview.closeNow()
                       delegationSummary.onToggle()
                     }}
-                    className="flex-shrink-0 inline-flex size-4 items-center justify-center rounded text-foreground/45 hover:bg-foreground/[0.055] hover:text-foreground/70 transition-colors"
+                    onDoubleClick={(event) => {
+                      event.stopPropagation()
+                      preview.closeNow()
+                    }}
+                    className="flex-shrink-0 inline-flex size-6 -my-1 items-center justify-center rounded text-foreground/45 hover:bg-foreground/[0.055] hover:text-foreground/70 transition-colors"
                   >
                     <ChevronRight
                       size={11}
@@ -3135,7 +3163,15 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                     />
                   </button>
                 )}
-                <span className="truncate">{session.title}</span>
+                <span
+                  className="truncate"
+                  onDoubleClick={(event) => {
+                    event.stopPropagation()
+                    startEdit()
+                  }}
+                >
+                  {session.title}
+                </span>
                 {workspaceName && (
                   <span className="flex-shrink-0 px-1.5 py-0 rounded-full bg-primary/10 text-[10px] leading-4 workspace-badge font-medium truncate max-w-[80px]">
                     {workspaceName}
@@ -3248,6 +3284,7 @@ interface AgentProjectGroupItemProps {
   activeSessionId: string | null
   agentIndicatorMap: Map<string, SessionIndicatorStatus>
   expandedDelegationParentIds: Set<string>
+  collapsedDelegationParentIds: Set<string>
   relativeTimeNow: number
   dragging: boolean
   dropPosition: 'before' | 'after' | null
@@ -3270,7 +3307,7 @@ interface AgentProjectGroupItemProps {
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
-  onToggleDelegationParent: (id: string) => void
+  onToggleDelegationParent: (id: string, expanded: boolean) => void
 }
 
 const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
@@ -3284,6 +3321,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   activeSessionId,
   agentIndicatorMap,
   expandedDelegationParentIds,
+  collapsedDelegationParentIds,
   relativeTimeNow,
   dragging,
   dropPosition,
@@ -3546,7 +3584,8 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 const rowStatus = getSessionTreeStatus(item, agentIndicatorMap)
                 const treeActive = treeContainsSessionId(item, activeSessionId)
                 const activeChildVisible = item.childSessions.some((child) => child.id === activeSessionId)
-                const expandedChildren = expandedDelegationParentIds.has(item.session.id) || activeChildVisible
+                const expandedChildren = expandedDelegationParentIds.has(item.session.id)
+                  || (activeChildVisible && !collapsedDelegationParentIds.has(item.session.id))
 
                 return (
                   <div key={item.session.id} className="flex flex-col gap-0.5">
@@ -3560,7 +3599,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                           total: childCount,
                           completed: countCompletedDelegatedChildren(item.childSessions),
                           expanded: expandedChildren,
-                          onToggle: () => onToggleDelegationParent(item.session.id),
+                          onToggle: () => onToggleDelegationParent(item.session.id, expandedChildren),
                         }
                         : undefined}
                       leftAccent={getSessionLeftAccent(rowStatus)}
