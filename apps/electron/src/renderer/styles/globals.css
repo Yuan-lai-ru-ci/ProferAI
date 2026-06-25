@@ -2179,19 +2179,6 @@
   padding: 2px 4px !important;
 }
 
-.theme-terminal-dark .is-user [class*="bg-gradient-to-t"] {
-  background: linear-gradient(to top, hsl(100 5% 9%), transparent) !important;
-}
-
-/* 折叠态长消息的"展开全部"按钮：默认 absolute + 渐变遮罩在 Terminal 主题下失效
- * （父容器 padding:0 撤掉了为按钮预留的 pb-6，渐变也被透明化），
- * 会让按钮文字直接压在正文最后一行上。改为流式布局，让按钮自然落到正文下方。 */
-.theme-terminal-dark .is-user button[class*="bg-gradient-to-t"] {
-  position: static !important;
-  padding: 0 !important;
-  margin-top: 0.25rem !important;
-}
-
 /* AI 消息前缀 — 已移除 */
 
 /* 终端格式时间戳 — [MM/DD HH:MM] 方括号包裹 */
