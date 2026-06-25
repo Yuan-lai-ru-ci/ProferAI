@@ -3133,36 +3133,6 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                 {session.sourceDelegationId && !session.sourceAutomationId && (
                   <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
                 )}
-                {delegationSummary && (
-                  <button
-                    type="button"
-                    aria-label={`${delegationSummary.expanded ? '收起' : '展开'}子会话`}
-                    onMouseEnter={preview.closeNow}
-                    onFocus={preview.closeNow}
-                    onMouseDown={(event) => {
-                      event.stopPropagation()
-                      preview.closeNow()
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      preview.closeNow()
-                      delegationSummary.onToggle()
-                    }}
-                    onDoubleClick={(event) => {
-                      event.stopPropagation()
-                      preview.closeNow()
-                    }}
-                    className="flex-shrink-0 inline-flex size-6 -my-1 items-center justify-center rounded text-foreground/45 hover:bg-foreground/[0.055] hover:text-foreground/70 transition-colors"
-                  >
-                    <ChevronRight
-                      size={11}
-                      className={cn(
-                        'transition-transform duration-150',
-                        delegationSummary.expanded && 'rotate-90',
-                      )}
-                    />
-                  </button>
-                )}
                 <span
                   className="truncate"
                   onDoubleClick={(event) => {
@@ -3187,16 +3157,48 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
           </div>
 
           {!editing && (
-            <SessionItemActions
-              updatedAt={session.updatedAt}
-              relativeTimeNow={relativeTimeNow}
-              pinned={!!session.pinned}
-              archived={!!session.archived}
-              onTogglePin={() => onTogglePin(session.id)}
-              onToggleArchive={() => onToggleArchive(session.id)}
-              onMenuOpenChange={setMenuOpen}
-              menuItems={menuItems}
-            />
+            <>
+              {delegationSummary && (
+                <button
+                  type="button"
+                  aria-label={`${delegationSummary.expanded ? '收起' : '展开'}子会话`}
+                  onMouseEnter={preview.closeNow}
+                  onFocus={preview.closeNow}
+                  onMouseDown={(event) => {
+                    event.stopPropagation()
+                    preview.closeNow()
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    preview.closeNow()
+                    delegationSummary.onToggle()
+                  }}
+                  onDoubleClick={(event) => {
+                    event.stopPropagation()
+                    preview.closeNow()
+                  }}
+                  className="flex-shrink-0 inline-flex size-6 -my-1 items-center justify-center rounded text-foreground/45 hover:bg-foreground/[0.055] hover:text-foreground/70 transition-colors"
+                >
+                  <ChevronRight
+                    size={11}
+                    className={cn(
+                      'transition-transform duration-150',
+                      delegationSummary.expanded && 'rotate-90',
+                    )}
+                  />
+                </button>
+              )}
+              <SessionItemActions
+                updatedAt={session.updatedAt}
+                relativeTimeNow={relativeTimeNow}
+                pinned={!!session.pinned}
+                archived={!!session.archived}
+                onTogglePin={() => onTogglePin(session.id)}
+                onToggleArchive={() => onToggleArchive(session.id)}
+                onMenuOpenChange={setMenuOpen}
+                menuItems={menuItems}
+              />
+            </>
           )}
         </div>
       </ContextMenuTrigger>
