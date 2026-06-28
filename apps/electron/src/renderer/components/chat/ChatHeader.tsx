@@ -13,7 +13,7 @@ import type { ConversationMeta } from '@proma/shared'
 import { SystemPromptSelector } from './SystemPromptSelector'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { detectIsWindows } from '@/lib/platform'
+import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 
 interface ChatHeaderProps {
@@ -70,7 +70,7 @@ export function ChatHeader({ conversation }: ChatHeaderProps): React.ReactElemen
     <div className="relative z-[51] flex items-center gap-2 px-4 h-[48px]">
       {/* 拖拽层仅覆盖左侧区域，Windows 上避开右上角 WindowControls（~126px）。
           否则 header 的 drag-region 会与按钮重叠，导致 OS hitmask 把单击当成标题栏点击。 */}
-      <div className={cn("absolute inset-0 titlebar-drag-region pointer-events-none", isWindows && "right-[126px]")} />
+      <div className={cn("absolute inset-0 titlebar-drag-region pointer-events-none", isWindows && WINDOW_CONTROLS_INSET_RIGHT)} />
       {editing ? (
         <div className="flex items-center gap-1.5 flex-1 min-w-0 titlebar-no-drag">
           <input

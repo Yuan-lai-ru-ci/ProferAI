@@ -34,7 +34,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TabBarItem } from './TabBarItem'
 import { useCloseTab } from '@/hooks/useCloseTab'
-import { detectIsWindows } from '@/lib/platform'
+import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT, WINDOW_CONTROLS_PADDING_RIGHT } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 
@@ -365,7 +365,7 @@ function TabBarInner({
           注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
           Windows 上背景拖拽层避开右上角 WindowControls 区域（126px），防止 hitmask 重叠。
           需要交互的单个 Tab 会在 TabBarItem 内部自己声明 titlebar-no-drag。 */}
-      <div className={cn("absolute inset-0 titlebar-drag-region", isWindows && "right-[126px]")} />
+      <div className={cn("absolute inset-0 titlebar-drag-region", isWindows && WINDOW_CONTROLS_INSET_RIGHT)} />
 
       {/* Tear-off 提示遮罩：拖出 TabBar 区域时，让 TabBar 下方出现一条高亮分割线 */}
       {tearingOff && (
@@ -377,7 +377,7 @@ function TabBarInner({
         className={cn(
           "relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none",
           // Windows 始终避开 WindowControls（~126px）；非 Windows 打开按钮时给 scroll 预留空间
-          isWindows && "pr-[126px]",
+          isWindows && WINDOW_CONTROLS_PADDING_RIGHT,
           !isWindows && showOpenPanelButton && "pr-10",
         )}
       >
