@@ -1519,6 +1519,23 @@
    - 单棵展开链路：只有最深一层 sticky 子行有阴影（父行的子项容器内含子 sticky，被规则排除）。
    - 多个平行展开（多个根目录同时打开）：每条链路各自一道阴影——这里把每棵独立树视为独立视觉单元。
    要做到全局唯一一道阴影需要 JS 监听滚动 + 展开状态动态打标记，目前不做。 */
+.file-tree-row {
+  isolation: isolate;
+}
+
+.file-tree-sticky-row {
+  background-color: hsl(var(--content-area));
+}
+
+.file-tree-sticky-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: hsl(var(--content-area));
+}
+
 [data-sticky-row="true"]:not(:has(~ * [data-sticky-row="true"])) {
   box-shadow: 0 2px 4px -1px hsl(var(--foreground) / 0.08);
 }
