@@ -24,12 +24,20 @@ import type {
 import { PROVIDER_DEFAULT_URLS } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@proma/core'
+import {
+  getPromaUserAgent,
+  migrateCompatibleChannelBaseUrl,
+  normalizeBaseUrl,
+  resolveAnthropicMessagesUrl,
+  resolveAnthropicModelsUrl,
+  resolveOpenAIChatCompletionsUrl,
+  resolveOpenAIModelsUrl,
+} from '@proma/core'
 import { normalizeHttpResponse, normalizeRequestError } from './channel-test-error'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** 当前配置版本 */
-const CONFIG_VERSION = 1
+const CONFIG_VERSION = 2
 /** 连接测试 / 模型拉取的统一超时时间 */
 const CHANNEL_TEST_TIMEOUT_MS = 15_000
 
@@ -42,7 +50,43 @@ function withTimeout(init: RequestInit): RequestInit {
 }
 
 /**
+ * 将渠道配置迁移到最新版本。
+ *
+ * v1 → v2：custom / anthropic-compatible 两类通用兼容渠道的 baseUrl 语义从「Base URL（运行时
+ * 自动补端点后缀）」改为「完整请求地址（原样使用）」。把存量 baseUrl 一次性补全为旧版本实际
+ * 请求过的完整端点，使升级后的运行时行为与升级前保持一致。详见 migrateCompatibleChannelBaseUrl。
+ *
+ * @returns 迁移后的配置；`changed` 标记是否发生实际变更（决定是否需要回写文件）
+ */
+function migrateConfig(config: ChannelsConfig): { config: ChannelsConfig; changed: boolean } {
+  const version = config.version ?? 1
+  if (version >= CONFIG_VERSION) {
+    return { config, changed: false }
+  }
+
+  let mutated = false
+  const channels = config.channels.map((channel) => {
+    if (channel.provider !== 'custom' && channel.provider !== 'anthropic-compatible') {
+      return channel
+    }
+    const migratedUrl = migrateCompatibleChannelBaseUrl(channel.baseUrl, channel.provider)
+    if (migratedUrl === channel.baseUrl) {
+      return channel
+    }
+    mutated = true
+    console.log(
+      `[渠道管理] v${version}→v${CONFIG_VERSION} 迁移渠道 ${channel.name} (${channel.provider}) Base URL: ${channel.baseUrl} → ${migratedUrl}`,
+    )
+    return { ...channel, baseUrl: migratedUrl }
+  })
+
+  return { config: { version: CONFIG_VERSION, channels }, changed: true }
+}
+
+/**
  * 读取渠道配置文件
+ *
+ * 读取时自动将旧版本配置迁移到 CONFIG_VERSION，并在发生变更时回写。
  */
 function readConfig(): ChannelsConfig {
   const configPath = getChannelsPath()
@@ -53,7 +97,13 @@ function readConfig(): ChannelsConfig {
 
   try {
     const raw = readFileSync(configPath, 'utf-8')
-    return JSON.parse(raw) as ChannelsConfig
+    const parsed = JSON.parse(raw) as ChannelsConfig
+    const { config, changed } = migrateConfig(parsed)
+    if (changed) {
+      writeConfig(config)
+      console.log('[渠道管理] 渠道配置已迁移并持久化')
+    }
+    return config
   } catch (error) {
     console.error('[渠道管理] 读取配置文件失败:', error)
     return { version: CONFIG_VERSION, channels: [] }
@@ -294,7 +344,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'doubao':
       case 'qwen':
       case 'custom':
-        return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl)
+        return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
       case 'google':
         return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
       default:
@@ -308,8 +358,8 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
 /**
  * 测试 Anthropic 兼容 API 连接（Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax）
  *
- * DeepSeek / Kimi 等以 /anthropic 为协议根路径的供应商，实际端点位于 /anthropic/v1/messages，
- * 由 normalizeAnthropicProviderUrl 统一按需补 /v1。
+ * DeepSeek / Kimi 等内置供应商会按协议根路径补全端点。
+ * Anthropic 兼容格式使用用户填写的完整请求地址。
  * Kimi Coding Plan 必须发送 Proma User-Agent，否则返回 403。
  */
 async function testAnthropicCompatible(
@@ -318,7 +368,7 @@ async function testAnthropicCompatible(
   proxyUrl?: string,
   provider: ProviderType = 'anthropic',
 ): Promise<ChannelTestResult> {
-  const url = normalizeAnthropicProviderUrl(baseUrl, provider)
+  const url = resolveAnthropicMessagesUrl(baseUrl, provider)
   const fetchFn = getFetchFn(proxyUrl)
 
   let testModel: string
@@ -366,7 +416,7 @@ async function testAnthropicCompatible(
     headers.Authorization = `Bearer ${apiKey}`
   }
 
-  const response = await fetchFn(`${url}/messages`, withTimeout({
+  const response = await fetchFn(url, withTimeout({
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -382,11 +432,34 @@ async function testAnthropicCompatible(
 /**
  * 测试 OpenAI 兼容 API 连接（OpenAI / Custom）
  */
-async function testOpenAICompatible(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<ChannelTestResult> {
-  const url = normalizeBaseUrl(baseUrl)
+async function testOpenAICompatible(
+  baseUrl: string,
+  apiKey: string,
+  proxyUrl?: string,
+  provider: ProviderType = 'openai',
+): Promise<ChannelTestResult> {
+  if (provider === 'custom') {
+    const url = resolveOpenAIChatCompletionsUrl(baseUrl, provider)
+    const fetchFn = getFetchFn(proxyUrl)
+    const response = await fetchFn(url, withTimeout({
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      }),
+    }))
+    return normalizeHttpResponse(response)
+  }
+
+  const url = resolveOpenAIModelsUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
-  const response = await fetchFn(`${url}/models`, withTimeout({
+  const response = await fetchFn(url, withTimeout({
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -439,7 +512,7 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
       case 'doubao':
       case 'qwen':
       case 'custom':
-        return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl)
+        return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'google':
         return await testGoogle(input.baseUrl, input.apiKey, proxyUrl)
       default:
@@ -479,7 +552,7 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'doubao':
       case 'qwen':
       case 'custom':
-        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl)
+        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'google':
         return await fetchGoogleModels(input.baseUrl, input.apiKey, proxyUrl)
       default:
@@ -504,8 +577,8 @@ interface AnthropicModelItem {
 /**
  * 从 Anthropic 兼容 API 拉取模型列表（Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax）
  *
- * DeepSeek / Kimi 等以 /anthropic 为协议根路径的供应商，实际端点位于 /anthropic/v1/messages，
- * 由 normalizeAnthropicProviderUrl 统一按需补 /v1。
+ * DeepSeek / Kimi 等内置供应商会按协议根路径补全模型端点。
+ * Anthropic 兼容格式使用完整请求地址，不再推导模型端点。
  * Kimi Coding Plan 必须发送 Proma User-Agent。
  * 文档: https://docs.anthropic.com/en/api/models-list
  */
@@ -515,7 +588,11 @@ async function fetchAnthropicCompatibleModels(
   proxyUrl?: string,
   provider: ProviderType = 'anthropic',
 ): Promise<FetchModelsResult> {
-  const url = normalizeAnthropicProviderUrl(baseUrl, provider)
+  if (provider === 'anthropic-compatible') {
+    return { success: false, message: 'Anthropic 兼容格式使用完整请求地址，请手动添加模型', models: [] }
+  }
+
+  const url = resolveAnthropicModelsUrl(baseUrl, provider)
   const fetchFn = getFetchFn(proxyUrl)
 
   const headers: Record<string, string> = {
@@ -534,7 +611,7 @@ async function fetchAnthropicCompatibleModels(
     headers.Authorization = `Bearer ${apiKey}`
   }
 
-  const response = await fetchFn(`${url}/models`, withTimeout({
+  const response = await fetchFn(url, withTimeout({
     method: 'GET',
     headers,
   }))
@@ -574,11 +651,20 @@ interface OpenAIModelItem {
  * API: GET {baseUrl}/models
  * 通用 OpenAI 兼容格式，适用于大部分第三方供应商。
  */
-async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
-  const url = normalizeBaseUrl(baseUrl)
+async function fetchOpenAICompatibleModels(
+  baseUrl: string,
+  apiKey: string,
+  proxyUrl?: string,
+  provider: ProviderType = 'openai',
+): Promise<FetchModelsResult> {
+  if (provider === 'custom') {
+    return { success: false, message: 'OpenAI 兼容格式使用完整请求地址，请手动添加模型', models: [] }
+  }
+
+  const url = resolveOpenAIModelsUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
-  const response = await fetchFn(`${url}/models`, withTimeout({
+  const response = await fetchFn(url, withTimeout({
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`,

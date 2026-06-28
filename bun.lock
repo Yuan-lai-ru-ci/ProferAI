@@ -154,7 +154,7 @@
     },
     "packages/core": {
       "name": "@proma/core",
-      "version": "0.2.11",
+      "version": "0.2.12",
       "dependencies": {
         "@proma/shared": "workspace:*",
         "highlight.js": "^11.11.1",
