@@ -360,7 +360,7 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className="flex items-end h-[34px] tabbar-bg relative">
+    <div ref={barRef} className="main-tabbar flex items-end h-[34px] tabbar-bg relative">
       {/* 顶部 TabBar 的空白区域必须保持可拖拽，尤其是 macOS/Windows 自定义标题栏。
           注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
           Windows 上背景拖拽层避开右上角 WindowControls 区域（126px），防止 hitmask 重叠。

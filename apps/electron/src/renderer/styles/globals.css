@@ -122,6 +122,7 @@
     --content-area: 0 0% 100%;            /* 主内容区域背景 */
     --sidebar-surface: 60 14.3% 98.6%;    /* 默认浅色侧栏：RGB 252/252/251 */
     --tabbar-surface: 60 14.3% 98.6%;     /* 默认浅色未选中 Tab 背景：RGB 252/252/251 */
+    --tab-indicator: var(--primary);       /* 顶部 Tab 选中条，默认跟随主色 */
     --sidebar-control-surface: 60 7% 93%;
     --sidebar-control-surface-hover: 60 7% 90%;
     --sidebar-control-stroke: 0 0% 9% / 0.10;
@@ -166,6 +167,7 @@
     --content-area: 0 0% 7%;              /* 主内容区域背景 zinc-900 */
     --sidebar-surface: 0 0% 7%;
     --tabbar-surface: 0 0% 7%;
+    --tab-indicator: var(--primary);
     --sidebar-control-surface: 0 0% 14%;
     --sidebar-control-surface-hover: 0 0% 18%;
     --sidebar-control-stroke: 0 0% 100% / 0.08;
@@ -208,6 +210,7 @@
     --dialog-foreground: 210 30% 15%;     /* #1b2632 弹窗前景 */
     --sidebar-surface: 205 35% 94%;
     --tabbar-surface: 205 35% 94%;
+    --tab-indicator: 205 50% 50%;
     --sidebar-control-surface: 205 32% 90%;
     --sidebar-control-surface-hover: 205 34% 87%;
     --sidebar-control-stroke: 205 45% 34% / 0.12;
@@ -236,6 +239,7 @@
     --content-area: 210 14% 9%;           /* 内容区：最深，专注 */
     --sidebar-surface: 210 12% 13%;
     --tabbar-surface: 210 12% 13%;
+    --tab-indicator: 210 28% 38%;
     --sidebar-control-surface: 210 12% 18%;
     --sidebar-control-surface-hover: 210 13% 21%;
     --sidebar-control-stroke: 210 18% 72% / 0.10;
@@ -296,6 +300,7 @@
     --dialog-foreground: 132 16% 18%;
     --sidebar-surface: 84 24% 92%;
     --tabbar-surface: 84 24% 92%;
+    --tab-indicator: 134 24% 38%;
     --sidebar-control-surface: 82 20% 87%;
     --sidebar-control-surface-hover: 82 18% 84%;
     --sidebar-control-stroke: 132 20% 30% / 0.12;
@@ -322,6 +327,7 @@
     --content-area: 150 10% 9%;           /* 内容区：深林泥土 */
     --sidebar-surface: 150 8% 14%;
     --tabbar-surface: 150 8% 14%;
+    --tab-indicator: 150 22% 42%;
     --sidebar-control-surface: 150 9% 17%;
     --sidebar-control-surface-hover: 150 10% 20%;
     --sidebar-control-stroke: 140 14% 72% / 0.10;
@@ -386,6 +392,7 @@
     --dialog-foreground: 40 8% 18%;       /* #312f2a 弹窗前景 */
     --sidebar-surface: 40 6% 92%;
     --tabbar-surface: 40 6% 92%;
+    --tab-indicator: 18 24% 52%;
     --sidebar-control-surface: 40 6% 88%;
     --sidebar-control-surface-hover: 40 6% 86%;
     --sidebar-control-stroke: 40 10% 28% / 0.11;
@@ -413,6 +420,7 @@
     --content-area: 270 8% 9%;            /* #161418 内容区域 */
     --sidebar-surface: 260 6% 12%;
     --tabbar-surface: 260 6% 12%;
+    --tab-indicator: 15 25% 68%;
     --sidebar-control-surface: 260 7% 18%;
     --sidebar-control-surface-hover: 260 8% 21%;
     --sidebar-control-stroke: 30 12% 74% / 0.10;
@@ -463,6 +471,7 @@
     --content-area: 100 6% 3%;            /* #080907 内容区：最深 */
     --sidebar-surface: 100 6% 5%;
     --tabbar-surface: 100 6% 5%;
+    --tab-indicator: 100 40% 52%;
     --sidebar-control-surface: 100 5% 12%;
     --sidebar-control-surface-hover: 100 6% 16%;
     --sidebar-control-stroke: 100 20% 55% / 0.12;
@@ -945,6 +954,25 @@
 
 .app-tab-inactive:hover {
   background-color: hsl(var(--tab-surface) / 0.7);
+}
+
+.main-tabbar .app-tab-active {
+  background-color: transparent;
+  border-color: transparent !important;
+}
+
+.main-tabbar .app-tab-active::after {
+  left: 5px;
+  right: 5px;
+  height: 3px;
+  border-radius: 0;
+  background-color: hsl(var(--tab-indicator));
+  box-shadow: 0 0 10px hsl(var(--tab-indicator) / 0.28);
+  z-index: 2;
+}
+
+.main-tabbar .app-tab-inactive:hover {
+  background-color: hsl(var(--tab-surface) / 0.42);
 }
 
 [data-input-mode] > div:first-child {
