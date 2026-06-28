@@ -31,6 +31,7 @@ import { lowlight } from '@/lib/lowlight'
 import { htmlToMarkdown } from '@/lib/markdown-rich-text'
 import { createFileMentionSuggestion } from '@/components/file-browser/file-mention-suggestion'
 import { createSkillMentionSuggestion, createMcpMentionSuggestion, createSessionMentionSuggestion } from '@/components/agent/mention-suggestions'
+import { shouldConvertClipboardTextToAttachment } from '@/lib/clipboard-text-attachment'
 import {
   VOICE_DICTATION_INSERT_EVENT,
   getLastFocusedVoiceInputId,
@@ -422,9 +423,12 @@ export function RichTextInput({
             ).trim() || plainText)
           : plainText
         if (
-          threshold &&
-          threshold > 0 &&
-          (plainText.length >= threshold || text.length >= threshold) &&
+          shouldConvertClipboardTextToAttachment({
+            enabled: Boolean(threshold && onPasteLongTextRef.current),
+            plainText,
+            normalizedText: text,
+            threshold: threshold ?? 0,
+          }) &&
           onPasteLongTextRef.current
         ) {
           event.preventDefault()

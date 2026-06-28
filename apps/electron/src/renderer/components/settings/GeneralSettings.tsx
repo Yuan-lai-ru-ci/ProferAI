@@ -38,7 +38,9 @@ import {
   DEFAULT_NOTIFICATION_SOUNDS,
 } from '@/atoms/notifications'
 import {
+  longTextPasteAsAttachmentEnabledAtom,
   stickyUserMessageEnabledAtom,
+  updateLongTextPasteAsAttachmentEnabled,
   updateStickyUserMessageEnabled,
 } from '@/atoms/ui-preferences'
 import { cn } from '@/lib/utils'
@@ -61,6 +63,7 @@ export function GeneralSettings(): React.ReactElement {
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useAtom(notificationSoundEnabledAtom)
   const [notificationSounds, setNotificationSounds] = useAtom(notificationSoundsAtom)
   const [stickyUserMessageEnabled, setStickyUserMessageEnabled] = useAtom(stickyUserMessageEnabledAtom)
+  const [longTextPasteAsAttachmentEnabled, setLongTextPasteAsAttachmentEnabled] = useAtom(longTextPasteAsAttachmentEnabledAtom)
   const [isEditingName, setIsEditingName] = React.useState(false)
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
@@ -317,6 +320,15 @@ export function GeneralSettings(): React.ReactElement {
             onCheckedChange={(checked) => {
               setStickyUserMessageEnabled(checked)
               updateStickyUserMessageEnabled(checked)
+            }}
+          />
+          <SettingsToggle
+            label="长文本粘贴转附件"
+            description="开启后，输入框粘贴超过 2000 字的文本会自动生成可预览编辑的附件"
+            checked={longTextPasteAsAttachmentEnabled}
+            onCheckedChange={(checked) => {
+              setLongTextPasteAsAttachmentEnabled(checked)
+              updateLongTextPasteAsAttachmentEnabled(checked)
             }}
           />
         </SettingsCard>
