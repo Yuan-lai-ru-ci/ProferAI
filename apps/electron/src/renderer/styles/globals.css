@@ -465,10 +465,10 @@
    * CRT 氛围交给扫描线和辉光，颜色本身收敛。
    */
   .theme-terminal-dark {
-    /* 基础色 — 近纯黑的极暗暖灰底 */
+    /* 基础色 — 现代布局会让内容区铺满屏幕，避免沿用极暗底导致整体发黑 */
     --background: 100 6% 5%;              /* #0d0e0c 侧边栏 */
     --foreground: 90 20% 65%;             /* #acb09f 暖黄绿白 */
-    --content-area: 100 6% 3%;            /* #080907 内容区：最深 */
+    --content-area: 100 6% 6%;            /* #0f100e 内容区：比旧版回调再提亮 1% */
     --sidebar-surface: 100 6% 5%;
     --tabbar-surface: 100 6% 5%;
     --tab-indicator: 100 40% 52%;
@@ -624,7 +624,7 @@
 .theme-forest-dark .shell-bg { background: linear-gradient(135deg, hsl(150 10% 5%) 0%, hsl(150 10% 7%) 100%); }
 .theme-slate-light .shell-bg { background: linear-gradient(135deg, hsl(40 6% 84%) 0%, hsl(40 6% 86%) 100%); }
 .theme-slate-dark .shell-bg  { background: linear-gradient(135deg, hsl(270 10% 7%) 0%, hsl(260 8% 9%) 100%); }
-.theme-terminal-dark .shell-bg { background: linear-gradient(135deg, hsl(100 6% 3%) 0%, hsl(100 8% 5%) 100%); }
+.theme-terminal-dark .shell-bg { background: linear-gradient(135deg, hsl(100 6% 6%) 0%, hsl(100 8% 7%) 100%); }
 
 /* ===== 特殊主题：模式切换器选中状态 ===== */
 /* 晴空碧海：蓝色背景滑块 + 白色文字 */
