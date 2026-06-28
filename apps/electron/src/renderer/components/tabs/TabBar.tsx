@@ -80,7 +80,7 @@ export function TabBar(): React.ReactElement {
   const automationSessionIds = React.useMemo(() => {
     const ids = new Set<string>()
     for (const s of agentSessions) {
-      if (s.sourceAutomationId) ids.add(s.id)
+      if (s.sourceAutomationId && !s.sourceDelegationId) ids.add(s.id)
     }
     return ids
   }, [agentSessions])

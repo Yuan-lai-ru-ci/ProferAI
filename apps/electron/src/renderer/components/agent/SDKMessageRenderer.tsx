@@ -853,7 +853,7 @@ function ScheduledRunBadge(): React.ReactElement {
   const setActiveView = useSetAtom(activeViewAtom)
 
   const session = sessions.find((s) => s.id === activeSessionId)
-  const automation = session?.sourceAutomationId
+  const automation = session?.sourceAutomationId && !session.sourceDelegationId
     ? automations.find((a) => a.id === session.sourceAutomationId)
     : undefined
 
