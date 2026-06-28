@@ -14,7 +14,6 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { Extension } from '@tiptap/core'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -22,8 +21,6 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import Mention from '@tiptap/extension-mention'
-import { Plugin, PluginKey } from '@tiptap/pm/state'
-import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -39,63 +36,6 @@ import {
 } from '@/lib/voice-input-focus'
 
 // ===== 行数计算 =====
-
-const thickCaretPluginKey = new PluginKey<boolean>('promaThickInputCaret')
-
-const ThickInputCaret = Extension.create({
-  name: 'thickInputCaret',
-
-  addProseMirrorPlugins() {
-    const editor = this.editor
-
-    return [
-      new Plugin<boolean>({
-        key: thickCaretPluginKey,
-        state: {
-          init: () => false,
-          apply: (tr, focused) => {
-            const nextFocused = tr.getMeta(thickCaretPluginKey)
-            return typeof nextFocused === 'boolean' ? nextFocused : focused
-          },
-        },
-        props: {
-          handleDOMEvents: {
-            focus: (view) => {
-              view.dispatch(view.state.tr.setMeta(thickCaretPluginKey, true))
-              return false
-            },
-            blur: (view) => {
-              view.dispatch(view.state.tr.setMeta(thickCaretPluginKey, false))
-              return false
-            },
-          },
-          decorations: (state) => {
-            const focused = thickCaretPluginKey.getState(state)
-            if (!focused || !editor.isEditable || !state.selection.empty) {
-              return DecorationSet.empty
-            }
-
-            return DecorationSet.create(state.doc, [
-              Decoration.widget(
-                state.selection.from,
-                () => {
-                  const caret = document.createElement('span')
-                  caret.className = 'proma-input-caret'
-                  caret.setAttribute('aria-hidden', 'true')
-                  return caret
-                },
-                {
-                  key: 'proma-input-caret',
-                  side: 1,
-                },
-              ),
-            ])
-          },
-        },
-      }),
-    ]
-  },
-})
 
 /** 计算编辑器内容的行数 */
 function countEditorLines(editor: ReturnType<typeof useEditor>): number {
@@ -294,7 +234,6 @@ export function RichTextInput({
         link: false,
         underline: false,
       }),
-      ThickInputCaret,
       Underline,
       Link.configure({
         openOnClick: false,
@@ -711,37 +650,6 @@ export function RichTextInput({
           outline: none;
           padding: 9px 15px 0px;
           font-style: normal;
-        }
-        .rich-text-input .ProseMirror:focus {
-          caret-color: transparent;
-        }
-        .rich-text-input .proma-input-caret {
-          display: inline-block;
-          width: 0;
-          height: 1em;
-          position: relative;
-          vertical-align: baseline;
-          pointer-events: none;
-        }
-        .rich-text-input .proma-input-caret::after {
-          content: '';
-          position: absolute;
-          left: 0;
-          top: 50%;
-          width: 2px;
-          height: calc(1.45em - 2px);
-          border-radius: 999px;
-          background: hsl(var(--foreground));
-          transform: translateY(calc(-50% + 2px));
-          animation: proma-input-caret-blink 1s steps(1, end) infinite;
-        }
-        @keyframes proma-input-caret-blink {
-          0%, 49% {
-            opacity: 1;
-          }
-          50%, 100% {
-            opacity: 0;
-          }
         }
         .ProseMirror p {
           font-style: normal;
