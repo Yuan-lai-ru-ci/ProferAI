@@ -41,6 +41,7 @@
         "@emoji-mart/react": "^1.1.1",
         "@larksuiteoapi/node-sdk": "^1.65.0",
         "@proma/core": "workspace:*",
+        "@proma/session-core": "workspace:*",
         "@proma/shared": "workspace:*",
         "@proma/ui": "workspace:*",
         "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -153,6 +154,16 @@
         "@anthropic-ai/claude-agent-sdk": ">=0.2.123",
         "@anthropic-ai/sdk": ">=0.70.0",
         "@modelcontextprotocol/sdk": ">=1.0.0",
+      },
+    },
+    "packages/session-core": {
+      "name": "@proma/session-core",
+      "version": "0.1.0",
+      "dependencies": {
+        "@proma/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.0.0",
       },
     },
     "packages/shared": {
@@ -417,6 +428,8 @@
     "@proma/core": ["@proma/core@workspace:packages/core"],
 
     "@proma/electron": ["@proma/electron@workspace:apps/electron"],
+
+    "@proma/session-core": ["@proma/session-core@workspace:packages/session-core"],
 
     "@proma/shared": ["@proma/shared@workspace:packages/shared"],
 
