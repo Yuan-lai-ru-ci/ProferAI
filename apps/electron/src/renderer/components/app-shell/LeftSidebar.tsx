@@ -94,6 +94,8 @@ import {
 import { detectIsMac } from '@/lib/platform'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import {
+  collectAgentSessionTreeIds,
+  isAgentSessionVisibleInTrees,
   replaceAgentSessionInFreshnessOrder,
   sortAgentSessionsByUpdatedAtDesc,
 } from '@/lib/agent-session-list'
@@ -386,15 +388,6 @@ function countCompletedDelegatedChildren(childSessions: AgentSessionMeta[]): num
 function treeContainsSessionId(item: AgentSessionTreeItem, sessionId: string | null): boolean {
   if (!sessionId) return false
   return item.session.id === sessionId || item.childSessions.some((session) => session.id === sessionId)
-}
-
-function collectTreeSessionIds(items: AgentSessionTreeItem[]): Set<string> {
-  const ids = new Set<string>()
-  for (const item of items) {
-    ids.add(item.session.id)
-    for (const child of item.childSessions) ids.add(child.id)
-  }
-  return ids
 }
 
 function getDirectDelegatedChildren(
@@ -3427,7 +3420,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
       if (delta !== 0) return delta
       return b.session.updatedAt - a.session.updatedAt
     })
-  const activeIds = collectTreeSessionIds(activeSessions)
+  const activeIds = collectAgentSessionTreeIds(activeSessions)
   // 非活跃部分按自然策略（最近 3 天窗口 + 预览上限）计算，且不依赖当前选中态，
   // 保持 group.sessions 的 updatedAt 倒序——这样点击已可见会话时顺序保持稳定，
   // 不会因为它变成 activeSessionId 而被提到顶部。
@@ -3445,8 +3438,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   const sessionsWithoutPinned = [...collapsedSessions, ...extraSessions]
   // 仅当选中会话不在当前可见列表中时才置顶（如搜索结果打开旧会话），
   // 若会话已在可见区域则保持原位不跳
-  const sessionIds = new Set(sessionsWithoutPinned.map((item) => item.session.id))
-  const currentSession = activeSessionId && !sessionIds.has(activeSessionId)
+  const currentSession = activeSessionId && !isAgentSessionVisibleInTrees(sessionsWithoutPinned, activeSessionId)
     ? treeItems.find((item) => treeContainsSessionId(item, activeSessionId)) ?? null
     : null
   const pinnedCurrent = currentSession ? [currentSession] : []
