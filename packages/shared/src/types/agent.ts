@@ -932,6 +932,8 @@ export interface AgentQueueMessageInput {
   sessionId: string
   /** 用户消息内容 */
   userMessage: string
+  /** 仅用于持久化/重放的原始用户输入；省略时回退到 userMessage */
+  rawUserMessage?: string
   /** 前端预生成的 UUID（用于乐观更新去重） */
   uuid?: string
   /**

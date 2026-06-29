@@ -2330,6 +2330,7 @@ export class AgentOrchestrator {
   async queueMessage(
     sessionId: string,
     text: string,
+    rawText?: string,
     _priority?: string,
     presetUuid?: string,
     opts?: { interrupt?: boolean },
@@ -2407,7 +2408,7 @@ export class AgentOrchestrator {
         type: 'user',
         uuid,
         message: {
-          content: [{ type: 'text', text }],
+          content: [{ type: 'text', text: rawText ?? text }],
         },
         parent_tool_use_id: null,
         _createdAt: Date.now(),

@@ -373,6 +373,7 @@ export async function queueAgentMessage(
   return orchestrator.queueMessage(
     input.sessionId,
     input.userMessage,
+    input.rawUserMessage,
     undefined,
     input.uuid,
     { interrupt: input.interrupt },
