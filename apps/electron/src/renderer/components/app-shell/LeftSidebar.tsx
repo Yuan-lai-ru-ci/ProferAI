@@ -1026,12 +1026,14 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         setCurrentWorkspaceId(targetWorkspaceId)
         window.electronAPI.updateSettings({ agentWorkspaceId: targetWorkspaceId }).catch(console.error)
       }
-
       const meta = await window.electronAPI.createAgentSession(
         undefined,
         agentChannelId || undefined,
         targetWorkspaceId,
       )
+      if (targetWorkspaceId) {
+        setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, targetWorkspaceId))
+      }
       setAgentSessions((prev) => [meta, ...prev])
       // 从全局默认值初始化 per-session 渠道/模型配置
       if (agentChannelId) {
