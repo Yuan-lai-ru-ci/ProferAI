@@ -19,6 +19,7 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { WindowControls } from '@/components/WindowControls'
 import { detectIsWindows } from '@/lib/platform'
+import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
@@ -36,6 +37,8 @@ export interface AppShellProps {
 export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const interfaceVariant = useAtomValue(interfaceVariantAtom)
+  const isClassic = interfaceVariant === 'classic'
   const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
   const automationForm = useAtomValue(automationFormAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
@@ -135,6 +138,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         <div className="p-2 pr-0 relative z-[60] crt-sidebar">
           <LeftSidebar />
         </div>
+        {!isClassic && (
+          <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-border/80 dark:bg-border/70" />
+        )}
 
         {/* 中间容器 */}
         <div className="flex-1 min-w-0 p-2 relative z-[60]">
@@ -148,11 +154,22 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
         {/* 右侧边栏：个人模式显示文件面板；团队模式文件已在主区域 */}
         {!isTeamWorkspace && showRightPanel && (
-          <div className={cn('relative z-[60] flex items-stretch transition-[padding] duration-300 ease-in-out crt-sidebar', isPanelOpen ? 'p-2 pl-0' : 'p-0')}>
+          <div
+            className={cn(
+              'relative z-[60] flex items-stretch crt-sidebar transition-[padding] duration-300 ease-in-out',
+              isPanelOpen ? 'p-2 pl-0' : 'p-0'
+            )}
+          >
+            {!isClassic && (
+              <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-border/80 dark:bg-border/70" />
+            )}
             {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
             {isPanelOpen && (
               <div
-                className="absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors z-10"
+                className={cn(
+                  'absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors',
+                  isClassic ? 'z-10' : 'z-20'
+                )}
                 onMouseDown={handleMouseDown}
               />
             )}

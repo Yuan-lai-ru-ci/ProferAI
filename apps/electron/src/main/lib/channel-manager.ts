@@ -21,14 +21,24 @@ import type {
   FetchModelsResult,
   ProviderType,
 } from '@proma/shared'
-import { PROVIDER_DEFAULT_URLS } from '@proma/shared'
+import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@proma/core'
+import { isCommercialBuild } from './build-target'
+import {
+  inferAgentBaseUrl,
+  normalizeChannelForCurrentSchema,
+  normalizeConfigForCurrentSchema,
+} from './channel-url-routing'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** 当前配置版本 */
 const CONFIG_VERSION = 1
+
+export function resolveChannelAgentBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | 'agentBaseUrl'>): string | undefined {
+  return inferAgentBaseUrl(channel.provider, channel.baseUrl, channel.agentBaseUrl)
+}
 
 /**
  * 读取渠道配置文件
@@ -42,7 +52,17 @@ function readConfig(): ChannelsConfig {
 
   try {
     const raw = readFileSync(configPath, 'utf-8')
-    return JSON.parse(raw) as ChannelsConfig
+    const parsed = JSON.parse(raw) as ChannelsConfig
+    const normalized = normalizeConfigForCurrentSchema(parsed)
+    if (normalized.changed) {
+      try {
+        writeFileSync(configPath, JSON.stringify(normalized.config, null, 2), 'utf-8')
+        console.log('[渠道管理] 已迁移渠道配置：拆分 Chat Base URL 与 Agent Base URL')
+      } catch (error) {
+        console.warn('[渠道管理] 写入迁移后的渠道配置失败，将继续使用内存中的迁移结果:', error)
+      }
+    }
+    return normalized.config
   } catch (error) {
     console.error('[渠道管理] 读取配置文件失败:', error)
     return { version: CONFIG_VERSION, channels: [] }
@@ -122,7 +142,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
     throw new Error(`渠道同步失败: HTTP ${resp.status}`)
   }
 
-  const data = await resp.json() as { commercialMode: boolean; channels: Array<{ id: string; name: string; provider: string; apiKey: string; baseUrl: string; models: ChannelModel[] }> }
+  const data = await resp.json() as { commercialMode: boolean; channels: Array<{ id: string; name: string; provider: string; apiKey: string; baseUrl: string; agentBaseUrl?: string; models: ChannelModel[] }> }
 
   if (!data.commercialMode || !data.channels) return
 
@@ -135,26 +155,56 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
     } catch { /* 备份失败不致命 */ }
   }
 
-  // 将服务端渠道写入本地，API Key 用本地 safeStorage 加密
+  // 将服务端渠道写入本地，保留用户自建的本地渠道
+  const existingConfig = readConfig()
+  const serverIds = new Set(data.channels.map((ch) => ch.id))
+  const localChannels = existingConfig.channels.filter((c) => !serverIds.has(c.id))
+
   const now = Date.now()
-  const config: ChannelsConfig = { version: 1, channels: [] }
+  const config: ChannelsConfig = { version: 1, channels: [...localChannels] }
 
   for (const ch of data.channels) {
-    config.channels.push({
+    const result = normalizeChannelForCurrentSchema({
       id: ch.id,
       name: ch.name,
       provider: ch.provider as ProviderType,
       baseUrl: ch.baseUrl,
+      agentBaseUrl: ch.agentBaseUrl || '',
       apiKey: encryptApiKey(ch.apiKey),
       models: ch.models,
       enabled: true,
       createdAt: now,
       updatedAt: now,
     })
+    config.channels.push(result.channel)
   }
 
   writeConfig(config)
   console.log(`[渠道管理] 已从服务端同步 ${config.channels.length} 个渠道`)
+
+  // 自动配置 Agent：将同步的渠道设为 Agent 供应商
+  if (config.channels.length > 0) {
+    try {
+      const { updateSettings, getSettings } = require('./settings-service')
+      const settings = getSettings()
+      const agentCapableChannels = config.channels.filter((c) => {
+        const { isAgentCompatibleProvider } = require('@proma/shared')
+        return isAgentCompatibleProvider(c.provider)
+      })
+      const agentIds = agentCapableChannels.map((c) => c.id)
+      const firstAgent = agentCapableChannels[0]
+      const firstModel = firstAgent?.models?.find((m) => m.enabled)
+
+      updateSettings({
+        agentChannelIds: agentIds,
+        agentChannelId: settings.agentChannelId || firstAgent?.id,
+        agentModelId: settings.agentModelId || firstModel?.id,
+      })
+      console.log(`[渠道管理] 已自动配置 ${agentIds.length} 个 Agent 供应商`)
+    } catch (err) {
+      console.warn('[渠道管理] 自动配置 Agent 供应商失败:', err)
+    }
+  }
 }
 
 /** 当前是否处于商业模式（渠道由服务端统一管理） */
@@ -162,6 +212,16 @@ export function isCommercialMode(): boolean {
   try {
     const { getCommercialMode } = require('./auth-service')
     return getCommercialMode()
+  } catch {
+    return false
+  }
+}
+
+/** 当前用户是否可以自配渠道（代管模式 + 自配开关 = 可自配） */
+export function canSelfConfig(): boolean {
+  try {
+    const { isSelfConfigAllowed } = require('./auth-service')
+    return isSelfConfigAllowed()
   } catch {
     return false
   }
@@ -187,6 +247,7 @@ export function listChannels(): Channel[] {
       name: 'DeepSeek',
       provider: 'deepseek',
       baseUrl: PROVIDER_DEFAULT_URLS.deepseek,
+      agentBaseUrl: PROVIDER_DEFAULT_AGENT_URLS.deepseek,
       apiKey: encryptApiKey(''),
       models: [
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
@@ -222,21 +283,23 @@ export function getChannelById(id: string): Channel | undefined {
  * @returns 创建后的渠道（apiKey 为加密态）
  */
 export function createChannel(input: ChannelCreateInput): Channel {
-  if (isCommercialMode()) throw new Error('商业模式下不允许手动创建渠道，渠道由服务端统一管理')
+  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许手动创建渠道，渠道由服务端统一管理')
   const config = readConfig()
   const now = Date.now()
 
-  const channel: Channel = {
+  const rawChannel: Channel = {
     id: randomUUID(),
     name: input.name,
     provider: input.provider,
     baseUrl: input.baseUrl,
+    agentBaseUrl: input.agentBaseUrl,
     apiKey: encryptApiKey(input.apiKey),
     models: input.models,
     enabled: input.enabled,
     createdAt: now,
     updatedAt: now,
   }
+  const { channel } = normalizeChannelForCurrentSchema(rawChannel)
 
   config.channels.push(channel)
   writeConfig(config)
@@ -253,7 +316,19 @@ export function createChannel(input: ChannelCreateInput): Channel {
  * @returns 更新后的渠道
  */
 export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
-  if (isCommercialMode()) throw new Error('商业模式下不允许修改渠道，渠道由服务端统一管理')
+  // 商业模式下无自配权限时只允许切换 enabled，有自配权限则全部放开
+  if (isCommercialMode() && !canSelfConfig()) {
+    const hasStructuralChange =
+      input.name !== undefined ||
+      input.provider !== undefined ||
+      input.baseUrl !== undefined ||
+      input.agentBaseUrl !== undefined ||
+      input.apiKey !== undefined ||
+      input.models !== undefined
+    if (hasStructuralChange) {
+      throw new Error('商业模式下不允许修改渠道，渠道由服务端统一管理')
+    }
+  }
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
 
@@ -263,16 +338,18 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
 
   const existing = config.channels[index]!
 
-  const updated: Channel = {
+  const rawUpdated: Channel = {
     ...existing,
     name: input.name ?? existing.name,
     provider: input.provider ?? existing.provider,
     baseUrl: input.baseUrl ?? existing.baseUrl,
+    agentBaseUrl: input.agentBaseUrl !== undefined ? input.agentBaseUrl : existing.agentBaseUrl,
     apiKey: input.apiKey ? encryptApiKey(input.apiKey) : existing.apiKey,
     models: input.models ?? existing.models,
     enabled: input.enabled ?? existing.enabled,
     updatedAt: Date.now(),
   }
+  const { channel: updated } = normalizeChannelForCurrentSchema(rawUpdated)
 
   config.channels[index] = updated
   writeConfig(config)
@@ -285,7 +362,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
  * 删除渠道
  */
 export function deleteChannel(id: string): void {
-  if (isCommercialMode()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
+  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
 
@@ -335,7 +412,6 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
     switch (channel.provider) {
       case 'anthropic':
       case 'anthropic-compatible':
-      case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
       case 'zhipu-coding':
@@ -344,6 +420,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'xiaomi-token-plan':
         return await testAnthropicCompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
       case 'openai':
+      case 'deepseek':
       case 'zhipu':
       case 'doubao':
       case 'qwen':
@@ -417,7 +494,8 @@ async function testAnthropicCompatible(
     headers.Authorization = `Bearer ${apiKey}`
   }
 
-  const response = await fetchFn(`${url}/messages`, {
+  const endpoint = `${url}/messages`
+  const response = await fetchFn(endpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -431,13 +509,18 @@ async function testAnthropicCompatible(
     return { success: true, message: '连接成功' }
   }
 
+  const text = await response.text().catch(() => '')
+
   if (response.status === 401) {
-    const text = await response.text().catch(() => '')
     return { success: false, message: `API Key 无效${text ? `: ${text.slice(0, 150)}` : ''}` }
   }
 
-  // 如果能收到 API 的响应（即使是错误），说明连接是通的
-  return { success: true, message: '连接成功' }
+  const detail = text ? `: ${text.slice(0, 200)}` : ''
+  const endpointHint = provider === 'deepseek'
+    ? `；当前测试端点为 ${endpoint}。DeepSeek 内置渠道使用 Anthropic 协议，Base URL 应为 https://api.deepseek.com/anthropic，而不是 OpenAI 兼容的 /v1`
+    : `；当前测试端点为 ${endpoint}`
+
+  return { success: false, message: `请求失败 (${response.status})${detail}${endpointHint}` }
 }
 
 /**
@@ -504,7 +587,6 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
     switch (input.provider) {
       case 'anthropic':
       case 'anthropic-compatible':
-      case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
       case 'zhipu-coding':
@@ -513,6 +595,7 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
       case 'xiaomi-token-plan':
         return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'openai':
+      case 'deepseek':
       case 'zhipu':
       case 'doubao':
       case 'qwen':
@@ -544,7 +627,6 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
     switch (input.provider) {
       case 'anthropic':
       case 'anthropic-compatible':
-      case 'deepseek':
       case 'kimi-api':
       case 'kimi-coding':
       case 'zhipu-coding':
@@ -553,6 +635,7 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'xiaomi-token-plan':
         return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'openai':
+      case 'deepseek':
       case 'zhipu':
       case 'doubao':
       case 'qwen':

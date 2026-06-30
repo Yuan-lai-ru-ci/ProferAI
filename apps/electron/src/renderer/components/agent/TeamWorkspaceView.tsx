@@ -184,7 +184,13 @@ export function TeamWorkspaceView(): React.ReactElement {
     if (!filesPath || !teamId) return
     if (!silent) setLoading(true)
     try {
-      const manifest = await window.electronAPI.teamFile.getManifest(teamId, workspace?.slug).catch(() => [] as Awaited<ReturnType<typeof window.electronAPI.teamFile.getManifest>>)
+      const manifest = await window.electronAPI.teamFile.getManifest(teamId, workspace?.slug).catch(() => null)
+      // null = 拉取失败（认证/网络）→ 保留旧列表，绝不清空，避免 token 失效误清空文件
+      if (manifest === null) {
+        if (entriesRef.current.length > 0) return
+        // 本地也没有旧数据时，首次加载失败保持空，等待下次刷新
+        return
+      }
       const items: FileEntry[] = manifest.map((f: Record<string, unknown>) => {
         return {
           name: f.name as string, path: f.path as string, isDirectory: (f.isDirectory as boolean) ?? false, size: f.size as number,
@@ -193,7 +199,7 @@ export function TeamWorkspaceView(): React.ReactElement {
           remoteModifiedAt: (f.modifiedAt as number) ?? undefined,
         }
       })
-      // 静默刷新返回空且已有旧数据 → 保留旧数据，防止 token 过期导致清空
+      // 静默刷新返回空且已有旧数据 → 保留旧数据，防止竞态/瞬时空清空
       if (silent && items.length === 0 && entriesRef.current.length > 0) return
       setEntries(items)
     } catch (e) { /* ignore */ }
@@ -345,7 +351,7 @@ export function TeamWorkspaceView(): React.ReactElement {
       await loadFiles()
       // 验证
       const manifest = await window.electronAPI.teamFile.getManifest(teamId, workspace?.slug).catch(() => [] as any[])
-      const ghost = manifest.some((f: any) => f.path === fromPath)
+      const ghost = (manifest ?? []).some((f: any) => f.path === fromPath)
       console.log(ghost ? '[DnD] 失败: 旧路径仍存在!' : '[DnD] 验证通过: 旧路径已清除')
     }, 500)
   }, [teamId, workspace?.slug, filesPath, loadFiles])
@@ -421,7 +427,7 @@ export function TeamWorkspaceView(): React.ReactElement {
     } else {
       toast.error('创建失败')
     }
-  }, [newFolderName, teamId, workspace?.slug, loadFiles])
+  }, [newFolderName, teamId, workspace?.slug, loadFiles, currentPath])
 
   const retrySingle = async (fileName: string) => {
     const f = failedUploads.find((x) => x.name === fileName)
@@ -999,7 +1005,7 @@ export function TeamWorkspaceView(): React.ReactElement {
               </button>
             )}
             {/* 刷新 */}
-            <button className="h-8 w-8 rounded-md flex items-center justify-center hover:bg-accent text-muted-foreground" onClick={loadFiles} disabled={loading}>
+            <button className="h-8 w-8 rounded-md flex items-center justify-center hover:bg-accent text-muted-foreground" onClick={() => { void loadFiles() }} disabled={loading}>
               <RefreshCw size={14} className={cn(loading && 'animate-spin')} />
             </button>
             {/* 视图切换 */}

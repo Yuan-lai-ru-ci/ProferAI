@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { interfaceVariantAtom } from '@/atoms/theme'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
@@ -62,6 +63,9 @@ interface SidePanelProps {
 const filePanelActionButtonClass = 'h-6 w-6 flex-shrink-0 rounded-md text-muted-foreground/75 hover:bg-accent/70 hover:text-foreground [&_svg]:size-3.5'
 
 export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 280 }: SidePanelProps): React.ReactElement {
+  const interfaceVariant = useAtomValue(interfaceVariantAtom)
+  const isClassic = interfaceVariant === 'classic'
+
   // per-session 侧面板状态（默认打开）
   const [isOpen, setIsOpen] = useAtom(agentSidePanelOpenAtom)
   const isWindows = React.useMemo(() => detectIsWindows(), [])
@@ -400,7 +404,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   return (
     <div
       className={cn(
-        'relative z-0 h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl',
+        'relative z-0 h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl dark:shadow-md',
         shouldAnimate && 'transition-[width] duration-300 ease-in-out',
         isOpen ? '' : '!w-0',
       )}
@@ -1051,8 +1055,9 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
     try {
       await window.electronAPI.renameAttachedFile(currentPath, newName, { sessionId, candidateBasePaths: allowedPaths })
       // 更新本地显示
-      const parentDir = currentPath.substring(0, currentPath.lastIndexOf('/'))
-      const newPath = `${parentDir}/${newName}`
+      const lastSlash = currentPath.lastIndexOf('/')
+      const parentDir = lastSlash === -1 ? '' : currentPath.substring(0, lastSlash)
+      const newPath = parentDir ? `${parentDir}/${newName}` : newName
       // 更新选中状态中的路径
       onSelect(newPath, false)
       setCurrentName(newName)

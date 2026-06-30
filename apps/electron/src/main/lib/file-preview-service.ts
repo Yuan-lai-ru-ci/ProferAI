@@ -136,14 +136,7 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
     const home = homedir()
     const homeCandidate = resolve(home, filePath)
     if (existsSync(homeCandidate)) return homeCandidate
-    const rootCandidate = resolve('/', filePath)
-    if (existsSync(rootCandidate)) return rootCandidate
-    const name = basename(filePath)
-    for (const base of basePaths) {
-      if (!base) continue
-      const found = searchFileInDir(base, name)
-      if (found) return found
-    }
+    // 不做根目录 fallback——防止相对路径被解析到系统文件
     return resolve(basePaths[0]!, filePath)
   }
   const homeCandidate = resolve(homedir(), filePath)

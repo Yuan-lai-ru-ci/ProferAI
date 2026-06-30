@@ -177,7 +177,6 @@ function rememberLocalSource(
   return true
 }
 
-/** 上传文件到团队服务器 */
 /** 获取认证，token 过期时自动刷新 */
 async function getOrRefreshAuth() {
   let auth = getTeamAuth()
@@ -188,6 +187,42 @@ async function getOrRefreshAuth() {
   return auth
 }
 
+/**
+ * 带认证的团队文件请求封装（token 过期或被服务端拒绝时自动刷新重试）。
+ *
+ * 与 team-manager.authedFetch 行为一致，但不强制 Content-Type，
+ * 以兼容 octet-stream 上传和二进制下载。
+ *
+ * @returns Response；未登录或无法获取令牌时返回 null
+ */
+async function teamFileFetch(
+  path: string,
+  options: RequestInit = {},
+): Promise<Response | null> {
+  const auth = await getOrRefreshAuth()
+  if (!auth) return null
+
+  const { baseUrl } = auth
+  const doFetch = (token: string) =>
+    (undiciFetch as unknown as typeof fetch)(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        ...(options.headers as Record<string, string>),
+        Authorization: `Bearer ${token}`,
+      },
+    })
+
+  const res = await doFetch(auth.token)
+  // 仅本地时钟认为有效、但服务端已拒绝（401）时，刷新令牌后重试一次。
+  if (res.status !== 401) return res
+
+  const refreshed = await refreshAuthToken().catch(() => false)
+  if (!refreshed) return res
+  const auth2 = getTeamAuth()
+  if (!auth2 || auth2.token === auth.token) return res
+  return doFetch(auth2.token)
+}
+
 export async function uploadFile(
   workspaceId: string,
   workspaceSlug: string,
@@ -195,21 +230,18 @@ export async function uploadFile(
   fileBuffer: Buffer,
   sourcePath?: string,
 ): Promise<{ success: boolean; path: string; size: number; error?: string }> {
-  const auth = await getOrRefreshAuth()
-  if (!auth) return { success: false, path: fileName, size: 0, error: '未登录' }
-
   try {
     console.log('[team-file] 上传文件:', fileName, 'size:', fileBuffer.length, 'to:', workspaceId)
 
-    const res = await (undiciFetch as unknown as typeof fetch)(`${auth.baseUrl}/v1/workspaces/${workspaceId}/files/upload`, {
+    const res = await teamFileFetch(`/v1/workspaces/${workspaceId}/files/upload`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${auth.token}`,
         'Content-Type': 'application/octet-stream',
         'X-Filename': encodeURIComponent(fileName),
       },
       body: fileBuffer as unknown as RequestInit['body'],
     })
+    if (!res) return { success: false, path: fileName, size: 0, error: '未登录' }
 
     if (!res.ok) {
       const txt = await res.text()
@@ -260,16 +292,11 @@ export async function downloadFile(
   const existingLocal = getExistingLocalFile(workspaceSlug, filePath)
   if (existingLocal) return existingLocal
 
-  const auth = await getOrRefreshAuth()
-  if (!auth) return null
-
   try {
-    const res = await (undiciFetch as unknown as typeof fetch)(
-      `${auth.baseUrl}/v1/workspaces/${workspaceId}/files/download/${encodeURIComponent(filePath)}`,
-      { headers: { Authorization: `Bearer ${auth.token}` } },
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/download/${encodeURIComponent(filePath)}`,
     )
-
-    if (!res.ok) return null
+    if (!res || !res.ok) return null
 
     const buffer = Buffer.from(await res.arrayBuffer())
     const localPath = writeLocalCache(workspaceSlug, filePath, buffer)
@@ -286,16 +313,13 @@ export async function deleteRemoteFile(
   workspaceSlug: string,
   filePath: string,
 ): Promise<boolean> {
-  const auth = await getOrRefreshAuth()
-  if (!auth) return false
-
   try {
-    const res = await (undiciFetch as unknown as typeof fetch)(
-      `${auth.baseUrl}/v1/workspaces/${workspaceId}/files/${encodeURIComponent(filePath)}`,
-      { method: 'DELETE', headers: { Authorization: `Bearer ${auth.token}` } },
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/${encodeURIComponent(filePath)}`,
+      { method: 'DELETE' },
     )
-    if (res.ok) forgetLocalSourceTree(workspaceId, filePath)
-    return res.ok
+    if (res?.ok) forgetLocalSourceTree(workspaceId, filePath)
+    return !!res?.ok
   } catch {
     return false
   }
@@ -307,21 +331,16 @@ export async function moveRemoteFile(
   fromPath: string,
   toDir: string,
 ): Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }> {
-  const auth = await getOrRefreshAuth()
-  if (!auth) return { success: false, fromPath, error: '未登录' }
-
   try {
-    const res = await (undiciFetch as unknown as typeof fetch)(
-      `${auth.baseUrl}/v1/workspaces/${workspaceId}/files/move`,
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/move`,
       {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${auth.token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fromPath, toDir }),
       },
     )
+    if (!res) return { success: false, fromPath, error: '未登录' }
     if (!res.ok) {
       const txt = await res.text()
       return { success: false, fromPath, error: txt.slice(0, 200) }
@@ -339,41 +358,39 @@ export async function createRemoteDirectory(
   workspaceId: string,
   dirPath: string,
 ): Promise<boolean> {
-  const auth = await getOrRefreshAuth()
-  if (!auth) return false
-
   try {
-    const res = await (undiciFetch as unknown as typeof fetch)(
-      `${auth.baseUrl}/v1/workspaces/${workspaceId}/files/mkdir`,
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/mkdir`,
       {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${auth.token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: dirPath }),
       },
     )
-    return res.ok
+    return !!res && res.ok
   } catch {
     return false
   }
 }
 
-/** 获取远程文件清单 */
+/**
+ * 获取远程文件清单。
+ *
+ * @returns 文件清单数组；当认证失败或网络错误导致无法确认远端状态时返回 null，
+ *          以便调用方区分「真的没有文件（[]）」和「拉取失败（null）」，
+ *          失败时保留本地已有列表而非清空。
+ */
 export async function fetchFileManifest(
   workspaceId: string,
   workspaceSlug?: string,
-): Promise<TeamFileManifestEntry[]> {
-  const auth = await getOrRefreshAuth()
-  if (!auth) return []
-
+): Promise<TeamFileManifestEntry[] | null> {
   try {
-    const res = await (undiciFetch as unknown as typeof fetch)(
-      `${auth.baseUrl}/v1/workspaces/${workspaceId}/files/manifest`,
-      { headers: { Authorization: `Bearer ${auth.token}` } },
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/manifest`,
+      { headers: { 'Content-Type': 'application/json' } },
     )
-    if (!res.ok) return []
+    if (!res) return null
+    if (!res.ok) return null
     const manifest = (await res.json()) as TeamFileManifestEntry[]
     if (!workspaceSlug) return manifest
 
@@ -399,7 +416,7 @@ export async function fetchFileManifest(
       }
     })
   } catch {
-    return []
+    return null
   }
 }
 

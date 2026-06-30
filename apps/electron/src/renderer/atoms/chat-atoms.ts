@@ -21,11 +21,11 @@ export interface SelectedModel {
   modelId: string
 }
 
-/** 上下文长度选项值 */
-export type ContextLengthValue = 0 | 5 | 10 | 15 | 20 | 'infinite'
+/** 上下文长度选项列表（单一数据源） */
+export const CONTEXT_LENGTH_OPTIONS = [0, 5, 10, 15, 20, 'infinite'] as const
 
-/** 上下文长度选项列表 */
-export const CONTEXT_LENGTH_OPTIONS: ContextLengthValue[] = [0, 5, 10, 15, 20, 'infinite']
+/** 上下文长度选项值（派生自 CONTEXT_LENGTH_OPTIONS，避免类型与数据不同步） */
+export type ContextLengthValue = typeof CONTEXT_LENGTH_OPTIONS[number]
 
 /** 对话列表 */
 export const conversationsAtom = atom<ConversationMeta[]>([])
@@ -176,6 +176,12 @@ export const INITIAL_MESSAGE_LIMIT = 10
  * 错误发生时写入，下次发送或手动关闭时清除
  */
 export const chatStreamErrorsAtom = atom<Map<string, string>>(new Map())
+
+/**
+ * 结构化错误代码（与 chatStreamErrorsAtom 并行，按 conversationId 索引）
+ * 例如 'insufficient_credits'，供 UI 渲染充值引导按钮。
+ */
+export const chatStreamErrorCodesAtom = atom<Map<string, string>>(new Map())
 
 /** 当前对话的错误消息（派生只读原子） */
 export const currentChatErrorAtom = atom<string | null>((get) => {

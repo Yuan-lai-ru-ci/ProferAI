@@ -39,6 +39,8 @@ export function ChannelSettings(): React.ReactElement {
   const [editingChannel, setEditingChannel] = React.useState<Channel | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [commercialMode, setCommercialMode] = React.useState(false)
+  const [canSelfConfig, setCanSelfConfig] = React.useState(false)
+  const [accountType, setAccountType] = React.useState('standard')
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
@@ -55,9 +57,16 @@ export function ChannelSettings(): React.ReactElement {
     agentChannelIdRef.current = agentChannelId
   }, [agentChannelId])
 
-  // 检测商业模式
+  // 检测账号能力（商业模式 + 自配权限 + 账号类型）
   React.useEffect(() => {
-    window.electronAPI.getCommercialMode().then(setCommercialMode).catch(() => setCommercialMode(false))
+    window.electronAPI.getAccountCapabilities().then((caps) => {
+      setCommercialMode(caps.commercialMode)
+      setCanSelfConfig(caps.canSelfConfig)
+      setAccountType(caps.accountType)
+    }).catch(() => {
+      setCommercialMode(false)
+      setCanSelfConfig(false)
+    })
   }, [])
 
   /** 加载渠道列表 */
@@ -78,6 +87,14 @@ export function ChannelSettings(): React.ReactElement {
   React.useEffect(() => {
     loadChannels()
   }, [loadChannels])
+
+  // 商业模式且无自配权限时：不允许进入创建/编辑视图，自动退回列表
+  React.useEffect(() => {
+    const locked = commercialMode && !canSelfConfig
+    if (!locked || viewMode === 'list') return
+    setViewMode('list')
+    setEditingChannel(null)
+  }, [commercialMode, canSelfConfig, viewMode])
 
   const syncAgentChannelEligibility = React.useCallback(async (
     channel: Channel,
@@ -198,12 +215,8 @@ export function ChannelSettings(): React.ReactElement {
     setEditingChannel(null)
   }
 
-  // 表单视图 — 商业模式下禁止访问
-  if (viewMode === 'create' || viewMode === 'edit') {
-    if (commercialMode) {
-      setViewMode('list')
-      return null
-    }
+  // 表单视图 — 无自配权限的商业模式下禁止访问
+  if ((viewMode === 'create' || viewMode === 'edit') && !(commercialMode && !canSelfConfig)) {
     return (
       <ChannelForm
         channel={editingChannel}
@@ -225,9 +238,9 @@ export function ChannelSettings(): React.ReactElement {
       {/* 区块一：模型配置 */}
       <SettingsSection
         title="模型配置"
-        description={commercialMode ? '渠道由团队服务器统一管理，无需手动配置' : '管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式'}
+        description={commercialMode && !canSelfConfig ? '渠道由团队服务器统一管理，无需手动配置' : '管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式'}
         action={
-          commercialMode ? null : (
+          (commercialMode && !canSelfConfig) ? null : (
             <Button size="sm" onClick={() => setViewMode('create')}>
               <Plus size={16} />
               <span>添加配置</span>
@@ -235,13 +248,13 @@ export function ChannelSettings(): React.ReactElement {
           )
         }
       >
-        {commercialMode && (
+        {commercialMode && !canSelfConfig && (
           <SettingsCard>
             <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
               <Server size={18} className="text-primary shrink-0" />
               <div>
                 <div className="text-sm font-medium">渠道由服务端统一管理</div>
-                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端，无需手动添加或修改 API Key</div>
+                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端。如需自行添加 API Key，请让管理员开通自配权限</div>
               </div>
             </div>
           </SettingsCard>

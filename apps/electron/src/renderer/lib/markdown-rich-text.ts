@@ -278,11 +278,74 @@ function preprocessMarkdown(markdown: string): string {
     .join('')
 }
 
+/** 匹配 Windows 绝对路径或 Unix 绝对路径 */
+const FILE_PATH_RE = /(?:^|[\s(])((?:[A-Za-z]:[\\/][^\s<>:"|?*\n{}]+(?:\\[^\s<>:"|?*\n{}]+)+)|(?:\/[^\s<>:"|?*\n{}]+\/[^\s<>:"|?*\n{}]+))(?=[\s),;:\n]|$)/g
+
+/** 跳过标签名集合 */
+const SKIP_TAGS = new Set(['A', 'CODE', 'PRE', 'SCRIPT', 'STYLE'])
+
+function isInsideSkipTag(node: Node): boolean {
+  let p: Node | null = node
+  while (p) {
+    if (p.nodeType === Node.ELEMENT_NODE && SKIP_TAGS.has((p as Element).tagName)) return true
+    p = p.parentNode
+  }
+  return false
+}
+
+function linkifyFilePathsInTextNodes(root: HTMLElement): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const toProcess: Text[] = []
+
+  let n = walker.nextNode() as Text | null
+  while (n) {
+    if (!isInsideSkipTag(n) && (n.textContent ?? '').length > 0) toProcess.push(n)
+    n = walker.nextNode() as Text | null
+  }
+
+  const isWin = typeof navigator !== 'undefined' ? /Win/.test(navigator.platform || '') : true
+
+  for (const node of toProcess) {
+    const text = node.textContent ?? ''
+    FILE_PATH_RE.lastIndex = 0
+    const hits: Array<{ idx: number; len: number; path: string }> = []
+    let m
+    while ((m = FILE_PATH_RE.exec(text)) !== null) {
+      const raw = m[1] ?? ''
+      if (!raw) continue
+      const offset = m.index + (m[0].length - raw.length)
+      hits.push({ idx: offset, len: raw.length, path: raw })
+    }
+    if (hits.length === 0) continue
+
+    const frag = document.createDocumentFragment()
+    let cursor = 0
+    for (const h of hits) {
+      if (h.idx > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, h.idx)))
+      const href = isWin
+        ? `file:///${h.path.replace(/\\/g, '/')}`
+        : `file://${h.path}`
+      const a = document.createElement('a')
+      a.href = href
+      a.textContent = h.path
+      a.title = h.path
+      a.style.cssText = 'color:inherit;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;cursor:pointer'
+      frag.appendChild(a)
+      cursor = h.idx + h.len
+    }
+    if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)))
+    node.parentNode?.replaceChild(frag, node)
+  }
+}
+
 function enhanceMarkdownHtml(html: string): string {
   if (typeof document === 'undefined') return html
 
   const root = document.createElement('div')
   root.innerHTML = html
+
+  // 文件路径自动链接
+  linkifyFilePathsInTextNodes(root)
 
   for (const li of Array.from(root.querySelectorAll('li'))) {
     const first = li.firstChild
@@ -306,12 +369,14 @@ function enhanceMarkdownHtml(html: string): string {
 
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return ''
+  if (typeof document === 'undefined') return markdownIt.render(preprocessMarkdown(markdown))
   return enhanceMarkdownHtml(markdownIt.render(preprocessMarkdown(markdown)))
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */
 export function htmlToMarkdown(html: string): string {
   if (!html || html === '<p></p>') return ''
+  if (typeof document === 'undefined') return html
 
   const div = document.createElement('div')
   div.innerHTML = html

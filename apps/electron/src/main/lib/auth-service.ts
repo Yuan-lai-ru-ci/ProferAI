@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { fetch as undiciFetch } from 'undici'
 import { getTeamServersConfigPath } from './config-paths'
+import { isCommercialBuild } from './build-target'
 import type { TeamServerConfig } from '@proma/shared'
 
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
@@ -71,6 +72,12 @@ interface AuthTokenStore {
   [serverId: string]: {
     accessToken: string
     refreshToken: string
+    /** 长效 relay 令牌 — 代管模式下替代 accessToken 作为 proxy 凭证，不随 1h 过期 */
+    relayToken?: string
+    /** 账号类型（restricted/standard/advanced），决定工作区配额 */
+    accountType?: string
+    /** 是否允许自配 API — 独立于账号类型的开关 */
+    canSelfConfigApi?: boolean
     tokenExpiresAt: number
     teamAccountId: string
     teamEmail: string
@@ -140,7 +147,16 @@ interface LoginResult {
   success: boolean
   teamAccountId?: string
   teamEmail?: string
+  displayName?: string
+  accountType?: string
+  commercialMode?: boolean
+  isAdmin?: boolean
+  joinedWorkspace?: string
   error?: string
+}
+
+function resolveCommercialMode(serverCommercialMode?: boolean): boolean {
+  return serverCommercialMode === true
 }
 
 /**
@@ -197,30 +213,45 @@ export async function login(
     const data = (await response.json()) as {
       accessToken: string
       refreshToken: string
+      relayToken?: string
       expiresAt: number
       userId: string
       email: string
+      displayName?: string
+      accountType?: string
+      canSelfConfigApi?: boolean
       isAdmin?: boolean
       commercialMode?: boolean
+      joinedWorkspace?: string
     }
+
+    const commercialMode = resolveCommercialMode(data.commercialMode)
 
     // 加密存储令牌
     const tokens = readTokens()
     tokens[server.id] = {
       accessToken: data.accessToken,
       refreshToken: data.refreshToken,
+      relayToken: data.relayToken || undefined,
+      accountType: data.accountType || 'standard',
+      canSelfConfigApi: data.canSelfConfigApi || false,
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
-      commercialMode: !!data.commercialMode,
+      commercialMode,
       isAdmin: !!data.isAdmin,
     }
     writeTokens(tokens)
 
-    console.log(`[认证] 登录成功: ${data.email} (${data.userId}), commercialMode=${!!data.commercialMode}`)
+    console.log(
+      `[认证] 登录成功: ${data.email} (${data.userId}), serverCommercialMode=${!!data.commercialMode}, effectiveCommercialMode=${commercialMode}`,
+    )
+
+    // 启动主动 token 续期：过期前自动刷新，用户无感
+    scheduleAutoRefresh()
 
     // 商业模式下自动同步渠道
-    if (data.commercialMode) {
+    if (commercialMode) {
       try {
         const { syncChannelsFromServer } = require('./channel-manager')
         await syncChannelsFromServer(server.baseUrl, data.accessToken)
@@ -233,6 +264,10 @@ export async function login(
       success: true,
       teamAccountId: data.userId,
       teamEmail: data.email,
+      displayName: data.displayName,
+      accountType: data.accountType,
+      commercialMode,
+      isAdmin: !!data.isAdmin,
     }
   } catch (err) {
     console.error('[认证] 登录请求失败:', err)
@@ -241,7 +276,7 @@ export async function login(
 }
 
 /**
- * 注册团队账户
+ * 注册账户（个人/团队）
  */
 export async function register(
   serverUrl: string,
@@ -249,6 +284,7 @@ export async function register(
   password: string,
   displayName: string,
   invitationToken?: string,
+  activationCode?: string,
 ): Promise<LoginResult> {
   const url = `${serverUrl}${API_PREFIX}/auth/register`
 
@@ -259,7 +295,7 @@ export async function register(
     const response = await (undiciFetch as unknown as typeof fetch)(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, displayName, invitationToken }),
+      body: JSON.stringify({ email, password, displayName, invitationToken, activationCode }),
       signal: controller.signal,
     } as RequestInit)
     clearTimeout(timeout)
@@ -273,21 +309,27 @@ export async function register(
       } catch {
         // 响应体不是 JSON，使用默认错误消息
       }
-      if (response.status === 409) errorMsg = '该邮箱已注册'
+      if (response.status === 409) errorMsg = errorMsg || '该邮箱已注册'
+      else if (response.status === 410) errorMsg = errorMsg || '邀请码无效或已过期'
       else if (response.status === 400) errorMsg = errorMsg || '请求参数无效'
       else if (response.status === 403) errorMsg = errorMsg || '邀请码无效或已过期'
-      else if (response.status === 429) errorMsg = '请求过于频繁，请稍后再试'
+      else if (response.status === 429) errorMsg = errorMsg || '请求过于频繁，请稍后再试'
       return { success: false, error: errorMsg }
     }
 
     const data = (await response.json()) as {
       accessToken: string
       refreshToken: string
+      relayToken?: string
       expiresAt: number
       userId: string
       email: string
+      displayName?: string
+      accountType?: string
+      canSelfConfigApi?: boolean
       isAdmin?: boolean
       commercialMode?: boolean
+      joinedWorkspace?: string
     }
 
     // 自动注册服务器配置（复用 login 的模式）
@@ -307,22 +349,31 @@ export async function register(
       writeTeamServers(servers)
     }
 
+    const commercialMode = resolveCommercialMode(data.commercialMode)
     const tokens = readTokens()
     tokens[server.id] = {
       accessToken: data.accessToken,
       refreshToken: data.refreshToken,
+      relayToken: data.relayToken || undefined,
+      accountType: data.accountType || 'standard',
+      canSelfConfigApi: data.canSelfConfigApi || false,
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
-      commercialMode: !!data.commercialMode,
+      commercialMode,
       isAdmin: !!data.isAdmin,
     }
     writeTokens(tokens)
 
-    console.log(`[认证] 注册成功: ${data.email} (${data.userId}), commercialMode=${!!data.commercialMode}`)
+    console.log(
+      `[认证] 注册成功: ${data.email} (${data.userId}), serverCommercialMode=${!!data.commercialMode}, effectiveCommercialMode=${commercialMode}`,
+    )
+
+    // 启动主动 token 续期
+    scheduleAutoRefresh()
 
     // 商业模式下自动同步渠道
-    if (data.commercialMode) {
+    if (commercialMode) {
       try {
         const { syncChannelsFromServer } = require('./channel-manager')
         await syncChannelsFromServer(server.baseUrl, data.accessToken)
@@ -334,6 +385,11 @@ export async function register(
       success: true,
       teamAccountId: data.userId,
       teamEmail: data.email,
+      displayName: data.displayName,
+      accountType: data.accountType,
+      commercialMode,
+      isAdmin: !!data.isAdmin,
+      joinedWorkspace: data.joinedWorkspace,
     }
   } catch (err) {
     console.error('[认证] 注册请求失败:', err)
@@ -368,7 +424,7 @@ export function getAuthStatus(): {
   return { isLoggedIn: false }
 }
 
-/** 注销（清除本地令牌，并通知服务端吊销） */
+/** 注销（清除本地令牌和渠道，并通知服务端吊销） */
 export async function logout(): Promise<void> {
   // 通知服务端吊销 accessToken
   const tokens = readTokens()
@@ -386,7 +442,51 @@ export async function logout(): Promise<void> {
   }
 
   writeTokens({})
+
+  // 清除渠道配置：防止登出后旧渠道残留磁盘，下个用户可见
+  try {
+    const { writeFileSync } = require('node:fs')
+    const { getChannelsPath } = require('./config-paths')
+    writeFileSync(getChannelsPath(), JSON.stringify({ version: 1, channels: [] }), 'utf-8')
+  } catch { /* 非致命 */ }
+
+  // 清除服务端内存缓存：防止登出后 _servers 残留
+  _servers = null
+
   console.log('[认证] 已注销')
+}
+
+// 自动续期定时器引用
+let _autoRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 启动主动 token 续期：accessToken 过期前 5 分钟自动刷新 */
+export function scheduleAutoRefresh(): void {
+  if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer)
+  const tokens = readTokens()
+  const serverIds = Object.keys(tokens)
+  if (serverIds.length === 0) return
+
+  // 找最近过期的 token
+  let earliest = Infinity
+  for (const id of serverIds) {
+    const t = tokens[id]
+    if (t && t.refreshToken && t.tokenExpiresAt > Date.now()) {
+      earliest = Math.min(earliest, t.tokenExpiresAt)
+    }
+  }
+  if (earliest === Infinity) return
+
+  // 过期前 5 分钟刷新（最小 30 秒）
+  const delay = Math.max(30000, earliest - Date.now() - 5 * 60 * 1000)
+  _autoRefreshTimer = setTimeout(async () => {
+    const ok = await refreshAuthToken().catch(() => false)
+    if (ok) console.log('[认证] Token 自动续期成功')
+    else console.warn('[认证] Token 自动续期失败，将在 60s 后重试')
+    // 无论成功失败，60 秒后再试（成功时 scheduleAutoRefresh 会被重新调用）
+    if (!ok) _autoRefreshTimer = setTimeout(() => scheduleAutoRefresh(), 60000)
+    else scheduleAutoRefresh()
+  }, delay)
+  console.log(`[认证] 将在 ${Math.round(delay / 60000)} 分钟后自动续期 token`)
 }
 
 /** 刷新 accessToken（用 refreshToken 换新的） */
@@ -414,13 +514,23 @@ export async function refreshAuthToken(): Promise<boolean> {
       clearTimeout(timeout)
 
       if (response.ok) {
-        const data = await response.json() as { accessToken: string; expiresAt: number }
+        const data = await response.json() as { accessToken: string; relayToken?: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean; accountType?: string; canSelfConfigApi?: boolean }
+        const commercialMode = data.commercialMode === undefined
+          ? resolveCommercialMode(token.commercialMode)
+          : resolveCommercialMode(data.commercialMode)
         tokens[server.id] = {
           ...token,
           accessToken: data.accessToken,
+          relayToken: data.relayToken ?? token.relayToken,
+          accountType: data.accountType ?? token.accountType,
+          canSelfConfigApi: data.canSelfConfigApi ?? token.canSelfConfigApi,
           tokenExpiresAt: data.expiresAt,
+          commercialMode,
+          isAdmin: data.isAdmin ?? token.isAdmin,
         }
         writeTokens(tokens)
+        // 刷新成功后重新排下一次续期
+        scheduleAutoRefresh()
         return true
       }
     } catch { /* 网络错误，继续尝试下一个 */ }
@@ -429,14 +539,14 @@ export async function refreshAuthToken(): Promise<boolean> {
   return false
 }
 
-/** 当前会话是否处于商业模式 */
+/** 当前会话是否处于商业模式（登录时存储的标记，不依赖 token 是否过期） */
 export function getCommercialMode(): boolean {
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   for (const id of serverIds) {
-    if (tokens[id]!.tokenExpiresAt > Date.now()) {
-      return tokens[id]!.commercialMode === true
-    }
+    // commercialMode 是登录时写死的标记，不应因 token 过期而翻转。
+    // token 过期时 refresh 流程会重新获取，商业模式判断不应阻断 refresh。
+    if (tokens[id]!.commercialMode === true) return true
   }
   return false
 }
@@ -491,7 +601,7 @@ export function getServerInfoList(): Array<{ baseUrl: string; email: string; isL
   })
 }
 
-export function getTeamAuth(): { baseUrl: string; token: string } | null {
+export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: string; accountType?: string; canSelfConfigApi?: boolean } | null {
   const tokens = readTokens()
   const servers = listTeamServers()
   const now = Date.now()
@@ -499,9 +609,52 @@ export function getTeamAuth(): { baseUrl: string; token: string } | null {
   for (const server of servers) {
     const token = tokens[server.id]
     if (token && token.tokenExpiresAt > now) {
-      return { baseUrl: server.baseUrl, token: token.accessToken }
+      // token = JWT accessToken（向后兼容，所有非 proxy 端点用这个）
+      // proxyToken = relay 令牌（打 /v1/proxy 用，长效不过期）
+      //
+      // 这里的判定口径必须与消费方（chat-service / agent-orchestrator）的
+      // shouldUseCommercialProxy = isCommercialBuild() || isCommercialMode() 完全一致。
+      // 否则「OSS 构建但服务端标 commercialMode」时消费方会进 proxy 分支，
+      // 而 proxyToken 为空回退到 1h 的 accessToken，导致长任务 60 分钟后 401。
+      const isCommercial = token.commercialMode || isCommercialBuild()
+      return {
+        baseUrl: server.baseUrl,
+        token: token.accessToken,
+        proxyToken: isCommercial ? token.relayToken : undefined,
+        accountType: token.accountType,
+        canSelfConfigApi: token.canSelfConfigApi,
+      }
     }
   }
 
   return null
+}
+
+/** 代管模式下当前用户是否允许自配 API（独立于账号类型的开关，不依赖 token 过期） */
+export function isSelfConfigAllowed(): boolean {
+  const tokens = readTokens()
+  const serverIds = Object.keys(tokens)
+  for (const id of serverIds) {
+    if (tokens[id]!.canSelfConfigApi === true) return true
+  }
+  return false
+}
+
+/** 获取当前用户的 accountType（不存在则返回 'standard'，不依赖 token 过期） */
+export function getAccountType(): string {
+  const tokens = readTokens()
+  const serverIds = Object.keys(tokens)
+  for (const id of serverIds) {
+    if (tokens[id]!.accountType) return tokens[id]!.accountType!
+  }
+  return 'standard'
+}
+
+export async function getTeamAuthWithRefresh(): Promise<{ baseUrl: string; token: string; proxyToken?: string; accountType?: string; canSelfConfigApi?: boolean } | null> {
+  const current = getTeamAuth()
+  if (current) return current
+
+  const refreshed = await refreshAuthToken().catch(() => false)
+  if (!refreshed) return null
+  return getTeamAuth()
 }

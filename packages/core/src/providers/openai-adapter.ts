@@ -10,6 +10,7 @@
  * - 认证：Authorization: Bearer
  */
 
+import type { ProviderType } from '@proma/shared'
 import type {
   ProviderAdapter,
   ProviderRequest,
@@ -185,11 +186,20 @@ function appendContinuationMessages(
 // ===== 适配器实现 =====
 
 export class OpenAIAdapter implements ProviderAdapter {
-  readonly providerType = 'openai' as const
+  readonly providerType: ProviderType
+
+  constructor(providerType: ProviderType = 'openai') {
+    this.providerType = providerType
+  }
 
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
     const url = normalizeBaseUrl(input.baseUrl)
     const messages = toOpenAIMessages(input)
+
+    // 工具续接消息（必须在构造 bodyObj 之前完成，避免隐式修改已赋值的 messages 引用）
+    if (input.continuationMessages && input.continuationMessages.length > 0) {
+      appendContinuationMessages(messages, input.continuationMessages)
+    }
 
     const bodyObj: Record<string, unknown> = {
       model: input.modelId,
@@ -200,11 +210,6 @@ export class OpenAIAdapter implements ProviderAdapter {
     // 工具定义
     if (input.tools && input.tools.length > 0) {
       bodyObj.tools = toOpenAITools(input.tools)
-    }
-
-    // 工具续接消息
-    if (input.continuationMessages && input.continuationMessages.length > 0) {
-      appendContinuationMessages(messages, input.continuationMessages)
     }
 
     return {

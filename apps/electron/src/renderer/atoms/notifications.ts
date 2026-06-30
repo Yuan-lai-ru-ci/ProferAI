@@ -141,6 +141,8 @@ function getAudioElement(soundId: NotificationSoundId): HTMLAudioElement | null 
   let audio = audioCache.get(soundId)
   if (!audio) {
     audio = new Audio(url)
+    // 音频解码/网络失败时剔除损坏实例，下次播放时重建
+    audio.onerror = () => audioCache.delete(soundId)
     audioCache.set(soundId, audio)
   }
   return audio

@@ -418,6 +418,7 @@ export type ErrorCode =
   | 'mcp_auth_required'
   | 'mcp_unreachable'
   | 'billing_error'
+  | 'insufficient_credits'
   | 'model_no_tool_support'
   | 'invalid_model'
   | 'data_policy_error'
@@ -448,6 +449,7 @@ export interface RecoveryAction {
     | 'compact'
     | 'open_environment_check'
     | 'open_channel_settings'
+    | 'open_credits'
     | 'open_external'
     | (string & {})
   /** 操作附带的载荷，例如 open_external 的 URL */
@@ -531,7 +533,8 @@ export interface RetryAttempt {
 
 /**
  * Agent 事件类型
- *
+ */
+
 /** MCP 工具结果中的图片附件 */
 export interface AgentToolResultImage {
   localPath: string
@@ -620,7 +623,7 @@ export type PromaEvent =
   | { type: 'run_resumed'; sessionId: string }
 
 /** 外部入口触发 Agent 运行的来源 */
-export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge'
+export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation' | 'automation'
 
 /** IPC 传输的统一 payload（替代 AgentEvent） */
 export type AgentStreamPayload =
@@ -672,6 +675,22 @@ export interface AgentSessionMeta {
   permissionMode?: PromaPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
+  /** 父会话 ID（委派子会话使用，指向母会话） */
+  parentSessionId?: string
+  /** 根会话 ID（委派链中的最初母会话，跨级委派时标记） */
+  rootSessionId?: string
+  /** 来源委派 ID（委派子会话使用，标记所属委派记录） */
+  sourceDelegationId?: string
+  /** 委派角色：explore / research / implement / review / custom */
+  delegationRole?: string
+  /** 委派任务目标描述 */
+  delegationGoal?: string
+  /** 委派链深度（0 为母会话，每级委派 +1） */
+  delegationDepth?: number
+  /** 委派状态（用于侧栏子会话状态显示）：running / completed / interrupted */
+  delegationStatus?: string
+  /** 自动任务毕业后标记（毕业指从自动任务区移到正常会话区） */
+  automationGraduated?: boolean
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -936,7 +955,7 @@ export interface AgentSendInput {
   /** 渲染进程生成的流式开始时间戳，主进程原样回传到 STREAM_COMPLETE，确保竞态保护比较的是同一个值 */
   startedAt?: number
   /** 触发来源：用户手动 vs 定时任务自动触发（用于 UI 区分标记） */
-  triggeredBy?: 'user' | 'automation'
+  triggeredBy?: 'user' | 'automation' | 'delegation'
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
 }

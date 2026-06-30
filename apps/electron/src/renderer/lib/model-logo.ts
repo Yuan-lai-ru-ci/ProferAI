@@ -254,10 +254,14 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
 
 // ===== 公共 API =====
 
+/** 预编译的正则匹配列表，避免每次查找时重复创建 RegExp */
+const COMPILED_LOGO_MAP: Array<[RegExp, string]> = Object.entries(MODEL_LOGO_MAP)
+  .map(([key, logo]) => [new RegExp(key, 'i'), logo])
+
 /**
  * 根据模型 ID 获取对应的 Logo
  *
- * 使用正则匹配，按优先级顺序遍历 MODEL_LOGO_MAP。
+ * 使用正则匹配，按优先级顺序遍历编译后的正则列表。
  * 未匹配到返回 undefined。
  *
  * @param modelId 模型 ID（如 "gpt-4-turbo"、"claude-3-opus-20240229"）
@@ -265,10 +269,9 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
 export function getModelLogoById(modelId: string): string | undefined {
   if (!modelId) return undefined
 
-  for (const key in MODEL_LOGO_MAP) {
-    const regex = new RegExp(key, 'i')
+  for (const [regex, logo] of COMPILED_LOGO_MAP) {
     if (regex.test(modelId)) {
-      return MODEL_LOGO_MAP[key]
+      return logo
     }
   }
 

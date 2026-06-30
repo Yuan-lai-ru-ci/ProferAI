@@ -5,7 +5,7 @@
 export function adminMiddleware(c, next) {
   const payload = c.get('jwtPayload')
   if (!payload || !payload.is_admin) {
-    return c.json({ error: '需要管理员权限' }, 403)
+    return c.json({ error: '未授权访问' }, 403)
   }
   return next()
 }

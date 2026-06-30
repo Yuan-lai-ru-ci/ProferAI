@@ -3,5 +3,7 @@ files/
 *.db
 *.db-wal
 *.db-shm
-.env
+.env*
 logs/
+backups/
+deploy-upload/

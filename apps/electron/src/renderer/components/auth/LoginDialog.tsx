@@ -1,5 +1,6 @@
 /**
- * LoginDialog — 团队登录/注册对话框
+ * LoginDialog — 登录/注册对话框
+ * 支持个人注册（激活码）和团队注册（邀请码）
  */
 import * as React from 'react'
 import { useAtom } from 'jotai'
@@ -21,13 +22,15 @@ interface LoginResult {
   teamAccountId?: string
   teamEmail?: string
   joinedWorkspace?: string
+  accountType?: string
   error?: string
 }
+
 
 export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.ReactElement {
   const [, setAuthStatus] = useAtom(authStatusAtom)
   const [mode, setMode] = React.useState<'login' | 'register'>('login')
-  const [serverUrl, setServerUrl] = React.useState('http://47.109.108.57/proma')
+  const [serverUrl, setServerUrl] = React.useState('')
   const [showServerUrl, setShowServerUrl] = React.useState(false)
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
@@ -35,19 +38,35 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
   const [invitationToken, setInvitationToken] = React.useState('')
   const [loading, setLoading] = React.useState(false)
 
+  // 商业版预填服务器地址
+  React.useEffect(() => {
+    window.electronAPI.getBuildTarget().then((target) => {
+      if (target === 'commercial') {
+        setServerUrl('http://47.109.108.57/proma')
+      }
+    }).catch(() => {})
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!email || !password) return
+    if (mode === 'register' && !displayName.trim()) return
     if (mode === 'register' && !invitationToken.trim()) {
-      toast.error('请输入邀请码')
+      toast.error('请输入邀请码或激活码')
       return
     }
-    if (mode === 'register' && !displayName.trim()) return
 
     setLoading(true)
     try {
+      const params: Record<string, string> = { serverUrl, email, password, displayName }
+      // 同时发两种码，服务端根据实际类型走对应分支
+      if (mode === 'register') {
+        params.invitationToken = invitationToken.trim()
+        params.activationCode = invitationToken.trim()
+      }
+
       const fn = mode === 'login' ? window.electronAPI.auth.login : window.electronAPI.auth.register
-      const result = await fn({ serverUrl, email, password, displayName, invitationToken: invitationToken.trim() }) as unknown as LoginResult
+      const result = await fn(params) as unknown as LoginResult
       if (result.success) {
         setAuthStatus({
           isLoggedIn: true,
@@ -85,8 +104,8 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
             </DialogTitle>
             <DialogDescription className="text-sm leading-relaxed">
               {mode === 'login'
-                ? '登录团队服务器，访问协作工作区'
-                : '使用邀请码注册，加入团队协作'}
+                ? '登录账户，使用服务端渠道和协作功能'
+                : '创建账户，开始使用 Profer AI 助手'}
             </DialogDescription>
           </DialogHeader>
 
@@ -111,29 +130,11 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
               <UserPlus size={14} />注册
             </button>
           </div>
+
         </div>
 
         {/* 表单 */}
         <form onSubmit={handleSubmit} className="px-6 pb-6 pt-3 space-y-3.5">
-          {/* 邀请码（注册必填） */}
-          {mode === 'register' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="invite-token" className="text-xs font-medium flex items-center gap-1">
-                <Ticket size={12} />邀请码 <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="invite-token"
-                value={invitationToken}
-                onChange={(e) => setInvitationToken(e.target.value)}
-                placeholder="粘贴管理员发送的邀请码"
-                className="h-9 font-mono text-xs tracking-wide"
-                required
-                autoFocus
-              />
-              <p className="text-[11px] text-muted-foreground">需要有效的邀请码才能注册账户</p>
-            </div>
-          )}
-
           {/* 显示名称 */}
           {mode === 'register' && (
             <div className="space-y-1.5">
@@ -146,13 +147,25 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
             </div>
           )}
 
+          {mode === 'register' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="invite-token" className="text-xs font-medium flex items-center gap-1">
+                <Ticket size={12} />邀请码 / 激活码 <span className="text-destructive">*</span>
+              </Label>
+              <Input id="invite-token" value={invitationToken}
+                onChange={(e) => setInvitationToken(e.target.value)}
+                placeholder="管理员发送的邀请码或激活码"
+                className="h-9 font-mono text-xs" required />
+            </div>
+          )}
+
           {/* 邮箱 */}
           <div className="space-y-1.5">
             <Label htmlFor="email" className="text-xs font-medium flex items-center gap-1">
               <Mail size={12} />邮箱
             </Label>
             <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@team.com" className="h-9" required />
+              placeholder="you@example.com" className="h-9" required />
           </div>
 
           {/* 密码 */}
@@ -162,7 +175,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
             </Label>
             <Input id="password" type="password" value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••" className="h-9" required />
+              placeholder="至少8位，含大小写字母和数字" className="h-9" required />
           </div>
 
           {/* 服务器地址（可折叠） */}
@@ -188,7 +201,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
           <Button type="submit" className="w-full h-10 mt-2" disabled={loading}>
             {loading
               ? (mode === 'login' ? '登录中...' : '注册中...')
-              : mode === 'login' ? '登录' : '创建账户并加入'}
+              : mode === 'login' ? '登录' : '创建账户'}
           </Button>
         </form>
       </DialogContent>

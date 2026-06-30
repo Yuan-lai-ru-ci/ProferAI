@@ -4,37 +4,10 @@
  * 需要在 authMiddleware 之后、proxy handler 之前挂载
  */
 import { COMMERCIAL_MODE } from '../config.js'
-import { deductCredits, getCredits } from '../db.js'
+import { deductCredits } from '../db.js'
+import { estimateProxyCost } from '../billing-utils.js'
+import { getPricingCached } from '../shared/pricing-cache.js'
 import { v4 as uuidv4 } from 'uuid'
-
-/** 简单成本估算：按模型每 1K token 的价格，返回整数 credits（1 credit ≈ $0.00001 USD） */
-function estimateCost(c) {
-  try {
-    const body = c.get('proxyBody') || {}
-    const model = body.model || ''
-    const maxTokens = body.max_tokens || 4096
-
-    // 各模型每 1K 输出 token 的大致价格（credits）
-    const pricing = {
-      'deepseek-v4-pro': 2,
-      'deepseek-v4-flash': 1,
-      'claude-sonnet-4-5': 15,
-      'claude-haiku-4-5': 3,
-      'gpt-5': 15,
-      'gpt-5-mini': 2,
-      'kimi-k2': 3,
-    }
-
-    let rate = 3 // 默认
-    for (const [key, r] of Object.entries(pricing)) {
-      if (model.includes(key)) { rate = r; break }
-    }
-
-    return Math.max(1, Math.ceil((maxTokens / 1000) * rate))
-  } catch {
-    return 5 // 默认估算 5 credits
-  }
-}
 
 export async function creditCheckMiddleware(c, next) {
   if (!COMMERCIAL_MODE) return next()
@@ -42,21 +15,26 @@ export async function creditCheckMiddleware(c, next) {
   const payload = c.get('jwtPayload')
   if (!payload?.sub) return next()
 
-  // 读取请求体用于估算
+  // 读取请求体用于估算（clone 避免消费原始流，确保后续 handler 仍可读取）
   let body = {}
   try {
-    body = await c.req.json()
+    body = await c.req.raw.clone().json()
     c.set('proxyBody', body)
-  } catch { /* body 可能已被读取 */ }
+  } catch {
+    return c.json({ error: '请求体必须是 JSON' }, 400)
+  }
 
-  const estimated = estimateCost({ ...c, body })
+  const estimated = estimateProxyCost(body, getPricingCached())
+  const requestId = uuidv4()
   try {
-    deductCredits(payload.sub, estimated, {
+    const txId = deductCredits(payload.sub, estimated, {
       description: `估算: ${estimated} credits`,
       referenceType: 'api_call',
-      referenceId: uuidv4(),
+      referenceId: requestId,
     })
+    c.set('proxyRequestId', requestId)
     c.set('creditDeducted', estimated)
+    c.set('creditTxId', txId)
   } catch (err) {
     if (err.message?.startsWith('INSUFFICIENT_CREDITS')) {
       const balance = err.message.split(':')[1] || '0'

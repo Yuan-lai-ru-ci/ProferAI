@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { X, Download, ExternalLink, Loader2 } from 'lucide-react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -131,6 +131,9 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       )}>
         <DialogHeader className="flex flex-row items-center justify-between px-4 py-2 border-b flex-shrink-0">
           <DialogTitle className="text-sm font-medium truncate flex-1 mr-2">{fileName}</DialogTitle>
+          <DialogDescription className="sr-only">
+            预览文件 {fileName}
+          </DialogDescription>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7"
               onClick={() => { void handleOpenLocalFile() }}

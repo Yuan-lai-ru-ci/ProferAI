@@ -136,6 +136,46 @@ function buildPreviewUrl(baseUrl: string, provider: ProviderType): string {
   return `${trimmed}${PROVIDER_CHAT_PATHS[provider]}`
 }
 
+function getPresetModelsForProvider(provider: ProviderType): ChannelModel[] {
+  switch (provider) {
+    case 'deepseek':
+      return [
+        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
+        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true },
+      ]
+    case 'kimi-api':
+      return [
+        { id: 'kimi-k2.6', name: 'Kimi K2.6', enabled: true },
+      ]
+    case 'kimi-coding':
+      return [
+        { id: 'kimi-for-coding', name: 'Kimi for Coding', enabled: true },
+      ]
+    case 'zhipu':
+    case 'zhipu-coding':
+      return [
+        { id: 'glm-5.2', name: 'GLM-5.2', enabled: true },
+        { id: 'glm-5.1', name: 'GLM-5.1', enabled: false },
+      ]
+    case 'minimax':
+      return [
+        { id: 'MiniMax-M3', name: 'MiniMax-M3', enabled: true },
+        { id: 'MiniMax-M2.7', name: 'MiniMax-M2.7', enabled: true },
+      ]
+    case 'xiaomi':
+    case 'xiaomi-token-plan':
+      return [
+        { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', enabled: true },
+        { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', enabled: true },
+        { id: 'mimo-v2.5', name: 'MiMo V2.5', enabled: true },
+        { id: 'mimo-v2-omni', name: 'MiMo V2 Omni', enabled: true },
+        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', enabled: true },
+      ]
+    default:
+      return []
+  }
+}
+
 /** auto-save 防抖延迟 */
 const AUTO_SAVE_DELAY = 600
 
@@ -150,6 +190,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [name, setName] = React.useState(channel?.name ?? '')
   const [provider, setProvider] = React.useState<ProviderType>(channel?.provider ?? 'anthropic')
   const [baseUrl, setBaseUrl] = React.useState(channel?.baseUrl ?? PROVIDER_DEFAULT_URLS.anthropic)
+  const [agentBaseUrl, setAgentBaseUrl] = React.useState(channel?.agentBaseUrl ?? '')
   const [apiKey, setApiKey] = React.useState('')
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [models, setModels] = React.useState<ChannelModel[]>(channel?.models ?? [])
@@ -184,8 +225,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
       window.electronAPI.decryptApiKey(channel.id).then((key) => {
         setApiKey(key)
         setApiKeyLoaded(true)
-      }).catch((error) => {
-        console.error('[模型配置表单] 解密 API Key 失败:', error)
+      }).catch(() => {
         setApiKeyLoaded(true)
       })
     }
@@ -202,6 +242,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     currentName: string,
     currentProvider: ProviderType,
     currentBaseUrl: string,
+    currentAgentBaseUrl: string,
     currentApiKey: string,
     currentEnabled: boolean,
   ) => {
@@ -211,6 +252,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         name: currentName,
         provider: currentProvider,
         baseUrl: currentBaseUrl,
+        agentBaseUrl: currentAgentBaseUrl.trim(),
         apiKey: currentApiKey || undefined,
         models: currentModels,
         enabled: currentEnabled,
@@ -233,13 +275,14 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     nextName: string,
     nextProvider: ProviderType,
     nextBaseUrl: string,
+    nextAgentBaseUrl: string,
     nextApiKey: string,
     nextEnabled: boolean,
   ) => {
     if (!isEdit || !initializedRef.current) return
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
-      doAutoSave(nextModels, nextName, nextProvider, nextBaseUrl, nextApiKey, nextEnabled)
+      doAutoSave(nextModels, nextName, nextProvider, nextBaseUrl, nextAgentBaseUrl, nextApiKey, nextEnabled)
     }, AUTO_SAVE_DELAY)
   }, [isEdit, doAutoSave])
 
@@ -257,9 +300,9 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   // 监听字段变化触发 auto-save
   React.useEffect(() => {
-    scheduleAutoSave(models, name, provider, baseUrl, apiKey, enabled)
+    scheduleAutoSave(models, name, provider, baseUrl, agentBaseUrl, apiKey, enabled)
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current) }
-  }, [models, name, provider, baseUrl, apiKey, enabled, scheduleAutoSave])
+  }, [models, name, provider, baseUrl, agentBaseUrl, apiKey, enabled, scheduleAutoSave])
 
   // 切换供应商时自动更新 Base URL 与名称，Anthropic 兼容渠道自动添加预设模型
   const handleProviderChange = (newProvider: string): void => {
@@ -271,42 +314,12 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
     setProvider(p)
     setBaseUrl(PROVIDER_DEFAULT_URLS[p])
+    setAgentBaseUrl('')
     setTestResult(null)
-    // 预设模型：首次切换到对应 provider 且无模型时自动填充
-    if (models.length === 0) {
-      if (p === 'deepseek') {
-        setModels([
-          { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
-          { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true },
-        ])
-      } else if (p === 'kimi-api') {
-        setModels([
-          { id: 'kimi-k2.6', name: 'Kimi K2.6', enabled: true },
-        ])
-      } else if (p === 'kimi-coding') {
-        setModels([
-          { id: 'kimi-for-coding', name: 'Kimi for Coding', enabled: true },
-        ])
-      } else if (p === 'zhipu' || p === 'zhipu-coding') {
-        setModels([
-          { id: 'glm-5.2', name: 'GLM-5.2', enabled: true },
-          { id: 'glm-5.1', name: 'GLM-5.1', enabled: false },
-        ])
-      } else if (p === 'minimax') {
-        setModels([
-          { id: 'MiniMax-M3', name: 'MiniMax-M3', enabled: true },
-          { id: 'MiniMax-M2.7', name: 'MiniMax-M2.7', enabled: true },
-        ])
-      } else if (p === 'xiaomi' || p === 'xiaomi-token-plan') {
-        setModels([
-          { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', enabled: true },
-          { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', enabled: true },
-          { id: 'mimo-v2.5', name: 'MiMo V2.5', enabled: true },
-          { id: 'mimo-v2-omni', name: 'MiMo V2 Omni', enabled: true },
-          { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', enabled: true },
-        ])
-      }
-    }
+    setFetchResult(null)
+    setModelFilter('')
+    // provider 切换意味着协议和模型命名空间都变了，旧模型继续保留会导致实际请求打错端点。
+    setModels(getPresetModelsForProvider(p))
   }
 
   /** 添加模型 */
@@ -409,6 +422,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         name,
         provider,
         baseUrl,
+        agentBaseUrl: agentBaseUrl.trim() || undefined,
         apiKey,
         models,
         enabled,
@@ -426,7 +440,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     } finally {
       setSaving(false)
     }
-  }, [name, provider, baseUrl, apiKey, models, enabled, onAgentEligibilityChange])
+  }, [name, provider, baseUrl, agentBaseUrl, apiKey, models, enabled, onAgentEligibilityChange])
 
   /** 创建渠道（仅新建模式） */
   const handleCreate = async (): Promise<void> => {

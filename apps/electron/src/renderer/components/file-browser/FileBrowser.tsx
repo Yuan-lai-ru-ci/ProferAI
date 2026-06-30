@@ -221,7 +221,9 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     setError(null)
     try {
       if (isTeamMode) {
-        const manifest = await window.electronAPI.teamFile.getManifest(workspaceId!, workspaceSlug).catch(() => [] as Awaited<ReturnType<typeof window.electronAPI.teamFile.getManifest>>)
+        const manifest = await window.electronAPI.teamFile.getManifest(workspaceId!, workspaceSlug).catch(() => null)
+        // null = 拉取失败（认证/网络）→ 保留当前列表，避免 token 失效误清空文件
+        if (manifest === null) return
         const serverItems: FileEntry[] = manifest.map((f: { name: string; path: string; isDirectory: boolean; size: number; syncStatus?: FileEntry['syncStatus']; localExists?: boolean; uploadedBy?: string; uploadedByName?: string }) => ({
           name: f.name, path: f.path, isDirectory: f.isDirectory, size: f.size,
           syncStatus: f.syncStatus ?? (f.localExists ? 'synced' : 'cloud-only'),

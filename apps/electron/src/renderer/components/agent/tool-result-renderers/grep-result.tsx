@@ -57,11 +57,17 @@ function parseGrepOutput(text: string): GrepFileGroup[] | null {
   return Array.from(groups.entries()).map(([file, fileMatches]) => ({ file, matches: fileMatches }))
 }
 
+/** 转义正则表达式特殊字符，防止 ReDoS */
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /** 高亮搜索词 */
 function highlightPattern(text: string, pattern: string): React.ReactNode {
   if (!pattern) return text
   try {
-    const regex = new RegExp(`(${pattern})`, 'gi')
+    const escaped = escapeRegExp(pattern)
+    const regex = new RegExp(`(${escaped})`, 'gi')
     const parts = text.split(regex)
     return parts.map((part, i) =>
       regex.test(part)

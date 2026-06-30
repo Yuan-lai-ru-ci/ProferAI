@@ -14,7 +14,7 @@ heartbeatRoutes.post('/', async (c) => {
   const now = Date.now()
 
   if (Array.isArray(workspaceIds) && workspaceIds.length > 0) {
-    // 只允许更新用户实际所属的工作区
+    // 客户端指定了工作区列表：只更新用户实际所属的工作区（防止伪造）
     const memberOf = db.prepare(
       'SELECT workspace_id FROM workspace_members WHERE user_id = ?'
     ).all(userId).map(r => r.workspace_id)
@@ -32,6 +32,7 @@ heartbeatRoutes.post('/', async (c) => {
       tx(validIds)
     }
   } else {
+    // 未指定或为空：更新该用户所有工作区的心跳
     db.prepare(
       'UPDATE workspace_members SET last_seen_at = ? WHERE user_id = ?'
     ).run(now, userId)

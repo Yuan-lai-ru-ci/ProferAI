@@ -3,31 +3,17 @@
  */
 import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto'
-import { listAllChannels, getChannelById, createChannel, updateChannel, softDeleteChannel } from '../../db.js'
+import { listAllChannels, getChannelById, createChannel, updateChannel, hardDeleteChannel } from '../../db.js'
 import { CHANNEL_ENCRYPTION_KEY } from '../../config.js'
 import { logAudit } from '../../audit.js'
+import {
+  DEFAULT_MODELS,
+  encryptApiKey,
+  decryptApiKey,
+  normalizeChannelUrls,
+} from '../../shared/channel-utils.js'
 
 export const adminChannels = new Hono()
-
-const ALGO = 'aes-256-gcm'
-
-function encryptApiKey(plaintext) {
-  const key = Buffer.from(CHANNEL_ENCRYPTION_KEY, 'hex')
-  const iv = randomBytes(16)
-  const cipher = createCipheriv(ALGO, key, iv)
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return JSON.stringify({ iv: iv.toString('hex'), data: encrypted.toString('hex'), tag: tag.toString('hex') })
-}
-
-function decryptApiKey(ciphertext) {
-  const { iv, data, tag } = JSON.parse(ciphertext)
-  const key = Buffer.from(CHANNEL_ENCRYPTION_KEY, 'hex')
-  const decipher = createDecipheriv(ALGO, key, Buffer.from(iv, 'hex'))
-  decipher.setAuthTag(Buffer.from(tag, 'hex'))
-  return Buffer.concat([decipher.update(Buffer.from(data, 'hex')), decipher.final()]).toString('utf8')
-}
 
 function maskKey(ciphertext) {
   try {
@@ -54,12 +40,23 @@ adminChannels.post('/', async (c) => {
   if (!CHANNEL_ENCRYPTION_KEY) return c.json({ error: 'CHANNEL_ENCRYPTION_KEY 未配置' }, 500)
 
   const body = await c.req.json()
-  const { name, provider, apiKey, baseUrl, models } = body || {}
-  if (!name || !provider || !apiKey) return c.json({ error: 'name, provider, apiKey 必填' }, 400)
+  const { name, provider, apiKey, baseUrl, agentBaseUrl, models, modelsJson } = body || {}
+  // apiKey 在代管模式下可选：前端只填 modelsJson 时用占位符
+  if (!name || !provider) return c.json({ error: 'name, provider 必填' }, 400)
+  const effectiveKey = apiKey || 'proxy-managed'
+  if (!apiKey && !modelsJson && !models) return c.json({ error: 'apiKey 或 models 必填其一' }, 400)
+
+  let finalModels
+  if (modelsJson) {
+    try { finalModels = JSON.parse(modelsJson) } catch (e) { return c.json({ error: 'modelsJson 必须是合法 JSON' }, 400) }
+  } else {
+    finalModels = models && models.length > 0 ? models : (DEFAULT_MODELS[provider] || [])
+  }
 
   const id = uuidv4()
-  const encrypted = encryptApiKey(apiKey)
-  createChannel({ id, name, provider, apiKeyEncrypted: encrypted, baseUrl, modelsJson: JSON.stringify(models || []), createdBy: c.get('userId') })
+  const encrypted = encryptApiKey(effectiveKey)
+  const urls = normalizeChannelUrls(provider, baseUrl, agentBaseUrl)
+  createChannel({ id, name, provider, apiKeyEncrypted: encrypted, baseUrl: urls.baseUrl, agentBaseUrl: urls.agentBaseUrl, modelsJson: JSON.stringify(finalModels), createdBy: c.get('userId') })
 
   logAudit({ action: 'admin.create_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id, detail: `provider=${provider} name=${name}` })
   return c.json({ id, name, provider }, 201)
@@ -79,8 +76,20 @@ adminChannels.patch('/:id', async (c) => {
   const fields = {}
   if (body.name !== undefined) fields.name = body.name
   if (body.provider !== undefined) fields.provider = body.provider
-  if (body.baseUrl !== undefined) fields.base_url = body.baseUrl
+  if (body.baseUrl !== undefined || body.agentBaseUrl !== undefined || body.provider === 'deepseek') {
+    const current = getChannelById(id)
+    const urls = normalizeChannelUrls(
+      body.provider ?? current?.provider,
+      body.baseUrl ?? current?.base_url,
+      body.agentBaseUrl ?? current?.agent_base_url,
+    )
+    if (body.baseUrl !== undefined || urls.baseUrl !== current?.base_url) fields.base_url = urls.baseUrl
+    if (body.agentBaseUrl !== undefined || urls.agentBaseUrl !== current?.agent_base_url) fields.agent_base_url = urls.agentBaseUrl
+  }
   if (body.models !== undefined) fields.models_json = JSON.stringify(body.models)
+  if (body.modelsJson !== undefined) {
+    try { JSON.parse(body.modelsJson); fields.models_json = body.modelsJson } catch (e) {}
+  }
   if (body.is_active !== undefined) fields.is_active = body.is_active ? 1 : 0
   if (body.apiKey) fields.api_key_encrypted = encryptApiKey(body.apiKey)
 
@@ -89,10 +98,10 @@ adminChannels.patch('/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// DELETE /v1/admin/channels/:id — 删除渠道（软删除）
+// DELETE /v1/admin/channels/:id — 删除渠道
 adminChannels.delete('/:id', (c) => {
   const id = c.req.param('id')
-  softDeleteChannel(id)
+  hardDeleteChannel(id)
   logAudit({ action: 'admin.delete_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id })
   return c.json({ success: true })
 })
@@ -103,12 +112,16 @@ adminChannels.post('/test', async (c) => {
   const { apiKey, baseUrl, provider } = body || {}
   if (!apiKey || !baseUrl) return c.json({ error: 'apiKey 和 baseUrl 必填' }, 400)
 
+  const isAnthropic = provider === 'anthropic' || provider === 'anthropic-compatible'
   try {
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
-    const url = provider === 'anthropic' || provider === 'anthropic-compatible'
-      ? `${baseUrl}/v1/messages`
-      : `${baseUrl}/models`
-    const resp = await fetch(url, { method: provider === 'anthropic' || provider === 'anthropic-compatible' ? 'POST' : 'GET', headers, body: provider === 'anthropic' || provider === 'anthropic-compatible' ? JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) : undefined, signal: AbortSignal.timeout(15000) })
+    const url = isAnthropic ? `${baseUrl}/v1/messages` : `${baseUrl}/models`
+    const resp = await fetch(url, {
+      method: isAnthropic ? 'POST' : 'GET',
+      headers,
+      body: isAnthropic ? JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) : undefined,
+      signal: AbortSignal.timeout(15000),
+    })
     if (resp.ok) return c.json({ success: true, status: resp.status })
     const text = await resp.text()
     return c.json({ success: false, status: resp.status, error: text.slice(0, 200) })

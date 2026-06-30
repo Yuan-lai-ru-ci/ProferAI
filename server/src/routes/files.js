@@ -129,7 +129,7 @@ fileRoutes.post('/:id/files/upload', async (c) => {
   const mw = authMiddleware(c)
   if (mw) return mw
 
-  // Content-Length 预检
+  // Content-Length 预检（可信客户端的快速拒绝，不可信客户端可能伪造）
   const contentLength = parseInt(c.req.header('Content-Length') || '0', 10)
   if (contentLength > MAX_FILE_SIZE) {
     return c.json({ error: `文件过大，上限 ${Math.round(MAX_FILE_SIZE / 1048576)}MB` }, 413)
@@ -144,12 +144,46 @@ fileRoutes.post('/:id/files/upload', async (c) => {
   if (!decoded) return c.json({ error: '文件名编码无效' }, 400)
   const filePath = normalizeFilePath(decoded)
   if (!filePath) return c.json({ error: '文件路径不合法' }, 400)
-  const buffer = Buffer.from(await c.req.arrayBuffer())
 
-  if (buffer.length === 0) return c.json({ error: '文件必填' }, 400)
-  if (buffer.length > MAX_FILE_SIZE) {
-    return c.json({ error: `文件过大，上限 ${Math.round(MAX_FILE_SIZE / 1048576)}MB` }, 413)
+  // 分块流式读取，在超过限制时及早拒绝，防止内存耗尽（Content-Length 可能被伪造）
+  const reader = c.req.raw.body?.getReader()
+  if (!reader) {
+    // 回退：非流式 body（如测试环境），使用 arrayBuffer
+    const buffer = Buffer.from(await c.req.arrayBuffer())
+    if (buffer.length === 0) return c.json({ error: '文件必填' }, 400)
+    if (buffer.length > MAX_FILE_SIZE) {
+      return c.json({ error: `文件过大，上限 ${Math.round(MAX_FILE_SIZE / 1048576)}MB` }, 413)
+    }
+    return writeUploadedFile(c, wsId, filePath, buffer)
   }
+
+  // 流式读取
+  const chunks = []
+  let totalRead = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        totalRead += value.byteLength
+        if (totalRead > MAX_FILE_SIZE) {
+          reader.cancel().catch(() => {})
+          return c.json({ error: `文件过大，上限 ${Math.round(MAX_FILE_SIZE / 1048576)}MB` }, 413)
+        }
+        chunks.push(value)
+      }
+    }
+  } finally {
+    reader.releaseLock?.()
+  }
+
+  if (totalRead === 0) return c.json({ error: '文件必填' }, 400)
+  const buffer = Buffer.concat(chunks, totalRead)
+  return writeUploadedFile(c, wsId, filePath, buffer)
+})
+
+/** 写入上传文件到磁盘和 manifest */
+function writeUploadedFile(c, wsId, filePath, buffer) {
 
   const wsDir = pathJoin(FILES_DIR, wsId)
   ensureDir(wsDir)
@@ -189,7 +223,7 @@ fileRoutes.post('/:id/files/upload', async (c) => {
   logAudit({ action: 'file.upload', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `${buffer.length} bytes` })
 
   return c.json({ success: true, path: filePath, size: buffer.length })
-})
+}
 
 /** 下载文件 */
 fileRoutes.get('/:id/files/download/:path{.+}', (c) => {

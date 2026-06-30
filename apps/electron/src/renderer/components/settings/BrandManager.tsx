@@ -42,6 +42,23 @@ function saveBrand(brand: WorkspaceBrand | null): void {
   }
 }
 
+/** 清洗自定义 CSS，移除危险构造以防止 CSS 注入攻击 */
+function sanitizeCustomCss(css: string): string {
+  // 移除 @import 规则（可加载外部资源）
+  let sanitized = css.replace(/@import\s+["']?https?:\/\/[^;'"]*/gi, '/* blocked @import */')
+  // 移除 url() 中引用外部 http/https 协议的内容
+  sanitized = sanitized.replace(/url\(\s*["']?\s*https?:\/\/[^)]+\)/gi, 'url()')
+  // 移除 javascript: 协议
+  sanitized = sanitized.replace(/url\(\s*["']?\s*javascript:/gi, 'url()')
+  // 移除 expression() (旧 IE 特性)
+  sanitized = sanitized.replace(/\bexpression\(/gi, '/* blocked expression */(')
+  // 移除 behavior (旧 IE 特性，可加载 .htc)
+  sanitized = sanitized.replace(/behavior\s*:\s*url\(/gi, '/* blocked behavior */: url(')
+  // 移除 -moz-binding (Firefox 旧特性)
+  sanitized = sanitized.replace(/-moz-binding\s*:\s*url\(/gi, '/* blocked -moz-binding */: url(')
+  return sanitized
+}
+
 /** 将品牌配置应用到 DOM（CSS 变量和文档标题） */
 function applyBrandToDOM(brand: WorkspaceBrand | null): void {
   const root = document.documentElement
@@ -68,7 +85,7 @@ function applyBrandToDOM(brand: WorkspaceBrand | null): void {
       styleEl.id = 'brand-custom-css'
       document.head.appendChild(styleEl)
     }
-    styleEl.textContent = brand.customCss
+    styleEl.textContent = sanitizeCustomCss(brand.customCss)
   } else {
     const styleEl = document.getElementById('brand-custom-css')
     if (styleEl) styleEl.remove()

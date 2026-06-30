@@ -75,8 +75,8 @@ export function hasDangerousStructure(command: string): boolean {
   if (/>{1,2}/.test(command)) return true
   // find -exec / -delete（可执行任意命令/删除文件）
   if (/\b-exec\b/.test(command) || /\b-delete\b/.test(command)) return true
-  // 命令链接操作符（&&、;）
-  if (/[;&]/.test(command)) return true
+  // 命令链接操作符：&& 和命令上下文中的独立分号（排除引号内字符串中的分号）
+  if (/&&/.test(command) || /;\s*(?=\S)/.test(command)) return true
   // 子 shell / 命令替换（$(...) 和反引号）
   if (/\$\(/.test(command) || /`/.test(command)) return true
   return false

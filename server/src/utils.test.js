@@ -11,16 +11,18 @@ describe('hashPassword / verifyPassword', () => {
   test('哈希和验证一致性', () => {
     const hash = hashPassword('myPassword123')
     expect(hash).toBeTypeOf('string')
-    expect(hash.length).toBe(128) // 64 bytes hex
+    expect(hash).toMatch(/^[a-f0-9]{32}:[a-f0-9]{128}$/)
 
     expect(verifyPassword('myPassword123', hash)).toBe(true)
     expect(verifyPassword('wrongPassword', hash)).toBe(false)
   })
 
-  test('相同密码生成相同哈希', () => {
+  test('相同密码使用随机盐生成不同哈希', () => {
     const h1 = hashPassword('test')
     const h2 = hashPassword('test')
-    expect(h1).toBe(h2)
+    expect(h1).not.toBe(h2)
+    expect(verifyPassword('test', h1)).toBe(true)
+    expect(verifyPassword('test', h2)).toBe(true)
   })
 
   test('不同密码生成不同哈希', () => {

@@ -151,6 +151,15 @@ Invoke-NativeCommand "scp" @($stagedExe, "${server}:${remoteDir}/")
 Invoke-NativeCommand "scp" @($stagedYml, "${server}:${remoteDir}/latest.yml")
 Invoke-NativeCommand "scp" @($stagedBlockmap, "${server}:${remoteDir}/")
 
+# 同步版本历史 releases.json（从仓库根目录 release-notes/ 生成）
+$releasesJson = Join-Path $PSScriptRoot ".." ".." ".." "release-notes" "releases.json"
+if (Test-Path $releasesJson) {
+  Write-Host "Uploading releases.json..."
+  Invoke-NativeCommand "scp" @($releasesJson, "${server}:${remoteDir}/releases.json")
+} else {
+  Write-Warning "releases.json not found, skipping"
+}
+
 $publishCommand = "set -e; mkdir -p $nginxDir; cp $remoteDir/* $nginxDir/; echo update-files-deployed-to-nginx"
 Invoke-NativeCommand "ssh" @($server, "sudo sh -c '$publishCommand'")
 

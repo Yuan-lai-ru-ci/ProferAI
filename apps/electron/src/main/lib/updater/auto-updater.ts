@@ -137,20 +137,15 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   } catch { /* 代理模块不可用时跳过 */ }
 
   // 更新源：编译时注入，oss 走 GitHub Releases，commercial 走国内服务器
-  if (getBuildTarget() === 'oss') {
-    // 使用 electron-builder.yml 中配置的 GitHub publisher
-    console.log('[更新] 更新源: GitHub Releases')
-  } else {
-    // commercial：直连国内服务器
-    const updateFeedUrl =
-      process.env.PROFER_UPDATE_FEED_URL ||
-      'http://47.109.108.57/profer-updates/'
-    autoUpdater.setFeedURL({
-      provider: 'generic',
-      url: updateFeedUrl,
-    })
-    console.log('[更新] 更新源:', updateFeedUrl)
-  }
+  // 统一使用自建更新服务器
+  const updateFeedUrl =
+    process.env.PROFER_UPDATE_FEED_URL ||
+    'http://47.109.108.57/profer-updates/'
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: updateFeedUrl,
+  })
+  console.log('[更新] 更新源:', updateFeedUrl)
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),

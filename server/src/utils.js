@@ -54,3 +54,12 @@ export function safePath(root, ...parts) {
   if (full !== pathJoin(root) && !full.startsWith(rootPrefix)) return null
   return full
 }
+
+// ===== 网络工具 =====
+
+/** 从请求中提取客户端真实 IP */
+export function clientIP(c) {
+  const forwarded = c.req.header('x-forwarded-for')
+  if (forwarded) return forwarded.split(',')[0].trim()
+  return c.env?.remoteAddr || c.req.header('x-real-ip') || 'unknown'
+}

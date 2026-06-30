@@ -1,11 +1,18 @@
 import { Hono } from 'hono'
 import { db } from '../db.js'
 import { authMiddleware } from '../middleware.js'
+import { rateLimit } from '../rate-limiter.js'
+import { clientIP } from '../utils.js'
 
 export const invitationRoutes = new Hono()
 
 /** 验证邀请 token */
 invitationRoutes.get('/:token', (c) => {
+  const rl = rateLimit(`invite:${clientIP(c)}`, 60 * 1000, 30)
+  if (!rl.allowed) {
+    return c.json({ error: `请求过于频繁，请 ${Math.ceil(rl.retryAfterMs / 1000)} 秒后重试` }, 429)
+  }
+
   const inv = db.prepare(`
     SELECT i.*, w.name as workspace_name, u.display_name as inviter_name
     FROM invitations i

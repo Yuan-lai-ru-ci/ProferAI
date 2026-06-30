@@ -443,6 +443,15 @@ export function useGlobalAgentListeners(): void {
     }
 
     const workspaceFilesPathCache = new Map<string, string>()
+    const WORKSPACE_FILES_CACHE_MAX = 50
+    const setWorkspaceFilesPath = (slug: string, path: string) => {
+      workspaceFilesPathCache.delete(slug)
+      workspaceFilesPathCache.set(slug, path)
+      if (workspaceFilesPathCache.size > WORKSPACE_FILES_CACHE_MAX) {
+        const oldest = workspaceFilesPathCache.keys().next().value
+        if (oldest !== undefined) workspaceFilesPathCache.delete(oldest)
+      }
+    }
     const autoPreviewSeq = new Map<string, number>()
 
     const getWorkspaceIdForSession = (sid: string): string | null => {
@@ -463,7 +472,7 @@ export function useGlobalAgentListeners(): void {
       if (cached) return cached
       try {
         const path = await window.electronAPI.getWorkspaceFilesPath(slug)
-        workspaceFilesPathCache.set(slug, path)
+        setWorkspaceFilesPath(slug, path)
         return path
       } catch {
         return null
@@ -566,20 +575,8 @@ export function useGlobalAgentListeners(): void {
     }).catch(console.error)
 
     // ===== 1. 流式事件 =====
-    // [FLASH-DEBUG] 事件频率计数器
-    let eventCount = 0
-    let lastLogTime = Date.now()
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
       (streamEvent: AgentStreamEvent) => {
-        // [FLASH-DEBUG] 每 2 秒输出一次事件频率
-        eventCount++
-        const now = Date.now()
-        if (now - lastLogTime >= 2000) {
-          console.log(`[FLASH-DEBUG] GlobalListener: ${eventCount} events in ${((now - lastLogTime) / 1000).toFixed(1)}s (${(eventCount / ((now - lastLogTime) / 1000)).toFixed(1)} evt/s)`)
-          eventCount = 0
-          lastLogTime = now
-        }
-
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
 
@@ -811,7 +808,6 @@ export function useGlobalAgentListeners(): void {
             })
           } else if (event.type === 'prompt_suggestion') {
             // 存储提示建议到 atom
-            console.log(`[GlobalAgentListeners] 收到建议: sessionId=${sessionId}, suggestion="${event.suggestion.slice(0, 50)}..."`)
             store.set(agentPromptSuggestionsAtom, (prev) => {
               const map = new Map(prev)
               map.set(sessionId, event.suggestion)
@@ -883,7 +879,6 @@ export function useGlobalAgentListeners(): void {
             )
           } else if (event.type === 'permission_mode_changed') {
             // 权限模式变更（如 Plan 模式退出后切换到自动审批或完全自动）
-            console.log(`[GlobalAgentListeners] 权限模式变更: ${event.mode}`)
             store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@proma/shared').PromaPermissionMode>) => {
               const next = new Map(prev)
               next.set(sessionId, event.mode)
@@ -910,7 +905,6 @@ export function useGlobalAgentListeners(): void {
     // ===== 2. 流式完成 =====
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: AgentStreamCompletePayload) => {
-        console.log(`[FLASH-DEBUG] STREAM_COMPLETE for session=${data.sessionId.slice(0, 8)}, stoppedByUser=${data.stoppedByUser}, resultSubtype=${data.resultSubtype}`)
         unstable_batchedUpdates(() => {
         // 后台任务等待态：turn 主体结束但仍有后台任务在飞行，UI 进入"空闲可输入"。
         // 不发"任务已完成"通知（任务并未真正完成）、不清后台任务列表、不重载消息——

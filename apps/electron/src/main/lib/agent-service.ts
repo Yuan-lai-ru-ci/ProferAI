@@ -10,7 +10,7 @@
  * 所有业务逻辑已委托给 AgentOrchestrator。
  */
 
-import { join, dirname } from 'node:path'
+import { join, dirname, basename, sep } from 'node:path'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
@@ -29,7 +29,7 @@ import type {
 } from '@proma/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
-import { AgentOrchestrator } from './agent-orchestrator'
+import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 
@@ -160,8 +160,14 @@ export async function runAgent(
       },
     })
   } catch (err) {
-    console.error('[Agent 服务] runAgent 未处理异常:', err)
+    console.error(`[Agent 服务] ══════════ runAgent 未处理异常 ══════════`)
+    console.error(`[Agent 服务] sessionId: ${input.sessionId}`)
+    console.error(`[Agent 服务] raw error 详细诊断:\n${serializeErrorDetail(err)}`)
+    console.error(`[Agent 服务] err instanceof Error: ${err instanceof Error}`)
+    console.error(`[Agent 服务] typeof err: ${typeof err}`)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
+    console.error(`[Agent 服务] errorMessage: ${errorMessage || '(空)'}`)
+    console.error(`[Agent 服务] ══════════ runAgent 未处理异常 结束 ══════════`)
     if (!webContents.isDestroyed()) {
       webContents.send(AGENT_IPC_CHANNELS.STREAM_ERROR, {
         sessionId: input.sessionId,
@@ -262,8 +268,14 @@ export async function runAgentHeadless(
       },
     })
   } catch (err) {
-    console.error('[Agent 服务] runAgentHeadless 未处理异常:', err)
+    console.error(`[Agent 服务] ══════════ runAgentHeadless 未处理异常 ══════════`)
+    console.error(`[Agent 服务] sessionId: ${runInput.sessionId}`)
+    console.error(`[Agent 服务] raw error 详细诊断:\n${serializeErrorDetail(err)}`)
+    console.error(`[Agent 服务] err instanceof Error: ${err instanceof Error}`)
+    console.error(`[Agent 服务] typeof err: ${typeof err}`)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
+    console.error(`[Agent 服务] errorMessage: ${errorMessage || '(空)'}`)
+    console.error(`[Agent 服务] ══════════ runAgentHeadless 未处理异常 结束 ══════════`)
     callbacks.onError(errorMessage)
     callbacks.onComplete()
     if (wc && !wc.isDestroyed()) {
@@ -365,7 +377,12 @@ export function saveFilesToAgentSession(input: AgentSaveFilesInput): AgentSavedF
   const usedPaths = new Set<string>()
 
   for (const file of input.files) {
-    let targetPath = join(sessionDir, file.filename)
+    // 防御：文件名不能包含路径分隔符、.. 或为绝对路径，防止路径穿越
+    const safeFilename = basename(file.filename)
+    if (safeFilename !== file.filename || safeFilename === '..' || file.filename.includes(sep) || file.filename.includes('/')) {
+      console.warn(`[Agent 服务] 文件名包含非法路径字符，已净化: ${file.filename} → ${safeFilename}`)
+    }
+    let targetPath = join(sessionDir, safeFilename)
 
     // 防止同名文件覆盖
     if (usedPaths.has(targetPath) || existsSync(targetPath)) {
@@ -413,13 +430,18 @@ export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): 
   const usedPaths = new Set<string>()
 
   for (const file of input.files) {
-    let targetPath = join(wsFilesDir, file.filename)
+    // 防御：文件名不能包含路径分隔符、.. 或为绝对路径，防止路径穿越
+    const safeFilename = basename(file.filename)
+    if (safeFilename !== file.filename || safeFilename === '..' || file.filename.includes(sep) || file.filename.includes('/')) {
+      console.warn(`[Agent 服务] 工作区文件名包含非法路径字符，已净化: ${file.filename} → ${safeFilename}`)
+    }
+    let targetPath = join(wsFilesDir, safeFilename)
 
     // 防止同名文件覆盖
     if (usedPaths.has(targetPath) || existsSync(targetPath)) {
-      const dotIdx = file.filename.lastIndexOf('.')
-      const baseName = dotIdx > 0 ? file.filename.slice(0, dotIdx) : file.filename
-      const ext = dotIdx > 0 ? file.filename.slice(dotIdx) : ''
+      const dotIdx = safeFilename.lastIndexOf('.')
+      const baseName = dotIdx > 0 ? safeFilename.slice(0, dotIdx) : safeFilename
+      const ext = dotIdx > 0 ? safeFilename.slice(dotIdx) : ''
       let counter = 1
       let candidate = join(wsFilesDir, `${baseName}-${counter}${ext}`)
       while (usedPaths.has(candidate) || existsSync(candidate)) {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeTheme, powerMonitor, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 
@@ -8,13 +8,12 @@ if (!app.isPackaged) {
   app.setPath('userData', join(app.getPath('appData'), '@profer/electron-dev'))
 }
 
-// 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
-//
-// 失败的常见原因：用户升级新版本时旧版进程仍在后台运行（macOS 关闭窗口 = hide
-// 不退出）。原先此处直接 process.exit(0)，没有任何用户可见反馈——如果旧进程
-// 卡在启动期，second-instance 也唤不起窗口，用户表现就是"双击应用没反应"。
-// 改为：留下 stderr 排查线索后正常退出，让 Electron 触发已存在实例的
-// second-instance 事件，由主实例负责显示窗口。
+// 开发模式用独立锁名，与生产版共存
+if (!app.isPackaged) {
+  app.setName('profer-dev')
+}
+
+// 单实例锁：防止重复启动同一个版本
 if (!app.requestSingleInstanceLock()) {
   console.warn(
     '[启动] 已有 Profer 进程持有单实例锁，本次启动将退出。\n' +
@@ -84,7 +83,7 @@ import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
-import { seedDefaultSkills } from './lib/config-paths'
+import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { stopAllGenerations } from './lib/chat-service'
@@ -366,7 +365,7 @@ function createWindow(): void {
   // Load the renderer
   const isDev = !app.isPackaged
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.loadURL(VITE_DEV_SERVER_URL)
   } else {
     mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
   }
@@ -394,6 +393,19 @@ function createWindow(): void {
   mainWindow.on('resize', scheduleWindowStateSave)
   mainWindow.on('move', scheduleWindowStateSave)
 
+  // 将 file:// 或 Windows 绝对路径转为系统路径
+  const toSystemPath = (u: string): string | null => {
+    if (u.startsWith('file:///')) {
+      // Windows: file:///C:/... → C:/... ; Unix: file:///home/... → /home/...
+      return process.platform === 'win32'
+        ? decodeURIComponent(u.slice(8).replace(/\//g, '\\'))
+        : decodeURIComponent(u.slice(7))
+    }
+    if (/^[A-Za-z]:[\\/]/.test(u)) return u.replace(/\//g, '\\')
+    if (u.startsWith('/')) return u
+    return null
+  }
+
   // 拦截页面内导航，外部链接用系统浏览器打开，防止 Electron 窗口被覆盖
   mainWindow.webContents.on('will-navigate', (event, url) => {
     // 允许开发模式下的 Vite HMR 热重载
@@ -401,6 +413,9 @@ function createWindow(): void {
     event.preventDefault()
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url)
+    } else {
+      const sysPath = toSystemPath(url)
+      if (sysPath) shell.openPath(sysPath)
     }
   })
 
@@ -408,6 +423,9 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url)
+    } else {
+      const sysPath = toSystemPath(url)
+      if (sysPath) shell.openPath(sysPath)
     }
     return { action: 'deny' }
   })
@@ -581,9 +599,11 @@ async function bootstrap(): Promise<void> {
 
   // 启动时恢复团队会话：如果已登录，启动同步引擎并刷新工作区索引
   safeRun('restoreTeamSession', () => {
-    const { getAuthStatus } = require('./lib/auth-service')
+    const { getAuthStatus, scheduleAutoRefresh } = require('./lib/auth-service')
     if (getAuthStatus().isLoggedIn) {
       console.log('[启动] 检测到已登录，恢复团队同步...')
+      // 启动主动 token 续期，确保 accessToken 永不过期
+      scheduleAutoRefresh()
       const { startSyncEngine } = require('./lib/sync-manager')
       startSyncEngine()
       // 延迟 3 秒同步团队工作区，等窗口 IPC 就绪
@@ -615,6 +635,40 @@ async function bootstrap(): Promise<void> {
       // 窗口已存在但可能被隐藏（macOS 关闭按钮 = hide），重新显示
       showAndFocusMainWindow()
     }
+  })
+
+  // 休眠恢复：系统唤醒后重建网络连接
+  powerMonitor.on('resume', () => {
+    console.log('[系统] 从休眠恢复，重建连接...')
+    safeRun('resume:refreshTeamSession', () => {
+      const { getAuthStatus } = require('./lib/auth-service')
+      if (getAuthStatus().isLoggedIn) {
+        const { startSyncEngine } = require('./lib/sync-manager')
+        startSyncEngine()
+        setTimeout(() => {
+          const { listTeamWorkspaces } = require('./lib/team-manager')
+          const { syncTeamWorkspacesToIndex } = require('./lib/agent-workspace-manager')
+          listTeamWorkspaces().then((teamWs: unknown[]) => {
+            syncTeamWorkspacesToIndex(teamWs)
+            for (const w of BrowserWindow.getAllWindows()) {
+              w.webContents.send('team:workspaces-synced')
+            }
+          }).catch(() => {})
+        }, 2000)
+      }
+    })
+    safeRun('resume:channelsSync', () => {
+      const { getTeamAuth } = require('./lib/auth-service')
+      const auth = getTeamAuth()
+      if (auth) {
+        const { syncChannelsFromServer } = require('./lib/channel-manager')
+        syncChannelsFromServer(auth.baseUrl, auth.token).catch(() => {})
+      }
+    })
+  })
+
+  powerMonitor.on('lock-screen', () => {
+    console.log('[系统] 屏幕已锁定')
   })
 }
 

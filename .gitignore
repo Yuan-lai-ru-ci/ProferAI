@@ -44,3 +44,5 @@ vendor
 
 # git worktrees (managed by proma-worktree skill)
 .worktrees
+# 发布产物(不入库)
+server/server-rel.tar.gz

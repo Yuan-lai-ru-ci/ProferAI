@@ -1,7 +1,8 @@
 import * as React from 'react'
 import { BubbleMenu } from '@tiptap/react/menus'
 import type { Editor } from '@tiptap/react'
-import { CellSelection, isInTable } from '@tiptap/pm/tables'
+import { isInTable } from '@tiptap/pm/tables'
+import type { Selection } from '@tiptap/pm/state'
 import {
   ArrowUpFromLine,
   ArrowDownFromLine,
@@ -31,9 +32,14 @@ function selectionInsideNode(editor: Editor, nodeName: string): boolean {
   return contains($from) || contains($to)
 }
 
+/** 检测 selection 是否为 CellSelection（通过 duck-typing，避免跨包 instanceof 失败） */
+function isCellSelection(selection: Selection): boolean {
+  return '$anchorCell' in selection && '$headCell' in selection
+}
+
 function shouldShowTableMenu(editor: Editor): boolean {
   if (!editor.isEditable) return false
-  if (editor.state.selection instanceof CellSelection) return false
+  if (isCellSelection(editor.state.selection)) return false
   return isInTable(editor.state) || selectionInsideNode(editor, 'table')
 }
 

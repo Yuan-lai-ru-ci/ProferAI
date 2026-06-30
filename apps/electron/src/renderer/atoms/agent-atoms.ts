@@ -47,6 +47,7 @@ export interface ActivityGroup {
 export function finalizeStreamingActivities(
   toolActivities: ToolActivity[],
 ): { toolActivities: ToolActivity[] } {
+  if (!Array.isArray(toolActivities)) return { toolActivities: [] }
   const hasUnfinishedTools = toolActivities.some((ta) => !ta.done)
 
   return {

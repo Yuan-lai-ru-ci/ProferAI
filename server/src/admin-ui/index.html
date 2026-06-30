@@ -93,6 +93,7 @@ function route(){
     case'users':renderUsers(c);break;
     case'channels':renderChannels(c);break;
     case'credits':renderCredits(c);break;
+    case'pricing':renderPricing(c);break;case'activation':renderActivation(c);break;
   }
 }
 
@@ -131,17 +132,28 @@ function renderLogin(c){
 function renderDashboard(c){
   c.innerHTML='<h1 class="page-title">仪表盘</h1><div class="card"><span class="muted">加载中...</span></div>';
   api('/admin/dashboard/stats').then(function(s){
+    var topRows=s.topUsers&&s.topUsers.length?s.topUsers.map(function(u){return'<tr><td><strong>'+esc(u.email||u.id||'-')+'</strong></td><td>'+(u.requests||0).toLocaleString()+'</td><td>'+formatTokens(u.total_tokens||0)+'</td><td style="font-weight:600;color:var(--danger)">'+(u.consumed||0).toLocaleString()+'</td></tr>'}).join(''):'<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">📭</div>近30天暂无调用记录</div></td></tr>';
     c.innerHTML='<h1 class="page-title">仪表盘</h1>'+
       '<div class="stat-grid mb">'+
       '<div class="stat-card"><div class="stat-icon">👥</div><div class="stat-val">'+s.totalUsers+'</div><div class="stat-lbl">总用户</div></div>'+
       '<div class="stat-card"><div class="stat-icon">🟢</div><div class="stat-val">'+s.activeToday+'</div><div class="stat-lbl">今日活跃</div></div>'+
       '<div class="stat-card"><div class="stat-icon">🔌</div><div class="stat-val">'+s.activeChannels+'</div><div class="stat-lbl">活跃渠道</div></div>'+
       '<div class="stat-card"><div class="stat-icon">📁</div><div class="stat-val">'+s.totalWorkspaces+'</div><div class="stat-lbl">总工作区</div></div></div>'+
+      '<div class="card"><div class="card-header"><h2>近30天 API 用量</h2></div>'+
+      '<div class="stat-grid"><div class="stat-card"><div class="stat-icon">🚀</div><div class="stat-val">'+(s.usageRequests||0).toLocaleString()+'</div><div class="stat-lbl">调用次数</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">✅</div><div class="stat-val">'+(s.usageSuccessfulRequests||0).toLocaleString()+'</div><div class="stat-lbl">成功调用</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">🌊</div><div class="stat-val">'+(s.usageStreamingRequests||0).toLocaleString()+'</div><div class="stat-lbl">流式请求</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">🧮</div><div class="stat-val">'+(s.usageTotalCost||0).toLocaleString()+'</div><div class="stat-lbl">实际计费</div></div></div>'+
+      '<div class="stat-grid" style="margin-top:16px"><div class="stat-card"><div class="stat-icon">🧾</div><div class="stat-val">'+formatTokens(s.usageTotalTokens||0)+'</div><div class="stat-lbl">总 Token</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">⬇️</div><div class="stat-val">'+formatTokens(s.usagePromptTokens||0)+'</div><div class="stat-lbl">输入 Token</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">⬆️</div><div class="stat-val">'+formatTokens(s.usageCompletionTokens||0)+'</div><div class="stat-lbl">输出 Token</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">⚠️</div><div class="stat-val">'+(s.usageFailedRequests||0).toLocaleString()+'</div><div class="stat-lbl">失败调用</div></div></div></div>'+
       '<div class="card"><div class="card-header"><h2>额度概览</h2></div>'+
       '<div class="stat-grid"><div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+(s.totalBalance||0).toLocaleString()+'</div><div class="stat-lbl">总余额</div></div>'+
       '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+(s.totalConsumed||0).toLocaleString()+'</div><div class="stat-lbl">累计消耗</div></div>'+
       '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+(s.consumedThisMonth||0).toLocaleString()+'</div><div class="stat-lbl">本月消耗</div></div>'+
-      '<div class="stat-card"><div class="stat-icon">⭐</div><div class="stat-val">'+(s.topUsers&&s.topUsers[0]?s.topUsers[0].email:'-')+'</div><div class="stat-lbl">最高用量用户</div></div></div></div>';
+      '<div class="stat-card"><div class="stat-icon">⭐</div><div class="stat-val">'+(s.topUsers&&s.topUsers[0]?esc(s.topUsers[0].email||s.topUsers[0].id):'-')+'</div><div class="stat-lbl">最高用量用户</div></div></div></div>'+
+      '<div class="card" style="overflow:auto"><div class="card-header"><h2>近30天用量用户</h2><a class="btn btn-outline btn-sm" href="#credits">查看用量明细</a></div><table><thead><tr><th>用户</th><th>请求数</th><th>Token</th><th>费用</th></tr></thead><tbody>'+topRows+'</tbody></table></div>';
   }).catch(function(e){c.innerHTML='<h1 class="page-title">仪表盘</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
 }
 
@@ -155,8 +167,8 @@ function renderUsers(c){var page=1,search='';
         var status=u.is_suspended?'<span class="badge badge-danger">已封禁</span>':'<span class="badge badge-success">正常</span>';
         var act='';act+='<button class="btn btn-ghost copy-btn" data-uid="'+u.id+'" style="font-size:11px" title="复制ID">📋</button> ';
         if(!u.is_admin)act+='<button class="btn btn-ghost promote-btn" data-uid="'+u.id+'">⬆ 提权</button>';
-        if(u.is_suspended){act+='<button class="btn btn-ghost unsuspend-btn" data-uid="'+u.id+'" style="color:var(--success)">✅ 解封</button>'}else{act+='<button class="btn btn-ghost suspend-btn" data-uid="'+u.id+'" style="color:var(--danger)">⛔ 封禁</button>'};
-        return'<tr><td><strong>'+esc(u.email)+'</strong></td><td>'+esc(u.display_name||'')+'</td><td>'+role+'</td><td>'+status+'</td><td>'+(u.credit_balance||0).toLocaleString()+'</td><td>'+fmtDate(u.created_at)+'</td><td>'+act+'</td></tr>';
+        if(u.is_suspended){act+='<button class="btn btn-ghost unsuspend-btn" data-uid="'+u.id+'" style="color:var(--success)">✅ 解封</button>'}else{act+='<button class="btn btn-ghost suspend-btn" data-uid="'+u.id+'" style="color:var(--danger)">⛔ 封禁</button>'};if(!u.is_admin)act+=' <button class="btn btn-ghost del-user-btn" data-uid="'+u.id+'" data-email="'+esc(u.email)+'" style="color:var(--danger);font-size:11px">🗑</button>';
+        var sc=u.can_self_config_api?'<span class="badge badge-success">可自配</span>':'<span class="badge badge-warn">仅平台</span>';var typeSel='<select class="type-sel" data-uid="'+u.id+'" style="width:80px;font-size:11px;padding:2px 4px"><option value="restricted"'+(u.account_type==='restricted'?' selected':'')+'>受限</option><option value="standard"'+(u.account_type==='standard'?' selected':'')+'>标准</option><option value="advanced"'+(u.account_type==='advanced'?' selected':'')+'>高级</option></select>';var scBtn='<button class="btn btn-ghost sc-btn" data-uid="'+u.id+'" data-sc="'+(u.can_self_config_api?1:0)+'" style="font-size:11px">'+(u.can_self_config_api?'🔓':'🔒')+'</button>';return'<tr><td><strong>'+esc(u.email)+'</strong></td><td>'+esc(u.display_name||'')+'</td><td>'+role+'</td><td>'+status+'</td><td>'+sc+'</td><td>'+typeSel+'</td><td>'+scBtn+'</td><td>'+(u.credit_balance||0).toLocaleString()+'</td><td>'+fmtDate(u.created_at)+'</td><td>'+act+'</td></tr>';
       }).join('');
       var pager=d.total>30?'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px"><span style="color:var(--muted);font-size:13px">共 '+d.total+' 个用户</span><div style="display:flex;gap:8px">'+
         (page>1?'<button class="btn btn-outline btn-sm prev-btn">上一页</button>':'')+
@@ -164,10 +176,10 @@ function renderUsers(c){var page=1,search='';
         (page*30<d.total?'<button class="btn btn-outline btn-sm next-btn">下一页</button>':'')+'</div></div>':'';
       c.innerHTML='<h1 class="page-title">用户管理</h1>'+
         '<div class="card" style="margin-bottom:16px"><input class="search-inp" placeholder="🔍 搜索邮箱或名称..." value="'+esc(search)+'" style="max-width:400px"></div>'+
-        '<div class="card" style="overflow:auto"><table><thead><tr><th>邮箱</th><th>名称</th><th>角色</th><th>状态</th><th>余额</th><th>注册时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>'+pager+'</div>';
+        '<div class="card" style="overflow:auto"><table><thead><tr><th>邮箱</th><th>名称</th><th>角色</th><th>状态</th><th>自配</th><th>类型</th><th>开关</th><th>余额</th><th>注册时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>'+pager+'</div>';
       c.querySelector('.search-inp').addEventListener('input',function(e){search=e.target.value;page=1;load()});
-      c.querySelectorAll('.promote-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid+'/promote',{method:'POST'}).then(function(){toast('已提升为管理员');load()})})});
-      c.querySelectorAll('.suspend-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定封禁该用户？'))return;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:1})}).then(function(){toast('已封禁');load()})})});c.querySelectorAll('.unsuspend-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:0})}).then(function(){toast('已解封');load()})})});c.querySelectorAll('.copy-btn').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();navigator.clipboard.writeText(b.dataset.uid).then(function(){toast('已复制用户ID')})})});
+      c.querySelectorAll('.type-sel').forEach(function(s){s.addEventListener('change',function(){api('/admin/users/'+s.dataset.uid,{method:'PATCH',body:JSON.stringify({account_type:s.value})}).then(function(){toast('类型已更新');load()})})});c.querySelectorAll('.sc-btn').forEach(function(b){b.addEventListener('click',function(){var nv=b.dataset.sc==='1'?0:1;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({can_self_config_api:nv})}).then(function(){toast(nv?'已开启自配':'已关闭自配');load()})})});c.querySelectorAll('.promote-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid+'/promote',{method:'POST'}).then(function(){toast('已提升为管理员');load()})})});
+      c.querySelectorAll('.suspend-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定封禁该用户？'))return;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:1})}).then(function(){toast('已封禁');load()})})});c.querySelectorAll('.unsuspend-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:0})}).then(function(){toast('已解封');load()})})});c.querySelectorAll('.del-user-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除 '+b.dataset.email+'？此操作不可撤销！'))return;api('/admin/users/'+b.dataset.uid,{method:'DELETE'}).then(function(){toast('已删除用户');load()}).catch(function(e){toast(e.message,false)})})});c.querySelectorAll('.copy-btn').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();navigator.clipboard.writeText(b.dataset.uid).then(function(){toast('已复制用户ID')})})});
       var pb=c.querySelector('.prev-btn');if(pb)pb.addEventListener('click',function(){page--;load()});
       var nb=c.querySelector('.next-btn');if(nb)nb.addEventListener('click',function(){page++;load()});
     }).catch(function(e){c.innerHTML='<h1 class="page-title">用户管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
@@ -176,62 +188,170 @@ function renderUsers(c){var page=1,search='';
 }
 
 // ---- Channels ----
-function renderChannels(c){
-  var show=false,nm='',prov='deepseek',url='',key='';
-  function load(){
-    c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
-    api('/admin/channels').then(function(chs){
-      var rows=chs.length?chs.map(function(ch){return'<tr><td><strong>'+esc(ch.name)+'</strong></td><td>'+ch.provider+'</td><td>'+(ch.is_active?'<span class="badge badge-success">活跃</span>':'<span class="badge badge-danger">停用</span>')+'</td><td>'+fmtDate(ch.created_at)+'</td><td><button class="btn btn-ghost del-btn" data-cid="'+ch.id+'" style="color:var(--danger)">🗑 删除</button></td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📡</div>还没有配置渠道</div></td></tr>';
-      c.innerHTML='<h1 class="page-title">渠道管理</h1>';
-      c.insertAdjacentHTML('beforeend','<div style="margin-bottom:16px"><button class="btn btn-primary toggle-btn">'+(show?'✕ 取消':'＋ 创建渠道')+'</button></div>');
-      if(show){
-        c.insertAdjacentHTML('beforeend','<div class="card form-card" style="max-width:560px">'+
-          '<div class="card-header"><h2>创建渠道</h2></div>'+
-          '<div class="form-row"><div><label>名称</label><input class="ch-name" value="'+esc(nm)+'"></div><div><label>供应商</label><select class="ch-provider"><option value="deepseek"'+(prov==='deepseek'?' selected':'')+'>DeepSeek</option><option value="anthropic"'+(prov==='anthropic'?' selected':'')+'>Anthropic</option><option value="openai"'+(prov==='openai'?' selected':'')+'>OpenAI</option><option value="qwen"'+(prov==='qwen'?' selected':'')+'>通义千问</option><option value="kimi-api"'+(prov==='kimi-api'?' selected':'')+'>Kimi</option><option value="zhipu"'+(prov==='zhipu'?' selected':'')+'>智谱</option><option value="minimax"'+(prov==='minimax'?' selected':'')+'>MiniMax</option><option value="doubao"'+(prov==='doubao'?' selected':'')+'>豆包</option></select></div></div>'+
-          '<div class="form-row"><div><label>Base URL</label><input class="ch-url" value="'+esc(url)+'" placeholder="自动填充"></div><div><label>API Key</label><div style="display:flex;gap:8px"><input class="ch-key" type="password" value="'+esc(key)+'"><button class="btn btn-outline test-btn">测试</button></div></div></div>'+
-          '<div class="test-msg" style="font-size:13px;margin-bottom:12px"></div>'+
-          '<button class="btn btn-primary create-btn">创建渠道</button></div>');
-        c.querySelector('.test-btn').addEventListener('click',function(){
-          var k=c.querySelector('.ch-key').value,u=c.querySelector('.ch-url').value||'https://api.deepseek.com',p=c.querySelector('.ch-provider').value;
-          c.querySelector('.test-msg').innerHTML='<span style="color:var(--muted)">测试中...</span>';
-          api('/admin/channels/test',{method:'POST',body:JSON.stringify({apiKey:k,baseUrl:u,provider:p})}).then(function(r){c.querySelector('.test-msg').innerHTML=r.success?'<span style="color:#10b981">✅ 连接成功</span>':'<span style="color:#ef4444">❌ '+esc(r.error||'失败')+'</span>'}).catch(function(e){c.querySelector('.test-msg').innerHTML='<span style="color:#ef4444">❌ '+esc(e.message)+'</span>'});
-        });
-        c.querySelector('.create-btn').addEventListener('click',function(){
-          var n=c.querySelector('.ch-name').value,k=c.querySelector('.ch-key').value,u=c.querySelector('.ch-url').value,p=c.querySelector('.ch-provider').value;
-          if(!n||!k){toast('名称和 API Key 必填',false);return}
-          api('/admin/channels',{method:'POST',body:JSON.stringify({name:n,provider:p,apiKey:k,baseUrl:u})}).then(function(){toast('渠道创建成功');show=false;load()}).catch(function(e){toast(e.message,false)});
-        });
-      }
-      c.insertAdjacentHTML('beforeend','<div class="card" style="overflow:auto"><table><thead><tr><th>名称</th><th>供应商</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>');
-      c.querySelector('.toggle-btn').addEventListener('click',function(){show=!show;load()});
-      c.querySelectorAll('.del-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除该渠道？'))return;api('/admin/channels/'+b.dataset.cid,{method:'DELETE'}).then(function(){toast('已删除');load()})})});
-    }).catch(function(e){c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
-  }
-  load();
-}
+	function renderChannels(c){
+	  var show=false,nm='',prov='deepseek',models='',editingId='';
+	  function load(){
+	    c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+	    api('/admin/channels').then(function(chs){
+	      var rows=chs.length?chs.map(function(ch){
+	        var mlist='';try{mlist=(JSON.parse(ch.models_json||'[]')||[]).map(function(m){return m.name||m.id}).join(', ')}catch(e){}
+	        return'<tr><td><strong>'+esc(ch.name)+'</strong></td><td>'+ch.provider+'</td><td style="max-width:220px;font-size:12px;color:var(--muted)">'+esc(mlist||'—')+'</td><td>'+(ch.is_active?'<span class="badge badge-success">活跃</span>':'<span class="badge badge-danger">停用</span>')+'</td><td>'+fmtDate(ch.created_at)+'</td><td><button class="btn btn-ghost edit-ch-btn" data-cid="'+ch.id+'" data-nm="'+esc(ch.name)+'" data-prov="'+ch.provider+'" data-models="'+esc(JSON.stringify(JSON.parse(ch.models_json||'[]')))+'" data-active="'+ch.is_active+'">✏️ 编辑</button> <button class="btn btn-ghost del-btn" data-cid="'+ch.id+'" style="color:var(--danger)">🗑 删除</button></td></tr>'
+	      }).join(''):'<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📡</div>还没有配置渠道</div></td></tr>';
+	      c.innerHTML='<h1 class="page-title">渠道管理</h1>';
+	      c.insertAdjacentHTML('beforeend','<div class="card" style="margin-bottom:20px;border-left:3px solid var(--primary);background:rgba(59,130,246,.06)"><div style="font-size:13px;line-height:1.6">ℹ️ <strong>代管模式说明</strong>：API Key 和上游地址在 <a href="/" target="_blank" style="color:var(--primary)">New API 后台</a> 统一配置，此处的渠道仅管理<strong>供应商类型</strong>和<strong>可用模型清单</strong>。</div></div>');
+	      c.insertAdjacentHTML('beforeend','<div style="margin-bottom:16px"><button class="btn btn-primary toggle-btn">'+(show?'✕ 取消':'＋ 创建渠道')+'</button></div>');
+	      if(show){
+	        c.insertAdjacentHTML('beforeend','<div class="card form-card" style="max-width:560px">'+
+	          '<div class="card-header"><h2>'+(editingId?'编辑渠道':'创建渠道')+'</h2></div>'+
+	          '<div class="form-row"><div><label>名称</label><input class="ch-name" value="'+esc(nm)+'"></div><div><label>供应商</label><select class="ch-provider"><option value="deepseek"'+(prov=='deepseek'?' selected':'')+'>DeepSeek</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="qwen">通义千问</option><option value="kimi-api">Kimi</option><option value="zhipu">智谱</option><option value="minimax">MiniMax</option><option value="doubao">豆包</option></select></div></div>'+
+	          '<div class="form-row"><div><label>模型清单（JSON，每项含 id/name/enabled）</label>'+
+	          '<textarea class="ch-models" rows="4" style="font-size:12px;font-family:monospace" placeholder=\'[{"id":"deepseek-v4-flash","name":"DeepSeek V4 Flash","enabled":true}]\'>'+esc(models)+'</textarea></div></div>'+
+	          '<button class="btn btn-primary create-btn">'+(editingId?'保存修改':'创建渠道')+'</button></div>');
+	        c.querySelector('.create-btn').addEventListener('click',function(){
+	          var n=c.querySelector('.ch-name').value,p=c.querySelector('.ch-provider').value,ms=c.querySelector('.ch-models').value;
+	          if(!n){toast('名称必填',false);return}
+	          try{JSON.parse(ms||'[]')}catch(e){toast('模型清单必须是合法 JSON',false);return}
+	          if(editingId){
+	            api('/admin/channels/'+editingId,{method:'PATCH',body:JSON.stringify({name:n,provider:p,modelsJson:ms})}).then(function(){toast('渠道已更新');editingId='';show=false;load()}).catch(function(e){toast(e.message,false)});
+	          }else{
+	            api('/admin/channels',{method:'POST',body:JSON.stringify({name:n,provider:p,modelsJson:ms})}).then(function(){toast('渠道创建成功');show=false;load()}).catch(function(e){toast(e.message,false)});
+	          }
+	        });
+	      }
+	      c.insertAdjacentHTML('beforeend','<div class="card" style="overflow:auto"><table><thead><tr><th>名称</th><th>供应商</th><th>模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>');
+	      c.querySelector('.toggle-btn').addEventListener('click',function(){show=!show;load()});
+	      c.querySelectorAll('.edit-ch-btn').forEach(function(b){b.addEventListener('click',function(){nm=b.dataset.nm;prov=b.dataset.prov;models=b.dataset.models||'';editingId=b.dataset.cid;show=true;load()})});c.querySelectorAll('.del-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除该渠道？'))return;api('/admin/channels/'+b.dataset.cid,{method:'DELETE'}).then(function(){toast('已删除');load()})})});
+	    }).catch(function(e){c.innerHTML='<h1 class="page-title">渠道管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+	  }
+	  load();
+	}
 
 // ---- Credits ----
-function renderCredits(c){api('/admin/users?limit=200').then(function(ud){var dl=document.getElementById('user-datalist');if(dl&&ud.users){ud.users.forEach(function(u){dl.insertAdjacentHTML('beforeend','<option value="'+u.id+'">'+esc(u.email)+' ('+esc(u.display_name||'')+')</option>')})}}).catch(function(){});
+function renderCredits(c){
   c.innerHTML='<h1 class="page-title">额度管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
-  api('/admin/credits/transactions?limit=50').then(function(d){
-    var rows=d.transactions.length?d.transactions.map(function(tx){return'<tr><td><strong>'+esc(tx.user_email||tx.user_id)+'</strong></td><td style="color:'+(tx.amount>=0?'var(--success)':'var(--danger)')+';font-weight:600">'+(tx.amount>=0?'+':'')+tx.amount.toLocaleString()+'</td><td><span class="badge '+(tx.type==='grant'?'badge-success':tx.type==='consumption'?'badge-warn':'badge-info')+'">'+tx.type+'</span></td><td>'+esc(tx.description||'-')+'</td><td>'+fmtDateTime(tx.created_at)+'</td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📭</div>暂无交易记录</div></td></tr>';
-    c.innerHTML='<h1 class="page-title">额度管理</h1>'+
-      '<div class="card" style="max-width:560px">'+
-      '<div class="card-header"><h2>💳 手动充值</h2></div>'+
-      '<div class="form-row form-row-3"><div><label>用户 ID</label><input class="grant-uid" placeholder="从用户管理页面复制"></div><div><label>数量</label><input class="grant-amt" type="number" min="1" placeholder="credits"></div><div><label>备注</label><input class="grant-desc" placeholder="充值说明"></div></div>'+
+  // 并行加载汇总、交易、请求日志、按模型统计
+  Promise.all([
+    api('/admin/credits/summary').catch(function(){return{}}),
+    api('/admin/credits/transactions?limit=30').catch(function(){return{transactions:[]}}),
+    api('/admin/credits/request-logs?limit=30').catch(function(){return{logs:[]}}),
+    api('/admin/credits/usage-by-model?days=30').catch(function(){return[]}),
+    api('/admin/users?limit=200').catch(function(){return{users:[]}})
+  ]).then(function(r){var s=r[0],tx=r[1],rl=r[2],um=r[3],ud=r[4];
+    // 摘要卡片
+    var cards='<div class="stat-grid" style="margin-bottom:20px">'+
+      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+(s.total_balance||0).toLocaleString()+'</div><div class="stat-lbl">总余额</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+(s.total_consumed||0).toLocaleString()+'</div><div class="stat-lbl">累计消耗</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+(s.consumed_this_month||0).toLocaleString()+'</div><div class="stat-lbl">本月消耗</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">👥</div><div class="stat-val">'+(s.users_with_credits||0)+'</div><div class="stat-lbl">额度用户</div></div></div>';
+
+    // 充值
+    var grant='<div class="card" style="max-width:600px;margin-bottom:20px"><div class="card-header"><h2>💳 手动充值</h2></div>'+
+      '<div class="form-row form-row-3"><div><label>用户</label><select class="grant-uid" style="font-size:12px"><option value="">选择用户...</option>'+(ud.users||[]).map(function(u){return'<option value="'+u.id+'">'+esc(u.email)+' ('+esc(u.display_name||'')+') — '+(u.credit_balance||0).toLocaleString()+' cr</option>'}).join('')+'</select></div>'+
+      '<div><label>数量</label><input class="grant-amt" type="number" min="1" placeholder="credits"></div>'+
+      '<div><label>备注</label><input class="grant-desc" placeholder="充值说明"></div></div>'+
       '<div class="grant-msg" style="font-size:13px;margin-bottom:12px"></div>'+
-      '<button class="btn btn-primary grant-btn">确认充值</button></div>'+
-      '<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 最近交易</h2></div><table><thead><tr><th>用户</th><th>数量</th><th>类型</th><th>说明</th><th>时间</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      '<button class="btn btn-primary grant-btn">确认充值</button></div>';
+
+    // 按模型用量
+    var modelRows=um.length?um.map(function(m){
+      var maxCost=Math.max.apply(null,um.map(function(x){return x.total_cost}))||1;
+      var bar=Math.round(m.total_cost/maxCost*100);
+      return'<tr><td><strong>'+esc(m.model)+'</strong></td><td>'+m.requests+' 次</td><td>'+(m.total_tokens/1000).toFixed(1)+'K</td><td style="font-weight:600">'+m.total_cost.toLocaleString()+'</td><td><div style="height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden;min-width:60px"><div style="height:100%;width:'+bar+'%;background:var(--primary);border-radius:3px"></div></div></td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📭</div>暂无用量数据</div></td></tr>';
+    var modelTable='<div class="card" style="overflow:auto;margin-bottom:20px"><div class="card-header"><h2>📊 近30天用量（按模型）</h2></div><table><thead><tr><th>模型</th><th>请求数</th><th>Token量</th><th>费用</th><th>占比</th></tr></thead><tbody>'+modelRows+'</tbody></table></div>';
+
+    // 请求日志
+    var logRows=rl.logs&&rl.logs.length?rl.logs.map(function(l){
+      return'<tr><td>'+esc(l.model)+'</td><td>'+(l.stream?'流式':'')+'</td><td>'+(l.total_tokens>0?(l.total_tokens/1000).toFixed(1)+'K':'—')+'</td><td style="color:var(--danger);font-weight:600">-'+l.cost_credits.toLocaleString()+'</td><td>'+(l.duration_ms?(l.duration_ms/1000).toFixed(1)+'s':'—')+'</td><td>'+fmtDateTime(l.created_at)+'</td></tr>'}).join(''):'<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📭</div>暂无请求记录</div></td></tr>';
+    var logTable='<div class="card" style="overflow:auto;margin-bottom:20px"><div class="card-header"><h2>📋 最近请求日志</h2></div><table><thead><tr><th>模型</th><th>类型</th><th>Token</th><th>费用</th><th>耗时</th><th>时间</th></tr></thead><tbody>'+logRows+'</tbody></table></div>';
+
+    // 交易记录
+    var txRows=tx.transactions&&tx.transactions.length?tx.transactions.map(function(tx){return'<tr><td><strong>'+esc(tx.user_email||tx.user_id)+'</strong></td><td style="color:'+(tx.amount>=0?'var(--success)':'var(--danger)')+';font-weight:600">'+(tx.amount>=0?'+':'')+tx.amount.toLocaleString()+'</td><td><span class="badge '+(tx.type==='grant'?'badge-success':tx.type==='consumption'?'badge-warn':'badge-info')+'">'+tx.type+'</span></td><td>'+esc(tx.description||'-')+'</td><td>'+fmtDateTime(tx.created_at)+'</td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📭</div>暂无交易记录</div></td></tr>';
+    var txTable='<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 最近交易</h2></div><table><thead><tr><th>用户</th><th>数量</th><th>类型</th><th>说明</th><th>时间</th></tr></thead><tbody>'+txRows+'</tbody></table></div>';
+
+    c.innerHTML='<h1 class="page-title">额度管理</h1>'+cards+grant+modelTable+logTable+txTable;
+
     c.querySelector('.grant-btn').addEventListener('click',function(){
       var uid=c.querySelector('.grant-uid').value,amt=c.querySelector('.grant-amt').value,desc=c.querySelector('.grant-desc').value;
-      if(!uid||!amt||parseInt(amt)<=0){toast('请填写用户ID和有效数量',false);return}
+      if(!uid||!amt||parseInt(amt)<=0){toast('请选择用户和有效数量',false);return}
       c.querySelector('.grant-msg').innerHTML='<span style="color:var(--muted)">处理中...</span>';
       api('/admin/credits/grant',{method:'POST',body:JSON.stringify({userId:uid,amount:parseInt(amt),description:desc})}).then(function(r){toast('✅ 已充值 '+parseInt(amt).toLocaleString()+' credits');renderCredits(c)}).catch(function(e){c.querySelector('.grant-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>'});
     });
   }).catch(function(e){c.innerHTML='<h1 class="page-title">额度管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
 }
 
+// ---- Activation Codes ----
+function renderActivation(c){
+var atOpts='<option value="restricted">受限用户</option><option value="standard" selected>标准用户</option><option value="advanced">高级用户</option>';
+function load(){
+c.innerHTML='<h1 class="page-title">激活码管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+api('/admin/activation-codes').then(function(codes){
+var rows=codes.length?codes.map(function(a){
+var st=a.status==='pending'?'<span class="badge badge-success">有效</span>':'<span class="badge badge-warn">'+a.status+'</span>';
+return'<tr><td><code style="font-size:12px">'+esc(a.code)+'</code></td><td>'+esc(a.account_type||'standard')+'</td><td>'+st+'</td><td>'+(a.used_by||'—')+'</td><td>'+fmtDate(a.created_at)+'</td></tr>';
+}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🎫</div>暂无激活码</div></td></tr>';
+c.innerHTML='<h1 class="page-title">激活码管理</h1>'+
+'<div class="card" style="max-width:500px;margin-bottom:20px"><div class="card-header"><h2>🎫 生成激活码</h2></div>'+
+'<div class="form-row form-row-3"><div><label>数量</label><input class="ac-count" type="number" min="1" max="100" value="1"></div>'+
+'<div><label>账号类型</label><select class="ac-type">'+atOpts+'</select></div>'+
+'<div><label>有效期(天)</label><input class="ac-days" type="number" min="0" value="0" placeholder="0=不限"></div></div>'+
+'<button class="btn btn-primary gen-btn">生成激活码</button></div>'+
+'<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 已有激活码</h2></div><table><thead><tr><th>激活码</th><th>类型</th><th>状态</th><th>使用者</th><th>创建时间</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+c.querySelector('.gen-btn').addEventListener('click',function(){
+var cnt=parseInt(c.querySelector('.ac-count').value)||1;
+var tp=c.querySelector('.ac-type').value;
+var days=parseInt(c.querySelector('.ac-days').value)||0;
+api('/admin/activation-codes',{method:'POST',body:JSON.stringify({count:cnt,accountType:tp,expiresInDays:days||null})}).then(function(r){toast('已生成 '+r.codes.length+' 个激活码');load()}).catch(function(e){toast(e.message,false)});
+});
+}).catch(function(e){c.innerHTML='<h1 class="page-title">激活码管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+}
+load();
+}
+// ---- Pricing ----
+function renderPricing(c){
+  c.innerHTML='<h1 class="page-title">模型定价</h1><div class="card" style="margin-bottom:16px"><div class="card-header"><h2>💲 添加/修改模型价格</h2></div>'+
+    '<div class="form-row form-row-3"><div><label>模型标识</label><input class="pm-model" placeholder="如 deepseek-v4-pro"></div>'+
+    '<div><label>输入价格 (cr/1K)</label><input class="pm-input" type="number" step="0.1" min="0" placeholder="0.5"></div>'+
+    '<div><label>输出价格 (cr/1K)</label><input class="pm-output" type="number" step="0.1" min="0" placeholder="2"></div></div>'+
+    '<div class="form-row" style="grid-template-columns:1fr 2fr"><div><label>缓存折扣</label><input class="pm-cache" type="number" step="0.01" min="0" max="1" placeholder="0.1" value="0.1"></div><div style="display:flex;align-items:flex-end;padding-bottom:2px"><span style="font-size:12px;color:var(--muted)">缓存命中按此比例收费（0.1=1折，0=免费，1=原价）</span></div></div>'+
+    '<div class="pm-msg" style="font-size:13px;margin-bottom:12px"></div>'+
+    '<button class="btn btn-primary add-price-btn">保存</button></div>'+
+    '<div class="card pricing-list"><span style="color:var(--muted)">加载中...</span></div>';
+  loadPricing();
+  c.querySelector('.add-price-btn').addEventListener('click',function(){
+    var m=c.querySelector('.pm-model').value.trim(),i=parseFloat(c.querySelector('.pm-input').value),o=parseFloat(c.querySelector('.pm-output').value),cr=parseFloat(c.querySelector('.pm-cache').value);
+    if(!m||isNaN(i)||isNaN(o)){toast('请填写完整',false);return}
+    api('/admin/pricing/'+encodeURIComponent(m),{method:'PUT',body:JSON.stringify({inputRate:i,outputRate:o,cacheReadRatio:isNaN(cr)?0.1:cr})}).then(function(){
+      toast('✅ 价格已保存');loadPricing();
+    }).catch(function(e){toast(e.message,false)});
+  });
+  function loadPricing(){
+    api('/admin/pricing/models').then(function(items){
+      var rows=items.length?items.map(function(p){
+        var st=p.priced?'<span class="badge badge-success">已定价</span>':'<span class="badge badge-warn">未定价</span>';
+        return'<tr><td><strong>'+esc(p.model)+'</strong><td>'+esc(p.name)+'</td><td>'+esc(p.provider)+'</td><td>'+st+'</td><td>'+(p.priced?p.input_rate+''+p.output_rate:'—')+'</td><td>'+fmtDateTime(p.updatedAt)+'</td>'+
+          '<td><button class="btn btn-ghost edit-price-btn" data-m="'+esc(p.model)+'" data-i="'+p.inputRate+'" data-o="'+p.outputRate+'" data-cr="'+p.cacheReadRatio+'">✏️ 定价</button></td></tr>';
+      }).join(''):'<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div>暂无渠道模型，请先添加渠道</div></td></tr>';
+      c.querySelector('.pricing-list').innerHTML='<div class="card-header"><h2>📋 当前价格表</h2></div><table><thead><tr><th>模型ID</th><th>名称</th><th>供应商</th><th>状态</th><th>价格(入/出)</th><th>更新时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      c.querySelectorAll('.edit-price-btn').forEach(function(b){
+        b.addEventListener('click',function(){
+          c.querySelector('.pm-model').value=b.dataset.m;
+          c.querySelector('.pm-input').value=b.dataset.i;
+          c.querySelector('.pm-output').value=b.dataset.o;
+          c.querySelector('.pm-cache').value=b.dataset.cr||'0.1';
+        });
+      });
+      c.querySelectorAll('.del-price-btn').forEach(function(b){
+        b.addEventListener('click',function(){
+          if(!confirm('确定删除 '+b.dataset.m+' 的价格配置？'))return;
+          api('/admin/pricing/'+encodeURIComponent(b.dataset.m),{method:'DELETE'}).then(function(){toast('已删除');loadPricing()}).catch(function(e){toast(e.message,false)});
+        });
+      });
+    }).catch(function(e){c.querySelector('.pricing-list').innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div>'});
+  }
+}
+
 function esc(s){s=s||'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function formatTokens(n){n=Number(n||0);return n>=1000000?(n/1000000).toFixed(1)+'M':n>=1000?(n/1000).toFixed(1)+'K':n.toLocaleString()}
 function fmtDate(t){return new Date(t).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})}
 function fmtDateTime(t){return new Date(t).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 
@@ -246,6 +366,7 @@ function init(){
         '<a href="#users"><span class="nav-icon">👥</span> 用户管理</a>'+
         '<a href="#channels"><span class="nav-icon">🔌</span> 渠道管理</a>'+
         '<a href="#credits"><span class="nav-icon">💰</span> 额度管理</a>'+
+        '<a href="#activation"><span class="nav-icon">🎫</span> 激活码</a><a href="#pricing"><span class="nav-icon">💲</span> 模型定价</a>'+
       '</div>'+
       '<div class="sidebar-footer"><a href="#" id="logout-btn">🚪 退出登录</a></div>'+
     '</nav>'+
