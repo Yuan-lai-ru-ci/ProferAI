@@ -81,7 +81,8 @@ export function TabBar(): React.ReactElement {
   const automationSessionIds = React.useMemo(() => {
     const ids = new Set<string>()
     for (const s of agentSessions) {
-      if (s.sourceAutomationId) ids.add(s.id)
+      // 委派来源优先：同时带委派与定时任务来源时不算定时任务（#993）
+      if (s.sourceAutomationId && !s.sourceDelegationId) ids.add(s.id)
     }
     return ids
   }, [agentSessions])

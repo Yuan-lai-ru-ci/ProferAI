@@ -624,6 +624,9 @@ function startDelegation(
     parentSessionId: ctx.sessionId,
     rootSessionId,
     sourceDelegationId: delegationId,
+    // 继承父会话的定时任务来源，保留自动化血缘；前端以 sourceDelegationId 优先
+    // 展示委派徽章，不会被误判为定时任务（#993）。
+    sourceAutomationId: parent?.sourceAutomationId,
     delegationRole: role,
     delegationStatus: 'running',
     delegationDepth: (parent?.delegationDepth ?? 0) + 1,
