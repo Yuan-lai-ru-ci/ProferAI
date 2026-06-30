@@ -15,7 +15,8 @@
  * 在 electron app 的 build 链中调用（见 package.json build:cli）。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const color = {
@@ -50,18 +51,57 @@ mkdirSync(outDir, { recursive: true })
 
 console.log(`${color.cyan}[build:cli]${color.reset} 编译 proma CLI → ${color.dim}${outFile}${color.reset}`)
 
+// ── Windows 短路径 workaround ──
+// bun build --compile 在 Windows 上尝试复制自身到临时目录时，
+// 若 bun.exe 位于过长路径（如 ~/.bun/bin/bun.exe）会报 ENOENT。
+// 解决：将 bun.exe 复制到短路径（os.tmpdir()）后通过
+// --compile-executable-path 指向副本，编译后清理。
+let tempBunPath: string | undefined
+const compileArgs = ['build', '--compile', '--outfile', outFile, cliEntry]
+
+if (isWindows) {
+  const bunExe = process.execPath // bun 中即 bun.exe 自身
+  const tmpDir = tmpdir()
+  const bunName = `bun-temp-${Date.now()}.exe`
+  tempBunPath = join(tmpDir, bunName)
+
+  try {
+    copyFileSync(bunExe, tempBunPath)
+    compileArgs.splice(2, 0, '--compile-executable-path', tempBunPath)
+    console.log(`${color.dim}[build:cli] Windows 短路径 workaround: ${tempBunPath}${color.reset}`)
+  } catch {
+    console.warn(`${color.yellow}[build:cli] 无法复制 bun 到临时目录，尝试直接编译${color.reset}`)
+  }
+}
+
 const started = Date.now()
 const result = spawnSync(
   'bun',
-  ['build', '--compile', '--outfile', outFile, cliEntry],
+  compileArgs,
   { cwd: join(repoRoot, 'apps/cli'), stdio: 'inherit' },
 )
 
 if (result.status !== 0) {
+  // 清理临时 bun 副本后再报错
+  if (tempBunPath) {
+    try { unlinkSync(tempBunPath) } catch { /* ignore */ }
+  }
   fail(`bun build --compile 失败（exit ${result.status}）`)
 }
 if (!existsSync(outFile)) {
+  if (tempBunPath) {
+    try { unlinkSync(tempBunPath) } catch { /* ignore */ }
+  }
   fail(`编译完成但未产出二进制: ${outFile}`)
+}
+
+// 清理临时 bun 副本
+if (tempBunPath) {
+  try {
+    unlinkSync(tempBunPath)
+  } catch {
+    console.warn(`${color.yellow}[build:cli] 无法删除临时 bun 副本: ${tempBunPath}${color.reset}`)
+  }
 }
 
 const sizeMb = (statSync(outFile).size / 1024 / 1024).toFixed(0)
