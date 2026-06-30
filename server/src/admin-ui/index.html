@@ -244,10 +244,11 @@ function renderCredits(c){
       '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+(s.consumed_this_month||0).toLocaleString()+'</div><div class="stat-lbl">本月消耗</div></div>'+
       '<div class="stat-card"><div class="stat-icon">👥</div><div class="stat-val">'+(s.users_with_credits||0)+'</div><div class="stat-lbl">额度用户</div></div></div>';
 
-    // 充值
+    // 充值（金额以美元计；后端 credits 以 quota 单位存，500000 quota = $1）
+    var QPU=500000;
     var grant='<div class="card" style="max-width:600px;margin-bottom:20px"><div class="card-header"><h2>💳 手动充值</h2></div>'+
-      '<div class="form-row form-row-3"><div><label>用户</label><select class="grant-uid" style="font-size:12px"><option value="">选择用户...</option>'+(ud.users||[]).map(function(u){return'<option value="'+u.id+'">'+esc(u.email)+' ('+esc(u.display_name||'')+') — '+(u.credit_balance||0).toLocaleString()+' cr</option>'}).join('')+'</select></div>'+
-      '<div><label>数量</label><input class="grant-amt" type="number" min="1" placeholder="credits"></div>'+
+      '<div class="form-row form-row-3"><div><label>用户</label><select class="grant-uid" style="font-size:12px"><option value="">选择用户...</option>'+(ud.users||[]).map(function(u){return'<option value="'+u.id+'">'+esc(u.email)+' ('+esc(u.display_name||'')+') — $'+((u.credit_balance||0)/QPU).toFixed(2)+'</option>'}).join('')+'</select></div>'+
+      '<div><label>金额（$）</label><input class="grant-amt" type="number" min="0.01" step="0.01" placeholder="美元，如 5"></div>'+
       '<div><label>备注</label><input class="grant-desc" placeholder="充值说明"></div></div>'+
       '<div class="grant-msg" style="font-size:13px;margin-bottom:12px"></div>'+
       '<button class="btn btn-primary grant-btn">确认充值</button></div>';
@@ -271,10 +272,11 @@ function renderCredits(c){
     c.innerHTML='<h1 class="page-title">额度管理</h1>'+cards+grant+modelTable+logTable+txTable;
 
     c.querySelector('.grant-btn').addEventListener('click',function(){
-      var uid=c.querySelector('.grant-uid').value,amt=c.querySelector('.grant-amt').value,desc=c.querySelector('.grant-desc').value;
-      if(!uid||!amt||parseInt(amt)<=0){toast('请选择用户和有效数量',false);return}
+      var uid=c.querySelector('.grant-uid').value,amtUsd=parseFloat(c.querySelector('.grant-amt').value),desc=c.querySelector('.grant-desc').value;
+      if(!uid||!(amtUsd>0)){toast('请选择用户和有效金额',false);return}
+      var quota=Math.round(amtUsd*QPU);
       c.querySelector('.grant-msg').innerHTML='<span style="color:var(--muted)">处理中...</span>';
-      api('/admin/credits/grant',{method:'POST',body:JSON.stringify({userId:uid,amount:parseInt(amt),description:desc})}).then(function(r){toast('✅ 已充值 '+parseInt(amt).toLocaleString()+' credits');renderCredits(c)}).catch(function(e){c.querySelector('.grant-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>'});
+      api('/admin/credits/grant',{method:'POST',body:JSON.stringify({userId:uid,amount:quota,description:desc||('管理员充值 $'+amtUsd.toFixed(2))})}).then(function(r){toast('✅ 已充值 $'+amtUsd.toFixed(2));renderCredits(c)}).catch(function(e){c.querySelector('.grant-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>'});
     });
   }).catch(function(e){c.innerHTML='<h1 class="page-title">额度管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
 }

@@ -24,7 +24,19 @@ accountCredits.get('/', (c) => {
   })
 })
 
-// GET /v1/account/credits/usage — 当前用户请求日志
+// POST /v1/account/credits/recharge — 用户自助充值（预留）
+//
+// 当前未接入支付，返回 501 + 引导联系管理员。接支付时在此：
+//   1. 校验金额/创建 payment_orders 订单
+//   2. 跳转支付服务商 hosted checkout（带订单号/用户id 元数据）
+//   3. 支付回调 webhook 验签后调 grantCredits(userId, usd*NEWAPI_QUOTA_PER_UNIT) 加额度
+// 管理员手动充值走 admin-ui「手动充值」（已支持，按美元）。
+accountCredits.post('/recharge', (c) => {
+  return c.json({
+    error: '自助充值暂未开放，请联系管理员充值',
+    code: 'recharge_not_configured',
+  }, 501)
+})
 
 // GET /v1/account/credits/usage — 当前用户请求日志
 accountCredits.get('/usage', (c) => {
