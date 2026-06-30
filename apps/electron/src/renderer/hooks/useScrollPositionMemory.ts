@@ -16,8 +16,18 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 
-/** 模块级缓存：对话/会话 ID → 距底部像素距离 */
+/** 模块级缓存：对话/会话 ID → 距底部像素距离，LRU 淘汰防止无限增长 */
+const SCROLL_CACHE_MAX = 50
 const scrollPositionCache = new Map<string, number>()
+
+function setScrollPosition(id: string, distance: number): void {
+  scrollPositionCache.delete(id) // 先删后插维持 LRU 顺序
+  scrollPositionCache.set(id, distance)
+  if (scrollPositionCache.size > SCROLL_CACHE_MAX) {
+    const oldest = scrollPositionCache.keys().next().value
+    if (oldest !== undefined) scrollPositionCache.delete(oldest)
+  }
+}
 
 /**
  * ScrollPositionManager — 放在 Conversation（StickToBottom）内部
@@ -35,7 +45,7 @@ export function ScrollPositionManager({ id, ready }: { id: string; ready: boolea
 
     const savePosition = (): void => {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-      scrollPositionCache.set(id, distanceFromBottom)
+      setScrollPosition(id, distanceFromBottom)
     }
 
     el.addEventListener('scroll', savePosition, { passive: true })

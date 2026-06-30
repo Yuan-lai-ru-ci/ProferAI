@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
@@ -880,10 +880,14 @@ export interface QuotedFileRef {
 
 /** 解析消息中的 <attached_files> 块和 <quoted_file> 块，返回文件列表、引用列表和剩余文本 */
 export function parseAttachedFiles(content: string): { files: AttachedFileRef[]; quotes: QuotedFileRef[]; text: string } {
+  // 防止超长输入导致正则回溯性能问题
+  const MAX_PARSE_LENGTH = 100_000
+  const safeContent = content.length > MAX_PARSE_LENGTH ? content.slice(0, MAX_PARSE_LENGTH) : content
+
   const quoteRegex = /<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g
   const quotes: QuotedFileRef[] = []
   let quoteMatch: RegExpExecArray | null
-  while ((quoteMatch = quoteRegex.exec(content)) !== null) {
+  while ((quoteMatch = quoteRegex.exec(safeContent)) !== null) {
     const pathMatch = quoteMatch[0].match(/path="([^"]*)"/)
     if (pathMatch) {
       // 反解 XML 实体：&amp; 必须最后做，否则会被先一步解出的 & 误伤
@@ -897,9 +901,9 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
   }
 
   const regex = /<attached_files>\n?([\s\S]*?)\n?<\/attached_files>\n*/
-  const match = content.match(regex)
+  const match = safeContent.match(regex)
   if (!match) {
-    const cleanText = content.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '').trim()
+    const cleanText = safeContent.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '').trim()
     return { files: [], quotes, text: cleanText }
   }
 
@@ -912,7 +916,7 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
     }
   }
 
-  let text = content.replace(regex, '')
+  let text = safeContent.replace(regex, '')
   text = text.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
   text = text.trim()
   return { files, quotes, text }
@@ -1162,6 +1166,10 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
         setSettingsTab('channels')
         setSettingsOpen(true)
         break
+      case 'open_credits':
+        setSettingsTab('credits')
+        setSettingsOpen(true)
+        break
       case 'settings':
         setSettingsOpen(true)
         break
@@ -1191,6 +1199,8 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
       case 'open_channel_settings':
       case 'settings':
         return <Settings className="size-3.5 mr-1.5" />
+      case 'open_credits':
+        return <Wallet className="size-3.5 mr-1.5" />
       case 'open_external':
         return <ExternalLink className="size-3.5 mr-1.5" />
       case 'retry':

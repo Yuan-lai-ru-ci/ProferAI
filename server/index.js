@@ -25,7 +25,7 @@ import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
-import { corsMiddleware, authMiddleware, honoAuthMiddleware } from './src/middleware.js'
+import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
 import { authRoutes } from './src/routes/auth.js'
 import { workspaceRoutes } from './src/routes/workspaces.js'
@@ -37,10 +37,11 @@ import { adminUsers } from './src/routes/admin/users.js'
 import { adminChannels } from './src/routes/admin/channels.js'
 import { adminCredits } from './src/routes/admin/credits.js'
 import { adminDashboard } from './src/routes/admin/dashboard.js'
+import { adminActivationCodes } from './src/routes/admin/activation-codes.js'
+import { adminPricing } from './src/routes/admin/pricing.js'
 import { accountChannels } from './src/routes/account/channels.js'
 import { accountCredits } from './src/routes/account/credits.js'
 import { proxyRoutes } from './src/routes/proxy/chat.js'
-import { creditCheckMiddleware } from './src/middleware/credits.js'
 
 // ===== 初始化 =====
 initAdmin()
@@ -50,8 +51,14 @@ const app = new Hono()
 
 app.use('*', async (c, next) => {
   if (c.req.method === 'OPTIONS') {
-    corsMiddleware(c)
-    return new Response(null, { status: 204 })
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+      },
+    })
   }
   corsMiddleware(c)
   await next()
@@ -72,6 +79,8 @@ adminApp.route('/users', adminUsers)
 adminApp.route('/channels', adminChannels)
 adminApp.route('/credits', adminCredits)
 adminApp.route('/dashboard', adminDashboard)
+adminApp.route('/activation-codes', adminActivationCodes)
+adminApp.route('/pricing', adminPricing)
 app.route('/v1/admin', adminApp)
 
 // Account 路由（需要 auth）
@@ -81,10 +90,14 @@ accountApp.route('/channels', accountChannels)
 accountApp.route('/credits', accountCredits)
 app.route('/v1/account', accountApp)
 
-// Proxy 路由（需要 auth + 额度检查）
+// Proxy 路由（需要 auth）
+// 用 proxyAuthMiddleware：兼容长效 relay 令牌和标准 accessToken，
+// 避免客户端把 1h accessToken 当渠道 key 长期持有导致中途 401
+//
+// 计费已收敛到 New API 单一计费方：Profer 不再预扣 credits，
+// proxy 只认人 + 透传转发，额度校验/扣费完全交给 New API。
 const proxyApp = new Hono()
-proxyApp.use('*', honoAuthMiddleware)
-proxyApp.use('*', creditCheckMiddleware)
+proxyApp.use('*', proxyAuthMiddleware)
 proxyApp.route('/', proxyRoutes)
 app.route('/v1/proxy', proxyApp)
 
@@ -103,6 +116,12 @@ app.get('/admin/*', (c) => {
 
 // Health check
 app.get('/health', (c) => c.json({ status: 'ok', time: Date.now() }))
+
+// 全局错误处理
+app.onError((err, c) => {
+  console.error('[Proma] 未处理的错误:', err.message)
+  return c.json({ error: '服务器内部错误' }, 500)
+})
 
 // ===== 启动 =====
 console.log('[Proma Team Server] 启动中...')

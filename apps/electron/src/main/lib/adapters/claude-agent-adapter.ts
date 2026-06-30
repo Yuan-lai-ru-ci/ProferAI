@@ -24,6 +24,7 @@ import {
   THINKING_SIGNATURE_ERROR_TITLE,
   isThinkingSignatureError as matchesThinkingSignatureError,
 } from '@proma/shared'
+import { detectInsufficientCredits } from '@proma/core'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
@@ -434,6 +435,25 @@ export function mapSDKErrorToTypedError(
   }
 
   const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
+
+  // 额度不足：Profer 自有 402 或 New API 上游 403「预扣费额度失败」（含美元文案）。
+  // 必须在 errorMap['authentication_failed'] 之前拦截——New API 的额度 403 文本含
+  // "Failed to authenticate" 会被误判成 invalid_api_key 认证失败。
+  const creditInfo = detectInsufficientCredits(`${detailedMessage}\n${originalError}`, httpStatus ?? undefined)
+  if (creditInfo) {
+    return {
+      code: 'insufficient_credits',
+      title: '额度不足',
+      message: creditInfo.message || '平台额度不足，请联系管理员充值',
+      actions: [
+        { key: 'c', label: '查看额度', action: 'open_credits' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: false,
+      originalError,
+    }
+  }
+
   if (httpStatus != null && (httpStatus === 429 || httpStatus >= 500)) {
     const isRateLimited = httpStatus === 429
     const isUnavailable = httpStatus === 503
@@ -467,8 +487,8 @@ export function mapSDKErrorToTypedError(
 
   const mapped = errorMap[errorCode] || {
     code: 'unknown_error' as ErrorCode,
-    title: '',
-    message: detailedMessage || errorCode,
+    title: detailedMessage ? '执行错误' : '未知错误',
+    message: detailedMessage || `SDK 返回未识别错误 (errorType: ${errorCode})`,
     canRetry: false,
   }
 
@@ -487,10 +507,24 @@ export function mapSDKErrorToTypedError(
   }
 }
 
-/** 从 assistant 错误消息中提取详细信息 */
-export function extractErrorDetails(msg: { error?: { message: string }; message?: { content?: Array<Record<string, unknown>> } }): { detailedMessage: string; originalError: string } {
-  let detailedMessage = msg.error?.message ?? '未知错误'
-  let originalError = msg.error?.message ?? '未知错误'
+/** 从 assistant 错误消息中提取详细信息
+ *  注意：SDK 返回的 msg.error 可能是字符串（如 "authentication_failed"）或对象 {message, errorType} */
+export function extractErrorDetails(msg: { error?: string | { message?: string; errorType?: string }; message?: { content?: Array<Record<string, unknown>> } }): { detailedMessage: string; originalError: string } {
+  // msg.error 可能是字符串（错误码）或对象
+  const rawErrorStr = typeof msg.error === 'string' ? msg.error : (msg.error?.message ?? '')
+  let detailedMessage = rawErrorStr || '未知错误'
+  let originalError = rawErrorStr || '未知错误'
+  console.error(`[extractErrorDetails] 输入: error=${typeof msg.error === 'string' ? `"${msg.error}"` : `object(message="${msg.error?.message ?? '(空)'}")`}, content blocks=${msg.message?.content?.length ?? 0}`)
+  if (Array.isArray(msg.message?.content)) {
+    for (const block of msg.message.content) {
+      if (block && typeof block === 'object') {
+        console.error(`[extractErrorDetails] content block type=${block.type}, keys=${Object.keys(block).join(',')}`)
+        if (block.type === 'text' && 'text' in block) {
+          console.error(`[extractErrorDetails] text block (前300字符): ${String((block as { text: string }).text).slice(0, 300)}`)
+        }
+      }
+    }
+  }
 
   try {
     const content = msg.message?.content
@@ -504,8 +538,14 @@ export function extractErrorDetails(msg: { error?: { message: string }; message?
         if (apiErrorMatch?.[1]) {
           try {
             const apiErrorObj = JSON.parse(apiErrorMatch[1])
-            if (apiErrorObj.error?.message) {
+            // API 返回的 error 可能是字符串（如 "预扣费额度失败..."）或对象 {message: "..."}
+            if (typeof apiErrorObj.error === 'string') {
+              detailedMessage = apiErrorObj.error
+            } else if (apiErrorObj.error?.message) {
               detailedMessage = apiErrorObj.error.message
+            } else {
+              // 有其他字段如 code, type 等，直接用完整 JSON
+              detailedMessage = JSON.stringify(apiErrorObj)
             }
           } catch {
             detailedMessage = fullText

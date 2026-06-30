@@ -30,9 +30,12 @@ export function SystemPromptSelector(): React.ReactElement {
 
   /** 懒加载配置 */
   React.useEffect(() => {
+    let cancelled = false
     window.electronAPI.getSystemPromptConfig().then((cfg) => {
+      if (cancelled) return
       setConfig(cfg)
     }).catch(console.error)
+    return () => { cancelled = true }
   }, [setConfig])
 
   const selectedPrompt = config.prompts.find((p) => p.id === selectedId)

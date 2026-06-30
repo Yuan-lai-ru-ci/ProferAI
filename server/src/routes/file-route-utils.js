@@ -19,15 +19,15 @@ export function safeDecodeURI(input) {
 }
 
 export function canModifyRows(rows, userId) {
-  let hasOwnedRow = false
+  let hasModifiableRow = false
   for (const row of rows) {
     if (!row.uploaded_by) {
       if (!row.is_directory) return false
+      hasModifiableRow = true
       continue
     }
     if (row.uploaded_by !== userId) return false
-    hasOwnedRow = true
+    hasModifiableRow = true
   }
-  // 所有行都是目录且至少有一行属于该用户
-  return hasOwnedRow
+  return hasModifiableRow
 }

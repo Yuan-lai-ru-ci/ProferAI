@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { Camera, ImagePlus, Volume2 } from 'lucide-react'
+import { Camera, ImagePlus, Volume2, LogIn, LogOut } from 'lucide-react'
 import Picker from '@emoji-mart/react'
 import data from '@emoji-mart/data'
 import {
@@ -26,6 +26,8 @@ import {
 } from '../ui/select'
 import { UserAvatar } from '../chat/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { authStatusAtom } from '@/atoms/identity-atoms'
+import { LoginDialog } from '@/components/auth/LoginDialog'
 import {
   notificationsEnabledAtom,
   notificationSoundEnabledAtom,
@@ -57,6 +59,8 @@ interface EmojiMartEmoji {
 
 export function GeneralSettings(): React.ReactElement {
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
+  const [authStatus, setAuthStatus] = useAtom(authStatusAtom)
+  const [loginOpen, setLoginOpen] = React.useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useAtom(notificationsEnabledAtom)
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useAtom(notificationSoundEnabledAtom)
   const [notificationSounds, setNotificationSounds] = useAtom(notificationSoundsAtom)
@@ -231,6 +235,44 @@ export function GeneralSettings(): React.ReactElement {
           </div>
         </SettingsCard>
       </SettingsSection>
+
+      {/* 账户 */}
+      <SettingsSection
+        title="账户"
+        description="登录以使用服务端渠道和团队协作功能"
+      >
+        <SettingsCard>
+          {authStatus.isLoggedIn ? (
+            <div className="flex items-center gap-3 px-4 py-4">
+              <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+              <span className="text-sm flex-1 truncate">{authStatus.teamEmail}</span>
+              <button
+                onClick={() => {
+                  window.electronAPI.auth.logout().catch(() => {})
+                  setAuthStatus({ isLoggedIn: false })
+                }}
+                className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-destructive transition-colors"
+              >
+                <LogOut size={13} />
+                退出登录
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 px-4 py-4">
+              <span className="w-2 h-2 rounded-full bg-muted-foreground/30 flex-shrink-0" />
+              <span className="text-sm text-muted-foreground flex-1">未登录</span>
+              <button
+                onClick={() => setLoginOpen(true)}
+                className="flex items-center gap-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors"
+              >
+                <LogIn size={13} />
+                登录
+              </button>
+            </div>
+          )}
+        </SettingsCard>
+      </SettingsSection>
+      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
 
       {/* 通用设置 */}
       <SettingsSection

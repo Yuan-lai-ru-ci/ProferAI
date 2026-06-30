@@ -5,7 +5,7 @@
  * 移植自 proma-frontend 的 chat-view/copy-button.tsx。
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { CopyIcon, CheckIcon } from 'lucide-react'
 import { MessageAction } from '@/components/ai-elements/message'
 
@@ -16,16 +16,22 @@ interface CopyButtonProps {
 
 export function CopyButton({ content }: CopyButtonProps): React.ReactElement {
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
 
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(content)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 2000)
     } catch (error) {
       console.error('复制失败:', error)
     }
   }, [content])
+
+  useEffect(() => {
+    return () => clearTimeout(timerRef.current)
+  }, [])
 
   return (
     <MessageAction

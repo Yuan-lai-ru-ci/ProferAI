@@ -22,8 +22,18 @@ import {
 
 /** 文件存在性缓存（模块级共享，避免重复 IPC）。key = filePath + basePaths */
 const fileExistsCache = new Map<string, boolean>()
+/** 缓存最大条目数，防止长会话内存无限增长 */
+const MAX_CACHE_SIZE = 500
 function existsCacheKey(filePath: string, bases: string[]): string {
   return `${filePath}\0${bases.join('\0')}`
+}
+/** 写入缓存，超限时删除最旧条目 */
+function cacheSet(key: string, value: boolean): void {
+  if (fileExistsCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = fileExistsCache.keys().next().value
+    if (firstKey !== undefined) fileExistsCache.delete(firstKey)
+  }
+  fileExistsCache.set(key, value)
 }
 
 /** 图片扩展名 */
@@ -148,12 +158,18 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
       (entries) => {
         if (!entries[0]?.isIntersecting) return
         observer.disconnect()
-        const bases = candidateBases.length > 0 ? candidateBases : undefined
         const sessionId = store.get(currentAgentSessionIdAtom)
-        window.electronAPI.resolveFilePath(cleanPath, { sessionId: sessionId ?? undefined, candidateBasePaths: bases })
+
+        // 绝对路径：不传 options，允许访问任意位置（如 Desktop、Documents 等）
+        // 相对路径：传 sessionId 和 candidateBasePaths，限制在授权目录内
+        const accessOptions = isAbsolute
+          ? undefined
+          : { sessionId: sessionId ?? undefined, candidateBasePaths: candidateBases.length > 0 ? candidateBases : undefined }
+
+        window.electronAPI.resolveFilePath(cleanPath, accessOptions)
           .then((resolved) => {
             const exists = resolved !== null
-            fileExistsCache.set(key, exists)
+            cacheSet(key, exists)
             setFileStatus(exists ? 'resolved' : 'broken')
           })
           .catch(() => { /* IPC 失败不标记 */ })
@@ -162,17 +178,20 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [cleanPath, candidateBases, store])
+  }, [cleanPath, candidateBases, isAbsolute, store])
 
   const handleClick = React.useCallback(() => {
     const sessionId = store.get(currentAgentSessionIdAtom)
-    if (!sessionId) return
-
-    openPreview(sessionId, {
-      filePath: cleanPath,
-      previewOnly: true,
-      basePaths: candidateBases.length > 0 ? candidateBases : undefined,
-    })
+    if (sessionId) {
+      openPreview(sessionId, {
+        filePath: cleanPath,
+        previewOnly: true,
+        basePaths: candidateBases.length > 0 ? candidateBases : undefined,
+      })
+    } else {
+      // 无 session 时直接调用系统默认程序打开
+      window.electronAPI.systemOpenFile(cleanPath).catch(() => {})
+    }
   }, [store, openPreview, cleanPath, candidateBases])
 
   const handleShowInFolder = React.useCallback(() => {
@@ -229,8 +248,8 @@ export function isAbsoluteFilePath(text: string): boolean {
   // 剥离末尾行号后缀再检测
   const { path: clean } = stripLineCol(trimmed)
 
-  // macOS/Linux 绝对路径：以 / 开头，至少两级
-  if (clean.startsWith('/') && /^\/[^\n]+\/[^\n]+$/.test(clean)) {
+  // macOS/Linux 绝对路径：以 / 开头，包含可预览扩展名或多级路径
+  if (clean.startsWith('/') && /^\/[^\n]+(?:\/[^\n]+)*$/.test(clean)) {
     // 排除常见的非路径模式（如 /regex/ 模式）
     if (clean.endsWith('/') && !clean.includes('.')) return false
     return true

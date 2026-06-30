@@ -32,7 +32,7 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   anthropic: 'https://api.anthropic.com',
   'anthropic-compatible': '',
   openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com/anthropic',
+  deepseek: 'https://api.deepseek.com',
   google: 'https://generativelanguage.googleapis.com',
   'kimi-api': 'https://api.moonshot.cn/anthropic',
   'kimi-coding': 'https://api.kimi.com/coding/v1',
@@ -44,6 +44,23 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   xiaomi: 'https://api.xiaomimimo.com/anthropic',
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   custom: '',
+}
+
+/**
+ * Agent 模式使用的 Anthropic 兼容 Base URL。
+ *
+ * `PROVIDER_DEFAULT_URLS` 永远表示 Chat / 模型列表使用的 Base URL，
+ * 这里单独维护 Agent SDK 入口，避免 DeepSeek 这类双协议供应商混用端点。
+ */
+export const PROVIDER_DEFAULT_AGENT_URLS: Partial<Record<ProviderType, string>> = {
+  anthropic: 'https://api.anthropic.com',
+  deepseek: 'https://api.deepseek.com/anthropic',
+  'kimi-api': 'https://api.moonshot.cn/anthropic',
+  'kimi-coding': 'https://api.kimi.com/coding/v1',
+  'zhipu-coding': 'https://open.bigmodel.cn/api/anthropic',
+  minimax: 'https://api.minimaxi.com/anthropic',
+  xiaomi: 'https://api.xiaomimimo.com/anthropic',
+  'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
 }
 
 /**
@@ -118,8 +135,10 @@ export interface Channel {
   name: string
   /** AI 供应商类型 */
   provider: ProviderType
-  /** API Base URL */
+  /** API Base URL（Chat 模式 / OpenAI 兼容端点） */
   baseUrl: string
+  /** Agent 模式 Anthropic 兼容端点（为空则自动推导） */
+  agentBaseUrl?: string
   /** 加密后的 API Key（base64 编码） */
   apiKey: string
   /** 可用模型列表 */
@@ -139,6 +158,7 @@ export interface ChannelCreateInput {
   name: string
   provider: ProviderType
   baseUrl: string
+  agentBaseUrl?: string
   /** 明文 API Key，主进程会加密后存储 */
   apiKey: string
   models: ChannelModel[]
@@ -152,6 +172,7 @@ export interface ChannelUpdateInput {
   name?: string
   provider?: ProviderType
   baseUrl?: string
+  agentBaseUrl?: string
   /** 明文 API Key，为空字符串表示不更新 */
   apiKey?: string
   models?: ChannelModel[]
@@ -224,4 +245,8 @@ export const CHANNEL_IPC_CHANNELS = {
   SYNC_FROM_SERVER: 'channel:sync-from-server',
   /** 检查是否处于商业模式 */
   GET_COMMERCIAL_MODE: 'channel:get-commercial-mode',
+  /** 获取构建目标（oss/commercial） */
+  GET_BUILD_TARGET: 'channel:get-build-target',
+  /** 获取账号能力（商业模式+自配权限+账号类型） */
+  GET_ACCOUNT_CAPABILITIES: 'channel:get-account-capabilities',
 } as const

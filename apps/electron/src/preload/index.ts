@@ -221,6 +221,12 @@ export interface ElectronAPI {
   /** 检查是否处于商业模式 */
   getCommercialMode: () => Promise<boolean>
 
+  /** 获取账号能力（商业模式+自配权限+账号类型） */
+  getAccountCapabilities: () => Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }>
+
+  /** 获取构建目标 */
+  getBuildTarget: () => Promise<'oss' | 'commercial'>
+
   // ===== 对话管理相关 =====
 
   /** 获取对话列表 */
@@ -239,7 +245,7 @@ export interface ElectronAPI {
   updateConversationTitle: (id: string, title: string) => Promise<ConversationMeta>
 
   /** 更新对话使用的模型/渠道 */
-  updateConversationModel: (id: string, modelId: string, channelId: string) => Promise<ConversationMeta>
+  updateConversationModel: (id: string, modelId?: string, channelId?: string) => Promise<ConversationMeta>
 
   /** 删除对话 */
   deleteConversation: (id: string) => Promise<void>
@@ -334,7 +340,7 @@ export interface ElectronAPI {
   onSystemThemeChanged: (callback: (isDark: boolean) => void) => () => void
 
   /** 订阅用户手动切换主题事件（跨窗口同步，返回清理函数） */
-  onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string }) => void) => () => void
+  onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }) => void) => () => void
 
   // ===== Scratch Pad =====
 
@@ -1100,7 +1106,7 @@ export interface ElectronAPI {
     upload: (input: { workspaceId: string; workspaceSlug: string; fileName: string; fileData: Uint8Array; sourcePath?: string }) => Promise<{ success: boolean; path: string; size: number; error?: string }>
     download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) => Promise<string | null>
     delete: (input: { workspaceId: string; workspaceSlug: string; filePath: string }) => Promise<boolean>
-    getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }>>
+    getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }> | null>
     createDirectory: (input: { workspaceId: string; dirPath: string }) => Promise<boolean>
     move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }>
   }
@@ -1234,6 +1240,14 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE)
   },
 
+  getAccountCapabilities: () => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES)
+  },
+
+  getBuildTarget: () => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_BUILD_TARGET)
+  },
+
   // 对话管理
   listConversations: () => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.LIST_CONVERSATIONS)
@@ -1255,7 +1269,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_TITLE, id, title)
   },
 
-  updateConversationModel: (id: string, modelId: string, channelId: string) => {
+  updateConversationModel: (id: string, modelId?: string, channelId?: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_MODEL, id, modelId, channelId)
   },
 
@@ -1379,8 +1393,8 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, listener) }
   },
 
-  onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string }) => void) => {
-    const listener = (_: unknown, payload: { themeMode: string; themeStyle: string }): void => callback(payload)
+  onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }) => void) => {
+    const listener = (_: unknown, payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }): void => callback(payload)
     ipcRenderer.on(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener) }
   },

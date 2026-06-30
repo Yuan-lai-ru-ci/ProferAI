@@ -5,12 +5,14 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
-import { join, resolve, sep, dirname } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep, dirname, basename } from 'node:path'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
+
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
+import { getBuildTarget } from './lib/build-target'
 import type {
   QuickTaskSubmitInput,
   VoiceDictationAudioChunkInput,
@@ -184,6 +186,7 @@ import {
   cleanupStaleAttachedPaths,
   searchAgentSessionMessages,
   searchAgentSessionReferences,
+  createDelegatedChildSessionMeta,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
@@ -293,6 +296,19 @@ function getAuthorizedRoots(options?: FileAccessOptions): string[] {
     join(tmpdir(), 'proma-preview'),
   ]
 
+  // 添加用户常用目录授权（Desktop、Documents、Downloads 等）
+  // 这些目录通常包含用户希望与 Agent 交互的文件
+  // 注意：不包含用户主目录本身，防止 Agent 访问 ~/.ssh、~/.aws 等敏感目录
+  const userHome = homedir()
+  const commonUserDirs = [
+    join(userHome, 'Desktop'),
+    join(userHome, 'Documents'),
+    join(userHome, 'Downloads'),
+    join(userHome, 'Pictures'),
+    join(userHome, 'Videos'),
+  ]
+  roots.push(...commonUserDirs)
+
   const workspaceSlugs = new Set<string>()
 
   if (options?.sessionId) {
@@ -327,7 +343,51 @@ function isUnderRoot(resolvedPath: string, root: string): boolean {
   return resolvedPath === resolvedRoot || resolvedPath.startsWith(resolvedRoot + sep)
 }
 
+function isResolvedPathInsideRoot(targetPath: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(targetPath))
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+}
+
+function assertInsideAgentWorkspaces(targetPath: string): void {
+  if (!isResolvedPathInsideRoot(targetPath, getAgentWorkspacesDir())) {
+    throw new Error('访问路径超出 Agent 工作区范围')
+  }
+}
+
+function parseHttpUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    // SSRF 防护：阻止打开本地/私有网络地址，防止攻击者探测内网服务
+    const hostname = parsed.hostname.toLowerCase()
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '[::1]' ||
+      hostname === '[::]' ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+      hostname.startsWith('169.254.') ||
+      hostname.endsWith('.local')
+    ) {
+      console.warn('[IPC] parseHttpUrl 拒绝本地/私有地址:', hostname)
+      return null
+    }
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
 function isPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
+  // deny-by-default：渲染进程不可信，未提供访问选项时拒绝越权访问
+  // 调用方必须显式传递 sessionId 或 workspaceSlug 来声明授权上下文
+  if (!options) {
+    console.warn('[IPC] isPathAllowed 拒绝：未提供 FileAccessOptions')
+    return false
+  }
   let resolved: string
   try {
     resolved = realpathSync(resolve(filePath))
@@ -975,12 +1035,13 @@ export function registerIpcHandlers(): void {
         console.warn('[IPC] shell:open-external 收到无效的 URL')
         return
       }
-      // 仅允许 http/https 协议，防止安全风险
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      // 仅允许标准 http/https URL，防止畸形协议被交给系统处理。
+      const safeUrl = parseHttpUrl(url)
+      if (!safeUrl) {
         console.warn('[IPC] shell:open-external 仅支持 http/https 协议:', url)
         return
       }
-      await shell.openExternal(url)
+      await shell.openExternal(safeUrl)
     }
   )
 
@@ -1007,7 +1068,8 @@ export function registerIpcHandlers(): void {
           spawnSync('open', [absPath], { timeout: 5000 })
         }
       } else {
-        await shell.openPath(absPath)
+        const errMsg = await shell.openPath(absPath)
+        if (errMsg) console.warn('[IPC] shell:system-open-file 打开失败:', errMsg)
       }
     }
   )
@@ -1059,9 +1121,17 @@ export function registerIpcHandlers(): void {
   // ===== 渠道管理相关 =====
 
   // 获取所有渠道（apiKey 保持加密态）
+  // 商业模式下先从服务端拉取最新渠道，再返回本地列表
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.LIST,
     async (): Promise<Channel[]> => {
+      try {
+        const { getTeamAuth } = require('./lib/auth-service')
+        const auth = getTeamAuth()
+        if (auth && isCommercialMode()) {
+          await syncChannelsFromServer(auth.baseUrl, auth.token)
+        }
+      } catch { /* 非商业模式或无网络，使用本地缓存 */ }
       return listChannels()
     }
   )
@@ -1090,10 +1160,12 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 解密 API Key（仅在用户查看时调用）
+  // 解密 API Key（商业模式下仅自配用户可用）
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.DECRYPT_KEY,
     async (_, channelId: string): Promise<string> => {
+      const { isCommercialMode, canSelfConfig } = require('./lib/channel-manager')
+      if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下渠道由服务端统一管理')
       return decryptApiKey(channelId)
     }
   )
@@ -1135,6 +1207,28 @@ export function registerIpcHandlers(): void {
     CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE,
     async (): Promise<boolean> => {
       return isCommercialMode()
+    }
+  )
+
+  // 获取账号能力（自配权限 + 账号类型）
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES,
+    async (): Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }> => {
+      const { isCommercialMode } = require('./lib/channel-manager')
+      const { isSelfConfigAllowed, getAccountType } = require('./lib/auth-service')
+      return {
+        commercialMode: isCommercialMode(),
+        canSelfConfig: isSelfConfigAllowed(),
+        accountType: getAccountType(),
+      }
+    }
+  )
+
+  // 获取构建目标
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.GET_BUILD_TARGET,
+    async (): Promise<'oss' | 'commercial'> => {
+      return getBuildTarget()
     }
   )
 
@@ -1183,7 +1277,7 @@ export function registerIpcHandlers(): void {
   // 更新对话使用的模型/渠道
   ipcMain.handle(
     CHAT_IPC_CHANNELS.UPDATE_MODEL,
-    async (_, id: string, modelId: string, channelId: string): Promise<ConversationMeta> => {
+    async (_, id: string, modelId?: string, channelId?: string): Promise<ConversationMeta> => {
       return updateConversationMeta(id, { modelId, channelId })
     }
   )
@@ -1462,8 +1556,12 @@ export function registerIpcHandlers(): void {
       }
 
       // 主题相关设置变化时，广播给所有窗口（跨窗口同步，如 Quick Task 面板）
-      if (updates.themeMode !== undefined || updates.themeStyle !== undefined) {
-        const payload = { themeMode: result.themeMode, themeStyle: result.themeStyle }
+      if (updates.themeMode !== undefined || updates.themeStyle !== undefined || updates.interfaceVariant !== undefined) {
+        const payload = {
+          themeMode: result.themeMode,
+          themeStyle: result.themeStyle,
+          interfaceVariant: result.interfaceVariant,
+        }
         BrowserWindow.getAllWindows().forEach((win) => {
           // 跳过发起者窗口，避免重复应用
           if (win.webContents.id !== event.sender.id) {
@@ -2709,10 +2807,7 @@ export function registerIpcHandlers(): void {
 
       // 安全校验：路径必须在 agent-workspaces 目录下
       const safePath = resolve(dirPath)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot)) {
-        throw new Error('访问路径超出 Agent 工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
 
       // 目录可能已被删除（如删除 Agent 会话后面板仍持有旧路径），优雅返回空列表
       if (!existsSync(safePath)) {
@@ -2757,10 +2852,7 @@ export function registerIpcHandlers(): void {
 
       // 安全校验：路径必须在 agent-workspaces 目录下
       const safePath = resolve(filePath)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot)) {
-        throw new Error('访问路径超出 Agent 工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
 
       rmSync(safePath, { recursive: true, force: true })
       console.log(`[Agent 文件] 已删除: ${safePath}`)
@@ -2775,10 +2867,7 @@ export function registerIpcHandlers(): void {
       const { resolve, relative, join } = await import('node:path')
 
       const safePath = resolve(dirPath)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot)) {
-        throw new Error('路径超出工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
 
       const results: Array<{ relativePath: string; data: Uint8Array }> = []
       const walk = (currentDir: string) => {
@@ -2803,8 +2892,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     'agent:select-and-upload-folder',
     async (): Promise<Array<{ relativePath: string; data: Uint8Array; sourcePath: string }> | null> => {
-      const { readdirSync, readFileSync } = await import('node:fs')
-      const { resolve, relative, join } = await import('node:path')
+      const { readdirSync, readFileSync, statSync } = await import('node:fs')
+      const { resolve, relative, join, basename } = await import('node:path')
       const { BrowserWindow, dialog } = await import('electron')
 
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
@@ -2819,16 +2908,40 @@ export function registerIpcHandlers(): void {
       const dirPath = resolve(result.filePaths[0]!)
       const results: Array<{ relativePath: string; data: Uint8Array; sourcePath: string }> = []
 
+      // 限制：最多 1000 个文件、单文件最大 50MB、跳过敏感文件名
+      const MAX_FILES = 1000
+      const MAX_FILE_SIZE = 50 * 1024 * 1024
+      const SENSITIVE_NAMES = new Set([
+        '.env', '.env.local', '.env.production',
+        'credentials.json', 'secrets.json', 'secret.key',
+        'id_rsa', 'id_ed25519', 'id_ecdsa',
+      ])
+      const SENSITIVE_EXTENSIONS = new Set(['.pem', '.pfx', '.p12', '.key', '.keystore', '.jks'])
+      const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg'])
+
+      let fileCount = 0
       const walk = (currentDir: string) => {
         const items = readdirSync(currentDir, { withFileTypes: true })
         for (const item of items) {
+          if (fileCount >= MAX_FILES) break
+          if (SKIP_DIRS.has(item.name)) continue
           const full = join(currentDir, item.name)
           if (item.isDirectory()) {
             walk(full)
           } else {
-            const relPath = relative(dirPath, full)
-            const buffer = readFileSync(full)
-            results.push({ relativePath: relPath, data: new Uint8Array(buffer), sourcePath: full })
+            // 跳过敏感文件
+            const lowerName = item.name.toLowerCase()
+            if (SENSITIVE_NAMES.has(item.name) || SENSITIVE_EXTENSIONS.has(lowerName.slice(lowerName.lastIndexOf('.')))) continue
+            try {
+              const st = statSync(full)
+              if (st.size > MAX_FILE_SIZE) continue
+              const buffer = readFileSync(full)
+              fileCount++
+              const relPath = relative(dirPath, full)
+              results.push({ relativePath: relPath, data: new Uint8Array(buffer), sourcePath: full })
+            } catch {
+              // 跳过无法读取的文件
+            }
           }
         }
       }
@@ -2844,12 +2957,10 @@ export function registerIpcHandlers(): void {
       const { resolve } = await import('node:path')
 
       const safePath = resolve(filePath)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot)) {
-        throw new Error('访问路径超出 Agent 工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
 
-      await shell.openPath(safePath)
+      const errMsg = await shell.openPath(safePath)
+      if (errMsg) console.warn('[IPC] agent:open-file 打开失败:', errMsg)
     }
   )
 
@@ -2897,10 +3008,7 @@ export function registerIpcHandlers(): void {
       const { resolve } = await import('node:path')
 
       const safePath = resolve(filePath)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot)) {
-        throw new Error('访问路径超出 Agent 工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
 
       shell.showItemInFolder(safePath)
     }
@@ -3024,14 +3132,25 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 注册文件路径到 proma-file:// 协议（不做路径校验，供团队文件预览等内部场景使用）
+  // 注册文件路径到 proma-file:// 协议
+  // 路径必须在基础授权根目录内（工作区 + 用户常用目录）。
+  // 兼容旧调用方：未传 access 时回退到基础授权根校验。
   ipcMain.handle(
     'file:register-preview-path',
-    async (_, filePath: string): Promise<string | null> => {
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<string | null> => {
       const { statSync } = await import('node:fs')
       const { registerPromaFilePath } = await import('./lib/local-file-protocol')
+      const options = normalizeFileAccessOptions(access)
       try {
         if (!statSync(filePath).isFile()) return null
+        // 安全校验：有 options 走完整 isPathAllowed；无 options 回退到基础授权根
+        const allowed = options
+          ? isPathAllowed(filePath, options)
+          : getAuthorizedRoots().some((root) => isUnderRoot(realpathOrResolve(filePath), root))
+        if (!allowed) {
+          console.warn('[IPC] file:register-preview-path 拒绝越界路径:', filePath)
+          return null
+        }
         return registerPromaFilePath(filePath)
       } catch { return null }
     }
@@ -3064,10 +3183,7 @@ export function registerIpcHandlers(): void {
       }
 
       const safePath = resolve(filePath)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot)) {
-        throw new Error('访问路径超出 Agent 工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
 
       const newPath = join(dirname(safePath), newName)
       renameSync(safePath, newPath)
@@ -3084,10 +3200,8 @@ export function registerIpcHandlers(): void {
 
       const safePath = resolve(filePath)
       const safeTarget = resolve(targetDir)
-      const workspacesRoot = resolve(getAgentWorkspacesDir())
-      if (!safePath.startsWith(workspacesRoot) || !safeTarget.startsWith(workspacesRoot)) {
-        throw new Error('访问路径超出 Agent 工作区范围')
-      }
+      assertInsideAgentWorkspaces(safePath)
+      assertInsideAgentWorkspaces(safeTarget)
 
       const newPath = join(safeTarget, basename(safePath))
       renameSync(safePath, newPath)
@@ -3517,18 +3631,50 @@ export function registerIpcHandlers(): void {
 
   // ===== GitHub Release =====
 
+  /** 商业版 releases.json 地址，可通过 PROFER_UPDATE_FEED_URL 环境变量覆盖 */
+  const RELEASES_JSON_URL =
+    (process.env.PROFER_UPDATE_FEED_URL || 'http://47.109.108.57/profer-updates/') + 'releases.json'
+
+  /** 从服务器获取 releases 列表（商业版数据源） */
+  async function fetchServerReleases(): Promise<GitHubRelease[]> {
+    const resp = await fetch(RELEASES_JSON_URL)
+    if (!resp.ok) throw new Error(`服务器返回 ${resp.status}`)
+    const data = await resp.json() as GitHubRelease[]
+    if (!Array.isArray(data)) throw new Error('服务器返回数据格式错误')
+    return data
+  }
+
   // 获取最新 Release
   ipcMain.handle(
     GITHUB_RELEASE_IPC_CHANNELS.GET_LATEST_RELEASE,
     async (): Promise<GitHubRelease | null> => {
+      if (getBuildTarget() === 'commercial') {
+        try {
+          const releases = await fetchServerReleases()
+          return releases[0] ?? null
+        } catch (err) {
+          console.log('[版本历史] 服务器 releases 不可用:', err)
+          return null
+        }
+      }
       return getLatestRelease()
     }
   )
 
-  // 获取 Release 列表
+  // 获取 Release 列表（商业版走服务器，oss 走 GitHub）
   ipcMain.handle(
     GITHUB_RELEASE_IPC_CHANNELS.LIST_RELEASES,
     async (_, options?: GitHubReleaseListOptions): Promise<GitHubRelease[]> => {
+      if (getBuildTarget() === 'commercial') {
+        try {
+          const releases = await fetchServerReleases()
+          const perPage = options?.perPage ?? 3
+          return releases.slice(0, perPage)
+        } catch (err) {
+          console.log('[版本历史] 服务器 releases 不可用:', err)
+          return []
+        }
+      }
       return listGitHubReleases(options)
     }
   )
@@ -3537,6 +3683,15 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG,
     async (_, tag: string): Promise<GitHubRelease | null> => {
+      if (getBuildTarget() === 'commercial') {
+        try {
+          const releases = await fetchServerReleases()
+          return releases.find(r => r.tag_name === tag) ?? null
+        } catch (err) {
+          console.log('[版本历史] 服务器 releases 不可用:', err)
+          return null
+        }
+      }
       return getReleaseByTag(tag)
     }
   )
@@ -3968,6 +4123,28 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 同步协作委派子会话到 agent-sessions.json（桥接平台层 → 侧栏）
+  ipcMain.handle(
+    'agent:sync-delegation-session',
+    async (
+      _event,
+      params: {
+        childSessionId: string
+        parentSessionId: string
+        sourceDelegationId: string
+        title: string
+        channelId?: string
+        modelId?: string
+        workspaceId?: string
+        delegationRole?: string
+        delegationGoal?: string
+        permissionMode?: import('@proma/shared').PromaPermissionMode
+      }
+    ): Promise<AgentSessionMeta> => {
+      return createDelegatedChildSessionMeta(params)
+    }
+  )
+
   console.log('[IPC] IPC 处理器注册完成')
 
   // 注册更新 IPC 处理器
@@ -4017,9 +4194,26 @@ export function registerIpcHandlers(): void {
 
   // 迁移取消时清理临时解压目录
   ipcMain.handle('migration:cancelImport', async (_, tempDir: string) => {
-    if (tempDir && existsSync(tempDir) && tempDir.includes('proma-import-')) {
-      rmSync(tempDir, { recursive: true, force: true })
-      console.log(`[迁移] 已清理临时目录: ${tempDir}`)
+    if (!tempDir || typeof tempDir !== 'string') return
+    try {
+      // 安全校验：解析真实路径，确保只清理 tmpdir 下的 proma-import-* 目录
+      const resolved = realpathSync(resolve(tempDir))
+      const tmpRoot = realpathSync(tmpdir())
+      if (!resolved.startsWith(tmpRoot + sep)) {
+        console.warn('[迁移] 拒绝清理非临时目录:', tempDir)
+        return
+      }
+      const dirName = basename(resolved)
+      if (!dirName.startsWith('proma-import-')) {
+        console.warn('[迁移] 目录名不匹配，拒绝清理:', dirName)
+        return
+      }
+      if (existsSync(resolved)) {
+        rmSync(resolved, { recursive: true, force: true })
+        console.log(`[迁移] 已清理临时目录: ${resolved}`)
+      }
+    } catch {
+      // 目录不存在或无法解析，无需清理
     }
   })
 
@@ -4427,7 +4621,7 @@ export function registerIpcHandlers(): void {
   // ===== 身份认证 =====
 
   const { getOrCreateDeviceIdentity, getUserIdentity } = require('./lib/identity-service')
-  const { login, register, logout, getAuthStatus, getServerInfoList, getTeamAuth } = require('./lib/auth-service')
+  const { login, register, logout, getAuthStatus, getServerInfoList, getTeamAuthWithRefresh } = require('./lib/auth-service')
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_DEVICE_IDENTITY,
@@ -4527,8 +4721,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.REGISTER,
-    async (_, credentials: { serverUrl: string; email: string; password: string; displayName: string; invitationToken?: string }) => {
-      const result = await register(credentials.serverUrl, credentials.email, credentials.password, credentials.displayName, credentials.invitationToken)
+    async (_, credentials: { serverUrl: string; email: string; password: string; displayName: string; invitationToken?: string; activationCode?: string }) => {
+      const result = await register(credentials.serverUrl, credentials.email, credentials.password, credentials.displayName, credentials.invitationToken, credentials.activationCode)
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
         startSyncEngine()
@@ -4546,7 +4740,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_TEAM_AUTH,
-    async () => getTeamAuth()
+    async () => getTeamAuthWithRefresh()
   )
 
   // ===== 同步 =====

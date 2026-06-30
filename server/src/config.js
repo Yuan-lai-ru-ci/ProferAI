@@ -16,8 +16,12 @@ export const ACCOUNT_LOCK_MINUTES = 15
 // JWT_SECRET 必须由环境变量提供，拒绝默认值
 export const JWT_SECRET = (() => {
   const secret = process.env.JWT_SECRET
-  if (!secret || secret === 'proma-team-server-secret-change-in-production') {
-    console.error('[Proma Team Server] 致命错误: JWT_SECRET 未设置或使用了默认不安全值')
+  const knownDefaults = [
+    'proma-team-server-secret-change-in-production',
+    'change-me-to-a-random-64-byte-hex',
+  ]
+  if (!secret || secret.length < 32 || knownDefaults.includes(secret)) {
+    console.error('[Proma Team Server] 致命错误: JWT_SECRET 未设置、过短或使用了默认不安全值')
     console.error('  请通过环境变量设置: export JWT_SECRET="<随机生成的安全密钥>"')
     console.error('  生成建议: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"')
     process.exit(1)
@@ -55,8 +59,53 @@ export const CHANNEL_ENCRYPTION_KEY = (() => {
 })()
 
 // 新用户注册时赠送的默认额度
-export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '1000000', 10)
+export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '1000', 10)
+
+// 单次手动充值上限（防呆）
+export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '100000', 10)
 
 // New API 中继站地址（额度代理转发目标）
 export const RELAY_BASE_URL = process.env.RELAY_BASE_URL || 'http://127.0.0.1:3080'
-export const RELAY_API_KEY = process.env.RELAY_API_KEY || ''
+export const RELAY_API_KEY = (() => {
+  const key = process.env.RELAY_API_KEY
+  if (COMMERCIAL_MODE && !key) {
+    console.warn('[Profer] 警告: COMMERCIAL_MODE=true 但 RELAY_API_KEY 未设置，代理请求可能被中继站拒绝')
+  }
+  return key || ''
+})()
+
+// New API 系统访问令牌（用于查询共享额度池真实余额）
+// 在 New API 后台 root1 账号 → 个人设置 → 生成系统访问令牌，配到此处。
+// 计费已收敛到 New API，余额接口用它调 New API /api/user/self 拿真实 quota。
+export const NEWAPI_ADMIN_TOKEN = process.env.NEWAPI_ADMIN_TOKEN || ''
+
+// New API quota → 货币换算锚点（默认 500000 quota = 1 单位，与 New API QuotaPerUnit 一致）
+export const NEWAPI_QUOTA_PER_UNIT = parseInt(process.env.NEWAPI_QUOTA_PER_UNIT || '500000', 10)
+
+// ===== 多类账号体系 =====
+// 账号类型决定工作区配额 + 初始额度。自配 API 为独立开关（users.can_self_config_api）。
+// 要加新类型：在此对象加一行即可。
+export const ACCOUNT_TYPES = {
+  restricted: {
+    label: '受限用户',
+    maxWorkspaces: 0,
+    defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '500', 10),
+  },
+  standard: {
+    label: '标准用户',
+    maxWorkspaces: 3,
+    defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '1000', 10),
+  },
+  advanced: {
+    label: '高级用户',
+    maxWorkspaces: 10,
+    defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '5000', 10),
+  },
+}
+
+/** 获取账号类型的能力配置（不存在或旧版本 'team' 均降级为 standard） */
+export function getAccountCapability(type) {
+  // 旧版本遗留的 'team' 类型映射为 standard
+  const normalized = type === 'team' ? 'standard' : type
+  return ACCOUNT_TYPES[normalized] || ACCOUNT_TYPES.standard
+}

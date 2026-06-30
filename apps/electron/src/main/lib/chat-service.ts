@@ -20,9 +20,11 @@ import {
   getAdapter,
   streamSSE,
   fetchTitle,
+  detectInsufficientCredits,
 } from '@proma/core'
 import type { ImageAttachmentData, ContinuationMessage } from '@proma/core'
-import { listChannels, decryptApiKey } from './channel-manager'
+import { listChannels, decryptApiKey, isCommercialMode, canSelfConfig } from './channel-manager'
+import { getTeamAuthWithRefresh } from './auth-service'
 import { appendMessage, updateConversationMeta, getConversationMessages } from './conversation-manager'
 import { readAttachmentAsBase64, isImageAttachment } from './attachment-service'
 import { extractTextFromAttachment, isDocumentAttachment } from './document-parser'
@@ -30,12 +32,24 @@ import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getEnabledTools } from './chat-tool-registry'
 import { executeToolCalls } from './chat-tool-executor'
+import { isCommercialBuild } from './build-target'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
 
 /** 最大工具续接轮数（安全上限，防止极端情况下的无限循环） */
 const MAX_TOOL_ROUNDS = 999
+
+const ANTHROPIC_PROXY_PROVIDERS = new Set([
+  'anthropic',
+  'anthropic-compatible',
+  'kimi-api',
+  'kimi-coding',
+  'minimax',
+  'xiaomi',
+  'xiaomi-token-plan',
+  'zhipu-coding',
+])
 
 // ===== 平台相关：图片附件读取器 =====
 
@@ -209,17 +223,51 @@ export async function sendMessage(
     })
     return
   }
-
-  // 2. 解密 API Key
-  let apiKey: string
-  try {
-    apiKey = decryptApiKey(channelId)
-  } catch {
+  if (!channel.enabled) {
     webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
-      error: '解密 API Key 失败',
+      error: '当前渠道已停用，请重新选择可用模型',
     })
     return
+  }
+  const selectedChannelModel = channel.models.find((m) => m.id === modelId)
+  if (!selectedChannelModel || !selectedChannelModel.enabled) {
+    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+      conversationId,
+      error: '当前模型配置已失效，请在模型选择器中重新选择',
+    })
+    return
+  }
+
+  let apiKey: string
+  let proxyBaseUrl = ''
+  // 代管模式判定：商业构建 或 服务端标记代管，且用户无自配权限
+  // 自配用户(canSelfConfigApi=true)可用自己配的渠道直连，不强制走统一 proxy
+  const shouldUseCommercialProxy = (isCommercialBuild() || isCommercialMode()) && !canSelfConfig()
+
+  if (shouldUseCommercialProxy) {
+    const auth = await getTeamAuthWithRefresh()
+    if (!auth) {
+      webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+        conversationId,
+        error: '团队账号登录已过期，请重新登录后再使用商业渠道',
+      })
+      return
+    }
+
+    const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+    proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
+    apiKey = auth.proxyToken || auth.token
+  } else {
+    try {
+      apiKey = decryptApiKey(channelId)
+    } catch {
+      webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+        conversationId,
+        error: '解密 API Key 失败',
+      })
+      return
+    }
   }
 
   // 3. 先读取历史消息（在追加用户消息之前，避免 adapter 重复发送当前消息）
@@ -310,7 +358,7 @@ export async function sendMessage(
       pendingToolResults = false
 
       const request = adapter.buildStreamRequest({
-        baseUrl: channel.baseUrl,
+        baseUrl: proxyBaseUrl || channel.baseUrl,
         apiKey,
         modelId,
         history: enrichedHistory,
@@ -322,6 +370,11 @@ export async function sendMessage(
         tools,
         continuationMessages: continuationMessages.length > 0 ? continuationMessages : undefined,
       })
+
+      // 商业模式：覆盖 URL 为服务端代理地址
+      if (proxyBaseUrl) {
+        request.url = proxyBaseUrl
+      }
 
       const { content, reasoning, thinkingBlocks, toolCalls, stopReason } = await streamSSE({
         request,
@@ -386,7 +439,7 @@ export async function sendMessage(
       console.log(`[聊天服务] 工具轮次已达上限 (${MAX_TOOL_ROUNDS})，发起最终响应轮`)
 
       const finalRequest = adapter.buildStreamRequest({
-        baseUrl: channel.baseUrl,
+        baseUrl: proxyBaseUrl || channel.baseUrl,
         apiKey,
         modelId,
         history: enrichedHistory,
@@ -395,9 +448,10 @@ export async function sendMessage(
         attachments,
         readImageAttachments: getImageAttachmentData,
         thinkingEnabled,
-        // 不传 tools，强制模型生成文本回复而非继续调用工具
         continuationMessages,
       })
+
+      if (proxyBaseUrl) finalRequest.url = proxyBaseUrl
 
       await streamSSE({
         request: finalRequest,
@@ -481,6 +535,10 @@ export async function sendMessage(
     const errorMessage = error instanceof Error ? error.message : '未知错误'
     console.error(`[聊天服务] 流式请求失败:`, error)
 
+    // 额度不足（402）：把原始报错替换成「额度不足，请充值」结构化引导
+    const insufficient = detectInsufficientCredits(error)
+    const displayError = insufficient ? insufficient.message : errorMessage
+
     // 保存已累积的部分助手消息（与 abort 逻辑一致，防止内容丢失）
     if (accumulatedContent) {
       const assistantMsgId = randomUUID()
@@ -492,7 +550,7 @@ export async function sendMessage(
         model: modelId,
         reasoning: accumulatedReasoning || undefined,
         stopped: true,
-        error: errorMessage,
+        error: displayError,
         toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
       }
       appendMessage(conversationId, partialMsg)
@@ -506,7 +564,8 @@ export async function sendMessage(
 
     webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
-      error: errorMessage,
+      error: displayError,
+      ...(insufficient ? { code: 'insufficient_credits', errorTitle: '额度不足' } : {}),
     })
   } finally {
     activeControllers.delete(conversationId)
@@ -576,23 +635,38 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
     return null
   }
 
-  // 解密 API Key
   let apiKey: string
-  try {
-    apiKey = decryptApiKey(channelId)
-  } catch {
-    console.warn('[标题生成] 解密 API Key 失败')
-    return null
+  let proxyBaseUrl = ''
+  const shouldUseCommercialProxy = (isCommercialBuild() || isCommercialMode()) && !canSelfConfig()
+
+  if (shouldUseCommercialProxy) {
+    const auth = await getTeamAuthWithRefresh()
+    if (!auth) {
+      console.warn('[标题生成] 团队账号登录已过期，跳过 AI 标题生成')
+      return null
+    }
+    const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+    proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
+    apiKey = auth.proxyToken || auth.token
+  } else {
+    try {
+      apiKey = decryptApiKey(channelId)
+    } catch {
+      console.warn('[标题生成] 解密 API Key 失败')
+      return null
+    }
   }
 
   try {
     const adapter = getAdapter(channel.provider)
     const request = adapter.buildTitleRequest({
-      baseUrl: channel.baseUrl,
+      baseUrl: proxyBaseUrl || channel.baseUrl,
       apiKey,
       modelId,
       prompt: TITLE_PROMPT + userMessage,
     })
+
+    if (proxyBaseUrl) request.url = proxyBaseUrl
 
     const proxyUrl = await getEffectiveProxyUrl()
     const fetchFn = getFetchFn(proxyUrl)

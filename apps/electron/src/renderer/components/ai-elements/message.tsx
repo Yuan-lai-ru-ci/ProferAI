@@ -419,8 +419,19 @@ const MarkdownLink = React.memo(function MarkdownLink({
       href={href}
       onClick={(e) => {
         e.preventDefault()
-        if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+        if (!href) return
+        if (href.startsWith('http://') || href.startsWith('https://')) {
           window.electronAPI.openExternal(href)
+        } else if (href.startsWith('file:///')) {
+          // file:// 协议 → 用系统默认应用打开
+          const filePath = href.replace(/^file:\/\/\//, process.platform === 'win32' ? '' : '/')
+          window.electronAPI.systemOpenFile(filePath).catch(() => {})
+        } else if (/^[A-Za-z]:[\\/]/.test(href)) {
+          // Windows 绝对路径
+          window.electronAPI.systemOpenFile(href).catch(() => {})
+        } else if (href.startsWith('/') || href.startsWith('.')) {
+          // Unix 绝对/相对路径
+          window.electronAPI.systemOpenFile(href).catch(() => {})
         }
       }}
       title={href}

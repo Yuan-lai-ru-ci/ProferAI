@@ -146,13 +146,13 @@ export async function isBotMentionedWithId(
 
   if (!resolvedId && client) {
     try {
-      const botInfoResp = await client.request<{
-        bot?: { open_id?: string }
-        data?: { bot?: { open_id?: string } }
-      }>({
+      const botInfoResp = await client.request({
         method: 'GET',
         url: 'https://open.feishu.cn/open-apis/bot/v3/info/',
-      })
+      }) as {
+        bot?: { open_id?: string }
+        data?: { bot?: { open_id?: string } }
+      }
       resolvedId = botInfoResp?.bot?.open_id ?? botInfoResp?.data?.bot?.open_id ?? null
       if (resolvedId) console.log(`[飞书 Bridge] 延迟获取 Bot open_id 成功: ${resolvedId}`)
     } catch (error) {

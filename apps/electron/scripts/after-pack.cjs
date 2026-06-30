@@ -25,7 +25,7 @@ function findRcedit() {
 module.exports = async function (context) {
   if (context.electronPlatformName !== 'win32') return
 
-  const exePath = join(context.appOutDir, 'Proma.exe')
+  const exePath = join(context.appOutDir, 'Profer.exe')
   const icoPath = join(context.packager.projectDir, 'resources', 'icon.ico')
   if (!existsSync(exePath) || !existsSync(icoPath)) return
 
@@ -35,9 +35,9 @@ module.exports = async function (context) {
     execFileSync(rcedit, [
       exePath,
       '--set-icon', icoPath,
-      '--set-version-string', 'ProductName', 'Proma',
-      '--set-version-string', 'FileDescription', 'Proma',
-      '--set-version-string', 'CompanyName', 'Proma Team',
+      '--set-version-string', 'ProductName', 'Profer',
+      '--set-version-string', 'FileDescription', 'Profer',
+      '--set-version-string', 'CompanyName', 'Profer Team',
     ], { stdio: 'ignore' })
     console.log('  [afterPack] fixed exe icon + metadata')
   } catch (err) {

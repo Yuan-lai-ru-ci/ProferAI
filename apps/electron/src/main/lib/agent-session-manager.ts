@@ -78,6 +78,63 @@ function writeIndex(index: AgentSessionsIndex): void {
 }
 
 /**
+ * 为委派子会话创建 agent-sessions.json 索引条目。
+ *
+ * 协作 MCP 工具（由平台层提供）创建子 SDK 会话后，需调用此函数将元数据
+ * 写入 Profer 的 agent-sessions.json，否则侧栏无法发现和显示该子会话。
+ */
+export function createDelegatedChildSessionMeta(params: {
+  childSessionId: string
+  parentSessionId: string
+  sourceDelegationId: string
+  title: string
+  channelId?: string
+  modelId?: string
+  workspaceId?: string
+  delegationRole?: string
+  delegationGoal?: string
+  permissionMode?: import('@proma/shared').PromaPermissionMode
+}): AgentSessionMeta {
+  const index = readIndex()
+  const now = Date.now()
+
+  // 检查是否已存在（幂等）
+  const existing = index.sessions.find((s) => s.id === params.childSessionId)
+  if (existing) {
+    return updateAgentSessionMeta(params.childSessionId, {
+      parentSessionId: params.parentSessionId,
+      sourceDelegationId: params.sourceDelegationId,
+      delegationStatus: 'running',
+      delegationRole: params.delegationRole,
+      delegationGoal: params.delegationGoal,
+      permissionMode: params.permissionMode,
+    })
+  }
+
+  const meta: AgentSessionMeta = {
+    id: params.childSessionId,
+    title: params.title || '委派子会话',
+    channelId: params.channelId,
+    modelId: params.modelId,
+    workspaceId: params.workspaceId,
+    parentSessionId: params.parentSessionId,
+    sourceDelegationId: params.sourceDelegationId,
+    delegationStatus: 'running',
+    delegationRole: params.delegationRole,
+    delegationGoal: params.delegationGoal,
+    permissionMode: params.permissionMode,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  index.sessions.push(meta)
+  writeIndex(index)
+
+  console.log(`[协作] 已创建委派子会话索引: ${meta.title} (${meta.id})`)
+  return meta
+}
+
+/**
  * 获取所有会话（按 updatedAt 降序）
  */
 export function listAgentSessions(): AgentSessionMeta[] {
@@ -379,7 +436,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)

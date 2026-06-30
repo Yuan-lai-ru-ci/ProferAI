@@ -179,9 +179,11 @@ function appendContinuationMessages(
       }
       contents.push({ role: 'model', parts })
     } else if (contMsg.role === 'tool') {
+      // Google functionResponse.name 必须匹配原始 functionCall.name（即工具名称）。
+      // 由于 toolCallId 格式为 `name_N`（由计数器生成），这里去掉 `_\d+$` 后缀还原函数名。
       const parts: GooglePart[] = contMsg.results.map((r) => ({
         functionResponse: {
-          name: r.toolCallId,
+          name: r.toolCallId.replace(/_\d+$/, ''),
           response: { content: r.content },
         },
       }))
@@ -195,7 +197,11 @@ function appendContinuationMessages(
 export class GoogleAdapter implements ProviderAdapter {
   readonly providerType = 'google' as const
 
+  /** 每个流式请求的函数调用计数器，用于生成唯一 toolCallId，避免同名调用碰撞 */
+  private toolCallCounter = 0
+
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
+    this.toolCallCounter = 0  // 每个流式请求重置计数器
     const url = normalizeBaseUrl(input.baseUrl)
     const contents = toGoogleContents(input)
 
@@ -259,9 +265,10 @@ export class GoogleAdapter implements ProviderAdapter {
         // 函数调用（Google 一次返回完整参数）
         if (part.functionCall) {
           const fc = part.functionCall
+          const callId = `${fc.name}_${this.toolCallCounter++}`
           events.push({
             type: 'tool_call_start',
-            toolCallId: fc.name,  // Google 没有独立的调用 ID，用函数名
+            toolCallId: callId,
             toolName: fc.name,
             // 保留 thoughtSignature，续接请求需要原样返回
             metadata: part.thoughtSignature
@@ -270,7 +277,7 @@ export class GoogleAdapter implements ProviderAdapter {
           })
           events.push({
             type: 'tool_call_delta',
-            toolCallId: fc.name,
+            toolCallId: callId,
             argumentsDelta: JSON.stringify(fc.args || {}),
           })
           continue

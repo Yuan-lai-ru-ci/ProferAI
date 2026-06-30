@@ -24,7 +24,7 @@ import type { ProviderType } from '@proma/shared'
 export function normalizeAnthropicBaseUrl(baseUrl: string): string {
   let url = baseUrl.trim().replace(/\/+$/, '')
   url = url.replace(/\/messages$/, '')
-  if (!url.match(/\/v\d+$/)) {
+  if (!url.match(/\/v\d+(\.\d+)*$/)) {
     // 仅对根路径或纯域名追加 /v1；已有路径（如 deepseek /anthropic）保持原样
     try {
       const pathname = new URL(url).pathname
@@ -49,7 +49,7 @@ export function normalizeAnthropicBaseUrl(baseUrl: string): string {
 export function normalizeVersionedAnthropicBaseUrl(baseUrl: string): string {
   let url = baseUrl.trim().replace(/\/+$/, '')
   url = url.replace(/\/messages$/, '')
-  if (!url.match(/\/v\d+$/)) {
+  if (!url.match(/\/v\d+(\.\d+)*$/)) {
     url = `${url}/v1`
   }
   return url
@@ -72,8 +72,8 @@ export function normalizeAnthropicBaseUrlForSdk(baseUrl: string): string {
   return baseUrl
     .trim()
     .replace(/\/+$/, '')
-    .replace(/\/v\d+\/messages$/, '')
-    .replace(/\/v\d+$/, '')
+    .replace(/\/v\d+(\.\d+)*\/messages$/, '')
+    .replace(/\/v\d+(\.\d+)*$/, '')
 }
 
 /**

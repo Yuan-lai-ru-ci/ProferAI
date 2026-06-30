@@ -226,8 +226,11 @@ export const ReasoningContent = React.memo(
                   href={href}
                   onClick={(e) => {
                     e.preventDefault()
-                    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                    if (!href) return
+                    if (href.startsWith('http://') || href.startsWith('https://')) {
                       window.electronAPI.openExternal(href)
+                    } else if (/^[A-Za-z]:[\\/]/.test(href) || href.startsWith('/') || href.startsWith('.')) {
+                      window.electronAPI.systemOpenFile(href).catch(() => {})
                     }
                   }}
                   title={href}

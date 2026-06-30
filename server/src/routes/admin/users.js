@@ -2,7 +2,7 @@
  * Admin 用户管理路由 — 需要 authMiddleware + adminMiddleware
  */
 import { Hono } from 'hono'
-import { listAllUsers, getUserById, updateUser, promoteUser, demoteUser } from '../../db.js'
+import { listAllUsers, getUserById, updateUser, promoteUser, demoteUser, deleteUser } from '../../db.js'
 import { logAudit } from '../../audit.js'
 
 export const adminUsers = new Hono()
@@ -55,5 +55,20 @@ adminUsers.post('/:id/demote', (c) => {
   if (targetId === adminId) return c.json({ error: '不能撤销自己的管理员权限' }, 400)
   demoteUser(targetId)
   logAudit({ action: 'admin.demote_user', userId: adminId, userEmail: c.get('userEmail'), entityType: 'user', entityId: targetId })
+  return c.json({ success: true })
+})
+
+// DELETE /v1/admin/users/:id — 彻底删除用户（清除关联数据）
+adminUsers.delete('/:id', (c) => {
+  const targetId = c.req.param('id')
+  const adminId = c.get('userId')
+  if (targetId === adminId) return c.json({ error: '不能删除自己的账户' }, 400)
+
+  const user = getUserById(targetId)
+  if (!user) return c.json({ error: '用户不存在' }, 404)
+  if (user.is_admin) return c.json({ error: '不能删除管理员账户，请先撤销管理员权限' }, 400)
+
+  deleteUser(targetId)
+  logAudit({ action: 'admin.delete_user', userId: adminId, userEmail: c.get('userEmail'), entityType: 'user', entityId: targetId, detail: `deleted: ${user.email}` })
   return c.json({ success: true })
 })
