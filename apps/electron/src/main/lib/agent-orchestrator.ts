@@ -1482,7 +1482,7 @@ export class AgentOrchestrator {
                 console.error(`[Agent 编排] message.content 文本块:`,
                   (assistantMsg.message?.content ?? [])
                     .filter((b: { type: string }) => b.type === 'text')
-                    .map((b: Record<string, unknown>) => (b as { text: string }).text?.slice(0, 500))
+                    .map((b) => (b as { text?: string }).text?.slice(0, 500))
                 )
                 try { console.error(`[Agent 编排] 完整 assistantMsg (JSON keys):`, Object.keys(assistantMsg)) } catch {}
                 try { console.error(`[Agent 编排] assistantMsg JSON (截断):`, JSON.stringify(assistantMsg).slice(0, 2000)) } catch {}
