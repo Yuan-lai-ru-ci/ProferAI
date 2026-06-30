@@ -990,7 +990,10 @@ export function useGlobalAgentListeners(): void {
             error_during_execution: '任务执行过程中发生错误。',
           }
           const msg = messages[data.resultSubtype] ?? `任务异常结束（${data.resultSubtype}）`
-          toast.warning(msg, { duration: 8000 })
+          // error_during_execution 等执行期错误：优先展示 SDK result.errors[] 携带的真实原因，
+          // 让用户能据此判断重试 / 改提问 / 报 bug，而非只看到泛泛的兜底文案。
+          const detail = data.resultErrors?.find((e) => typeof e === 'string' && e.trim().length > 0)?.trim()
+          toast.warning(detail ? `任务执行出错：${detail}` : msg, { duration: 8000 })
         }
 
         // 清除 Plan 模式状态（防止异常退出时残留）
