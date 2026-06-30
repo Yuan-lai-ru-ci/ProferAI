@@ -55,52 +55,47 @@ console.log(`${color.cyan}[build:cli]${color.reset} 编译 proma CLI → ${color
 // bun build --compile 在 Windows 上尝试复制自身到临时目录时，
 // 若 bun.exe 位于过长路径（如 ~/.bun/bin/bun.exe）会报 ENOENT。
 // 解决：将 bun.exe 复制到短路径（os.tmpdir()）后通过
-// --compile-executable-path 指向副本，编译后清理。
+// --compile-executable-path 指向副本，编译后清理（try/finally 保证清理）。
 let tempBunPath: string | undefined
 const compileArgs = ['build', '--compile', '--outfile', outFile, cliEntry]
 
 if (isWindows) {
-  const bunExe = process.execPath // bun 中即 bun.exe 自身
   const tmpDir = tmpdir()
-  const bunName = `bun-temp-${Date.now()}.exe`
+  const bunName = `bun-temp-${Date.now()}-${process.pid}.exe`
   tempBunPath = join(tmpDir, bunName)
 
   try {
-    copyFileSync(bunExe, tempBunPath)
+    copyFileSync(process.execPath, tempBunPath)
     compileArgs.splice(2, 0, '--compile-executable-path', tempBunPath)
     console.log(`${color.dim}[build:cli] Windows 短路径 workaround: ${tempBunPath}${color.reset}`)
-  } catch {
-    console.warn(`${color.yellow}[build:cli] 无法复制 bun 到临时目录，尝试直接编译${color.reset}`)
+  } catch (err) {
+    tempBunPath = undefined // copy 失败，无需清理
+    console.warn(`${color.yellow}[build:cli] 无法复制 bun 到临时目录: ${err}，尝试直接编译${color.reset}`)
   }
 }
 
 const started = Date.now()
-const result = spawnSync(
-  'bun',
-  compileArgs,
-  { cwd: join(repoRoot, 'apps/cli'), stdio: 'inherit' },
-)
+try {
+  const result = spawnSync(
+    'bun',
+    compileArgs,
+    { cwd: join(repoRoot, 'apps/cli'), stdio: 'inherit' },
+  )
 
-if (result.status !== 0) {
-  // 清理临时 bun 副本后再报错
-  if (tempBunPath) {
-    try { unlinkSync(tempBunPath) } catch { /* ignore */ }
+  if (result.status !== 0) {
+    fail(`bun build --compile 失败（exit ${result.status}）`)
   }
-  fail(`bun build --compile 失败（exit ${result.status}）`)
-}
-if (!existsSync(outFile)) {
-  if (tempBunPath) {
-    try { unlinkSync(tempBunPath) } catch { /* ignore */ }
+  if (!existsSync(outFile)) {
+    fail(`编译完成但未产出二进制: ${outFile}`)
   }
-  fail(`编译完成但未产出二进制: ${outFile}`)
-}
-
-// 清理临时 bun 副本
-if (tempBunPath) {
-  try {
-    unlinkSync(tempBunPath)
-  } catch {
-    console.warn(`${color.yellow}[build:cli] 无法删除临时 bun 副本: ${tempBunPath}${color.reset}`)
+} finally {
+  // 始终清理临时 bun 副本
+  if (tempBunPath) {
+    try {
+      unlinkSync(tempBunPath)
+    } catch {
+      console.warn(`${color.yellow}[build:cli] 无法删除临时 bun 副本: ${tempBunPath}${color.reset}`)
+    }
   }
 }
 
