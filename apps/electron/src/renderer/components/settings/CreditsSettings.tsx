@@ -40,7 +40,7 @@ export function CreditsSettings(): React.ReactElement {
       const auth = await fetchAuth()
       if (!auth) return
 
-      // 余额（共享池，balance 可能为 null）
+      // 余额（当前用户本地账本，balance 可能为 null）
       const cr = await fetch(`${auth.baseUrl}/v1/account/credits`, {
         headers: { Authorization: `Bearer ${auth.token}` },
       })
@@ -81,7 +81,7 @@ export function CreditsSettings(): React.ReactElement {
   return (
     <div className="space-y-8">
       {/* 余额卡片 */}
-      <SettingsSection title="额度概览" description="平台共享额度（所有成员共用），按 New API 实时余额显示">
+      <SettingsSection title="额度概览" description="我的账户余额，按实际用量实时扣减">
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div className={`
             rounded-xl border p-4
@@ -90,21 +90,21 @@ export function CreditsSettings(): React.ReactElement {
             ${!isLow && !isExhausted ? 'border-border bg-card' : ''}
           `}>
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-              <Zap size={14} /> 平台剩余额度
+              <Zap size={14} /> 我的剩余额度
             </div>
             <div className={`text-2xl font-bold ${isExhausted ? 'text-destructive' : isLow ? 'text-yellow-500' : 'text-foreground'}`}>
               {loading ? '...' : balanceLoaded ? fmt(balance!) : '--'}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">{balanceLoaded ? '共享额度' : '未配置余额查询'}</div>
+            <div className="text-xs text-muted-foreground mt-1">{balanceLoaded ? '账户余额' : '未配置余额查询'}</div>
           </div>
           <div className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-              <TrendingDown size={14} /> 平台累计消耗
+              <TrendingDown size={14} /> 累计消耗
             </div>
             <div className="text-2xl font-bold text-foreground">
               {fmt(lifetimeConsumed ?? 0)}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">共享额度</div>
+            <div className="text-xs text-muted-foreground mt-1">历史用量</div>
           </div>
         </div>
         {balanceLoaded && (
@@ -129,12 +129,12 @@ export function CreditsSettings(): React.ReactElement {
         )}
         {isExhausted && (
           <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-            平台额度已耗尽，请联系管理员充值。
+            余额已耗尽，请联系管理员充值。
           </div>
         )}
         {isLow && !isExhausted && (
           <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-sm text-yellow-600">
-            平台额度偏低，建议尽快联系管理员充值。
+            余额偏低，建议尽快联系管理员充值。
           </div>
         )}
       </SettingsSection>
