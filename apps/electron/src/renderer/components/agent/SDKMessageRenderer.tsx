@@ -1021,7 +1021,10 @@ function ScheduledRunBadge(): React.ReactElement {
   const setActiveView = useSetAtom(activeViewAtom)
 
   const session = sessions.find((s) => s.id === activeSessionId)
-  const automation = session?.sourceAutomationId
+  // 委派子会话恰由定时任务触发的父会话创建时会同时带 sourceAutomationId 与
+  // sourceDelegationId 两个来源标记。统一为 sourceDelegationId 优先：有委派来源
+  // 时不再展示定时任务徽章，避免被误判为定时任务（#993）。
+  const automation = session?.sourceAutomationId && !session.sourceDelegationId
     ? automations.find((a) => a.id === session.sourceAutomationId)
     : undefined
 
