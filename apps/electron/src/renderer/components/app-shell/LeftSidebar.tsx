@@ -3393,18 +3393,22 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
       && item.session.updatedAt >= recentCutoff
     )
     .slice(0, PROJECT_SESSION_PREVIEW_LIMIT)
-  const fillIds = collectTreeSessionIds(fillSessions)
-  const currentSession = activeSessionId
-    && !activeIds.has(activeSessionId)
-    && !fillIds.has(activeSessionId)
+  // 先拼不含置顶项的可见列表（含 extraSessions），再判断选中会话是否已可见。
+  const collapsedSessionsWithoutPinned = [...activeSessions, ...fillSessions]
+  const collapsedIdsWithoutPinned = new Set(collapsedSessionsWithoutPinned.map((item) => item.session.id))
+  const remainingSessions = treeItems.filter((item) => !collapsedIdsWithoutPinned.has(item.session.id))
+  const extraSessions = remainingSessions.slice(0, extraCount)
+  const sessionsWithoutPinned = [...collapsedSessionsWithoutPinned, ...extraSessions]
+  const visibleIds = collectTreeSessionIds(sessionsWithoutPinned)
+  // 仅当选中会话不在当前完整可见列表（含 extra 区）中时才置顶（如搜索结果打开旧会话），
+  // 已可见则保持原位不强制置顶（#958）。
+  const currentSession = activeSessionId && !visibleIds.has(activeSessionId)
     ? treeItems.find((item) => treeContainsSessionId(item, activeSessionId)) ?? null
     : null
   const pinnedCurrent = currentSession ? [currentSession] : []
-  const collapsedSessions = [...activeSessions, ...pinnedCurrent, ...fillSessions]
-  const collapsedIds = new Set(collapsedSessions.map((item) => item.session.id))
-  const remainingSessions = treeItems.filter((item) => !collapsedIds.has(item.session.id))
-  const extraSessions = remainingSessions.slice(0, extraCount)
-  const sessions = [...collapsedSessions, ...extraSessions]
+  const sessions = pinnedCurrent.length > 0
+    ? [...activeSessions, ...pinnedCurrent, ...fillSessions, ...extraSessions]
+    : sessionsWithoutPinned
   const hiddenCount = Math.max(0, treeItems.length - sessions.length)
 
   return (
