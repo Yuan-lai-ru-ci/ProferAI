@@ -142,6 +142,7 @@ export async function runAgent(
             stoppedByUser: opts?.stoppedByUser ?? false,
             startedAt: opts?.startedAt,
             resultSubtype: opts?.resultSubtype,
+            resultErrors: opts?.resultErrors,
             backgroundTasksPending: opts?.backgroundTasksPending,
           })
         }
@@ -233,6 +234,7 @@ export async function runAgentHeadless(
             stoppedByUser: opts?.stoppedByUser ?? false,
             startedAt: opts?.startedAt,
             resultSubtype: opts?.resultSubtype,
+            resultErrors: opts?.resultErrors,
             backgroundTasksPending: opts?.backgroundTasksPending,
           })
         }
