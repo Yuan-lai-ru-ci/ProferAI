@@ -58,11 +58,12 @@ export const CHANNEL_ENCRYPTION_KEY = (() => {
   return key || ''
 })()
 
-// 新用户注册时赠送的默认额度
-export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '1000', 10)
+// 新用户注册时赠送的默认额度（单位：New API quota，500000 = $1）
+// 默认 500000 = $1 起步。可用 DEFAULT_CREDIT_GRANT 覆盖（直接给 quota 数）。
+export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '500000', 10)
 
-// 单次手动充值上限（防呆）
-export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '100000', 10)
+// 单次手动充值/发放上限（防呆）。单位 quota（500000=$1）。默认 5 亿 quota = $1000。
+export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '500000000', 10)
 
 // New API 中继站地址（额度代理转发目标）
 export const RELAY_BASE_URL = process.env.RELAY_BASE_URL || 'http://127.0.0.1:3080'
@@ -93,21 +94,22 @@ export const BILLING_MARKUP = parseFloat(process.env.BILLING_MARKUP || '1.0')
 // ===== 多类账号体系 =====
 // 账号类型决定工作区配额 + 初始额度。自配 API 为独立开关（users.can_self_config_api）。
 // 要加新类型：在此对象加一行即可。
+// 账号类型赠送额单位：New API quota（500000 = $1）。restricted $0.5 / standard $1 / advanced $5。
 export const ACCOUNT_TYPES = {
   restricted: {
     label: '受限用户',
     maxWorkspaces: 0,
-    defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '500', 10),
+    defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '250000', 10),
   },
   standard: {
     label: '标准用户',
     maxWorkspaces: 3,
-    defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '1000', 10),
+    defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '500000', 10),
   },
   advanced: {
     label: '高级用户',
     maxWorkspaces: 10,
-    defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '5000', 10),
+    defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '2500000', 10),
   },
 }
 
