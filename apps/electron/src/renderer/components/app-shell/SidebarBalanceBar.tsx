@@ -65,8 +65,8 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
       <button
         type="button"
         onClick={openCredits}
-        aria-label={`平台额度 ${formatBalance(balance)}`}
-        title={`平台共享额度 ${formatBalance(balance)}${isExhausted ? '（已耗尽）' : isLow ? '（偏低）' : ''}`}
+        aria-label={`我的额度 ${formatBalance(balance)}`}
+        title={`我的额度 ${formatBalance(balance)}${isExhausted ? '（已耗尽）' : isLow ? '（偏低）' : ''}`}
         className={cn(
           'w-full flex items-center justify-center py-2 rounded-[10px] border transition-colors titlebar-no-drag',
           tone.ring,
@@ -81,8 +81,8 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
     <button
       type="button"
       onClick={openCredits}
-      aria-label={`平台共享额度 ${formatBalance(balance)}，点击查看`}
-      title={`平台共享额度 ${formatBalance(balance)}`}
+      aria-label={`我的额度 ${formatBalance(balance)}，点击查看`}
+      title={`我的额度 ${formatBalance(balance)}`}
       className={cn(
         'w-full flex flex-col gap-1.5 px-3 py-2 rounded-[10px] border transition-colors titlebar-no-drag text-left',
         tone.ring,
@@ -91,7 +91,7 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
       <div className="flex items-center gap-2">
         <Wallet className={cn('size-3.5 shrink-0', tone.text)} />
         <span className="text-[11px] text-foreground/50 flex-1">
-          {isExhausted ? '平台额度已耗尽' : isLow ? '平台额度偏低' : '平台额度'}
+          {isExhausted ? '我的额度已耗尽' : isLow ? '我的额度偏低' : '我的额度'}
         </span>
         <span className={cn('text-xs font-semibold tabular-nums', tone.text)}>
           {formatBalance(balance)}

@@ -1,68 +1,32 @@
 /**
  * 用户额度路由
  *
- * 计费已收敛到 New API：余额读取的是「共享额度池」(RELAY_API_KEY 对应的 New API
- * 账号)的真实消耗，通过 /v1/dashboard/billing/usage 获取（该接口 token key 可调）。
- * 所有 Profer 用户共用这一个池。
+ * 计费单一真源 = New API 实扣 quota，镜像进 Profer 本地 credits 账本（quota 单位）。
+ * 余额读取的是**当前用户**自己的本地 credits 余额（不再是共享池 POOL_TOTAL 减法），
+ * 换算成货币单位返回（quota / NEWAPI_QUOTA_PER_UNIT），与 New API 实扣一致、可对账。
  */
 import { Hono } from 'hono'
-import { getRequestLogs, getUsageByModel } from '../../db.js'
-import { RELAY_BASE_URL, RELAY_API_KEY } from '../../config.js'
+import { getRequestLogs, getUsageByModel, getCredits } from '../../db.js'
+import { NEWAPI_QUOTA_PER_UNIT } from '../../config.js'
 
 export const accountCredits = new Hono()
 
-// 共享池总额度（可配环境变量手动设；未配时用 New API users.quota 推算值）
-const POOL_TOTAL = parseInt(process.env.POOL_TOTAL_QUOTA || '0', 10) || undefined
-
-// 缓存
-let _balanceCache = { value: null, at: 0 }
-const BALANCE_TTL = 30_000
-
-/** 调 New API /v1/dashboard/billing/usage 拿累计消耗(美分)；失败返回 null。 */
-async function fetchPoolUsage() {
-  const now = Date.now()
-  if (_balanceCache.value && now - _balanceCache.at < BALANCE_TTL) {
-    return _balanceCache.value
-  }
-  if (!RELAY_API_KEY) return null
-  try {
-    const resp = await fetch(`${RELAY_BASE_URL}/v1/dashboard/billing/usage`, {
-      headers: { Authorization: `Bearer ${RELAY_API_KEY}` },
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!resp.ok) return _balanceCache.value
-    const json = await resp.json()
-    // total_usage 单位美分 → 美元
-    const consumed = Math.round((json.total_usage || 0)) / 100
-    // 余额 = 总额度 - 累计消耗（总额度未配时只显示消耗）
-    const total = POOL_TOTAL ? POOL_TOTAL / 500000 : undefined
-    const result = {
-      lifetimeConsumed: consumed,
-      balance: total != null ? Math.max(0, total - consumed) : null,
-      total: total,
-      shared: true,
-    }
-    _balanceCache = { value: result, at: now }
-    return result
-  } catch {
-    return _balanceCache.value
-  }
-}
-
-// GET /v1/account/credits — 共享额度池余额
-accountCredits.get('/', async (c) => {
-  const pool = await fetchPoolUsage()
-  if (!pool) {
-    return c.json({ balance: null, lifetimeConsumed: 0, shared: true })
-  }
+// GET /v1/account/credits — 当前用户本地账本余额（货币单位）
+accountCredits.get('/', (c) => {
+  const userId = c.get('userId')
+  if (!userId) return c.json({ balance: null, lifetimeConsumed: 0 })
+  const row = getCredits(userId)
+  if (!row) return c.json({ balance: 0, lifetimeConsumed: 0 })
+  // 本地账本以 quota 单位存储，÷ QUOTA_PER_UNIT 换算成货币单位展示（与 New API 一致）
   return c.json({
-    balance: pool.balance,
-    lifetimeConsumed: pool.lifetimeConsumed,
-    shared: true,
+    balance: (row.balance || 0) / NEWAPI_QUOTA_PER_UNIT,
+    lifetimeConsumed: (row.lifetime_consumed || 0) / NEWAPI_QUOTA_PER_UNIT,
   })
 })
 
-// GET /v1/account/credits/usage — 当前用户请求日志（token 用量，不计费）
+// GET /v1/account/credits/usage — 当前用户请求日志
+
+// GET /v1/account/credits/usage — 当前用户请求日志
 accountCredits.get('/usage', (c) => {
   const userId = c.get('userId')
   const page = parseInt(c.req.query('page') || '1', 10)
