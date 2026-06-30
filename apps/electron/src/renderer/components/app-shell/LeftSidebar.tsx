@@ -828,14 +828,28 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
   /** 打开自动任务列表 */
   const handleOpenAutomations = React.useCallback((): void => {
+    // 已激活时再次点击切回对话列表（编辑页则先关表单回列表）（#972）
+    if (activeView === 'automations') {
+      if (store.get(automationFormAtom).open) {
+        setAutomationForm({ open: false, draft: null })
+        return
+      }
+      setActiveView('conversations')
+      return
+    }
     setAutomationForm({ open: false, draft: null })
     setActiveView('automations')
-  }, [setAutomationForm, setActiveView])
+  }, [activeView, setAutomationForm, setActiveView, store])
 
   /** 打开 Agent 技能视图 */
   const handleOpenSkills = React.useCallback((): void => {
+    // 已激活时再次点击切回对话列表（#972）
+    if (activeView === 'agent-skills') {
+      setActiveView('conversations')
+      return
+    }
     setActiveView('agent-skills')
-  }, [setActiveView])
+  }, [activeView, setActiveView])
 
   // 切换模式时重置归档视图
   React.useEffect(() => {
