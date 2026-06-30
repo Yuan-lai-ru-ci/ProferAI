@@ -11,7 +11,7 @@ import type { SuggestionOptions } from '@tiptap/suggestion'
 import { MessageSquareText, Sparkles, Server } from 'lucide-react'
 import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
-import { createMentionPopup, positionPopup } from './mention-popup-utils'
+import { createMentionPopup, positionPopup, isSuggestionTriggerPresent } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@proma/shared'
 
 // ===== 泛型工厂 =====
@@ -19,6 +19,8 @@ import type { AgentSessionReferenceSearchResult } from '@proma/shared'
 interface MentionSuggestionConfig<T> {
   /** 触发字符 */
   char: string
+  /** 标题栏左侧标签（面板类型） */
+  headerLabel: string
   /** 空列表占位文字 */
   emptyText: string
   /** 异步获取列表项 */
@@ -40,6 +42,9 @@ function createMentionSuggestion<T>(
   return {
     char: config.char,
     allowSpaces: false,
+    // allowedPrefixes 为 null：允许任意字符前缀触发（含中文等无空格场景，如 `你好#`）。
+    // 注意：设为 [' '] 不能阻止"空输入框触发"——TipTap 在块开头的前缀为空串，
+    // 始终通过校验；却会让中文/单词后紧跟触发符无法触发，属回归。
     allowedPrefixes: null,
 
     items: async ({ query }): Promise<T[]> => {
@@ -78,6 +83,12 @@ function createMentionSuggestion<T>(
             cleanup()
           }
 
+          // 防御异步竞态：await items() 期间触发符可能已被删除导致 suggestion 退出，
+          // 插件仍会用过期 props 调用 onStart；过期则跳过建弹窗，避免残留幽灵弹窗。
+          if (!isSuggestionTriggerPresent(props.editor, props.range, config.char)) {
+            return
+          }
+
           mentionActiveRef.current = true
           mentionItemCountRef.current = props.items.length
           editorDom = props.editor.view.dom
@@ -85,6 +96,7 @@ function createMentionSuggestion<T>(
             props: {
               items: props.items,
               emptyText: config.emptyText,
+              headerLabel: config.headerLabel,
               keyExtractor: config.keyExtractor,
               renderItem: config.renderItem,
               onSelect: (item: T) => {
@@ -147,6 +159,7 @@ export function createSkillMentionSuggestion(
   return createMentionSuggestion<SkillMentionItem>(
     {
       char: '/',
+      headerLabel: '调用 skill',
       emptyText: '无匹配 Skill',
       fetchItems: async (slug, q) => {
         const caps = await window.electronAPI.getWorkspaceCapabilities(slug)
@@ -189,6 +202,7 @@ export function createMcpMentionSuggestion(
   return createMentionSuggestion<McpMentionItem>(
     {
       char: '#',
+      headerLabel: 'MCP 服务',
       emptyText: '无匹配 MCP 服务',
       fetchItems: async (slug, q) => {
         const caps = await window.electronAPI.getWorkspaceCapabilities(slug)
@@ -226,6 +240,7 @@ export function createSessionMentionSuggestion(
   return createMentionSuggestion<SessionMentionItem>(
     {
       char: '&',
+      headerLabel: '引用会话',
       emptyText: '无匹配会话',
       fetchItems: async (_slug, q) => {
         const workspaceId = workspaceIdRef.current
