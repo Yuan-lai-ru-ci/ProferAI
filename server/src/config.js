@@ -58,11 +58,12 @@ export const CHANNEL_ENCRYPTION_KEY = (() => {
   return key || ''
 })()
 
-// 新用户注册时赠送的默认额度
-export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '1000', 10)
+// 新用户注册时赠送的默认额度（单位：New API quota，500000 = $1）
+// 默认 500000 = $1 起步。可用 DEFAULT_CREDIT_GRANT 覆盖（直接给 quota 数）。
+export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '500000', 10)
 
-// 单次手动充值上限（防呆）
-export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '100000', 10)
+// 单次手动充值/发放上限（防呆）。单位 quota（500000=$1）。默认 5 亿 quota = $1000。
+export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '500000000', 10)
 
 // New API 中继站地址（额度代理转发目标）
 export const RELAY_BASE_URL = process.env.RELAY_BASE_URL || 'http://127.0.0.1:3080'
@@ -74,32 +75,41 @@ export const RELAY_API_KEY = (() => {
   return key || ''
 })()
 
-// New API 系统访问令牌（用于查询共享额度池真实余额）
-// 在 New API 后台 root1 账号 → 个人设置 → 生成系统访问令牌，配到此处。
-// 计费已收敛到 New API，余额接口用它调 New API /api/user/self 拿真实 quota。
+// New API 系统访问令牌（用于查询真实用量/对账）
+// ⚠️ 必须是 New API 后台 root/超管账号 → 个人设置 → 生成的「系统访问令牌」，
+// 不是 API 令牌（sk-...）。系统令牌才能调 /api/log/ /api/user/ 等管理接口；
+// sk- 令牌只能调 /v1/dashboard/billing/usage。调管理接口还需 New-API-User 头 = 令牌所属用户 id。
 export const NEWAPI_ADMIN_TOKEN = process.env.NEWAPI_ADMIN_TOKEN || ''
+
+// 系统访问令牌所属的 New API 用户 id（root/超管），调管理接口时作 New-API-User 头。
+export const NEWAPI_ADMIN_USER_ID = process.env.NEWAPI_ADMIN_USER_ID || '1'
 
 // New API quota → 货币换算锚点（默认 500000 quota = 1 单位，与 New API QuotaPerUnit 一致）
 export const NEWAPI_QUOTA_PER_UNIT = parseInt(process.env.NEWAPI_QUOTA_PER_UNIT || '500000', 10)
 
+// 计费加价倍率：Profer 对用户扣费 = New API 真实成本 × 此倍率。
+// 默认 1.0（成本价，不加价）。要赚差价设 >1（如 1.5 = 加价 50%）。
+export const BILLING_MARKUP = parseFloat(process.env.BILLING_MARKUP || '1.0')
+
 // ===== 多类账号体系 =====
 // 账号类型决定工作区配额 + 初始额度。自配 API 为独立开关（users.can_self_config_api）。
 // 要加新类型：在此对象加一行即可。
+// 账号类型赠送额单位：New API quota（500000 = $1）。restricted $0.5 / standard $1 / advanced $5。
 export const ACCOUNT_TYPES = {
   restricted: {
     label: '受限用户',
     maxWorkspaces: 0,
-    defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '500', 10),
+    defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '250000', 10),
   },
   standard: {
     label: '标准用户',
     maxWorkspaces: 3,
-    defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '1000', 10),
+    defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '500000', 10),
   },
   advanced: {
     label: '高级用户',
     maxWorkspaces: 10,
-    defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '5000', 10),
+    defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '2500000', 10),
   },
 }
 
