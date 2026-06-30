@@ -15,6 +15,7 @@ import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { TabPreviewPanel } from './TabPreviewPanel'
+import { interfaceVariantAtom } from '@/atoms/theme'
 
 export interface TabBarItemProps {
   id: string
@@ -68,6 +69,8 @@ export function TabBarItem({
   const buttonRef = React.useRef<HTMLButtonElement>(null)
   const [isNarrow, setIsNarrow] = React.useState(false)
   const minimapCache = useAtomValue(tabMinimapCacheAtom)
+  const interfaceVariant = useAtomValue(interfaceVariantAtom)
+  const isClassic = interfaceVariant === 'classic'
 
   React.useEffect(() => {
     const el = buttonRef.current
@@ -121,11 +124,12 @@ export function TabBarItem({
           type="button"
           className={cn(
             'group relative flex items-center justify-center gap-1.5 min-w-[82px] px-3 h-[34px]',
-            'rounded-t-lg text-xs transition-colors select-none cursor-pointer',
+            'text-xs transition-colors select-none cursor-pointer',
             'border-t border-l border-r border-transparent',
+            isClassic ? 'rounded-t-lg' : 'rounded-none',
             isActive
-              ? 'bg-content-area text-foreground border-border/50'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+              ? isClassic ? 'bg-content-area text-foreground border-border/50' : 'app-tab-active text-foreground border-border/80'
+              : isClassic ? 'text-muted-foreground hover:text-foreground hover:bg-muted/50' : 'app-tab-inactive text-muted-foreground hover:text-foreground',
           )}
           onClick={onActivate}
           onMouseDown={handleMouseDown}
@@ -149,11 +153,12 @@ export function TabBarItem({
         type="button"
         className={cn(
           'group relative flex items-center gap-1.5 px-3 h-[34px] w-full',
-          'rounded-t-lg text-xs transition-colors select-none cursor-pointer',
+          'text-xs transition-colors select-none cursor-pointer',
           'border-t border-l border-r border-transparent',
+          isClassic ? 'rounded-t-lg' : 'rounded-none',
           isActive
-            ? 'bg-content-area text-foreground border-border/50'
-            : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+            ? isClassic ? 'bg-content-area text-foreground border-border/50' : 'app-tab-active text-foreground border-border/80'
+            : isClassic ? 'text-muted-foreground hover:text-foreground hover:bg-muted/50' : 'app-tab-inactive text-muted-foreground hover:text-foreground',
           isTearingOff && 'ring-2 ring-primary/70 ring-offset-0 bg-primary/10',
         )}
         onClick={onActivate}
@@ -203,7 +208,8 @@ export function TabBarItem({
         {indicatorColor && (
           <span
             className={cn(
-              'absolute inset-0 rounded-t-lg border-t-2 border-l-2 border-r-2 border-b-0 pointer-events-none',
+              'absolute inset-0 border-t-2 border-l-2 border-r-2 border-b-0 pointer-events-none',
+              isClassic ? 'rounded-t-lg' : 'rounded-none',
               indicatorColor,
             )}
             aria-hidden="true"

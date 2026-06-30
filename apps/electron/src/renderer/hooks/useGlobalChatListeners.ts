@@ -12,11 +12,13 @@ import { useStore } from 'jotai'
 import {
   streamingStatesAtom,
   chatStreamErrorsAtom,
+  chatStreamErrorCodesAtom,
   conversationsAtom,
   chatMessageRefreshAtom,
   pendingAgentRecommendationAtom,
 } from '@/atoms/chat-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
+import { refreshCreditsInto } from '@/hooks/useCreditsLoader'
 import type { ConversationStreamState } from '@/atoms/chat-atoms'
 import type {
   StreamChunkEvent,
@@ -153,6 +155,22 @@ export function useGlobalChatListeners(): void {
           map.set(event.conversationId, event.error)
           return map
         })
+
+        // 存储结构化错误代码（如 insufficient_credits），供 UI 渲染充值引导
+        store.set(chatStreamErrorCodesAtom, (prev) => {
+          const map = new Map(prev)
+          if (event.code) {
+            map.set(event.conversationId, event.code)
+          } else {
+            map.delete(event.conversationId)
+          }
+          return map
+        })
+
+        // 额度不足：立即刷新余额，让侧栏余额条与设置页反映最新（多为 0）状态
+        if (event.code === 'insufficient_credits') {
+          void refreshCreditsInto(store)
+        }
 
         // 递增消息刷新版本号，通知 ChatView 重新加载消息
         // 流式状态的完全清除由 ChatView 在消息加载完成后执行

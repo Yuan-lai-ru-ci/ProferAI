@@ -131,8 +131,16 @@ export class AgentPermissionService {
 
       const allow = (): PermissionResult => ({ behavior: 'allow' as const, updatedInput: input })
 
-      // Worker（子代理）的工具调用自动批准，避免 UI 等待导致超时死锁
+      // Worker（子代理）的工具调用基本安全审查
+      // 避免 UI 等待导致超时死锁，但仍需拦截明确的危险操作
       if (options.agentID) {
+        // 对子代理的 Bash 调用做危险命令检测
+        if (toolName === 'Bash') {
+          const command = typeof input.command === 'string' ? input.command : ''
+          if (isDangerousCommand(command) || hasDangerousStructure(command)) {
+            return { behavior: 'deny' as const, message: '子代理不允许执行危险命令', interrupt: true }
+          }
+        }
         return allow()
       }
 

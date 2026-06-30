@@ -9,6 +9,7 @@ import { app, BrowserWindow, screen, shell } from 'electron'
 import type { Rectangle } from 'electron'
 import { basename, join } from 'path'
 import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@proma/shared'
+import { VITE_DEV_SERVER_URL } from './config-paths'
 
 const previewDataById = new Map<string, DetachedPreviewWindowData>()
 const previewWindowsById = new Map<string, BrowserWindow>()
@@ -110,7 +111,7 @@ export function openDetachedPreviewWindow(
 
   const isDev = !app.isPackaged
   if (isDev) {
-    win.loadURL(`http://localhost:5173?window=detached-preview&previewId=${encodeURIComponent(id)}`)
+    win.loadURL(`${VITE_DEV_SERVER_URL}?window=detached-preview&previewId=${encodeURIComponent(id)}`)
   } else {
     win.loadFile(join(__dirname, 'renderer', 'index.html'), {
       query: { window: 'detached-preview', previewId: id },
@@ -121,9 +122,23 @@ export function openDetachedPreviewWindow(
     if (!win.isDestroyed()) win.show()
   })
 
+  const toSystemPath = (u: string): string | null => {
+    if (u.startsWith('file:///')) {
+      return process.platform === 'win32'
+        ? decodeURIComponent(u.slice(8).replace(/\//g, '\\'))
+        : decodeURIComponent(u.slice(7))
+    }
+    if (/^[A-Za-z]:[\\/]/.test(u)) return u.replace(/\//g, '\\')
+    if (u.startsWith('/')) return u
+    return null
+  }
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url)
+    } else {
+      const sysPath = toSystemPath(url)
+      if (sysPath) shell.openPath(sysPath)
     }
     return { action: 'deny' }
   })
@@ -133,6 +148,9 @@ export function openDetachedPreviewWindow(
     event.preventDefault()
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url)
+    } else {
+      const sysPath = toSystemPath(url)
+      if (sysPath) shell.openPath(sysPath)
     }
   })
 

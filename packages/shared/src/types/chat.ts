@@ -271,6 +271,10 @@ export interface StreamErrorEvent {
   conversationId: string
   /** 错误信息 */
   error: string
+  /** 结构化错误代码（如 'insufficient_credits'），供 UI 程序化处理与引导 */
+  code?: string
+  /** 错误标题（结构化错误时展示，如「额度不足」） */
+  errorTitle?: string
 }
 
 /**

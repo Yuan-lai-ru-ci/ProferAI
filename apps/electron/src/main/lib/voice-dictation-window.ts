@@ -9,6 +9,7 @@ import { join } from 'path'
 import { VOICE_DICTATION_IPC_CHANNELS } from '../../types'
 import { getSettings, updateSettings } from './settings-service'
 import { captureVoiceDictationTarget } from './text-output-service'
+import { VITE_DEV_SERVER_URL } from './config-paths'
 
 let voiceDictationWindow: BrowserWindow | null = null
 let voiceDictationTargetCaptured = false
@@ -65,7 +66,7 @@ export function createVoiceDictationWindow(): void {
 
   const isDev = !app.isPackaged
   if (isDev) {
-    voiceDictationWindow.loadURL('http://localhost:5173?window=voice-dictation')
+    voiceDictationWindow.loadURL(`${VITE_DEV_SERVER_URL}?window=voice-dictation`)
   } else {
     voiceDictationWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
       query: { window: 'voice-dictation' },
@@ -161,7 +162,7 @@ function isTrustedVoiceDictationUrl(rawUrl: string | undefined): boolean {
 
   try {
     const parsed = new URL(rawUrl)
-    if (!app.isPackaged && parsed.origin === 'http://localhost:5173') {
+    if (!app.isPackaged && parsed.origin === VITE_DEV_SERVER_URL) {
       return true
     }
     return parsed.protocol === 'file:'

@@ -21,7 +21,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 5174,
     strictPort: true, // 确保使用指定端口，如被占用则报错
     open: false,
   },

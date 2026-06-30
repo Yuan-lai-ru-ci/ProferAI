@@ -31,15 +31,22 @@ import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanMo
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
-import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
+import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig } from './channel-manager'
+import { getTeamAuthWithRefresh } from './auth-service'
 import { injectAutomationMcpServer } from './automation-agent-tools'
+import {
+  injectAgentCollaborationMcpServer,
+  registerCollaborationEventBus,
+} from './agent-collaboration-tools'
+import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
+import { isCommercialBuild } from './build-target'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
@@ -59,6 +66,17 @@ import { extractSDKToolSummary, buildContextPrompt, buildRecoveryPrompt, escapeC
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
 
+const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
+  'anthropic',
+  'anthropic-compatible',
+  'kimi-api',
+  'kimi-coding',
+  'minimax',
+  'xiaomi',
+  'xiaomi-token-plan',
+  'zhipu-coding',
+])
+
 // ===== 类型定义 =====
 
 /**
@@ -76,6 +94,50 @@ export interface SessionCallbacks {
   onTitleUpdated: (title: string) => void
   /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
   onRunStarted?: (opts: { startedAt: number }) => void
+}
+
+// ===== 错误诊断工具 =====
+
+/** 将捕获的 unknown error 序列化为详细诊断信息，用于控制台日志排查 */
+export function serializeErrorDetail(error: unknown): string {
+  if (error === null) return 'error 为 null'
+  if (error === undefined) return 'error 为 undefined'
+  const type = typeof error
+  if (type === 'string') return `[类型: string] ${error as string}`
+  if (type === 'number') return `[类型: number] ${String(error)}`
+  if (type === 'boolean') return `[类型: boolean] ${String(error)}`
+  if (type === 'bigint') return `[类型: bigint] ${String(error)}`
+  if (type === 'symbol') return `[类型: symbol] ${String(error)}`
+  if (type === 'function') return `[类型: function] ${(error as () => void).name || 'anonymous'}`
+
+  if (error instanceof Error) {
+    const parts: string[] = [
+      `[类型: ${error.constructor.name}]`,
+      `message: ${error.message || '(空)'}`,
+      `name: ${error.name}`,
+    ]
+    if (error.stack) {
+      // 取前 3 行 stack（含 message 行）
+      const stackLines = error.stack.split('\n').slice(0, 4)
+      parts.push(`stack(前4行): ${stackLines.join('\n    ')}`)
+    }
+    if (error.cause) {
+      parts.push(`cause: ${serializeErrorDetail(error.cause)}`)
+    }
+    // 也列出其他可枚举属性（如 statusCode, code 等）
+    const extra = Object.keys(error).filter((k) => !['message', 'name', 'stack', 'cause'].includes(k))
+    if (extra.length > 0) {
+      parts.push(`额外属性: ${JSON.stringify(extra.reduce((acc, k) => ({ ...acc, [k]: (error as unknown as Record<string, unknown>)[k] }), {}))}`)
+    }
+    return parts.join('\n  | ')
+  }
+
+  // 普通对象或其他
+  try {
+    return `[类型: object, constructor: ${(error as object).constructor?.name || 'unknown'}] keys: ${Object.keys(error as object).join(', ') || '(无)'} | JSON: ${JSON.stringify(error)}`
+  } catch {
+    return `[类型: object] (无法序列化)`
+  }
 }
 
 // ===== AgentOrchestrator =====
@@ -97,6 +159,15 @@ export class AgentOrchestrator {
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
     this.eventBus = eventBus
+    registerCollaborationEventBus(eventBus)
+
+    // 注册 headless runner，供协作工具 / 自动任务 / 桥接命令等非 UI 场景调用
+    setHeadlessAgentRunner((input, callbacks) =>
+      this.sendMessage(input, callbacks)
+    )
+    setAgentStopper((sessionId) => {
+      this.stop(sessionId)
+    })
   }
 
   /**
@@ -121,6 +192,7 @@ export class AgentOrchestrator {
     apiKey: string,
     baseUrl: string | undefined,
     provider: ProviderType,
+    forceBearerAuth = false,
   ): Promise<Record<string, string | undefined>> {
     const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
 
@@ -140,6 +212,10 @@ export class AgentOrchestrator {
       ...cleanEnv,
       // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+      // 暴露打包进 App 的 proma CLI 路径，供 session-cleaner 等 skill / Agent 调用
+      // （开发模式无编译二进制，getBundledCliPath 返回 undefined，此处不注入，
+      //   skill 回退到源码运行 bun apps/cli/src/index.ts）。
+      ...(getBundledCliPath() ? { PROMA_CLI: getBundledCliPath() } : {}),
       // 启用 Tasks 功能
       CLAUDE_CODE_ENABLE_TASKS: 'true',
       // 禁用实验性 beta 功能，使用稳定模式
@@ -153,7 +229,9 @@ export class AgentOrchestrator {
     // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
     // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
     // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
-    if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
+    if (forceBearerAuth) {
+      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
+    } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
       sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
     } else if (provider === 'minimax') {
@@ -344,14 +422,29 @@ export class AgentOrchestrator {
         return null
       }
 
-      const apiKey = decryptApiKey(channelId)
+      let apiKey: string
+      let proxyBaseUrl = ''
+      if ((isCommercialBuild() || isCommercialMode()) && !canSelfConfig()) {
+        const auth = await getTeamAuthWithRefresh()
+        if (!auth) {
+          console.warn('[Agent 标题生成] 团队账号登录已过期，跳过 AI 标题生成')
+          return null
+        }
+        const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+        proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
+        apiKey = auth.proxyToken || auth.token
+      } else {
+        apiKey = decryptApiKey(channelId)
+      }
+
       const providerAdapter = getAdapter(channel.provider)
       const request = providerAdapter.buildTitleRequest({
-        baseUrl: channel.baseUrl,
+        baseUrl: proxyBaseUrl || channel.baseUrl,
         apiKey,
         modelId,
         prompt: TITLE_PROMPT + userMessage,
       })
+      if (proxyBaseUrl) request.url = proxyBaseUrl
 
       const proxyUrl = await getEffectiveProxyUrl()
       const fetchFn = getFetchFn(proxyUrl)
@@ -587,19 +680,37 @@ export class AgentOrchestrator {
     }
 
     let apiKey: string
-    try {
-      apiKey = decryptApiKey(channelId)
-    } catch {
-      reportPreflightError({
-        code: 'api_key_decrypt_failed',
-        title: 'API Key 解密失败',
-        message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
-        actions: [
-          { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
-        ],
-        canRetry: false,
-      })
-      return
+    let agentUrl = (channel as any).agentBaseUrl || channel.baseUrl
+    const forceBearerAuth = (isCommercialBuild() || isCommercialMode()) && !canSelfConfig()
+    if (forceBearerAuth) {
+      const auth = await getTeamAuthWithRefresh()
+      if (!auth) {
+        reportPreflightError({
+          code: 'token_expired',
+          title: '团队账号登录已过期',
+          message: '请重新登录团队账号后再使用 Agent 商业渠道。',
+          actions: [{ key: 's', label: '打开设置', action: 'settings' }],
+          canRetry: false,
+        })
+        return
+      }
+      apiKey = auth.proxyToken || auth.token
+      agentUrl = `${auth.baseUrl}/v1/proxy`
+    } else {
+      try {
+        apiKey = decryptApiKey(channelId)
+      } catch {
+        reportPreflightError({
+          code: 'api_key_decrypt_failed',
+          title: 'API Key 解密失败',
+          message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
+          actions: [
+            { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+          ],
+          canRetry: false,
+        })
+        return
+      }
     }
 
     // 2.1 立即抢占会话槽位（在所有同步检查通过后、第一个 await 之前）
@@ -653,7 +764,9 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_BASE_URL
     delete process.env.ANTHROPIC_CUSTOM_HEADERS
-    if (channel.provider === 'kimi-coding') {
+    if (forceBearerAuth) {
+      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
+    } else if (channel.provider === 'kimi-coding') {
       // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
       process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
@@ -667,13 +780,13 @@ export class AgentOrchestrator {
     } else {
       process.env.ANTHROPIC_API_KEY = apiKey
     }
-    // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
-    if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
-      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
+    // Agent 模式优先使用 agentBaseUrl；商业模式强制走团队服务器代理。
+    if (agentUrl && agentUrl !== 'https://api.anthropic.com') {
+      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(agentUrl)
     }
 
     const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
-    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
+    const sdkEnv = await this.buildSdkEnv(apiKey, agentUrl, channel.provider, forceBearerAuth)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
@@ -821,6 +934,14 @@ export class AgentOrchestrator {
         channelId,
         modelId,
         workspaceId,
+        triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
+      })
+      await injectAgentCollaborationMcpServer(sdk, mcpServers, {
+        sessionId,
+        channelId,
+        modelId,
+        workspaceId,
+        permissionMode: input.permissionModeOverride,
         triggeredBy: input.triggeredBy,
       })
 
@@ -1352,12 +1473,36 @@ export class AgentOrchestrator {
             if (msg.type === 'assistant') {
               const assistantMsg = msg as SDKAssistantMessage
               if (assistantMsg.error) {
+                console.error(`[Agent 编排] ═══ SDK assistant 错误 原始数据 ═══`)
+                console.error(`[Agent 编排] error.errorType: ${assistantMsg.error.errorType ?? '(空)'}`)
+                console.error(`[Agent 编排] error.message: ${assistantMsg.error.message ?? '(空)'}`)
+                console.error(`[Agent 编排] message.content 文本块:`,
+                  (assistantMsg.message?.content ?? [])
+                    .filter((b: { type: string }) => b.type === 'text')
+                    .map((b: Record<string, unknown>) => (b as { text: string }).text?.slice(0, 500))
+                )
+                try { console.error(`[Agent 编排] 完整 assistantMsg (JSON keys):`, Object.keys(assistantMsg)) } catch {}
+                try { console.error(`[Agent 编排] assistantMsg JSON (截断):`, JSON.stringify(assistantMsg).slice(0, 2000)) } catch {}
+                console.error(`[Agent 编排] ═══ SDK assistant 错误 原始数据 结束 ═══`)
                 const { detailedMessage, originalError } = extractErrorDetails(assistantMsg as unknown as Parameters<typeof extractErrorDetails>[0])
-                let errorCode = assistantMsg.error.errorType || 'unknown_error'
+                // SDK 的 error 字段可能是字符串（错误码）或对象 {message, errorType}
+                const rawError = assistantMsg.error as unknown
+                let errorCode = (typeof rawError === 'object' && rawError !== null
+                  ? (rawError as Record<string, unknown>).errorType as string
+                  : undefined)
+                  ?? (typeof rawError === 'string' ? rawError : undefined)
+                  ?? 'unknown_error'
+                console.error(`[Agent 编排] rawError 类型=${typeof rawError}, errorCode=${errorCode}`)
                 if (isPromptTooLongError(detailedMessage, originalError)) {
                   errorCode = 'prompt_too_long'
                 }
                 const typedError = mapSDKErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError)
+                console.error(`[Agent 编排] mapSDKErrorToTypedError 结果:`)
+                console.error(`  code: ${typedError.code}`)
+                console.error(`  title: ${typedError.title || '(空)'}`)
+                console.error(`  message: ${typedError.message || '(空)'}`)
+                console.error(`  canRetry: ${typedError.canRetry}`)
+                console.error(`  originalError: ${typedError.originalError?.slice(0, 300) || '(空)'}`)
 
                 // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
                 if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && canAutoRetry(attempt)) {
@@ -1637,8 +1782,30 @@ export class AgentOrchestrator {
           }
 
           // 不可重试 — 走原有终止逻辑
+          console.error(`[Agent 编排] ══════════ 不可重试错误 诊断开始 ══════════`)
+          console.error(`[Agent 编排] sessionId: ${sessionId}`)
+          console.error(`[Agent 编排] attempt: ${attempt}/${MAX_AUTO_RETRIES}`)
+          console.error(`[Agent 编排] modelId: ${modelId || '(default)'}`)
+          console.error(`[Agent 编排] channelId: ${channelId}`)
+          console.error(`[Agent 编排] raw error 详细诊断:\n${serializeErrorDetail(error)}`)
+          console.error(`[Agent 编排] error instanceof Error: ${error instanceof Error}`)
+          console.error(`[Agent 编排] typeof error: ${typeof error}`)
+          if (apiError) {
+            console.error(`[Agent 编排] apiError statusCode: ${apiError.statusCode}`)
+            console.error(`[Agent 编排] apiError message: ${apiError.message}`)
+          } else {
+            console.error(`[Agent 编排] apiError: 未提取到 API 错误`)
+          }
+          console.error(`[Agent 编排] rawErrorMessage: ${rawErrorMessage || '(空)'}`)
+          console.error(`[Agent 编排] stderrOutput (${stderrOutput.length} 字符):`)
+          if (stderrOutput) console.error(stderrOutput)
+          else console.error(`  (空)`)
+          console.error(`[Agent 编排] fullStderr (${fullStderr.length} 字符):`)
+          if (fullStderr) console.error(fullStderr)
+          else console.error(`  (空)`)
+          console.error(`[Agent 编排] accumulatedMessages: ${accumulatedMessages.length} 条`)
           const errorMessage = error instanceof Error ? error.message : '未知错误'
-          console.error(`[Agent 编排] 执行失败:`, error)
+          console.error(`[Agent 编排] errorMessage: ${errorMessage || '(空字符串)'}`)
 
           // 保存已累积的部分内容
           if (accumulatedMessages.length > 0) {
@@ -1656,6 +1823,7 @@ export class AgentOrchestrator {
           } else {
             userFacingError = friendlyErrorMessage(errorMessage)
           }
+          console.error(`[Agent 编排] userFacingError (friendlyErrorMessage 之后):\n  ${userFacingError}`)
 
           // 保存错误消息到 JSONL
           try {
@@ -1694,6 +1862,11 @@ export class AgentOrchestrator {
                 ]
               : undefined
             userFacingError = errorContent
+            console.error(`[Agent 编排] 最终 errorContent:\n  errorCode: ${errorCode}`)
+            console.error(`  errorTitle: ${errorTitle}`)
+            console.error(`  errorContent: ${errorContent || '(空)'}`)
+            console.error(`  isPromptTooLong: ${isPromptTooLong}, isThinkingSignature: ${isThinkingSignature}`)
+            console.error(`[Agent 编排] ══════════ 不可重试错误 诊断结束 ══════════`)
 
             const errMsg: SDKMessage = {
               type: 'assistant',
@@ -1767,6 +1940,13 @@ export class AgentOrchestrator {
       }
 
     } finally {
+      // 清理 process.env 中的 API key：防止 Agent 会话结束后凭证残留
+      // 主进程环境变量中，被后续会话或其他模块读取
+      delete process.env.ANTHROPIC_API_KEY
+      delete process.env.ANTHROPIC_AUTH_TOKEN
+      delete process.env.ANTHROPIC_BASE_URL
+      delete process.env.ANTHROPIC_CUSTOM_HEADERS
+
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       releaseActiveRun()
       permissionService.clearSessionPending(sessionId)

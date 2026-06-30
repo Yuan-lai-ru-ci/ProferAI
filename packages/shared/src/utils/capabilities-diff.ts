@@ -29,8 +29,8 @@ export function diffCapabilities(
   const changes: CapabilityChange[] = []
 
   // --- MCP 服务器 ---
-  const prevMcpMap = new Map(prev.mcpServers.map((s) => [s.name, s]))
-  const nextMcpMap = new Map(next.mcpServers.map((s) => [s.name, s]))
+  const prevMcpMap = new Map((prev?.mcpServers ?? []).map((s) => [s.name, s]))
+  const nextMcpMap = new Map((next?.mcpServers ?? []).map((s) => [s.name, s]))
 
   for (const [name, server] of nextMcpMap) {
     const prevServer = prevMcpMap.get(name)
@@ -47,8 +47,8 @@ export function diffCapabilities(
   }
 
   // --- Skills ---
-  const prevSkillMap = new Map(prev.skills.map((s) => [s.slug, s]))
-  const nextSkillMap = new Map(next.skills.map((s) => [s.slug, s]))
+  const prevSkillMap = new Map((prev?.skills ?? []).map((s) => [s.slug, s]))
+  const nextSkillMap = new Map((next?.skills ?? []).map((s) => [s.slug, s]))
 
   for (const [slug, skill] of nextSkillMap) {
     const prevSkill = prevSkillMap.get(slug)

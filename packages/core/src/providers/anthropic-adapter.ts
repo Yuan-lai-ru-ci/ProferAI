@@ -20,7 +20,7 @@
  * Kimi Coding Plan 特殊要求：
  * - Base URL：`https://api.kimi.com/coding/v1`
  * - 必须发送 Proma 自有 User-Agent（服务端白名单校验）
- * - UA 格式：`Profer/<version> (+https://github.com/Yuan-lai-ru-ci/Profer)`
+ * - UA 格式：`Proma/<version> (+https://github.com/Yuan-lai-ru-ci/Profer)`（产品名保持 Proma 兼容渠道白名单）
  */
 
 import type { ProviderType } from '@proma/shared'
@@ -257,6 +257,9 @@ function appendContinuationMessages(
 export class AnthropicAdapter implements ProviderAdapter {
   readonly providerType: ProviderType
 
+  /** 当前活跃的内容块类型（由 content_block_start 设置，content_block_stop 消费后清除） */
+  private activeBlockType: string | null = null
+
   constructor(providerType: ProviderType = 'anthropic') {
     this.providerType = providerType
   }
@@ -391,8 +394,9 @@ export class AnthropicAdapter implements ProviderAdapter {
         console.log('[SSE]', jsonLine.slice(0, 400))
       }
 
-      // 内容块开始
+      // 内容块开始（跟踪块类型以正确匹配 content_block_stop）
       if (event.type === 'content_block_start') {
+        this.activeBlockType = event.content_block?.type ?? null
         if (event.content_block?.type === 'tool_use') {
           events.push({
             type: 'tool_call_start',
@@ -405,8 +409,12 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
 
       if (event.type === 'content_block_stop') {
-        // 无法从 stop 事件判断具体块类型，但 sse-reader 会忽略不相关的停止
-        events.push({ type: 'reasoning_block_stop' })
+        // 仅 thinking 块结束时发出 reasoning_block_stop；
+        // text 和 tool_use 块的结束不需要对应的事件
+        if (this.activeBlockType === 'thinking') {
+          events.push({ type: 'reasoning_block_stop' })
+        }
+        this.activeBlockType = null
       }
 
       if (event.type === 'content_block_delta') {

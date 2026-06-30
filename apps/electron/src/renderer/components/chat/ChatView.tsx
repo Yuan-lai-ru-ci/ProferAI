@@ -16,7 +16,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { AlertCircle, X } from 'lucide-react'
+import { AlertCircle, X, Wallet } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
 import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
@@ -27,15 +27,18 @@ import {
   conversationsAtom,
   streamingStatesAtom,
   chatStreamErrorsAtom,
+  chatStreamErrorCodesAtom,
   chatMessageRefreshAtom,
   pendingAgentRecommendationAtom,
   conversationModelsAtom,
   chatPendingMessageAtom,
+  channelsAtom,
   INITIAL_MESSAGE_LIMIT,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment, ChatPendingMessage } from '@/atoms/chat-atoms'
 import { promptConfigAtom, promptSidebarOpenAtom, conversationPromptIdAtom, resolveSystemMessage, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { activeToolIdsAtom } from '@/atoms/chat-tool-atoms'
+import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { ConversationProvider } from '@/contexts/session-context'
 import {
@@ -90,9 +93,13 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const setConversationModels = useSetAtom(conversationModelsAtom)
   const setChatStreamErrors = useSetAtom(chatStreamErrorsAtom)
   const chatStreamErrors = useAtomValue(chatStreamErrorsAtom)
+  const chatStreamErrorCodes = useAtomValue(chatStreamErrorCodesAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
   const refreshMap = useAtomValue(chatMessageRefreshAtom)
   const promptConfig = useAtomValue(promptConfigAtom)
   const userProfile = useAtomValue(userProfileAtom)
+  const channels = useAtomValue(channelsAtom)
   const promptSidebarOpen = useAtomValue(promptSidebarOpenAtom)
   const activeToolIds = useAtomValue(activeToolIdsAtom)
   const setPendingRecommendation = useSetAtom(pendingAgentRecommendationAtom)
@@ -119,6 +126,8 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const streamingModel = streamState?.model ?? null
   const toolActivities = streamState?.toolActivities ?? []
   const chatError = chatStreamErrors.get(conversationId) ?? null
+  const chatErrorCode = chatStreamErrorCodes.get(conversationId) ?? null
+  const isInsufficientCredits = chatErrorCode === 'insufficient_credits'
   const refreshVersion = refreshMap.get(conversationId) ?? 0
 
   // ===== 对话切换时重置状态 =====
@@ -217,6 +226,27 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   ): Promise<void> => {
     if (!selectedModel) {
       toast.error('暂无可用模型，请先在设置中添加 AI 渠道')
+      return
+    }
+    const channel = channels.find((c) => c.id === selectedModel.channelId)
+    const model = channel?.models.find((m) => m.id === selectedModel.modelId)
+    if (!channel?.enabled || !model?.enabled) {
+      toast.error('当前模型配置已失效，请重新选择可用模型')
+      setSelectedModel(null)
+      setConversationModels((prev) => {
+        if (!prev.has(conversationId)) return prev
+        const map = new Map(prev)
+        map.delete(conversationId)
+        return map
+      })
+      window.electronAPI
+        .updateConversationModel(conversationId, undefined, undefined)
+        .then((updated) => {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c))
+          )
+        })
+        .catch(console.error)
       return
     }
 
@@ -360,6 +390,9 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     promptConfig,
     userProfile.userName,
     activeToolIds,
+    channels,
+    setSelectedModel,
+    setConversationModels,
     setChatStreamErrors,
     setStreamingStates,
     setConversations,
@@ -605,12 +638,24 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
 
           {/* 错误提示 */}
           {chatError && (
-            <div className="mx-4 mb-2 px-4 py-2.5 rounded-lg bg-destructive/10 text-destructive text-sm flex items-center gap-2">
-              <AlertCircle className="size-4 shrink-0" />
+            <div className={`mx-4 mb-2 px-4 py-2.5 rounded-lg text-sm flex items-center gap-2 ${isInsufficientCredits ? 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400' : 'bg-destructive/10 text-destructive'}`}>
+              {isInsufficientCredits ? <Wallet className="size-4 shrink-0" /> : <AlertCircle className="size-4 shrink-0" />}
               <span className="flex-1 break-all">{chatError}</span>
+              {isInsufficientCredits && (
+                <button
+                  type="button"
+                  className="shrink-0 px-2.5 py-1 rounded-md bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-700 dark:text-yellow-400 font-medium transition-colors"
+                  onClick={() => {
+                    setSettingsTab('credits')
+                    setSettingsOpen(true)
+                  }}
+                >
+                  查看额度
+                </button>
+              )}
               <button
                 type="button"
-                className="shrink-0 p-0.5 rounded hover:bg-destructive/10 transition-colors"
+                className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
                 onClick={() => {
                   setChatStreamErrors((prev) => {
                     const map = new Map(prev)

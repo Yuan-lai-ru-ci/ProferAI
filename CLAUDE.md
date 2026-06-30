@@ -406,7 +406,7 @@ scp "out/Profer Setup *.exe" out/latest.yml out/*.blockmap ecs-user@47.109.108.5
 ssh ecs-user@47.109.108.57 "sudo cp /home/ecs-user/profer-updates/* /usr/share/nginx/html/profer-updates/"
 ```
 
-两个渠道编译时注入 `__UPDATE_CHANNEL__`，互不串扰。
+两个构建目标编译时注入 `__PROFER_BUILD_TARGET__`（`oss` / `commercial`），互不串扰。
 
 **新增 Skill 不需要先注入 default-skills 目录的旧版本**——`upgradeDefaultSkillsInWorkspaces` 会通过"目标缺失即注入"路径让所有老工作区自动获得。
 

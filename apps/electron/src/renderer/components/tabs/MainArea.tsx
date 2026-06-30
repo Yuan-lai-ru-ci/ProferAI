@@ -21,6 +21,8 @@ import { AutomationsListView } from '@/components/automation/AutomationsListView
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { interfaceVariantAtom } from '@/atoms/theme'
+import { cn } from '@/lib/utils'
 
 export function MainArea(): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
@@ -32,11 +34,23 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
+  const interfaceVariant = useAtomValue(interfaceVariantAtom)
+  const isClassic = interfaceVariant === 'classic'
 
   // Tab 内容渲染降级为非紧急：TabBar 立即高亮新 tab，主区域昂贵渲染（含 PreviewPanel 中
   // DiffTabContent → ProseMirror editor mount + Shiki tokenize）让出主线程，避免点击 tab
-  // 后必须等主区域渲染完才能看到 tab 切换效果
+  // 后必须等主区域渲染完才能看到 tab 切换效果。
+  //
+  // 注意：关闭 tab 时 deferredActiveTabId 可能还指向已删除的 tab，导致 TabContent 找不到对应
+  // tab 而显示"标签页不存在"。通过 safeTabId 兜底：若 deferred 值已不在 tabs 中，回退到同步
+  // activeTabId（后者通过 useAtomValue 实时同步，始终有效）。
   const deferredActiveTabId = React.useDeferredValue(activeTabId)
+  const safeTabId = React.useMemo(() => {
+    if (deferredActiveTabId && tabs.some((t) => t.id === deferredActiveTabId)) {
+      return deferredActiveTabId
+    }
+    return activeTabId
+  }, [deferredActiveTabId, activeTabId, tabs])
 
   const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
   const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
@@ -172,9 +186,9 @@ export function MainArea(): React.ReactElement {
                   <AutomationFormView />
                 ) : tabs.length === 0 ? (
                   <WelcomeView />
-                ) : deferredActiveTabId ? (
+                ) : safeTabId ? (
                   <div className="flex-1 min-h-0 titlebar-no-drag">
-                    <TabContent tabId={deferredActiveTabId} />
+                    <TabContent tabId={safeTabId} />
                   </div>
                 ) : null}
               </>

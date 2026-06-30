@@ -9,6 +9,11 @@ import { join, basename } from 'node:path'
 import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 
+/** Vite 开发服务器端口（避开旧 Proma 的 5173） */
+export const VITE_DEV_SERVER_PORT = 5174
+/** Vite 开发服务器 URL */
+export const VITE_DEV_SERVER_URL = `http://localhost:${VITE_DEV_SERVER_PORT}`
+
 /**
  * 获取配置目录名称
  *
@@ -414,6 +419,23 @@ export function getDefaultSkillsDir(): string {
   }
 
   return dir
+}
+
+/**
+ * 获取打包进 App 的 proma CLI 二进制路径。
+ *
+ * 打包模式下从 process.resourcesPath/bin 取（electron-builder extraResources 注入）。
+ * 开发模式下没有编译二进制——返回 undefined，由调用方回退到源码运行
+ * （bun apps/cli/src/index.ts）。
+ *
+ * @returns 二进制绝对路径；不存在时返回 undefined
+ */
+export function getBundledCliPath(): string | undefined {
+  const { app } = require('electron')
+  if (!app.isPackaged) return undefined
+  const binName = process.platform === 'win32' ? 'proma.exe' : 'proma'
+  const cliPath = join(process.resourcesPath, 'bin', binName)
+  return existsSync(cliPath) ? cliPath : undefined
 }
 
 /**

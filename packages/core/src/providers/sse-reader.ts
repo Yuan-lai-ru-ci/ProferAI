@@ -189,7 +189,7 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
   // 2. 错误检查
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new HTTPError(`${adapter.providerType} API 错误 (${response.status}): ${text.slice(0, 300)}`, response.status)
+    throw new HTTPError(`${adapter.providerType} API 错误 (${response.status})，请求端点：${request.url}: ${text.slice(0, 300)}`, response.status)
   }
 
   if (!response.body) {

@@ -14,6 +14,17 @@ import {
   MAX_AUTO_RETRY_WAIT_MS,
   RETRY_MAX_DELAY_MS,
 } from './agent-retry-utils'
+import type { TypedError } from '@proma/shared'
+
+function typedError(code: TypedError['code'], message = ''): TypedError {
+  return {
+    code,
+    message,
+    title: code,
+    actions: [],
+    canRetry: false,
+  }
+}
 
 describe('extractApiError', () => {
   test('从简单 JSON 格式 stderr 中提取错误', () => {
@@ -47,21 +58,21 @@ describe('extractApiError', () => {
 
 describe('isAutoRetryableTypedError', () => {
   test('rate_limited 可重试', () => {
-    expect(isAutoRetryableTypedError({ code: 'rate_limited', message: '请求过于频繁' })).toBe(true)
+    expect(isAutoRetryableTypedError(typedError('rate_limited', '请求过于频繁'))).toBe(true)
   })
 
   test('provider_error 可重试', () => {
-    expect(isAutoRetryableTypedError({ code: 'provider_error', message: '服务繁忙' })).toBe(true)
+    expect(isAutoRetryableTypedError(typedError('provider_error', '服务繁忙'))).toBe(true)
   })
 
   test('service_error / service_unavailable / network_error 可重试', () => {
-    expect(isAutoRetryableTypedError({ code: 'service_error', message: '' })).toBe(true)
-    expect(isAutoRetryableTypedError({ code: 'service_unavailable', message: '' })).toBe(true)
-    expect(isAutoRetryableTypedError({ code: 'network_error', message: '' })).toBe(true)
+    expect(isAutoRetryableTypedError(typedError('service_error'))).toBe(true)
+    expect(isAutoRetryableTypedError(typedError('service_unavailable'))).toBe(true)
+    expect(isAutoRetryableTypedError(typedError('network_error'))).toBe(true)
   })
 
   test('invalid_request 不可自动重试', () => {
-    expect(isAutoRetryableTypedError({ code: 'invalid_request', message: 'Bad request' })).toBe(false)
+    expect(isAutoRetryableTypedError(typedError('invalid_request', 'Bad request'))).toBe(false)
   })
 })
 
@@ -141,7 +152,7 @@ describe('getRetryDelayMs', () => {
 describe('sdkPermissionModeForPromaMode', () => {
   test('返回对应 SDK 权限模式（如果 @proma/shared 常量可用）', () => {
     try {
-      const result = sdkPermissionModeForPromaMode('safe')
+      const result = sdkPermissionModeForPromaMode('auto')
       expect(typeof result).toBe('string')
     } catch {
       // @proma/shared 常量在独立测试中可能不可用，跳过
