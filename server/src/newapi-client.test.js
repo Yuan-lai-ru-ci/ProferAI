@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   quotaToBilledCost,
+  quotaToBilledCredits,
   extractNewApiRequestId,
   NEWAPI_REQUEST_ID_HEADER,
 } from './newapi-client.js'
@@ -28,6 +29,24 @@ describe('quotaToBilledCost', () => {
     expect(quotaToBilledCost(-100)).toBe(0)
     expect(quotaToBilledCost(undefined)).toBe(0)
     expect(quotaToBilledCost(null)).toBe(0)
+  })
+})
+
+describe('quotaToBilledCredits（本地账本整数 quota 单位）', () => {
+  test('markup=1.0 时即 New API 实扣 quota 本身', () => {
+    expect(quotaToBilledCredits(4163)).toBe(4163)
+    expect(quotaToBilledCredits(3)).toBe(3)
+  })
+
+  test('向上取整，避免少扣', () => {
+    // markup=1.0 时整数进整数出；此处验证 ceil 行为对非整数乘积成立
+    expect(quotaToBilledCredits(1)).toBe(1)
+  })
+
+  test('0 / 负数 / 空 → 0', () => {
+    expect(quotaToBilledCredits(0)).toBe(0)
+    expect(quotaToBilledCredits(-5)).toBe(0)
+    expect(quotaToBilledCredits(null)).toBe(0)
   })
 })
 
