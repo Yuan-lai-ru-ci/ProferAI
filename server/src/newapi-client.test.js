@@ -1,0 +1,49 @@
+/**
+ * New API 对账客户端测试
+ *
+ * 覆盖纯逻辑：quota→扣费换算、加价倍率、request_id 头提取、边界值。
+ * 网络相关（fetchActualQuotaByRequestId / reconcileRequestCost）依赖真实 New API，
+ * 不在单测覆盖（由部署后端到端对账验证）。
+ */
+import { describe, expect, test } from 'bun:test'
+import {
+  quotaToBilledCost,
+  extractNewApiRequestId,
+  NEWAPI_REQUEST_ID_HEADER,
+} from './newapi-client.js'
+
+// 默认环境：QUOTA_PER_UNIT=500000, MARKUP=1.0
+describe('quotaToBilledCost', () => {
+  test('quota 按 500000=1单位 换算，markup=1.0 时即成本价', () => {
+    // 4163 quota（实测 deepseek 单次）→ 4163/500000 ≈ 0.008326
+    expect(quotaToBilledCost(4163)).toBeCloseTo(0.008326, 6)
+  })
+
+  test('500000 quota = 1 单位', () => {
+    expect(quotaToBilledCost(500000)).toBeCloseTo(1.0, 6)
+  })
+
+  test('0 / 负数 / 空 → 0（不产生负扣费）', () => {
+    expect(quotaToBilledCost(0)).toBe(0)
+    expect(quotaToBilledCost(-100)).toBe(0)
+    expect(quotaToBilledCost(undefined)).toBe(0)
+    expect(quotaToBilledCost(null)).toBe(0)
+  })
+})
+
+describe('extractNewApiRequestId', () => {
+  test('从响应头取 x-oneapi-request-id', () => {
+    const resp = { headers: new Headers({ [NEWAPI_REQUEST_ID_HEADER]: 'req-abc-123' }) }
+    expect(extractNewApiRequestId(resp)).toBe('req-abc-123')
+  })
+
+  test('头不存在 → null', () => {
+    const resp = { headers: new Headers({}) }
+    expect(extractNewApiRequestId(resp)).toBeNull()
+  })
+
+  test('异常输入 → null，不抛', () => {
+    expect(extractNewApiRequestId(null)).toBeNull()
+    expect(extractNewApiRequestId({})).toBeNull()
+  })
+})

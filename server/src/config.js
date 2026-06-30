@@ -74,13 +74,21 @@ export const RELAY_API_KEY = (() => {
   return key || ''
 })()
 
-// New API 系统访问令牌（用于查询共享额度池真实余额）
-// 在 New API 后台 root1 账号 → 个人设置 → 生成系统访问令牌，配到此处。
-// 计费已收敛到 New API，余额接口用它调 New API /api/user/self 拿真实 quota。
+// New API 系统访问令牌（用于查询真实用量/对账）
+// ⚠️ 必须是 New API 后台 root/超管账号 → 个人设置 → 生成的「系统访问令牌」，
+// 不是 API 令牌（sk-...）。系统令牌才能调 /api/log/ /api/user/ 等管理接口；
+// sk- 令牌只能调 /v1/dashboard/billing/usage。调管理接口还需 New-API-User 头 = 令牌所属用户 id。
 export const NEWAPI_ADMIN_TOKEN = process.env.NEWAPI_ADMIN_TOKEN || ''
+
+// 系统访问令牌所属的 New API 用户 id（root/超管），调管理接口时作 New-API-User 头。
+export const NEWAPI_ADMIN_USER_ID = process.env.NEWAPI_ADMIN_USER_ID || '1'
 
 // New API quota → 货币换算锚点（默认 500000 quota = 1 单位，与 New API QuotaPerUnit 一致）
 export const NEWAPI_QUOTA_PER_UNIT = parseInt(process.env.NEWAPI_QUOTA_PER_UNIT || '500000', 10)
+
+// 计费加价倍率：Profer 对用户扣费 = New API 真实成本 × 此倍率。
+// 默认 1.0（成本价，不加价）。要赚差价设 >1（如 1.5 = 加价 50%）。
+export const BILLING_MARKUP = parseFloat(process.env.BILLING_MARKUP || '1.0')
 
 // ===== 多类账号体系 =====
 // 账号类型决定工作区配额 + 初始额度。自配 API 为独立开关（users.can_self_config_api）。
