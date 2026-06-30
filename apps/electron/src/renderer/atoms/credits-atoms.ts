@@ -1,8 +1,8 @@
 /**
  * 额度状态管理
  *
- * 计费已收敛到 New API：balance 是「共享额度池」的真实剩余（货币单位，如 3.34），
- * 不再是 Profer credits 点数。所有用户共用此池。
+ * 计费单一真源 = New API 实扣 quota，镜像进每用户本地账本。balance 是**当前用户
+ * 自己**的真实剩余（货币单位，如 1.00），不再是共享池。
  */
 import { atom } from 'jotai'
 

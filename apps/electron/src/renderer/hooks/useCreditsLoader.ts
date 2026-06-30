@@ -34,7 +34,7 @@ export async function refreshCreditsInto(store: JotaiStore): Promise<void> {
     })
     if (!resp.ok) return
     const d = await resp.json()
-    // 共享池余额：balance 可能为 null（server 未配 NEWAPI_ADMIN_TOKEN 或查询失败），
+    // 当前用户本地账本余额：balance 可能为 null（非代管或查询失败），
     // 保留 null 让余额条不显示，而非误判为「已耗尽」
     store.set(creditsBalanceAtom, d.balance ?? null)
     store.set(creditsLifetimeConsumedAtom, d.lifetimeConsumed ?? 0)
