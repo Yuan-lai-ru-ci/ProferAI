@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom } from '@/atoms/agent-atoms'
 import type { PromaPermissionMode } from '@proma/shared'
 import { PROMA_PERMISSION_MODE_CONFIG, PROMA_PERMISSION_MODE_ORDER } from '@proma/shared'
-import { updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
+import { getDisplayedPermissionMode, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { inputToolbarButtonClass } from '@/components/ai-elements/input-toolbar-styles'
 
 const MODE_ICONS: Record<PromaPermissionMode, React.ComponentType<{ className?: string }>> = {
@@ -30,9 +30,12 @@ interface PermissionModeSelectorProps {
 export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProps): React.ReactElement | null {
   const [modeMap, setModeMap] = useAtom(agentPermissionModeMapAtom)
   const setPlanModeSessions = useSetAtom(agentPlanModeSessionsAtom)
+  const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
   const defaultMode = useAtomValue(agentDefaultPermissionModeAtom)
   const persistedSessionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
   const mode = modeMap.get(sessionId) ?? persistedSessionMode ?? defaultMode
+  const planModeActive = planModeSessions.has(sessionId)
+  const displayMode = getDisplayedPermissionMode(mode, planModeActive)
   const sessionExistsInList = useAtomValue(sessionExistsAtom(sessionId))
 
   // 初始化：如果当前 session 不在 Map 中，按以下优先级读回：
@@ -52,10 +55,11 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
 
   /** 循环切换模式 */
   const cycleMode = React.useCallback(async () => {
-    const currentIndex = PROMA_PERMISSION_MODE_ORDER.indexOf(mode)
+    const currentIndex = PROMA_PERMISSION_MODE_ORDER.indexOf(displayMode)
     const nextIndex = (currentIndex + 1) % PROMA_PERMISSION_MODE_ORDER.length
     const nextMode = PROMA_PERMISSION_MODE_ORDER[nextIndex]!
     const prevMode = mode
+    const prevPlanModeActive = planModeActive
 
     // 乐观更新当前 session 的模式
     setModeMap((prev: Map<string, PromaPermissionMode>) => {
@@ -78,13 +82,13 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
         return next
       })
       setPlanModeSessions((prev: Set<string>) =>
-        updatePlanModeSessionSet(prev, sessionId, prevMode === 'plan')
+        updatePlanModeSessionSet(prev, sessionId, prevPlanModeActive || prevMode === 'plan')
       )
     }
-  }, [mode, sessionId, setModeMap, setPlanModeSessions])
+  }, [displayMode, mode, planModeActive, sessionId, setModeMap, setPlanModeSessions])
 
-  const config = PROMA_PERMISSION_MODE_CONFIG[mode]
-  const Icon = MODE_ICONS[mode]
+  const config = PROMA_PERMISSION_MODE_CONFIG[displayMode]
+  const Icon = MODE_ICONS[displayMode]
 
   return (
     <TooltipProvider delayDuration={300}>
