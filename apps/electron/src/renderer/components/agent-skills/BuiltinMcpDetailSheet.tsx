@@ -31,13 +31,6 @@ interface BuiltinMcpConfigInfo {
 }
 
 function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
-  if (server.id === 'mem') {
-    return {
-      source: 'Chat 工具 / 记忆',
-      description: '配置 MemOS Cloud API Key、用户 ID 与记忆开关后，Agent 会话才能注入记忆 MCP。',
-      actionLabel: '配置记忆',
-    }
-  }
   if (server.id === 'nano-banana') {
     return {
       source: 'Chat 工具 / Nano Banana',

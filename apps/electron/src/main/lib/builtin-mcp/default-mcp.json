@@ -43,21 +43,6 @@
       ]
     },
     {
-      "id": "mem",
-      "name": "mem",
-      "displayName": "记忆",
-      "description": "通过 MemOS Cloud 检索和写入长期记忆。",
-      "category": "memory",
-      "kind": "internal",
-      "deletable": false,
-      "defaultEnabled": false,
-      "toggleable": true,
-      "tools": [
-        { "name": "recall_memory", "description": "检索用户长期记忆。", "readOnly": true },
-        { "name": "add_memory", "description": "写入一条长期记忆。" }
-      ]
-    },
-    {
       "id": "nano-banana",
       "name": "nano_banana",
       "displayName": "Nano Banana 生图",

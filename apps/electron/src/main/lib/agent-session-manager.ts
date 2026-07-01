@@ -21,7 +21,7 @@ import {
   getAgentWorkspacePath,
   getSdkConfigDir,
 } from './config-paths'
-import { getAgentWorkspace } from './agent-workspace-manager'
+import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-manager'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）
@@ -201,6 +201,11 @@ export function createAgentSession(
       }
       if (sdkSettings.skipWebFetchPreflight !== true) {
         sdkSettings.skipWebFetchPreflight = true
+        needsWrite = true
+      }
+      const autoMemoryDirectory = getWorkspaceAutoMemoryDir(ws.slug)
+      if (sdkSettings.autoMemoryDirectory !== autoMemoryDirectory) {
+        sdkSettings.autoMemoryDirectory = autoMemoryDirectory
         needsWrite = true
       }
       if (needsWrite) {
