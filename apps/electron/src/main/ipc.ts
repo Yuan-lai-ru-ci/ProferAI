@@ -189,6 +189,7 @@ import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath } from './lib/config-paths'
+import { getCachedDefaultAppInfo, saveCachedDefaultAppInfo } from './lib/default-app-cache'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
 import {
@@ -441,10 +442,12 @@ function getBundledResourcesDir(): string {
 }
 
 /**
- * 默认 App 探测结果按文件后缀缓存（含 null 负缓存），避免反复 spawn osascript / 注册表查询。
- * 进程级别一次会话足够，无需失效策略——用户切换默认 App 是低频行为，下次重启生效即可。
+ * 默认 App 探测结果按文件后缀缓存，避免反复 spawn Swift / 注册表查询。
+ * 成功结果会落盘；失败只做短暂内存冷却，避免一次瞬时失败导致整会话都隐藏按钮。
  */
-const defaultAppCache = new Map<string, import('@proma/shared').DefaultAppInfo | null>()
+const defaultAppCache = new Map<string, import('@proma/shared').DefaultAppInfo>()
+const defaultAppFailureCache = new Map<string, number>()
+const DEFAULT_APP_FAILURE_RETRY_MS = 60_000
 
 function extOf(filePath: string): string {
   const base = filePath.split(/[\\/]/).pop() ?? ''
@@ -710,7 +713,12 @@ async function getDefaultAppInfoForFile(
   const absPath = resolve(filePath)
 
   const cacheKey = `${process.platform}:${extOf(filePath) || filePath}`
-  if (defaultAppCache.has(cacheKey)) return defaultAppCache.get(cacheKey) ?? null
+  const cachedInfo = defaultAppCache.get(cacheKey) ?? getCachedDefaultAppInfo(cacheKey)
+  if (cachedInfo) {
+    defaultAppCache.set(cacheKey, cachedInfo)
+    return cachedInfo
+  }
+  if (isFailureCacheFresh(cacheKey)) return null
 
   let appPath = ''
   let appName = ''
@@ -733,6 +741,7 @@ if let appUrl = NSWorkspace.shared.urlForApplication(toOpen: url) {
     if (r.status === 0) {
       appPath = r.stdout.trim().replace(/\/$/, '')
     }
+    console.log('[DefaultApp] darwin swift 结果: status=%s appPath=%s', r.status, appPath)
     if (appPath.endsWith('.app')) {
       const base = appPath.split('/').pop() || ''
       appName = base.replace(/\.app$/, '')
@@ -777,11 +786,21 @@ if let appUrl = NSWorkspace.shared.urlForApplication(toOpen: url) {
 
   const info: import('@proma/shared').DefaultAppInfo = { name: appName, appPath, iconDataUrl }
   defaultAppCache.set(cacheKey, info)
+  defaultAppFailureCache.delete(cacheKey)
+  saveCachedDefaultAppInfo(cacheKey, info)
   return info
 }
 
+function isFailureCacheFresh(key: string): boolean {
+  const failedAt = defaultAppFailureCache.get(key)
+  if (failedAt === undefined) return false
+  if (Date.now() - failedAt < DEFAULT_APP_FAILURE_RETRY_MS) return true
+  defaultAppFailureCache.delete(key)
+  return false
+}
+
 function cacheNull(key: string): null {
-  defaultAppCache.set(key, null)
+  defaultAppFailureCache.set(key, Date.now())
   return null
 }
 

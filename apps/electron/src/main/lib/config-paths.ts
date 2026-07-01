@@ -158,6 +158,15 @@ export function getSettingsPath(): string {
 }
 
 /**
+ * 获取系统默认 App 探测缓存路径
+ *
+ * @returns ~/.proma/default-apps.json
+ */
+export function getDefaultAppsCachePath(): string {
+  return join(getConfigDir(), 'default-apps.json')
+}
+
+/**
  * 获取用户档案文件路径
  *
  * @returns ~/.proma/user-profile.json
