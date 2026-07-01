@@ -22,6 +22,7 @@ import {
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { listBuiltinMcpServers } from './builtin-mcp/catalog'
+import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
 import { inferMcpTransportType, normalizeMcpTransportType } from '@proma/shared'
 import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@proma/shared'
 
@@ -473,12 +474,16 @@ export function ensurePluginManifest(workspaceSlug: string, workspaceName: strin
 
 // ===== MCP 配置管理 =====
 
-function normalizeWorkspaceMcpConfig(config: Partial<WorkspaceMcpConfig>): WorkspaceMcpConfig {
+export function normalizeWorkspaceMcpConfig(config: Partial<WorkspaceMcpConfig>): WorkspaceMcpConfig {
   const servers: WorkspaceMcpConfig['servers'] = {}
   const rawServers = config.servers ?? {}
 
   for (const [name, rawEntry] of Object.entries(rawServers)) {
     if (!rawEntry || typeof rawEntry !== 'object') continue
+    if (RESERVED_BUILTIN_KEYS.has(name)) {
+      console.warn(`[Agent 工作区] MCP 服务器 "${name}" 与内置 MCP 保留名冲突，已忽略（内置 MCP 不写入 mcp.json）`)
+      continue
+    }
 
     const entryRecord = { ...(rawEntry as unknown as Record<string, unknown>) }
     const entry = entryRecord as unknown as WorkspaceMcpConfig['servers'][string] & { type?: unknown }
