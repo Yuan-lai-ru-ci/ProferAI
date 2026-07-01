@@ -459,7 +459,7 @@ const MAX_TITLE_LENGTH = 20
 const DEFAULT_SESSION_TITLE = '新 Agent 会话'
 
 /** 默认模型 ID */
-const DEFAULT_MODEL_ID = 'claude-sonnet-4-6'
+const DEFAULT_MODEL_ID = 'claude-sonnet-5'
 
 /**
  * 聚合一次 SDK 调用涉及的所有附加目录（去重，保持插入顺序）。
