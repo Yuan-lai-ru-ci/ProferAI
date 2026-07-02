@@ -14,7 +14,6 @@ import type {
   ThinkingConfig,
   AgentEffort,
   AgentDefinition,
-  SdkBeta,
   JsonSchemaOutputFormat,
   SDKMessage,
   PromaPermissionMode,
@@ -173,8 +172,6 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   maxBudgetUsd?: number
   /** 结构化 JSON 输出格式 */
   outputFormat?: JsonSchemaOutputFormat
-  /** Beta 特性（如 1M context window） */
-  betas?: SdkBeta[]
   /** 是否持久化会话到磁盘（默认 true） */
   persistSession?: boolean
   /** resume 时是否 fork 为新会话 */
@@ -777,7 +774,6 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         ...(options.fallbackModel && { fallbackModel: options.fallbackModel }),
         ...(options.maxBudgetUsd != null && { maxBudgetUsd: options.maxBudgetUsd }),
         ...(options.outputFormat && { outputFormat: options.outputFormat }),
-        ...(options.betas && { betas: options.betas }),
         ...(options.persistSession != null && { persistSession: options.persistSession }),
         ...(options.forkSession != null && { forkSession: options.forkSession }),
         ...(options.sdkSessionId && { sessionId: options.sdkSessionId }),
