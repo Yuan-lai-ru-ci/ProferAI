@@ -33,7 +33,7 @@ import {
 import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
-import { isTransientNetworkError, isMalformedResponseError } from './error-patterns'
+import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
@@ -170,17 +170,6 @@ function isAutoRetryableCatchError(
   return false
 }
 
-/**
- * 判断错误是否为 SDK session 不存在（"No conversation found with session ID"）
- *
- * 当 resume 目标 session 已过期或被清理时，SDK 会抛出此错误。
- * 此类错误可通过清除 sdkSessionId 并切换到上下文回填模式来恢复。
- */
-function isSessionNotFoundError(errorMessage: string, stderr?: string): boolean {
-  const pattern = /No conversation found.*with session/i
-  return pattern.test(errorMessage) || (!!stderr && pattern.test(stderr))
-}
-
 /** 最大自动重试次数 */
 const MAX_AUTO_RETRIES = 25
 
@@ -286,6 +275,37 @@ const MAX_CONTEXT_MESSAGES = 20
 /** 单条工具摘要最大字符数 */
 const MAX_TOOL_SUMMARY_LENGTH = 200
 
+function getSessionHistoryPath(sessionId: string): string {
+  return `~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl`
+}
+
+function getSessionCliCommandPrefix(): string {
+  return getBundledCliPath() ? '"$PROMA_CLI"' : 'proma'
+}
+
+function buildSessionCliAccessGuide(sessionId: string, historyPath: string): string {
+  const cli = getSessionCliCommandPrefix()
+  return [
+    `优先使用 Proma CLI 读取清洗后的会话历史，避免直接读取原始 JSONL。`,
+    `命令前缀: ${cli}`,
+    `建议流程:`,
+    `1. ${cli} session info ${sessionId}`,
+    `2. ${cli} session outline ${sessionId}`,
+    `3. 根据 outline/search 定位后，用 ${cli} session export ${sessionId} --turns A-B 或 ${cli} session export ${sessionId} --tail N 读取片段。`,
+    `4. 只有会话很小或 CLI 护栏允许时，才用 ${cli} session export ${sessionId} 读取全量。`,
+    `CLI 不可用时兜底读取原始历史文件: ${historyPath}`,
+  ].join('\n')
+}
+
+function buildSessionInfoBlock(sessionId: string, agentCwd: string): string {
+  const historyPath = getSessionHistoryPath(sessionId)
+  return `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${agentCwd}\n` +
+    `${buildSessionCliAccessGuide(sessionId, historyPath)}\n` +
+    `重要：上方仅为最近 ${MAX_CONTEXT_MESSAGES} 条对话摘要，可能不完整。在继续之前，` +
+    `请先使用 Proma CLI 恢复完整上下文，确认「已经完成了哪些工作、进行到哪一步」，` +
+    `然后从中断处继续，切勿重复执行已完成的步骤。\n</session_info>\n`
+}
+
 /**
  * 从 SDKMessage assistant 消息的 content 中提取工具活动摘要
  *
@@ -351,15 +371,9 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string, sessi
   if (lines.length === 0) return currentUserMessage
 
   // 注入 session 元信息 + 强指令：兜底场景（resume 指针丢失）下，仅靠最近
-  // MAX_CONTEXT_MESSAGES 条摘要不足以让长任务无缝接续，必须引导模型先读取完整 JSONL，
+  // MAX_CONTEXT_MESSAGES 条摘要不足以让长任务无缝接续，必须引导模型先通过 CLI 读取完整历史，
   // 避免「从零重新执行整个任务」（#903）。
-  const sessionInfoBlock = sessionHint
-    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\n` +
-      `完整历史: ~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl\n` +
-      `重要：上方仅为最近 ${MAX_CONTEXT_MESSAGES} 条对话摘要，可能不完整。在继续之前，` +
-      `请先读取上述完整历史文件，确认「已经完成了哪些工作、进行到哪一步」，` +
-      `然后从中断处继续，切勿重复执行已完成的步骤。\n</session_info>\n`
-    : ''
+  const sessionInfoBlock = sessionHint ? buildSessionInfoBlock(sessionId, sessionHint.agentCwd) : ''
 
   console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
   return `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
@@ -369,8 +383,8 @@ function buildContextPrompt(sessionId: string, currentUserMessage: string, sessi
  * 构建 Session 恢复 prompt
  *
  * 当 SDK resume 失败（session 过期、thinking signature 不兼容等）时，
- * 注入 <session_recovery> 标签指向当前会话的完整 JSONL 历史文件，
- * 让 Agent 自己读取完整历史后无缝继续工作。
+ * 注入 <session_recovery> 标签，指导 Agent 优先用 Proma CLI 读取清洗后的会话历史，
+ * 只有 CLI 不可用时才兜底读取原始 JSONL。
  */
 function buildRecoveryPrompt(
   sessionId: string,
@@ -379,18 +393,18 @@ function buildRecoveryPrompt(
 ): string {
   const meta = getAgentSessionMeta(sessionId)
   const title = meta ? escapeContextAttr(meta.title) : sessionId
-  const historyPath = `~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl`
+  const historyPath = getSessionHistoryPath(sessionId)
 
   const recoveryBlock =
     `<session_recovery>\n` +
     `你正在接续一个已有的 Agent 会话（因模型切换等原因需要重新建立连接）。\n` +
-    `当前会话的完整历史记录在下方路径中，请先读取它以恢复上下文，然后继续处理用户的最新请求。\n` +
+    `请先使用 Proma CLI 读取清洗后的会话历史以恢复上下文，然后继续处理用户的最新请求。\n` +
     `<session id="${sessionId}" title="${title}" cwd="${sessionHint.agentCwd}">\n` +
-    `History path: ${historyPath}\n` +
+    `${buildSessionCliAccessGuide(sessionId, historyPath)}\n` +
     `</session>\n` +
     `</session_recovery>`
 
-  console.log(`[Agent 编排] buildRecoveryPrompt: 注入 session 自引用 → ${historyPath}`)
+  console.log(`[Agent 编排] buildRecoveryPrompt: 注入 session CLI 恢复指引 → ${sessionId}`)
   return `${recoveryBlock}\n\n${currentUserMessage}`
 }
 
@@ -422,9 +436,10 @@ function buildReferencedSessionsPrompt(
     if (currentWorkspaceId && meta.workspaceId !== currentWorkspaceId) continue
 
     const title = escapeContextAttr(meta.title)
-    const historyPath = `~/${getConfigDirName()}/agent-sessions/${referencedSessionId}.jsonl`
+    const historyPath = getSessionHistoryPath(referencedSessionId)
     sessionBlocks.push(
       `<session id="${referencedSessionId}" title="${title}" updatedAt="${meta.updatedAt}">\n` +
+      `CLI target: ${referencedSessionId}\n` +
       `History path: ${historyPath}\n` +
       '</session>',
     )
@@ -440,7 +455,7 @@ function buildReferencedSessionsPrompt(
     const skillName = workspaceSlug
       ? `proma-workspace-${workspaceSlug}:session-cleaner`
       : 'session-cleaner'
-    return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。需要这些会话的上下文时，使用 session-cleaner skill（${skillName}）读取——它通过 proma CLI 把会话清洗为干净对话。默认正常完整读取整个会话；仅当某个会话过大、完整读入会撑爆上下文时，才改用 skill 的搜索 + turn 区间能力按需节省。不要假设会话内容，也不要直接 Read 原始 .jsonl 历史文件。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
+    return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。需要这些会话的上下文时，优先使用 Proma CLI（也可以调用 session-cleaner skill：${skillName}，它是 CLI 的薄封装）读取清洗后的会话历史。按 info → outline/search → export 的顺序渐进式读取；不要假设会话内容，也不要直接 Read 原始 .jsonl 历史文件。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
   }
 
   return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。不要假设这些会话的内容；需要上下文时，请先读取对应的 History path，再基于读取结果继续完成任务。\n\n重要提示：会话历史文件（.jsonl）可能包含大量消息和 tool results，文件较大。请优先使用 Grep 搜索关键词定位相关消息片段，再局部读取。避免一次性 Read 整个大文件。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
@@ -1743,9 +1758,12 @@ export class AgentOrchestrator {
 
                 // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
                 if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && canAutoRetry(attempt)) {
+                  invisibleRecoveryAttempts += 1
+                  skipNextRetryDelay = true
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
                   lastRetryableError = this.prepareSessionNotFoundRecovery(sessionId, queryOptions, contextualMessage, agentCwd, accumulatedMessages, queryStartedAt)
+                  stderrChunks.length = 0
                   shouldRetryFromError = true
                   break
                 }
@@ -1894,6 +1912,22 @@ export class AgentOrchestrator {
               if (
                 capturedResultSubtype === 'error_during_execution' &&
                 capturedResultErrors?.length &&
+                isSessionNotFoundError(capturedResultErrors.join('\n'), stderrChunks.join('\n')) &&
+                existingSdkSessionId &&
+                canAutoRetry(attempt)
+              ) {
+                invisibleRecoveryAttempts += 1
+                skipNextRetryDelay = true
+                existingSdkSessionId = undefined
+                capturedSdkSessionId = undefined
+                lastRetryableError = this.prepareSessionNotFoundRecovery(sessionId, queryOptions, contextualMessage, agentCwd, accumulatedMessages, queryStartedAt)
+                stderrChunks.length = 0
+                shouldRetryFromError = true
+                break
+              }
+              if (
+                capturedResultSubtype === 'error_during_execution' &&
+                capturedResultErrors?.length &&
                 isAutoRetryableCatchError(null, capturedResultErrors.join('\n')) &&
                 canAutoRetry(attempt)
               ) {
@@ -1999,6 +2033,8 @@ export class AgentOrchestrator {
 
           // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
           if (isSessionNotFoundError(rawErrorMessage, stderrOutput) && existingSdkSessionId && canAutoRetry(attempt)) {
+            invisibleRecoveryAttempts += 1
+            skipNextRetryDelay = true
             existingSdkSessionId = undefined
             capturedSdkSessionId = undefined
             lastRetryableError = this.prepareSessionNotFoundRecovery(sessionId, queryOptions, contextualMessage, agentCwd, accumulatedMessages, queryStartedAt)
