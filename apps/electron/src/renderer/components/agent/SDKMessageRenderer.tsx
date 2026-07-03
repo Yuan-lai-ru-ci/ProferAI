@@ -132,7 +132,7 @@ function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): Rea
         <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-foreground">自动审批已拒绝操作</span>
+            <span className="font-medium text-foreground">权限检查已拒绝操作</span>
             {toolName && (
               <span className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
                 {toolName}

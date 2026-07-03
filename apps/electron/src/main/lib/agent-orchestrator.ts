@@ -24,13 +24,12 @@ import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProvid
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
-  SAFE_TOOLS,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   normalizeMcpTransportType,
 } from '@proma/shared'
-import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
+import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
@@ -1304,18 +1303,6 @@ export class AgentOrchestrator {
         )
       }
 
-      // 始终创建 auto 权限回调（运行中可能切换到 auto）
-      const autoCanUseTool = permissionService.createCanUseTool(
-        sessionId,
-        (request: PermissionRequest) => {
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
-        },
-        (sid, toolInput, signal, sendAskUser) => askUserService.handleAskUserQuestion(sid, toolInput, signal, sendAskUser),
-        (request: AskUserRequest) => {
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
-        },
-      )
-
       /**
        * 判断 Bash 命令是否是只读的（计划模式下安全可执行）
        * 检测写操作特征：文件重定向、破坏性命令、包管理写操作、git 写操作等
@@ -1409,7 +1396,7 @@ export class AgentOrchestrator {
           return { behavior: 'allow' as const, updatedInput: input }
         }
 
-        // ExitPlanMode：auto/plan 模式下必须让用户确认计划。
+        // ExitPlanMode：plan 模式下必须让用户确认计划。
         if (toolName === 'ExitPlanMode') {
           console.log(`[canUseTool] ExitPlanMode: signal.aborted=${options.signal.aborted}, planModeEntered=${planModeEntered}, mode=${currentMode}`)
           const result = await handleExitPlanMode(input, options.signal)
@@ -1482,10 +1469,6 @@ export class AgentOrchestrator {
             // 其余工具拒绝
             return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
           }
-
-          case 'auto':
-            return autoCanUseTool(toolName, input, options)
-
           default:
             return { behavior: 'allow' as const, updatedInput: input }
         }
@@ -1506,7 +1489,7 @@ export class AgentOrchestrator {
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
         sdkPermissionMode: sdkPermissionModeForPromaMode(initialPermissionMode),
-        // permissionMode 负责表达 auto/plan/bypassPermissions。
+        // permissionMode 负责表达 plan/bypassPermissions。
         // 当提供 canUseTool 回调时这里必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
         // 两个矛盾的指令，导致 ExitPlanMode/AskUserQuestion 等交互式工具失败。
@@ -1514,7 +1497,6 @@ export class AgentOrchestrator {
         // 从实际 tool_use 流里同步，避免 UI 停留在计划阶段。
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
-        ...(sdkPermissionModeForPromaMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {
