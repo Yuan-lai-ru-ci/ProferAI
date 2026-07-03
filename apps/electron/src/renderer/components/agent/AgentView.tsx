@@ -147,7 +147,6 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
 function resolveRunContextWindow(modelId: string | undefined, previous: number | undefined): number | undefined {
   return inferContextWindow(modelId) ?? previous
 }
-}
 
 interface SDKMessageRecord {
   type?: string
