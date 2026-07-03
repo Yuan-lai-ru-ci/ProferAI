@@ -141,8 +141,10 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   resumeSessionAt?: string
   /** MCP 服务器配置 */
   mcpServers?: Record<string, unknown>
+  /** 仅使用 Proma 显式传入的 MCP 配置，避免 SDK 从其它来源发现额外 MCP */
+  strictMcpConfig?: boolean
   /** 插件配置 */
-  plugins?: Array<{ type: 'local'; path: string }>
+  plugins?: Array<{ type: 'local'; path: string; skipMcpDiscovery?: boolean }>
   /** stderr 回调 */
   onStderr?: (data: string) => void
   /** SDK session ID 捕获回调 */
@@ -761,6 +763,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 && {
           mcpServers: options.mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig>,
         }),
+        ...(options.strictMcpConfig != null && { strictMcpConfig: options.strictMcpConfig }),
         ...(options.plugins && { plugins: options.plugins }),
         ...(options.onStderr && { stderr: options.onStderr }),
 
