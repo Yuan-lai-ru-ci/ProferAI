@@ -10,6 +10,7 @@ import { atomFamily, atomWithStorage } from 'jotai/utils'
 import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
+import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -265,6 +266,35 @@ export const agentPendingFilesAtomFamily = atomFamily((sessionId: string) =>
     (get) => get(agentSessionPendingFilesAtom).get(sessionId) ?? [],
     (_get, set, update: AgentPendingFile[] | ((prev: AgentPendingFile[]) => AgentPendingFile[])) => {
       set(agentSessionPendingFilesAtom, (prev) => {
+        const current = prev.get(sessionId) ?? []
+        const next = typeof update === 'function' ? update(current) : update
+        const map = new Map(prev)
+        if (next.length === 0) {
+          map.delete(sessionId)
+        } else {
+          map.set(sessionId, next)
+        }
+        return map
+      })
+    },
+  ),
+)
+
+/**
+ * Agent 运行中待发送消息队列 Map — 以 sessionId 为 key。
+ * 队列只保存在渲染进程内存中，避免跨重启恢复时误把过期上下文继续发送。
+ */
+export const agentSessionMessageQueueAtom = atom<Map<string, AgentQueuedMessage[]>>(new Map())
+
+/**
+ * 单个 session 的队列派生 atom（读写）。
+ * 空队列写回时删除 Map entry，避免长时间使用后残留空数组。
+ */
+export const agentMessageQueueAtomFamily = atomFamily((sessionId: string) =>
+  atom(
+    (get) => get(agentSessionMessageQueueAtom).get(sessionId) ?? [],
+    (_get, set, update: AgentQueuedMessage[] | ((prev: AgentQueuedMessage[]) => AgentQueuedMessage[])) => {
+      set(agentSessionMessageQueueAtom, (prev) => {
         const current = prev.get(sessionId) ?? []
         const next = typeof update === 'function' ? update(current) : update
         const map = new Map(prev)
