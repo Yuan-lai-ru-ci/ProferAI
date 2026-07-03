@@ -272,6 +272,12 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       const sMsg = msg as SDKSystemMessage
       if (sMsg.subtype === 'compact_boundary') return [{ type: 'compact_complete' }]
       if (sMsg.subtype === 'compacting') return [{ type: 'compacting' }]
+      if (sMsg.subtype === 'status') {
+        if (sMsg.status === 'compacting') return [{ type: 'compacting' }]
+        if (sMsg.compact_result === 'success' || sMsg.compact_result === 'failed' || typeof sMsg.compact_error === 'string') {
+          return [{ type: 'compact_complete' }]
+        }
+      }
       if (sMsg.subtype === 'task_started' && sMsg.task_id) {
         return [{ type: 'task_started', taskId: sMsg.task_id, description: sMsg.description ?? '', taskType: sMsg.task_type, toolUseId: sMsg.tool_use_id }]
       }

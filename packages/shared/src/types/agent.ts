@@ -232,6 +232,10 @@ export interface SDKSystemMessage {
   task_type?: string
   tool_use_id?: string
   status?: string
+  /** SDK status: 上下文压缩结果 */
+  compact_result?: 'success' | 'failed'
+  /** SDK status: 上下文压缩失败原因 */
+  compact_error?: string
   summary?: string
   output_file?: string
   last_tool_name?: string
