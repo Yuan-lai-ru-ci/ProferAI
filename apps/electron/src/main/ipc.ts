@@ -5147,13 +5147,13 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     TEAM_FILE_IPC_CHANNELS.MOVE,
     async (_, input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) =>
-      moveRemoteFile(input.workspaceId, input.fromPath, input.toDir)
+      moveRemoteFile(input.workspaceId, input.workspaceSlug, input.fromPath, input.toDir)
   )
 
   ipcMain.handle(
     TEAM_FILE_IPC_CHANNELS.RENAME,
-    async (_, input: { workspaceId: string; path: string; newName: string }) =>
-      renameRemoteFile(input.workspaceId, input.path, input.newName)
+    async (_, input: { workspaceId: string; workspaceSlug: string; path: string; newName: string }) =>
+      renameRemoteFile(input.workspaceId, input.workspaceSlug, input.path, input.newName)
   )
 
   ipcMain.handle(
