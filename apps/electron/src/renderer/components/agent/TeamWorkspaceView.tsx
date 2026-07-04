@@ -14,6 +14,7 @@ import {
   ExternalLink, FolderSearch, ArrowUpDown, ArrowUp, Square, CheckSquare,
   PanelRightClose, PanelRightOpen, MessageSquarePlus, Pencil,
 } from 'lucide-react'
+import { authStatusAtom } from '@/atoms/identity-atoms'
 import {
   agentSessionsAtom,
   agentPendingFilesAtomFamily,
@@ -67,6 +68,17 @@ export function TeamWorkspaceView(): React.ReactElement {
   const currentId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspace = workspaces.find((w) => w.id === currentId)
   const teamId = workspace?.type === 'team' ? workspace.id : undefined
+  const authStatus = useAtomValue(authStatusAtom)
+
+  // 当前用户是否可以管理这条文件/文件夹（上传者 or 管理员/拥有者）
+  const canManage = React.useCallback((entry: { uploadedBy?: string }) => {
+    if (!authStatus.isLoggedIn) return false
+    if (workspace?.role === 'owner' || workspace?.role === 'admin') return true
+    if (entry.uploadedBy && entry.uploadedBy === authStatus.teamAccountId) return true
+    // 无上传者的旧条目：允许任何成员管理
+    if (!entry.uploadedBy) return true
+    return false
+  }, [authStatus, workspace?.role])
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -823,8 +835,15 @@ export function TeamWorkspaceView(): React.ReactElement {
     if (count > 0) { toast.success(`已下载 ${count} 个文件`); loadFiles() }
   }
 
+  // 批量删除权限：所有选中条目都可管理才能删
+  const canBatchDelete = selectedPaths.size > 0 && [...selectedPaths].every((path) => {
+    const entry = entries.find((e) => e.path === path)
+    return entry ? canManage(entry) : false
+  })
+
   const batchDelete = async () => {
     if (!teamId || !workspace?.slug) return
+    if (!canBatchDelete) return
     const pathsToDelete = [...selectedPaths]
     // 乐观更新：立即从本地状态移除
     setEntries((prev) => prev.filter((e) => !pathsToDelete.includes(e.path)))
@@ -970,9 +989,11 @@ export function TeamWorkspaceView(): React.ReactElement {
                 <Eye size={12} />
               </button>
             )}
-            <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); handleDelete(entry) }}>
-              <Trash2 size={12} />
-            </button>
+            {canManage(entry) && (
+              <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); handleDelete(entry) }}>
+                <Trash2 size={12} />
+              </button>
+            )}
           </div>
         </div>
         {/* 子节点 */}
@@ -1350,11 +1371,13 @@ export function TeamWorkspaceView(): React.ReactElement {
                               }}
                             />
                           )}
-                          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => {
-                            setMenuOpen(null); startRename(entry)
-                          }}>
-                            <Pencil size={13} />重命名
-                          </button>
+                          {canManage(entry) && (
+                            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => {
+                              setMenuOpen(null); startRename(entry)
+                            }}>
+                              <Pencil size={13} />重命名
+                            </button>
+                          )}
                           {failedUploads.some((f) => f.name === entry.name) && (
                             <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left text-muted-foreground" onClick={() => {
                               setMenuOpen(null)
@@ -1363,9 +1386,11 @@ export function TeamWorkspaceView(): React.ReactElement {
                               <Trash2 size={13} />移除
                             </button>
                           )}
-                          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-destructive text-left" onClick={() => { setMenuOpen(null); handleDelete(entry) }}>
-                            <Trash2 size={13} />删除
-                          </button>
+                          {canManage(entry) && (
+                            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-destructive text-left" onClick={() => { setMenuOpen(null); handleDelete(entry) }}>
+                              <Trash2 size={13} />删除
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1483,13 +1508,15 @@ export function TeamWorkspaceView(): React.ReactElement {
               >
                 <Download size={13} />下载
               </button>
-              <button
-                className="h-8 px-3 rounded-md text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/20 flex items-center gap-1.5"
-                onClick={batchDelete}
-                disabled={batchDeleting}
-              >
-                <Trash2 size={13} />{batchDeleting ? '删除中...' : '删除'}
-              </button>
+              {canBatchDelete && (
+                <button
+                  className="h-8 px-3 rounded-md text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/20 flex items-center gap-1.5"
+                  onClick={batchDelete}
+                  disabled={batchDeleting}
+                >
+                  <Trash2 size={13} />{batchDeleting ? '删除中...' : '删除'}
+                </button>
+              )}
             </div>
           )}
         </div>
