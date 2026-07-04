@@ -24,6 +24,7 @@ function requireWorkspaceMember(c, wsId) {
   const userId = c.get('userId')
   const member = getWorkspaceMember(wsId, userId)
   if (!member) return { error: c.json({ error: '无权访问工作区' }, 403) }
+  c.set('memberRole', member.role)
   return { userId, role: member.role }
 }
 
@@ -68,6 +69,61 @@ fileRoutes.get('/:id/files/manifest', (c) => {
     uploadedBy: r.uploaded_by || '',
     uploadedByName: r.uploaded_by_name || '',
   })))
+})
+
+/** 搜索文件（按文件名/路径，支持 * 和 ? 通配符） */
+fileRoutes.get('/:id/files/search', (c) => {
+  const mw = authMiddleware(c)
+  if (mw) return mw
+
+  const wsId = c.req.param('id')
+  const access = requireWorkspaceMember(c, wsId)
+  if (access.error) return access.error
+
+  const q = (c.req.query('q') || '').trim()
+  if (!q) return c.json({ files: [], total: 0 })
+
+  // 转换通配符: * → %, ? → _。无通配符则子串匹配
+  let likePattern
+  if (q.includes('*') || q.includes('?')) {
+    likePattern = q.replace(/\*/g, '%').replace(/\?/g, '_')
+  } else {
+    likePattern = `%${q}%`
+  }
+
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10))
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)))
+  const offset = (page - 1) * limit
+
+  const countRow = db.prepare(`
+    SELECT COUNT(*) as total FROM file_manifests
+    WHERE workspace_id = ? AND (file_name LIKE ? OR file_path LIKE ?) AND is_directory = 0
+  `).get(wsId, likePattern, likePattern)
+  const total = countRow.total
+
+  const rows = db.prepare(`
+    SELECT * FROM file_manifests
+    WHERE workspace_id = ? AND (file_name LIKE ? OR file_path LIKE ?) AND is_directory = 0
+    ORDER BY modified_at DESC
+    LIMIT ? OFFSET ?
+  `).all(wsId, likePattern, likePattern, limit, offset)
+
+  return c.json({
+    files: rows.map((r) => ({
+      name: r.file_name,
+      path: r.file_path,
+      isDirectory: r.is_directory !== 0,
+      size: r.size,
+      modifiedAt: r.modified_at,
+      sha256: r.sha256,
+      uploadedBy: r.uploaded_by || '',
+      uploadedByName: r.uploaded_by_name || '',
+    })),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  })
 })
 
 /** 创建文件夹 */
@@ -184,6 +240,17 @@ fileRoutes.post('/:id/files/upload', async (c) => {
 
 /** 写入上传文件到磁盘和 manifest */
 function writeUploadedFile(c, wsId, filePath, buffer) {
+  const userId = c.get('userId')
+  const userEmail = c.get('userEmail')
+  const memberRole = c.get('memberRole') || 'member'
+
+  // 检查既有文件归属：非 owner/admin 不能覆盖他人上传的文件
+  const existingFile = db.prepare(
+    'SELECT uploaded_by FROM file_manifests WHERE workspace_id = ? AND file_path = ? AND is_directory = 0'
+  ).get(wsId, filePath)
+  if (existingFile && !isAdminOrOwner(memberRole) && existingFile.uploaded_by && existingFile.uploaded_by !== userId) {
+    return c.json({ error: '无权覆盖该文件' }, 403)
+  }
 
   const wsDir = pathJoin(FILES_DIR, wsId)
   ensureDir(wsDir)
@@ -193,8 +260,6 @@ function writeUploadedFile(c, wsId, filePath, buffer) {
   ensureDir(pathDirname(localPath))
   writeFileSync(localPath, buffer)
 
-  const userId = c.get('userId')
-  const userEmail = c.get('userEmail')
   const user = db.prepare('SELECT display_name FROM users WHERE id = ?').get(userId)
   const displayName = user?.display_name || userEmail
   const hash = crypto.createHash('sha256').update(buffer).digest('hex')

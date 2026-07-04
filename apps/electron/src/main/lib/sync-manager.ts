@@ -14,11 +14,12 @@ import { BrowserWindow } from 'electron'
 import { fetch as undiciFetch } from 'undici'
 import { getSyncStatePath } from './config-paths'
 import { getTeamAuth, refreshAuthToken } from './auth-service'
-import { listAgentWorkspaces, readIndex, writeIndex, getWorkspaceBrand, setWorkspaceBrand } from './agent-workspace-manager'
+import { listAgentWorkspaces, readIndex, writeIndex } from './agent-workspace-manager'
 import { AGENT_IPC_CHANNELS, SYNC_IPC_CHANNELS } from '@proma/shared'
-import type { SyncEnvelope, SyncStateIndex, WorkspaceSyncState } from './sync-types'
+import type { SyncEnvelope, SyncStateIndex, WorkspaceSyncState, SyncPullResponse } from './sync-types'
 
-const POLL_INTERVAL_MS = 30_000 // 30 秒轮询间隔
+const POLL_INTERVAL_MS = 60_000 // 基础轮询间隔
+const POLL_JITTER_MS = 15_000   // ±15s 随机抖动，避免所有客户端同时请求
 const MAX_RETRY_COUNT = 5
 
 // ===== 本地同步状态管理 =====
@@ -53,6 +54,7 @@ function getWorkspaceSyncState(workspaceId: string): WorkspaceSyncState {
       workspaceId,
       lastFullSyncAt: null,
       lastIncrementalSyncAt: null,
+      lastSeq: 0,
       pendingOutgoing: 0,
       pendingIncoming: 0,
       isSyncing: false,
@@ -191,15 +193,31 @@ async function pushEnvelopes(serverBaseUrl: string, token: string): Promise<bool
   }
 }
 
-async function pullChanges(serverBaseUrl: string, token: string): Promise<SyncEnvelope[]> {
+/** 拉取结果，包含 envelopes 和精确游标 */
+interface PullResult {
+  envelopes: SyncEnvelope[]
+  lastOccurredAt: number
+  lastSeq: number
+}
+
+async function pullChanges(serverBaseUrl: string, token: string): Promise<PullResult> {
+  const emptyResult: PullResult = { envelopes: [], lastOccurredAt: 0, lastSeq: 0 }
   const teamWs = listAgentWorkspaces().filter((w) => w.type === 'team')
-  if (teamWs.length === 0) return []
+  if (teamWs.length === 0) return emptyResult
 
   try {
-    const lastSync = Math.max(
-      ...teamWs.map((w) => w.lastSyncedAt ?? 0),
-      0,
-    )
+    // 取所有团队工作区中最大的游标（保守策略：宁可多拉不丢）
+    let maxSince = 0
+    let maxSeq = 0
+    for (const w of teamWs) {
+      const s = getWorkspaceSyncState(w.id)
+      if ((s.lastIncrementalSyncAt ?? 0) > maxSince) {
+        maxSince = s.lastIncrementalSyncAt!
+        maxSeq = s.lastSeq ?? 0
+      } else if ((s.lastIncrementalSyncAt ?? 0) === maxSince && (s.lastSeq ?? 0) > maxSeq) {
+        maxSeq = s.lastSeq ?? 0
+      }
+    }
 
     const response = await (undiciFetch as unknown as typeof fetch)(
       `${serverBaseUrl}/v1/sync/pull`,
@@ -209,15 +227,26 @@ async function pullChanges(serverBaseUrl: string, token: string): Promise<SyncEn
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ since: lastSync }),
+        body: JSON.stringify({ since: maxSince, afterSeq: maxSeq }),
       },
     )
 
-    if (!response.ok) return []
-    return (await response.json()) as SyncEnvelope[]
+    if (!response.ok) return emptyResult
+    const data = (await response.json()) as SyncPullResponse
+
+    // 兼容旧服务端（无 seq 字段的裸数组响应）
+    if (Array.isArray(data)) {
+      return { envelopes: data, lastOccurredAt: Date.now(), lastSeq: 0 }
+    }
+
+    return {
+      envelopes: data.envelopes || [],
+      lastOccurredAt: data.lastOccurredAt || Date.now(),
+      lastSeq: data.lastSeq || 0,
+    }
   } catch (err) {
     console.error('[同步] 拉取变更失败:', err)
-    return []
+    return emptyResult
   }
 }
 
@@ -251,11 +280,6 @@ function applyRemoteChanges(envelopes: SyncEnvelope[]): void {
   for (const env of envelopes) {
     try {
       switch (env.entityType) {
-        case 'brand': {
-          const payload = env.payload as { workspaceId: string; brand: Parameters<typeof setWorkspaceBrand>[1] }
-          setWorkspaceBrand(payload.workspaceId, payload.brand)
-          break
-        }
         case 'workspace': {
           // 工作区成员变更：同步 memberSummary 到本地索引
           const payload = env.payload as Record<string, unknown> | undefined
@@ -322,7 +346,7 @@ function broadcastStatusChange(): void {
 
 // ===== 同步周期 =====
 
-let _syncTimer: ReturnType<typeof setInterval> | null = null
+let _syncTimer: ReturnType<typeof setTimeout> | null = null
 
 /** 执行一次完整的同步周期 */
 async function syncCycle(): Promise<void> {
@@ -338,19 +362,23 @@ async function syncCycle(): Promise<void> {
   await pushEnvelopes(auth.baseUrl, auth.token)
 
   // 2. 拉取远程变更
-  const changes = await pullChanges(auth.baseUrl, auth.token)
+  const pullResult = await pullChanges(auth.baseUrl, auth.token)
+  const changes = pullResult.envelopes
   if (changes.length > 0) {
     applyRemoteChanges(changes)
     checkIfRemoved(changes)
     console.log(`[同步] 已拉取 ${changes.length} 条远程变更`)
   }
 
-  // 3. 更新同步时间戳
+  // 3. 更新同步游标（用服务端返回的精确值，避免 Date.now() 跳过同毫秒事件）
   const teamWs = listAgentWorkspaces().filter((w) => w.type === 'team')
-  const now = Date.now()
   for (const ws of teamWs) {
     const state = getWorkspaceSyncState(ws.id)
-    state.lastIncrementalSyncAt = now
+    // 仅当服务端返回了有效游标时才更新（避免网络错误后游标倒退）
+    if (pullResult.lastOccurredAt > 0) {
+      state.lastIncrementalSyncAt = pullResult.lastOccurredAt
+      state.lastSeq = pullResult.lastSeq
+    }
     state.pendingOutgoing = _pendingEnvelopes.filter(
       (e) => e.workspaceId === ws.id,
     ).length
@@ -370,7 +398,18 @@ export function startSyncEngine(): void {
   if (_syncTimer) return
 
   console.log('[同步] 同步引擎已启动')
-  _syncTimer = setInterval(syncCycle, POLL_INTERVAL_MS)
+
+  // 带随机抖动的自调度轮询，避免所有客户端同时请求服务器
+  const scheduleNext = () => {
+    const jitter = Math.floor(Math.random() * POLL_JITTER_MS * 2) - POLL_JITTER_MS
+    const delay = Math.max(10000, POLL_INTERVAL_MS + jitter)
+    _syncTimer = setTimeout(() => {
+      syncCycle().catch((err) => console.warn('[同步] 同步周期失败:', err))
+      scheduleNext()
+    }, delay)
+  }
+
+  scheduleNext()
 
   // 立即执行首次同步
   syncCycle().catch((err) => console.warn('[同步] 首次同步失败:', err))
@@ -379,7 +418,7 @@ export function startSyncEngine(): void {
 /** 停止同步引擎 */
 export function stopSyncEngine(): void {
   if (_syncTimer) {
-    clearInterval(_syncTimer)
+    clearTimeout(_syncTimer)
     _syncTimer = null
     console.log('[同步] 同步引擎已停止')
   }
