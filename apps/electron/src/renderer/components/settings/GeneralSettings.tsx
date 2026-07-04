@@ -7,7 +7,8 @@
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { Camera, ImagePlus, Volume2, LogIn, LogOut, RefreshCw } from 'lucide-react'
+import { Camera, ImagePlus, Volume2, LogIn, LogOut, RefreshCw, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import Picker from '@emoji-mart/react'
 import data from '@emoji-mart/data'
 import {
@@ -61,6 +62,7 @@ export function GeneralSettings(): React.ReactElement {
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
   const [authStatus, setAuthStatus] = useAtom(authStatusAtom)
   const [loginOpen, setLoginOpen] = React.useState(false)
+  const [refreshing, setRefreshing] = React.useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useAtom(notificationsEnabledAtom)
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useAtom(notificationSoundEnabledAtom)
   const [notificationSounds, setNotificationSounds] = useAtom(notificationSoundsAtom)
@@ -248,15 +250,26 @@ export function GeneralSettings(): React.ReactElement {
               <span className="text-sm flex-1 truncate">{authStatus.teamEmail}</span>
               <button
                 onClick={async () => {
-                  const status = await window.electronAPI.auth.getAuthStatus()
-                  if (status.isLoggedIn) {
-                    setAuthStatus({ isLoggedIn: true, teamAccountId: status.teamAccountId, teamEmail: status.teamEmail })
+                  setRefreshing(true)
+                  try {
+                    const status = await window.electronAPI.auth.getAuthStatus()
+                    if (status.isLoggedIn) {
+                      setAuthStatus({ isLoggedIn: true, teamAccountId: status.teamAccountId, teamEmail: status.teamEmail })
+                      toast.success('登录状态已刷新')
+                    } else {
+                      toast.error('未检测到有效登录会话')
+                    }
+                  } catch {
+                    toast.error('刷新失败，请检查网络')
+                  } finally {
+                    setRefreshing(false)
                   }
                 }}
+                disabled={refreshing}
                 className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
                 title="从服务端刷新登录状态"
               >
-                <RefreshCw size={13} />
+                {refreshing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
               </button>
               <button
                 onClick={() => {
