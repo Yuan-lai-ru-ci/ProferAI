@@ -169,8 +169,8 @@ fileRoutes.post('/:id/files/mkdir', async (c) => {
     ).get(wsId, parentPath)
     if (!exists && parentPath) {
       db.prepare(
-        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256) VALUES (?, ?, ?, 1, 0, ?, ?)'
-      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '')
+        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?)'
+      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '', userId, displayName)
     }
   }
 
@@ -394,8 +394,8 @@ fileRoutes.post('/:id/files/move', async (c) => {
     ).get(wsId, parentPath)
     if (!exists && parentPath) {
       db.prepare(
-        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256) VALUES (?, ?, ?, 1, 0, ?, ?)'
-      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '')
+        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?)'
+      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '', userId, displayName)
     }
   }
 
