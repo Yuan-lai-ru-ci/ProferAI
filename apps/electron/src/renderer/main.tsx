@@ -53,6 +53,7 @@ import {
 import {
   stickyUserMessageEnabledAtom,
   longTextPasteAsAttachmentEnabledAtom,
+  richTextRenderingEnabledAtom,
   initializeUiPreferences,
 } from './atoms/ui-preferences'
 import {
@@ -426,15 +427,20 @@ function DockBadgeInitializer(): null {
 /**
  * UI 偏好初始化组件
  *
- * 从主进程加载 UI 偏好设置（悬浮置顶条等）。
+ * 从主进程加载 UI 偏好设置（悬浮置顶条、输入框 Markdown 渲染等）。
  */
 function UiPreferencesInitializer(): null {
   const setStickyUserMessageEnabled = useSetAtom(stickyUserMessageEnabledAtom)
   const setLongTextPasteAsAttachmentEnabled = useSetAtom(longTextPasteAsAttachmentEnabledAtom)
+  const setRichTextRenderingEnabled = useSetAtom(richTextRenderingEnabledAtom)
 
   useEffect(() => {
-    initializeUiPreferences(setStickyUserMessageEnabled, setLongTextPasteAsAttachmentEnabled)
-  }, [setStickyUserMessageEnabled, setLongTextPasteAsAttachmentEnabled])
+    initializeUiPreferences(
+      setStickyUserMessageEnabled,
+      setLongTextPasteAsAttachmentEnabled,
+      setRichTextRenderingEnabled
+    )
+  }, [setStickyUserMessageEnabled, setLongTextPasteAsAttachmentEnabled, setRichTextRenderingEnabled])
 
   return null
 }
