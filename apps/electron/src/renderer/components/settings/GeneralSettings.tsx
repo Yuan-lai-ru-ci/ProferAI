@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { Camera, ImagePlus, Volume2, LogIn, LogOut } from 'lucide-react'
+import { Camera, ImagePlus, Volume2, LogIn, LogOut, RefreshCw } from 'lucide-react'
 import Picker from '@emoji-mart/react'
 import data from '@emoji-mart/data'
 import {
@@ -246,6 +246,18 @@ export function GeneralSettings(): React.ReactElement {
             <div className="flex items-center gap-3 px-4 py-4">
               <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
               <span className="text-sm flex-1 truncate">{authStatus.teamEmail}</span>
+              <button
+                onClick={async () => {
+                  const status = await window.electronAPI.auth.getAuthStatus()
+                  if (status.isLoggedIn) {
+                    setAuthStatus({ isLoggedIn: true, teamAccountId: status.teamAccountId, teamEmail: status.teamEmail })
+                  }
+                }}
+                className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
+                title="从服务端刷新登录状态"
+              >
+                <RefreshCw size={13} />
+              </button>
               <button
                 onClick={() => {
                   window.electronAPI.auth.logout().catch(() => {})

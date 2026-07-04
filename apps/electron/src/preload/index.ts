@@ -1055,7 +1055,7 @@ export interface ElectronAPI {
     login: (credentials: Record<string, unknown>) => Promise<unknown>
     register: (credentials: Record<string, unknown>) => Promise<unknown>
     logout: () => Promise<void>
-    getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string }>
+    getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string; teamEmail?: string }>
     getServerInfo: () => Promise<Array<{ baseUrl: string; email: string; isLoggedIn: boolean }>>
     getTeamAuth: () => Promise<{ baseUrl: string; token: string } | null>
   }
