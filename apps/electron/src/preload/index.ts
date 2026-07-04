@@ -1085,20 +1085,18 @@ export interface ElectronAPI {
     declineInvitation: (token: string) => Promise<void>
     updateMemberRole: (input: { workspaceId: string; userId: string; role: string }) => Promise<void>
     removeMember: (input: { workspaceId: string; userId: string }) => Promise<void>
-    applyBranding: (workspaceId: string) => Promise<void>
-    getBranding: (workspaceId: string) => Promise<unknown>
-    setWorkspaceBrand: (workspaceId: string, brand: import('@proma/shared').WorkspaceBrand) => Promise<void>
     leaveWorkspace: (workspaceId: string) => Promise<void>
     transferOwnership: (input: { workspaceId: string; targetUserId: string }) => Promise<void>
+    restoreWorkspace: (workspaceId: string) => Promise<void>
   }
 
-  // ===== 技能市场（Phase 1: 占位类型）=====
+  // ===== 技能市场 =====
   skillMarketplace: {
-    publish: (input: { workspaceSlug: string; skillSlug: string }) => Promise<unknown>
-    unpublish: (input: { workspaceSlug: string; skillSlug: string }) => Promise<void>
-    listTeamSkills: (workspaceId: string) => Promise<unknown[]>
-    installTeamSkill: (input: { workspaceId: string; skillSlug: string }) => Promise<unknown>
-    checkForUpdates: (workspaceSlug: string) => Promise<unknown[]>
+    publish: (input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) => Promise<{ success: boolean; skillSlug: string }>
+    unpublish: (input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) => Promise<{ success: boolean; skillSlug: string }>
+    listTeamSkills: (workspaceId: string) => Promise<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>
+    installTeamSkill: (input: { workspaceId: string; skillSlug: string; targetWorkspaceSlug: string }) => Promise<{ success: boolean; skillSlug: string }>
+    checkForUpdates: (workspaceSlug: string) => Promise<Array<import('@proma/shared').SkillMeta>>
   }
 
   // ===== 团队文件操作 =====
@@ -1109,6 +1107,8 @@ export interface ElectronAPI {
     getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }> | null>
     createDirectory: (input: { workspaceId: string; dirPath: string }) => Promise<boolean>
     move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }>
+    rename: (input: { workspaceId: string; path: string; newName: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string } | null>
+    search: (workspaceId: string, options: { q: string; page?: number; limit?: number }) => Promise<{ files: Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string }>; total: number; page: number; limit: number; totalPages: number } | null>
   }
 }
 
@@ -2525,27 +2525,23 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(TEAM_IPC_CHANNELS.UPDATE_MEMBER_ROLE, input),
     removeMember: (input: { workspaceId: string; userId: string }) =>
       ipcRenderer.invoke(TEAM_IPC_CHANNELS.REMOVE_MEMBER, input),
-    applyBranding: (workspaceId: string) =>
-      ipcRenderer.invoke(TEAM_IPC_CHANNELS.APPLY_BRANDING, workspaceId),
-    getBranding: (workspaceId: string) =>
-      ipcRenderer.invoke(TEAM_IPC_CHANNELS.GET_BRANDING, workspaceId),
-    setWorkspaceBrand: (workspaceId: string, brand: import('@proma/shared').WorkspaceBrand) =>
-      ipcRenderer.invoke(TEAM_IPC_CHANNELS.SET_WORKSPACE_BRAND, workspaceId, brand),
     leaveWorkspace: (workspaceId: string) =>
       ipcRenderer.invoke(TEAM_IPC_CHANNELS.LEAVE_WORKSPACE, workspaceId),
     transferOwnership: (input: { workspaceId: string; targetUserId: string }) =>
       ipcRenderer.invoke(TEAM_IPC_CHANNELS.TRANSFER_OWNERSHIP, input),
+    restoreWorkspace: (workspaceId: string) =>
+      ipcRenderer.invoke(TEAM_IPC_CHANNELS.RESTORE_WORKSPACE, workspaceId),
   },
 
-  // ===== 技能市场（Phase 1: 占位）=====
+  // ===== 技能市场 =====
   skillMarketplace: {
-    publish: (input: { workspaceSlug: string; skillSlug: string }) =>
+    publish: (input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.PUBLISH, input),
-    unpublish: (input: { workspaceSlug: string; skillSlug: string }) =>
+    unpublish: (input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.UNPUBLISH, input),
     listTeamSkills: (workspaceId: string) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.LIST_TEAM_SKILLS, workspaceId),
-    installTeamSkill: (input: { workspaceId: string; skillSlug: string }) =>
+    installTeamSkill: (input: { workspaceId: string; skillSlug: string; targetWorkspaceSlug: string }) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.INSTALL_TEAM_SKILL, input),
     checkForUpdates: (workspaceSlug: string) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.CHECK_FOR_UPDATES, workspaceSlug),
@@ -2565,6 +2561,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.CREATE_DIRECTORY, input),
     move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.MOVE, input),
+    rename: (input: { workspaceId: string; path: string; newName: string }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.RENAME, input),
+    search: (workspaceId: string, options: { q: string; page?: number; limit?: number }) =>
+      ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.SEARCH, workspaceId, options),
   },
 }
 

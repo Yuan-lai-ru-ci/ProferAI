@@ -405,6 +405,72 @@ fileRoutes.post('/:id/files/move', async (c) => {
   return c.json({ success: true, fromPath, toPath: newPath, affectedCount: affected.length })
 })
 
+/** 重命名文件或文件夹 */
+fileRoutes.post('/:id/files/rename', async (c) => {
+  const mw = authMiddleware(c)
+  if (mw) return mw
+
+  const wsId = c.req.param('id')
+  const access = requireWorkspaceMember(c, wsId)
+  if (access.error) return access.error
+
+  const body = (await c.req.json()) || {}
+  const filePath = normalizeFilePath(body.path)
+  if (!filePath) return c.json({ error: 'path 必填' }, 400)
+
+  const newName = (body.newName || '').trim()
+  if (!newName) return c.json({ error: 'newName 必填' }, 400)
+  if (newName.includes('/') || newName.includes('\\')) return c.json({ error: '文件名不能包含路径分隔符' }, 400)
+  if (newName === '.' || newName === '..') return c.json({ error: '文件名不合法' }, 400)
+
+  // 构造新路径（同目录，仅改文件名）
+  const parentDir = pathDirname(filePath)
+  const newPath = parentDir === '.' ? newName : `${parentDir}/${newName}`
+
+  if (filePath === newPath) return c.json({ error: '新旧文件名相同' }, 400)
+
+  // 路径遍历防护
+  const wsDir = pathJoin(FILES_DIR, wsId)
+  const oldLocal = safePath(wsDir, filePath)
+  const newLocal = safePath(wsDir, newPath)
+  if (!oldLocal || !newLocal) return c.json({ error: '路径不合法' }, 400)
+
+  if (!existsSync(oldLocal)) return c.json({ error: '文件不存在' }, 404)
+  if (existsSync(newLocal)) return c.json({ error: '已存在同名文件' }, 409)
+
+  // 权限校验：仅 owner/admin 或文件上传者可重命名
+  const affected = db.prepare(
+    'SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND (file_path = ? OR file_path LIKE ?)'
+  ).all(wsId, filePath, filePath + '/%')
+  if (affected.length === 0) return c.json({ error: '文件不存在' }, 404)
+
+  if (!isAdminOrOwner(access.role) && !canModifyRows(affected, access.userId)) {
+    return c.json({ error: '无权重命名' }, 403)
+  }
+
+  // 磁盘重命名
+  renameSync(oldLocal, newLocal)
+
+  const now = Date.now()
+  const updateStmt = db.prepare(
+    'UPDATE file_manifests SET file_path = ?, file_name = ?, modified_at = ? WHERE workspace_id = ? AND file_path = ?'
+  )
+
+  for (const row of affected) {
+    const updatedPath = row.file_path === filePath
+      ? newPath
+      : newPath + row.file_path.slice(filePath.length)
+    const updatedName = pathBasename(updatedPath)
+    updateStmt.run(updatedPath, updatedName, now, wsId, row.file_path)
+  }
+
+  // 更新本地来源映射（服务端记录不会直接触达客户端，这里只做磁盘+DB）
+  emitFileChange(wsId, 'update', { fromPath: filePath, path: newPath, affectedCount: affected.length })
+  logAudit({ action: 'file.rename', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `renamed to ${newName}, ${affected.length} entries` })
+
+  return c.json({ success: true, fromPath: filePath, toPath: newPath, newName })
+})
+
 /** 删除文件或文件夹（递归） */
 fileRoutes.delete('/:id/files/:path{.+}', async (c) => {
   const mw = authMiddleware(c)

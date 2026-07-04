@@ -430,3 +430,94 @@ export function isFileLocal(workspaceSlug: string, filePath: string): boolean {
 export function getLocalFilePath(workspaceSlug: string, filePath: string): string {
   return getSafeWorkspaceFilePath(workspaceSlug, filePath) ?? join(getWorkspaceFilesDir(workspaceSlug), filePath)
 }
+
+// ===== 文件搜索 =====
+
+export interface FileSearchOptions {
+  q: string
+  page?: number
+  limit?: number
+}
+
+export interface FileSearchResult {
+  files: TeamFileManifestEntry[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
+/** 搜索团队工作区文件（按文件名/路径，支持 * 和 ? 通配符） */
+export async function searchFiles(
+  workspaceId: string,
+  options: FileSearchOptions,
+): Promise<FileSearchResult | null> {
+  try {
+    const params = new URLSearchParams()
+    params.set('q', options.q)
+    if (options.page) params.set('page', String(options.page))
+    if (options.limit) params.set('limit', String(options.limit))
+
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/search?${params.toString()}`
+    )
+    if (!res || !res.ok) return null
+    return (await res.json()) as FileSearchResult
+  } catch {
+    return null
+  }
+}
+
+/** 重命名远程文件或文件夹 */
+export async function renameRemoteFile(
+  workspaceId: string,
+  path: string,
+  newName: string,
+): Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }> {
+  try {
+    const res = await teamFileFetch(
+      `/v1/workspaces/${workspaceId}/files/rename`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, newName }),
+      },
+    )
+    if (!res) return { success: false, fromPath: path, error: '未登录' }
+    if (!res.ok) {
+      const txt = await res.text()
+      return { success: false, fromPath: path, error: txt.slice(0, 200) }
+    }
+    const result = (await res.json()) as { success: boolean; fromPath: string; toPath: string; newName: string }
+    // 更新本地来源映射
+    if (result.success && result.toPath) {
+      // 单个文件重命名：直接更新 key
+      const store = readLocalSources()
+      const oldKey = getLocalSourceKey(workspaceId, path)
+      const newKey = getLocalSourceKey(workspaceId, result.toPath)
+      if (store[oldKey]) {
+        store[newKey] = { ...store[oldKey], remotePath: result.toPath }
+        delete store[oldKey]
+        writeLocalSources(store)
+      }
+      // 目录重命名：递归更新所有子路径
+      const prefix = `${workspaceId}:${path}/`
+      const newPrefix = `${workspaceId}:${result.toPath}/`
+      const moved: Record<string, TeamFileLocalSourceEntry> = {}
+      for (const [key, entry] of Object.entries(store)) {
+        if (key.startsWith(prefix)) {
+          const suffix = entry.remotePath.slice(path.length)
+          moved[`${workspaceId}:${result.toPath}${suffix}`] = {
+            ...entry,
+            remotePath: `${result.toPath}${suffix}`,
+          }
+          delete store[key]
+        }
+      }
+      if (Object.keys(moved).length > 0) writeLocalSources({ ...store, ...moved })
+    }
+    return result
+  } catch (err) {
+    return { success: false, fromPath: path, error: String(err) }
+  }
+}

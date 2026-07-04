@@ -12,7 +12,7 @@ import {
   Plus, Search, Users, FolderOpen, FolderPlus, FolderUp, Trash2, Download,
   MoreHorizontal, Eye, Loader2, Cloud, CloudOff, ChevronDown, ChevronRight,
   ExternalLink, FolderSearch, ArrowUpDown, ArrowUp, Square, CheckSquare,
-  PanelRightClose, PanelRightOpen, MessageSquarePlus,
+  PanelRightClose, PanelRightOpen, MessageSquarePlus, Pencil,
 } from 'lucide-react'
 import {
   agentSessionsAtom,
@@ -29,6 +29,7 @@ import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import { useTrackSessionView } from '@/hooks/useTrackSessionView'
+import { useDefaultAppForFile } from '@/hooks/useDefaultAppForFile'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -134,6 +135,9 @@ export function TeamWorkspaceView(): React.ReactElement {
   const [dragSourceInternal, setDragSourceInternal] = React.useState(false)
   const [agentPanelCollapsed, setAgentPanelCollapsed] = React.useState(false)
   const [agentDropOver, setAgentDropOver] = React.useState(false)
+  const [editingPath, setEditingPath] = React.useState<string | null>(null)
+  const [editingName, setEditingName] = React.useState('')
+  const editInputRef = React.useRef<HTMLInputElement>(null)
 
   // 全局阻止浏览器对拖入文件的默认处理
   React.useEffect(() => {
@@ -507,14 +511,17 @@ export function TeamWorkspaceView(): React.ReactElement {
     return null
   }
 
-  // 预览
+  // 预览：所有文件统一走弹窗预览，团队文件先下载到本地
   const handlePreview = (entry: FileEntry) => {
     if (entry.isDirectory) return
     setPreview({
       path: entry.path,
       name: entry.name,
-      download: teamId ? async () => {
-        const local = await window.electronAPI.teamFile.download({ workspaceId: teamId, workspaceSlug: workspace?.slug!, filePath: entry.path, uploadedBy: entry.uploadedBy })
+      download: teamId && workspace?.slug ? async () => {
+        const local = await window.electronAPI.teamFile.download({
+          workspaceId: teamId, workspaceSlug: workspace.slug,
+          filePath: entry.path, uploadedBy: entry.uploadedBy,
+        })
         return local
       } : undefined,
     })
@@ -657,6 +664,42 @@ export function TeamWorkspaceView(): React.ReactElement {
       setTimeout(() => loadFiles(), 500)
     } else {
       toast.error('删除失败')
+    }
+  }
+
+  // 重命名
+  const startRename = (entry: FileEntry) => {
+    setEditingPath(entry.path)
+    setEditingName(entry.name)
+    setTimeout(() => editInputRef.current?.focus(), 50)
+  }
+  const cancelRename = () => {
+    setEditingPath(null)
+    setEditingName('')
+  }
+  const confirmRename = async () => {
+    if (!teamId || !workspace?.slug || !editingPath) return
+    const trimmed = editingName.trim()
+    if (!trimmed) { toast.error('文件名不能为空'); return }
+    const oldEntry = entries.find((e) => e.path === editingPath)
+    if (!oldEntry) { cancelRename(); return }
+    if (trimmed === oldEntry.name) { cancelRename(); return }
+    // 检查同目录下是否有重名
+    const parentDir = editingPath.includes('/') ? editingPath.slice(0, editingPath.lastIndexOf('/')) : ''
+    const conflict = entries.find((e) => {
+      const eDir = e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : ''
+      return eDir === parentDir && e.name === trimmed && e.path !== editingPath
+    })
+    if (conflict) { toast.error('已存在同名文件'); return }
+    const result = await window.electronAPI.teamFile.rename({
+      workspaceId: teamId, path: editingPath, newName: trimmed,
+    }).catch(() => null)
+    if (result?.success) {
+      toast.success('已重命名')
+      cancelRename()
+      setTimeout(() => loadFiles(), 300)
+    } else {
+      toast.error(result?.error || '重命名失败')
     }
   }
 
@@ -1259,15 +1302,38 @@ export function TeamWorkspaceView(): React.ReactElement {
                             <FolderSearch size={13} />在文件夹查看
                           </button>
                           {!entry.isDirectory && (
-                            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => {
-                              setMenuOpen(null)
-                              void handleDownload(entry).then((local) => {
-                                if (local) window.electronAPI.systemOpenFile(local).catch(() => {})
-                              })
-                            }}>
-                              <ExternalLink size={13} />用应用打开
-                            </button>
+                            <DefaultAppOpenInline
+                              filePath={filesPath ? `${filesPath}/${entry.path}` : entry.path}
+                              probePath={entry.name}
+                              candidateBasePaths={filesPath ? [filesPath] : undefined}
+                              onOpen={async () => {
+                                setMenuOpen(null)
+                                if (entry.syncStatus === 'cloud-only' && teamId && workspace?.slug) {
+                                  const local = await window.electronAPI.teamFile.download({
+                                    workspaceId: teamId, workspaceSlug: workspace.slug,
+                                    filePath: entry.path, uploadedBy: entry.uploadedBy,
+                                  }).catch(() => null)
+                                  if (local) {
+                                    window.electronAPI.systemOpenFile(
+                                      local, undefined,
+                                      { candidateBasePaths: [filesPath].filter(Boolean) as string[] },
+                                    ).catch(() => {})
+                                  }
+                                  return
+                                }
+                                window.electronAPI.systemOpenFile(
+                                  filesPath ? `${filesPath}/${entry.path}` : entry.path,
+                                  undefined,
+                                  filesPath ? { candidateBasePaths: [filesPath] } : undefined,
+                                ).catch(() => {})
+                              }}
+                            />
                           )}
+                          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => {
+                            setMenuOpen(null); startRename(entry)
+                          }}>
+                            <Pencil size={13} />重命名
+                          </button>
                           {failedUploads.some((f) => f.name === entry.name) && (
                             <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left text-muted-foreground" onClick={() => {
                               setMenuOpen(null)
@@ -1289,9 +1355,25 @@ export function TeamWorkspaceView(): React.ReactElement {
                     </div>
 
                     {/* 文件名 */}
-                    <span className="text-[11px] text-center leading-snug line-clamp-2 break-all w-full font-medium">
-                      {entry.name}
-                    </span>
+                    {editingPath === entry.path ? (
+                      <div className="w-full px-1" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+                        <input
+                          ref={editInputRef}
+                          className="w-full text-[11px] text-center px-1 py-0.5 rounded border border-primary bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') confirmRename()
+                            if (e.key === 'Escape') cancelRename()
+                          }}
+                          onBlur={cancelRename}
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-center leading-snug line-clamp-2 break-all w-full font-medium">
+                        {entry.name}
+                      </span>
+                    )}
                     {entry.isDirectory && (
                       <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 font-medium">
                         {folderItemCounts.has(entry.path) ? `${folderItemCounts.get(entry.path)} 项` : '空文件夹'}
@@ -1490,6 +1572,31 @@ export function TeamWorkspaceView(): React.ReactElement {
 
 function MessageSquareIcon({ size, strokeWidth }: { size: number; strokeWidth: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+}
+
+/** 内联版"用默认App打开"按钮 — 不依赖 Radix Menu，可用于自定义菜单 */
+function DefaultAppOpenInline({
+  filePath,
+  probePath,
+  candidateBasePaths,
+  onOpen,
+}: {
+  filePath: string
+  probePath?: string
+  candidateBasePaths?: string[]
+  onOpen: () => void
+}): React.ReactElement | null {
+  const info = useDefaultAppForFile(probePath ?? filePath)
+  if (!info) return null
+  return (
+    <button
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left"
+      onClick={onOpen}
+    >
+      <img src={info.iconDataUrl} alt="" className="size-3.5 shrink-0" draggable={false} />
+      <span className="truncate">用 {info.name} 打开</span>
+    </button>
+  )
 }
 
 function formatSize(bytes: number): string {
