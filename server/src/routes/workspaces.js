@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '../db.js'
-import { ONLINE_THRESHOLD, INVITATION_TTL } from '../config.js'
+import { ONLINE_THRESHOLD, INVITATION_TTL, WORKSPACE_GRACE_PERIOD_MS } from '../config.js'
 import { authMiddleware } from '../middleware.js'
 import { logAudit } from '../audit.js'
 
@@ -13,12 +13,23 @@ workspaceRoutes.get('/', (c) => {
   if (mw) return mw
 
   const userId = c.get('userId')
+  const includeDeleted = c.req.query('include_deleted') === 'true'
+
+  let whereClause = 'w.is_deleted = 0'
+  const params = [userId]
+
+  if (includeDeleted) {
+    const graceCutoff = Date.now() - WORKSPACE_GRACE_PERIOD_MS
+    whereClause = '(w.is_deleted = 0 OR (w.is_deleted = 1 AND w.deleted_at > ?))'
+    params.push(graceCutoff)
+  }
+
   const rows = db.prepare(`
     SELECT w.*, wm.role FROM workspaces w
     JOIN workspace_members wm ON w.id = wm.workspace_id
-    WHERE wm.user_id = ? AND w.is_deleted = 0
+    WHERE wm.user_id = ? AND ${whereClause}
     ORDER BY w.updated_at DESC
-  `).all(userId)
+  `).all(...params)
 
   return c.json(rows.map((r) => ({
     id: r.id,
@@ -31,17 +42,22 @@ workspaceRoutes.get('/', (c) => {
     brand: r.brand ? JSON.parse(r.brand) : undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    isDeleted: r.is_deleted !== 0,
+    deletedAt: r.deleted_at || undefined,
+    restoredAt: r.restored_at || undefined,
+    expiresAt: r.is_deleted && r.deleted_at ? r.deleted_at + WORKSPACE_GRACE_PERIOD_MS : undefined,
   })))
 })
 
-/** 校验当前用户是否工作区成员 */
+/** 校验当前用户是否工作区成员，并将角色存入上下文供后续鉴权 */
 function requireWorkspaceMember(c) {
   const wsId = c.req.param('id')
   const userId = c.get('userId')
   const member = db.prepare(
-    'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?'
+    'SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?'
   ).get(wsId, userId)
   if (!member) return c.json({ error: '不是工作区成员' }, 403)
+  c.set('memberRole', member.role)
 }
 
 // ===== 审计日志 =====
@@ -55,13 +71,23 @@ workspaceRoutes.get('/:id/audit-logs', (c) => {
   const rawLimit = parseInt(c.req.query('limit') || '50', 10)
   const limit = isNaN(rawLimit) ? 50 : Math.min(Math.max(rawLimit, 1), 200)
 
+  const memberRole = c.get('memberRole') || 'member'
+  const isPrivileged = memberRole === 'owner' || memberRole === 'admin'
+
+  // 普通成员只看本工作区审计；owner/admin 可额外看到无工作区归属的全局事件
+  let whereClause = 'workspace_id = ?'
+  const params = [wsId]
+  if (isPrivileged) {
+    whereClause = '(workspace_id = ? OR workspace_id = \'\')'
+  }
+
   const rows = db.prepare(`
     SELECT action, user_email, entity_type, entity_id, detail, created_at
     FROM audit_logs
-    WHERE workspace_id = ? OR workspace_id = ''
+    WHERE ${whereClause}
     ORDER BY created_at DESC
     LIMIT ?
-  `).all(wsId, limit)
+  `).all(...params, limit)
 
   return c.json(rows)
 })
@@ -145,9 +171,36 @@ workspaceRoutes.delete('/:id', async (c) => {
   const member = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, userId)
   if (!member || member.role !== 'owner') return c.json({ error: '仅拥有者可删除' }, 403)
 
-  db.prepare('UPDATE workspaces SET is_deleted = 1, updated_at = ? WHERE id = ?').run(Date.now(), wsId)
-  logAudit({ action: 'workspace.delete', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'workspace', entityId: wsId })
+  const now = Date.now()
+  db.prepare('UPDATE workspaces SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, wsId)
+  logAudit({ action: 'workspace.delete', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'workspace', entityId: wsId, detail: `grace period until ${now + WORKSPACE_GRACE_PERIOD_MS}` })
   return c.json({ success: true })
+})
+
+// ===== 恢复已删除工作区（冷静期内） =====
+workspaceRoutes.post('/:id/restore', async (c) => {
+  const mw = authMiddleware(c)
+  if (mw) return mw
+
+  const wsId = c.req.param('id')
+  const userId = c.get('userId')
+  const member = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, userId)
+  if (!member || member.role !== 'owner') return c.json({ error: '仅拥有者可恢复' }, 403)
+
+  const ws = db.prepare('SELECT is_deleted, deleted_at FROM workspaces WHERE id = ?').get(wsId)
+  if (!ws) return c.json({ error: '工作区不存在' }, 404)
+  if (!ws.is_deleted) return c.json({ error: '工作区未被删除，无需恢复' }, 400)
+
+  const graceCutoff = Date.now() - WORKSPACE_GRACE_PERIOD_MS
+  if (ws.deleted_at && ws.deleted_at <= graceCutoff) {
+    return c.json({ error: '冷静期已过，无法恢复' }, 410)
+  }
+
+  const now = Date.now()
+  db.prepare('UPDATE workspaces SET is_deleted = 0, deleted_at = NULL, restored_at = ?, updated_at = ? WHERE id = ?')
+    .run(now, now, wsId)
+  logAudit({ action: 'workspace.restore', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'workspace', entityId: wsId })
+  return c.json({ success: true, id: wsId, restoredAt: now })
 })
 
 // ===== 成员列表 =====
@@ -202,7 +255,7 @@ workspaceRoutes.post('/:id/members', async (c) => {
   return c.json({ id, token, workspaceId: wsId, inviteeEmail: email || '', role: role || 'member', status: 'pending', expiresAt: now + INVITATION_TTL })
 })
 
-// ===== 邀请列表 =====
+// ===== 邀请列表（支持状态过滤与分页） =====
 workspaceRoutes.get('/:id/invitations', (c) => {
   const mw = authMiddleware(c)
   if (mw) return mw
@@ -215,26 +268,78 @@ workspaceRoutes.get('/:id/invitations', (c) => {
   ).get(wsId, userId)
   if (!member) return c.json({ error: '不是工作区成员' }, 403)
 
+  const status = c.req.query('status')
+  const hasFilterParams = status || c.req.query('page') || c.req.query('limit')
+
+  // 构建条件
+  const conditions = ['i.workspace_id = ?']
+  const params = [wsId]
+
+  if (status && ['pending', 'accepted', 'declined', 'expired', 'cancelled'].includes(status)) {
+    conditions.push('i.status = ?')
+    params.push(status)
+  }
+
+  const whereClause = conditions.join(' AND ')
+
+  // 无过滤参数时保持旧数组返回格式（向后兼容）
+  if (!hasFilterParams) {
+    const rows = db.prepare(`
+      SELECT i.*, u.display_name as inviter_name
+      FROM invitations i
+      JOIN users u ON i.inviter_id = u.id
+      WHERE ${whereClause}
+      ORDER BY i.created_at DESC
+    `).all(...params)
+
+    return c.json(rows.map((r) => ({
+      id: r.id,
+      workspaceId: r.workspace_id,
+      inviterId: r.inviter_id,
+      inviterName: r.inviter_name,
+      inviteeEmail: r.invitee_email,
+      role: r.role,
+      token: r.token,
+      status: r.status,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+    })))
+  }
+
+  // 带过滤参数时返回分页结构
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10))
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)))
+  const offset = (page - 1) * limit
+
+  const total = db.prepare(`SELECT COUNT(*) as total FROM invitations i WHERE ${whereClause}`).get(...params).total
+
   const rows = db.prepare(`
     SELECT i.*, u.display_name as inviter_name
     FROM invitations i
     JOIN users u ON i.inviter_id = u.id
-    WHERE i.workspace_id = ?
+    WHERE ${whereClause}
     ORDER BY i.created_at DESC
-  `).all(wsId)
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset)
 
-  return c.json(rows.map((r) => ({
-    id: r.id,
-    workspaceId: r.workspace_id,
-    inviterId: r.inviter_id,
-    inviterName: r.inviter_name,
-    inviteeEmail: r.invitee_email,
-    role: r.role,
-    token: r.token,
-    status: r.status,
-    createdAt: r.created_at,
-    expiresAt: r.expires_at,
-  })))
+  return c.json({
+    invitations: rows.map((r) => ({
+      id: r.id,
+      workspaceId: r.workspace_id,
+      inviterId: r.inviter_id,
+      inviterName: r.inviter_name,
+      inviteeEmail: r.invitee_email,
+      role: r.role,
+      token: r.token,
+      status: r.status,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+    })),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  })
 })
 
 // ===== 取消邀请 =====

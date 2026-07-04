@@ -98,6 +98,22 @@ try { db.exec("ALTER TABLE users ADD COLUMN relay_token TEXT DEFAULT NULL") } ca
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_relay_token ON users(relay_token)") } catch (_) {}
 // 自配 API 开关 — admin 可对任意用户单独开/关，与账号类型无关
 try { db.exec("ALTER TABLE users ADD COLUMN can_self_config_api INTEGER NOT NULL DEFAULT 0") } catch (_) {}
+try { db.exec("ALTER TABLE workspaces ADD COLUMN deleted_at INTEGER DEFAULT NULL") } catch (_) {}
+try { db.exec("ALTER TABLE workspaces ADD COLUMN restored_at INTEGER DEFAULT NULL") } catch (_) {}
+// 文件搜索索引
+db.exec('CREATE INDEX IF NOT EXISTS idx_file_manifests_file_name ON file_manifests(file_name)')
+db.exec('CREATE INDEX IF NOT EXISTS idx_file_manifests_file_path ON file_manifests(file_path)')
+// 同步信封序列号（替代 occurred_at 作为精确游标，解决同毫秒丢数据问题）
+try { db.exec("ALTER TABLE sync_envelopes ADD COLUMN seq INTEGER DEFAULT 0") } catch (_) {}
+db.exec('CREATE INDEX IF NOT EXISTS idx_sync_envelopes_ws_seq ON sync_envelopes(workspace_id, occurred_at, seq)')
+// 回填已有信封的 seq（用 rowid 保证不重复）
+try {
+  db.exec("UPDATE sync_envelopes SET seq = rowid WHERE seq = 0")
+} catch (_) {}
+// 一次性回填：已有软删除但无 deleted_at 的工作区用 updated_at 补上
+try {
+  db.exec("UPDATE workspaces SET deleted_at = updated_at WHERE is_deleted = 1 AND deleted_at IS NULL")
+} catch (_) {}
 
 // token 黑名单表
 db.exec(`

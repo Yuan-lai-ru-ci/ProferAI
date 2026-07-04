@@ -54,7 +54,8 @@ invitationRoutes.post('/:token/accept', (c) => {
   const userId = c.get('userId')
   const userEmail = c.get('userEmail')
 
-  if (inv.invitee_email !== userEmail) {
+  // 公开邀请（空邮箱）不校验邮箱匹配；定向邀请才校验
+  if (inv.invitee_email && inv.invitee_email !== userEmail) {
     return c.json({ error: '邀请邮箱与当前账户不匹配' }, 403)
   }
 

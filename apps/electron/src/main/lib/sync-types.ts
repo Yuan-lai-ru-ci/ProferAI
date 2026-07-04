@@ -8,7 +8,7 @@
 export type SyncOperation = 'create' | 'update' | 'delete'
 
 /** 可同步的实体类型 */
-export type SyncEntityType = 'workspace' | 'skill' | 'brand' | 'file'
+export type SyncEntityType = 'workspace' | 'skill' | 'file'
 
 /** 同步信封 */
 export interface SyncEnvelope {
@@ -26,10 +26,19 @@ export interface SyncEnvelope {
   payload: unknown
   /** 变更发生时间 */
   occurredAt: number
+  /** 服务端单调递增序列号（同毫秒精确排序） */
+  seq?: number
   /** 重试次数 */
   retryCount: number
   /** 最后一次错误 */
   lastError?: string
+}
+
+/** 服务端 pull 响应 */
+export interface SyncPullResponse {
+  envelopes: SyncEnvelope[]
+  lastOccurredAt: number
+  lastSeq: number
 }
 
 /** 单个文件的同步状态 */
@@ -66,6 +75,8 @@ export interface WorkspaceSyncState {
   workspaceId: string
   lastFullSyncAt: number | null
   lastIncrementalSyncAt: number | null
+  /** 上次拉取的最大 seq（用于精确游标，解决同毫秒丢数据） */
+  lastSeq: number
   pendingOutgoing: number
   pendingIncoming: number
   isSyncing: boolean
