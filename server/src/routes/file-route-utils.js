@@ -22,7 +22,7 @@ export function canModifyRows(rows, userId) {
   let hasModifiableRow = false
   for (const row of rows) {
     if (!row.uploaded_by) {
-      if (!row.is_directory) return false
+      // 无上传者记录（旧数据/自动创建的父目录）：允许任何成员管理，避免文件永久不可操作
       hasModifiableRow = true
       continue
     }
