@@ -14,7 +14,6 @@ import {
   ExternalLink, FolderSearch, ArrowUpDown, ArrowUp, Square, CheckSquare,
   PanelRightClose, PanelRightOpen, MessageSquarePlus, Pencil,
 } from 'lucide-react'
-import { authStatusAtom } from '@/atoms/identity-atoms'
 import {
   agentSessionsAtom,
   agentPendingFilesAtomFamily,
@@ -68,17 +67,24 @@ export function TeamWorkspaceView(): React.ReactElement {
   const currentId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspace = workspaces.find((w) => w.id === currentId)
   const teamId = workspace?.type === 'team' ? workspace.id : undefined
-  const authStatus = useAtomValue(authStatusAtom)
+
+  // 从主进程取真实 teamAccountId，避免 localStorage 残留旧数据导致鉴权失败
+  const [teamAccountId, setTeamAccountId] = React.useState<string>('')
+  React.useEffect(() => {
+    window.electronAPI.auth.getAuthStatus().then((s) => {
+      if (s.isLoggedIn && s.teamAccountId) setTeamAccountId(s.teamAccountId)
+    }).catch(() => {})
+  }, [])
 
   // 当前用户是否可以管理这条文件/文件夹（上传者 or 管理员/拥有者）
   const canManage = React.useCallback((entry: { uploadedBy?: string }) => {
-    if (!authStatus.isLoggedIn) return false
+    if (!teamAccountId) return false
     if (workspace?.role === 'owner' || workspace?.role === 'admin') return true
-    if (entry.uploadedBy && entry.uploadedBy === authStatus.teamAccountId) return true
+    if (entry.uploadedBy && entry.uploadedBy === teamAccountId) return true
     // 无上传者的旧条目：允许任何成员管理
     if (!entry.uploadedBy) return true
     return false
-  }, [authStatus, workspace?.role])
+  }, [teamAccountId, workspace?.role])
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
