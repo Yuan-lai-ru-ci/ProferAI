@@ -713,7 +713,7 @@ export function TeamWorkspaceView(): React.ReactElement {
     })
     if (conflict) { toast.error('已存在同名文件'); return }
     const result = await window.electronAPI.teamFile.rename({
-      workspaceId: teamId, path: editingPath, newName: finalName,
+      workspaceId: teamId, workspaceSlug: workspace.slug!, path: editingPath, newName: finalName,
     }).catch(() => null)
     if (result?.success) {
       toast.success('已重命名')

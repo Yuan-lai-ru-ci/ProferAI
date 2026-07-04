@@ -79,6 +79,34 @@ function forgetLocalSourceTree(workspaceId: string, remotePath: string): void {
   if (changed) writeLocalSources(store)
 }
 
+/** 物理移动本地缓存文件（目录则递归），配合远程 move/rename 保持 synced 状态 */
+function moveLocalCache(workspaceSlug: string, fromPath: string, toPath: string): void {
+  try {
+    const { renameSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } = require('node:fs')
+    const { join, dirname } = require('node:path')
+    const filesDir = resolve(getWorkspaceFilesDir(workspaceSlug))
+    const oldLocal = resolve(filesDir, fromPath)
+    const newLocal = resolve(filesDir, toPath)
+    // 安全检查：两者都必须在工作区目录内
+    if (!oldLocal.startsWith(filesDir) || !newLocal.startsWith(filesDir)) return
+    if (!existsSync(oldLocal)) return
+    mkdirSync(dirname(newLocal), { recursive: true })
+    renameSync(oldLocal, newLocal)
+    // 清理空父目录
+    let parent = dirname(oldLocal)
+    while (parent.startsWith(filesDir) && parent !== filesDir) {
+      try {
+        const remaining = readdirSync(parent)
+        if (remaining.length === 0) rmSync(parent, { recursive: true })
+        else break
+      } catch { break }
+      parent = dirname(parent)
+    }
+  } catch (err) {
+    console.warn('[team-file] 移动本地缓存失败:', fromPath, '→', toPath, err)
+  }
+}
+
 function moveLocalSourceTree(workspaceId: string, fromPath: string, toPath: string): void {
   const store = readLocalSources()
   const exactKey = getLocalSourceKey(workspaceId, fromPath)
@@ -328,6 +356,7 @@ export async function deleteRemoteFile(
 /** 移动文件或文件夹到指定目录 */
 export async function moveRemoteFile(
   workspaceId: string,
+  workspaceSlug: string,
   fromPath: string,
   toDir: string,
 ): Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }> {
@@ -346,7 +375,11 @@ export async function moveRemoteFile(
       return { success: false, fromPath, error: txt.slice(0, 200) }
     }
     const result = (await res.json()) as { success: boolean; fromPath: string; toPath: string }
-    if (result.success && result.toPath) moveLocalSourceTree(workspaceId, fromPath, result.toPath)
+    if (result.success && result.toPath) {
+      moveLocalSourceTree(workspaceId, fromPath, result.toPath)
+      // 同步移动本地缓存，避免文件从"已下载"变成"云端"
+      moveLocalCache(workspaceSlug, fromPath, result.toPath)
+    }
     return result
   } catch (err) {
     return { success: false, fromPath, error: String(err) }
@@ -471,6 +504,7 @@ export async function searchFiles(
 /** 重命名远程文件或文件夹 */
 export async function renameRemoteFile(
   workspaceId: string,
+  workspaceSlug: string,
   path: string,
   newName: string,
 ): Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }> {
@@ -489,7 +523,7 @@ export async function renameRemoteFile(
       return { success: false, fromPath: path, error: txt.slice(0, 200) }
     }
     const result = (await res.json()) as { success: boolean; fromPath: string; toPath: string; newName: string }
-    // 更新本地来源映射
+    // 同步本地缓存 + 来源映射，避免文件从"已下载"变成"云端"
     if (result.success && result.toPath) {
       // 单个文件重命名：直接更新 key
       const store = readLocalSources()
@@ -515,6 +549,7 @@ export async function renameRemoteFile(
         }
       }
       if (Object.keys(moved).length > 0) writeLocalSources({ ...store, ...moved })
+      moveLocalCache(workspaceSlug, path, result.toPath)
     }
     return result
   } catch (err) {

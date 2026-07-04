@@ -1107,7 +1107,7 @@ export interface ElectronAPI {
     getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }> | null>
     createDirectory: (input: { workspaceId: string; dirPath: string }) => Promise<boolean>
     move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }>
-    rename: (input: { workspaceId: string; path: string; newName: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string } | null>
+    rename: (input: { workspaceId: string; workspaceSlug: string; path: string; newName: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string } | null>
     search: (workspaceId: string, options: { q: string; page?: number; limit?: number }) => Promise<{ files: Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string }>; total: number; page: number; limit: number; totalPages: number } | null>
   }
 }
@@ -2561,7 +2561,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.CREATE_DIRECTORY, input),
     move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.MOVE, input),
-    rename: (input: { workspaceId: string; path: string; newName: string }) =>
+    rename: (input: { workspaceId: string; workspaceSlug: string; path: string; newName: string }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.RENAME, input),
     search: (workspaceId: string, options: { q: string; page?: number; limit?: number }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.SEARCH, workspaceId, options),
