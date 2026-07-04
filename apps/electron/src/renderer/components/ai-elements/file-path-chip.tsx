@@ -115,20 +115,25 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   const displayPath = React.useMemo(() => {
     if (isAbsolute) return trimmedPath
     if (candidateBases.length > 0) {
-      const firstSegment = cleanPath.split('/')[0]
+      // 同时支持 / 和 \ 路径分隔符（Windows 兼容）
+      const segments = cleanPath.split(/[\\/]/)
+      const firstSegment = segments[0]
       if (firstSegment) {
         for (const base of candidateBases) {
-          const baseName = base.endsWith('/') ? base.slice(0, -1).split('/').pop() : base.split('/').pop()
+          // 剥除末尾分隔符后取最后一段作为目录名
+          const baseName = base.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
           if (baseName === firstSegment) {
-            const parentDir = base.endsWith('/')
-              ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
-              : base.slice(0, base.lastIndexOf('/'))
-            return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
+            // 剥除最后一段得到父目录
+            const normalized = base.replace(/[\\/]+$/, '')
+            const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+            const parentDir = lastSep >= 0 ? normalized.slice(0, lastSep) : ''
+            if (!normalized) return cleanPath
+            return parentDir ? `${parentDir}/${cleanPath}` : `/${cleanPath}`
           }
         }
       }
       const base = candidateBases[0]!
-      return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
+      return base.endsWith('/') || base.endsWith('\\') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
     }
     return trimmedPath
   }, [trimmedPath, cleanPath, isAbsolute, candidateBases])
