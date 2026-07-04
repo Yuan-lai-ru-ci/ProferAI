@@ -55,9 +55,9 @@ const DOC_EXTS = new Set(['pdf', 'docx'])
 /** 所有可预览的扩展名集合（用于相对路径检测） */
 const ALL_PREVIEWABLE_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS, ...CODE_EXTS, ...DOC_EXTS])
 
-/** 从路径提取文件名 */
+/** 从路径提取文件名（同时支持 / 和 \） */
 function getFileName(filePath: string): string {
-  const parts = filePath.split('/')
+  const parts = filePath.split(/[\\/]/)
   return parts[parts.length - 1] || filePath
 }
 
@@ -97,7 +97,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const filename = getFileName(cleanPath)
 
-  const isAbsolute = cleanPath.startsWith('/') || /^[A-Z]:\\/.test(cleanPath)
+  const isAbsolute = cleanPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cleanPath)
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
@@ -220,7 +220,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
  *
  * 匹配规则：
  * - macOS/Linux: 以 / 开头，至少两级路径
- * - Windows: 以 C:\ 等盘符开头
+ * - Windows: 以 C:\ 或 C:/ 等盘符开头（大小写盘符均支持，反斜杠和正斜杠均支持）
  */
 export function isAbsoluteFilePath(text: string): boolean {
   const trimmed = text.trim()
@@ -236,8 +236,8 @@ export function isAbsoluteFilePath(text: string): boolean {
     return true
   }
 
-  // Windows 绝对路径
-  if (/^[A-Z]:\\/.test(clean)) return true
+  // Windows 绝对路径（支持反斜杠和正斜杠、大小写盘符）
+  if (/^[A-Za-z]:[\\/]/.test(clean)) return true
 
   return false
 }
