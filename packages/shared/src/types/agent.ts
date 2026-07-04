@@ -82,6 +82,12 @@ export interface AgentWorkspace {
   type?: WorkspaceType
   /** 软删除标记 */
   isDeleted?: boolean
+  /** 软删除时间戳 */
+  deletedAt?: number
+  /** 恢复时间戳 */
+  restoredAt?: number
+  /** 冷静期到期时间（仅 deleted 状态下有意义） */
+  expiresAt?: number
 
   // 团队工作区专属字段（type === 'team' 时有效）
   /** 团队 ID */
@@ -1665,6 +1671,7 @@ export const TEAM_IPC_CHANNELS = {
   SET_WORKSPACE_BRAND: 'team:set-workspace-brand',
   LEAVE_WORKSPACE: 'team:leave-workspace',
   TRANSFER_OWNERSHIP: 'team:transfer-ownership',
+  RESTORE_WORKSPACE: 'team:restore-workspace',
 } as const
 
 /** 技能市场 IPC 通道 */
@@ -1692,6 +1699,8 @@ export const TEAM_FILE_IPC_CHANNELS = {
   GET_MANIFEST: 'team-file:get-manifest',
   CREATE_DIRECTORY: 'team-file:create-directory',
   MOVE: 'team-file:move',
+  RENAME: 'team-file:rename',
+  SEARCH: 'team-file:search',
 } as const
 
 /** 团队服务器配置 */
@@ -1720,7 +1729,7 @@ export interface WorkspaceInvitation {
   inviteeEmail: string
   role: WorkspaceRole
   token: string
-  status: 'pending' | 'accepted' | 'declined' | 'expired'
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled'
   createdAt: number
   expiresAt: number
   acceptedAt?: number
