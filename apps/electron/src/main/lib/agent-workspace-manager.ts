@@ -21,7 +21,7 @@ import {
   parseSkillVersion,
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
-import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceBrand, WorkspaceType } from '@proma/shared'
+import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceType } from '@proma/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -1106,6 +1106,18 @@ function isNewerVersion(a: string, b: string): boolean {
 export function syncTeamWorkspacesToIndex(teamWorkspaces: AgentWorkspace[]): void {
   const index = readIndex()
   let changed = false
+  const serverIds = new Set(teamWorkspaces.map((w) => w.id))
+
+  // 清理：移除本地索引中已不在服务端列表里的团队工作区（被踢出/删除）
+  const before = index.workspaces.length
+  index.workspaces = index.workspaces.filter((w) => {
+    if (w.type === 'team' && !serverIds.has(w.id)) {
+      console.log(`[Agent 工作区] 移除已无权访问的团队工作区: ${w.name} (${w.id})`)
+      changed = true
+      return false
+    }
+    return true
+  })
 
   for (const tw of teamWorkspaces) {
     const existing = index.workspaces.find((w) => w.id === tw.id)
@@ -1126,39 +1138,9 @@ export function syncTeamWorkspacesToIndex(teamWorkspaces: AgentWorkspace[]): voi
 
   if (changed) {
     writeIndex(index)
-    console.log(`[Agent 工作区] 已同步 ${teamWorkspaces.length} 个团队工作区到本地索引`)
+    const removed = before - index.workspaces.length
+    console.log(`[Agent 工作区] 已同步 ${teamWorkspaces.length} 个团队工作区到本地索引${removed > 0 ? `，移除 ${removed} 个` : ''}`)
   }
-}
-
-// ===== 品牌管理 =====
-
-/** 获取工作区品牌配置 */
-export function getWorkspaceBrand(workspaceId: string): WorkspaceBrand | undefined {
-  const index = readIndex()
-  const ws = index.workspaces.find((w) => w.id === workspaceId)
-  return ws?.brand
-}
-
-/** 设置工作区品牌配置 */
-export function setWorkspaceBrand(
-  workspaceId: string,
-  brand: WorkspaceBrand,
-): void {
-  const index = readIndex()
-  const idx = index.workspaces.findIndex((w) => w.id === workspaceId)
-
-  if (idx === -1) {
-    throw new Error(`Agent 工作区不存在: ${workspaceId}`)
-  }
-
-  index.workspaces[idx] = {
-    ...index.workspaces[idx]!,
-    brand,
-    updatedAt: Date.now(),
-  }
-
-  writeIndex(index)
-  console.log(`[Agent 工作区] 已更新品牌配置: ${index.workspaces[idx]!.name}`)
 }
 
 // ===== 工作区类型筛选 =====
