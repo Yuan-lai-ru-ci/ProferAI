@@ -670,8 +670,18 @@ export function TeamWorkspaceView(): React.ReactElement {
   // 重命名
   const startRename = (entry: FileEntry) => {
     setEditingPath(entry.path)
-    setEditingName(entry.name)
-    setTimeout(() => editInputRef.current?.focus(), 50)
+    if (entry.isDirectory) {
+      setEditingName(entry.name)
+    } else {
+      // 文件：只预填文件名本体，扩展名自动保留防止误改格式
+      const dotIdx = entry.name.lastIndexOf('.')
+      setEditingName(dotIdx > 0 ? entry.name.slice(0, dotIdx) : entry.name)
+    }
+    setTimeout(() => {
+      editInputRef.current?.focus()
+      // 选中不含扩展名的部分方便直接替换
+      editInputRef.current?.select()
+    }, 50)
   }
   const cancelRename = () => {
     setEditingPath(null)
@@ -683,16 +693,27 @@ export function TeamWorkspaceView(): React.ReactElement {
     if (!trimmed) { toast.error('文件名不能为空'); return }
     const oldEntry = entries.find((e) => e.path === editingPath)
     if (!oldEntry) { cancelRename(); return }
-    if (trimmed === oldEntry.name) { cancelRename(); return }
+    // 文件自动补回原扩展名，防止误改格式
+    let finalName = trimmed
+    if (!oldEntry.isDirectory) {
+      const oldDot = oldEntry.name.lastIndexOf('.')
+      if (oldDot > 0) {
+        const oldExt = oldEntry.name.slice(oldDot) // 含点，如 ".pdf"
+        if (!trimmed.endsWith(oldExt)) {
+          finalName = trimmed + oldExt
+        }
+      }
+    }
+    if (finalName === oldEntry.name) { cancelRename(); return }
     // 检查同目录下是否有重名
     const parentDir = editingPath.includes('/') ? editingPath.slice(0, editingPath.lastIndexOf('/')) : ''
     const conflict = entries.find((e) => {
       const eDir = e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : ''
-      return eDir === parentDir && e.name === trimmed && e.path !== editingPath
+      return eDir === parentDir && e.name === finalName && e.path !== editingPath
     })
     if (conflict) { toast.error('已存在同名文件'); return }
     const result = await window.electronAPI.teamFile.rename({
-      workspaceId: teamId, path: editingPath, newName: trimmed,
+      workspaceId: teamId, path: editingPath, newName: finalName,
     }).catch(() => null)
     if (result?.success) {
       toast.success('已重命名')
