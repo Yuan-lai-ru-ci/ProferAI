@@ -1049,9 +1049,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.SYSTEM_OPEN_FILE,
     async (_, filePath: string, appName?: string, access?: FileAccessOptions | string[]): Promise<void> => {
-      const { resolve } = await import('node:path')
-      const absPath = resolve(filePath)
       const options = normalizeFileAccessOptions(access)
+      const candidateBasePaths = options?.candidateBasePaths
+      // 相对路径从候选基础目录解析（匹配工作区路径），而非 process.cwd()
+      const { resolveTargetPath } = await import('./lib/file-preview-service')
+      const absPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
       if (!isPathAllowed(absPath, options)) {
         console.warn('[IPC] shell:system-open-file 拒绝越界路径:', absPath)
         return
@@ -1126,8 +1128,8 @@ export function registerIpcHandlers(): void {
     CHANNEL_IPC_CHANNELS.LIST,
     async (): Promise<Channel[]> => {
       try {
-        const { getTeamAuth } = require('./lib/auth-service')
-        const auth = getTeamAuth()
+        const { getTeamAuthWithRefresh } = require('./lib/auth-service')
+        const auth = await getTeamAuthWithRefresh()
         if (auth && isCommercialMode()) {
           await syncChannelsFromServer(auth.baseUrl, auth.token)
         }
@@ -4641,43 +4643,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  /** 将品牌配置应用到所有窗口（图标 + 标题） */
-  function applyBrandToWindows(brand: import('@proma/shared').WorkspaceBrand) {
-    const windows = BrowserWindow.getAllWindows()
-    if (brand.appName) {
-      for (const w of windows) w.setTitle(brand.appName)
-    }
-
-    if (brand.logoUrl) {
-      try {
-        const iconPath = resolveBrandIconPath(brand.logoUrl)
-        if (iconPath) {
-          for (const w of windows) w.setIcon(iconPath)
-          if (process.platform === 'darwin') app.dock?.setIcon(iconPath)
-        }
-      } catch (err) {
-        console.error('[品牌] 设置窗口图标失败:', err)
-      }
-    }
-  }
-
-  let _brandIconDir: string | null = null
-  function resolveBrandIconPath(logoUrl: string): string | null {
-    if (!_brandIconDir) {
-      _brandIconDir = join(tmpdir(), 'proma-brand-icons')
-      if (!existsSync(_brandIconDir)) mkdirSync(_brandIconDir, { recursive: true })
-    }
-    const iconPath = join(_brandIconDir, 'brand-logo.png')
-    if (logoUrl.startsWith('data:')) {
-      const b64 = logoUrl.replace(/^data:image\/\w+;base64,/, '')
-      writeFileSync(iconPath, Buffer.from(b64, 'base64'))
-      return iconPath
-    }
-    // 如果是文件路径且存在
-    if (existsSync(logoUrl)) return logoUrl
-    return null
-  }
-
   /** 登录/注册成功后同步团队工作区到本地索引，并通知渲染进程刷新 */
   async function syncTeamWorkspacesToSidebar() {
     try {
@@ -4790,8 +4755,8 @@ export function registerIpcHandlers(): void {
     removeMember,
     leaveWorkspace,
     transferOwnership,
+    restoreTeamWorkspace,
   } = require('./lib/team-manager')
-  const { getWorkspaceBrand, setWorkspaceBrand } = require('./lib/agent-workspace-manager')
 
   ipcMain.handle(
     TEAM_IPC_CHANNELS.LIST_WORKSPACES,
@@ -4872,28 +4837,6 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(
-    TEAM_IPC_CHANNELS.APPLY_BRANDING,
-    async (_, workspaceId: string) => {
-      const brand = getWorkspaceBrand(workspaceId)
-      if (!brand) return
-      applyBrandToWindows(brand)
-    }
-  )
-
-  ipcMain.handle(
-    TEAM_IPC_CHANNELS.SET_WORKSPACE_BRAND,
-    async (_, workspaceId: string, brand: import('@proma/shared').WorkspaceBrand) => {
-      setWorkspaceBrand(workspaceId, brand)
-      applyBrandToWindows(brand)
-    }
-  )
-
-  ipcMain.handle(
-    TEAM_IPC_CHANNELS.GET_BRANDING,
-    async (_, workspaceId: string) => getWorkspaceBrand(workspaceId)
-  )
-
-  ipcMain.handle(
     TEAM_IPC_CHANNELS.LEAVE_WORKSPACE,
     async (_, workspaceId: string) => { await leaveWorkspace(workspaceId) }
   )
@@ -4904,31 +4847,257 @@ export function registerIpcHandlers(): void {
       { await transferOwnership(input.workspaceId, input.targetUserId) }
   )
 
-  // ===== 技能市场（Phase 3 实现）=====
+  ipcMain.handle(
+    TEAM_IPC_CHANNELS.RESTORE_WORKSPACE,
+    async (_, workspaceId: string) => {
+      await restoreTeamWorkspace(workspaceId)
+      // 恢复后更新侧栏工作区列表
+      syncTeamWorkspacesToSidebar()
+    }
+  )
+
+  // ===== 技能市场（复用团队文件系统）=====
 
   ipcMain.handle(
     SKILL_MARKETPLACE_IPC_CHANNELS.PUBLISH,
-    async (_) => { throw new Error('技能市场功能将在下一版本中提供') }
+    async (_, input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) => {
+      const { readWorkspaceSkillContent } = require('./lib/agent-workspace-manager')
+      const { readFileSync, existsSync, readdirSync, statSync } = require('node:fs')
+      const { join } = require('node:path')
+      const { getAgentWorkspacePath } = require('./lib/config-paths')
+
+      const skillDir = join(getAgentWorkspacePath(input.workspaceSlug), 'skills', input.skillSlug)
+      if (!existsSync(skillDir)) throw new Error(`技能目录不存在: ${skillDir}`)
+
+      // 通过专用接口读取 SKILL.md
+      const skillMdContent = readWorkspaceSkillContent(input.workspaceSlug, input.skillSlug)
+      if (!skillMdContent) throw new Error('SKILL.md 不存在或为空')
+
+      // 上传 SKILL.md
+      const uploadResult = await uploadFile(
+        input.workspaceId, input.workspaceSlug,
+        `_skills/${input.skillSlug}/SKILL.md`,
+        Buffer.from(skillMdContent, 'utf-8'),
+      )
+      if (!uploadResult.success) throw new Error(`上传失败: ${uploadResult.error}`)
+
+      // 上传技能目录下其他文件（如图标、脚本等）
+      if (existsSync(skillDir)) {
+        const uploadDir = async (dir: string, base: string) => {
+          for (const entry of readdirSync(dir)) {
+            const full = join(dir, entry)
+            const rel = join(base, entry).replace(/\\/g, '/')
+            if (entry === 'SKILL.md') continue
+            if (statSync(full).isDirectory()) { await uploadDir(full, rel); continue }
+            await uploadFile(input.workspaceId, input.workspaceSlug,
+              `_skills/${input.skillSlug}/${rel}`, readFileSync(full))
+          }
+        }
+        await uploadDir(skillDir, '')
+      }
+
+      // 推送 sync envelope 通知团队
+      const { enqueueChange } = require('./lib/sync-manager')
+      enqueueChange(input.workspaceId, 'skill', input.skillSlug, 'publish',
+        { workspaceId: input.workspaceId, skillSlug: input.skillSlug })
+
+      return { success: true, skillSlug: input.skillSlug }
+    }
   )
 
   ipcMain.handle(
     SKILL_MARKETPLACE_IPC_CHANNELS.UNPUBLISH,
-    async (_) => { throw new Error('技能市场功能将在下一版本中提供') }
+    async (_, input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) => {
+      const manifest = await fetchFileManifest(input.workspaceId, input.workspaceSlug)
+      if (!manifest) throw new Error('无法获取文件清单')
+
+      const prefix = `_skills/${input.skillSlug}/`
+      const skillFiles = manifest.filter((e: { path: string }) => e.path.startsWith(prefix))
+      for (const f of skillFiles) {
+        await deleteRemoteFile(input.workspaceId, input.workspaceSlug, f.path)
+      }
+
+      // 同步通知
+      const { enqueueChange } = require('./lib/sync-manager')
+      enqueueChange(input.workspaceId, 'skill', input.skillSlug, 'unpublish',
+        { workspaceId: input.workspaceId, skillSlug: input.skillSlug })
+
+      return { success: true, skillSlug: input.skillSlug }
+    }
   )
 
   ipcMain.handle(
     SKILL_MARKETPLACE_IPC_CHANNELS.LIST_TEAM_SKILLS,
-    async (_) => []
+    async (_, workspaceId: string) => {
+      const manifest = await fetchFileManifest(workspaceId)
+      if (!manifest) return []
+
+      // 解析 frontmatter 的简易实现
+      const parseFrontmatter = (md: string) => {
+        const m = md.match(/^---\n([\s\S]*?)\n---/)
+        if (!m) return {}
+        const fm: Record<string, string> = {}
+        for (const line of m[1].split('\n')) {
+          const kv = line.match(/^(\w+):\s*(.*)/)
+          if (kv) fm[kv[1]] = kv[2].trim()
+        }
+        return fm
+      }
+
+      // 按 skillSlug 分组
+      const skillMap = new Map<string, { name: string; description: string; version: string; files: string[]; uploadedBy: string; modifiedAt: number }>()
+      for (const entry of manifest) {
+        if (!entry.path.startsWith('_skills/')) continue
+        const parts = entry.path.slice(8).split('/') // remove '_skills/' prefix
+        const slug = parts[0]
+        if (!slug) continue
+        if (!skillMap.has(slug)) {
+          skillMap.set(slug, { name: slug, description: '', version: '0.0.0', files: [], uploadedBy: '', modifiedAt: 0 })
+        }
+        const skill = skillMap.get(slug)!
+        skill.files.push(entry.path)
+        if (entry.uploadedBy) skill.uploadedBy = entry.uploadedBy
+        if (entry.modifiedAt > skill.modifiedAt) skill.modifiedAt = entry.modifiedAt
+      }
+
+      // 为每个技能下载并解析 SKILL.md 获取元数据
+      const result = []
+      for (const [slug, skill] of skillMap) {
+        const skillMdFile = manifest.find((e: { path: string }) => e.path === `_skills/${slug}/SKILL.md`)
+        if (!skillMdFile) continue
+
+        try {
+          const { downloadFile } = require('./lib/team-file-service')
+          // 临时下载到内存（通过 downloadFile 获取本地路径再读取）
+          const localPath = await (async () => {
+            const { default: tmp } = await import('node:os')
+            const { writeFileSync, unlinkSync } = require('node:fs')
+            const { join } = require('node:path')
+            const { fetch: uFetch } = require('undici')
+            const { getTeamAuth } = require('./lib/auth-service')
+            const auth = getTeamAuth()
+            if (!auth) return null
+            const res = await (uFetch as unknown as typeof fetch)(`${auth.baseUrl}/v1/workspaces/${workspaceId}/files/download/${encodeURIComponent(`_skills/${slug}/SKILL.md`)}`, {
+              headers: { Authorization: `Bearer ${auth.token}` },
+            })
+            if (!res.ok) return null
+            const buf = Buffer.from(await res.arrayBuffer())
+            const tmpPath = join(tmp.tmpdir(), `proma-skill-${slug}.md`)
+            writeFileSync(tmpPath, buf)
+            return tmpPath
+          })()
+          if (localPath) {
+            const { readFileSync } = require('node:fs')
+            const content = readFileSync(localPath, 'utf-8')
+            const fm = parseFrontmatter(content)
+            skill.name = fm.name || slug
+            skill.description = fm.description || ''
+            skill.version = fm.version || '0.0.0'
+          }
+        } catch { /* 解析失败用默认值 */ }
+
+        result.push({
+          slug,
+          name: skill.name,
+          description: skill.description,
+          version: skill.version,
+          publishedBy: skill.uploadedBy,
+          publishedAt: skill.modifiedAt,
+        })
+      }
+
+      return result
+    }
   )
 
   ipcMain.handle(
     SKILL_MARKETPLACE_IPC_CHANNELS.INSTALL_TEAM_SKILL,
-    async (_) => { throw new Error('技能市场功能将在下一版本中提供') }
+    async (_, input: { workspaceId: string; skillSlug: string; targetWorkspaceSlug: string }) => {
+      const { existsSync, mkdirSync, writeFileSync } = require('node:fs')
+      const { join } = require('node:path')
+      const { getAgentWorkspacePath } = require('./lib/config-paths')
+
+      const manifest = await fetchFileManifest(input.workspaceId)
+      if (!manifest) throw new Error('无法获取文件清单')
+
+      const prefix = `_skills/${input.skillSlug}/`
+      const skillFiles = manifest.filter((e: { path: string }) => e.path.startsWith(prefix))
+      if (skillFiles.length === 0) throw new Error('技能不存在于市场中')
+
+      const targetDir = join(getAgentWorkspacePath(input.targetWorkspaceSlug), 'skills', input.skillSlug)
+      if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true })
+
+      for (const f of skillFiles) {
+        const relPath = f.path.slice(prefix.length) // 去掉 _skills/{slug}/ 前缀
+        const localPath = await downloadFile(input.workspaceId, input.targetWorkspaceSlug, f.path)
+        if (!localPath) throw new Error(`下载失败: ${f.path}`)
+        const { readFileSync } = require('node:fs')
+        const destPath = join(targetDir, relPath || 'SKILL.md')
+        const destDir = join(destPath, '..')
+        if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+        writeFileSync(destPath, readFileSync(localPath))
+      }
+
+      // 触发重扫描
+      const { scanSkillsInDir } = require('./lib/agent-workspace-manager')
+      try { scanSkillsInDir(targetDir, input.targetWorkspaceSlug) } catch { /* 重扫描静默 */ }
+
+      return { success: true, skillSlug: input.skillSlug }
+    }
   )
 
   ipcMain.handle(
     SKILL_MARKETPLACE_IPC_CHANNELS.CHECK_FOR_UPDATES,
-    async (_) => []
+    async (_, workspaceSlug: string) => {
+      const { getWorkspaceSkills } = require('./lib/agent-workspace-manager')
+      const localSkills = getWorkspaceSkills(workspaceSlug) || []
+
+      // 只检查有 sourceWorkspaceId 的技能（从市场安装的）
+      const updates = []
+      for (const skill of localSkills) {
+        if (!skill.sourceWorkspaceId) continue
+        try {
+          const manifest = await fetchFileManifest(skill.sourceWorkspaceId)
+          if (!manifest) continue
+          const skillMdFile = manifest.find((e: { path: string }) => e.path === `_skills/${skill.slug}/SKILL.md`)
+          if (!skillMdFile) continue
+
+          // 简易版本解析（通过 download + parse）
+          const { getTeamAuth } = require('./lib/auth-service')
+          const auth = getTeamAuth()
+          if (!auth) continue
+          const { fetch: uFetch } = require('undici')
+          const res = await (uFetch as unknown as typeof fetch)(`${auth.baseUrl}/v1/workspaces/${skill.sourceWorkspaceId}/files/download/${encodeURIComponent(`_skills/${skill.slug}/SKILL.md`)}`, {
+            headers: { Authorization: `Bearer ${auth.token}` },
+          })
+          if (!res.ok) continue
+          const content = await res.text()
+          const m = content.match(/^---\n([\s\S]*?)\n---/)
+          if (!m) continue
+          const fm: Record<string, string> = {}
+          for (const line of m[1].split('\n')) {
+            const kv = line.match(/^(\w+):\s*(.*)/)
+            if (kv) fm[kv[1]] = kv[2].trim()
+          }
+          const remoteVersion = fm.version || '0.0.0'
+
+          // semver 简易比较
+          const compareVersions = (a: string, b: string) => {
+            const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+            for (let i = 0; i < 3; i++) {
+              if ((pa[i] || 0) > (pb[i] || 0)) return 1
+              if ((pa[i] || 0) < (pb[i] || 0)) return -1
+            }
+            return 0
+          }
+          if (compareVersions(remoteVersion, skill.version || '0.0.0') > 0) {
+            updates.push({ ...skill, latestVersion: remoteVersion })
+          }
+        } catch { /* 网络错误跳过 */ }
+      }
+
+      return updates
+    }
   )
 
   // ===== 团队文件操作 =====
@@ -4940,6 +5109,8 @@ export function registerIpcHandlers(): void {
     fetchFileManifest,
     createRemoteDirectory,
     moveRemoteFile,
+    renameRemoteFile,
+    searchFiles,
   } = require('./lib/team-file-service')
 
   ipcMain.handle(
@@ -4977,5 +5148,17 @@ export function registerIpcHandlers(): void {
     TEAM_FILE_IPC_CHANNELS.MOVE,
     async (_, input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) =>
       moveRemoteFile(input.workspaceId, input.fromPath, input.toDir)
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.RENAME,
+    async (_, input: { workspaceId: string; path: string; newName: string }) =>
+      renameRemoteFile(input.workspaceId, input.path, input.newName)
+  )
+
+  ipcMain.handle(
+    TEAM_FILE_IPC_CHANNELS.SEARCH,
+    async (_, workspaceId: string, options: { q: string; page?: number; limit?: number }) =>
+      searchFiles(workspaceId, options)
   )
 }
