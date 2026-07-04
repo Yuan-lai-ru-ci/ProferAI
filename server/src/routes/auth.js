@@ -135,7 +135,8 @@ authRoutes.post('/register', async (c) => {
   const tokenExpiresAt = now + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000
   return c.json({
     accessToken, refreshToken, expiresAt: tokenExpiresAt, relayToken,
-    userId: id, email, displayName: displayName || email.split('@')[0],
+    userId: id, teamAccountId: id, teamEmail: email,
+    email, displayName: displayName || email.split('@')[0],
     commercialMode: COMMERCIAL_MODE, accountType,
     canSelfConfigApi: false, joinedWorkspace: workspaceName || undefined,
   })
@@ -198,6 +199,8 @@ authRoutes.post('/login', async (c) => {
     expiresAt: Date.now() + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000,
     relayToken,
     userId: user.id,
+    teamAccountId: user.id,
+    teamEmail: user.email,
     email: user.email,
     displayName: user.display_name,
     isAdmin: !!user.is_admin,
@@ -212,7 +215,7 @@ authRoutes.post('/refresh', async (c) => {
   const { refreshToken } = await c.req.json()
   if (!refreshToken) return c.json({ error: 'refreshToken 必填' }, 400)
 
-  const user = db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended FROM users WHERE refresh_token = ?').get(refreshToken)
+  const user = db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended, can_self_config_api FROM users WHERE refresh_token = ?').get(refreshToken)
   if (!user) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
 
   if (user.is_suspended) {
@@ -230,6 +233,10 @@ authRoutes.post('/refresh', async (c) => {
   const accountType = user.account_type || 'standard'
   const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, account_type: accountType }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
 
+  // 轮换 refreshToken：生成新 token 替换旧的，延长会话有效期
+  const newRefreshToken = generateRefreshToken()
+  db.prepare('UPDATE users SET refresh_token = ? WHERE id = ?').run(newRefreshToken, user.id)
+
   // 代管模式下回带 relay 令牌，确保客户端始终持有（幂等，不存在则生成）
   const relayToken = COMMERCIAL_MODE ? ensureRelayToken(user.id) : undefined
 
@@ -237,9 +244,12 @@ authRoutes.post('/refresh', async (c) => {
   // 确保管理员改类型后下次 refresh 即生效（不超 1h）
   return c.json({
     accessToken,
+    refreshToken: newRefreshToken,
     expiresAt: Date.now() + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000,
     relayToken,
     userId: user.id,
+    teamAccountId: user.id,
+    teamEmail: user.email,
     email: user.email,
     displayName: user.display_name,
     isAdmin: !!user.is_admin,
