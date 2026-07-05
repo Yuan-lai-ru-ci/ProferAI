@@ -216,7 +216,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
           <span className="truncate max-w-[240px] leading-none">{filename}{lineColSuffix}</span>
         </button>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
+      <ContextMenuContent className="w-48 z-[9999]">
         <ContextMenuItem onClick={handleClick}>
           打开预览
         </ContextMenuItem>
