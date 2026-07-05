@@ -8,10 +8,11 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, createReadStream, createWriteStream, type WriteStream, type RmOptions, cpSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
+import { rmSyncWithRetry, renameWithRetry } from './fs-retry'
 import { join, resolve, dirname } from 'node:path'
 import {
   getAgentSessionsIndexPath,
@@ -44,15 +45,6 @@ import { convertLegacyMessage } from '@proma/session-core'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
-
-// Windows 上 fs.watch 递归监听持有的句柄释放是毫秒级延迟，
-// rmSync/renameSync 可能抛 EBUSY/EPERM/EACCES/ENOTEMPTY，这些错误可重试。
-// 注意：EPERM/EACCES 在非 Windows 平台通常是真实的权限拒绝，不应重试，故按平台区分。
-const RETRYABLE_FS_CODES = new Set(
-  process.platform === 'win32'
-    ? ['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY']
-    : ['EBUSY', 'ENOTEMPTY'],
-)
 
 /**
  * 会话索引文件格式
@@ -520,49 +512,6 @@ export function deleteAgentSession(id: string): void {
 }
 
 /**
- * 在 Windows 上删除被 fs.watch 递归监听的目录时，可能因句柄尚未释放而抛出
- * EBUSY / EPERM / ENOTEMPTY。带退避重试以等待 watcher 释放句柄。
- *
- * 仅对可重试的 Windows 文件占用错误进行重试，其他错误（如权限拒绝）直接抛出。
- *
- * 阻塞策略：优先用 Atomics.wait 同步等待（不占 CPU）；
- * SharedArrayBuffer 不可用时降级为 busy-wait。最坏情况累计 750ms 同步阻塞，
- * 这是为保持函数同步签名所做的取舍。
- */
-function rmSyncWithRetry(target: string, options: RmOptions, maxAttempts = 5): void {
-  let lastErr: unknown
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      rmSync(target, options)
-      return
-    } catch (err) {
-      lastErr = err
-      const code = (err as NodeJS.ErrnoException)?.code
-      if (!code || !RETRYABLE_FS_CODES.has(code)) throw err
-      if (attempt === maxAttempts) break
-      // 指数退避: 50ms, 100ms, 200ms, 400ms — 累计 750ms 内重试 5 次
-      const delayMs = 50 * Math.pow(2, attempt - 1)
-      sleepSync(delayMs)
-    }
-  }
-  throw lastErr
-}
-
-/**
- * 同步阻塞等待指定毫秒数。优先用 Atomics.wait（不占 CPU），
- * SharedArrayBuffer 不可用时降级为 busy-wait。
- */
-function sleepSync(ms: number): void {
-  try {
-    const buf = new Int32Array(new SharedArrayBuffer(4))
-    Atomics.wait(buf, 0, 0, ms)
-  } catch {
-    const start = Date.now()
-    while (Date.now() - start < ms) { /* busy wait fallback */ }
-  }
-}
-
-/**
  * 迁移 Agent 会话到另一个工作区
  *
  * 操作步骤：
@@ -614,30 +563,8 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
             throw cleanupError
           }
         }
-        // 优先使用 renameSync（原子、快速、无需复制）。
-        // 仅在跨设备（EXDEV）或 Windows 上 fs.watch 句柄占用导致 rename 失败时
-        // （EBUSY/EPERM/EACCES，见 RETRYABLE_FS_CODES）降级为 cpSync + rmSyncWithRetry。
-        try {
-          renameSync(srcDir, destDir)
-        } catch (renameErr) {
-          const code = (renameErr as NodeJS.ErrnoException)?.code
-          // 非跨设备且非可重试的文件占用错误 → 真实错误，直接抛出
-          if (code !== 'EXDEV' && !(code && RETRYABLE_FS_CODES.has(code))) throw renameErr
-          // 降级：复制后删除源目录；rmSync 仍可能因 watcher 句柄未释放抛错，带退避重试
-          try {
-            cpSync(srcDir, destDir, { recursive: true, force: true })
-            rmSyncWithRetry(srcDir, { recursive: true, force: true })
-          } catch (moveErr) {
-            // cpSync 成功但 rmSync 失败：回滚 destDir 副本，保证失败语义干净
-            // （索引未更新，下次重试时 destDir 不应残留）
-            try {
-              rmSyncWithRetry(destDir, { recursive: true, force: true })
-            } catch (rollbackErr) {
-              console.warn(`[Agent 会话] 回滚目标目录失败:`, rollbackErr)
-            }
-            throw moveErr
-          }
-        }
+        // renameWithRetry：优先 renameSync（原子），跨设备或句柄占用时自动降级 cpSync + rmSyncWithRetry
+        renameWithRetry(srcDir, destDir)
         console.log(`[Agent 会话] 已移动工作目录: ${srcDir} → ${destDir}`)
       }
     }
