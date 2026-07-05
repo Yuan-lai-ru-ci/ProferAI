@@ -1950,7 +1950,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       open={moveTargetId !== null}
       onOpenChange={(open) => { if (!open) setMoveTargetId(null) }}
       sessionId={moveTargetId ?? ''}
-      currentWorkspaceId={moveSourceWorkspaceId ?? undefined}
+      sourceWorkspaceId={moveSourceWorkspaceId ?? undefined}
       workspaces={workspaces}
       onMoved={handleSessionMoved}
     />
