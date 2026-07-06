@@ -30,6 +30,7 @@ import {
   conversationContextLengthAtom,
   conversationThinkingEnabledAtom,
   conversationParallelModeAtom,
+  agentSideChatMapAtom,
 } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
@@ -739,6 +740,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setConvPromptId = useSetAtom(conversationPromptIdAtom)
   const setPreviewPanelOpen = useSetAtom(previewPanelOpenMapAtom)
   const setPreviewFile = useSetAtom(previewFileMapAtom)
+  const setAgentSideChatMap = useSetAtom(agentSideChatMapAtom)
   const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
   const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
   const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
@@ -764,6 +766,18 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setConvPromptId(deleteKey)
     setPreviewPanelOpen(deleteKey)
     setPreviewFile(deleteKey)
+    setAgentSideChatMap((prev) => {
+      let changed = false
+      const map = new Map(prev)
+      if (map.delete(id)) changed = true
+      for (const [sessionId, conversationId] of map) {
+        if (conversationId === id) {
+          map.delete(sessionId)
+          changed = true
+        }
+      }
+      return changed ? map : prev
+    })
     setDiffPanelTab(deleteKey)
     setDiffRefreshVersion(deleteKey)
     setDiffUnseen(deleteKey)

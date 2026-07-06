@@ -22,7 +22,7 @@ import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
-const MAX_RIGHT_PANEL_WIDTH = 420
+const MAX_RIGHT_PANEL_WIDTH = 560
 
 function clampRightPanelWidth(width: number): number {
   return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, width))
