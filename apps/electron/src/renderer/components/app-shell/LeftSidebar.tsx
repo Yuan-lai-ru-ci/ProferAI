@@ -1833,7 +1833,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
 
   /** Agent 归档会话按日期分组（跨项目），含委派树 */
   const archivedAgentSessionTrees = React.useMemo(() => {
-    const archived = agentSessions.filter((s) => s.archived && !draftSessionIds.has(s.id))
+    const archived = sortAgentSessionsByUpdatedAtDesc(
+      agentSessions.filter((s) => s.archived && !draftSessionIds.has(s.id))
+    )
     const trees = buildAgentSessionTrees(archived)
     // groupByDate 要求 T extends { updatedAt: number }，AgentSessionTreeItem 不直接满足
     const wrapped = trees.map((tree) => ({ updatedAt: tree.session.updatedAt, tree }))
