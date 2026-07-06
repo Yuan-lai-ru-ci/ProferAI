@@ -293,6 +293,8 @@ function SkillsSidebarEntry({ count, updateCount, active, onClick }: SkillsSideb
 export interface LeftSidebarProps {
   /** 可选固定宽度，默认使用 CSS 响应式宽度 */
   width?: number
+  /** 拖拽过程中禁用 CSS transition，保证即时响应 */
+  noTransition?: boolean
 }
 
 /** 日期分组标签 */
@@ -617,7 +619,7 @@ function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
   return next
 }
 
-export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
+export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   const setAgentSkillsTab = useSetAtom(agentSkillsTabAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
@@ -2065,7 +2067,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     return (
       <div
         className={cn(
-          'relative h-full flex flex-col items-center transition-[width] duration-300 px-2',
+          'relative h-full flex flex-col items-center px-2',
+          !noTransition && 'transition-[width] duration-300',
           isClassic
             ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
             : 'bg-[hsl(var(--sidebar-surface))]'
@@ -2290,7 +2293,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   return (
     <div
       className={cn(
-        'relative h-full flex flex-col transition-[width] duration-300',
+        'relative h-full flex flex-col',
+        !noTransition && 'transition-[width] duration-300',
         isClassic
           ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
           : 'bg-[hsl(var(--sidebar-surface))]'
