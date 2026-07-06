@@ -893,7 +893,7 @@ if (isQuickTaskWindow) {
       <React.StrictMode>
         <ThemeInitializer />
         <VoiceDictationApp />
-        <Toaster position="top-right" />
+        <Toaster position="bottom-right" />
       </React.StrictMode>
     )
   })
@@ -904,7 +904,7 @@ if (isQuickTaskWindow) {
         <ThemeInitializer />
         <MarkdownFontSizeInitializer />
         <DetachedPreviewApp />
-        <Toaster position="top-right" />
+        <Toaster position="bottom-right" />
       </React.StrictMode>
     )
   })
@@ -930,7 +930,7 @@ if (isQuickTaskWindow) {
       <GlobalShortcuts />
       <TabSwitcher />
       <App />
-      <Toaster position="top-right" />
+      <Toaster position="bottom-right" />
     </React.StrictMode>
   )
 }
