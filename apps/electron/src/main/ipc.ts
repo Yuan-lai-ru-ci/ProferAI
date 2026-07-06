@@ -2384,9 +2384,11 @@ export function registerIpcHandlers(): void {
         try {
           const response = await fetch('https://api.tavily.com/search', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${credentials.apiKey}`,
+            },
             body: JSON.stringify({
-              api_key: credentials.apiKey,
               query: 'test connection',
               search_depth: 'basic',
               max_results: 1,
