@@ -154,7 +154,7 @@ export function MainArea(): React.ReactElement {
               视觉上像"内容从右向左推送"。让左侧瞬间变宽，由右侧 absolute 滑出动画
               覆盖期内呈现"被剥离"的视觉效果。 */}
           <div
-            className="flex flex-col min-w-0 h-full relative mr-0.5"
+            className={cn('flex flex-col min-w-0 h-full relative', showPreview && 'mr-0.5')}
             style={leftFlexStyle}
           >
             {activeView === 'automations' ? (
