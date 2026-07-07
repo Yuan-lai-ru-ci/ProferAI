@@ -273,3 +273,6 @@ export const thinkingExpandedAtom = atomWithStorage<boolean>(
   'proma-thinking-expanded',
   false,
 )
+
+/** Agent 会话 → 右侧 Chat 对话 ID 映射（Agent 右侧问答 Tab 使用） */
+export const agentSideChatMapAtom = atom<Map<string, string>>(new Map())
