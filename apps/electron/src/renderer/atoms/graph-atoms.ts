@@ -33,6 +33,7 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
 
   const states = get(agentStreamingStatesAtom)
   const state = states.get(sessionId)
+  const persistedGraph = get(persistedGraphAtom)
 
   if (state) {
     const activities: ToolActivity[] = state.toolActivities
@@ -41,13 +42,41 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
     )
     if (taskActivities.length > 0) {
       const taskItems = aggregateTaskItems(taskActivities, false)
-      if (taskItems.length > 0) return deriveGraph(taskItems)
+      if (taskItems.length > 0) {
+        const derivedGraph = deriveGraph(taskItems)
+        // 合并持久化图中的 session 关联信息（sdkSessionId / delegationId），
+        // 这些字段只在 JSONL 的 task_session_linked 事件中存在，ToolActivity 不会携带。
+        if (persistedGraph) {
+          return mergeSessionLinks(derivedGraph, persistedGraph)
+        }
+        return derivedGraph
+      }
     }
   }
 
   // 流式已结束或无流式活动 → 回退到 IPC 加载的持久化数据
-  return get(persistedGraphAtom)
+  return persistedGraph
 })
+
+/**
+ * 将持久化图中的 session 关联字段合并到流式派生图中。
+ * 流式派生图只有基础字段（id/subject/status），缺少 sdkSessionId/delegationId。
+ */
+function mergeSessionLinks(derived: TaskGraph, persisted: TaskGraph): TaskGraph {
+  const nodes = { ...derived.nodes }
+  for (const [id, pNode] of Object.entries(persisted.nodes)) {
+    const dNode = nodes[id]
+    if (!dNode) continue
+    if (pNode.sdkSessionId || pNode.delegationId) {
+      nodes[id] = {
+        ...dNode,
+        ...(pNode.sdkSessionId && { sdkSessionId: pNode.sdkSessionId }),
+        ...(pNode.delegationId && { delegationId: pNode.delegationId }),
+      }
+    }
+  }
+  return { ...derived, nodes }
+}
 
 /** Graph 摘要（供 ToolbarGraphButton 使用） */
 export const currentGraphSummaryAtom = atom<GraphSummary | null>((get) => {
