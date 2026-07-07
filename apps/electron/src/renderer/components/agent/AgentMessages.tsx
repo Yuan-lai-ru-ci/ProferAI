@@ -37,6 +37,7 @@ import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extr
 import { buildLiveGroupSet } from './live-group-set'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
+import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import type { AgentEventUsage, RetryAttempt, SDKMessage } from '@proma/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 
@@ -403,6 +404,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
   // 空会话无需淡入过渡（无消息则无滚动位置问题）
   const [skipFadeIn, setSkipFadeIn] = React.useState(false)
   const prevSessionIdRef = React.useRef<string | null>(null)
+  const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
     if (sessionId !== prevSessionIdRef.current) {
@@ -610,6 +612,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
   return (
     <BasePathsProvider basePaths={attachedDirs}>
+    <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
     <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
       <ConversationContent>
@@ -705,6 +708,8 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
         <StickyUserMessage userMessages={allUserMessagesData} />
       )}
     </Conversation>
+      <AgentHistorySelectionLayer sessionId={sessionId} rootRef={historySelectionRootRef} />
+    </div>
     </BasePathsProvider>
   )
 }

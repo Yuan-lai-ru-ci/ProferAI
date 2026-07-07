@@ -7,26 +7,35 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { LeftSidebar } from './LeftSidebar'
 import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
 import { TeamWorkspaceView } from '@/components/agent/TeamWorkspaceView'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
+import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { WindowControls } from '@/components/WindowControls'
 import { detectIsWindows } from '@/lib/platform'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
-const MAX_RIGHT_PANEL_WIDTH = 420
+const MAX_RIGHT_PANEL_WIDTH = 560
+
+const MIN_LEFT_SIDEBAR_WIDTH = 300
+const MAX_LEFT_SIDEBAR_WIDTH = 420
 
 function clampRightPanelWidth(width: number): number {
   return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, width))
+}
+
+function clampLeftSidebarWidth(width: number): number {
+  return Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, width))
 }
 
 export interface AppShellProps {
@@ -40,6 +49,48 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
   const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
+  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
+
+  // ===== 小窗口自动折叠右侧面板 =====
+  const AUTO_HIDE_PANEL_WIDTH = 900
+  const [windowWidth, setWindowWidth] = React.useState(() => window.innerWidth)
+  const userOverrodeAutoHideRef = React.useRef(false)
+  const prevWidthRef = React.useRef<number | null>(null)
+  const prevIsPanelOpenRef = React.useRef(isPanelOpen)
+
+  React.useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // 窗口恢复到阈值以上时，重置用户手动覆盖标记
+  React.useEffect(() => {
+    if (windowWidth >= AUTO_HIDE_PANEL_WIDTH) {
+      userOverrodeAutoHideRef.current = false
+    }
+  }, [windowWidth])
+
+  // 小窗口自动折叠 / 用户手动展开后不再自动折叠
+  React.useEffect(() => {
+    const prevWidth = prevWidthRef.current
+    const isFirstRender = prevWidth === null
+    // 仅在窗口从大→小过渡（或首次渲染窗口就小）时自动折叠
+    const shouldAutoClose = isFirstRender || prevWidth >= AUTO_HIDE_PANEL_WIDTH
+
+    if (shouldAutoClose && windowWidth < AUTO_HIDE_PANEL_WIDTH && isPanelOpen && !userOverrodeAutoHideRef.current) {
+      setSidePanelOpen(false)
+    }
+
+    // 检测用户在小窗口下手动展开了面板（从关 → 开），设置覆盖标记
+    if (windowWidth < AUTO_HIDE_PANEL_WIDTH && isPanelOpen && !prevIsPanelOpenRef.current) {
+      userOverrodeAutoHideRef.current = true
+    }
+
+    prevWidthRef.current = windowWidth
+    prevIsPanelOpenRef.current = isPanelOpen
+  }, [windowWidth, isPanelOpen, setSidePanelOpen])
+
   const automationForm = useAtomValue(automationFormAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -51,26 +102,14 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const showTeamWorkspaceView = isTeamWorkspace && appMode === 'agent' && activeView !== 'agent-skills'
 
-  // 品牌 CSS 注入：从 localStorage 读取品牌配置并应用 CSS 变量
+  // 窗口标题设为用户名
   React.useEffect(() => {
     try {
-      const raw = localStorage.getItem('proma-brand-overrides')
+      const raw = localStorage.getItem('proma-user-profile')
       if (raw) {
-        const brand = JSON.parse(raw)
-        if (brand.primaryColor) {
-          document.documentElement.style.setProperty('--primary', brand.primaryColor)
-        }
-        if (brand.appName) {
-          document.title = brand.appName
-        }
-        if (brand.customCss) {
-          let styleEl = document.getElementById('brand-custom-css') as HTMLStyleElement | null
-          if (!styleEl) {
-            styleEl = document.createElement('style')
-            styleEl.id = 'brand-custom-css'
-            document.head.appendChild(styleEl)
-          }
-          styleEl.textContent = brand.customCss
+        const profile = JSON.parse(raw)
+        if (profile?.userName) {
+          document.title = profile.userName
         }
       }
     } catch { /* ignore */ }
@@ -116,6 +155,59 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     document.addEventListener('mouseup', onMouseUp)
   }, [clampedRightPanelWidth, setRightPanelWidth])
 
+  // 左侧边栏可拖拽宽度
+  const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
+  const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom)
+  const leftDragging = React.useRef(false)
+  const [isDraggingLeftSidebar, setIsDraggingLeftSidebar] = React.useState(false)
+  const clampedLeftSidebarWidth = clampLeftSidebarWidth(leftSidebarWidth)
+
+  React.useEffect(() => {
+    if (clampedLeftSidebarWidth !== leftSidebarWidth) {
+      setLeftSidebarWidth(clampedLeftSidebarWidth)
+    }
+  }, [clampedLeftSidebarWidth, leftSidebarWidth, setLeftSidebarWidth])
+
+  const handleLeftSidebarMouseDown = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    leftDragging.current = true
+    setIsDraggingLeftSidebar(true)
+    const startX = e.clientX
+    const startWidth = clampedLeftSidebarWidth
+    let latestClientX = startX
+    let rafId = 0
+
+    const applyWidth = () => {
+      const delta = latestClientX - startX
+      setLeftSidebarWidth(clampLeftSidebarWidth(startWidth + delta))
+    }
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!leftDragging.current) return
+      latestClientX = ev.clientX
+      if (rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        applyWidth()
+      })
+    }
+
+    const onMouseUp = () => {
+      leftDragging.current = false
+      setIsDraggingLeftSidebar(false)
+      if (rafId) {
+        cancelAnimationFrame(rafId)
+        rafId = 0
+      }
+      applyWidth()
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [clampedLeftSidebarWidth, setLeftSidebarWidth])
+
   return (
     <AppShellProvider value={contextValue}>
       {/* 可拖动标题栏区域，用于窗口拖动。
@@ -134,9 +226,18 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       {!showTeamWorkspaceView && <WindowControls />}
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
-        {/* 左侧边栏：可折叠，带圆角和内边距 */}
-        <div className="p-2 pr-0 relative z-[60] crt-sidebar">
-          <LeftSidebar />
+        {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
+        <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
+          <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
+          {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
+          {!sidebarCollapsed && (
+            <div
+              className={cn(
+                'absolute right-0 top-0 bottom-0 w-4 translate-x-1/2 cursor-col-resize hover:bg-primary/5 active:bg-primary/50 transition-colors z-20'
+              )}
+              onMouseDown={handleLeftSidebarMouseDown}
+            />
+          )}
         </div>
         {!isClassic && (
           <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-border/80 dark:bg-border/70" />

@@ -213,6 +213,8 @@ function SkillsSidebarEntry({ count, updateCount, active, onClick }: SkillsSideb
 export interface LeftSidebarProps {
   /** 可选固定宽度，默认使用 CSS 响应式宽度 */
   width?: number
+  /** 拖拽过程中禁用 CSS transition，保证即时响应 */
+  noTransition?: boolean
 }
 
 /** 日期分组标签 */
@@ -511,7 +513,7 @@ function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
   return next
 }
 
-export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
+export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   const authStatus = useAtomValue(authStatusAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
@@ -575,6 +577,24 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const [currentWorkspaceId, setCurrentWorkspaceId] = useAtom(currentAgentWorkspaceIdAtom)
   const [workspaces, setWorkspaces] = useAtom(agentWorkspacesAtom)
+  /** 工作区切换高亮：记录最近一次切换的时间戳，用于短暂高亮目标工作区 */
+  const [workspaceSwitchTs, setWorkspaceSwitchTs] = React.useState(0)
+  const prevWorkspaceIdRef = React.useRef(currentWorkspaceId)
+  if (currentWorkspaceId !== prevWorkspaceIdRef.current && currentWorkspaceId) {
+    prevWorkspaceIdRef.current = currentWorkspaceId
+    // 延迟到下一帧设置，避免在 render 中 setState
+    setTimeout(() => setWorkspaceSwitchTs(Date.now()), 0)
+  }
+  /** 稳定 setter：工作区内容未变时保留旧引用，避免级联重渲染 */
+  const setWorkspacesStable = React.useCallback((next: AgentWorkspace[]) => {
+    setWorkspaces((prev) => {
+      if (prev.length !== next.length) return next
+      const same = prev.every((w, i) =>
+        w.id === next[i].id && w.updatedAt === next[i].updatedAt && w.isDeleted === next[i].isDeleted
+      )
+      return same ? prev : next
+    })
+  }, [setWorkspaces])
   const setMode = useSetAtom(appModeAtom)
 
   // 当前项目能力（MCP + Skill 计数）
@@ -809,22 +829,16 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   // 监听团队工作区同步事件，登录/注册成功后自动刷新侧边栏
   React.useEffect(() => {
     const unsub = window.electronAPI.team.onWorkspacesSynced(() => {
-      window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
+      window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
     })
     return unsub
-  }, [setWorkspaces])
+  }, [setWorkspacesStable])
 
   // authStatus 变化时刷新工作区（登录/登出）
-  // 立即刷新 + 500ms 后二次刷新兜底，防止 syncTeamWorkspacesToIndex 未完成导致的短暂空窗
+  // 仅立即刷新一次，不再 500ms 二次刷新——syncTeamWorkspacesToIndex 在 IPC 端已保证原子写入
   React.useEffect(() => {
-    window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
-    if (authStatus.isLoggedIn) {
-      const timer = setTimeout(() => {
-        window.electronAPI.listAgentWorkspaces().then(setWorkspaces).catch(console.error)
-      }, 500)
-      return () => clearTimeout(timer)
-    }
-  }, [authStatus.isLoggedIn, setWorkspaces])
+    window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
+  }, [authStatus.isLoggedIn, setWorkspacesStable])
 
   /** 打开自动任务列表 */
   const handleOpenAutomations = React.useCallback((): void => {
@@ -1086,16 +1100,13 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, workspaceId))
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
 
-    // 团队工作区：自动选中或创建一个 Agent 会话
-    const ws = workspaces.find((w) => w.id === workspaceId)
-    if (ws?.type === 'team') {
-      const existing = agentSessions.find((s) => !s.archived && s.workspaceId === workspaceId)
-      if (existing) {
-        setCurrentAgentSessionId(existing.id)
-        openSessionTimerRef.current = setTimeout(() => openSession('agent', existing.id, existing.title), 50)
-      }
+    // 自动选中该工作区最近的一个未归档会话（所有类型的工作区统一行为）
+    const existing = agentSessions.find((s) => !s.archived && s.workspaceId === workspaceId)
+    if (existing) {
+      setCurrentAgentSessionId(existing.id)
+      openSessionTimerRef.current = setTimeout(() => openSession('agent', existing.id, existing.title), 50)
     }
-  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView, workspaces, agentSessions, setCurrentAgentSessionId, openSession])
+  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView, agentSessions, setCurrentAgentSessionId, openSession])
 
   const canDeleteWorkspace = React.useCallback(
     (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
@@ -1816,7 +1827,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     return (
       <div
         className={cn(
-          'relative h-full flex flex-col items-center transition-[width] duration-300 px-2',
+          'relative h-full flex flex-col items-center px-2',
+          !noTransition && 'transition-[width] duration-300',
           isClassic
             ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
             : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
@@ -2036,7 +2048,8 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   return (
     <div
       className={cn(
-        'relative h-full flex flex-col transition-[width] duration-300',
+        'relative h-full flex flex-col',
+        !noTransition && 'transition-[width] duration-300',
         isClassic
           ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
           : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
@@ -2352,6 +2365,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
                   onTogglePin={handleTogglePinAgent}
                   onToggleArchive={handleToggleArchiveAgent}
                   onToggleDelegationParent={handleToggleDelegationParent}
+                  workspaceSwitchTs={workspaceSwitchTs}
                 />
               ))}
             </div>
@@ -3310,11 +3324,14 @@ interface AgentProjectGroupItemProps {
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
   onToggleDelegationParent: (id: string) => void
+  /** 工作区最近一次切换的时间戳，用于短暂高亮 */
+  workspaceSwitchTs?: number
 }
 
 const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   group,
   currentWorkspaceId,
+  workspaceSwitchTs = 0,
   expanded,
   collapsed,
   extraCount,
@@ -3346,6 +3363,8 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   onToggleDelegationParent,
 }: AgentProjectGroupItemProps): React.ReactElement {
   const isCurrent = group.workspace.id === currentWorkspaceId
+  /** 最近 1.2 秒内切换到此工作区时，短暂高亮 */
+  const justSwitchedTo = isCurrent && workspaceSwitchTs > 0 && Date.now() - workspaceSwitchTs < 1200
 
   const [renamingWorkspace, setRenamingWorkspace] = React.useState(false)
   const [workspaceEditName, setWorkspaceEditName] = React.useState('')
@@ -3482,6 +3501,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               isCurrent
                 ? 'agent-project-item-current text-foreground'
                 : 'text-foreground/65 hover:text-foreground/88',
+              justSwitchedTo && 'animate-workspace-highlight bg-primary/15 rounded-md',
             )}
           >
             <FolderOpen size={13} className="flex-shrink-0 text-foreground/40" />
