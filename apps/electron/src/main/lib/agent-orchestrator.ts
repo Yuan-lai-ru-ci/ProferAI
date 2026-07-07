@@ -389,23 +389,6 @@ export class AgentOrchestrator {
   }
 
   /**
-   * 注入 SDK 内置生图工具（Nano Banana）
-   */
-  private async injectNanoBananaTools(
-    sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
-    mcpServers: Record<string, Record<string, unknown>>,
-    sessionId: string,
-    agentCwd?: string,
-  ): Promise<void> {
-    try {
-      const { injectNanoBananaMcpServer } = await import('./chat-tools/nano-banana-mcp')
-      await injectNanoBananaMcpServer(sdk, mcpServers, sessionId, agentCwd)
-    } catch (err) {
-      console.error(`[Agent 编排] 注入 Nano Banana MCP 失败:`, err)
-    }
-  }
-
-  /**
    * 生成 Agent 会话标题
    *
    * 使用 Provider 适配器系统，支持所有渠道。任何错误返回 null。
@@ -681,7 +664,8 @@ export class AgentOrchestrator {
 
     let apiKey: string
     let agentUrl = (channel as any).agentBaseUrl || channel.baseUrl
-    const forceBearerAuth = (isCommercialBuild() || isCommercialMode()) && !canSelfConfig()
+    const isOfficialChannel = channel.id?.startsWith('newapi-')
+    const forceBearerAuth = (isCommercialBuild() || isCommercialMode()) && isOfficialChannel
     if (forceBearerAuth) {
       const auth = await getTeamAuthWithRefresh()
       if (!auth) {
@@ -925,10 +909,9 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 将直接使用已保存的 sdkSessionId 进行 resume: ${existingSdkSessionId}`)
       }
 
-      // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
+      // 10. 构建 MCP 服务器配置 + 记忆工具 + 自定义工具（生图工具仅 Chat 模式可用）
       const mcpServers = this.buildMcpServers(workspaceSlug)
       await this.injectMemoryTools(sdk, mcpServers)
-      await this.injectNanoBananaTools(sdk, mcpServers, sessionId, agentCwd)
       await injectAutomationMcpServer(sdk, mcpServers, {
         sessionId,
         channelId,
@@ -1291,14 +1274,18 @@ export class AgentOrchestrator {
           console.error(`[Agent SDK stderr] ${data}`)
         },
         onSessionId: (sdkSessionId: string) => {
+          // 仅在 session_id 真正变化时才持久化。SDK v2 几乎每条消息都会回调 onSessionId，
+          // 旧逻辑误用「初始快照后永不更新」的 existingSdkSessionId 作比较（回调里更新的是
+          // capturedSdkSessionId），导致新会话每条消息都全量读写会话索引（readIndex + 原子写 +
+          // 备份），再叠加一次读回验证。历史会话多 + 多会话并发时引发同步 fsync 风暴，周期性
+          // 卡死主进程事件循环。capturedSdkSessionId 已初始化为 existingSdkSessionId，并在
+          // session-not-found 重试时与其同步重置，比较它即可正确判定「真正变化」。
+          const isNewSessionId = sdkSessionId !== capturedSdkSessionId
           capturedSdkSessionId = sdkSessionId
-          if (sdkSessionId !== existingSdkSessionId) {
+          if (isNewSessionId) {
             try {
               updateAgentSessionMeta(sessionId, { sdkSessionId })
               console.log(`[Agent 编排] 已保存 SDK session_id: ${sdkSessionId}`)
-              // 验证保存是否成功
-              const verifyMeta = getAgentSessionMeta(sessionId)
-              console.log(`[Agent 编排] 验证读回: sdkSessionId=${verifyMeta?.sdkSessionId || '空'}`)
             } catch (err) {
               console.error(`[Agent 编排] 保存 SDK session_id 失败:`, err)
             }
@@ -1905,15 +1892,15 @@ export class AgentOrchestrator {
 
           failRun(userFacingError, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
-          // 根据错误类型决定是否保留 sdkSessionId
-          const shouldClearSession = !apiError || apiError.statusCode >= 500
-          if (existingSdkSessionId && shouldClearSession) {
-            try {
-              updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
-              console.log(`[Agent 编排] 已清除失效的 sdkSessionId`)
-            } catch { /* 忽略 */ }
-          } else if (existingSdkSessionId && !shouldClearSession) {
-            console.log(`[Agent 编排] 保留 sdkSessionId (API 错误 ${apiError?.statusCode})`)
+          // 保留 sdkSessionId，确保下一轮能继续 resume（修复 #903）。
+          // 此终止分支只会被「非 session-not-found」的错误命中（session 失效已在上文
+          // isSessionNotFoundError 分支单独处理并切到恢复模式）。网络断连、服务端 5xx、
+          // 未知错误都不代表 SDK 会话本身失效——其完整历史 JSONL 仍保存在
+          // ~/.proma/sdk-config/projects/.../{sdkSessionId}.jsonl 中，依旧可 resume。
+          // 此前这里对 `!apiError`（如普通断连解析不出状态码）一律清除指针，导致下一轮
+          // 退化为「仅回填最近 N 条」的冷启动，上下文从满载骤降（#903）。
+          if (existingSdkSessionId) {
+            console.log(`[Agent 编排] 保留 sdkSessionId 以便下一轮 resume（错误未表明会话失效）`)
           }
 
           return
