@@ -124,7 +124,7 @@ import {
   removeQueuedMessage,
   restoreQueuedMessageToFront,
 } from '@/lib/agent-message-queue'
-import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
+import type { AgentQueuedAttachment, AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -132,6 +132,12 @@ const LONG_TEXT_ATTACHMENT_THRESHOLD = 2000
 
 interface OptimisticSDKUserMessage extends SDKUserMessage {
   _createdAt: number
+}
+
+interface PreparedAgentAttachment {
+  referenceBlock: string
+  attachments: AgentQueuedAttachment[]
+  additionalDirectories: string[]
 }
 
 function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now()): SDKMessage {
@@ -757,9 +763,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     text: string,
     mentions: ReturnType<typeof parseQueuedMessageMentions>,
     channelId: string,
+    queuedAdditionalDirectories: string[] = [],
   ): Promise<void> => {
     const streamStartedAt = Date.now()
     const additionalDirectoriesForRun = createBaseAdditionalDirectories()
+    for (const dir of queuedAdditionalDirectories) {
+      additionalDirectoriesForRun.add(dir)
+    }
     setStreamingStates((prev) => {
       const map = new Map(prev)
       const existing = prev.get(sessionId)
@@ -833,7 +843,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return
     }
 
-    await startQueuedMessageRun(payload.rawText, payload.mentions, agentChannelId)
+    await startQueuedMessageRun(payload.rawText, payload.mentions, agentChannelId, message.additionalDirectories)
   }, [
     agentChannelId,
     backgroundWaiting,
@@ -1062,6 +1072,151 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
   }, [sessionId, setAttachedFilesMap])
+
+  const preparePendingFilesForSend = React.useCallback(async (
+    files: AgentPendingFile[],
+    additionalDirectoriesForRun: Set<string>,
+  ): Promise<PreparedAgentAttachment | null> => {
+    if (files.length === 0) {
+      return { referenceBlock: '', attachments: [], additionalDirectories: [] }
+    }
+
+    const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
+    if (!workspace) {
+      toast.warning('暂时无法发送附件', {
+        description: '当前 Agent 会话没有绑定有效工作区。请在顶部选择工作区，或新建 Agent 会话后重新上传。',
+      })
+      return null
+    }
+
+    // 区分三类：
+    // - 剪贴板临时草稿（isClipboardDraft）：sourcePath 指向 os.tmpdir，可能被系统清理，
+    //   需读取最新内容（含预览面板 autosave 的编辑）拷贝进 session 目录持久化
+    // - 侧面板真实文件（仅 sourcePath）：原地引用，不复制
+    // - 新上传文件（无 sourcePath）：从内存数据保存到 session 目录
+    const existingFiles = files.filter((f) => f.sourcePath && !f.isClipboardDraft)
+    const clipboardDrafts = files.filter((f) => f.sourcePath && f.isClipboardDraft)
+    const newFiles = files.filter((f) => !f.sourcePath)
+
+    const allRefs: Array<{ filename: string; targetPath: string; sourceFile: AgentPendingFile }> = []
+    const queuedAdditionalDirectories = new Set<string>()
+
+    // 已有路径的文件直接引用
+    for (const f of existingFiles) {
+      const sourcePath = f.sourcePath!
+      allRefs.push({ filename: f.filename, targetPath: sourcePath, sourceFile: f })
+      const parentPath = getFileParentPath(sourcePath)
+      if (parentPath) {
+        additionalDirectoriesForRun.add(parentPath)
+        queuedAdditionalDirectories.add(parentPath)
+      }
+    }
+
+    // 剪贴板草稿：读取临时文件最新内容，转为待保存数据
+    const draftFilesToSave: Array<{ sourceFile: AgentPendingFile; filename: string; data: string }> = []
+    const staleDraftFiles: string[] = []
+    for (const f of clipboardDrafts) {
+      const sourcePath = f.sourcePath!
+      const parentPath = getFileParentPath(sourcePath)
+      try {
+        const read = await window.electronAPI.resolveAndReadFile(sourcePath, {
+          sessionId,
+          candidateBasePaths: parentPath ? [parentPath] : undefined,
+        })
+        if (!read) {
+          staleDraftFiles.push(f.filename)
+          continue
+        }
+        const data = await fileToBase64(new File([read.content], f.filename, { type: f.mediaType }))
+        draftFilesToSave.push({ sourceFile: f, filename: f.filename, data })
+      } catch (error) {
+        console.error('[AgentView] 读取剪贴板草稿失败:', error)
+        staleDraftFiles.push(f.filename)
+      }
+    }
+    if (staleDraftFiles.length > 0) {
+      toast.error('附件数据已失效', {
+        description: `请移除后重新粘贴：${staleDraftFiles.join('、')}`,
+      })
+      return null
+    }
+
+    // 新上传的文件 + 剪贴板草稿一并保存到 session 目录
+    const inMemoryFilesToSave = newFiles.map((f) => ({
+      sourceFile: f,
+      filename: f.filename,
+      data: window.__pendingAgentFileData?.get(f.id) || '',
+    }))
+    const missingDataFiles = inMemoryFilesToSave.filter((f) => !f.data).map((f) => f.filename)
+    if (missingDataFiles.length > 0) {
+      toast.error('附件数据已失效', {
+        description: `请移除后重新添加文件：${missingDataFiles.join('、')}`,
+      })
+      return null
+    }
+
+    const filesToSave = [...inMemoryFilesToSave, ...draftFilesToSave]
+    if (filesToSave.length > 0) {
+      try {
+        const saved = await window.electronAPI.saveFilesToAgentSession({
+          workspaceSlug: workspace.slug,
+          sessionId,
+          files: filesToSave.map(({ filename, data }) => ({ filename, data })),
+        })
+        saved.forEach((savedFile, index) => {
+          const sourceFile = filesToSave[index]?.sourceFile
+          if (!sourceFile) return
+          allRefs.push({ ...savedFile, sourceFile })
+        })
+      } catch (error) {
+        console.error('[AgentView] 保存附件到 session 失败:', error)
+        toast.error('附件保存失败', {
+          description: '请确认当前工作区可用，或新建 Agent 会话后重新上传。',
+        })
+        return null
+      }
+    }
+
+    if (allRefs.length === 0) {
+      toast.error('附件没有成功加入消息', {
+        description: '请重新上传文件，或切换到有效工作区后再试。',
+      })
+      return null
+    }
+
+    const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
+
+    for (const f of files) {
+      if (f.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(f.previewUrl)
+      window.__pendingAgentFileData?.delete(f.id)
+    }
+    setPendingFiles([])
+
+    return {
+      referenceBlock: `<attached_files>\n${refs}\n</attached_files>\n\n`,
+      attachments: allRefs.map((ref) => ({
+        filename: ref.filename,
+        mediaType: ref.sourceFile.mediaType,
+        size: ref.sourceFile.size,
+        targetPath: ref.targetPath,
+      })),
+      additionalDirectories: Array.from(queuedAdditionalDirectories),
+    }
+  }, [currentWorkspaceId, sessionId, setPendingFiles, workspaces])
+
+  const restoreQueuedAttachmentsToPending = React.useCallback((attachments?: AgentQueuedAttachment[]): void => {
+    if (!attachments || attachments.length === 0) return
+    setPendingFiles((prev) => [
+      ...prev,
+      ...attachments.map((attachment) => ({
+        id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        filename: attachment.filename,
+        mediaType: attachment.mediaType,
+        size: attachment.size,
+        sourcePath: attachment.targetPath,
+      })),
+    ])
+  }, [setPendingFiles])
 
   /** 将 File 对象列表添加为待发送附件 */
   const addFilesAsAttachments = React.useCallback(async (files: File[], sourcePaths?: Map<File, string>): Promise<void> => {
@@ -1495,17 +1650,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     if (streaming) {
       // Agent 正在输出时，用户消息默认进入 Proma 托管队列，不打断当前 turn。
-      if (pendingFilesSnapshot.length > 0) {
-        toast.info('Agent 运行中暂不支持追加发送附件', {
-          description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
-        })
-        return
-      }
+      const attachmentContext = pendingFilesSnapshot.length > 0
+        ? await preparePendingFilesForSend(pendingFilesSnapshot, additionalDirectoriesForRun)
+        : null
+      if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
 
       const quotedSelection = consumeQuotedSelection()
       setQueuedMessages((prev) => [
         ...prev,
-        createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
+        createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection, attachmentContext
+          ? {
+              fileReferenceBlock: attachmentContext.referenceBlock,
+              attachments: attachmentContext.attachments,
+              additionalDirectories: attachmentContext.additionalDirectories,
+            }
+          : undefined),
       ])
       if (overrideText === undefined) {
         setInputContent('')
@@ -1523,15 +1682,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     if (backgroundWaiting) {
       // 软空闲态没有活跃输出，直接注入，无需中断。
-      if (pendingFilesSnapshot.length > 0) {
-        toast.info('Agent 后台等待中暂不支持追加发送附件', {
-          description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
-        })
-        return
-      }
+      const attachmentContext = pendingFilesSnapshot.length > 0
+        ? await preparePendingFilesForSend(pendingFilesSnapshot, additionalDirectoriesForRun)
+        : null
+      if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
 
       const quotedSelection = consumeQuotedSelection()
-      const message = createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection)
+      const message = createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection, attachmentContext
+        ? {
+            fileReferenceBlock: attachmentContext.referenceBlock,
+            attachments: attachmentContext.attachments,
+            additionalDirectories: attachmentContext.additionalDirectories,
+          }
+        : undefined)
       if (overrideText === undefined) {
         setInputContent('')
         setInputHtmlContent('')
@@ -1565,6 +1728,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             return map
           })
         }
+        restoreQueuedAttachmentsToPending(message.attachments)
       })
       return
     }
@@ -1586,112 +1750,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
 
     // 1. 如果有 pending 文件，先保存到 session 目录
-    let fileReferences = ''
-    if (pendingFilesSnapshot.length > 0) {
-      const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
-      if (!workspace) {
-        toast.warning('暂时无法发送附件', {
-          description: '当前 Agent 会话没有绑定有效工作区。请在顶部选择工作区，或新建 Agent 会话后重新上传。',
-        })
-        return
-      }
-
-      // 区分三类：
-      // - 剪贴板临时草稿（isClipboardDraft）：sourcePath 指向 os.tmpdir，可能被系统清理，
-      //   需读取最新内容（含预览面板 autosave 的编辑）拷贝进 session 目录持久化
-      // - 侧面板真实文件（仅 sourcePath）：原地引用，不复制
-      // - 新上传文件（无 sourcePath）：从内存数据保存到 session 目录
-      const existingFiles = pendingFilesSnapshot.filter((f) => f.sourcePath && !f.isClipboardDraft)
-      const clipboardDrafts = pendingFilesSnapshot.filter((f) => f.sourcePath && f.isClipboardDraft)
-      const newFiles = pendingFilesSnapshot.filter((f) => !f.sourcePath)
-
-      const allRefs: Array<{ filename: string; targetPath: string }> = []
-
-      // 已有路径的文件直接引用
-      for (const f of existingFiles) {
-        const sourcePath = f.sourcePath!
-        allRefs.push({ filename: f.filename, targetPath: sourcePath })
-        const parentPath = getFileParentPath(sourcePath)
-        if (parentPath) additionalDirectoriesForRun.add(parentPath)
-      }
-
-      // 剪贴板草稿：读取临时文件最新内容，转为待保存数据
-      const draftFilesToSave: Array<{ filename: string; data: string }> = []
-      const staleDraftFiles: string[] = []
-      for (const f of clipboardDrafts) {
-        const sourcePath = f.sourcePath!
-        const parentPath = getFileParentPath(sourcePath)
-        try {
-          const read = await window.electronAPI.resolveAndReadFile(sourcePath, {
-            sessionId,
-            candidateBasePaths: parentPath ? [parentPath] : undefined,
-          })
-          if (!read) {
-            staleDraftFiles.push(f.filename)
-            continue
-          }
-          const data = await fileToBase64(new File([read.content], f.filename, { type: f.mediaType }))
-          draftFilesToSave.push({ filename: f.filename, data })
-        } catch (error) {
-          console.error('[AgentView] 读取剪贴板草稿失败:', error)
-          staleDraftFiles.push(f.filename)
-        }
-      }
-      if (staleDraftFiles.length > 0) {
-        toast.error('附件数据已失效', {
-          description: `请移除后重新粘贴：${staleDraftFiles.join('、')}`,
-        })
-        return
-      }
-
-      // 新上传的文件 + 剪贴板草稿一并保存到 session 目录
-      const inMemoryFilesToSave = newFiles.map((f) => ({
-        filename: f.filename,
-        data: window.__pendingAgentFileData?.get(f.id) || '',
-      }))
-      const missingDataFiles = inMemoryFilesToSave.filter((f) => !f.data).map((f) => f.filename)
-      if (missingDataFiles.length > 0) {
-        toast.error('附件数据已失效', {
-          description: `请移除后重新添加文件：${missingDataFiles.join('、')}`,
-        })
-        return
-      }
-
-      const filesToSave = [...inMemoryFilesToSave, ...draftFilesToSave]
-      if (filesToSave.length > 0) {
-        try {
-          const saved = await window.electronAPI.saveFilesToAgentSession({
-            workspaceSlug: workspace.slug,
-            sessionId,
-            files: filesToSave,
-          })
-          allRefs.push(...saved)
-        } catch (error) {
-          console.error('[AgentView] 保存附件到 session 失败:', error)
-          toast.error('附件保存失败', {
-            description: '请确认当前工作区可用，或新建 Agent 会话后重新上传。',
-          })
-          return
-        }
-      }
-
-      if (allRefs.length === 0) {
-        toast.error('附件没有成功加入消息', {
-          description: '请重新上传文件，或切换到有效工作区后再试。',
-        })
-        return
-      }
-
-      const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
-      fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
-
-      // 清理
-      for (const f of pendingFilesSnapshot) {
-        if (f.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(f.previewUrl)
-        window.__pendingAgentFileData?.delete(f.id)
-      }
-      setPendingFiles([])
-    }
+    const attachmentContext = pendingFilesSnapshot.length > 0
+      ? await preparePendingFilesForSend(pendingFilesSnapshot, additionalDirectoriesForRun)
+      : null
+    if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
+    let fileReferences = attachmentContext?.referenceBlock ?? ''
 
     // 构建引用选中文本：内联 XML 拼入 prompt，对话框不展示（parseAttachedFiles 剥离）
     const quotedSelection = consumeQuotedSelection()
@@ -1779,7 +1842,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, createBaseAdditionalDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage])
+  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -2131,6 +2194,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     }
+    restoreQueuedAttachmentsToPending(message.attachments)
 
     const hasDraft = inputContent.trim().length > 0
     const nextDraft = hasDraft
@@ -2148,7 +2212,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     } else {
       setInputHtmlContent('')
     }
-  }, [inputContent, inputHtmlContent, queuedMessages, sessionId, setInputContent, setInputHtmlContent, setQueuedMessages, setQuotedSelectionMap])
+  }, [inputContent, inputHtmlContent, queuedMessages, restoreQueuedAttachmentsToPending, sessionId, setInputContent, setInputHtmlContent, setQueuedMessages, setQuotedSelectionMap])
 
   const handleRemoveQueuedMessage = React.useCallback((messageId: string): void => {
     setQueuedMessages((prev) => removeQueuedMessage(prev, messageId))
