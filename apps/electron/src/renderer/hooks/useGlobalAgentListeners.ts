@@ -57,8 +57,21 @@ import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta } from '@proma/shared'
 import { inferContextWindow } from '@proma/shared'
+import { parseDependsOn, stripMetaTags } from '@proma/project-core'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
+import { parseTaskCreateResult } from '@/components/agent/task-progress'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
+
+/** 从 delegate_agent 工具返回的 JSON 中提取 delegationId */
+function parseDelegationId(result: unknown): string | null {
+  if (typeof result !== 'string') return null
+  try {
+    const parsed = JSON.parse(result)
+    return typeof parsed?.delegationId === 'string' ? parsed.delegationId : null
+  } catch {
+    return null
+  }
+}
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 
@@ -348,6 +361,8 @@ export function useGlobalAgentListeners(): void {
     const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
     /** 正在执行的 git 突变 Bash 命令：toolUseId → sessionId（完成后触发 diff 刷新） */
     const pendingGitMutateTools = new Map<string, string>()
+    /** 当前正在操作的 Task ID — TaskCreate/TaskUpdate 时更新，delegate_agent 时消费 */
+    const currentTaskIdRef = { current: null as string | null }
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
@@ -758,6 +773,69 @@ export function useGlobalAgentListeners(): void {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
               prev.filter((t) => t.toolUseId !== event.toolUseId)
             )
+            // 持久化 Task Graph 事件到 JSONL（供 ProjectGraphPanel IPC 回退读取）
+            try {
+              const streamState = store.get(agentStreamingStatesAtom).get(sessionId)
+              const activity = streamState?.toolActivities.find(a => a.toolUseId === event.toolUseId)
+              if (activity && activity.result != null) {
+                const api = window.electronAPI
+                if (activity.toolName === 'TaskCreate') {
+                  const parsedResult = parseTaskCreateResult(activity.result)
+                  const taskId = parsedResult?.id ?? activity.toolUseId
+                  currentTaskIdRef.current = taskId
+                  const subject = typeof activity.input.subject === 'string'
+                    ? activity.input.subject
+                    : (parsedResult?.subject ?? '未命名任务')
+                  const description = typeof activity.input.description === 'string'
+                    ? activity.input.description
+                    : ''
+                  const dependsOn = parseDependsOn(description)
+                  void api.appendGraphEvent?.(sessionId, {
+                    type: 'task_created',
+                    taskId,
+                    timestamp: Date.now(),
+                    payload: { subject: stripMetaTags(subject), description, dependsOn },
+                  })?.catch(() => {})
+                } else if (activity.toolName === 'TaskUpdate') {
+                  const taskId = activity.input.taskId ?? activity.input.task_id ?? activity.input.id
+                  if (taskId != null) {
+                    currentTaskIdRef.current = String(taskId)
+                    const statusInput = activity.input.status
+                    if (typeof statusInput === 'string' && ['pending', 'in_progress', 'completed', 'failed', 'cancelled'].includes(statusInput)) {
+                      void api.appendGraphEvent?.(sessionId, {
+                        type: 'task_status_changed',
+                        taskId: String(taskId),
+                        timestamp: Date.now(),
+                        payload: { oldStatus: null, newStatus: statusInput as import('@proma/project-core').TaskStatus },
+                      })?.catch(() => {})
+                    }
+                    const subjectInput = activity.input.subject
+                    if (typeof subjectInput === 'string') {
+                      void api.appendGraphEvent?.(sessionId, {
+                        type: 'task_updated',
+                        taskId: String(taskId),
+                        timestamp: Date.now(),
+                        payload: { subject: subjectInput },
+                      })?.catch(() => {})
+                    }
+                  }
+                } else if (activity.toolName === 'delegate_agent') {
+                  // 委派完成：将 delegationId 关联到当前 Task 节点
+                  const currentTaskId = currentTaskIdRef.current
+                  if (currentTaskId) {
+                    const delegationId = parseDelegationId(activity.result)
+                    if (delegationId) {
+                      void api.appendGraphEvent?.(sessionId, {
+                        type: 'task_session_linked',
+                        taskId: currentTaskId,
+                        timestamp: Date.now(),
+                        payload: { sessionId: delegationId },
+                      })?.catch(() => {})
+                    }
+                  }
+                }
+              }
+            } catch { /* graph persistence should never break streaming */ }
             // Agent 写类工具完成时，递增 diff 刷新版本号并切换预览文件
             if (pendingWriteTools.has(event.toolUseId)) {
               const entry = pendingWriteTools.get(event.toolUseId)!
