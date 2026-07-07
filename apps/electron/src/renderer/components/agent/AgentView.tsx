@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -46,6 +46,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
@@ -79,6 +81,7 @@ import {
   workspaceAttachedFilesMapAtom,
   liveMessagesMapAtom,
   agentThinkingAtom,
+  agentEffortAtom,
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
   agentPermissionModeMapAtom,
@@ -89,7 +92,11 @@ import {
   allPendingExitPlanRequestsAtom,
   finalizeStreamingActivities,
   agentProcessGroupsKeepExpandedAtom,
+  currentAgentSessionIdAtom,
 } from '@/atoms/agent-atoms'
+import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
+import { persistedGraphAtom } from '@/atoms/graph-atoms'
+import { TASK_TOOL_NAMES } from './task-progress'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
@@ -146,10 +153,17 @@ interface AgentThinkingPopoverProps {
 
 function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverProps): React.ReactElement {
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
+  const [effort, setEffort] = useAtom(agentEffortAtom)
   const [open, setOpen] = React.useState(false)
   const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isEnabled = agentThinking?.type === 'adaptive'
+
+  const handleEffortChange = React.useCallback((v: string) => {
+    const value = v as import('@proma/shared').AgentEffort
+    setEffort(value)
+    window.electronAPI.updateSettings({ agentEffort: value }).catch(console.error)
+  }, [setEffort])
 
   const handleMouseEnter = React.useCallback(() => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
@@ -188,7 +202,7 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
         side="top"
         align="center"
         sideOffset={8}
-        className="w-auto min-w-[160px] p-2 px-2.5"
+        className="w-auto min-w-[180px] p-2 px-2.5"
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         onOpenAutoFocus={(e) => e.preventDefault()}
@@ -210,6 +224,27 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
               onCheckedChange={setThinkingExpanded}
               className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
             />
+          </div>
+          <div className="h-px bg-border" />
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-foreground/70">思考强度</span>
+            <div className="flex gap-0.5">
+              {(['low', 'medium', 'high', 'max'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => handleEffortChange(v)}
+                  className={cn(
+                    'px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors',
+                    (effort ?? 'high') === v
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-foreground/50 hover:bg-muted hover:text-foreground/70',
+                  )}
+                >
+                  {v === 'low' ? '低' : v === 'medium' ? '中' : v === 'high' ? '高' : '最大'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </PopoverContent>
@@ -300,6 +335,57 @@ function DisplayOptionsPopover({
   )
 }
 
+// ===== 工具栏 Graph 按钮（状态感知） =====
+
+function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactElement {
+  const atomSummary = useAtomValue(currentGraphSummaryAtom)
+  const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const [ipcSummary, setIpcSummary] = React.useState<import('@proma/project-core').GraphSummary | null>(null)
+
+  React.useEffect(() => {
+    if (!sessionId) return
+    const api = window.electronAPI as { getGraphSummary?: (id: string) => Promise<import('@proma/project-core').GraphSummary> }
+    if (!api.getGraphSummary) return
+    api.getGraphSummary(sessionId).then(s => { if (s && s.totalTasks > 0) setIpcSummary(s) }).catch(() => {})
+  }, [sessionId])
+
+  const summary = atomSummary ?? ipcSummary
+  const hasData = summary && summary.totalTasks > 0
+  const completed = summary?.statusCounts.completed ?? 0
+  const total = summary?.totalTasks ?? 0
+  const progress = total > 0 ? Math.round((completed / total) * 100) : 0
+  const inProgress = summary?.statusCounts.in_progress ?? 0
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          className={cn(
+            'flex items-center gap-1.5 h-[32px] rounded-lg transition-colors',
+            hasData
+              ? 'px-2.5 bg-muted/40 hover:bg-muted/70 text-xs'
+              : 'size-[32px] justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-accent/50',
+          )}
+        >
+          <GitBranch className={cn('size-[14px] flex-shrink-0', hasData && 'text-muted-foreground')} />
+          {hasData && (
+            <>
+              <span className="font-medium text-foreground/70 tabular-nums">{completed}/{total}</span>
+              <div className="w-8 h-1 bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-400 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
+              </div>
+              <span className="text-muted-foreground/50">{inProgress > 0 ? '进行中' : progress === 100 ? '完成' : ''}</span>
+            </>
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">任务图{hasData ? ` · ${completed}/${total}` : ''}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
@@ -310,9 +396,24 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   // atom 输出引用未变，订阅者跳过通知。
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
+  const setPersistedGraph = useSetAtom(persistedGraphAtom)
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
   const backgroundWaiting = streamState?.backgroundWaiting ?? false
+
+  // 流式结束后从 JSONL 加载持久化 Graph，确保 ProjectGraphPanel 有数据可展示
+  const prevStreamingRef = React.useRef(streaming)
+  React.useEffect(() => {
+    const wasStreaming = prevStreamingRef.current
+    prevStreamingRef.current = streaming
+    // 仅在 streaming: true → false 时触发一次加载
+    if (wasStreaming && !streaming && sessionId) {
+      const api = window.electronAPI as { getGraph?: (id: string) => Promise<import('@proma/project-core').TaskGraph> }
+      api.getGraph?.(sessionId)
+        .then((g) => { if (g && Object.keys(g.nodes).length > 0) setPersistedGraph(g) })
+        .catch(() => {})
+    }
+  }, [streaming, sessionId, setPersistedGraph])
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
@@ -680,14 +781,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             if (!state || state.running) return prev
             const map = new Map(prev)
             // 软空闲态（后台任务等待）：必须保留 backgroundWaiting 标志（否则 handleSend 误走新建 run），
-            // 但展示字段 content/toolActivities 仍要清空——否则上一轮流式文本残留会被兜底气泡渲染成重复消息。
+            // 但展示字段 content 仍要清空——否则上一轮流式文本残留会被兜底气泡渲染成重复消息。
+            // task 相关 toolActivities 必须保留，供 currentGraphAtom 派生任务图。
+            const taskActivities = state.toolActivities.filter(a =>
+              TASK_TOOL_NAMES.has(a.toolName),
+            )
             if (state.inputTokens !== undefined) {
               // 保留 usage 数据，仅清除流式展示字段
               map.set(sessionId, {
                 running: false,
                 backgroundWaiting: state.backgroundWaiting,
                 content: '',
-                toolActivities: [],
+                toolActivities: taskActivities,
                 inputTokens: state.inputTokens,
                 outputTokens: state.outputTokens,
                 cacheReadTokens: state.cacheReadTokens,
@@ -701,7 +806,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                 running: false,
                 backgroundWaiting: true,
                 content: '',
-                toolActivities: [],
+                toolActivities: taskActivities,
+              })
+            } else if (taskActivities.length > 0) {
+              map.set(sessionId, {
+                running: false,
+                content: '',
+                toolActivities: taskActivities,
               })
             } else {
               map.delete(sessionId)
@@ -1484,10 +1595,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     setStreamingStates((prev) => {
       const map = new Map(prev)
       const existing = prev.get(sessionId)
+      // 保留上一轮 task 相关活动（TaskCreate/TaskUpdate/TodoWrite），
+      // 确保跨 turn 的 TaskUpdate 能在 aggregateTaskItems 中匹配到
+      // 正确命名的 TaskCreate 条目，避免状态更新（completed/in_progress）丢失。
+      const carryOver = (existing?.toolActivities ?? []).filter(a =>
+        TASK_TOOL_NAMES.has(a.toolName),
+      )
       map.set(sessionId, {
         running: true,
         content: '',
-        toolActivities: [],
+        toolActivities: carryOver,
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
@@ -1765,6 +1882,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
   const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)
+  const [graphDialogOpen, setGraphDialogOpen] = React.useState(false)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
     setRewindTargetUuid(assistantMessageUuid)
@@ -1857,7 +1975,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [togglePreviewPanel])
 
   const hasTextInput = inputContent.trim().length > 0
-  const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
+  const isCompacting = contextStatus.isCompacting
+  const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
     {
@@ -1956,6 +2075,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           onProcessGroupsKeepExpandedChange={setProcessGroupsKeepExpanded}
         />
       ),
+    },
+    {
+      key: 'graph',
+      node: <ToolbarGraphButton onClick={() => setGraphDialogOpen(true)} />,
     },
   ], [
     agentChannelIds,
@@ -2138,7 +2261,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               onPasteLongText={handlePasteLongText}
               longTextPasteThreshold={LONG_TEXT_ATTACHMENT_THRESHOLD}
               placeholder={
-                agentChannelId && hasAvailableModel
+                isCompacting
+                  ? '正在压缩上下文，完成后可继续对话...'
+                  : agentChannelId && hasAvailableModel
                   ? sendWithCmdEnter
                     ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
                     : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
@@ -2168,6 +2293,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         )}
       </div>
     </AgentSessionProvider>
+
+    {/* 任务图悬浮画板 */}
+    <Dialog open={graphDialogOpen} onOpenChange={setGraphDialogOpen}>
+      <DialogContent className="w-[85vw] max-w-[1200px] h-[80vh] max-h-[850px] p-0 gap-0" hideClose={false}>
+        <DialogTitle className="sr-only">任务图</DialogTitle>
+        <ProjectGraphPanel />
+      </DialogContent>
+    </Dialog>
 
     {/* 回退确认弹窗 */}
     <AlertDialog
