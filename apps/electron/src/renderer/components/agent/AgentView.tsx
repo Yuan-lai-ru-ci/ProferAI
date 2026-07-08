@@ -187,6 +187,16 @@ function getUserTextFromSDKMessage(message: SDKMessage): string | null {
   return texts.length > 0 ? texts.join('\n') : null
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isStaleAgentQueueError(error: unknown): boolean {
+  const message = getErrorMessage(error)
+  return message.includes('会话未运行，无法追加消息') ||
+    message.includes('无活跃消息通道可注入队列消息')
+}
+
 // ===== 思考模式 Hover Popover =====
 
 interface AgentThinkingPopoverProps {
@@ -839,7 +849,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // - backgroundWaiting（软空闲，无活跃 turn）：直接注入，无需中断
     // 避免"外层判定 streaming、内层已结束"两个快照不一致导致的竞态。
     if (streaming || backgroundWaiting) {
-      await queueMessageIntoActiveAgent(message, payload.rawText, payload.sdkText, payload.mentions, streaming)
+      try {
+        await queueMessageIntoActiveAgent(message, payload.rawText, payload.sdkText, payload.mentions, streaming)
+      } catch (error) {
+        if (isStaleAgentQueueError(error)) {
+          console.warn('[AgentView] 检测到陈旧的 Agent 追加通道，改为启动新一轮运行:', error)
+          await startQueuedMessageRun(payload.rawText, payload.mentions, agentChannelId, message.additionalDirectories)
+          return
+        }
+        throw error
+      }
       return
     }
 
