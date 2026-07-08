@@ -407,7 +407,7 @@ export class AgentOrchestrator {
 
       let apiKey: string
       let proxyBaseUrl = ''
-      if ((isCommercialBuild() || isCommercialMode()) && !canSelfConfig()) {
+      if ((isCommercialBuild() || isCommercialMode()) && channel.id?.startsWith('newapi-')) {
         const auth = await getTeamAuthWithRefresh()
         if (!auth) {
           console.warn('[Agent 标题生成] 团队账号登录已过期，跳过 AI 标题生成')

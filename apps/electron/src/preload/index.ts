@@ -221,8 +221,8 @@ export interface ElectronAPI {
   /** 检查是否处于商业模式 */
   getCommercialMode: () => Promise<boolean>
 
-  /** 获取账号能力（商业模式+自配权限+账号类型） */
-  getAccountCapabilities: () => Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }>
+  /** 获取账号能力（商业模式+自配权限+账号类型）。force=true 时先拉服务端刷新再读，用于权限变更即时生效 */
+  getAccountCapabilities: (force?: boolean) => Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }>
 
   /** 获取构建目标 */
   getBuildTarget: () => Promise<'oss' | 'commercial'>
@@ -1264,8 +1264,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE)
   },
 
-  getAccountCapabilities: () => {
-    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES)
+  getAccountCapabilities: (force?: boolean) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES, force)
   },
 
   getBuildTarget: () => {
