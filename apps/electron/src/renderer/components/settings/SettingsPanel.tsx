@@ -27,6 +27,7 @@ import {
   Users,
   Coins,
   MessageSquareText,
+  Monitor,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
@@ -61,6 +62,7 @@ import { StorageSettings } from "./StorageSettings";
 import { TeamWorkspaceSettings } from "./TeamWorkspaceSettings";
 import { CreditsSettings } from "./CreditsSettings";
 import { FeedbackSettings } from "./FeedbackSettings";
+import { DevicesSettings } from "./DevicesSettings";
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -116,6 +118,7 @@ const TAIL_TABS: TabItem[] = [
   { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "team", label: "团队管理", icon: <Users size={16} /> },
+  { id: "devices", label: "登录设备", icon: <Monitor size={16} /> },
   { id: "feedback", label: "意见箱", icon: <MessageSquareText size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
@@ -155,6 +158,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <CreditsSettings />;
     case "feedback":
       return <FeedbackSettings />;
+    case "devices":
+      return <DevicesSettings />;
     default:
       // tutorial 等特殊 tab 由 handleTabChange 拦截打开主区 Tab，不会在此渲染
       return <GeneralSettings />;

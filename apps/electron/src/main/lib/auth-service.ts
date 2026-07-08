@@ -722,6 +722,75 @@ export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: st
   return null
 }
 
+/** 取当前团队服务器 baseUrl + 有效 accessToken（JWT，过期先刷新）。无登录返回 null。 */
+async function getAccessTokenForApi(): Promise<{ baseUrl: string; token: string } | null> {
+  const pick = () => {
+    const tokens = readTokens()
+    for (const server of listTeamServers()) {
+      const t = tokens[server.id]
+      if (t?.accessToken) {
+        return { baseUrl: server.baseUrl, token: t.accessToken, expired: !(t.tokenExpiresAt > Date.now()) }
+      }
+    }
+    return null
+  }
+  let cur = pick()
+  if (!cur) return null
+  if (cur.expired) {
+    await refreshAuthToken().catch(() => false)
+    cur = pick()
+    if (!cur) return null
+  }
+  return { baseUrl: cur.baseUrl, token: cur.token }
+}
+
+/** 拉取当前账号的登录设备列表（含本机 deviceId 用于标注）。走 accessToken(JWT)。 */
+export async function listRemoteDevices(): Promise<{
+  ok: boolean
+  devices?: Array<{ id: string; deviceId: string | null; deviceName: string; platform: string | null; appVersion?: string | null; createdAt: number; lastUsedAt: number }>
+  currentDeviceId?: string
+  error?: string
+}> {
+  const currentDeviceId = getDeviceAuthInfo().deviceId
+  const auth = await getAccessTokenForApi()
+  if (!auth) return { ok: false, error: '未登录团队账号', currentDeviceId }
+  try {
+    let resp = await (undiciFetch as unknown as typeof fetch)(`${auth.baseUrl}${API_PREFIX}/auth/devices`, {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    })
+    if (resp.status === 401) {
+      await refreshAuthToken().catch(() => false)
+      const fresh = await getAccessTokenForApi()
+      if (fresh) {
+        resp = await (undiciFetch as unknown as typeof fetch)(`${fresh.baseUrl}${API_PREFIX}/auth/devices`, {
+          headers: { Authorization: `Bearer ${fresh.token}` },
+        })
+      }
+    }
+    if (!resp.ok) return { ok: false, error: `服务器错误 (${resp.status})`, currentDeviceId }
+    const data = (await resp.json()) as { devices: NonNullable<Awaited<ReturnType<typeof listRemoteDevices>>['devices']> }
+    return { ok: true, devices: data.devices || [], currentDeviceId }
+  } catch {
+    return { ok: false, error: '无法连接团队服务器', currentDeviceId }
+  }
+}
+
+/** 撤销（远程登出）指定设备槽位。走 accessToken(JWT)。 */
+export async function revokeRemoteDevice(slotId: string): Promise<{ ok: boolean; error?: string }> {
+  const auth = await getAccessTokenForApi()
+  if (!auth) return { ok: false, error: '未登录团队账号' }
+  try {
+    const resp = await (undiciFetch as unknown as typeof fetch)(
+      `${auth.baseUrl}${API_PREFIX}/auth/devices/${encodeURIComponent(slotId)}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${auth.token}` } },
+    )
+    if (!resp.ok) return { ok: false, error: `服务器错误 (${resp.status})` }
+    return { ok: true }
+  } catch {
+    return { ok: false, error: '无法连接团队服务器' }
+  }
+}
+
 /** 代管模式下当前用户是否允许自配 API（独立于账号类型的开关，不依赖 token 过期） */
 export function isSelfConfigAllowed(): boolean {
   const tokens = readTokens()
