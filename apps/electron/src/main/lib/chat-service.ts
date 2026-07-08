@@ -243,7 +243,7 @@ export async function sendMessage(
   let proxyBaseUrl = ''
   // 代管模式判定：商业构建 或 服务端标记代管，且用户无自配权限
   // 自配用户(canSelfConfigApi=true)可用自己配的渠道直连，不强制走统一 proxy
-  const shouldUseCommercialProxy = (isCommercialBuild() || isCommercialMode()) && !canSelfConfig()
+  const shouldUseCommercialProxy = (isCommercialBuild() || isCommercialMode()) && channel.id?.startsWith('newapi-')
 
   if (shouldUseCommercialProxy) {
     const auth = await getTeamAuthWithRefresh()
@@ -637,7 +637,7 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
 
   let apiKey: string
   let proxyBaseUrl = ''
-  const shouldUseCommercialProxy = (isCommercialBuild() || isCommercialMode()) && !canSelfConfig()
+  const shouldUseCommercialProxy = (isCommercialBuild() || isCommercialMode()) && channel.id?.startsWith('newapi-')
 
   if (shouldUseCommercialProxy) {
     const auth = await getTeamAuthWithRefresh()

@@ -69,9 +69,10 @@ adminChannels.get('/:id', (c) => {
   return c.json({ ...ch, api_key_encrypted: maskKey(ch.api_key_encrypted), models: JSON.parse(ch.models_json || '[]'), models_json: undefined })
 })
 
-// PATCH /v1/admin/channels/:id — 编辑渠道
+// PATCH /v1/admin/channels/:id — 编辑渠道（官方同步渠道不可编辑名称/供应商/模型）
 adminChannels.patch('/:id', async (c) => {
   const id = c.req.param('id')
+  if (id.startsWith('newapi-')) return c.json({ error: '官方同步渠道不可编辑，请在 New API 后台修改后重新同步' }, 403)
   const body = await c.req.json()
   const fields = {}
   if (body.name !== undefined) fields.name = body.name
@@ -98,9 +99,10 @@ adminChannels.patch('/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// DELETE /v1/admin/channels/:id — 删除渠道
+// DELETE /v1/admin/channels/:id — 删除渠道（官方同步渠道不可删除）
 adminChannels.delete('/:id', (c) => {
   const id = c.req.param('id')
+  if (id.startsWith('newapi-')) return c.json({ error: '官方同步渠道不可删除，请在 New API 后台停用后重新同步' }, 403)
   hardDeleteChannel(id)
   logAudit({ action: 'admin.delete_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id })
   return c.json({ success: true })
