@@ -83,6 +83,8 @@ function getCachedInterfaceVariant(): InterfaceVariant {
   try {
     const cached = localStorage.getItem(INTERFACE_VARIANT_CACHE_KEY)
     if (cached === 'classic' || cached === 'modern') {
+      // 现代样式已移除，始终回退到经典样式
+      if (cached === 'modern') return 'classic'
       return cached
     }
   } catch {
