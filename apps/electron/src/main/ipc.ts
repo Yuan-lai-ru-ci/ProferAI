@@ -4707,8 +4707,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.LOGIN,
-    async (_, credentials: { serverUrl: string; email: string; password: string }) => {
-      const result = await login(credentials.serverUrl, credentials.email, credentials.password)
+    async (_, credentials: { serverUrl: string; email: string; password: string; revokeSlotId?: string }) => {
+      const result = await login(credentials.serverUrl, credentials.email, credentials.password, credentials.revokeSlotId)
       console.log('[AUTH IPC] login result:', JSON.stringify({ success: result.success, teamAccountId: result.teamAccountId, teamEmail: result.teamEmail }))
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
