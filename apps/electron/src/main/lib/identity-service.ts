@@ -32,38 +32,60 @@ function generateDeviceName(): string {
 let _deviceIdentity: DeviceIdentity | null = null
 
 /**
- * 获取设备身份，不存在则创建
+ * 获取设备身份，不存在则创建。
+ *
+ * deviceId 优先级：OS 级持久位置（注册表/keychain，扛清目录）> device.json 快取 > 新生成。
+ * 无论来源如何，最终都双写回 OS 级持久位置 + device.json，保证两处一致。
  */
 export function getOrCreateDeviceIdentity(): DeviceIdentity {
   if (_deviceIdentity) return _deviceIdentity
 
   const path = getDeviceIdentityPath()
+  const { readDurableDeviceId, writeDurableDeviceId } = require('./device-durable-store')
 
+  // 读 config 目录快取（含 deviceName / registeredAt）
+  let identity: DeviceIdentity | null = null
   if (existsSync(path)) {
     try {
-      const raw = readFileSync(path, 'utf-8')
-      _deviceIdentity = JSON.parse(raw) as DeviceIdentity
-      return _deviceIdentity!
+      identity = JSON.parse(readFileSync(path, 'utf-8')) as DeviceIdentity
     } catch {
-      // 文件损坏，重新生成
+      // 文件损坏，忽略
     }
   }
 
-  const identity: DeviceIdentity = {
-    deviceId: randomUUID(),
-    deviceName: generateDeviceName(),
-    registeredAt: Date.now(),
+  // OS 级持久 deviceId 优先（config 目录被清后仍认得同一台机）
+  const durableId: string | null = readDurableDeviceId()
+  const finalId = durableId || identity?.deviceId || randomUUID()
+
+  if (!identity) {
+    identity = { deviceId: finalId, deviceName: generateDeviceName(), registeredAt: Date.now() }
+  } else if (identity.deviceId !== finalId) {
+    identity.deviceId = finalId
   }
 
+  // OS 级持久位置缺失则回填（首次运行 / 之前降级过）
+  if (!durableId) {
+    try { writeDurableDeviceId(finalId) } catch { /* 静默降级 */ }
+  }
   try {
     writeFileSync(path, JSON.stringify(identity, null, 2), 'utf-8')
-    console.log(`[身份] 已生成设备身份: ${identity.deviceName} (${identity.deviceId})`)
   } catch (err) {
     console.warn('[身份] 持久化设备身份失败:', err)
   }
 
   _deviceIdentity = identity
+  console.log(`[身份] 设备身份: ${identity.deviceName} (${identity.deviceId})${durableId ? ' [OS级持久]' : ''}`)
   return identity
+}
+
+/**
+ * 取登录/刷新请求要带的设备信息（注册设备数模型）。
+ */
+export function getDeviceAuthInfo(): { deviceId: string; deviceName: string; platform: string; appVersion: string } {
+  const id = getOrCreateDeviceIdentity()
+  let appVersion = ''
+  try { appVersion = require('electron').app.getVersion() } catch { /* 非 Electron 环境 */ }
+  return { deviceId: id.deviceId, deviceName: id.deviceName, platform: process.platform, appVersion }
 }
 
 /**
