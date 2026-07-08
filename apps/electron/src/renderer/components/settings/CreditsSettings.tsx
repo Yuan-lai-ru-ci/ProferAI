@@ -75,66 +75,66 @@ export function CreditsSettings(): React.ReactElement {
 
   const totalGranted = (balance ?? 0) + (lifetimeConsumed ?? 0)
   const pct = totalGranted > 0 ? Math.round(((lifetimeConsumed ?? 0) / totalGranted) * 100) : 0
-  const fmt = (n: number): string => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  const fmt = (n: number): string => n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' $'
   const balanceLoaded = balance !== null
 
   return (
     <div className="space-y-8">
       {/* 余额卡片 */}
       <SettingsSection title="额度概览" description="我的账户余额，按实际用量实时扣减">
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-2 gap-3">
           <div className={`
-            rounded-xl border p-4
+            rounded-xl border p-5
             ${isExhausted ? 'border-destructive/30 bg-destructive/5' : ''}
             ${isLow && !isExhausted ? 'border-yellow-500/30 bg-yellow-500/5' : ''}
             ${!isLow && !isExhausted ? 'border-border bg-card' : ''}
           `}>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-              <Zap size={14} /> 我的剩余额度
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-2 tracking-wide uppercase">
+              <Zap size={12} /> 剩余额度
             </div>
-            <div className={`text-2xl font-bold ${isExhausted ? 'text-destructive' : isLow ? 'text-yellow-500' : 'text-foreground'}`}>
+            <div className={`text-[28px] font-bold leading-none tracking-tight ${isExhausted ? 'text-destructive' : isLow ? 'text-yellow-500' : 'text-foreground'}`}>
               {loading ? '...' : balanceLoaded ? fmt(balance!) : '--'}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">{balanceLoaded ? '账户余额' : '未配置余额查询'}</div>
           </div>
-          <div className="rounded-xl border border-border bg-card p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-              <TrendingDown size={14} /> 累计消耗
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-2 tracking-wide uppercase">
+              <TrendingDown size={12} /> 累计消耗
             </div>
-            <div className="text-2xl font-bold text-foreground">
+            <div className="text-[28px] font-bold leading-none tracking-tight text-foreground">
               {fmt(lifetimeConsumed ?? 0)}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">历史用量</div>
           </div>
         </div>
+
         {balanceLoaded && (
-        <SettingsCard>
-          <div className="space-y-2">
+        <SettingsCard className="mt-3">
+          <div className="px-1 py-2 space-y-2.5">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">已使用</span>
-              <span className="font-medium">{pct}%</span>
+              <span className="font-semibold tabular-nums">{pct}%</span>
             </div>
-            <div className="h-2 bg-muted rounded-full overflow-hidden">
+            <div className="relative h-2 bg-muted rounded-full">
               <div
-                className={`h-full rounded-full transition-all ${isExhausted ? 'bg-destructive' : isLow ? 'bg-yellow-500' : 'bg-primary'}`}
+                className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${isExhausted ? 'bg-destructive' : isLow ? 'bg-yellow-500' : 'bg-primary'}`}
                 style={{ width: `${Math.min(pct, 100)}%` }}
               />
             </div>
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>总额度: {fmt(totalGranted ?? 0)}</span>
-              <span>剩余: {fmt(balance ?? 0)}</span>
+            <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
+              <span>总额度 {fmt(totalGranted ?? 0)}</span>
+              <span>剩余 {fmt(balance ?? 0)}</span>
             </div>
           </div>
         </SettingsCard>
         )}
+
         {isExhausted && (
-          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-            余额已耗尽，请联系管理员充值。
+          <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive flex items-center gap-2">
+            <Zap size={14} /> 余额已耗尽，请联系管理员充值
           </div>
         )}
         {isLow && !isExhausted && (
-          <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-sm text-yellow-600">
-            余额偏低，建议尽快联系管理员充值。
+          <div className="mt-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-sm text-yellow-600 flex items-center gap-2">
+            <Zap size={14} /> 余额偏低，建议尽快联系管理员充值
           </div>
         )}
       </SettingsSection>
