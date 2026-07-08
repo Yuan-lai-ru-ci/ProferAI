@@ -495,6 +495,8 @@ app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
  * 单点失败不应阻止窗口和托盘的创建（用户至少要能看到界面）。
  */
 async function bootstrap(): Promise<void> {
+  // ─── 第一梯队：必须在窗口显示前完成的关键路径 ───
+
   // 初始化 Proma 版本号（供 User-Agent 等全局标识使用）
   setPromaVersion(app.getVersion())
 
@@ -503,18 +505,12 @@ async function bootstrap(): Promise<void> {
   protocol.handle('proma-file', handlePromaFileRequest)
 
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
-  // 必须在其他初始化之前执行，确保环境变量正确加载
+  // 热启动时从磁盘缓存恢复，耗时 < 10ms
   await safeAwait('initializeRuntime', () => initializeRuntime())
 
   // 从旧 Proma 数据目录迁移到 Profer（一次性）
   const { migrateFromPromaIfNeeded } = require('./lib/config-paths')
   safeRun('migrateFromProma', migrateFromPromaIfNeeded)
-
-  // 同步默认 Skills 模板到 ~/.profer/default-skills/
-  safeRun('seedDefaultSkills', seedDefaultSkills)
-
-  // 升级所有工作区中版本过旧的默认 Skills
-  safeRun('upgradeDefaultSkillsInWorkspaces', upgradeDefaultSkillsInWorkspaces)
 
   // Create application menu
   const menu = createApplicationMenu()
@@ -524,8 +520,6 @@ async function bootstrap(): Promise<void> {
   registerIpcHandlers()
 
   // Set dock icon on macOS
-  // 确保 Dock 图标可见（dev 模式下通过 spawn 启动时可能不会自动显示）
-  // 如果用户有保存的图标偏好则使用，否则用默认图标
   if (process.platform === 'darwin' && app.dock) {
     await app.dock.show()
     const { resolveAppIconPath } = require('./ipc')
@@ -537,10 +531,8 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  // Create main window (will be shown when ready)
+  // ─── 窗口 + 托盘：用户看到界面的临界点 ───
   createWindow()
-
-  // Create system tray icon
   createTray({
     showMainWindow: showAndFocusMainWindow,
     openAgentSession: (sessionId, title) => {
@@ -554,22 +546,35 @@ async function bootstrap(): Promise<void> {
     },
   })
 
-  // 启动工作区文件监听（Agent MCP/Skills + 文件浏览器自动刷新）
+  // ─── 第二梯队：窗口已显示，以下任务延迟到空闲时执行 ───
+
+  // 同步默认 Skills（非关键，后台执行）
+  safeRun('seedDefaultSkills', seedDefaultSkills)
+  safeRun('upgradeDefaultSkillsInWorkspaces', upgradeDefaultSkillsInWorkspaces)
+
+  // 应用开机自启动设置：确保与实际系统状态同步
+  safeRun('applyAutoLaunch', () => {
+    const settings = getSettings()
+    const enabled = settings.autoLaunch === true
+    app.setLoginItemSettings({ openAtLogin: enabled })
+    console.log(`[启动] 开机自启动: ${enabled ? '已开启' : '已关闭'}`)
+  })
+
+  // 启动工作区文件监听
   if (mainWindow) {
     safeRun('startWorkspaceWatcher', () => startWorkspaceWatcher(mainWindow!))
   }
 
-  // 启动 Chat 工具配置文件监听（Agent 创建工具后自动通知渲染进程）
+  // 启动 Chat 工具配置文件监听
   safeRun('startChatToolsWatcher', startChatToolsWatcher)
 
-  // 自动更新已禁用 — 通过自有渠道管控版本发布
   // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
   safeRun('createQuickTaskWindow', createQuickTaskWindow)
   if (getSettings().voiceDictation?.enabled === true) {
     safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
   }
 
-  // 飞书实时同步开启时，默认阻止系统自动休眠，保证远程群内继续可用。
+  // 飞书实时同步开启时，默认阻止系统自动休眠
   safeRun('syncFeishuSyncSleepBlocker', () => syncFeishuSyncSleepBlocker(getSettings()))
 
   // 注册全局快捷键
@@ -585,28 +590,49 @@ async function bootstrap(): Promise<void> {
     }),
   )
 
-  // 启动所有已注册的 Bridge（飞书/钉钉/微信等）
-  await safeAwait('startAllBridges', () => startAllBridges())
-  safeRun('startBridgeSelfHealing', startBridgeSelfHealing)
+  // Bridge 启动延后到下一个事件循环，让窗口先完成渲染
+  setTimeout(() => {
+    safeRun('startAllBridges', () => { startAllBridges().catch(() => {}) })
+    safeRun('startBridgeSelfHealing', startBridgeSelfHealing)
+    safeRun('startScheduler', startScheduler)
+    if (mainWindow) {
+      safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
+    }
+  }, 0)
 
-  // 启动定时任务调度器（恢复持久化的 active 任务）
-  safeRun('startScheduler', startScheduler)
+  // 启动时恢复团队会话：先检查已登录，否则用 refreshToken 尝试恢复
+  safeRun('restoreTeamSession', async () => {
+    const { getAuthStatus, scheduleAutoRefresh, tryRestoreSession } = require('./lib/auth-service')
 
-  // 初始化自动更新（启动后 10s 首次检查，之后每 4 小时检查一次）
-  if (mainWindow) {
-    safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
-  }
+    // 如果 accessToken 已过期但 refreshToken 存在，先尝试恢复
+    const restored = await tryRestoreSession()
 
-  // 启动时恢复团队会话：如果已登录，启动同步引擎并刷新工作区索引
-  safeRun('restoreTeamSession', () => {
-    const { getAuthStatus, scheduleAutoRefresh } = require('./lib/auth-service')
-    if (getAuthStatus().isLoggedIn) {
-      console.log('[启动] 检测到已登录，恢复团队同步...')
-      // 启动主动 token 续期，确保 accessToken 永不过期
+    if (restored) {
+      console.log('[启动] 团队会话已恢复，开始同步...')
       scheduleAutoRefresh()
       const { startSyncEngine } = require('./lib/sync-manager')
       startSyncEngine()
       // 延迟 3 秒同步团队工作区，等窗口 IPC 就绪
+      setTimeout(() => {
+        const { listTeamWorkspaces } = require('./lib/team-manager')
+        const { syncTeamWorkspacesToIndex } = require('./lib/agent-workspace-manager')
+        listTeamWorkspaces().then((teamWs: unknown[]) => {
+          syncTeamWorkspacesToIndex(teamWs)
+          for (const w of BrowserWindow.getAllWindows()) {
+            w.webContents.send('team:workspaces-synced')
+          }
+          console.log(`[启动] 团队工作区同步完成: ${(teamWs as unknown[]).length} 个`)
+        }).catch((err: unknown) => {
+          console.error('[启动] 团队工作区同步失败:', err)
+        })
+      }, 3000)
+    } else if (getAuthStatus().isLoggedIn) {
+      // 向后兼容：如果 getAuthStatus 返回 true，tryRestoreSession 也会返回 true，已处理
+      // 这里仅当 token 有效但 refreshToken 不存在时也有可能
+      console.log('[启动] 检测到已登录，恢复团队同步...')
+      scheduleAutoRefresh()
+      const { startSyncEngine } = require('./lib/sync-manager')
+      startSyncEngine()
       setTimeout(() => {
         const { listTeamWorkspaces } = require('./lib/team-manager')
         const { syncTeamWorkspacesToIndex } = require('./lib/agent-workspace-manager')
@@ -637,12 +663,16 @@ async function bootstrap(): Promise<void> {
     }
   })
 
-  // 休眠恢复：系统唤醒后重建网络连接
+  // 休眠恢复：系统唤醒后重建网络连接，必要时用 refreshToken 恢复会话
   powerMonitor.on('resume', () => {
     console.log('[系统] 从休眠恢复，重建连接...')
-    safeRun('resume:refreshTeamSession', () => {
-      const { getAuthStatus } = require('./lib/auth-service')
-      if (getAuthStatus().isLoggedIn) {
+    safeRun('resume:refreshTeamSession', async () => {
+      const { tryRestoreSession } = require('./lib/auth-service')
+
+      // 如果 token 在休眠期间过期，用 refreshToken 尝试恢复
+      const restored = await tryRestoreSession()
+
+      if (restored) {
         const { startSyncEngine } = require('./lib/sync-manager')
         startSyncEngine()
         setTimeout(() => {

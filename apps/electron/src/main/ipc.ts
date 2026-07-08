@@ -1600,6 +1600,29 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 获取开机自启动状态
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.GET_AUTO_LAUNCH,
+    async (): Promise<boolean> => {
+      return app.getLoginItemSettings().openAtLogin
+    }
+  )
+
+  // 设置开机自启动
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.SET_AUTO_LAUNCH,
+    async (_event, enabled: boolean): Promise<void> => {
+      app.setLoginItemSettings({
+        openAtLogin: enabled,
+        // 开发模式下也允许设置，方便测试（正式版会自动使用应用路径）
+        ...(app.isPackaged ? {} : { openAtLogin: enabled, path: process.execPath }),
+      })
+      // 同步持久化到 settings.json
+      updateSettings({ autoLaunch: enabled })
+      console.log(`[设置] 开机自启动: ${enabled ? '已开启' : '已关闭'}`)
+    }
+  )
+
   // 监听系统主题变化，推送给所有渲染进程窗口
   nativeTheme.on('updated', () => {
     const isDark = nativeTheme.shouldUseDarkColors
@@ -2488,30 +2511,25 @@ export function registerIpcHandlers(): void {
           return { success: false, message: `连接失败: ${msg}` }
         }
       }
-      // Nano Banana 生图工具测试
-      if (toolId === 'nano-banana') {
+      // GPT Image 生图工具测试
+      if (toolId === 'nano-banana' || toolId === 'gpt-image') {
         const { getToolCredentials: getCredentials } = await import('./lib/chat-tool-config')
-        const credentials = getCredentials('nano-banana')
+        const credentials = getCredentials(toolId)
         if (!credentials.apiKey) {
-          return { success: false, message: '请先填写 Gemini API Key' }
+          return { success: false, message: '请先填写 OpenAI API Key' }
         }
         try {
-          const baseUrl = credentials.baseUrl?.trim() || 'https://generativelanguage.googleapis.com'
-          const model = credentials.model?.trim() || 'gemini-3.1-flash-image-preview'
-          const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${credentials.apiKey}`
+          const baseUrl = credentials.baseUrl?.trim() || 'https://api.openai.com'
+          const url = `${baseUrl}/v1/models`
           const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
-              generationConfig: { maxOutputTokens: 10 },
-            }),
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${credentials.apiKey}` },
           })
           if (!response.ok) {
             const errorText = await response.text()
             return { success: false, message: `API 请求失败 (${response.status}): ${errorText.slice(0, 200)}` }
           }
-          return { success: true, message: `连接成功，模型 ${model} 可用` }
+          return { success: true, message: `连接成功，OpenAI API 可用` }
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error)
           return { success: false, message: `连接失败: ${msg}` }
@@ -2589,6 +2607,31 @@ export function registerIpcHandlers(): void {
         exitPlans: exitPlanService.getPendingRequests(),
       }
     }
+  )
+
+  // ===== Project Graph =====
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_GRAPH,
+    async (_event, sessionId: string) => {
+      const { loadGraph } = await import('./lib/project-graph-service')
+      return loadGraph(sessionId)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY,
+    async (_event, sessionId: string) => {
+      const { getGraphSummary } = await import('./lib/project-graph-service')
+      return getGraphSummary(sessionId)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.APPEND_GRAPH_EVENT,
+    async (_event, sessionId: string, event: import('@proma/project-core').GraphEvent) => {
+      const { appendGraphEvent } = await import('./lib/project-graph-service')
+      appendGraphEvent(sessionId, event)
+    },
   )
 
   // ===== Agent 附件 =====
@@ -4938,9 +4981,9 @@ export function registerIpcHandlers(): void {
         const m = md.match(/^---\n([\s\S]*?)\n---/)
         if (!m) return {}
         const fm: Record<string, string> = {}
-        for (const line of m[1].split('\n')) {
+        for (const line of (m[1] ?? '').split('\n')) {
           const kv = line.match(/^(\w+):\s*(.*)/)
-          if (kv) fm[kv[1]] = kv[2].trim()
+          if (kv && kv[1]) fm[kv[1]] = (kv[2] ?? '').trim()
         }
         return fm
       }
@@ -5076,9 +5119,9 @@ export function registerIpcHandlers(): void {
           const m = content.match(/^---\n([\s\S]*?)\n---/)
           if (!m) continue
           const fm: Record<string, string> = {}
-          for (const line of m[1].split('\n')) {
+          for (const line of (m[1] ?? '').split('\n')) {
             const kv = line.match(/^(\w+):\s*(.*)/)
-            if (kv) fm[kv[1]] = kv[2].trim()
+            if (kv && kv[1]) fm[kv[1]] = (kv[2] ?? '').trim()
           }
           const remoteVersion = fm.version || '0.0.0'
 

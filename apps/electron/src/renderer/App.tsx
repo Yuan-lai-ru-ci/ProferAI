@@ -1,16 +1,18 @@
 import * as React from 'react'
 import { useAtom, useStore } from 'jotai'
 import { AppShell } from './components/app-shell/AppShell'
-import { OnboardingView } from './components/onboarding/OnboardingView'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
-import { EnvironmentCheckDialog } from './components/environment/EnvironmentCheckDialog'
-import { MigrationImportDialog } from './components/migration/MigrationImportDialog'
 import { TooltipProvider } from './components/ui/tooltip'
-import { SettingsDialog } from './components/settings/SettingsDialog'
 import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from './atoms/tab-atoms'
 import type { AppShellContextType } from './contexts/AppShellContext'
+
+/** 懒加载非首屏组件——减少首次渲染的 JS 解析量 */
+const OnboardingView = React.lazy(() => import('./components/onboarding/OnboardingView').then(m => ({ default: m.OnboardingView })))
+const EnvironmentCheckDialog = React.lazy(() => import('./components/environment/EnvironmentCheckDialog').then(m => ({ default: m.EnvironmentCheckDialog })))
+const MigrationImportDialog = React.lazy(() => import('./components/migration/MigrationImportDialog').then(m => ({ default: m.MigrationImportDialog })))
+const SettingsDialog = React.lazy(() => import('./components/settings/SettingsDialog').then(m => ({ default: m.SettingsDialog })))
 
 export default function App(): React.ReactElement {
   // [FLASH-DEBUG] 监控 App 组件重渲染（如果看到频繁日志，说明根组件被频繁重渲染）
@@ -92,8 +94,12 @@ export default function App(): React.ReactElement {
   if (showOnboarding) {
     return (
       <TooltipProvider delayDuration={200}>
-        <OnboardingView onComplete={handleOnboardingComplete} />
-        <MigrationImportDialog />
+        <React.Suspense fallback={null}>
+          <OnboardingView onComplete={handleOnboardingComplete} />
+        </React.Suspense>
+        <React.Suspense fallback={null}>
+          <MigrationImportDialog />
+        </React.Suspense>
       </TooltipProvider>
     )
   }
@@ -105,10 +111,14 @@ export default function App(): React.ReactElement {
   return (
     <TooltipProvider delayDuration={200}>
       <AppShell contextValue={contextValue} />
-      <SettingsDialog />
+      <React.Suspense fallback={null}>
+        <SettingsDialog />
+      </React.Suspense>
       <TutorialBanner />
       <GlobalEnvironmentCheckDialog />
-      <MigrationImportDialog />
+      <React.Suspense fallback={null}>
+        <MigrationImportDialog />
+      </React.Suspense>
     </TooltipProvider>
   )
 }

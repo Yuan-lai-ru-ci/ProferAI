@@ -590,7 +590,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     setWorkspaces((prev) => {
       if (prev.length !== next.length) return next
       const same = prev.every((w, i) =>
-        w.id === next[i].id && w.updatedAt === next[i].updatedAt && w.isDeleted === next[i].isDeleted
+        w.id === next[i]?.id && w.updatedAt === next[i]?.updatedAt && w.isDeleted === next[i]?.isDeleted
       )
       return same ? prev : next
     })

@@ -16,12 +16,137 @@ import { detectBunRuntime } from './bun-finder'
 import { detectGitRuntime, getGitRepoStatus } from './git-detector'
 import { detectGitBash } from './git-bash-detector'
 import { detectWsl } from './wsl-detector'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 
 /** 运行时状态缓存 */
 let runtimeStatusCache: RuntimeStatus | null = null
 
 /** 初始化标志 */
 let isInitialized = false
+
+/** 运行时缓存有效期（24 小时），过期后重新检测以捕获环境变化 */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
+/** 获取缓存文件路径（不能依赖 config-paths.ts 避免循环引用） */
+function getRuntimeCachePath(): string {
+  // 复用 getConfigDir 的逻辑：检测是否为打包版本
+  let configDirName = '.profer'
+  try {
+    const { app } = require('electron')
+    configDirName = app.isPackaged ? '.profer' : '.profer-dev'
+  } catch { /* 降级使用默认值 */ }
+  return join(homedir(), configDirName, 'runtime-cache.json')
+}
+
+/** 读取磁盘缓存的运行时状态，如果有效则直接返回；缺失的工具会增量重检 */
+async function loadCachedRuntime(): Promise<RuntimeStatus | null> {
+  try {
+    const cachePath = getRuntimeCachePath()
+    if (!existsSync(cachePath)) return null
+
+    const raw = readFileSync(cachePath, 'utf-8')
+    const cached = JSON.parse(raw) as RuntimeStatus & { _cachedAt?: number }
+
+    // 检查缓存是否过期
+    if (cached._cachedAt && Date.now() - cached._cachedAt > CACHE_TTL_MS) {
+      console.log('[运行时初始化] 缓存已过期，将重新检测')
+      return null
+    }
+
+    // 快速验证：确认缓存中已找到的工具路径仍存在
+    const pathsToCheck: (string | null)[] = [
+      cached.node?.path,
+      cached.bun?.path,
+      cached.git?.path,
+    ]
+    const allPathsValid = pathsToCheck
+      .filter((p): p is string => typeof p === 'string')
+      .every((p) => existsSync(p))
+
+    if (!allPathsValid) {
+      console.log('[运行时初始化] 缓存路径已失效，将重新检测')
+      return null
+    }
+
+    // 增量重检：缓存中标记为"未找到"的工具，尝试快速重新检测
+    // 解决"第一波没装环境，后面装了也检测不到"的问题
+    let needsRewrite = false
+
+    if (!cached.bun?.available) {
+      console.log('[运行时初始化] 缓存中 Bun 未找到，尝试增量重检...')
+      const bunStatus = await detectBunRuntime()
+      if (bunStatus.available) {
+        cached.bun = bunStatus
+        needsRewrite = true
+        console.log('[运行时初始化] 增量重检发现 Bun:', bunStatus.version)
+      }
+    }
+
+    if (!cached.git?.available) {
+      console.log('[运行时初始化] 缓存中 Git 未找到，尝试增量重检...')
+      const gitStatus = await detectGitRuntime()
+      if (gitStatus.available) {
+        cached.git = gitStatus
+        needsRewrite = true
+        console.log('[运行时初始化] 增量重检发现 Git:', gitStatus.version)
+      }
+    }
+
+    if (!cached.node?.available) {
+      console.log('[运行时初始化] 缓存中 Node.js 未找到，尝试增量重检...')
+      const nodeStatus = await detectNodeRuntime()
+      if (nodeStatus.available) {
+        cached.node = nodeStatus
+        needsRewrite = true
+        console.log('[运行时初始化] 增量重检发现 Node.js:', nodeStatus.version)
+      }
+    }
+
+    // Windows 下 Git Bash / WSL 的增量重检
+    if (process.platform === 'win32' && !cached.shell?.recommended) {
+      console.log('[运行时初始化] 缓存中无可用 Shell 环境，尝试增量重检...')
+      try {
+        const gitBashStatus = await detectGitBash()
+        const wslStatus = await detectWsl()
+        let recommended: 'git-bash' | 'wsl' | null = null
+        if (gitBashStatus.available) recommended = 'git-bash'
+        else if (wslStatus.available) recommended = 'wsl'
+        if (recommended) {
+          cached.shell = { gitBash: gitBashStatus, wsl: wslStatus, recommended }
+          needsRewrite = true
+          console.log('[运行时初始化] 增量重检发现 Shell:', recommended)
+        }
+      } catch { /* 重检失败不影响已有缓存 */ }
+    }
+
+    if (needsRewrite) {
+      saveCachedRuntime(cached)
+    }
+
+    console.log('[运行时初始化] 已从磁盘缓存恢复运行时状态')
+    return cached
+  } catch (err) {
+    console.warn('[运行时初始化] 读取缓存失败，将重新检测:', err)
+    return null
+  }
+}
+
+/** 将运行时状态写入磁盘缓存 */
+function saveCachedRuntime(status: RuntimeStatus): void {
+  try {
+    const cachePath = getRuntimeCachePath()
+    const dir = join(homedir(), '.profer')
+    try { mkdirSync(dir, { recursive: true }) } catch { /* 目录可能已存在 */ }
+    const toCache = { ...status, _cachedAt: Date.now() }
+    writeFileSync(cachePath, JSON.stringify(toCache, null, 2), 'utf-8')
+    console.log('[运行时初始化] 已写入磁盘缓存')
+  } catch (err) {
+    // 缓存写入失败不影响功能，仅记录日志
+    console.warn('[运行时初始化] 写入缓存失败:', err)
+  }
+}
 
 /**
  * 初始化运行时环境
@@ -38,6 +163,21 @@ let isInitialized = false
  */
 export async function initializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
   const startTime = Date.now()
+
+  // 如果有强制跳过的选项或被要求强制重新检测，跳过缓存逻辑
+  const forceRefresh = options.skipEnvLoad || options.skipNodeDetection || options.skipBunDetection || options.skipGitDetection || options.skipShellDetection
+
+  // 热启动：尝试从磁盘缓存恢复（含增量重检缺失工具）
+  if (!forceRefresh) {
+    const cached = await loadCachedRuntime()
+    if (cached) {
+      runtimeStatusCache = cached
+      isInitialized = true
+      console.log(`[运行时初始化] 从缓存恢复完成 (耗时 ${Date.now() - startTime}ms)`)
+      return cached
+    }
+  }
+
   console.log('[运行时初始化] 开始初始化运行时环境...')
 
   // 1. 加载 Shell 环境
@@ -128,9 +268,14 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
     initializedAt: Date.now(),
   }
 
-  // 缓存状态
+  // 缓存状态（内存 + 磁盘）
   runtimeStatusCache = runtimeStatus
   isInitialized = true
+
+  // 写入磁盘缓存供下次热启动使用
+  if (!forceRefresh) {
+    saveCachedRuntime(runtimeStatus)
+  }
 
   const duration = Date.now() - startTime
   console.log(`[运行时初始化] 初始化完成 (耗时 ${duration}ms)`)

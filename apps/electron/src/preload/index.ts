@@ -339,6 +339,12 @@ export interface ElectronAPI {
   /** 订阅系统主题变化事件（返回清理函数） */
   onSystemThemeChanged: (callback: (isDark: boolean) => void) => () => void
 
+  /** 获取开机自启动状态 */
+  getAutoLaunch: () => Promise<boolean>
+
+  /** 设置开机自启动 */
+  setAutoLaunch: (enabled: boolean) => Promise<void>
+
   /** 订阅用户手动切换主题事件（跨窗口同步，返回清理函数） */
   onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }) => void) => () => void
 
@@ -631,6 +637,20 @@ export interface ElectronAPI {
 
   /** 获取所有待处理的交互请求快照（渲染进程重载后恢复状态） */
   getPendingRequests: () => Promise<PendingRequestsSnapshot>
+
+  // ===== Project Graph =====
+
+  /** 获取当前会话的 Task Graph */
+  getGraph: (sessionId: string) => Promise<import('@proma/project-core').TaskGraph>
+
+  /** 获取当前会话的 Graph 摘要 */
+  getGraphSummary: (sessionId: string) => Promise<import('@proma/project-core').GraphSummary>
+
+  /** 订阅 Graph 数据更新（主进程主动推送） */
+  onGraphUpdated: (callback: (sessionId: string) => void) => () => void
+
+  /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
+  appendGraphEvent: (sessionId: string, event: import('@proma/project-core').GraphEvent) => Promise<void>
 
   // ===== Agent 附件 =====
 
@@ -1121,6 +1141,10 @@ interface MigrationExportResult {
 /**
  * 实现 ElectronAPI 接口
  */
+
+/** 启动时去重：多个初始化组件同时调用 getSettings()，共享同一个 Promise */
+let _settingsPromise: Promise<AppSettings> | null = null
+
 const electronAPI: ElectronAPI = {
   // 运行时
   getRuntimeStatus: () => {
@@ -1372,7 +1396,14 @@ const electronAPI: ElectronAPI = {
 
   // 应用设置
   getSettings: () => {
-    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET)
+    // 启动时去重：多个初始化组件同时调用 getSettings()，共享同一个 Promise
+    if (!_settingsPromise) {
+      _settingsPromise = ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET) as Promise<AppSettings>
+      _settingsPromise.finally(() => {
+        _settingsPromise = null
+      })
+    }
+    return _settingsPromise
   },
 
   updateSettings: (updates: Partial<AppSettings>) => {
@@ -1385,6 +1416,14 @@ const electronAPI: ElectronAPI = {
 
   getSystemTheme: () => {
     return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_SYSTEM_THEME)
+  },
+
+  getAutoLaunch: () => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_AUTO_LAUNCH)
+  },
+
+  setAutoLaunch: (enabled: boolean) => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_AUTO_LAUNCH, enabled)
   },
 
   onSystemThemeChanged: (callback: (isDark: boolean) => void) => {
@@ -1795,6 +1834,25 @@ const electronAPI: ElectronAPI = {
   // 待处理请求恢复
   getPendingRequests: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PENDING_REQUESTS)
+  },
+
+  // ===== Project Graph =====
+  getGraph: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH, sessionId)
+  },
+
+  getGraphSummary: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId)
+  },
+
+  onGraphUpdated: (callback: (sessionId: string) => void) => {
+    const listener = (_: unknown, sessionId: string): void => callback(sessionId)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.GRAPH_UPDATED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.GRAPH_UPDATED, listener) }
+  },
+
+  appendGraphEvent: (sessionId: string, event: import('@proma/project-core').GraphEvent) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.APPEND_GRAPH_EVENT, sessionId, event)
   },
 
   // 工作区文件变化通知
