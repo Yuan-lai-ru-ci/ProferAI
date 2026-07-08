@@ -1215,9 +1215,11 @@ export function registerIpcHandlers(): void {
   // 获取账号能力（自配权限 + 账号类型）
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES,
-    async (): Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }> => {
+    async (_, force?: boolean): Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }> => {
       const { isCommercialMode } = require('./lib/channel-manager')
-      const { isSelfConfigAllowed, getAccountType } = require('./lib/auth-service')
+      const { isSelfConfigAllowed, getAccountType, refreshAuthToken } = require('./lib/auth-service')
+      // force=true：先拉一次服务端刷新，让管理员刚开通的自配权限即时生效（无需重登）
+      if (force) await refreshAuthToken().catch(() => {})
       return {
         commercialMode: isCommercialMode(),
         canSelfConfig: isSelfConfigAllowed(),

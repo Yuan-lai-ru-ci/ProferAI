@@ -9,7 +9,7 @@
 
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
-import { Plus, Pencil, Trash2, Server, Lock } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, Lock, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
@@ -57,17 +57,40 @@ export function ChannelSettings(): React.ReactElement {
     agentChannelIdRef.current = agentChannelId
   }, [agentChannelId])
 
-  // 检测账号能力（商业模式 + 自配权限 + 账号类型）
-  React.useEffect(() => {
-    window.electronAPI.getAccountCapabilities().then((caps) => {
+  const [refreshingCaps, setRefreshingCaps] = React.useState(false)
+
+  // 加载账号能力（商业模式 + 自配权限 + 账号类型）。
+  // force=true 时先拉一次服务端刷新，让管理员刚开通的自配权限即时生效，无需用户重新登录。
+  const loadCaps = React.useCallback(async (force: boolean) => {
+    try {
+      const caps = await window.electronAPI.getAccountCapabilities(force)
       setCommercialMode(caps.commercialMode)
       setCanSelfConfig(caps.canSelfConfig)
       setAccountType(caps.accountType)
-    }).catch(() => {
+      return caps
+    } catch {
       setCommercialMode(false)
       setCanSelfConfig(false)
-    })
+      return null
+    }
   }, [])
+
+  // 首次读本地能力；若显示被锁（可能刚被管理员解限），自动强刷一次服务端纠正
+  React.useEffect(() => {
+    loadCaps(false).then((caps) => {
+      if (caps && caps.commercialMode && !caps.canSelfConfig) loadCaps(true)
+    })
+  }, [loadCaps])
+
+  // 手动刷新权限（解限后无需重登即可生效）
+  const handleRefreshCaps = React.useCallback(async () => {
+    setRefreshingCaps(true)
+    try {
+      await loadCaps(true)
+    } finally {
+      setRefreshingCaps(false)
+    }
+  }, [loadCaps])
 
   /** 加载渠道列表 */
   const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
@@ -252,10 +275,14 @@ export function ChannelSettings(): React.ReactElement {
           <SettingsCard>
             <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
               <Server size={18} className="text-primary shrink-0" />
-              <div>
+              <div className="flex-1">
                 <div className="text-sm font-medium">渠道由服务端统一管理</div>
-                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端。如需自行添加 API Key，请让管理员开通自配权限</div>
+                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端。如需自行添加 API Key，请让管理员开通自配权限后点「刷新权限」</div>
               </div>
+              <Button size="sm" variant="outline" onClick={handleRefreshCaps} disabled={refreshingCaps} className="shrink-0">
+                <RefreshCw size={14} className={refreshingCaps ? 'animate-spin' : ''} />
+                <span>刷新权限</span>
+              </Button>
             </div>
           </SettingsCard>
         )}
