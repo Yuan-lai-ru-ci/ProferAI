@@ -25,11 +25,12 @@ Bun workspace monorepo：
 ```
 proma-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.31)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.11)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
+│   ├── shared/        # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.31)
+│   ├── core/          # AI Provider 适配器、代码高亮服务 (v0.2.11)
+│   ├── session-core/  # headless session 读取/分组/搜索/渲染 (v0.1.0)
+│   └── ui/            # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.12.26)
+    └── electron/      # Electron 桌面应用 (v0.12.69)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -53,12 +54,17 @@ proma-v2/
 - **依赖**：`@proma/shared`、`shiki`
 - **Peer 依赖**：`@anthropic-ai/claude-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
+#### @proma/session-core (v0.1.0)
+- **职责**：headless 核心——读取、分组、搜索、渲染 Proma Agent 会话。Electron 应用、proma CLI 和未来查询界面的单一事实来源
+- **导出模块**：`./index`（`group`、`outline`、`read`、`search`、`select`、`transcript`、`render-markdown`、`thinking-tags`、`tokens`）、`./node`（文件系统读取 + session 列表）
+- **依赖**：`@proma/shared`
+
 #### @proma/ui (v0.1.9)
 - **关键组件**：共享 React UI 组件库
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.12.26)
+#### @proma/electron (v0.12.69)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@anthropic-ai/claude-agent-sdk@0.3.153` - Agent SDK
@@ -173,9 +179,14 @@ bun run generate:icons    # 生成应用图标
 
 | 服务 | 职责 |
 |------|------|
-| `agent-orchestrator.ts` | Agent 核心编排层（71KB）：并发守卫、渠道查找、环境变量构建、SDK 路径解析、消息持久化、事件流处理、错误处理、自动标题生成 |
-| `agent-session-manager.ts` | Agent 会话管理：SDK 消息持久化、会话元数据 CRUD、JSONL 存储 |
-| `agent-prompt-builder.ts` | Agent 系统提示词构建（18KB）：动态上下文构建、内置 Agent 构建、工作区上下文注入 |
+| `agent-orchestrator.ts` | Agent 核心编排层（107KB）：并发守卫、渠道查找、环境变量构建、SDK 路径解析、消息持久化、事件流处理、错误处理、自动标题生成 |
+| `agent-collaboration-tools.ts` | Agent 协作委派工具（39KB）：10 个 MCP 工具（delegate_agent / delegate_agents / wait_for_delegations / list_delegations / get_delegation_results / stop_delegation / stop_delegations / answer_delegation_question / continue_delegation / list_available_agent_models），子会话创建、等待、管理和恢复 |
+| `adapters/claude-agent-adapter.ts` | Claude Agent SDK 适配器（45KB）：实现 AgentProviderAdapter 接口，长生命周期消息通道，支持 streamInput 持久化、工具权限注入、thinking signature 错误处理 |
+| `agent-session-manager.ts` | Agent 会话管理（60KB）：SDK 消息持久化、会话元数据 CRUD、JSONL 存储、委派子会话元数据 |
+| `agent-prompt-builder.ts` | Agent 系统提示词构建（19KB）：动态上下文构建、内置 Agent 构建、工作区上下文注入 |
+| `agent-service.ts` | Agent headless 运行服务（18KB）：无界面 Agent 运行、协作子会话执行 |
+| `agent-headless-runner-registry.ts` | Headless runner 注册表：管理协作委派的 Agent 运行实例生命周期 |
+| `agent-model-selection.ts` | 协作委派模型选择验证：确保委派子会话使用已启用的合法模型 |
 | `agent-permission-service.ts` | Agent 权限管理：工具权限检查、权限模式管理 |
 | `agent-ask-user-service.ts` | Agent 用户交互：AskUser 请求处理 |
 | `agent-exit-plan-service.ts` | Agent 退出计划服务 |
@@ -183,7 +194,9 @@ bun run generate:icons    # 生成应用图标
 | `team-manager.ts` / `team-file-service.ts` | 团队工作区与团队文件：远程 CRUD、邀请成员、文件上传 / 下载 / 删除 / 移动、本地缓存 |
 | `chat-service.ts` | Chat 流式调用编排（20KB）：Provider 适配器集成、消息持久化、AbortController |
 | `conversation-manager.ts` | 对话管理（13KB）：对话 CRUD、JSONL 消息存储、置顶、上下文分割 |
-| `channel-manager.ts` | 渠道管理（16KB）：渠道 CRUD、API Key AES-256-GCM 加密（safeStorage）、连接测试、模型获取 |
+| `channel-manager.ts` | 渠道管理（28KB）：渠道 CRUD、API Key AES-256-GCM 加密（safeStorage）、连接测试、模型获取、NewAPI 积分渠道同步 |
+| `sync-manager.ts` | 同步引擎（13KB）：团队工作区双向同步、轮询远程变更、冲突检测 |
+| `credits/` | 积分与计费系统：`SidebarBalanceBar`（余额显示）、`CreditsSettings`（积分设置页）、`credits-atoms.ts`、`useCreditsLoader.ts`，服务端 `credits-db.js`、`billing-utils.js` |
 
 #### 集成服务
 
@@ -246,21 +259,33 @@ bun run generate:icons    # 生成应用图标
 |-----------|-----------|
 | `chat-atoms.ts` | 对话列表、当前消息、流式状态（Map 结构支持多对话并行）、模型选择、上下文设置、并排模式、思考模式、待上传附件 |
 | `agent-atoms.ts` | Agent 会话列表、当前会话、流式状态（`AgentStreamState`）、工作区选择、渠道选择、权限/AskUser 请求队列（按 sessionId Map） |
-| `active-view.ts` | 主面板视图切换（'conversations' / 'settings'） |
-| `app-mode.ts` | 应用模式（Chat / Agent） |
-| `settings-tab.ts` | 设置面板当前标签页 |
+| `active-view.ts` | 主面板视图切换（'conversations' / 'automations' / 'agent-skills'） |
+| `app-mode.ts` | 应用模式（'chat' / 'agent' / 'scratch'） |
+| `settings-tab.ts` | 设置面板当前标签页（17 个 Tab：general / channels / agent / prompts / tools / appearance / proxy / shortcuts / voice-input / memory / bots / storage / migration / credits / brand / team / tutorial / about） |
+| `automation-atoms.ts` | 定时任务状态（automationsAtom、automationFormAtom） |
+| `credits-atoms.ts` | 积分余额和用量统计 |
 | `theme.ts` | 主题模式（light / dark / system） |
 | `user-profile.ts` | 用户档案（姓名 + 头像） |
 | `updater.ts` | 自动更新状态（检查/下载/安装），优雅降级（updater 不可用时保持 idle） |
 
 ### 渲染进程组件架构（`renderer/components/`）
 
-- **`app-shell/`**：三面板布局（LeftSidebar | NavigatorPanel | MainContentPanel），侧边栏含模式切换、置顶对话、日期分组列表、流式指示器
+- **`app-shell/`**：三面板布局（LeftSidebar | NavigatorPanel | MainContentPanel），侧边栏含模式切换、置顶对话、日期分组列表、流式指示器、余额显示、委派子会话树形折叠
 - **`chat/`**：聊天核心 — ChatView（消息加载/流式订阅）、ChatHeader（模型选择/上下文设置）、ChatInput（Tiptap 富文本编辑器）、ChatMessages（消息列表/自动滚动）、ParallelChatMessages（并排模式）
-- **`agent/`**：Agent 模式 — AgentView（纯展示 + 交互，IPC 监听已提升到全局）、AgentHeader（渠道/模型选择）、AgentMessages（消息列表 + 工具活动）、ToolActivityItem（工具调用展示）、WorkspaceSelector（工作区切换）、PermissionBanner/AskUserBanner（权限/问答请求 UI）
-- **`settings/`**：设置面板 — GeneralSettings（用户档案）、AppearanceSettings（主题）、ChannelSettings（渠道管理）、ChannelForm（Provider 配置）、AgentSettings（Agent 渠道/工作区/MCP）、McpServerForm（MCP 服务器配置）、AboutSettings（版本/更新）、FeishuSettings（飞书集成）；含 `primitives/` 可复用表单组件
+- **`agent/`**：Agent 模式 — AgentView（87KB，纯展示 + 交互，IPC 监听已提升到全局）、AgentHeader（渠道/模型选择）、AgentMessages（消息列表 + 工具活动）、SDKMessageRenderer（54KB，SDK 消息渲染，含协作工具 UI）、SidePanel（52KB，右侧面板）、TeamWorkspaceView（77KB，团队工作区文件管理+Agent 侧栏）、WorkspaceSelector（工作区切换）、PermissionBanner/AskUserBanner（权限/问答请求 UI）、MentionList（@ 提及文件/工作区）、ProcessBlockGroup（工具调用分组展示）、TaskProgressCard（任务进度卡片）
+- **`agent-skills/`**：Agent 技能全屏管理视图 — AgentSkillsView（19KB，Skills + MCP 管理）、SkillCard/SkillDetailSheet/McpCard/McpDetailSheet、ImportSkillDialog、useAgentSkillsData
+- **`settings/`**：设置面板（30+ 个组件） — GeneralSettings、AppearanceSettings（含经典/现代风格切换）、ChannelSettings/ChannelForm、AgentSettings、McpServerForm、AboutSettings、FeishuSettings、DingTalkSettings、WeChatSettings、PromptSettings、ToolSettings、MemorySettings、ShortcutSettings、VoiceInputSettings、ProxySettings、MigrationSettings、StorageSettings、CreditsSettings（积分与用量）、BrandManager（Logo/品牌定制）、TeamWorkspaceSettings、BotHubSettings/BotDefaultSettings、UpdateDialog、ReleaseNotesViewer；含 `primitives/` 可复用表单组件
 - **`file-browser/`**：文件浏览器 — FileBrowser（工作区文件树浏览）
+- **`diff/`**：Diff 与 Markdown 编辑器 — DiffView/DiffTabContent（55KB，并排 diff 展示）、PreviewPanel/PreviewTabContent（Markdown 预览）、MarkdownRichEditor/MarkdownEditorToolbar（富文本编辑）、MarkdownToc（目录导航）、PreviewFindBar（预览内搜索）、WorktreeSelector
 - **`ai-elements/`**：AI 展示组件 — Markdown 渲染、代码块、Mermaid 图、推理折叠、上下文分割线、富文本输入
+- **`automation/`**：定时任务 UI — AutomationsListView（12KB，任务列表）、AutomationFormView（45KB，任务编辑表单）
+- **`auth/`**：认证 — LoginDialog、JoinWorkspaceDialog
+- **`scratch-pad/`**：草稿本 — ScratchPadView（14KB）
+- **`quick-task/`**：快速任务窗口 — QuickTaskApp（17KB）
+- **`onboarding/`**：新手引导 — OnboardingView
+- **`tutorial/`**：教程横幅 — TutorialBanner
+- **`welcome/`**：欢迎页 — WelcomeView、WelcomeEmptyState
+- **`session-preview/`**：会话预览 — SessionMiniMapPopover
 - **`ui/`**：Radix UI 组件（现代化设计，CSS 变量主题）
 
 ### 全局 Hooks（`renderer/hooks/`）
@@ -310,6 +335,72 @@ bun run generate:icons    # 生成应用图标
 - Agent 工作区按 slug 隔离，每个会话独立目录
 - MCP 配置和 Skills 按工作区管理
 - 团队文件以服务器清单为唯一数据源，本地 `workspace-files/` 仅作为预览、打开和 Agent 解读的按需缓存
+
+## 团队服务器架构（`server/`）
+
+Hono + better-sqlite3 + JWT，Docker 部署。
+
+```
+server/
+├── index.js                     # 入口
+├── src/
+│   ├── config.js                # 环境变量配置
+│   ├── db.js                    # SQLite 数据库初始化 + 表结构（33KB）
+│   ├── utils.js                 # 工具函数（密码哈希、safePath 等）
+│   ├── audit.js                 # 审计日志
+│   ├── billing-utils.js         # 积分计费工具
+│   ├── newapi-client.js         # NewAPI 代理客户端
+│   ├── rate-limiter.js          # 限流器
+│   ├── request-log-utils.js     # 请求日志
+│   ├── middleware/               # admin、credits 中间件
+│   ├── routes/
+│   │   ├── auth.js              # 注册/登录/刷新/登出
+│   │   ├── workspaces.js        # 工作区 CRUD + 成员 + 邀请
+│   │   ├── invitations.js       # 邀请验证/接受/拒绝
+│   │   ├── files.js             # 文件上传/下载/移动/删除
+│   │   ├── sync.js              # 双向同步 (push/pull)
+│   │   ├── heartbeat.js         # 心跳上报
+│   │   ├── proxy/chat.js        # NewAPI Chat 代理
+│   │   ├── account/channels.js  # 账户渠道管理
+│   │   ├── account/credits.js   # 账户积分查询
+│   │   ├── admin/               # 管理后台路由（激活码/渠道/积分/定价/用户）
+│   │   └── admin-ui/index.html  # 管理后台 SPA（44KB）
+│   ├── shared/
+│   │   ├── channel-utils.js     # 渠道工具
+│   │   ├── newapi-channel-sync.js # NewAPI 渠道同步
+│   │   └── pricing-cache.js     # 定价缓存
+│   └── test-helpers/            # 测试辅助
+├── scripts/                     # 运维脚本
+│   ├── grant-monthly.js         # 月度积分发放
+│   ├── migrate-billing-units.js # 计费单位迁移
+│   ├── mock-relay.js            # Mock 中继
+│   └── newapi-probe.js          # NewAPI 探测
+├── docker-compose.yml
+└── Dockerfile
+```
+
+**安全特性**：JWT_SECRET 强制环境变量、Admin 密码环境变量（未设置则随机生成）、PBKDF2 随机盐、限流、账户锁定、防路径遍历、`MAX_FILE_SIZE` 文件大小上限
+
+## 默认 Skills（`apps/electron/default-skills/`）
+
+应用启动时 semver 比较自动同步到 `~/.proma/default-skills/` 和各工作区。共 14 个：
+
+| Skill | 用途 |
+|-------|------|
+| `automation` | Proma 内嵌定时任务 Skill |
+| `brainstorming` | 创意工作前需求探索和设计 |
+| `docx` | Word 文档创建/读取/编辑 |
+| `executing-plans` | 带审查检查点的实现计划执行 |
+| `find-skills` | 发现和安装 Skills |
+| `guizang-ppt-skill` | 横向翻页网页 PPT 生成 |
+| `pdf` | PDF 文档处理 |
+| `pptx` | PowerPoint 演示文稿 |
+| `proma-coach` | Proma 使用顾问，优化工作流 |
+| `session-cleaner` | 会话 JSONL 清洗为 Markdown |
+| `skill-creator` | Skill 创建/编辑/评估 |
+| `tool-builder` | 自定义 HTTP 工具管理 |
+| `writing-plans` | 多步骤任务实施计划 |
+| `xlsx` | 电子表格处理 |
 
 ## 构建工具
 
@@ -583,10 +674,3 @@ React UI 更新
 - 拖动稳定性优化
 - feishu-bridge 继续拆分（command-handlers、chat-history）
 - 错误监控（服务端日志收集）
-
-### 低优先级
-- Skill 市场（Phase 3）
-- 审计日志、使用统计
-- 多团队服务器配置
-- E2E 测试（多客户端完整流程）
-- 客户端签名（Windows/macOS）
