@@ -62,12 +62,23 @@ import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { parseTaskCreateResult } from '@/components/agent/task-progress'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 
-/** 从 delegate_agent 工具返回的 JSON 中提取 delegationId */
-function parseDelegationId(result: unknown): string | null {
+/** 从 delegate_agent 工具返回的 JSON 中提取 delegationId 和 childSessionId */
+function parseDelegationResult(result: unknown): { delegationId: string; childSessionId: string } | null {
   if (typeof result !== 'string') return null
   try {
     const parsed = JSON.parse(result)
-    return typeof parsed?.delegationId === 'string' ? parsed.delegationId : null
+    // delegate_agent 返回格式：{ delegation: { delegationId, childSessionId, ... }, ... }
+    const delegation = parsed?.delegation
+    if (delegation && typeof delegation === 'object') {
+      const delegationId = typeof delegation.delegationId === 'string' ? delegation.delegationId : null
+      const childSessionId = typeof delegation.childSessionId === 'string' ? delegation.childSessionId : null
+      if (delegationId && childSessionId) return { delegationId, childSessionId }
+    }
+    // 兼容旧格式：直接取顶层字段
+    if (typeof parsed?.delegationId === 'string' && typeof parsed?.childSessionId === 'string') {
+      return { delegationId: parsed.delegationId, childSessionId: parsed.childSessionId }
+    }
+    return null
   } catch {
     return null
   }
@@ -796,6 +807,13 @@ export function useGlobalAgentListeners(): void {
                     timestamp: Date.now(),
                     payload: { subject: stripMetaTags(subject), description, dependsOn },
                   })?.catch(() => {})
+                  // 任务创建时关联到当前会话，使 DetailPanel 的「跳转到执行会话」按钮可用
+                  void api.appendGraphEvent?.(sessionId, {
+                    type: 'task_session_linked',
+                    taskId,
+                    timestamp: Date.now(),
+                    payload: { sessionId },
+                  })?.catch(() => {})
                 } else if (activity.toolName === 'TaskUpdate') {
                   const taskId = activity.input.taskId ?? activity.input.task_id ?? activity.input.id
                   if (taskId != null) {
@@ -820,16 +838,16 @@ export function useGlobalAgentListeners(): void {
                     }
                   }
                 } else if (activity.toolName === 'delegate_agent') {
-                  // 委派完成：将 delegationId 关联到当前 Task 节点
+                  // 委派完成：将 delegationId + childSessionId 关联到当前 Task 节点
                   const currentTaskId = currentTaskIdRef.current
                   if (currentTaskId) {
-                    const delegationId = parseDelegationId(activity.result)
-                    if (delegationId) {
+                    const parsed = parseDelegationResult(activity.result)
+                    if (parsed) {
                       void api.appendGraphEvent?.(sessionId, {
                         type: 'task_session_linked',
                         taskId: currentTaskId,
                         timestamp: Date.now(),
-                        payload: { sessionId: delegationId },
+                        payload: { sessionId: parsed.delegationId, childSessionId: parsed.childSessionId },
                       })?.catch(() => {})
                     }
                   }

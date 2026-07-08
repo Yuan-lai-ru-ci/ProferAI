@@ -151,6 +151,8 @@ export interface TaskArtifactAddedPayload {
 export interface TaskSessionLinkedPayload {
   /** 关联的子会话 ID（delegation ID 或 SDK session ID） */
   sessionId: string
+  /** 如果通过协作委派执行，子 Agent 会话的实际 session ID（可直接用于导航跳转） */
+  childSessionId?: string
 }
 
 // ===== Project 元数据 =====

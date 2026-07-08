@@ -19,7 +19,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { currentAgentSessionIdAtom, graphQuestionAtom } from '@/atoms/agent-atoms'
+import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { currentGraphAtom } from '@/atoms/graph-atoms'
 import { computeLayout, type TaskGraph, type TaskNode, type TaskStatus, type LayoutResult } from '@proma/project-core'
 import { GraphQuestionInput } from './GraphQuestionInput'
@@ -193,7 +193,25 @@ function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number
 function DetailPanel({ node, onClose }: { node: TaskNode; onClose: () => void }) {
   const cfg = statusConfig[node.status]
   const openSession = useOpenSession()
-  const targetSessionId = node.delegationId || node.sdkSessionId
+  const agentSessions = useAtomValue(agentSessionsAtom)
+  const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+
+  // 解析可导航的执行会话 ID（按优先级）：
+  // 1. sdkSessionId — graph-state 中直接存了可导航的子会话 ID
+  // 2. delegationId — 通过 sourceDelegationId 反向查找子会话
+  // 3. currentSessionId — 兜底：任务在当前会话中直接执行（非委派）
+  const targetSessionId = React.useMemo(() => {
+    if (node.sdkSessionId) return node.sdkSessionId
+    if (node.delegationId) {
+      // 向后兼容：旧的 delegationId 可能直接是可导航的 session ID
+      if (agentSessions.some(s => s.id === node.delegationId)) return node.delegationId
+      // 再尝试通过 sourceDelegationId 解析（delegation UUID → child session ID）
+      const childSession = agentSessions.find(s => s.sourceDelegationId === node.delegationId)
+      if (childSession) return childSession.id
+    }
+    // 兜底：任务在当前会话中创建/执行，跳转到当前会话
+    return currentSessionId
+  }, [node.sdkSessionId, node.delegationId, agentSessions, currentSessionId])
 
   const handleJumpToSession = () => {
     if (!targetSessionId) return

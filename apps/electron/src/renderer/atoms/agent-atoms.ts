@@ -1029,6 +1029,18 @@ export const backgroundTasksAtomFamily = atomFamily((sessionId: string) =>
   atom<BackgroundTask[]>([])
 )
 
+// ===== Graph 追问状态 =====
+
+/** Graph 追问上下文（点击节点后设置，触发底部输入条） */
+export interface GraphQuestionContext {
+  sessionId: string
+  taskId: string
+  taskSubject: string
+}
+
+/** Graph 追问 atom：非空时显示底部输入条 */
+export const graphQuestionAtom = atom<GraphQuestionContext | null>(null)
+
 // ===== 用户打断状态 =====
 
 /** 被用户手动打断的会话集合（仅当前 streaming 周期有效，reload 后清除） */

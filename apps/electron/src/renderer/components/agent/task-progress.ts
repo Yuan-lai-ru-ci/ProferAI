@@ -11,6 +11,8 @@ export interface TaskItem {
   subject: string
   status: TaskItemStatus
   activeForm?: string
+  /** Task 的详细描述（从 TaskCreate input.description 提取） */
+  description?: string
 }
 
 interface TaskCreateOutput {
@@ -64,6 +66,25 @@ export function parseTaskCreateResult(result: string | undefined): { id: string;
       id: String(task.id),
       subject: typeof task.subject === 'string' ? task.subject : undefined,
     }
+  }
+
+  // result 可能被包在 content block 数组里：[{type:"text",text:'{"task":{...}}'}]
+  const extracted = extractToolResultText(json)
+  if (extracted) {
+    const inner = parseJsonObject(extracted) as TaskCreateOutput | null
+    const innerTask = inner?.task
+    if (isRecord(innerTask) && (typeof innerTask.id === 'string' || typeof innerTask.id === 'number')) {
+      return {
+        id: String(innerTask.id),
+        subject: typeof innerTask.subject === 'string' ? innerTask.subject : undefined,
+      }
+    }
+  }
+
+  // 兜底：兼容旧 SDK 文本格式 "Task #7 created successfully"
+  const match = result.match(/Task\s*#(\d+)/i)
+  if (match && match[1]) {
+    return { id: match[1] }
   }
 
   return null
@@ -140,11 +161,15 @@ export function aggregateTaskItems(
         : taskCreateSubjectMap.get(id)
           ?? (typeof activity.input.description === 'string' ? activity.input.description : '未命名任务')
 
+      const description = typeof activity.input.description === 'string'
+        ? activity.input.description
+        : undefined
       taskMap.set(id, {
         id,
         subject,
         status: 'pending',
         activeForm: typeof activity.input.activeForm === 'string' ? activity.input.activeForm : undefined,
+        ...(description ? { description } : {}),
       })
     } else if (activity.toolName === 'TaskUpdate') {
       const taskId = taskIdFromInput(activity.input)
@@ -153,22 +178,34 @@ export function aggregateTaskItems(
       const existing = taskMap.get(taskId)
       const status = toTaskStatus(activity.input.status, existing?.status ?? 'pending')
 
+      const updDescription = typeof activity.input.description === 'string'
+        ? activity.input.description
+        : undefined
       if (existing) {
         taskMap.set(taskId, {
           ...existing,
           status,
           ...(typeof activity.input.subject === 'string' && { subject: activity.input.subject }),
           ...(typeof activity.input.activeForm === 'string' && { activeForm: activity.input.activeForm }),
+          ...(updDescription !== undefined && { description: updDescription }),
         })
       } else {
-        taskMap.set(taskId, {
-          id: taskId,
-          subject: typeof activity.input.subject === 'string'
+        // 无已有条目：仅当可以提供有意义的名字时才创建（来自 TaskUpdate 自身的
+        // subject 或跨 turn 历史映射），否则跳过——等 TaskCreate result 到达后
+        // 自然会创建正确命名的条目，避免出现「任务 #N」回退名与正确条目并存的重影。
+        const updSubject =
+          typeof activity.input.subject === 'string'
             ? activity.input.subject
-            : historicalTaskSubjects?.get(taskId) ?? `任务 #${taskId}`,
-          status,
-          activeForm: typeof activity.input.activeForm === 'string' ? activity.input.activeForm : undefined,
-        })
+            : historicalTaskSubjects?.get(taskId)
+        if (updSubject) {
+          taskMap.set(taskId, {
+            id: taskId,
+            subject: updSubject,
+            status,
+            activeForm: typeof activity.input.activeForm === 'string' ? activity.input.activeForm : undefined,
+            ...(updDescription !== undefined && { description: updDescription }),
+          })
+        }
       }
     }
   }
