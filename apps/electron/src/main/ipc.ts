@@ -4668,7 +4668,7 @@ export function registerIpcHandlers(): void {
   // ===== 身份认证 =====
 
   const { getOrCreateDeviceIdentity, getUserIdentity } = require('./lib/identity-service')
-  const { login, register, logout, getAuthStatus, getServerInfoList, getTeamAuthWithRefresh } = require('./lib/auth-service')
+  const { login, register, logout, getAuthStatus, getServerInfoList, getTeamAuthWithRefresh, listRemoteDevices, revokeRemoteDevice } = require('./lib/auth-service')
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_DEVICE_IDENTITY,
@@ -4752,6 +4752,16 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_TEAM_AUTH,
     async () => getTeamAuthWithRefresh()
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.LIST_DEVICES,
+    async () => listRemoteDevices()
+  )
+
+  ipcMain.handle(
+    AUTH_IPC_CHANNELS.REVOKE_DEVICE,
+    async (_, slotId: string) => revokeRemoteDevice(slotId)
   )
 
   // ===== 同步 =====

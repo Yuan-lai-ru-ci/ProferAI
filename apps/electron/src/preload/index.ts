@@ -1075,6 +1075,8 @@ export interface ElectronAPI {
     login: (credentials: Record<string, unknown>) => Promise<unknown>
     register: (credentials: Record<string, unknown>) => Promise<unknown>
     logout: () => Promise<void>
+    listDevices: () => Promise<{ ok: boolean; devices?: Array<{ id: string; deviceId: string | null; deviceName: string; platform: string | null; appVersion?: string | null; createdAt: number; lastUsedAt: number }>; currentDeviceId?: string; error?: string }>
+    revokeDevice: (slotId: string) => Promise<{ ok: boolean; error?: string }>
     getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string; teamEmail?: string }>
     getServerInfo: () => Promise<Array<{ baseUrl: string; email: string; isLoggedIn: boolean }>>
     getTeamAuth: () => Promise<{ baseUrl: string; token: string } | null>
@@ -2530,6 +2532,8 @@ const electronAPI: ElectronAPI = {
     register: (credentials: Record<string, unknown>) =>
       ipcRenderer.invoke(AUTH_IPC_CHANNELS.REGISTER, credentials),
     logout: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.LOGOUT),
+    listDevices: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.LIST_DEVICES),
+    revokeDevice: (slotId: string) => ipcRenderer.invoke(AUTH_IPC_CHANNELS.REVOKE_DEVICE, slotId),
     getAuthStatus: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_AUTH_STATUS),
     getServerInfo: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_SERVER_INFO),
     getTeamAuth: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_TEAM_AUTH) as Promise<{ baseUrl: string; token: string } | null>,
