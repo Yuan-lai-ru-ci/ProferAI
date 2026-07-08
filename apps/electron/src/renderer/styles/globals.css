@@ -11,6 +11,7 @@
     'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont,
     'SF Pro Text', 'PingFang SC', 'Segoe UI', 'Microsoft YaHei',
     system-ui, sans-serif;
+  font-weight: 500;
   font-feature-settings: 'cv11', 'ss01', 'ss03', 'tnum';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -20,9 +21,10 @@
 /* CRT Terminal 主题：全局等宽字体覆盖 */
 .theme-terminal-dark {
   font-family:
-    'JetBrains Mono', 'IBM Plex Mono', 'Cascadia Code',
+    'Cascadia Code', 'Cascadia Mono', 'JetBrainsMono Nerd Font',
     ui-monospace, SFMono-Regular, Menlo, Monaco,
     Consolas, 'Courier New', monospace;
+  font-weight: 400;
   font-feature-settings: 'cv11', 'ss01', 'ss03', 'tnum', 'calt';
 }
 
@@ -2134,4 +2136,14 @@
  */
 .theme-terminal-dark [class*="rounded"] {
   border-radius: 0 !important;
+}
+
+/* ===== 工作区切换高亮动画 ===== */
+@keyframes workspace-highlight {
+  0%   { background-color: transparent; }
+  15%  { background-color: hsl(var(--primary) / 0.25); }
+  100% { background-color: transparent; }
+}
+.animate-workspace-highlight {
+  animation: workspace-highlight 1.2s ease-out;
 }

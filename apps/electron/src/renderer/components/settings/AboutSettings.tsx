@@ -23,7 +23,6 @@ import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckC
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { ReleaseNotesViewer } from './ReleaseNotesViewer'
-import { VersionHistory } from './VersionHistory'
 
 /** 从 package.json 构建时由 Vite define 注入 */
 declare const __APP_VERSION__: string
@@ -50,11 +49,6 @@ function UpdateCard(): React.ReactElement | null {
       // 状态由 atom 订阅自动更新，延迟重置 checking 避免按钮闪烁
       setTimeout(() => setChecking(false), 1000)
     }
-  }
-
-  const handleGoToDownload = (): void => {
-    const url = release?.html_url || GITHUB_RELEASES_URL
-    window.electronAPI.openExternal(url)
   }
 
   const handleQuitAndInstall = (): void => {
@@ -96,14 +90,6 @@ function UpdateCard(): React.ReactElement | null {
             >
               <RotateCw className="h-3.5 w-3.5" />
               立即重启
-            </button>
-          ) : status.status === 'available' ? (
-            <button
-              onClick={handleGoToDownload}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              前往下载
             </button>
           ) : (
             <button
@@ -440,21 +426,9 @@ function ShellEnvironmentCard(): React.ReactElement | null {
 }
 
 export function AboutSettings(): React.ReactElement {
-  const [appName, setAppName] = React.useState('Profer')
-
-  React.useEffect(() => {
-    try {
-      const raw = localStorage.getItem('profer-brand-overrides')
-      if (raw) {
-        const brand = JSON.parse(raw)
-        if (brand.appName) setAppName(brand.appName)
-      }
-    } catch { /* ignore */ }
-  }, [])
-
   return (
     <SettingsSection
-      title={`关于 ${appName}`}
+      title="关于 Profer"
       description="集成通用 AI Agent 的下一代人工智能软件 — Profer"
     >
       <SettingsCard>
@@ -491,9 +465,6 @@ export function AboutSettings(): React.ReactElement {
 
       {/* 自动更新卡片（updater 不可用时不渲染） */}
       <UpdateCard />
-
-      {/* 版本历史 */}
-      <VersionHistory />
 
       {/* 环境检测卡片 */}
       <EnvironmentCard />

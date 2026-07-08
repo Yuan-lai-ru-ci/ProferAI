@@ -18,13 +18,10 @@ import {
 import {
   themeModeAtom,
   themeStyleAtom,
-  interfaceVariantAtom,
   systemIsDarkAtom,
   updateThemeMode,
   updateThemeStyle,
-  updateInterfaceVariant,
   applyThemeToDOM,
-  applyInterfaceVariantToDOM,
 } from '@/atoms/theme'
 import {
   markdownFontSizeAtom,
@@ -33,7 +30,7 @@ import {
 import { previewModePreferenceAtom, type PreviewModePreference } from '@/atoms/preview-atoms'
 import { cn } from '@/lib/utils'
 import { detectIsWindows } from '@/lib/platform'
-import type { InterfaceVariant, ThemeMode, ThemeStyle, MarkdownFontSize } from '../../../types'
+import type { ThemeMode, ThemeStyle, MarkdownFontSize } from '../../../types'
 
 // ===== Logo 资源导入（用于图标选择器） =====
 import promaBlackLogo from '@/assets/bots/proma-logos/proma-black.png'
@@ -78,12 +75,6 @@ const MARKDOWN_FONT_SIZE_OPTIONS = [
 const PREVIEW_MODE_OPTIONS: { value: PreviewModePreference; label: string }[] = [
   { value: 'tab', label: '标签页' },
   { value: 'split', label: '侧边分屏' },
-]
-
-/** 界面风格选项 */
-const INTERFACE_VARIANT_OPTIONS: { value: InterfaceVariant; label: string }[] = [
-  { value: 'classic', label: '经典' },
-  { value: 'modern', label: '现代' },
 ]
 
 /** 特殊风格 ID（排除 default） */
@@ -188,7 +179,6 @@ const ZOOM_HINT = isMac
 export function AppearanceSettings(): React.ReactElement {
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
-  const [interfaceVariant, setInterfaceVariant] = useAtom(interfaceVariantAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
   const [markdownFontSize, setMarkdownFontSize] = useAtom(markdownFontSizeAtom)
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
@@ -222,14 +212,6 @@ export function AppearanceSettings(): React.ReactElement {
     setMarkdownFontSize(size)
     updateMarkdownFontSize(size)
   }, [setMarkdownFontSize])
-
-  /** 切换界面风格 */
-  const handleInterfaceVariantChange = React.useCallback((value: string) => {
-    const variant = value as InterfaceVariant
-    setInterfaceVariant(variant)
-    updateInterfaceVariant(variant)
-    applyInterfaceVariantToDOM(variant)
-  }, [setInterfaceVariant])
 
   return (
     <div className="space-y-6">
@@ -273,14 +255,6 @@ export function AppearanceSettings(): React.ReactElement {
             value={markdownFontSize}
             onValueChange={handleMarkdownFontSizeChange}
             options={MARKDOWN_FONT_SIZE_OPTIONS}
-          />
-
-          <SettingsSegmentedControl
-            label="界面风格"
-            description="经典风保留旧版视觉；现代风使用更小圆角、更清晰分割线达成更统一干净的质感"
-            value={interfaceVariant}
-            onValueChange={handleInterfaceVariantChange}
-            options={INTERFACE_VARIANT_OPTIONS}
           />
 
           <SettingsSegmentedControl
