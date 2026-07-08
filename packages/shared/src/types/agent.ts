@@ -1649,6 +1649,8 @@ export const AUTH_IPC_CHANNELS = {
   REGISTER: 'auth:register',
   GET_SERVER_INFO: 'auth:get-server-info',
   GET_TEAM_AUTH: 'auth:get-team-auth',
+  LIST_DEVICES: 'auth:list-devices',
+  REVOKE_DEVICE: 'auth:revoke-device',
 } as const
 
 /** 同步 IPC 通道 */
