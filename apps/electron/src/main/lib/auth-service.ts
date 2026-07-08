@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { fetch as undiciFetch } from 'undici'
 import { getTeamServersConfigPath } from './config-paths'
 import { isCommercialBuild } from './build-target'
+import { getDeviceAuthInfo } from './identity-service'
 import type { TeamServerConfig } from '@proma/shared'
 
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
@@ -217,7 +218,7 @@ export async function login(
     const response = await (undiciFetch as unknown as typeof fetch)(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...getDeviceAuthInfo() }),
       signal: controller.signal,
     } as RequestInit)
     clearTimeout(timeout)
@@ -315,7 +316,7 @@ export async function register(
     const response = await (undiciFetch as unknown as typeof fetch)(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, displayName, invitationToken, activationCode }),
+      body: JSON.stringify({ email, password, displayName, invitationToken, activationCode, ...getDeviceAuthInfo() }),
       signal: controller.signal,
     } as RequestInit)
     clearTimeout(timeout)
@@ -490,7 +491,8 @@ export async function logout(): Promise<void> {
       try {
         await (undiciFetch as unknown as typeof fetch)(`${server.baseUrl}${API_PREFIX}/auth/logout`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token.accessToken}` },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token.accessToken}` },
+          body: JSON.stringify({ deviceId: getDeviceAuthInfo().deviceId }),
         })
       } catch { /* 网络错误忽略 */ }
     }
@@ -568,7 +570,7 @@ export async function refreshAuthToken(): Promise<boolean> {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: token.refreshToken }),
+          body: JSON.stringify({ refreshToken: token.refreshToken, ...getDeviceAuthInfo() }),
           signal: controller.signal,
         } as RequestInit,
       )
