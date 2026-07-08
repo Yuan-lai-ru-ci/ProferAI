@@ -21,11 +21,25 @@ function ns(): string {
   return getConfigDirName().replace(/^\./, '') || 'profer'
 }
 
+/**
+ * 调 reg.exe：优先用 PATH 里的 'reg'（正常 Windows 都有），
+ * 若该环境 PATH 被剥离(ENOENT)则回退到 System32 全路径，最大化"能持久化"的概率。
+ */
+function reg(args: string[], opts: Parameters<typeof execFileSync>[2]): string {
+  try {
+    return execFileSync('reg', args, opts) as unknown as string
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
+    const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+    return execFileSync(`${root}\\System32\\reg.exe`, args, opts) as unknown as string
+  }
+}
+
 /** 从 OS 级持久位置读取 deviceId；不存在 / 不支持 / 失败均返回 null */
 export function readDurableDeviceId(): string | null {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync('reg', ['query', `HKCU\\Software\\${ns()}`, '/v', 'DeviceId'], {
+      const out = reg(['query', `HKCU\\Software\\${ns()}`, '/v', 'DeviceId'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       })
@@ -49,7 +63,7 @@ export function readDurableDeviceId(): string | null {
 export function writeDurableDeviceId(id: string): void {
   try {
     if (process.platform === 'win32') {
-      execFileSync('reg', ['add', `HKCU\\Software\\${ns()}`, '/v', 'DeviceId', '/t', 'REG_SZ', '/d', id, '/f'], {
+      reg(['add', `HKCU\\Software\\${ns()}`, '/v', 'DeviceId', '/t', 'REG_SZ', '/d', id, '/f'], {
         stdio: 'ignore',
       })
       return
