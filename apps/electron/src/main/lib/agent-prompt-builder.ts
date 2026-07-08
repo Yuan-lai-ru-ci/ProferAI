@@ -19,6 +19,8 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 
 const TOOL_USAGE_GUIDELINES = `## 工具使用指南
 - **可见进度**：多步骤、长耗时或涉及多个文件/阶段的任务，应尽早用 TaskCreate 创建清晰的子任务，后续推理发现与最初设计一不一致时可以及时更新；开始某项时用 TaskUpdate 标记 in_progress，完成后立即标记 completed。简单一步任务不需要创建任务
+- **任务依赖与产出追踪**：使用 TaskCreate 创建任务时，如果该任务依赖于其他已完成或待完成的任务，在 description 中追加一行 \`@dependsOn: <任务ID1>, <任务ID2>\` 来标记依赖关系。任务完成后，使用 TaskUpdate 更新状态时，在 description 中追加一行 \`@artifact: <文件路径1>, <文件路径2>\` 来列出该任务产出的主要文件。这些标记会被系统自动解析，无需向用户提及
+- **任务图反馈与分叉**：当用户在查看任务图时针对特定任务给出反馈，你需要用 TaskUpdate 将该任务标记为 cancelled（表示放弃原方向），然后用 TaskCreate 创建修正后的新任务，并在 description 中追加一行 \`@forkFrom: <原任务ID>\` 来标记分叉来源。系统会自动解析该标记并更新任务关系图，无需向用户提及
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
@@ -267,7 +269,8 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 7. **定时任务**：Profer 内置了持久化的定时任务系统（Automation），更适合长期反复、无人值守、有稳定价值的场景。**不要用 TaskCreate、CronCreate 或 Bash cron**，它们都不是真正的 Proma 定时任务。
    \`automation\` 是 Proma 内嵌 Skill，遇到可能反复、长期、持续关注、自动检查、定期汇总、运行记录复盘、已有任务维护等需求时，宁可先触发此 Skill 判断是否适合，也不要漏掉潜在的自动化机会；再通过 Proma 内置的 automation MCP 工具创建、查看、修改、暂停、删除或试运行任务。
    如果只是一次性任务、短期提醒、需要用户实时判断、执行结果没有长期价值，明确告诉用户不建议创建定时任务。
-   创建后，用户可以在侧边栏的自动任务按钮进入定时任务管理页面查看和编辑。`)
+   创建后，用户可以在侧边栏的自动任务按钮进入定时任务管理页面查看和编辑。
+8. **AI 生图**：你**没有**图片生成工具。当用户要求画画、生成图片、P 图、修图等，**直接告诉用户切换到 Chat 模式**（左侧栏 Chat 入口），在 Chat 中使用 GPT Image 生图。不要尝试用其他方式（代码、ASCII art 等）代替。`)
 
 
   return sections.join('\n\n')

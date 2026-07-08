@@ -194,8 +194,8 @@ function WebSearchSettings(): React.ReactElement {
   )
 }
 
-/** Nano Banana 生图工具设置区域 */
-function NanoBananaSettings(): React.ReactElement {
+/** GPT Image 生图工具设置区域 */
+function GptImageSettings(): React.ReactElement {
   const [apiKey, setApiKey] = React.useState('')
   const [baseUrl, setBaseUrl] = React.useState('')
   const [model, setModel] = React.useState('')
@@ -211,9 +211,9 @@ function NanoBananaSettings(): React.ReactElement {
   React.useEffect(() => {
     Promise.all([
       window.electronAPI.getChatTools(),
-      window.electronAPI.getChatToolCredentials('nano-banana'),
+      window.electronAPI.getChatToolCredentials('gpt-image'),
     ]).then(([tools, credentials]) => {
-      const tool = tools.find((t) => t.meta.id === 'nano-banana')
+      const tool = tools.find((t) => t.meta.id === 'gpt-image')
       if (tool) setEnabled(tool.enabled)
       if (credentials.apiKey) setApiKey(credentials.apiKey)
       if (credentials.baseUrl) setBaseUrl(credentials.baseUrl)
@@ -224,7 +224,7 @@ function NanoBananaSettings(): React.ReactElement {
         model: credentials.model || '',
       }
     }).catch((err: unknown) => {
-      console.error('[Nano Banana 设置] 加载失败:', err)
+      console.error('[GPT Image 设置] 加载失败:', err)
     }).finally(() => {
       setLoading(false)
     })
@@ -236,22 +236,22 @@ function NanoBananaSettings(): React.ReactElement {
     const saved = savedCredentialsRef.current
     if (current.apiKey === saved.apiKey && current.baseUrl === saved.baseUrl && current.model === saved.model) return
     try {
-      await window.electronAPI.updateChatToolCredentials('nano-banana', current)
+      await window.electronAPI.updateChatToolCredentials('gpt-image', current)
       savedCredentialsRef.current = current
       await refreshChatTools(setChatTools)
-      toast.success('Nano Banana 设置已保存')
+      toast.success('GPT Image 设置已保存')
     } catch (error) {
-      console.error('[Nano Banana 设置] 保存失败:', error)
+      console.error('[GPT Image 设置] 保存失败:', error)
     }
   }, [apiKey, baseUrl, model, setChatTools])
 
   const handleToggle = async (checked: boolean): Promise<void> => {
     try {
-      await window.electronAPI.updateChatToolState('nano-banana', { enabled: checked })
+      await window.electronAPI.updateChatToolState('gpt-image', { enabled: checked })
       setEnabled(checked)
       await refreshChatTools(setChatTools)
     } catch (error) {
-      console.error('[Nano Banana 设置] 切换失败:', error)
+      console.error('[GPT Image 设置] 切换失败:', error)
     }
   }
 
@@ -261,18 +261,18 @@ function NanoBananaSettings(): React.ReactElement {
     const saved = savedCredentialsRef.current
     if (current.apiKey !== saved.apiKey || current.baseUrl !== saved.baseUrl || current.model !== saved.model) {
       try {
-        await window.electronAPI.updateChatToolCredentials('nano-banana', current)
+        await window.electronAPI.updateChatToolCredentials('gpt-image', current)
         savedCredentialsRef.current = current
         await refreshChatTools(setChatTools)
       } catch (error) {
-        console.error('[Nano Banana 设置] 保存失败:', error)
+        console.error('[GPT Image 设置] 保存失败:', error)
       }
     }
 
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await window.electronAPI.testChatTool('nano-banana')
+      const result = await window.electronAPI.testChatTool('gpt-image')
       setTestResult(result)
     } catch (error) {
       setTestResult({ success: false, message: error instanceof Error ? error.message : String(error) })
@@ -287,8 +287,8 @@ function NanoBananaSettings(): React.ReactElement {
 
   return (
     <SettingsSection
-      title="Nano Banana"
-      description="启用后 AI 可以生成和编辑图片（基于 Gemini Image Generation）"
+      title="GPT Image"
+      description="启用后 AI 可以生成和编辑图片（基于 OpenAI GPT Image）"
       action={
         <Switch
           checked={enabled}
@@ -300,21 +300,21 @@ function NanoBananaSettings(): React.ReactElement {
         <div className="space-y-4 p-4">
           {/* 引导说明 */}
           <div className="rounded-lg bg-muted/50 p-3 space-y-2 text-sm text-muted-foreground">
-            <p>Nano Banana 基于 <span className="font-medium text-foreground">Gemini Image Generation</span> 提供 AI 图片生成与编辑能力。</p>
+            <p>GPT Image 基于 <span className="font-medium text-foreground">OpenAI GPT Image</span> 提供 AI 图片生成与编辑能力，支持高质量写实风格、精确文字渲染和图片编辑。</p>
             <p className="text-xs">配置步骤：</p>
             <ol className="text-xs list-decimal list-inside space-y-1">
               <li>
                 访问{' '}
                 <a
-                  href="https://aistudio.google.com/apikey"
+                  href="https://platform.openai.com/api-keys"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-primary hover:underline inline-flex items-center gap-0.5"
                 >
-                  Google AI Studio
+                  OpenAI Platform
                   <ExternalLink size={10} />
                 </a>
-                {' '}获取 Gemini API Key
+                {' '}获取 API Key
               </li>
               <li>将 API Key 填入下方，可选修改 API 地址和模型</li>
               <li>开启开关即可在对话中使用生图能力</li>
@@ -336,7 +336,7 @@ function NanoBananaSettings(): React.ReactElement {
             <div className="relative">
               <Input
                 type={showApiKey ? 'text' : 'password'}
-                placeholder="AIza..."
+                placeholder="sk-..."
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 onBlur={handleBlurSave}
@@ -357,24 +357,24 @@ function NanoBananaSettings(): React.ReactElement {
             <label className="text-sm font-medium">API 地址</label>
             <Input
               type="text"
-              placeholder="https://generativelanguage.googleapis.com"
+              placeholder="https://api.openai.com"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               onBlur={handleBlurSave}
             />
-            <p className="text-xs text-muted-foreground">留空则使用 Gemini 官方地址</p>
+            <p className="text-xs text-muted-foreground">留空则使用 OpenAI 官方地址。可使用代理地址（如 https://api.openai-proxy.com）</p>
           </div>
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium">模型</label>
             <Input
               type="text"
-              placeholder="gemini-3.1-flash-image-preview"
+              placeholder="gpt-image-2"
               value={model}
               onChange={(e) => setModel(e.target.value)}
               onBlur={handleBlurSave}
             />
-            <p className="text-xs text-muted-foreground">留空则使用默认模型 gemini-3.1-flash-image-preview</p>
+            <p className="text-xs text-muted-foreground">留空则使用默认模型 gpt-image-2</p>
           </div>
 
           {testResult && (
@@ -473,8 +473,8 @@ export function ToolSettings(): React.ReactElement {
       {/* 联网搜索工具 */}
       <WebSearchSettings />
 
-      {/* Nano Banana 生图工具 */}
-      <NanoBananaSettings />
+      {/* GPT Image 生图工具 */}
+      <GptImageSettings />
 
       {/* 自定义工具 */}
       <CustomToolsSection />

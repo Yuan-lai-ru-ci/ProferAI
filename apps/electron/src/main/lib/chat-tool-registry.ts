@@ -27,10 +27,10 @@ import {
   isAgentRecommendAvailable,
 } from './chat-tools/agent-recommend-tool'
 import {
-  NANO_BANANA_TOOL_META,
-  NANO_BANANA_TOOL_DEFINITIONS,
-  isNanoBananaAvailable,
-} from './chat-tools/nano-banana-tool'
+  GPT_IMAGE_TOOL_META,
+  GPT_IMAGE_TOOL_DEFINITIONS,
+  isGptImageAvailable,
+} from './chat-tools/gpt-image-tool'
 
 // ===== 内置工具注册 =====
 
@@ -59,9 +59,9 @@ const BUILTIN_TOOLS: BuiltinToolEntry[] = [
     checkAvailable: isAgentRecommendAvailable,
   },
   {
-    meta: NANO_BANANA_TOOL_META,
-    getDefinitions: () => NANO_BANANA_TOOL_DEFINITIONS,
-    checkAvailable: isNanoBananaAvailable,
+    meta: GPT_IMAGE_TOOL_META,
+    getDefinitions: () => GPT_IMAGE_TOOL_DEFINITIONS,
+    checkAvailable: isGptImageAvailable,
   },
 ]
 

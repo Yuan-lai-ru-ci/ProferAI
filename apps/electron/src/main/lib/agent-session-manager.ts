@@ -38,7 +38,7 @@ import type {
   AgentSessionReferenceSearchResult,
 } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
-import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
+// GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
 /**
  * 会话索引文件格式
@@ -505,9 +505,6 @@ export function deleteAgentSession(id: string): void {
   }
 
   console.log(`[Agent 会话] 已删除会话: ${removed.title} (${removed.id})`)
-
-  // 清理 Nano Banana 生图历史
-  clearNanoBananaAgentHistory(id)
 
   // 清理 SDK 关联数据（file-history 和 projects 下的 session JSONL）
   const sdkSessionIds = [removed.sdkSessionId, removed.forkSourceSdkSessionId].filter(Boolean) as string[]
