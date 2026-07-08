@@ -19,14 +19,6 @@ let cachedChannels = null
 let cachedAt = 0
 const CACHE_TTL_MS = 60_000
 
-/** 全局 model → group 映射（代理转发时用来指定 New API 分组路由） */
-let modelGroupMap = new Map()
-
-/** 查询模型所属的 New API 分组（非 default 时代理转发需要加 ?group=xxx） */
-export function getGroupForModel(model) {
-  return modelGroupMap.get(model) || null
-}
-
 /** New API channel type → Profer provider */
 const TYPE_TO_PROVIDER = {
   1: 'openai', 8: 'openai', 14: 'anthropic', 15: 'openai',
@@ -132,18 +124,6 @@ async function applySync(db, newApiChannels) {
     if (!modelsMatch(existing.models_json, mapped.modelsJson)) return true
     return false
   }
-
-  // 重建 model → group 映射（代理转发时查此表决定加哪个 ?group= 参数）
-  const newModelGroupMap = new Map()
-  for (const nc of newApiChannels) {
-    if (nc.status !== 1) continue
-    const group = nc.group || 'default'
-    const modelNames = (nc.models || '').split(',').map(s => s.trim()).filter(Boolean)
-    for (const m of modelNames) {
-      newModelGroupMap.set(m, group)
-    }
-  }
-  modelGroupMap = newModelGroupMap
 
   const tx = db.transaction(() => {
     for (const nc of newApiChannels) {

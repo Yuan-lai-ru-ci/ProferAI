@@ -173,9 +173,18 @@ setInterval(() => {
       db.prepare('DELETE FROM workspaces WHERE id = ?').run(wsId)
     })
 
+    // 防护：FILES_DIR 未配置或指向根路径时，绝不执行目录删除，避免灾难性 rmSync（DB 清理不受影响）
+    const filesDirOk =
+      typeof FILES_DIR === 'string' &&
+      FILES_DIR.trim().length > 0 &&
+      FILES_DIR.trim() !== '/' &&
+      FILES_DIR.trim() !== '\\'
+
     for (const { id } of expired) {
-      const wsDir = pathJoin(FILES_DIR, id)
-      if (existsSync(wsDir)) rmSync(wsDir, { recursive: true, force: true })
+      if (filesDirOk && id) {
+        const wsDir = pathJoin(FILES_DIR, id)
+        if (existsSync(wsDir)) rmSync(wsDir, { recursive: true, force: true })
+      }
       hardDeleteWorkspace(id)
       console.log(`[清理] 已硬删除过期工作区: ${id}`)
     }

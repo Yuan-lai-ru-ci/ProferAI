@@ -16,7 +16,7 @@ import { DB_PATH, NEWAPI_QUOTA_PER_UNIT } from '../src/config.js'
 const APPLY = process.argv.includes('--apply')
 const GRANT_USD = 5
 const GRANT_QUOTA = GRANT_USD * NEWAPI_QUOTA_PER_UNIT
-const GRANT_TAG = 'monthly-2026-07' // 每月的 tag 不同，防止重复发放
+const GRANT_TAG = `monthly-${new Date().toISOString().slice(0, 7)}` // 按当前年月(YYYY-MM)自动生成，每月唯一，防止重复发放
 
 const c = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m' }
 

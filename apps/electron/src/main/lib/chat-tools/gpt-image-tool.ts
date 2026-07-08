@@ -272,8 +272,6 @@ export async function executeGptImageTool(
 
     const url = `${baseUrl}/v1/images/generations`
 
-    console.log(`[GPT Image] 调用 OpenAI API: model=${model}, prompt="${prompt.slice(0, 50)}...", images=${referenceImages.length}`)
-
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -294,13 +292,6 @@ export async function executeGptImageTool(
     }
 
     const data = (await response.json()) as GptImageResponse
-
-    // 调试：打印响应结构
-    console.log(`[GPT Image] API 响应: data.length=${data.data?.length ?? 0}, hasError=${!!data.error}`)
-    if (data.data && data.data.length > 0) {
-      const item = data.data[0]
-      console.log(`[GPT Image] 第一个条目: hasB64=${!!item?.b64_json}, b64Len=${item?.b64_json?.length ?? 0}, hasUrl=${!!item?.url}, url=${item?.url?.slice(0, 80) ?? '无'}`)
-    }
 
     if (data.error) {
       return {
