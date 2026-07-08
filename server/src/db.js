@@ -98,6 +98,20 @@ try { db.exec("ALTER TABLE users ADD COLUMN relay_token TEXT DEFAULT NULL") } ca
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_relay_token ON users(relay_token)") } catch (_) {}
 // 自配 API 开关 — admin 可对任意用户单独开/关，与账号类型无关
 try { db.exec("ALTER TABLE users ADD COLUMN can_self_config_api INTEGER NOT NULL DEFAULT 0") } catch (_) {}
+// 多设备 refresh token 支持：每个设备独立持有 token，不再互相踢下线
+try { db.exec(`
+  CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    device_name TEXT DEFAULT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )
+`) } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)') } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token)') } catch (_) {}
 try { db.exec("ALTER TABLE workspaces ADD COLUMN deleted_at INTEGER DEFAULT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE workspaces ADD COLUMN restored_at INTEGER DEFAULT NULL") } catch (_) {}
 // 文件搜索索引

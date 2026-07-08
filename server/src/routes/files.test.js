@@ -44,3 +44,38 @@ describe('canModifyRows', () => {
     ], 'u1')).toBe(true)
   })
 })
+
+// ===== 文件搜索 =====
+
+describe('文件搜索 LIKE 模式构建', () => {
+  function buildLikePattern(q) {
+    if (!q || !q.trim()) return null
+    const trimmed = q.trim()
+    if (trimmed.includes('*') || trimmed.includes('?')) {
+      return trimmed.replace(/\*/g, '%').replace(/\?/g, '_')
+    }
+    return `%${trimmed}%`
+  }
+
+  test('无通配符时子串匹配', () => {
+    expect(buildLikePattern('readme')).toBe('%readme%')
+  })
+
+  test('* 转换为 %', () => {
+    expect(buildLikePattern('*.md')).toBe('%.md')
+    expect(buildLikePattern('test*.ts')).toBe('test%.ts')
+  })
+
+  test('? 转换为 _', () => {
+    expect(buildLikePattern('file?.txt')).toBe('file_.txt')
+  })
+
+  test('混合通配符', () => {
+    expect(buildLikePattern('src/*/test?.ts')).toBe('src/%/test_.ts')
+  })
+
+  test('空查询返回 null', () => {
+    expect(buildLikePattern('')).toBeNull()
+    expect(buildLikePattern('  ')).toBeNull()
+  })
+})

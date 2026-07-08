@@ -23,7 +23,7 @@
  */
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE } from './src/config.js'
+import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, WORKSPACE_GRACE_PERIOD_MS, INVITATION_RETENTION_MS, FILES_DIR } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
 import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
@@ -102,9 +102,9 @@ proxyApp.route('/', proxyRoutes)
 app.route('/v1/proxy', proxyApp)
 
 // Admin SPA — 管理后台
-import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
-const adminHtmlPath = join(import.meta.dirname, 'src', 'admin-ui', 'index.html')
+import { readFileSync, existsSync, rmSync } from 'node:fs'
+import { join as pathJoin } from 'node:path'
+const adminHtmlPath = pathJoin(import.meta.dirname, 'src', 'admin-ui', 'index.html')
 app.get('/admin', (c) => {
   if (!existsSync(adminHtmlPath)) return c.text('Admin UI not found', 404)
   return c.html(readFileSync(adminHtmlPath, 'utf-8'))
@@ -153,6 +153,51 @@ setInterval(() => {
     db.prepare('DELETE FROM token_blacklist WHERE expires_at < ?').run(Date.now())
   } catch { /* 忽略 */ }
 }, 30 * 60 * 1000).unref()
+
+// 工作区冷静期满硬删除（每 1 小时检查）
+setInterval(() => {
+  try {
+    const cutoff = Date.now() - WORKSPACE_GRACE_PERIOD_MS
+    const expired = db.prepare(
+      'SELECT id FROM workspaces WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?'
+    ).all(cutoff)
+
+    if (expired.length === 0) return
+
+    const hardDeleteWorkspace = db.transaction((wsId) => {
+      db.prepare('DELETE FROM sync_envelopes WHERE workspace_id = ?').run(wsId)
+      db.prepare('DELETE FROM file_manifests WHERE workspace_id = ?').run(wsId)
+      db.prepare('DELETE FROM workspace_members WHERE workspace_id = ?').run(wsId)
+      db.prepare('DELETE FROM invitations WHERE workspace_id = ?').run(wsId)
+      db.prepare('DELETE FROM audit_logs WHERE workspace_id = ?').run(wsId)
+      db.prepare('DELETE FROM workspaces WHERE id = ?').run(wsId)
+    })
+
+    for (const { id } of expired) {
+      const wsDir = pathJoin(FILES_DIR, id)
+      if (existsSync(wsDir)) rmSync(wsDir, { recursive: true, force: true })
+      hardDeleteWorkspace(id)
+      console.log(`[清理] 已硬删除过期工作区: ${id}`)
+    }
+  } catch (err) {
+    console.warn('[清理] 工作区冷静期满清理失败:', err.message)
+  }
+}, 60 * 60 * 1000).unref()
+
+// 定期清理已处理的过期历史邀请（每 24 小时）
+setInterval(() => {
+  try {
+    const cutoff = Date.now() - INVITATION_RETENTION_MS
+    const result = db.prepare(
+      "DELETE FROM invitations WHERE status != 'pending' AND created_at < ?"
+    ).run(cutoff)
+    if (result.changes > 0) {
+      console.log(`[清理] 已删除 ${result.changes} 条过期历史邀请`)
+    }
+  } catch (err) {
+    console.warn('[清理] 邀请历史清理失败:', err.message)
+  }
+}, 24 * 60 * 60 * 1000).unref()
 
 // 优雅关闭
 process.on('SIGTERM', () => { db.close(); process.exit(0) })

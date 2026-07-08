@@ -42,6 +42,16 @@ export const ONLINE_THRESHOLD = 120_000
 // 邀请有效期（7 天）
 export const INVITATION_TTL = 7 * 86400 * 1000
 
+// 工作区冷静期（软删除后可恢复的时间窗口，默认 30 天）
+export const WORKSPACE_GRACE_PERIOD_MS = parseInt(
+  process.env.WORKSPACE_GRACE_PERIOD_MS || String(30 * 86400 * 1000), 10
+)
+
+// 已处理邀请保留期（accepted/declined/cancelled/expired 后默认保留 90 天再自动清理）
+export const INVITATION_RETENTION_MS = parseInt(
+  process.env.INVITATION_RETENTION_MS || String(90 * 86400 * 1000), 10
+)
+
 // ===== 商业模式 =====
 // COMMERCIAL_MODE=true 时启用额度扣除、渠道统配、管理后台
 export const COMMERCIAL_MODE = process.env.COMMERCIAL_MODE === 'true'
@@ -73,6 +83,21 @@ export const RELAY_API_KEY = (() => {
     console.warn('[Profer] 警告: COMMERCIAL_MODE=true 但 RELAY_API_KEY 未设置，代理请求可能被中继站拒绝')
   }
   return key || ''
+})()
+
+// 按分组的代理 Key：模型属于非 default 组时，用对应组的 token 转发，
+// 让 New API 走该分组的倍率。格式：group1:key1,group2:key2
+// default 组不需要配，自动用 RELAY_API_KEY
+export const GROUP_PROXY_KEYS = (() => {
+  const raw = process.env.GROUP_PROXY_KEYS || ''
+  const map = {}
+  if (raw) {
+    for (const pair of raw.split(',')) {
+      const colon = pair.indexOf(':')
+      if (colon > 0) map[pair.slice(0, colon).trim()] = pair.slice(colon + 1).trim()
+    }
+  }
+  return map
 })()
 
 // New API 系统访问令牌（用于查询真实用量/对账）

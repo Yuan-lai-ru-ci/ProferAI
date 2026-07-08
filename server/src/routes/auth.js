@@ -113,6 +113,11 @@ authRoutes.post('/register', async (c) => {
       'INSERT INTO users (id, email, password_hash, display_name, refresh_token, account_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(id, email, hashPassword(password), displayName || email.split('@')[0], refreshToken, accountType, now)
 
+    // 同时写入 refresh_tokens 表（多设备支持）
+    db.prepare(
+      'INSERT INTO refresh_tokens (id, user_id, token, device_name, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(uuidv4(), id, refreshToken, null, now, now)
+
     // 仅邀请码注册加入工作区
     if (workspaceId) {
       db.prepare(
@@ -183,11 +188,19 @@ authRoutes.post('/login', async (c) => {
   db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id)
   ensureCreditRow(user.id)
 
-  // 生成新的 refreshToken，旧 refreshToken 自动失效
+  // 生成新的 refreshToken，写入独立表（支持多设备同时在线，最多 3 台）
   const refreshToken = generateRefreshToken()
   const accountType = user.account_type || 'standard'
   const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, account_type: accountType }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
-  db.prepare('UPDATE users SET refresh_token = ? WHERE id = ?').run(refreshToken, user.id)
+
+  // 多设备管理：最多保留 3 个 refreshToken，超出则删除最旧的
+  const tokenCount = db.prepare('SELECT COUNT(*) as cnt FROM refresh_tokens WHERE user_id = ?').get(user.id)
+  if (tokenCount && tokenCount.cnt >= 3) {
+    db.prepare('DELETE FROM refresh_tokens WHERE id IN (SELECT id FROM refresh_tokens WHERE user_id = ? ORDER BY last_used_at ASC LIMIT ?)')
+      .run(user.id, tokenCount.cnt - 2)
+  }
+  db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_name, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(uuidv4(), user.id, refreshToken, null, Date.now(), Date.now())
   logAudit({ action: 'login', userId: user.id, userEmail: user.email })
 
   // 代管模式下签发长效 relay 令牌
@@ -215,7 +228,11 @@ authRoutes.post('/refresh', async (c) => {
   const { refreshToken } = await c.req.json()
   if (!refreshToken) return c.json({ error: 'refreshToken 必填' }, 400)
 
-  const user = db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended, can_self_config_api FROM users WHERE refresh_token = ?').get(refreshToken)
+  // 从多设备 refresh_tokens 表查找（向后兼容旧的 users.refresh_token）
+  const tokenRow = db.prepare('SELECT user_id FROM refresh_tokens WHERE token = ?').get(refreshToken)
+  const user = tokenRow
+    ? db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended, can_self_config_api FROM users WHERE id = ?').get(tokenRow.user_id)
+    : db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended, can_self_config_api FROM users WHERE refresh_token = ?').get(refreshToken)
   if (!user) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
 
   if (user.is_suspended) {
@@ -233,9 +250,17 @@ authRoutes.post('/refresh', async (c) => {
   const accountType = user.account_type || 'standard'
   const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, account_type: accountType }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
 
-  // 轮换 refreshToken：生成新 token 替换旧的，延长会话有效期
+  // 轮换 refreshToken：更新 refresh_tokens 表中的记录
   const newRefreshToken = generateRefreshToken()
-  db.prepare('UPDATE users SET refresh_token = ? WHERE id = ?').run(newRefreshToken, user.id)
+  if (tokenRow) {
+    db.prepare('UPDATE refresh_tokens SET token = ?, last_used_at = ? WHERE token = ?')
+      .run(newRefreshToken, Date.now(), refreshToken)
+  } else {
+    // 从旧 users.refresh_token 迁移到新表
+    db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_name, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), user.id, newRefreshToken, null, Date.now(), Date.now())
+    db.prepare('UPDATE users SET refresh_token = NULL WHERE id = ?').run(user.id)
+  }
 
   // 代管模式下回带 relay 令牌，确保客户端始终持有（幂等，不存在则生成）
   const relayToken = COMMERCIAL_MODE ? ensureRelayToken(user.id) : undefined

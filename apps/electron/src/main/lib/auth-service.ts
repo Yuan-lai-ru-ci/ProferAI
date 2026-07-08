@@ -105,15 +105,21 @@ function readTokens(): AuthTokenStore {
       try {
         const decrypted = safeStorage.decryptString(encrypted)
         return JSON.parse(decrypted) as AuthTokenStore
-      } catch {
-        // 解密失败，尝试明文读取
+      } catch (decryptErr) {
+        // 解密失败：可能是 DPAPI 密钥变化（Windows 密码重置、用户切换等）
+        console.warn('[认证] safeStorage 解密失败，token 文件可能已损坏:', (decryptErr as Error).message)
+        console.warn('[认证] 将删除损坏的 token 文件，下次登录后将使用明文存储作为兜底')
+        // 删除损坏的加密文件，避免反复解密失败
+        try { require('node:fs').unlinkSync(path) } catch { /* 忽略 */ }
+        return {}
       }
     }
 
-    // 回退：明文 JSON
+    // 回退：明文 JSON（safeStorage 不可用或解密失败后重新登录）
     try {
       return JSON.parse(encrypted.toString('utf-8')) as AuthTokenStore
     } catch {
+      console.warn('[认证] token 文件格式无效（非加密非 JSON），已忽略')
       return {}
     }
   } catch (err) {
@@ -128,14 +134,28 @@ function writeTokens(tokens: AuthTokenStore): void {
     const { safeStorage } = require('electron')
 
     if (safeStorage.isEncryptionAvailable()) {
-      const decrypted = JSON.stringify(tokens)
-      const encrypted = safeStorage.encryptString(decrypted)
-      writeFileSync(path, encrypted)
-    } else {
-      // 回退：明文 JSON（开发环境 / 未签名应用）
-      console.warn('[认证] safeStorage 不可用，令牌将明文存储')
-      writeFileSync(path, JSON.stringify(tokens, null, 2), 'utf-8')
+      try {
+        // 先做一次加密-解密往返测试，确保 DPAPI 状态正常
+        const testData = 'proma-token-test'
+        const testEncrypted = safeStorage.encryptString(testData)
+        const testDecrypted = safeStorage.decryptString(testEncrypted)
+        if (testDecrypted !== testData) {
+          throw new Error('safeStorage 往返测试失败：解密结果不匹配')
+        }
+
+        const decrypted = JSON.stringify(tokens)
+        const encrypted = safeStorage.encryptString(decrypted)
+        writeFileSync(path, encrypted)
+        console.log('[认证] 令牌已加密存储')
+        return
+      } catch (encryptErr) {
+        console.warn('[认证] safeStorage 加密不可靠，降级为明文存储:', (encryptErr as Error).message)
+      }
     }
+
+    // 回退：明文 JSON 存储
+    writeFileSync(path, JSON.stringify(tokens, null, 2), 'utf-8')
+    console.log('[认证] 令牌已明文存储（safeStorage 不可用或不可靠）')
   } catch (err) {
     console.warn('[认证] 写入令牌失败:', err)
   }
@@ -397,6 +417,41 @@ export async function register(
   }
 }
 
+/** 检查是否存储了有效的 refreshToken（用于启动/休眠恢复时尝试恢复会话） */
+export function hasStoredRefreshToken(): boolean {
+  const tokens = readTokens()
+  for (const id of Object.keys(tokens)) {
+    if (tokens[id]?.refreshToken) return true
+  }
+  return false
+}
+
+/** 尝试用 refreshToken 恢复过期会话。返回 true 表示恢复成功 */
+export async function tryRestoreSession(): Promise<boolean> {
+  if (getAuthStatus().isLoggedIn) return true
+  if (!hasStoredRefreshToken()) return false
+  console.log('[认证] accessToken 已过期，尝试用 refreshToken 恢复会话...')
+  const ok = await refreshAuthToken()
+  if (ok) {
+    console.log('[认证] 会话恢复成功 ✅')
+    // 刷新成功后同步通知所有渲染进程
+    const { BrowserWindow } = require('electron')
+    const auth = getTeamAuth()
+    const tokens = readTokens()
+    const firstKey = Object.keys(tokens)[0]
+    const restoredEmail = auth && firstKey ? (tokens[firstKey]?.teamEmail || '') : ''
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.send('team:auth-restored', {
+        isLoggedIn: true,
+        teamEmail: restoredEmail,
+      })
+    }
+  } else {
+    console.warn('[认证] 会话恢复失败 ❌ —— refreshToken 可能已过期或网络不通')
+  }
+  return ok
+}
+
 /** 获取当前登录状态 */
 export function getAuthStatus(): {
   isLoggedIn: boolean
@@ -494,14 +549,20 @@ export async function refreshAuthToken(): Promise<boolean> {
   const tokens = readTokens()
   const servers = listTeamServers()
 
+  console.log(`[认证] 开始刷新 token，共 ${servers.length} 个服务器配置`)
+
   for (const server of servers) {
     const token = tokens[server.id]
-    if (!token || !token.refreshToken) continue
+    if (!token || !token.refreshToken) {
+      console.log(`[认证] 跳过服务器 ${server.baseUrl}: 无 token 或无 refreshToken`)
+      continue
+    }
 
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 10000)
 
+      console.log(`[认证] 向 ${server.baseUrl}/v1/auth/refresh 发送刷新请求...`)
       const response = await (undiciFetch as unknown as typeof fetch)(
         `${server.baseUrl}${API_PREFIX}/auth/refresh`,
         {
@@ -514,7 +575,8 @@ export async function refreshAuthToken(): Promise<boolean> {
       clearTimeout(timeout)
 
       if (response.ok) {
-        const data = await response.json() as { accessToken: string; relayToken?: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean; accountType?: string; canSelfConfigApi?: boolean }
+        const data = await response.json() as { accessToken: string; relayToken?: string; refreshToken?: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean; accountType?: string; canSelfConfigApi?: boolean }
+        console.log(`[认证] 刷新成功，新 token 过期时间: ${new Date(data.expiresAt).toISOString()}`)
         const commercialMode = data.commercialMode === undefined
           ? resolveCommercialMode(token.commercialMode)
           : resolveCommercialMode(data.commercialMode)
@@ -522,6 +584,7 @@ export async function refreshAuthToken(): Promise<boolean> {
           ...token,
           accessToken: data.accessToken,
           relayToken: data.relayToken ?? token.relayToken,
+          refreshToken: data.refreshToken ?? token.refreshToken,
           accountType: data.accountType ?? token.accountType,
           canSelfConfigApi: data.canSelfConfigApi ?? token.canSelfConfigApi,
           tokenExpiresAt: data.expiresAt,
@@ -532,10 +595,16 @@ export async function refreshAuthToken(): Promise<boolean> {
         // 刷新成功后重新排下一次续期
         scheduleAutoRefresh()
         return true
+      } else {
+        const body = await response.text().catch(() => '(无法读取响应体)')
+        console.warn(`[认证] 刷新失败: HTTP ${response.status} — ${body.slice(0, 200)}`)
       }
-    } catch { /* 网络错误，继续尝试下一个 */ }
+    } catch (err) {
+      console.warn(`[认证] 刷新请求异常:`, (err as Error).message || err)
+    }
   }
 
+  console.warn('[认证] 所有服务器 token 刷新均失败')
   return false
 }
 
