@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { Sparkles, RefreshCw, ShieldCheck, ArrowDownToLine } from 'lucide-react'
+import { Sparkles, RefreshCw, ShieldCheck, ArrowDownToLine, Upload } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -18,9 +18,12 @@ interface SkillCardProps {
   onOpen: () => void
   onToggle: (enabled: boolean) => void
   onUpdate: () => void
+  /** 团队工作区时：发布到团队市场 */
+  onPublish?: () => void
+  publishing?: boolean
 }
 
-export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
+export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate, onPublish, publishing }: SkillCardProps): React.ReactElement {
   return (
     <div
       role="button"
@@ -96,7 +99,23 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
             <TooltipContent side="top">点击同步来源最新版本</TooltipContent>
           </Tooltip>
         )}
-        {!skill.hasUpdate && skill.importSource && (
+        {onPublish && !isBuiltin && !skill.importSource && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onPublish() }}
+                disabled={publishing}
+                className="ml-auto flex items-center gap-1 rounded-md bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 hover:bg-green-500/20 transition-colors disabled:opacity-60 dark:text-green-400"
+              >
+                <Upload size={12} className={cn(publishing && 'animate-pulse')} />
+                {publishing ? '发布中' : '发布'}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">发布到团队市场</TooltipContent>
+          </Tooltip>
+        )}
+        {!skill.hasUpdate && skill.importSource && !onPublish && (
           <ArrowDownToLine size={12} className="ml-auto text-muted-foreground/40" />
         )}
       </div>
