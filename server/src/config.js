@@ -85,21 +85,6 @@ export const RELAY_API_KEY = (() => {
   return key || ''
 })()
 
-// 按分组的代理 Key：模型属于非 default 组时，用对应组的 token 转发，
-// 让 New API 走该分组的倍率。格式：group1:key1,group2:key2
-// default 组不需要配，自动用 RELAY_API_KEY
-export const GROUP_PROXY_KEYS = (() => {
-  const raw = process.env.GROUP_PROXY_KEYS || ''
-  const map = {}
-  if (raw) {
-    for (const pair of raw.split(',')) {
-      const colon = pair.indexOf(':')
-      if (colon > 0) map[pair.slice(0, colon).trim()] = pair.slice(colon + 1).trim()
-    }
-  }
-  return map
-})()
-
 // New API 系统访问令牌（用于查询真实用量/对账）
 // ⚠️ 必须是 New API 后台 root/超管账号 → 个人设置 → 生成的「系统访问令牌」，
 // 不是 API 令牌（sk-...）。系统令牌才能调 /api/log/ /api/user/ 等管理接口；
