@@ -164,6 +164,12 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   const config: ChannelsConfig = { version: 1, channels: [...localChannels] }
 
   for (const ch of data.channels) {
+    // 本地已有同 ID 渠道时：保留用户启停状态（enabled + 模型级 enabled）
+    const localExisting = existingConfig.channels.find((c) => c.id === ch.id)
+    const mergedModels = ch.models.map((m: any) => {
+      const localModel = localExisting?.models?.find((lm: any) => lm.id === (m.id || m.name))
+      return { ...m, enabled: localModel ? localModel.enabled : (m.enabled !== false) }
+    })
     const result = normalizeChannelForCurrentSchema({
       id: ch.id,
       name: ch.name,
@@ -171,9 +177,9 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
       baseUrl: ch.baseUrl,
       agentBaseUrl: ch.agentBaseUrl || '',
       apiKey: encryptApiKey(ch.apiKey),
-      models: ch.models,
-      enabled: true,
-      createdAt: now,
+      models: mergedModels,
+      enabled: localExisting?.enabled ?? true,
+      createdAt: localExisting?.createdAt ?? now,
       updatedAt: now,
     })
     config.channels.push(result.channel)
@@ -182,25 +188,30 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   writeConfig(config)
   console.log(`[渠道管理] 已从服务端同步 ${config.channels.length} 个渠道`)
 
-  // 自动配置 Agent：将同步的渠道设为 Agent 供应商
+  // 首次同步时自动配置 Agent 供应商（用户手动配过后不再覆盖）
   if (config.channels.length > 0) {
     try {
       const { updateSettings, getSettings } = require('./settings-service')
       const settings = getSettings()
-      const agentCapableChannels = config.channels.filter((c) => {
-        const { isAgentCompatibleProvider } = require('@proma/shared')
-        return isAgentCompatibleProvider(c.provider)
-      })
-      const agentIds = agentCapableChannels.map((c) => c.id)
-      const firstAgent = agentCapableChannels[0]
-      const firstModel = firstAgent?.models?.find((m) => m.enabled)
+      // 已配置过 → 不覆盖用户选择
+      if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {
+        // 静默跳过
+      } else {
+        const agentCapableChannels = config.channels.filter((c) => {
+          const { isAgentCompatibleProvider } = require('@proma/shared')
+          return isAgentCompatibleProvider(c.provider)
+        })
+        const agentIds = agentCapableChannels.map((c) => c.id)
+        const firstAgent = agentCapableChannels[0]
+        const firstModel = firstAgent?.models?.find((m) => m.enabled)
 
-      updateSettings({
-        agentChannelIds: agentIds,
-        agentChannelId: settings.agentChannelId || firstAgent?.id,
-        agentModelId: settings.agentModelId || firstModel?.id,
-      })
-      console.log(`[渠道管理] 已自动配置 ${agentIds.length} 个 Agent 供应商`)
+        updateSettings({
+          agentChannelIds: agentIds,
+          agentChannelId: settings.agentChannelId || firstAgent?.id,
+          agentModelId: settings.agentModelId || firstModel?.id,
+        })
+        console.log(`[渠道管理] 首次自动配置 ${agentIds.length} 个 Agent 供应商`)
+      }
     } catch (err) {
       console.warn('[渠道管理] 自动配置 Agent 供应商失败:', err)
     }
@@ -316,6 +327,25 @@ export function createChannel(input: ChannelCreateInput): Channel {
  * @returns 更新后的渠道
  */
 export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
+  // 官方同步渠道（newapi-*）：允许切换 channel enabled + 模型 enabled，不允许改名称/供应商/API Key/增删模型
+  if (id.startsWith('newapi-')) {
+    if (input.name !== undefined || input.provider !== undefined ||
+        input.baseUrl !== undefined || input.agentBaseUrl !== undefined ||
+        input.apiKey !== undefined) {
+      throw new Error('官方渠道由平台统一管理，不可修改')
+    }
+    if (input.models !== undefined) {
+      const config = readConfig()
+      const existing = config.channels.find((c) => c.id === id)
+      if (existing) {
+        const oldIds = new Set(existing.models.map(m => m.id))
+        const newIds = new Set(input.models.map(m => m.id))
+        if (oldIds.size !== newIds.size || ![...oldIds].every(oid => newIds.has(oid))) {
+          throw new Error('官方渠道不可增删模型，仅可控制启用/停用')
+        }
+      }
+    }
+  }
   // 商业模式下无自配权限时只允许切换 enabled，有自配权限则全部放开
   if (isCommercialMode() && !canSelfConfig()) {
     const hasStructuralChange =
@@ -362,6 +392,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
  * 删除渠道
  */
 export function deleteChannel(id: string): void {
+  if (id.startsWith('newapi-')) throw new Error('官方同步渠道不可删除，请在 New API 后台管理')
   if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
