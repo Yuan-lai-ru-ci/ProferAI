@@ -57,13 +57,18 @@ export function registerBridge(bridge: BridgeRegistration): void {
  * 启动是 fire-and-forget，不阻塞主流程。
  */
 export async function startAllBridges(): Promise<void> {
+  const startTasks: Promise<void>[] = []
   for (const bridge of bridges) {
     if (bridge.shouldAutoStart()) {
-      bridge.start().catch((err) => {
-        console.error(`[Bridge Registry] ${bridge.name} 自动启动失败:`, err)
-      })
+      startTasks.push(
+        bridge.start().catch((err) => {
+          console.error(`[Bridge Registry] ${bridge.name} 自动启动失败:`, err)
+        })
+      )
     }
   }
+  // 所有 Bridge 并行启动，不串行等待
+  await Promise.all(startTasks)
 }
 
 /** 启动 Bridge 自愈守护：系统恢复/解锁后重建长连接，定时恢复 error 状态。 */
