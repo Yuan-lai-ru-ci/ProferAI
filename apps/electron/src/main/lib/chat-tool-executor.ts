@@ -13,8 +13,8 @@ import { isMemoryToolCall, executeMemoryTool } from './chat-tools/memory-tool'
 import { isWebSearchToolCall, executeWebSearchTool } from './chat-tools/web-search-tool'
 import { isCustomHttpToolCall, executeHttpTool } from './chat-tools/http-tool-executor'
 import { isAgentRecommendToolCall, executeAgentRecommendTool } from './chat-tools/agent-recommend-tool'
-import { isNanoBananaToolCall, executeNanoBananaTool } from './chat-tools/nano-banana-tool'
-import type { NanoBananaContext } from './chat-tools/nano-banana-tool'
+import { isGptImageToolCall, executeGptImageTool } from './chat-tools/gpt-image-tool'
+import type { GptImageContext } from './chat-tools/gpt-image-tool'
 import { getChatToolsConfig } from './chat-tool-config'
 
 /** 工具执行上下文 */
@@ -55,14 +55,14 @@ export async function executeToolCalls(
       result = await executeWebSearchTool(tc)
     } else if (isAgentRecommendToolCall(tc.name)) {
       result = await executeAgentRecommendTool(tc)
-    } else if (isNanoBananaToolCall(tc.name)) {
-      const nanoBananaContext: NanoBananaContext = {
+    } else if (isGptImageToolCall(tc.name)) {
+      const gptImageContext: GptImageContext = {
         conversationId: context.conversationId,
         currentAttachments: context.currentAttachments,
         previousUserAttachments: context.previousUserAttachments,
         previousAssistantAttachments: context.previousAssistantAttachments,
       }
-      result = await executeNanoBananaTool(tc, nanoBananaContext)
+      result = await executeGptImageTool(tc, gptImageContext)
     } else if (isCustomHttpToolCall(tc.name)) {
       const config = getChatToolsConfig()
       const meta = config.customTools.find((t) => t.id === tc.name)

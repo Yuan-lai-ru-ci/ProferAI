@@ -16,7 +16,7 @@ const DEFAULT_CONFIG: ChatToolsFileConfig = {
     memory: { enabled: true },
     'agent-mode-recommend': { enabled: true },
     'web-search': { enabled: false },
-    'nano-banana': { enabled: false },
+    'gpt-image': { enabled: false },
   },
   toolCredentials: {},
   customTools: [],
