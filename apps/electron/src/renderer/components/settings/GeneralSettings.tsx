@@ -71,14 +71,27 @@ export function GeneralSettings(): React.ReactElement {
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
   const [archiveAfterDays, setArchiveAfterDays] = React.useState<number>(7)
+  const [autoLaunch, setAutoLaunch] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
-  // 加载归档天数设置
+  // 加载设置
   React.useEffect(() => {
     window.electronAPI.getSettings().then((settings) => {
       setArchiveAfterDays(settings.archiveAfterDays ?? 7)
+      setAutoLaunch(settings.autoLaunch ?? false)
     }).catch(console.error)
   }, [])
+
+  /** 切换开机自启动 */
+  const handleAutoLaunchChange = async (enabled: boolean): Promise<void> => {
+    setAutoLaunch(enabled)
+    try {
+      await window.electronAPI.setAutoLaunch(enabled)
+    } catch (error) {
+      console.error('[通用设置] 设置开机自启动失败:', error)
+      setAutoLaunch(!enabled) // 回滚
+    }
+  }
 
   /** 更新归档天数 */
   const handleArchiveDaysChange = async (value: string): Promise<void> => {
@@ -385,6 +398,12 @@ export function GeneralSettings(): React.ReactElement {
               setStickyUserMessageEnabled(checked)
               updateStickyUserMessageEnabled(checked)
             }}
+          />
+          <SettingsToggle
+            label="开机自启动"
+            description="系统启动时自动运行 Profer"
+            checked={autoLaunch}
+            onCheckedChange={handleAutoLaunchChange}
           />
         </SettingsCard>
       </SettingsSection>

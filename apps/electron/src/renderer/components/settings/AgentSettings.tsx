@@ -7,20 +7,36 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { Pencil, Brain, ImagePlus, Search } from 'lucide-react'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { Pencil, Brain, ImagePlus, Search, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { settingsTabAtom } from '@/atoms/settings-tab'
 import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
-import { SettingsSection, SettingsCard } from './primitives'
+import { agentEffortAtom } from '@/atoms/agent-atoms'
+import { SettingsSection, SettingsCard, SettingsSegmentedControl } from './primitives'
+import type { AgentEffort } from '@proma/shared'
+
+const EFFORT_OPTIONS: { value: AgentEffort; label: string }[] = [
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'max', label: '最大' },
+]
 
 export function AgentSettings(): React.ReactElement {
   const tools = useAtomValue(chatToolsAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
+  const [effort, setEffort] = useAtom(agentEffortAtom)
+
+  const handleEffortChange = React.useCallback((value: string) => {
+    const v = value as AgentEffort
+    setEffort(v)
+    window.electronAPI.updateSettings({ agentEffort: v }).catch(console.error)
+  }, [setEffort])
 
   const memoryTool = tools.find((t) => t.meta.id === 'memory')
-  const nanoBananaTool = tools.find((t) => t.meta.id === 'nano-banana')
+  const gptImageTool = tools.find((t) => t.meta.id === 'gpt-image')
   const webSearchTool = tools.find((t) => t.meta.id === 'web-search')
 
   interface BuiltinToolItem {
@@ -42,12 +58,12 @@ export function AgentSettings(): React.ReactElement {
       available: memoryTool?.available ?? false,
     },
     {
-      id: 'nano-banana',
-      name: 'Nano Banana',
+      id: 'gpt-image',
+      name: 'GPT Image',
       description: 'AI 图片生成与编辑',
       icon: <ImagePlus className="size-4" />,
-      enabled: nanoBananaTool?.enabled ?? false,
-      available: nanoBananaTool?.available ?? false,
+      enabled: gptImageTool?.enabled ?? false,
+      available: gptImageTool?.available ?? false,
     },
     {
       id: 'web-search',
@@ -60,7 +76,20 @@ export function AgentSettings(): React.ReactElement {
   ]
 
   return (
-    <SettingsSection
+    <div className="space-y-6">
+      <SettingsSection title="Agent 配置" description="调整 Agent 的推理行为和资源限制">
+        <SettingsCard>
+          <SettingsSegmentedControl
+            label="思考强度"
+            description="控制 Agent 推理深度。低强度响应更快，高强度更适合复杂任务（仅 Claude Opus 4.6+ 支持 max）"
+            value={effort ?? 'high'}
+            onValueChange={handleEffortChange}
+            options={EFFORT_OPTIONS}
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection
       title="内置工具"
       description="启用后自动注入到 Agent 会话，在工具设置中配置。Skills 与 MCP 已移至侧边栏的「Agent 技能」。"
       action={
@@ -95,5 +124,6 @@ export function AgentSettings(): React.ReactElement {
         })}
       </SettingsCard>
     </SettingsSection>
+    </div>
   )
 }

@@ -24,9 +24,9 @@ import {
   Mic,
   HardDriveDownload,
   HardDrive,
-  Paintbrush,
   Users,
   Coins,
+  MessageSquareText,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
@@ -58,9 +58,9 @@ import { ShortcutSettings } from "./ShortcutSettings";
 import { VoiceInputSettings } from "./VoiceInputSettings";
 import { MigrationSettings } from "./MigrationSettings";
 import { StorageSettings } from "./StorageSettings";
-import { BrandManager } from "./BrandManager";
 import { TeamWorkspaceSettings } from "./TeamWorkspaceSettings";
 import { CreditsSettings } from "./CreditsSettings";
+import { FeedbackSettings } from "./FeedbackSettings";
 
 /** 设置 Tab 定义 */
 interface TabItem {
@@ -73,6 +73,7 @@ interface TabItem {
 const BASE_TABS: TabItem[] = [
   { id: "general", label: "通用设置", icon: <Settings size={16} /> },
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
+  { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
 ];
@@ -113,10 +114,9 @@ const VOICE_INPUT_TAB: TabItem = {
 const TAIL_TABS: TabItem[] = [
   { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
   { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
-  { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
-  { id: "brand", label: "品牌定制", icon: <Paintbrush size={16} /> },
   { id: "team", label: "团队管理", icon: <Users size={16} /> },
+  { id: "feedback", label: "意见箱", icon: <MessageSquareText size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
@@ -149,12 +149,12 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <MigrationSettings />;
     case "storage":
       return <StorageSettings />;
-    case "brand":
-      return <BrandManager />;
     case "team":
       return <TeamWorkspaceSettings />;
     case "credits":
       return <CreditsSettings />;
+    case "feedback":
+      return <FeedbackSettings />;
     default:
       // tutorial 等特殊 tab 由 handleTabChange 拦截打开主区 Tab，不会在此渲染
       return <GeneralSettings />;

@@ -15,14 +15,20 @@ export const creditsLifetimeConsumedAtom = atom<number>(0)
 /** 是否正在加载 */
 export const creditsLoadingAtom = atom<boolean>(false)
 
-/** 余额偏低阈值（货币单位）：低于此值提示偏低 */
-export const CREDITS_LOW_THRESHOLD = 10
+/**
+ * 余额偏低阈值：剩余额度 ≤ 总量的 20% 时提示告急。
+ * 余额为 null（未加载）或总量为 0（新用户未消费）不触发。
+ */
+export const CREDITS_LOW_RATIO = 0.2
 
-/** 余额偏低 */
+/** 余额偏低（剩余 ≤ 总量 20%） */
 export const creditsLowAtom = atom((get) => {
   const balance = get(creditsBalanceAtom)
+  const consumed = get(creditsLifetimeConsumedAtom)
   if (balance === null) return false
-  return balance < CREDITS_LOW_THRESHOLD
+  const total = balance + consumed
+  if (total <= 0) return false
+  return balance / total <= CREDITS_LOW_RATIO
 })
 
 /** 余额耗尽 */
