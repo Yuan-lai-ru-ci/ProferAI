@@ -54,9 +54,10 @@ async function authedFetch(
 // ===== 团队工作区 CRUD =====
 
 /** 列出当前用户的团队工作区（远程） */
-export async function listTeamWorkspaces(): Promise<AgentWorkspace[]> {
+export async function listTeamWorkspaces(includeDeleted = false): Promise<AgentWorkspace[]> {
   try {
-    const res = await authedFetch('/v1/workspaces')
+    const query = includeDeleted ? '?include_deleted=true' : ''
+    const res = await authedFetch(`/v1/workspaces${query}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return (await res.json()) as AgentWorkspace[]
   } catch (err) {
@@ -118,6 +119,23 @@ export async function deleteTeamWorkspace(workspaceId: string): Promise<void> {
 
   enqueueChange(workspaceId, 'workspace', workspaceId, 'delete', {})
   console.log(`[团队] 已删除团队工作区: ${workspaceId}`)
+}
+
+/** 恢复已删除的团队工作区（冷静期内） */
+export async function restoreTeamWorkspace(workspaceId: string): Promise<void> {
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/restore`, { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`恢复工作区失败: ${body}`)
+  }
+  // 更新本地索引：移除删除标记
+  const index = readIndex()
+  const idx = index.workspaces.findIndex((w) => w.id === workspaceId)
+  if (idx !== -1) {
+    index.workspaces[idx] = { ...index.workspaces[idx]!, isDeleted: false }
+    writeIndex(index)
+  }
+  console.log(`[团队] 已恢复团队工作区: ${workspaceId}`)
 }
 
 // ===== 成员管理 =====
@@ -302,24 +320,26 @@ export async function cancelInvitation(workspaceId: string, invitationId: string
 }
 
 /** 列出工作区的所有邀请 */
-export async function listInvitations(workspaceId: string): Promise<Array<{
-  id: string
-  workspaceId: string
-  inviterId: string
-  inviterName: string
-  inviteeEmail: string
-  role: string
-  token: string
-  status: string
-  createdAt: number
-  expiresAt: number
-}>> {
+export async function listInvitations(
+  workspaceId: string,
+  options?: { status?: string; page?: number; limit?: number }
+): Promise<any> {
   try {
-    const res = await authedFetch(`/v1/workspaces/${workspaceId}/invitations`)
-    if (!res.ok) return []
-    return (await res.json()) as any[]
+    const params = new URLSearchParams()
+    if (options?.status) params.set('status', options.status)
+    if (options?.page) params.set('page', String(options.page))
+    if (options?.limit) params.set('limit', String(options.limit))
+    const queryStr = params.toString()
+    const path = `/v1/workspaces/${workspaceId}/invitations${queryStr ? '?' + queryStr : ''}`
+
+    const res = await authedFetch(path)
+    if (!res.ok) {
+      // 无参数时返回空数组（向后兼容），有参数时返回分页空结构
+      return options ? { invitations: [], total: 0, page: options.page || 1, limit: options.limit || 20, totalPages: 0 } : []
+    }
+    return (await res.json()) as any
   } catch {
-    return []
+    return options ? { invitations: [], total: 0, page: options.page || 1, limit: options.limit || 20, totalPages: 0 } : []
   }
 }
 

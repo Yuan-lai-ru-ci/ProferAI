@@ -78,8 +78,10 @@ export function TeamWorkspaceView(): React.ReactElement {
 
   // 当前用户是否可以管理这条文件/文件夹（上传者 or 管理员/拥有者）
   const canManage = React.useCallback((entry: { uploadedBy?: string }) => {
-    if (!teamAccountId) return false
+    // 管理员/拥有者可以管理所有文件（不依赖 teamAccountId，避免异步加载期间误判）
     if (workspace?.role === 'owner' || workspace?.role === 'admin') return true
+    // 普通成员：需要 teamAccountId 来匹配上传者
+    if (!teamAccountId) return false
     if (entry.uploadedBy && entry.uploadedBy === teamAccountId) return true
     // 无上传者的旧条目：允许任何成员管理
     if (!entry.uploadedBy) return true
