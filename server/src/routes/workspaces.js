@@ -71,15 +71,9 @@ workspaceRoutes.get('/:id/audit-logs', (c) => {
   const rawLimit = parseInt(c.req.query('limit') || '50', 10)
   const limit = isNaN(rawLimit) ? 50 : Math.min(Math.max(rawLimit, 1), 200)
 
-  const memberRole = c.get('memberRole') || 'member'
-  const isPrivileged = memberRole === 'owner' || memberRole === 'admin'
-
-  // 普通成员只看本工作区审计；owner/admin 可额外看到无工作区归属的全局事件
-  let whereClause = 'workspace_id = ?'
+  // 审计仅限本工作区：不再让 owner/admin 借 workspace_id='' 跨工作区看到全站登录/登出记录和他人邮箱
+  const whereClause = 'workspace_id = ?'
   const params = [wsId]
-  if (isPrivileged) {
-    whereClause = '(workspace_id = ? OR workspace_id = \'\')'
-  }
 
   const rows = db.prepare(`
     SELECT action, user_email, entity_type, entity_id, detail, created_at

@@ -52,6 +52,12 @@ export const INVITATION_RETENTION_MS = parseInt(
   process.env.INVITATION_RETENTION_MS || String(90 * 86400 * 1000), 10
 )
 
+// 同步信封保留期（默认 30 天）。超期的 sync_envelopes 定期清理，避免无限增长。
+// 注意：离线超过该时长的客户端再上线会漏掉窗口外的增量变更，需触发全量重同步。
+export const SYNC_ENVELOPE_RETENTION_MS = parseInt(
+  process.env.SYNC_ENVELOPE_RETENTION_MS || String(30 * 86400 * 1000), 10
+)
+
 // ===== 商业模式 =====
 // COMMERCIAL_MODE=true 时启用额度扣除、渠道统配、管理后台
 export const COMMERCIAL_MODE = process.env.COMMERCIAL_MODE === 'true'

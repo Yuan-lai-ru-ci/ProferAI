@@ -23,7 +23,7 @@
  */
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, WORKSPACE_GRACE_PERIOD_MS, INVITATION_RETENTION_MS, FILES_DIR } from './src/config.js'
+import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, WORKSPACE_GRACE_PERIOD_MS, INVITATION_RETENTION_MS, SYNC_ENVELOPE_RETENTION_MS, FILES_DIR } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
 import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
@@ -207,6 +207,19 @@ setInterval(() => {
     console.warn('[清理] 邀请历史清理失败:', err.message)
   }
 }, 24 * 60 * 60 * 1000).unref()
+
+// 定期清理超期的同步信封（每 6 小时），避免 sync_envelopes 无限增长
+setInterval(() => {
+  try {
+    const cutoff = Date.now() - SYNC_ENVELOPE_RETENTION_MS
+    const result = db.prepare('DELETE FROM sync_envelopes WHERE occurred_at < ?').run(cutoff)
+    if (result.changes > 0) {
+      console.log(`[清理] 已删除 ${result.changes} 条超期同步信封`)
+    }
+  } catch (err) {
+    console.warn('[清理] 同步信封清理失败:', err.message)
+  }
+}, 6 * 60 * 60 * 1000).unref()
 
 // 优雅关闭
 process.on('SIGTERM', () => { db.close(); process.exit(0) })
