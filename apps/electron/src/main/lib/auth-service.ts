@@ -174,6 +174,11 @@ interface LoginResult {
   isAdmin?: boolean
   joinedWorkspace?: string
   error?: string
+  /** 达到设备上限时返回：需用户撤销一台设备后重试（携带 revokeSlotId） */
+  deviceLimit?: {
+    maxDevices: number
+    devices: Array<{ id: string; deviceName: string; platform?: string | null; lastUsedAt: number }>
+  }
 }
 
 function resolveCommercialMode(serverCommercialMode?: boolean): boolean {
@@ -191,6 +196,7 @@ export async function login(
   serverUrl: string,
   email: string,
   password: string,
+  revokeSlotId?: string,
 ): Promise<LoginResult> {
   // 自动注册服务器配置
   const servers = readTeamServers()
@@ -218,13 +224,28 @@ export async function login(
     const response = await (undiciFetch as unknown as typeof fetch)(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, ...getDeviceAuthInfo() }),
+      body: JSON.stringify({ email, password, revokeSlotId, ...getDeviceAuthInfo() }),
       signal: controller.signal,
     } as RequestInit)
     clearTimeout(timeout)
 
     if (!response.ok) {
       const body = await response.text()
+      if (response.status === 409) {
+        try {
+          const j = JSON.parse(body) as {
+            code?: string; error?: string; maxDevices?: number
+            devices?: Array<{ id: string; deviceName: string; platform?: string | null; lastUsedAt: number }>
+          }
+          if (j.code === 'device_limit') {
+            return {
+              success: false,
+              error: j.error || '已达设备上限',
+              deviceLimit: { maxDevices: j.maxDevices || 0, devices: j.devices || [] },
+            }
+          }
+        } catch { /* 非结构化 409 → 走通用错误 */ }
+      }
       return {
         success: false,
         error: response.status === 401 ? '邮箱或密码错误' : `服务器错误 (${response.status})`,
