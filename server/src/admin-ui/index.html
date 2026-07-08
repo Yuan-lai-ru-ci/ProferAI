@@ -195,7 +195,7 @@ function renderUsers(c){var page=1,search='';
 	    api('/admin/channels').then(function(chs){
 	      var rows=chs.length?chs.map(function(ch){
 	        var mlist='';try{mlist=(JSON.parse(ch.models_json||'[]')||[]).map(function(m){return m.name||m.id}).join(', ')}catch(e){}
-	        return'<tr><td><strong>'+esc(ch.name)+'</strong></td><td>'+ch.provider+'</td><td style="max-width:220px;font-size:12px;color:var(--muted)">'+esc(mlist||'—')+'</td><td>'+(ch.is_active?'<span class="badge badge-success">活跃</span>':'<span class="badge badge-danger">停用</span>')+'</td><td>'+fmtDate(ch.created_at)+'</td><td><button class="btn btn-ghost edit-ch-btn" data-cid="'+ch.id+'" data-nm="'+esc(ch.name)+'" data-prov="'+ch.provider+'" data-models="'+esc(JSON.stringify(JSON.parse(ch.models_json||'[]')))+'" data-active="'+ch.is_active+'">✏️ 编辑</button> <button class="btn btn-ghost del-btn" data-cid="'+ch.id+'" style="color:var(--danger)">🗑 删除</button></td></tr>'
+	        var isOfficial=ch.id.indexOf('newapi-')===0;var nameCell='<strong>'+esc(ch.name)+'</strong>'+(isOfficial?' <span class="badge badge-info" style="font-size:10px">官方</span>':'');var act=isOfficial?'<span class="badge badge-info" style="font-size:10px">同步渠道</span>':'<button class="btn btn-ghost edit-ch-btn" data-cid="'+ch.id+'" data-nm="'+esc(ch.name)+'" data-prov="'+ch.provider+'" data-models="'+esc(JSON.stringify(JSON.parse(ch.models_json||'[]')))+'" data-active="'+ch.is_active+'">✏️ 编辑</button> <button class="btn btn-ghost del-btn" data-cid="'+ch.id+'" style="color:var(--danger)">🗑 删除</button>';return'<tr><td>'+nameCell+'</td><td>'+ch.provider+'</td><td style="max-width:220px;font-size:12px;color:var(--muted)">'+esc(mlist||'—')+'</td><td>'+(ch.is_active?'<span class="badge badge-success">活跃</span>':'<span class="badge badge-danger">停用</span>')+'</td><td>'+fmtDate(ch.created_at)+'</td><td>'+act+'</td></tr>'
 	      }).join(''):'<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📡</div>还没有配置渠道</div></td></tr>';
 	      c.innerHTML='<h1 class="page-title">渠道管理</h1>';
 	      c.insertAdjacentHTML('beforeend','<div class="card" style="margin-bottom:20px;border-left:3px solid var(--primary);background:rgba(59,130,246,.06)"><div style="font-size:13px;line-height:1.6">ℹ️ <strong>代管模式说明</strong>：API Key 和上游地址在 <a href="/" target="_blank" style="color:var(--primary)">New API 后台</a> 统一配置，此处的渠道仅管理<strong>供应商类型</strong>和<strong>可用模型清单</strong>。</div></div>');
@@ -235,8 +235,9 @@ function renderCredits(c){
     api('/admin/credits/transactions?limit=30').catch(function(){return{transactions:[]}}),
     api('/admin/credits/request-logs?limit=30').catch(function(){return{logs:[]}}),
     api('/admin/credits/usage-by-model?days=30').catch(function(){return[]}),
-    api('/admin/users?limit=200').catch(function(){return{users:[]}})
-  ]).then(function(r){var s=r[0],tx=r[1],rl=r[2],um=r[3],ud=r[4];
+    api('/admin/users?limit=200').catch(function(){return{users:[]}}),
+    api('/admin/credits/reset-preview').catch(function(){return{users:[]}})
+  ]).then(function(r){var s=r[0],tx=r[1],rl=r[2],um=r[3],ud=r[4],rp=r[5];
     // 摘要卡片
     var cards='<div class="stat-grid" style="margin-bottom:20px">'+
       '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+(s.total_balance||0).toLocaleString()+'</div><div class="stat-lbl">总余额</div></div>'+
@@ -252,6 +253,18 @@ function renderCredits(c){
       '<div><label>备注</label><input class="grant-desc" placeholder="充值说明"></div></div>'+
       '<div class="grant-msg" style="font-size:13px;margin-bottom:12px"></div>'+
       '<button class="btn btn-primary grant-btn">确认充值</button></div>';
+
+    // 批量重置额度
+    var resetUsers=rp.users||[];
+    var resetRows=resetUsers.length?resetUsers.map(function(u){
+      var typeLabel=u.accountType==='advanced'?'高级':u.accountType==='restricted'?'受限':'标准';
+      return'<tr><td><input type="checkbox" class="reset-cb" data-uid="'+u.id+'" data-amount="'+u.resetAmountQuota+'" checked></td><td><strong>'+esc(u.email)+'</strong></td><td><span class="badge '+(u.accountType==='advanced'?'badge-info':u.accountType==='restricted'?'badge-warn':'badge-success')+'">'+typeLabel+'</span></td><td class="number">$'+u.currentBalanceUSD+'</td><td class="number" style="color:var(--success);font-weight:600">→ $'+u.resetAmountUSD+' ('+u.resetAmountQuota.toLocaleString()+' quota)</td></tr>';
+    }).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👥</div>暂无用户数据</div></td></tr>';
+    var batchReset='<div class="card" style="margin-bottom:20px"><div class="card-header"><div><h2>🔄 批量重置额度</h2><div style="font-size:12px;color:var(--muted);margin-top:2px">受限 $1 / 标准 $5 / 高级 $15 · 重置后余额将设为对应类型的默认值</div></div>'+
+      '<div style="display:flex;gap:8px"><button class="btn btn-outline btn-sm selall-btn">全选</button><button class="btn btn-outline btn-sm desel-btn">取消全选</button>'+
+      '<button class="btn btn-danger btn-sm reset-btn" style="margin-left:8px">⚠ 重置选中用户额度</button></div></div>'+
+      '<div style="overflow:auto"><table><thead><tr><th style="width:32px"><input type="checkbox" class="reset-all-cb" checked></th><th>邮箱</th><th>类型</th><th>当前余额</th><th>重置为</th></tr></thead><tbody>'+resetRows+'</tbody></table>'+
+      '<div class="reset-msg" style="font-size:13px;margin-top:12px;text-align:right"></div></div></div>';
 
     // 按模型用量
     var modelRows=um.length?um.map(function(m){
@@ -269,7 +282,7 @@ function renderCredits(c){
     var txRows=tx.transactions&&tx.transactions.length?tx.transactions.map(function(tx){return'<tr><td><strong>'+esc(tx.user_email||tx.user_id)+'</strong></td><td style="color:'+(tx.amount>=0?'var(--success)':'var(--danger)')+';font-weight:600">'+(tx.amount>=0?'+':'')+tx.amount.toLocaleString()+'</td><td><span class="badge '+(tx.type==='grant'?'badge-success':tx.type==='consumption'?'badge-warn':'badge-info')+'">'+tx.type+'</span></td><td>'+esc(tx.description||'-')+'</td><td>'+fmtDateTime(tx.created_at)+'</td></tr>'}).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📭</div>暂无交易记录</div></td></tr>';
     var txTable='<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 最近交易</h2></div><table><thead><tr><th>用户</th><th>数量</th><th>类型</th><th>说明</th><th>时间</th></tr></thead><tbody>'+txRows+'</tbody></table></div>';
 
-    c.innerHTML='<h1 class="page-title">额度管理</h1>'+cards+grant+modelTable+logTable+txTable;
+    c.innerHTML='<h1 class="page-title">额度管理</h1>'+cards+grant+batchReset+modelTable+logTable+txTable;
 
     c.querySelector('.grant-btn').addEventListener('click',function(){
       var uid=c.querySelector('.grant-uid').value,amtUsd=parseFloat(c.querySelector('.grant-amt').value),desc=c.querySelector('.grant-desc').value;
@@ -278,6 +291,39 @@ function renderCredits(c){
       c.querySelector('.grant-msg').innerHTML='<span style="color:var(--muted)">处理中...</span>';
       api('/admin/credits/grant',{method:'POST',body:JSON.stringify({userId:uid,amount:quota,description:desc||('管理员充值 $'+amtUsd.toFixed(2))})}).then(function(r){toast('✅ 已充值 $'+amtUsd.toFixed(2));renderCredits(c)}).catch(function(e){c.querySelector('.grant-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>'});
     });
+
+    // ---- 批量重置额度事件 ----
+    var resetAllCb=c.querySelector('.reset-all-cb');
+    if(resetAllCb){
+      resetAllCb.addEventListener('change',function(){
+        c.querySelectorAll('.reset-cb').forEach(function(cb){cb.checked=resetAllCb.checked});
+      });
+    }
+    c.querySelector('.selall-btn').addEventListener('click',function(){
+      c.querySelectorAll('.reset-cb').forEach(function(cb){cb.checked=true});if(resetAllCb)resetAllCb.checked=true;
+    });
+    c.querySelector('.desel-btn').addEventListener('click',function(){
+      c.querySelectorAll('.reset-cb').forEach(function(cb){cb.checked=false});if(resetAllCb)resetAllCb.checked=false;
+    });
+    c.querySelector('.reset-btn').addEventListener('click',function(){
+      var checked=c.querySelectorAll('.reset-cb:checked');
+      if(checked.length===0){toast('请至少选择一个用户',false);return}
+      var ids=[];checked.forEach(function(cb){ids.push(cb.dataset.uid)});
+      var sample=ids.slice(0,3).map(function(id){var u=resetUsers.find(function(x){return x.id===id});return u?u.email+'→$'+u.resetAmountUSD:id}).join(', ');
+      if(!confirm('确定要重置 '+ids.length+' 个用户的额度吗？\n\n示例：'+sample+(ids.length>3?' ... 等共'+ids.length+'人':'')))return;
+      c.querySelector('.reset-msg').innerHTML='<span style="color:var(--muted)">处理中...</span>';
+      api('/admin/credits/batch-reset',{method:'POST',body:JSON.stringify({userIds:ids})}).then(function(r){
+        toast('✅ 已重置 '+r.count+' 个用户额度');
+        renderCredits(c);
+      }).catch(function(e){
+        c.querySelector('.reset-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>';
+      });
+    });
+    // 单个 checkbox 变化时同步全选框
+    c.querySelectorAll('.reset-cb').forEach(function(cb){cb.addEventListener('change',function(){
+      var all=c.querySelectorAll('.reset-cb');var checked=c.querySelectorAll('.reset-cb:checked');
+      if(resetAllCb)resetAllCb.checked=checked.length===all.length;
+    })});
   }).catch(function(e){c.innerHTML='<h1 class="page-title">额度管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
 }
 
