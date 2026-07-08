@@ -10,9 +10,9 @@
  */
 
 import * as React from 'react'
-import { useSetAtom } from 'jotai'
+import { useSetAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check, Store, Download, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -31,7 +31,7 @@ import { SkillDetailSheet } from './SkillDetailSheet'
 import { McpDetailSheet } from './McpDetailSheet'
 import { ImportSkillDialog } from './ImportSkillDialog'
 
-type CapabilityTab = 'skills' | 'mcp'
+type CapabilityTab = 'skills' | 'marketplace' | 'mcp'
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData()
@@ -76,6 +76,61 @@ export function AgentSkillsView(): React.ReactElement {
     () => Object.keys(data.mcpConfig.servers ?? {}).filter((n) => n !== 'memos-cloud').length,
     [data.mcpConfig],
   )
+
+  // 团队市场状态
+  const [marketSkills, setMarketSkills] = React.useState<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>([])
+  const [marketLoading, setMarketLoading] = React.useState(false)
+  const [installingSlug, setInstallingSlug] = React.useState<string | null>(null)
+
+  const currentWs = React.useMemo(() =>
+    (workspaces as Array<{ id: string; type?: string; teamId?: string }>).find((w) => w.id === currentWorkspaceId),
+  [workspaces, currentWorkspaceId])
+  const isTeamWorkspace = currentWs?.type === 'team'
+  const teamWorkspaceId = (currentWs as { id?: string; teamId?: string } | undefined)?.teamId || currentWorkspaceId
+
+  React.useEffect(() => {
+    if (tab === 'marketplace' && isTeamWorkspace && teamWorkspaceId) {
+      setMarketLoading(true)
+      window.electronAPI.skillMarketplace.listTeamSkills(teamWorkspaceId)
+        .then(setMarketSkills)
+        .catch(() => setMarketSkills([]))
+        .finally(() => setMarketLoading(false))
+    }
+  }, [tab, isTeamWorkspace, teamWorkspaceId])
+
+  const filteredMarket = React.useMemo(() => {
+    if (!q) return marketSkills
+    return marketSkills.filter((s) =>
+      s.name.toLowerCase().includes(q) ||
+      s.slug.toLowerCase().includes(q) ||
+      s.description.toLowerCase().includes(q),
+    )
+  }, [marketSkills, q])
+
+  const [publishingSlug, setPublishingSlug] = React.useState<string | null>(null)
+
+  const handlePublish = React.useCallback(async (skillSlug: string) => {
+    if (!isTeamWorkspace || !teamWorkspaceId) return
+    setPublishingSlug(skillSlug)
+    try {
+      const result = await window.electronAPI.skillMarketplace.publish({
+        workspaceId: teamWorkspaceId,
+        workspaceSlug: data.workspaceSlug,
+        skillSlug,
+      })
+      if (result.success) {
+        toast.success(`已发布 ${skillSlug} 到团队市场`)
+        // 刷新市场列表
+        window.electronAPI.skillMarketplace.listTeamSkills(teamWorkspaceId)
+          .then(setMarketSkills)
+          .catch(() => {})
+      }
+    } catch (e: any) {
+      toast.error(`发布失败: ${e.message}`)
+    } finally {
+      setPublishingSlug(null)
+    }
+  }, [isTeamWorkspace, teamWorkspaceId, data.workspaceSlug])
 
   const selectedSkill = data.skills.find((s) => s.slug === selectedSkillSlug) ?? null
   const selectedIsBuiltin = selectedSkill ? data.defaultSkillSlugs.has(selectedSkill.slug) : false
@@ -150,26 +205,29 @@ export function AgentSkillsView(): React.ReactElement {
 
       {/* 工具条 */}
       <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center gap-3 px-8 pb-4">
-        {/* Skills / MCP 切换 */}
+        {/* Skills / 市场 / MCP 切换 */}
         <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
           <div
             className={cn(
-              'absolute bottom-0.5 top-0.5 w-[calc(50%-3px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-              tab === 'skills' ? 'translate-x-0' : 'translate-x-[100%]',
+              'absolute bottom-0.5 top-0.5 rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
+              isTeamWorkspace ? 'w-[calc(33.33%-2px)]' : 'w-[calc(50%-3px)]',
+              tab === 'skills' ? 'translate-x-0' : tab === 'marketplace' ? 'translate-x-[100%]' : isTeamWorkspace ? 'translate-x-[200%]' : 'translate-x-[100%]',
             )}
           />
-          {([
+          {[
             { value: 'skills' as const, label: 'Skills', count: data.skills.length },
+            ...(isTeamWorkspace ? [{ value: 'marketplace' as const, label: '团队市场', count: marketSkills.length }] : []),
             { value: 'mcp' as const, label: 'MCP', count: mcpCount },
-          ]).map(({ value, label, count }) => (
+          ].map(({ value, label, count }) => (
             <button
               key={value}
               onClick={() => setTab(value)}
               className={cn(
-                'relative z-[1] flex min-w-[96px] items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium transition-colors duration-200',
+                'relative z-[1] flex min-w-[90px] items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors duration-200',
                 tab === value ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
               )}
             >
+              {value === 'marketplace' && <Store size={13} />}
               {label}
               <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
             </button>
@@ -215,7 +273,61 @@ export function AgentSkillsView(): React.ReactElement {
       {/* 内容 */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         <div className="mx-auto w-full max-w-6xl px-8 pb-10">
-          {data.loading ? (
+          {tab === 'marketplace' && isTeamWorkspace ? (
+            marketLoading ? (
+              <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
+            ) : filteredMarket.length === 0 ? (
+              <div className="py-20 text-center text-sm text-muted-foreground">
+                <Store size={32} className="mx-auto mb-3 text-foreground/30" />
+                团队市场暂无技能
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {filteredMarket.map((skill) => (
+                  <div key={skill.slug} className="flex flex-col rounded-xl border border-border bg-card p-4">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold truncate">{skill.name}</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{skill.description || '暂无描述'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground mt-auto pt-3">
+                      <span>v{skill.version}</span>
+                      <span>·</span>
+                      <span className="truncate">{skill.publishedBy || '未知'}</span>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        setInstallingSlug(skill.slug)
+                        try {
+                          await window.electronAPI.skillMarketplace.installTeamSkill({
+                            workspaceId: teamWorkspaceId!,
+                            skillSlug: skill.slug,
+                            targetWorkspaceSlug: data.workspaceSlug,
+                          })
+                          toast.success(`已安装 ${skill.name}`)
+                          bumpCapabilities((v) => v + 1)
+                        } catch (e: any) {
+                          toast.error(`安装失败: ${e.message}`)
+                        } finally {
+                          setInstallingSlug(null)
+                        }
+                      }}
+                      disabled={installingSlug === skill.slug}
+                      className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      {installingSlug === skill.slug ? (
+                        <RefreshCw size={12} className="animate-spin" />
+                      ) : (
+                        <Download size={12} />
+                      )}
+                      安装
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : data.loading ? (
             <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
           ) : tab === 'skills' ? (
             <SkillsTab
@@ -228,6 +340,8 @@ export function AgentSkillsView(): React.ReactElement {
               onOpen={setSelectedSkillSlug}
               onToggle={data.toggleSkill}
               onUpdate={data.updateSkill}
+              onPublish={isTeamWorkspace ? handlePublish : undefined}
+              publishingSlug={publishingSlug}
             />
           ) : (
             <McpTab
@@ -325,9 +439,11 @@ interface SkillsTabProps {
   onOpen: (slug: string) => void
   onToggle: (slug: string, enabled: boolean) => void
   onUpdate: (slug: string) => void
+  onPublish?: (slug: string) => void
+  publishingSlug?: string | null
 }
 
-function SkillsTab({ customSkills, builtinSkills, total, updateCount, updatingSkill, isBuiltin, onOpen, onToggle, onUpdate }: SkillsTabProps): React.ReactElement {
+function SkillsTab({ customSkills, builtinSkills, total, updateCount, updatingSkill, isBuiltin, onOpen, onToggle, onUpdate, onPublish, publishingSlug }: SkillsTabProps): React.ReactElement {
   if (total === 0) {
     return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Proma 帮你联网查找并安装 Skill，或从其他工作区导入。" />
   }
@@ -343,10 +459,10 @@ function SkillsTab({ customSkills, builtinSkills, total, updateCount, updatingSk
         </div>
       )}
       {customSkills.length > 0 && (
-        <SkillSection title="我的 Skills" skills={customSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection title="我的 Skills" skills={customSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="PROMA 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection title="PROMA 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
       )}
     </div>
   )
@@ -360,9 +476,11 @@ interface SkillSectionProps {
   onOpen: (slug: string) => void
   onToggle: (slug: string, enabled: boolean) => void
   onUpdate: (slug: string) => void
+  onPublish?: (slug: string) => void
+  publishingSlug?: string | null
 }
 
-function SkillSection({ title, skills, isBuiltin, updatingSkill, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
+function SkillSection({ title, skills, isBuiltin, updatingSkill, onOpen, onToggle, onUpdate, onPublish, publishingSlug }: SkillSectionProps): React.ReactElement {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 px-1">
@@ -379,6 +497,8 @@ function SkillSection({ title, skills, isBuiltin, updatingSkill, onOpen, onToggl
             onOpen={() => onOpen(skill.slug)}
             onToggle={(enabled) => onToggle(skill.slug, enabled)}
             onUpdate={() => onUpdate(skill.slug)}
+            onPublish={onPublish ? () => onPublish(skill.slug) : undefined}
+            publishing={publishingSlug === skill.slug}
           />
         ))}
       </div>
