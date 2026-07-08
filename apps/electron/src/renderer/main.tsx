@@ -72,7 +72,6 @@ import { diffCapabilities } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
-import { FilePreviewContainer } from './components/file-browser/FilePreviewContainer'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
@@ -294,15 +293,6 @@ function AgentSettingsInitializer(): null {
         suppressToastRef.current = false
       })
       .catch(console.error)
-
-    // 加载品牌配置并应用到窗口图标
-    if (ws.type === 'team') {
-      window.electronAPI.team.getBranding(currentWorkspaceId).then((b) => {
-        if (b && Object.keys(b as object).length > 0) {
-          window.electronAPI.team.applyBranding(currentWorkspaceId)
-        }
-      }).catch(() => {})
-    }
   }, [currentWorkspaceId, workspaces])
 
   // 订阅主进程文件监听推送
@@ -327,13 +317,19 @@ function AgentSettingsInitializer(): null {
 
       bumpCapabilities((v) => v + 1)
     })
+    // 用 throttle（节流）代替直接 bump：文件变更事件以 1 秒为最小间隔
+    // 避免同步引擎轮询 + 文件监听器同时触发导致文件浏览器频繁重载
+    let fileBumpThrottle: ReturnType<typeof setTimeout> | null = null
     const unsubFiles = window.electronAPI.onWorkspaceFilesChanged(() => {
+      if (fileBumpThrottle) return
       bumpFiles((v) => v + 1)
+      fileBumpThrottle = setTimeout(() => { fileBumpThrottle = null }, 1000)
     })
 
     return () => {
       unsubCapabilities()
       unsubFiles()
+      if (fileBumpThrottle) clearTimeout(fileBumpThrottle)
     }
   }, [bumpCapabilities, bumpFiles, currentWorkspaceId, workspaces])
 
@@ -935,7 +931,6 @@ if (isQuickTaskWindow) {
       <TabSwitcher />
       <App />
       <UpdateDialog />
-      <FilePreviewContainer />
       <Toaster position="top-right" />
     </React.StrictMode>
   )
