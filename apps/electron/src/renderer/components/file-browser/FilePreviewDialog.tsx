@@ -81,24 +81,28 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       }
       setResolvedPath(localPath)
 
+      // 团队下载后拿到的是临时目录绝对路径，IPC handler 需要授权上下文
+      const parentDir = localPath.replace(/[/\\][^/\\]*$/, '') || '/'
+      const access = teamDownload ? { candidateBasePaths: [parentDir] } : undefined
+
       if (IMAGE_EXTS.has(e)) {
         const url = await window.electronAPI.registerPreviewPath(localPath)
         if (url) setState({ status: 'image', src: url })
         else setState({ status: 'error', message: '无法读取图片' })
       } else if (e === 'pdf') {
-        const result = await window.electronAPI.preparePdfPreview(localPath)
+        const result = await window.electronAPI.preparePdfPreview(localPath, access)
         if (result?.tmpHtmlUrl) setState({ status: 'iframe', src: result.tmpHtmlUrl })
         else setState({ status: 'error', message: '无法预览 PDF' })
       } else if (e === 'docx') {
-        const result = await window.electronAPI.docxToHtml(localPath)
+        const result = await window.electronAPI.docxToHtml(localPath, access)
         if (result?.html) setState({ status: 'html', html: result.html })
         else setState({ status: 'error', message: '无法预览文档' })
       } else if (['xlsx', 'pptx', 'odt', 'ods', 'odp'].includes(e)) {
-        const result = await window.electronAPI.officeToHtml(localPath)
+        const result = await window.electronAPI.officeToHtml(localPath, access)
         if (result?.html) setState({ status: 'html', html: result.html })
         else setState({ status: 'error', message: '无法预览文档' })
       } else if (TEXT_EXTS.has(e) || !e) {
-        const result = await window.electronAPI.resolveAndReadFile(localPath)
+        const result = await window.electronAPI.resolveAndReadFile(localPath, access)
         if (result?.content) setState({ status: 'text', content: result.content, language: langFromExt(e) })
         else setState({ status: 'error', message: '无法读取文件' })
       } else {
@@ -120,7 +124,12 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       targetPath = downloaded
       setResolvedPath(downloaded)
     }
-    window.electronAPI.systemOpenFile(targetPath).catch(() => {})
+    const parentDir = targetPath.replace(/[/\\][^/\\]*$/, '') || '/'
+    window.electronAPI.systemOpenFile(
+      targetPath,
+      undefined,
+      teamDownload ? { candidateBasePaths: [parentDir] } : undefined,
+    ).catch(() => {})
   }
 
   return (

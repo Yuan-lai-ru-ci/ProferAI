@@ -376,12 +376,12 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       })
     } else {
       setSelectedPaths(new Set([entry.path]))
-      // 单击非目录文件 → 预览
+      // 单击非目录文件 → 预览（走标签页而不是弹窗）
       if (!entry.isDirectory) {
-        dispatchInlinePreview(entry)
+        handlePreviewFile(entry)
       }
     }
-  }, [dispatchInlinePreview])
+  }, [handlePreviewFile])
 
   /** 点击空白区域清空选中 */
   const handleBackgroundClick = React.useCallback((e: React.MouseEvent) => {
@@ -542,6 +542,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           onAddToChat={onAddToChat}
           onFilePreview={handlePreviewFile}
           onDownload={handleDownload}
+          rootPath={rootPath}
         />
       ))}
     </div>
@@ -795,6 +796,8 @@ interface FileTreeItemProps {
   onAddToChat?: (entry: FileEntry) => void
   onFilePreview?: (entry: FileEntry) => void
   onDownload?: (entry: FileEntry) => Promise<string | null>
+  /** 文件浏览器的根路径，用于将相对路径解析为绝对路径 */
+  rootPath: string
 }
 
 function FileTreeItem({
@@ -822,6 +825,7 @@ function FileTreeItem({
   onAddToChat,
   onFilePreview,
   onDownload,
+  rootPath,
 }: FileTreeItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
@@ -1187,6 +1191,7 @@ function FileTreeItem({
                     filePath={entry.path}
                     probePath={entry.name}
                     resolveFilePath={onDownload && entry.syncStatus ? () => onDownload(entry) : undefined}
+                    candidateBasePaths={[rootPath]}
                     className="text-xs py-1 [&>svg]:size-3.5"
                   />
                 )}
@@ -1264,6 +1269,7 @@ function FileTreeItem({
               onAddToChat={onAddToChat}
               onFilePreview={onFilePreview}
               onDownload={onDownload}
+              rootPath={rootPath}
             />
           ))}
         </div>
