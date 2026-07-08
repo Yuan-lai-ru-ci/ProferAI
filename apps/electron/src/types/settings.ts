@@ -178,7 +178,7 @@ export const DEFAULT_THEME_STYLE: ThemeStyle = 'default'
 export type InterfaceVariant = 'classic' | 'modern'
 
 /** 默认界面风格 */
-export const DEFAULT_INTERFACE_VARIANT: InterfaceVariant = 'modern'
+export const DEFAULT_INTERFACE_VARIANT: InterfaceVariant = 'classic'
 
 /** Markdown 预览字号档位 */
 export type MarkdownFontSize = 'small' | 'medium' | 'large'
@@ -250,6 +250,8 @@ export interface AppSettings {
   autoCleanupArchivedDays?: number
   /** 主窗口状态（大小、位置、是否最大化） */
   mainWindowState?: MainWindowState
+  /** 是否开机自启动（默认 false） */
+  autoLaunch?: boolean
 }
 
 /** 主窗口大小、位置和最大化状态 */
@@ -276,6 +278,9 @@ export const SETTINGS_IPC_CHANNELS = {
   ON_SYSTEM_THEME_CHANGED: 'settings:system-theme-changed',
   /** 用户手动切换主题时广播给所有窗口 */
   ON_THEME_SETTINGS_CHANGED: 'settings:theme-settings-changed',
+  /** 获取/设置开机自启动状态 */
+  GET_AUTO_LAUNCH: 'settings:get-auto-launch',
+  SET_AUTO_LAUNCH: 'settings:set-auto-launch',
 } as const
 
 /** Scratch Pad IPC 通道 */

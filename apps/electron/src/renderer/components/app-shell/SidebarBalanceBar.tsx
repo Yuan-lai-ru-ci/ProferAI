@@ -23,9 +23,9 @@ interface SidebarBalanceBarProps {
   collapsed?: boolean
 }
 
-/** 余额显示：货币单位，保留 2 位小数（去掉无意义的末尾 0） */
+/** 余额显示：货币单位，保留 2 位小数（去掉无意义的末尾 0），带 $ 后缀 */
 function formatBalance(n: number): string {
-  return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' $'
 }
 
 export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps): React.ReactElement | null {
