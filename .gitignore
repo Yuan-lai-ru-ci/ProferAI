@@ -46,3 +46,6 @@ vendor
 .worktrees
 # 发布产物(不入库)
 server/server-rel.tar.gz
+
+# 打包内置二进制(体积大，构建产物，不入库)
+apps/electron/resources/bin/

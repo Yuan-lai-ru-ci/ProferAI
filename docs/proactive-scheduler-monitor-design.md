@@ -3,6 +3,14 @@
 > 版本：Draft 2  
 > 日期：2026-06-20  
 > 范围：Proma OSS Electron app 的主动协作、定时任务、Monitor、Memory 插件化与 UI 设计
+>
+> **⚠️ 实现状态（2026-07-02 扫描）：本文档为纯架构设计，Phase 1-5 均未进入代码实现阶段。**
+> - ❌ Phase 1 (Proactive foundation / Proactive Center UI / Today / Schedules / Runs)
+> - ❌ Phase 2 (Proma Memory plugin / memory-daily routine)
+> - ❌ Phase 3 (Recommendation cards / Agent inline recommendation)
+> - ❌ Phase 4 (Monitor MVP / MonitorService / session stale monitor)
+> - ❌ Phase 5 (Routine ecosystem / PluginRuntime)
+> - ✅ 现有 Automation 底座：`automation-manager.ts`、`automation-scheduler.ts`、`AutomationsListView.tsx`、`AutomationFormView.tsx` 已可用
 
 ## 1. 背景
 
