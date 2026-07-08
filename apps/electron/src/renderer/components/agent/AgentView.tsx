@@ -2444,6 +2444,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     </Button>
   )
 
+  // 同批图片附件 — 用于大图预览时左右翻页（提取到 useMemo 避免每次渲染重建）
+  const pendingImageFiles = React.useMemo(
+    () => pendingFiles.filter((f) => f.mediaType.startsWith('image/') && !!f.previewUrl),
+    [pendingFiles]
+  )
+  const imageSiblingsForPending = React.useMemo(
+    () => pendingImageFiles.map((f) => ({
+      previewUrl: f.previewUrl as string,
+      filename: f.filename,
+      onEditComplete: (editedDataUrl: string) => handleAttachmentEditComplete(f.id, editedDataUrl),
+    })),
+    [pendingImageFiles, handleAttachmentEditComplete]
+  )
+
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
@@ -2513,16 +2527,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             {(pendingFiles.length > 0 || currentQuotedSelection) && (
               <div className="flex flex-wrap gap-2 px-3 pt-2.5 pb-1.5">
                 {pendingFiles.map((file) => (
-                  <AttachmentPreviewItem
-                    key={file.id}
-                    filename={file.filename}
-                    mediaType={file.mediaType}
-                    previewUrl={file.previewUrl}
-                    onRemove={() => handleRemoveFile(file.id)}
-                    onClick={file.filename.startsWith('clipboard-') ? () => handleClipboardPreview(file) : undefined}
-                    onEditComplete={(editedDataUrl) => handleAttachmentEditComplete(file.id, editedDataUrl)}
-                  />
-                ))}
+                    <AttachmentPreviewItem
+                      key={file.id}
+                      filename={file.filename}
+                      mediaType={file.mediaType}
+                      previewUrl={file.previewUrl}
+                      onRemove={() => handleRemoveFile(file.id)}
+                      onClick={file.filename.startsWith('clipboard-') ? () => handleClipboardPreview(file) : undefined}
+                      onEditComplete={(editedDataUrl) => handleAttachmentEditComplete(file.id, editedDataUrl)}
+                      imageSiblings={imageSiblingsForPending}
+                      siblingIndex={pendingImageFiles.findIndex((f) => f.id === file.id)}
+                    />
+                  ))}
                 {currentQuotedSelection && (
                   <QuotedSelectionChip
                     text={currentQuotedSelection.text}
