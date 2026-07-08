@@ -5,7 +5,7 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Globe, Mail, Lock, User, Ticket, LogIn, UserPlus, Server } from 'lucide-react'
+import { Globe, Mail, Lock, User, Ticket, LogIn, UserPlus, Server, Monitor } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,10 @@ interface LoginResult {
   joinedWorkspace?: string
   accountType?: string
   error?: string
+  deviceLimit?: {
+    maxDevices: number
+    devices: Array<{ id: string; deviceName: string; platform?: string | null; lastUsedAt: number }>
+  }
 }
 
 
@@ -37,6 +41,8 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
   const [displayName, setDisplayName] = React.useState('')
   const [invitationToken, setInvitationToken] = React.useState('')
   const [loading, setLoading] = React.useState(false)
+  const [deviceLimit, setDeviceLimit] = React.useState<NonNullable<LoginResult['deviceLimit']> | null>(null)
+  const [revoking, setRevoking] = React.useState<string | null>(null)
 
   // 商业版预填服务器地址
   React.useEffect(() => {
@@ -78,6 +84,8 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
           : mode === 'login' ? `已登录: ${result.teamEmail}` : `注册成功: ${result.teamEmail}`
         toast.success(msg)
         onOpenChange(false)
+      } else if (result.deviceLimit) {
+        setDeviceLimit(result.deviceLimit)
       } else {
         toast.error(result.error ?? (mode === 'login' ? '登录失败' : '注册失败'))
       }
@@ -88,9 +96,32 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
     }
   }
 
+  const handleRevokeAndLogin = async (slotId: string): Promise<void> => {
+    setRevoking(slotId)
+    try {
+      const result = await window.electronAPI.auth.login({ serverUrl, email, password, revokeSlotId: slotId }) as unknown as LoginResult
+      if (result.success) {
+        setAuthStatus({ isLoggedIn: true, teamAccountId: result.teamAccountId, teamEmail: result.teamEmail })
+        toast.success(`已登录: ${result.teamEmail}`)
+        setDeviceLimit(null)
+        onOpenChange(false)
+      } else if (result.deviceLimit) {
+        setDeviceLimit(result.deviceLimit)
+        toast.error(result.error ?? '仍超出设备上限')
+      } else {
+        toast.error(result.error ?? '登录失败')
+      }
+    } catch {
+      toast.error('登录请求失败')
+    } finally {
+      setRevoking(null)
+    }
+  }
+
   const switchMode = (m: 'login' | 'register') => {
     setMode(m)
     setLoading(false)
+    setDeviceLimit(null)
   }
 
   return (
@@ -134,6 +165,34 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
         </div>
 
         {/* 表单 */}
+        {/* 设备上限：列出已登录设备，撤销一台后即可在本机登录 */}
+        {deviceLimit ? (
+          <div className="px-6 pb-6 pt-3 space-y-3">
+            <div className="text-sm text-muted-foreground leading-relaxed">
+              该账号已达设备上限（最多 {deviceLimit.maxDevices} 台）。登出其中一台后即可在本机登录：
+            </div>
+            <div className="space-y-2 max-h-[260px] overflow-y-auto">
+              {deviceLimit.devices.map((d) => (
+                <div key={d.id} className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border">
+                  <Monitor size={16} className="text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{d.deviceName}</div>
+                    <div className="text-[11px] text-muted-foreground truncate">
+                      {(d.platform || '未知平台')} · 最近活跃 {new Date(d.lastUsedAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <Button type="button" size="sm" variant="outline" disabled={revoking !== null}
+                    onClick={() => handleRevokeAndLogin(d.id)}>
+                    {revoking === d.id ? '登出中...' : '登出并登录'}
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <Button type="button" variant="ghost" className="w-full h-9" onClick={() => setDeviceLimit(null)}>
+              返回
+            </Button>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="px-6 pb-6 pt-3 space-y-3.5">
           {/* 显示名称 */}
           {mode === 'register' && (
@@ -204,6 +263,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
               : mode === 'login' ? '登录' : '创建账户'}
           </Button>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   )
