@@ -14,6 +14,8 @@ interface DefaultAppMenuItemProps {
   probePath?: string
   className?: string
   resolveFilePath?: () => Promise<string | null>
+  /** 候选基础目录，用于将相对路径解析为绝对路径并授权访问 */
+  candidateBasePaths?: string[]
 }
 
 export function DefaultAppMenuItem({
@@ -21,6 +23,7 @@ export function DefaultAppMenuItem({
   probePath,
   className,
   resolveFilePath,
+  candidateBasePaths,
 }: DefaultAppMenuItemProps): React.ReactElement | null {
   const info = useDefaultAppForFile(probePath ?? filePath)
 
@@ -33,7 +36,11 @@ export function DefaultAppMenuItem({
         void (async () => {
           const targetPath = resolveFilePath ? await resolveFilePath() : filePath
           if (!targetPath) return
-          await window.electronAPI.systemOpenFile(targetPath)
+          await window.electronAPI.systemOpenFile(
+            targetPath,
+            undefined,
+            candidateBasePaths?.length ? { candidateBasePaths } : undefined,
+          )
         })().catch((err) => {
           console.error('[DefaultAppMenuItem] 打开文件失败:', err)
         })
