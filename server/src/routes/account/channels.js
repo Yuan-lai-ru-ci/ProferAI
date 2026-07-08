@@ -10,14 +10,16 @@
  * 跑到一半时过期导致 401。
  */
 import { Hono } from 'hono'
-import { listActiveChannels, ensureRelayToken } from '../../db.js'
+import { listActiveChannels, ensureRelayToken, db } from '../../db.js'
 import { COMMERCIAL_MODE } from '../../config.js'
 import { DEFAULT_MODELS, normalizeChannelForClient } from '../../shared/channel-utils.js'
+import { syncChannelsFromNewApi } from '../../shared/newapi-channel-sync.js'
 
 export const accountChannels = new Hono()
 
-// GET /v1/account/channels — 获取活跃渠道列表（apiKey 为用户专属 relay 令牌）
-accountChannels.get('/', (c) => {
+// GET /v1/account/channels — 获取活跃渠道列表
+// 每次请求自动对比 New API 渠道：新增的拉下来，模型变化的更新（60s 缓存）
+accountChannels.get('/', async (c) => {
   if (!COMMERCIAL_MODE) {
     return c.json({ commercialMode: false, channels: [] })
   }
@@ -27,11 +29,13 @@ accountChannels.get('/', (c) => {
     return c.json({ error: '未认证' }, 401)
   }
 
-  // 为该用户签发/复用长效 relay 令牌，所有渠道共用同一令牌：
-  // 令牌只负责认人，上游路由由请求体里的 model 决定。
+  // 自动从 New API 拉渠道（内部 60s 缓存）
+  await syncChannelsFromNewApi(db)
+  const channels = listActiveChannels()
+
+  // 所有用户统一：官方渠道 apiKey = relay 令牌 → 走 proxy → New API 扣费
   const relayToken = ensureRelayToken(userId)
 
-  const channels = listActiveChannels()
   const result = channels.map(ch => {
     let models = JSON.parse(ch.models_json || '[]')
     if (models.length === 0 && DEFAULT_MODELS[ch.provider]) {

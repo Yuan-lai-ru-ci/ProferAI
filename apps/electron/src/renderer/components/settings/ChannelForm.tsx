@@ -69,6 +69,8 @@ interface ChannelFormProps {
   onSaved: (channel?: Channel) => void
   onAgentEligibilityChange?: (channel: Channel, eligible: boolean) => void | Promise<void>
   onCancel: () => void
+  /** 仅允许填 API Key（官方渠道只设 Key，不修改名称/供应商/模型） */
+  apiKeyOnly?: boolean
 }
 
 /** 国内供应商（优先推荐） */

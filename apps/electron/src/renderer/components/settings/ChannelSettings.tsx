@@ -274,6 +274,7 @@ export function ChannelSettings(): React.ReactElement {
                 key={channel.id}
                 channel={channel}
                 commercialMode={commercialMode}
+                canSelfConfig={canSelfConfig}
                 onEdit={() => {
                   setEditingChannel(channel)
                   setViewMode('edit')
@@ -340,9 +341,11 @@ interface ChannelRowProps {
   onDelete: () => void
   onToggle: () => void
   commercialMode?: boolean
+  canSelfConfig?: boolean
 }
 
-function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode }: ChannelRowProps): React.ReactElement {
+function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSelfConfig }: ChannelRowProps): React.ReactElement {
+  const isOfficial = channel.id.startsWith('newapi-')
   const enabledCount = channel.models.filter((m) => m.enabled).length
   const description = [
     PROVIDER_LABELS[channel.provider],
@@ -354,14 +357,15 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode }: Cha
 
   return (
     <SettingsRow
-      label={channel.name}
+      label={channel.name + (isOfficial ? ' · 官方' : '')}
       icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
       description={description}
       className="group"
     >
       <div className="flex items-center gap-2">
-        {/* 操作按钮 — 商业模式下隐藏 */}
-        {!commercialMode && (
+        {/* 官方渠道：不显示编辑/删除（key 由服务端统一管理） */}
+        {/* 自建渠道：自配用户可编辑/删除 */}
+        {!isOfficial && (!commercialMode || canSelfConfig) && (
           <>
             <button
               onClick={onEdit}
