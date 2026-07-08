@@ -33,8 +33,10 @@ function isAdminOrOwner(role) {
 }
 
 function emitFileChange(workspaceId, operation, payload) {
+  // seq 用内联子查询原子分配（与 /push 一致的全局单调序列），避免同毫秒多条文件变更 seq=0 被游标跳过丢失
   db.prepare(
-    'INSERT INTO sync_envelopes (id, workspace_id, entity_type, entity_id, operation, payload, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    `INSERT INTO sync_envelopes (id, workspace_id, entity_type, entity_id, operation, payload, occurred_at, seq)
+     VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_envelopes))`
   ).run(
     crypto.randomUUID(),
     workspaceId,
