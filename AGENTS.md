@@ -12,9 +12,13 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 - 在 UI 设计上采用更现代的方案，UI 组件推荐采用 ShadcnUI，在合适的情况下，用卡片和阴影取代边框，用符合主题的饱满色彩，设置界面要设置背景，为未来做不同主题留下空间。
 - 采用 BDD 行为驱动开发的方案。
 
+> ⚠️ 本文件与 `CLAUDE.md` 内容高度重合但更新不同步。**CLAUDE.md 是当前的主文档**，已更新至 2026-07-02 状态（v0.12.69）。本文件待后续整体同步。
+
 ## 项目概述
 
-Proma 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Electron 桌面应用架构。
+Profer 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Electron 桌面应用架构。脱胎于开源项目 Proma (github.com/ErlichLiu/Proma)，经深度改造而来。
+
+> **改名记录**：2026-06-21 从 Proma 改名为 Profer。代码包名 `@proma/*` 保持不变。
 
 ## Monorepo 结构
 
@@ -23,11 +27,12 @@ Bun workspace monorepo：
 ```
 proma-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.31)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.11)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
+│   ├── shared/        # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.31)
+│   ├── core/          # AI Provider 适配器、代码高亮服务 (v0.2.11)
+│   ├── session-core/  # headless session 读取/分组/搜索/渲染 (v0.1.0)
+│   └── ui/            # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.9)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.12.26)
+    └── electron/      # Electron 桌面应用 (v0.12.69)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -56,7 +61,7 @@ proma-v2/
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.12.26)
+#### @proma/electron (v0.12.69)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@anthropic-ai/claude-agent-sdk@0.3.153` - Agent SDK
