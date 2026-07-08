@@ -112,6 +112,12 @@ try { db.exec(`
 `) } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)') } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token)') } catch (_) {}
+// 稳定设备标识（注册设备数模型）：客户端生成 UUID 存 OS 级持久位置，登录/刷新带上
+try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN device_id TEXT DEFAULT NULL") } catch (_) {}
+try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN platform TEXT DEFAULT NULL") } catch (_) {}
+try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN app_version TEXT DEFAULT NULL") } catch (_) {}
+// 同一账号同一设备只保留一行（device_id 为空的存量行不受唯一约束影响，兼容旧客户端）
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_user_device ON refresh_tokens(user_id, device_id) WHERE device_id IS NOT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE workspaces ADD COLUMN deleted_at INTEGER DEFAULT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE workspaces ADD COLUMN restored_at INTEGER DEFAULT NULL") } catch (_) {}
 // 文件搜索索引

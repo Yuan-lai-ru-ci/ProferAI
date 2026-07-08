@@ -115,16 +115,19 @@ export const ACCOUNT_TYPES = {
   restricted: {
     label: '受限用户',
     maxWorkspaces: 0,
+    maxDevices: parseInt(process.env.MAX_DEVICES_RESTRICTED || '2', 10),
     defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '250000', 10),
   },
   standard: {
     label: '标准用户',
     maxWorkspaces: 3,
+    maxDevices: parseInt(process.env.MAX_DEVICES_STANDARD || '3', 10),
     defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '500000', 10),
   },
   advanced: {
     label: '高级用户',
     maxWorkspaces: 10,
+    maxDevices: parseInt(process.env.MAX_DEVICES_ADVANCED || '5', 10),
     defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '2500000', 10),
   },
 }
