@@ -16,10 +16,12 @@ import {
   Loader2,
   Brain,
   MessageSquareText,
+  Download,
 } from 'lucide-react'
 import { useAtomValue } from 'jotai'
 import { thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
+import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
@@ -644,6 +646,81 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
   )
 }
 
+// ===== PROMA_IMAGE_ATTACHMENT 生成图片解析与渲染 =====
+
+/** 从文本中解析的生成图片引用 */
+interface ParsedGeneratedImage {
+  localPath: string
+  filename: string
+  mediaType: string
+}
+
+/** 从文本中提取 [PROMA_IMAGE_ATTACHMENT:{...}] 标记，返回图片列表和清理后的文本 */
+function parseGeneratedImages(text: string): { images: ParsedGeneratedImage[]; cleanText: string } {
+  const markerRegex = /\[PROMA_IMAGE_ATTACHMENT:(.+?)\]/g
+  const images: ParsedGeneratedImage[] = []
+  let match: RegExpExecArray | null
+  while ((match = markerRegex.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]!) as ParsedGeneratedImage
+      if (parsed.localPath && parsed.filename) {
+        images.push(parsed)
+      }
+    } catch {
+      // 忽略解析失败的标记
+    }
+  }
+  const cleanText = text.replace(markerRegex, '').replace(/\n{3,}/g, '\n\n').trim()
+  return { images, cleanText }
+}
+
+/** 生成图片缩略图组件（点击可预览大图） */
+function GeneratedImageThumb({ image }: { image: ParsedGeneratedImage }): React.ReactElement {
+  const [imageSrc, setImageSrc] = React.useState<string | null>(null)
+  const [lightboxOpen, setLightboxOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    window.electronAPI
+      .readAttachment(image.localPath)
+      .then((base64) => setImageSrc(`data:${image.mediaType};base64,${base64}`))
+      .catch((err) => console.error('[GeneratedImage] 读取图片失败:', err))
+  }, [image.localPath, image.mediaType])
+
+  const handleSave = React.useCallback((): void => {
+    window.electronAPI.saveImageAs(image.localPath, image.filename)
+  }, [image.localPath, image.filename])
+
+  if (!imageSrc) {
+    return <div className="w-full max-w-[300px] h-[200px] rounded-lg bg-muted/30 animate-pulse shrink-0" />
+  }
+
+  return (
+    <div className="relative group inline-block">
+      <img
+        src={imageSrc}
+        alt={image.filename}
+        className="max-w-[400px] max-h-[350px] rounded-lg object-contain cursor-pointer border border-border/50"
+        onClick={() => setLightboxOpen(true)}
+      />
+      <button
+        type="button"
+        onClick={handleSave}
+        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+        title="保存图片"
+      >
+        <Download className="size-4" />
+      </button>
+      <ImageLightbox
+        src={imageSrc}
+        alt={image.filename}
+        open={lightboxOpen}
+        onOpenChange={setLightboxOpen}
+        onSave={handleSave}
+      />
+    </div>
+  )
+}
+
 // ===== ContentBlock 主组件 =====
 
 export function ContentBlock({ block, allMessages, basePath, basePaths, animate = false, index = 0, dimmed = false, childBlocks, isStreaming }: ContentBlockProps): React.ReactElement | null {
@@ -651,8 +728,23 @@ export function ContentBlock({ block, allMessages, basePath, basePaths, animate 
   if (block.type === 'text') {
     const textBlock = block as SDKTextBlock
     if (!textBlock.text) return null
+
+    // 解析生成图片标记 [PROMA_IMAGE_ATTACHMENT:{...}]
+    const { images, cleanText } = parseGeneratedImages(textBlock.text)
+
     return (
-      <MessageResponse basePath={basePath} basePaths={basePaths}>{textBlock.text}</MessageResponse>
+      <>
+        {images.length > 0 && (
+          <div className="flex flex-wrap gap-3 mb-3">
+            {images.map((img, i) => (
+              <GeneratedImageThumb key={`${img.localPath}:${i}`} image={img} />
+            ))}
+          </div>
+        )}
+        {cleanText && (
+          <MessageResponse basePath={basePath} basePaths={basePaths}>{cleanText}</MessageResponse>
+        )}
+      </>
     )
   }
 

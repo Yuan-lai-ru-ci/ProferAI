@@ -179,12 +179,19 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
     case 'task_session_linked': {
       const existing = nodes[event.taskId]
       if (!existing) break
-      const { sessionId } = event.payload
+      const { sessionId, childSessionId } = event.payload
       // 已关联则不重复写入
-      if (existing.delegationId === sessionId) break
+      const alreadyLinked =
+        existing.sdkSessionId === sessionId ||
+        (childSessionId && existing.sdkSessionId === childSessionId)
+      if (alreadyLinked) break
       nodes[event.taskId] = {
         ...existing,
-        delegationId: sessionId,
+        // 如果是协作委派：delegationId 记录委派 ID，sdkSessionId 记录实际可导航的子会话 ID
+        // 否则 sessionId 本身就是可导航的 SDK session ID
+        ...(childSessionId
+          ? { delegationId: sessionId, sdkSessionId: childSessionId }
+          : { sdkSessionId: sessionId }),
         updatedAt: event.timestamp,
       }
       break

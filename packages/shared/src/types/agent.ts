@@ -1612,6 +1612,16 @@ export const AGENT_IPC_CHANNELS = {
   // 待处理请求恢复（渲染进程重载后查询主进程状态）
   /** 获取所有待处理的交互请求快照 */
   GET_PENDING_REQUESTS: 'agent:get-pending-requests',
+
+  // Project Graph（任务图查询 + 实时推送）
+  /** 获取当前会话的 Graph 数据 */
+  GET_GRAPH: 'agent:get-graph',
+  /** 获取当前会话的 Graph 摘要 */
+  GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
+  /** Graph 数据更新推送（主进程 → 渲染进程） */
+  GRAPH_UPDATED: 'agent:graph-updated',
+  /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
+  APPEND_GRAPH_EVENT: 'agent:append-graph-event',
 } as const
 
 /**
