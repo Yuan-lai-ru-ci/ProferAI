@@ -651,7 +651,14 @@ class WeChatBridge {
         console.warn(`[微信 Bridge] 轮询失败 (${failures}/${MAX_CONSECUTIVE_FAILURES}, backoff=${backoff}ms):`, error)
 
         if (failures >= MAX_CONSECUTIVE_FAILURES) {
-          console.warn('[微信 Bridge] 连续失败过多，可能需要重新登录')
+          // 连续失败过多：停止无限重试，置错误态，交由 Bridge 自愈守护（powerMonitor resume /
+          // 定时健康检查）或用户手动重连，避免断网时永久高频轮询耗流量。
+          this.updateStatus({
+            status: 'error',
+            errorMessage: `连续 ${failures} 次轮询失败，已暂停。恢复网络后将自动重连，或手动重新连接。`,
+          })
+          console.warn('[微信 Bridge] 连续失败过多，暂停长轮询，等待自愈或手动重连')
+          return
         }
 
         await sleep(backoff)

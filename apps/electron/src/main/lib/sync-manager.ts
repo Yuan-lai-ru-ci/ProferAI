@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, powerMonitor } from 'electron'
 import { fetch as undiciFetch } from 'undici'
 import { getSyncStatePath } from './config-paths'
 import { getTeamAuth, refreshAuthToken } from './auth-service'
@@ -18,8 +18,12 @@ import { listAgentWorkspaces, readIndex, writeIndex } from './agent-workspace-ma
 import { AGENT_IPC_CHANNELS, SYNC_IPC_CHANNELS } from '@proma/shared'
 import type { SyncEnvelope, SyncStateIndex, WorkspaceSyncState, SyncPullResponse } from './sync-types'
 
-const POLL_INTERVAL_MS = 60_000 // 基础轮询间隔
+const POLL_INTERVAL_MS = 60_000 // 基础轮询间隔（活跃时）
 const POLL_JITTER_MS = 15_000   // ±15s 随机抖动，避免所有客户端同时请求
+const IDLE_POLL_INTERVAL_MS = 600_000 // 空闲/不可见时的轮询间隔（10min）
+const SYSTEM_IDLE_THRESHOLD_S = 300   // 系统空闲判定阈值（5min，秒）
+const HEARTBEAT_INTERVAL_MS = 300_000 // 心跳最小间隔（5min），不必每个同步周期都发
+const CATCHUP_POLL_INTERVAL_MS = 2_000 // 追赶模式：本轮拉满一页时快速跟进
 const MAX_RETRY_COUNT = 5
 
 // ===== 本地同步状态管理 =====
@@ -198,10 +202,11 @@ interface PullResult {
   envelopes: SyncEnvelope[]
   lastOccurredAt: number
   lastSeq: number
+  hasMore: boolean
 }
 
 async function pullChanges(serverBaseUrl: string, token: string): Promise<PullResult> {
-  const emptyResult: PullResult = { envelopes: [], lastOccurredAt: 0, lastSeq: 0 }
+  const emptyResult: PullResult = { envelopes: [], lastOccurredAt: 0, lastSeq: 0, hasMore: false }
   const teamWs = listAgentWorkspaces().filter((w) => w.type === 'team')
   if (teamWs.length === 0) return emptyResult
 
@@ -236,13 +241,14 @@ async function pullChanges(serverBaseUrl: string, token: string): Promise<PullRe
 
     // 兼容旧服务端（无 seq 字段的裸数组响应）
     if (Array.isArray(data)) {
-      return { envelopes: data, lastOccurredAt: Date.now(), lastSeq: 0 }
+      return { envelopes: data, lastOccurredAt: Date.now(), lastSeq: 0, hasMore: false }
     }
 
     return {
       envelopes: data.envelopes || [],
       lastOccurredAt: data.lastOccurredAt || Date.now(),
       lastSeq: data.lastSeq || 0,
+      hasMore: Boolean(data.hasMore),
     }
   } catch (err) {
     console.error('[同步] 拉取变更失败:', err)
@@ -311,8 +317,12 @@ function applyRemoteChanges(envelopes: SyncEnvelope[]): void {
   }
 }
 
-/** 心跳上报 */
+/** 心跳上报（限频：最多每 HEARTBEAT_INTERVAL_MS 一次） */
+let _lastHeartbeatAt = 0
+
 async function sendHeartbeat(): Promise<void> {
+  if (Date.now() - _lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) return
+
   const auth = getTeamAuth()
   if (!auth) return
 
@@ -331,6 +341,7 @@ async function sendHeartbeat(): Promise<void> {
       },
       body: JSON.stringify({ workspaceIds }),
     })
+    _lastHeartbeatAt = Date.now()
   } catch {
     // 心跳失败不关键，静默
   }
@@ -347,50 +358,76 @@ function broadcastStatusChange(): void {
 // ===== 同步周期 =====
 
 let _syncTimer: ReturnType<typeof setTimeout> | null = null
+let _isRunning = false // 防重入锁：定时轮询与手动 triggerSync 不并发
 
-/** 执行一次完整的同步周期 */
-async function syncCycle(): Promise<void> {
-  let auth = getTeamAuth()
-  // token 过期时主动尝试刷新
-  if (!auth) {
-    const ok = await refreshAuthToken().catch(() => false)
-    if (ok) auth = getTeamAuth()
-    if (!auth) return
-  }
-
-  // 1. 推送待发送的变更
-  await pushEnvelopes(auth.baseUrl, auth.token)
-
-  // 2. 拉取远程变更
-  const pullResult = await pullChanges(auth.baseUrl, auth.token)
-  const changes = pullResult.envelopes
-  if (changes.length > 0) {
-    applyRemoteChanges(changes)
-    checkIfRemoved(changes)
-    console.log(`[同步] 已拉取 ${changes.length} 条远程变更`)
-  }
-
-  // 3. 更新同步游标（用服务端返回的精确值，避免 Date.now() 跳过同毫秒事件）
-  const teamWs = listAgentWorkspaces().filter((w) => w.type === 'team')
-  for (const ws of teamWs) {
-    const state = getWorkspaceSyncState(ws.id)
-    // 仅当服务端返回了有效游标时才更新（避免网络错误后游标倒退）
-    if (pullResult.lastOccurredAt > 0) {
-      state.lastIncrementalSyncAt = pullResult.lastOccurredAt
-      state.lastSeq = pullResult.lastSeq
+/**
+ * 执行一次完整的同步周期
+ * @returns 是否需要快速跟进（本轮拉取到满页，说明还有积压变更未拉完）
+ */
+async function syncCycle(): Promise<boolean> {
+  // 防重入：已有同步周期在执行时直接跳过，避免并发 push/pull 风暴
+  if (_isRunning) return false
+  _isRunning = true
+  try {
+    let auth = getTeamAuth()
+    // token 过期时主动尝试刷新
+    if (!auth) {
+      const ok = await refreshAuthToken().catch(() => false)
+      if (ok) auth = getTeamAuth()
+      if (!auth) return false
     }
-    state.pendingOutgoing = _pendingEnvelopes.filter(
-      (e) => e.workspaceId === ws.id,
-    ).length
-    state.pendingIncoming = 0
-    state.isSyncing = false
+
+    // 1. 推送待发送的变更
+    await pushEnvelopes(auth.baseUrl, auth.token)
+
+    // 2. 拉取远程变更
+    const pullResult = await pullChanges(auth.baseUrl, auth.token)
+    const changes = pullResult.envelopes
+    if (changes.length > 0) {
+      applyRemoteChanges(changes)
+      checkIfRemoved(changes)
+      console.log(`[同步] 已拉取 ${changes.length} 条远程变更${pullResult.hasMore ? '（还有积压，将快速跟进）' : ''}`)
+    }
+
+    // 3. 更新同步游标（用服务端返回的精确值，避免 Date.now() 跳过同毫秒事件）
+    const teamWs = listAgentWorkspaces().filter((w) => w.type === 'team')
+    for (const ws of teamWs) {
+      const state = getWorkspaceSyncState(ws.id)
+      // 仅当服务端返回了有效游标时才更新（避免网络错误后游标倒退）
+      if (pullResult.lastOccurredAt > 0) {
+        state.lastIncrementalSyncAt = pullResult.lastOccurredAt
+        state.lastSeq = pullResult.lastSeq
+      }
+      state.pendingOutgoing = _pendingEnvelopes.filter(
+        (e) => e.workspaceId === ws.id,
+      ).length
+      state.pendingIncoming = 0
+      state.isSyncing = false
+    }
+    writeSyncIndex()
+
+    // 4. 心跳上报（内部限频）
+    await sendHeartbeat()
+
+    broadcastStatusChange()
+
+    return pullResult.hasMore
+  } finally {
+    _isRunning = false
   }
-  writeSyncIndex()
+}
 
-  // 4. 心跳上报
-  await sendHeartbeat()
-
-  broadcastStatusChange()
+/** 判断当前是否处于空闲/不可见状态（用于降低轮询频率） */
+function isIdleOrHidden(): boolean {
+  // 系统空闲超过阈值
+  try {
+    if (powerMonitor.getSystemIdleTime() >= SYSTEM_IDLE_THRESHOLD_S) return true
+  } catch { /* 某些平台不支持时忽略 */ }
+  // 没有任何可见（且未最小化）的窗口
+  const anyVisible = BrowserWindow.getAllWindows().some(
+    (w) => !w.isDestroyed() && w.isVisible() && !w.isMinimized(),
+  )
+  return !anyVisible
 }
 
 /** 启动同步引擎 */
@@ -399,20 +436,31 @@ export function startSyncEngine(): void {
 
   console.log('[同步] 同步引擎已启动')
 
-  // 带随机抖动的自调度轮询，避免所有客户端同时请求服务器
-  const scheduleNext = () => {
+  // 带随机抖动的自调度轮询；空闲/窗口不可见时降频，追赶积压时快速跟进
+  const scheduleNext = (base: number) => {
     const jitter = Math.floor(Math.random() * POLL_JITTER_MS * 2) - POLL_JITTER_MS
-    const delay = Math.max(10000, POLL_INTERVAL_MS + jitter)
+    const delay = Math.max(2000, base + jitter)
     _syncTimer = setTimeout(() => {
-      syncCycle().catch((err) => console.warn('[同步] 同步周期失败:', err))
-      scheduleNext()
+      syncCycle()
+        .then((needsFastFollow) => {
+          // 还有积压未拉完 → 短间隔快速跟进；否则按活跃度选择间隔
+          if (needsFastFollow) scheduleNext(CATCHUP_POLL_INTERVAL_MS)
+          else scheduleNext(isIdleOrHidden() ? IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS)
+        })
+        .catch((err) => {
+          console.warn('[同步] 同步周期失败:', err)
+          scheduleNext(isIdleOrHidden() ? IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS)
+        })
     }, delay)
   }
 
-  scheduleNext()
-
-  // 立即执行首次同步
-  syncCycle().catch((err) => console.warn('[同步] 首次同步失败:', err))
+  // 立即执行首次同步，然后进入自调度
+  syncCycle()
+    .then((needsFastFollow) => scheduleNext(needsFastFollow ? CATCHUP_POLL_INTERVAL_MS : POLL_INTERVAL_MS))
+    .catch((err) => {
+      console.warn('[同步] 首次同步失败:', err)
+      scheduleNext(POLL_INTERVAL_MS)
+    })
 }
 
 /** 停止同步引擎 */

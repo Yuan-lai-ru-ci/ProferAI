@@ -857,7 +857,18 @@ export function resolveAppIconPath(variantId: string): string | null {
   return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
 }
 
+let _ipcHandlersRegistered = false
+
 export function registerIpcHandlers(): void {
+  // 幂等守卫：正常启动与启动失败降级路径（index.ts:520 / index.ts:748）都会调用本函数。
+  // ipcMain.handle 会按 channel 去重覆盖，但 ipcMain.on / nativeTheme.on / setInterval 等副作用
+  // 不会去重，重复调用会累积监听器和定时器（内存泄露）。此守卫确保只注册一次。
+  if (_ipcHandlersRegistered) {
+    console.log('[IPC] IPC 处理器已注册，跳过重复注册')
+    return
+  }
+  _ipcHandlersRegistered = true
+
   console.log('[IPC] 正在注册 IPC 处理器...')
 
   // ===== 运行时相关 =====
@@ -2633,6 +2644,22 @@ export function registerIpcHandlers(): void {
     async (_event, sessionId: string, event: import('@proma/project-core').GraphEvent) => {
       const { appendGraphEvent } = await import('./lib/project-graph-service')
       appendGraphEvent(sessionId, event)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH,
+    async (_event, sessionId: string) => {
+      const { loadProjectGraph } = await import('./lib/project-graph-service')
+      return loadProjectGraph(sessionId)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH_SUMMARY,
+    async (_event, sessionId: string) => {
+      const { getProjectGraphSummary } = await import('./lib/project-graph-service')
+      return getProjectGraphSummary(sessionId)
     },
   )
 

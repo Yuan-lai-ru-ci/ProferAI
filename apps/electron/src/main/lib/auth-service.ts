@@ -536,6 +536,10 @@ export async function logout(): Promise<void> {
 
 // 自动续期定时器引用
 let _autoRefreshTimer: ReturnType<typeof setTimeout> | null = null
+// 连续续期失败次数，用于指数退避（避免认证服务器故障时每 60s 无限重试）
+let _autoRefreshFailures = 0
+// 退避阶梯：1min → 5min → 15min → 30min → 60min（封顶），避免无退避高频重试
+const AUTO_REFRESH_BACKOFF_MS = [60_000, 300_000, 900_000, 1_800_000, 3_600_000]
 
 /** 启动主动 token 续期：accessToken 过期前 5 分钟自动刷新 */
 export function scheduleAutoRefresh(): void {
@@ -558,11 +562,18 @@ export function scheduleAutoRefresh(): void {
   const delay = Math.max(30000, earliest - Date.now() - 5 * 60 * 1000)
   _autoRefreshTimer = setTimeout(async () => {
     const ok = await refreshAuthToken().catch(() => false)
-    if (ok) console.log('[认证] Token 自动续期成功')
-    else console.warn('[认证] Token 自动续期失败，将在 60s 后重试')
-    // 无论成功失败，60 秒后再试（成功时 scheduleAutoRefresh 会被重新调用）
-    if (!ok) _autoRefreshTimer = setTimeout(() => scheduleAutoRefresh(), 60000)
-    else scheduleAutoRefresh()
+    if (ok) {
+      _autoRefreshFailures = 0
+      console.log('[认证] Token 自动续期成功')
+      scheduleAutoRefresh()
+    } else {
+      // 失败：指数退避重试，封顶 60min，避免认证服务器故障时高频打点
+      const idx = Math.min(_autoRefreshFailures, AUTO_REFRESH_BACKOFF_MS.length - 1)
+      const backoff = AUTO_REFRESH_BACKOFF_MS[idx]!
+      _autoRefreshFailures++
+      console.warn(`[认证] Token 自动续期失败（第 ${_autoRefreshFailures} 次），将在 ${Math.round(backoff / 60000)} 分钟后重试`)
+      _autoRefreshTimer = setTimeout(() => scheduleAutoRefresh(), backoff)
+    }
   }, delay)
   console.log(`[认证] 将在 ${Math.round(delay / 60000)} 分钟后自动续期 token`)
 }

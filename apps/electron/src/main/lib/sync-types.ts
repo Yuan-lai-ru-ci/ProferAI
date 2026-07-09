@@ -39,6 +39,8 @@ export interface SyncPullResponse {
   envelopes: SyncEnvelope[]
   lastOccurredAt: number
   lastSeq: number
+  /** 是否还有更多积压变更未返回（服务端分页时置 true，客户端据此快速跟进） */
+  hasMore?: boolean
 }
 
 /** 单个文件的同步状态 */
