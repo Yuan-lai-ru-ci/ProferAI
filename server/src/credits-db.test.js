@@ -177,3 +177,49 @@ describe('relay 令牌', () => {
   })
 })
 
+
+// reserveSyncSeq —— 替代原 SELECT MAX(seq) 全表扫描的同步序列号计数器。
+// 放在本文件复用其 db 生命周期（beforeAll 打开、afterAll 关闭），断言全部用相对关系，不假设起始值。
+describe('reserveSyncSeq (sync 序列号)', () => {
+  test('相邻单个预留严格 +1 递增', () => {
+    const { reserveSyncSeq } = dbModule
+    const a = reserveSyncSeq(1)
+    const b = reserveSyncSeq(1)
+    expect(b).toBe(a + 1)
+  })
+
+  test('批量预留返回该段第一个值且不与后续重叠', () => {
+    const { reserveSyncSeq } = dbModule
+    const blockStart = reserveSyncSeq(3) // 占用 blockStart, +1, +2
+    const next = reserveSyncSeq(1)
+    expect(next).toBe(blockStart + 3)
+  })
+
+  test('count<1 时按 1 处理（仍前进一格）', () => {
+    const { reserveSyncSeq } = dbModule
+    const a = reserveSyncSeq(0)
+    const b = reserveSyncSeq(1)
+    expect(b).toBe(a + 1)
+  })
+
+  test('分配的 seq 写入 sync_envelopes 后严格单调递增', () => {
+    const { reserveSyncSeq, db } = dbModule
+    const uid = makeUser(`user-syncseq-${Date.now()}`)
+    const wid = `w-syncseq-${Date.now()}`
+    db.prepare('INSERT OR IGNORE INTO workspaces (id,name,slug,owner_id,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+      .run(wid, 't', `${wid}-slug`, uid, Date.now(), Date.now())
+    const s1 = reserveSyncSeq(1)
+    const s2 = reserveSyncSeq(1)
+    const ins = db.prepare(
+      'INSERT INTO sync_envelopes (id,workspace_id,entity_type,entity_id,operation,payload,occurred_at,seq) VALUES (?,?,?,?,?,?,?,?)'
+    )
+    ins.run(`e1-${wid}`, wid, 'file', 'p1', 'update', '{}', Date.now(), s1)
+    ins.run(`e2-${wid}`, wid, 'file', 'p2', 'update', '{}', Date.now(), s2)
+    expect(s2).toBe(s1 + 1)
+    const rows = db.prepare('SELECT seq FROM sync_envelopes WHERE workspace_id = ? ORDER BY seq ASC').all(wid)
+    const seqs = rows.map((r) => r.seq)
+    for (let i = 1; i < seqs.length; i++) {
+      expect(seqs[i]).toBeGreaterThan(seqs[i - 1])
+    }
+  })
+})

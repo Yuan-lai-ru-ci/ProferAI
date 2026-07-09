@@ -130,6 +130,33 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_sync_envelopes_ws_seq ON sync_envelopes(
 try {
   db.exec("UPDATE sync_envelopes SET seq = rowid WHERE seq = 0")
 } catch (_) {}
+// 同步序列号计数器：单调递增真源，替代每次写入的 MAX(seq) 全表扫描
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sync_seq_counter (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    value INTEGER NOT NULL
+  )
+`)
+// 首次创建时用当前最大 seq 播种，保证与历史信封连续（仅在行不存在时执行一次）
+try {
+  const seed = db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM sync_envelopes').get()?.m ?? 0
+  db.prepare('INSERT OR IGNORE INTO sync_seq_counter (id, value) VALUES (1, ?)').run(seed)
+} catch (_) {}
+
+// 原子预留一段连续的同步序列号，返回该段的第一个值。
+// 用单行计数器自增替代 SELECT MAX(seq) 全表扫描；better-sqlite3 事务同步执行，天然互斥。
+const _incSeqStmt = db.prepare('UPDATE sync_seq_counter SET value = value + ? WHERE id = 1')
+const _getSeqStmt = db.prepare('SELECT value FROM sync_seq_counter WHERE id = 1')
+const _reserveSeqTx = db.transaction((count) => {
+  _incSeqStmt.run(count)
+  const after = _getSeqStmt.get().value
+  return after - count + 1 // 本段第一个 seq
+})
+/** 预留 count 个连续序列号，返回第一个。count 默认 1。 */
+export function reserveSyncSeq(count = 1) {
+  const n = Math.max(1, count | 0)
+  return _reserveSeqTx(n)
+}
 // 一次性回填：已有软删除但无 deleted_at 的工作区用 updated_at 补上
 try {
   db.exec("UPDATE workspaces SET deleted_at = updated_at WHERE is_deleted = 1 AND deleted_at IS NULL")

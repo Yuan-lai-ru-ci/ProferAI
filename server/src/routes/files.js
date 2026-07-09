@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { writeFileSync, readFileSync, existsSync, rmSync, renameSync } from 'node:fs'
 import { join as pathJoin, dirname as pathDirname, basename as pathBasename } from 'node:path'
 import crypto from 'crypto'
-import { db } from '../db.js'
+import { db, reserveSyncSeq } from '../db.js'
 import { logAudit } from '../audit.js'
 import { MAX_FILE_SIZE, FILES_DIR } from '../config.js'
 import { ensureDir, safePath } from '../utils.js'
@@ -33,10 +33,12 @@ function isAdminOrOwner(role) {
 }
 
 function emitFileChange(workspaceId, operation, payload) {
-  // seq 用内联子查询原子分配（与 /push 一致的全局单调序列），避免同毫秒多条文件变更 seq=0 被游标跳过丢失
+  // seq 用计数器原子分配（与 /push 一致的全局单调序列），避免同毫秒多条文件变更被游标跳过丢失。
+  // 用单行计数器自增替代 MAX(seq) 全表扫描（原热路径瓶颈）。
+  const seq = reserveSyncSeq(1)
   db.prepare(
     `INSERT INTO sync_envelopes (id, workspace_id, entity_type, entity_id, operation, payload, occurred_at, seq)
-     VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_envelopes))`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     crypto.randomUUID(),
     workspaceId,
@@ -45,6 +47,7 @@ function emitFileChange(workspaceId, operation, payload) {
     operation,
     JSON.stringify(payload),
     Date.now(),
+    seq,
   )
 }
 
