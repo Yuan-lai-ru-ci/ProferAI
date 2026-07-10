@@ -628,7 +628,7 @@ function createShikiCodeBlockView(initialNode: ProseMirrorNode, view: EditorView
 
   const mermaidHost = document.createElement('div')
   mermaidHost.contentEditable = 'false'
-  setClass(mermaidHost, 'proma-mermaid-preview hidden')
+  setClass(mermaidHost, 'profer-mermaid-preview hidden')
   const mermaidRoot: Root = createRoot(mermaidHost)
   let mermaidRenderTimer: ReturnType<typeof setTimeout> | null = null
   let destroyed = false
@@ -652,7 +652,7 @@ function createShikiCodeBlockView(initialNode: ProseMirrorNode, view: EditorView
     label.textContent = language === 'text' ? 'Code' : getDisplayName(language)
     const className = language === 'text' ? undefined : `language-${language}`
     const shouldRenderMermaid = !view.editable && shouldRenderMermaidCodeBlock(className, currentCode)
-    dom.classList.toggle('proma-code-block--mermaid', shouldRenderMermaid)
+    dom.classList.toggle('profer-code-block--mermaid', shouldRenderMermaid)
     scheduleMermaidRender(shouldRenderMermaid ? currentCode : null)
   }
 

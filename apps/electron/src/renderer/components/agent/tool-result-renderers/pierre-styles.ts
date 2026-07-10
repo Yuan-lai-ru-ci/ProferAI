@@ -124,14 +124,14 @@ export function createPierreFileCSS(lineNumberStart: number, maxLineNumber: numb
       --diffs-min-number-column-width: ${minWidth};
     }
     [data-gutter] {
-      counter-reset: proma-read-line ${safeStart - 1};
+      counter-reset: profer-read-line ${safeStart - 1};
     }
     [data-line-number-content] {
       color: transparent !important;
     }
     [data-line-number-content]::before {
-      counter-increment: proma-read-line;
-      content: counter(proma-read-line);
+      counter-increment: profer-read-line;
+      content: counter(profer-read-line);
       color: var(--diffs-fg-number);
     }
   `
