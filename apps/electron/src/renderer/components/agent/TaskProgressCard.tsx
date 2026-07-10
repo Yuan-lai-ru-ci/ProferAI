@@ -99,12 +99,14 @@ interface TaskProgressCardProps {
   animate?: boolean
   /** 流式是否已结束（用于停止 in_progress 任务的 spinner） */
   streamEnded?: boolean
+  /** 是否被用户手动打断（打断 → in_progress 变 cancelled） */
+  stoppedByUser?: boolean
   /** 历史 TaskCreate 的 taskId → subject 映射（跨 turn 回溯，用于恢复任务名） */
   historicalTaskSubjects?: Map<string, string>
 }
 
-export function TaskProgressCard({ activities, animate = false, streamEnded = false, historicalTaskSubjects }: TaskProgressCardProps): React.ReactElement | null {
-  const items = React.useMemo(() => aggregateTaskItems(activities, streamEnded, historicalTaskSubjects), [activities, streamEnded, historicalTaskSubjects])
+export function TaskProgressCard({ activities, animate = false, streamEnded = false, stoppedByUser = false, historicalTaskSubjects }: TaskProgressCardProps): React.ReactElement | null {
+  const items = React.useMemo(() => aggregateTaskItems(activities, streamEnded, historicalTaskSubjects, stoppedByUser), [activities, streamEnded, historicalTaskSubjects, stoppedByUser])
   const [expanded, setExpanded] = React.useState(false)
 
   if (items.length === 0) return null

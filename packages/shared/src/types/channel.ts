@@ -145,6 +145,8 @@ export interface Channel {
   models: ChannelModel[]
   /** 是否启用 */
   enabled: boolean
+  /** 是否由服务端统一管理（商业模式下从 /v1/account/channels 同步的渠道）。服务端删除后本地自动清理 */
+  serverManaged?: boolean
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */

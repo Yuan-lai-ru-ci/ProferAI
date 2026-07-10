@@ -50,6 +50,8 @@ import {
 } from './atoms/notifications'
 import {
   stickyUserMessageEnabledAtom,
+  longTextPasteAsAttachmentEnabledAtom,
+  richTextRenderingEnabledAtom,
   initializeUiPreferences,
 } from './atoms/ui-preferences'
 import {
@@ -437,10 +439,16 @@ function DockBadgeInitializer(): null {
  */
 function UiPreferencesInitializer(): null {
   const setStickyUserMessageEnabled = useSetAtom(stickyUserMessageEnabledAtom)
+  const setLongTextPasteAsAttachmentEnabled = useSetAtom(longTextPasteAsAttachmentEnabledAtom)
+  const setRichTextRenderingEnabled = useSetAtom(richTextRenderingEnabledAtom)
 
   useEffect(() => {
-    initializeUiPreferences(setStickyUserMessageEnabled)
-  }, [setStickyUserMessageEnabled])
+    initializeUiPreferences(
+      setStickyUserMessageEnabled,
+      setLongTextPasteAsAttachmentEnabled,
+      setRichTextRenderingEnabled
+    )
+  }, [setStickyUserMessageEnabled, setLongTextPasteAsAttachmentEnabled, setRichTextRenderingEnabled])
 
   return null
 }

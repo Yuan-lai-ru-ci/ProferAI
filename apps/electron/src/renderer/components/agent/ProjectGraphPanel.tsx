@@ -1,8 +1,8 @@
 /**
- * ProjectGraphPanel — 无界画板任务图可视化（思维导图风格）
+ * ProjectGraphPanel — 无界画板任务图可视化（知识图谱风格）
  *
- * 支持缩放（滚轮）、平移（拖拽）、节点选中交互。
- * 作为 TaskProgressLink 的 Dialog 内容使用。
+ * 支持力导向布局、分支/汇合可视化、缩放（滚轮）、平移（拖拽）、节点选中交互。
+ * 作为 AgentView 工具栏 Graph 按钮的 Dialog 内容使用。
  */
 
 import * as React from 'react'
@@ -17,11 +17,13 @@ import {
   Clock,
   FileText,
   ExternalLink,
+  GitMerge,
+  GitFork,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { currentGraphAtom } from '@/atoms/graph-atoms'
-import { computeLayout, type TaskGraph, type TaskNode, type TaskStatus, type LayoutResult } from '@proma/project-core'
+import { computeForceLayout, computeForkEdgesLayout, type TaskGraph, type TaskNode, type TaskStatus, type ForceLayoutResult, type ForkEdgeLayout } from '@proma/project-core'
 import { GraphQuestionInput } from './GraphQuestionInput'
 import { useOpenSession } from '@/hooks/useOpenSession'
 
@@ -44,10 +46,10 @@ function injectBreatheStyle() {
 
 // ===== 常量 =====
 
-const NODE_W = 260
-const NODE_H = 100
+const NODE_W = 270
+const NODE_H = 128
 const LEVEL_GAP = 80
-const NODE_GAP_Y = 16
+const NODE_GAP_Y = 20
 const CANVAS_PAD = 70
 
 const MIN_SCALE = 0.25
@@ -56,6 +58,73 @@ const ZOOM_STEP = 0.1
 
 // 连线端点圆点半径
 const DOT_R = 5
+
+// 分支着色调色板（用于多分支视觉区分）
+const BRANCH_COLORS = [
+  { accent: 'border-blue-400/30',   tint: 'bg-blue-500/5',   stripe: '#60a5fa' },
+  { accent: 'border-emerald-400/30', tint: 'bg-emerald-500/5', stripe: '#34d399' },
+  { accent: 'border-violet-400/30', tint: 'bg-violet-500/5', stripe: '#a78bfa' },
+  { accent: 'border-amber-400/30',  tint: 'bg-amber-500/5',  stripe: '#fbbf24' },
+  { accent: 'border-rose-400/30',   tint: 'bg-rose-500/5',   stripe: '#fb7185' },
+  { accent: 'border-cyan-400/30',   tint: 'bg-cyan-500/5',   stripe: '#22d3ee' },
+  { accent: 'border-orange-400/30', tint: 'bg-orange-500/5', stripe: '#fb923c' },
+  { accent: 'border-lime-400/30',   tint: 'bg-lime-500/5',   stripe: '#a3e635' },
+]
+
+/** 为分叉子图分配分支索引（基于 forkEdges） */
+function computeBranchIndex(graph: TaskGraph): Map<string, number> {
+  const branchIndex = new Map<string, number>()
+  // 根节点（无 forkFrom 或 forkFrom 节点不在图中）
+  for (const node of Object.values(graph.nodes)) {
+    if (!node.forkFrom || !graph.nodes[node.forkFrom]) {
+      branchIndex.set(node.id, 0)
+    }
+  }
+
+  // BFS: 分叉子节点继承源分支号，或新分支
+  const forkSourceChildren = new Map<string, number>()
+  for (const fe of graph.forkEdges) {
+    const children = graph.forkEdges.filter(e => e.from === fe.from)
+    if (children.length > 1) {
+      children.forEach((child, idx) => {
+        forkSourceChildren.set(child.to, idx + 1) // 分支 1, 2, 3...
+      })
+    }
+  }
+
+  for (const node of Object.values(graph.nodes)) {
+    if (branchIndex.has(node.id)) continue
+    if (node.forkFrom && forkSourceChildren.has(node.id)) {
+      branchIndex.set(node.id, forkSourceChildren.get(node.id)!)
+    } else {
+      // 通过依赖边继承分支号
+      for (const depId of node.dependsOn) {
+        const depBranch = branchIndex.get(depId)
+        if (depBranch !== undefined) {
+          branchIndex.set(node.id, depBranch)
+          break
+        }
+      }
+      if (!branchIndex.has(node.id)) branchIndex.set(node.id, 0)
+    }
+  }
+
+  return branchIndex
+}
+
+/** 检测分叉点（有 forkEdge 从这个节点发出） */
+function computeForkNodeIds(graph: TaskGraph): Set<string> {
+  return new Set(graph.forkEdges.map(e => e.from))
+}
+
+/** 检测汇合点（有 ≥2 条入边） */
+function computeMergeNodeIds(graph: TaskGraph): Set<string> {
+  const inDegree = new Map<string, number>()
+  for (const e of graph.edges) {
+    inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1)
+  }
+  return new Set([...inDegree.entries()].filter(([, d]) => d >= 2).map(([id]) => id))
+}
 
 const statusConfig: Record<TaskStatus, { icon: React.ReactElement; color: string; border: string; lineColor: string }> = {
   pending:     { icon: <Circle className="size-4" />,                color: 'text-muted-foreground', border: 'border-border',                lineColor: 'hsl(var(--muted-foreground)/0.4)' },
@@ -89,72 +158,118 @@ function useGraphData(): { graph: TaskGraph | null; loading: boolean } {
   return { graph, loading: loading && !graph }
 }
 
-// ===== 计算节点坐标 =====
+// ===== 力导向布局坐标提取 =====
 
-interface NodePosition { id: string; x: number; y: number }
-
-function computePositions(layout: LayoutResult): NodePosition[] {
-  const positions: NodePosition[] = []
-  for (const level of layout.levels) {
-    const x = CANVAS_PAD + level.level * (NODE_W + LEVEL_GAP)
-    const totalH = level.nodes.length * NODE_H + (level.nodes.length - 1) * NODE_GAP_Y
-    const startY = CANVAS_PAD + Math.max(0, (layout.maxNodesInLevel * (NODE_H + NODE_GAP_Y) - totalH) / 2)
-    level.nodes.forEach((node, i) => {
-      positions.push({ id: node.id, x, y: startY + i * (NODE_H + NODE_GAP_Y) })
-    })
-  }
-  return positions
+/** 从 ForceLayoutResult 提取节点位置数组（含分支色） */
+function positionsFromForceLayout(
+  layout: ForceLayoutResult,
+  graph: TaskGraph,
+): { id: string; x: number; y: number }[] {
+  return Array.from(layout.positions.entries()).map(([id, pos]) => ({
+    id,
+    x: pos.x,
+    y: pos.y,
+  }))
 }
 
-// ===== SVG 连线（思维导图风格：依赖→被依赖 左→右） =====
+// ===== SVG 连线 =====
 
 interface EdgeData {
   from: string
   to: string
   d: string
-  /** 起点坐标（左侧节点的右边缘） */
   x1: number; y1: number
-  /** 终点坐标（右侧节点的左边缘） */
   x2: number; y2: number
   lineColor: string
+  type: 'dependency' | 'fork'
+  forkReason?: string
 }
 
-function computeEdges(graph: TaskGraph, positions: NodePosition[]): EdgeData[] {
+/** 为依赖边计算 Bezier 曲线（左→右，水平弧线） */
+function computeDependencyEdges(
+  graph: TaskGraph,
+  positions: { id: string; x: number; y: number }[],
+): EdgeData[] {
   const posMap = new Map(positions.map(p => [p.id, p]))
   return Object.values(graph.nodes).flatMap(node => {
     return node.dependsOn.map(depId => {
-      const depPos = posMap.get(depId)    // 被依赖节点（左侧）
-      const nodePos = posMap.get(node.id) // 依赖方节点（右侧）
+      const depPos = posMap.get(depId)
+      const nodePos = posMap.get(node.id)
       if (!depPos || !nodePos) return null!
       const depCfg = statusConfig[graph.nodes[depId]?.status ?? 'pending']
-      // 起点：被依赖节点（左侧）的右边缘 → 终点：依赖方节点（右侧）的左边缘
       const x1 = depPos.x + NODE_W
       const y1 = depPos.y + NODE_H / 2
       const x2 = nodePos.x
       const y2 = nodePos.y + NODE_H / 2
       const cx = (x1 + x2) / 2
       const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`
-      return { from: depId, to: node.id, d, x1, y1, x2, y2, lineColor: depCfg.lineColor }
+      return { from: depId, to: node.id, d, x1, y1, x2, y2, lineColor: depCfg.lineColor, type: 'dependency' as const }
     })
   }).filter(Boolean)
 }
 
-// ===== 节点卡片（不透明、实色背景） =====
+/** 将 ForkEdgeLayout 转换为渲染用的 EdgeData */
+function computeForkEdges(
+  forkLayouts: ForkEdgeLayout[],
+): EdgeData[] {
+  return forkLayouts.map(fl => ({
+    from: fl.from,
+    to: fl.to,
+    d: fl.d,
+    x1: fl.x1,
+    y1: fl.y1,
+    x2: fl.x2,
+    y2: fl.y2,
+    lineColor: fl.lineColor,
+    type: 'fork' as const,
+    forkReason: fl.reason,
+  }))
+}
 
-function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number; y: number; selected: boolean; onClick: () => void }) {
+// ===== 节点卡片（知识图谱风格 — 高信息密度） =====
+
+function NodeCard({
+  node, x, y, selected, onClick,
+  isForkNode, isMergeNode, branchColor, isForkChild, graph, currentSessionId,
+}: {
+  node: TaskNode
+  x: number
+  y: number
+  selected: boolean
+  onClick: () => void
+  isForkNode: boolean
+  isMergeNode: boolean
+  branchColor?: typeof BRANCH_COLORS[number]
+  isForkChild: boolean
+  graph: TaskGraph
+  currentSessionId?: string
+}) {
   const cfg = statusConfig[node.status]
   const showDesc = node.description && node.description.length > 0
   const isCancelled = node.status === 'cancelled'
+  const depCount = node.dependsOn.length
+  const depByCount = node.dependedBy.length
+  const createdAt = new Date(node.createdAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  const shortId = node.id.length > 12 ? node.id.slice(0, 12) + '…' : node.id
+  // 检测跨会话节点（任务来自其他子会话）
+  const isCrossSession = currentSessionId && node.sdkSessionId && node.sdkSessionId !== currentSessionId
+  const crossSessionShortId = isCrossSession
+    ? (node.sdkSessionId!.length > 8 ? node.sdkSessionId!.slice(0, 8) + '…' : node.sdkSessionId!)
+    : null
+
   return (
     <foreignObject x={x} y={y} width={NODE_W} height={NODE_H} className="overflow-visible">
       <button
         type="button"
         onClick={onClick}
         className={cn(
-          'flex items-start gap-2.5 w-full h-full px-3.5 py-3 rounded-xl border-2 text-left',
+          'flex flex-col w-full h-full rounded-xl border-2 text-left',
           'transition-all duration-200 shadow-sm',
-          'bg-card', // 统一实色卡片背景
-          cfg.border,
+          'bg-card',
+          isForkNode
+            ? 'border-dashed border-amber-400/40'
+            : cfg.border,
+          isMergeNode && 'ring-2 ring-purple-400/30',
           selected
             ? 'border-foreground/50 shadow-lg scale-[1.04] ring-2 ring-foreground/10'
             : 'hover:border-foreground/30 hover:shadow-md',
@@ -162,27 +277,124 @@ function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number
           isCancelled && 'opacity-50',
         )}
       >
-        <span className={cn('flex-shrink-0 mt-0.5', cfg.color)}>{cfg.icon}</span>
-        <div className="flex-1 min-w-0">
-          <div className={cn(
-            'text-sm font-semibold leading-tight',
-            isCancelled && 'line-through',
-            node.status === 'completed' && 'line-through',
-          )}>
-            {node.subject}
+        {/* 分支颜色条纹（左侧细条） */}
+        {branchColor && branchColor.stripe && !isForkNode && (
+          <div
+            className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full opacity-60"
+            style={{ backgroundColor: branchColor.stripe }}
+          />
+        )}
+
+        {/* 分叉子节点标记 */}
+        {isForkChild && (
+          <div className="absolute -top-1 -left-1 size-4 rounded-full bg-amber-400/20 flex items-center justify-center">
+            <GitFork className="size-2.5 text-amber-400" />
           </div>
-          {showDesc && (
-            <div className="mt-1 text-[11px] text-muted-foreground/70 leading-tight line-clamp-2">
+        )}
+
+        {/* === 头部：状态图标 + 标题 + ID === */}
+        <div className="flex items-start gap-2 px-3.5 pt-3 pb-1.5">
+          <span className={cn('flex-shrink-0 mt-0.5', cfg.color)}>{cfg.icon}</span>
+          <div className="flex-1 min-w-0">
+            <div className={cn(
+              'text-[13px] font-semibold leading-tight truncate',
+              isCancelled && 'line-through',
+              node.status === 'completed' && 'line-through opacity-80',
+            )}>
+              {node.subject}
+            </div>
+            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+              <span className="text-[10px] font-mono text-muted-foreground/50 bg-muted/50 px-1.5 py-px rounded">
+                #{shortId}
+              </span>
+              {isCrossSession && (
+                <span
+                  className="text-[10px] text-blue-400/80 bg-blue-500/10 px-1.5 py-px rounded font-medium"
+                  title={`来自子会话 ${node.sdkSessionId}`}
+                >
+                  ↳ {crossSessionShortId}
+                </span>
+              )}
+              {node.forkFrom && (
+                <span className="text-[10px] text-amber-400/70">
+                  分叉自 {node.forkFrom.length > 10 ? node.forkFrom.slice(0, 10) + '…' : node.forkFrom}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* === 主体：描述 === */}
+        <div className="flex-1 px-3.5">
+          {showDesc ? (
+            <p className="text-[11px] text-muted-foreground/80 leading-relaxed line-clamp-3 whitespace-pre-line">
               {node.description}
-            </div>
-          )}
-          {node.artifact.length > 0 && (
-            <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground/60">
-              <FileText className="size-3" />
-              {node.artifact.length} 个文件
-            </div>
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground/30 italic">暂无描述</p>
           )}
         </div>
+
+        {/* === 底部：统计标签行 === */}
+        <div className={cn(
+          'flex items-center gap-2 px-3.5 pb-2.5 pt-1.5 mt-auto',
+          'border-t border-border/20',
+        )}>
+          {/* 依赖关系 */}
+          {depCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60">
+              <span className="text-[9px]">依赖</span>
+              <span className="font-mono font-medium text-muted-foreground/80">{depCount}</span>
+            </span>
+          )}
+          {depByCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60">
+              <span className="text-[9px]">被依赖</span>
+              <span className="font-mono font-medium text-muted-foreground/80">{depByCount}</span>
+            </span>
+          )}
+
+          {/* 产出文件数 */}
+          {node.artifact.length > 0 && (
+            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60">
+              <FileText className="size-2.5" />
+              <span className="font-mono font-medium text-muted-foreground/80">{node.artifact.length}</span>
+            </span>
+          )}
+
+          {/* 分叉/汇合标记 */}
+          {isForkNode && (
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-400/70 font-medium ml-auto">
+              <GitFork className="size-2.5" />分叉
+            </span>
+          )}
+          {isMergeNode && (
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-purple-400/70 font-medium ml-auto">
+              <GitMerge className="size-2.5" />汇合
+            </span>
+          )}
+
+          {/* 创建时间 */}
+          <span className="text-[10px] text-muted-foreground/40 ml-auto tabular-nums flex items-center gap-0.5">
+            <Clock className="size-2.5" />
+            {createdAt}
+          </span>
+        </div>
+
+        {/* === 用量数据（如果有） === */}
+        {node.usage && (node.usage.totalTokens || node.usage.toolUses || node.usage.durationMs) && (
+          <div className="px-3.5 pb-2.5 flex items-center gap-3 text-[10px] text-muted-foreground/50">
+            {node.usage.totalTokens != null && (
+              <span className="tabular-nums">{node.usage.totalTokens.toLocaleString()} tokens</span>
+            )}
+            {node.usage.toolUses != null && (
+              <span className="tabular-nums">{node.usage.toolUses} 工具调用</span>
+            )}
+            {node.usage.durationMs != null && (
+              <span className="tabular-nums">{(node.usage.durationMs / 1000).toFixed(1)}s</span>
+            )}
+          </div>
+        )}
       </button>
     </foreignObject>
   )
@@ -337,7 +549,7 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/30">
       <GitBranch className="size-14" />
-      <p className="text-sm text-center">Agent 创建多步骤任务后，<br />任务关系图会在这里展示</p>
+      <p className="text-sm text-center">Agent 创建多步骤任务后，<br />项目知识图谱会在这里展示<br /><span className="text-muted-foreground/20 text-xs">跨会话任务自动聚合</span></p>
     </div>
   )
 }
@@ -372,12 +584,28 @@ export function ProjectGraphPanel(): React.ReactElement {
     }
   }, [selectedNode, setGraphQuestion])
 
-  const layout = React.useMemo(() => (graph ? computeLayout(graph) : null), [graph])
-  const positions = React.useMemo(() => (layout ? computePositions(layout) : []), [layout])
-  const edges = React.useMemo(() => (graph ? computeEdges(graph, positions) : []), [graph, positions])
+  const forceLayout = React.useMemo(() => (
+    graph ? computeForceLayout(graph, {
+      edgeLength: 300,
+      repulsionStrength: 8000,
+      iterations: 300,
+    }) : null
+  ), [graph])
+  const positions = React.useMemo(() => (forceLayout ? positionsFromForceLayout(forceLayout, graph!) : []), [forceLayout, graph])
+  const depEdges = React.useMemo(() => (graph ? computeDependencyEdges(graph, positions) : []), [graph, positions])
+  const forkEdgesRender = React.useMemo(() => {
+    if (!graph || !forceLayout) return []
+    const forkLayouts = computeForkEdgesLayout(graph, forceLayout.positions, NODE_W, NODE_H)
+    return computeForkEdges(forkLayouts)
+  }, [graph, forceLayout])
 
-  const svgW = layout ? layout.totalLevels * (NODE_W + LEVEL_GAP) + CANVAS_PAD * 2 : 800
-  const svgH = layout ? Math.max(layout.maxNodesInLevel, 1) * (NODE_H + NODE_GAP_Y) + CANVAS_PAD * 2 : 600
+  // 分支/分叉/汇合元数据
+  const forkNodeIds = React.useMemo(() => (graph ? computeForkNodeIds(graph) : new Set<string>()), [graph])
+  const mergeNodeIds = React.useMemo(() => (graph ? computeMergeNodeIds(graph) : new Set<string>()), [graph])
+  const branchIndex = React.useMemo(() => (graph ? computeBranchIndex(graph) : new Map<string, number>()), [graph])
+
+  const svgW = forceLayout ? forceLayout.canvasWidth : 800
+  const svgH = forceLayout ? forceLayout.canvasHeight : 600
 
   // 缩放（滚轮）— window 级绑定 + 区域过滤，稳定可靠
   React.useEffect(() => {
@@ -403,10 +631,10 @@ export function ProjectGraphPanel(): React.ReactElement {
     return () => window.removeEventListener('wheel', onWheel, { capture: true })
   }, [])
 
-  // 初始镜头：定位到第一个 in_progress（否则 pending）节点
+  // 初始镜头：定位到第一个 in_progress（否则 pending）节点的位置
   const initialCameraSet = React.useRef(false)
   React.useEffect(() => {
-    if (initialCameraSet.current || !layout || positions.length === 0 || !containerRef.current) return
+    if (initialCameraSet.current || !forceLayout || positions.length === 0 || !containerRef.current) return
     const activeNode = positions.find(p => {
       const n = graph?.nodes[p.id]
       return n && (n.status === 'in_progress' || n.status === 'pending')
@@ -418,7 +646,7 @@ export function ProjectGraphPanel(): React.ReactElement {
     setTx(cx)
     setTy(cy)
     initialCameraSet.current = true
-  }, [layout, positions, graph])
+  }, [forceLayout, positions, graph])
 
   // 平移（拖拽）— 点击空白区域同时关闭选中
   const handleMouseDown = React.useCallback((e: React.MouseEvent) => {
@@ -445,7 +673,7 @@ export function ProjectGraphPanel(): React.ReactElement {
   if (loading) {
     return <div className="flex items-center justify-center h-full"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
   }
-  if (!graph || !layout || layout.totalLevels === 0) return <EmptyState />
+  if (!graph || !forceLayout || Object.keys(graph.nodes).length === 0) return <EmptyState />
 
   const nodes = Object.values(graph.nodes)
   const completed = nodes.filter(n => n.status === 'completed').length
@@ -486,12 +714,12 @@ export function ProjectGraphPanel(): React.ReactElement {
                 transformOrigin: '0 0',
               }}
             >
-              {/* 单层 SVG：连线 → 节点卡 → 连接点（由底到顶） */}
+              {/* 多层 SVG：依赖边 → 分叉边 → 节点卡 → 连接点（由底到顶） */}
               <svg width={svgW} height={svgH} className="absolute inset-0" style={{ overflow: 'visible' }}>
-                {/* 第1层：连线 */}
-                {edges.map(e => (
+                {/* 第1层：依赖边（实线） */}
+                {depEdges.map(e => (
                   <path
-                    key={`edge-${e.from}-${e.to}`}
+                    key={`dep-${e.from}-${e.to}`}
                     d={e.d}
                     fill="none"
                     stroke={e.lineColor}
@@ -501,10 +729,40 @@ export function ProjectGraphPanel(): React.ReactElement {
                     style={{ pointerEvents: 'none' }}
                   />
                 ))}
-                {/* 第2层：节点卡片 */}
+                {/* 第2层：分叉边（虚线，琥珀色） */}
+                {forkEdgesRender.map(e => (
+                  <g key={`fork-${e.from}-${e.to}`}>
+                    <path
+                      d={e.d}
+                      fill="none"
+                      stroke={e.lineColor}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeDasharray="6 4"
+                      opacity={0.6}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                    {/* 分叉标签（中点位置） */}
+                    {e.forkReason && (
+                      <text
+                        x={(e.x1 + e.x2) / 2 + 8}
+                        y={(e.y1 + e.y2) / 2 - 4}
+                        fontSize="9"
+                        fill="#fbbf24"
+                        opacity={0.7}
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        分叉: {e.forkReason.length > 8 ? e.forkReason.slice(0, 8) + '...' : e.forkReason}
+                      </text>
+                    )}
+                  </g>
+                ))}
+                {/* 第3层：节点卡片 */}
                 {positions.map(pos => {
                   const node = graph.nodes[pos.id]
                   if (!node) return null
+                  const bIdx = branchIndex.get(node.id) ?? 0
+                  const bColor = bIdx > 0 ? BRANCH_COLORS[bIdx % BRANCH_COLORS.length] : undefined
                   return (
                     <NodeCard
                       key={node.id}
@@ -512,6 +770,12 @@ export function ProjectGraphPanel(): React.ReactElement {
                       x={pos.x}
                       y={pos.y}
                       selected={selectedNode?.id === node.id}
+                      isForkNode={forkNodeIds.has(node.id)}
+                      isMergeNode={mergeNodeIds.has(node.id)}
+                      branchColor={bColor}
+                      isForkChild={!!node.forkFrom && !!graph.nodes[node.forkFrom]}
+                      graph={graph}
+                      currentSessionId={sessionId ?? undefined}
                       onClick={() => {
                         const isSelecting = selectedNode?.id !== node.id
                         setSelectedNode(prev => prev?.id === node.id ? null : node)
@@ -528,11 +792,17 @@ export function ProjectGraphPanel(): React.ReactElement {
                     />
                   )
                 })}
-                {/* 第3层：连接点（在节点上方，盖住节点边缘） */}
-                {edges.map(e => (
-                  <g key={`dots-${e.from}-${e.to}`} style={{ pointerEvents: 'none' }}>
+                {/* 第4层：连接点（依赖边实心圆 + 分叉边空心圆） */}
+                {depEdges.map(e => (
+                  <g key={`dep-dots-${e.from}-${e.to}`} style={{ pointerEvents: 'none' }}>
                     <circle cx={e.x1} cy={e.y1} r={DOT_R} fill={e.lineColor} />
                     <circle cx={e.x2} cy={e.y2} r={DOT_R} fill={e.lineColor} />
+                  </g>
+                ))}
+                {forkEdgesRender.map(e => (
+                  <g key={`fork-dots-${e.from}-${e.to}`} style={{ pointerEvents: 'none' }}>
+                    <circle cx={e.x1} cy={e.y1} r={DOT_R} fill={e.lineColor} fillOpacity={0.6} />
+                    <circle cx={e.x2} cy={e.y2} r={DOT_R} fill={e.lineColor} fillOpacity={0.6} />
                   </g>
                 ))}
               </svg>

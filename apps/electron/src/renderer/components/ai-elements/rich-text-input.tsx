@@ -14,6 +14,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { useAtomValue } from 'jotai'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -26,8 +27,10 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { lowlight } from '@/lib/lowlight'
 import { htmlToMarkdown } from '@/lib/markdown-rich-text'
+import { richTextRenderingEnabledAtom } from '@/atoms/ui-preferences'
 import { createFileMentionSuggestion } from '@/components/file-browser/file-mention-suggestion'
 import { createSkillMentionSuggestion, createMcpMentionSuggestion, createSessionMentionSuggestion } from '@/components/agent/mention-suggestions'
+import { shouldConvertClipboardTextToAttachment } from '@/lib/clipboard-text-attachment'
 import {
   VOICE_DICTATION_INSERT_EVENT,
   getLastFocusedVoiceInputId,
@@ -200,6 +203,11 @@ export function RichTextInput({
   // 是否启用 Mention 功能：Agent 首帧可能尚未拿到路径/slug/id，但扩展必须先注册。
   const hasMentionSupport = enableMentions ?? (workspacePath !== undefined || workspaceSlug !== undefined || workspaceId !== undefined)
 
+  // 输入框 Markdown 渲染开关：关闭后为纯文本模式（禁用格式化扩展 + 粘贴跳过 HTML 解析），Mention 仍保留
+  const richTextEnabled = useAtomValue(richTextRenderingEnabledAtom)
+  const richTextEnabledRef = useRef(richTextEnabled)
+  richTextEnabledRef.current = richTextEnabled
+
   // Mention Suggestion 配置（稳定引用，不随 workspacePath 变化重建）
   const mentionSuggestion = useMemo(
     () => createFileMentionSuggestion(workspacePathRef, mentionActiveRef, attachedDirsRef, mentionItemCountRef, sessionAttachedDirsRef),
@@ -232,28 +240,44 @@ export function RichTextInput({
         // 禁用内置版本，使用下面单独配置的版本
         link: false,
         underline: false,
+        // 纯文本模式：禁用所有格式化扩展，仅保留 Document/Paragraph/Text/HardBreak/History
+        ...(richTextEnabled ? {} : {
+          blockquote: false,
+          bold: false,
+          bulletList: false,
+          code: false,
+          heading: false,
+          horizontalRule: false,
+          italic: false,
+          orderedList: false,
+          strike: false,
+        }),
       }),
-      Underline,
-      Link.configure({
-        openOnClick: false,
-        autolink: false,
-        linkOnPaste: false,
-        HTMLAttributes: {
-          class: 'text-primary underline',
-        },
-      }),
-      CodeBlockLowlight.configure({
-        lowlight,
-        HTMLAttributes: {
-          class: 'rounded-md p-3 font-mono text-sm',
-        },
-      }),
+      // 富文本模式下注册格式化扩展；纯文本模式下跳过
+      ...(richTextEnabled ? [
+        Underline,
+        Link.configure({
+          openOnClick: false,
+          autolink: false,
+          linkOnPaste: false,
+          HTMLAttributes: {
+            class: 'text-primary underline',
+          },
+        }),
+        CodeBlockLowlight.configure({
+          lowlight,
+          HTMLAttributes: {
+            class: 'rounded-md p-3 font-mono text-sm',
+          },
+        }),
+      ] : []),
       Placeholder.configure({
         placeholder,
         emptyEditorClass: 'is-editor-empty',
       }),
       // Mention 扩展：启用时注册，路径/slug 后续通过 ref 异步更新
       // @ 引用文件、/ 触发 Skill、# 触发 MCP
+      // 纯文本模式下仍然保留，确保引用功能可用
       ...(hasMentionSupport ? [
         Mention.extend({
           addAttributes() {
@@ -333,7 +357,7 @@ export function RichTextInput({
           const fragment = range.cloneContents()
           const tempDiv = document.createElement('div')
           tempDiv.appendChild(fragment)
-          const text = htmlToMarkdown(tempDiv.innerHTML) || selection.toString()
+          const text = htmlToMarkdown(tempDiv.innerHTML, { skipMarkdownEscape: !richTextEnabledRef.current }) || selection.toString()
           event.preventDefault()
           event.clipboardData.setData('text/plain', text)
           event.clipboardData.setData('text/html', '')
@@ -351,6 +375,25 @@ export function RichTextInput({
 
         const threshold = longTextPasteThresholdRef.current
         const plainText = event.clipboardData?.getData('text/plain') ?? ''
+
+        // 纯文本模式：直接插入原始文本，不经过 HTML 解析
+        if (!richTextEnabledRef.current) {
+          // 超长文本转附件逻辑仍然生效（按纯文本长度判断）
+          if (
+            threshold &&
+            threshold > 0 &&
+            plainText.length >= threshold &&
+            onPasteLongTextRef.current
+          ) {
+            event.preventDefault()
+            onPasteLongTextRef.current(plainText)
+            return true
+          }
+          event.preventDefault()
+          view.dispatch(view.state.tr.insertText(plainText))
+          return true
+        }
+
         const html = event.clipboardData?.getData('text/html') ?? ''
         // 预处理 HTML：将 <div> 替换为 <p>，避免 htmlToMarkdown 对 <div> 不分段导致换行丢失
         const text = html
@@ -361,9 +404,12 @@ export function RichTextInput({
             ).trim() || plainText)
           : plainText
         if (
-          threshold &&
-          threshold > 0 &&
-          (plainText.length >= threshold || text.length >= threshold) &&
+          shouldConvertClipboardTextToAttachment({
+            enabled: Boolean(threshold && onPasteLongTextRef.current),
+            plainText,
+            normalizedText: text,
+            threshold: threshold ?? 0,
+          }) &&
           onPasteLongTextRef.current
         ) {
           event.preventDefault()
@@ -374,18 +420,21 @@ export function RichTextInput({
       },
       handleKeyDown: (view, event) => {
         // macOS 上 Cmd+B/S 被全局快捷键占用，用 Ctrl+B/S 作为格式化替代键
-        const isMacOS = navigator.platform.startsWith('Mac')
-        if (isMacOS && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
-          const key = event.key.toLowerCase()
-          if (key === 'b') {
-            event.preventDefault()
-            editor?.chain().focus().toggleBold().run()
-            return true
-          }
-          if (key === 's') {
-            event.preventDefault()
-            editor?.chain().focus().toggleStrike().run()
-            return true
+        // 纯文本模式下跳过，避免无效操作且不吃事件
+        if (richTextEnabledRef.current) {
+          const isMacOS = navigator.platform.startsWith('Mac')
+          if (isMacOS && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+            const key = event.key.toLowerCase()
+            if (key === 'b') {
+              event.preventDefault()
+              editor?.chain().focus().toggleBold().run()
+              return true
+            }
+            if (key === 's') {
+              event.preventDefault()
+              editor?.chain().focus().toggleStrike().run()
+              return true
+            }
           }
         }
 
@@ -408,8 +457,13 @@ export function RichTextInput({
             return false
           }
 
-          // Mention 列表打开且有可选项时，让 TipTap Mention 处理 Enter
-          if (mentionActiveRef.current && mentionItemCountRef.current > 0) {
+          // Suggestion（@ 文件 / / Skill / # MCP / & 会话）弹窗激活时，让 TipTap Suggestion
+          // 插件处理 Enter（选中高亮项 / 关闭）。这里用实时 decoration 判定，而非 onStart 里
+          // 异步设置的 mentionActiveRef/mentionItemCountRef——后者要等 items() 异步加载
+          // （IPC 拉取工作区能力）resolve 后才置位，存在竞态窗口：插件已 active、补全列表
+          // 正在加载时按 Enter，旧逻辑会误判为无 mention 激活而把消息直接发送出去。
+          // data-decoration-id 由 @tiptap/suggestion 在 active 时同步渲染，与插件状态严格一致。
+          if (view.dom.querySelector('[data-decoration-id]')) {
             return false
           }
 
@@ -422,7 +476,7 @@ export function RichTextInput({
             return true
           }
 
-          // 换行：列表内延续列表项，其他场景插入硬换行（紧凑行距）
+          // 换行：普通段落中 Shift+Enter 插入硬换行；列表项内使用拆分列表项生成下一条。
           event.preventDefault()
           // 检查是否在列表项内（遍历祖先节点）
           let isInList = false
@@ -439,10 +493,17 @@ export function RichTextInput({
             if (listItemNode && listItemNode.textContent === '') {
               editor.chain().focus().liftListItem('listItem').run()
             } else {
+              // 发送模式下 Enter 会提交消息，因此 Shift+Enter 也应作为列表续项键。
               editor.chain().focus().splitListItem('listItem').run()
             }
           } else if (editor) {
-            editor.chain().focus().splitBlock().run()
+            if (hasShift) {
+              // Shift+Enter：同段落内硬换行
+              editor.chain().focus().setHardBreak().run()
+            } else {
+              // 普通 Enter：拆分为新段落
+              editor.chain().focus().splitBlock().run()
+            }
           }
           return true
         }
@@ -482,7 +543,7 @@ export function RichTextInput({
         }
         setIsManuallyCollapsed(false)
       } else {
-        const markdown = htmlToMarkdown(html)
+        const markdown = htmlToMarkdown(html, { skipMarkdownEscape: !richTextEnabled })
         lastEditorValueRef.current = markdown
         onChange(markdown)
         onHtmlChangeRef.current?.(html)
@@ -502,7 +563,7 @@ export function RichTextInput({
         })
       }
     },
-  })
+  }, [richTextEnabled])
 
   // 卸载时取消未触发的 rAF 行数检查，避免泄漏 / 在卸载组件上 setState
   useEffect(() => {
@@ -514,12 +575,17 @@ export function RichTextInput({
     }
   }, [])
 
+  // 追踪编辑器实例，重建时强制同步（避免 htmlValue 草稿丢失）
+  const editorInstanceRef = useRef(editor)
   // 同步外部 value 变化（清空时）
   useEffect(() => {
     if (editor) {
       const controllerValue = value
+      const isEditorRecreated = editor !== editorInstanceRef.current
+      editorInstanceRef.current = editor
       // 如果值是编辑器自己设置的，跳过同步
-      if (controllerValue === lastEditorValueRef.current) {
+      // 但编辑器重建后必须强制同步（即使 value 未变，htmlValue 草稿可能不同）
+      if (!isEditorRecreated && controllerValue === lastEditorValueRef.current) {
         return
       }
 
