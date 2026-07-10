@@ -1,4 +1,4 @@
-import type { AgentPlanModeChangeSource } from '@proma/shared'
+import type { AgentPlanModeChangeSource } from '@profer/shared'
 
 export interface PlanModeChange {
   active: boolean

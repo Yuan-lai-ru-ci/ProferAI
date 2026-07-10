@@ -11,7 +11,7 @@
  *
  * 本模块根据模型 ID 推断思考协议，供适配器构造请求体时分支使用。
  */
-import type { ProviderType } from '@proma/shared'
+import type { ProviderType } from '@profer/shared'
 
 /** 思考协议能力 */
 export type ThinkingMode =

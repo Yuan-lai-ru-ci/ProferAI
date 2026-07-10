@@ -9,7 +9,7 @@
  */
 
 import { atom } from 'jotai'
-import { deriveGraph, type TaskGraph, type GraphSummary, generateSummary } from '@proma/project-core'
+import { deriveGraph, type TaskGraph, type GraphSummary, generateSummary } from '@profer/project-core'
 import { agentStreamingStatesAtom, type ToolActivity } from './agent-atoms'
 import { currentAgentSessionIdAtom } from './agent-atoms'
 import { aggregateTaskItems } from '@/components/agent/task-progress'

@@ -9,7 +9,7 @@ import type {
   FeishuBridgeState,
   FeishuChatBinding,
   FeishuBotBridgeState,
-} from '@proma/shared'
+} from '@profer/shared'
 
 /** 多 Bot Bridge 状态（botId → 状态） */
 export const feishuBotStatesAtom = atom<Record<string, FeishuBotBridgeState>>({})

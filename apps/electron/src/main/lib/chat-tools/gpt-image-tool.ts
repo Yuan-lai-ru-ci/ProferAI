@@ -6,8 +6,8 @@
  * 凭据存储在 ~/.proma/chat-tools.json 的 toolCredentials 中。
  */
 
-import type { ToolCall, ToolResult, ToolDefinition } from '@proma/core'
-import type { ChatToolMeta, FileAttachment } from '@proma/shared'
+import type { ToolCall, ToolResult, ToolDefinition } from '@profer/core'
+import type { ChatToolMeta, FileAttachment } from '@profer/shared'
 import { randomUUID } from 'node:crypto'
 import { getToolCredentials } from '../chat-tool-config'
 import { saveAttachment, readAttachmentAsBase64, isImageAttachment } from '../attachment-service'

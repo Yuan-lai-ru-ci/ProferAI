@@ -1,6 +1,6 @@
-import type { Channel, ChannelsConfig, ProviderType } from '@proma/shared'
-import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, isAgentCompatibleProvider } from '@proma/shared'
-import { normalizeBaseUrl } from '@proma/core'
+import type { Channel, ChannelsConfig, ProviderType } from '@profer/shared'
+import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, isAgentCompatibleProvider } from '@profer/shared'
+import { normalizeBaseUrl } from '@profer/core'
 
 function hasAnthropicPath(baseUrl?: string): boolean {
   if (!baseUrl) return false

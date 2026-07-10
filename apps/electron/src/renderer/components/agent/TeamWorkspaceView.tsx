@@ -36,7 +36,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { WindowControls } from '@/components/WindowControls'
 import { cn } from '@/lib/utils'
 import { detectIsWindows } from '@/lib/platform'
-import type { AgentPendingFile, FileEntry } from '@proma/shared'
+import type { AgentPendingFile, FileEntry } from '@profer/shared'
 
 function getMediaTypeFromFilename(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase()

@@ -1,11 +1,11 @@
 /**
- * @proma/session-core — Proma 会话读取 / 快照去重 / 转录 / 渲染的 headless 核心。
+ * @profer/session-core — Proma 会话读取 / 快照去重 / 转录 / 渲染的 headless 核心。
  *
  * 唯一真源：Electron 主进程、proma CLI、未来的 query 型接口共用本包，
  * 避免在仓库外侧重抄一份会随存储格式漂移的解析器。
  *
  * 本主入口（'.'）**全部为纯函数，浏览器安全**，可被 Electron 渲染层直接 import。
- * 涉及文件 IO（node:fs）的 readSessionMessages 在子入口 '@proma/session-core/node'，
+ * 涉及文件 IO（node:fs）的 readSessionMessages 在子入口 '@profer/session-core/node'，
  * 仅供 Node 侧（proma CLI / 主进程）使用，避免 Vite 把 node:fs 打进渲染层 bundle。
  */
 

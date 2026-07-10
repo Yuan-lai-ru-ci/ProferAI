@@ -5,7 +5,7 @@
  * 带 5 分钟缓存和内置 fallback——断网或接口不可用时至少能拿到官方上游 URL。
  */
 
-import type { InstallerManifest, InstallerSource } from '@proma/shared'
+import type { InstallerManifest, InstallerSource } from '@profer/shared'
 
 const PROMA_API_BASE = 'https://api.proma.cool'
 const MANIFEST_URL = `${PROMA_API_BASE}/api/v1/installers/manifest`

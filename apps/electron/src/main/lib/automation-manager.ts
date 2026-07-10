@@ -18,7 +18,7 @@ import {
   type AutomationRun,
   type CreateAutomationInput,
   type UpdateAutomationInput,
-} from '@proma/shared'
+} from '@profer/shared'
 
 /** 索引文件格式 */
 interface AutomationsIndex {

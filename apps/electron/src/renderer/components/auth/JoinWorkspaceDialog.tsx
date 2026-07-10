@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
-import type { WorkspaceRole } from '@proma/shared'
+import type { WorkspaceRole } from '@profer/shared'
 
 interface JoinWorkspaceDialogProps {
   open: boolean

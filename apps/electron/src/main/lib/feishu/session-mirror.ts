@@ -2,7 +2,7 @@ import type {
   AgentSessionMeta,
   FeishuBotConfig,
   FeishuSessionMirrorSettings,
-} from '@proma/shared'
+} from '@profer/shared'
 
 export const DEFAULT_FEISHU_SESSION_MIRROR: FeishuSessionMirrorSettings = { mode: 'off' }
 

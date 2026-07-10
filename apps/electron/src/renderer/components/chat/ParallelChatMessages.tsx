@@ -30,7 +30,7 @@ import {
 } from '@/components/ai-elements/reasoning'
 import { streamingModelAtom, channelsAtom } from '@/atoms/chat-atoms'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
-import type { ChatMessage } from '@proma/shared'
+import type { ChatMessage } from '@profer/shared'
 
 /** 消息段落（按分隔线分割） */
 interface MessageSegment {

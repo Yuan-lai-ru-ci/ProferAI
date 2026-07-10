@@ -5,7 +5,7 @@
  */
 import { getAgentSessionSDKMessages, getAgentSessionMeta } from './agent-session-manager'
 import { getConfigDirName } from './config-paths'
-import type { SDKMessage, AgentSessionMeta } from '@proma/shared'
+import type { SDKMessage, AgentSessionMeta } from '@profer/shared'
 
 /** 最大回填消息条数 */
 export const MAX_CONTEXT_MESSAGES = 20

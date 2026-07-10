@@ -2,7 +2,7 @@
  * 文件处理工具函数
  */
 
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
 
 export function formatFileNames(names: string[], max = 3): string {
   if (names.length <= max) return names.join('、')

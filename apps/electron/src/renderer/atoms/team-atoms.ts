@@ -6,7 +6,7 @@
  */
 
 import { atom } from 'jotai'
-import type { AgentWorkspace } from '@proma/shared'
+import type { AgentWorkspace } from '@profer/shared'
 
 /** 团队工作区列表 */
 export const teamWorkspacesAtom = atom<AgentWorkspace[]>([])

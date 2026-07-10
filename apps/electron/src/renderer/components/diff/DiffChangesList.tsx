@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { agentDiffUnseenFilesAtom, agentDiffDataAtom, agentSelectedWorktreeAtom } from '@/atoms/agent-atoms'
-import type { ChangedFileEntry, ChangeSource, UntrackedFileEntry, WorktreeInfo } from '@proma/shared'
+import type { ChangedFileEntry, ChangeSource, UntrackedFileEntry, WorktreeInfo } from '@profer/shared'
 import { WorktreeSelector } from './WorktreeSelector'
 
 /** 按目录分组后的数据结构 */

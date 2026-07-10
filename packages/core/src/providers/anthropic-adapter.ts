@@ -23,7 +23,7 @@
  * - UA 格式：`Proma/<version> (+https://github.com/Yuan-lai-ru-ci/Profer)`（产品名保持 Proma 兼容渠道白名单）
  */
 
-import type { ProviderType } from '@proma/shared'
+import type { ProviderType } from '@profer/shared'
 import type {
   ProviderAdapter,
   ProviderRequest,

@@ -1,5 +1,5 @@
 {
-  "name": "@proma/project-core",
+  "name": "@profer/project-core",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "description": "Headless core for Agent project orchestration — Graph construction, state replay, and query. Shared by the Electron app, CLI and future query surfaces.",
@@ -14,7 +14,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@proma/shared": "workspace:*"
+    "@profer/shared": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

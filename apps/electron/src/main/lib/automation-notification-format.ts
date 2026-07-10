@@ -8,7 +8,7 @@ import type {
   AutomationRun,
   SDKAssistantMessage,
   SDKMessage,
-} from '@proma/shared'
+} from '@profer/shared'
 
 interface AutomationNotificationCardPayload {
   automation: Automation

@@ -3,7 +3,7 @@
  *
  * 从 feishu-bridge.ts 提取的群聊相关纯函数和工具方法。
  */
-import type { FeishuMention, FeishuGroupInfo, FeishuGroupMember } from '@proma/shared'
+import type { FeishuMention, FeishuGroupInfo, FeishuGroupMember } from '@profer/shared'
 
 /** 群聊信息缓存 TTL（1 小时） */
 export const GROUP_CACHE_TTL = 3_600_000

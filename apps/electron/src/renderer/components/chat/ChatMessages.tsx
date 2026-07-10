@@ -42,14 +42,14 @@ import {
   ReasoningTrigger,
   ReasoningContent,
 } from '@/components/ai-elements/reasoning'
-import { useSmoothStream } from '@proma/ui'
+import { useSmoothStream } from '@profer/ui'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { useConversationParallelMode } from '@/hooks/useConversationSettings'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
-import type { ChatMessage, ChatToolActivity } from '@proma/shared'
+import type { ChatMessage, ChatToolActivity } from '@profer/shared'
 
 // ===== 滚动到顶部加载更多 =====
 

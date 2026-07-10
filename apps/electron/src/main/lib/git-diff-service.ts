@@ -8,9 +8,9 @@
 import { spawn } from 'child_process'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
-import type { ChangedFileEntry, UnstagedChangesResult, UntrackedFileEntry } from '@proma/shared'
-import { normalizePathForCompare } from '@proma/shared'
-import type { ChangeSource, ChangedFileStatus } from '@proma/shared'
+import type { ChangedFileEntry, UnstagedChangesResult, UntrackedFileEntry } from '@profer/shared'
+import { normalizePathForCompare } from '@profer/shared'
+import type { ChangeSource, ChangedFileStatus } from '@profer/shared'
 
 /** 大文件读取上限：超过则跳过，避免 IPC 序列化撑爆内存 */
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
@@ -569,7 +569,7 @@ export async function getMainRepoRoot(somePath: string): Promise<string | null> 
 /**
  * 列出指定仓库的所有 Git Worktree
  */
-export async function listWorktrees(repoPath: string): Promise<import('@proma/shared').WorktreeInfo[]> {
+export async function listWorktrees(repoPath: string): Promise<import('@profer/shared').WorktreeInfo[]> {
   const root = await findGitRoot(repoPath)
   if (!root) return []
   const output = await runGitCommand(['worktree', 'list', '--porcelain'], root, { quiet: true })
@@ -577,7 +577,7 @@ export async function listWorktrees(repoPath: string): Promise<import('@proma/sh
   const mainRepoRoot = await getMainRepoRoot(root)
   const normalizedMainRoot = mainRepoRoot ? normalizeGitRoot(mainRepoRoot) : normalizeGitRoot(root)
 
-  const worktrees: import('@proma/shared').WorktreeInfo[] = []
+  const worktrees: import('@profer/shared').WorktreeInfo[] = []
   const blocks = output.split('\n\n').filter(Boolean)
 
   for (const block of blocks) {
@@ -622,7 +622,7 @@ export async function listWorktrees(repoPath: string): Promise<import('@proma/sh
 export async function getWorktreeChanges(
   worktreePath: string,
   baseBranch: string = 'origin/main',
-): Promise<import('@proma/shared').UnstagedChangesResult> {
+): Promise<import('@profer/shared').UnstagedChangesResult> {
   if (!existsSync(worktreePath)) {
     return { isGitRepo: false, files: [], untrackedFiles: [], gitRootNames: [] }
   }
@@ -637,8 +637,8 @@ export async function getWorktreeChanges(
   }
 
   const gitRoot = normalizeGitRoot(toplevel)
-  const allFiles: import('@proma/shared').ChangedFileEntry[] = []
-  const fileMap = new Map<string, import('@proma/shared').ChangedFileEntry>()
+  const allFiles: import('@profer/shared').ChangedFileEntry[] = []
+  const fileMap = new Map<string, import('@profer/shared').ChangedFileEntry>()
 
   // 1. 已 commit 但未合并的改动: git diff baseBranch...HEAD
   const committedStatus = await runGitCommand(['diff', `${baseBranch}...HEAD`, '--name-status'], gitRoot)
@@ -650,7 +650,7 @@ export async function getWorktreeChanges(
       const simpleMatch = line.match(/^([MDAT])\t(.+)$/)
       const renameMatch = line.match(/^([RC])\d*\t([^\t]+)\t(.+)$/)
 
-      let status: import('@proma/shared').ChangedFileStatus
+      let status: import('@profer/shared').ChangedFileStatus
       let filePath: string
 
       if (simpleMatch) {
@@ -665,7 +665,7 @@ export async function getWorktreeChanges(
       }
 
       const stats = committedStats.get(filePath) ?? { additions: 0, deletions: 0 }
-      const entry: import('@proma/shared').ChangedFileEntry = {
+      const entry: import('@profer/shared').ChangedFileEntry = {
         filePath,
         status,
         additions: stats.additions,
@@ -687,7 +687,7 @@ export async function getWorktreeChanges(
       const simpleMatch = line.match(/^([MDAT])\t(.+)$/)
       const renameMatch = line.match(/^([RC])\d*\t([^\t]+)\t(.+)$/)
 
-      let status: import('@proma/shared').ChangedFileStatus
+      let status: import('@profer/shared').ChangedFileStatus
       let filePath: string
 
       if (simpleMatch) {
@@ -722,7 +722,7 @@ export async function getWorktreeChanges(
   allFiles.push(...fileMap.values())
 
   // 3. 新文件（未追踪）
-  const untrackedFiles: import('@proma/shared').UntrackedFileEntry[] = []
+  const untrackedFiles: import('@profer/shared').UntrackedFileEntry[] = []
   const untrackedOutput = await runGitCommand(['ls-files', '--others', '--exclude-standard'], gitRoot)
   if (untrackedOutput) {
     for (const rel of untrackedOutput.split('\n').filter(Boolean)) {

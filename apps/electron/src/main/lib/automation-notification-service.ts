@@ -7,7 +7,7 @@
 import type {
   Automation,
   AutomationRun,
-} from '@proma/shared'
+} from '@profer/shared'
 import { getAgentSessionSDKMessages } from './agent-session-manager'
 import { feishuBridgeManager } from './feishu-bridge-manager'
 import {

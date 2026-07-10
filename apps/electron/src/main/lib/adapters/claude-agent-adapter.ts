@@ -18,13 +18,13 @@ import type {
   JsonSchemaOutputFormat,
   SDKMessage,
   PromaPermissionMode,
-} from '@proma/shared'
+} from '@profer/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   isThinkingSignatureError as matchesThinkingSignatureError,
-} from '@proma/shared'
-import { detectInsufficientCredits } from '@proma/core'
+} from '@profer/shared'
+import { detectInsufficientCredits } from '@profer/core'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'

@@ -1,5 +1,5 @@
 {
-  "name": "@proma/core",
+  "name": "@profer/core",
   "version": "0.2.12",
   "license": "AGPL-3.0-only",
   "description": "proma core types,storage and core logic with agents",
@@ -14,7 +14,7 @@
     "./highlight": "./src/highlight/index.ts"
   },
   "dependencies": {
-    "@proma/shared": "workspace:*",
+    "@profer/shared": "workspace:*",
     "highlight.js": "^11.11.1",
     "shiki": "^3.22.0"
   },

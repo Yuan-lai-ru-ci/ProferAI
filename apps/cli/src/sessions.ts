@@ -6,7 +6,7 @@
  * 不写索引（导出/清洗不修改用户数据）。
  */
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import type { AgentSessionMeta } from '@proma/shared'
+import type { AgentSessionMeta } from '@profer/shared'
 import { getSessionsIndexPath, getSessionMessagesPath, type PathOptions } from './paths'
 
 interface AgentSessionsIndex {

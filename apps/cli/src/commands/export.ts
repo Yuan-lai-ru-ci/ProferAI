@@ -13,8 +13,8 @@ import { dirname } from 'node:path'
 import { register } from '../registry'
 import { resolveSession } from '../sessions'
 import { emitJson, emitText, errorLine, info, EXIT_OK, EXIT_ERROR, UsageError } from '../output'
-import { readSessionMessages } from '@proma/session-core/node'
-import { groupIntoTurns, toTranscript, selectTurns, renderTranscriptMarkdown } from '@proma/session-core'
+import { readSessionMessages } from '@profer/session-core/node'
+import { groupIntoTurns, toTranscript, selectTurns, renderTranscriptMarkdown } from '@profer/session-core'
 import { numFlag, strFlag, boolFlag, parseRange } from '../args'
 
 const DEFAULT_MAX_BYTES = 51200 // 50KB

@@ -26,8 +26,8 @@ import type {
   AgentSessionMeta,
   SDKAssistantMessage,
   SDKUserMessage,
-} from '@proma/shared'
-import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@proma/shared'
+} from '@profer/shared'
+import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@profer/shared'
 import { getDecryptedBotAppSecret } from './feishu-config'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'

@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 import { FileTypeIcon } from './FileTypeIcon'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { fileBrowserAutoRevealAtom } from '@/atoms/agent-atoms'
-import type { FileIndexEntry } from '@proma/shared'
+import type { FileIndexEntry } from '@profer/shared'
 
 interface FileSearchBarProps {
   workspaceFilesPath: string | null

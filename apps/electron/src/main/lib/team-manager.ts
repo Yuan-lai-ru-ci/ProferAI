@@ -11,7 +11,7 @@ import { getTeamAuth, refreshAuthToken } from './auth-service'
 import { readIndex, writeIndex, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath } from './config-paths'
 import { enqueueChange } from './sync-manager'
-import type { AgentWorkspace, WorkspaceRole } from '@proma/shared'
+import type { AgentWorkspace, WorkspaceRole } from '@profer/shared'
 
 /** 带认证的 fetch 封装（token 过期自动刷新重试） */
 async function authedFetch(

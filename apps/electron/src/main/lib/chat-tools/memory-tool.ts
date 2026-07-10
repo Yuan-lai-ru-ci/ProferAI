@@ -5,8 +5,8 @@
  * 凭据通过 getMemoryConfig() 从 memory.json 读取（Chat + Agent 共用）。
  */
 
-import type { ToolCall, ToolResult, ToolDefinition } from '@proma/core'
-import type { ChatToolMeta } from '@proma/shared'
+import type { ToolCall, ToolResult, ToolDefinition } from '@profer/core'
+import type { ChatToolMeta } from '@profer/shared'
 import { getMemoryConfig } from '../memory-service'
 import { searchMemory, addMemory, formatSearchResult } from '../memos-client'
 

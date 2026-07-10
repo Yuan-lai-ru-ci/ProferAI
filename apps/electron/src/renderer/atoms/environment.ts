@@ -9,7 +9,7 @@ import type {
   EnvironmentCheckResult,
   RuntimeStatus,
   InstallerManifest,
-} from '@proma/shared'
+} from '@profer/shared'
 
 /**
  * 单个安装包的下载状态

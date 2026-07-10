@@ -3,8 +3,8 @@
  *
  * 从 agent-orchestrator.ts 提取的纯函数，用于自动重试决策和延迟计算。
  */
-import type { TypedError, PromaPermissionMode } from '@proma/shared'
-import { PROMA_PERMISSION_MODE_CONFIG } from '@proma/shared'
+import type { TypedError, PromaPermissionMode } from '@profer/shared'
+import { PROMA_PERMISSION_MODE_CONFIG } from '@profer/shared'
 import { isTransientNetworkError, isMalformedResponseError } from './error-patterns'
 
 /** 可自动重试的 TypedError 错误码 */

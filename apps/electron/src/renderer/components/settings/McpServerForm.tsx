@@ -10,7 +10,7 @@ import { ArrowLeft, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-r
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { McpServerEntry, McpTransportType, WorkspaceMcpConfig } from '@proma/shared'
+import type { McpServerEntry, McpTransportType, WorkspaceMcpConfig } from '@profer/shared'
 import {
   SettingsSection,
   SettingsCard,

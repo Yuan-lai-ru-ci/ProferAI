@@ -14,7 +14,7 @@ import {
   MAX_AUTO_RETRY_WAIT_MS,
   RETRY_MAX_DELAY_MS,
 } from './agent-retry-utils'
-import type { TypedError } from '@proma/shared'
+import type { TypedError } from '@profer/shared'
 
 function typedError(code: TypedError['code'], message = ''): TypedError {
   return {
@@ -150,12 +150,12 @@ describe('getRetryDelayMs', () => {
 })
 
 describe('sdkPermissionModeForPromaMode', () => {
-  test('返回对应 SDK 权限模式（如果 @proma/shared 常量可用）', () => {
+  test('返回对应 SDK 权限模式（如果 @profer/shared 常量可用）', () => {
     try {
       const result = sdkPermissionModeForPromaMode('auto')
       expect(typeof result).toBe('string')
     } catch {
-      // @proma/shared 常量在独立测试中可能不可用，跳过
+      // @profer/shared 常量在独立测试中可能不可用，跳过
     }
   })
 })

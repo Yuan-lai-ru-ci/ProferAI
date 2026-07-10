@@ -15,7 +15,7 @@ import { settingsTabAtom } from '@/atoms/settings-tab'
 import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
 import { agentEffortAtom } from '@/atoms/agent-atoms'
 import { SettingsSection, SettingsCard, SettingsSegmentedControl } from './primitives'
-import type { AgentEffort } from '@proma/shared'
+import type { AgentEffort } from '@profer/shared'
 
 const EFFORT_OPTIONS: { value: AgentEffort; label: string }[] = [
   { value: 'low', label: '低' },

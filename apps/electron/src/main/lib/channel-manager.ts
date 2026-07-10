@@ -20,11 +20,11 @@ import type {
   FetchModelsInput,
   FetchModelsResult,
   ProviderType,
-} from '@proma/shared'
-import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS } from '@proma/shared'
+} from '@profer/shared'
+import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@proma/core'
+import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@profer/core'
 import { isCommercialBuild } from './build-target'
 import {
   inferAgentBaseUrl,
@@ -198,7 +198,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
         // 静默跳过
       } else {
         const agentCapableChannels = config.channels.filter((c) => {
-          const { isAgentCompatibleProvider } = require('@proma/shared')
+          const { isAgentCompatibleProvider } = require('@profer/shared')
           return isAgentCompatibleProvider(c.provider)
         })
         const agentIds = agentCapableChannels.map((c) => c.id)

@@ -14,7 +14,7 @@ import {
   currentAgentWorkspaceIdAtom,
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
-import type { SkillMeta, WorkspaceMcpConfig } from '@proma/shared'
+import type { SkillMeta, WorkspaceMcpConfig } from '@profer/shared'
 
 export interface AgentSkillsData {
   /** 当前工作区（未选中时为 null） */

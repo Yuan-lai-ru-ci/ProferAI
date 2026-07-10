@@ -11,13 +11,13 @@ import { getSystemPromptsPath } from './config-paths'
 import {
   BUILTIN_DEFAULT_ID,
   BUILTIN_DEFAULT_PROMPT,
-} from '@proma/shared'
+} from '@profer/shared'
 import type {
   SystemPrompt,
   SystemPromptConfig,
   SystemPromptCreateInput,
   SystemPromptUpdateInput,
-} from '@proma/shared'
+} from '@profer/shared'
 
 /** 默认配置 */
 function getDefaultConfig(): SystemPromptConfig {

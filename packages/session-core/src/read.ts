@@ -11,9 +11,9 @@
  *
  * 注意：本文件刻意不 import 'node:fs'，以便被 Electron 渲染层（浏览器环境）
  * 经主 barrel 引入。需要从磁盘读取的 readSessionMessages 在 './read-fs' 中，
- * 仅通过 '@proma/session-core/node' 子路径暴露给 Node 侧（CLI / 主进程）。
+ * 仅通过 '@profer/session-core/node' 子路径暴露给 Node 侧（CLI / 主进程）。
  */
-import type { AgentMessage, SDKMessage } from '@proma/shared'
+import type { AgentMessage, SDKMessage } from '@profer/shared'
 
 /**
  * 将旧的 AgentMessage 转换为近似的 SDKMessage（向后兼容）。

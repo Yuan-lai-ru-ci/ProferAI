@@ -10,7 +10,7 @@
 
 import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import type { McpServerEntry } from '@proma/shared'
+import type { McpServerEntry } from '@profer/shared'
 
 /**
  * MCP 验证结果

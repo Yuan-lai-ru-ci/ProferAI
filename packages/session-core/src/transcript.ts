@@ -6,7 +6,7 @@
  * （每行共享同一 message.id，是逐步增长的完整快照）。本层按 message.id 取最后一条
  * （最完整）快照来消除「拼接单字 / 重复段落」，这是会话「快照去重」的落地实现。
  */
-import type { SDKAssistantMessage, SDKContentBlock, SDKToolUseBlock } from '@proma/shared'
+import type { SDKAssistantMessage, SDKContentBlock, SDKToolUseBlock } from '@profer/shared'
 import { type MessageGroup, extractUserText, getGroupPreview, stripScheduledRunMarker } from './group'
 import { estimateTokens } from './tokens'
 

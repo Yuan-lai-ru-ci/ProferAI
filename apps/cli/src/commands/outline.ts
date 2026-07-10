@@ -5,8 +5,8 @@
 import { register } from '../registry'
 import { resolveSession } from '../sessions'
 import { emitJson, emitText, errorLine, EXIT_OK, EXIT_ERROR, UsageError } from '../output'
-import { readSessionMessages } from '@proma/session-core/node'
-import { groupIntoTurns, toTranscript, outline, formatOutlineLine, selectTurns } from '@proma/session-core'
+import { readSessionMessages } from '@profer/session-core/node'
+import { groupIntoTurns, toTranscript, outline, formatOutlineLine, selectTurns } from '@profer/session-core'
 import { numFlag } from '../args'
 
 register({

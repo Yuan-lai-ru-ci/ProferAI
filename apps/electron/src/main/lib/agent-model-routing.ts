@@ -1,4 +1,4 @@
-import type { ProviderType } from '@proma/shared'
+import type { ProviderType } from '@profer/shared'
 
 export const DEEPSEEK_SUBAGENT_MODEL_ID = 'deepseek-v4-flash'
 export interface AgentModelRoutingInput {

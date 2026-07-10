@@ -23,14 +23,14 @@
       },
     },
     "apps/cli": {
-      "name": "@proma/cli",
+      "name": "@profer/cli",
       "version": "0.1.0",
       "bin": {
         "proma": "./src/index.ts",
       },
       "dependencies": {
-        "@proma/session-core": "workspace:*",
-        "@proma/shared": "workspace:*",
+        "@profer/session-core": "workspace:*",
+        "@profer/shared": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^5.0.0",
@@ -38,7 +38,7 @@
     },
     "apps/electron": {
       "name": "@proma/electron",
-      "version": "0.13.3",
+      "version": "0.13.4",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.201",
         "@anthropic-ai/sdk": "^0.93.0",
@@ -56,11 +56,11 @@
         "@emoji-mart/data": "^1.2.1",
         "@emoji-mart/react": "^1.1.1",
         "@larksuiteoapi/node-sdk": "^1.65.0",
-        "@proma/core": "workspace:*",
-        "@proma/project-core": "workspace:*",
-        "@proma/session-core": "workspace:*",
-        "@proma/shared": "workspace:*",
-        "@proma/ui": "workspace:*",
+        "@profer/core": "workspace:*",
+        "@profer/project-core": "workspace:*",
+        "@profer/session-core": "workspace:*",
+        "@profer/shared": "workspace:*",
+        "@profer/ui": "workspace:*",
         "@radix-ui/react-alert-dialog": "^1.1.15",
         "@radix-ui/react-collapsible": "^1.1.12",
         "@radix-ui/react-context-menu": "^2.2.16",
@@ -155,10 +155,10 @@
       },
     },
     "packages/core": {
-      "name": "@proma/core",
+      "name": "@profer/core",
       "version": "0.2.12",
       "dependencies": {
-        "@proma/shared": "workspace:*",
+        "@profer/shared": "workspace:*",
         "highlight.js": "^11.11.1",
         "shiki": "^3.22.0",
       },
@@ -173,37 +173,37 @@
       },
     },
     "packages/project-core": {
-      "name": "@proma/project-core",
+      "name": "@profer/project-core",
       "version": "0.1.0",
       "dependencies": {
-        "@proma/shared": "workspace:*",
+        "@profer/shared": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^5.0.0",
       },
     },
     "packages/session-core": {
-      "name": "@proma/session-core",
+      "name": "@profer/session-core",
       "version": "0.1.0",
       "dependencies": {
-        "@proma/shared": "workspace:*",
+        "@profer/shared": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^5.0.0",
       },
     },
     "packages/shared": {
-      "name": "@proma/shared",
+      "name": "@profer/shared",
       "version": "0.1.31",
       "devDependencies": {
         "typescript": "^5.0.0",
       },
     },
     "packages/ui": {
-      "name": "@proma/ui",
+      "name": "@profer/ui",
       "version": "0.1.9",
       "dependencies": {
-        "@proma/core": "workspace:*",
+        "@profer/core": "workspace:*",
         "beautiful-mermaid": "1.1.3",
         "mermaid": "11.15.0",
         "shiki": "^3.22.0",
@@ -451,19 +451,19 @@
 
     "@pkgjs/parseargs": ["@pkgjs/parseargs@0.11.0", "", {}, "sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg=="],
 
-    "@proma/cli": ["@proma/cli@workspace:apps/cli"],
+    "@profer/cli": ["@profer/cli@workspace:apps/cli"],
 
-    "@proma/core": ["@proma/core@workspace:packages/core"],
+    "@profer/core": ["@profer/core@workspace:packages/core"],
+
+    "@profer/project-core": ["@profer/project-core@workspace:packages/project-core"],
+
+    "@profer/session-core": ["@profer/session-core@workspace:packages/session-core"],
+
+    "@profer/shared": ["@profer/shared@workspace:packages/shared"],
+
+    "@profer/ui": ["@profer/ui@workspace:packages/ui"],
 
     "@proma/electron": ["@proma/electron@workspace:apps/electron"],
-
-    "@proma/project-core": ["@proma/project-core@workspace:packages/project-core"],
-
-    "@proma/session-core": ["@proma/session-core@workspace:packages/session-core"],
-
-    "@proma/shared": ["@proma/shared@workspace:packages/shared"],
-
-    "@proma/ui": ["@proma/ui@workspace:packages/ui"],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
 
@@ -1279,7 +1279,7 @@
 
     "end-of-stream": ["end-of-stream@1.4.5", "", { "dependencies": { "once": "^1.4.0" } }, "sha512-ooEGc6HP26xXq/N+GCGOT0JKCLDGrq2bQUZrQ7gyrJiZANJ/8YDTxTpQBXGMn+WbIQXNVpyWymm7KYVICQnyOg=="],
 
-    "entities": ["entities@4.5.0", "", {}, "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw=="],
+    "entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
 
     "env-paths": ["env-paths@2.2.1", "", {}, "sha512-+h1lkLKhZMTYjog1VEpJNG7NZJWcuc2DDk/qsqSTRRCOXiLjeQ1d1/udrUGhqMxUgAlwKNZ0cf2uqan5GLuS2A=="],
 
@@ -2493,8 +2493,6 @@
 
     "are-we-there-yet/readable-stream": ["readable-stream@3.6.2", "", { "dependencies": { "inherits": "^2.0.3", "string_decoder": "^1.1.1", "util-deprecate": "^1.0.1" } }, "sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA=="],
 
-    "beautiful-mermaid/entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
-
     "bl/readable-stream": ["readable-stream@3.6.2", "", { "dependencies": { "inherits": "^2.0.3", "string_decoder": "^1.1.1", "util-deprecate": "^1.0.1" } }, "sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA=="],
 
     "bluebird-lst/bluebird": ["bluebird@3.7.2", "", {}, "sha512-XpNj6GDQzdfW+r2Wnn7xiSAd7TM3jzkxGXBGTtWKuSXv1xUV+azxAm8jdWZN06QTQk+2N2XB9jRDkvbmQmcRtg=="],
@@ -2588,6 +2586,8 @@
     "make-fetch-happen/negotiator": ["negotiator@0.6.4", "", {}, "sha512-myRT3DiWPHqho5PrJaIRyaMv2kgYf0mUVgBNOYMuCH5Ki1yEiQaf/ZJuQ62nvpc44wL5WDbTX7yGJi1Neevw8w=="],
 
     "mammoth/argparse": ["argparse@1.0.10", "", { "dependencies": { "sprintf-js": "~1.0.2" } }, "sha512-o5Roy6tNG4SL/FOkCAN6RzjiakZS25RLYFrcMttJqbdd8BWrnA+fGz57iN5Pb06pvBGvl5gQ0B48dJlslXvoTg=="],
+
+    "markdown-it/entities": ["entities@4.5.0", "", {}, "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw=="],
 
     "mdast-util-find-and-replace/escape-string-regexp": ["escape-string-regexp@5.0.0", "", {}, "sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw=="],
 

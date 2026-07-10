@@ -4,7 +4,7 @@
  * 从 agent-orchestrator.ts 提取的纯函数，用于聚合 SDK 调用涉及的附加目录。
  */
 import { dirname } from 'node:path'
-import type { AgentSessionMeta } from '@proma/shared'
+import type { AgentSessionMeta } from '@profer/shared'
 import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getWorkspaceFilesDir } from './config-paths'
 

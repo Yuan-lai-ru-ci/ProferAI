@@ -4,7 +4,7 @@
  * 支持 macOS、Windows、Linux 三个平台的系统代理自动检测。
  */
 
-import type { SystemProxyDetectResult } from '@proma/shared'
+import type { SystemProxyDetectResult } from '@profer/shared'
 
 /**
  * 检测系统代理配置

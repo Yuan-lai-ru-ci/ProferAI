@@ -1,5 +1,5 @@
 /**
- * @proma/project-core — Agent 项目编排核心类型
+ * @profer/project-core — Agent 项目编排核心类型
  *
  * 定义 Project、Graph、Node、Edge 及其状态，
  * 是 project-core 包所有模块共享的类型基础。
