@@ -171,14 +171,18 @@ export function deriveGraph(items: TaskItemInput[]): TaskGraph {
 
   for (const item of items) {
     if (item.status === 'deleted' as never) continue
-    const dependsOn = parseDependsOn(item.subject)
-    const forkFrom = parseForkFrom(item.subject)
+    // 元标记优先从 description 解析（prompt 指示 AI 写入 description），
+    // 回退 subject 以兼容标记误写进标题的历史情况。
+    const desc = item.description ?? ''
+    const depFromDesc = parseDependsOn(desc)
+    const dependsOn = depFromDesc.length > 0 ? depFromDesc : parseDependsOn(item.subject)
+    const forkFrom = parseForkFrom(desc) ?? parseForkFrom(item.subject)
     const cleanSubject = stripMetaTags(item.subject)
 
     nodes[item.id] = {
       id: item.id,
       subject: cleanSubject || item.subject || item.id,
-      description: item.description || '',
+      description: stripMetaTags(desc),
       status: item.status as TaskStatus,
       dependsOn,
       dependedBy: [],

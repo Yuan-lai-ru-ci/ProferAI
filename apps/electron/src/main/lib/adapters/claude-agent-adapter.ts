@@ -575,6 +575,18 @@ const activeQueries = new Map<string, SDKQuery>()
 /** 活跃的消息通道映射（sessionId → channel），供后续消息注入 */
 const activeChannels = new Map<string, MessageChannel>()
 
+/**
+ * 排队消息计数器（sessionId → 已入 channel 但尚未被 SDK 消化为独立 turn 的消息数）。
+ *
+ * 每条 sendQueuedMessage 的消息入 channel 后 SDK 立即从 generator 拉取写入 CLI stdin，
+ * channel.hasPending() 永远为 false。此计数器独立追踪"发了多少条，还剩多少条没跑完"。
+ *
+ * 不变式：counter>0 ⇒ 至少还有一个未来 turn 待执行 ⇒ 当前 result 不得 close channel。
+ * 每次普通 result（非 continuable 暂停）且 counter>0 时 counter--。连续排队消息的最后一个
+ * result 会把 counter 降到 0，此时正常 teardown。
+ */
+const queuedFollowupCount = new Map<string, number>()
+
 /** Query 就绪 Promise（在 SDK init 完成前缓冲队列消息） */
 const queryReadyPromises = new Map<string, Promise<void>>()
 const queryReadyResolvers = new Map<string, () => void>()
@@ -661,6 +673,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     }
 
     activeChannels.delete(sessionId)
+    queuedFollowupCount.delete(sessionId)
 
     const controller = activeControllers.get(sessionId)
     if (controller) {
@@ -724,6 +737,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     activeChannels.clear()
     queryReadyPromises.clear()
     queryReadyResolvers.clear()
+    queuedFollowupCount.clear()
   }
 
   /**
@@ -750,6 +764,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     // 声明在 try 外，使 finally 也能 clearIdleTimer。
     let backgroundTasksPending = false
     let idleTimer: NodeJS.Timeout | null = null
+    let terminateAfterTerminalResult = false
     const clearIdleTimer = (): void => {
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
     }
@@ -912,7 +927,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       // .return()，进而触发 cleanup（内部 Promise.race([waitForExit(), 2s]) 有界），让子进程退出、
       // 输出流结束。这样 orchestrator 的 next() 立即拿到 done:true 走自然退出路径，无需再依赖其
       // 2s drain timeout 兜底。promptSuggestions 已关闭，result 即本轮最后一条消息，break 不会丢消息。
-      let terminateAfterTerminalResult = false
+      // (terminateAfterTerminalResult 声明在 try 外，以便 finally 据此清理排队计数器)
 
       for await (const sdkMessage of queryIterator) {
         if (controller.signal.aborted) break
@@ -963,7 +978,25 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           // 后者由 Stop hook 观察者刷新的 backgroundTasksPending 标识。
           const keepForTasks = backgroundTasksPending
 
-          if (keepForTasks && !keepForReason) {
+          // 排队消息计数器：channel 入队后 SDK 立即拉取，hasPending() 不可靠，故独立计数。
+          // !keepForReason 说明本轮真正结束（非权限/ExitPlan/AskUser 暂停），此时若
+          // counter>0 表示未来还有排队 turn 待执行 → 保持通道开、不 teardown。
+          let keepForQueue = false
+          if (!keepForReason) {
+            const pendingCount = queuedFollowupCount.get(options.sessionId) ?? 0
+            if (pendingCount > 0) {
+              keepForQueue = true
+              queuedFollowupCount.set(options.sessionId, pendingCount - 1)
+              ;(msg as Record<string, unknown>)._keepChannelOpenForQueue = true
+            }
+          }
+
+          if (keepForQueue) {
+            // 排队消息正在驱动下一轮：保持通道开，UI 维持 running。
+            // 无需 idle timer——消息已被 SDK 拉取，turn 即刻开始。
+            // 若同时有后台任务在飞（keepForTasks），arm idle timer 兜底。
+            if (keepForTasks) armIdleTimer()
+          } else if (keepForTasks && !keepForReason) {
             // 本轮主体结束、但仍有后台任务/定时任务在飞行：保持通道开启，
             // 子进程存活并在任务完成时自动 yield task_notification 驱动新一轮。
             // 给消息打注解，让 orchestrator 走"轻量完成"（UI 空闲但保留会话）而非彻底释放。
@@ -1004,6 +1037,10 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       activeChannels.delete(options.sessionId)
       queryReadyPromises.delete(options.sessionId)
       queryReadyResolvers.delete(options.sessionId)
+      // 会话真正结束时清理排队计数器；重试/中止时保留（由 abort 或新 query 的 finally 处理）
+      if (terminateAfterTerminalResult) {
+        queuedFollowupCount.delete(options.sessionId)
+      }
     }
   }
 
@@ -1032,9 +1069,12 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     if (!channel) {
       throw new Error(`[Claude 适配器] 无活跃消息通道可注入队列消息: ${sessionId}`)
     }
+    // 先增计数器（消息入 channel 后 SDK 立即拉取，hasPending() 不可靠，需独立追踪）
+    const prev = queuedFollowupCount.get(sessionId) ?? 0
+    queuedFollowupCount.set(sessionId, prev + 1)
     // 通过消息通道入队，generator 会自动 yield 给 SDK
     channel.enqueue(message as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage)
-    console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, priority=${message.priority}`)
+    console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, queuedCount=${prev + 1}`)
   }
 
   /**

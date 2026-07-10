@@ -21,7 +21,8 @@ import {
 import { cn } from '@/lib/utils'
 import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { currentGraphAtom } from '@/atoms/graph-atoms'
-import { computeLayout, type TaskGraph, type TaskNode, type TaskStatus, type LayoutResult } from '@profer/project-core'
+import dagre from '@dagrejs/dagre'
+import { type TaskGraph, type TaskNode, type TaskStatus } from '@profer/project-core'
 import { GraphQuestionInput } from './GraphQuestionInput'
 import { useOpenSession } from '@/hooks/useOpenSession'
 
@@ -89,21 +90,66 @@ function useGraphData(): { graph: TaskGraph | null; loading: boolean } {
   return { graph, loading: loading && !graph }
 }
 
-// ===== 计算节点坐标 =====
+// ===== 计算节点坐标（dagre 布局）=====
 
 interface NodePosition { id: string; x: number; y: number }
 
-function computePositions(layout: LayoutResult): NodePosition[] {
-  const positions: NodePosition[] = []
-  for (const level of layout.levels) {
-    const x = CANVAS_PAD + level.level * (NODE_W + LEVEL_GAP)
-    const totalH = level.nodes.length * NODE_H + (level.nodes.length - 1) * NODE_GAP_Y
-    const startY = CANVAS_PAD + Math.max(0, (layout.maxNodesInLevel * (NODE_H + NODE_GAP_Y) - totalH) / 2)
-    level.nodes.forEach((node, i) => {
-      positions.push({ id: node.id, x, y: startY + i * (NODE_H + NODE_GAP_Y) })
-    })
+const EMPTY_POSITIONS: NodePosition[] = []
+
+interface DagreLayout {
+  positions: NodePosition[]
+  width: number
+  height: number
+}
+
+/**
+ * 用 dagre 计算分层布局。
+ * - 依赖边与分叉边都参与布局，使分叉能沿主轴"张开"成分支。
+ * - rankdir=LR：被依赖节点在左、依赖方在右，维持原有左→右视觉习惯。
+ * - dagre 返回节点中心点坐标，此处转换为左上角坐标供 foreignObject 使用。
+ */
+function computeDagreLayout(graph: TaskGraph): DagreLayout {
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({
+    rankdir: 'LR',
+    nodesep: NODE_GAP_Y,
+    ranksep: LEVEL_GAP,
+    marginx: CANVAS_PAD,
+    marginy: CANVAS_PAD,
+  })
+  g.setDefaultEdgeLabel(() => ({}))
+
+  const nodeIds = Object.keys(graph.nodes)
+  for (const id of nodeIds) {
+    g.setNode(id, { width: NODE_W, height: NODE_H })
   }
-  return positions
+
+  // 依赖边：edges = {from:依赖方, to:被依赖方}，视觉上被依赖方在左 → setEdge(被依赖, 依赖)
+  for (const e of graph.edges) {
+    if (graph.nodes[e.from] && graph.nodes[e.to]) g.setEdge(e.to, e.from)
+  }
+  // 分叉边：forkEdges = {from:源, to:分叉}，源在左 → setEdge(源, 分叉)
+  for (const e of graph.forkEdges) {
+    if (graph.nodes[e.from] && graph.nodes[e.to]) g.setEdge(e.from, e.to)
+  }
+
+  dagre.layout(g)
+
+  const positions: NodePosition[] = []
+  let width = 0
+  let height = 0
+  for (const id of nodeIds) {
+    const n = g.node(id)
+    if (!n) continue
+    // dagre 给中心点 → 转左上角
+    const x = n.x - NODE_W / 2
+    const y = n.y - NODE_H / 2
+    positions.push({ id, x, y })
+    width = Math.max(width, x + NODE_W)
+    height = Math.max(height, y + NODE_H)
+  }
+
+  return { positions, width: width + CANVAS_PAD, height: height + CANVAS_PAD }
 }
 
 // ===== SVG 连线（思维导图风格：依赖→被依赖 左→右） =====
@@ -117,26 +163,47 @@ interface EdgeData {
   /** 终点坐标（右侧节点的左边缘） */
   x2: number; y2: number
   lineColor: string
+  /** 是否为分叉边（虚线渲染） */
+  isFork: boolean
 }
+
+// 分叉边配色：琥珀色，与依赖边的状态色区分
+const FORK_LINE_COLOR = '#fbbf24'
 
 function computeEdges(graph: TaskGraph, positions: NodePosition[]): EdgeData[] {
   const posMap = new Map(positions.map(p => [p.id, p]))
-  return Object.values(graph.nodes).flatMap(node => {
-    return node.dependsOn.map(depId => {
-      const depPos = posMap.get(depId)    // 被依赖节点（左侧）
-      const nodePos = posMap.get(node.id) // 依赖方节点（右侧）
-      if (!depPos || !nodePos) return null!
+
+  // 左节点右边缘 → 右节点左边缘 的贝塞尔曲线
+  const makeEdge = (
+    leftId: string, rightId: string, lineColor: string, isFork: boolean,
+  ): EdgeData | null => {
+    const leftPos = posMap.get(leftId)
+    const rightPos = posMap.get(rightId)
+    if (!leftPos || !rightPos) return null
+    const x1 = leftPos.x + NODE_W
+    const y1 = leftPos.y + NODE_H / 2
+    const x2 = rightPos.x
+    const y2 = rightPos.y + NODE_H / 2
+    const cx = (x1 + x2) / 2
+    const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`
+    return { from: leftId, to: rightId, d, x1, y1, x2, y2, lineColor, isFork }
+  }
+
+  const result: EdgeData[] = []
+  // 依赖边：被依赖节点（左）→ 依赖方节点（右），实线
+  for (const node of Object.values(graph.nodes)) {
+    for (const depId of node.dependsOn) {
       const depCfg = statusConfig[graph.nodes[depId]?.status ?? 'pending']
-      // 起点：被依赖节点（左侧）的右边缘 → 终点：依赖方节点（右侧）的左边缘
-      const x1 = depPos.x + NODE_W
-      const y1 = depPos.y + NODE_H / 2
-      const x2 = nodePos.x
-      const y2 = nodePos.y + NODE_H / 2
-      const cx = (x1 + x2) / 2
-      const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`
-      return { from: depId, to: node.id, d, x1, y1, x2, y2, lineColor: depCfg.lineColor }
-    })
-  }).filter(Boolean)
+      const edge = makeEdge(depId, node.id, depCfg.lineColor, false)
+      if (edge) result.push(edge)
+    }
+  }
+  // 分叉边：源节点（左）→ 分叉节点（右），虚线异色
+  for (const fe of graph.forkEdges) {
+    const edge = makeEdge(fe.from, fe.to, FORK_LINE_COLOR, true)
+    if (edge) result.push(edge)
+  }
+  return result
 }
 
 // ===== 节点卡片（不透明、实色背景） =====
@@ -372,12 +439,12 @@ export function ProjectGraphPanel(): React.ReactElement {
     }
   }, [selectedNode, setGraphQuestion])
 
-  const layout = React.useMemo(() => (graph ? computeLayout(graph) : null), [graph])
-  const positions = React.useMemo(() => (layout ? computePositions(layout) : []), [layout])
+  const layout = React.useMemo(() => (graph ? computeDagreLayout(graph) : null), [graph])
+  const positions = layout?.positions ?? EMPTY_POSITIONS
   const edges = React.useMemo(() => (graph ? computeEdges(graph, positions) : []), [graph, positions])
 
-  const svgW = layout ? layout.totalLevels * (NODE_W + LEVEL_GAP) + CANVAS_PAD * 2 : 800
-  const svgH = layout ? Math.max(layout.maxNodesInLevel, 1) * (NODE_H + NODE_GAP_Y) + CANVAS_PAD * 2 : 600
+  const svgW = layout ? layout.width + CANVAS_PAD : 800
+  const svgH = layout ? layout.height + CANVAS_PAD : 600
 
   // 缩放（滚轮）— window 级绑定 + 区域过滤，稳定可靠
   React.useEffect(() => {
@@ -445,7 +512,7 @@ export function ProjectGraphPanel(): React.ReactElement {
   if (loading) {
     return <div className="flex items-center justify-center h-full"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
   }
-  if (!graph || !layout || layout.totalLevels === 0) return <EmptyState />
+  if (!graph || !layout || layout.positions.length === 0) return <EmptyState />
 
   const nodes = Object.values(graph.nodes)
   const completed = nodes.filter(n => n.status === 'completed').length
@@ -491,13 +558,14 @@ export function ProjectGraphPanel(): React.ReactElement {
                 {/* 第1层：连线 */}
                 {edges.map(e => (
                   <path
-                    key={`edge-${e.from}-${e.to}`}
+                    key={`edge-${e.isFork ? 'fork' : 'dep'}-${e.from}-${e.to}`}
                     d={e.d}
                     fill="none"
                     stroke={e.lineColor}
                     strokeWidth={2.5}
                     strokeLinecap="round"
-                    opacity={0.5}
+                    strokeDasharray={e.isFork ? '6 5' : undefined}
+                    opacity={e.isFork ? 0.7 : 0.5}
                     style={{ pointerEvents: 'none' }}
                   />
                 ))}
@@ -530,7 +598,7 @@ export function ProjectGraphPanel(): React.ReactElement {
                 })}
                 {/* 第3层：连接点（在节点上方，盖住节点边缘） */}
                 {edges.map(e => (
-                  <g key={`dots-${e.from}-${e.to}`} style={{ pointerEvents: 'none' }}>
+                  <g key={`dots-${e.isFork ? 'fork' : 'dep'}-${e.from}-${e.to}`} style={{ pointerEvents: 'none' }}>
                     <circle cx={e.x1} cy={e.y1} r={DOT_R} fill={e.lineColor} />
                     <circle cx={e.x2} cy={e.y2} r={DOT_R} fill={e.lineColor} />
                   </g>
