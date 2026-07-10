@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { collectAttachedDirectories } from './agent-directory-utils'
 
-const testDir = join(homedir(), '.proma-test-tmp')
+const testDir = join(homedir(), '.profer-test-tmp')
 
 beforeEach(() => {
   if (!existsSync(testDir)) mkdirSync(testDir, { recursive: true })

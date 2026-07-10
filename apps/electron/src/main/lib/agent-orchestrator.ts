@@ -952,7 +952,7 @@ export class AgentOrchestrator {
         const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
         for (const slug of mentionedSkills ?? []) {
           const qualifiedName = workspaceSlug
-            ? `proma-workspace-${workspaceSlug}:${slug}`
+            ? `profer-workspace-${workspaceSlug}:${slug}`
             : slug
           toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
         }

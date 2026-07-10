@@ -33,18 +33,18 @@ import { detectIsWindows } from '@/lib/platform'
 import type { ThemeMode, ThemeStyle, MarkdownFontSize } from '../../../types'
 
 // ===== Logo 资源导入（用于图标选择器） =====
-import promaBlackLogo from '@/assets/bots/profer-logos/proma-black.png'
+import promaBlackLogo from '@/assets/bots/profer-logos/profer-black.png'
 import promaWhiteLogo from '@/assets/bots/profer-logos/profer-white.png'
-import promaBlueLogo from '@/assets/bots/profer-logos/proma-blue.png'
+import promaBlueLogo from '@/assets/bots/profer-logos/profer-blue.png'
 import promaPurpleLogo from '@/assets/bots/profer-logos/profer-purple.png'
 import promaGradientLogo from '@/assets/bots/profer-logos/profer-gradient.png'
-import promaCoralLogo from '@/assets/bots/profer-logos/proma-coral.png'
+import promaCoralLogo from '@/assets/bots/profer-logos/profer-coral.png'
 import promaVeriPeriLogo from '@/assets/bots/profer-logos/profer-veri-peri.png'
 import promaVivaMagentaLogo from '@/assets/bots/profer-logos/profer-viva-magenta.png'
 import promaMochaMousseLogo from '@/assets/bots/profer-logos/profer-mocha-mousse.png'
 import promaEmeraldLogo from '@/assets/bots/profer-logos/profer-emerald.png'
-import proma8bitLogo from '@/assets/bots/profer-logos/proma-8bit.png'
-import promaCyberpunkLogo from '@/assets/bots/profer-logos/proma-cyberpunk.png'
+import proma8bitLogo from '@/assets/bots/profer-logos/profer-8bit.png'
+import promaCyberpunkLogo from '@/assets/bots/profer-logos/profer-cyberpunk.png'
 import promaFuturisticLogo from '@/assets/bots/profer-logos/profer-futuristic.png'
 
 // ===== 主题预览图片导入 =====

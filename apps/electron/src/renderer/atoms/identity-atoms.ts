@@ -19,6 +19,6 @@ interface AuthStatusState {
 }
 
 /** 认证状态（持久化到 localStorage，避免刷新丢失） */
-export const authStatusAtom = atomWithStorage<AuthStatusState>('proma-auth-status', {
+export const authStatusAtom = atomWithStorage<AuthStatusState>('profer-auth-status', {
   isLoggedIn: false,
 })

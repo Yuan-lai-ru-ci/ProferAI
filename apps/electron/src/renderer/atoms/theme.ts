@@ -14,9 +14,9 @@ import { atom } from 'jotai'
 import { DEFAULT_INTERFACE_VARIANT, THEME_STYLES, type InterfaceVariant, type ThemeMode, type ThemeStyle } from '../../types'
 
 /** localStorage 缓存键 */
-const THEME_CACHE_KEY = 'proma-theme-mode'
-const THEME_STYLE_CACHE_KEY = 'proma-theme-style'
-const INTERFACE_VARIANT_CACHE_KEY = 'proma-interface-variant'
+const THEME_CACHE_KEY = 'profer-theme-mode'
+const THEME_STYLE_CACHE_KEY = 'profer-theme-style'
+const INTERFACE_VARIANT_CACHE_KEY = 'profer-interface-variant'
 
 /**
  * 从 localStorage 读取缓存的主题模式

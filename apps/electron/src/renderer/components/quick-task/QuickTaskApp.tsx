@@ -70,7 +70,7 @@ export function QuickTaskApp(): React.ReactElement {
         }
       } else {
         // Chat 模式读取 localStorage 中的 selectedModel
-        const raw = localStorage.getItem('proma-selected-model')
+        const raw = localStorage.getItem('profer-selected-model')
         if (raw) {
           try {
             const selected = JSON.parse(raw) as { channelId: string; modelId: string }
