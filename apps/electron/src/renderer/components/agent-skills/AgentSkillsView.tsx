@@ -23,7 +23,7 @@ import {
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { useProjectActions } from '@/hooks/useProjectActions'
-import type { McpServerEntry, SkillMeta } from '@proma/shared'
+import type { McpServerEntry, SkillMeta } from '@profer/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
 import { SkillCard } from './SkillCard'
 import { McpCard } from './McpCard'

@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
 import { createConversation, appendMessage } from './conversation-manager'
 import { getConversationAttachmentsDir } from './config-paths'
-import type { ConversationMeta, FileAttachment, ChatMessage } from '@proma/shared'
+import type { ConversationMeta, FileAttachment, ChatMessage } from '@profer/shared'
 
 /**
  * 获取教程文件路径

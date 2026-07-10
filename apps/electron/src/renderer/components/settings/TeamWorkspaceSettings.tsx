@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { teamWorkspacesAtom } from '@/atoms/team-atoms'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
-import type { WorkspaceRole } from '@proma/shared'
+import type { WorkspaceRole } from '@profer/shared'
 
 /** 角色名中文映射 */
 function roleLabel(role: string): string {

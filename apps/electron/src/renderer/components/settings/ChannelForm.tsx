@@ -33,7 +33,7 @@ import {
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
   isAgentCompatibleProvider,
-} from '@proma/shared'
+} from '@profer/shared'
 import type {
   Channel,
   ChannelCreateInput,
@@ -41,8 +41,8 @@ import type {
   ChannelTestResult,
   FetchModelsResult,
   ProviderType,
-} from '@proma/shared'
-import { normalizeAnthropicProviderUrl } from '@proma/core'
+} from '@profer/shared'
+import { normalizeAnthropicProviderUrl } from '@profer/core'
 import { getProviderLogo } from '@/lib/model-logo'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {

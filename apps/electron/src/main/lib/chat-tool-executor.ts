@@ -5,10 +5,10 @@
  * 替代 chat-service.ts 中硬编码的 if/else 分支。
  */
 
-import type { ToolCall, ToolResult } from '@proma/core'
+import type { ToolCall, ToolResult } from '@profer/core'
 import type { WebContents } from 'electron'
-import type { FileAttachment } from '@proma/shared'
-import { CHAT_IPC_CHANNELS } from '@proma/shared'
+import type { FileAttachment } from '@profer/shared'
+import { CHAT_IPC_CHANNELS } from '@profer/shared'
 import { isMemoryToolCall, executeMemoryTool } from './chat-tools/memory-tool'
 import { isWebSearchToolCall, executeWebSearchTool } from './chat-tools/web-search-tool'
 import { isCustomHttpToolCall, executeHttpTool } from './chat-tools/http-tool-executor'

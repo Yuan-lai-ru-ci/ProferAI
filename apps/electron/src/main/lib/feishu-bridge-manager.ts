@@ -13,7 +13,7 @@ import type {
   FeishuTestResult,
   FeishuBotConfig,
   AgentSessionMeta,
-} from '@proma/shared'
+} from '@profer/shared'
 import { FeishuBridge } from './feishu-bridge'
 import { getFeishuMultiBotConfig, getFeishuBotById } from './feishu-config'
 import { getSettings } from './settings-service'

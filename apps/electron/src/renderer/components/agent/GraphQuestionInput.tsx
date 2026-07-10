@@ -20,8 +20,8 @@ import {
   currentAgentWorkspaceIdAtom,
 } from '@/atoms/agent-atoms'
 import { currentGraphAtom } from '@/atoms/graph-atoms'
-import { formatTaskContext } from '@proma/project-core'
-import type { AgentSendInput } from '@proma/shared'
+import { formatTaskContext } from '@profer/project-core'
+import type { AgentSendInput } from '@profer/shared'
 
 export function GraphQuestionInput(): React.ReactElement | null {
   const question = useAtomValue(graphQuestionAtom)

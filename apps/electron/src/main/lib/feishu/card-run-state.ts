@@ -3,7 +3,7 @@ import type {
   SDKAssistantMessage,
   SDKResultMessage,
   SDKUserMessage,
-} from '@proma/shared'
+} from '@profer/shared'
 
 /**
  * 飞书流式卡片的运行时状态机。

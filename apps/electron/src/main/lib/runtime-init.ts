@@ -9,7 +9,7 @@
  * 5. Shell 环境检测（Windows - Git Bash / WSL）
  */
 
-import type { RuntimeStatus, RuntimeInitOptions, ShellEnvironmentStatus } from '@proma/shared'
+import type { RuntimeStatus, RuntimeInitOptions, ShellEnvironmentStatus } from '@profer/shared'
 import { loadShellEnv } from './shell-env'
 import { detectNodeRuntime } from './node-detector'
 import { detectBunRuntime } from './bun-finder'

@@ -5,7 +5,7 @@
  */
 
 import { getChannelById } from './channel-manager'
-import type { ProviderType } from '@proma/shared'
+import type { ProviderType } from '@profer/shared'
 
 export interface AvailableAgentModel {
   id: string

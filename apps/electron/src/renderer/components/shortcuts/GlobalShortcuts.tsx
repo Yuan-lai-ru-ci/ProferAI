@@ -291,7 +291,7 @@ export function GlobalShortcuts(): null {
           store.set(currentConversationIdAtom, meta.id)
 
           // 处理附件：保存到磁盘，收集 FileAttachment[]
-          const savedAttachments: import('@proma/shared').FileAttachment[] = []
+          const savedAttachments: import('@profer/shared').FileAttachment[] = []
           if (data.files && data.files.length > 0) {
             for (const file of data.files) {
               if (!file.base64) {

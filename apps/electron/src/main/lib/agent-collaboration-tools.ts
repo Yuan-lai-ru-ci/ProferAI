@@ -14,7 +14,7 @@ import type {
   PermissionRequest,
   PromaPermissionMode,
   SDKMessage,
-} from '@proma/shared'
+} from '@profer/shared'
 import {
   createAgentSession,
   getAgentSessionMeta,
@@ -134,7 +134,7 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
           type: 'delegation_blocked' as const,
           delegationId: record.delegationId,
           blockedEvent: blocked,
-        } as unknown as import('@proma/shared').PromaEvent,
+        } as unknown as import('@profer/shared').PromaEvent,
       })
     }
 
@@ -158,7 +158,7 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
           type: 'delegation_blocked' as const,
           delegationId: record.delegationId,
           blockedEvent: blocked,
-        } as unknown as import('@proma/shared').PromaEvent,
+        } as unknown as import('@profer/shared').PromaEvent,
       })
     }
 

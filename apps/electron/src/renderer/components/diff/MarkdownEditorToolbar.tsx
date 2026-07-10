@@ -23,7 +23,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { SCREENSHOT_LIMITS } from '@proma/shared'
+import { SCREENSHOT_LIMITS } from '@profer/shared'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'

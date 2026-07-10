@@ -5,8 +5,8 @@
  * 凭据存储在 ~/.proma/chat-tools.json 的 toolCredentials 中。
  */
 
-import type { ToolCall, ToolResult, ToolDefinition } from '@proma/core'
-import type { ChatToolMeta } from '@proma/shared'
+import type { ToolCall, ToolResult, ToolDefinition } from '@profer/core'
+import type { ChatToolMeta } from '@profer/shared'
 import { getToolCredentials } from '../chat-tool-config'
 
 // ===== 工具元数据 =====

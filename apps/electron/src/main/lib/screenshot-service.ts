@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { PNG } from 'pngjs'
-import { SCREENSHOT_LIMITS } from '@proma/shared'
+import { SCREENSHOT_LIMITS } from '@profer/shared'
 
 const SCREENSHOT_SCALE_CANDIDATES = [4, 3, 2, 1.5, 1]
 const SCREENSHOT_MAX_SEGMENT = 4000

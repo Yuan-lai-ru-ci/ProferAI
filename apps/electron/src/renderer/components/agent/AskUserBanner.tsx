@@ -12,7 +12,7 @@ import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
 import { allPendingAskUserRequestsAtom, agentStreamingStatesAtom, finalizeStreamingActivities } from '@/atoms/agent-atoms'
-import type { AskUserQuestion } from '@proma/shared'
+import type { AskUserQuestion } from '@profer/shared'
 
 interface QuestionAnswer {
   selected: string[]

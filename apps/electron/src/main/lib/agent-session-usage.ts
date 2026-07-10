@@ -20,8 +20,8 @@
  * 避免对整份会话 JSONL 全量 JSON.parse（高频 daily 任务一天可触发数百次）。
  */
 
-import { calculateContextUsageRatio, inferContextWindow } from '@proma/shared'
-import type { SDKAssistantMessage, SDKResultMessage } from '@proma/shared'
+import { calculateContextUsageRatio, inferContextWindow } from '@profer/shared'
+import type { SDKAssistantMessage, SDKResultMessage } from '@profer/shared'
 import { existsSync, readFileSync } from 'node:fs'
 import { getAgentSessionMessagesPath } from './config-paths'
 

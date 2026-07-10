@@ -4,7 +4,7 @@
  * 整合 Node.js 和 Git 检测，提供统一的环境检测接口
  */
 
-import type { EnvironmentCheckResult } from '@proma/shared'
+import type { EnvironmentCheckResult } from '@profer/shared'
 import { detectNodeRuntime, checkNodeVersion } from './node-detector'
 import { detectGitRuntime } from './git-detector'
 

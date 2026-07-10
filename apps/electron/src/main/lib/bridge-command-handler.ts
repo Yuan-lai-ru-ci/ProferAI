@@ -8,8 +8,8 @@
  */
 
 import { BrowserWindow } from 'electron'
-import type { AgentStreamPayload } from '@proma/shared'
-import { AGENT_IPC_CHANNELS } from '@proma/shared'
+import type { AgentStreamPayload } from '@profer/shared'
+import { AGENT_IPC_CHANNELS } from '@profer/shared'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
 import {
   listAgentWorkspacesByUpdatedAt,

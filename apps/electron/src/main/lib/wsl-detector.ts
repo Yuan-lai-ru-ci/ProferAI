@@ -12,7 +12,7 @@
 
 import { execSync } from 'node:child_process'
 import iconv from 'iconv-lite'
-import type { WslStatus } from '@proma/shared'
+import type { WslStatus } from '@profer/shared'
 
 /** WSL 不可用时返回的统一错误提示 */
 const WSL_NOT_READY_ERROR = 'WSL 未就绪，如已安装 Git Bash 可不安装'

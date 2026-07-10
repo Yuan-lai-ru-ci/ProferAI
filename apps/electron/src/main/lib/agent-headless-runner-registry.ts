@@ -6,7 +6,7 @@
  * 其余模块（如协作工具、桥接命令）通过注册表间接调用。
  */
 
-import type { AgentMessage, AgentSendInput, AgentExternalRunSource } from '@proma/shared'
+import type { AgentMessage, AgentSendInput, AgentExternalRunSource } from '@profer/shared'
 
 export interface HeadlessAgentRunCallbacks {
   onError: (error: string) => void

@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { safeStorage } from 'electron'
 import { getWeChatConfigPath } from './config-paths'
-import type { WeChatConfig, WeChatCredentials } from '@proma/shared'
+import type { WeChatConfig, WeChatCredentials } from '@profer/shared'
 
 /** 默认配置 */
 const DEFAULT_CONFIG: WeChatConfig = {

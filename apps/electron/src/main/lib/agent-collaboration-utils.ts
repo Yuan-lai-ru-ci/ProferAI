@@ -4,7 +4,7 @@
  * 不依赖 Electron 和磁盘服务，便于单元测试。
  */
 
-import type { AgentSessionMeta, PromaPermissionMode } from '@proma/shared'
+import type { AgentSessionMeta, PromaPermissionMode } from '@profer/shared'
 
 export type AgentDelegationRole = 'explore' | 'research' | 'implement' | 'review' | 'custom'
 

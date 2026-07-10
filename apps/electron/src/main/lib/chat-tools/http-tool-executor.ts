@@ -5,8 +5,8 @@
  * 支持 URL/Body 模板占位符替换、超时控制、响应路径提取。
  */
 
-import type { ToolCall, ToolResult } from '@proma/core'
-import type { ChatToolMeta, ChatToolHttpConfig } from '@proma/shared'
+import type { ToolCall, ToolResult } from '@profer/core'
+import type { ChatToolMeta, ChatToolHttpConfig } from '@profer/shared'
 import { getChatToolsConfig } from '../chat-tool-config'
 
 /** HTTP 请求超时（30 秒） */

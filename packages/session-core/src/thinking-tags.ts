@@ -1,4 +1,4 @@
-import type { SDKContentBlock, SDKTextBlock } from '@proma/shared'
+import type { SDKContentBlock, SDKTextBlock } from '@profer/shared'
 
 const THINK_OPEN_TAG = '<think>'
 const THINK_CLOSE_TAG = '</think>'

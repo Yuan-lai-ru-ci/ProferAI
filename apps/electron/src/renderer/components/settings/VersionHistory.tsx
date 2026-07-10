@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import type { GitHubRelease } from '@proma/shared'
+import type { GitHubRelease } from '@profer/shared'
 import { RefreshCw, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { ReleaseNotesViewer } from './ReleaseNotesViewer'
 import { SettingsCard } from './primitives'

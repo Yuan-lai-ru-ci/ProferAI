@@ -36,7 +36,7 @@ import type {
   AgentMessageSearchResult,
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
-} from '@proma/shared'
+} from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
 // GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
@@ -93,7 +93,7 @@ export function createDelegatedChildSessionMeta(params: {
   workspaceId?: string
   delegationRole?: string
   delegationGoal?: string
-  permissionMode?: import('@proma/shared').PromaPermissionMode
+  permissionMode?: import('@profer/shared').PromaPermissionMode
 }): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()

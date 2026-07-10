@@ -14,7 +14,7 @@ import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
 import { SettingsRow } from './primitives/SettingsRow'
 import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
-import type { WeChatBridgeStatus } from '@proma/shared'
+import type { WeChatBridgeStatus } from '@profer/shared'
 
 /** 安全地用系统浏览器打开链接 */
 function openLink(url: string): void {

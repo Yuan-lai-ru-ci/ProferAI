@@ -47,7 +47,7 @@ import type {
   CreateAutomationInput,
   FeishuChatBinding,
   UpdateAutomationInput,
-} from '@proma/shared'
+} from '@profer/shared'
 
 const NO_FEISHU_BINDING = '__none__'
 

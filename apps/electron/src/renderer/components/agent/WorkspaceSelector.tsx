@@ -23,7 +23,7 @@ import {
 import { projectListHeightAtom } from '@/atoms/sidebar-atoms'
 import { useProjectActions } from '@/hooks/useProjectActions'
 import { agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
-import type { AgentWorkspace } from '@proma/shared'
+import type { AgentWorkspace } from '@profer/shared'
 
 export function WorkspaceSelector(): React.ReactElement {
   const { workspaces, currentWorkspaceId, selectProject, createProject } = useProjectActions()
