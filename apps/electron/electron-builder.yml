@@ -67,8 +67,8 @@ extraResources:
   - from: ../../tutorial/tutorial-v2.md
     to: tutorial.md
   # Proma 品牌 Logo 素材（品牌素材下载功能使用）
-  - from: resources/proma-logos
-    to: proma-logos
+  - from: resources/profer-logos
+    to: profer-logos
     filter:
       - "**/*"
   # 窗口图标（Windows 任务栏 / Linux 标题栏 / macOS Dock 使用）

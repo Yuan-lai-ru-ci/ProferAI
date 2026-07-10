@@ -4,11 +4,10 @@ import { existsSync, cpSync, mkdirSync, readdirSync } from 'fs'
 
 // userData 目录隔离：让 Profer 与开源原版 Proma、以及各自的 dev 版互不干扰。
 //
-// ⚠️ 根因（改名遗留）：apps/electron/package.json 的 name 仍是 "@proma/electron"，
-//    因此 app.getName() === "@proma/electron"，默认 userData 会落到 %APPDATA%\@proma\electron，
-//    与原版 Proma 完全同一目录 → Electron 单实例锁绑定 userData → 两个应用无法同时打开
-//    （点开一个只会把另一个已开的窗口抢到前台）。这里显式 setPath 把 Profer 的 userData 独立出来。
-//    B 阶段把包名正式改为 @profer/* 后，app.getName() 会变，此显式 setPath 可保留为冗余保险或按需撤除。
+// 当前状态（B5 已完成）：apps/electron/package.json 的 name 已是 "@profer/electron"，
+//   app.getName() === "@profer/electron"，默认 userData 自然落入 %APPDATA%\@profer\electron，
+//   已与原版 Proma（@proma\electron）彻底独立 → 单实例锁不再互斥 → 两者可同时运行。
+//   此显式 setPath 现在与默认一致，保留作为冗余保险（防未来再被 productName 逻辑绕回去）。
 // 必须在任何会读取 userData 路径的模块加载之前执行。
 app.setPath('userData', join(app.getPath('appData'), app.isPackaged ? '@profer/electron' : '@profer/electron-dev'))
 

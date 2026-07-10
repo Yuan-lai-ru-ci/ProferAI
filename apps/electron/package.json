@@ -1,5 +1,5 @@
 {
-  "name": "@proma/electron",
+  "name": "@profer/electron",
   "version": "0.13.4",
   "description": "Profer next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",
