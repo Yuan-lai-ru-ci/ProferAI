@@ -4,7 +4,7 @@ import type { ToolActivity } from '@/atoms/agent-atoms'
  * 注意：TaskGet/TaskList 是只读查询工具，不纳入聚合，保留为普通工具活动行 */
 export const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite'])
 
-export type TaskItemStatus = 'pending' | 'in_progress' | 'completed' | 'deleted'
+export type TaskItemStatus = 'pending' | 'in_progress' | 'completed' | 'deleted' | 'cancelled'
 
 export interface TaskItem {
   id: string
@@ -113,11 +113,17 @@ function taskIdFromInput(input: Record<string, unknown>): string | undefined {
  * 策略：
  * 1. TaskCreate 读取 SDK 0.3 的结构化输出 `{ task: { id, subject } }`
  * 2. TaskUpdate 通过 taskId 更新已有条目，跨 turn 时可用历史 subject 恢复任务名
+ *
+ * @param activities — 工具调用活动列表
+ * @param streamEnded — 流式是否正常结束（正常结束 → in_progress 变 pending）
+ * @param historicalTaskSubjects — 跨 turn 历史 subject 映射
+ * @param stoppedByUser — 是否被用户手动打断（打断 → in_progress 变 cancelled）
  */
 export function aggregateTaskItems(
   activities: ToolActivity[],
   streamEnded: boolean,
   historicalTaskSubjects?: Map<string, string>,
+  stoppedByUser?: boolean,
 ): TaskItem[] {
   const taskMap = new Map<string, TaskItem>()
   let todoAutoId = 0
@@ -211,7 +217,13 @@ export function aggregateTaskItems(
   }
 
   let items = Array.from(taskMap.values()).filter((t) => t.status !== 'deleted')
-  if (streamEnded) {
+  if (stoppedByUser) {
+    // 用户手动打断 → 所有 in_progress 任务标记为 cancelled（表示路线变更）
+    items = items.map((t) =>
+      t.status === 'in_progress' ? { ...t, status: 'cancelled' as const } : t
+    )
+  } else if (streamEnded) {
+    // 正常结束 → in_progress 回退为 pending（任务未完成但 Agent 已停止）
     items = items.map((t) =>
       t.status === 'in_progress' ? { ...t, status: 'pending' as const } : t
     )

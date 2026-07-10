@@ -95,7 +95,7 @@ import {
   currentAgentSessionIdAtom,
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
-import { persistedGraphAtom } from '@/atoms/graph-atoms'
+import { persistedGraphAtom, persistedProjectGraphAtom } from '@/atoms/graph-atoms'
 import { TASK_TOOL_NAMES } from './task-progress'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
@@ -109,6 +109,7 @@ import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption
 import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
+import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -397,6 +398,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
   const setPersistedGraph = useSetAtom(persistedGraphAtom)
+  const setPersistedProjectGraph = useSetAtom(persistedProjectGraphAtom)
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
   const backgroundWaiting = streamState?.backgroundWaiting ?? false
@@ -408,14 +410,23 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     prevStreamingRef.current = streaming
     // 仅在 streaming: true → false 时触发一次加载
     if (wasStreaming && !streaming && sessionId) {
-      const api = window.electronAPI as { getGraph?: (id: string) => Promise<import('@proma/project-core').TaskGraph> }
+      const api = window.electronAPI as {
+        getGraph?: (id: string) => Promise<import('@proma/project-core').TaskGraph>
+        getProjectGraph?: (id: string) => Promise<import('@proma/project-core').TaskGraph>
+      }
+      // 加载单会话 Graph
       api.getGraph?.(sessionId)
         .then((g) => { if (g && Object.keys(g.nodes).length > 0) setPersistedGraph(g) })
         .catch(() => {})
+      // 加载项目级聚合 Graph（跨会话）
+      api.getProjectGraph?.(sessionId)
+        .then((g) => { if (g && Object.keys(g.nodes).length > 0) setPersistedProjectGraph(g) })
+        .catch(() => {})
     }
-  }, [streaming, sessionId, setPersistedGraph])
+  }, [streaming, sessionId, setPersistedGraph, setPersistedProjectGraph])
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
+  const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
   const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
@@ -2259,7 +2270,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               onSubmit={handleSend}
               onPasteFiles={handlePasteFiles}
               onPasteLongText={handlePasteLongText}
-              longTextPasteThreshold={LONG_TEXT_ATTACHMENT_THRESHOLD}
+              longTextPasteThreshold={longTextPasteAsAttachmentEnabled ? LONG_TEXT_ATTACHMENT_THRESHOLD : undefined}
               placeholder={
                 isCompacting
                   ? '正在压缩上下文，完成后可继续对话...'

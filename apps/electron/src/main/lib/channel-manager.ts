@@ -146,6 +146,13 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
 
   if (!data.commercialMode || !data.channels) return
 
+  // 防止空列表雪崩：服务端返回 0 条渠道时跳过同步，保留现有本地缓存。
+  // 空结果通常是服务端异常导致，不应将客户端全部渠道清空。
+  if (data.channels.length === 0) {
+    console.warn('[渠道管理] 服务端返回空渠道列表，跳过同步以保留现有渠道')
+    return
+  }
+
   // 备份旧配置
   const configPath = getChannelsPath()
   if (existsSync(configPath)) {
@@ -158,7 +165,18 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   // 将服务端渠道写入本地，保留用户自建的本地渠道
   const existingConfig = readConfig()
   const serverIds = new Set(data.channels.map((ch) => ch.id))
-  const localChannels = existingConfig.channels.filter((c) => !serverIds.has(c.id))
+
+  // 清理已不在服务端列表中的 serverManaged 渠道（服务端已删除的渠道）
+  const preCleanupCount = existingConfig.channels.length
+  const localChannels = existingConfig.channels.filter((c) => {
+    if (serverIds.has(c.id)) return false // 服务端仍在管理，后面会用最新数据覆盖
+    if (c.serverManaged || c.id.startsWith('newapi-')) return false // 之前由服务端管理但现在不在列表中了 → 已删除，清理
+    return true // 用户自建本地渠道，保留
+  })
+  const cleanedCount = preCleanupCount - localChannels.length - serverIds.size
+  if (cleanedCount > 0) {
+    console.log(`[渠道管理] 清理了 ${cleanedCount} 个服务端已删除的渠道`)
+  }
 
   const now = Date.now()
   const config: ChannelsConfig = { version: 1, channels: [...localChannels] }
@@ -179,6 +197,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
       apiKey: encryptApiKey(ch.apiKey),
       models: mergedModels,
       enabled: localExisting?.enabled ?? true,
+      serverManaged: true,
       createdAt: localExisting?.createdAt ?? now,
       updatedAt: now,
     })
