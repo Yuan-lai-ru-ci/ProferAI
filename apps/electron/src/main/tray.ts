@@ -23,8 +23,8 @@ function getTrayIconPath(): string {
   // dev: __dirname/resources（build:resources 拷贝产物）
   // prod: process.resourcesPath（electron-builder extraResources 产物）
   const resourcesDir = app.isPackaged
-    ? join(process.resourcesPath, 'proma-logos')
-    : join(__dirname, 'resources/proma-logos')
+    ? join(process.resourcesPath, 'profer-logos')
+    : join(__dirname, 'resources/profer-logos')
   return join(resourcesDir, 'iconTemplate.png')
 }
 

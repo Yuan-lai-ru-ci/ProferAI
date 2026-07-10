@@ -749,7 +749,7 @@ export interface ElectronAPI {
   /** 仅解析文件路径（供 PDF/图片等用 file:// 加载） */
   resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').ResolvedFileUrl | null>
 
-  /** 注册文件路径到 proma-file:// 协议（不做路径校验，供团队文件预览） */
+  /** 注册文件路径到 profer-file:// 协议（不做路径校验，供团队文件预览） */
   registerPreviewPath: (filePath: string) => Promise<string | null>
 
   /** 为内联 PDF 预览生成临时 HTML 文件，返回文件路径 */
@@ -1033,7 +1033,7 @@ export interface ElectronAPI {
   migrationParseImportFile: (filePath: string) => Promise<unknown>
   /** 确认导入 */
   migrationConfirmImport: (options: unknown) => Promise<{ success: boolean }>
-  /** 打开文件选择对话框（选择 .proma-backup 或 .proma-share） */
+  /** 打开文件选择对话框（选择 .profer-backup 或 .profer-share） */
   migrationOpenFileDialog: () => Promise<string | null>
   /** 打开文件保存对话框（选择导出路径） */
   migrationSaveFileDialog: (mode: string) => Promise<string | null>

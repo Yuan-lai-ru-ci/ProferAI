@@ -2,8 +2,8 @@
  * 数据迁移服务
  *
  * 支持两种导出模式：
- * - personal (.proma-backup)：个人全量备份，含解密后的 API Key 明文
- * - share (.proma-share)：团队分发，自由选择组件，凭据自动剥离
+ * - personal (.profer-backup)：个人全量备份，含解密后的 API Key 明文
+ * - share (.profer-share)：团队分发，自由选择组件，凭据自动剥离
  *
  * 导入时自动检测跨平台差异并提示用户处理路径映射。
  */

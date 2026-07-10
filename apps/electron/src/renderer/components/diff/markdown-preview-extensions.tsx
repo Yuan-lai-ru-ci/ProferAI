@@ -349,7 +349,7 @@ function createCodeBlockRenderModePlugin(): Plugin<CodeBlockRenderModeState> {
 }
 
 function isExternalUrl(src: string): boolean {
-  return /^(?:https?:|data:|blob:|file:|proma-file:)/i.test(src)
+  return /^(?:https?:|data:|blob:|file:|profer-file:)/i.test(src)
 }
 
 function sanitizeHtml(html: string): string {
@@ -394,7 +394,7 @@ async function resolveFirstMediaCandidate(paths: string[], fileAccessRef: FileAc
 }
 
 function resolveMediaSrc(src: string, fileAccessRef: FileAccessRefOrNull, apply: (src: string) => void): () => void {
-  // 外链 / data-URL / blob / 已授权 proma-file 协议：直接 apply，不走 IPC
+  // 外链 / data-URL / blob / 已授权 profer-file 协议：直接 apply，不走 IPC
   if (!src || isExternalUrl(src)) {
     apply(src)
     return () => {}

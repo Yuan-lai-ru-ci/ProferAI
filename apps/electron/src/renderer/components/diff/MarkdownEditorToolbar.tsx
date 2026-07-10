@@ -222,7 +222,7 @@ function LinkPopover({ editor, active }: { editor: Editor; active: boolean }) {
   const apply = () => {
     if (url) {
       // 仅允许安全协议
-      const safe = /^(https?|mailto|file|proma-file):/.test(url) ? url : `https://${url}`
+      const safe = /^(https?|mailto|file|profer-file):/.test(url) ? url : `https://${url}`
       editor.chain().focus().setLink({ href: safe }).run()
     } else {
       editor.chain().focus().unsetLink().run()

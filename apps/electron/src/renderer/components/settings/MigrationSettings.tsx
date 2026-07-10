@@ -2,8 +2,8 @@
  * MigrationSettings - 数据迁移设置页
  *
  * 支持两种模式：
- * - Personal 备份（.proma-backup）：全量导出，含解密 API Key
- * - Share 分发（.proma-share）：自由选择组件，凭据自动剥离
+ * - Personal 备份（.profer-backup）：全量导出，含解密 API Key
+ * - Share 分发（.profer-share）：自由选择组件，凭据自动剥离
  *
  * Share 模式支持多工作区导出：
  * - 默认：导出所有工作区的 Skills + MCP
@@ -246,14 +246,14 @@ export function MigrationSettings(): React.ReactElement {
                 active={exportMode === 'personal'}
                 onClick={() => setExportMode('personal')}
                 title="个人备份"
-                subtitle=".proma-backup"
+                subtitle=".profer-backup"
                 description="完整备份所有数据，含 API Key，用于换机迁移"
               />
               <ModeCard
                 active={exportMode === 'share'}
                 onClick={() => setExportMode('share')}
                 title="团队分发"
-                subtitle=".proma-share"
+                subtitle=".profer-share"
                 description="自选组件，凭据自动剥离，分享给同事"
               />
             </div>
@@ -468,7 +468,7 @@ export function MigrationSettings(): React.ReactElement {
       {/* ── 导入区块 ──────────────────────────────── */}
       <SettingsSection
         title="导入备份"
-        description="从备份文件导入数据，支持 .proma-backup 和 .proma-share 格式"
+        description="从备份文件导入数据，支持 .profer-backup 和 .profer-share 格式"
       >
         <button
           onClick={() => setMigrationImportDialogOpen(true)}
