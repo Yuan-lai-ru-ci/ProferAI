@@ -105,7 +105,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   // 窗口标题设为用户名
   React.useEffect(() => {
     try {
-      const raw = localStorage.getItem('proma-user-profile')
+      const raw = localStorage.getItem('profer-user-profile')
       if (raw) {
         const profile = JSON.parse(raw)
         if (profile?.userName) {

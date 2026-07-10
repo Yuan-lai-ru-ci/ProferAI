@@ -98,7 +98,7 @@ export async function executeMemoryTool(toolCall: ToolCall): Promise<ToolResult>
   const memoryConfig = getMemoryConfig()
   const credentials = {
     apiKey: memoryConfig.apiKey,
-    userId: memoryConfig.userId?.trim() || 'proma-user',
+    userId: memoryConfig.userId?.trim() || 'profer-user',
     baseUrl: memoryConfig.baseUrl,
   }
 

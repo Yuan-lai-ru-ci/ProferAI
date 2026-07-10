@@ -29,7 +29,7 @@ export type VoiceDictationProvider = 'doubao'
 export type VoiceDictationEndpointMode = 'async' | 'duplex'
 
 /** 语音输入输出方式 */
-export type VoiceDictationOutputMode = 'auto' | 'clipboard' | 'proma-input'
+export type VoiceDictationOutputMode = 'auto' | 'clipboard' | 'profer-input'
 
 /** 语音输入浮窗位置 */
 export interface VoiceDictationWindowPosition {
@@ -118,7 +118,7 @@ export interface VoiceDictationResizeInput {
 
 /** 输出语音输入文本结果 */
 export interface VoiceDictationCommitResult {
-  mode: 'proma-input' | 'cursor' | 'clipboard'
+  mode: 'profer-input' | 'cursor' | 'clipboard'
   success: boolean
   message: string
 }
@@ -244,7 +244,7 @@ export interface AppSettings {
   voiceDictation?: VoiceDictationPersistedSettings
   /** 飞书 Session 镜像设置：每个 Proma Session 可创建一个仅包含用户与指定 Bot 的飞书群 */
   feishuSessionMirror?: FeishuSessionMirrorSettings
-  /** 启动时自动清理临时文件（proma-preview、proma-installers），默认 true */
+  /** 启动时自动清理临时文件（profer-preview、profer-installers），默认 true */
   autoCleanupTempOnStart?: boolean
   /** 自动清理 N 天前已归档会话的 SDK 数据（0 = 禁用，默认 0） */
   autoCleanupArchivedDays?: number

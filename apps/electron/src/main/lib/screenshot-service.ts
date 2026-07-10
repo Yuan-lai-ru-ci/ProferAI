@@ -191,14 +191,14 @@ html::-webkit-scrollbar,body::-webkit-scrollbar{display:none}
 body{-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
 img,video,canvas,svg{max-width:100%}
 .proma-screenshot-wrapper{padding:${SCREENSHOT_PADDING_TOP}px ${SCREENSHOT_PADDING_X}px;background:${bg};width:max-content;max-width:100%;margin:0 auto}
-.proma-screenshot-sheet{width:max-content;max-width:100%;margin:0 auto;background:${bg}}
-.proma-screenshot-sheet [contenteditable],
-.proma-screenshot-sheet [contenteditable="false"]{outline:none}
-.proma-screenshot-sheet .ProseMirror-selectednode,
-.proma-screenshot-sheet .selectedCell::after{display:none!important}
+.profer-screenshot-sheet{width:max-content;max-width:100%;margin:0 auto;background:${bg}}
+.profer-screenshot-sheet [contenteditable],
+.profer-screenshot-sheet [contenteditable="false"]{outline:none}
+.profer-screenshot-sheet .ProseMirror-selectednode,
+.profer-screenshot-sheet .selectedCell::after{display:none!important}
 </style></head><body class="${safeThemeClass}">
 <div class="proma-screenshot-wrapper">
-<main class="proma-screenshot-sheet">${safeHtml}</main>
+<main class="profer-screenshot-sheet">${safeHtml}</main>
 </div>
 </body></html>`
 }

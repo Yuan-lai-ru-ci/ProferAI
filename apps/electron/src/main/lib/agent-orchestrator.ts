@@ -339,7 +339,7 @@ export class AgentOrchestrator {
     mcpServers: Record<string, Record<string, unknown>>,
   ): Promise<void> {
     const memoryConfig = getMemoryConfig()
-    const memUserId = memoryConfig.userId?.trim() || 'proma-user'
+    const memUserId = memoryConfig.userId?.trim() || 'profer-user'
     if (!memoryConfig.enabled || !memoryConfig.apiKey) return
 
     try {

@@ -605,7 +605,7 @@ function _addPersonalFiles(zip: AdmZip) {
 // ─── 导入（解析预览）────────────────────────────────────────────────────────
 
 export async function parseImportFile(filePath: string): Promise<ImportPreview | ImportPreviewV2> {
-  const tempDir = join(tmpdir(), `proma-import-${randomUUID()}`)
+  const tempDir = join(tmpdir(), `profer-import-${randomUUID()}`)
   mkdirSync(tempDir, { recursive: true })
 
   const zip = new AdmZip(filePath)

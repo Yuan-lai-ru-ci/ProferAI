@@ -293,7 +293,7 @@ function realpathOrResolve(path: string): string {
 function getAuthorizedRoots(options?: FileAccessOptions): string[] {
   const roots: string[] = [
     getAgentWorkspacesDir(),
-    join(tmpdir(), 'proma-preview'),
+    join(tmpdir(), 'profer-preview'),
   ]
 
   // 添加用户常用目录授权（Desktop、Documents、Downloads 等）
@@ -2411,7 +2411,7 @@ export function registerIpcHandlers(): void {
       try {
         const { searchMemory } = await import('./lib/memos-client')
         const result = await searchMemory(
-          { apiKey: config.apiKey, userId: config.userId?.trim() || 'proma-user', baseUrl: config.baseUrl },
+          { apiKey: config.apiKey, userId: config.userId?.trim() || 'profer-user', baseUrl: config.baseUrl },
           'test connection',
           1,
         )
@@ -2486,7 +2486,7 @@ export function registerIpcHandlers(): void {
         try {
           const { searchMemory } = await import('./lib/memos-client')
           const result = await searchMemory(
-            { apiKey: config.apiKey, userId: config.userId?.trim() || 'proma-user', baseUrl: config.baseUrl },
+            { apiKey: config.apiKey, userId: config.userId?.trim() || 'profer-user', baseUrl: config.baseUrl },
             'test connection',
             1,
           )
@@ -3054,7 +3054,7 @@ export function registerIpcHandlers(): void {
       const { existsSync, mkdirSync } = await import('node:fs')
       const { writeFile } = await import('node:fs/promises')
 
-      const tmpDir = join(tmpdir(), 'proma-preview')
+      const tmpDir = join(tmpdir(), 'profer-preview')
       if (!existsSync(tmpDir)) {
         mkdirSync(tmpDir, { recursive: true })
       }
@@ -4270,7 +4270,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('migration:cancelImport', async (_, tempDir: string) => {
     if (!tempDir || typeof tempDir !== 'string') return
     try {
-      // 安全校验：解析真实路径，确保只清理 tmpdir 下的 proma-import-* 目录
+      // 安全校验：解析真实路径，确保只清理 tmpdir 下的 profer-import-* 目录
       const resolved = realpathSync(resolve(tempDir))
       const tmpRoot = realpathSync(tmpdir())
       if (!resolved.startsWith(tmpRoot + sep)) {
@@ -4278,7 +4278,7 @@ export function registerIpcHandlers(): void {
         return
       }
       const dirName = basename(resolved)
-      if (!dirName.startsWith('proma-import-')) {
+      if (!dirName.startsWith('profer-import-')) {
         console.warn('[迁移] 目录名不匹配，拒绝清理:', dirName)
         return
       }

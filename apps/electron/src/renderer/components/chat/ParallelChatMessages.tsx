@@ -6,7 +6,7 @@
  * - 各列独立 StickToBottom 滚动
  * - ChatMessageItem 以 isParallelMode={true} 渲染
  *
- * 移植自 proma-frontend 的 parallel-chat-messages.tsx。
+ * 移植自 profer-frontend 的 parallel-chat-messages.tsx。
  */
 
 import { Fragment, useMemo, useRef, useEffect } from 'react'
