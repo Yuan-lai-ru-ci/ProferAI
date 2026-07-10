@@ -1,11 +1,56 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, powerMonitor, protocol, screen, shell } from 'electron'
 import { join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, cpSync, mkdirSync, readdirSync } from 'fs'
 
-// Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
-// 必须在任何会读取 userData 路径的模块加载之前执行
-if (!app.isPackaged) {
-  app.setPath('userData', join(app.getPath('appData'), '@profer/electron-dev'))
+// userData 目录隔离：让 Profer 与开源原版 Proma、以及各自的 dev 版互不干扰。
+//
+// ⚠️ 根因（改名遗留）：apps/electron/package.json 的 name 仍是 "@proma/electron"，
+//    因此 app.getName() === "@proma/electron"，默认 userData 会落到 %APPDATA%\@proma\electron，
+//    与原版 Proma 完全同一目录 → Electron 单实例锁绑定 userData → 两个应用无法同时打开
+//    （点开一个只会把另一个已开的窗口抢到前台）。这里显式 setPath 把 Profer 的 userData 独立出来。
+//    B 阶段把包名正式改为 @profer/* 后，app.getName() 会变，此显式 setPath 可保留为冗余保险或按需撤除。
+// 必须在任何会读取 userData 路径的模块加载之前执行。
+app.setPath('userData', join(app.getPath('appData'), app.isPackaged ? '@profer/electron' : '@profer/electron-dev'))
+
+// 一次性迁移：把存量 Profer 用户遗留在 @proma/electron 的浏览器层数据搬到新目录。
+// 登录态/会话/自动任务/device_id 都在 ~/.profer（不涉及），这里只搬 Chromium 层，避免用户升级后
+// 首屏缓存/cookie 凭空清空。copy 而非 move（保住原版 Proma 的目录）；跳过可再生大缓存；静默降级。
+migrateUserDataFromPromaIfNeeded()
+
+function migrateUserDataFromPromaIfNeeded(): void {
+  // 仅正式版需要：dev 版一直用独立的 @profer/electron-dev，无 @proma 遗留。
+  if (!app.isPackaged) return
+  try {
+    const newDir = app.getPath('userData') // setPath 后 = %APPDATA%\@profer\electron
+    const oldDir = join(app.getPath('appData'), '@proma', 'electron')
+    // 幂等：新目录已存在（迁过或已在用）或旧目录不存在（全新用户）时跳过。
+    if (existsSync(newDir) || !existsSync(oldDir)) return
+
+    // 可再生的大缓存不迁（省时且避免占用冲突）——Electron 会自动重建。
+    const SKIP = new Set([
+      'Cache',
+      'Code Cache',
+      'GPUCache',
+      'DawnGraphiteCache',
+      'DawnWebGPUCache',
+      'blob_storage',
+      'Dictionaries',
+      'Shared Dictionary',
+    ])
+
+    mkdirSync(newDir, { recursive: true })
+    for (const entry of readdirSync(oldDir, { withFileTypes: true })) {
+      if (SKIP.has(entry.name)) continue
+      try {
+        cpSync(join(oldDir, entry.name), join(newDir, entry.name), { recursive: true })
+      } catch {
+        // 单项失败不阻断其余项（如原版 Proma 正在运行占用某文件）。
+      }
+    }
+    console.log('[userData迁移] 已从 @proma/electron 复制浏览器层数据到 @profer/electron')
+  } catch (err) {
+    console.warn('[userData迁移] 失败（不影响使用，核心数据在 ~/.profer）:', err)
+  }
 }
 
 // 开发模式用独立锁名，与生产版共存
