@@ -2647,21 +2647,23 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH,
-    async (_event, sessionId: string) => {
-      const { loadProjectGraph } = await import('./lib/project-graph-service')
-      return loadProjectGraph(sessionId)
-    },
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH_SUMMARY,
-    async (_event, sessionId: string) => {
-      const { getProjectGraphSummary } = await import('./lib/project-graph-service')
-      return getProjectGraphSummary(sessionId)
-    },
-  )
+  // TODO(graph): GET_PROJECT_GRAPH / GET_PROJECT_GRAPH_SUMMARY 常量 + loadProjectGraph /
+  //   getProjectGraphSummary 函数尚未实现，待图谱功能完成后恢复。
+  // ipcMain.handle(
+  //   AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH,
+  //   async (_event, sessionId: string) => {
+  //     const { loadProjectGraph } = await import('./lib/project-graph-service')
+  //     return loadProjectGraph(sessionId)
+  //   },
+  // )
+  //
+  // ipcMain.handle(
+  //   AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH_SUMMARY,
+  //   async (_event, sessionId: string) => {
+  //     const { getProjectGraphSummary } = await import('./lib/project-graph-service')
+  //     return getProjectGraphSummary(sessionId)
+  //   },
+  // )
 
   // ===== Agent 附件 =====
 
