@@ -137,7 +137,7 @@ function writeTokens(tokens: AuthTokenStore): void {
     if (safeStorage.isEncryptionAvailable()) {
       try {
         // 先做一次加密-解密往返测试，确保 DPAPI 状态正常
-        const testData = 'proma-token-test'
+        const testData = 'profer-token-test'
         const testEncrypted = safeStorage.encryptString(testData)
         const testDecrypted = safeStorage.decryptString(testEncrypted)
         if (testDecrypted !== testData) {

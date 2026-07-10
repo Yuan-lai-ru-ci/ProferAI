@@ -449,7 +449,7 @@ function ensurePathAllowed(filePath: string, options?: FileAccessOptions): boole
 /**
  * 在 ensurePathAllowed 基础上，额外放行「已授权仓库的 worktree」。
  *
- * worktree 常被放在主仓库之外（如 ~/proma-dev/worktrees/xxx），其路径不在任何
+ * worktree 常被放在主仓库之外（如 ~/profer-dev/worktrees/xxx），其路径不在任何
  * 授权根下，会被 ensurePathAllowed 拒绝。但只要它回溯到的主仓库已被授权，就应放行。
  * 用 git 自身背书（--git-common-dir），避免粗暴跳过安全检查。
  */
@@ -546,7 +546,7 @@ async function getMacAppIconViaSips(appPath: string): Promise<string> {
   const icnsPath = candidates.find((p) => existsSync(p))
   if (!icnsPath) return ''
 
-  const tmp = mkdtempSync(join(tmpdir(), 'proma-icon-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'profer-icon-'))
   const outPath = join(tmp, 'icon.png')
   try {
     const r = await runCmd('sips', ['-s', 'format', 'png', '-Z', '64', icnsPath, '--out', outPath], { timeoutMs: 4000 })
@@ -854,7 +854,7 @@ export function resolveAppIconPath(variantId: string): string | null {
   if (!variantId || variantId === 'default') {
     return join(resourcesDir, 'icon.png')
   }
-  return join(resourcesDir, 'profer-logos', `proma-${variantId}.png`)
+  return join(resourcesDir, 'profer-logos', `profer-${variantId}.png`)
 }
 
 let _ipcHandlersRegistered = false
@@ -4521,7 +4521,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('migration:saveFileDialog', async (_, mode: string) => {
     const { dialog } = await import('electron')
     const ext = mode === 'personal' ? 'profer-backup' : 'profer-share'
-    const defaultName = `proma-migration-${new Date().toISOString().slice(0, 10)}.${ext}`
+    const defaultName = `profer-migration-${new Date().toISOString().slice(0, 10)}.${ext}`
     const result = await dialog.showSaveDialog({
       title: '保存迁移文件',
       defaultPath: defaultName,
@@ -5065,7 +5065,7 @@ export function registerIpcHandlers(): void {
             })
             if (!res.ok) return null
             const buf = Buffer.from(await res.arrayBuffer())
-            const tmpPath = join(tmp.tmpdir(), `proma-skill-${slug}.md`)
+            const tmpPath = join(tmp.tmpdir(), `profer-skill-${slug}.md`)
             writeFileSync(tmpPath, buf)
             return tmpPath
           })()

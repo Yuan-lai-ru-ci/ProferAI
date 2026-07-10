@@ -28,7 +28,7 @@ export const promptConfigAtom = atom<SystemPromptConfig>({
 
 /** 当前选中的提示词 ID（持久化到 localStorage） */
 export const selectedPromptIdAtom = atomWithStorage<string>(
-  'proma-selected-system-prompt-id',
+  'profer-selected-system-prompt-id',
   BUILTIN_DEFAULT_ID
 )
 

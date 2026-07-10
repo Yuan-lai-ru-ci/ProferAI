@@ -6,9 +6,11 @@
     <title>Profer</title>
     <script>
       // 窗口标题初始化（在 React 加载前执行，避免标题闪烁）
+      // 兼容旧 key（proma-→profer- 迁移，一两个版本后移除旧读）
       ;(function() {
         try {
-          var profile = JSON.parse(localStorage.getItem('proma-user-profile') || 'null')
+          var raw = localStorage.getItem('profer-user-profile') || localStorage.getItem('proma-user-profile')
+          var profile = JSON.parse(raw || 'null')
           if (profile && profile.userName) {
             document.title = profile.userName
           }

@@ -4,6 +4,10 @@
  * 挂载 React 应用，初始化主题系统。
  */
 
+// localStorage key 迁移：proma-* → profer-*（一次性，必须在任何模块读 localStorage 前执行）
+import { migrateLocalStorageKeys } from '@/lib/localstorage-migration'
+migrateLocalStorageKeys()
+
 // 引入 Inter Variable 自托管字体（含 400/500/600/700 等所有字重）
 // index.css 声明了全部语言子集（latin/latin-ext/cyrillic/greek/vietnamese 等），
 // 但每个 @font-face 都带 unicode-range，浏览器仅按需下载实际用到的子集（本应用主要是 latin）。

@@ -551,7 +551,7 @@ export async function revertFile(dirPath: string, filePath: string, gitRoot?: st
  * 对于 worktree，git 的公共目录（--git-common-dir）始终指向主仓库的 .git，
  * 因此其父目录即主仓库根。普通仓库返回自身根目录。非 git 路径返回 null。
  *
- * 用于安全校验：worktree 常被放在主仓库之外（如 ~/proma-dev/worktrees/xxx），
+ * 用于安全校验：worktree 常被放在主仓库之外（如 ~/profer-dev/worktrees/xxx），
  * 直接判定其路径会越界；改为校验它回溯到的主仓库是否已授权。
  */
 export async function getMainRepoRoot(somePath: string): Promise<string | null> {

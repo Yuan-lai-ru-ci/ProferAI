@@ -39,7 +39,7 @@ export const previewFileMapAtom = atom<Map<string, PreviewFile | null>>(new Map(
 export const previewSplitRatioAtom = atomWithStorage<number>('profer-preview-split-ratio', 0.5)
 
 /** 自动预览开关，持久化（默认关闭以减轻设备性能负担，老用户保留已设置的偏好） */
-export const autoPreviewEnabledAtom = atomWithStorage<boolean>('proma-auto-preview-enabled', false)
+export const autoPreviewEnabledAtom = atomWithStorage<boolean>('profer-auto-preview-enabled', false)
 
 /**
  * 预览默认展开方式，持久化。

@@ -166,7 +166,7 @@ function buildClientRequest(settings: VoiceDictationSettings): Buffer {
 
   const request = {
     user: {
-      uid: 'proma-desktop',
+      uid: 'profer-desktop',
     },
     audio,
     request: requestOptions,

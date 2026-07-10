@@ -201,15 +201,15 @@ export function MarkdownRichEditor({
         className={cn(
           'h-full min-h-full flex-1',
           isEditable
-            ? '[&_.profer-mermaid-preview]:hidden [&_.proma-code-source-body]:block'
+            ? '[&_.profer-mermaid-preview]:hidden [&_.profer-code-source-body]:block'
             : [
                 '[&_.profer-code-block--mermaid]:overflow-visible',
                 '[&_.profer-code-block--mermaid]:rounded-none',
                 '[&_.profer-code-block--mermaid]:border-0',
                 '[&_.profer-code-block--mermaid]:bg-transparent',
-                '[&_.profer-code-block--mermaid_.proma-code-header]:hidden',
+                '[&_.profer-code-block--mermaid_.profer-code-header]:hidden',
                 '[&_.profer-code-block--mermaid_.profer-mermaid-preview]:block',
-                '[&_.profer-code-block--mermaid_.proma-code-source-body]:hidden',
+                '[&_.profer-code-block--mermaid_.profer-code-source-body]:hidden',
               ],
         )}
       />
