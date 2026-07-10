@@ -182,7 +182,7 @@ function buildScreenshotHtml(htmlContent: string, isDark: boolean, css: string, 
   return `<!DOCTYPE html>
 <html class="${safeThemeClass}"><head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data: blob: proma-file: https: http:; media-src 'self' data: blob: proma-file: https: http:; font-src 'self' data: https: http:; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data: blob: profer-file: https: http:; media-src 'self' data: blob: profer-file: https: http:; font-src 'self' data: https: http:; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <style>${safeCss}</style>
 <style>
 *{box-sizing:border-box}

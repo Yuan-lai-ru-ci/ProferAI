@@ -854,7 +854,7 @@ export function resolveAppIconPath(variantId: string): string | null {
   if (!variantId || variantId === 'default') {
     return join(resourcesDir, 'icon.png')
   }
-  return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
+  return join(resourcesDir, 'profer-logos', `proma-${variantId}.png`)
 }
 
 let _ipcHandlersRegistered = false
@@ -3206,7 +3206,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 注册文件路径到 proma-file:// 协议
+  // 注册文件路径到 profer-file:// 协议
   // 路径必须在基础授权根目录内（工作区 + 用户常用目录）。
   // 兼容旧调用方：未传 access 时回退到基础授权根校验。
   ipcMain.handle(
@@ -4510,7 +4510,7 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       title: '选择迁移文件',
       filters: [
-        { name: 'Proma 迁移文件', extensions: ['proma-backup', 'proma-share'] },
+        { name: 'Proma 迁移文件', extensions: ['profer-backup', 'profer-share'] },
         { name: '所有文件', extensions: ['*'] },
       ],
       properties: ['openFile'],
@@ -4520,7 +4520,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('migration:saveFileDialog', async (_, mode: string) => {
     const { dialog } = await import('electron')
-    const ext = mode === 'personal' ? 'proma-backup' : 'proma-share'
+    const ext = mode === 'personal' ? 'profer-backup' : 'profer-share'
     const defaultName = `proma-migration-${new Date().toISOString().slice(0, 10)}.${ext}`
     const result = await dialog.showSaveDialog({
       title: '保存迁移文件',
