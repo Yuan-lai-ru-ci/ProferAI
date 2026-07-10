@@ -10,6 +10,7 @@ import { atomFamily, atomWithStorage } from 'jotai/utils'
 import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@profer/shared'
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
+import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -283,6 +284,35 @@ export const workspaceCapabilitiesVersionAtom = atom(0)
 
 /** 工作区文件版本号 — 文件变化时自增，触发文件浏览器重新加载 */
 export const workspaceFilesVersionAtom = atom(0)
+
+// ===== Agent 运行中追加消息队列 Atoms =====
+
+/** 全局队列 Map — 以 sessionId 为 key，存运行中用户追加、待发送的消息 */
+export const agentSessionMessageQueueAtom = atom<Map<string, AgentQueuedMessage[]>>(new Map())
+
+/**
+ * 单个 session 的追加消息队列派生 atom（读写）— 按 sessionId 切片
+ * read：返回当前 session 的数组（空数组兜底）
+ * write：接受新数组或 updater 函数，写回时空数组转为 delete，避免 Map 长期残留空 entry
+ */
+export const agentMessageQueueAtomFamily = atomFamily((sessionId: string) =>
+  atom(
+    (get) => get(agentSessionMessageQueueAtom).get(sessionId) ?? [],
+    (_get, set, update: AgentQueuedMessage[] | ((prev: AgentQueuedMessage[]) => AgentQueuedMessage[])) => {
+      set(agentSessionMessageQueueAtom, (prev) => {
+        const current = prev.get(sessionId) ?? []
+        const next = typeof update === 'function' ? update(current) : update
+        const map = new Map(prev)
+        if (next.length === 0) {
+          map.delete(sessionId)
+        } else {
+          map.set(sessionId, next)
+        }
+        return map
+      })
+    },
+  ),
+)
 
 // ===== 侧面板 Atoms =====
 

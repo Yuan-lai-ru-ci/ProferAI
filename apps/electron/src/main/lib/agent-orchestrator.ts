@@ -1630,16 +1630,23 @@ export class AgentOrchestrator {
               // adapter 在"本轮结束但仍有后台任务/定时任务在飞行"时打的注解：
               // 走轻量完成（UI 空闲可输入、host 保留会话），等待 task_notification 自动续轮。
               const keptOpenForTasks = (msg as Record<string, unknown>)._keepChannelOpenForTasks === true
-              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
+              // adapter 在"当前 turn 真正结束、且有排队消息等待驱动下一轮"时打的注解：
+              // 视同 continuable —— 保持通道开、UI 维持 running，不走 idleComplete。
+              const keptOpenForQueue = (msg as Record<string, unknown>)._keepChannelOpenForQueue === true
+              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks || keptOpenForQueue
               // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
               const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
               console.log(
                 `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}, ` +
                 `terminal_reason=${resultTerminalReason ?? 'undefined'}, keepChannelOpen=${keepChannelOpen}` +
                 (keptOpenForTasks ? ', keptOpenForTasks=true' : '') +
+                (keptOpenForQueue ? ', keptOpenForQueue=true' : '') +
                 (hasDeferredTool ? ', hasDeferredTool=true' : ''),
               )
-              if (keptOpenForTasks) {
+              if (keptOpenForQueue) {
+                // 排队续轮：保持 running、继续 park 在 queryIterator.next()，等 SDK 拉取排队消息驱动下一轮。
+                // 不 idleComplete、不 drain（keepChannelOpen 为真已跳过下面的 drain 分支）。
+              } else if (keptOpenForTasks) {
                 // 轻量完成：UI 置空闲可输入，但 host 保持运行态（不 releaseActiveRun、不 break、不启动 drain 超时），
                 // while 循环继续 park 在 queryIterator.next()，等待后台任务完成时 SDK 自动 yield 的新一轮消息。
                 awaitingBackgroundWake = true
@@ -2096,9 +2103,13 @@ export class AgentOrchestrator {
   async queueMessage(
     sessionId: string,
     text: string,
+    rawText?: string,
     _priority?: string,
     presetUuid?: string,
     opts?: { interrupt?: boolean },
+    mentionedSkills?: string[],
+    mentionedMcpServers?: string[],
+    mentionedSessionIds?: string[],
   ): Promise<string> {
     if (!this.activeSessions.has(sessionId)) {
       throw new Error(`[Agent 编排] 会话未运行，无法追加消息: ${sessionId}`)
@@ -2115,20 +2126,43 @@ export class AgentOrchestrator {
     uuids.add(uuid)
     this.queuedMessageUuids.set(sessionId, uuids)
 
-    // 构造 SDKUserMessage 并注入（强制 'now' 优先级）
+    // 注入 mention 引用指令（Skill/MCP/会话）— 仅影响发往 SDK 的 prompt，不影响持久化。
+    // 与 sendMessage 路径保持一致的拼装逻辑。
+    let enrichedText = text
+    const sessionMeta = getAgentSessionMeta(sessionId)
+    const workspaceId = sessionMeta?.workspaceId
+    const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
+    const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
+    if (referencedSessionsBlock) {
+      enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
+    }
+    if (mentionedSkills?.length || mentionedMcpServers?.length) {
+      const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
+      for (const slug of mentionedSkills ?? []) {
+        const qualifiedName = workspaceSlug
+          ? `profer-workspace-${workspaceSlug}:${slug}`
+          : slug
+        toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
+      }
+      for (const name of mentionedMcpServers ?? []) {
+        toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+      }
+      enrichedText = `<mentioned_tools>\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${text}`
+    }
+
+    // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）
     const sdkMessage = {
       type: 'user' as const,
-      message: { role: 'user' as const, content: text },
+      message: { role: 'user' as const, content: enrichedText },
       parent_tool_use_id: null,
-      priority: 'now' as const,
+      priority: 'next' as const,
       uuid,
       session_id: sessionId,
     }
 
     try {
-      // 用户希望"立即打断当前输出并续跑新消息"：先软中断，再把消息压入通道
-      // - interrupt() 让 SDK 结束当前 turn 并 yield 一个 aborted result
-      // - 随后通道里的 'now' 消息会作为下一轮 turn 的用户输入被消费
+      // interrupt=true：先软中断当前 turn 再注入（下一轮消费本条）；
+      // 否则排队不打断：消息直接入 channel FIFO，priority:'next' 告知 CLI 等当前 turn 完成后再处理。
       if (opts?.interrupt && this.adapter.interruptQuery) {
         try {
           await this.adapter.interruptQuery(sessionId)
@@ -2140,12 +2174,12 @@ export class AgentOrchestrator {
       await this.adapter.sendQueuedMessage(sessionId, sdkMessage)
       console.log(`[Agent 编排] 追加消息已注入: sessionId=${sessionId}, uuid=${uuid}, interrupt=${!!opts?.interrupt}`)
 
-      // 立即持久化到 JSONL
+      // 立即持久化到 JSONL — 仅存原始文本（rawText），不含 prompt 工程块
       const persistMsg: SDKMessage = {
         type: 'user',
         uuid,
         message: {
-          content: [{ type: 'text', text }],
+          content: [{ type: 'text', text: rawText ?? text }],
         },
         parent_tool_use_id: null,
         _createdAt: Date.now(),
