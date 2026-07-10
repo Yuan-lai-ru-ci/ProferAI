@@ -136,7 +136,7 @@ function markMatchesInTextNode(node: Text, matcher: RegExp): HTMLElement[] {
       fragment.appendChild(document.createTextNode(text.slice(offset, item.index)))
     }
     const mark = document.createElement('mark')
-    mark.dataset.promaFindMatch = 'true'
+    mark.dataset.proferFindMatch = 'true'
     mark.textContent = item.text
     applyMatchStyle(mark, false)
     fragment.appendChild(mark)
@@ -174,7 +174,7 @@ function applyHighlights(container: HTMLElement, query: string, options: FindOpt
   }
 
   marks.forEach((mark, index) => {
-    mark.dataset.promaFindIndex = String(index)
+    mark.dataset.proferFindIndex = String(index)
   })
   return marks
 }
@@ -182,11 +182,11 @@ function applyHighlights(container: HTMLElement, query: string, options: FindOpt
 function setActiveMatch(marks: HTMLElement[], activeIndex: number): void {
   marks.forEach((mark, index) => {
     if (index === activeIndex) {
-      mark.dataset.promaFindActive = 'true'
+      mark.dataset.proferFindActive = 'true'
       applyMatchStyle(mark, true)
       mark.scrollIntoView({ block: 'center', inline: 'nearest' })
     } else {
-      delete mark.dataset.promaFindActive
+      delete mark.dataset.proferFindActive
       applyMatchStyle(mark, false)
     }
   })
