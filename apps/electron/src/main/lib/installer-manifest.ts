@@ -1,7 +1,7 @@
 ﻿/**
  * Installer Manifest 客户端
  *
- * 从 proma-api 的 /api/v1/installers/manifest 接口拉取第三方安装包清单，
+ * 从 profer-api 的 /api/v1/installers/manifest 接口拉取第三方安装包清单，
  * 带 5 分钟缓存和内置 fallback——断网或接口不可用时至少能拿到官方上游 URL。
  */
 

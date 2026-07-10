@@ -222,7 +222,7 @@ export const agentStreamingStatesAtom = atom<Map<string, AgentStreamState>>(new 
 
 /** Agent 流式结束后是否保持过程组展开，默认收起以降低结果阅读干扰 */
 export const agentProcessGroupsKeepExpandedAtom = atomWithStorage<boolean>(
-  'proma-agent-process-groups-keep-expanded',
+  'profer-agent-process-groups-keep-expanded',
   false,
 )
 
@@ -287,10 +287,10 @@ export const workspaceFilesVersionAtom = atom(0)
 // ===== 侧面板 Atoms =====
 
 /** 侧面板是否打开（全局共享，所有会话共用一个状态） */
-export const agentSidePanelOpenAtom = atomWithStorage<boolean>('proma-agent-sidepanel-open', true)
+export const agentSidePanelOpenAtom = atomWithStorage<boolean>('profer-agent-sidepanel-open', true)
 
 /** 侧面板宽度（全局共享，用户拖拽后持久化） */
-export const agentSidePanelWidthAtom = atomWithStorage<number>('proma-agent-sidepanel-width', 280)
+export const agentSidePanelWidthAtom = atomWithStorage<number>('profer-agent-sidepanel-width', 280)
 
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())

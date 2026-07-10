@@ -163,11 +163,11 @@ export async function addMemory(
 
   await callApi(credentials, '/add/message', {
     user_id: credentials.userId,
-    conversation_id: params.conversationId || `proma-${Date.now()}`,
+    conversation_id: params.conversationId || `profer-${Date.now()}`,
     messages,
     source: 'proma',
     tags: params.tags ?? ['proma'],
     async_mode: true,
-    info: { source: 'proma-builtin' },
+    info: { source: 'profer-builtin' },
   })
 }
