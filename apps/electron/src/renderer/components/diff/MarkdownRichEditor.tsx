@@ -90,7 +90,7 @@ export function MarkdownRichEditor({
       openOnClick: false,
       autolink: true,
       linkOnPaste: true,
-      validate: (href) => /^(https?|mailto|file|proma-file):/.test(href),
+      validate: (href) => /^(https?|mailto|file|profer-file):/.test(href),
       HTMLAttributes: {
         class: 'text-primary underline',
       },

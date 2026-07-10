@@ -69,7 +69,7 @@ export function MigrationImportDialog(): React.ReactElement {
         <DialogHeader>
           <DialogTitle>导入配置</DialogTitle>
           <DialogDescription>
-            从备份文件导入数据，支持 .proma-backup 和 .proma-share 格式
+            从备份文件导入数据，支持 .profer-backup 和 .profer-share 格式
           </DialogDescription>
         </DialogHeader>
 
@@ -81,7 +81,7 @@ export function MigrationImportDialog(): React.ReactElement {
                 <FolderOpen size={28} className="text-muted-foreground" />
               </div>
               <p className="text-sm text-muted-foreground text-center">
-                选择 .proma-backup 或 .proma-share 文件开始导入
+                选择 .profer-backup 或 .profer-share 文件开始导入
               </p>
               <button
                 onClick={handleSelectImportFile}

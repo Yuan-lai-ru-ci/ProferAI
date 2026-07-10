@@ -15,24 +15,24 @@ import { Button } from '@/components/ui/button'
 // ===== Logo 资源导入 =====
 
 // 基础色系
-import promaBlackLogo from '@/assets/bots/proma-logos/proma-black.png'
-import promaWhiteLogo from '@/assets/bots/proma-logos/profer-white.png'
-import promaBlueLogo from '@/assets/bots/proma-logos/proma-blue.png'
-import promaPurpleLogo from '@/assets/bots/proma-logos/profer-purple.png'
-import promaGradientLogo from '@/assets/bots/proma-logos/profer-gradient.png'
-import promaTransparentLogo from '@/assets/bots/proma-logos/proma-transparent.png'
+import promaBlackLogo from '@/assets/bots/profer-logos/proma-black.png'
+import promaWhiteLogo from '@/assets/bots/profer-logos/profer-white.png'
+import promaBlueLogo from '@/assets/bots/profer-logos/proma-blue.png'
+import promaPurpleLogo from '@/assets/bots/profer-logos/profer-purple.png'
+import promaGradientLogo from '@/assets/bots/profer-logos/profer-gradient.png'
+import promaTransparentLogo from '@/assets/bots/profer-logos/proma-transparent.png'
 
 // 潘通年度色
-import promaCoralLogo from '@/assets/bots/proma-logos/proma-coral.png'
-import promaVeriPeriLogo from '@/assets/bots/proma-logos/profer-veri-peri.png'
-import promaVivaMagentaLogo from '@/assets/bots/proma-logos/profer-viva-magenta.png'
-import promaMochaMousseLogo from '@/assets/bots/proma-logos/profer-mocha-mousse.png'
-import promaEmeraldLogo from '@/assets/bots/proma-logos/profer-emerald.png'
+import promaCoralLogo from '@/assets/bots/profer-logos/proma-coral.png'
+import promaVeriPeriLogo from '@/assets/bots/profer-logos/profer-veri-peri.png'
+import promaVivaMagentaLogo from '@/assets/bots/profer-logos/profer-viva-magenta.png'
+import promaMochaMousseLogo from '@/assets/bots/profer-logos/profer-mocha-mousse.png'
+import promaEmeraldLogo from '@/assets/bots/profer-logos/profer-emerald.png'
 
 // 科技风格
-import proma8bitLogo from '@/assets/bots/proma-logos/proma-8bit.png'
-import promaCyberpunkLogo from '@/assets/bots/proma-logos/proma-cyberpunk.png'
-import promaFuturisticLogo from '@/assets/bots/proma-logos/profer-futuristic.png'
+import proma8bitLogo from '@/assets/bots/profer-logos/proma-8bit.png'
+import promaCyberpunkLogo from '@/assets/bots/profer-logos/proma-cyberpunk.png'
+import promaFuturisticLogo from '@/assets/bots/profer-logos/profer-futuristic.png'
 
 // ===== 类型 =====
 
@@ -54,7 +54,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '经典黑',
     description: '黑色背景，适合浅色界面',
     src: promaBlackLogo,
-    resourcePath: 'proma-logos/proma-black.png',
+    resourcePath: 'profer-logos/proma-black.png',
     previewBg: 'bg-neutral-900',
   },
   {
@@ -62,7 +62,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '纯白版',
     description: '白色背景，适合深色界面',
     src: promaWhiteLogo,
-    resourcePath: 'proma-logos/profer-white.png',
+    resourcePath: 'profer-logos/profer-white.png',
     previewBg: 'bg-white',
   },
   {
@@ -70,7 +70,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '品牌蓝',
     description: '深蓝背景，适合正式场合',
     src: promaBlueLogo,
-    resourcePath: 'proma-logos/proma-blue.png',
+    resourcePath: 'profer-logos/proma-blue.png',
     previewBg: 'bg-blue-900',
   },
   {
@@ -78,7 +78,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '紫色版',
     description: '紫色调，个性风格',
     src: promaPurpleLogo,
-    resourcePath: 'proma-logos/profer-purple.png',
+    resourcePath: 'profer-logos/profer-purple.png',
     previewBg: 'bg-purple-900',
   },
   {
@@ -86,7 +86,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '渐变版',
     description: '蓝紫渐变背景',
     src: promaGradientLogo,
-    resourcePath: 'proma-logos/profer-gradient.png',
+    resourcePath: 'profer-logos/profer-gradient.png',
     previewBg: 'bg-gradient-to-br from-blue-600 to-purple-600',
   },
   {
@@ -94,7 +94,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '透明底',
     description: '无背景，可叠加任意颜色',
     src: promaTransparentLogo,
-    resourcePath: 'proma-logos/proma-transparent.png',
+    resourcePath: 'profer-logos/proma-transparent.png',
     previewBg: 'bg-[repeating-conic-gradient(#e5e7eb_0%_25%,#fff_0%_50%)] bg-[length:16px_16px]',
   },
   // 潘通年度色
@@ -103,7 +103,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '珊瑚橘',
     description: 'Pantone 2019 Living Coral',
     src: promaCoralLogo,
-    resourcePath: 'proma-logos/proma-coral.png',
+    resourcePath: 'profer-logos/proma-coral.png',
     previewBg: 'bg-[#FF6F61]',
   },
   {
@@ -111,7 +111,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '长春花蓝',
     description: 'Pantone 2022 Very Peri',
     src: promaVeriPeriLogo,
-    resourcePath: 'proma-logos/profer-veri-peri.png',
+    resourcePath: 'profer-logos/profer-veri-peri.png',
     previewBg: 'bg-[#6667AB]',
   },
   {
@@ -119,7 +119,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '非凡洋红',
     description: 'Pantone 2023 Viva Magenta',
     src: promaVivaMagentaLogo,
-    resourcePath: 'proma-logos/profer-viva-magenta.png',
+    resourcePath: 'profer-logos/profer-viva-magenta.png',
     previewBg: 'bg-[#BB2649]',
   },
   {
@@ -127,7 +127,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '摩卡慕斯',
     description: 'Pantone 2025 Mocha Mousse',
     src: promaMochaMousseLogo,
-    resourcePath: 'proma-logos/profer-mocha-mousse.png',
+    resourcePath: 'profer-logos/profer-mocha-mousse.png',
     previewBg: 'bg-[#A47764]',
   },
   {
@@ -135,7 +135,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '翡翠绿',
     description: 'Pantone 2013 Emerald',
     src: promaEmeraldLogo,
-    resourcePath: 'proma-logos/profer-emerald.png',
+    resourcePath: 'profer-logos/profer-emerald.png',
     previewBg: 'bg-[#009473]',
   },
   // 科技风格
@@ -144,7 +144,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '8bit 像素风',
     description: '复古像素游戏风格',
     src: proma8bitLogo,
-    resourcePath: 'proma-logos/proma-8bit.png',
+    resourcePath: 'profer-logos/proma-8bit.png',
     previewBg: 'bg-[#1a1a2e]',
   },
   {
@@ -152,7 +152,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '赛博朋克',
     description: '霓虹赛博风格',
     src: promaCyberpunkLogo,
-    resourcePath: 'proma-logos/proma-cyberpunk.png',
+    resourcePath: 'profer-logos/proma-cyberpunk.png',
     previewBg: 'bg-[#0d0221]',
   },
   {
@@ -160,7 +160,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     name: '未来质感',
     description: '金属全息科技风',
     src: promaFuturisticLogo,
-    resourcePath: 'proma-logos/profer-futuristic.png',
+    resourcePath: 'profer-logos/profer-futuristic.png',
     previewBg: 'bg-[#4a4a4a]',
   },
 ] as const
