@@ -20,7 +20,7 @@ import { ProferLogoSettings } from './ProferLogoSettings'
 import feishuLogo from '@/assets/bots/feishu.png'
 import dingtalkLogo from '@/assets/bots/dingding.png'
 import wechatLogo from '@/assets/bots/wechat.png'
-import proferModelLogo from '@/assets/models/proma.png'
+import proferModelLogo from '@/assets/models/profer.png'
 
 // ===== 类型 =====
 

@@ -110,7 +110,7 @@ import MiniMaxLogo from '@/assets/models/minimax.png'
 import XiaomiLogo from '@/assets/models/xiaomi.png'
 
 // Proma
-import ProferLogo from '@/assets/models/proma.png'
+import ProferLogo from '@/assets/models/profer.png'
 
 // Cohere
 import CohereLogo from '@/assets/models/cohere.png'
