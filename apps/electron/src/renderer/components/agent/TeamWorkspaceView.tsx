@@ -57,7 +57,7 @@ function createTeamFileDragPayload(entry: FileEntry): string {
 }
 
 function isTeamFileTransfer(dataTransfer: DataTransfer): boolean {
-  return Array.from(dataTransfer.types).includes('application/x-proma-team-file')
+  return Array.from(dataTransfer.types).includes('application/x-profer-team-file')
 }
 
 export function TeamWorkspaceView(): React.ReactElement {
@@ -651,7 +651,7 @@ export function TeamWorkspaceView(): React.ReactElement {
 
   const handleAgentDrop = React.useCallback((e: React.DragEvent): void => {
     if (!isTeamFileTransfer(e.dataTransfer)) return
-    const payload = e.dataTransfer.getData('application/x-proma-team-file')
+    const payload = e.dataTransfer.getData('application/x-profer-team-file')
     if (!payload) return
     e.preventDefault()
     e.stopPropagation()
@@ -880,7 +880,7 @@ export function TeamWorkspaceView(): React.ReactElement {
     e.preventDefault()
     e.stopPropagation()
     if (dragLeaveTimer.current) { clearTimeout(dragLeaveTimer.current); dragLeaveTimer.current = null }
-    const isInternal = Array.from(e.dataTransfer.types).includes('application/x-proma-move')
+    const isInternal = Array.from(e.dataTransfer.types).includes('application/x-profer-move')
     setDragSourceInternal(isInternal) // 每次拖入都重置，防止上次残留
     if (isInternal) return
     setDragOver(true)
@@ -898,7 +898,7 @@ export function TeamWorkspaceView(): React.ReactElement {
     setDragOver(false)
     setDragOverFolder(null)
     setDragSourceInternal(false)
-    const src = e.dataTransfer.getData('application/x-proma-move')
+    const src = e.dataTransfer.getData('application/x-profer-move')
     if (src) { handleMove(src, targetDir); return }
     handleDropFiles(e, targetDir || undefined)
   }, [handleMove, handleDropFiles, currentPath, dragOverFolder])
@@ -916,8 +916,8 @@ export function TeamWorkspaceView(): React.ReactElement {
         <div
           draggable
           onDragStart={(e) => {
-            e.dataTransfer.setData('application/x-proma-move', entry.path)
-            e.dataTransfer.setData('application/x-proma-team-file', createTeamFileDragPayload(entry))
+            e.dataTransfer.setData('application/x-profer-move', entry.path)
+            e.dataTransfer.setData('application/x-profer-team-file', createTeamFileDragPayload(entry))
             e.dataTransfer.effectAllowed = 'copyMove'
             setDragSourceInternal(true)
           }}
@@ -942,7 +942,7 @@ export function TeamWorkspaceView(): React.ReactElement {
             if (dragLeaveTimer.current) { clearTimeout(dragLeaveTimer.current); dragLeaveTimer.current = null }
             setDragOver(false); setDragSourceInternal(false); setDragOverFolder(null)
             if (!isDir) return
-            const src = e.dataTransfer.getData('application/x-proma-move')
+            const src = e.dataTransfer.getData('application/x-profer-move')
             if (src && src !== entry.path) handleMove(src, entry.path)
             else if (!src) handleDropFiles(e, entry.path)
           }}
@@ -1278,8 +1278,8 @@ export function TeamWorkspaceView(): React.ReactElement {
                   <div key={entry.path}
                     draggable
                     onDragStart={(e) => {
-                      e.dataTransfer.setData('application/x-proma-move', entry.path)
-                      e.dataTransfer.setData('application/x-proma-team-file', createTeamFileDragPayload(entry))
+                      e.dataTransfer.setData('application/x-profer-move', entry.path)
+                      e.dataTransfer.setData('application/x-profer-team-file', createTeamFileDragPayload(entry))
                       e.dataTransfer.effectAllowed = 'copyMove'
                       setDragSourceInternal(true)
                     }}
@@ -1299,7 +1299,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                       if (dragLeaveTimer.current) { clearTimeout(dragLeaveTimer.current); dragLeaveTimer.current = null }
                       setDragOver(false); setDragSourceInternal(false); setDragOverFolder(null)
                       if (!entry.isDirectory) return
-                      const src = e.dataTransfer.getData('application/x-proma-move')
+                      const src = e.dataTransfer.getData('application/x-profer-move')
                       if (src && src !== entry.path) handleMove(src, entry.path)
                       else if (!src) handleDropFiles(e, entry.path)
                     }}
