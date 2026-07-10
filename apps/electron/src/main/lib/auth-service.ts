@@ -14,7 +14,7 @@ import { fetch as undiciFetch } from 'undici'
 import { getTeamServersConfigPath } from './config-paths'
 import { isCommercialBuild } from './build-target'
 import { getDeviceAuthInfo } from './identity-service'
-import type { TeamServerConfig } from '@proma/shared'
+import type { TeamServerConfig } from '@profer/shared'
 
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
 const API_PREFIX = '/v1'

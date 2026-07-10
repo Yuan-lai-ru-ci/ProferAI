@@ -10,7 +10,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { RotateCw } from 'lucide-react'
-import type { GitHubRelease } from '@proma/shared'
+import type { GitHubRelease } from '@profer/shared'
 import {
   AlertDialog,
   AlertDialogContent,

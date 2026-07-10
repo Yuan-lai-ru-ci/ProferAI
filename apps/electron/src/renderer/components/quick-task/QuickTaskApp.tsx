@@ -7,7 +7,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { fileToBase64, formatFileNames } from '@/lib/file-utils'
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
 import { toast } from 'sonner'
 
 /** 任务模式 */

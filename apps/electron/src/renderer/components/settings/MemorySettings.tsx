@@ -12,7 +12,7 @@ import { ExternalLink, Eye, EyeOff, Loader2, CheckCircle2, XCircle } from 'lucid
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
-import type { MemoryConfig } from '@proma/shared'
+import type { MemoryConfig } from '@profer/shared'
 import { SettingsSection, SettingsCard } from './primitives'
 import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
 

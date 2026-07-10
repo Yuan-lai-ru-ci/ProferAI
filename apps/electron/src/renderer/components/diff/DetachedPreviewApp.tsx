@@ -7,7 +7,7 @@
 import * as React from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { useSetAtom } from 'jotai'
-import type { DetachedPreviewWindowData } from '@proma/shared'
+import type { DetachedPreviewWindowData } from '@profer/shared'
 import { agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
 import { DiffTabContent } from './DiffTabContent'

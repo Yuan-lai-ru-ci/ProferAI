@@ -21,7 +21,7 @@ import {
 import { cn } from '@/lib/utils'
 import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { currentGraphAtom } from '@/atoms/graph-atoms'
-import { computeLayout, type TaskGraph, type TaskNode, type TaskStatus, type LayoutResult } from '@proma/project-core'
+import { computeLayout, type TaskGraph, type TaskNode, type TaskStatus, type LayoutResult } from '@profer/project-core'
 import { GraphQuestionInput } from './GraphQuestionInput'
 import { useOpenSession } from '@/hooks/useOpenSession'
 

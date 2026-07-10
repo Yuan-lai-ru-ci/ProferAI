@@ -18,7 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { SettingsCard } from '@/components/settings/primitives'
 import { SkillFilesPanel } from '@/components/settings/SkillFilesPanel'
 import { cn } from '@/lib/utils'
-import type { SkillMeta } from '@proma/shared'
+import type { SkillMeta } from '@profer/shared'
 import { extractSkillBody, rebuildSkillMd } from './skillMdUtils'
 
 interface SkillDetailSheetProps {

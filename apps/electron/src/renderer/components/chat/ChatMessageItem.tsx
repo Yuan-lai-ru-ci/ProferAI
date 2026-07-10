@@ -37,7 +37,7 @@ import { UserAvatar } from './UserAvatar'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import type { ChatMessage } from '@proma/shared'
+import type { ChatMessage } from '@profer/shared'
 import type { InlineEditSubmitPayload } from './InlineEditForm'
 import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
 

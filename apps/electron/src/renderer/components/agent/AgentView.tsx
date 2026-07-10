@@ -105,8 +105,8 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 
@@ -147,7 +147,7 @@ function getUserTextFromSDKMessage(message: SDKMessage): string | null {
 // ===== 思考模式 Hover Popover =====
 
 interface AgentThinkingPopoverProps {
-  agentThinking: import('@proma/shared').ThinkingConfig | undefined
+  agentThinking: import('@profer/shared').ThinkingConfig | undefined
   onToggle: () => void
 }
 
@@ -160,7 +160,7 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
   const isEnabled = agentThinking?.type === 'adaptive'
 
   const handleEffortChange = React.useCallback((v: string) => {
-    const value = v as import('@proma/shared').AgentEffort
+    const value = v as import('@profer/shared').AgentEffort
     setEffort(value)
     window.electronAPI.updateSettings({ agentEffort: value }).catch(console.error)
   }, [setEffort])
@@ -340,11 +340,11 @@ function DisplayOptionsPopover({
 function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactElement {
   const atomSummary = useAtomValue(currentGraphSummaryAtom)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
-  const [ipcSummary, setIpcSummary] = React.useState<import('@proma/project-core').GraphSummary | null>(null)
+  const [ipcSummary, setIpcSummary] = React.useState<import('@profer/project-core').GraphSummary | null>(null)
 
   React.useEffect(() => {
     if (!sessionId) return
-    const api = window.electronAPI as { getGraphSummary?: (id: string) => Promise<import('@proma/project-core').GraphSummary> }
+    const api = window.electronAPI as { getGraphSummary?: (id: string) => Promise<import('@profer/project-core').GraphSummary> }
     if (!api.getGraphSummary) return
     api.getGraphSummary(sessionId).then(s => { if (s && s.totalTasks > 0) setIpcSummary(s) }).catch(() => {})
   }, [sessionId])
@@ -408,7 +408,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     prevStreamingRef.current = streaming
     // 仅在 streaming: true → false 时触发一次加载
     if (wasStreaming && !streaming && sessionId) {
-      const api = window.electronAPI as { getGraph?: (id: string) => Promise<import('@proma/project-core').TaskGraph> }
+      const api = window.electronAPI as { getGraph?: (id: string) => Promise<import('@profer/project-core').TaskGraph> }
       api.getGraph?.(sessionId)
         .then((g) => { if (g && Object.keys(g.nodes).length > 0) setPersistedGraph(g) })
         .catch(() => {})
@@ -1374,7 +1374,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const localUuid = crypto.randomUUID()
 
       // 1. 立即注入 liveMessages（作为普通用户消息显示）
-      const syntheticMsg: import('@proma/shared').SDKMessage = {
+      const syntheticMsg: import('@profer/shared').SDKMessage = {
         type: 'user',
         uuid: localUuid,
         message: {
@@ -1382,7 +1382,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         },
         parent_tool_use_id: null,
         _createdAt: Date.now(),
-      } as unknown as import('@proma/shared').SDKMessage
+      } as unknown as import('@profer/shared').SDKMessage
 
       store.set(liveMessagesMapAtom, (prev) => {
         const map = new Map(prev)
@@ -1686,7 +1686,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const localUuid = crypto.randomUUID()
 
     // 1. 立即注入合成用户消息（/compact 气泡立刻可见，与普通发送路径一致）
-    const syntheticMsg: import('@proma/shared').SDKMessage = {
+    const syntheticMsg: import('@profer/shared').SDKMessage = {
       type: 'user',
       uuid: localUuid,
       message: {
@@ -1694,7 +1694,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       },
       parent_tool_use_id: null,
       _createdAt: streamStartedAt,
-    } as unknown as import('@proma/shared').SDKMessage
+    } as unknown as import('@profer/shared').SDKMessage
 
     store.set(liveMessagesMapAtom, (prev) => {
       const map = new Map(prev)

@@ -4,7 +4,7 @@
  *
  * 设计：
  * - 用 `bun build --compile` 把 apps/cli 连同其 workspace 依赖
- *   （@proma/session-core / @proma/shared）打成单个自包含可执行档，
+ *   （@profer/session-core / @profer/shared）打成单个自包含可执行档，
  *   用户机器无需安装 bun/node 即可运行。
  * - 输出到 apps/electron/resources/bin/，由 electron-builder 经 extraResources
  *   打进 process.resourcesPath/bin/，运行时由主进程注入 PROMA_CLI 暴露给 skill。

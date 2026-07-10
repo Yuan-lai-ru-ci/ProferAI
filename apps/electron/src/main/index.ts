@@ -159,7 +159,7 @@ import {
   shouldSuppressVoiceDictationActivate,
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
-import { setPromaVersion } from '@proma/core'
+import { setPromaVersion } from '@profer/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'

@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, chmodSync, rmSync, createWriteStream, readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { createHash } from 'crypto'
-import type { PlatformArch, BunDownloadInfo } from '@proma/shared'
+import type { PlatformArch, BunDownloadInfo } from '@profer/shared'
 
 /** Bun 下载 URL 基础路径 */
 const BUN_DOWNLOAD_BASE = 'https://github.com/oven-sh/bun/releases/download'

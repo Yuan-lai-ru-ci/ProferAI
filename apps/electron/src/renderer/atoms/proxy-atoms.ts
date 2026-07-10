@@ -5,7 +5,7 @@
  */
 
 import { atom } from 'jotai'
-import type { ProxyConfig } from '@proma/shared'
+import type { ProxyConfig } from '@profer/shared'
 
 /**
  * 代理配置 Atom

@@ -11,7 +11,7 @@ import { Paperclip, FolderPlus, Loader2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { fileToBase64, formatFileNames } from '@/lib/file-utils'
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
 
 interface FileDropZoneProps {
   workspaceSlug: string

@@ -34,7 +34,7 @@ import {
 } from './config-paths'
 import { listAgentWorkspaces, getAgentWorkspace, getAllWorkspaceSkills, getWorkspaceMcpConfig } from './agent-workspace-manager'
 import { listChannels, decryptApiKey } from './channel-manager'
-import type { AgentWorkspace } from '@proma/shared'
+import type { AgentWorkspace } from '@profer/shared'
 
 // ─── 类型定义 ────────────────────────────────────────────────────────────────
 

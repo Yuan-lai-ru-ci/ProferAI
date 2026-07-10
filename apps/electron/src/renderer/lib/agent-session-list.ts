@@ -1,4 +1,4 @@
-import type { AgentSessionMeta } from '@proma/shared'
+import type { AgentSessionMeta } from '@profer/shared'
 
 /** 按最近更新时间排序 Agent 会话，保持与主进程 listAgentSessions 一致。 */
 export function sortAgentSessionsByUpdatedAtDesc(

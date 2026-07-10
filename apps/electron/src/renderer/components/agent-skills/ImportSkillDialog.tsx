@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsCard } from '@/components/settings/primitives'
-import type { OtherWorkspaceSkillsGroup, SkillMeta } from '@proma/shared'
+import type { OtherWorkspaceSkillsGroup, SkillMeta } from '@profer/shared'
 
 interface ImportSkillDialogProps {
   open: boolean

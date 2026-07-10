@@ -14,7 +14,7 @@
 import { execSync } from 'child_process'
 import { existsSync } from 'fs'
 import { app } from 'electron'
-import type { ShellEnvResult } from '@proma/shared'
+import type { ShellEnvResult } from '@profer/shared'
 
 /**
  * Windows PATH 分隔符

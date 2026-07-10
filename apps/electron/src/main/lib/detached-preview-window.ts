@@ -8,7 +8,7 @@
 import { app, BrowserWindow, screen, shell } from 'electron'
 import type { Rectangle } from 'electron'
 import { basename, join } from 'path'
-import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@proma/shared'
+import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@profer/shared'
 import { VITE_DEV_SERVER_URL } from './config-paths'
 
 const previewDataById = new Map<string, DetachedPreviewWindowData>()

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -104,7 +104,7 @@ import type {
   Automation,
   CreateAutomationInput,
   UpdateAutomationInput,
-} from '@proma/shared'
+} from '@profer/shared'
 import type {
   UserProfile,
   AppSettings,
@@ -153,19 +153,19 @@ export interface ElectronAPI {
   getGitRepoStatus: (dirPath: string) => Promise<GitRepoStatus | null>
 
   /** 获取未暂存的变更文件列表 */
-  getUnstagedChanges: (dirPath: string, sessionPath?: string, workspaceFilesPath?: string, extraPaths?: string[], sessionId?: string) => Promise<import('@proma/shared').UnstagedChangesResult>
+  getUnstagedChanges: (dirPath: string, sessionPath?: string, workspaceFilesPath?: string, extraPaths?: string[], sessionId?: string) => Promise<import('@profer/shared').UnstagedChangesResult>
   /** 获取单个文件的 diff */
-  getFileDiff: (input: import('@proma/shared').GetFileDiffInput) => Promise<string>
+  getFileDiff: (input: import('@profer/shared').GetFileDiffInput) => Promise<string>
   /** 获取未追踪文件内容 */
-  getUntrackedContent: (input: import('@proma/shared').GetFileDiffInput) => Promise<string>
+  getUntrackedContent: (input: import('@profer/shared').GetFileDiffInput) => Promise<string>
   /** 还原文件变更 */
-  revertFile: (input: import('@proma/shared').RevertFileInput) => Promise<void>
+  revertFile: (input: import('@profer/shared').RevertFileInput) => Promise<void>
   /** 获取文件新旧版本内容 */
-  getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => Promise<{ oldContent: string; newContent: string } | null>
+  getDiffContents: (input: import('@profer/shared').GetFileDiffInput) => Promise<{ oldContent: string; newContent: string } | null>
   /** 列出 Git Worktree */
-  listWorktrees: (repoPath: string, sessionId: string) => Promise<import('@proma/shared').WorktreeInfo[]>
+  listWorktrees: (repoPath: string, sessionId: string) => Promise<import('@profer/shared').WorktreeInfo[]>
   /** 获取 Worktree 相对于基准分支的全量变更 */
-  getWorktreeChanges: (worktreePath: string, baseBranch: string, sessionId: string) => Promise<import('@proma/shared').UnstagedChangesResult>
+  getWorktreeChanges: (worktreePath: string, baseBranch: string, sessionId: string) => Promise<import('@profer/shared').UnstagedChangesResult>
   /** 在独立窗口打开当前文件预览 */
   openDetachedPreview: (input: DetachedPreviewWindowInput) => Promise<string | null>
   /** 获取独立预览窗口数据 */
@@ -520,7 +520,7 @@ export interface ElectronAPI {
   saveWorkspaceMcpConfig: (workspaceSlug: string, config: WorkspaceMcpConfig) => Promise<void>
 
   /** 测试 MCP 服务器连接 */
-  testMcpServer: (name: string, entry: import('@proma/shared').McpServerEntry) => Promise<{ success: boolean; message: string }>
+  testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry) => Promise<{ success: boolean; message: string }>
 
   /** 获取工作区 Skill 列表（含活跃和不活跃） */
   getWorkspaceSkills: (workspaceSlug: string) => Promise<SkillMeta[]>
@@ -553,10 +553,10 @@ export interface ElectronAPI {
   writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => Promise<void>
 
   /** 列出 Skill 目录下的子文件树（不含 SKILL.md） */
-  listSkillFiles: (workspaceSlug: string, skillSlug: string) => Promise<import('@proma/shared').SkillFileNode[]>
+  listSkillFiles: (workspaceSlug: string, skillSlug: string) => Promise<import('@profer/shared').SkillFileNode[]>
 
   /** 读取 Skill 目录下的子文件内容 */
-  readSkillFile: (workspaceSlug: string, skillSlug: string, relativePath: string) => Promise<import('@proma/shared').SkillFileContent>
+  readSkillFile: (workspaceSlug: string, skillSlug: string, relativePath: string) => Promise<import('@profer/shared').SkillFileContent>
 
   /** 写入 Skill 目录下的子文件内容（文本） */
   writeSkillFile: (workspaceSlug: string, skillSlug: string, relativePath: string, content: string) => Promise<void>
@@ -641,16 +641,16 @@ export interface ElectronAPI {
   // ===== Project Graph =====
 
   /** 获取当前会话的 Task Graph */
-  getGraph: (sessionId: string) => Promise<import('@proma/project-core').TaskGraph>
+  getGraph: (sessionId: string) => Promise<import('@profer/project-core').TaskGraph>
 
   /** 获取当前会话的 Graph 摘要 */
-  getGraphSummary: (sessionId: string) => Promise<import('@proma/project-core').GraphSummary>
+  getGraphSummary: (sessionId: string) => Promise<import('@profer/project-core').GraphSummary>
 
   /** 订阅 Graph 数据更新（主进程主动推送） */
   onGraphUpdated: (callback: (sessionId: string) => void) => () => void
 
   /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
-  appendGraphEvent: (sessionId: string, event: import('@proma/project-core').GraphEvent) => Promise<void>
+  appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => Promise<void>
 
   // ===== Agent 附件 =====
 
@@ -696,11 +696,11 @@ export interface ElectronAPI {
   /** 获取工作区附加文件列表 */
   getWorkspaceAttachedFiles: (workspaceSlug: string) => Promise<string[]>
   /** 获取工作区 worktree 仓库配置列表 */
-  getWorktreeRepos: (workspaceSlug: string) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  getWorktreeRepos: (workspaceSlug: string) => Promise<import('@profer/shared').WorkspaceWorktreeRepo[]>
   /** 添加 worktree 仓库到工作区配置 */
-  addWorktreeRepo: (workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  addWorktreeRepo: (workspaceSlug: string, repo: import('@profer/shared').WorkspaceWorktreeRepo) => Promise<import('@profer/shared').WorkspaceWorktreeRepo[]>
   /** 从工作区配置移除 worktree 仓库 */
-  removeWorktreeRepo: (workspaceSlug: string, repoPath: string) => Promise<import('@proma/shared').WorkspaceWorktreeRepo[]>
+  removeWorktreeRepo: (workspaceSlug: string, repoPath: string) => Promise<import('@profer/shared').WorkspaceWorktreeRepo[]>
 
   // ===== Agent 文件系统操作 =====
 
@@ -726,13 +726,13 @@ export interface ElectronAPI {
   writeClipboardPreview: (filename: string, content: string) => Promise<string>
 
   /** 用系统默认应用打开任意文件（无工作区限制） */
-  systemOpenFile: (filePath: string, appName?: string, access?: import('@proma/shared').FileAccessOptions) => Promise<void>
+  systemOpenFile: (filePath: string, appName?: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
 
   /** 扫描系统中可用的编辑器应用（仅 macOS） */
-  scanEditors: () => Promise<import('@proma/shared').EditorApp[]>
+  scanEditors: () => Promise<import('@profer/shared').EditorApp[]>
 
   /** 查询本机为该文件类型注册的默认打开应用（含图标 dataURL） */
-  getDefaultAppForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').DefaultAppInfo | null>
+  getDefaultAppForFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').DefaultAppInfo | null>
 
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
@@ -741,28 +741,28 @@ export interface ElectronAPI {
   showItemInFolder: (filePath: string, candidateBasePaths?: string[]) => Promise<void>
 
   /** 解析文件路径并读取内容（供内联预览使用） */
-  resolveAndReadFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ resolvedPath: string; content: string } | null>
+  resolveAndReadFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ resolvedPath: string; content: string } | null>
 
   /** 写入文本文件（供 Markdown 内联编辑使用） */
-  writeTextFile: (filePath: string, content: string, access?: import('@proma/shared').FileAccessOptions) => Promise<boolean>
+  writeTextFile: (filePath: string, content: string, access?: import('@profer/shared').FileAccessOptions) => Promise<boolean>
 
   /** 仅解析文件路径（供 PDF/图片等用 file:// 加载） */
-  resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').ResolvedFileUrl | null>
+  resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').ResolvedFileUrl | null>
 
   /** 注册文件路径到 proma-file:// 协议（不做路径校验，供团队文件预览） */
   registerPreviewPath: (filePath: string) => Promise<string | null>
 
   /** 为内联 PDF 预览生成临时 HTML 文件，返回文件路径 */
-  preparePdfPreview: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ tmpHtmlUrl: string } | null>
+  preparePdfPreview: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ tmpHtmlUrl: string } | null>
 
   /** 读取文件为 base64（带路径校验，供内联图片预览等） */
-  readBinaryBase64: (filePath: string, access?: import('@proma/shared').FileAccessOptions, maxSize?: number) => Promise<string | null>
+  readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => Promise<string | null>
 
   /** DOCX 转 HTML（内联预览） */
-  docxToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ resolvedPath: string; html: string } | null>
+  docxToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ resolvedPath: string; html: string } | null>
 
   /** XLSX/PPTX 转 HTML（内联预览） */
-  officeToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').OfficePreviewResult | null>
+  officeToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').OfficePreviewResult | null>
 
   /** 截图导出：将 HTML 渲染为 PNG 并复制到剪贴板或保存文件 */
   screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => Promise<{ success: boolean; message: string; filePath?: string }>
@@ -774,19 +774,19 @@ export interface ElectronAPI {
   moveFile: (filePath: string, targetDir: string) => Promise<void>
 
   /** 列出附加目录内容 */
-  listAttachedDirectory: (dirPath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<FileEntry[]>
+  listAttachedDirectory: (dirPath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<FileEntry[]>
 
   /** 读取附加目录文件内容为 base64（限制在已附加目录范围内） */
   readAttachedFile: (filePath: string, sessionId?: string, workspaceSlug?: string) => Promise<string>
 
   /** 在文件管理器中显示附加目录文件 */
-  showAttachedInFolder: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<void>
+  showAttachedInFolder: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
 
   /** 重命名附加目录文件/目录（无工作区路径限制） */
-  renameAttachedFile: (filePath: string, newName: string, access?: import('@proma/shared').FileAccessOptions) => Promise<void>
+  renameAttachedFile: (filePath: string, newName: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
 
   /** 移动附加目录文件/目录（无工作区路径限制） */
-  moveAttachedFile: (filePath: string, targetDir: string, access?: import('@proma/shared').FileAccessOptions) => Promise<void>
+  moveAttachedFile: (filePath: string, targetDir: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
 
   /** 检查路径类型（文件 or 目录），用于拖拽检测 */
   checkPathsType: (paths: string[]) => Promise<{ directories: string[]; files: string[] }>
@@ -878,9 +878,9 @@ export interface ElectronAPI {
   // --- 多 Bot v2 API ---
 
   /** 获取多 Bot 配置 */
-  getFeishuMultiConfig: () => Promise<import('@proma/shared').FeishuMultiBotConfig>
+  getFeishuMultiConfig: () => Promise<import('@profer/shared').FeishuMultiBotConfig>
   /** 保存单个 Bot 配置 */
-  saveFeishuBotConfig: (input: import('@proma/shared').FeishuBotConfigInput) => Promise<import('@proma/shared').FeishuBotConfig>
+  saveFeishuBotConfig: (input: import('@profer/shared').FeishuBotConfigInput) => Promise<import('@profer/shared').FeishuBotConfig>
   /** 获取单个 Bot 解密后的 App Secret */
   getDecryptedFeishuBotSecret: (botId: string) => Promise<string>
   /** 删除 Bot */
@@ -890,18 +890,18 @@ export interface ElectronAPI {
   /** 停止单个 Bot */
   stopFeishuBot: (botId: string) => Promise<void>
   /** 获取多 Bot 状态 */
-  getFeishuMultiStatus: () => Promise<import('@proma/shared').FeishuMultiBridgeState>
+  getFeishuMultiStatus: () => Promise<import('@profer/shared').FeishuMultiBridgeState>
 
   // --- 扫码注册 ---
 
   /** 启动扫码注册流程，等待用户扫码 + 飞书确认后返回 App ID/Secret */
-  registerFeishuApp: () => Promise<import('@proma/shared').FeishuRegisterAppResult>
+  registerFeishuApp: () => Promise<import('@profer/shared').FeishuRegisterAppResult>
   /** 取消正在进行的扫码注册流程 */
   cancelFeishuRegistration: () => Promise<void>
   /** 监听二维码 URL 生成 */
-  onFeishuRegisterQrcode: (callback: (payload: import('@proma/shared').FeishuRegisterAppQRCode) => void) => () => void
+  onFeishuRegisterQrcode: (callback: (payload: import('@profer/shared').FeishuRegisterAppQRCode) => void) => () => void
   /** 监听注册流程状态变化 */
-  onFeishuRegisterStatus: (callback: (payload: import('@proma/shared').FeishuRegisterAppStatus) => void) => () => void
+  onFeishuRegisterStatus: (callback: (payload: import('@profer/shared').FeishuRegisterAppStatus) => void) => () => void
 
   // ===== 钉钉集成 =====
 
@@ -925,9 +925,9 @@ export interface ElectronAPI {
   // --- 钉钉多 Bot v2 API ---
 
   /** 获取多 Bot 配置 */
-  getDingTalkMultiConfig: () => Promise<import('@proma/shared').DingTalkMultiBotConfig>
+  getDingTalkMultiConfig: () => Promise<import('@profer/shared').DingTalkMultiBotConfig>
   /** 保存单个 Bot 配置 */
-  saveDingTalkBotConfig: (input: import('@proma/shared').DingTalkBotConfigInput) => Promise<import('@proma/shared').DingTalkBotConfig>
+  saveDingTalkBotConfig: (input: import('@profer/shared').DingTalkBotConfigInput) => Promise<import('@profer/shared').DingTalkBotConfig>
   /** 获取单个 Bot 解密后的 Client Secret */
   getDecryptedDingTalkBotSecret: (botId: string) => Promise<string>
   /** 删除 Bot */
@@ -937,7 +937,7 @@ export interface ElectronAPI {
   /** 停止单个 Bot */
   stopDingTalkBot: (botId: string) => Promise<void>
   /** 获取多 Bot 状态 */
-  getDingTalkMultiStatus: () => Promise<import('@proma/shared').DingTalkMultiBridgeState>
+  getDingTalkMultiStatus: () => Promise<import('@profer/shared').DingTalkMultiBridgeState>
 
   // ===== 微信集成 =====
 
@@ -1093,9 +1093,9 @@ export interface ElectronAPI {
 
   // ===== 团队管理（Phase 1: 占位类型）=====
   team: {
-    listWorkspaces: () => Promise<import('@proma/shared').AgentWorkspace[]>
+    listWorkspaces: () => Promise<import('@profer/shared').AgentWorkspace[]>
     onWorkspacesSynced: (callback: () => void) => () => void
-    createWorkspace: (name: string) => Promise<import('@proma/shared').AgentWorkspace>
+    createWorkspace: (name: string) => Promise<import('@profer/shared').AgentWorkspace>
     deleteWorkspace: (workspaceId: string) => Promise<void>
     getMembers: (workspaceId: string) => Promise<unknown[]>
     createInvitation: (input: { workspaceId: string; email: string; role: string }) => Promise<unknown>
@@ -1103,7 +1103,7 @@ export interface ElectronAPI {
     cancelInvitation: (input: { workspaceId: string; invitationId: string }) => Promise<void>
     getStats: (workspaceId: string) => Promise<{ totalSize: number; fileCount: number; dirCount: number; memberCount: number; onlineCount: number; pendingInvites: number } | null>
     verifyInvitation: (token: string) => Promise<unknown>
-    acceptInvitation: (token: string) => Promise<import('@proma/shared').AgentWorkspace>
+    acceptInvitation: (token: string) => Promise<import('@profer/shared').AgentWorkspace>
     declineInvitation: (token: string) => Promise<void>
     updateMemberRole: (input: { workspaceId: string; userId: string; role: string }) => Promise<void>
     removeMember: (input: { workspaceId: string; userId: string }) => Promise<void>
@@ -1118,7 +1118,7 @@ export interface ElectronAPI {
     unpublish: (input: { workspaceId: string; workspaceSlug: string; skillSlug: string }) => Promise<{ success: boolean; skillSlug: string }>
     listTeamSkills: (workspaceId: string) => Promise<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>
     installTeamSkill: (input: { workspaceId: string; skillSlug: string; targetWorkspaceSlug: string }) => Promise<{ success: boolean; skillSlug: string }>
-    checkForUpdates: (workspaceSlug: string) => Promise<Array<import('@proma/shared').SkillMeta>>
+    checkForUpdates: (workspaceSlug: string) => Promise<Array<import('@profer/shared').SkillMeta>>
   }
 
   // ===== 团队文件操作 =====
@@ -1165,19 +1165,19 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_UNSTAGED_CHANGES, dirPath, sessionPath, workspaceFilesPath, extraPaths, sessionId)
   },
 
-  getFileDiff: (input: import('@proma/shared').GetFileDiffInput) => {
+  getFileDiff: (input: import('@profer/shared').GetFileDiffInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_FILE_DIFF, input)
   },
 
-  getUntrackedContent: (input: import('@proma/shared').GetFileDiffInput) => {
+  getUntrackedContent: (input: import('@profer/shared').GetFileDiffInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_UNTRACKED_CONTENT, input)
   },
 
-  revertFile: (input: import('@proma/shared').RevertFileInput) => {
+  revertFile: (input: import('@profer/shared').RevertFileInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.REVERT_FILE, input)
   },
 
-  getDiffContents: (input: import('@proma/shared').GetFileDiffInput) => {
+  getDiffContents: (input: import('@profer/shared').GetFileDiffInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DIFF_CONTENTS, input)
   },
 
@@ -1656,7 +1656,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG, workspaceSlug, config)
   },
 
-  testMcpServer: (name: string, entry: import('@proma/shared').McpServerEntry) => {
+  testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, name, entry) as Promise<{ success: boolean; message: string }>
   },
 
@@ -1853,7 +1853,7 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.GRAPH_UPDATED, listener) }
   },
 
-  appendGraphEvent: (sessionId: string, event: import('@proma/project-core').GraphEvent) => {
+  appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.APPEND_GRAPH_EVENT, sessionId, event)
   },
 
@@ -1931,7 +1931,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKTREE_REPOS, workspaceSlug)
   },
 
-  addWorktreeRepo: (workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo) => {
+  addWorktreeRepo: (workspaceSlug: string, repo: import('@profer/shared').WorkspaceWorktreeRepo) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_WORKTREE_REPO, workspaceSlug, repo)
   },
 
@@ -1970,7 +1970,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_CLIPBOARD_PREVIEW, filename, content)
   },
 
-  systemOpenFile: (filePath: string, appName?: string, access?: import('@proma/shared').FileAccessOptions) => {
+  systemOpenFile: (filePath: string, appName?: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(IPC_CHANNELS.SYSTEM_OPEN_FILE, filePath, appName, access)
   },
 
@@ -1978,8 +1978,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(IPC_CHANNELS.SCAN_EDITORS)
   },
 
-  getDefaultAppForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke(IPC_CHANNELS.GET_DEFAULT_APP_FOR_FILE, filePath, access) as Promise<import('@proma/shared').DefaultAppInfo | null>
+  getDefaultAppForFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_DEFAULT_APP_FOR_FILE, filePath, access) as Promise<import('@profer/shared').DefaultAppInfo | null>
   },
 
   showInFolder: (filePath: string) => {
@@ -1991,36 +1991,36 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(IPC_CHANNELS.SHOW_ITEM_IN_FOLDER, filePath, candidateBasePaths)
   },
 
-  resolveAndReadFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+  resolveAndReadFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:resolve-and-read', filePath, access) as Promise<{ resolvedPath: string; content: string } | null>
   },
 
-  writeTextFile: (filePath: string, content: string, access?: import('@proma/shared').FileAccessOptions) => {
+  writeTextFile: (filePath: string, content: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:write-text', filePath, content, access) as Promise<boolean>
   },
 
-  resolveFilePath: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@proma/shared').ResolvedFileUrl | null>
+  resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@profer/shared').ResolvedFileUrl | null>
   },
 
   registerPreviewPath: (filePath: string) => {
     return ipcRenderer.invoke('file:register-preview-path', filePath) as Promise<string | null>
   },
 
-  preparePdfPreview: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+  preparePdfPreview: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:prepare-pdf-preview', filePath, access) as Promise<{ tmpHtmlUrl: string } | null>
   },
 
-  readBinaryBase64: (filePath: string, access?: import('@proma/shared').FileAccessOptions, maxSize?: number) => {
+  readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => {
     return ipcRenderer.invoke('file:read-binary-base64', filePath, access, maxSize) as Promise<string | null>
   },
 
-  docxToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+  docxToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:docx-to-html', filePath, access) as Promise<{ resolvedPath: string; html: string } | null>
   },
 
-  officeToHtml: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:office-to-html', filePath, access) as Promise<import('@proma/shared').OfficePreviewResult | null>
+  officeToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke('file:office-to-html', filePath, access) as Promise<import('@profer/shared').OfficePreviewResult | null>
   },
 
   screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => {
@@ -2035,7 +2035,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_FILE, filePath, targetDir)
   },
 
-  listAttachedDirectory: (dirPath: string, access?: import('@proma/shared').FileAccessOptions) => {
+  listAttachedDirectory: (dirPath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ATTACHED_DIRECTORY, dirPath, access)
   },
 
@@ -2043,15 +2043,15 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_ATTACHED_FILE, filePath, sessionId, workspaceSlug)
   },
 
-  showAttachedInFolder: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+  showAttachedInFolder: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_ATTACHED_IN_FOLDER, filePath, access)
   },
 
-  renameAttachedFile: (filePath: string, newName: string, access?: import('@proma/shared').FileAccessOptions) => {
+  renameAttachedFile: (filePath: string, newName: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE, filePath, newName, access)
   },
 
-  moveAttachedFile: (filePath: string, targetDir: string, access?: import('@proma/shared').FileAccessOptions) => {
+  moveAttachedFile: (filePath: string, targetDir: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE, filePath, targetDir, access)
   },
 
@@ -2175,7 +2175,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.GET_MULTI_CONFIG)
   },
 
-  saveFeishuBotConfig: (input: import('@proma/shared').FeishuBotConfigInput) => {
+  saveFeishuBotConfig: (input: import('@profer/shared').FeishuBotConfigInput) => {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.SAVE_BOT_CONFIG, input)
   },
 
@@ -2209,14 +2209,14 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REGISTER_APP_CANCEL)
   },
 
-  onFeishuRegisterQrcode: (callback: (payload: import('@proma/shared').FeishuRegisterAppQRCode) => void) => {
-    const listener = (_: unknown, payload: import('@proma/shared').FeishuRegisterAppQRCode) => callback(payload)
+  onFeishuRegisterQrcode: (callback: (payload: import('@profer/shared').FeishuRegisterAppQRCode) => void) => {
+    const listener = (_: unknown, payload: import('@profer/shared').FeishuRegisterAppQRCode) => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.REGISTER_APP_QRCODE, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.REGISTER_APP_QRCODE, listener) }
   },
 
-  onFeishuRegisterStatus: (callback: (payload: import('@proma/shared').FeishuRegisterAppStatus) => void) => {
-    const listener = (_: unknown, payload: import('@proma/shared').FeishuRegisterAppStatus) => callback(payload)
+  onFeishuRegisterStatus: (callback: (payload: import('@profer/shared').FeishuRegisterAppStatus) => void) => {
+    const listener = (_: unknown, payload: import('@profer/shared').FeishuRegisterAppStatus) => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.REGISTER_APP_STATUS, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.REGISTER_APP_STATUS, listener) }
   },
@@ -2295,7 +2295,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.GET_MULTI_CONFIG)
   },
 
-  saveDingTalkBotConfig: (input: import('@proma/shared').DingTalkBotConfigInput) => {
+  saveDingTalkBotConfig: (input: import('@profer/shared').DingTalkBotConfigInput) => {
     return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.SAVE_BOT_CONFIG, input)
   },
 

@@ -8,7 +8,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getChatToolsConfigPath } from './config-paths'
-import type { ChatToolsFileConfig, ChatToolState, ChatToolMeta } from '@proma/shared'
+import type { ChatToolsFileConfig, ChatToolState, ChatToolMeta } from '@profer/shared'
 
 /** 默认配置 */
 const DEFAULT_CONFIG: ChatToolsFileConfig = {

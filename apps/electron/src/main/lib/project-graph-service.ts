@@ -1,7 +1,7 @@
 /**
  * project-graph-service.ts — 主进程 Project Graph 服务
  *
- * 桥接 @proma/project-core 和 Electron 主进程：
+ * 桥接 @profer/project-core 和 Electron 主进程：
  * - 监听 SDK 事件流中的 TaskCreate/TaskUpdate
  * - 将 Graph 事件追加写入 project-{uuid}.jsonl
  * - 通过 IPC 向渲染进程提供 Graph 查询接口
@@ -35,8 +35,8 @@ import {
   type TaskNode,
   type TaskStatus,
   type GraphEvent,
-} from '@proma/project-core'
-import type { AgentSessionMeta } from '@proma/shared'
+} from '@profer/project-core'
+import type { AgentSessionMeta } from '@profer/shared'
 
 // ===== Graph 读取 =====
 

@@ -11,7 +11,7 @@ import {
   type AutomationScheduleType,
   type CreateAutomationInput,
   type UpdateAutomationInput,
-} from '@proma/shared'
+} from '@profer/shared'
 import {
   createAutomation,
   deleteAutomation,

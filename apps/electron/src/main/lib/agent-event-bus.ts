@@ -9,7 +9,7 @@
  * - use(middleware): 注册中间件（事件经过中间件链后再分发）
  */
 
-import type { AgentStreamPayload } from '@proma/shared'
+import type { AgentStreamPayload } from '@profer/shared'
 
 /** 事件监听器 */
 export type AgentEventHandler = (sessionId: string, payload: AgentStreamPayload) => void

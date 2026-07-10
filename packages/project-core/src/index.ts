@@ -1,5 +1,5 @@
 /**
- * @proma/project-core — Agent 项目编排 headless 核心
+ * @profer/project-core — Agent 项目编排 headless 核心
  *
  * 提供 Agent 任务 Graph 的构建、状态管理、查询和 Project 元数据管理。
  * 所有导出函数均为纯函数，浏览器安全。

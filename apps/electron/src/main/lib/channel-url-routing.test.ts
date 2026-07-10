@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Channel } from '@proma/shared'
+import type { Channel } from '@profer/shared'
 import { inferAgentBaseUrl, normalizeChannelForCurrentSchema } from './channel-url-routing'
 
 function channel(overrides: Partial<Channel>): Channel {

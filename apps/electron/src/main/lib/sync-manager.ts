@@ -15,7 +15,7 @@ import { fetch as undiciFetch } from 'undici'
 import { getSyncStatePath } from './config-paths'
 import { getTeamAuth, refreshAuthToken } from './auth-service'
 import { listAgentWorkspaces, readIndex, writeIndex } from './agent-workspace-manager'
-import { AGENT_IPC_CHANNELS, SYNC_IPC_CHANNELS } from '@proma/shared'
+import { AGENT_IPC_CHANNELS, SYNC_IPC_CHANNELS } from '@profer/shared'
 import type { SyncEnvelope, SyncStateIndex, WorkspaceSyncState, SyncPullResponse } from './sync-types'
 
 const POLL_INTERVAL_MS = 60_000 // 基础轮询间隔（活跃时）
