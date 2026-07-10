@@ -1,31 +1,41 @@
 /**
  * graph-atoms.ts — Graph 数据 Jotai atoms
  *
- * 双数据源架构：
+ * 三数据源架构（按优先级）：
  * 1. 流式进行中：从 agentStreamingStatesAtom 的 ToolActivity[] 实时派生 TaskGraph
- * 2. 流式结束后：回退到 IPC 从 JSONL 加载的持久化 Graph
+ * 2. 流式结束后：回退到 IPC 加载的项目级聚合 Graph（跨会话）
+ * 3. 兜底：单会话持久化 Graph
  *
- * 数据源和 TaskProgressCard 完全一致，保证任务命名正确。
+ * 项目级 Graph 聚合了项目下所有子会话的任务，
+ * 实现人+AI 共享的跨对话持续项目视图。
  */
 
 import { atom } from 'jotai'
 import { deriveGraph, type TaskGraph, type GraphSummary, generateSummary } from '@proma/project-core'
 import { agentStreamingStatesAtom, type ToolActivity } from './agent-atoms'
-import { currentAgentSessionIdAtom } from './agent-atoms'
+import { currentAgentSessionIdAtom, stoppedByUserSessionsAtom } from './agent-atoms'
 import { aggregateTaskItems } from '@/components/agent/task-progress'
 
 /**
- * IPC 回退层：流式结束后从 JSONL 加载的持久化 TaskGraph。
+ * IPC 回退层：单个会话的持久化 TaskGraph。
  * 由 AgentView 在 streaming→false 时触发 IPC getGraph 并写入此 atom。
  */
 export const persistedGraphAtom = atom<TaskGraph | null>(null)
+
+/**
+ * 项目级聚合 Graph（跨会话合并）。
+ * 由 AgentView 在 streaming→false 时触发 IPC getProjectGraph 并写入此 atom。
+ * 如果会话不属于任何项目（无子会话），则等于单会话 Graph。
+ */
+export const persistedProjectGraphAtom = atom<TaskGraph | null>(null)
 
 /**
  * 从当前会话的数据源派生 TaskGraph。
  *
  * 优先级：
  * 1. 流式进行中 → 从 ToolActivity[] 实时派生（与 TaskProgressCard 数据一致）
- * 2. 流式结束后 → 回退到 persistedGraphAtom（IPC 从 JSONL 加载）
+ * 2. 流式结束后 → 回退到 persistedProjectGraphAtom（项目级聚合）
+ * 3. 兜底 → persistedGraphAtom（单会话持久化）
  */
 export const currentGraphAtom = atom<TaskGraph | null>((get) => {
   const sessionId = get(currentAgentSessionIdAtom)
@@ -34,6 +44,7 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
   const states = get(agentStreamingStatesAtom)
   const state = states.get(sessionId)
   const persistedGraph = get(persistedGraphAtom)
+  const projectGraph = get(persistedProjectGraphAtom)
 
   if (state) {
     const activities: ToolActivity[] = state.toolActivities
@@ -41,7 +52,8 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
       a.toolName === 'TaskCreate' || a.toolName === 'TaskUpdate' || a.toolName === 'TodoWrite',
     )
     if (taskActivities.length > 0) {
-      const taskItems = aggregateTaskItems(taskActivities, false)
+      const stoppedByUser = get(stoppedByUserSessionsAtom).has(sessionId)
+      const taskItems = aggregateTaskItems(taskActivities, false, undefined, stoppedByUser)
       if (taskItems.length > 0) {
         const derivedGraph = deriveGraph(taskItems)
         // 合并持久化图中的 session 关联信息（sdkSessionId / delegationId），
@@ -54,8 +66,8 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
     }
   }
 
-  // 流式已结束或无流式活动 → 回退到 IPC 加载的持久化数据
-  return persistedGraph
+  // 流式已结束或无流式活动 → 优先项目级 Graph，回退单会话
+  return projectGraph ?? persistedGraph
 })
 
 /**
@@ -78,7 +90,7 @@ function mergeSessionLinks(derived: TaskGraph, persisted: TaskGraph): TaskGraph 
   return { ...derived, nodes }
 }
 
-/** Graph 摘要（供 ToolbarGraphButton 使用） */
+/** Graph 摘要（供 ToolbarGraphButton 使用，优先项目级） */
 export const currentGraphSummaryAtom = atom<GraphSummary | null>((get) => {
   const graph = get(currentGraphAtom)
   if (!graph) return null

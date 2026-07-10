@@ -653,6 +653,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
             key="task-progress-card"
             activities={taskActivities}
             streamEnded={!isStreaming}
+            stoppedByUser={stoppedByUser}
             historicalTaskSubjects={historicalTaskSubjects}
           />
         )

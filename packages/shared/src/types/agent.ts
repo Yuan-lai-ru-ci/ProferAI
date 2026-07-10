@@ -1618,6 +1618,10 @@ export const AGENT_IPC_CHANNELS = {
   GET_GRAPH: 'agent:get-graph',
   /** 获取当前会话的 Graph 摘要 */
   GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
+  /** 获取项目级聚合 Graph（跨会话合并） */
+  GET_PROJECT_GRAPH: 'agent:get-project-graph',
+  /** 获取项目级 Graph 摘要（跨会话合并） */
+  GET_PROJECT_GRAPH_SUMMARY: 'agent:get-project-graph-summary',
   /** Graph 数据更新推送（主进程 → 渲染进程） */
   GRAPH_UPDATED: 'agent:graph-updated',
   /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
