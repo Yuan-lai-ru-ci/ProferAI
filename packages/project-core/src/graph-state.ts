@@ -56,11 +56,12 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
     case 'task_created': {
       const { subject, description, dependsOn } = event.payload
       const now = event.timestamp
-      const forkFrom = parseForkFrom(subject)
+      // forkFrom 优先从 description 解析（prompt 指示写入 description），回退 subject
+      const forkFrom = (description ? parseForkFrom(description) : null) ?? parseForkFrom(subject)
       const node: TaskNode = {
         id: event.taskId,
         subject: stripMetaTags(subject),
-        description,
+        description: description ? stripMetaTags(description) : description,
         status: 'pending',
         dependsOn: [...dependsOn],
         dependedBy: [],
@@ -97,7 +98,7 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
       if (!existing) break
       const { subject, description } = event.payload
       const usage = description ? parseUsage(description) : null
-      const forkFrom = subject ? parseForkFrom(subject) : null
+      const forkFrom = (description ? parseForkFrom(description) : null) ?? (subject ? parseForkFrom(subject) : null)
       nodes[event.taskId] = {
         ...existing,
         ...(subject !== undefined && { subject: stripMetaTags(subject) }),
@@ -105,6 +106,10 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
         ...(usage && { usage }),
         ...(forkFrom && { forkFrom }),
         updatedAt: event.timestamp,
+      }
+      // 若 update 引入了分叉且边尚不存在，补 forkEdge（正常路径分叉在 task_created 已建边）
+      if (forkFrom && !forkEdges.some(e => e.from === forkFrom && e.to === event.taskId)) {
+        forkEdges.push({ from: forkFrom, to: event.taskId })
       }
       break
     }

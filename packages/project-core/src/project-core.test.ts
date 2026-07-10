@@ -290,6 +290,47 @@ describe('graph-query', () => {
     expect(graph.forkEdges[0]!.to).toBe('t2')
   })
 
+  test('deriveGraph 从 description 解析 @forkFrom（prompt 约定的主路径）', () => {
+    const graph = deriveGraph([
+      { id: 't1', subject: '原方案', status: 'completed' },
+      { id: 't2', subject: '修正方案', description: '重做登录\n@forkFrom: t1', status: 'pending' },
+    ])
+    expect(graph.nodes['t2']!.forkFrom).toBe('t1')
+    expect(graph.forkEdges.length).toBe(1)
+    expect(graph.forkEdges[0]!.from).toBe('t1')
+    expect(graph.forkEdges[0]!.to).toBe('t2')
+    // description 中的标记应被清除，不残留
+    expect(graph.nodes['t2']!.description).not.toContain('@forkFrom')
+  })
+
+  test('deriveGraph 从 description 解析 @dependsOn', () => {
+    const graph = deriveGraph([
+      { id: 't1', subject: '接口设计', status: 'completed' },
+      { id: 't2', subject: '实现登录', description: '写代码\n@dependsOn: t1', status: 'pending' },
+    ])
+    expect(graph.nodes['t2']!.dependsOn).toEqual(['t1'])
+    expect(graph.edges.some(e => e.from === 't2' && e.to === 't1')).toBe(true)
+  })
+
+  test('deriveGraph description 优先，subject 回退兼容', () => {
+    // 标记写在 subject（历史情况）仍应生效
+    const graph = deriveGraph([
+      { id: 't1', subject: '原方案', status: 'completed' },
+      { id: 't2', subject: '修正 @forkFrom: t1', status: 'pending' },
+    ])
+    expect(graph.nodes['t2']!.forkFrom).toBe('t1')
+  })
+
+  test('buildGraphFromEvents 从 description 解析 @forkFrom（持久化路径）', () => {
+    const graph = buildGraphFromEvents([
+      { type: 'task_created', timestamp: 1000, taskId: 't1', payload: { subject: '原方案', description: '', dependsOn: [] } },
+      { type: 'task_created', timestamp: 2000, taskId: 't2', payload: { subject: '修正方案', description: '重做\n@forkFrom: t1', dependsOn: [] } },
+    ])
+    expect(graph.nodes['t2']!.forkFrom).toBe('t1')
+    expect(graph.forkEdges.some(e => e.from === 't1' && e.to === 't2')).toBe(true)
+    expect(graph.nodes['t2']!.description).not.toContain('@forkFrom')
+  })
+
   test('formatTaskContext 格式化节点上下文', () => {
     const graph = deriveGraph([
       { id: 't1', subject: '实现注册 API', status: 'in_progress' },

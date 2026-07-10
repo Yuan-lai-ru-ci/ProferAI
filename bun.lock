@@ -38,10 +38,11 @@
     },
     "apps/electron": {
       "name": "@profer/electron",
-      "version": "0.13.4",
+      "version": "0.14.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.201",
         "@anthropic-ai/sdk": "^0.93.0",
+        "@dagrejs/dagre": "^3.0.0",
         "@fontsource-variable/inter": "5.2.8",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@pierre/diffs": "^1.1.20",
@@ -296,6 +297,10 @@
     "@braintree/sanitize-url": ["@braintree/sanitize-url@7.1.2", "", {}, "sha512-jigsZK+sMF/cuiB7sERuo9V7N9jx+dhmHHnQyDSVdpZwVutaBu7WvNYqMDLSgFgfB30n452TP3vjDAvFC973mA=="],
 
     "@chevrotain/types": ["@chevrotain/types@11.1.2", "", {}, "sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw=="],
+
+    "@dagrejs/dagre": ["@dagrejs/dagre@3.0.0", "", { "dependencies": { "@dagrejs/graphlib": "4.0.1" } }, "sha512-ZzhnTy1rfuoew9Ez3EIw4L2znPGnYYhfn8vc9c4oB8iw6QAsszbiU0vRhlxWPFnmmNSFAkrYeF1PhM5m4lAN0Q=="],
+
+    "@dagrejs/graphlib": ["@dagrejs/graphlib@4.0.1", "", {}, "sha512-IvcV6FduIIAmLwnH+yun+QtV36SC7mERqa86aClNqmMN09WhmPPYU8ckHrZBozErf+UvHPWOTJYaGYiIcs0DgA=="],
 
     "@develar/schema-utils": ["@develar/schema-utils@2.6.5", "", { "dependencies": { "ajv": "^6.12.0", "ajv-keywords": "^3.4.1" } }, "sha512-0cp4PsWQ/9avqTVMCtZ+GirikIA36ikvjtHweU4/j8yLtgObI0+JUPhYFScgwlteveGB1rt3Cm8UhN04XayDig=="],
 

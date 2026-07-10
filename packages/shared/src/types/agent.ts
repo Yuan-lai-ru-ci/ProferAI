@@ -982,6 +982,14 @@ export interface AgentQueueMessageInput {
    * false / undefined：排队追加（默认行为，turn 结束后才会被消费）。
    */
   interrupt?: boolean
+  /** 原始用户输入（含 /skill: #mcp: &session: 语法），仅用于持久化/气泡展示；省略回退到 userMessage */
+  rawUserMessage?: string
+  /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
+  mentionedSkills?: string[]
+  /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */
+  mentionedMcpServers?: string[]
+  /** 用户通过 &session:xxx 引用的 Agent 会话 ID 列表 */
+  mentionedSessionIds?: string[]
 }
 
 // ===== 会话迁移输入 =====
