@@ -75,8 +75,10 @@ function useGraphData(): { graph: TaskGraph | null; loading: boolean } {
   const [loading, setLoading] = React.useState(false)
 
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId) { setIpcGraph(null); return }
     let cancelled = false
+    // 切换会话立即清空上一会话的残留图，避免 atomGraph 为空时 fallback 到旧 ipcGraph
+    setIpcGraph(null)
     setLoading(true)
     const api = window.electronAPI as { getGraph?: (id: string) => Promise<TaskGraph> }
     if (!api.getGraph) { setLoading(false); return }
