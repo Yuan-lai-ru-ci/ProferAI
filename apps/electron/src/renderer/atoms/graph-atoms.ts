@@ -9,6 +9,7 @@
  */
 
 import { atom } from 'jotai'
+import { atomFamily } from 'jotai/utils'
 import { deriveGraph, type TaskGraph, type GraphSummary, generateSummary } from '@profer/project-core'
 import { agentStreamingStatesAtom, type ToolActivity } from './agent-atoms'
 import { currentAgentSessionIdAtom } from './agent-atoms'
@@ -16,9 +17,14 @@ import { aggregateTaskItems } from '@/components/agent/task-progress'
 
 /**
  * IPC 回退层：流式结束后从 JSONL 加载的持久化 TaskGraph。
- * 由 AgentView 在 streaming→false 时触发 IPC getGraph 并写入此 atom。
+ * 由 AgentView 在 streaming→false 时触发 IPC getGraph 并写入。
+ *
+ * 按 sessionId 切片：每个会话各存一份持久图，避免全局单值 atom 在切换/新开
+ * 会话时把上一个会话的图带过去、甚至覆盖（表现为任务图到处飞、新对话仍显示旧任务）。
  */
-export const persistedGraphAtom = atom<TaskGraph | null>(null)
+export const persistedGraphAtomFamily = atomFamily((_sessionId: string) =>
+  atom<TaskGraph | null>(null),
+)
 
 /**
  * 从当前会话的数据源派生 TaskGraph。
@@ -38,7 +44,7 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
 
   const states = get(agentStreamingStatesAtom)
   const state = states.get(sessionId)
-  const persistedGraph = get(persistedGraphAtom)
+  const persistedGraph = get(persistedGraphAtomFamily(sessionId))
 
   // 实时派生图：仅反映当前 run 的 toolActivities（每次新 run 会重置），可能只是「最后一轮子集」。
   let derivedGraph: TaskGraph | null = null
