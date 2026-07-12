@@ -1,18 +1,20 @@
 /**
  * graph-atoms.ts — Graph 数据 Jotai atoms
  *
- * 双数据源架构：
+ * 三数据源架构（按优先级）：
  * 1. 流式进行中：从 agentStreamingStatesAtom 的 ToolActivity[] 实时派生 TaskGraph
- * 2. 流式结束后：回退到 IPC 从 JSONL 加载的持久化 Graph
+ * 2. 流式结束后：回退到 IPC 加载的项目级聚合 Graph（跨会话）
+ * 3. 兜底：单会话持久化 Graph
  *
- * 数据源和 TaskProgressCard 完全一致，保证任务命名正确。
+ * 项目级 Graph 聚合了项目下所有子会话的任务，
+ * 实现人+AI 共享的跨对话持续项目视图。
  */
 
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
 import { deriveGraph, type TaskGraph, type GraphSummary, generateSummary } from '@profer/project-core'
 import { agentStreamingStatesAtom, type ToolActivity } from './agent-atoms'
-import { currentAgentSessionIdAtom } from './agent-atoms'
+import { currentAgentSessionIdAtom, stoppedByUserSessionsAtom } from './agent-atoms'
 import { aggregateTaskItems } from '@/components/agent/task-progress'
 
 /**
@@ -25,6 +27,13 @@ import { aggregateTaskItems } from '@/components/agent/task-progress'
 export const persistedGraphAtomFamily = atomFamily((_sessionId: string) =>
   atom<TaskGraph | null>(null),
 )
+
+/**
+ * 项目级聚合 Graph（跨会话合并）。
+ * 由 AgentView 在 streaming→false 时触发 IPC getProjectGraph 并写入此 atom。
+ * 如果会话不属于任何项目（无子会话），则等于单会话 Graph。
+ */
+export const persistedProjectGraphAtom = atom<TaskGraph | null>(null)
 
 /**
  * 从当前会话的数据源派生 TaskGraph。
@@ -89,7 +98,7 @@ function mergeSessionLinks(derived: TaskGraph, persisted: TaskGraph): TaskGraph 
   return { ...derived, nodes }
 }
 
-/** Graph 摘要（供 ToolbarGraphButton 使用） */
+/** Graph 摘要（供 ToolbarGraphButton 使用，优先项目级） */
 export const currentGraphSummaryAtom = atom<GraphSummary | null>((get) => {
   const graph = get(currentGraphAtom)
   if (!graph) return null

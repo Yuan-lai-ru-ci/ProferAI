@@ -15,6 +15,9 @@ import type {
   TaskStatus,
   LayoutLevel,
   LayoutResult,
+  ForceLayoutOptions,
+  ForceLayoutResult,
+  ForkEdgeLayout,
   TaskItemInput,
 } from './types'
 import { getReadyTasks, topologicalSort, ensureSequentialEdges } from './graph-state'
@@ -46,11 +49,19 @@ export function generateSummary(graph: TaskGraph): GraphSummary {
     .slice(0, 3)
     .map(toRecentCompleted)
 
+  // 最近取消的 Task（按更新时间倒序，最多 3 个，用于打断后提醒）
+  const recentCancelled = nodes
+    .filter(n => n.status === 'cancelled')
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 3)
+    .map(toRecentCompleted)
+
   return {
     totalTasks: nodes.length,
     statusCounts,
     nextPending,
     recentCompleted,
+    recentCancelled,
   }
 }
 
@@ -64,12 +75,13 @@ export function formatSummaryAsPreamble(summary: GraphSummary): string {
   const lines: string[] = []
 
   // 进度概览
-  const { total, completed, inProgress, pending, failed } = {
+  const { total, completed, inProgress, pending, failed, cancelled } = {
     total: summary.totalTasks,
     completed: summary.statusCounts['completed'] ?? 0,
     inProgress: summary.statusCounts['in_progress'] ?? 0,
     pending: summary.statusCounts['pending'] ?? 0,
     failed: summary.statusCounts['failed'] ?? 0,
+    cancelled: summary.statusCounts['cancelled'] ?? 0,
   }
 
   lines.push(`你已经在这个项目中规划了 ${total} 个任务。`)
@@ -77,6 +89,15 @@ export function formatSummaryAsPreamble(summary: GraphSummary): string {
 
   if (failed > 0) {
     lines.push(`有 ${failed} 个任务遇到了问题，需要重新评估。`)
+  }
+
+  // 已取消的任务（用户手动打断/路线变更）—— 重要：告知 AI 不要恢复
+  if (cancelled > 0) {
+    lines.push(`\n⚠️ 有 ${cancelled} 个任务已被用户手动取消（通常意味着方向变更）：`)
+    for (const task of summary.recentCancelled) {
+      lines.push(`- ${task.subject}（已废弃，不要恢复）`)
+    }
+    lines.push('如果用户表达了新方向，请创建新任务并用 @forkFrom 标记分叉来源。')
   }
 
   // 最近完成的产出
@@ -297,6 +318,267 @@ export function computeLayout(graph: TaskGraph): LayoutResult {
   }
 
   return { levels, totalLevels: maxLevel + 1, maxNodesInLevel }
+}
+
+// ===== 力导向布局（知识图谱风格） =====
+
+/** 默认力导向布局参数 */
+const DEFAULT_FORCE_OPTIONS: Required<ForceLayoutOptions> = {
+  iterations: 300,
+  repulsionStrength: 5000,
+  attractionStrength: 0.01,
+  edgeLength: 200,
+  dagDirectionStrength: 0.1,
+  centerGravity: 0.05,
+}
+
+/** 内部速度状态 */
+interface VelocityState {
+  vx: number
+  vy: number
+}
+
+/**
+ * 计算拓扑深度（最长路径层数）。
+ * depth 0 = 无依赖根节点，depth N = max(依赖的 depth) + 1
+ */
+function computeTopologicalDepth(graph: TaskGraph): Map<string, number> {
+  const depthMap = new Map<string, number>()
+
+  function getDepth(nodeId: string, visited: Set<string>): number {
+    const cached = depthMap.get(nodeId)
+    if (cached !== undefined) return cached
+
+    if (visited.has(nodeId)) return 0 // 防止循环依赖
+    visited.add(nodeId)
+
+    const node = graph.nodes[nodeId]
+    if (!node) return 0
+
+    if (node.dependsOn.length === 0) {
+      depthMap.set(nodeId, 0)
+      return 0
+    }
+
+    let maxDepth = 0
+    for (const depId of node.dependsOn) {
+      maxDepth = Math.max(maxDepth, getDepth(depId, new Set(visited)))
+    }
+
+    const depth = maxDepth + 1
+    depthMap.set(nodeId, depth)
+    return depth
+  }
+
+  for (const id of Object.keys(graph.nodes)) {
+    getDepth(id, new Set())
+  }
+
+  return depthMap
+}
+
+/**
+ * 力导向布局算法。
+ *
+ * 结合库仑斥力、弹簧引力、DAG 方向力 + 温度退火 + 速度阻尼，
+ * 产生类似知识图谱的自由 2D 布局：
+ * 1. 库仑斥力 — 所有节点互相推开，避免重叠
+ * 2. 弹簧引力 — 有边连接的节点互相拉近
+ * 3. DAG 方向力 — 基于拓扑深度，浅层推左、深层推右
+ * 4. 速度阻尼 — 每次迭代衰减速度，确保收敛稳定
+ */
+export function computeForceLayout(
+  graph: TaskGraph,
+  options?: ForceLayoutOptions,
+): ForceLayoutResult {
+  const opts = { ...DEFAULT_FORCE_OPTIONS, ...options }
+  const nodes = Object.values(graph.nodes)
+  if (nodes.length === 0) {
+    return {
+      positions: new Map(),
+      canvasWidth: 800,
+      canvasHeight: 600,
+      iterations: 0,
+    }
+  }
+
+  // 1. 计算拓扑深度，用于种子布局和 DAG 方向力
+  const depthMap = computeTopologicalDepth(graph)
+  const maxDepth = Math.max(1, ...depthMap.values())
+
+  // 2. 初始化位置：基于拓扑深度做种子布局 + 随机偏移
+  const positions = new Map<string, { x: number; y: number }>()
+  const velocities = new Map<string, VelocityState>()
+
+  // 按深度分组
+  const depthGroups = new Map<number, string[]>()
+  for (const [id, depth] of depthMap) {
+    const list = depthGroups.get(depth) || []
+    list.push(id)
+    depthGroups.set(depth, list)
+  }
+
+  const seedSpacingX = opts.edgeLength * 1.5
+  const seedSpacingY = 120
+  const seedOriginX = 100
+  const seedOriginY = 100
+
+  for (let d = 0; d <= maxDepth; d++) {
+    const group = depthGroups.get(d) || []
+    const totalH = (group.length - 1) * seedSpacingY
+    const startY = seedOriginY + Math.max(0, (nodes.length * seedSpacingY / maxDepth - totalH) / 2)
+    group.forEach((id, i) => {
+      positions.set(id, {
+        x: seedOriginX + d * seedSpacingX + (Math.random() - 0.5) * 40,
+        y: startY + i * seedSpacingY + (Math.random() - 0.5) * 20,
+      })
+      velocities.set(id, { vx: 0, vy: 0 })
+    })
+  }
+
+  // 3. 构建有效边列表（依赖边 + 分叉边）
+  interface SimEdge {
+    source: string
+    target: string
+    isFork: boolean
+  }
+  const simEdges: SimEdge[] = []
+  for (const e of graph.edges) {
+    simEdges.push({ source: e.from, target: e.to, isFork: false })
+  }
+  for (const fe of graph.forkEdges) {
+    simEdges.push({ source: fe.from, target: fe.to, isFork: true })
+  }
+
+  // 4. 迭代模拟
+  const totalIterations = opts.iterations
+
+  for (let iter = 0; iter < totalIterations; iter++) {
+    const alpha = 1 - iter / totalIterations // 温度退火
+
+    // 4a. 库仑斥力（所有节点对）
+    const nodeIds = Array.from(positions.keys())
+    for (let i = 0; i < nodeIds.length; i++) {
+      for (let j = i + 1; j < nodeIds.length; j++) {
+        const aId = nodeIds[i]!
+        const bId = nodeIds[j]!
+        const a = positions.get(aId)!
+        const b = positions.get(bId)!
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+        const force = (opts.repulsionStrength * alpha) / (dist * dist)
+        const fx = (dx / dist) * force
+        const fy = (dy / dist) * force
+        // a 被推开（远离 b）
+        velocities.get(aId)!.vx -= fx
+        velocities.get(aId)!.vy -= fy
+        // b 被推开（远离 a）
+        velocities.get(bId)!.vx += fx
+        velocities.get(bId)!.vy += fy
+      }
+    }
+
+    // 4b. 弹簧引力（沿边）
+    for (const edge of simEdges) {
+      const src = positions.get(edge.source)
+      const tgt = positions.get(edge.target)
+      if (!src || !tgt) continue
+      const dx = tgt.x - src.x
+      const dy = tgt.y - src.y
+      const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+      const displacement = dist - opts.edgeLength
+      const force = opts.attractionStrength * displacement * alpha
+      const fx = (dx / dist) * force
+      const fy = (dy / dist) * force
+      velocities.get(edge.source)!.vx += fx
+      velocities.get(edge.source)!.vy += fy
+      velocities.get(edge.target)!.vx -= fx
+      velocities.get(edge.target)!.vy -= fy
+    }
+
+    // 4c. DAG 方向力（基于拓扑深度）
+    for (const [id, pos] of positions) {
+      const depth = depthMap.get(id) ?? 0
+      // 目标 x 位置：深度越大越靠右
+      const targetX = seedOriginX + depth * seedSpacingX
+      const dx = targetX - pos.x
+      velocities.get(id)!.vx += dx * opts.dagDirectionStrength * alpha
+    }
+
+    // 4d. 速度阻尼（收敛稳定）
+    for (const [, vel] of velocities) {
+      vel.vx *= 0.95
+      vel.vy *= 0.95
+    }
+
+    // 4e. 应用速度
+    for (const [id, vel] of velocities) {
+      const pos = positions.get(id)!
+      pos.x += vel.vx
+      pos.y += vel.vy
+    }
+  }
+
+  // 5. 计算包围盒
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const pos of positions.values()) {
+    minX = Math.min(minX, pos.x)
+    minY = Math.min(minY, pos.y)
+    maxX = Math.max(maxX, pos.x)
+    maxY = Math.max(maxY, pos.y)
+  }
+  const pad = 150
+  const canvasWidth = Math.max(800, maxX - minX + pad * 2)
+  const canvasHeight = Math.max(600, maxY - minY + pad * 2)
+
+  // 平移使所有坐标为正
+  for (const pos of positions.values()) {
+    pos.x = pos.x - minX + pad
+    pos.y = pos.y - minY + pad
+  }
+
+  return { positions, canvasWidth, canvasHeight, iterations: totalIterations }
+}
+
+/**
+ * 为分叉边计算渲染布局数据。
+ *
+ * 分叉边从源节点底部出发、到达目标节点顶部，使用虚线样式。
+ */
+export function computeForkEdgesLayout(
+  graph: TaskGraph,
+  positions: Map<string, { x: number; y: number }>,
+  nodeW: number,
+  nodeH: number,
+): ForkEdgeLayout[] {
+  const FORK_LINE_COLOR = '#fbbf24' // amber-400
+
+  return graph.forkEdges.map((fe): ForkEdgeLayout | null => {
+    const fromPos = positions.get(fe.from)
+    const toPos = positions.get(fe.to)
+    if (!fromPos || !toPos) return null
+
+    // 源节点底部中心 → 目标节点顶部中心
+    const x1 = fromPos.x + nodeW / 2
+    const y1 = fromPos.y + nodeH
+    const x2 = toPos.x + nodeW / 2
+    const y2 = toPos.y
+
+    // 贝塞尔曲线：向下弯曲
+    const midY = (y1 + y2) / 2
+    const offsetY = Math.min(60, Math.abs(y2 - y1) * 0.4)
+    const d = `M ${x1} ${y1} C ${x1} ${y1 + offsetY}, ${x2} ${y2 - offsetY}, ${x2} ${y2}`
+
+    return {
+      from: fe.from,
+      to: fe.to,
+      reason: fe.reason,
+      x1, y1, x2, y2,
+      d,
+      lineColor: FORK_LINE_COLOR,
+    }
+  }).filter((e): e is ForkEdgeLayout => e !== null)
 }
 
 // ===== Task 上下文格式化 =====

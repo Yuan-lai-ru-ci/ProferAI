@@ -30,6 +30,10 @@ export type {
   ExtractGraphInput,
   LayoutLevel,
   LayoutResult,
+  ForceLayoutOptions,
+  ForceLayoutResult,
+  NodePosition,
+  ForkEdgeLayout,
   TaskItemInput,
 } from './types'
 
@@ -66,6 +70,8 @@ export {
   completionPercentage,
   getExecutionPlan,
   computeLayout,
+  computeForceLayout,
+  computeForkEdgesLayout,
   deriveGraph,
   formatTaskContext,
 } from './graph-query'

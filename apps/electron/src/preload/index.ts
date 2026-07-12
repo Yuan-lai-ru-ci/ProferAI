@@ -646,6 +646,12 @@ export interface ElectronAPI {
   /** 获取当前会话的 Graph 摘要 */
   getGraphSummary: (sessionId: string) => Promise<import('@profer/project-core').GraphSummary>
 
+  /** 获取项目级聚合 Graph（跨会话合并） */
+  getProjectGraph: (sessionId: string) => Promise<import('@proma/project-core').TaskGraph>
+
+  /** 获取项目级 Graph 摘要（跨会话合并） */
+  getProjectGraphSummary: (sessionId: string) => Promise<import('@proma/project-core').GraphSummary>
+
   /** 订阅 Graph 数据更新（主进程主动推送） */
   onGraphUpdated: (callback: (sessionId: string) => void) => () => void
 
@@ -1845,6 +1851,14 @@ const electronAPI: ElectronAPI = {
 
   getGraphSummary: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId)
+  },
+
+  getProjectGraph: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH, sessionId)
+  },
+
+  getProjectGraphSummary: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH_SUMMARY, sessionId)
   },
 
   onGraphUpdated: (callback: (sessionId: string) => void) => {

@@ -22,6 +22,8 @@ import {
   findNodeById,
   completionPercentage,
   computeLayout,
+  computeForceLayout,
+  computeForkEdgesLayout,
   deriveGraph,
   formatTaskContext,
   createProjectMeta,
@@ -400,5 +402,129 @@ describe('project-meta', () => {
 
     const archived = { ...meta, projectStatus: 'archived' as const }
     expect(projectStatusLabel(archived)).toBe('已归档')
+  })
+})
+
+// ===== graph-query 力导向布局测试 =====
+
+describe('computeForceLayout', () => {
+  test('空图返回空结果', () => {
+    const result = computeForceLayout({ nodes: {}, edges: [], forkEdges: [], updatedAt: 0 })
+    expect(result.positions.size).toBe(0)
+    expect(result.canvasWidth).toBe(800)
+    expect(result.canvasHeight).toBe(600)
+    expect(result.iterations).toBe(0)
+  })
+
+  test('单节点布局在画布内', () => {
+    const graph: TaskGraph = {
+      nodes: {
+        't1': { id: 't1', subject: '任务一', description: '', status: 'pending',
+          dependsOn: [], dependedBy: [], artifact: [], reviewStatus: 'none' as const, createdAt: 1000, updatedAt: 1000 },
+      },
+      edges: [],
+      forkEdges: [],
+      updatedAt: 1000,
+    }
+    const result = computeForceLayout(graph, { iterations: 50 })
+    expect(result.positions.size).toBe(1)
+    const pos = result.positions.get('t1')
+    expect(pos).toBeDefined()
+    expect(pos!.x).toBeGreaterThan(0)
+    expect(pos!.y).toBeGreaterThan(0)
+    expect(result.canvasWidth).toBeGreaterThan(0)
+    expect(result.canvasHeight).toBeGreaterThan(0)
+  })
+
+  test('线性链（A→B→C）保持从左到右阅读顺序', () => {
+    const graph: TaskGraph = {
+      nodes: {
+        'a': { id: 'a', subject: 'A', description: '', status: 'completed',
+          dependsOn: [], dependedBy: ['b'], artifact: [], reviewStatus: 'none' as const, createdAt: 1000, updatedAt: 1000 },
+        'b': { id: 'b', subject: 'B', description: '', status: 'in_progress',
+          dependsOn: ['a'], dependedBy: ['c'], artifact: [], reviewStatus: 'none' as const, createdAt: 2000, updatedAt: 2000 },
+        'c': { id: 'c', subject: 'C', description: '', status: 'pending',
+          dependsOn: ['b'], dependedBy: [], artifact: [], reviewStatus: 'none' as const, createdAt: 3000, updatedAt: 3000 },
+      },
+      edges: [{ from: 'b', to: 'a' }, { from: 'c', to: 'b' }],
+      forkEdges: [],
+      updatedAt: 3000,
+    }
+    const result = computeForceLayout(graph, { iterations: 100 })
+    const aX = result.positions.get('a')!.x
+    const bX = result.positions.get('b')!.x
+    const cX = result.positions.get('c')!.x
+    expect(aX).toBeLessThan(bX)
+    expect(bX).toBeLessThan(cX)
+  })
+
+  test('分支图（A→B 且 A→C 且 B→D 且 C→D）形成菱形', () => {
+    const graph: TaskGraph = {
+      nodes: {
+        'a': { id: 'a', subject: 'A', description: '', status: 'completed',
+          dependsOn: [], dependedBy: ['b', 'c'], artifact: [], reviewStatus: 'none' as const, createdAt: 1000, updatedAt: 1000 },
+        'b': { id: 'b', subject: 'B', description: '', status: 'completed',
+          dependsOn: ['a'], dependedBy: ['d'], artifact: [], reviewStatus: 'none' as const, createdAt: 2000, updatedAt: 2000 },
+        'c': { id: 'c', subject: 'C', description: '', status: 'in_progress',
+          dependsOn: ['a'], dependedBy: ['d'], artifact: [], reviewStatus: 'none' as const, createdAt: 2500, updatedAt: 2500 },
+        'd': { id: 'd', subject: 'D', description: '', status: 'pending',
+          dependsOn: ['b', 'c'], dependedBy: [], artifact: [], reviewStatus: 'none' as const, createdAt: 3000, updatedAt: 3000 },
+      },
+      edges: [
+        { from: 'b', to: 'a' }, { from: 'c', to: 'a' },
+        { from: 'd', to: 'b' }, { from: 'd', to: 'c' },
+      ],
+      forkEdges: [],
+      updatedAt: 3000,
+    }
+    const result = computeForceLayout(graph, { iterations: 150 })
+    const aX = result.positions.get('a')!.x
+    const bX = result.positions.get('b')!.x
+    const cX = result.positions.get('c')!.x
+    const dX = result.positions.get('d')!.x
+
+    // B 和 C 应该在 A 和 D 之间（大体顺序）
+    expect(aX).toBeLessThan(bX)
+    expect(aX).toBeLessThan(cX)
+    expect(bX).toBeLessThan(dX)
+    expect(cX).toBeLessThan(dX)
+
+    // B 和 C 应该有一定垂直分离（分叉效果）
+    const bY = result.positions.get('b')!.y
+    const cY = result.positions.get('c')!.y
+    const yDiff = Math.abs(bY - cY)
+    expect(yDiff).toBeGreaterThan(10)
+  })
+
+  test('包含分叉边的图正确参与力模拟并生成布局数据', () => {
+    const graph: TaskGraph = {
+      nodes: {
+        't1': { id: 't1', subject: '原始方案', description: '', status: 'completed',
+          dependsOn: [], dependedBy: [], artifact: [], reviewStatus: 'none' as const, createdAt: 1000, updatedAt: 1000,
+          forkFrom: undefined },
+        't2': { id: 't2', subject: '改进方案', description: '', status: 'in_progress',
+          dependsOn: [], dependedBy: [], artifact: [], reviewStatus: 'none' as const, createdAt: 2000, updatedAt: 2000,
+          forkFrom: 't1' },
+      },
+      edges: [],
+      forkEdges: [{ from: 't1', to: 't2', reason: '改用新方案' }],
+      updatedAt: 2000,
+    }
+    const result = computeForceLayout(graph, { iterations: 100 })
+    expect(result.positions.size).toBe(2)
+
+    // forkEdges 参与了力模拟，两个节点距离不会太远
+    const t1 = result.positions.get('t1')!
+    const t2 = result.positions.get('t2')!
+    const dist = Math.sqrt((t1.x - t2.x) ** 2 + (t1.y - t2.y) ** 2)
+    // 分叉节点有弹簧引力，距离应在合理范围内
+    expect(dist).toBeLessThan(1200)
+
+    // computeForkEdgesLayout 应正确生成分叉边布局
+    const forkLayouts = computeForkEdgesLayout(graph, result.positions, 260, 100)
+    expect(forkLayouts.length).toBe(1)
+    expect(forkLayouts[0]!.from).toBe('t1')
+    expect(forkLayouts[0]!.to).toBe('t2')
+    expect(forkLayouts[0]!.reason).toBe('改用新方案')
   })
 })
