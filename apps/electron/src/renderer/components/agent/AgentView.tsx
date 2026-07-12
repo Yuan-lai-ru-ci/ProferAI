@@ -124,6 +124,7 @@ import {
 } from '@/lib/agent-message-queue'
 import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
+import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -442,6 +443,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [streaming, sessionId, setPersistedGraph])
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
+  const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
   const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
@@ -2525,7 +2527,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               onSubmit={handleSend}
               onPasteFiles={handlePasteFiles}
               onPasteLongText={handlePasteLongText}
-              longTextPasteThreshold={LONG_TEXT_ATTACHMENT_THRESHOLD}
+              longTextPasteThreshold={longTextPasteAsAttachmentEnabled ? LONG_TEXT_ATTACHMENT_THRESHOLD : undefined}
               placeholder={
                 isCompacting
                   ? '正在压缩上下文，完成后可继续对话...'

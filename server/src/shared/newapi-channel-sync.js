@@ -19,6 +19,14 @@ let cachedChannels = null
 let cachedAt = 0
 const CACHE_TTL_MS = 60_000
 
+/** 全局 model → group 映射（代理转发时用来指定 New API 分组路由） */
+let modelGroupMap = new Map()
+
+/** 查询模型所属的 New API 分组（非 default 时代理转发需要加 ?group=xxx） */
+export function getGroupForModel(model) {
+  return modelGroupMap.get(model) || null
+}
+
 /** New API channel type → Profer provider */
 const TYPE_TO_PROVIDER = {
   1: 'openai', 8: 'openai', 14: 'anthropic', 15: 'openai',
@@ -90,7 +98,7 @@ export async function syncChannelsFromNewApi(db) {
   if (!ok) {
     // 网络失败时用旧缓存兜底（如有）
     if (cachedChannels) return await applySync(db, cachedChannels)
-    return { synced: 0, updated: 0, skipped: 0, error: reason }
+    return { synced: 0, updated: 0, deactivated: 0, skipped: 0, error: reason }
   }
 
   cachedChannels = channels
@@ -101,6 +109,10 @@ export async function syncChannelsFromNewApi(db) {
 async function applySync(db, newApiChannels) {
   const existingRows = db.prepare('SELECT id, name, provider, models_json, is_active FROM channels WHERE id LIKE ?').all('newapi-%')
   const existingMap = new Map(existingRows.map(r => [r.id, r]))
+
+  // 防止空列表雪崩：New API 返回 0 条渠道时，跳过反向清理，避免误停全部渠道。
+  // 空结果通常是上游分页/配置异常导致，不应将 Profer 侧全线停用。
+  const newApiHasChannels = newApiChannels.length > 0
 
   let synced = 0, updated = 0, skipped = 0
   const now = Date.now()
@@ -125,10 +137,30 @@ async function applySync(db, newApiChannels) {
     return false
   }
 
+  // 重建 model → group 映射（代理转发时查此表决定加哪个 ?group= 参数）
+  const newModelGroupMap = new Map()
+  for (const nc of newApiChannels) {
+    if (nc.status !== 1) continue
+    const group = nc.group || 'default'
+    const modelNames = (nc.models || '').split(',').map(s => s.trim()).filter(Boolean)
+    for (const m of modelNames) {
+      newModelGroupMap.set(m, group)
+    }
+  }
+  modelGroupMap = newModelGroupMap
+
+  // 反向清理：Profer 中有但 New API 中已删除/停用的 newapi-* 渠道 → 软删除
+  let deactivated = 0
+  const newApiActiveIds = new Set()
+  const deactivateStale = db.prepare(
+    `UPDATE channels SET is_active = 0, updated_at = ? WHERE id = ?`
+  )
+
   const tx = db.transaction(() => {
     for (const nc of newApiChannels) {
       if (nc.status !== 1) continue
       const mapped = mapNewApiChannel(nc)
+      newApiActiveIds.add(mapped.id)
       const existing = existingMap.get(mapped.id)
 
       if (!existing) {
@@ -147,17 +179,28 @@ async function applySync(db, newApiChannels) {
         skipped++
       }
     }
+
+    // 反向清理：Profer 中有但 New API 中已删除的 newapi-* 渠道 → 软删除
+    // 仅当 New API 返回了有效渠道列表时才执行，防止上游返回空列表时雪崩误停
+    if (newApiHasChannels) {
+      for (const [proferId, proferChannel] of existingMap) {
+        if (!newApiActiveIds.has(proferId) && proferChannel.is_active === 1) {
+          deactivateStale.run(now, proferId)
+          deactivated++
+        }
+      }
+    }
   })
   tx()
 
-  if (synced > 0 || updated > 0) {
-    console.log(`[newapi-sync] 新增 ${synced}，更新 ${updated}，跳过 ${skipped}（共 ${newApiChannels.length} 条 New API 来源）`)
+  if (synced > 0 || updated > 0 || deactivated > 0) {
+    console.log(`[newapi-sync] 新增 ${synced}，更新 ${updated}，停用 ${deactivated}，跳过 ${skipped}（共 ${newApiChannels.length} 条 New API 来源）`)
   }
 
   // 自动维护 New API 的 abilities 路由表：确保所有渠道的模型在 default 组可路由
   await maintainAbilitiesTable(db, newApiChannels)
 
-  return { synced, updated, skipped }
+  return { synced, updated, deactivated, skipped }
 }
 
 /**
