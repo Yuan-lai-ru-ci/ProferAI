@@ -181,7 +181,7 @@ export interface ProjectMeta {
   lastActiveAt: number
 }
 
-// ===== DAG 布局 =====
+// ===== DAG 布局（层级式，已保留向后兼容） =====
 
 /** 拓扑层级中的一层 */
 export interface LayoutLevel {
@@ -191,7 +191,7 @@ export interface LayoutLevel {
   nodes: TaskNode[]
 }
 
-/** DAG 布局结果 */
+/** DAG 布局结果（层级式） */
 export interface LayoutResult {
   /** 按层级分组的节点 */
   levels: LayoutLevel[]
@@ -201,13 +201,70 @@ export interface LayoutResult {
   maxNodesInLevel: number
 }
 
+// ===== 力导向布局（知识图谱风格） =====
+
+/** 力导向布局选项 */
+export interface ForceLayoutOptions {
+  /** 最大迭代次数（默认 300） */
+  iterations?: number
+  /** 库仑斥力强度（默认 5000） */
+  repulsionStrength?: number
+  /** 弹簧引力强度（默认 0.01） */
+  attractionStrength?: number
+  /** 弹簧理想长度（默认 200） */
+  edgeLength?: number
+  /** DAG 方向力强度（默认 0.1），正值推动节点从左向右 */
+  dagDirectionStrength?: number
+  /** 向心力强度（默认 0.05） */
+  centerGravity?: number
+}
+
+/** 单个节点的布局位置 */
+export interface NodePosition {
+  id: string
+  x: number
+  y: number
+}
+
+/** 力导向布局结果 */
+export interface ForceLayoutResult {
+  /** 节点 ID → 位置映射 */
+  positions: Map<string, { x: number; y: number }>
+  /** 画布总宽度 */
+  canvasWidth: number
+  /** 画布总高度 */
+  canvasHeight: number
+  /** 实际执行的迭代次数 */
+  iterations: number
+}
+
+/** 分叉边渲染布局数据 */
+export interface ForkEdgeLayout {
+  /** 分叉源 Task ID */
+  from: string
+  /** 新 Task ID */
+  to: string
+  /** 原因 */
+  reason?: string
+  /** 起点坐标 */
+  x1: number
+  y1: number
+  /** 终点坐标 */
+  x2: number
+  y2: number
+  /** SVG 路径 d 属性 */
+  d: string
+  /** 颜色 */
+  lineColor: string
+}
+
 // ===== deriveGraph 输入 =====
 
 /** aggregateTaskItems 产出的 TaskItem 的最小投影 */
 export interface TaskItemInput {
   id: string
   subject: string
-  status: 'pending' | 'in_progress' | 'completed' | 'deleted'
+  status: 'pending' | 'in_progress' | 'completed' | 'deleted' | 'cancelled'
   description?: string
 }
 
@@ -223,6 +280,8 @@ export interface GraphSummary {
   nextPending: TaskNode[]
   /** 最近完成的 Task 摘要 */
   recentCompleted: RecentCompletedTask[]
+  /** 最近被取消的 Task 摘要（用于打断后提醒 AI 不要恢复） */
+  recentCancelled: RecentCompletedTask[]
 }
 
 /** 最近完成的 Task 摘要 */
