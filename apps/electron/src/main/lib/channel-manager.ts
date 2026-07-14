@@ -594,7 +594,12 @@ async function testXiaomiMessages(
   const headers: Record<string, string> = {
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
-    'api-key': apiKey,
+  }
+  if (provider === 'xiaomi-token-plan') {
+    headers.Authorization = `Bearer ${apiKey}`
+    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+  } else {
+    headers['api-key'] = apiKey
   }
 
   const response = await fetchFn(url, withTimeout({
