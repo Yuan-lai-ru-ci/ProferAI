@@ -130,13 +130,10 @@ describe('linkify 合成链接防护', () => {
     expect(html).not.toContain('<a')
   })
 
-  test('markdownToHtml 不把 .md 结尾的文件名误判为合成链接', () => {
-    // 这是 htmlToMarkdown 序列化乱码的根源：linkify 若把 SKILL.md 合成为
-    // <a href="http://SKILL.md">SKILL.md</a>，<a> case 会序列化为
-    // [SKILL.md](<http://SKILL.md>)。这里从 markdownToHtml 侧断言不合成。
-    const html = markdownToHtml('请查看 SKILL.md 了解更多')
-    expect(html).not.toContain('http://SKILL.md')
+  test('markdownToHtml 不把裸邮箱 foo@bar.com 误判为 mailto 链接', () => {
+    const html = markdownToHtml('联系 foo@bar.com')
+    expect(html).not.toContain('mailto:')
     expect(html).not.toContain('<a')
-    expect(html).toContain('SKILL.md')
+    expect(html).toContain('foo@bar.com')
   })
 })
