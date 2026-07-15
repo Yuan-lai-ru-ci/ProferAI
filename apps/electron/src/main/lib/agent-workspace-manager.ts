@@ -7,6 +7,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync, statSync, openSync, readSync, closeSync, realpathSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { rmSyncWithRetry, renameWithRetry } from './fs-retry'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
@@ -629,6 +630,17 @@ export function deleteWorkspaceSkill(workspaceSlug: string, skillSlug: string): 
 }
 
 /** 扫描指定目录下的 Skills，供 getWorkspaceSkills 和 getAllWorkspaceSkills 复用 */
+function isSkillDirectoryEntry(dir: string, entry: Dirent): boolean {
+  if (entry.isDirectory()) return true
+  if (!entry.isSymbolicLink()) return false
+
+  try {
+    return statSync(join(dir, entry.name)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
   const skills: SkillMeta[] = []
 
@@ -636,15 +648,7 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
     const entries = readdirSync(dir, { withFileTypes: true })
 
     for (const entry of entries) {
-      // 单个条目（含 dangling/broken symlink）解析失败时跳过该条目继续扫描，
-      // 不能让坏条目逃逸到 outer catch 终止整个扫描，导致后续 Skill 全部丢失。
-      let isDir: boolean
-      try {
-        isDir = entry.isDirectory() || (entry.isSymbolicLink() && statSync(join(dir, entry.name)).isDirectory())
-      } catch {
-        continue
-      }
-      if (!isDir) continue
+      if (!isSkillDirectoryEntry(dir, entry)) continue
 
       const skillMdPath = join(dir, entry.name, 'SKILL.md')
       if (!existsSync(skillMdPath)) continue
