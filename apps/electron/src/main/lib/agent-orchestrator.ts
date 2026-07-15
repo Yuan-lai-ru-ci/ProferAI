@@ -59,6 +59,7 @@ import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-
 import { injectBuiltinMcpServers } from './builtin-mcp/registry'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
+import { getAgentSdkMaxOutputTokens } from './agent-sdk-output-limits'
 
 // ===== 类型定义 =====
 
@@ -397,8 +398,8 @@ export class AgentOrchestrator {
 
     const sdkEnv: Record<string, string | undefined> = {
       ...cleanEnv,
-      // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
-      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+      // Claude 原生可提高输出上限；兼容渠道常见上限为 32768，不能全局下发 64000。
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: getAgentSdkMaxOutputTokens(provider),
       // 暴露打包进 App 的 proma CLI 路径，供 session-cleaner 等 skill / Agent 调用
       // （开发模式无编译二进制，getBundledCliPath 返回 undefined，此处不注入，
       //   skill 回退到源码运行 bun apps/cli/src/index.ts）。
