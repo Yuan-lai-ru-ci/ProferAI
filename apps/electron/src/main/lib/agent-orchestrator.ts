@@ -29,6 +29,7 @@ import {
   THINKING_SIGNATURE_ERROR_TITLE,
   isPersistableSDKSystemMessage,
   normalizeMcpTransportType,
+  inferAgentSdkContextWindow,
   resolveAgentSdkModelId,
 } from '@proma/shared'
 import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
@@ -1477,12 +1478,14 @@ export class AgentOrchestrator {
           this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
         },
         onContextWindow: (cw: number) => {
-          console.log(`[Agent 编排] 缓存 contextWindow: ${cw}`)
+          const inferredWindow = inferAgentSdkContextWindow(modelId, channel.provider)
+          const contextWindow = Math.max(cw, inferredWindow ?? 0) || cw
+          console.log(`[Agent 编排] 缓存 contextWindow: ${contextWindow}`)
           // result 消息里的真实 contextWindow 透传到 renderer，
           // 覆盖流式过程中按模型名推断的 fallback 值（智谱等端点会把 [1m] 等后缀剥掉，导致 fallback 不准）
           this.eventBus.emit(sessionId, {
             kind: 'proma_event',
-            event: { type: 'context_window', contextWindow: cw },
+            event: { type: 'context_window', contextWindow },
           })
         },
       }
