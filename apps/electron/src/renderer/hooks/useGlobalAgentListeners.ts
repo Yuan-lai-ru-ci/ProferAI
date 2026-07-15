@@ -26,7 +26,9 @@ import {
   applyAgentEvent,
   liveMessagesMapAtom,
   agentSessionModelMapAtom,
+  agentSessionChannelMapAtom,
   agentModelIdAtom,
+  agentChannelIdAtom,
   agentPermissionModeMapAtom,
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
@@ -53,11 +55,12 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
+import { channelsAtom } from '@/atoms/chat-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta } from '@proma/shared'
-import { inferContextWindow } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta, ProviderType } from '@proma/shared'
+import { inferAgentSdkContextWindow, inferContextWindow } from '@proma/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
@@ -200,7 +203,10 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         // 因为部分端点（如智谱）会在 message.model 里剥掉 [1m] 等规格后缀，
         // 导致 glm-x-preview[1m] 被识别成 glm-x-preview（200K）。
         const modelName = aMsg._channelModelId ?? aMsg.message.model
-        const fallbackWindow = inferContextWindow(modelName)
+        const provider = aMsg._channelProvider
+        const fallbackWindow = provider
+          ? inferAgentSdkContextWindow(modelName, provider)
+          : inferContextWindow(modelName)
         events.push({
           type: 'usage_update',
           usage: {
@@ -630,11 +636,21 @@ export function useGlobalAgentListeners(): void {
               msgRecord._createdAt = Date.now()
             }
 
-            // 为 assistant 消息注入渠道 modelId，确保流式期间就绑定正确模型
+            // 为 assistant 消息注入渠道信息，确保流式期间就绑定正确模型与 Agent SDK 窗口
             if (msgRecord.type === 'assistant' && !msgRecord._channelModelId) {
               const sessionModelMap = store.get(agentSessionModelMapAtom)
               const defaultModelId = store.get(agentModelIdAtom)
               msgRecord._channelModelId = sessionModelMap.get(sessionId) ?? defaultModelId ?? undefined
+            }
+            if (msgRecord.type === 'assistant' && !msgRecord._channelProvider) {
+              const sessionChannelMap = store.get(agentSessionChannelMapAtom)
+              const defaultChannelId = store.get(agentChannelIdAtom)
+              const channelId = sessionChannelMap.get(sessionId) ?? defaultChannelId ?? undefined
+              const channels = store.get(channelsAtom)
+              const provider = channels.find((c) => c.id === channelId)?.provider
+              if (provider) {
+                msgRecord._channelProvider = provider as ProviderType
+              }
             }
 
             store.set(liveMessagesMapAtom, (prev) => {
