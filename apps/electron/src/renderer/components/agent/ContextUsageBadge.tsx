@@ -24,7 +24,7 @@ const WARNING_RATIO = 0.80
 /** Popover hover 关闭延迟（ms），与 AgentThinkingPopover 一致 */
 const HOVER_CLOSE_DELAY = 150
 /** 订阅额度缓存时间，避免频繁 hover 时重复打远端 API */
-const PLAN_QUOTA_CACHE_MS = 4 * 60 * 1000
+const PLAN_QUOTA_CACHE_MS = 60 * 1000
 const PLAN_QUOTA_ERROR_CACHE_MS = 15 * 1000
 const UNSUPPORTED_PLAN_QUOTA_MESSAGE = '当前渠道不支持订阅 Plan 额度查询'
 

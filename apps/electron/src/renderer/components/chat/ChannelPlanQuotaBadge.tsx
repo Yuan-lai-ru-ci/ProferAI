@@ -3,7 +3,7 @@ import type { Channel, ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@p
 import { cn } from '@/lib/utils'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 
-const PLAN_QUOTA_CACHE_MS = 4 * 60 * 1000
+const PLAN_QUOTA_CACHE_MS = 60 * 1000
 const PLAN_QUOTA_ERROR_CACHE_MS = 15 * 1000
 
 const quotaCache = new Map<string, ChannelPlanQuotaResult>()
