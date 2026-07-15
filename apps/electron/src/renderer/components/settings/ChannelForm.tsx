@@ -33,6 +33,7 @@ import {
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
   isAgentCompatibleProvider,
+  parseZhipuTeamCredentials,
 } from '@proma/shared'
 import type {
   Channel,
@@ -157,46 +158,14 @@ const EMPTY_ZHIPU_TEAM_SECRET: ZhipuTeamSecretForm = {
   project: '',
 }
 
-function normalizeSecretKey(key: string): string {
-  return key.trim().toLowerCase().replace(/[_-]/g, '')
-}
-
 function parseZhipuTeamSecret(secret: string): Partial<ZhipuTeamSecretForm> {
-  const trimmed = secret.trim()
-  if (!trimmed) return {}
-
-  const pick = (record: Record<string, unknown>): Partial<ZhipuTeamSecretForm> => {
-    const normalized = new Map<string, string>()
-    for (const [key, value] of Object.entries(record)) {
-      if (typeof value === 'string' && value.trim()) {
-        normalized.set(normalizeSecretKey(key), value.trim())
-      }
-    }
-    return {
-      apiKey: normalized.get('apikey') ?? normalized.get('apitoken') ?? normalized.get('token') ?? '',
-      organization: normalized.get('bigmodelorganization') ?? normalized.get('organization') ?? normalized.get('org') ?? '',
-      project: normalized.get('bigmodelproject') ?? normalized.get('project') ?? '',
-    }
+  const credentials = parseZhipuTeamCredentials(secret)
+  if (!credentials) return {}
+  return {
+    apiKey: credentials.apiKey,
+    organization: credentials.organization ?? '',
+    project: credentials.project ?? '',
   }
-
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return pick(parsed as Record<string, unknown>)
-      }
-    } catch {
-      return {}
-    }
-  }
-
-  const entries: Record<string, string> = {}
-  for (const part of trimmed.split(/[;\n]+/)) {
-    const index = part.indexOf('=')
-    if (index <= 0) continue
-    entries[part.slice(0, index).trim()] = part.slice(index + 1).trim()
-  }
-  return pick(entries)
 }
 
 function buildZhipuTeamSecret(secret: ZhipuTeamSecretForm): string {

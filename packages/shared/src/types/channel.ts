@@ -104,18 +104,64 @@ export function isAgentCompatibleProvider(provider: ProviderType): boolean {
   return AGENT_COMPATIBLE_PROVIDERS.has(provider)
 }
 
-export function extractZhipuCodingTeamApiToken(secret: string): string {
+export interface ZhipuTeamCredentials {
+  apiKey: string
+  organization?: string
+  project?: string
+}
+
+function normalizeZhipuCredentialKey(key: string): string {
+  return key.trim().toLowerCase().replace(/[_-]/g, '')
+}
+
+export function parseZhipuTeamCredentials(secret: string): ZhipuTeamCredentials | null {
   const trimmed = secret.trim()
-  if (!trimmed.startsWith('{')) return secret
-  try {
-    const parsed = JSON.parse(trimmed) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return secret
-    const record = parsed as Record<string, unknown>
-    const value = record.apiKey ?? record.apiToken
-    return typeof value === 'string' && value.trim() ? value.trim() : ''
-  } catch {
-    return secret
+  if (!trimmed) return null
+
+  const pick = (record: Record<string, unknown>): ZhipuTeamCredentials | null => {
+    const normalized = new Map<string, string>()
+    for (const [key, value] of Object.entries(record)) {
+      if (typeof value === 'string' && value.trim()) {
+        normalized.set(normalizeZhipuCredentialKey(key), value.trim())
+      }
+    }
+    const apiKey = normalized.get('apikey')
+      ?? normalized.get('apitoken')
+      ?? normalized.get('token')
+      ?? normalized.get('authorization')
+      ?? normalized.get('auth')
+      ?? normalized.get('bearer')
+    const organization = normalized.get('bigmodelorganization') ?? normalized.get('organization') ?? normalized.get('org')
+    const project = normalized.get('bigmodelproject') ?? normalized.get('project')
+    if (!apiKey) return null
+    return { apiKey, organization, project }
   }
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return pick(parsed as Record<string, unknown>)
+      }
+    } catch {
+      return null
+    }
+  }
+
+  const entries: Record<string, string> = {}
+  for (const part of trimmed.split(/[;\n]+/)) {
+    const index = part.indexOf('=')
+    if (index <= 0) continue
+    entries[part.slice(0, index).trim()] = part.slice(index + 1).trim()
+  }
+  return pick(entries)
+}
+
+export function extractZhipuCodingTeamApiToken(secret: string): string {
+  const credentials = parseZhipuTeamCredentials(secret)
+  if (credentials) return credentials.apiKey
+  const trimmed = secret.trim()
+  return trimmed || secret
 }
 
 /**

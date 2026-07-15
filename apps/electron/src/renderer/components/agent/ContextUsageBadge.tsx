@@ -16,6 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { inputToolbarButtonClass } from '@/components/ai-elements/input-toolbar-styles'
 import { cn } from '@/lib/utils'
 import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@proma/shared'
+import { fetchChannelPlanQuota } from '@/lib/channel-plan-quota'
 
 /** 压缩阈值比例（SDK 在 ~77.5% 窗口大小时自动压缩） */
 const COMPACT_THRESHOLD_RATIO = 0.775
@@ -23,9 +24,6 @@ const COMPACT_THRESHOLD_RATIO = 0.775
 const WARNING_RATIO = 0.80
 /** Popover hover 关闭延迟（ms），与 AgentThinkingPopover 一致 */
 const HOVER_CLOSE_DELAY = 150
-/** 订阅额度缓存时间，避免频繁 hover 时重复打远端 API */
-const PLAN_QUOTA_CACHE_MS = 60 * 1000
-const PLAN_QUOTA_ERROR_CACHE_MS = 15 * 1000
 const UNSUPPORTED_PLAN_QUOTA_MESSAGE = '当前渠道不支持订阅 Plan 额度查询'
 
 interface ContextUsageBadgeProps {
@@ -197,8 +195,6 @@ export function ContextUsageBadge({
   const closeTimerRef = React.useRef<number | null>(null)
   const [quota, setQuota] = React.useState<ChannelPlanQuotaResult | null>(null)
   const [quotaLoading, setQuotaLoading] = React.useState(false)
-  const quotaChannelRef = React.useRef<string | null>(null)
-  const quotaResultRef = React.useRef<ChannelPlanQuotaResult | null>(null)
 
   const cancelClose = React.useCallback(() => {
     if (closeTimerRef.current != null) {
@@ -217,44 +213,15 @@ export function ContextUsageBadge({
   React.useEffect(() => {
     if (!open || !channelId) return
 
-    const cachedForChannel = quotaChannelRef.current === channelId
-    const cachedQuota = cachedForChannel ? quotaResultRef.current : null
-    const cacheTtl = cachedQuota?.supported ? PLAN_QUOTA_CACHE_MS : PLAN_QUOTA_ERROR_CACHE_MS
-    if (cachedQuota && Date.now() - cachedQuota.updatedAt < cacheTtl) {
-      setQuota(cachedQuota)
-      return
-    }
-
     let cancelled = false
     setQuotaLoading(true)
-    if (!cachedForChannel) {
-      setQuota(null)
-    }
 
-    window.electronAPI.getChannelPlanQuota(channelId)
+    fetchChannelPlanQuota(channelId)
       .then((result) => {
-        if (cancelled) return
-        quotaChannelRef.current = channelId
-        quotaResultRef.current = result
-        setQuota(result)
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        quotaChannelRef.current = channelId
-        const errorResult: ChannelPlanQuotaResult = {
-          supported: false,
-          provider: 'custom',
-          windows: [],
-          updatedAt: Date.now(),
-          message: error instanceof Error ? error.message : '订阅额度查询失败',
-        }
-        quotaResultRef.current = errorResult
-        setQuota(errorResult)
+        if (!cancelled) setQuota(result)
       })
       .finally(() => {
-        if (!cancelled) {
-          setQuotaLoading(false)
-        }
+        if (!cancelled) setQuotaLoading(false)
       })
 
     return () => {

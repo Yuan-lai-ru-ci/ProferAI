@@ -24,7 +24,7 @@ import type {
   FetchModelsResult,
   ProviderType,
 } from '@proma/shared'
-import { extractZhipuCodingTeamApiToken, PROVIDER_DEFAULT_URLS } from '@proma/shared'
+import { extractZhipuCodingTeamApiToken, parseZhipuTeamCredentials, PROVIDER_DEFAULT_URLS } from '@proma/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import {
@@ -994,12 +994,6 @@ interface ZhipuQuotaResponse {
   }
 }
 
-interface ZhipuTeamQuotaCredentials {
-  apiKey: string
-  organization?: string
-  project?: string
-}
-
 function createZhipuQuotaUrl(baseUrl: string, query?: Record<string, string>): string {
   let requestUrl = 'https://bigmodel.cn/api/monitor/usage/quota/limit'
   try {
@@ -1034,53 +1028,6 @@ function createZhipuTeamQuotaUrl(): string {
   return url.toString()
 }
 
-function normalizeZhipuCredentialKey(key: string): string {
-  return key.trim().toLowerCase().replace(/[_-]/g, '')
-}
-
-function parseZhipuTeamQuotaCredentials(apiKey: string): ZhipuTeamQuotaCredentials | null {
-  const trimmed = apiKey.trim()
-  if (!trimmed) return null
-
-  const pick = (record: Record<string, unknown>): ZhipuTeamQuotaCredentials | null => {
-    const normalized = new Map<string, string>()
-    for (const [key, value] of Object.entries(record)) {
-      if (typeof value === 'string' && value.trim()) {
-        normalized.set(normalizeZhipuCredentialKey(key), value.trim())
-      }
-    }
-    const apiKey = normalized.get('apikey')
-      ?? normalized.get('apitoken')
-      ?? normalized.get('token')
-      ?? normalized.get('authorization')
-      ?? normalized.get('auth')
-      ?? normalized.get('bearer')
-    const organization = normalized.get('bigmodelorganization') ?? normalized.get('organization') ?? normalized.get('org')
-    const project = normalized.get('bigmodelproject') ?? normalized.get('project')
-    if (!apiKey) return null
-    return { apiKey, organization, project }
-  }
-
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return pick(parsed as Record<string, unknown>)
-      }
-    } catch {
-      return null
-    }
-  }
-
-  const entries: Record<string, string> = {}
-  for (const part of trimmed.split(/[;\n]+/)) {
-    const index = part.indexOf('=')
-    if (index <= 0) continue
-    entries[part.slice(0, index).trim()] = part.slice(index + 1).trim()
-  }
-  return pick(entries)
-}
-
 async function fetchZhipuQuota(
   apiKey: string,
   requestUrl: string,
@@ -1108,7 +1055,7 @@ async function fetchZhipuQuota(
 }
 
 async function fetchZhipuTeamQuota(
-  credentials: ZhipuTeamQuotaCredentials,
+  credentials: import('@proma/shared').ZhipuTeamCredentials,
   proxyUrl?: string,
 ): Promise<ZhipuQuotaResponse | { error: string }> {
   const fetchFn = getFetchFn(proxyUrl)
@@ -1148,7 +1095,7 @@ async function testZhipuCodingTeam(
   baseUrl: string,
   proxyUrl?: string,
 ): Promise<ChannelTestResult> {
-  const teamCredentials = parseZhipuTeamQuotaCredentials(apiKey)
+  const teamCredentials = parseZhipuTeamCredentials(apiKey)
   if (teamCredentials) {
     const response = await fetchZhipuTeamQuota(teamCredentials, proxyUrl)
     if ('error' in response) {
@@ -1166,10 +1113,10 @@ async function testZhipuCodingTeam(
 
   const authToken = extractZhipuCodingTeamApiToken(apiKey)
   if (!authToken) {
-      return {
-        success: false,
-        message: '请填写 API Token；组织 ID 和项目 ID 可选',
-      }
+    return {
+      success: false,
+      message: '请填写 API Token；组织 ID 和项目 ID 可选',
+    }
   }
 
   return await testAnthropicCompatible(baseUrl, apiKey, proxyUrl, 'zhipu-coding-team')
@@ -1254,7 +1201,7 @@ async function queryZhipuPlanQuota(
   provider: ProviderType = 'zhipu-coding',
 ): Promise<ChannelPlanQuotaResult> {
   if (provider === 'zhipu-coding-team') {
-    const teamCredentials = parseZhipuTeamQuotaCredentials(apiKey)
+    const teamCredentials = parseZhipuTeamCredentials(apiKey)
     if (!teamCredentials) {
       return createUnsupportedPlanQuota(
         'zhipu-coding-team',
@@ -1299,7 +1246,12 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
     return createUnsupportedPlanQuota('custom', '渠道不存在')
   }
 
-  const provider = inferProviderFromBaseUrl(channel.provider, channel.baseUrl)
+  let provider: ProviderType
+  try {
+    provider = inferProviderFromBaseUrl(channel.provider, channel.baseUrl)
+  } catch {
+    provider = channel.provider
+  }
   const proxyUrl = await getEffectiveProxyUrl()
   let apiKey: string
   try {

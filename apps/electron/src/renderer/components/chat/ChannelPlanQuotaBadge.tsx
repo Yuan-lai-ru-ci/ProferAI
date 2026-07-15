@@ -1,16 +1,7 @@
 import * as React from 'react'
 import type { Channel, ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@proma/shared'
 import { cn } from '@/lib/utils'
-import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
-
-const PLAN_QUOTA_CACHE_MS = 60 * 1000
-const PLAN_QUOTA_ERROR_CACHE_MS = 15 * 1000
-
-const quotaCache = new Map<string, ChannelPlanQuotaResult>()
-
-function getCacheTtl(result: ChannelPlanQuotaResult): number {
-  return result.supported ? PLAN_QUOTA_CACHE_MS : PLAN_QUOTA_ERROR_CACHE_MS
-}
+import { supportsChannelPlanQuota, fetchChannelPlanQuota } from '@/lib/channel-plan-quota'
 
 function formatWindow(window: ChannelPlanQuotaWindow): string {
   const label = window.type === '5h'
@@ -48,41 +39,21 @@ function buildTitle(result: ChannelPlanQuotaResult): string {
 }
 
 export function ChannelPlanQuotaBadge({ channel }: { channel: Channel }): React.ReactElement | null {
-  const [quota, setQuota] = React.useState<ChannelPlanQuotaResult | null>(() => quotaCache.get(channel.id) ?? null)
+  const [quota, setQuota] = React.useState<ChannelPlanQuotaResult | null>(null)
 
   React.useEffect(() => {
     if (!supportsChannelPlanQuota(channel)) return
 
-    const cached = quotaCache.get(channel.id)
-    if (cached && Date.now() - cached.updatedAt < getCacheTtl(cached)) {
-      setQuota(cached)
-      return
-    }
-
     let cancelled = false
-    window.electronAPI.getChannelPlanQuota(channel.id)
+    fetchChannelPlanQuota(channel.id)
       .then((result) => {
-        if (cancelled) return
-        quotaCache.set(channel.id, result)
-        setQuota(result)
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        const result: ChannelPlanQuotaResult = {
-          supported: false,
-          provider: channel.provider,
-          windows: [],
-          updatedAt: Date.now(),
-          message: error instanceof Error ? error.message : '订阅额度查询失败',
-        }
-        quotaCache.set(channel.id, result)
-        setQuota(result)
+        if (!cancelled) setQuota(result)
       })
 
     return () => {
       cancelled = true
     }
-  }, [channel])
+  }, [channel.id, channel.provider, channel.baseUrl])
 
   if (!supportsChannelPlanQuota(channel)) return null
 
