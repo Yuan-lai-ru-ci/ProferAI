@@ -58,6 +58,7 @@ import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 import { injectBuiltinMcpServers } from './builtin-mcp/registry'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
+import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 
 // ===== 类型定义 =====
 
@@ -428,19 +429,14 @@ export class AgentOrchestrator {
     }
 
     // 认证方式按 provider 分支
-    // - Kimi Coding Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Proma UA
+    // - Coding Plan / Token Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Proma UA
     // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
     // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
     // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
-    if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
-      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
-    } else if (provider === 'minimax') {
-      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
+    applyAgentSdkAuthEnv(sdkEnv, provider, apiKey, getPromaUserAgent(pkg.version))
+    if (provider === 'minimax') {
       sdkEnv.API_TIMEOUT_MS = '3000000'
       sdkEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
-    } else {
-      sdkEnv.ANTHROPIC_API_KEY = apiKey
     }
 
     // 全局 API 超时保护：防止网络环境变化（代理断开/WiFi 切换等）导致 SDK 子进程的
@@ -954,20 +950,7 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_BASE_URL
     delete process.env.ANTHROPIC_CUSTOM_HEADERS
-    if (channel.provider === 'kimi-coding') {
-      // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
-    } else if (channel.provider === 'xiaomi-token-plan') {
-      // 小米 Token Plan：Bearer + 必须带 User-Agent
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
-    } else if (channel.provider === 'minimax') {
-      // MiniMax Coding Plan：Claude Code 兼容配置使用 Bearer
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-    } else {
-      process.env.ANTHROPIC_API_KEY = apiKey
-    }
+    applyAgentSdkAuthEnv(process.env, channel.provider, apiKey, getPromaUserAgent(pkg.version))
     // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
     if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
       process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
@@ -975,7 +958,7 @@ export class AgentOrchestrator {
 
     const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
     const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
-    applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
+    applyAgentModelRoutingToEnv(sdkEnv, modelRouting, channel.provider)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     const sessionMeta = getAgentSessionMeta(sessionId)
@@ -1397,8 +1380,8 @@ export class AgentOrchestrator {
       const queryOptions: ClaudeAgentQueryOptions = {
         sessionId,
         prompt: finalPrompt,
-        // SDK 需要 `[1m]` 显式选择扩展上下文；发送给提供商前会自动剥离后缀。
-        model: resolveAgentSdkModelId(selectedModelId),
+        // 已验证的内置供应商可用 `[1m]` 选择扩展上下文；通用兼容端点保持原始模型 ID。
+        model: resolveAgentSdkModelId(selectedModelId, channel.provider),
         cwd: agentCwd,
         sdkCliPath: cliPath,
         env: sdkEnv,
@@ -1767,6 +1750,8 @@ export class AgentOrchestrator {
                     content: [{ type: 'text', text: errorContent }],
                   },
                   parent_tool_use_id: null,
+                  _channelModelId: modelId,
+                  _channelProvider: channel.provider,
                   error: { message: typedError.message, errorType: typedError.code },
                   _createdAt: Date.now(),
                   _errorCode: typedError.code,
@@ -1809,9 +1794,19 @@ export class AgentOrchestrator {
                     accumulatedMessages.push(msg)
                   }
                 } else {
-                  // 为 assistant 消息注入渠道 modelId，确保持久化后能正确匹配模型显示名
-                  if (msg.type === 'assistant' && modelId) {
-                    (msg as Record<string, unknown>)._channelModelId = modelId
+                  // 为结果消息注入渠道信息，确保持久化后能按 Agent SDK 运行窗口计算压缩阈值
+                  if (msg.type === 'result') {
+                    if (modelId) {
+                      (msg as Record<string, unknown>)._channelModelId = modelId
+                    }
+                    ;(msg as Record<string, unknown>)._channelProvider = channel.provider
+                  }
+                  // 为 assistant 消息注入渠道信息，确保持久化后能正确匹配模型显示名与 Agent SDK 窗口
+                  if (msg.type === 'assistant') {
+                    if (modelId) {
+                      (msg as Record<string, unknown>)._channelModelId = modelId
+                    }
+                    ;(msg as Record<string, unknown>)._channelProvider = channel.provider
                   }
                   accumulatedMessages.push(msg)
                 }

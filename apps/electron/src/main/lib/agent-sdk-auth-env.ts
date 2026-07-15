@@ -1,0 +1,27 @@
+import type { ProviderType } from '@proma/shared'
+
+export function usesAgentSdkBearerWithUserAgent(provider: ProviderType): boolean {
+  return provider === 'kimi-coding'
+    || provider === 'zhipu-coding'
+    || provider === 'xiaomi-token-plan'
+}
+
+export function applyAgentSdkAuthEnv(
+  target: Record<string, string | undefined>,
+  provider: ProviderType,
+  apiKey: string,
+  userAgent: string,
+): void {
+  if (usesAgentSdkBearerWithUserAgent(provider)) {
+    target.ANTHROPIC_AUTH_TOKEN = apiKey
+    target.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${userAgent}`
+    return
+  }
+
+  if (provider === 'minimax') {
+    target.ANTHROPIC_AUTH_TOKEN = apiKey
+    return
+  }
+
+  target.ANTHROPIC_API_KEY = apiKey
+}
