@@ -108,12 +108,14 @@ export function inferContextWindow(model?: string): number | undefined {
 /**
  * 按 Agent SDK 实际启用的窗口推断 contextWindow。
  *
- * 与 inferContextWindow 不同，这里必须同时看 provider：通用 Anthropic-compatible
- * 端点即便模型名命中 1M 家族，也不一定能安全使用 SDK `[1m]` 变体。
+ * 与 resolveAgentSdkModelId 不同，这里只判断模型窗口能力，不判断是否要把
+ * `[1m]` 后缀传给 SDK。通用 Anthropic-compatible 端点可能不接受带后缀的
+ * 模型名，但这不应把已知 1M 模型的上下文分母降级为 200K。
  */
 export function inferAgentSdkContextWindow(modelId: string | undefined, provider: ProviderType): number | undefined {
   if (!modelId) return undefined
-  return resolveAgentSdkModelId(modelId, provider) !== modelId
+  return supports1MContext(modelId)
+    || resolveAgentSdkModelId(modelId, provider) !== modelId
     || /\[1m\]$/i.test(modelId)
     ? ONE_MILLION_CONTEXT_WINDOW
     : DEFAULT_CONTEXT_WINDOW

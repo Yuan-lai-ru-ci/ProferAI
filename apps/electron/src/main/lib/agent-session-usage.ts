@@ -107,10 +107,11 @@ function pickResultContextWindow(result: SDKResultMessage): number | undefined {
   if (!result.modelUsage) return undefined
   let best: number | undefined
   for (const [modelId, info] of Object.entries(result.modelUsage)) {
+    const fallbackModelId = result._channelModelId ?? modelId
     const fallbackWindow = result._channelProvider
-      ? inferAgentSdkContextWindow(modelId, result._channelProvider)
-      : inferContextWindow(modelId)
-    const win = info?.contextWindow ?? fallbackWindow
+      ? inferAgentSdkContextWindow(fallbackModelId, result._channelProvider)
+      : inferContextWindow(fallbackModelId)
+    const win = Math.max(info?.contextWindow ?? 0, fallbackWindow ?? 0) || undefined
     if (win === undefined) continue
     if (best === undefined || win > best) best = win
   }

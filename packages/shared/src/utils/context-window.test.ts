@@ -63,11 +63,12 @@ describe('模型上下文窗口', () => {
     expect(resolveAgentSdkModelId('glm-5.2', 'anthropic-compatible')).toBe('glm-5.2')
   })
 
-  test('Given Agent SDK 运行窗口推断 When 通用兼容端点模型名命中 1M 规则 Then 仍按 200K 处理', () => {
+  test('Given Agent SDK 运行窗口推断 When 模型名命中 1M 规则 Then 按模型能力返回 1M', () => {
     expect(inferAgentSdkContextWindow('glm-5.2', 'zhipu-coding')).toBe(ONE_MILLION_CONTEXT_WINDOW)
-    expect(inferAgentSdkContextWindow('glm-5.2', 'anthropic-compatible')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferAgentSdkContextWindow('glm-5.2', 'anthropic-compatible')).toBe(ONE_MILLION_CONTEXT_WINDOW)
     expect(inferAgentSdkContextWindow('deepseek-v4-pro', 'deepseek')).toBe(ONE_MILLION_CONTEXT_WINDOW)
-    expect(inferAgentSdkContextWindow('deepseek-v4-pro', 'anthropic-compatible')).toBe(DEFAULT_CONTEXT_WINDOW)
-    expect(inferAgentSdkContextWindow('qwen3.7-plus', 'qwen-anthropic')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferAgentSdkContextWindow('deepseek-v4-pro', 'anthropic-compatible')).toBe(ONE_MILLION_CONTEXT_WINDOW)
+    expect(inferAgentSdkContextWindow('qwen3.7-plus', 'qwen-anthropic')).toBe(ONE_MILLION_CONTEXT_WINDOW)
+    expect(inferAgentSdkContextWindow('claude-sonnet-5', 'anthropic-compatible')).toBe(ONE_MILLION_CONTEXT_WINDOW)
   })
 })

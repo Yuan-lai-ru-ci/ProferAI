@@ -248,16 +248,27 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         total_cost_usd?: number
         modelUsage?: Record<string, { contextWindow?: number }>
         usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+        _channelModelId?: string
+        _channelProvider?: ProviderType
       }
       // 多 entry 场景（Task 子 Agent 等）：取最大 contextWindow，
       // 避免子 Agent 的小窗口覆盖主模型的大窗口、导致指示器飘忽。
       let contextWindow: number | undefined
+      const fallbackWindow = rMsg._channelProvider
+        ? inferAgentSdkContextWindow(rMsg._channelModelId, rMsg._channelProvider)
+        : inferContextWindow(rMsg._channelModelId)
       if (rMsg.modelUsage) {
-        for (const info of Object.values(rMsg.modelUsage)) {
-          if (info?.contextWindow && (contextWindow === undefined || info.contextWindow > contextWindow)) {
-            contextWindow = info.contextWindow
+        for (const [modelId, info] of Object.entries(rMsg.modelUsage)) {
+          const modelFallbackWindow = rMsg._channelProvider
+            ? inferAgentSdkContextWindow(rMsg._channelModelId ?? modelId, rMsg._channelProvider)
+            : inferContextWindow(rMsg._channelModelId ?? modelId)
+          const candidate = Math.max(info?.contextWindow ?? 0, modelFallbackWindow ?? 0) || undefined
+          if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
+            contextWindow = candidate
           }
         }
+      } else {
+        contextWindow = fallbackWindow
       }
       // result.usage 是整个 query 内所有模型调用的累计求和，不能当成当前上下文占用，
       // 否则进度环会虚高、冲破 100%（PR #821 修的正是这个问题）。
