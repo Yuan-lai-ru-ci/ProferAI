@@ -57,6 +57,7 @@ import {
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
+import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import {
@@ -380,21 +381,27 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setSessionModelMap = useSetAtom(agentSessionModelMapAtom)
   const [defaultChannelId, setDefaultChannelId] = useAtom(agentChannelIdAtom)
   const [defaultModelId, setDefaultModelId] = useAtom(agentModelIdAtom)
-  const agentChannelId = sessionChannelMap.get(sessionId) ?? defaultChannelId
-  const agentModelId = sessionModelMap.get(sessionId) ?? defaultModelId
+  const sessions = useAtomValue(agentSessionsAtom)
+  const sessionMeta = React.useMemo(
+    () => sessions.find((s) => s.id === sessionId),
+    [sessions, sessionId],
+  )
+  const sessionMetaChannelId = sessionMeta?.channelId
+  const sessionMetaModelId = sessionMeta?.modelId
+  const hasSessionMeta = Boolean(sessionMeta)
+  const agentChannelId = sessionMetaChannelId ?? sessionChannelMap.get(sessionId) ?? defaultChannelId
+  const agentModelId = sessionMetaModelId ?? sessionModelMap.get(sessionId) ?? defaultModelId
   const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
-  const sessions = useAtomValue(agentSessionsAtom)
   // 从会话元数据派生 workspaceId：会话数据已加载时以自身为准，未加载时回退全局 atom
   const currentWorkspaceId = React.useMemo(() => {
-    const meta = sessions.find((s) => s.id === sessionId)
-    if (!meta) return globalWorkspaceId // 数据未加载，回退全局
-    return meta.workspaceId ?? null     // 数据已加载，以会话自身为准
-  }, [sessions, sessionId, globalWorkspaceId])
+    if (!sessionMeta) return globalWorkspaceId // 数据未加载，回退全局
+    return sessionMeta.workspaceId ?? null     // 数据已加载，以会话自身为准
+  }, [sessionMeta, globalWorkspaceId])
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
@@ -404,20 +411,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
   const stableChannelId = agentChannelId ?? stableChannelIdRef.current
 
-  // 已有会话首次打开时，从全局默认值初始化 per-session map。
+  // 已有会话首次打开时，从会话元数据初始化 per-session map。
   // setter 内的 `prev.has(sessionId)` 守卫保证幂等，外层不再订阅 Map atom，
   // 避免 setter 写入 → atom 引用变化 → effect 重跑的自循环（React #185）。
-  // 优先使用会话元数据上的 channelId/modelId（如自动任务子会话），回退到全局默认。
-  const sessionMeta = React.useMemo(
-    () => sessions.find((s) => s.id === sessionId),
-    [sessions, sessionId],
-  )
-  const sessionMetaChannelId = sessionMeta?.channelId
-  const sessionMetaModelId = sessionMeta?.modelId
+  // 只有会话元数据尚未加载时，才允许使用全局默认值初始化新会话。
   React.useEffect(() => {
     if (!sessionId) return
-    const initialChannelId = sessionMetaChannelId ?? defaultChannelId
-    const initialModelId = sessionMetaModelId ?? defaultModelId
+    const initialChannelId = sessionMetaChannelId ?? (!hasSessionMeta ? defaultChannelId : undefined)
+    const initialModelId = sessionMetaModelId ?? (!hasSessionMeta ? defaultModelId : undefined)
     if (initialChannelId) {
       setSessionChannelMap((prev) => {
         if (prev.has(sessionId)) return prev
@@ -434,7 +435,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     }
-  }, [sessionId, sessionMetaChannelId, sessionMetaModelId, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap])
+  }, [sessionId, sessionMetaChannelId, sessionMetaModelId, hasSessionMeta, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap])
 
   const contextStatus: AgentContextStatus = {
     isCompacting: streamState?.isCompacting ?? false,
@@ -541,6 +542,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
   const globalChannels = useAtomValue(channelsAtom)
+  const stableChannel = React.useMemo(
+    () => stableChannelId ? globalChannels.find((channel) => channel.id === stableChannelId) : undefined,
+    [globalChannels, stableChannelId],
+  )
+  const planQuotaChannelId = stableChannel && supportsChannelPlanQuota(stableChannel)
+    ? stableChannel.id
+    : null
   const agentChannelProvider = React.useMemo(
     () => globalChannels.find((c) => c.id === agentChannelId)?.provider,
     [globalChannels, agentChannelId],
@@ -1621,6 +1629,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       map.set(sessionId, option.modelId)
       return map
     })
+    setAgentSessions((prev) => prev.map((session) => (
+      session.id === sessionId
+        ? { ...session, channelId: option.channelId, modelId: option.modelId }
+        : session
+    )))
 
     // 模型切换时：清除旧的 contextWindow，让 result 重新提供真实值
     setStreamingStates((prev) => {
@@ -1649,7 +1662,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       agentModelId: option.modelId,
       agentChannelIds: updatedChannelIds,
     }).catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds])
+
+    window.electronAPI.updateAgentSessionModel(sessionId, option.channelId, option.modelId)
+      .then((updated) => {
+        setAgentSessions((prev) => prev.map((session) => (
+          session.id === updated.id ? updated : session
+        )))
+      })
+      .catch(console.error)
+  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, setAgentSessions])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -2030,7 +2051,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     try {
       const meta = await window.electronAPI.createAgentSession(
-        undefined, agentChannelId, currentWorkspaceId || undefined,
+        undefined, agentChannelId, currentWorkspaceId || undefined, agentModelId || undefined,
       )
       setAgentSessions((prev) => [meta, ...prev])
 
@@ -2387,6 +2408,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           isCompacting={contextStatus.isCompacting}
           isProcessing={streaming}
           sessionId={sessionId}
+          channelId={planQuotaChannelId}
           onCompact={handleCompact}
         />
       ),
@@ -2403,6 +2425,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   ], [
     agentChannelIds,
     agentChannelId,
+    planQuotaChannelId,
     agentModelId,
     handleModelSelect,
     sessionId,

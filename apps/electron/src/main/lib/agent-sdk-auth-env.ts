@@ -1,8 +1,9 @@
-import type { ProviderType } from '@proma/shared'
+import { extractZhipuCodingTeamApiToken, type ProviderType } from '@proma/shared'
 
 export function usesAgentSdkBearerWithUserAgent(provider: ProviderType): boolean {
   return provider === 'kimi-coding'
     || provider === 'zhipu-coding'
+    || provider === 'zhipu-coding-team'
     || provider === 'xiaomi-token-plan'
 }
 
@@ -13,7 +14,9 @@ export function applyAgentSdkAuthEnv(
   userAgent: string,
 ): void {
   if (usesAgentSdkBearerWithUserAgent(provider)) {
-    target.ANTHROPIC_AUTH_TOKEN = apiKey
+    target.ANTHROPIC_AUTH_TOKEN = provider === 'zhipu-coding-team'
+      ? extractZhipuCodingTeamApiToken(apiKey)
+      : apiKey
     target.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${userAgent}`
     return
   }
