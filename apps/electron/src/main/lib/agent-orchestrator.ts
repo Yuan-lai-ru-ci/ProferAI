@@ -381,6 +381,7 @@ export class AgentOrchestrator {
     apiKey: string,
     baseUrl: string | undefined,
     provider: ProviderType,
+    modelId: string | undefined,
   ): Promise<Record<string, string | undefined>> {
     const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
 
@@ -391,15 +392,17 @@ export class AgentOrchestrator {
     // loadShellEnv() 可能从 shell 配置文件（~/.zshrc 等）重新注入这些变量。
     const cleanEnv: Record<string, string | undefined> = {}
     for (const [key, value] of Object.entries(process.env)) {
-      if (!key.startsWith('ANTHROPIC_')) {
+      if (!key.startsWith('ANTHROPIC_') && key !== 'CLAUDE_CODE_MAX_OUTPUT_TOKENS') {
         cleanEnv[key] = value
       }
     }
 
+    const maxOutputTokens = getAgentSdkMaxOutputTokens(modelId)
+
     const sdkEnv: Record<string, string | undefined> = {
       ...cleanEnv,
-      // Claude 原生可提高输出上限；兼容渠道常见上限为 32768，不能全局下发 64000。
-      CLAUDE_CODE_MAX_OUTPUT_TOKENS: getAgentSdkMaxOutputTokens(provider),
+      // 仅 Claude 模型显式提高输出上限；其它兼容模型不注入 max_tokens 覆盖。
+      ...(maxOutputTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: maxOutputTokens } : {}),
       // 暴露打包进 App 的 proma CLI 路径，供 session-cleaner 等 skill / Agent 调用
       // （开发模式无编译二进制，getBundledCliPath 返回 undefined，此处不注入，
       //   skill 回退到源码运行 bun apps/cli/src/index.ts）。
@@ -951,6 +954,7 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_BASE_URL
     delete process.env.ANTHROPIC_CUSTOM_HEADERS
+    delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS
     applyAgentSdkAuthEnv(process.env, channel.provider, apiKey, getPromaUserAgent(pkg.version))
     // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
     if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
@@ -958,7 +962,7 @@ export class AgentOrchestrator {
     }
 
     const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
-    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider)
+    const sdkEnv = await this.buildSdkEnv(apiKey, channel.baseUrl, channel.provider, modelId || DEFAULT_MODEL_ID)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting, channel.provider)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
