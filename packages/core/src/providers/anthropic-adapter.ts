@@ -23,7 +23,7 @@
  * - UA 格式：`Proma/<version> (+https://github.com/ErlichLiu/Proma)`
  */
 
-import type { ProviderType } from '@proma/shared'
+import { extractZhipuCodingTeamApiToken, type ProviderType } from '@proma/shared'
 import type {
   ProviderAdapter,
   ProviderRequest,
@@ -278,8 +278,8 @@ export class AnthropicAdapter implements ProviderAdapter {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     }
-    if (this.providerType === 'kimi-coding' || this.providerType === 'zhipu-coding') {
-      base['Authorization'] = `Bearer ${apiKey}`
+    if (this.providerType === 'kimi-coding' || this.providerType === 'zhipu-coding' || this.providerType === 'zhipu-coding-team') {
+      base['Authorization'] = `Bearer ${this.providerType === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey}`
       base['User-Agent'] = getPromaUserAgent()
       return base
     }

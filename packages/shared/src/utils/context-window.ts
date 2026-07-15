@@ -50,6 +50,7 @@ const AGENT_SDK_1M_CONTEXT_PROVIDER_RULES: Partial<Record<ProviderType, readonly
   anthropic: AGENT_SDK_1M_CONTEXT_RULES.claude,
   deepseek: AGENT_SDK_1M_CONTEXT_RULES.deepseek,
   'zhipu-coding': AGENT_SDK_1M_CONTEXT_RULES.glm,
+  'zhipu-coding-team': AGENT_SDK_1M_CONTEXT_RULES.glm,
   minimax: AGENT_SDK_1M_CONTEXT_RULES.minimax,
   xiaomi: AGENT_SDK_1M_CONTEXT_RULES.mimo,
   'xiaomi-token-plan': AGENT_SDK_1M_CONTEXT_RULES.mimo,
