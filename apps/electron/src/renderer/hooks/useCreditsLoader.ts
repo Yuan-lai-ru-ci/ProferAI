@@ -14,6 +14,14 @@ import {
   creditsBalanceAtom,
   creditsLifetimeConsumedAtom,
   creditsLoadingAtom,
+  creditsBalancePackageAtom,
+  creditsBalanceReferralAtom,
+  creditsBalancePurchasedAtom,
+  membershipTierAtom,
+  isVipAtom,
+  multiplierAtom,
+  inviteCodeAtom,
+  subscriptionAtom,
 } from '@/atoms/credits-atoms'
 
 /** jotai store（useStore() / createStore() 的返回类型） */
@@ -34,10 +42,21 @@ export async function refreshCreditsInto(store: JotaiStore): Promise<void> {
     })
     if (!resp.ok) return
     const d = await resp.json()
-    // 当前用户本地账本余额：balance 可能为 null（非代管或查询失败），
-    // 保留 null 让余额条不显示，而非误判为「已耗尽」
+    // 当前用户本地账本余额：balance 可能为 null（非代管或查询失败）
     store.set(creditsBalanceAtom, d.balance ?? null)
     store.set(creditsLifetimeConsumedAtom, d.lifetimeConsumed ?? 0)
+    // 积分分账 + 会员
+    store.set(creditsBalancePackageAtom, d.balancePackage ?? 0)
+    store.set(creditsBalanceReferralAtom, d.balanceReferral ?? 0)
+    store.set(creditsBalancePurchasedAtom, d.balancePurchased ?? 0)
+    store.set(membershipTierAtom, d.membershipTier ?? 'free')
+    store.set(isVipAtom, !!d.isVip)
+    store.set(multiplierAtom, d.multiplier ?? 1.0)
+    store.set(inviteCodeAtom, d.inviteCode ?? null)
+    // 订阅状态
+    if (d.subscription) {
+      store.set(subscriptionAtom, d.subscription)
+    }
   } catch {
     /* 静默：余额拉取失败不打扰用户 */
   }

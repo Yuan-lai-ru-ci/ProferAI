@@ -22,7 +22,7 @@ interface LoginResult {
   teamAccountId?: string
   teamEmail?: string
   joinedWorkspace?: string
-  accountType?: string
+  membershipTier?: string
   error?: string
   deviceLimit?: {
     maxDevices: number
@@ -39,7 +39,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
   const [displayName, setDisplayName] = React.useState('')
-  const [invitationToken, setInvitationToken] = React.useState('')
+  const [inviteCode, setInviteCode] = React.useState('')
   const [loading, setLoading] = React.useState(false)
   const [deviceLimit, setDeviceLimit] = React.useState<NonNullable<LoginResult['deviceLimit']> | null>(null)
   const [revoking, setRevoking] = React.useState<string | null>(null)
@@ -57,18 +57,16 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
     e.preventDefault()
     if (!email || !password) return
     if (mode === 'register' && !displayName.trim()) return
-    if (mode === 'register' && !invitationToken.trim()) {
-      toast.error('请输入邀请码或激活码')
+    if (mode === 'register' && !inviteCode.trim()) {
+      toast.error('请输入邀请码')
       return
     }
 
     setLoading(true)
     try {
       const params: Record<string, string> = { serverUrl, email, password, displayName }
-      // 同时发两种码，服务端根据实际类型走对应分支
       if (mode === 'register') {
-        params.invitationToken = invitationToken.trim()
-        params.activationCode = invitationToken.trim()
+        params.inviteCode = inviteCode.trim()
       }
 
       const fn = mode === 'login' ? window.electronAPI.auth.login : window.electronAPI.auth.register
@@ -208,12 +206,12 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
 
           {mode === 'register' && (
             <div className="space-y-1.5">
-              <Label htmlFor="invite-token" className="text-xs font-medium flex items-center gap-1">
-                <Ticket size={12} />邀请码 / 激活码 <span className="text-destructive">*</span>
+              <Label htmlFor="invite-code" className="text-xs font-medium flex items-center gap-1">
+                <Ticket size={12} />邀请码 <span className="text-destructive">*</span>
               </Label>
-              <Input id="invite-token" value={invitationToken}
-                onChange={(e) => setInvitationToken(e.target.value)}
-                placeholder="管理员发送的邀请码或激活码"
+              <Input id="invite-code" value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
+                placeholder="输入邀请码（如 UA1B2C3）"
                 className="h-9 font-mono text-xs" required />
             </div>
           )}
