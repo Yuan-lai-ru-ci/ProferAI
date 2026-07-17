@@ -2,7 +2,7 @@
  * 跨平台清理残留的 electronmon / electron 进程
  * 替代 pkill（Windows 不支持）
  *
- * 传入 --vite 时，额外清理占用 Vite 端口（5173）的残留进程。
+ * 传入 --vite 时，额外清理占用 Vite 端口（5174）的残留进程。
  * 该清理仅应在 concurrently 拉起 dev:vite 之前跑一次（顶层 dev 脚本），
  * 不要在与 dev:vite 并发的 dev:electron 内部跑，否则会误杀本次刚启动的 vite。
  */
@@ -11,7 +11,7 @@ import { execSync } from 'child_process'
 const isWin = process.platform === 'win32'
 const killVite = process.argv.includes('--vite')
 /** 与 vite.config.ts 的 server.port 保持一致 */
-const VITE_PORT = 5173
+const VITE_PORT = 5174
 
 function kill(pattern: string): void {
   try {
