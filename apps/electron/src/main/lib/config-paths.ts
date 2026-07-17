@@ -147,6 +147,25 @@ export function getAttachmentsDir(): string {
 }
 
 /**
+ * 获取自定义通知音效存储目录
+ *
+ * 用户通过设置界面添加的音频文件会复制到此目录。
+ * 如果目录不存在则自动创建。
+ *
+ * @returns ~/.profer/custom-sounds/
+ */
+export function getCustomSoundsDir(): string {
+  const dir = join(getConfigDir(), 'custom-sounds')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+    console.log(`[配置] 已创建自定义音效目录: ${dir}`)
+  }
+
+  return dir
+}
+
+/**
  * 获取指定对话的附件目录
  *
  * 如果目录不存在则自动创建。
@@ -682,6 +701,60 @@ export function getScratchPadPath(): string {
  */
 export function getAutomationsPath(): string {
   return join(getConfigDir(), 'automations.json')
+}
+
+/**
+ * 获取知识库根目录路径
+ *
+ * 如果目录不存在则自动创建。
+ *
+ * @returns ~/.profer/knowledge-base/
+ */
+export function getKnowledgeBaseDir(): string {
+  const dir = join(getConfigDir(), 'knowledge-base')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+    console.log(`[配置] 已创建知识库目录: ${dir}`)
+  }
+
+  return dir
+}
+
+/**
+ * 获取知识库索引文件路径
+ *
+ * @returns ~/.profer/knowledge-base/index.json
+ */
+export function getKnowledgeBaseIndexPath(): string {
+  return join(getKnowledgeBaseDir(), 'index.json')
+}
+
+/**
+ * 获取知识库向量数据库路径
+ *
+ * @returns ~/.profer/knowledge-base/vectors.db
+ */
+export function getKnowledgeBaseVectorDbPath(): string {
+  return join(getKnowledgeBaseDir(), 'vectors.db')
+}
+
+/**
+ * 获取指定论文的存储目录路径
+ *
+ * 如果目录不存在则自动创建。
+ *
+ * @param paperId 论文 ID
+ * @returns ~/.profer/knowledge-base/papers/{id}/
+ */
+export function getPaperDir(paperId: string): string {
+  const dir = join(getKnowledgeBaseDir(), 'papers', paperId)
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
 }
 
 /**

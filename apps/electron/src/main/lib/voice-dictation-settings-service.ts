@@ -4,9 +4,9 @@
  * 独立处理豆包 ASR 凭证，避免通过通用 settings IPC 暴露加密细节。
  */
 
-import { safeStorage } from 'electron'
 import type { VoiceDictationSettings, VoiceDictationSettingsUpdate } from '../../types'
 import { getSettings, updateSettings } from './settings-service'
+import { encryptToken, decryptToken } from './token-crypto'
 
 const DEFAULT_VOICE_DICTATION_SETTINGS: VoiceDictationSettings = {
   enabled: false,
@@ -22,22 +22,12 @@ const DEFAULT_VOICE_DICTATION_SETTINGS: VoiceDictationSettings = {
 
 function encryptSecret(value: string): string {
   if (!value) return ''
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('[语音输入] safeStorage 加密不可用，将以明文存储 Access Token')
-    return value
-  }
-  return safeStorage.encryptString(value).toString('base64')
+  return encryptToken(value)
 }
 
 function decryptSecret(value: string): string {
   if (!value) return ''
-  if (!safeStorage.isEncryptionAvailable()) return value
-  try {
-    return safeStorage.decryptString(Buffer.from(value, 'base64'))
-  } catch (error) {
-    console.error('[语音输入] 解密 Access Token 失败:', error)
-    return ''
-  }
+  return decryptToken(value)
 }
 
 /** 获取解密后的语音输入设置 */
