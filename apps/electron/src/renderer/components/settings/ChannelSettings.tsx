@@ -40,7 +40,6 @@ export function ChannelSettings(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [commercialMode, setCommercialMode] = React.useState(false)
   const [canSelfConfig, setCanSelfConfig] = React.useState(false)
-  const [accountType, setAccountType] = React.useState('standard')
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
@@ -66,7 +65,6 @@ export function ChannelSettings(): React.ReactElement {
       const caps = await window.electronAPI.getAccountCapabilities(force)
       setCommercialMode(caps.commercialMode)
       setCanSelfConfig(caps.canSelfConfig)
-      setAccountType(caps.accountType)
       return caps
     } catch {
       setCommercialMode(false)

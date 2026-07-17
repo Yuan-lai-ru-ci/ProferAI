@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { ChevronRight, Code2, Copy, Check, Eye, List, Pencil, RefreshCw, Save, X } from 'lucide-react'
+import { ChevronRight, Code2, Copy, Check, Eye, List, Pencil, RefreshCw, Save, X, FileQuestion } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import DOMPurify from 'dompurify'
 import { File as PierreFile } from '@pierre/diffs/react'
@@ -227,6 +227,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [findOpen, setFindOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
+  // 文件解析失败（主进程 resolveAndReadFile 返回 null）：区别于「文件存在但内容为空」
+  const [notFound, setNotFound] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
   const setRefreshVersionMap = useSetAtom(agentDiffRefreshVersionAtom)
   const refreshVersion = refreshVersionMap.get(sessionId) ?? 0
@@ -474,6 +476,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   React.useEffect(() => {
     setOldContent('')
     setNewContent('')
+    setNotFound(false)
     setDocxHtml('')
     setOfficeHtml('')
     setOfficeText('')
@@ -556,6 +559,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       if (!isLegacyOffice) setLoading(true)
       setOldContent('')
       setNewContent('')
+      setNotFound(false)
       setDocxHtml('')
       setOfficeHtml('')
       setOfficeText('')
@@ -626,6 +630,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             }
             const result = await window.electronAPI.resolveAndReadFile(filePath, fileAccess)
             if (cancelled) return
+            // result === null ⇒ 主进程在所有授权/全局目录都没找到该文件（非空文件，而是不存在）
+            if (result === null) setNotFound(true)
             content = result?.content ?? ''
           } else {
             const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot, sessionId, baseRef })
@@ -1282,6 +1288,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   <PierreFile file={pierreFile} options={pierreOptions} />
                 </div>
               )
+            ) : notFound ? (
+              <div className="flex flex-col items-center justify-center h-full gap-1.5 px-4 text-center">
+                <FileQuestion className="size-6 text-muted-foreground/60" />
+                <span className="text-[13px] text-muted-foreground">文件不存在或无法定位</span>
+                <span className="text-[12px] text-muted-foreground/70 font-mono break-all">{filePath}</span>
+              </div>
             ) : (
               <pre className="p-3 text-[13px] leading-relaxed text-foreground/80 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
                 <span className="text-muted-foreground">（文件为空）</span>

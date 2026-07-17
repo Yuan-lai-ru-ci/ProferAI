@@ -36,10 +36,9 @@ export function FeedbackSettings(): React.ReactElement {
   const [submitState, setSubmitState] = React.useState<SubmitState>('idle')
   const [errorMsg, setErrorMsg] = React.useState('')
 
-  const getBaseUrl = React.useCallback(async (): Promise<string | null> => {
+  const getAuth = React.useCallback(async () => {
     try {
-      const auth = await window.electronAPI.auth.getTeamAuth()
-      return auth?.baseUrl ?? null
+      return await window.electronAPI.auth.getTeamAuth()
     } catch {
       return null
     }
@@ -52,14 +51,14 @@ export function FeedbackSettings(): React.ReactElement {
     setErrorMsg('')
 
     try {
-      const baseUrl = await getBaseUrl()
-      if (!baseUrl) {
+      const auth = await getAuth()
+      if (!auth?.baseUrl) {
         setErrorMsg('未连接到 Profer 服务端，请先在通用设置中登录团队账号。')
         setSubmitState('error')
         return
       }
 
-      const resp = await fetch(`${baseUrl}/v1/feedback`, {
+      const resp = await fetch(`${auth.baseUrl}/v1/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -67,6 +66,8 @@ export function FeedbackSettings(): React.ReactElement {
           contact: contact.trim() || undefined,
           category,
           pageUrl: 'proma://settings/feedback',
+          teamEmail: auth.teamEmail || undefined,
+          teamAccountId: auth.teamAccountId || undefined,
         }),
       })
 
@@ -83,7 +84,7 @@ export function FeedbackSettings(): React.ReactElement {
       setErrorMsg(err.message || '提交失败，请稍后重试')
       setSubmitState('error')
     }
-  }, [content, contact, category, getBaseUrl])
+  }, [content, contact, category, getAuth])
 
   const handleReset = React.useCallback(() => {
     setSubmitState('idle')

@@ -120,6 +120,15 @@ export function MarkdownRichEditor({
           '[&_input[type=checkbox]]:accent-primary',
         ),
       },
+      handlePaste: (_view, event) => {
+        if (!isEditableRef.current) return false
+        // 直接处理粘贴，不走 ProseMirror 内部 capturePaste（Electron 39+ sandbox 不可靠）
+        const plainText = event.clipboardData?.getData('text/plain') ?? ''
+        if (!plainText) return false
+        event.preventDefault()
+        _view.dispatch(_view.state.tr.insertText(plainText))
+        return true
+      },
       handleKeyDown: (_view, event) => {
         if (!isEditableRef.current) return false
         if (event.key === 'Escape') {

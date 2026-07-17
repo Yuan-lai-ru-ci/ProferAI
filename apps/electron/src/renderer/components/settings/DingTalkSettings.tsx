@@ -186,7 +186,7 @@ export function DingTalkSettings(): React.ReactElement {
               </div>
               <p className="pl-7 text-muted-foreground">
                 在「应用能力」中启用机器人功能。
-                然后回到 Proma，<span className="text-foreground font-medium">先点击「保存配置」</span>，
+                然后回到 Profer，<span className="text-foreground font-medium">先点击「保存配置」</span>，
                 确认状态变为「已连接」后，再去钉钉后台配置事件订阅（选择 Stream 模式）。
               </p>
             </div>
@@ -205,7 +205,7 @@ export function DingTalkSettings(): React.ReactElement {
 
             {/* 提示 */}
             <div className="pl-7 p-3 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs">
-              <span className="font-medium">重要：</span>配置事件订阅前，必须先在 Proma 中保存凭证并确认 Stream 连接成功，
+              <span className="font-medium">重要：</span>配置事件订阅前，必须先在 Profer 中保存凭证并确认 Stream 连接成功，
               否则钉钉后台会提示「Stream 模式接入失败」。
             </div>
           </div>

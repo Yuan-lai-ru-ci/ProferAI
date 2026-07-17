@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Maximize2, PanelRight, X } from 'lucide-react'
+import { Maximize2, PanelRight, FolderOpen, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   previewPanelOpenMapAtom,
@@ -53,6 +53,10 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const useStackedWindowsHeader = isWindows && !isSidePanelOpen
 
+  const fileName = currentFile ? currentFile.filePath.split(/[\\/]/).pop() || currentFile.filePath : '文件预览'
+  const defaultAppTargetPath = currentFile ? getDefaultAppTargetPath(currentFile, sessionPath) : ''
+  const defaultAppAccess = currentFile ? getPreviewFileAccess(sessionId, currentFile, sessionPath) : undefined
+
   const handleClosePanel = React.useCallback(() => {
     setOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, false); return m })
   }, [sessionId, setOpenMap])
@@ -73,9 +77,13 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
     })
   }, [currentFile, sessionId, setActiveTabId, setOpenMap, setTabs, tabs])
 
-  const fileName = currentFile ? currentFile.filePath.split(/[\\/]/).pop() || currentFile.filePath : '文件预览'
-  const defaultAppTargetPath = currentFile ? getDefaultAppTargetPath(currentFile, sessionPath) : ''
-  const defaultAppAccess = currentFile ? getPreviewFileAccess(sessionId, currentFile, sessionPath) : undefined
+  const handleShowInFolder = React.useCallback(() => {
+    if (!defaultAppTargetPath) return
+    window.electronAPI.showItemInFolder(
+      defaultAppTargetPath,
+      currentFile?.basePaths,
+    ).catch((err) => console.error('[PreviewPanel] 打开文件位置失败:', err))
+  }, [defaultAppTargetPath, currentFile?.basePaths])
 
   const renderPreviewActions = (): React.ReactElement => (
     <div className="ml-auto flex items-center gap-0.5 shrink-0">
@@ -84,6 +92,23 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
           filePath={defaultAppTargetPath}
           access={defaultAppAccess}
         />
+      )}
+      {currentFile && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleShowInFolder}
+              className="flex items-center justify-center size-6 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
+              aria-label="打开文件所在位置"
+            >
+              <FolderOpen className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p>在文件管理器中显示</p>
+          </TooltipContent>
+        </Tooltip>
       )}
       {currentFile && (
         <Tooltip>

@@ -416,7 +416,13 @@ export function RichTextInput({
           onPasteLongTextRef.current(text)
           return true
         }
-        return false
+        // 直接插入文本，不走 ProseMirror 内部 clipboardData 解析（Electron 39+
+        // sandbox 环境下 ProseMirror capturePaste 回退路径不可靠，会导致粘贴静默失败）
+        event.preventDefault()
+        if (text) {
+          view.dispatch(view.state.tr.insertText(text))
+        }
+        return true
       },
       handleKeyDown: (view, event) => {
         // macOS 上 Cmd+B/S 被全局快捷键占用，用 Ctrl+B/S 作为格式化替代键

@@ -8,13 +8,11 @@
 import { basename, join, dirname, extname, resolve, posix as pathPosix } from 'node:path'
 import { readFileSync, readdirSync, statSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
-import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import AdmZip from 'adm-zip'
 import { DOMParser } from '@xmldom/xmldom'
 import type { OfficePreviewResult } from '@profer/shared'
-
-const require = createRequire(__filename)
+import { getConfigDir } from './config-paths'
 const PDFJS_PACKAGE = 'pdfjs-dist'
 
 /** 文件大小限制：50MB */
@@ -90,6 +88,101 @@ function searchFileInDir(dir: string, targetName: string, maxDepth = 8): string 
   return walk(dir, 0)
 }
 
+/** 相对路径 fallback 搜索的常用用户目录 */
+function searchCommonDirs(filePath: string): string | null {
+  const home = homedir()
+  const commonDirs = [
+    join(home, 'Desktop'),
+    join(home, 'Documents'),
+    join(home, 'Downloads'),
+  ]
+  for (const dir of commonDirs) {
+    const candidate = resolve(dir, filePath)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+// ─── 全局目录收集（相对路径 fallback 用）───
+
+/** 全局搜索目录缓存 */
+let _globalSearchDirsCache: { dirs: string[]; ts: number } | null = null
+/** 缓存 TTL：30 秒，平衡实时性与性能 */
+const GLOBAL_SEARCH_CACHE_TTL = 30_000
+
+/**
+ * 收集所有潜在的搜索目录：
+ * - 所有工作区的 agent-workspaces 子目录
+ * - agent-sessions.json 中所有会话的 attachedDirectories
+ *
+ * 用于相对路径在 basePaths 中找不到时的全局 fallback 搜索。
+ * 结果会缓存 30 秒以避免每次文件路径解析都读取磁盘。
+ */
+function collectGlobalSearchDirs(): string[] {
+  const now = Date.now()
+  if (_globalSearchDirsCache && (now - _globalSearchDirsCache.ts) < GLOBAL_SEARCH_CACHE_TTL) {
+    return _globalSearchDirsCache.dirs
+  }
+
+  const dirs = new Set<string>()
+
+  try {
+    const configDir = getConfigDir()
+
+    // 1. 收集所有工作区目录
+    const workspacesDir = join(configDir, 'agent-workspaces')
+    if (existsSync(workspacesDir)) {
+      try {
+        for (const wsName of readdirSync(workspacesDir)) {
+          const wsPath = join(workspacesDir, wsName)
+          try {
+            if (statSync(wsPath).isDirectory() && !wsName.startsWith('.')) {
+              dirs.add(wsPath)
+              // 也收集工作区下的子目录（各个 session 目录）
+              for (const sessionDir of readdirSync(wsPath)) {
+                const sessionPath = join(wsPath, sessionDir)
+                try {
+                  if (statSync(sessionPath).isDirectory() && !sessionDir.startsWith('.')) {
+                    dirs.add(sessionPath)
+                  }
+                } catch { /* skip */ }
+              }
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+
+    // 2. 收集 agent-sessions.json 中的 attachedDirectories 和 forkSourceDir
+    const indexPath = join(configDir, 'agent-sessions.json')
+    if (existsSync(indexPath)) {
+      try {
+        const raw = readFileSync(indexPath, 'utf-8')
+        const index = JSON.parse(raw) as {
+          sessions?: Array<{
+            attachedDirectories?: string[]
+            forkSourceDir?: string
+          }>
+        }
+        for (const session of index.sessions ?? []) {
+          if (session.attachedDirectories) {
+            for (const d of session.attachedDirectories) {
+              if (d && existsSync(d)) dirs.add(d)
+            }
+          }
+          if (session.forkSourceDir && existsSync(session.forkSourceDir)) {
+            dirs.add(session.forkSourceDir)
+          }
+        }
+      } catch { /* JSON 解析失败不影响功能 */ }
+    }
+  } catch { /* 全局搜索目录收集失败时降级为空列表 */ }
+
+  const result = Array.from(dirs)
+  _globalSearchDirsCache = { dirs: result, ts: now }
+  return result
+}
+
 /**
  * 解析待预览的文件路径
  * - 绝对路径：直接 resolve，不存在时 fallback 搜索
@@ -136,13 +229,43 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
     const home = homedir()
     const homeCandidate = resolve(home, filePath)
     if (existsSync(homeCandidate)) return homeCandidate
-    // 不做根目录 fallback——防止相对路径被解析到系统文件
+    // 相对路径在 basePaths 和 home 都找不到时，搜常用用户目录（Desktop/Documents/Downloads）
+    const commonFound = searchCommonDirs(filePath)
+    if (commonFound) return commonFound
+    // 全局 fallback：在所有已知工作区和附加目录中搜索（按文件名，递归 2 层）
+    const gName = basename(filePath)
+    const globalDirs = collectGlobalSearchDirs()
+    // 先尝试直接拼接（快路径）
+    for (const dir of globalDirs) {
+      const candidate = resolve(dir, filePath)
+      if (existsSync(candidate)) return candidate
+    }
+    // 再尝试在全局目录中按文件名搜索（默认深度 8，与绝对路径分支/下方 264 行一致；
+    // 受 searchFileInDir 内 MAX_SCANNED=500 + 跳过 node_modules/.git 等硬上限约束，
+    // 深度 3 会漏掉 apps/electron/src/main/lib/xxx 这类第 5 层的裸文件名）
+    for (const dir of globalDirs) {
+      const foundInDir = searchFileInDir(dir, gName)
+      if (foundInDir) return foundInDir
+    }
     return resolve(basePaths[0]!, filePath)
   }
   const homeCandidate = resolve(homedir(), filePath)
   if (existsSync(homeCandidate)) return homeCandidate
   const rootCandidate = resolve('/', filePath)
   if (existsSync(rootCandidate)) return rootCandidate
+  const commonFound = searchCommonDirs(filePath)
+  if (commonFound) return commonFound
+  // 全局 fallback：在所有已知工作区和附加目录中搜索
+  const name = basename(filePath)
+  const globalDirs = collectGlobalSearchDirs()
+  for (const dir of globalDirs) {
+    const candidate = resolve(dir, filePath)
+    if (existsSync(candidate)) return candidate
+  }
+  for (const dir of globalDirs) {
+    const foundInDir = searchFileInDir(dir, name)
+    if (foundInDir) return foundInDir
+  }
   return resolve(filePath)
 }
 

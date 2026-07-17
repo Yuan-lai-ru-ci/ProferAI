@@ -118,7 +118,7 @@ export function WeChatSettings(): React.ReactElement {
       {/* 连接状态 */}
       <SettingsSection
         title="微信集成"
-        description="扫码登录微信，在微信中控制 Proma Agent"
+        description="扫码登录微信，在微信中控制 Profer Agent"
       >
         <SettingsCard>
           <SettingsRow label="Bridge 状态">
@@ -233,7 +233,7 @@ export function WeChatSettings(): React.ReactElement {
               </div>
               <p className="pl-7 text-muted-foreground">
                 点击上方「扫码登录」，用微信扫描二维码。
-                这会将你的微信账号作为 Bot 接入 Proma。
+                这会将你的微信账号作为 Bot 接入 Profer。
               </p>
             </div>
 
@@ -244,8 +244,8 @@ export function WeChatSettings(): React.ReactElement {
                 <span className="font-medium text-foreground">自动连接</span>
               </div>
               <p className="pl-7 text-muted-foreground">
-                扫码成功后，Proma 会自动建立长连接。
-                凭证会加密保存，下次启动 Proma 时自动重连。
+                扫码成功后，Profer 会自动建立长连接。
+                凭证会加密保存，下次启动 Profer 时自动重连。
               </p>
             </div>
 
@@ -256,7 +256,7 @@ export function WeChatSettings(): React.ReactElement {
                 <span className="font-medium text-foreground">收发消息</span>
               </div>
               <p className="pl-7 text-muted-foreground">
-                连接成功后，通过微信发送消息即可与 Proma Agent 交互。
+                连接成功后，通过微信发送消息即可与 Profer Agent 交互。
                 支持文本、图片、文件等消息类型。
               </p>
             </div>

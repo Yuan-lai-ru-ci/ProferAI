@@ -6,7 +6,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
-import { PanelRight } from 'lucide-react'
+import { PanelRight, FolderOpen } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   agentSessionPathMapAtom,
@@ -104,6 +104,26 @@ export function PreviewTabContent({ sessionId }: PreviewTabContentProps): React.
         filePath={defaultAppTargetPath}
         access={defaultAppAccess}
       />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => {
+              window.electronAPI.showItemInFolder(
+                defaultAppTargetPath,
+                currentFile?.basePaths,
+              ).catch((err) => console.error('[PreviewTabContent] 打开文件位置失败:', err))
+            }}
+            className="flex items-center justify-center size-6 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
+            aria-label="打开文件所在位置"
+          >
+            <FolderOpen className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <p>在文件管理器中显示</p>
+        </TooltipContent>
+      </Tooltip>
       <TearOffButton sessionId={sessionId} />
     </>
   )

@@ -107,7 +107,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const filename = getFileName(cleanPath)
 
-  const isAbsolute = cleanPath.startsWith('/') || /^[A-Z]:\\/.test(cleanPath)
+  const isAbsolute = cleanPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cleanPath)
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
@@ -163,7 +163,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
         // 绝对路径：不传 options，允许访问任意位置（如 Desktop、Documents 等）
         // 相对路径：传 sessionId 和 candidateBasePaths，限制在授权目录内
         const accessOptions = isAbsolute
-          ? undefined
+          ? { sessionId: sessionId ?? undefined }
           : { sessionId: sessionId ?? undefined, candidateBasePaths: candidateBases.length > 0 ? candidateBases : undefined }
 
         window.electronAPI.resolveFilePath(cleanPath, accessOptions)
@@ -256,7 +256,7 @@ export function isAbsoluteFilePath(text: string): boolean {
   }
 
   // Windows 绝对路径
-  if (/^[A-Z]:\\/.test(clean)) return true
+  if (/^[A-Za-z]:[\\/]/.test(clean)) return true
 
   return false
 }

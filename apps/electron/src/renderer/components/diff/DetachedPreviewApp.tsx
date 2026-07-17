@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { AlertCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, FolderOpen, RefreshCw } from 'lucide-react'
 import { useSetAtom } from 'jotai'
 import type { DetachedPreviewWindowData } from '@profer/shared'
 import { agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
@@ -61,6 +61,14 @@ export function DetachedPreviewApp(): React.ReactElement {
     })
   }, [data, setRefreshVersionMap])
 
+  const handleShowInFolder = React.useCallback(() => {
+    if (!data) return
+    window.electronAPI.showItemInFolder(
+      defaultAppTargetPath,
+      data.basePaths,
+    ).catch((err) => console.error('[DetachedPreviewApp] 打开文件位置失败:', err))
+  }, [data, defaultAppTargetPath])
+
   if (loading) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-content-area text-xs text-muted-foreground">
@@ -96,6 +104,17 @@ export function DetachedPreviewApp(): React.ReactElement {
           filePath={defaultAppTargetPath}
           access={defaultAppAccess}
         />
+        <button
+          type="button"
+          onClick={handleShowInFolder}
+          className={cn(
+            'size-7 flex items-center justify-center rounded-md text-muted-foreground',
+            'hover:bg-muted/60 hover:text-foreground transition-colors',
+          )}
+          title="打开文件所在位置"
+        >
+          <FolderOpen className="size-3.5" />
+        </button>
         <button
           type="button"
           onClick={handleRefresh}

@@ -232,18 +232,22 @@ export function ScratchPadView(): React.ReactElement {
 
       const text = e.clipboardData?.getData('text/plain')
       if (!text) return
-      // markdown 触发字符：#标题 *强调 >引用 -列表 `代码 [链接 ~删除 |表格 $公式
-      if (!/[#*>\-`[\]~|$]/.test(text)) return
 
+      // 阻止事件冒泡到 ProseMirror，我们自己插入内容
+      // （Electron 39+ sandbox 环境下 ProseMirror 内部 paste 处理不可靠）
       e.preventDefault()
       e.stopPropagation()
-      try {
-        const html = markdownToHtml(text)
-        editor.chain().focus().insertContent(html).run()
-      } catch {
-        // 转换失败，回退到纯文本插入
-        editor.chain().focus().insertContent(text).run()
+      // markdown 触发字符：#标题 *强调 >引用 -列表 `代码 [链接 ~删除 |表格 $公式
+      if (/[#*>\-`[\]~|$]/.test(text)) {
+        try {
+          const html = markdownToHtml(text)
+          editor.chain().focus().insertContent(html).run()
+          return
+        } catch {
+          // 转换失败，回退到纯文本插入
+        }
       }
+      editor.chain().focus().insertContent(text).run()
     }
 
     el.addEventListener('paste', handlePaste, true)
