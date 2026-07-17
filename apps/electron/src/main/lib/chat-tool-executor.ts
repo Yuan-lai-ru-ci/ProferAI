@@ -9,7 +9,6 @@ import type { ToolCall, ToolResult } from '@profer/core'
 import type { WebContents } from 'electron'
 import type { FileAttachment } from '@profer/shared'
 import { CHAT_IPC_CHANNELS } from '@profer/shared'
-import { isMemoryToolCall, executeMemoryTool } from './chat-tools/memory-tool'
 import { isWebSearchToolCall, executeWebSearchTool } from './chat-tools/web-search-tool'
 import { isCustomHttpToolCall, executeHttpTool } from './chat-tools/http-tool-executor'
 import { isAgentRecommendToolCall, executeAgentRecommendTool } from './chat-tools/agent-recommend-tool'
@@ -49,9 +48,7 @@ export async function executeToolCalls(
   for (const tc of toolCalls) {
     let result: ToolResult
 
-    if (isMemoryToolCall(tc.name)) {
-      result = await executeMemoryTool(tc)
-    } else if (isWebSearchToolCall(tc.name)) {
+    if (isWebSearchToolCall(tc.name)) {
       result = await executeWebSearchTool(tc)
     } else if (isAgentRecommendToolCall(tc.name)) {
       result = await executeAgentRecommendTool(tc)

@@ -30,8 +30,9 @@ import { McpCard } from './McpCard'
 import { SkillDetailSheet } from './SkillDetailSheet'
 import { McpDetailSheet } from './McpDetailSheet'
 import { ImportSkillDialog } from './ImportSkillDialog'
+import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
 
-type CapabilityTab = 'skills' | 'marketplace' | 'mcp'
+type CapabilityTab = 'skills' | 'marketplace' | 'mcp' | 'memory'
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData()
@@ -76,6 +77,14 @@ export function AgentSkillsView(): React.ReactElement {
     () => Object.keys(data.mcpConfig.servers ?? {}).filter((n) => n !== 'memos-cloud').length,
     [data.mcpConfig],
   )
+
+  const [memoryCount, setMemoryCount] = React.useState(0)
+  React.useEffect(() => {
+    if (!data.workspaceSlug) return
+    window.electronAPI.getWorkspaceMemorySummary(data.workspaceSlug).then((mem) => {
+      setMemoryCount((mem.claudeMd.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0))
+    }).catch(() => {})
+  }, [data.workspaceSlug, data.loading])
 
   // 团队市场状态
   const [marketSkills, setMarketSkills] = React.useState<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>([])
@@ -205,19 +214,24 @@ export function AgentSkillsView(): React.ReactElement {
 
       {/* 工具条 */}
       <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center gap-3 px-8 pb-4">
-        {/* Skills / 市场 / MCP 切换 */}
+        {/* Skills / 市场 / MCP / 记忆 切换 */}
         <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
           <div
             className={cn(
               'absolute bottom-0.5 top-0.5 rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-              isTeamWorkspace ? 'w-[calc(33.33%-2px)]' : 'w-[calc(50%-3px)]',
-              tab === 'skills' ? 'translate-x-0' : tab === 'marketplace' ? 'translate-x-[100%]' : isTeamWorkspace ? 'translate-x-[200%]' : 'translate-x-[100%]',
+              isTeamWorkspace ? 'w-[calc(25%-2px)]' : 'w-[calc(33.33%-3px)]',
+              tab === 'skills' ? 'translate-x-0'
+              : tab === 'marketplace' ? 'translate-x-[100%]'
+              : tab === 'mcp' ? (isTeamWorkspace ? 'translate-x-[200%]' : 'translate-x-[100%]')
+              : tab === 'memory' ? (isTeamWorkspace ? 'translate-x-[300%]' : 'translate-x-[200%]')
+              : 'translate-x-0',
             )}
           />
           {[
             { value: 'skills' as const, label: 'Skills', count: data.skills.length },
             ...(isTeamWorkspace ? [{ value: 'marketplace' as const, label: '团队市场', count: marketSkills.length }] : []),
             { value: 'mcp' as const, label: 'MCP', count: mcpCount },
+            { value: 'memory' as const, label: '记忆', count: memoryCount },
           ].map(({ value, label, count }) => (
             <button
               key={value}
@@ -240,7 +254,7 @@ export function AgentSkillsView(): React.ReactElement {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={tab === 'skills' ? '搜索 Skills...' : '搜索 MCP 服务器...'}
+            placeholder={tab === 'skills' ? '搜索 Skills...' : tab === 'mcp' ? '搜索 MCP 服务器...' : '搜索记忆文件...'}
             className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
           />
         </div>
@@ -343,6 +357,8 @@ export function AgentSkillsView(): React.ReactElement {
               onPublish={isTeamWorkspace ? handlePublish : undefined}
               publishingSlug={publishingSlug}
             />
+          ) : tab === 'memory' ? (
+            <WorkspaceMemoryTab workspaceSlug={data.workspaceSlug} search={search} />
           ) : (
             <McpTab
               entries={serverEntries}

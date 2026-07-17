@@ -4,32 +4,6 @@
  * 包含 Agent SDK 集成所需的事件类型、会话管理、消息持久化和 IPC 通道常量。
  */
 
-// ===== 记忆配置 =====
-
-/** 全局记忆配置（MemOS Cloud） */
-export interface MemoryConfig {
-  /** 是否启用记忆功能 */
-  enabled: boolean
-  /** MemOS Cloud API Key */
-  apiKey: string
-  /** 用户标识 */
-  userId: string
-  /** 自定义 API 地址（可选，默认 MemOS Cloud） */
-  baseUrl?: string
-}
-
-/**
- * 全局记忆配置 IPC 通道常量
- */
-export const MEMORY_IPC_CHANNELS = {
-  /** 获取全局记忆配置 */
-  GET_CONFIG: 'memory:get-config',
-  /** 保存全局记忆配置 */
-  SET_CONFIG: 'memory:set-config',
-  /** 测试记忆连接 */
-  TEST_CONNECTION: 'memory:test-connection',
-} as const
-
 // ===== Agent 工作区 =====
 
 /** 工作区类型 */
@@ -606,12 +580,12 @@ export type AgentEvent =
   // 模型确认（SDK 确认实际使用的模型）
   | { type: 'model_resolved'; model: string }
   // 权限模式变更（Plan → bypassPermissions 等）
-  | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
+  | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
 
-// ===== Proma 内部事件（SDK 不覆盖的场景） =====
+// ===== Profer 内部事件（SDK 不覆盖的场景） =====
 
-/** Proma 内部事件类型 */
-export type PromaEvent =
+/** Profer 内部事件类型 */
+export type ProferEvent =
   | { type: 'permission_request'; request: PermissionRequest }
   | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
   | { type: 'ask_user_request'; request: AskUserRequest }
@@ -623,7 +597,7 @@ export type PromaEvent =
   | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
   | { type: 'model_resolved'; model: string }
   | { type: 'context_window'; contextWindow: number }
-  | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
+  | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number }
   | { type: 'run_resumed'; sessionId: string }
@@ -634,7 +608,7 @@ export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge'
 /** IPC 传输的统一 payload（替代 AgentEvent） */
 export type AgentStreamPayload =
   | { kind: 'sdk_message'; message: SDKMessage }
-  | { kind: 'proma_event'; event: PromaEvent }
+  | { kind: 'profer_event'; event: ProferEvent }
 
 // ===== Agent 会话管理 =====
 
@@ -678,7 +652,7 @@ export interface AgentSessionMeta {
   /** 最后一次流式执行是否被用户主动中断 */
   stoppedByUser?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
-  permissionMode?: PromaPermissionMode
+  permissionMode?: ProferPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
   /** 父会话 ID（委派子会话使用，指向母会话） */
@@ -697,6 +671,8 @@ export interface AgentSessionMeta {
   delegationStatus?: string
   /** 自动任务毕业后标记（毕业指从自动任务区移到正常会话区） */
   automationGraduated?: boolean
+  /** 回溯放弃抽取的增量水位：已分析到的最新轮次索引（下次只分析 > 此值的新增轮次） */
+  lastAnalyzedTurn?: number
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -924,10 +900,50 @@ export interface SkillFileContent {
   size: number
 }
 
-/** 工作区能力摘要（MCP + Skill 计数） */
+/** 工作区记忆文件摘要 */
+export interface WorkspaceMemoryFileSummary {
+  /** 文件是否存在 */
+  exists: boolean
+  /** 绝对路径 */
+  path: string
+  /** 文件大小（字节） */
+  size: number
+  /** 最近修改时间戳 */
+  updatedAt?: number
+}
+
+/** 工作区记忆摘要 */
+export interface WorkspaceMemorySummary {
+  /** 工作区级 CLAUDE.md */
+  claudeMd: WorkspaceMemoryFileSummary
+  /** SDK auto memory 目录 */
+  autoMemory: {
+    /** 绝对目录路径 */
+    directory: string
+    /** MEMORY.md 是否存在 */
+    memoryMdExists: boolean
+    /** 文本文件数量 */
+    fileCount: number
+    /** 总大小（字节） */
+    totalSize: number
+    /** 最近修改时间戳 */
+    updatedAt?: number
+  }
+}
+
+/** 内置 MCP 服务器摘要 */
+export interface BuiltinMcpServerSummary {
+  name: string
+  enabled: boolean
+  type: McpTransportType
+}
+
+/** 工作区能力摘要（MCP + Skill + Memory） */
 export interface WorkspaceCapabilities {
   mcpServers: Array<{ name: string; enabled: boolean; type: McpTransportType }>
+  builtinMcpServers: BuiltinMcpServerSummary[]
   skills: SkillMeta[]
+  memory: WorkspaceMemorySummary
 }
 
 // ===== Agent 发送输入 =====
@@ -951,7 +967,7 @@ export interface AgentSendInput {
   /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */
   customMcpServers?: Record<string, Record<string, unknown>>
   /** 强制覆盖权限模式（飞书等无 UI 交互场景下强制 'bypassPermissions'） */
-  permissionModeOverride?: PromaPermissionMode
+  permissionModeOverride?: ProferPermissionMode
   /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
   mentionedSkills?: string[]
   /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */
@@ -1032,6 +1048,24 @@ export interface RewindSessionResult {
     insertions?: number
     deletions?: number
   }
+}
+
+/**
+ * 会话健康状态（findOrphanSessions 返回结果）
+ */
+export interface SessionHealth {
+  sessionId: string
+  title: string
+  /** agent-sessions/<id>.jsonl 是否存在 */
+  hasPromaJsonl: boolean
+  /** SDK project 目录下是否有对应 JSONL */
+  hasSdkJsonl: boolean
+  /** 工作区目录是否存在 */
+  hasWorkspaceDir: boolean
+  /** 是否为孤儿记录（有索引但缺关键数据） */
+  isOrphan: boolean
+  /** 孤儿原因描述 */
+  orphanReason?: string
 }
 
 // ===== 后台任务管理 =====
@@ -1312,22 +1346,22 @@ export interface ExitPlanModeResponse {
 
 // ===== 权限系统类型 =====
 
-/** 当前 Proma 支持的权限模式，值直接映射 SDK 原生 permissionMode */
-export const PROMA_PERMISSION_MODES = ['auto', 'bypassPermissions', 'plan'] as const
+/** 当前 Profer 支持的权限模式，值直接映射 SDK 原生 permissionMode */
+export const PROFER_PERMISSION_MODES = ['auto', 'bypassPermissions', 'plan'] as const
 
-export type PromaPermissionMode = typeof PROMA_PERMISSION_MODES[number]
+export type ProferPermissionMode = typeof PROFER_PERMISSION_MODES[number]
 
-export const PROMA_DEFAULT_PERMISSION_MODE: PromaPermissionMode = 'bypassPermissions'
+export const PROFER_DEFAULT_PERMISSION_MODE: ProferPermissionMode = 'bypassPermissions'
 
-export interface PromaPermissionModeConfig {
+export interface ProferPermissionModeConfig {
   /** 对应 Claude Agent SDK 的 permissionMode */
-  sdkMode: PromaPermissionMode
+  sdkMode: ProferPermissionMode
   label: string
   description: string
 }
 
-/** Proma 权限模式的单一配置来源 */
-export const PROMA_PERMISSION_MODE_CONFIG = {
+/** Profer 权限模式的单一配置来源 */
+export const PROFER_PERMISSION_MODE_CONFIG = {
   auto: {
     sdkMode: 'auto',
     label: '自动审批',
@@ -1343,19 +1377,19 @@ export const PROMA_PERMISSION_MODE_CONFIG = {
     label: '计划模式',
     description: '仅规划不执行，查看工具使用计划',
   },
-} as const satisfies Record<PromaPermissionMode, PromaPermissionModeConfig>
+} as const satisfies Record<ProferPermissionMode, ProferPermissionModeConfig>
 
 /** 权限模式定义顺序（用于循环切换） */
-export const PROMA_PERMISSION_MODE_ORDER: readonly PromaPermissionMode[] = PROMA_PERMISSION_MODES
+export const PROFER_PERMISSION_MODE_ORDER: readonly ProferPermissionMode[] = PROFER_PERMISSION_MODES
 
-export function isPromaPermissionMode(mode: string): mode is PromaPermissionMode {
-  return (PROMA_PERMISSION_MODES as readonly string[]).includes(mode)
+export function isProferPermissionMode(mode: string): mode is ProferPermissionMode {
+  return (PROFER_PERMISSION_MODES as readonly string[]).includes(mode)
 }
 
 /** 规范化权限模式：不匹配当前三种模式时统一回到默认自动审批 */
-export function migratePermissionMode(mode: string): PromaPermissionMode {
-  if (isPromaPermissionMode(mode)) return mode
-  return PROMA_DEFAULT_PERMISSION_MODE
+export function migratePermissionMode(mode: string): ProferPermissionMode {
+  if (isProferPermissionMode(mode)) return mode
+  return PROFER_DEFAULT_PERMISSION_MODE
 }
 
 /** 危险等级 */
@@ -1434,6 +1468,8 @@ export const AGENT_IPC_CHANNELS = {
   FORK_SESSION: 'agent:fork-session',
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
   REWIND_SESSION: 'agent:rewind-session',
+  /** 扫描所有会话的孤儿记录和文件系统不一致 */
+  FIND_ORPHAN_SESSIONS: 'agent:find-orphan-sessions',
 
   // 工作区管理
   /** 获取工作区列表 */
@@ -1504,6 +1540,18 @@ export const AGENT_IPC_CHANNELS = {
   DELETE_SKILL_ENTRY: 'agent:delete-skill-entry',
   /** 重命名/移动 Skill 目录下的文件或目录 */
   RENAME_SKILL_ENTRY: 'agent:rename-skill-entry',
+  /** 获取工作区记忆摘要 */
+  GET_WORKSPACE_MEMORY_SUMMARY: 'agent:get-workspace-memory-summary',
+  /** 读取工作区 CLAUDE.md */
+  READ_WORKSPACE_CLAUDE_MD: 'agent:read-workspace-claude-md',
+  /** 写入工作区 CLAUDE.md */
+  WRITE_WORKSPACE_CLAUDE_MD: 'agent:write-workspace-claude-md',
+  /** 列出工作区 auto memory 文件树 */
+  LIST_WORKSPACE_AUTO_MEMORY_FILES: 'agent:list-workspace-auto-memory-files',
+  /** 读取工作区 auto memory 文件 */
+  READ_WORKSPACE_AUTO_MEMORY_FILE: 'agent:read-workspace-auto-memory-file',
+  /** 写入工作区 auto memory 文件 */
+  WRITE_WORKSPACE_AUTO_MEMORY_FILE: 'agent:write-workspace-auto-memory-file',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */
@@ -1626,14 +1674,14 @@ export const AGENT_IPC_CHANNELS = {
   GET_GRAPH: 'agent:get-graph',
   /** 获取当前会话的 Graph 摘要 */
   GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
-  /** 获取项目级聚合 Graph（跨会话合并） */
-  GET_PROJECT_GRAPH: 'agent:get-project-graph',
-  /** 获取项目级 Graph 摘要（跨会话合并） */
-  GET_PROJECT_GRAPH_SUMMARY: 'agent:get-project-graph-summary',
-  /** Graph 数据更新推送（主进程 → 渲染进程） */
-  GRAPH_UPDATED: 'agent:graph-updated',
   /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
   APPEND_GRAPH_EVENT: 'agent:append-graph-event',
+  /** 回溯放弃抽取：通读会话增量轮次，抽取放弃方向写进图（渲染进程 → 主进程，返回刷新后的图） */
+  RUN_RETROSPECTIVE: 'agent:run-retrospective',
+
+  // 热力图
+  /** 获取工作区每日活跃会话数（用于热力图） */
+  GET_WORKSPACE_HEATMAP_DAILY: 'agent:get-workspace-heatmap-daily',
 } as const
 
 /**
@@ -1725,6 +1773,14 @@ export const TEAM_FILE_IPC_CHANNELS = {
   MOVE: 'team-file:move',
   RENAME: 'team-file:rename',
   SEARCH: 'team-file:search',
+} as const
+
+/** SSE 实时事件推送 IPC 通道 */
+export const SSE_IPC_CHANNELS = {
+  /** 主进程 → 渲染进程：SSE 事件推送 */
+  EVENT: 'sse:event',
+  /** 主进程 → 渲染进程：连接状态变更 */
+  CONNECTION_CHANGED: 'sse:connection-changed',
 } as const
 
 /** 团队服务器配置 */

@@ -17,35 +17,38 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@profer/shared'
 import {
-  PROMA_DEFAULT_PERMISSION_MODE,
+  PROFER_DEFAULT_PERMISSION_MODE,
   SAFE_TOOLS,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   supports1MContext,
+  resolveAgentSdkModelId,
 } from '@profer/shared'
-import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@profer/shared'
+import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@profer/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
 import { injectAutomationMcpServer } from './automation-agent-tools'
+import { injectKbMcpServer } from './kb-agent-tools'
+import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
 import {
   injectAgentCollaborationMcpServer,
   registerCollaborationEventBus,
 } from './agent-collaboration-tools'
 import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
-import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@profer/core'
+import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getProferUserAgent } from '@profer/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { isCommercialBuild } from './build-target'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
-import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
+import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
@@ -55,13 +58,12 @@ import type { PermissionResult, CanUseToolOptions } from './agent-permission-ser
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { applyAgentModelRoutingToEnv, resolveAgentModelRouting } from './agent-model-routing'
-import { getMemoryConfig } from './memory-service'
-import { searchMemory, addMemory, formatSearchResult } from './memos-client'
+
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 
 // 已提取的工具模块
-import { sdkPermissionModeForPromaMode, extractApiError, isAutoRetryableTypedError, isAutoRetryableCatchError, isSessionNotFoundError, getRetryDelayMs, MAX_AUTO_RETRIES, MAX_AUTO_RETRY_WAIT_MS } from './agent-retry-utils'
+import { sdkPermissionModeForProferMode, extractApiError, isAutoRetryableTypedError, isAutoRetryableCatchError, isSessionNotFoundError, getRetryDelayMs, MAX_AUTO_RETRIES, MAX_AUTO_RETRY_WAIT_MS } from './agent-retry-utils'
 import { extractSDKToolSummary, buildContextPrompt, buildRecoveryPrompt, escapeContextAttr, buildReferencedSessionsPrompt, TITLE_PROMPT, MAX_TITLE_LENGTH, DEFAULT_SESSION_TITLE, DEFAULT_MODEL_ID, MAX_CONTEXT_MESSAGES } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
@@ -154,7 +156,7 @@ export class AgentOrchestrator {
   private stoppedBySessions = new Set<string>()
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
-  private sessionPermissionModes = new Map<string, PromaPermissionMode>()
+  private sessionPermissionModes = new Map<string, ProferPermissionMode>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
@@ -233,7 +235,7 @@ export class AgentOrchestrator {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
     } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
+      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
     } else if (provider === 'minimax') {
       sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
       sdkEnv.API_TIMEOUT_MS = '3000000'
@@ -329,63 +331,6 @@ export class AgentOrchestrator {
     }
 
     return mcpServers
-  }
-
-  /**
-   * 注入 SDK 内置记忆工具（全局，不依赖工作区）
-   */
-  private async injectMemoryTools(
-    sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
-    mcpServers: Record<string, Record<string, unknown>>,
-  ): Promise<void> {
-    const memoryConfig = getMemoryConfig()
-    const memUserId = memoryConfig.userId?.trim() || 'profer-user'
-    if (!memoryConfig.enabled || !memoryConfig.apiKey) return
-
-    try {
-      const { z } = await import('zod')
-      const memosServer = sdk.createSdkMcpServer({
-        name: 'mem',
-        version: '1.0.0',
-        tools: [
-          sdk.tool(
-            'recall_memory',
-            'Search user memories (facts and preferences) from MemOS Cloud. Use this to recall relevant context about the user.',
-            { query: z.string().describe('Search query for memory retrieval'), limit: z.number().optional().describe('Max results (default 6)') },
-            async (args) => {
-              const result = await searchMemory(
-                { apiKey: memoryConfig.apiKey, userId: memUserId, baseUrl: memoryConfig.baseUrl },
-                args.query,
-                args.limit,
-              )
-              return { content: [{ type: 'text' as const, text: formatSearchResult(result) }] }
-            },
-            { annotations: { readOnlyHint: true } },
-          ),
-          sdk.tool(
-            'add_memory',
-            'Store a conversation message pair into MemOS Cloud for long-term memory. Call this after meaningful exchanges worth remembering.',
-            {
-              userMessage: z.string().describe('The user message to store'),
-              assistantMessage: z.string().optional().describe('The assistant response to store'),
-              conversationId: z.string().optional().describe('Conversation ID for grouping'),
-              tags: z.array(z.string()).optional().describe('Tags for categorization'),
-            },
-            async (args) => {
-              await addMemory(
-                { apiKey: memoryConfig.apiKey, userId: memUserId, baseUrl: memoryConfig.baseUrl },
-                args,
-              )
-              return { content: [{ type: 'text' as const, text: 'Memory stored successfully.' }] }
-            },
-          ),
-        ],
-      })
-      mcpServers['mem'] = memosServer as unknown as Record<string, unknown>
-      console.log(`[Agent 编排] 已注入内置记忆工具 (mem)`)
-    } catch (err) {
-      console.error(`[Agent 编排] 注入记忆工具失败:`, err)
-    }
   }
 
   /**
@@ -525,7 +470,22 @@ export class AgentOrchestrator {
     this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
     accumulatedMessages.length = 0
     // 清除失效的 SDK session，新 SDK 会话产生的 sdkSessionId 会通过 onSessionId 回调自动保存
-    try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
+    // 此操作必须成功，否则下次打开会话仍会尝试 resume 已失效的 session，陷入无限恢复循环
+    try {
+      updateAgentSessionMeta(sessionId, { sdkSessionId: undefined })
+    } catch (clearErr) {
+      console.error(`[Agent 编排] ⚠️ 清除失效 sdkSessionId 失败！下次打开此会话可能仍触发 session-not-found 恢复:`, clearErr)
+      // 写诊断文件供后续排查
+      try {
+        const diagDir = join(getAgentSessionWorkspacePath(
+          getAgentWorkspace(getAgentSessionMeta(sessionId)?.workspaceId ?? '')?.slug ?? 'unknown',
+          sessionId,
+        ), '.context')
+        if (!existsSync(diagDir)) mkdirSync(diagDir, { recursive: true })
+        appendFileSync(join(diagDir, 'session-errors.log'),
+          `[${new Date().toISOString()}] session-not-found 恢复时清除 sdkSessionId 失败: ${clearErr}\n`)
+      } catch { /* 诊断写入是尽力而为的 */ }
+    }
     queryOptions.resumeSessionId = undefined
     queryOptions.resumeSessionAt = undefined
     queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, { agentCwd })
@@ -706,6 +666,19 @@ export class AgentOrchestrator {
     const streamStartedAt = input.startedAt ?? runGeneration
     this.activeSessions.set(sessionId, runGeneration)
 
+    // 5. 持久化用户消息（SDKMessage 格式）——在所有 preflight 检查之前写入，
+    // 确保即使后续渠道/Key 检查失败，用户输入也不会丢失。
+    const userSDKMsg: SDKMessage = {
+      type: 'user',
+      message: {
+        content: [{ type: 'text', text: userMessage }],
+      },
+      parent_tool_use_id: null,
+      _createdAt: Date.now(),
+    } as unknown as SDKMessage
+    appendSDKMessages(sessionId, [userSDKMsg])
+    callbacks.onRunStarted?.({ startedAt: streamStartedAt })
+
     const releaseActiveRun = (): void => {
       // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
       // 主进程仍在 finally 前短暂拒绝下一条消息。
@@ -753,11 +726,11 @@ export class AgentOrchestrator {
     } else if (channel.provider === 'kimi-coding') {
       // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
+      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
     } else if (channel.provider === 'xiaomi-token-plan') {
       // 小米 Token Plan：Bearer + 必须带 User-Agent
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getPromaUserAgent(pkg.version)}`
+      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
     } else if (channel.provider === 'minimax') {
       // MiniMax Coding Plan：Claude Code 兼容配置使用 Bearer
       process.env.ANTHROPIC_AUTH_TOKEN = apiKey
@@ -787,18 +760,6 @@ export class AgentOrchestrator {
     }
 
     console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}`)
-
-    // 5. 持久化用户消息（SDKMessage 格式）
-    const userSDKMsg: SDKMessage = {
-      type: 'user',
-      message: {
-        content: [{ type: 'text', text: userMessage }],
-      },
-      parent_tool_use_id: null,
-      _createdAt: Date.now(),
-    } as unknown as SDKMessage
-    appendSDKMessages(sessionId, [userSDKMsg])
-    callbacks.onRunStarted?.({ startedAt: streamStartedAt })
 
     // 6. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
@@ -894,9 +855,14 @@ export class AgentOrchestrator {
           sdkProjectSettings.skipWebFetchPreflight = true
           needsWrite = true
         }
+        const autoMemoryDirectory = getWorkspaceAutoMemoryDir(workspaceSlug)
+        if (sdkProjectSettings.autoMemoryDirectory !== autoMemoryDirectory) {
+          sdkProjectSettings.autoMemoryDirectory = autoMemoryDirectory
+          needsWrite = true
+        }
         if (needsWrite) {
           writeFileSync(settingsPath, JSON.stringify(sdkProjectSettings, null, 2))
-          console.log(`[Agent 编排] 已设置 SDK settings (plansDirectory, skipWebFetchPreflight)`)
+          console.log(`[Agent 编排] 已设置 SDK settings (plansDirectory, skipWebFetchPreflight, autoMemoryDirectory, autoCompact)`)
         }
       }
 
@@ -909,15 +875,18 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 将直接使用已保存的 sdkSessionId 进行 resume: ${existingSdkSessionId}`)
       }
 
-      // 10. 构建 MCP 服务器配置 + 记忆工具 + 自定义工具（生图工具仅 Chat 模式可用）
+      // 10. 构建 MCP 服务器配置 + 自定义工具（生图工具仅 Chat 模式可用）
       const mcpServers = this.buildMcpServers(workspaceSlug)
-      await this.injectMemoryTools(sdk, mcpServers)
       await injectAutomationMcpServer(sdk, mcpServers, {
         sessionId,
         channelId,
         modelId,
         workspaceId,
         triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
+      })
+      await injectKbMcpServer(sdk, mcpServers, {
+        sessionId,
+        workspaceId,
       })
       await injectAgentCollaborationMcpServer(sdk, mcpServers, {
         sessionId,
@@ -927,6 +896,7 @@ export class AgentOrchestrator {
         permissionMode: input.permissionModeOverride,
         triggeredBy: input.triggeredBy,
       })
+      await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId })
 
       // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
       if (customMcpServers) {
@@ -981,27 +951,27 @@ export class AgentOrchestrator {
       // 12. 读取应用设置并确定权限模式
       // 权限模式只属于当前 session；新会话默认完全自动模式。
       const appSettings = getSettings()
-      const initialPermissionMode: PromaPermissionMode = permissionModeOverride
-        ?? PROMA_DEFAULT_PERMISSION_MODE
+      const initialPermissionMode: ProferPermissionMode = permissionModeOverride
+        ?? PROFER_DEFAULT_PERMISSION_MODE
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
 
       const emitPlanModeChanged = (active: boolean, source: 'initial' | 'tool' | 'permission'): void => {
         this.eventBus.emit(sessionId, {
-          kind: 'proma_event',
+          kind: 'profer_event',
           event: { type: 'plan_mode_changed', sessionId, active, source },
         })
       }
 
       // 当初始模式为 plan 时，通知渲染进程展示计划模式 UI（如「Agent 正在规划」横幅）
       if (initialPermissionMode === 'plan') {
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+        this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'enter_plan_mode', sessionId } })
         emitPlanModeChanged(true, 'initial')
       }
 
       /** 读取当前会话的实时权限模式（支持运行中切换） */
-      const getPermissionMode = (): PromaPermissionMode =>
+      const getPermissionMode = (): ProferPermissionMode =>
         this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
 
       // ExitPlanMode 拦截器：plan 模式下走 UI 审批流程
@@ -1011,7 +981,7 @@ export class AgentOrchestrator {
           toolInput,
           signal,
           (request: ExitPlanModeRequest) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
+            this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'exit_plan_mode_request', request } })
           },
         )
       }
@@ -1020,11 +990,11 @@ export class AgentOrchestrator {
       const autoCanUseTool = permissionService.createCanUseTool(
         sessionId,
         (request: PermissionRequest) => {
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
+          this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_request', request } })
         },
         (sid, toolInput, signal, sendAskUser) => askUserService.handleAskUserQuestion(sid, toolInput, signal, sendAskUser),
         (request: AskUserRequest) => {
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+          this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'ask_user_request', request } })
         },
       )
 
@@ -1132,7 +1102,7 @@ export class AgentOrchestrator {
             emitPlanModeChanged(false, 'permission')
             // 同步通知 SDK 侧切换权限模式
             if (this.adapter.setPermissionMode) {
-              this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(result.targetMode)).catch((err: unknown) => {
+              this.adapter.setPermissionMode(sessionId, sdkPermissionModeForProferMode(result.targetMode)).catch((err: unknown) => {
                 console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
               })
             }
@@ -1144,7 +1114,7 @@ export class AgentOrchestrator {
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
           emitPlanModeChanged(true, 'tool')
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+          this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'enter_plan_mode', sessionId } })
           return { behavior: 'allow' as const, updatedInput: input }
         }
 
@@ -1153,7 +1123,7 @@ export class AgentOrchestrator {
           return askUserService.handleAskUserQuestion(
             sessionId, input, options.signal,
             (request: AskUserRequest) => {
-              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+              this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'ask_user_request', request } })
             },
           )
         }
@@ -1212,12 +1182,12 @@ export class AgentOrchestrator {
       const queryOptions: ClaudeAgentQueryOptions = {
         sessionId,
         prompt: finalPrompt,
-        model: modelId || DEFAULT_MODEL_ID,
+        model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID),
         cwd: agentCwd,
         sdkCliPath: cliPath,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
-        sdkPermissionMode: sdkPermissionModeForPromaMode(initialPermissionMode),
+        sdkPermissionMode: sdkPermissionModeForProferMode(initialPermissionMode),
         // permissionMode 负责表达 auto/plan/bypassPermissions。
         // 当提供 canUseTool 回调时这里必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
@@ -1226,7 +1196,7 @@ export class AgentOrchestrator {
         // 从实际 tool_use 流里同步，避免 UI 停留在计划阶段。
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
-        ...(sdkPermissionModeForPromaMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(sdkPermissionModeForProferMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {
@@ -1237,7 +1207,6 @@ export class AgentOrchestrator {
             workspaceSlug,
             sessionId,
             permissionMode: initialPermissionMode,
-            memoryEnabled: (() => { const mc = getMemoryConfig(); return mc.enabled && !!mc.apiKey })(),
             claudeAvailable,
             deepSeekSubagentModel: modelRouting.subagentModel,
           }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : ''),
@@ -1302,14 +1271,14 @@ export class AgentOrchestrator {
           resolvedModel = model
           console.log(`[Agent 编排] SDK 确认模型: ${resolvedModel}`)
           // 通知渲染进程更新流式状态中的模型信息
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model } })
+          this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'model_resolved', model } })
         },
         onContextWindow: (cw: number) => {
           console.log(`[Agent 编排] 缓存 contextWindow: ${cw}`)
           // result 消息里的真实 contextWindow 透传到 renderer，
           // 覆盖流式过程中按模型名推断的 fallback 值（智谱等端点会把 [1m] 等后缀剥掉，导致 fallback 不准）
           this.eventBus.emit(sessionId, {
-            kind: 'proma_event',
+            kind: 'profer_event',
             event: { type: 'context_window', contextWindow: cw },
           })
         },
@@ -1325,6 +1294,8 @@ export class AgentOrchestrator {
       let skipNextRetryDelay = false
       let thinkingSignatureRecoveryAttempted = false
       let invisibleRecoveryAttempts = 0
+      /** 前 N 次自动重试静默执行，不向 UI 发送事件，减少网络瞬断时的界面噪音 */
+      const RETRY_VISIBILITY_THRESHOLD = 5
       const canAutoRetry = (attempt: number): boolean =>
         attempt <= MAX_AUTO_RETRIES && retryDelayElapsedMs < MAX_AUTO_RETRY_WAIT_MS
 
@@ -1361,16 +1332,19 @@ export class AgentOrchestrator {
               delaySeconds: delaySec,
             }
 
-            this.eventBus.emit(sessionId, {
-              kind: 'proma_event',
-              event: { type: 'retry', status: 'starting', attempt: retryAttempt, maxAttempts: MAX_AUTO_RETRIES, delaySeconds: delaySec, reason: lastRetryableError ?? '未知错误' },
-            })
-            this.eventBus.emit(sessionId, {
-              kind: 'proma_event',
-              event: { type: 'retry', status: 'attempt', attemptData },
-            })
+            // 前 RETRY_VISIBILITY_THRESHOLD 次重试静默执行，避免网络瞬断时 UI 频繁弹黄条
+            if (retryAttempt > RETRY_VISIBILITY_THRESHOLD) {
+              this.eventBus.emit(sessionId, {
+                kind: 'profer_event',
+                event: { type: 'retry', status: 'starting', attempt: retryAttempt, maxAttempts: MAX_AUTO_RETRIES, delaySeconds: delaySec, reason: lastRetryableError ?? '未知错误' },
+              })
+              this.eventBus.emit(sessionId, {
+                kind: 'profer_event',
+                event: { type: 'retry', status: 'attempt', attemptData },
+              })
+            }
 
-            console.log(`[Agent 编排] 第 ${retryAttempt} 次重试，等待 ${delaySec}s...`)
+            console.log(`[Agent 编排] 第 ${retryAttempt} 次重试${retryAttempt <= RETRY_VISIBILITY_THRESHOLD ? '(静默)' : ''}，等待 ${delaySec}s...`)
             await new Promise((r) => setTimeout(r, delayMs))
 
             // 等待期间如果会话被中止，退出
@@ -1442,7 +1416,7 @@ export class AgentOrchestrator {
               const sub = msg.type === 'system' ? (msg as { subtype?: string }).subtype : undefined
               if (msg.type === 'assistant' || msg.type === 'user' || sub === 'task_started' || sub === 'task_progress') {
                 awaitingBackgroundWake = false
-                this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'run_resumed', sessionId } })
+                this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'run_resumed', sessionId } })
               }
             }
 
@@ -1567,10 +1541,10 @@ export class AgentOrchestrator {
                 appendSDKMessages(sessionId, [errorSDKMsg])
                 console.log(`[Agent 编排] 已保存 TypedError 消息: ${typedError.code} - ${typedError.title}`)
 
-                // 如果之前有重试记录，发送 retry_failed
-                if (retryAttemptsScheduled > 0 && lastRetryableError) {
+                // 如果之前有可见重试记录，发送 retry_failed
+                if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD && lastRetryableError) {
                   this.eventBus.emit(sessionId, {
-                    kind: 'proma_event',
+                    kind: 'profer_event',
                     event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: typedError.message, delaySeconds: 0 } },
                   })
                 }
@@ -1630,23 +1604,16 @@ export class AgentOrchestrator {
               // adapter 在"本轮结束但仍有后台任务/定时任务在飞行"时打的注解：
               // 走轻量完成（UI 空闲可输入、host 保留会话），等待 task_notification 自动续轮。
               const keptOpenForTasks = (msg as Record<string, unknown>)._keepChannelOpenForTasks === true
-              // adapter 在"当前 turn 真正结束、且有排队消息等待驱动下一轮"时打的注解：
-              // 视同 continuable —— 保持通道开、UI 维持 running，不走 idleComplete。
-              const keptOpenForQueue = (msg as Record<string, unknown>)._keepChannelOpenForQueue === true
-              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks || keptOpenForQueue
+              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
               // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
               const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
               console.log(
                 `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}, ` +
                 `terminal_reason=${resultTerminalReason ?? 'undefined'}, keepChannelOpen=${keepChannelOpen}` +
                 (keptOpenForTasks ? ', keptOpenForTasks=true' : '') +
-                (keptOpenForQueue ? ', keptOpenForQueue=true' : '') +
                 (hasDeferredTool ? ', hasDeferredTool=true' : ''),
               )
-              if (keptOpenForQueue) {
-                // 排队续轮：保持 running、继续 park 在 queryIterator.next()，等 SDK 拉取排队消息驱动下一轮。
-                // 不 idleComplete、不 drain（keepChannelOpen 为真已跳过下面的 drain 分支）。
-              } else if (keptOpenForTasks) {
+              if (keptOpenForTasks) {
                 // 轻量完成：UI 置空闲可输入，但 host 保持运行态（不 releaseActiveRun、不 break、不启动 drain 超时），
                 // while 循环继续 park 在 queryIterator.next()，等待后台任务完成时 SDK 自动 yield 的新一轮消息。
                 awaitingBackgroundWake = true
@@ -1688,7 +1655,7 @@ export class AgentOrchestrator {
 
           // 正常完成 — 如果之前有重试，发送 retry_cleared
           if (!wasStoppedByUser && retryAttemptsScheduled > 0) {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
+            this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'retry', status: 'cleared' } })
             console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
           }
           retrySucceeded = true
@@ -1892,7 +1859,7 @@ export class AgentOrchestrator {
           // 如果之前有重试记录，发送 retry_failed
           if (retryAttemptsScheduled > 0 && lastRetryableError) {
             this.eventBus.emit(sessionId, {
-              kind: 'proma_event',
+              kind: 'profer_event',
               event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: userFacingError, delaySeconds: 0 } },
             })
           }
@@ -1920,7 +1887,7 @@ export class AgentOrchestrator {
           ? '重试等待已达到 5 分钟后仍然失败'
           : `重试 ${retryAttemptsScheduled || MAX_AUTO_RETRIES} 次后仍然失败`
         this.eventBus.emit(sessionId, {
-          kind: 'proma_event',
+          kind: 'profer_event',
           event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled || MAX_AUTO_RETRIES, timestamp: Date.now(), reason: lastRetryableError, errorMessage: retryFailureMessage, delaySeconds: 0 } },
         })
 
@@ -1982,19 +1949,19 @@ export class AgentOrchestrator {
   /**
    * 运行中动态切换会话的权限模式
    *
-   * 同时更新 Proma 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
+   * 同时更新 Profer 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
    * 典型场景：用户在 Agent 运行中通过 PermissionModeSelector 切换模式。
    */
-  async updateSessionPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
+  async updateSessionPermissionMode(sessionId: string, mode: ProferPermissionMode): Promise<void> {
     if (!this.activeSessions.has(sessionId)) return
     this.sessionPermissionModes.set(sessionId, mode)
     this.eventBus.emit(sessionId, {
-      kind: 'proma_event',
+      kind: 'profer_event',
       event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
     })
     // 同步通知 SDK 侧
     if (this.adapter.setPermissionMode) {
-      await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(mode))
+      await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForProferMode(mode))
     }
     console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
   }
