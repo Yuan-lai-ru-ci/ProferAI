@@ -2,8 +2,8 @@
 /**
  * 老用户迁移脚本 — 一次性将现有用户迁移到新定价方案
  *
- * 迁移内容（按决策 #19）：
- *   - 所有现有用户 → is_vip = 1, membership_tier = 'pro', multiplier = 0.8
+ * 迁移规则：
+ *   - 所有现有用户 → membership_tier = 'plus'（Plus 套餐）
  *   - 每人 500 积分（25,000,000 quota）到 balance_purchased
  *   - 确保每人有邀请码
  *
@@ -23,7 +23,7 @@ const APPLY = process.argv.includes('--apply')
 const c = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m' }
 
 // 迁移标记（写在 credit_transactions.description 中，确保幂等）
-const MIGRATION_TAG = 'migrate-to-new-plan-2026-07'
+const MIGRATION_TAG = 'migrate-to-plus-2026-07'
 
 const MIGRATION_POINTS = 500
 const MIGRATION_QUOTA = MIGRATION_POINTS * 50_000 // 25,000,000 quota
@@ -32,7 +32,7 @@ const db = new Database(DB_PATH)
 const now = Date.now()
 
 console.log(`${c.bold}老用户迁移 → 新定价方案${c.reset}  DB=${DB_PATH}  模式=${APPLY ? c.yellow + 'APPLY' + c.reset : c.green + 'DRY-RUN' + c.reset}`)
-console.log(`每人: VIP + Pro + ${MIGRATION_POINTS}积分(${MIGRATION_QUOTA} quota) + 邀请码\n`)
+console.log(`每人: Plus + ${MIGRATION_POINTS}积分(${MIGRATION_QUOTA} quota) + 邀请码\n`)
 
 // 已迁移用户（通过 credit_transactions description 标记去重）
 const alreadyMigrated = new Set(
@@ -65,14 +65,14 @@ function migrate() {
 
     const oldTier = u.membership_tier || 'free'
     const oldVip = u.is_vip ? 'VIP' : '非VIP'
-    console.log(`  ${u.email} [${oldTier}, ${oldVip}] → VIP+Pro+${MIGRATION_POINTS}积分`)
+    console.log(`  ${u.email} [${oldTier}, ${oldVip}] → Plus+${MIGRATION_POINTS}积分`)
 
     if (!APPLY) continue
     migrated++
 
-    // 设 VIP + Pro
-    db.prepare('UPDATE users SET is_vip = 1, membership_tier = ?, multiplier = 0.8 WHERE id = ?')
-      .run('pro', u.id)
+    // 设 Plus
+    db.prepare('UPDATE users SET membership_tier = ? WHERE id = ?')
+      .run('plus', u.id)
 
     // 加 500 积分到 balance_purchased
     db.prepare('UPDATE users SET balance_purchased = balance_purchased + ? WHERE id = ?')
@@ -93,7 +93,7 @@ function migrate() {
     db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
       VALUES (?, ?, ?, 'grant', ?, 'purchased', 'migration', ?, ?)`)
       .run(uuidv4(), u.id, MIGRATION_QUOTA,
-        `${MIGRATION_TAG}：VIP+Pro+${MIGRATION_POINTS}积分`,
+        `${MIGRATION_TAG}：Plus+${MIGRATION_POINTS}积分`,
         'migrate-users-to-new-plan', now)
 
     // 确保有邀请码
