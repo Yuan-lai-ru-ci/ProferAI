@@ -5,6 +5,7 @@
  * 1. 个性化时段问候
  * 2. 平台感知的小 Tips
  * 3. Chat/Agent 模式切换 Tab
+ * 4. Agent 模式 + 普通工作区：编码活跃热力图
  */
 
 import * as React from 'react'
@@ -14,7 +15,9 @@ import { cn } from '@/lib/utils'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { themeStyleAtom } from '@/atoms/theme'
+import { currentAgentWorkspaceIdAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { getRandomTip, getPlatform, type Tip } from '@/lib/tips'
+import { UsageHeatmap } from './UsageHeatmap'
 
 /** 根据小时返回时段问候 */
 function getGreeting(hour: number): string {
@@ -35,6 +38,15 @@ export function WelcomeEmptyState(): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const [mode, setMode] = useAtom(appModeAtom)
   const themeStyle = useAtomValue(themeStyleAtom)
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+
+  // 是否在 Agent 模式下的普通工作区（非团队）
+  const currentWorkspace = React.useMemo(
+    () => workspaces.find((w) => w.id === currentWorkspaceId) ?? null,
+    [workspaces, currentWorkspaceId],
+  )
+  const showHeatmap = mode === 'agent' && currentWorkspace?.type !== 'team'
 
   // 稳定的随机 Tip（组件挂载时选一条）
   const [tip] = React.useState<Tip>(() => getRandomTip(getPlatform()))
@@ -95,6 +107,9 @@ export function WelcomeEmptyState(): React.ReactElement {
           )
         })}
       </div>
+
+      {/* 编码活跃热力图（仅 Agent 模式 + 普通工作区） */}
+      {showHeatmap && <UsageHeatmap />}
     </div>
   )
 }
