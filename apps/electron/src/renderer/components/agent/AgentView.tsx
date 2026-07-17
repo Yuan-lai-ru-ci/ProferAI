@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, FileText } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -103,6 +103,8 @@ import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { usePaperReading, markdownToFile, PAPER_PROMPT } from '@/hooks/usePaperReading'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
@@ -598,6 +600,38 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [errorCopied, setErrorCopied] = React.useState(false)
 
+  // ref 桥接：addFilesAsAttachments 在后面才定义，但 usePaperReading 需要用它
+  const addFilesRef = React.useRef<(files: File[], sourcePaths?: Map<File, string>) => Promise<void>>(async () => {})
+
+  // 记录最近拖入的 PDF 真实路径，供论文精读按钮使用
+  const pdfPathRef = React.useRef<string | null>(null)
+  const pdfNameRef = React.useRef<string | null>(null)
+
+  const { isMineruLoading, largePaperConfirm, parseByPath, confirmLargePaper, cancelLargePaper } = usePaperReading({
+    isStreaming: streaming,
+    onParsed: React.useCallback(async (markdown, pages, creditsUsed, pdfName) => {
+      const mdFile = markdownToFile(markdown, pdfName)
+      await addFilesRef.current([mdFile])
+      // 用 .md 替换掉原来的 PDF 附件
+      setPendingFiles((prev) => prev.filter((f) => !f.filename.toLowerCase().endsWith('.pdf')))
+      setDraftsMap((prev) => {
+        const map = new Map(prev)
+        map.set(sessionId, PAPER_PROMPT)
+        return map
+      })
+      toast.success(`论文解析完成（${pages} 页，消耗 ${creditsUsed} 积分），内容已作为附件加入，点击发送即可`)
+    }, [sessionId, setDraftsMap, setPendingFiles]),
+  })
+
+  const handlePaperReading = React.useCallback(() => {
+    const path = pdfPathRef.current
+    if (!path) {
+      toast.warning('请先拖入 PDF 论文文件')
+      return
+    }
+    parseByPath(path, pdfNameRef.current ?? undefined)
+  }, [parseByPath])
+
   // pendingFiles ref（供 addFilesAsAttachments 读取最新列表，避免闭包旧值）
   const pendingFilesRef = React.useRef(pendingFiles)
   React.useEffect(() => {
@@ -752,8 +786,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const parent = getFileParentPath(filePath)
       if (parent && !dirs.includes(parent)) dirs.push(parent)
     }
+    // 将工作区根目录加入候选，使 workspace 级别的文件（如 CLAUDE.md）可被相对路径解析
+    if (sessionPath) {
+      const wsRoot = sessionPath.replace(/[\\/][^\\/]+$/, '')
+      if (wsRoot && !dirs.includes(wsRoot)) dirs.push(wsRoot)
+    }
     return dirs
-  }, [attachedDirs, workspaceDirs, attachedFiles, wsAttachedFiles])
+  }, [attachedDirs, workspaceDirs, attachedFiles, wsAttachedFiles, sessionPath])
 
   // 监听消息刷新版本号
   const refreshMap = useAtomValue(agentMessageRefreshAtom)
@@ -1057,6 +1096,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       toast.error(`以下文件超过 100MB 且无法取得本地路径，已跳过：${formatFileNames(rejectedLargeFiles)}`)
     }
   }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
+  addFilesRef.current = addFilesAsAttachments
 
   const addLargeDialogFilesAsReferences = React.useCallback(async (files: FileDialogLargeFile[]): Promise<void> => {
     if (files.length === 0) return
@@ -1271,6 +1311,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // 通过 preload 的 webUtils.getPathForFile 获取真实路径
     const pathMap = new Map<string, File>()
     const paths: string[] = []
+    // 记录第一个 PDF 的真实路径和文件名，供论文精读按钮使用
+    for (const f of droppedFiles) {
+      if (f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf') {
+        const pp = window.electronAPI.getPathForFile(f)
+        if (pp) { pdfPathRef.current = pp; pdfNameRef.current = f.name; break }
+      }
+    }
+
     for (const f of droppedFiles) {
       try {
         const p = window.electronAPI.getPathForFile(f)
@@ -1924,7 +1972,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const handleStop = React.useCallback((): void => {
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
-      if (!current || !current.running) return prev
+      // 允许在 streaming (running=true) 或 backgroundWaiting (running=false 但有后台任务) 时停止。
+      // 纯 idle 态 (running=false, backgroundWaiting=false) 则无需操作。
+      if (!current || (!current.running && !current.backgroundWaiting)) return prev
       const map = new Map(prev)
       map.set(sessionId, {
         ...current,
@@ -1939,7 +1989,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** 手动发送 /compact 命令 */
   const handleCompact = React.useCallback((): void => {
-    if (!agentChannelId || streaming) return
+    // 防护：streaming（active turn 进行中）或 backgroundWaiting（后台任务等待态）
+    // 都不允许发送 /compact，避免与活跃的 agent session 冲突导致卡死
+    if (!agentChannelId || streaming || backgroundWaiting) return
 
     const streamStartedAt = Date.now()
     const localUuid = crypto.randomUUID()
@@ -2003,7 +2055,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setStreamingStates, store, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, backgroundWaiting, setStreamingStates, store, permissionMode])
 
   /** 复制错误信息到剪贴板 */
   const handleCopyError = React.useCallback(async (): Promise<void> => {
@@ -2020,7 +2072,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** 重试：在当前会话中重新发送最后一条用户消息 */
   const handleRetry = React.useCallback((): void => {
-    if (!agentChannelId || streaming) return
+    if (!agentChannelId || streaming || backgroundWaiting) return
 
     // 找到最后一条用户消息
     const lastUserMessage = [...persistedSDKMessages]
@@ -2063,7 +2115,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
     }).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, permissionMode])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode])
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -2142,6 +2194,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
   const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)
   const [graphDialogOpen, setGraphDialogOpen] = React.useState(false)
+  const [graphRefreshVersion, setGraphRefreshVersion] = React.useState(0)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
     setRewindTargetUuid(assistantMessageUuid)
@@ -2193,11 +2246,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   // 监听快捷键系统分发的 stop-generation 事件
   React.useEffect(() => {
     const handler = (): void => {
-      if (streaming) handleStop()
+      if (streaming || backgroundWaiting) handleStop()
     }
     window.addEventListener('proma:stop-generation', handler)
     return () => window.removeEventListener('proma:stop-generation', handler)
-  }, [streaming, handleStop])
+  }, [streaming, backgroundWaiting, handleStop])
 
   // 监听快捷键系统分发的 focus-input 事件（Cmd+L）
   React.useEffect(() => {
@@ -2207,6 +2260,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
     window.addEventListener('proma:focus-input', handler)
     return () => window.removeEventListener('proma:focus-input', handler)
+  }, [])
+
+  // 清理本会话在全局 window.__pendingAgentFileData 中的 base64 数据。
+  // AgentView 卸载时（切标签页/关标签页）释放 ObjectURL 和 base64，
+  // 防止 100MB 级文件在内存中累积到下次重启。
+  // session 删除/归档由 cleanupMapAtoms 处理，此处仅覆盖卸载路径。
+  React.useEffect(() => {
+    return () => {
+      const files = pendingFilesRef.current
+      if (files.length === 0) return
+      for (const f of files) {
+        if (f.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(f.previewUrl)
+        window.__pendingAgentFileData?.delete(f.id)
+      }
+    }
   }, [])
 
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
@@ -2287,6 +2355,33 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       ),
     },
     {
+      key: 'paper-reading',
+      node: (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                'size-[36px] shrink-0 rounded-full',
+                isMineruLoading
+                  ? 'text-blue-400'
+                  : 'text-foreground/60 hover:text-foreground'
+              )}
+              onClick={handlePaperReading}
+              disabled={isMineruLoading || streaming || !agentChannelId}
+            >
+              <FileText className={cn('size-5', isMineruLoading && 'animate-pulse')} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>论文精读 — 选择 PDF 自动解析为 Markdown</p>
+          </TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
       key: 'attach-folder',
       node: (
         <Tooltip>
@@ -2318,7 +2413,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           contextWindow={contextStatus.contextWindow}
           usageUpdatedAt={contextStatus.usageUpdatedAt}
           isCompacting={contextStatus.isCompacting}
-          isProcessing={streaming}
+          isProcessing={streaming || backgroundWaiting}
           sessionId={sessionId}
           onCompact={handleCompact}
         />
@@ -2337,7 +2432,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     },
     {
       key: 'graph',
-      node: <ToolbarGraphButton onClick={() => setGraphDialogOpen(true)} />,
+      node: <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
     },
   ], [
     agentChannelIds,
@@ -2348,6 +2443,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     agentThinking,
     setAgentThinking,
     handleOpenFileDialog,
+    handlePaperReading,
+    isMineruLoading,
+    agentChannelId,
     handleAttachFolder,
     contextStatus.inputTokens,
     contextStatus.outputTokens,
@@ -2566,7 +2664,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     <Dialog open={graphDialogOpen} onOpenChange={setGraphDialogOpen}>
       <DialogContent className="w-[85vw] max-w-[1200px] h-[80vh] max-h-[850px] p-0 gap-0" hideClose={false}>
         <DialogTitle className="sr-only">任务图</DialogTitle>
-        <ProjectGraphPanel />
+        <ProjectGraphPanel refreshVersion={graphRefreshVersion} />
       </DialogContent>
     </Dialog>
 
@@ -2593,6 +2691,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+
+    {/* 大论文确认弹窗（>50 页） */}
+    <ConfirmDialog
+      open={largePaperConfirm !== null}
+      onOpenChange={() => cancelLargePaper()}
+      title="确认论文解析"
+      confirmLabel="继续解析"
+      cancelLabel="取消"
+      variant="default"
+      onConfirm={confirmLargePaper}
+    >
+      <div>
+        <p>这篇论文约 {largePaperConfirm?.pages ?? 0} 页，预计消耗 {largePaperConfirm?.estimatedCredits ?? 0} 积分。</p>
+        <p className="text-muted-foreground mt-1">大于 50 页的论文解析耗时较长且消耗积分较多，是否继续？</p>
+      </div>
+    </ConfirmDialog>
     </>
   )
 }

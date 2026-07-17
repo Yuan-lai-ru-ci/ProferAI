@@ -21,12 +21,27 @@ import {
   getAgentWorkspacePath,
   getSdkConfigDir,
 } from './config-paths'
-import { getAgentWorkspace } from './agent-workspace-manager'
+import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-manager'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
-// process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）
-if (!process.env.CLAUDE_CONFIG_DIR) {
-  process.env.CLAUDE_CONFIG_DIR = getSdkConfigDir()
+// process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）。
+//
+// ⚠️ 必须【无条件】强制覆盖，不能用 `if (!process.env.CLAUDE_CONFIG_DIR)` 守卫：
+// getSdkConfigDir 的设计目标就是「与用户 Claude Code CLI 的配置隔离」。若用户装了
+// Claude Code CLI（或 shell/CI 里）本就设了 CLAUDE_CONFIG_DIR，旧守卫会跳过覆盖 →
+// 进程内的 sdk.forkSession（只读 process.env，不像 orchestrator query 子进程那样显式传参）
+// 会去读用户/CLI 的配置目录，导致 dev/生产/CLI 三方 SDK 会话数据互相污染、fork 报
+// "Session not found"。这里强制指向 Proma 隔离目录，检测到外部不同值时打 warn 以便排查。
+{
+  const promaSdkConfigDir = getSdkConfigDir()
+  const ambientConfigDir = process.env.CLAUDE_CONFIG_DIR
+  if (ambientConfigDir && ambientConfigDir !== promaSdkConfigDir) {
+    console.warn(
+      `[Agent 会话] 检测到外部 CLAUDE_CONFIG_DIR=${ambientConfigDir}（可能来自 Claude Code CLI / shell / CI），` +
+      `已强制覆盖为 Proma 隔离目录: ${promaSdkConfigDir}（配置隔离，避免 SDK 会话数据串目录）`,
+    )
+  }
+  process.env.CLAUDE_CONFIG_DIR = promaSdkConfigDir
 }
 import type {
   AgentSessionMeta,
@@ -36,8 +51,13 @@ import type {
   AgentMessageSearchResult,
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
+  SessionHealth,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
+import {
+  parseEventsFromJsonl,
+  serializeEvent,
+} from '@profer/project-core'
 // GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
 /**
@@ -93,7 +113,7 @@ export function createDelegatedChildSessionMeta(params: {
   workspaceId?: string
   delegationRole?: string
   delegationGoal?: string
-  permissionMode?: import('@profer/shared').PromaPermissionMode
+  permissionMode?: import('@profer/shared').ProferPermissionMode
 }): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -201,6 +221,11 @@ export function createAgentSession(
         sdkSettings.skipWebFetchPreflight = true
         needsWrite = true
       }
+      const autoMemoryDirectory = getWorkspaceAutoMemoryDir(ws.slug)
+      if (sdkSettings.autoMemoryDirectory !== autoMemoryDirectory) {
+        sdkSettings.autoMemoryDirectory = autoMemoryDirectory
+        needsWrite = true
+      }
       if (needsWrite) {
         writeFileSync(settingsPath, JSON.stringify(sdkSettings, null, 2))
       }
@@ -228,9 +253,18 @@ export function getAgentSessionMessages(id: string): AgentMessage[] {
   try {
     const raw = readFileSync(filePath, 'utf-8')
     const lines = raw.split('\n').filter((line) => line.trim())
-    return lines.map((line) => JSON.parse(line) as AgentMessage)
+    const messages: AgentMessage[] = []
+    for (const line of lines) {
+      try {
+        messages.push(JSON.parse(line) as AgentMessage)
+      } catch {
+        // 单行损坏不丢整文件：跳过坏行继续解析后续
+        console.warn(`[Agent 会话] 跳过损坏的消息行 (${id})`)
+      }
+    }
+    return messages
   } catch (error) {
-    console.error(`[Agent 会话] 读取消息失败 (${id}):`, error)
+    console.error(`[Agent 会话] 读取消息文件失败 (${id}):`, error)
     return []
   }
 }
@@ -357,16 +391,24 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
   try {
     const raw = readFileSync(filePath, 'utf-8')
     const lines = raw.split('\n').filter((line) => line.trim())
-    return lines.map((line) => {
-      const parsed = JSON.parse(line)
-      // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
-      if ('role' in parsed && !('type' in parsed)) {
-        return convertLegacyMessage(parsed as AgentMessage)
+    const messages: SDKMessage[] = []
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line)
+        // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
+        if ('role' in parsed && !('type' in parsed)) {
+          messages.push(convertLegacyMessage(parsed as AgentMessage))
+        } else {
+          messages.push(parsed as SDKMessage)
+        }
+      } catch {
+        // 单行损坏不丢整文件：跳过坏行继续解析后续
+        console.warn(`[Agent 会话] 跳过损坏的 SDKMessage 行 (${id})`)
       }
-      return parsed as SDKMessage
-    })
+    }
+    return messages
   } catch (error) {
-    console.error(`[Agent 会话] 读取 SDKMessage 失败 (${id}):`, error)
+    console.error(`[Agent 会话] 读取 SDKMessage 文件失败 (${id}):`, error)
     return []
   }
 }
@@ -436,7 +478,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -507,7 +549,13 @@ export function deleteAgentSession(id: string): void {
   console.log(`[Agent 会话] 已删除会话: ${removed.title} (${removed.id})`)
 
   // 清理 SDK 关联数据（file-history 和 projects 下的 session JSONL）
-  const sdkSessionIds = [removed.sdkSessionId, removed.forkSourceSdkSessionId].filter(Boolean) as string[]
+  // ⚠️ 只清理本会话自己的 sdkSessionId，绝不能清理 forkSourceSdkSessionId：
+  // 后者指向的是**源会话仍在使用**的 SDK session（fork 只是引用它做回退定位，
+  // 并不拥有它的副本 — fork 自己的数据存在 forkResult.sessionId 即 sdkSessionId 下）。
+  // 若一并删除，会在「删除某个 fork 会话」或「fork 中途失败触发回滚」时连带摧毁
+  // 源会话的 SDK JSONL 和 file-history，使源会话变成无法 resume 的孤儿。
+  // 源会话自身被删除时，它自己的 sdkSessionId 会走这里正常清理，不会泄漏。
+  const sdkSessionIds = [removed.sdkSessionId].filter(Boolean) as string[]
   if (sdkSessionIds.length > 0) {
     const sdkConfigDir = getSdkConfigDir()
 
@@ -550,8 +598,76 @@ export function deleteAgentSession(id: string): void {
 }
 
 /**
- * 迁移 Agent 会话到另一个工作区
+ * 扫描所有会话，检测孤儿记录和文件系统不一致。
  *
+ * 检测项：
+ * - agent-sessions/<id>.jsonl 缺失 → UI 无法展示历史消息
+ * - SDK JSONL 缺失 → 无法 resume，每次打开都触发 session-not-found 恢复
+ * - 工作区目录缺失 → Agent 无 cwd，首次运行会重建但丢失上下文文件
+ *
+ * @returns 所有会话的健康状态列表，按严重程度排序（孤儿在前）
+ */
+export function findOrphanSessions(): SessionHealth[] {
+  const index = readIndex()
+  const results: SessionHealth[] = []
+
+  for (const session of index.sessions) {
+    const health: SessionHealth = {
+      sessionId: session.id,
+      title: session.title,
+      hasPromaJsonl: false,
+      hasSdkJsonl: false,
+      hasWorkspaceDir: false,
+      isOrphan: false,
+    }
+
+    // 检查 Proma JSONL
+    health.hasPromaJsonl = existsSync(getAgentSessionMessagesPath(session.id))
+
+    // 检查 SDK JSONL
+    if (session.sdkSessionId) {
+      health.hasSdkJsonl = findSdkSessionJsonl(session.sdkSessionId) !== undefined
+    }
+
+    // 检查工作区目录
+    if (session.workspaceId) {
+      const ws = getAgentWorkspace(session.workspaceId)
+      if (ws) {
+        const dir = getAgentSessionWorkspacePath(ws.slug, session.id)
+        health.hasWorkspaceDir = existsSync(dir)
+      }
+    }
+
+    // 判定孤儿
+    const reasons: string[] = []
+    if (!health.hasPromaJsonl && !health.hasSdkJsonl) {
+      reasons.push('Proma 和 SDK JSONL 均缺失')
+    } else if (session.sdkSessionId && !health.hasSdkJsonl) {
+      reasons.push('SDK JSONL 缺失（无法 resume，每次打开都会触发 session-not-found 恢复）')
+    }
+    if (!health.hasWorkspaceDir && session.workspaceId) {
+      reasons.push('工作区目录缺失')
+    }
+
+    if (reasons.length > 0) {
+      health.isOrphan = true
+      health.orphanReason = reasons.join('；')
+    }
+
+    results.push(health)
+  }
+
+  // 孤儿排在前面
+  results.sort((a, b) => {
+    if (a.isOrphan !== b.isOrphan) return a.isOrphan ? -1 : 1
+    return a.title.localeCompare(b.title)
+  })
+
+  return results
+}
+
+/**
+ * 迁移 Agent 会话到另一个工作区
  * 操作步骤：
  * 1. 验证会话和目标工作区存在
  * 2. 源 == 目标 → no-op
@@ -599,7 +715,18 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
             console.warn(`[Agent 会话] 清理目标目录失败，跳过目录迁移:`, cleanupError)
           }
         }
-        renameSync(srcDir, destDir)
+        try {
+          renameSync(srcDir, destDir)
+        } catch (renameErr) {
+          // 跨文件系统（EXDEV）时 renameSync 会失败，回退到 copy + delete
+          if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+            console.log(`[Agent 会话] 跨设备移动，使用复制+删除: ${srcDir} → ${destDir}`)
+            cpSync(srcDir, destDir, { recursive: true })
+            rmSync(srcDir, { recursive: true, force: true })
+          } else {
+            throw renameErr
+          }
+        }
         console.log(`[Agent 会话] 已移动工作目录: ${srcDir} → ${destDir}`)
       }
     }
@@ -779,6 +906,20 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     }
   }
 
+  // 3.5 校验 SDK forkSession 是否真的产生了 JSONL 文件
+  // SDK forkSession 在某些边缘场景（如源会话为 collaboration 子会话、project-hash
+  // 不匹配等）可能返回 sessionId 但实际未落盘 JSONL。若不校验，后续步骤会创建
+  // Proma 会话元数据但 SDK 侧无对应文件，导致 "No conversation found" 错误。
+  const forkJsonlPath = findSdkSessionJsonl(forkResult.sessionId)
+  if (!forkJsonlPath) {
+    throw new Error(
+      `SDK forkSession 返回了 sessionId (${forkResult.sessionId}) 但未找到对应的 JSONL 文件。` +
+      `源会话: ${sessionId}, 源 SDK session: ${forkSourceSdkSessionId}。` +
+      `这通常是 SDK 在非标准会话（如协作子会话）上 fork 时的已知问题，建议在原会话中继续工作或新建会话。`,
+    )
+  }
+  console.log(`[Agent 会话] SDK forkSession JSONL 已确认: ${forkJsonlPath}`)
+
   // 4. 创建 Proma 新会话，立即设置 sdkSessionId
   const forkTitle = `${sourceMeta.title} (fork)`
   const newMeta = createAgentSession(
@@ -797,92 +938,102 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   newMeta.forkSourceDir = sourceDir
   newMeta.forkSourceSdkSessionId = forkSourceSdkSessionId
 
-  // 4.4 计算 fork 目标会话的 cwd（新会话目录），后续多个步骤需要用到
-  let destDir: string | undefined
-  if (sourceDir && sourceMeta.workspaceId) {
-    const ws = getAgentWorkspace(sourceMeta.workspaceId)
-    if (ws) {
-      destDir = getAgentSessionWorkspacePath(ws.slug, newMeta.id)
+  // 4.4-7 包装在 try-catch 中，关键步骤失败时回滚已创建的 Proma 会话记录，
+  // 避免产生孤儿条目（agent-sessions.json 有记录但无有效 SDK session 数据）。
+  try {
+    // 4.4 计算 fork 目标会话的 cwd（新会话目录），后续多个步骤需要用到
+    let destDir: string | undefined
+    if (sourceDir && sourceMeta.workspaceId) {
+      const ws = getAgentWorkspace(sourceMeta.workspaceId)
+      if (ws) {
+        destDir = getAgentSessionWorkspacePath(ws.slug, newMeta.id)
+      }
     }
-  }
 
-  // 4.5 将 SDK session JSONL 复制到 fork 自己的 project-hash 目录
-  // SDK forkSession() 在源 cwd 的 project-hash 下创建 JSONL（如 projects/<hash-of-sourceDir>/<newId>.jsonl），
-  // 但 fork 会话的 cwd 是新的 session 目录（不同 project-hash），resume 时 SDK 会找不到。
-  // 这里直接将 JSONL 复制到 fork 目标 cwd 的 project-hash 下，让后续每轮 resume 都能直接命中。
-  // 同时把 JSONL 内容中所有源目录路径改写为目标目录路径，避免历史中的绝对路径误导 Claude
-  // 继续在源目录下读写文件。
-  if (sourceDir && destDir) {
-    const sourceJsonl = findSdkSessionJsonl(forkResult.sessionId)
-    if (sourceJsonl) {
-      // SDK 使用简单的字符替换计算 project-hash：path.replace(/[^a-zA-Z0-9]/g, '-')
+    // 4.5 将 SDK session JSONL 复制到 fork 自己的 project-hash 目录
+    // SDK forkSession() 在源 cwd 的 project-hash 下创建 JSONL（如 projects/<hash-of-sourceDir>/<newId>.jsonl），
+    // 但 fork 会话的 cwd 是新的 session 目录（不同 project-hash），resume 时 SDK 会找不到。
+    // 这里直接将 JSONL 复制到 fork 目标 cwd 的 project-hash 下，让后续每轮 resume 都能直接命中。
+    // 同时把 JSONL 内容中所有源目录路径改写为目标目录路径，避免历史中的绝对路径误导 Claude
+    // 继续在源目录下读写文件。
+    if (sourceDir && destDir) {
+      // 复用 step 3.5 已确认的 JSONL 路径，避免重复扫描
       const destProjectHash = destDir.replace(/[^a-zA-Z0-9]/g, '-')
       const sdkProjectsDir = join(getSdkConfigDir(), 'projects', destProjectHash)
       if (!existsSync(sdkProjectsDir)) mkdirSync(sdkProjectsDir, { recursive: true })
       const destJsonl = join(sdkProjectsDir, `${forkResult.sessionId}.jsonl`)
+      copyFileSync(forkJsonlPath, destJsonl)
+      rewritePathsInJsonlFile(destJsonl, sourceDir, destDir)
+      console.log(`[Agent 会话] 已将 SDK session JSONL 复制到 fork 目标目录并改写路径: ${destJsonl}`)
+    }
+
+    // 5. 复制源会话工作区文件到新会话目录
+    // 仅排除 .claude/（settings.json 启动时会重建）、.DS_Store、.git。
+    // .context/ 必须保留 — Proma 约定 .context/note.md、todo.md、plan/ 等是会话上下文，
+    // 如果不复制，fork 后这些参考资料会丢失或被 Claude 误回源目录读取。
+    if (sourceDir && destDir) {
+      if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
       try {
-        copyFileSync(sourceJsonl, destJsonl)
-        rewritePathsInJsonlFile(destJsonl, sourceDir, destDir)
-        console.log(`[Agent 会话] 已将 SDK session JSONL 复制到 fork 目标目录并改写路径: ${destJsonl}`)
+        const entries = readdirSync(sourceDir)
+        const skip = (entry: string) => entry === '.claude' || entry === '.DS_Store' || entry === '.git'
+        let copiedCount = 0
+        for (const entry of entries) {
+          if (skip(entry)) continue
+          const srcPath = join(sourceDir, entry)
+          const destPath = join(destDir, entry)
+          cpSync(srcPath, destPath, { recursive: true })
+          copiedCount += 1
+        }
+        console.log(`[Agent 会话] 已复制工作区文件: ${sourceDir} → ${destDir} (${copiedCount} 个条目)`)
       } catch (err) {
-        console.warn(`[Agent 会话] 复制 SDK session JSONL 失败，fork 后首轮可能触发上下文回填:`, err)
+        // 工作区文件复制失败不触发回滚——fork 会话功能完整，仅缺上下文文件
+        console.warn(`[Agent 会话] 复制工作区文件失败，fork 会话缺少源会话的上下文文件:`, err)
       }
+    }
+
+    // 6. 复制截断后的 SDKMessages 到新会话的 JSONL（用于 UI 展示历史）
+    // 同时改写消息中所有源目录绝对路径为目标目录路径 — 否则 Claude 在历史里看到的所有
+    // Read/Edit/Bash 工具调用都指向源会话目录，会继续在源目录而非新 cwd 下操作文件。
+    //
+    // 注意：UI 截断点用原始 upToMessageUuid，保留用户实际看到的所有内容（包括 sub-agent
+    // 过程消息），与 SDK forkSession 用 effectiveUpToMessageUuid（主线 uuid）解耦。
+    const sourceMessages = getAgentSessionSDKMessages(sessionId)
+    let messagesToCopy: SDKMessage[]
+
+    if (upToMessageUuid) {
+      const cutIndex = sourceMessages.findIndex(
+        (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid,
+      )
+      messagesToCopy = cutIndex >= 0 ? sourceMessages.slice(0, cutIndex + 1) : sourceMessages
     } else {
-      console.warn(`[Agent 会话] 未找到 SDK session JSONL (${forkResult.sessionId})，fork 后首轮可能触发上下文回填`)
+      messagesToCopy = sourceMessages
     }
-  }
 
-  // 5. 复制源会话工作区文件到新会话目录
-  // 仅排除 .claude/（settings.json 启动时会重建）、.DS_Store、.git。
-  // .context/ 必须保留 — Proma 约定 .context/note.md、todo.md、plan/ 等是会话上下文，
-  // 如果不复制，fork 后这些参考资料会丢失或被 Claude 误回源目录读取。
-  if (sourceDir && destDir) {
-    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+    if (sourceDir && destDir && messagesToCopy.length > 0) {
+      messagesToCopy = messagesToCopy.map((m) => rewritePathsInSDKMessage(m, sourceDir, destDir!))
+    }
+
+    if (messagesToCopy.length > 0) {
+      appendSDKMessages(newMeta.id, messagesToCopy)
+    }
+
+    // 7. 复制截断后的 Graph JSONL 到新会话
+    // Graph 事件存储为 {sessionId}-graph.jsonl，fork 创建新 sessionId，
+    // 不复制则新会话看不到 fork 点之前的任务图（表现：任务图空白/不跟随）。
+    copyTruncatedGraphJsonl(sessionId, newMeta.id, upToMessageUuid, sourceMessages)
+
+    console.log(`[Agent 会话] 分叉会话已创建（SDK 原生 fork）: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息, sdkSessionId=${forkResult.sessionId})`)
+    return newMeta
+  } catch (err) {
+    // 回滚：删除已创建的 Proma 会话记录，避免孤儿条目
+    console.error(`[Agent 会话] fork 关键步骤失败，回滚会话记录 (${newMeta.id}):`, err)
     try {
-      const entries = readdirSync(sourceDir)
-      const skip = (entry: string) => entry === '.claude' || entry === '.DS_Store' || entry === '.git'
-      let copiedCount = 0
-      for (const entry of entries) {
-        if (skip(entry)) continue
-        const srcPath = join(sourceDir, entry)
-        const destPath = join(destDir, entry)
-        cpSync(srcPath, destPath, { recursive: true })
-        copiedCount += 1
-      }
-      console.log(`[Agent 会话] 已复制工作区文件: ${sourceDir} → ${destDir} (${copiedCount} 个条目)`)
-    } catch (err) {
-      console.warn(`[Agent 会话] 复制工作区文件失败:`, err)
+      deleteAgentSession(newMeta.id)
+    } catch (rollbackErr) {
+      console.error(`[Agent 会话] fork 回滚失败:`, rollbackErr)
     }
+    throw err
   }
-
-  // 6. 复制截断后的 SDKMessages 到新会话的 JSONL（用于 UI 展示历史）
-  // 同时改写消息中所有源目录绝对路径为目标目录路径 — 否则 Claude 在历史里看到的所有
-  // Read/Edit/Bash 工具调用都指向源会话目录，会继续在源目录而非新 cwd 下操作文件。
-  //
-  // 注意：UI 截断点用原始 upToMessageUuid，保留用户实际看到的所有内容（包括 sub-agent
-  // 过程消息），与 SDK forkSession 用 effectiveUpToMessageUuid（主线 uuid）解耦。
-  const sourceMessages = getAgentSessionSDKMessages(sessionId)
-  let messagesToCopy: SDKMessage[]
-
-  if (upToMessageUuid) {
-    const cutIndex = sourceMessages.findIndex(
-      (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid,
-    )
-    messagesToCopy = cutIndex >= 0 ? sourceMessages.slice(0, cutIndex + 1) : sourceMessages
-  } else {
-    messagesToCopy = sourceMessages
-  }
-
-  if (sourceDir && destDir && messagesToCopy.length > 0) {
-    messagesToCopy = messagesToCopy.map((m) => rewritePathsInSDKMessage(m, sourceDir, destDir!))
-  }
-
-  if (messagesToCopy.length > 0) {
-    appendSDKMessages(newMeta.id, messagesToCopy)
-  }
-
-  console.log(`[Agent 会话] 分叉会话已创建（SDK 原生 fork）: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息, sdkSessionId=${forkResult.sessionId})`)
-  return newMeta
 }
 
 /**
@@ -912,17 +1063,71 @@ function rewriteSourceToDest(content: string, sourceDir: string, destDir: string
 
 /**
  * 改写 SDK JSONL 文件中所有出现的源目录路径为目标目录路径。
- * 文件不存在或读写失败时静默忽略（fork 仍可继续，只是 resume 时可能触发上下文回填）。
+ *
+ * 使用原子写入（临时文件 + rename）避免进程崩溃时截断 JSONL。
+ * 文件不存在或读写失败时抛出异常，由调用方（forkAgentSession）统一回滚。
  */
 function rewritePathsInJsonlFile(filePath: string, sourceDir: string, destDir: string): void {
+  const content = readFileSync(filePath, 'utf-8')
+  const rewritten = rewriteSourceToDest(content, sourceDir, destDir)
+  if (rewritten !== content) {
+    const tmpPath = filePath + '.tmp.' + Date.now()
+    writeFileSync(tmpPath, rewritten, 'utf-8')
+    renameSync(tmpPath, filePath)
+  }
+}
+
+/**
+ * 复制并截断 Graph JSONL 到 fork 会话。
+ *
+ * Graph 事件存储为 {sessionId}-graph.jsonl，fork 后新会话有新的 sessionId，
+ * 如果不显式复制，新会话的 loadGraph() 找不到文件，任务图始终为空。
+ *
+ * 截断逻辑：以 fork 目标消息的 _createdAt 为截止时间戳，
+ * 只复制该时间点之前的图事件，保证 fork 会话只看到 fork 点的任务状态。
+ */
+function copyTruncatedGraphJsonl(
+  sourceSessionId: string,
+  destSessionId: string,
+  upToMessageUuid: string | undefined,
+  sourceMessages: SDKMessage[],
+): void {
   try {
-    const content = readFileSync(filePath, 'utf-8')
-    const rewritten = rewriteSourceToDest(content, sourceDir, destDir)
-    if (rewritten !== content) {
-      writeFileSync(filePath, rewritten)
+    const sourcePath = join(getAgentSessionsDir(), `${sourceSessionId}-graph.jsonl`)
+    if (!existsSync(sourcePath)) return
+
+    const graphContent = readFileSync(sourcePath, 'utf-8')
+    const allEvents = parseEventsFromJsonl(graphContent)
+    if (allEvents.length === 0) return
+
+    // 确定 fork 截止时间戳：取 fork 目标消息的 _createdAt
+    let forkTimestamp = Date.now()
+    if (upToMessageUuid) {
+      const targetMsg = sourceMessages.find(
+        (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToMessageUuid,
+      )
+      if (targetMsg && typeof (targetMsg as Record<string, unknown>)._createdAt === 'number') {
+        forkTimestamp = (targetMsg as Record<string, unknown>)._createdAt as number
+      }
     }
+
+    // 只保留 fork 点之前创建的图事件
+    const truncatedEvents = allEvents.filter((e) => e.timestamp <= forkTimestamp)
+    if (truncatedEvents.length === 0) return
+
+    const destPath = join(getAgentSessionsDir(), `${destSessionId}-graph.jsonl`)
+    const dir = dirname(destPath)
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true })
+    }
+    const lines = truncatedEvents.map((e) => serializeEvent(e)).join('\n') + '\n'
+    writeFileSync(destPath, lines, 'utf-8')
+    console.log(
+      `[Agent 会话] 已复制 Graph JSONL 到 fork 会话 ` +
+      `(${truncatedEvents.length}/${allEvents.length} 个事件, 截止时间戳=${forkTimestamp})`,
+    )
   } catch (err) {
-    console.warn(`[Agent 会话] 改写 SDK JSONL 路径失败 (${filePath}):`, err)
+    console.warn(`[Agent 会话] 复制 Graph JSONL 到 fork 会话失败:`, err)
   }
 }
 

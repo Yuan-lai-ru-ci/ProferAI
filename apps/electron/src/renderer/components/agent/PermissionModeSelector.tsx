@@ -12,11 +12,11 @@ import { Zap, Compass, Map as MapIcon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom } from '@/atoms/agent-atoms'
-import type { PromaPermissionMode } from '@profer/shared'
-import { PROMA_PERMISSION_MODE_CONFIG, PROMA_PERMISSION_MODE_ORDER } from '@profer/shared'
+import type { ProferPermissionMode } from '@profer/shared'
+import { PROFER_PERMISSION_MODE_CONFIG, PROFER_PERMISSION_MODE_ORDER } from '@profer/shared'
 import { updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 
-const MODE_ICONS: Record<PromaPermissionMode, React.ComponentType<{ className?: string }>> = {
+const MODE_ICONS: Record<ProferPermissionMode, React.ComponentType<{ className?: string }>> = {
   auto: Compass,
   bypassPermissions: Zap,
   plan: MapIcon,
@@ -41,7 +41,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
   React.useEffect(() => {
     if (!sessionExistsInList) return
 
-    setModeMap((prev: Map<string, PromaPermissionMode>) => {
+    setModeMap((prev: Map<string, ProferPermissionMode>) => {
       if (prev.has(sessionId)) return prev
       const next = new Map(prev)
       next.set(sessionId, persistedSessionMode ?? defaultMode)
@@ -51,13 +51,13 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
 
   /** 循环切换模式 */
   const cycleMode = React.useCallback(async () => {
-    const currentIndex = PROMA_PERMISSION_MODE_ORDER.indexOf(mode)
-    const nextIndex = (currentIndex + 1) % PROMA_PERMISSION_MODE_ORDER.length
-    const nextMode = PROMA_PERMISSION_MODE_ORDER[nextIndex]!
+    const currentIndex = PROFER_PERMISSION_MODE_ORDER.indexOf(mode)
+    const nextIndex = (currentIndex + 1) % PROFER_PERMISSION_MODE_ORDER.length
+    const nextMode = PROFER_PERMISSION_MODE_ORDER[nextIndex]!
     const prevMode = mode
 
     // 乐观更新当前 session 的模式
-    setModeMap((prev: Map<string, PromaPermissionMode>) => {
+    setModeMap((prev: Map<string, ProferPermissionMode>) => {
       const next = new Map(prev)
       next.set(sessionId, nextMode)
       return next
@@ -71,7 +71,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
       await window.electronAPI.updateSessionPermissionMode(sessionId, nextMode)
     } catch (error) {
       console.error('[PermissionModeSelector] 运行中切换权限模式失败，回滚 UI:', error)
-      setModeMap((prev: Map<string, PromaPermissionMode>) => {
+      setModeMap((prev: Map<string, ProferPermissionMode>) => {
         const next = new Map(prev)
         next.set(sessionId, prevMode)
         return next
@@ -82,7 +82,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
     }
   }, [mode, sessionId, setModeMap, setPlanModeSessions])
 
-  const config = PROMA_PERMISSION_MODE_CONFIG[mode]
+  const config = PROFER_PERMISSION_MODE_CONFIG[mode]
   const Icon = MODE_ICONS[mode]
 
   return (
