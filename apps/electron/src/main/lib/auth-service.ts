@@ -14,6 +14,7 @@ import { fetch as undiciFetch } from 'undici'
 import { getTeamServersConfigPath } from './config-paths'
 import { isCommercialBuild } from './build-target'
 import { getDeviceAuthInfo } from './identity-service'
+import { encryptToken, decryptToken } from './token-crypto'
 import type { TeamServerConfig } from '@profer/shared'
 
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
@@ -75,10 +76,8 @@ interface AuthTokenStore {
     refreshToken: string
     /** 长效 relay 令牌 — 代管模式下替代 accessToken 作为 proxy 凭证，不随 1h 过期 */
     relayToken?: string
-    /** 账号类型（restricted/standard/advanced），决定工作区配额 */
-    accountType?: string
-    /** 是否允许自配 API — 独立于账号类型的开关 */
-    canSelfConfigApi?: boolean
+    /** 订阅等级（free/standard/plus/pro），决定工作区配额、模型门控 */
+    membershipTier?: string
     tokenExpiresAt: number
     teamAccountId: string
     teamEmail: string
@@ -98,29 +97,41 @@ function readTokens(): AuthTokenStore {
   if (!existsSync(path)) return {}
 
   try {
-    const encrypted = readFileSync(path)
-    const { safeStorage } = require('electron')
+    const raw = readFileSync(path)
 
-    // 尝试安全解密
+    // 兼容旧格式：原始 safeStorage Buffer（非 base64）。
+    // 新格式统一为 base64 文本，旧 Buffer 无法当 utf-8 解析。
+    const { safeStorage } = require('electron')
     if (safeStorage.isEncryptionAvailable()) {
       try {
-        const decrypted = safeStorage.decryptString(encrypted)
-        return JSON.parse(decrypted) as AuthTokenStore
-      } catch (decryptErr) {
-        // 解密失败：可能是 DPAPI 密钥变化（Windows 密码重置、用户切换等）
-        console.warn('[认证] safeStorage 解密失败，token 文件可能已损坏:', (decryptErr as Error).message)
-        console.warn('[认证] 将删除损坏的 token 文件，下次登录后将使用明文存储作为兜底')
-        // 删除损坏的加密文件，避免反复解密失败
-        try { require('node:fs').unlinkSync(path) } catch { /* 忽略 */ }
-        return {}
+        const decrypted = safeStorage.decryptString(raw)
+        const tokens = JSON.parse(decrypted) as AuthTokenStore
+        // 旧 safeStorage raw Buffer → 迁移到新 base64 格式
+        if (Object.keys(tokens).length > 0) writeTokens(tokens)
+        return tokens
+      } catch {
+        // 不是旧 raw Buffer → 继续尝试新格式
       }
     }
 
-    // 回退：明文 JSON（safeStorage 不可用或解密失败后重新登录）
+    // 新格式：base64 文本（safeStorage 或 AES-GCM）
+    const text = raw.toString('utf-8').trim()
+    if (text.startsWith('{') || text.startsWith('[')) {
+      // 旧版明文 JSON → 立即迁移到 AES-GCM，下次重启就是加密的了
+      const tokens = JSON.parse(text) as AuthTokenStore
+      if (Object.keys(tokens).length > 0) {
+        console.log('[认证] 检测到旧明文 token 文件，将自动迁移到 AES-GCM 加密存储')
+        writeTokens(tokens)
+      }
+      return tokens
+    }
+
+    // token-crypto 格式（safeStorage base64 / proferv1: AES-GCM）
     try {
-      return JSON.parse(encrypted.toString('utf-8')) as AuthTokenStore
-    } catch {
-      console.warn('[认证] token 文件格式无效（非加密非 JSON），已忽略')
+      const decrypted = decryptToken(text)
+      return JSON.parse(decrypted) as AuthTokenStore
+    } catch (err) {
+      console.warn('[认证] token 文件解密失败，已忽略:', (err as Error).message)
       return {}
     }
   } catch (err) {
@@ -132,31 +143,11 @@ function readTokens(): AuthTokenStore {
 function writeTokens(tokens: AuthTokenStore): void {
   try {
     const path = getTokenStorePath()
+    const json = JSON.stringify(tokens)
+    const encrypted = encryptToken(json)
+    writeFileSync(path, encrypted, 'utf-8')
     const { safeStorage } = require('electron')
-
-    if (safeStorage.isEncryptionAvailable()) {
-      try {
-        // 先做一次加密-解密往返测试，确保 DPAPI 状态正常
-        const testData = 'profer-token-test'
-        const testEncrypted = safeStorage.encryptString(testData)
-        const testDecrypted = safeStorage.decryptString(testEncrypted)
-        if (testDecrypted !== testData) {
-          throw new Error('safeStorage 往返测试失败：解密结果不匹配')
-        }
-
-        const decrypted = JSON.stringify(tokens)
-        const encrypted = safeStorage.encryptString(decrypted)
-        writeFileSync(path, encrypted)
-        console.log('[认证] 令牌已加密存储')
-        return
-      } catch (encryptErr) {
-        console.warn('[认证] safeStorage 加密不可靠，降级为明文存储:', (encryptErr as Error).message)
-      }
-    }
-
-    // 回退：明文 JSON 存储
-    writeFileSync(path, JSON.stringify(tokens, null, 2), 'utf-8')
-    console.log('[认证] 令牌已明文存储（safeStorage 不可用或不可靠）')
+    console.log('[认证] 令牌已存储' + (safeStorage.isEncryptionAvailable() ? ' (safeStorage)' : ' (AES-GCM)'))
   } catch (err) {
     console.warn('[认证] 写入令牌失败:', err)
   }
@@ -169,7 +160,7 @@ interface LoginResult {
   teamAccountId?: string
   teamEmail?: string
   displayName?: string
-  accountType?: string
+  membershipTier?: string
   commercialMode?: boolean
   isAdmin?: boolean
   joinedWorkspace?: string
@@ -260,7 +251,7 @@ export async function login(
       userId: string
       email: string
       displayName?: string
-      accountType?: string
+      membershipTier?: string
       canSelfConfigApi?: boolean
       isAdmin?: boolean
       commercialMode?: boolean
@@ -275,8 +266,7 @@ export async function login(
       accessToken: data.accessToken,
       refreshToken: data.refreshToken,
       relayToken: data.relayToken || undefined,
-      accountType: data.accountType || 'standard',
-      canSelfConfigApi: data.canSelfConfigApi || false,
+      membershipTier: data.membershipTier || 'free',
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
@@ -307,7 +297,7 @@ export async function login(
       teamAccountId: data.userId,
       teamEmail: data.email,
       displayName: data.displayName,
-      accountType: data.accountType,
+      membershipTier: data.membershipTier,
       commercialMode,
       isAdmin: !!data.isAdmin,
     }
@@ -318,15 +308,16 @@ export async function login(
 }
 
 /**
- * 注册账户（个人/团队）
+ * 注册账户（邀请码制）
  */
 export async function register(
   serverUrl: string,
   email: string,
   password: string,
   displayName: string,
-  invitationToken?: string,
+  inviteCode?: string,
   activationCode?: string,
+  invitationToken?: string,
 ): Promise<LoginResult> {
   const url = `${serverUrl}${API_PREFIX}/auth/register`
 
@@ -337,7 +328,7 @@ export async function register(
     const response = await (undiciFetch as unknown as typeof fetch)(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, displayName, invitationToken, activationCode, ...getDeviceAuthInfo() }),
+      body: JSON.stringify({ email, password, displayName, inviteCode, activationCode, invitationToken, ...getDeviceAuthInfo() }),
       signal: controller.signal,
     } as RequestInit)
     clearTimeout(timeout)
@@ -367,7 +358,7 @@ export async function register(
       userId: string
       email: string
       displayName?: string
-      accountType?: string
+      membershipTier?: string
       canSelfConfigApi?: boolean
       isAdmin?: boolean
       commercialMode?: boolean
@@ -397,8 +388,7 @@ export async function register(
       accessToken: data.accessToken,
       refreshToken: data.refreshToken,
       relayToken: data.relayToken || undefined,
-      accountType: data.accountType || 'standard',
-      canSelfConfigApi: data.canSelfConfigApi || false,
+      membershipTier: data.membershipTier || 'free',
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
@@ -428,7 +418,7 @@ export async function register(
       teamAccountId: data.userId,
       teamEmail: data.email,
       displayName: data.displayName,
-      accountType: data.accountType,
+      membershipTier: data.membershipTier,
       commercialMode,
       isAdmin: !!data.isAdmin,
       joinedWorkspace: data.joinedWorkspace,
@@ -609,7 +599,7 @@ export async function refreshAuthToken(): Promise<boolean> {
       clearTimeout(timeout)
 
       if (response.ok) {
-        const data = await response.json() as { accessToken: string; relayToken?: string; refreshToken?: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean; accountType?: string; canSelfConfigApi?: boolean }
+        const data = await response.json() as { accessToken: string; relayToken?: string; refreshToken?: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean; membershipTier?: string; canSelfConfigApi?: boolean }
         console.log(`[认证] 刷新成功，新 token 过期时间: ${new Date(data.expiresAt).toISOString()}`)
         const commercialMode = data.commercialMode === undefined
           ? resolveCommercialMode(token.commercialMode)
@@ -619,8 +609,7 @@ export async function refreshAuthToken(): Promise<boolean> {
           accessToken: data.accessToken,
           relayToken: data.relayToken ?? token.relayToken,
           refreshToken: data.refreshToken ?? token.refreshToken,
-          accountType: data.accountType ?? token.accountType,
-          canSelfConfigApi: data.canSelfConfigApi ?? token.canSelfConfigApi,
+          membershipTier: data.membershipTier ?? token.membershipTier,
           tokenExpiresAt: data.expiresAt,
           commercialMode,
           isAdmin: data.isAdmin ?? token.isAdmin,
@@ -704,7 +693,7 @@ export function getServerInfoList(): Array<{ baseUrl: string; email: string; isL
   })
 }
 
-export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: string; accountType?: string; canSelfConfigApi?: boolean } | null {
+export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: string; membershipTier?: string; teamEmail?: string; teamAccountId?: string } | null {
   const tokens = readTokens()
   const servers = listTeamServers()
   const now = Date.now()
@@ -724,8 +713,9 @@ export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: st
         baseUrl: server.baseUrl,
         token: token.accessToken,
         proxyToken: isCommercial ? token.relayToken : undefined,
-        accountType: token.accountType,
-        canSelfConfigApi: token.canSelfConfigApi,
+        membershipTier: token.membershipTier,
+        teamEmail: token.teamEmail,
+        teamAccountId: token.teamAccountId,
       }
     }
   }
@@ -802,27 +792,23 @@ export async function revokeRemoteDevice(slotId: string): Promise<{ ok: boolean;
   }
 }
 
-/** 代管模式下当前用户是否允许自配 API（独立于账号类型的开关，不依赖 token 过期） */
+/** 代管模式下当前用户是否允许自配 API（plus/pro/VIP 可自配，不依赖 token 过期） */
 export function isSelfConfigAllowed(): boolean {
+  const tier = getMembershipTier()
+  return tier === 'plus' || tier === 'pro' || tier === 'vip'
+}
+
+/** 获取当前用户的 membershipTier（不存在则返回 'free'，不依赖 token 过期） */
+export function getMembershipTier(): string {
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   for (const id of serverIds) {
-    if (tokens[id]!.canSelfConfigApi === true) return true
+    if (tokens[id]!.membershipTier) return tokens[id]!.membershipTier!
   }
-  return false
+  return 'free'
 }
 
-/** 获取当前用户的 accountType（不存在则返回 'standard'，不依赖 token 过期） */
-export function getAccountType(): string {
-  const tokens = readTokens()
-  const serverIds = Object.keys(tokens)
-  for (const id of serverIds) {
-    if (tokens[id]!.accountType) return tokens[id]!.accountType!
-  }
-  return 'standard'
-}
-
-export async function getTeamAuthWithRefresh(): Promise<{ baseUrl: string; token: string; proxyToken?: string; accountType?: string; canSelfConfigApi?: boolean } | null> {
+export async function getTeamAuthWithRefresh(): Promise<{ baseUrl: string; token: string; proxyToken?: string; membershipTier?: string; teamEmail?: string; teamAccountId?: string } | null> {
   const current = getTeamAuth()
   if (current) return current
 

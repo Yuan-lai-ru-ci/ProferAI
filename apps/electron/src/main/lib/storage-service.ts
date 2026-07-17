@@ -501,7 +501,7 @@ async function cleanupOrphanWorkspaces(): Promise<CleanupResult> {
         if (!(await fsPromises.lstat(slugDir)).isDirectory()) continue
         const entries = await fsPromises.readdir(slugDir)
         for (const entry of entries) {
-          if (['workspace-files', 'skills', 'skills-inactive', '.claude-plugin'].includes(entry)) continue
+          if (['workspace-files', 'skills', 'skills-inactive', '.claude-plugin', '.claude'].includes(entry)) continue
           const entryPath = join(slugDir, entry)
           try {
             if (!(await fsPromises.lstat(entryPath)).isDirectory()) continue

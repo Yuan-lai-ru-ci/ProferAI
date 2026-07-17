@@ -7,9 +7,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { safeStorage } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { getChannelsPath } from './config-paths'
+import { encryptToken, decryptToken } from './token-crypto'
 import type {
   Channel,
   ChannelCreateInput,
@@ -24,7 +24,7 @@ import type {
 import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getPromaUserAgent } from '@profer/core'
+import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getProferUserAgent } from '@profer/core'
 import { isCommercialBuild } from './build-target'
 import {
   inferAgentBaseUrl,
@@ -86,21 +86,13 @@ function writeConfig(config: ChannelsConfig): void {
 /**
  * 加密 API Key
  *
- * 使用 Electron safeStorage 加密，底层使用：
- * - macOS: Keychain
- * - Windows: DPAPI
- * - Linux: Secret Service API
+ * 使用 Electron safeStorage 加密（底层使用 OS 级加密）。
+ * safeStorage 不可用时自动降级到 AES-256-GCM（deviceId 派生密钥）。
  *
  * @returns base64 编码的加密字符串
  */
 function encryptApiKey(plainKey: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('[渠道管理] safeStorage 加密不可用，将以明文存储')
-    return plainKey
-  }
-
-  const encrypted = safeStorage.encryptString(plainKey)
-  return encrypted.toString('base64')
+  return encryptToken(plainKey)
 }
 
 /**
@@ -110,18 +102,7 @@ function encryptApiKey(plainKey: string): string {
  * @returns 明文 API Key
  */
 function decryptKey(encryptedKey: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    // 如果加密不可用，假设存储的是明文
-    return encryptedKey
-  }
-
-  try {
-    const buffer = Buffer.from(encryptedKey, 'base64')
-    return safeStorage.decryptString(buffer)
-  } catch (error) {
-    console.error('[渠道管理] 解密 API Key 失败:', error)
-    throw new Error('解密 API Key 失败')
-  }
+  return decryptToken(encryptedKey)
 }
 
 /**
@@ -533,10 +514,10 @@ async function testAnthropicCompatible(
   }
   if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
   } else if (provider === 'minimax') {
     headers.Authorization = `Bearer ${apiKey}`
   } else {
@@ -733,10 +714,10 @@ async function fetchAnthropicCompatibleModels(
   }
   if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
   } else if (provider === 'minimax') {
     headers.Authorization = `Bearer ${apiKey}`
   } else {

@@ -10,8 +10,8 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { safeStorage } from 'electron'
 import { getFeishuConfigPath } from './config-paths'
+import { encryptToken, decryptToken } from './token-crypto'
 import type {
   FeishuConfig,
   FeishuConfigInput,
@@ -23,26 +23,11 @@ import type {
 // ===== 加密/解密 =====
 
 function encryptSecret(plainSecret: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('[飞书配置] safeStorage 加密不可用，将以明文存储')
-    return plainSecret
-  }
-  const encrypted = safeStorage.encryptString(plainSecret)
-  return encrypted.toString('base64')
+  return encryptToken(plainSecret)
 }
 
 function decryptSecret(encryptedSecret: string): string {
-  if (!encryptedSecret) return ''
-  if (!safeStorage.isEncryptionAvailable()) {
-    return encryptedSecret
-  }
-  try {
-    const buffer = Buffer.from(encryptedSecret, 'base64')
-    return safeStorage.decryptString(buffer)
-  } catch (error) {
-    console.error('[飞书配置] 解密 App Secret 失败:', error)
-    throw new Error('解密 App Secret 失败')
-  }
+  return decryptToken(encryptedSecret)
 }
 
 // ===== 内部：读写多 Bot 配置 =====

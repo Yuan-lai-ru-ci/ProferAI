@@ -7,8 +7,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { safeStorage } from 'electron'
 import { getWeChatConfigPath } from './config-paths'
+import { encryptToken as encrypt, decryptToken as decrypt } from './token-crypto'
 import type { WeChatConfig, WeChatCredentials } from '@profer/shared'
 
 /** 默认配置 */
@@ -20,22 +20,11 @@ const DEFAULT_CONFIG: WeChatConfig = {
 // ===== 加密/解密 =====
 
 function encryptToken(plainToken: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('[微信配置] safeStorage 加密不可用，将以明文存储')
-    return plainToken
-  }
-  return safeStorage.encryptString(plainToken).toString('base64')
+  return encrypt(plainToken)
 }
 
 function decryptToken(encryptedToken: string): string {
-  if (!encryptedToken) return ''
-  if (!safeStorage.isEncryptionAvailable()) return encryptedToken
-  try {
-    return safeStorage.decryptString(Buffer.from(encryptedToken, 'base64'))
-  } catch (error) {
-    console.error('[微信配置] 解密 Bot Token 失败:', error)
-    throw new Error('解密 Bot Token 失败')
-  }
+  return decrypt(encryptedToken)
 }
 
 // ===== 配置 CRUD =====

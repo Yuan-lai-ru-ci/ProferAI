@@ -314,6 +314,20 @@ function applyRemoteChanges(envelopes: SyncEnvelope[]): void {
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED)
     })
+
+    // SSE 降级：通过轮询检测到文件变更时也发送通知
+    try {
+      const { teamNotificationService } = require('./team-notification-service')
+      for (const env of envelopes) {
+        if (env.entityType === 'file') {
+          teamNotificationService.notifyFromSync(
+            env.workspaceId,
+            env.operation === 'delete' ? 'file_deleted' : 'file_updated',
+            { userId: '', ...(env.payload as Record<string, unknown>) },
+          )
+        }
+      }
+    } catch { /* 通知服务未加载时忽略 */ }
   }
 }
 
