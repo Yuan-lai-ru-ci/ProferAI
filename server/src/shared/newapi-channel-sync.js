@@ -86,11 +86,12 @@ function modelsMatch(aJson, bJson) {
  * 新增不存在的渠道；名称/供应商/模型任一变化即更新。非 newapi-* 渠道不受影响。
  *
  * @param {import('better-sqlite3').Database} db
+ * @param {{force?:boolean}} opts
  * @returns {Promise<{synced:number, updated:number, skipped:number, error?:string}>}
  */
-export async function syncChannelsFromNewApi(db) {
-  // 缓存 60s，避免每次请求都调 New API
-  if (cachedChannels && (Date.now() - cachedAt) < CACHE_TTL_MS) {
+export async function syncChannelsFromNewApi(db, { force = false } = {}) {
+  // force=true 时跳过缓存，直接从 New API 拉最新数据
+  if (!force && cachedChannels && (Date.now() - cachedAt) < CACHE_TTL_MS) {
     return await applySync(db, cachedChannels)
   }
 

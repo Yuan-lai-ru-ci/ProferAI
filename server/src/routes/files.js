@@ -8,6 +8,7 @@ import { MAX_FILE_SIZE, FILES_DIR } from '../config.js'
 import { ensureDir, safePath } from '../utils.js'
 import { authMiddleware } from '../middleware.js'
 import { canModifyRows, normalizeFilePath, safeDecodeURI } from './file-route-utils.js'
+import { broadcastEvent } from '../event-bus.js'
 
 export const fileRoutes = new Hono()
 
@@ -291,6 +292,7 @@ function writeUploadedFile(c, wsId, filePath, buffer) {
 
   emitFileChange(wsId, 'update', { path: filePath, size: buffer.length, sha256: hash })
   logAudit({ action: 'file.upload', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `${buffer.length} bytes` })
+  broadcastEvent(wsId, 'file_updated', { path: filePath, size: buffer.length, uploadedBy: userId, uploadedByName: displayName, action: 'upload' })
 
   return c.json({ success: true, path: filePath, size: buffer.length })
 }
@@ -406,6 +408,7 @@ fileRoutes.post('/:id/files/move', async (c) => {
 
   emitFileChange(wsId, 'update', { fromPath, path: newPath, affectedCount: affected.length })
   logAudit({ action: 'file.move', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: fromPath, detail: `moved to ${newPath}, ${affected.length} entries` })
+  broadcastEvent(wsId, 'file_updated', { path: newPath, fromPath, action: 'move', affectedCount: affected.length, userId: access.userId })
 
   return c.json({ success: true, fromPath, toPath: newPath, affectedCount: affected.length })
 })
@@ -472,6 +475,7 @@ fileRoutes.post('/:id/files/rename', async (c) => {
   // 更新本地来源映射（服务端记录不会直接触达客户端，这里只做磁盘+DB）
   emitFileChange(wsId, 'update', { fromPath: filePath, path: newPath, affectedCount: affected.length })
   logAudit({ action: 'file.rename', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `renamed to ${newName}, ${affected.length} entries` })
+  broadcastEvent(wsId, 'file_updated', { path: newPath, fromPath: filePath, action: 'rename', affectedCount: affected.length, userId: access.userId })
 
   return c.json({ success: true, fromPath: filePath, toPath: newPath, newName })
 })
@@ -513,6 +517,7 @@ fileRoutes.delete('/:id/files/:path{.+}', async (c) => {
 
   emitFileChange(wsId, 'delete', { path: filePath, deletedCount: children.length })
   logAudit({ action: 'file.delete', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `${children.length} entries deleted` })
+  broadcastEvent(wsId, 'file_deleted', { path: filePath, deletedCount: children.length, userId: access.userId })
 
   return c.json({ success: true, deletedCount: children.length })
 })

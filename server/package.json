@@ -7,6 +7,7 @@
     "better-sqlite3": "^12.11.1",
     "hono": "^4.0.0",
     "js-tiktoken": "^1.0.21",
+    "adm-zip": "^0.5.16",
     "jsonwebtoken": "^9.0.0",
     "uuid": "^10.0.0"
   }

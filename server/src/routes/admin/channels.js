@@ -3,15 +3,18 @@
  */
 import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
-import { listAllChannels, getChannelById, createChannel, updateChannel, hardDeleteChannel } from '../../db.js'
+import { listAllChannels, getChannelById, createChannel, updateChannel, hardDeleteChannel, db } from '../../db.js'
 import { CHANNEL_ENCRYPTION_KEY } from '../../config.js'
 import { logAudit } from '../../audit.js'
+import { CHANNEL_ACTIVATE_CONFIRM_REQUIRED } from '../../config.js'
+import { adminOpLimit, ADMIN_OP_LIMITS } from '../../admin-rate-limiter.js'
 import {
   DEFAULT_MODELS,
   encryptApiKey,
   decryptApiKey,
   normalizeChannelUrls,
 } from '../../shared/channel-utils.js'
+import { syncChannelsFromNewApi } from '../../shared/newapi-channel-sync.js'
 
 export const adminChannels = new Hono()
 
@@ -23,8 +26,17 @@ function maskKey(ciphertext) {
   } catch { return '****' }
 }
 
-// GET /v1/admin/channels — 渠道列表
-adminChannels.get('/', (c) => {
+// POST /v1/admin/channels/sync — 强制从 New API 同步渠道（跳过缓存）
+adminChannels.post('/sync', async (c) => {
+  const result = await syncChannelsFromNewApi(db, { force: true })
+  logAudit({ action: 'admin.sync_channels', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', detail: `synced=${result.synced} updated=${result.updated} deactivated=${result.deactivated}` })
+  return c.json(result)
+})
+
+// GET /v1/admin/channels — 渠道列表（自动触发同步）
+adminChannels.get('/', async (c) => {
+  // 每次打开 admin 渠道页触发同步（内部 60s 缓存，不会频繁调 New API）
+  await syncChannelsFromNewApi(db)
   const channels = listAllChannels()
   const masked = channels.map(ch => ({
     ...ch,
@@ -35,13 +47,18 @@ adminChannels.get('/', (c) => {
   return c.json(masked)
 })
 
-// POST /v1/admin/channels — 创建渠道
+// POST /v1/admin/channels — 创建渠道（默认 scope=test，需手动激活为 global）
 adminChannels.post('/', async (c) => {
   if (!CHANNEL_ENCRYPTION_KEY) return c.json({ error: 'CHANNEL_ENCRYPTION_KEY 未配置' }, 500)
 
+  // 频控
+  const freqLimit = adminOpLimit(c.get('userId'), 'create-channel', ADMIN_OP_LIMITS['create-channel'])
+  if (!freqLimit.allowed) {
+    return c.json({ error: '今日创建渠道次数已达上限' }, 429)
+  }
+
   const body = await c.req.json()
   const { name, provider, apiKey, baseUrl, agentBaseUrl, models, modelsJson } = body || {}
-  // apiKey 在代管模式下可选：前端只填 modelsJson 时用占位符
   if (!name || !provider) return c.json({ error: 'name, provider 必填' }, 400)
   const effectiveKey = apiKey || 'proxy-managed'
   if (!apiKey && !modelsJson && !models) return c.json({ error: 'apiKey 或 models 必填其一' }, 400)
@@ -56,10 +73,11 @@ adminChannels.post('/', async (c) => {
   const id = uuidv4()
   const encrypted = encryptApiKey(effectiveKey)
   const urls = normalizeChannelUrls(provider, baseUrl, agentBaseUrl)
-  createChannel({ id, name, provider, apiKeyEncrypted: encrypted, baseUrl: urls.baseUrl, agentBaseUrl: urls.agentBaseUrl, modelsJson: JSON.stringify(finalModels), createdBy: c.get('userId') })
+  // 🔒 新建渠道默认 scope=test，仅管理员可见/可用。需手动 activate 后才会对用户开放。
+  createChannel({ id, name, provider, apiKeyEncrypted: encrypted, baseUrl: urls.baseUrl, agentBaseUrl: urls.agentBaseUrl, modelsJson: JSON.stringify(finalModels), createdBy: c.get('userId'), scope: 'test' })
 
-  logAudit({ action: 'admin.create_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id, detail: `provider=${provider} name=${name}` })
-  return c.json({ id, name, provider }, 201)
+  logAudit({ action: 'admin.create_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id, detail: `provider=${provider} name=${name} scope=test` })
+  return c.json({ id, name, provider, scope: 'test' }, 201)
 })
 
 // GET /v1/admin/channels/:id — 单个渠道
@@ -99,13 +117,35 @@ adminChannels.patch('/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// DELETE /v1/admin/channels/:id — 删除渠道（官方同步渠道不可删除）
+// DELETE /v1/admin/channels/:id — 删除渠道（global 范围不可删，需先停用）
 adminChannels.delete('/:id', (c) => {
   const id = c.req.param('id')
   if (id.startsWith('newapi-')) return c.json({ error: '官方同步渠道不可删除，请在 New API 后台停用后重新同步' }, 403)
+  const ch = getChannelById(id)
+  if (!ch) return c.json({ error: '渠道不存在' }, 404)
+  if (ch.scope === 'global') return c.json({ error: '全局渠道不可直接删除，请先设为停用 (is_active=0)' }, 403)
   hardDeleteChannel(id)
   logAudit({ action: 'admin.delete_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id })
   return c.json({ success: true })
+})
+
+// POST /v1/admin/channels/:id/activate — 激活渠道：test → global（高风险操作，需审计）
+adminChannels.post('/:id/activate', (c) => {
+  const id = c.req.param('id')
+  const ch = getChannelById(id)
+  if (!ch) return c.json({ error: '渠道不存在' }, 404)
+  if (ch.id.startsWith('newapi-')) return c.json({ error: '官方同步渠道无需手动激活' }, 403)
+  if (ch.scope === 'global') return c.json({ error: '渠道已是全局范围' }, 400)
+
+  // 频控
+  const freqLimit = adminOpLimit(c.get('userId'), 'activate-channel', ADMIN_OP_LIMITS['activate-channel'])
+  if (!freqLimit.allowed) {
+    return c.json({ error: '今日激活渠道次数已达上限' }, 429)
+  }
+
+  db.prepare('UPDATE channels SET scope = ?, updated_at = ? WHERE id = ?').run('global', Date.now(), id)
+  logAudit({ action: 'admin.activate_channel', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'channel', entityId: id, detail: `scope: test → global, name=${ch.name}, provider=${ch.provider}` })
+  return c.json({ success: true, scope: 'global' })
 })
 
 // POST /v1/admin/channels/test — 测试渠道连通性

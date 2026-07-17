@@ -19,6 +19,7 @@ export const REQUEST_LOG_COLUMNS = Object.freeze([
   'stream',
   'error_message',
   'created_at',
+  'new_api_request_id',
 ])
 
 export function buildRequestLogInsertSql() {
@@ -47,6 +48,7 @@ export function buildRequestLogValues(params, createdAt = Date.now()) {
     success,
     stream,
     errorMessage,
+    newApiRequestId,
   } = params
 
   return [
@@ -65,5 +67,6 @@ export function buildRequestLogValues(params, createdAt = Date.now()) {
     stream ? 1 : 0,
     errorMessage || '',
     createdAt,
+    newApiRequestId || '',
   ]
 }

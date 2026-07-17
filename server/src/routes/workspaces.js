@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '../db.js'
-import { ONLINE_THRESHOLD, INVITATION_TTL, WORKSPACE_GRACE_PERIOD_MS } from '../config.js'
+import { ONLINE_THRESHOLD, INVITATION_TTL, WORKSPACE_GRACE_PERIOD_MS, getSubscriptionCap } from '../config.js'
 import { authMiddleware } from '../middleware.js'
 import { logAudit } from '../audit.js'
+import { broadcastEvent } from '../event-bus.js'
 
 export const workspaceRoutes = new Hono()
 
@@ -139,6 +140,24 @@ workspaceRoutes.post('/', async (c) => {
   const { name } = (await c.req.json()) || {}
   if (!name) return c.json({ error: '工作区名称必填' }, 400)
 
+  // 团队工作区数量配额：按 membership_tier 限制
+  const user = db.prepare('SELECT membership_tier FROM users WHERE id = ?').get(userId)
+  const tier = user?.membership_tier || 'free'
+  const cap = getSubscriptionCap(tier)
+  if (cap.maxWorkspaces !== Infinity) {
+    const count = db.prepare(
+      'SELECT COUNT(*) as c FROM workspaces WHERE owner_id = ? AND is_deleted = 0'
+    ).get(userId).c
+    if (count >= cap.maxWorkspaces) {
+      return c.json({
+        error: `当前订阅等级（${tier}）最多创建 ${cap.maxWorkspaces} 个团队工作区，您已有 ${count} 个。请升级订阅以创建更多工作区。`,
+        code: 'workspace_limit',
+        currentTier: tier,
+        maxWorkspaces: cap.maxWorkspaces,
+      }, 403)
+    }
+  }
+
   const id = uuidv4()
   const slug = `team-${id.slice(0, 8)}`
   const now = Date.now()
@@ -168,6 +187,7 @@ workspaceRoutes.delete('/:id', async (c) => {
   const now = Date.now()
   db.prepare('UPDATE workspaces SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, wsId)
   logAudit({ action: 'workspace.delete', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'workspace', entityId: wsId, detail: `grace period until ${now + WORKSPACE_GRACE_PERIOD_MS}` })
+  broadcastEvent(wsId, 'workspace_updated', { action: 'deleted', userId, expiresAt: now + WORKSPACE_GRACE_PERIOD_MS })
   return c.json({ success: true })
 })
 
@@ -194,6 +214,7 @@ workspaceRoutes.post('/:id/restore', async (c) => {
   db.prepare('UPDATE workspaces SET is_deleted = 0, deleted_at = NULL, restored_at = ?, updated_at = ? WHERE id = ?')
     .run(now, now, wsId)
   logAudit({ action: 'workspace.restore', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'workspace', entityId: wsId })
+  broadcastEvent(wsId, 'workspace_updated', { action: 'restored', userId, restoredAt: now })
   return c.json({ success: true, id: wsId, restoredAt: now })
 })
 
@@ -245,6 +266,7 @@ workspaceRoutes.post('/:id/members', async (c) => {
     'INSERT INTO invitations (id, workspace_id, inviter_id, invitee_email, role, token, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, wsId, inviterId, email || '', role || 'member', token, now, now + INVITATION_TTL)
   logAudit({ action: 'member.invite', workspaceId: wsId, userId: inviterId, userEmail: c.get('userEmail'), entityType: 'invitation', entityId: id, detail: `invited ${email || 'public'} as ${role || 'member'}` })
+  broadcastEvent(wsId, 'member_changed', { action: 'invited', inviteeEmail: email || 'public', role: role || 'member', userId: inviterId })
 
   return c.json({ id, token, workspaceId: wsId, inviteeEmail: email || '', role: role || 'member', status: 'pending', expiresAt: now + INVITATION_TTL })
 })
@@ -360,6 +382,7 @@ workspaceRoutes.delete('/:id/invitations/:invitationId', (c) => {
 
   db.prepare('UPDATE invitations SET status = ? WHERE id = ?').run('cancelled', invitationId)
   logAudit({ action: 'member.cancel_invitation', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'invitation', entityId: invitationId })
+  broadcastEvent(wsId, 'member_changed', { action: 'invitation_cancelled', invitationId, userId })
   return c.json({ success: true })
 })
 
@@ -378,6 +401,7 @@ workspaceRoutes.patch('/:id/members/:uid', async (c) => {
 
   db.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run(role, wsId, targetUid)
   logAudit({ action: 'member.update_role', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'member', entityId: targetUid, detail: `role changed to ${role}` })
+  broadcastEvent(wsId, 'member_changed', { action: 'role_updated', targetUserId: targetUid, role, userId })
   return c.json({ success: true })
 })
 
@@ -397,6 +421,7 @@ workspaceRoutes.delete('/:id/members/:uid', async (c) => {
 
   db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, targetUid)
   logAudit({ action: 'member.remove', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'member', entityId: targetUid })
+  broadcastEvent(wsId, 'member_changed', { action: 'removed', targetUserId: targetUid, userId })
   return c.json({ success: true })
 })
 
@@ -413,6 +438,7 @@ workspaceRoutes.post('/:id/leave', async (c) => {
   if (member.role === 'owner') return c.json({ error: '拥有者需先转让所有权' }, 400)
 
   db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, userId)
+  broadcastEvent(wsId, 'member_changed', { action: 'left', userId })
   return c.json({ success: true })
 })
 
@@ -440,6 +466,7 @@ workspaceRoutes.post('/:id/transfer-ownership', async (c) => {
   })
   tx()
   logAudit({ action: 'member.transfer_ownership', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'member', entityId: targetUserId })
+  broadcastEvent(wsId, 'member_changed', { action: 'ownership_transferred', fromUserId: userId, toUserId: targetUserId })
 
   return c.json({ success: true })
 })

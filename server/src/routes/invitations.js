@@ -3,6 +3,7 @@ import { db } from '../db.js'
 import { authMiddleware } from '../middleware.js'
 import { rateLimit } from '../rate-limiter.js'
 import { clientIP } from '../utils.js'
+import { broadcastEvent } from '../event-bus.js'
 
 export const invitationRoutes = new Hono()
 
@@ -74,6 +75,8 @@ invitationRoutes.post('/:token/accept', (c) => {
   })
   tx()
 
+  broadcastEvent(inv.workspace_id, 'member_changed', { action: 'joined', userId, email: userEmail, role: inv.role })
+
   return c.json({
     id: inv.workspace_id,
     name: inv.workspace_name,
@@ -98,5 +101,6 @@ invitationRoutes.post('/:token/decline', (c) => {
   }
 
   db.prepare('UPDATE invitations SET status = ? WHERE id = ?').run('declined', inv.id)
+  broadcastEvent(inv.workspace_id, 'invitation_changed', { action: 'declined', userId: c.get('userId'), email: c.get('userEmail') })
   return c.json({ success: true })
 })

@@ -5,7 +5,8 @@ import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
 import { getCredits, grantCredits, getCreditTransactions, getCreditSummary, getRequestLogs, getUsageByModel, listAllUsers, ensureCreditRow, db } from '../../db.js'
 import { logAudit } from '../../audit.js'
-import { MAX_GRANT_AMOUNT, getAccountCapability, NEWAPI_QUOTA_PER_UNIT } from '../../config.js'
+import { MAX_GRANT_AMOUNT, NEWAPI_QUOTA_PER_UNIT, MAX_BATCH_RESET_SIZE, MAX_BATCH_RESET_PER_DAY, DAILY_GRANT_CAP } from '../../config.js'
+import { adminOpLimit, ADMIN_OP_LIMITS } from '../../admin-rate-limiter.js'
 
 export const adminCredits = new Hono()
 
@@ -15,17 +16,34 @@ adminCredits.get('/summary', (c) => {
   return c.json(summary)
 })
 
-// POST /v1/admin/credits/grant — 手动充值
+// POST /v1/admin/credits/grant — 手动充值（带日额度上限）
 adminCredits.post('/grant', async (c) => {
   const body = await c.req.json()
   const { userId, amount, description } = body || {}
   if (!userId || !amount || amount <= 0) return c.json({ error: 'userId 和 amount(>0) 必填' }, 400)
   if (amount > MAX_GRANT_AMOUNT) return c.json({ error: `单次充值不能超过 ${MAX_GRANT_AMOUNT} credits，当前输入 ${amount}` }, 400)
 
-  grantCredits(c.get('userId'), userId, amount, description || '管理员手动充值')
+  const adminId = c.get('userId')
+
+  // 频控检查
+  const freqLimit = adminOpLimit(adminId, 'grant-credits', ADMIN_OP_LIMITS['grant-credits'])
+  if (!freqLimit.allowed) {
+    return c.json({ error: '今日充值次数已达上限，请明天再试' }, 429)
+  }
+
+  // 日充值总额度检查
+  const todayStart = new Date().setHours(0, 0, 0, 0)
+  const dailyTotal = db.prepare(
+    'SELECT COALESCE(SUM(amount), 0) as total FROM credit_transactions WHERE reference_id = ? AND type = ? AND reference_type = ? AND created_at > ?'
+  ).get(adminId, 'grant', 'admin_grant', todayStart).total
+  if (dailyTotal + amount > DAILY_GRANT_CAP) {
+    return c.json({ error: `今日充值总额已达上限 (${DAILY_GRANT_CAP} quota)` }, 403)
+  }
+
+  grantCredits(adminId, userId, amount, description || '管理员手动充值')
   const credits = getCredits(userId)
 
-  logAudit({ action: 'admin.grant_credits', userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'user', entityId: userId, detail: `granted ${amount}, new balance: ${credits?.balance}` })
+  logAudit({ action: 'admin.grant_credits', userId: adminId, userEmail: c.get('userEmail'), entityType: 'user', entityId: userId, detail: `granted ${amount}, new balance: ${credits?.balance}` })
   return c.json({ success: true, balance: credits?.balance })
 })
 
@@ -55,21 +73,21 @@ adminCredits.get('/usage-by-model', (c) => {
   return c.json(result)
 })
 
-/** 各账号类型的重置额度（美元） */
-const RESET_AMOUNT_USD = { restricted: 1, standard: 5, advanced: 15 }
+/** 各订阅等级的重置额度（美元） */
+const RESET_AMOUNT_USD = { free: 1, standard: 5, plus: 10, pro: 15 }
 
 // GET /v1/admin/credits/reset-preview — 预览批量充值的用户和金额
 adminCredits.get('/reset-preview', (c) => {
   const qpu = NEWAPI_QUOTA_PER_UNIT
   const result = listAllUsers({ search: '', page: 1, limit: 9999 })
   const users = (result.users || []).map((u) => {
-    const type = u.account_type === 'team' ? 'standard' : (u.account_type || 'standard')
-    const resetUsd = RESET_AMOUNT_USD[type] || RESET_AMOUNT_USD.standard
+    const type = u.membership_tier || 'free'
+    const resetUsd = RESET_AMOUNT_USD[type] || RESET_AMOUNT_USD.free
     return {
       id: u.id,
       email: u.email,
       displayName: u.display_name,
-      accountType: type,
+      membershipTier: type,
       currentBalance: u.credit_balance || 0,
       currentBalanceUSD: ((u.credit_balance || 0) / qpu).toFixed(2),
       resetAmountQuota: resetUsd * qpu,
@@ -80,16 +98,32 @@ adminCredits.get('/reset-preview', (c) => {
 })
 
 // POST /v1/admin/credits/batch-reset — 批量重置用户额度为账号类型默认值
+// 🔒 安全加固：必须显式传 userIds、单批上限 50、每 admin 每天最多 3 次、保留 lifetime_consumed
 adminCredits.post('/batch-reset', async (c) => {
   const body = await c.req.json()
   const { userIds } = body || {}
   const qpu = NEWAPI_QUOTA_PER_UNIT
   const adminId = c.get('userId')
 
-  // 确定目标用户：传了 userIds 就只重置那些，否则全部用户
+  // Guard 1: 必须显式指定 userIds（不允许空列表=全部用户）
+  if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+    return c.json({ error: '必须指定要重置的用户 ID 列表 (userIds)，不允许重置全部用户' }, 400)
+  }
+
+  // Guard 2: 单批上限
+  if (userIds.length > MAX_BATCH_RESET_SIZE) {
+    return c.json({ error: `单次批量重置最多 ${MAX_BATCH_RESET_SIZE} 个用户，当前传入 ${userIds.length}` }, 400)
+  }
+
+  // Guard 3: 每 admin 每天次数限制
+  const freqLimit = adminOpLimit(adminId, 'batch-reset', ADMIN_OP_LIMITS['batch-reset'])
+  if (!freqLimit.allowed) {
+    return c.json({ error: `今日批量重置次数已达上限 (${MAX_BATCH_RESET_PER_DAY} 次)，请明天再试` }, 429)
+  }
+
   const allUsers = listAllUsers({ search: '', page: 1, limit: 9999 }).users || []
-  const targetSet = userIds && userIds.length > 0 ? new Set(userIds) : null
-  const targets = allUsers.filter((u) => !targetSet || targetSet.has(u.id))
+  const targetSet = new Set(userIds)
+  const targets = allUsers.filter((u) => targetSet.has(u.id))
 
   if (targets.length === 0) return c.json({ error: '没有匹配的用户' }, 400)
 
@@ -98,12 +132,14 @@ adminCredits.post('/batch-reset', async (c) => {
 
   const tx = db.transaction(() => {
     for (const u of targets) {
-      const type = u.account_type === 'team' ? 'standard' : (u.account_type || 'standard')
-      const resetUsd = RESET_AMOUNT_USD[type] || RESET_AMOUNT_USD.standard
+      const type = u.membership_tier || 'free'
+      const resetUsd = RESET_AMOUNT_USD[type] || RESET_AMOUNT_USD.free
       const resetQuota = resetUsd * qpu
       const oldBalance = u.credit_balance || 0
 
       ensureCreditRow(u.id)
+      // 保留 lifetime_consumed（不归零），只设新余额。
+      // 前端"总额度 = balance + lifetimeConsumed"用于展示历史累积，归零会导致数据丢失。
       db.prepare('UPDATE credits SET balance = ?, updated_at = ? WHERE user_id = ?')
         .run(resetQuota, now, u.id)
       db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, reference_type, reference_id, created_at)

@@ -93,7 +93,8 @@ function route(){
     case'users':renderUsers(c);break;
     case'channels':renderChannels(c);break;
     case'credits':renderCredits(c);break;
-    case'pricing':renderPricing(c);break;case'activation':renderActivation(c);break;
+    case'orders':renderOrders(c);break;
+    case'activation':renderActivation(c);break;case'redemption':renderRedemption(c);break;
   }
 }
 
@@ -149,9 +150,9 @@ function renderDashboard(c){
       '<div class="stat-card"><div class="stat-icon">⬆️</div><div class="stat-val">'+formatTokens(s.usageCompletionTokens||0)+'</div><div class="stat-lbl">输出 Token</div></div>'+
       '<div class="stat-card"><div class="stat-icon">⚠️</div><div class="stat-val">'+(s.usageFailedRequests||0).toLocaleString()+'</div><div class="stat-lbl">失败调用</div></div></div></div>'+
       '<div class="card"><div class="card-header"><h2>额度概览</h2></div>'+
-      '<div class="stat-grid"><div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+(s.totalBalance||0).toLocaleString()+'</div><div class="stat-lbl">总余额</div></div>'+
-      '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+(s.totalConsumed||0).toLocaleString()+'</div><div class="stat-lbl">累计消耗</div></div>'+
-      '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+(s.consumedThisMonth||0).toLocaleString()+'</div><div class="stat-lbl">本月消耗</div></div>'+
+      '<div class="stat-grid"><div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+Math.round((s.totalBalance||0)/50000).toLocaleString()+'</div><div class="stat-lbl">总余额（积分）</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+Math.round((s.totalConsumed||0)/50000).toLocaleString()+'</div><div class="stat-lbl">累计消耗（积分）</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+Math.round((s.consumedThisMonth||0)/50000).toLocaleString()+'</div><div class="stat-lbl">本月消耗（积分）</div></div>'+
       '<div class="stat-card"><div class="stat-icon">⭐</div><div class="stat-val">'+(s.topUsers&&s.topUsers[0]?esc(s.topUsers[0].email||s.topUsers[0].id):'-')+'</div><div class="stat-lbl">最高用量用户</div></div></div></div>'+
       '<div class="card" style="overflow:auto"><div class="card-header"><h2>近30天用量用户</h2><a class="btn btn-outline btn-sm" href="#credits">查看用量明细</a></div><table><thead><tr><th>用户</th><th>请求数</th><th>Token</th><th>费用</th></tr></thead><tbody>'+topRows+'</tbody></table></div>';
   }).catch(function(e){c.innerHTML='<h1 class="page-title">仪表盘</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
@@ -159,16 +160,25 @@ function renderDashboard(c){
 
 // ---- Users ----
 function renderUsers(c){var page=1,search='';
+  var QPU=500000;
   function load(){
     c.innerHTML='<h1 class="page-title">用户管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
     api('/admin/users?page='+page+'&limit=30&search='+encodeURIComponent(search)).then(function(d){
       var rows=d.users.map(function(u){
         var role=u.is_admin?'<span class="badge badge-info">管理员</span>':'<span class="badge badge-success">用户</span>';
         var status=u.is_suspended?'<span class="badge badge-danger">已封禁</span>':'<span class="badge badge-success">正常</span>';
-        var act='';act+='<button class="btn btn-ghost copy-btn" data-uid="'+u.id+'" style="font-size:11px" title="复制ID">📋</button> ';
+        var vipBadge=u.is_vip?'<span class="badge badge-warn" style="background:#fef3c7;color:#92400e">👑 VIP</span>':'<span class="badge" style="background:#f1f5f9;color:#94a3b8">—</span>';
+        var typeBadge={free:'<span class="badge" style="background:#f1f5f9;color:#64748b">Free</span>',standard:'<span class="badge badge-success">Standard</span>',plus:'<span class="badge badge-info">Plus</span>',pro:'<span class="badge badge-warn" style="background:#fef3c7;color:#92400e">Pro</span>'}[u.membership_tier]||'<span class="badge">'+esc(u.membership_tier||'free')+'</span>';
+        var typeSel='<select class="type-sel" data-uid="'+u.id+'" style="width:82px;font-size:11px;padding:3px 4px"><option value="free"'+(u.membership_tier==='free'?' selected':'')+'>Free</option><option value="standard"'+(u.membership_tier==='standard'?' selected':'')+'>Standard</option><option value="plus"'+(u.membership_tier==='plus'?' selected':'')+'>Plus</option><option value="pro"'+(u.membership_tier==='pro'?' selected':'')+'>Pro</option></select>';
+        var scBadge=u.membership_tier==='plus'||u.membership_tier==='pro'?'<span style="font-size:11px;color:var(--success)">🔓 可自配</span>':'<span style="font-size:11px;color:var(--muted)">🔒 仅平台</span>';
+        var balQuota=u.credit_balance||0;
+        var balPoints=Math.round(balQuota/50000);
+        var balUsd=(balPoints/10).toFixed(2);
+        var act='';act+='<button class="btn btn-ghost copy-btn" data-uid="'+u.id+'" style="font-size:11px" title="复制用户ID">📋</button> ';
         if(!u.is_admin)act+='<button class="btn btn-ghost promote-btn" data-uid="'+u.id+'">⬆ 提权</button>';
-        if(u.is_suspended){act+='<button class="btn btn-ghost unsuspend-btn" data-uid="'+u.id+'" style="color:var(--success)">✅ 解封</button>'}else{act+='<button class="btn btn-ghost suspend-btn" data-uid="'+u.id+'" style="color:var(--danger)">⛔ 封禁</button>'};if(!u.is_admin)act+=' <button class="btn btn-ghost del-user-btn" data-uid="'+u.id+'" data-email="'+esc(u.email)+'" style="color:var(--danger);font-size:11px">🗑</button>';
-        var sc=u.can_self_config_api?'<span class="badge badge-success">可自配</span>':'<span class="badge badge-warn">仅平台</span>';var typeSel='<select class="type-sel" data-uid="'+u.id+'" style="width:80px;font-size:11px;padding:2px 4px"><option value="restricted"'+(u.account_type==='restricted'?' selected':'')+'>受限</option><option value="standard"'+(u.account_type==='standard'?' selected':'')+'>标准</option><option value="advanced"'+(u.account_type==='advanced'?' selected':'')+'>高级</option></select>';var scBtn='<button class="btn btn-ghost sc-btn" data-uid="'+u.id+'" data-sc="'+(u.can_self_config_api?1:0)+'" style="font-size:11px">'+(u.can_self_config_api?'🔓':'🔒')+'</button>';return'<tr><td><strong>'+esc(u.email)+'</strong></td><td>'+esc(u.display_name||'')+'</td><td>'+role+'</td><td>'+status+'</td><td>'+sc+'</td><td>'+typeSel+'</td><td>'+scBtn+'</td><td>'+(u.credit_balance||0).toLocaleString()+'</td><td>'+fmtDate(u.created_at)+'</td><td>'+act+'</td></tr>';
+        if(u.is_suspended){act+='<button class="btn btn-ghost unsuspend-btn" data-uid="'+u.id+'" style="color:var(--success)">✅ 解封</button>'}else{act+='<button class="btn btn-ghost suspend-btn" data-uid="'+u.id+'" style="color:var(--danger)">⛔ 封禁</button>'};if(u.has_new_api_key)act+=' <button class="btn btn-ghost rotate-key-btn" data-uid="'+u.id+'" data-email="'+esc(u.email)+'" style="font-size:11px" title="轮换NewAPI Key">🔄</button>';if(!u.is_admin)act+=' <button class="btn btn-ghost del-user-btn" data-uid="'+u.id+'" data-email="'+esc(u.email)+'" style="color:var(--danger);font-size:11px">🗑</button>';
+        var newapiBadge=u.has_new_api_key?'<span class="badge badge-success" style="font-size:10px">🔑 已绑定</span><div style="font-size:10px;color:var(--muted)">ID: '+esc(String(u.new_api_user_id||'—'))+'</div>':'<span class="badge" style="background:#f1f5f9;color:#94a3b8;font-size:10px">—</span>';
+        return'<tr><td><strong>'+esc(u.email)+'</strong><div style="font-size:10px;color:var(--muted)">'+esc(u.id).substring(0,8)+'...</div></td><td>'+esc(u.display_name||'—')+'</td><td>'+typeBadge+'<div style="margin-top:2px">'+typeSel+'</div></td><td>'+vipBadge+'</td><td>'+role+'</td><td>'+status+'</td><td>'+newapiBadge+'</td><td style="font-weight:600">$'+balUsd+'<div style="font-size:10px;color:var(--muted)">'+balPoints.toLocaleString()+' 积分</div></td><td>'+scBadge+'</td><td style="font-size:12px">'+fmtDate(u.created_at)+'</td><td>'+act+'</td></tr>';
       }).join('');
       var pager=d.total>30?'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px"><span style="color:var(--muted);font-size:13px">共 '+d.total+' 个用户</span><div style="display:flex;gap:8px">'+
         (page>1?'<button class="btn btn-outline btn-sm prev-btn">上一页</button>':'')+
@@ -176,10 +186,10 @@ function renderUsers(c){var page=1,search='';
         (page*30<d.total?'<button class="btn btn-outline btn-sm next-btn">下一页</button>':'')+'</div></div>':'';
       c.innerHTML='<h1 class="page-title">用户管理</h1>'+
         '<div class="card" style="margin-bottom:16px"><input class="search-inp" placeholder="🔍 搜索邮箱或名称..." value="'+esc(search)+'" style="max-width:400px"></div>'+
-        '<div class="card" style="overflow:auto"><table><thead><tr><th>邮箱</th><th>名称</th><th>角色</th><th>状态</th><th>自配</th><th>类型</th><th>开关</th><th>余额</th><th>注册时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>'+pager+'</div>';
+        '<div class="card" style="overflow:auto"><table><thead><tr><th>邮箱</th><th>名称</th><th>订阅等级</th><th>VIP</th><th>角色</th><th>状态</th><th>NewAPI</th><th>余额</th><th>自配</th><th>注册时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>'+pager+'</div>';
       c.querySelector('.search-inp').addEventListener('input',function(e){search=e.target.value;page=1;load()});
-      c.querySelectorAll('.type-sel').forEach(function(s){s.addEventListener('change',function(){api('/admin/users/'+s.dataset.uid,{method:'PATCH',body:JSON.stringify({account_type:s.value})}).then(function(){toast('类型已更新');load()})})});c.querySelectorAll('.sc-btn').forEach(function(b){b.addEventListener('click',function(){var nv=b.dataset.sc==='1'?0:1;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({can_self_config_api:nv})}).then(function(){toast(nv?'已开启自配':'已关闭自配');load()})})});c.querySelectorAll('.promote-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid+'/promote',{method:'POST'}).then(function(){toast('已提升为管理员');load()})})});
-      c.querySelectorAll('.suspend-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定封禁该用户？'))return;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:1})}).then(function(){toast('已封禁');load()})})});c.querySelectorAll('.unsuspend-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:0})}).then(function(){toast('已解封');load()})})});c.querySelectorAll('.del-user-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除 '+b.dataset.email+'？此操作不可撤销！'))return;api('/admin/users/'+b.dataset.uid,{method:'DELETE'}).then(function(){toast('已删除用户');load()}).catch(function(e){toast(e.message,false)})})});c.querySelectorAll('.copy-btn').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();navigator.clipboard.writeText(b.dataset.uid).then(function(){toast('已复制用户ID')})})});
+      c.querySelectorAll('.type-sel').forEach(function(s){s.addEventListener('change',function(){api('/admin/users/'+s.dataset.uid,{method:'PATCH',body:JSON.stringify({membership_tier:s.value})}).then(function(){toast('等级已更新');load()})})});c.querySelectorAll('.promote-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid+'/promote',{method:'POST'}).then(function(){toast('已提升为管理员');load()})})});
+      c.querySelectorAll('.suspend-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定封禁该用户？'))return;api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:1})}).then(function(){toast('已封禁');load()})})});c.querySelectorAll('.unsuspend-btn').forEach(function(b){b.addEventListener('click',function(){api('/admin/users/'+b.dataset.uid,{method:'PATCH',body:JSON.stringify({is_suspended:0})}).then(function(){toast('已解封');load()})})});c.querySelectorAll('.rotate-key-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定轮换 '+b.dataset.email+' 的 NewAPI Key？旧 Key 将立即失效。'))return;api('/admin/users/'+b.dataset.uid+'/rotate-newapi-key',{method:'POST'}).then(function(){toast('Key 已轮换');load()}).catch(function(e){toast(e.message,false)})})});c.querySelectorAll('.del-user-btn').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除 '+b.dataset.email+'？此操作不可撤销！'))return;api('/admin/users/'+b.dataset.uid,{method:'DELETE'}).then(function(){toast('已删除用户');load()}).catch(function(e){toast(e.message,false)})})});c.querySelectorAll('.copy-btn').forEach(function(b){b.addEventListener('click',function(e){e.stopPropagation();navigator.clipboard.writeText(b.dataset.uid).then(function(){toast('已复制用户ID')})})});
       var pb=c.querySelector('.prev-btn');if(pb)pb.addEventListener('click',function(){page--;load()});
       var nb=c.querySelector('.next-btn');if(nb)nb.addEventListener('click',function(){page++;load()});
     }).catch(function(e){c.innerHTML='<h1 class="page-title">用户管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
@@ -240,15 +250,15 @@ function renderCredits(c){
   ]).then(function(r){var s=r[0],tx=r[1],rl=r[2],um=r[3],ud=r[4],rp=r[5];
     // 摘要卡片
     var cards='<div class="stat-grid" style="margin-bottom:20px">'+
-      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+(s.total_balance||0).toLocaleString()+'</div><div class="stat-lbl">总余额</div></div>'+
-      '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+(s.total_consumed||0).toLocaleString()+'</div><div class="stat-lbl">累计消耗</div></div>'+
-      '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+(s.consumed_this_month||0).toLocaleString()+'</div><div class="stat-lbl">本月消耗</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-val">'+Math.round((s.total_balance||0)/50000).toLocaleString()+'</div><div class="stat-lbl">总余额（积分）</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📊</div><div class="stat-val">'+Math.round((s.total_consumed||0)/50000).toLocaleString()+'</div><div class="stat-lbl">累计消耗（积分）</div></div>'+
+      '<div class="stat-card"><div class="stat-icon">📅</div><div class="stat-val">'+Math.round((s.consumed_this_month||0)/50000).toLocaleString()+'</div><div class="stat-lbl">本月消耗（积分）</div></div>'+
       '<div class="stat-card"><div class="stat-icon">👥</div><div class="stat-val">'+(s.users_with_credits||0)+'</div><div class="stat-lbl">额度用户</div></div></div>';
 
     // 充值（金额以美元计；后端 credits 以 quota 单位存，500000 quota = $1）
     var QPU=500000;
     var grant='<div class="card" style="max-width:600px;margin-bottom:20px"><div class="card-header"><h2>💳 手动充值</h2></div>'+
-      '<div class="form-row form-row-3"><div><label>用户</label><select class="grant-uid" style="font-size:12px"><option value="">选择用户...</option>'+(ud.users||[]).map(function(u){return'<option value="'+u.id+'">'+esc(u.email)+' ('+esc(u.display_name||'')+') — $'+((u.credit_balance||0)/QPU).toFixed(2)+'</option>'}).join('')+'</select></div>'+
+      '<div class="form-row form-row-3"><div><label>用户</label><select class="grant-uid" style="font-size:12px"><option value="">选择用户...</option>'+(ud.users||[]).map(function(u){var pts=Math.round((u.credit_balance||0)/50000);return'<option value="'+u.id+'">'+esc(u.email)+' — '+pts+'积分 ($'+(pts/10).toFixed(2)+') '+(u.display_name?esc(u.display_name):'')+'</option>'}).join('')+'</select></div>'+
       '<div><label>金额（$）</label><input class="grant-amt" type="number" min="0.01" step="0.01" placeholder="美元，如 5"></div>'+
       '<div><label>备注</label><input class="grant-desc" placeholder="充值说明"></div></div>'+
       '<div class="grant-msg" style="font-size:13px;margin-bottom:12px"></div>'+
@@ -257,10 +267,10 @@ function renderCredits(c){
     // 批量重置额度
     var resetUsers=rp.users||[];
     var resetRows=resetUsers.length?resetUsers.map(function(u){
-      var typeLabel=u.accountType==='advanced'?'高级':u.accountType==='restricted'?'受限':'标准';
-      return'<tr><td><input type="checkbox" class="reset-cb" data-uid="'+u.id+'" data-amount="'+u.resetAmountQuota+'" checked></td><td><strong>'+esc(u.email)+'</strong></td><td><span class="badge '+(u.accountType==='advanced'?'badge-info':u.accountType==='restricted'?'badge-warn':'badge-success')+'">'+typeLabel+'</span></td><td class="number">$'+u.currentBalanceUSD+'</td><td class="number" style="color:var(--success);font-weight:600">→ $'+u.resetAmountUSD+' ('+u.resetAmountQuota.toLocaleString()+' quota)</td></tr>';
+      var typeLabel=u.membershipTier==='pro'?'Pro':u.membershipTier==='plus'?'Plus':u.membershipTier==='standard'?'Standard':'Free';
+      return'<tr><td><input type="checkbox" class="reset-cb" data-uid="'+u.id+'" data-amount="'+u.resetAmountQuota+'" checked></td><td><strong>'+esc(u.email)+'</strong></td><td><span class="badge '+(u.membershipTier==='pro'?'badge-warn':u.membershipTier==='plus'?'badge-info':u.membershipTier==='standard'?'badge-success':'')+'">'+typeLabel+'</span></td><td class="number">$'+u.currentBalanceUSD+'</td><td class="number" style="color:var(--success);font-weight:600">→ $'+u.resetAmountUSD+' ('+Math.round(u.resetAmountQuota/50000).toLocaleString()+' 积分)</td></tr>';
     }).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">👥</div>暂无用户数据</div></td></tr>';
-    var batchReset='<div class="card" style="margin-bottom:20px"><div class="card-header"><div><h2>🔄 批量重置额度</h2><div style="font-size:12px;color:var(--muted);margin-top:2px">受限 $1 / 标准 $5 / 高级 $15 · 重置后余额将设为对应类型的默认值</div></div>'+
+    var batchReset='<div class="card" style="margin-bottom:20px"><div class="card-header"><div><h2>🔄 批量重置额度</h2><div style="font-size:12px;color:var(--muted);margin-top:2px">Free $1 / Standard $5 / Plus $10 / Pro $15 · 重置后余额将设为对应类型的默认值</div></div>'+
       '<div style="display:flex;gap:8px"><button class="btn btn-outline btn-sm selall-btn">全选</button><button class="btn btn-outline btn-sm desel-btn">取消全选</button>'+
       '<button class="btn btn-danger btn-sm reset-btn" style="margin-left:8px">⚠ 重置选中用户额度</button></div></div>'+
       '<div style="overflow:auto"><table><thead><tr><th style="width:32px"><input type="checkbox" class="reset-all-cb" checked></th><th>邮箱</th><th>类型</th><th>当前余额</th><th>重置为</th></tr></thead><tbody>'+resetRows+'</tbody></table>'+
@@ -329,18 +339,18 @@ function renderCredits(c){
 
 // ---- Activation Codes ----
 function renderActivation(c){
-var atOpts='<option value="restricted">受限用户</option><option value="standard" selected>标准用户</option><option value="advanced">高级用户</option>';
+var atOpts='<option value="free" selected>Free</option><option value="standard">Standard</option><option value="plus">Plus</option><option value="pro">Pro</option>';
 function load(){
 c.innerHTML='<h1 class="page-title">激活码管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
 api('/admin/activation-codes').then(function(codes){
 var rows=codes.length?codes.map(function(a){
 var st=a.status==='pending'?'<span class="badge badge-success">有效</span>':'<span class="badge badge-warn">'+a.status+'</span>';
-return'<tr><td><code style="font-size:12px">'+esc(a.code)+'</code></td><td>'+esc(a.account_type||'standard')+'</td><td>'+st+'</td><td>'+(a.used_by||'—')+'</td><td>'+fmtDate(a.created_at)+'</td></tr>';
+return'<tr><td><code style="font-size:12px">'+esc(a.code)+'</code></td><td>'+esc(a.membership_tier||'free')+'</td><td>'+st+'</td><td>'+(a.used_by||'—')+'</td><td>'+fmtDate(a.created_at)+'</td></tr>';
 }).join(''):'<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🎫</div>暂无激活码</div></td></tr>';
 c.innerHTML='<h1 class="page-title">激活码管理</h1>'+
 '<div class="card" style="max-width:500px;margin-bottom:20px"><div class="card-header"><h2>🎫 生成激活码</h2></div>'+
 '<div class="form-row form-row-3"><div><label>数量</label><input class="ac-count" type="number" min="1" max="100" value="1"></div>'+
-'<div><label>账号类型</label><select class="ac-type">'+atOpts+'</select></div>'+
+'<div><label>订阅等级</label><select class="ac-type">'+atOpts+'</select></div>'+
 '<div><label>有效期(天)</label><input class="ac-days" type="number" min="0" value="0" placeholder="0=不限"></div></div>'+
 '<button class="btn btn-primary gen-btn">生成激活码</button></div>'+
 '<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 已有激活码</h2></div><table><thead><tr><th>激活码</th><th>类型</th><th>状态</th><th>使用者</th><th>创建时间</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
@@ -348,54 +358,238 @@ c.querySelector('.gen-btn').addEventListener('click',function(){
 var cnt=parseInt(c.querySelector('.ac-count').value)||1;
 var tp=c.querySelector('.ac-type').value;
 var days=parseInt(c.querySelector('.ac-days').value)||0;
-api('/admin/activation-codes',{method:'POST',body:JSON.stringify({count:cnt,accountType:tp,expiresInDays:days||null})}).then(function(r){toast('已生成 '+r.codes.length+' 个激活码');load()}).catch(function(e){toast(e.message,false)});
+api('/admin/activation-codes',{method:'POST',body:JSON.stringify({count:cnt,membershipTier:tp,expiresInDays:days||null})}).then(function(r){toast('已生成 '+r.codes.length+' 个激活码');load()}).catch(function(e){toast(e.message,false)});
 });
 }).catch(function(e){c.innerHTML='<h1 class="page-title">激活码管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
 }
 load();
 }
-// ---- Pricing ----
-function renderPricing(c){
-  c.innerHTML='<h1 class="page-title">模型定价</h1><div class="card" style="margin-bottom:16px"><div class="card-header"><h2>💲 添加/修改模型价格</h2></div>'+
-    '<div class="form-row form-row-3"><div><label>模型标识</label><input class="pm-model" placeholder="如 deepseek-v4-pro"></div>'+
-    '<div><label>输入价格 (cr/1K)</label><input class="pm-input" type="number" step="0.1" min="0" placeholder="0.5"></div>'+
-    '<div><label>输出价格 (cr/1K)</label><input class="pm-output" type="number" step="0.1" min="0" placeholder="2"></div></div>'+
-    '<div class="form-row" style="grid-template-columns:1fr 2fr"><div><label>缓存折扣</label><input class="pm-cache" type="number" step="0.01" min="0" max="1" placeholder="0.1" value="0.1"></div><div style="display:flex;align-items:flex-end;padding-bottom:2px"><span style="font-size:12px;color:var(--muted)">缓存命中按此比例收费（0.1=1折，0=免费，1=原价）</span></div></div>'+
-    '<div class="pm-msg" style="font-size:13px;margin-bottom:12px"></div>'+
-    '<button class="btn btn-primary add-price-btn">保存</button></div>'+
-    '<div class="card pricing-list"><span style="color:var(--muted)">加载中...</span></div>';
-  loadPricing();
-  c.querySelector('.add-price-btn').addEventListener('click',function(){
-    var m=c.querySelector('.pm-model').value.trim(),i=parseFloat(c.querySelector('.pm-input').value),o=parseFloat(c.querySelector('.pm-output').value),cr=parseFloat(c.querySelector('.pm-cache').value);
-    if(!m||isNaN(i)||isNaN(o)){toast('请填写完整',false);return}
-    api('/admin/pricing/'+encodeURIComponent(m),{method:'PUT',body:JSON.stringify({inputRate:i,outputRate:o,cacheReadRatio:isNaN(cr)?0.1:cr})}).then(function(){
-      toast('✅ 价格已保存');loadPricing();
-    }).catch(function(e){toast(e.message,false)});
-  });
-  function loadPricing(){
-    api('/admin/pricing/models').then(function(items){
-      var rows=items.length?items.map(function(p){
-        var st=p.priced?'<span class="badge badge-success">已定价</span>':'<span class="badge badge-warn">未定价</span>';
-        return'<tr><td><strong>'+esc(p.model)+'</strong><td>'+esc(p.name)+'</td><td>'+esc(p.provider)+'</td><td>'+st+'</td><td>'+(p.priced?p.input_rate+''+p.output_rate:'—')+'</td><td>'+fmtDateTime(p.updatedAt)+'</td>'+
-          '<td><button class="btn btn-ghost edit-price-btn" data-m="'+esc(p.model)+'" data-i="'+p.inputRate+'" data-o="'+p.outputRate+'" data-cr="'+p.cacheReadRatio+'">✏️ 定价</button></td></tr>';
-      }).join(''):'<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div>暂无渠道模型，请先添加渠道</div></td></tr>';
-      c.querySelector('.pricing-list').innerHTML='<div class="card-header"><h2>📋 当前价格表</h2></div><table><thead><tr><th>模型ID</th><th>名称</th><th>供应商</th><th>状态</th><th>价格(入/出)</th><th>更新时间</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table>';
-      c.querySelectorAll('.edit-price-btn').forEach(function(b){
+// ---- Redemption Codes ----
+function renderRedemption(c){
+var typeOpts='<option value="credits">💰 兑换额度</option><option value="plan">📋 兑换套餐</option><option value="vip">👑 兑换VIP</option>';
+var planOpts='<option value="standard">标准版</option><option value="plus">Plus版</option><option value="pro">Pro版</option>';
+var TYPE_LABEL={credits:'额度',plan:'套餐',vip:'VIP'};
+var CYCLE_LABEL={monthly:'月付',yearly:'年付'};
+function load(){
+c.innerHTML='<h1 class="page-title">兑换码管理</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+api('/admin/redemption-codes').then(function(codes){
+var rows=codes.length?codes.map(function(r){
+var st=r.status==='active'?'<span class="badge badge-success">有效</span>':r.status==='used'?'<span class="badge badge-info">已使用</span>':'<span class="badge badge-warn">'+r.status+'</span>';
+var typeLabel=TYPE_LABEL[r.type]||r.type;
+var valueLabel=r.type==='credits'?r.value+' 积分':r.type==='plan'?r.value+' · '+(CYCLE_LABEL[r.cycle]||r.cycle):'VIP 终身';
+var usedInfo=r.used_by?'<span style="font-size:11px">'+(r.used_by_email||r.used_by)+'</span>':'—';
+return'<tr><td><code style="font-size:12px">'+esc(r.code)+'</code></td><td><span class="badge badge-info">'+typeLabel+'</span></td><td>'+esc(valueLabel)+'</td><td>'+st+'</td><td>'+usedInfo+'</td><td>'+(r.expires_at?fmtDate(r.expires_at):'不限')+'</td><td>'+fmtDate(r.created_at)+'</td></tr>';
+}).join(''):'<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🎁</div>暂无兑换码</div></td></tr>';
+c.innerHTML='<h1 class="page-title">兑换码管理</h1>'+
+'<div class="card" style="max-width:600px;margin-bottom:20px"><div class="card-header"><h2>🎁 生成兑换码</h2></div>'+
+'<div class="form-row form-row-3"><div><label>类型</label><select class="rc-type">'+typeOpts+'</select></div>'+
+'<div><label>兑换内容</label><div class="rc-value-wrap"><select class="rc-value-sel" style="display:none">'+planOpts+'</select><input class="rc-value-inp" type="text" placeholder="输入积分数"></div></div>'+
+'<div><label>套餐周期</label><select class="rc-cycle" style="display:none"><option value="monthly">月付</option><option value="yearly">年付</option></select></div></div>'+
+'<div class="form-row form-row-3"><div><label>数量</label><input class="rc-count" type="number" min="1" max="100" value="1"></div>'+
+'<div><label>有效期(天)</label><input class="rc-days" type="number" min="0" value="0" placeholder="0=不限"></div>'+
+'<div style="display:flex;align-items:flex-end"><button class="btn btn-primary gen-btn" style="width:100%">生成兑换码</button></div></div>'+
+'<div class="rc-msg" style="font-size:13px;margin-bottom:12px;word-break:break-all"></div></div>'+
+'<div class="card" style="overflow:auto"><div class="card-header"><h2>📋 已有兑换码</h2></div><table><thead><tr><th>兑换码</th><th>类型</th><th>内容</th><th>状态</th><th>使用者</th><th>有效期至</th><th>创建时间</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+
+// 类型切换联动
+var typeSel=c.querySelector('.rc-type');
+var planSel=c.querySelector('.rc-value-sel');
+var inp=c.querySelector('.rc-value-inp');
+var cycleSel=c.querySelector('.rc-cycle');
+function updateFields(){
+var t=typeSel.value;
+if(t==='credits'){planSel.style.display='none';inp.style.display='block';inp.placeholder='积分数量，如 100';cycleSel.style.display='none'}
+else if(t==='plan'){planSel.style.display='block';inp.style.display='none';cycleSel.style.display='block'}
+else if(t==='vip'){planSel.style.display='none';inp.style.display='none';cycleSel.style.display='none'}
+}
+typeSel.addEventListener('change',updateFields);
+updateFields();
+
+c.querySelector('.gen-btn').addEventListener('click',function(){
+var cnt=parseInt(c.querySelector('.rc-count').value)||1;
+var tp=typeSel.value;
+var val=tp==='plan'?planSel.value:(tp==='vip'?'vip':c.querySelector('.rc-value-inp').value.trim());
+var cycle=c.querySelector('.rc-cycle').value||'monthly';
+var days=parseInt(c.querySelector('.rc-days').value)||0;
+if(tp==='credits'&&(!val||isNaN(parseInt(val))||parseInt(val)<=0)){toast('请输入有效积分数',false);return}
+var body={count:cnt,type:tp,value:val,expiresInDays:days||null};
+if(tp==='plan')body.cycle=cycle;
+c.querySelector('.rc-msg').innerHTML='<span style="color:var(--muted)">生成中...</span>';
+api('/admin/redemption-codes',{method:'POST',body:JSON.stringify(body)}).then(function(r){
+var list=r.codes.map(function(x){return'<code>'+esc(x.code)+'</code>'}).join(' ');
+c.querySelector('.rc-msg').innerHTML='<span style="color:var(--success);font-weight:600">✅ 已生成 '+r.codes.length+' 个兑换码</span><div style="margin-top:8px;background:#f0fdf4;padding:10px 14px;border-radius:8px;font-size:13px;line-height:1.8">'+list+'</div>';
+load();
+}).catch(function(e){c.querySelector('.rc-msg').innerHTML='<span style="color:#ef4444">'+e.message+'</span>'});
+});
+}).catch(function(e){c.innerHTML='<h1 class="page-title">兑换码管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+}
+load();
+}
+
+// ---- Orders ----
+function renderOrders(c){
+  var QPU=500000;
+  var status='', allUsers=[], filteredUsers=[];
+
+  // 先加载用户列表，再渲染表单
+  api('/admin/users?limit=200').then(function(ud){
+    allUsers=(ud.users||[]).sort(function(a,b){return (a.email||'').localeCompare(b.email||'')});
+    filteredUsers=allUsers;
+
+    c.innerHTML='<h1 class="page-title">📦 订单管理</h1>'+
+      '<div class="card"><div class="card-header"><h2>创建充值订单</h2></div>'+
+        '<div class="form-row form-row-3">'+
+          '<div><label>用户（搜索选择）</label>'+
+            '<input class="order-user-search" placeholder="🔍 输入邮箱或名称筛选…" style="margin-bottom:6px" autocomplete="off">'+
+            '<select id="new-order-user" size="5" style="height:auto;font-size:12px"><option value="">— 请先筛选用户 —</option></select>'+
+            '<div style="font-size:11px;color:var(--muted);margin-top:2px">已选：<span class="order-user-info">—</span></div></div>'+
+          '<div><label>类型</label><select id="new-order-type"><option value="topup">💰 积分充值</option><option value="subscription">📋 套餐购买</option><option value="vip">👑 VIP 购买 (¥698)</option></select></div>'+
+          '<div><label>金额（人民币，分）</label><input id="new-order-amount" type="number" placeholder="如 4900 = ¥49"></div>'+
+        '</div>'+
+        '<div class="form-row form-row-3" id="sub-fields" style="display:none">'+
+          '<div><label>套餐</label><select id="new-order-plan"><option value="standard">标准版 (¥29/月)</option><option value="plus">Plus版 (¥49/月)</option><option value="pro">Pro版 (¥99/月)</option></select></div>'+
+          '<div><label>周期</label><select id="new-order-cycle"><option value="monthly">月付</option><option value="yearly">年付</option></select></div>'+
+          '<div><label>套餐金额自动计算</label><div id="sub-amount-preview" style="padding:9px 0;font-weight:600;color:var(--primary)">—</div></div>'+
+        '</div>'+
+        '<div class="form-row">'+
+          '<div><label>备注</label><input id="new-order-remark" placeholder="可选备注"></div>'+
+          '<div style="display:flex;align-items:end"><button class="btn btn-primary" id="create-order-btn">+ 创建订单</button></div>'+
+        '</div>'+
+      '</div>'+
+      '<div class="card"><div class="card-header"><h2>订单列表</h2>'+
+        '<div style="display:flex;gap:8px">'+
+          '<button class="btn btn-outline btn-sm filter-btn on" data-status="">全部</button>'+
+          '<button class="btn btn-outline btn-sm filter-btn" data-status="pending">待确认</button>'+
+          '<button class="btn btn-outline btn-sm filter-btn" data-status="paid">已收款</button>'+
+          '<button class="btn btn-outline btn-sm filter-btn" data-status="expired">已过期</button>'+
+        '</div>'+
+      '</div><div class="orders-table"></div></div>';
+
+    // 填充用户下拉
+    function populateUserSelect(filter){
+      var list=filter?allUsers.filter(function(u){
+        var q=filter.toLowerCase();
+        return (u.email||'').toLowerCase().indexOf(q)!==-1 || (u.display_name||'').toLowerCase().indexOf(q)!==-1;
+      }) : allUsers;
+      filteredUsers=list;
+      var sel=c.querySelector('#new-order-user');
+      var html=list.length?list.map(function(u){
+        var pts=Math.round((u.credit_balance||0)/50000);
+        return '<option value="'+u.id+'">'+esc(u.email)+' — '+pts+'积分 ($'+(pts/10).toFixed(2)+') '+(u.display_name?esc(u.display_name):'')+'</option>';
+      }).join(''):'<option value="">无匹配用户</option>';
+      sel.innerHTML=html;
+    }
+    populateUserSelect('');
+
+    // 用户搜索
+    c.querySelector('.order-user-search').addEventListener('input',function(e){populateUserSelect(e.target.value)});
+    c.querySelector('#new-order-user').addEventListener('change',function(){
+      var uid=this.value;
+      var u=filteredUsers.find(function(x){return x.id===uid});
+      c.querySelector('.order-user-info').innerHTML=u?esc(u.email)+' · '+Math.round((u.credit_balance||0)/50000)+'积分 ($'+((u.credit_balance||0)/QPU).toFixed(2)+') · '+esc(u.display_name||'')+' <button class="btn btn-ghost copy-btn" data-uid="'+uid+'" style="font-size:10px">📋</button>':'—';
+    });
+
+    // 类型切换 → 显示/隐藏套餐字段、自动填 VIP 金额
+    c.querySelector('#new-order-type').addEventListener('change',function(){
+      var type=this.value;
+      c.querySelector('#sub-fields').style.display=type==='subscription'?'grid':'none';
+      if(type==='vip'){
+        c.querySelector('#new-order-amount').value='69800';
+      }else if(type==='subscription'){
+        updateSubAmount();
+      }else{
+        c.querySelector('#new-order-amount').value='';
+      }
+    });
+
+    // 套餐/周期变化 → 重新计算金额
+    function updateSubAmount(){
+      var plan=c.querySelector('#new-order-plan').value;
+      var cycle=c.querySelector('#new-order-cycle').value;
+      var PRICES={standard:{monthly:2900,yearly:29600},plus:{monthly:4900,yearly:50000},pro:{monthly:9900,yearly:101000}};
+      var amt=(PRICES[plan]||{})[cycle]||0;
+      var pts=Math.round(amt/10);c.querySelector('#sub-amount-preview').textContent='¥'+(amt/100).toFixed(2)+'（'+pts+' 积分）';
+      c.querySelector('#new-order-amount').value=amt;
+    }
+    c.querySelector('#new-order-plan').addEventListener('change',updateSubAmount);
+    c.querySelector('#new-order-cycle').addEventListener('change',updateSubAmount);
+
+    // 创建订单
+    c.querySelector('#create-order-btn').addEventListener('click',function(){
+      var uid=c.querySelector('#new-order-user').value;
+      var type=c.querySelector('#new-order-type').value;
+      var amount=parseInt(c.querySelector('#new-order-amount').value,10);
+      var remark=c.querySelector('#new-order-remark').value.trim();
+      if(!uid){toast('请选择用户',false);return}
+      if(!amount||amount<=0){toast('请填写有效金额',false);return}
+      var body={userId:uid,type:type,amountRmb:amount,remark:remark};
+      if(type==='subscription'){
+        body.plan=c.querySelector('#new-order-plan').value;
+        body.cycle=c.querySelector('#new-order-cycle').value;
+      }
+      api('/admin/orders',{method:'POST',body:JSON.stringify(body)})
+        .then(function(r){toast('订单已创建，'+r.credits+' 积分');loadOrders()})
+        .catch(function(e){toast(e.message,false)});
+    });
+
+    loadOrders();
+  }).catch(function(e){c.innerHTML='<h1 class="page-title">📦 订单管理</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>'});
+
+  function loadOrders(){
+    api('/admin/orders?status='+status+'&limit=50').then(function(r){
+      var rows=r.orders||[];
+      if(!rows.length){c.querySelector('.orders-table').innerHTML='<div class="empty-state"><div class="empty-icon">📦</div>暂无订单</div>';return}
+      var h='<table><thead><tr><th>用户</th><th>类型</th><th>金额</th><th>积分</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>';
+      var TYPE={topup:'💰 充值',vip:'👑 VIP',subscription:'📋 套餐'};
+      var STATUS={pending:'<span class="badge badge-warn">待确认</span>',paid:'<span class="badge badge-success">已收款</span>',expired:'<span class="badge badge-info">已过期</span>'};
+      var PLAN={standard:'标准版',plus:'Plus版',pro:'Pro版'};
+      rows.forEach(function(o){
+        var typeLabel=TYPE[o.type]||o.type;
+        if(o.type==='subscription'&&o.plan) typeLabel+=' · '+(PLAN[o.plan]||o.plan)+' · '+(o.cycle==='yearly'?'年付':'月付');
+        h+='<tr><td><div style="font-weight:500">'+esc(o.user_email||'?')+'</div><div style="font-size:11px;color:var(--muted)">'+(o.user_name?esc(o.user_name):'')+(o.user_id?' <button class="btn btn-ghost copy-btn" data-uid="'+o.user_id+'" style="font-size:9px;padding:1px 4px">📋</button>':'')+'</div></td>'+
+          '<td>'+typeLabel+'</td>'+
+          '<td>¥'+(o.amount_rmb/100).toFixed(2)+'</td>'+
+          '<td>'+o.credits.toLocaleString()+' 积分</td>'+
+          '<td>'+(STATUS[o.status]||o.status)+'</td>'+
+          '<td style="font-size:12px;color:var(--muted)">'+fmtDateTime(o.created_at)+'</td>'+
+          '<td>'+(o.status==='pending'?
+            '<button class="btn btn-primary btn-sm confirm-btn" data-oid="'+o.id+'" data-amt="'+(o.amount_rmb/100).toFixed(2)+'">确认收款</button> '+
+            '<button class="btn btn-outline btn-sm expire-btn" data-oid="'+o.id+'">过期</button>'
+            :'')+'</td></tr>';
+      });
+      h+='</tbody></table>';
+      c.querySelector('.orders-table').innerHTML=h;
+
+      // confirm
+      c.querySelectorAll('.confirm-btn').forEach(function(b){
         b.addEventListener('click',function(){
-          c.querySelector('.pm-model').value=b.dataset.m;
-          c.querySelector('.pm-input').value=b.dataset.i;
-          c.querySelector('.pm-output').value=b.dataset.o;
-          c.querySelector('.pm-cache').value=b.dataset.cr||'0.1';
+          if(!confirm('确认收到 ¥'+b.dataset.amt+' ？'))return;
+          api('/admin/orders/'+b.dataset.oid+'/confirm',{method:'POST'}).then(function(){toast('已确认收款');loadOrders()}).catch(function(e){toast(e.message,false)});
         });
       });
-      c.querySelectorAll('.del-price-btn').forEach(function(b){
+      // expire
+      c.querySelectorAll('.expire-btn').forEach(function(b){
         b.addEventListener('click',function(){
-          if(!confirm('确定删除 '+b.dataset.m+' 的价格配置？'))return;
-          api('/admin/pricing/'+encodeURIComponent(b.dataset.m),{method:'DELETE'}).then(function(){toast('已删除');loadPricing()}).catch(function(e){toast(e.message,false)});
+          if(!confirm('确定将此订单标记为过期？'))return;
+          api('/admin/orders/'+b.dataset.oid+'/expire',{method:'POST'}).then(function(){toast('已标记过期');loadOrders()}).catch(function(e){toast(e.message,false)});
         });
       });
-    }).catch(function(e){c.querySelector('.pricing-list').innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div>'});
+      // copy user ID buttons in orders table
+      c.querySelectorAll('.copy-btn').forEach(function(b){
+        b.addEventListener('click',function(e){e.stopPropagation();navigator.clipboard.writeText(b.dataset.uid).then(function(){toast('已复制用户ID')})});
+      });
+    }).catch(function(e){c.querySelector('.orders-table').innerHTML='<div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div>'});
   }
+
+  loadOrders();
+
+  c.querySelectorAll('.filter-btn').forEach(function(b){
+    b.addEventListener('click',function(){
+      status=b.dataset.status;
+      c.querySelectorAll('.filter-btn').forEach(function(bb){bb.className='btn btn-outline btn-sm filter-btn'+(bb.dataset.status===status?' on':'')});
+      loadOrders();
+    });
+  });
 }
 
 function esc(s){s=s||'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -414,7 +608,8 @@ function init(){
         '<a href="#users"><span class="nav-icon">👥</span> 用户管理</a>'+
         '<a href="#channels"><span class="nav-icon">🔌</span> 渠道管理</a>'+
         '<a href="#credits"><span class="nav-icon">💰</span> 额度管理</a>'+
-        '<a href="#activation"><span class="nav-icon">🎫</span> 激活码</a><a href="#pricing"><span class="nav-icon">💲</span> 模型定价</a>'+
+        '<a href="#orders"><span class="nav-icon">📦</span> 订单管理</a>'+
+        '<a href="#activation"><span class="nav-icon">🎫</span> 激活码</a><a href="#redemption"><span class="nav-icon">🎁</span> 兑换码</a>'+
       '</div>'+
       '<div class="sidebar-footer"><a href="#" id="logout-btn">🚪 退出登录</a></div>'+
     '</nav>'+
