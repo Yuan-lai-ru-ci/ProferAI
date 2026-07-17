@@ -2,12 +2,13 @@ import { Hono } from 'hono'
 import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 import { v4 as uuidv4 } from 'uuid'
-import { db, ensureCreditRow, getUserByEmail, ensureRelayToken, rotateRelayToken, validateActivationCode } from '../db.js'
-import { JWT_SECRET, JWT_EXPIRES, ACCESS_TOKEN_EXPIRES, MAX_LOGIN_ATTEMPTS, ACCOUNT_LOCK_MINUTES, COMMERCIAL_MODE, getAccountCapability } from '../config.js'
+import { db, ensureCreditRow, getUserByEmail, ensureRelayToken, rotateRelayToken, validateActivationCode, createInviteCode, getInviterByCode, recordInviteEvent } from '../db.js'
+import { JWT_SECRET, JWT_EXPIRES, ACCESS_TOKEN_EXPIRES, MAX_LOGIN_ATTEMPTS, ACCOUNT_LOCK_MINUTES, COMMERCIAL_MODE, PER_USER_NEWAPI_KEY, NEWAPI_USER_INITIAL_QUOTA, getSubscriptionCap } from '../config.js'
 import { hashPassword, verifyPassword, validatePassword, validateEmail, clientIP } from '../utils.js'
 import { rateLimit } from '../rate-limiter.js'
 import { logAudit } from '../audit.js'
 import { hashToken, authMiddleware } from '../middleware.js'
+import { createNewApiUser, generateNewApiToken, provisionNewApiUser } from '../newapi-client.js'
 
 /** 生成加密安全的 refresh token（256 位熵） */
 function generateRefreshToken() {
@@ -56,6 +57,7 @@ function listUserDevices(userId) {
 function registerDeviceToken(userId, refreshToken, meta) {
   const { deviceId, deviceName, platform, appVersion, maxDevices } = meta
   const now = Date.now()
+  const isWeb = platform === 'web'
   if (deviceId) {
     const existing = db.prepare('SELECT id FROM refresh_tokens WHERE user_id = ? AND device_id = ?').get(userId, deviceId)
     if (existing) {
@@ -63,9 +65,12 @@ function registerDeviceToken(userId, refreshToken, meta) {
         .run(refreshToken, deviceName || null, platform || null, appVersion || null, now, existing.id)
       return { ok: true }
     }
-    const count = db.prepare('SELECT COUNT(*) as c FROM refresh_tokens WHERE user_id = ?').get(userId).c
-    if (count >= maxDevices) {
-      return { ok: false, maxDevices, devices: listUserDevices(userId) }
+    // Web 端登录不占设备槽位，跳过数量检查
+    if (!isWeb) {
+      const count = db.prepare('SELECT COUNT(*) as c FROM refresh_tokens WHERE user_id = ? AND (platform IS NULL OR platform != ?)').get(userId, 'web').c
+      if (count >= maxDevices) {
+        return { ok: false, maxDevices, devices: listUserDevices(userId) }
+      }
     }
     db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(uuidv4(), userId, refreshToken, deviceId, deviceName || null, platform || null, appVersion || null, now, now)
@@ -83,12 +88,9 @@ function registerDeviceToken(userId, refreshToken, meta) {
 }
 
 // ===== 注册 =====
-// 支持两种方式：
-//   邀请码 (invitationToken) → 绑定工作区，account_type 默认 standard
-//   激活码 (activationCode)  → 不绑定工作区，account_type 从激活码取
-//
-//   当前端同时传 invitationToken + activationCode（同一值）时：
-//   优先尝试邀请码 → 回退尝试激活码 → 两个都无效才报错
+// 邀请码制（inviteCode）为主入口，需填写已有用户的邀请码才能注册。
+// activationCode 保留为管理员后门（直接开号，不走邀请链路）。
+// invitationToken 为工作区邀请（加入已有团队），可选。
 authRoutes.post('/register', async (c) => {
   const rl = rateLimit(`register:${clientIP(c)}`, 5 * 60 * 1000, 10)
   if (!rl.allowed) {
@@ -96,16 +98,12 @@ authRoutes.post('/register', async (c) => {
   }
 
   const body = await c.req.json()
-  const { email, password, displayName, invitationToken, activationCode, deviceId, deviceName, platform, appVersion } = body || {}
+  const { email, password, displayName, inviteCode, activationCode, invitationToken, deviceId, deviceName, platform, appVersion } = body || {}
 
   const emailErr = validateEmail(email)
   if (emailErr) return c.json({ error: emailErr }, 400)
   const pwdErr = validatePassword(password)
   if (pwdErr) return c.json({ error: pwdErr }, 400)
-
-  if (!invitationToken && !activationCode) {
-    return c.json({ error: '需要邀请码或激活码才能注册' }, 400)
-  }
 
   // 检查邮箱是否已注册
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email)
@@ -113,46 +111,51 @@ authRoutes.post('/register', async (c) => {
     return c.json({ error: '该邮箱已注册，请直接登录', alreadyRegistered: true }, 409)
   }
 
-  let accountType = 'standard'
+  let membershipTier = 'free'
   let workspaceName = ''
   let workspaceId = ''
+  let inviterId = null
 
-  // ---- 分支 A：邀请码优先（处理 invitationToken + activationCode 同值场景）----
+  // ---- 分支 A：激活码注册（管理员后门，无需邀请码）----
+  if (activationCode && !inviteCode) {
+    const ac = validateActivationCode(activationCode)
+    if (!ac.valid) return c.json({ error: ac.error }, 400)
+    membershipTier = ac.membershipTier || 'free'
+    db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ?")
+      .run(email, Date.now(), activationCode)
+  }
+  // ---- 分支 B：邀请码注册（主入口）----
+  // 先查邀请码，查不到则 fallback 尝试激活码（管理员后台生成的码也能走注册 UI）
+  else if (inviteCode) {
+    const inviter = getInviterByCode(inviteCode)
+    if (inviter) {
+      inviterId = inviter.user_id
+    } else {
+      // fallback：作为激活码校验
+      const ac = validateActivationCode(inviteCode)
+      if (!ac.valid) return c.json({ error: ac.error || '邀请码无效' }, 400)
+      membershipTier = ac.membershipTier || 'free'
+      db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ?")
+        .run(email, Date.now(), inviteCode)
+    }
+  }
+  // ---- 必须提供 inviteCode 或 activationCode ----
+  else {
+    return c.json({ error: '需要邀请码才能注册' }, 400)
+  }
+
+  // ---- 可选：工作区邀请（加入已有团队）----
   if (invitationToken) {
     const inv = db.prepare(`
       SELECT i.*, w.name as workspace_name FROM invitations i
       JOIN workspaces w ON i.workspace_id = w.id
       WHERE i.token = ?
     `).get(invitationToken)
-
     if (inv && inv.status === 'pending' && inv.expires_at >= Date.now()) {
-      // ✅ 是有效邀请码
       workspaceId = inv.workspace_id
       workspaceName = inv.workspace_name
-    } else if (inv) {
-      // 邀请码存在但状态不对
-      if (inv.status !== 'pending') return c.json({ error: '邀请码已被使用' }, 410)
-      if (inv.expires_at < Date.now()) return c.json({ error: '邀请码已过期' }, 410)
-    } else if (activationCode) {
-      // invitationToken 不是有效邀请码，回退尝试作为激活码
-      const ac = validateActivationCode(activationCode)
-      if (!ac.valid) return c.json({ error: ac.error }, 400)
-      accountType = ac.accountType || 'standard'
-      // 标记激活码已使用
-      db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ?")
-        .run(email, Date.now(), activationCode)
-    } else {
-      return c.json({ error: '邀请码无效' }, 400)
     }
-  }
-  // ---- 分支 B：仅激活码注册（没有 invitationToken 但有 activationCode）----
-  else if (activationCode) {
-    const ac = validateActivationCode(activationCode)
-    if (!ac.valid) return c.json({ error: ac.error }, 400)
-    accountType = ac.accountType || 'standard'
-    // 标记激活码已使用
-    db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ?")
-      .run(email, Date.now(), activationCode)
+    // 工作区邀请失败不阻塞注册
   }
 
   const id = uuidv4()
@@ -161,16 +164,24 @@ authRoutes.post('/register', async (c) => {
 
   const tx = db.transaction(() => {
     db.prepare(
-      'INSERT INTO users (id, email, password_hash, display_name, refresh_token, account_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, email, hashPassword(password), displayName || email.split('@')[0], refreshToken, accountType, now)
+      'INSERT INTO users (id, email, password_hash, display_name, refresh_token, membership_tier, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, email, hashPassword(password), displayName || email.split('@')[0], refreshToken, membershipTier, inviterId, now)
 
-    // 登记设备（注册时必然是首台设备，不会触发上限）
+    // 登记设备（注册时必然是首台设备）
     registerDeviceToken(id, refreshToken, {
       deviceId, deviceName, platform, appVersion,
-      maxDevices: getAccountCapability(accountType).maxDevices,
+      maxDevices: getSubscriptionCap(membershipTier).maxDevices,
     })
 
-    // 仅邀请码注册加入工作区
+    // 生成本人的邀请码
+    createInviteCode(id)
+
+    // 记录邀请事件
+    if (inviterId) {
+      recordInviteEvent({ inviterId, inviteeId: id, event: 'register' })
+    }
+
+    // 加入工作区（如有工作区邀请）
     if (workspaceId) {
       db.prepare(
         'INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
@@ -183,19 +194,55 @@ authRoutes.post('/register', async (c) => {
   })
   tx()
 
-  ensureCreditRow(id, accountType)
-  logAudit({ action: 'register', workspaceId: workspaceId || undefined, userId: id, userEmail: email, detail: workspaceName ? `joined: ${workspaceName}` : `type: ${accountType}` })
+  ensureCreditRow(id)
+  logAudit({ action: 'register', workspaceId: workspaceId || undefined, userId: id, userEmail: email, detail: `${workspaceName ? `joined: ${workspaceName}` : ''} invited_by: ${inviterId || 'activation_code'}` })
+
+  // New API 创建用户 + API Key
+  if (COMMERCIAL_MODE) {
+    if (PER_USER_NEWAPI_KEY) {
+      // 每用户独立 Key：同步创建，失败阻塞注册
+      const r = await provisionNewApiUser(email, displayName || email.split('@')[0], NEWAPI_USER_INITIAL_QUOTA)
+      if (!r.ok) {
+        console.error(`[register] New API 账号创建失败 (user=${email}): ${r.error}`)
+        return c.json({ error: '服务暂时不可用，请稍后重试' }, 503)
+      }
+      db.prepare('UPDATE users SET new_api_user_id = ?, new_api_key_encrypted = ? WHERE id = ?')
+        .run(r.userId, r.tokenKey, id)
+    } else {
+      // 旧方案：异步 fire-and-forget，不阻塞注册（未启用独立 Key 时的存量兼容路径）
+      createNewApiUser(email, displayName || email.split('@')[0]).then(async (r) => {
+        if (r.ok) {
+          db.prepare('UPDATE users SET new_api_user_id = ? WHERE id = ?').run(r.userId, id)
+          const tk = await generateNewApiToken(r.userId)
+          if (tk.ok) {
+            db.prepare('UPDATE users SET new_api_key_encrypted = ? WHERE id = ?').run(tk.key, id)
+          } else {
+            console.warn(`[register] New API Token 生成失败 (user=${email}, newApiId=${r.userId}): ${tk.error}`)
+          }
+        } else {
+          console.warn(`[register] New API 用户创建失败 (user=${email}): ${r.error}`)
+        }
+      })
+    }
+  }
 
   const relayToken = COMMERCIAL_MODE ? ensureRelayToken(id) : undefined
 
-  const accessToken = jwt.sign({ sub: id, email, is_admin: false, commercial_mode: COMMERCIAL_MODE, account_type: accountType }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
+  const accessToken = jwt.sign({ sub: id, email, is_admin: false, commercial_mode: COMMERCIAL_MODE, membership_tier: membershipTier }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
   const tokenExpiresAt = now + expiresInSeconds(ACCESS_TOKEN_EXPIRES) * 1000
+  const myInviteCode = db.prepare('SELECT code FROM invite_codes WHERE user_id = ?').get(id)?.code || ''
+
   return c.json({
     accessToken, refreshToken, expiresAt: tokenExpiresAt, relayToken,
     userId: id, teamAccountId: id, teamEmail: email,
     email, displayName: displayName || email.split('@')[0],
-    commercialMode: COMMERCIAL_MODE, accountType,
-    canSelfConfigApi: false, joinedWorkspace: workspaceName || undefined,
+    commercialMode: COMMERCIAL_MODE, membershipTier,
+    canSelfConfigApi: getSubscriptionCap(membershipTier).canSelfConfig || false,
+    joinedWorkspace: workspaceName || undefined,
+    // 会员 & 积分
+    isVip: false, multiplier: 1.0,
+    inviteCode: myInviteCode,
+    balancePackage: 0, balanceReferral: 0, balancePurchased: 0,
   })
 })
 
@@ -240,10 +287,29 @@ authRoutes.post('/login', async (c) => {
   db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id)
   ensureCreditRow(user.id)
 
-  // 生成新的 refreshToken，写入独立表（支持多设备同时在线，最多 3 台）
+  // 老账号补建邀请码（注册时可能还没有邀请码系统）
+  try { createInviteCode(user.id) } catch (e) { console.warn('[login] 补建邀请码失败:', e.message) }
+
+  // 存量用户补建 New API 账号（登录时检查，无独立 Key 则补建）
+  if (COMMERCIAL_MODE && PER_USER_NEWAPI_KEY && !user.new_api_key_encrypted) {
+    try {
+      const r = await provisionNewApiUser(user.email, user.display_name, NEWAPI_USER_INITIAL_QUOTA)
+      if (r.ok) {
+        db.prepare('UPDATE users SET new_api_user_id = ?, new_api_key_encrypted = ? WHERE id = ?')
+          .run(r.userId, r.tokenKey, user.id)
+        console.log(`[login] 已为存量用户补建 New API 账号 (user=${user.email}, newApiId=${r.userId})`)
+      } else {
+        console.warn(`[login] 补建 New API 账号失败 (user=${user.email}): ${r.error}`)
+      }
+    } catch (e) {
+      console.warn(`[login] 补建 New API 账号异常 (user=${user.email}): ${e.message}`)
+    }
+  }
+
+  // 生成新的 refreshToken，写入独立表（支持多设备同时在线）
   const refreshToken = generateRefreshToken()
-  const accountType = user.account_type || 'standard'
-  const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, account_type: accountType }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
+  const membershipTier = user.membership_tier || 'free'
+  const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, membership_tier: membershipTier }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
 
   // 可选：先撤销一台设备（用户在上限 409 的设备列表里选的），必须属于本人
   if (revokeSlotId) {
@@ -253,7 +319,7 @@ authRoutes.post('/login', async (c) => {
   // 登记设备（注册设备数模型）：同设备复用槽位不 churn；新设备满额则 409 让用户显式撤销
   const reg = registerDeviceToken(user.id, refreshToken, {
     deviceId, deviceName, platform, appVersion,
-    maxDevices: getAccountCapability(accountType).maxDevices,
+    maxDevices: getSubscriptionCap(membershipTier).maxDevices,
   })
   if (!reg.ok) {
     return c.json({
@@ -280,8 +346,15 @@ authRoutes.post('/login', async (c) => {
     displayName: user.display_name,
     isAdmin: !!user.is_admin,
     commercialMode: COMMERCIAL_MODE,
-    accountType,
-    canSelfConfigApi: !!user.can_self_config_api,
+    membershipTier,
+    canSelfConfigApi: getSubscriptionCap(membershipTier).canSelfConfig || false,
+    // 会员 & 积分
+    isVip: !!user.is_vip,
+    multiplier: user.multiplier || 1.0,
+    inviteCode: db.prepare('SELECT code FROM invite_codes WHERE user_id = ?').get(user.id)?.code || '',
+    balancePackage: user.balance_package || 0,
+    balanceReferral: user.balance_referral || 0,
+    balancePurchased: user.balance_purchased || 0,
   })
 })
 
@@ -293,8 +366,8 @@ authRoutes.post('/refresh', async (c) => {
   // 从多设备 refresh_tokens 表查找（向后兼容旧的 users.refresh_token）
   const tokenRow = db.prepare('SELECT id, user_id, device_id FROM refresh_tokens WHERE token = ?').get(refreshToken)
   const user = tokenRow
-    ? db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended, can_self_config_api FROM users WHERE id = ?').get(tokenRow.user_id)
-    : db.prepare('SELECT id, email, display_name, account_type, is_admin, is_suspended, can_self_config_api FROM users WHERE refresh_token = ?').get(refreshToken)
+    ? db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE id = ?').get(tokenRow.user_id)
+    : db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE refresh_token = ?').get(refreshToken)
   if (!user) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
 
   if (user.is_suspended) {
@@ -309,8 +382,11 @@ authRoutes.post('/refresh', async (c) => {
 
   ensureCreditRow(user.id)
 
-  const accountType = user.account_type || 'standard'
-  const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, account_type: accountType }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
+  // 老账号补建邀请码（注册时可能还没有邀请码系统）
+  try { createInviteCode(user.id) } catch (e) { console.warn('[refresh] 补建邀请码失败:', e.message) }
+
+  const membershipTier = user.membership_tier || 'free'
+  const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, membership_tier: membershipTier }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
 
   // 轮换 refreshToken：更新 refresh_tokens 表中的记录
   const newRefreshToken = generateRefreshToken()
@@ -338,8 +414,8 @@ authRoutes.post('/refresh', async (c) => {
   // 代管模式下回带 relay 令牌，确保客户端始终持有（幂等，不存在则生成）
   const relayToken = COMMERCIAL_MODE ? ensureRelayToken(user.id) : undefined
 
-  // refresh 时重新读取 DB 里的 account_type 和 can_self_config_api，
-  // 确保管理员改类型后下次 refresh 即生效（不超 1h）
+  // refresh 时重新读取 DB 里的 membership_tier，
+  // 确保管理员改等级后下次 refresh 即生效（不超 1h）
   return c.json({
     accessToken,
     refreshToken: newRefreshToken,
@@ -352,8 +428,15 @@ authRoutes.post('/refresh', async (c) => {
     displayName: user.display_name,
     isAdmin: !!user.is_admin,
     commercialMode: COMMERCIAL_MODE,
-    accountType,
-    canSelfConfigApi: !!user.can_self_config_api,
+    membershipTier,
+    canSelfConfigApi: getSubscriptionCap(membershipTier).canSelfConfig || false,
+    // 会员 & 积分
+    isVip: !!user.is_vip,
+    multiplier: user.multiplier || 1.0,
+    inviteCode: db.prepare('SELECT code FROM invite_codes WHERE user_id = ?').get(user.id)?.code || '',
+    balancePackage: user.balance_package || 0,
+    balanceReferral: user.balance_referral || 0,
+    balancePurchased: user.balance_purchased || 0,
   })
 })
 

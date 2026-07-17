@@ -14,6 +14,8 @@ services:
     volumes:
       # 持久化数据：数据库 + 上传文件
       - promadata:/app/data
+      # NewAPI 数据库共享（PER_USER_NEWAPI_KEY 模式下需要直接读写 NewAPI SQLite）
+      - ${NEWAPI_DATA_DIR:-/home/ecs-user/new-api-data}:/app/new-api-data
     environment:
       # === 必填 ===
       - JWT_SECRET=${JWT_SECRET}
@@ -27,7 +29,15 @@ services:
       - RELAY_BASE_URL=${RELAY_BASE_URL:-http://127.0.0.1:3080}
       - RELAY_API_KEY=${RELAY_API_KEY:-}
       - NEWAPI_ADMIN_TOKEN=${NEWAPI_ADMIN_TOKEN:-}
+      - NEWAPI_ADMIN_USER_ID=${NEWAPI_ADMIN_USER_ID:-2}
       - DEFAULT_CREDIT_GRANT=${DEFAULT_CREDIT_GRANT:-1000}
+      # === MinerU 论文解析 ===
+      - MINERU_API_KEY=${MINERU_API_KEY:-}
+      # === 飞书意见箱 ===
+      - LARK_APP_ID=${LARK_APP_ID:-}
+      - LARK_APP_SECRET=${LARK_APP_SECRET:-}
+      - LARK_FEEDBACK_BASE_TOKEN=${LARK_FEEDBACK_BASE_TOKEN:-SZ59bPc7Sabn0usFytdcR5xTnIb}
+      - LARK_FEEDBACK_TABLE_ID=${LARK_FEEDBACK_TABLE_ID:-tbltUYCTDxdcWMBT}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3456/health',r=>{process.exit(r.statusCode===200?0:1)})"]
       interval: 30s

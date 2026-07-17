@@ -37,14 +37,15 @@ afterAll(() => {
   }
 })
 
-/** 创建一个带额度行的测试用户，返回 userId。grant 默认 100（覆盖账号类型默认额度）。 */
+/** 创建一个带额度行的测试用户，返回 userId。grant 默认 100（写入 balance_purchased 桶）。 */
 function makeUser(id, grant = 100) {
   const { db, ensureCreditRow } = dbModule
   db.prepare(
     'INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES (?, ?, ?, ?, ?)',
   ).run(id, `${id}@example.com`, 'hash', id, Date.now())
+  // ensureCreditRow 会给 balance_package 加 DEFAULT_CREDIT_GRANT，先复位再按 grant 写入 balance_purchased
   ensureCreditRow(id)
-  // ensureCreditRow 按账号类型给默认额度，这里统一改写成测试期望的确定值
+  db.prepare('UPDATE users SET balance_package = 0, balance_purchased = ? WHERE id = ?').run(grant, id)
   db.prepare('UPDATE credits SET balance = ? WHERE user_id = ?').run(grant, id)
   return id
 }
@@ -76,13 +77,16 @@ describe('credits adjustment', () => {
 // __APPEND_MARKER__
 
 describe('deductCredits 额度不足', () => {
-  test('余额不足时抛 INSUFFICIENT_CREDITS:<balance>，且不改动余额', () => {
+  test('余额+透支不足时抛 INSUFFICIENT_CREDITS:<balance>，且不改动余额', () => {
     const { deductCredits, getCredits } = dbModule
-    const userId = makeUser('user-insufficient', 5)
+    // balance_purchased=0, overdraft=2,500,000, effective=2,500,000
+    // deduct 2,500,001 > effective → should fail
+    const userId = makeUser('user-insufficient', 0)
+    const OVERDRAFT_LIMIT = 2500000
 
-    expect(() => deductCredits(userId, 10, { description: '超额扣费' })).toThrow(/INSUFFICIENT_CREDITS:5/)
+    expect(() => deductCredits(userId, OVERDRAFT_LIMIT + 1, { description: '超额扣费' })).toThrow(/INSUFFICIENT_CREDITS:0/)
     // 失败的扣费不应改动任何状态
-    expect(getCredits(userId).balance).toBe(5)
+    expect(getCredits(userId).balance).toBe(0)
     expect(getCredits(userId).lifetime_consumed).toBe(0)
   })
 
@@ -122,23 +126,25 @@ describe('并发扣减不超扣', () => {
   test('并发发起多笔扣费，成功笔数受余额约束，余额不为负', async () => {
     const { deductCredits, getCredits } = dbModule
     const userId = makeUser('user-concurrent', 100)
+    const OVERDRAFT_LIMIT = 2500000
 
-    // 并发 15 笔各 10 credits（共需 150），余额仅 100 → 至多成功 10 笔
+    // 并发 15 笔各 200,000 quota，总需求 3,000,000
+    // 余额 100 + 透支 2,500,000 = 2,500,100 → 至多成功 12 笔（12×200,000=2,400,000）
+    const perDeduction = 200000
     const attempts = Array.from({ length: 15 }, (_, i) =>
       Promise.resolve().then(() =>
-        deductCredits(userId, 10, { description: '并发扣费', referenceId: `c-${i}` }),
+        deductCredits(userId, perDeduction, { description: '并发扣费', referenceId: `c-${i}` }),
       ),
     )
     const results = await Promise.allSettled(attempts)
     const ok = results.filter((r) => r.status === 'fulfilled').length
     const failed = results.filter((r) => r.status === 'rejected').length
 
-    expect(ok).toBe(10)
-    expect(failed).toBe(5)
+    expect(ok).toBe(12)
+    expect(failed).toBe(3)
     const credits = getCredits(userId)
-    expect(credits.balance).toBe(0)
-    expect(credits.balance).toBeGreaterThanOrEqual(0)
-    expect(credits.lifetime_consumed).toBe(100)
+    // balance 可为负（透支），但不低于 -OVERDRAFT_LIMIT
+    expect(credits.balance).toBeGreaterThanOrEqual(-OVERDRAFT_LIMIT)
   })
 })
 
