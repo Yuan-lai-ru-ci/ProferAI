@@ -16,7 +16,7 @@
 import Database from 'better-sqlite3'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
-import { DB_PATH } from './src/config.js'
+import { DB_PATH } from '../src/config.js'
 
 const APPLY = process.argv.includes('--apply')
 
