@@ -75,8 +75,8 @@ export const CHANNEL_ENCRYPTION_KEY = (() => {
 })()
 
 // 新用户注册时赠送的默认额度（单位：New API quota，500000 = $1）
-// 默认 500000 = $1 起步。可用 DEFAULT_CREDIT_GRANT 覆盖（直接给 quota 数）。
-export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '500000', 10)
+// 默认 2,500,000 = 50 积分 = $5。可用 DEFAULT_CREDIT_GRANT 覆盖。
+export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '2500000', 10)
 
 // 单次手动充值/发放上限（防呆）。单位 quota（500000=$1）。默认 5 亿 quota = $1000。
 export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '500000000', 10)
@@ -107,34 +107,73 @@ export const NEWAPI_QUOTA_PER_UNIT = parseInt(process.env.NEWAPI_QUOTA_PER_UNIT 
 // 默认 1.0（成本价，不加价）。要赚差价设 >1（如 1.5 = 加价 50%）。
 export const BILLING_MARKUP = parseFloat(process.env.BILLING_MARKUP || '1.0')
 
-// ===== 多类账号体系 =====
-// 账号类型决定工作区配额 + 初始额度。自配 API 为独立开关（users.can_self_config_api）。
-// 要加新类型：在此对象加一行即可。
-// 账号类型赠送额单位：New API quota（500000 = $1）。restricted $0.5 / standard $1 / advanced $5。
-export const ACCOUNT_TYPES = {
-  restricted: {
-    label: '受限用户',
-    maxWorkspaces: 0,
-    maxDevices: parseInt(process.env.MAX_DEVICES_RESTRICTED || '2', 10),
-    defaultCreditGrant: parseInt(process.env.CREDIT_RESTRICTED || '250000', 10),
+// ===== 每用户独立 New API Key =====
+// 新用户注册时在 New API 创建的初始额度（quota 单位，500000 = $1）。
+// 默认 5,000,000 = $10 等价额度，仅作兜底；Profer 侧实际扣费以本地账本为准。
+export const NEWAPI_USER_INITIAL_QUOTA = parseInt(process.env.NEWAPI_USER_INITIAL_QUOTA || '5000000', 10)
+// 是否启用每用户独立 New API Key（灰度开关，默认关闭）。
+// 开启后注册/登录会同步创建 New API 账号 + 独立 Key；proxy 转发用用户自己的 Key。
+export const PER_USER_NEWAPI_KEY = process.env.PER_USER_NEWAPI_KEY === 'true'
+
+// ===== 订阅制账号体系 =====
+// membership_tier 决定工作区配额 + 模型门控 + 自配 API 权限。
+// 要加新等级：在此对象加一行即可。
+// 设备数统一 4 台，不再按等级区分。
+// 初始赠送额度：50 积分（2,500,000 quota），统一给所有新注册用户。
+export const SUBSCRIPTION_CAPS = {
+  free: {
+    label: '免费用户',
+    maxWorkspaces: 1,
+    maxDevices: 4,
+    defaultCreditGrant: parseInt(process.env.DEFAULT_CREDIT_GRANT || '2500000', 10),
+    canSelfConfig: false,
   },
   standard: {
     label: '标准用户',
-    maxWorkspaces: 3,
-    maxDevices: parseInt(process.env.MAX_DEVICES_STANDARD || '3', 10),
-    defaultCreditGrant: parseInt(process.env.CREDIT_STANDARD || '500000', 10),
+    maxWorkspaces: Infinity,
+    maxDevices: 4,
+    canSelfConfig: false,
   },
-  advanced: {
-    label: '高级用户',
-    maxWorkspaces: 10,
-    maxDevices: parseInt(process.env.MAX_DEVICES_ADVANCED || '5', 10),
-    defaultCreditGrant: parseInt(process.env.CREDIT_ADVANCED || '2500000', 10),
+  plus: {
+    label: 'Plus 用户',
+    maxWorkspaces: Infinity,
+    maxDevices: 4,
+    canSelfConfig: true,
+  },
+  pro: {
+    label: 'Pro 用户',
+    maxWorkspaces: Infinity,
+    maxDevices: 4,
+    canSelfConfig: true,
   },
 }
 
-/** 获取账号类型的能力配置（不存在或旧版本 'team' 均降级为 standard） */
-export function getAccountCapability(type) {
-  // 旧版本遗留的 'team' 类型映射为 standard
-  const normalized = type === 'team' ? 'standard' : type
-  return ACCOUNT_TYPES[normalized] || ACCOUNT_TYPES.standard
+/** 获取订阅等级的能力配置（不存在则降级为 free）。VIP 同 pro。 */
+export function getSubscriptionCap(tier) {
+  if (tier === 'vip') return SUBSCRIPTION_CAPS.pro
+  return SUBSCRIPTION_CAPS[tier] || SUBSCRIPTION_CAPS.free
 }
+
+// ===== MinerU 论文解析 API =====
+// MinerU (mineru.net) 将 PDF 转为结构化 Markdown（含 LaTeX 公式、HTML 表格）。
+// 使用 v4 精准解析 API（批量上传模式），API key 服务端代管，绝不暴露给客户端。
+// 获取 API key: https://mineru.net → API 管理页面
+export const MINERU_API_KEY = process.env.MINERU_API_KEY || ''
+// 论文精读定价：每 10 页 2 积分，最少 1 积分
+export const MINERU_CREDITS_PER_10_PAGES = 2
+
+// ===== Admin 安全限制 =====
+// 批量重置：单次最多重置用户数
+export const MAX_BATCH_RESET_SIZE = parseInt(process.env.MAX_BATCH_RESET_SIZE || '50', 10)
+// 批量重置：每管理员每天最多执行次数
+export const MAX_BATCH_RESET_PER_DAY = parseInt(process.env.MAX_BATCH_RESET_PER_DAY || '3', 10)
+// 单笔订单金额上限（人民币分，默认 ¥1000）
+export const MAX_ORDER_AMOUNT_RMB = parseInt(process.env.MAX_ORDER_AMOUNT_RMB || '100000', 10)
+// 订单双人确认阈值（人民币分，默认 ¥500。超过此金额需另一管理员确认）
+export const ORDER_DUAL_CONFIRM_THRESHOLD = parseInt(process.env.ORDER_DUAL_CONFIRM_THRESHOLD || '50000', 10)
+// 同一管理员每日确认订单总额上限（人民币分，默认 ¥1000）
+export const ORDER_DAILY_CONFIRM_CAP = parseInt(process.env.ORDER_DAILY_CONFIRM_CAP || '100000', 10)
+// 同一管理员每日充值发放总额上限（quota 单位，默认 5000 万 = 100 积分）
+export const DAILY_GRANT_CAP = parseInt(process.env.DAILY_GRANT_CAP || '50000000', 10)
+// 渠道激活确认（test → global 是高风险操作）
+export const CHANNEL_ACTIVATE_CONFIRM_REQUIRED = true
