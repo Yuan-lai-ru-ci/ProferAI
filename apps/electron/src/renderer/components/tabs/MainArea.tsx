@@ -19,6 +19,7 @@ import { TabContent } from './TabContent'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { AutomationsListView } from '@/components/automation/AutomationsListView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
+import { KnowledgeBasePanel } from '@/components/knowledge-base/KnowledgeBasePanel'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
@@ -178,6 +179,9 @@ export function MainArea(): React.ReactElement {
             ) : activeView === 'agent-skills' ? (
               // Agent 技能视图：全屏取代 TabBar + TabContent
               <AgentSkillsView />
+            ) : activeView === 'knowledge-base' ? (
+              // 知识库视图：全屏取代 TabBar + TabContent
+              <KnowledgeBasePanel />
             ) : (
               <>
                 <TabBar />

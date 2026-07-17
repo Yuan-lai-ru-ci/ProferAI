@@ -52,7 +52,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
 
   // ===== 小窗口自动折叠右侧面板 =====
-  const AUTO_HIDE_PANEL_WIDTH = 900
+  const AUTO_HIDE_PANEL_WIDTH = 1200
   const [windowWidth, setWindowWidth] = React.useState(() => window.innerWidth)
   const userOverrodeAutoHideRef = React.useRef(false)
   const prevWidthRef = React.useRef<number | null>(null)
@@ -223,7 +223,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
       {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭）。
           团队工作区会把按钮嵌入文件管理顶栏，避免右侧 Agent 收起条被覆盖。 */}
-      {!showTeamWorkspaceView && <WindowControls />}
+      {!showTeamWorkspaceView && activeView !== 'knowledge-base' && <WindowControls />}
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
