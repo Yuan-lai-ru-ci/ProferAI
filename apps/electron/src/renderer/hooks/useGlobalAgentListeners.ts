@@ -46,6 +46,7 @@ import {
   notificationsEnabledAtom,
   notificationSoundEnabledAtom,
   notificationSoundsAtom,
+  customNotificationSoundsAtom,
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -55,11 +56,10 @@ import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTab
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta } from '@profer/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, ProferEvent, AgentSessionMeta } from '@profer/shared'
 import { inferContextWindow } from '@profer/shared'
-import { parseDependsOn, stripMetaTags } from '@profer/project-core'
+import { taskActivityToGraphEvents } from '@/lib/task-graph-events'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
-import { parseTaskCreateResult } from '@/components/agent/task-progress'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 
 /** 从 delegate_agent 工具返回的 JSON 中提取 delegationId 和 childSessionId */
@@ -127,7 +127,7 @@ function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
 // ============================================================================
 
 function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
-  if (payload.kind === 'proma_event') {
+  if (payload.kind === 'profer_event') {
     const evt = payload.event
     switch (evt.type) {
       case 'permission_request':
@@ -396,7 +396,7 @@ export function useGlobalAgentListeners(): void {
       return sessions.find((s) => s.id === sessionId)?.title ?? '未命名会话'
     }
 
-    const activateExternalAgentRun = (event: Extract<PromaEvent, { type: 'external_run_started' }>): void => {
+    const activateExternalAgentRun = (event: Extract<ProferEvent, { type: 'external_run_started' }>): void => {
       const applyActivation = (sessions: AgentSessionMeta[]): void => {
         const activation = buildExternalAgentRunActivation({
           tabs: store.get(tabsAtom),
@@ -469,6 +469,7 @@ export function useGlobalAgentListeners(): void {
       const enabled = store.get(notificationsEnabledAtom)
       const soundEnabled = store.get(notificationSoundEnabledAtom)
       const sounds = store.get(notificationSoundsAtom)
+      const customSounds = store.get(customNotificationSoundsAtom)
       const sessionTitle = getSessionTitle(sessionId)
       sendDesktopNotification(
         title,
@@ -479,6 +480,7 @@ export function useGlobalAgentListeners(): void {
           playSound: enabled && soundEnabled,
           soundType,
           sounds,
+          customSounds,
           onNavigate: makeNavigateToSession(sessionId, sessionTitle),
         }
       )
@@ -622,7 +624,7 @@ export function useGlobalAgentListeners(): void {
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
 
-        if (payload.kind === 'proma_event' && payload.event.type === 'external_run_started') {
+        if (payload.kind === 'profer_event' && payload.event.type === 'external_run_started') {
           activateExternalAgentRun(payload.event)
         }
 
@@ -790,52 +792,16 @@ export function useGlobalAgentListeners(): void {
               const activity = streamState?.toolActivities.find(a => a.toolUseId === event.toolUseId)
               if (activity && activity.result != null) {
                 const api = window.electronAPI
-                if (activity.toolName === 'TaskCreate') {
-                  const parsedResult = parseTaskCreateResult(activity.result)
-                  const taskId = parsedResult?.id ?? activity.toolUseId
-                  currentTaskIdRef.current = taskId
-                  const subject = typeof activity.input.subject === 'string'
-                    ? activity.input.subject
-                    : (parsedResult?.subject ?? '未命名任务')
-                  const description = typeof activity.input.description === 'string'
-                    ? activity.input.description
-                    : ''
-                  const dependsOn = parseDependsOn(description)
-                  void api.appendGraphEvent?.(sessionId, {
-                    type: 'task_created',
-                    taskId,
-                    timestamp: Date.now(),
-                    payload: { subject: stripMetaTags(subject), description, dependsOn },
-                  })?.catch(() => {})
-                  // 任务创建时关联到当前会话，使 DetailPanel 的「跳转到执行会话」按钮可用
-                  void api.appendGraphEvent?.(sessionId, {
-                    type: 'task_session_linked',
-                    taskId,
-                    timestamp: Date.now(),
-                    payload: { sessionId },
-                  })?.catch(() => {})
-                } else if (activity.toolName === 'TaskUpdate') {
-                  const taskId = activity.input.taskId ?? activity.input.task_id ?? activity.input.id
-                  if (taskId != null) {
-                    currentTaskIdRef.current = String(taskId)
-                    const statusInput = activity.input.status
-                    if (typeof statusInput === 'string' && ['pending', 'in_progress', 'completed', 'failed', 'cancelled'].includes(statusInput)) {
-                      void api.appendGraphEvent?.(sessionId, {
-                        type: 'task_status_changed',
-                        taskId: String(taskId),
-                        timestamp: Date.now(),
-                        payload: { oldStatus: null, newStatus: statusInput as import('@profer/project-core').TaskStatus },
-                      })?.catch(() => {})
-                    }
-                    const subjectInput = activity.input.subject
-                    if (typeof subjectInput === 'string') {
-                      void api.appendGraphEvent?.(sessionId, {
-                        type: 'task_updated',
-                        taskId: String(taskId),
-                        timestamp: Date.now(),
-                        payload: { subject: subjectInput },
-                      })?.catch(() => {})
-                    }
+                if (
+                  activity.toolName === 'TaskCreate' || activity.toolName === 'TaskUpdate' ||
+                  activity.toolName === 'proma_task_create' || activity.toolName === 'proma_task_update'
+                ) {
+                  const conversion = taskActivityToGraphEvents(activity, sessionId, Date.now(), currentTaskIdRef.current)
+                  if (conversion.nextCurrentTaskId) {
+                    currentTaskIdRef.current = conversion.nextCurrentTaskId
+                  }
+                  for (const graphEvent of conversion.events) {
+                    void api.appendGraphEvent?.(sessionId, graphEvent)?.catch(() => {})
                   }
                 } else if (activity.toolName === 'delegate_agent') {
                   // 委派完成：将 delegationId + childSessionId 关联到当前 Task 节点
@@ -991,7 +957,7 @@ export function useGlobalAgentListeners(): void {
             )
           } else if (event.type === 'permission_mode_changed') {
             // 权限模式变更（如 Plan 模式退出后切换到自动审批或完全自动）
-            store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@profer/shared').PromaPermissionMode>) => {
+            store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@profer/shared').ProferPermissionMode>) => {
               const next = new Map(prev)
               next.set(sessionId, event.mode)
               return next
@@ -1026,6 +992,7 @@ export function useGlobalAgentListeners(): void {
         const enabled = store.get(notificationsEnabledAtom)
         const soundEnabled = store.get(notificationSoundEnabledAtom)
         const sounds = store.get(notificationSoundsAtom)
+        const customSounds = store.get(customNotificationSoundsAtom)
         const sessionTitle = getSessionTitle(data.sessionId)
         if (!backgroundTasksPending) {
           sendDesktopNotification(
@@ -1036,6 +1003,7 @@ export function useGlobalAgentListeners(): void {
               playSound: enabled && soundEnabled,
               soundType: 'taskComplete',
               sounds,
+              customSounds,
               onNavigate: makeNavigateToSession(data.sessionId, sessionTitle),
             }
           )
