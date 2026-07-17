@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 import { JWT_SECRET } from './config.js'
-import { db, getUserByRelayToken } from './db.js'
+import { db, getUserByRelayToken, getApiKeyByHash } from './db.js'
 
 // ===== CORS 中间件 =====
 // 注：生产环境应通过 nginx 或反向代理限制 Origin，当前 * 通配符用于内网/开发环境。
@@ -60,13 +60,38 @@ export async function honoAuthMiddleware(c, next) {
 //   2. 标准 accessToken（JWT）— 回退，兼容旧客户端/调试
 //
 // 无论哪种，都把 jwtPayload.sub / userId 设成真实用户 ID，
-// 确保下游 creditCheckMiddleware 和 proxy handler 能正确认人扣费。
+// 确保下游 proxy handler 能正确认人扣费。
 export async function proxyAuthMiddleware(c, next) {
   const auth = c.req.header('Authorization')
   if (!auth?.startsWith('Bearer ')) {
     return c.json({ error: '未提供认证令牌' }, 401)
   }
   const token = auth.slice(7)
+
+  // 开放 API：用户自建 pk_ key（前缀识别）
+  // 只反查用户，绝不等于平台 RELAY_API_KEY；转发仍由 proxy handler 用服务端持有的 key 完成。
+  if (token.startsWith('pk_')) {
+    const rec = getApiKeyByHash(hashToken(token))
+    if (!rec) {
+      return c.json({ error: 'API Key 无效' }, 401)
+    }
+    if (rec.status !== 'active') {
+      return c.json({ error: 'API Key 已停用' }, 403)
+    }
+    if (rec.is_suspended) {
+      return c.json({ error: '账号已被停用' }, 403)
+    }
+    // key 级限额：设了上限且已超，直接拒（quota 单位）
+    if (rec.quota_limit != null && rec.quota_used >= rec.quota_limit) {
+      return c.json({ error: 'API Key 额度已用尽', code: 'apikey_quota_exceeded' }, 402)
+    }
+    // 与 JWT 路径保持同样的 context 形状；额外挂 apiKeyId 供 handler 计费后累加用量
+    c.set('userId', rec.user_id)
+    c.set('jwtPayload', { sub: rec.user_id, membership_tier: rec.membership_tier || 'free' })
+    c.set('apiKeyId', rec.id)
+    await next()
+    return
+  }
 
   // 优先按 relay 令牌处理（前缀识别，避免无谓的 JWT 验签）
   if (token.startsWith('prelay_')) {
@@ -80,7 +105,7 @@ export async function proxyAuthMiddleware(c, next) {
     // 与 JWT 路径保持同样的 context 形状，下游无需区分凭证来源
     c.set('userId', user.id)
     c.set('userEmail', user.email)
-    c.set('jwtPayload', { sub: user.id, email: user.email, is_admin: !!user.is_admin })
+    c.set('jwtPayload', { sub: user.id, email: user.email, is_admin: !!user.is_admin, membership_tier: user.membership_tier || 'free' })
     await next()
     return
   }
