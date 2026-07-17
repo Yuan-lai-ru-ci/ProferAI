@@ -204,7 +204,7 @@ $signature = @"
 using System;
 using System.Runtime.InteropServices;
 
-public static class PromaKeyboardInput
+public static class ProferKeyboardInput
 {
     private const int INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_KEYUP = 0x0002;
@@ -266,5 +266,5 @@ public static class PromaKeyboardInput
 "@
 
 Add-Type -TypeDefinition $signature
-[PromaKeyboardInput]::Paste()
+[ProferKeyboardInput]::Paste()
 `

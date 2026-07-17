@@ -65,15 +65,15 @@ function registerEntry(path: string, isDirectory: boolean): string {
   return `profer-file://${token}`
 }
 
-export function registerPromaFilePath(path: string): string {
+export function registerProferFilePath(path: string): string {
   return registerEntry(path, false)
 }
 
-export function registerPromaDirectoryPath(path: string): string {
+export function registerProferDirectoryPath(path: string): string {
   return registerEntry(path, true)
 }
 
-export function handlePromaFileRequest(request: Request): Promise<Response> | Response {
+export function handleProferFileRequest(request: Request): Promise<Response> | Response {
   let url: URL
   try {
     url = new URL(request.url)

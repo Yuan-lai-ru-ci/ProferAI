@@ -33,15 +33,15 @@ import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-
 // 会去读用户/CLI 的配置目录，导致 dev/生产/CLI 三方 SDK 会话数据互相污染、fork 报
 // "Session not found"。这里强制指向 Profer 隔离目录，检测到外部不同值时打 warn 以便排查。
 {
-  const promaSdkConfigDir = getSdkConfigDir()
+  const proferSdkConfigDir = getSdkConfigDir()
   const ambientConfigDir = process.env.CLAUDE_CONFIG_DIR
-  if (ambientConfigDir && ambientConfigDir !== promaSdkConfigDir) {
+  if (ambientConfigDir && ambientConfigDir !== proferSdkConfigDir) {
     console.warn(
       `[Agent 会话] 检测到外部 CLAUDE_CONFIG_DIR=${ambientConfigDir}（可能来自 Claude Code CLI / shell / CI），` +
-      `已强制覆盖为 Profer 隔离目录: ${promaSdkConfigDir}（配置隔离，避免 SDK 会话数据串目录）`,
+      `已强制覆盖为 Profer 隔离目录: ${proferSdkConfigDir}（配置隔离，避免 SDK 会话数据串目录）`,
     )
   }
-  process.env.CLAUDE_CONFIG_DIR = promaSdkConfigDir
+  process.env.CLAUDE_CONFIG_DIR = proferSdkConfigDir
 }
 import type {
   AgentSessionMeta,
@@ -615,14 +615,14 @@ export function findOrphanSessions(): SessionHealth[] {
     const health: SessionHealth = {
       sessionId: session.id,
       title: session.title,
-      hasPromaJsonl: false,
+      hasProferJsonl: false,
       hasSdkJsonl: false,
       hasWorkspaceDir: false,
       isOrphan: false,
     }
 
     // 检查 Profer JSONL
-    health.hasPromaJsonl = existsSync(getAgentSessionMessagesPath(session.id))
+    health.hasProferJsonl = existsSync(getAgentSessionMessagesPath(session.id))
 
     // 检查 SDK JSONL
     if (session.sdkSessionId) {
@@ -640,7 +640,7 @@ export function findOrphanSessions(): SessionHealth[] {
 
     // 判定孤儿
     const reasons: string[] = []
-    if (!health.hasPromaJsonl && !health.hasSdkJsonl) {
+    if (!health.hasProferJsonl && !health.hasSdkJsonl) {
       reasons.push('Profer 和 SDK JSONL 均缺失')
     } else if (session.sdkSessionId && !health.hasSdkJsonl) {
       reasons.push('SDK JSONL 缺失（无法 resume，每次打开都会触发 session-not-found 恢复）')
