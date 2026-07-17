@@ -1,5 +1,5 @@
 /**
- * 读取 Proma 会话 JSONL → SDKMessage[]
+ * 读取 Profer 会话 JSONL → SDKMessage[]
  *
  * 逻辑迁移自 apps/electron 主进程 agent-session-manager.ts 的
  * getAgentSessionSDKMessages / convertLegacyMessage，作为唯一真源由

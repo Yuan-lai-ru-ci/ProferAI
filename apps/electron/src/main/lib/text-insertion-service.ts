@@ -152,7 +152,7 @@ async function triggerSystemPaste(): Promise<void> {
 
 async function triggerMacPaste(): Promise<void> {
   if (!systemPreferences.isTrustedAccessibilityClient(true)) {
-    throw new Error('需要在 macOS 系统设置中允许 Proma 使用辅助功能')
+    throw new Error('需要在 macOS 系统设置中允许 Profer 使用辅助功能')
   }
 
   await execFileAsync(

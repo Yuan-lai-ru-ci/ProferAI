@@ -1043,10 +1043,10 @@ function ScheduledRunBadge(): React.ReactElement {
       type="button"
       onClick={handleClick}
       className="inline-flex items-center gap-1 text-[10px] text-primary/70 hover:text-primary transition-colors"
-      title="来自 Proma 定时任务，点击查看设置"
+      title="来自 Profer 定时任务，点击查看设置"
     >
       <Clock className="size-3" />
-      <span>来自 Proma 定时任务</span>
+      <span>来自 Profer 定时任务</span>
     </button>
   )
 }

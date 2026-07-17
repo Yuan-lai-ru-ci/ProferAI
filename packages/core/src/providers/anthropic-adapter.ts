@@ -19,8 +19,8 @@
  *
  * Kimi Coding Plan 特殊要求：
  * - Base URL：`https://api.kimi.com/coding/v1`
- * - 必须发送 Proma 自有 User-Agent（服务端白名单校验）
- * - UA 格式：`Proma/<version> (+https://github.com/Yuan-lai-ru-ci/Profer)`（产品名保持 Proma 兼容渠道白名单）
+ * - 必须发送自有 User-Agent（部分渠道白名单校验）
+ * - UA 产品名保持「Proma」以兼容渠道白名单（kimi-coding/zhipu-coding/xiaomi-token-plan）
  */
 
 import type { ProviderType } from '@profer/shared'
@@ -274,7 +274,7 @@ export class AnthropicAdapter implements ProviderAdapter {
    *
    * Kimi Coding Plan 要求：
    * - 只使用 Bearer（服务端校验 User-Agent 白名单）
-   * - User-Agent 使用 Proma 自有标识（通过 setProferVersion 初始化）
+   * - User-Agent 产品名保持「Proma」以兼容渠道白名单（通过 setProferVersion 初始化）
    */
   private buildHeaders(apiKey: string): Record<string, string> {
     const base: Record<string, string> = {
