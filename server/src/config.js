@@ -21,7 +21,7 @@ export const JWT_SECRET = (() => {
     'change-me-to-a-random-64-byte-hex',
   ]
   if (!secret || secret.length < 32 || knownDefaults.includes(secret)) {
-    console.error('[Proma Team Server] 致命错误: JWT_SECRET 未设置、过短或使用了默认不安全值')
+    console.error('[Profer Team Server] 致命错误: JWT_SECRET 未设置、过短或使用了默认不安全值')
     console.error('  请通过环境变量设置: export JWT_SECRET="<随机生成的安全密钥>"')
     console.error('  生成建议: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"')
     process.exit(1)

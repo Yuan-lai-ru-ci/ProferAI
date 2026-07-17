@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — Proma Team Server 安全部署（服务器端执行）
+# deploy.sh — Profer Team Server 安全部署（服务器端执行）
 #
 # 固化 memory/迁移知识包「已验证安全部署流程」，防住三个已知地雷：
 #   1) on-disk src 可能半改不可构建（历史上 feedback.js 引用了 db.js 不存在的导出 → crash-loop）

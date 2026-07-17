@@ -109,7 +109,7 @@ import MiniMaxLogo from '@/assets/models/minimax.png'
 // Xiaomi / MiMo
 import XiaomiLogo from '@/assets/models/xiaomi.png'
 
-// Proma
+// Profer
 import ProferLogo from '@/assets/models/profer.png'
 
 // Cohere

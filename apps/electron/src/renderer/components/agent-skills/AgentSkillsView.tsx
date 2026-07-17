@@ -461,7 +461,7 @@ interface SkillsTabProps {
 
 function SkillsTab({ customSkills, builtinSkills, total, updateCount, updatingSkill, isBuiltin, onOpen, onToggle, onUpdate, onPublish, publishingSlug }: SkillsTabProps): React.ReactElement {
   if (total === 0) {
-    return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Proma 帮你联网查找并安装 Skill，或从其他工作区导入。" />
+    return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Profer 帮你联网查找并安装 Skill，或从其他工作区导入。" />
   }
   if (customSkills.length === 0 && builtinSkills.length === 0) {
     return <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 Skill" hint="试试更换搜索关键词。" />
@@ -539,7 +539,7 @@ function McpTab({ entries, total, onOpen, onToggle, onRequestDelete, onAdd }: Mc
       <EmptyState
         icon={<Plus className="size-8 text-foreground/30" />}
         title="还没有 MCP 服务器"
-        hint="点击右上角「添加服务器」开始，或在 Agent 模式下让 Proma 帮你查找并配置。"
+        hint="点击右上角「添加服务器」开始，或在 Agent 模式下让 Profer 帮你查找并配置。"
         action={
           <button
             type="button"

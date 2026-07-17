@@ -72,7 +72,7 @@ function readIndex(): AutomationsIndex {
     return cachedIndex
   }
   if (data.version > INDEX_VERSION) {
-    // 数据由更高版本的 Proma 写入（用户回滚到旧版的场景）。保留原始 automations 数组只读返回，
+    // 数据由更高版本的 Profer 写入（用户回滚到旧版的场景）。保留原始 automations 数组只读返回，
     // 避免下次 writeIndex 用空数据覆盖磁盘导致永久丢失任务配置和运行历史。
     console.warn(
       `[定时任务] 索引文件版本 ${data.version} 高于当前构建（${INDEX_VERSION}），将以原数据加载，` +

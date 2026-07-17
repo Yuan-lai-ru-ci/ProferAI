@@ -102,7 +102,7 @@ function NowledgeMemSection(): React.ReactElement {
             <ul className="text-xs text-muted-foreground list-disc list-inside space-y-1">
               <li>已下载并安装 Nowledge Mem 桌面客户端（配置时无需登录或注册账号）</li>
               <li>已启动 Nowledge Mem，托盘 / Dock 中能看到运行图标</li>
-              <li>Proma 已切换到 <span className="font-medium text-foreground">Agent 模式</span>（此提示词只能在 Agent 中执行）</li>
+              <li>Profer 已切换到 <span className="font-medium text-foreground">Agent 模式</span>（此提示词只能在 Agent 中执行）</li>
             </ul>
           </div>
 
@@ -119,7 +119,7 @@ function NowledgeMemSection(): React.ReactElement {
               </p>
             </div>
             <p className="text-xs text-muted-foreground pt-1">
-              ⚠️ 提示词执行完成后需要 <span className="font-medium text-foreground">完全退出并重启 Proma</span>，MCP 与 Hooks 才会生效
+              ⚠️ 提示词执行完成后需要 <span className="font-medium text-foreground">完全退出并重启 Profer</span>，MCP 与 Hooks 才会生效
             </p>
           </div>
 
@@ -148,7 +148,7 @@ function NowledgeMemSection(): React.ReactElement {
                 rel="noopener noreferrer"
                 className="text-primary hover:underline inline-flex items-center gap-0.5"
               >
-                Nowledge Mem · Proma 集成文档
+                Nowledge Mem · Profer 集成文档
                 <ExternalLink size={10} />
               </a>
             </p>

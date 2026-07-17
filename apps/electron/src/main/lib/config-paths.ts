@@ -1,7 +1,7 @@
 /**
  * 配置路径工具
  *
- * 管理 Proma 应用的本地配置文件路径。
+ * 管理 Profer 应用的本地配置文件路径。
  * 所有用户配置存储在 ~/.profer/ 目录下。
  */
 
@@ -668,7 +668,7 @@ export function getAgentSessionWorkspacePath(workspaceSlug: string, sessionId: s
  * 获取 SDK 隔离配置目录路径
  *
  * 用于设置 CLAUDE_CONFIG_DIR 环境变量，让 SDK 读取独立的配置文件，
- * 而不是用户的 ~/.claude.json，实现 Proma 与 Claude Code CLI 的配置隔离。
+ * 而不是用户的 ~/.claude.json，实现 Profer 与 Claude Code CLI 的配置隔离。
  *
  * 如果目录不存在则自动创建。
  *

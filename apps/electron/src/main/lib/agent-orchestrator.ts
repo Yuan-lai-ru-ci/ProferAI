@@ -227,7 +227,7 @@ export class AgentOrchestrator {
     }
 
     // 认证方式按 provider 分支
-    // - Kimi Coding Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Proma UA
+    // - Kimi Coding Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Profer UA
     // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
     // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
     // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
@@ -1198,7 +1198,7 @@ export class AgentOrchestrator {
         canUseTool,
         ...(sdkPermissionModeForProferMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
-        // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
+        // buildSystemPrompt 追加 Profer 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
@@ -1478,7 +1478,7 @@ export class AgentOrchestrator {
                 }
 
                 // Thinking signature 不兼容：通常由跨模型 resume 触发。
-                // 先自动清除 SDK resume 关系，改用 Proma 已持久化上下文重跑一次；再失败才展示用户提示。
+                // 先自动清除 SDK resume 关系，改用 Profer 已持久化上下文重跑一次；再失败才展示用户提示。
                 if (
                   typedError.code === THINKING_SIGNATURE_ERROR_CODE &&
                   canTryThinkingSignatureRecovery(attempt)
@@ -1972,7 +1972,7 @@ export class AgentOrchestrator {
    * 回退会话到指定消息点
    *
    * 1. 直接从 SDK JSONL 的 file-history-snapshot 恢复文件到目标时刻的状态
-   * 2. 截断 Proma JSONL 到 assistantMessageUuid（inclusive）
+   * 2. 截断 Profer JSONL 到 assistantMessageUuid（inclusive）
    * 3. 记录 resumeAtMessageUuid，下次发消息时 SDK 从该点分支继续
    *
    * 文件恢复通过解析 SDK JSONL 中的快照完成，无需运行中的 Query。
@@ -2031,7 +2031,7 @@ export class AgentOrchestrator {
       fileRewindResult = { canRewind: false, error: '无法从 SDK session 中解析 user message UUID' }
     }
 
-    // 2. 截断 Proma JSONL
+    // 2. 截断 Profer JSONL
     const kept = truncateSDKMessages(sessionId, assistantMessageUuid)
 
     // 3. 记录 resumeAtMessageUuid，下次发消息时 SDK 从此点继续

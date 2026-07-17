@@ -1,7 +1,7 @@
 /**
  * Agent Provider 适配器接口
  *
- * 定义 Proma 自己的 Agent 接口层，让底层 SDK 可替换。
+ * 定义 Profer 自己的 Agent 接口层，让底层 SDK 可替换。
  * 当前实现：ClaudeAgentAdapter（基于 @anthropic-ai/claude-agent-sdk）
  * 未来可扩展：PiAgentAdapter 等。
  */

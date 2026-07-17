@@ -23,7 +23,7 @@ export interface WorkspaceBrand {
   primaryColor?: string
   /** 品牌 Logo URL */
   logoUrl?: string
-  /** 自定义应用名称（替换 "Proma"） */
+  /** 自定义应用名称（替换 "Profer"） */
   appName?: string
   /** 自定义 CSS 注入 */
   customCss?: string
@@ -639,7 +639,7 @@ export interface AgentSessionMeta {
   attachedDirectories?: string[]
   /** 附加的外部文件路径列表（绝对路径，发送时以父目录作为 SDK additionalDirectories） */
   attachedFiles?: string[]
-  /** 分叉来源：源会话的 Proma 工作目录（SDK session 文件在此目录的项目空间中，首次 resume 后清除） */
+  /** 分叉来源：源会话的 Profer 工作目录（SDK session 文件在此目录的项目空间中，首次 resume 后清除） */
   forkSourceDir?: string
   /** 分叉来源：源会话的 SDK session ID（用于 rewind 时读取源会话的 file-history-snapshot 和备份文件） */
   forkSourceSdkSessionId?: string
@@ -833,7 +833,7 @@ export interface SkillMeta {
   slug: string
   name: string
   description?: string
-  /** UI 分组名，用于把 Proma 内嵌 Skills 收拢到同一组 */
+  /** UI 分组名，用于把 Profer 内嵌 Skills 收拢到同一组 */
   group?: string
   icon?: string
   version?: string
@@ -1022,7 +1022,7 @@ export interface MoveSessionToWorkspaceInput {
 
 /** Fork（分叉）会话输入 */
 export interface ForkSessionInput {
-  /** Proma 会话 ID */
+  /** Profer 会话 ID */
   sessionId: string
   /** SDK 消息 uuid（截断点，inclusive）。省略时复制全部历史 */
   upToMessageUuid?: string
@@ -1030,7 +1030,7 @@ export interface ForkSessionInput {
 
 /** 快照回退输入（同一会话内回退到指定点） */
 export interface RewindSessionInput {
-  /** Proma 会话 ID */
+  /** Profer 会话 ID */
   sessionId: string
   /** 回退到哪条 assistant message（inclusive，截断该消息之后的一切） */
   assistantMessageUuid: string
@@ -1405,7 +1405,7 @@ export interface PermissionRequest {
   toolName: string
   /** 工具输入参数 */
   toolInput: Record<string, unknown>
-  /** 操作描述（人类可读，Proma 生成） */
+  /** 操作描述（人类可读，Profer 生成） */
   description: string
   /** 具体命令（Bash 工具时有值��� */
   command?: string

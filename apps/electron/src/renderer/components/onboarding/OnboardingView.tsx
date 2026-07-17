@@ -70,13 +70,13 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
                 <div className="flex-1">
                   <h3 className="text-sm font-semibold text-foreground">查看使用教程</h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    了解 Proma 的全部功能和使用技巧
+                    了解 Profer 的全部功能和使用技巧
                   </p>
                 </div>
               </button>
 
               <p className="text-sm text-muted-foreground pt-2">
-                自己或身边的人已经在用 Proma？直接导入现有配置
+                自己或身边的人已经在用 Profer？直接导入现有配置
               </p>
 
               <div className="grid grid-cols-2 gap-3">
@@ -141,7 +141,7 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
           <div className="mb-6 text-center">
             <h2 className="text-2xl font-semibold mb-2">先检查一下环境</h2>
             <p className="text-sm text-muted-foreground">
-              Proma 在 Windows 上需要 Git Bash 或 WSL 才能执行命令
+              Profer 在 Windows 上需要 Git Bash 或 WSL 才能执行命令
             </p>
           </div>
 

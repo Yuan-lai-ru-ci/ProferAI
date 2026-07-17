@@ -1,7 +1,7 @@
 /**
  * Bun 运行时路径检测模块
  *
- * Bun 是 Proma 的可选组件（不影响核心 Agent 功能，SDK 自带编译好的 claude 二进制）。
+ * Bun 是 Profer 的可选组件（不影响核心 Agent 功能，SDK 自带编译好的 claude 二进制）。
  * 仅用于：
  * - 系统状态展示（设置页显示用户是否装了 Bun）
  * - 用户可能从终端用 Bun 跑自定义脚本时的路径探测
@@ -210,7 +210,7 @@ export async function detectBunRuntime(): Promise<BunRuntimeStatus> {
     }
   }
 
-  console.log('[Bun 检测] 未找到 Bun（可选，不影响 Proma 核心功能）')
+  console.log('[Bun 检测] 未找到 Bun（可选，不影响 Profer 核心功能）')
   return {
     available: false,
     path: null,

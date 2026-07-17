@@ -2,7 +2,7 @@
   "name": "@profer/session-core",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
-  "description": "Headless core for reading, grouping, searching and rendering Proma agent sessions. Single source of truth shared by the Electron app, the proma CLI and future query surfaces.",
+  "description": "Headless core for reading, grouping, searching and rendering Profer agent sessions. Single source of truth shared by the Electron app, the profer CLI and future query surfaces.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

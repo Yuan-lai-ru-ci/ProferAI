@@ -211,7 +211,7 @@ function positionAndShow(): void {
 
   setVoiceDictationBoundsWithoutSaving(getInitialVoiceDictationBounds())
 
-  // 语音浮窗只是系统级提示层，不应抢焦点或改变 Proma 主窗口前后台状态。
+  // 语音浮窗只是系统级提示层，不应抢焦点或改变 Profer 主窗口前后台状态。
   voiceDictationWindow.showInactive()
   voiceDictationWindow.webContents.send(VOICE_DICTATION_IPC_CHANNELS.SHOWN)
 }

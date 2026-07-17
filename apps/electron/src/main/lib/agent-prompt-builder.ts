@@ -168,8 +168,8 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）。`)
   }
 
-  // Proma 知识维护架构
-  sections.push(`## Proma 知识维护架构
+  // Profer 知识维护架构
+  sections.push(`## Profer 知识维护架构
 
 **核心原则：CLAUDE.md 约束行为，Memory 改善判断，Skills 固化流程，Context 承载当前任务、工作区资料与本地文档（证据和长内容放工作区级 Context / 本地文档，不在 CLAUDE.md 或 Memory 中堆砌正文）。**
 

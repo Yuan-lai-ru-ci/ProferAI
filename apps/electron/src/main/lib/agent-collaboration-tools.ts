@@ -909,7 +909,7 @@ export async function injectAgentCollaborationMcpServer(
       ),
       sdk.tool(
         'stop_delegation',
-        '停止一个正在运行的 Proma 协作子会话。',
+        '停止一个正在运行的 Profer 协作子会话。',
         schemas.stop,
         async (args) => {
           return jsonResult(stopDelegation(ctx.sessionId, args.delegationId))
