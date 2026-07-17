@@ -19,6 +19,7 @@
  *   │       ├── sync.js         ← 变更同步
  *   │       ├── files.js        ← 文件上传/下载/删除
  *   │       └── heartbeat.js    ← 心跳上报
+ *   │       └── feedback.js     ← 意见箱（飞书 Base）
  *   └── files/              ← 上传文件存储目录
  */
 import { Hono } from 'hono'
@@ -33,15 +34,28 @@ import { invitationRoutes } from './src/routes/invitations.js'
 import { syncRoutes } from './src/routes/sync.js'
 import { fileRoutes } from './src/routes/files.js'
 import { heartbeatRoutes } from './src/routes/heartbeat.js'
+import { eventRoutes } from './src/routes/events.js'
+import { announcementRoutes } from './src/routes/announcements.js'
 import { adminUsers } from './src/routes/admin/users.js'
 import { adminChannels } from './src/routes/admin/channels.js'
 import { adminCredits } from './src/routes/admin/credits.js'
 import { adminDashboard } from './src/routes/admin/dashboard.js'
 import { adminActivationCodes } from './src/routes/admin/activation-codes.js'
-import { adminPricing } from './src/routes/admin/pricing.js'
+import { adminOrders } from './src/routes/admin/orders.js'
+import { adminRedemptionCodes } from './src/routes/admin/redemption-codes.js'
+import { adminAudit } from './src/routes/admin/audit.js'
 import { accountChannels } from './src/routes/account/channels.js'
 import { accountCredits } from './src/routes/account/credits.js'
+import { accountApiKeys } from './src/routes/account/api-keys.js'
+import { inviteRoutes } from './src/routes/invite.js'
+import { accountSubscription } from './src/routes/account/subscription.js'
+import { accountRedeem } from './src/routes/account/redeem.js'
 import { proxyRoutes } from './src/routes/proxy/chat.js'
+import { mineruRoutes } from './src/routes/services/mineru.js'
+import { kbRoutes } from './src/routes/services/kb.js'
+import { creditGateMiddleware } from './src/middleware/credit-gate.js'
+import { tierGateMiddleware } from './src/middleware/tier-gate.js'
+import { feedbackRoutes } from './src/routes/feedback.js'
 
 // ===== 初始化 =====
 initAdmin()
@@ -69,6 +83,8 @@ app.route('/v1/workspaces', workspaceRoutes)
 app.route('/v1/invitations', invitationRoutes)
 app.route('/v1/sync', syncRoutes)
 app.route('/v1/workspaces', fileRoutes)
+app.route('/v1/workspaces', eventRoutes)
+app.route('/v1/workspaces', announcementRoutes)
 app.route('/v1/heartbeat', heartbeatRoutes)
 
 // Admin 路由（需要 auth + admin 双重鉴权）
@@ -80,7 +96,9 @@ adminApp.route('/channels', adminChannels)
 adminApp.route('/credits', adminCredits)
 adminApp.route('/dashboard', adminDashboard)
 adminApp.route('/activation-codes', adminActivationCodes)
-adminApp.route('/pricing', adminPricing)
+adminApp.route('/orders', adminOrders)
+adminApp.route('/redemption-codes', adminRedemptionCodes)
+adminApp.route('/audit', adminAudit)
 app.route('/v1/admin', adminApp)
 
 // Account 路由（需要 auth）
@@ -88,6 +106,10 @@ const accountApp = new Hono()
 accountApp.use('*', honoAuthMiddleware)
 accountApp.route('/channels', accountChannels)
 accountApp.route('/credits', accountCredits)
+accountApp.route('/api-keys', accountApiKeys)
+accountApp.route('/subscription', accountSubscription)
+accountApp.route('/redeem', accountRedeem)
+accountApp.route('/', inviteRoutes)
 app.route('/v1/account', accountApp)
 
 // Proxy 路由（需要 auth）
@@ -98,8 +120,31 @@ app.route('/v1/account', accountApp)
 // proxy 只认人 + 透传转发，额度校验/扣费完全交给 New API。
 const proxyApp = new Hono()
 proxyApp.use('*', proxyAuthMiddleware)
+proxyApp.use('*', tierGateMiddleware)
+proxyApp.use('*', creditGateMiddleware)
 proxyApp.route('/', proxyRoutes)
 app.route('/v1/proxy', proxyApp)
+
+// MinerU 论文解析路由（需要 auth）
+// 用 proxyAuthMiddleware 兼容 relay token / JWT / pk_ 三种凭证
+const servicesApp = new Hono()
+servicesApp.use('*', proxyAuthMiddleware)
+servicesApp.route('/mineru', mineruRoutes)
+servicesApp.route('/kb', kbRoutes)
+// 扣费循环触发端点（供外部 cron / automation 调用）
+servicesApp.get('/billing/sweep', adminMiddleware, async (c) => {
+  const { sweepUnbilledRequests } = await import('./src/db.js')
+  try {
+    const result = await sweepUnbilledRequests()
+    return c.json(result)
+  } catch (e) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+app.route('/v1/services', servicesApp)
+
+// 意见箱（无需登录态）
+app.route('/v1/feedback', feedbackRoutes)
 
 // Admin SPA — 管理后台
 import { readFileSync, existsSync, rmSync } from 'node:fs'
@@ -146,6 +191,14 @@ setInterval(() => {
     console.warn('[清理] 邀请过期标记失败:', err.message)
   }
 }, 10 * 60 * 1000).unref()
+
+// 扣费循环：每 5 分钟扫描未扣费请求，按 New API request_id 补扣
+setInterval(async () => {
+  try {
+    const { sweepUnbilledRequests } = await import('./src/db.js')
+    await sweepUnbilledRequests()
+  } catch { /* 后台静默，不崩服务器 */ }
+}, 5 * 60 * 1000).unref()
 
 // 定期清理过期黑名单条目
 setInterval(() => {

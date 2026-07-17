@@ -8,7 +8,8 @@
  */
 import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
-import { RELAY_BASE_URL, RELAY_API_KEY } from '../../config.js'
+import { RELAY_BASE_URL, RELAY_API_KEY, PER_USER_NEWAPI_KEY } from '../../config.js'
+import { db } from '../../db.js'
 import { createStreamUsageTracker, extractModel, extractUsage, withOpenAIStreamUsage } from '../../proxy-usage-utils.js'
 import { extractNewApiRequestId, reconcileRequestCost } from '../../newapi-client.js'
 
@@ -45,8 +46,8 @@ function translateUpstreamError(parsed, status) {
   return { payload: parsed, isQuota: false }
 }
 
-/** 记录一次请求日志（含计费 quota cost）。 */
-async function logUsage({ requestId, userId, model, usage, durationMs, stream, success, errorMessage = '', costCredits = 0 }) {
+/** 记录一次请求日志（含计费 quota cost 和 New API request_id）。 */
+async function logUsage({ requestId, userId, model, usage, durationMs, stream, success, errorMessage = '', costCredits = 0, newApiRequestId = '' }) {
   if (!userId) return
   try {
     const { logRequest } = await import('../../db.js')
@@ -62,6 +63,7 @@ async function logUsage({ requestId, userId, model, usage, durationMs, stream, s
       success: success ? 1 : 0,
       stream: stream ? 1 : 0,
       errorMessage: errorMessage.slice(0, 200),
+      newApiRequestId,
     })
   } catch (e) {
     console.warn('[proxy] 用量日志记录失败:', e.message)
@@ -82,18 +84,19 @@ async function reconcileAndBill({ newApiRequestId, requestId, userId }) {
       return 0
     }
     if (rec.billedCredits <= 0) return 0
-    const { deductCredits } = await import('../../db.js')
-    try {
-      deductCredits(userId, rec.billedCredits, {
-        description: `API 调用（New API quota ${rec.quota}）`,
-        referenceType: 'api_call',
-        referenceId: requestId,
-      })
-    } catch (e) {
-      // 余额不足等：New API 那侧已放行（共享池足），这里只记账。余额不足说明本地账本
-      // 落后于真实消费，记告警，不阻断（避免用户已得到响应却报错）。
-      console.warn(`[proxy] ⚠️ 本地扣费失败 (user=${userId}, credits=${rec.billedCredits}): ${e.message}`)
-    }
+    const { deductCredits, claimDrip } = await import('../../db.js')
+    // 当日首次请求自动领取 drip（幂等，无未领 drip 时为空操作）
+    try { claimDrip(userId) } catch (e) { /* drip 领取失败不阻塞请求 */ }
+    // force: true — 事后对账必须记账，即使余额不足也透支扣费（余额门禁 creditGateMiddleware 已在转发前拦截）
+    deductCredits(userId, rec.billedCredits, {
+      description: `API 调用（New API quota ${rec.quota}）`,
+      referenceType: 'api_call',
+      referenceId: requestId,
+      force: true,
+    })
+    // 回写扣费额度到请求日志，避免被后台扣费循环重复处理
+    const { updateRequestLogCost } = await import('../../db.js')
+    updateRequestLogCost(requestId, rec.billedCredits)
     return rec.billedCredits
   } catch (e) {
     console.warn('[proxy] 对账扣费异常:', e.message)
@@ -101,10 +104,21 @@ async function reconcileAndBill({ newApiRequestId, requestId, userId }) {
   }
 }
 
+/** 开放 API：请求成功后累加该 pk_ key 的用量（request_count / last_used / quota_used）。 */
+async function touchApiKey(apiKeyId, costCredits) {
+  if (!apiKeyId) return
+  try {
+    const { touchApiKeyUsage } = await import('../../db.js')
+    touchApiKeyUsage(apiKeyId, costCredits)
+  } catch (e) {
+    console.warn(`[proxy] ⚠️ API Key 用量累加失败 (key=${apiKeyId}): ${e.message}`)
+  }
+}
+
 // __APPEND_STREAM_AND_FORWARD__
 
 /** 流式转发：边转发边累计 token 用量，结束时对账扣费 + 记日志。 */
-function createUsageTrackingStream({ resp, requestId, userId, requestModel, startTime, newApiRequestId }) {
+function createUsageTrackingStream({ resp, requestId, userId, requestModel, startTime, newApiRequestId, apiKeyId }) {
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   const tracker = createStreamUsageTracker(requestModel)
@@ -120,10 +134,11 @@ function createUsageTrackingStream({ resp, requestId, userId, requestModel, star
     const costCredits = success
       ? await reconcileAndBill({ newApiRequestId, requestId, userId })
       : 0
+    if (success) await touchApiKey(apiKeyId, costCredits)
     await logUsage({
       requestId, userId, model: tracked.model || requestModel,
       usage: tracked.usage, durationMs: Date.now() - startTime,
-      stream: true, success, errorMessage, costCredits,
+      stream: true, success, errorMessage, costCredits, newApiRequestId,
     })
   }
 
@@ -160,14 +175,24 @@ async function forwardToRelay(c, relayPath) {
   body = withOpenAIStreamUsage(body, relayPath)
 
   const userId = c.get('jwtPayload')?.sub
+  const apiKeyId = c.get('apiKeyId') || null
   const requestModel = body.model || 'unknown'
   const requestId = uuidv4()
   const startTime = Date.now()
 
+  // 每用户独立 New API Key（灰度）：查用户自己的 Key，无则 fallback 全局 RELAY_API_KEY
+  let apiKey = RELAY_API_KEY
+  if (PER_USER_NEWAPI_KEY && userId) {
+    const userRow = db.prepare('SELECT new_api_key_encrypted FROM users WHERE id = ?').get(userId)
+    if (userRow?.new_api_key_encrypted) {
+      apiKey = userRow.new_api_key_encrypted
+    }
+  }
+
   try {
     const resp = await fetch(`${RELAY_BASE_URL}${relayPath}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RELAY_API_KEY}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120000),
     })
@@ -186,13 +211,13 @@ async function forwardToRelay(c, relayPath) {
       if (isQuota) {
         console.warn(`[proxy] ⚠️ New API 额度不足/预扣失败 (status=${resp.status}, user=${userId}): ${JSON.stringify(parsed).slice(0, 200)}`)
       }
-      await logUsage({ requestId, userId, model: requestModel, usage: null, durationMs, stream: false, success: false, errorMessage: JSON.stringify(payload) })
+      await logUsage({ requestId, userId, model: requestModel, usage: null, durationMs, stream: false, success: false, errorMessage: JSON.stringify(payload), newApiRequestId })
       return c.json(payload, resp.status)
     }
 
     if (contentType.includes('text/event-stream')) {
       const streamBody = userId && resp.body
-        ? createUsageTrackingStream({ resp, requestId, userId, requestModel, startTime, newApiRequestId })
+        ? createUsageTrackingStream({ resp, requestId, userId, requestModel, startTime, newApiRequestId, apiKeyId })
         : resp.body
       return new Response(streamBody, {
         status: resp.status,
@@ -204,10 +229,11 @@ async function forwardToRelay(c, relayPath) {
     const data = await resp.json()
     const usage = extractUsage(data)
     const costCredits = await reconcileAndBill({ newApiRequestId, requestId, userId })
-    await logUsage({ requestId, userId, model: extractModel(data, requestModel), usage, durationMs, stream: false, success: true, costCredits })
+    await touchApiKey(apiKeyId, costCredits)
+    await logUsage({ requestId, userId, model: extractModel(data, requestModel), usage, durationMs, stream: false, success: true, costCredits, newApiRequestId })
     return c.json(data, resp.status)
   } catch (err) {
-    await logUsage({ requestId, userId, model: requestModel, usage: null, durationMs: Date.now() - startTime, stream: false, success: false, errorMessage: err.message })
+    await logUsage({ requestId, userId, model: requestModel, usage: null, durationMs: Date.now() - startTime, stream: false, success: false, errorMessage: err.message, newApiRequestId })
     return c.json({ error: `代理请求失败: ${err.message}` }, 502)
   }
 }
