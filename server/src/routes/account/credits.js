@@ -6,21 +6,43 @@
  * 换算成货币单位返回（quota / NEWAPI_QUOTA_PER_UNIT），与 New API 实扣一致、可对账。
  */
 import { Hono } from 'hono'
-import { getRequestLogs, getUsageByModel, getCredits } from '../../db.js'
+import { db, getRequestLogs, getUsageByModel, getCredits, getUserInviteCode, getSubscriptionStatus, accrueDailyDrip } from '../../db.js'
 import { NEWAPI_QUOTA_PER_UNIT } from '../../config.js'
 
 export const accountCredits = new Hono()
 
-// GET /v1/account/credits — 当前用户本地账本余额（货币单位）
+// GET /v1/account/credits — 当前用户余额 + 分账 + 会员信息 + 订阅状态
 accountCredits.get('/', (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ balance: null, lifetimeConsumed: 0 })
+
   const row = getCredits(userId)
-  if (!row) return c.json({ balance: 0, lifetimeConsumed: 0 })
-  // 本地账本以 quota 单位存储，÷ QUOTA_PER_UNIT 换算成货币单位展示（与 New API 一致）
+  const user = db.prepare(`
+    SELECT membership_tier, is_vip, multiplier,
+           balance_purchased, balance_referral, balance_package
+    FROM users WHERE id = ?
+  `).get(userId)
+  const ic = getUserInviteCode(userId)
+  // 先累加今日 drip（幂等，同日不重复），确保前端显示的 dripAvailableThisWeek 是当天最新值
+  accrueDailyDrip()
+  const sub = getSubscriptionStatus(userId)
+
+  const qpu = NEWAPI_QUOTA_PER_UNIT
   return c.json({
-    balance: (row.balance || 0) / NEWAPI_QUOTA_PER_UNIT,
-    lifetimeConsumed: (row.lifetime_consumed || 0) / NEWAPI_QUOTA_PER_UNIT,
+    // 旧字段兼容
+    balance: (row?.balance || 0) / qpu,
+    lifetimeConsumed: (row?.lifetime_consumed || 0) / qpu,
+    // 积分分账
+    balancePackage: (user?.balance_package || 0) / qpu,
+    balanceReferral: (user?.balance_referral || 0) / qpu,
+    balancePurchased: (user?.balance_purchased || 0) / qpu,
+    // 会员
+    membershipTier: user?.membership_tier || 'free',
+    isVip: !!user?.is_vip,
+    multiplier: user?.multiplier || 1.0,
+    inviteCode: ic?.code || '',
+    // 订阅
+    subscription: sub || null,
   })
 })
 

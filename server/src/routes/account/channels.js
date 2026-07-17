@@ -3,8 +3,8 @@
  *
  * 代管模式铁律：批发总 Key 绝不下发给客户端。
  * 这里返回的 apiKey 是【该用户专属的长效 relay 令牌】，客户端拿它打
- * <server>/v1/proxy，由 proxyAuthMiddleware 反查用户、creditCheckMiddleware
- * 扣额度、proxy handler 用服务端持有的 RELAY_API_KEY 转发上游。
+ * <server>/v1/proxy，由 proxyAuthMiddleware 反查用户、creditGateMiddleware
+ * 校验余额、proxy handler 用服务端持有的 RELAY_API_KEY 转发上游。
  *
  * relay 令牌相比 1h 的 accessToken 的好处：长效，不会在 Agent 长任务
  * 跑到一半时过期导致 401。
