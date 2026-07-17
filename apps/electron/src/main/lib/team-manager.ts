@@ -355,3 +355,58 @@ export async function getWorkspaceStats(workspaceId: string): Promise<{
     return null
   }
 }
+
+// ===== 公告 =====
+
+export interface Announcement {
+  id: string
+  workspaceId: string
+  authorId: string
+  authorName: string
+  title: string
+  content: string
+  isPinned: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** 列出工作区公告 */
+export async function getAnnouncements(workspaceId: string): Promise<Announcement[]> {
+  try {
+    const res = await authedFetch(`/v1/workspaces/${workspaceId}/announcements`)
+    if (!res.ok) return []
+    return (await res.json()) as Announcement[]
+  } catch {
+    return []
+  }
+}
+
+/** 创建公告 */
+export async function createAnnouncement(
+  workspaceId: string, title: string, content: string, isPinned: boolean,
+): Promise<Announcement> {
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/announcements`, {
+    method: 'POST',
+    body: JSON.stringify({ title, content, isPinned }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = `发布失败 (HTTP ${res.status})`
+    try { const parsed = JSON.parse(body); if (parsed.error) message = parsed.error } catch { /* ignore */ }
+    throw new Error(message)
+  }
+  return (await res.json()) as Announcement
+}
+
+/** 删除公告 */
+export async function deleteAnnouncement(workspaceId: string, announcementId: string): Promise<void> {
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/announcements/${announcementId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    let message = '删除失败'
+    try { const parsed = JSON.parse(body); if (parsed.error) message = parsed.error } catch { /* ignore */ }
+    throw new Error(message)
+  }
+}
