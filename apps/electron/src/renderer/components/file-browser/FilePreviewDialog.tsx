@@ -10,7 +10,7 @@
  */
 
 import * as React from 'react'
-import { X, Download, ExternalLink, Loader2 } from 'lucide-react'
+import { X, Download, ExternalLink, FolderOpen, Loader2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -132,6 +132,24 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
     ).catch(() => {})
   }
 
+  const handleShowInFolder = async (): Promise<void> => {
+    let targetPath = resolvedPath ?? filePath
+    if (!resolvedPath && teamDownload) {
+      const downloaded = await teamDownload()
+      if (!downloaded) {
+        setState({ status: 'error', message: '文件下载失败，请重试' })
+        return
+      }
+      targetPath = downloaded
+      setResolvedPath(downloaded)
+    }
+    const parentDir = targetPath.replace(/[/\\][^/\\]*$/, '') || '/'
+    window.electronAPI.showItemInFolder(
+      targetPath,
+      teamDownload ? [parentDir] : undefined,
+    ).catch(() => {})
+  }
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className={cn(
@@ -148,6 +166,11 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
               onClick={() => { void handleOpenLocalFile() }}
               title="用默认应用打开">
               <ExternalLink className="size-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7"
+              onClick={() => { void handleShowInFolder() }}
+              title="打开文件所在位置">
+              <FolderOpen className="size-3.5" />
             </Button>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
               <X className="size-3.5" />
