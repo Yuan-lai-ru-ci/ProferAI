@@ -3,15 +3,12 @@
  */
 import { Hono } from 'hono'
 import { getUserInviteCode, getUserInvitees } from '../db.js'
-import { authMiddleware } from '../middleware.js'
 
 export const inviteRoutes = new Hono()
 
 // GET /v1/account/invite-code — 本人的邀请码和被邀请统计
+// 鉴权由 accountApp.use('*', honoAuthMiddleware) 统一处理
 inviteRoutes.get('/invite-code', (c) => {
-  const mw = authMiddleware(c)
-  if (mw) return mw
-
   const userId = c.get('userId')
   const ic = getUserInviteCode(userId)
   const invitees = getUserInvitees(userId)

@@ -9,15 +9,12 @@ import {
   claimDrip,
   accrueDailyDrip,
 } from '../../db.js'
-import { authMiddleware } from '../../middleware.js'
 
 export const accountSubscription = new Hono()
 
 // GET /v1/account/subscription — 当前订阅状态
+// 鉴权由 accountApp.use('*', honoAuthMiddleware) 统一处理
 accountSubscription.get('/', (c) => {
-  const mw = authMiddleware(c)
-  if (mw) return mw
-
   const userId = c.get('userId')
   const status = getSubscriptionStatus(userId)
 
@@ -35,9 +32,6 @@ accountSubscription.get('/', (c) => {
 
 // POST /v1/account/subscription/claim-drip — 领取本周 drip
 accountSubscription.post('/claim-drip', (c) => {
-  const mw = authMiddleware(c)
-  if (mw) return mw
-
   const userId = c.get('userId')
 
   // 先累加今日 drip（幂等，同日不重复）
@@ -55,9 +49,6 @@ accountSubscription.post('/claim-drip', (c) => {
 
 // POST /v1/account/subscription/destroy — 销毁套餐
 accountSubscription.post('/destroy', (c) => {
-  const mw = authMiddleware(c)
-  if (mw) return mw
-
   const userId = c.get('userId')
   destroySubscription(userId)
   return c.json({ success: true, message: '套餐已销毁，剩余套餐积分仍可使用' })
@@ -65,9 +56,6 @@ accountSubscription.post('/destroy', (c) => {
 
 // POST /v1/account/subscription/upgrade — 升级套餐
 accountSubscription.post('/upgrade', async (c) => {
-  const mw = authMiddleware(c)
-  if (mw) return mw
-
   const userId = c.get('userId')
   const { plan } = await c.req.json()
   if (!plan || !['standard', 'plus', 'pro'].includes(plan)) {
