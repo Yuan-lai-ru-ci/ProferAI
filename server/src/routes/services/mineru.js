@@ -242,8 +242,9 @@ mineruRoutes.post('/parse', async (c) => {
   // ---- 接收上传文件 ----
   let fileBuffer
   let fileName
+  let formData
   try {
-    const formData = await c.req.parseBody()
+    formData = await c.req.parseBody()
     const file = formData.file
     if (!file) {
       return c.json({ error: '请上传 PDF 文件' }, 400)
