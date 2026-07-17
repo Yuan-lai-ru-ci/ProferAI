@@ -1057,7 +1057,7 @@ export interface SessionHealth {
   sessionId: string
   title: string
   /** agent-sessions/<id>.jsonl 是否存在 */
-  hasPromaJsonl: boolean
+  hasProferJsonl: boolean
   /** SDK project 目录下是否有对应 JSONL */
   hasSdkJsonl: boolean
   /** 工作区目录是否存在 */

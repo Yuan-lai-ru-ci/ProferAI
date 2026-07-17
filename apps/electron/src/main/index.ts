@@ -14,9 +14,9 @@ app.setPath('userData', join(app.getPath('appData'), app.isPackaged ? '@profer/e
 // 一次性迁移：把存量 Profer 用户遗留在 @proma/electron 的浏览器层数据搬到新目录。
 // 登录态/会话/自动任务/device_id 都在 ~/.profer（不涉及），这里只搬 Chromium 层，避免用户升级后
 // 首屏缓存/cookie 凭空清空。copy 而非 move（保住原版 Proma 的目录）；跳过可再生大缓存；静默降级。
-migrateUserDataFromPromaIfNeeded()
+migrateUserDataFromProferIfNeeded()
 
-function migrateUserDataFromPromaIfNeeded(): void {
+function migrateUserDataFromProferIfNeeded(): void {
   // 仅正式版需要：dev 版一直用独立的 @profer/electron-dev，无 @proma 遗留。
   if (!app.isPackaged) return
   try {
@@ -101,7 +101,7 @@ function registerProtocolsAndHandlers(): void {
 
 
 import { getSettings, updateSettings } from './lib/settings-service'
-import { handlePromaFileRequest } from './lib/local-file-protocol'
+import { handleProferFileRequest } from './lib/local-file-protocol'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
 // 这在开发环境热重载时经常发生，不影响应用功能
@@ -559,15 +559,15 @@ async function bootstrap(): Promise<void> {
 
   // 注册自定义协议 profer-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。
-  protocol.handle('profer-file', handlePromaFileRequest)
+  protocol.handle('profer-file', handleProferFileRequest)
 
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
   // 热启动时从磁盘缓存恢复，耗时 < 10ms
   await safeAwait('initializeRuntime', () => initializeRuntime())
 
   // 从旧 Proma 数据目录迁移到 Profer（一次性）
-  const { migrateFromPromaIfNeeded } = require('./lib/config-paths')
-  safeRun('migrateFromProma', migrateFromPromaIfNeeded)
+  const { migrateFromProferIfNeeded } = require('./lib/config-paths')
+  safeRun('migrateFromProfer', migrateFromProferIfNeeded)
 
   // Create application menu
   const menu = createApplicationMenu()
@@ -643,7 +643,7 @@ async function bootstrap(): Promise<void> {
   )
   safeRun('registerGlobalShortcut:voice-dictation', () =>
     registerGlobalShortcut('voice-dictation', () => {
-      toggleVoiceDictationWindow({ targetIsProma: mainWindow?.isFocused() === true })
+      toggleVoiceDictationWindow({ targetIsProfer: mainWindow?.isFocused() === true })
     }),
   )
 

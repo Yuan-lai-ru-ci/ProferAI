@@ -29,7 +29,7 @@ const POSITION_SAVE_DEBOUNCE_MS = 240
 const VOICE_DICTATION_PARTITION = 'voice-dictation'
 
 interface VoiceDictationToggleOptions {
-  targetIsProma?: boolean
+  targetIsProfer?: boolean
 }
 
 export function createVoiceDictationWindow(): void {
@@ -110,13 +110,13 @@ export function toggleVoiceDictationWindow(options: VoiceDictationToggleOptions 
   }
 
   if (!win) {
-    captureTargetForNextSession(options.targetIsProma)
+    captureTargetForNextSession(options.targetIsProfer)
     createVoiceDictationWindow()
     requestPositionAndShow()
     return
   }
 
-  captureTargetForNextSession(options.targetIsProma)
+  captureTargetForNextSession(options.targetIsProfer)
   requestPositionAndShow()
 }
 
@@ -197,8 +197,8 @@ function flushPendingShowIfReady(): void {
   positionAndShow()
 }
 
-function captureTargetForNextSession(targetIsProma?: boolean): void {
-  captureVoiceDictationTarget(targetIsProma)
+function captureTargetForNextSession(targetIsProfer?: boolean): void {
+  captureVoiceDictationTarget(targetIsProfer)
   voiceDictationTargetCaptured = true
 }
 
@@ -232,14 +232,14 @@ export function resizeVoiceDictationWindow(height: number): void {
 
 export function hideVoiceDictationWindow(): void {
   flushPendingVoiceDictationPositionSave()
-  suppressPromaActivationBriefly()
+  suppressProferActivationBriefly()
   if (voiceDictationWindow && !voiceDictationWindow.isDestroyed() && voiceDictationWindow.isVisible()) {
     voiceDictationWindow.hide()
   }
   voiceDictationTargetCaptured = false
 }
 
-function suppressPromaActivationBriefly(): void {
+function suppressProferActivationBriefly(): void {
   if (process.platform !== 'darwin') return
   suppressMainWindowActivateUntil = Date.now() + ACTIVATE_SUPPRESSION_MS
 }

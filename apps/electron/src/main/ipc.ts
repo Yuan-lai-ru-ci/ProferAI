@@ -127,7 +127,7 @@ import type {
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
-import { registerPromaFilePath } from './lib/local-file-protocol'
+import { registerProferFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
   listChannels,
@@ -1835,7 +1835,7 @@ export function registerIpcHandlers(): void {
       if (!existsSync(filePath)) {
         throw new Error(`音效文件不存在: ${fileName}`)
       }
-      const url = registerPromaFilePath(filePath)
+      const url = registerProferFilePath(filePath)
       console.log(`[IPC] 自定义音效 URL: ${filePath} → ${url}`)
       return url
     }
@@ -3340,7 +3340,7 @@ export function registerIpcHandlers(): void {
         console.warn('[IPC] file:resolve-path 拒绝越界路径:', result)
         return null
       }
-      return result ? { url: registerPromaFilePath(result) } : null
+      return result ? { url: registerProferFilePath(result) } : null
     }
   )
 
@@ -3401,7 +3401,7 @@ export function registerIpcHandlers(): void {
     'file:register-preview-path',
     async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<string | null> => {
       const { statSync } = await import('node:fs')
-      const { registerPromaFilePath } = await import('./lib/local-file-protocol')
+      const { registerProferFilePath } = await import('./lib/local-file-protocol')
       const options = normalizeFileAccessOptions(access)
       try {
         if (!statSync(filePath).isFile()) return null
@@ -3413,7 +3413,7 @@ export function registerIpcHandlers(): void {
           console.warn('[IPC] file:register-preview-path 拒绝越界路径:', filePath)
           return null
         }
-        return registerPromaFilePath(filePath)
+        return registerProferFilePath(filePath)
       } catch { return null }
     }
   )
@@ -4602,7 +4602,7 @@ export function registerIpcHandlers(): void {
     async (event): Promise<void> => {
       const { toggleVoiceDictationWindow } = await import('./lib/voice-dictation-window')
       const sourceWindow = BrowserWindow.fromWebContents(event.sender)
-      toggleVoiceDictationWindow({ targetIsProma: !!sourceWindow })
+      toggleVoiceDictationWindow({ targetIsProfer: !!sourceWindow })
     }
   )
 
