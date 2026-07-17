@@ -5,14 +5,14 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, getDefaultStore } from 'jotai'
 import { toast } from 'sonner'
 import {
-  Upload, RefreshCw, LayoutGrid, LayoutList,
+  Upload, LayoutGrid, LayoutList,
   Plus, Search, Users, FolderOpen, FolderPlus, FolderUp, Trash2, Download,
   MoreHorizontal, Eye, Loader2, Cloud, CloudOff, ChevronDown, ChevronRight,
   ExternalLink, FolderSearch, ArrowUpDown, ArrowUp, Square, CheckSquare,
-  PanelRightClose, PanelRightOpen, MessageSquarePlus, Pencil,
+  PanelRightClose, PanelRightOpen, MessageSquarePlus, Pencil, Bell, RefreshCw, History,
 } from 'lucide-react'
 import {
   agentSessionsAtom,
@@ -22,6 +22,7 @@ import {
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
   workspaceFilesVersionAtom,
+  teamAgentPanelWidthAtom,
 } from '@/atoms/agent-atoms'
 import { TabContent } from '@/components/tabs/TabContent'
 import { CompactModelSelectorCtx } from '@/components/chat/ModelSelector'
@@ -32,6 +33,8 @@ import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { useDefaultAppForFile } from '@/hooks/useDefaultAppForFile'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
+import { TeamActivityFeed } from '@/components/agent/TeamActivityFeed'
+import { TeamAnnouncements } from '@/components/agent/TeamAnnouncements'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { WindowControls } from '@/components/WindowControls'
 import { cn } from '@/lib/utils'
@@ -58,6 +61,13 @@ function createTeamFileDragPayload(entry: FileEntry): string {
 
 function isTeamFileTransfer(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes('application/x-profer-team-file')
+}
+
+const MIN_TEAM_AGENT_PANEL_WIDTH = 300
+const MAX_TEAM_AGENT_PANEL_WIDTH = 640
+
+function clampTeamAgentPanelWidth(width: number): number {
+  return Math.max(MIN_TEAM_AGENT_PANEL_WIDTH, Math.min(MAX_TEAM_AGENT_PANEL_WIDTH, width))
 }
 
 export function TeamWorkspaceView(): React.ReactElement {
@@ -158,6 +168,170 @@ export function TeamWorkspaceView(): React.ReactElement {
   const [editingPath, setEditingPath] = React.useState<string | null>(null)
   const [editingName, setEditingName] = React.useState('')
   const editInputRef = React.useRef<HTMLInputElement>(null)
+
+  // ===== 右侧 Agent 面板可拖拽宽度 =====
+  const [agentPanelWidth, setAgentPanelWidth] = useAtom(teamAgentPanelWidthAtom)
+  const [isDraggingAgentPanel, setIsDraggingAgentPanel] = React.useState(false)
+  const agentPanelDraggingRef = React.useRef(false)
+  const clampedAgentPanelWidth = clampTeamAgentPanelWidth(agentPanelWidth)
+
+  React.useEffect(() => {
+    if (clampedAgentPanelWidth !== agentPanelWidth) {
+      setAgentPanelWidth(clampedAgentPanelWidth)
+    }
+  }, [agentPanelWidth, clampedAgentPanelWidth, setAgentPanelWidth])
+
+  const handleAgentPanelResizeMouseDown = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    agentPanelDraggingRef.current = true
+    setIsDraggingAgentPanel(true)
+    const startX = e.clientX
+    const startWidth = clampedAgentPanelWidth
+    let latestClientX = startX
+    let rafId = 0
+
+    const applyWidth = () => {
+      const delta = startX - latestClientX
+      setAgentPanelWidth(clampTeamAgentPanelWidth(startWidth + delta))
+    }
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!agentPanelDraggingRef.current) return
+      latestClientX = ev.clientX
+      if (rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        applyWidth()
+      })
+    }
+
+    const onMouseUp = () => {
+      agentPanelDraggingRef.current = false
+      setIsDraggingAgentPanel(false)
+      if (rafId) {
+        cancelAnimationFrame(rafId)
+        rafId = 0
+      }
+      applyWidth()
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [clampedAgentPanelWidth, setAgentPanelWidth])
+
+  // ===== 窄屏自动收起右侧 Agent 面板 =====
+  const AUTO_HIDE_PANEL_WIDTH = 1200
+  const [windowWidth, setWindowWidth] = React.useState(() => window.innerWidth)
+  const userOverrodeAutoHideRef = React.useRef(false)
+  const prevWidthRef = React.useRef<number | null>(null)
+  const prevIsPanelOpenRef = React.useRef(!agentPanelCollapsed)
+
+  React.useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  React.useEffect(() => {
+    if (windowWidth >= AUTO_HIDE_PANEL_WIDTH) {
+      userOverrodeAutoHideRef.current = false
+    }
+  }, [windowWidth])
+
+  React.useEffect(() => {
+    const prevWidth = prevWidthRef.current
+    const isFirstRender = prevWidth === null
+    const shouldAutoClose = isFirstRender || prevWidth >= AUTO_HIDE_PANEL_WIDTH
+
+    if (shouldAutoClose && windowWidth < AUTO_HIDE_PANEL_WIDTH && !agentPanelCollapsed && !userOverrodeAutoHideRef.current) {
+      setAgentPanelCollapsed(true)
+    }
+
+    if (windowWidth < AUTO_HIDE_PANEL_WIDTH && !agentPanelCollapsed && !prevIsPanelOpenRef.current) {
+      userOverrodeAutoHideRef.current = true
+    }
+
+    prevWidthRef.current = windowWidth
+    prevIsPanelOpenRef.current = !agentPanelCollapsed
+  }, [windowWidth, agentPanelCollapsed, setAgentPanelCollapsed])
+
+  // ===== 活动面板 / 公告 / 文件浏览器切换 =====
+  const [activePanel, setActivePanel] = React.useState<'files' | 'announcements' | 'activity'>('files')
+  // SSE 事件版本号，用于触发活动面板和公告刷新
+  const [activityEventVersion, setActivityEventVersion] = React.useState(0)
+
+  // 公告未读数
+  const [unreadAnnouncements, setUnreadAnnouncements] = React.useState(0)
+
+  // 加载公告未读数（对比公告创建时间与上次查看时间）
+  const checkUnreadAnnouncements = React.useCallback(async () => {
+    if (!teamId) return
+    const lastSeenKey = `announcements-last-seen:${teamId}`
+    const lastSeen = parseInt(localStorage.getItem(lastSeenKey) || '0', 10)
+    try {
+      const data = await window.electronAPI.team.getAnnouncements?.(teamId)
+      if (!data || !Array.isArray(data)) return
+      const unread = (data as Array<{ createdAt: number }>).filter((a) => a.createdAt > lastSeen).length
+      setUnreadAnnouncements(unread)
+    } catch { /* ignore */ }
+  }, [teamId])
+
+  // 初始加载 + SSE 事件触发刷新
+  React.useEffect(() => {
+    checkUnreadAnnouncements()
+  }, [checkUnreadAnnouncements, activityEventVersion])
+
+  // 打开公告面板时标记已读
+  const handleOpenAnnouncements = React.useCallback(() => {
+    if (activePanel === 'announcements') {
+      setActivePanel('files')
+    } else {
+      setActivePanel('announcements')
+      if (teamId) {
+        localStorage.setItem(`announcements-last-seen:${teamId}`, String(Date.now()))
+        setUnreadAnnouncements(0)
+      }
+    }
+  }, [activePanel, teamId])
+
+  // 监听 SSE 事件刷新活动面板和公告
+  React.useEffect(() => {
+    const unsub = window.electronAPI.sse?.onEvent?.((wsId: string, event: { type: string }) => {
+      if (wsId === teamId && [
+        'file_updated', 'file_deleted', 'member_changed', 'invitation_changed',
+        'workspace_updated', 'announcement_created', 'announcement_deleted',
+      ].includes(event.type)) {
+        setActivityEventVersion((v) => v + 1)
+      }
+    })
+    return unsub
+  }, [teamId])
+
+  // ===== 文件冲突检测 =====
+  const [pendingConflicts, setPendingConflicts] = React.useState<Array<{
+    file: File
+    relPath: string
+    existingEntry: FileEntry
+    resolution?: 'overwrite' | 'keep-both'
+  }> | null>(null)
+
+  /** 自动重命名：name (2).ext, name (3).ext ... */
+  const autoRename = React.useCallback((fileName: string): string => {
+    const existingNames = new Set(entries.map((e) => e.path))
+    const dotIdx = fileName.lastIndexOf('.')
+    const base = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName
+    const ext = dotIdx > 0 ? fileName.slice(dotIdx) : ''
+    let n = 2
+    let candidate = `${base} (${n})${ext}`
+    while (existingNames.has(candidate)) {
+      n++
+      candidate = `${base} (${n})${ext}`
+    }
+    return candidate
+  }, [entries])
 
   // 全局阻止浏览器对拖入文件的默认处理
   React.useEffect(() => {
@@ -300,6 +474,25 @@ export function TeamWorkspaceView(): React.ReactElement {
     setUploading(true)
     if (!retryNames) setFailedUploads([])
     const arr = Array.from(files)
+
+    // 冲突检测：非重试模式下，检查是否有同名文件存在
+    if (!retryNames) {
+      const conflicts: Array<{ file: File; relPath: string; existingEntry: FileEntry }> = []
+      for (const file of arr) {
+        const base = (file as any).webkitRelativePath || file.name
+        const relPath = parentPath ? `${parentPath}/${base}` : base
+        const existing = entries.find((e) => e.path === relPath && !e.isDirectory)
+        if (existing) {
+          conflicts.push({ file, relPath, existingEntry: existing })
+        }
+      }
+      if (conflicts.length > 0) {
+        setPendingConflicts(conflicts.map((c) => ({ ...c, resolution: undefined })))
+        setUploading(false)
+        return
+      }
+    }
+
     const failed: Array<{ name: string; size: number }> = []
     for (const file of arr) {
       try {
@@ -332,6 +525,49 @@ export function TeamWorkspaceView(): React.ReactElement {
     else toast.success('上传完成')
     setTimeout(() => loadFiles(), 300)
   }, [teamId, workspace?.slug, loadFiles])
+
+  /** 冲突解决：用户确认后直接上传（绕过 handleUpload 的冲突检测） */
+  const handleResolveConflicts = React.useCallback(async (resolutions: Array<{ file: File; relPath: string; resolution: 'overwrite' | 'keep-both' }>) => {
+    setPendingConflicts(null)
+    setUploading(true)
+    if (!teamId || !workspace?.slug) return
+
+    const failed: Array<{ name: string; size: number }> = []
+
+    for (const r of resolutions) {
+      try {
+        const targetPath = r.resolution === 'keep-both' ? autoRename(r.relPath) : r.relPath
+        const buf = await r.file.arrayBuffer()
+        const data = new Uint8Array(buf)
+        let sourcePath = ''
+        try { sourcePath = window.electronAPI.getPathForFile(r.file) } catch { sourcePath = '' }
+
+        const result = await window.electronAPI.teamFile.upload({
+          workspaceId: teamId,
+          workspaceSlug: workspace.slug,
+          fileName: targetPath,
+          fileData: data,
+          sourcePath: sourcePath || undefined,
+        })
+        if (!result.success) {
+          failed.push({ name: targetPath, size: r.file.size })
+          failedDataRef.current.set(targetPath, buf)
+        }
+      } catch (err) {
+        failed.push({ name: r.relPath, size: r.file.size })
+        failedDataRef.current.set(r.relPath, await r.file.arrayBuffer().catch(() => new ArrayBuffer(0)))
+      }
+    }
+
+    setFailedUploads(failed)
+    setUploading(false)
+    if (failed.length) {
+      toast.error(`${failed.length} 个文件上传失败`)
+    } else {
+      toast.success('上传完成')
+    }
+    setTimeout(() => loadFiles(), 300)
+  }, [teamId, workspace?.slug, autoRename, loadFiles])
 
   // 内部拖拽移动文件/文件夹
   const handleMove = React.useCallback(async (fromPath: string, toDir: string) => {
@@ -1069,7 +1305,29 @@ export function TeamWorkspaceView(): React.ReactElement {
                 </div>
               )}
             </div>
+            {/* 公告 */}
+            <button
+              className={cn('relative h-8 w-8 rounded-md flex items-center justify-center hover:bg-accent transition-colors', activePanel === 'announcements' ? 'text-primary' : 'text-muted-foreground')}
+              title={activePanel === 'announcements' ? '返回文件' : unreadAnnouncements > 0 ? `${unreadAnnouncements} 条未读公告` : '公告'}
+              onClick={handleOpenAnnouncements}
+            >
+              <Bell size={14} />
+              {unreadAnnouncements > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold text-white leading-none">
+                  {unreadAnnouncements > 9 ? '9+' : unreadAnnouncements}
+                </span>
+              )}
+            </button>
+            {/* 活动 */}
+            <button
+              className={cn('h-8 w-8 rounded-md flex items-center justify-center hover:bg-accent transition-colors', activePanel === 'activity' ? 'text-primary' : 'text-muted-foreground')}
+              title={activePanel === 'activity' ? '返回文件' : '活动记录'}
+              onClick={() => setActivePanel(activePanel === 'activity' ? 'files' : 'activity')}
+            >
+              <History size={14} />
+            </button>
             {/* 搜索 */}
+            {activePanel === 'files' && (
             <button
               className={cn('h-8 w-8 rounded-md flex items-center justify-center hover:bg-accent transition-colors', searchActive ? 'text-primary' : 'text-muted-foreground')}
               title="搜索"
@@ -1077,6 +1335,7 @@ export function TeamWorkspaceView(): React.ReactElement {
             >
               <Search size={14} />
             </button>
+            )}
             {searchActive && (
               <input
                 ref={searchInputRef}
@@ -1233,7 +1492,133 @@ export function TeamWorkspaceView(): React.ReactElement {
             </div>
           )}
 
+          {/* 文件冲突弹窗 */}
+          {pendingConflicts && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+              <div className="bg-popover border rounded-2xl shadow-2xl p-6 w-[480px] max-h-[70vh] flex flex-col">
+                <h3 className="text-sm font-semibold mb-1">文件冲突</h3>
+                <p className="text-xs text-muted-foreground mb-4">{pendingConflicts.length} 个文件已存在，请选择处理方式</p>
+
+                <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+                  {pendingConflicts.map((conflict, idx) => (
+                    <div key={conflict.relPath} className="flex items-start gap-3 p-3 rounded-lg border border-border/60 bg-background/50">
+                      <FileTypeIcon name={conflict.file.name} isDirectory={false} size={24} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{conflict.file.name}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {conflict.existingEntry.size != null ? formatSize(conflict.existingEntry.size) : ''}
+                          {conflict.existingEntry.uploadedByName ? ` · ${conflict.existingEntry.uploadedByName}` : ''}
+                        </p>
+                        <div className="flex items-center gap-3 mt-2">
+                          <label className="flex items-center gap-1 text-xs cursor-pointer">
+                            <input
+                              type="radio"
+                              name={`conflict-${idx}`}
+                              checked={conflict.resolution === 'overwrite'}
+                              onChange={() => {
+                                setPendingConflicts((prev) => {
+                                  if (!prev) return prev
+                                  const next = [...prev]
+                                  next[idx] = { ...next[idx]!, resolution: 'overwrite' }
+                                  return next
+                                })
+                              }}
+                            />
+                            覆盖
+                          </label>
+                          <label className="flex items-center gap-1 text-xs cursor-pointer">
+                            <input
+                              type="radio"
+                              name={`conflict-${idx}`}
+                              checked={conflict.resolution === 'keep-both'}
+                              onChange={() => {
+                                setPendingConflicts((prev) => {
+                                  if (!prev) return prev
+                                  const next = [...prev]
+                                  next[idx] = { ...next[idx]!, resolution: 'keep-both' }
+                                  return next
+                                })
+                              }}
+                            />
+                            保留两份
+                            {conflict.resolution === 'keep-both' && (
+                              <span className="text-[10px] text-primary ml-1">→ {autoRename(conflict.relPath).split('/').pop()}</span>
+                            )}
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    className="flex-1 h-9 rounded-lg border text-xs font-medium hover:bg-accent"
+                    onClick={() => {
+                      // 全部覆盖
+                      setPendingConflicts((prev) => {
+                        if (!prev) return prev
+                        return prev.map((c) => ({ ...c, resolution: 'overwrite' as const }))
+                      })
+                    }}
+                  >
+                    全部覆盖
+                  </button>
+                  <button
+                    className="flex-1 h-9 rounded-lg border text-xs font-medium hover:bg-accent"
+                    onClick={() => {
+                      // 全部保留两份
+                      setPendingConflicts((prev) => {
+                        if (!prev) return prev
+                        return prev.map((c) => ({ ...c, resolution: 'keep-both' as const }))
+                      })
+                    }}
+                  >
+                    全部保留两份
+                  </button>
+                  <button
+                    className="flex-1 h-9 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    disabled={pendingConflicts.some((c) => !c.resolution)}
+                    onClick={() => {
+                      const allResolved = pendingConflicts.every((c) => c.resolution)
+                      if (!allResolved) return
+                      handleResolveConflicts(pendingConflicts.map((c) => ({
+                        file: c.file,
+                        relPath: c.relPath,
+                        resolution: c.resolution!,
+                      })))
+                    }}
+                  >
+                    确认上传
+                  </button>
+                  <button
+                    className="h-9 px-3 rounded-lg border text-xs font-medium hover:bg-accent"
+                    onClick={() => setPendingConflicts(null)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 文件内容区 */}
+          {activePanel === 'announcements' ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <TeamAnnouncements
+                workspaceId={teamId!}
+                workspaceRole={workspace?.role}
+                eventVersion={activityEventVersion}
+              />
+            </div>
+          ) : activePanel === 'activity' ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <TeamActivityFeed
+                workspaceId={teamId!}
+                eventVersion={activityEventVersion}
+              />
+            </div>
+          ) : (
           <ScrollArea className="flex-1 select-none">
             {loading ? (
               <div className="flex items-center justify-center h-40"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
@@ -1504,6 +1889,7 @@ export function TeamWorkspaceView(): React.ReactElement {
               </div>
             )}
           </ScrollArea>
+          )}
 
           {/* 批量操作栏 */}
           {selectedCount > 0 && (
@@ -1555,15 +1941,21 @@ export function TeamWorkspaceView(): React.ReactElement {
         ) : (
         <div
           className={cn(
-            'relative flex flex-col w-[360px] flex-shrink-0 min-h-0 bg-content-area rounded-2xl shadow-xl dark:shadow-sm overflow-hidden transition-all duration-200',
+            'relative flex flex-col flex-shrink-0 min-h-0 bg-content-area rounded-2xl shadow-xl dark:shadow-sm overflow-hidden',
+            !isDraggingAgentPanel && 'transition-all duration-200',
             agentDropOver && 'ring-2 ring-primary/50',
           )}
+          style={{ width: clampedAgentPanelWidth }}
           onDragOverCapture={handleAgentDragOver}
           onDropCapture={handleAgentDrop}
           onDragOver={handleAgentDragOver}
           onDragLeave={handleAgentDragLeave}
           onDrop={handleAgentDrop}
         >
+          <div
+            className="titlebar-no-drag absolute left-0 top-0 bottom-0 z-[60] w-3 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-primary/10 active:bg-primary/40"
+            onMouseDown={handleAgentPanelResizeMouseDown}
+          />
           {agentDropOver && (
             <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/60 bg-primary/5 backdrop-blur-[1px]">
               <div className="flex items-center gap-2 rounded-lg bg-background/95 px-3 py-2 text-xs font-medium text-primary shadow-lg">

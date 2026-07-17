@@ -527,6 +527,14 @@ export function TeamWorkspaceSettings(): React.ReactElement {
             </>
           )}
 
+          {(selectedWs.role === 'owner' || selectedWs.role === 'admin') && (
+            <SettingsSection title="通知设置" description="配置团队工作区的桌面通知">
+              <SettingsCard>
+                <NotificationSettingsRow />
+              </SettingsCard>
+            </SettingsSection>
+          )}
+
           {stats && (
             <SettingsSection title="使用统计">
               <SettingsCard>
@@ -631,6 +639,64 @@ export function TeamWorkspaceSettings(): React.ReactElement {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+/** 通知设置行（内嵌组件） */
+function NotificationSettingsRow(): React.ReactElement {
+  const [settings, setSettings] = React.useState<{
+    enabled: boolean; fileUpload: boolean; fileDelete: boolean; memberJoin: boolean; memberLeave: boolean; invitation: boolean
+  } | null>(null)
+
+  React.useEffect(() => {
+    window.electronAPI.team.getNotificationSettings?.().then(setSettings).catch(() => {})
+  }, [])
+
+  const toggle = async (key: string, value: boolean): Promise<void> => {
+    if (!settings) return
+    const next = { ...settings, [key]: value }
+    setSettings(next)
+    window.electronAPI.team.updateNotificationSettings?.({ [key]: value }).catch(() => {})
+  }
+
+  if (!settings) {
+    return <div className="py-2 text-xs text-muted-foreground">加载中...</div>
+  }
+
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center justify-between py-1">
+        <span className="text-sm">启用桌面通知</span>
+        <input
+          type="checkbox"
+          checked={settings.enabled}
+          onChange={(e) => toggle('enabled', e.target.checked)}
+          className="rounded"
+        />
+      </label>
+      <div className="border-t border-border/40 pt-2 space-y-2 pl-4">
+        <label className="flex items-center justify-between py-0.5">
+          <span className="text-xs text-muted-foreground">新文件上传</span>
+          <input type="checkbox" checked={settings.fileUpload} onChange={(e) => toggle('fileUpload', e.target.checked)} disabled={!settings.enabled} className="rounded" />
+        </label>
+        <label className="flex items-center justify-between py-0.5">
+          <span className="text-xs text-muted-foreground">文件删除</span>
+          <input type="checkbox" checked={settings.fileDelete} onChange={(e) => toggle('fileDelete', e.target.checked)} disabled={!settings.enabled} className="rounded" />
+        </label>
+        <label className="flex items-center justify-between py-0.5">
+          <span className="text-xs text-muted-foreground">新成员加入</span>
+          <input type="checkbox" checked={settings.memberJoin} onChange={(e) => toggle('memberJoin', e.target.checked)} disabled={!settings.enabled} className="rounded" />
+        </label>
+        <label className="flex items-center justify-between py-0.5">
+          <span className="text-xs text-muted-foreground">成员离开</span>
+          <input type="checkbox" checked={settings.memberLeave} onChange={(e) => toggle('memberLeave', e.target.checked)} disabled={!settings.enabled} className="rounded" />
+        </label>
+        <label className="flex items-center justify-between py-0.5">
+          <span className="text-xs text-muted-foreground">邀请变更</span>
+          <input type="checkbox" checked={settings.invitation} onChange={(e) => toggle('invitation', e.target.checked)} disabled={!settings.enabled} className="rounded" />
+        </label>
+      </div>
     </div>
   )
 }
