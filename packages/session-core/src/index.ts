@@ -18,6 +18,7 @@ export {
 // Turn 分组（快照合并去重的唯一真源）
 export {
   groupIntoTurns,
+  countTurns,
   getGroupPreview,
   extractUserText,
   extractMeta,

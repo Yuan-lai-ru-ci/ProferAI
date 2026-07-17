@@ -2,9 +2,9 @@ import type { ToolActivity } from '@/atoms/agent-atoms'
 
 /** Task 工具名集合（用于聚合判断，与 SDKMessageRenderer 共享语义）
  * 注意：TaskGet/TaskList 是只读查询工具，不纳入聚合，保留为普通工具活动行 */
-export const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite'])
+export const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'proma_task_create', 'proma_task_update'])
 
-export type TaskItemStatus = 'pending' | 'in_progress' | 'completed' | 'deleted' | 'cancelled'
+export type TaskItemStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled' | 'deleted'
 
 export interface TaskItem {
   id: string
@@ -91,7 +91,14 @@ export function parseTaskCreateResult(result: string | undefined): { id: string;
 }
 
 function toTaskStatus(value: unknown, fallback: TaskItemStatus = 'pending'): TaskItemStatus {
-  if (value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'deleted') {
+  if (
+    value === 'pending' ||
+    value === 'in_progress' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled' ||
+    value === 'deleted'
+  ) {
     return value
   }
   return fallback
@@ -132,7 +139,7 @@ export function aggregateTaskItems(
   const taskCreateSubjectMap = new Map<string, string>()
 
   for (const activity of activities) {
-    if (activity.toolName !== 'TaskCreate') continue
+    if (activity.toolName !== 'TaskCreate' && activity.toolName !== 'proma_task_create') continue
 
     const parsedResult = parseTaskCreateResult(activity.result)
     const taskId = parsedResult?.id ?? activity.toolUseId
@@ -160,7 +167,7 @@ export function aggregateTaskItems(
           })
         }
       }
-    } else if (activity.toolName === 'TaskCreate') {
+    } else if (activity.toolName === 'TaskCreate' || activity.toolName === 'proma_task_create') {
       const id = taskCreateIdMap.get(activity.toolUseId) ?? activity.toolUseId
       const subject = typeof activity.input.subject === 'string'
         ? activity.input.subject
@@ -177,7 +184,7 @@ export function aggregateTaskItems(
         activeForm: typeof activity.input.activeForm === 'string' ? activity.input.activeForm : undefined,
         ...(description ? { description } : {}),
       })
-    } else if (activity.toolName === 'TaskUpdate') {
+    } else if (activity.toolName === 'TaskUpdate' || activity.toolName === 'proma_task_update') {
       const taskId = taskIdFromInput(activity.input)
       if (!taskId) continue
 
