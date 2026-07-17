@@ -71,6 +71,11 @@ export function WriteResultRenderer({ result, isError, input }: WriteResultRende
 
   return (
     <div className="rounded-md overflow-x-hidden overflow-y-auto bg-content-area max-h-[400px]">
+      {filePath && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border/30 text-[12px] text-muted-foreground">
+          <FilePathChip filePath={filePath} />
+        </div>
+      )}
       <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} />
     </div>
   )
