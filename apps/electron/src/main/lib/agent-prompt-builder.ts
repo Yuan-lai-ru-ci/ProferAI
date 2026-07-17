@@ -1,15 +1,15 @@
-/**
+﻿/**
  * Agent 系统 Prompt 构建器
  *
  * 负责构建 Agent 的完整系统提示词和每条消息的动态上下文。
  *
  * 设计策略：
  * - 静态 system prompt（buildSystemPrompt）：追加到 claude_code preset 之后的自定义系统提示词
- *   preset 提供基础环境信息（platform/shell/OS/git/model 等），本模块追加 Proma 特有的指令
+ *   preset 提供基础环境信息（platform/shell/OS/git/model 等），本模块追加 Profer 特有的指令
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import type { PromaPermissionMode } from '@profer/shared'
+import type { ProferPermissionMode } from '@profer/shared'
 import { getUserProfile } from './user-profile-service'
 import { getWorkspaceMcpConfig } from './agent-workspace-manager'
 import { getConfigDirName } from './config-paths'
@@ -19,9 +19,14 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 
 const TOOL_USAGE_GUIDELINES = `## 工具使用指南
 - **可见进度**：多步骤、长耗时或涉及多个文件/阶段的任务，应尽早用 TaskCreate 创建清晰的子任务，后续推理发现与最初设计一不一致时可以及时更新；开始某项时用 TaskUpdate 标记 in_progress，完成后立即标记 completed。简单一步任务不需要创建任务
-- **任务依赖与产出追踪**：使用 TaskCreate 创建任务时，如果该任务依赖于其他已完成或待完成的任务，在 description 中追加一行 \`@dependsOn: <任务ID1>, <任务ID2>\` 来标记依赖关系。任务完成后，使用 TaskUpdate 更新状态时，在 description 中追加一行 \`@artifact: <文件路径1>, <文件路径2>\` 来列出该任务产出的主要文件。这些标记会被系统自动解析，无需向用户提及
-- **任务图反馈与分叉**：当用户在查看任务图时针对特定任务给出反馈，你需要用 TaskUpdate 将该任务标记为 cancelled（表示放弃原方向），然后用 TaskCreate 创建修正后的新任务，并在 description 中追加一行 \`@forkFrom: <原任务ID>\` 来标记分叉来源。系统会自动解析该标记并更新任务关系图，无需向用户提及
-- **执行中断与路线变更**：当用户在你执行任务的中途手动停止并要求换方向时：① 先将所有当前 in_progress 的任务用 TaskUpdate 标记为 cancelled；② 评估已完成的工作（哪些产出可以复用）；③ 用 TaskCreate 创建新任务，在 description 中追加 \`@forkFrom: <原任务ID>\` 和 \`@forkReason: <变更原因>\`；④ 告知用户已废弃旧任务、创建了新任务、哪些已有的成果可以复用。分叉标记帮助你和新会话的 Agent 理解项目的演化历史
+- **🔴 任务图协议（必读）**：**优先使用 \`proma_task_create\` / \`proma_task_update\`**（工具 schema 自带 dependsOn/forkFrom/abandonReason 字段，无需手写标记）。如使用原生 TaskCreate/TaskUpdate，需在 description 最前面手写标记行。标记系统自动解析并清除，不在 UI 展示：
+  | 标记 | 用途 | 用法 |
+  |------|------|------|
+  | \`dependsOn: id1, id2\` | 依赖哪些任务 | 写在 description 第一行 |
+  | \`forkFrom: id\` | 从旧任务分叉 | 换方向：先 abandon 旧任务，再 forkFrom 建新 |
+  | \`abandon: 原因\` | 放弃留痕（枯枝） | 追加在 description，渲染为枯死支线 |
+  | \`artifact: p1, p2\` | 产出文件列表 | 完成时追加 |
+  四态收尾：**完成**→completed；**放弃**→abandon；**分叉**→abandon 旧+forkFrom 新；**删除**→status=deleted。方向一变就回来写标记。
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
@@ -30,9 +35,7 @@ interface SystemPromptContext {
   workspaceName?: string
   workspaceSlug?: string
   sessionId: string
-  permissionMode: PromaPermissionMode
-  /** 记忆服务是否已启用且配置了 API Key */
-  memoryEnabled: boolean
+  permissionMode: ProferPermissionMode
   /** 用户选用的模型是否为 Claude 系列（影响 SubAgent 模型策略描述，缺省视为 true） */
   claudeAvailable?: boolean
   /** DeepSeek 系列主模型下，运行时固定注入给 SubAgent 的模型 */
@@ -45,7 +48,7 @@ interface SystemPromptContext {
  * 构建追加到 claude_code preset 之后的自定义系统提示词。
  *
  * claude_code preset 提供：环境信息（platform/shell/OS）、git 状态、模型信息、知识截止日期、currentDate 等。
- * 本函数追加：Proma Agent 角色定义、工具使用指南、SubAgent 策略、工作区信息、记忆系统等。
+ * 本函数追加：Profer Agent 角色定义、工具使用指南、SubAgent 策略、工作区信息、记忆系统等。
  * 工具（Read/Write/Edit/Bash 等）由 SDK 独立注册，不受 systemPrompt 影响。
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
@@ -123,7 +126,7 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 - 工作区根目录: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/
 - 当前会话目录（cwd）: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/${ctx.sessionId}/
 - MCP 配置: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/mcp.json（顶层 key 是 \`servers\`）
-- Skills 目录: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/skills/（Proma 只从此目录加载 skill；npx skills add 等外部命令安装到 .agents/skills/ 不会被加载，需手动 mv 到此目录）
+- Skills 目录: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/skills/（Profer 只从此目录加载 skill；npx skills add 等外部命令安装到 .agents/skills/ 不会被加载，需手动 mv 到此目录）
 
 ### .context 目录层级
 
@@ -165,63 +168,48 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）。`)
   }
 
-  // 记忆系统指引（静态，利用 prompt caching）
-  if (ctx.memoryEnabled) {
-    sections.push(`## 记忆系统
+  // Proma 知识维护架构
+  sections.push(`## Proma 知识维护架构
 
-你拥有跨会话的记忆能力。这些记忆是你和用户之间共同的经历——你们一起讨论过的问题、一起做过的决定、一起踩过的坑。
+**核心原则：CLAUDE.md 约束行为，Memory 改善判断，Skills 固化流程，Context 承载当前任务、工作区资料与本地文档（证据和长内容放工作区级 Context / 本地文档，不在 CLAUDE.md 或 Memory 中堆砌正文）。**
 
-**重要：记忆工具是 MCP 工具，不是文件操作！**
-- 存储和回忆记忆必须通过 mcp__mem__recall_memory 和 mcp__mem__add_memory 工具调用
-- 绝对不要把记忆写入 MEMORY.md 或任何本地文件来替代记忆工具
-- 这两个工具连接的是云端记忆服务，能真正跨会话持久化
+长期知识维护遵循五步：按需搜索 → 分类判断 → 提出维护建议 → 小幅创建/更新 → 在后续任务中验证效果。不要把所有信息都塞进同一个文件，也不要为了"显得完整"而重写已有沉淀。
 
-**理解记忆的本质：**
-- 记忆是"我们一起经历过的事"，不是"关于用户的信息条目"
-- 回忆起过去的经历时，像老搭档一样自然地带入，而不是像在查档案
-- 例如：不要说"根据记忆记录，您偏好使用 Tailwind"，而是自然地按照那个偏好去做，就像你本来就知道一样
+### CLAUDE.md — 工作区项目指令（长期持久化）
 
-**mcp__mem__recall_memory — 回忆过去：**
-在你觉得过去的经历可能对当前有帮助时主动调用：
-- 用户提到"之前"、"上次"、"我们讨论过"等回溯性表述
-- 当前任务可能和过去一起做过的事情有关联
-- 需要延续之前的讨论或决策
+维护工作区根目录下的 CLAUDE.md，记录未来任何 Agent 都应默认遵守的项目规则和入口。注意：当前会话目录是工作区根目录下的 session 子目录，不要把长期知识写到 session 子目录的 CLAUDE.md：
+- **适合写入**：项目硬约束、架构边界、常用命令、测试/发布流程、关键路径索引、明确的工作区规则
+- **不适合写入**：临时调试过程、一次性偏好、长篇调研正文、从代码中显而易见的内容
+- **维护要求**：保持精炼（<200 行），发现已有内容不准确时小幅修订或标注过时，避免追加冲突结论
 
-**mcp__mem__add_memory — 记住这次经历：**
-当这次对话中发生了值得记住的事情时调用。想象一下：如果下次用户再来，你会希望自己还记得什么？
-- 我们一起做了一个重要决定（如选择了某个架构方案及原因）
-- 用户分享了他的工作方式或偏好（如"我习惯用 pnpm"、"缩进用 2 空格"）
-- 我们一起解决了一个棘手的问题（问题是什么、怎么解决的）
-- 用户的项目有了重要进展或变化
-- 用户明确说"记住这个"
+### SDK auto memory — 自动记忆（用户可审计）
 
-存储时的要点：
-- userMessage 写用户当时说了什么（精简），assistantMessage 写你们一起得出的结论或经历
-- 记的是经历和结论，不是对话流水账
-- 不值得记的：纯粹的代码搬运、一次性的 typo 修复、临时调试过程
+Claude Agent SDK 可能会维护工作区级 auto memory 文件，目录由 Profer 指向工作区根目录的 \`.claude/memory/\`：
+- **用途**：沉淀跨会话学习到的经验、用户偏好、误判纠正、问题状态变化和易错点
+- **入口文件**：\`.claude/memory/MEMORY.md\` 只放主题索引和路由；详细内容拆到同目录或子目录下的主题文件
+- **使用要求**：不要把它当聊天流水账；只有明确重复出现、用户明确要求记住，或删掉后未来 Agent 明显会犯错的稳定经验才写入
+- **会话内维护**：当用户确认问题已解决、否定先前判断、说明问题仍存在/加重，或明确表达长期偏好时，判断是否应更新 memory；纠正旧记忆时应修订或标注旧结论，而不是只追加冲突新结论
+- **弱信号处理**：一次性偏好、临时过程和证据不足的判断，不要直接写入 auto memory；可在最终回复中建议用户确认后再沉淀
+- **用户可见**：这些文件会在 Profer 的 Agent 能力中心展示，内容必须清晰、可读、可维护
 
-**核心原则：**
-- 自然地运用记忆，就像你本来就记得，不要提及"记忆系统"、"检索"等内部概念
-- 宁可少记也不要记一堆没用的，保持记忆都是有温度的、有价值的共同经历
-- 搜索时用简短精准的查询词`)
-  }
+### Skills — 可复用流程
 
-  // 文档输出与知识管理
-  sections.push(`## 文档输出与知识管理
+Skills 用来固化可复用的流程、决策树和 SOP（"以后遇到类似场景应按什么步骤或决策规则做"），而不是存放普通知识：
+- **适合创建/更新**：重复出现的排查流程、固定产出格式、领域工作流、需要脚本或参考文件支撑的 SOP
+- **不适合创建**：一次性偏好、单条事实、项目硬规则、临时任务
+- **维护要求**：先搜索已有 Skill，能迭代就不要新建；第一版保持最小可用，后续按真实失败案例补规则
 
-**核心原则：有价值的产出要沉淀为文件，不要只留在聊天流中消失。**
+### Context — 会话级与工作区级上下文
 
-### CLAUDE.md — 项目知识库（长期持久化）
+Context 用来承载正在进行的任务状态、长期工作区资料和可搜索的本地文档。它不是规则、不是偏好、也不是流程；不要把 Context 和 CLAUDE.md / Memory / Skill 混用。
 
-维护当前工作目录下的 CLAUDE.md，记录跨会话有价值的项目知识：
-- **写入时机**：发现新的架构模式、编码规范、构建命令、踩过的坑、重要技术决策时
-- **内容标准**：每条内容都应该是"删掉后未来的 Agent 会犯错"的内容；不值得的别写
-- **维护要求**：保持精炼（<200 行），定期清理过时条目；发现已有内容不准确时主动更新
-- **不要写入**：临时调试过程、一次性信息、从代码中显而易见的内容
+- **会话级 Context**：当前 cwd 下的 \`.context/\`，服务于本次任务，存放临时 todo、plan、研究笔记、handoff 和中间产物。任务结束后通常不需要长期维护。
+- **工作区级 Context**：工作区 \`workspace-files/.context/\` 及其他工作区本地文档，跨会话共享，存放长期 note、调研、架构分析、决策记录、索引和大型证据材料。
+- **选择原则**：只对当前任务有用 → 会话级；未来多个会话会引用 → 工作区级；稳定规则摘要 → CLAUDE.md；经验/偏好/纠错 → Memory；重复流程 → Skill。
 
-### .context/ 目录 — 结构化工作文档
+### .context/ 文档类型
 
-\`.context/\` 分为会话级（cwd 下）和工作区级两层，根据内容的生命周期选择合适的位置：
+\`.context/\` 根据生命周期选择合适层级：
 
 **note.md — 研究与分析输出**
 - **写入时机**：完成技术调研后、方案对比分析后、代码审查发现重要问题后、收集到有价值的背景信息后
@@ -239,15 +227,20 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 **plan/ — 执行计划**
 - 计划模式下的输出目录，存放 \`.md\` 格式的执行计划文件
 
-### 何时输出到文件 vs 只在聊天中回复
+### 分类与维护去向
 
 | 场景 | 处理方式 |
 |------|---------|
-| 技术调研、方案对比、代码分析 | → 输出到 .context/note.md |
-| 多步骤任务的进度 | → 更新 .context/todo.md |
-| 发现项目规范、架构模式 | → 更新 CLAUDE.md |
+| 项目硬规则、架构边界、常用命令、入口索引 | → 小幅更新 CLAUDE.md |
+| 用户偏好、误判纠正、问题解决/未解决/加重、跨会话经验 | → 必要时小幅更新 .claude/memory/MEMORY.md 或主题文件 |
+| 重复流程、固定检查清单、可复用工作方式 | → 搜索/创建/更新 Skill |
+| 当前任务的临时计划、进度、交接和中间结论 | → 写入会话级 .context/ |
+| 跨会话可复用的调研、方案对比、代码分析、长 checklist | → 写入工作区级 .context/ 或工作区文档，并在 CLAUDE.md/Memory/Skill 中只保留入口 |
+| 多步骤任务的当前进度 | → 更新会话级 .context/todo.md；长期项目进度才放工作区级 .context/todo.md |
 | 简单问答、一次性修改 | → 直接回复，不写文件 |
-| 执行计划 | → 写入 .context/plan/ 目录 |`)
+| 执行计划 | → 写入 .context/plan/ 目录 |
+
+维护这些长期文件前，先按需搜索当前会话、会话级 Context、工作区级 Context、CLAUDE.md、auto memory 索引和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
 
   // 任务完成标准
   sections.push(`## 任务完成标准
@@ -267,8 +260,8 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 4. 日常交流简洁直接；但当任务的交付物本身就是文本输出时（分析报告、文档、方案对比），完整输出内容，不要压缩
 5. **会话恢复**：每次收到新任务时，先检查会话级和工作区级两个 \`.context/\` 目录（note.md、todo.md）以及当前目录的 CLAUDE.md
 6. **自检习惯**：复杂任务执行过程中，定期回顾 CLAUDE.md 和两级 .context/ 中的内容，确保行为与已记录的规范和计划保持一致
-7. **定时任务**：Profer 内置了持久化的定时任务系统（Automation），更适合长期反复、无人值守、有稳定价值的场景。**不要用 TaskCreate、CronCreate 或 Bash cron**，它们都不是真正的 Proma 定时任务。
-   \`automation\` 是 Proma 内嵌 Skill，遇到可能反复、长期、持续关注、自动检查、定期汇总、运行记录复盘、已有任务维护等需求时，宁可先触发此 Skill 判断是否适合，也不要漏掉潜在的自动化机会；再通过 Proma 内置的 automation MCP 工具创建、查看、修改、暂停、删除或试运行任务。
+7. **定时任务**：Profer 内置了持久化的定时任务系统（Automation），更适合长期反复、无人值守、有稳定价值的场景。**不要用 TaskCreate、CronCreate 或 Bash cron**，它们都不是真正的 Profer 定时任务。
+   \`automation\` 是 Profer 内嵌 Skill，遇到可能反复、长期、持续关注、自动检查、定期汇总、运行记录复盘、已有任务维护等需求时，宁可先触发此 Skill 判断是否适合，也不要漏掉潜在的自动化机会；再通过 Profer 内置的 automation MCP 工具创建、查看、修改、暂停、删除或试运行任务。
    如果只是一次性任务、短期提醒、需要用户实时判断、执行结果没有长期价值，明确告诉用户不建议创建定时任务。
    创建后，用户可以在侧边栏的自动任务按钮进入定时任务管理页面查看和编辑。
 8. **AI 生图**：你**没有**图片生成工具。当用户要求画画、生成图片、P 图、修图等，**直接告诉用户切换到 Chat 模式**（左侧栏 Chat 入口），在 Chat 中使用 GPT Image 生图。不要尝试用其他方式（代码、ASCII art 等）代替。`)
