@@ -6,13 +6,19 @@ import { db, getUserByRelayToken, getApiKeyByHash } from './db.js'
 // ===== CORS 中间件 =====
 // 注：生产环境应通过 nginx 或反向代理限制 Origin，当前 * 通配符用于内网/开发环境。
 export function corsMiddleware(c) {
-  c.res.headers.set('Access-Control-Allow-Origin', '*')
-  c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
-  c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-  // 安全响应头
-  c.res.headers.set('X-Content-Type-Options', 'nosniff')
-  c.res.headers.set('X-Frame-Options', 'DENY')
-  if (c.req.method === 'OPTIONS') return new Response(null, { status: 204 })
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+  }
+  for (const [k, v] of Object.entries(headers)) {
+    c.res.headers.set(k, v)
+  }
+  if (c.req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers })
+  }
 }
 
 /** token 哈希，用于黑名单查重 */

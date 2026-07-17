@@ -1,30 +1,63 @@
 /**
- * Proma Team Server — 团队协作后端
+ * Profer Team Server — 团队协作后端
  *
  * Hono + better-sqlite3 + JWT
  * 部署目标: 47.109.108.57
  *
  * 目录结构:
  *   server/
- *   ├── index.js            ← 入口（本文件）
+ *   ├── index.js                 ← 入口（本文件）
  *   ├── src/
- *   │   ├── config.js       ← 配置
- *   │   ├── db.js           ← 数据库初始化
- *   │   ├── utils.js        ← 工具函数
- *   │   ├── middleware.js    ← CORS + JWT 认证
+ *   │   ├── config.js            ← 配置（订阅/计费/MinerU）
+ *   │   ├── db.js                ← 数据库 barrel（re-export 子模块）
+ *   │   ├── db/
+ *   │   │   ├── schema.js        ←   db 实例 + DDL + 迁移
+ *   │   │   ├── credits.js       ←   三桶扣款/透支/交易
+ *   │   │   └── subscription.js  ←   订阅/订单/邀请/drip/兑换码
+ *   │   ├── utils.js             ← 工具函数
+ *   │   ├── middleware.js         ← CORS + JWT/relay/pk_ 鉴权
+ *   │   ├── middleware/
+ *   │   │   ├── admin.js         ←   管理员鉴权
+ *   │   │   ├── credit-gate.js   ←   余额透支门禁
+ *   │   │   └── tier-gate.js     ←   国际模型等级门禁
+ *   │   ├── event-bus.js         ← SSE 事件广播
+ *   │   ├── newapi-client.js     ← New API 对账客户端
  *   │   └── routes/
- *   │       ├── auth.js         ← 注册/登录
- *   │       ├── workspaces.js   ← 工作区 CRUD + 成员管理
- *   │       ├── invitations.js  ← 邀请验证/接受/拒绝
- *   │       ├── sync.js         ← 变更同步
- *   │       ├── files.js        ← 文件上传/下载/删除
- *   │       └── heartbeat.js    ← 心跳上报
- *   │       └── feedback.js     ← 意见箱（飞书 Base）
- *   └── files/              ← 上传文件存储目录
+ *   │       ├── auth.js              ← 注册/登录
+ *   │       ├── workspaces.js        ← 工作区 CRUD + 成员
+ *   │       ├── invitations.js       ← 邀请
+ *   │       ├── sync.js              ← 变更同步
+ *   │       ├── files.js             ← 文件上传/下载
+ *   │       ├── heartbeat.js         ← 心跳
+ *   │       ├── events.js            ← SSE 事件端点
+ *   │       ├── announcements.js     ← 工作区公告
+ *   │       ├── feedback.js          ← 意见箱（飞书 Base）
+ *   │       ├── invite.js            ← 邀请返利
+ *   │       ├── account/
+ *   │       │   ├── channels.js      ←   渠道管理
+ *   │       │   ├── credits.js       ←   额度查询
+ *   │       │   ├── api-keys.js      ←   开放 API Key
+ *   │       │   ├── subscription.js  ←   订阅状态/drip
+ *   │       │   └── redeem.js        ←   兑换码核销
+ *   │       ├── admin/
+ *   │       │   ├── users.js         ←   用户管理
+ *   │       │   ├── channels.js      ←   渠道管理
+ *   │       │   ├── credits.js       ←   额度管理
+ *   │       │   ├── dashboard.js     ←   仪表盘
+ *   │       │   ├── activation-codes.js  ← 激活码
+ *   │       │   ├── orders.js        ←   订单管理
+ *   │       │   ├── redemption-codes.js  ← 兑换码管理
+ *   │       │   └── audit.js         ←   审计日志
+ *   │       ├── proxy/
+ *   │       │   └── chat.js          ←   AI API 代理转发
+ *   │       └── services/
+ *   │           ├── kb.js            ←   知识库
+ *   │           └── mineru.js        ←   论文解析
+ *   └── scripts/                 ← 运维脚本（drip/备份/部署/迁移）
  */
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, WORKSPACE_GRACE_PERIOD_MS, INVITATION_RETENTION_MS, SYNC_ENVELOPE_RETENTION_MS, FILES_DIR } from './src/config.js'
+import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
 import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
@@ -64,17 +97,8 @@ initAdmin()
 const app = new Hono()
 
 app.use('*', async (c, next) => {
-  if (c.req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-      },
-    })
-  }
-  corsMiddleware(c)
+  const corsResult = corsMiddleware(c)
+  if (corsResult) return corsResult
   await next()
 })
 
@@ -169,110 +193,18 @@ app.onError((err, c) => {
 })
 
 // ===== 启动 =====
-console.log('[Proma Team Server] 启动中...')
+console.log('[Profer Team Server] 启动中...')
 console.log(`  端口: ${PORT}`)
 console.log(`  文件上限: ${Math.round(MAX_FILE_SIZE / 1048576)}MB`)
 console.log(`  admin: ${ADMIN_EMAIL}`)
 
 serve({ fetch: app.fetch, port: PORT, hostname: '0.0.0.0' }, (info) => {
-  console.log(`[Proma Team Server] 已启动: http://0.0.0.0:${info.port}`)
+  console.log(`[Profer Team Server] 已启动: http://0.0.0.0:${info.port}`)
 })
 
-// 定期清理过期邀请
-setInterval(() => {
-  try {
-    const result = db.prepare(
-      "UPDATE invitations SET status = 'expired' WHERE status = 'pending' AND expires_at < ?"
-    ).run(Date.now())
-    if (result.changes > 0) {
-      console.log(`[清理] 已将 ${result.changes} 条过期邀请标记为 expired`)
-    }
-  } catch (err) {
-    console.warn('[清理] 邀请过期标记失败:', err.message)
-  }
-}, 10 * 60 * 1000).unref()
-
-// 扣费循环：每 5 分钟扫描未扣费请求，按 New API request_id 补扣
-setInterval(async () => {
-  try {
-    const { sweepUnbilledRequests } = await import('./src/db.js')
-    await sweepUnbilledRequests()
-  } catch { /* 后台静默，不崩服务器 */ }
-}, 5 * 60 * 1000).unref()
-
-// 定期清理过期黑名单条目
-setInterval(() => {
-  try {
-    db.prepare('DELETE FROM token_blacklist WHERE expires_at < ?').run(Date.now())
-  } catch { /* 忽略 */ }
-}, 30 * 60 * 1000).unref()
-
-// 工作区冷静期满硬删除（每 1 小时检查）
-setInterval(() => {
-  try {
-    const cutoff = Date.now() - WORKSPACE_GRACE_PERIOD_MS
-    const expired = db.prepare(
-      'SELECT id FROM workspaces WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?'
-    ).all(cutoff)
-
-    if (expired.length === 0) return
-
-    const hardDeleteWorkspace = db.transaction((wsId) => {
-      db.prepare('DELETE FROM sync_envelopes WHERE workspace_id = ?').run(wsId)
-      db.prepare('DELETE FROM file_manifests WHERE workspace_id = ?').run(wsId)
-      db.prepare('DELETE FROM workspace_members WHERE workspace_id = ?').run(wsId)
-      db.prepare('DELETE FROM invitations WHERE workspace_id = ?').run(wsId)
-      db.prepare('DELETE FROM audit_logs WHERE workspace_id = ?').run(wsId)
-      db.prepare('DELETE FROM workspaces WHERE id = ?').run(wsId)
-    })
-
-    // 防护：FILES_DIR 未配置或指向根路径时，绝不执行目录删除，避免灾难性 rmSync（DB 清理不受影响）
-    const filesDirOk =
-      typeof FILES_DIR === 'string' &&
-      FILES_DIR.trim().length > 0 &&
-      FILES_DIR.trim() !== '/' &&
-      FILES_DIR.trim() !== '\\'
-
-    for (const { id } of expired) {
-      if (filesDirOk && id) {
-        const wsDir = pathJoin(FILES_DIR, id)
-        if (existsSync(wsDir)) rmSync(wsDir, { recursive: true, force: true })
-      }
-      hardDeleteWorkspace(id)
-      console.log(`[清理] 已硬删除过期工作区: ${id}`)
-    }
-  } catch (err) {
-    console.warn('[清理] 工作区冷静期满清理失败:', err.message)
-  }
-}, 60 * 60 * 1000).unref()
-
-// 定期清理已处理的过期历史邀请（每 24 小时）
-setInterval(() => {
-  try {
-    const cutoff = Date.now() - INVITATION_RETENTION_MS
-    const result = db.prepare(
-      "DELETE FROM invitations WHERE status != 'pending' AND created_at < ?"
-    ).run(cutoff)
-    if (result.changes > 0) {
-      console.log(`[清理] 已删除 ${result.changes} 条过期历史邀请`)
-    }
-  } catch (err) {
-    console.warn('[清理] 邀请历史清理失败:', err.message)
-  }
-}, 24 * 60 * 60 * 1000).unref()
-
-// 定期清理超期的同步信封（每 6 小时），避免 sync_envelopes 无限增长
-setInterval(() => {
-  try {
-    const cutoff = Date.now() - SYNC_ENVELOPE_RETENTION_MS
-    const result = db.prepare('DELETE FROM sync_envelopes WHERE occurred_at < ?').run(cutoff)
-    if (result.changes > 0) {
-      console.log(`[清理] 已删除 ${result.changes} 条超期同步信封`)
-    }
-  } catch (err) {
-    console.warn('[清理] 同步信封清理失败:', err.message)
-  }
-}, 6 * 60 * 60 * 1000).unref()
+// 后台定时任务（邀请清理/扣费补扫/黑名单/工作区硬删/信封清理）
+import { startSchedulers } from './src/scheduler.js'
+startSchedulers()
 
 // 优雅关闭
 process.on('SIGTERM', () => { db.close(); process.exit(0) })
