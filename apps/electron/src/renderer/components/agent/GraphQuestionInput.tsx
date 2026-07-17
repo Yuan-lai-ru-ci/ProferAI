@@ -68,14 +68,19 @@ export function GraphQuestionInput(): React.ReactElement | null {
 
       const state = streamingStates.get(sessionId)
       const isRunning = state?.running ?? false
+      const backgroundWaiting = state?.backgroundWaiting ?? false
 
-      if (isRunning) {
-        // Agent 运行中 → 排队发送
+      // 运行中 / 软空闲态（后台任务等待）→ 走注入通道，复用已打开的 SDK 会话。
+      // 软空闲态时 running 为 false 但服务端 activeSessions 仍保留，
+      // 直接调用 sendAgentMessage 新建 run 会被编排器拒绝。
+      if (isRunning || backgroundWaiting) {
+        // Agent 运行中 / 软空闲 → 排队发送
+        // backgroundWaiting 时无活跃 turn，不需要中断
         await window.electronAPI.queueAgentMessage({
           sessionId,
           userMessage: fullMessage,
           uuid: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
-          interrupt: true,
+          interrupt: isRunning,
         })
       } else {
         // Agent 未运行 → 发送新消息
@@ -114,7 +119,9 @@ export function GraphQuestionInput(): React.ReactElement | null {
     }
   }
 
-  const isRunning = streamingStates.get(sessionId ?? '')?.running ?? false
+  const state = streamingStates.get(sessionId ?? '')
+  const isRunning = state?.running ?? false
+  const isBackgroundWaiting = state?.backgroundWaiting ?? false
 
   return (
     <div
@@ -141,7 +148,7 @@ export function GraphQuestionInput(): React.ReactElement | null {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isRunning ? '输入反馈，Agent 将自动调整任务…' : '输入反馈，启动 Agent 调整任务…'}
+          placeholder={isRunning ? '输入反馈，Agent 将自动调整任务…' : isBackgroundWaiting ? '输入反馈，等待后台任务完成后 Agent 将处理…' : '输入反馈，启动 Agent 调整任务…'}
           disabled={sending}
           className={cn(
             'flex-1 min-w-0 h-9 px-3 text-sm',

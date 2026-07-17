@@ -18,9 +18,32 @@ import type {
   GraphEvent,
   TaskUsage,
 } from './types'
-import { parseUsage, parseForkFrom, stripMetaTags } from './graph-parser'
+import { parseArtifact, parseUsage, parseForkFrom, parseAbandon, parseDependsOn, stripMetaTags } from './graph-parser'
 
 // ===== 主入口 =====
+
+/**
+ * 全局一致性修复：从 edges 重建所有节点的 dependedBy 反向引用。
+ *
+ * 事件可能因乱序而导致 depNode 在 dependency 添加时尚未创建，
+ * 此函数确保 dependedBy 与 edges 完全一致。
+ */
+function reconcileDependedBy(graph: TaskGraph): TaskGraph {
+  const nodes: Record<string, TaskNode> = {}
+  for (const id of Object.keys(graph.nodes)) {
+    nodes[id] = { ...graph.nodes[id]!, dependedBy: [] }
+  }
+  for (const edge of graph.edges) {
+    const target = nodes[edge.to]
+    if (target && !target.dependedBy.includes(edge.from)) {
+      nodes[edge.to] = {
+        ...target,
+        dependedBy: [...target.dependedBy, edge.from],
+      }
+    }
+  }
+  return { ...graph, nodes }
+}
 
 /**
  * 从空 Graph 开始，重放事件列表构建完整 Graph 状态。
@@ -35,12 +58,14 @@ export function buildGraphFromEvents(events: GraphEvent[]): TaskGraph {
     graph = applyEvent(graph, event)
   }
 
+  // 全局 reconcile：修复因事件乱序导致的 dependedBy 丢失
+  graph = reconcileDependedBy(graph)
+
   graph.updatedAt = sorted.length > 0
     ? sorted[sorted.length - 1]!.timestamp
     : Date.now()
 
-  // 无显式边时自动补链式边
-  return ensureSequentialEdges(graph)
+  return graph
 }
 
 /**
@@ -58,18 +83,24 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
       const now = event.timestamp
       // forkFrom 优先从 description 解析（prompt 指示写入 description），回退 subject
       const forkFrom = (description ? parseForkFrom(description) : null) ?? parseForkFrom(subject)
+      const artifactFromDescription = description ? parseArtifact(description) : []
+      const artifact = artifactFromDescription.length > 0 ? artifactFromDescription : parseArtifact(subject)
+      const usage = (description ? parseUsage(description) : null) ?? parseUsage(subject)
+      const abandonReason = (description ? parseAbandon(description) : null) ?? parseAbandon(subject)
       const node: TaskNode = {
         id: event.taskId,
         subject: stripMetaTags(subject),
         description: description ? stripMetaTags(description) : description,
-        status: 'pending',
+        status: abandonReason ? 'cancelled' : 'pending',
         dependsOn: [...dependsOn],
         dependedBy: [],
-        artifact: [],
+        artifact,
         reviewStatus: 'none',
         createdAt: now,
         updatedAt: now,
+        ...(usage && { usage }),
         ...(forkFrom && { forkFrom }),
+        ...(abandonReason && { abandonReason, abandonConfidence: 1, abandonEvidence: [] }),
       }
       nodes[event.taskId] = node
 
@@ -87,7 +118,7 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
       }
 
       // 添加分叉边
-      if (forkFrom) {
+      if (forkFrom && nodes[forkFrom]) {
         forkEdges.push({ from: forkFrom, to: event.taskId })
       }
       break
@@ -97,19 +128,73 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
       const existing = nodes[event.taskId]
       if (!existing) break
       const { subject, description } = event.payload
+      const artifacts = description ? parseArtifact(description) : []
       const usage = description ? parseUsage(description) : null
       const forkFrom = (description ? parseForkFrom(description) : null) ?? (subject ? parseForkFrom(subject) : null)
+
+      // dependsOn：description 中的 @dependsOn 是 Agent 显式声明的权威列表 → 替换；
+      // subject 中的只是兜底 → 合并。这样 Agent 移除某个 @dependsOn 时边也会同步消失。
+      const dependsOnFromDescription = description ? parseDependsOn(description) : []
+      const dependsOnFromSubject = subject ? parseDependsOn(subject) : []
+      const hasExplicitDependsOn = dependsOnFromDescription.length > 0
+      const newDependsOn = hasExplicitDependsOn
+        ? dependsOnFromDescription
+        : dependsOnFromSubject
+
+      // 显式替换：清理被移除的旧边 + 被依赖方的 dependedBy
+      if (hasExplicitDependsOn) {
+        const removed = existing.dependsOn.filter((d) => !newDependsOn.includes(d))
+        for (const oldDep of removed) {
+          for (let i = edges.length - 1; i >= 0; i--) {
+            if (edges[i]!.from === event.taskId && edges[i]!.to === oldDep) {
+              edges.splice(i, 1)
+            }
+          }
+          const oldDepNode = nodes[oldDep]
+          if (oldDepNode) {
+            nodes[oldDep] = {
+              ...oldDepNode,
+              dependedBy: oldDepNode.dependedBy.filter((id) => id !== event.taskId),
+            }
+          }
+        }
+      }
+
+      const finalDependsOn = newDependsOn.length > 0
+        ? (hasExplicitDependsOn ? newDependsOn : [...new Set([...existing.dependsOn, ...newDependsOn])])
+        : existing.dependsOn
+
       nodes[event.taskId] = {
         ...existing,
         ...(subject !== undefined && { subject: stripMetaTags(subject) }),
         ...(description !== undefined && { description: stripMetaTags(description) }),
+        ...(newDependsOn.length > 0 && { dependsOn: finalDependsOn }),
+        ...(artifacts.length > 0 && { artifact: [...new Set([...existing.artifact, ...artifacts])] }),
         ...(usage && { usage }),
         ...(forkFrom && { forkFrom }),
         updatedAt: event.timestamp,
       }
-      // 若 update 引入了分叉且边尚不存在，补 forkEdge（正常路径分叉在 task_created 已建边）
-      if (forkFrom && !forkEdges.some(e => e.from === forkFrom && e.to === event.taskId)) {
-        forkEdges.push({ from: forkFrom, to: event.taskId })
+
+      // 添加新边（旧边清理已在上面完成，这里只加不重复的）
+      for (const dep of newDependsOn) {
+        if (!edges.some((e) => e.from === event.taskId && e.to === dep)) {
+          edges.push({ from: event.taskId, to: dep })
+        }
+        const depNode = nodes[dep]
+        if (depNode && !depNode.dependedBy.includes(event.taskId)) {
+          nodes[dep] = {
+            ...depNode,
+            dependedBy: [...depNode.dependedBy, event.taskId],
+          }
+        }
+      }
+      if (forkFrom) {
+        for (let i = forkEdges.length - 1; i >= 0; i--) {
+          if (forkEdges[i]!.to === event.taskId) forkEdges.splice(i, 1)
+        }
+        if (nodes[forkFrom]) {
+          forkEdges.push({ from: forkFrom, to: event.taskId })
+        }
       }
       break
     }
@@ -123,18 +208,30 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
           updatedAt: event.timestamp,
         }
       } else {
-        // 容错：task_created 事件缺失时，从 status_changed 推断节点存在
+        // 容错：task_created 事件缺失时，从已有 edges 中恢复该节点的依赖关系，
+        // 避免创建零连接的孤立节点
         let fallbackSubject: string
         if (event.payload.newStatus === 'completed') fallbackSubject = `已完成: ${event.taskId}`
         else if (event.payload.newStatus === 'in_progress') fallbackSubject = `执行中: ${event.taskId}`
         else fallbackSubject = `Task ${event.taskId}`
+
+        // 从已有边中恢复连接关系（之前 task_dependency_added 可能已为它建了边）
+        const recoveredDependsOn: string[] = []
+        const recoveredDependedBy: string[] = []
+        for (const edge of edges) {
+          if (edge.from === event.taskId && !recoveredDependsOn.includes(edge.to))
+            recoveredDependsOn.push(edge.to)
+          if (edge.to === event.taskId && !recoveredDependedBy.includes(edge.from))
+            recoveredDependedBy.push(edge.from)
+        }
+
         nodes[event.taskId] = {
           id: event.taskId,
           subject: fallbackSubject,
           description: '',
           status: event.payload.newStatus,
-          dependsOn: [],
-          dependedBy: [],
+          dependsOn: recoveredDependsOn,
+          dependedBy: recoveredDependedBy,
           artifact: [],
           reviewStatus: 'none',
           createdAt: event.timestamp,
@@ -145,8 +242,23 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
     }
 
     case 'task_dependency_added': {
-      const existing = nodes[event.taskId]
-      if (!existing) break
+      let existing = nodes[event.taskId]
+      // 源节点不存在时创建 fallback，避免依赖事件被静默丢弃
+      if (!existing) {
+        existing = {
+          id: event.taskId,
+          subject: `Task ${event.taskId}`,
+          description: '',
+          status: 'pending',
+          dependsOn: [],
+          dependedBy: [],
+          artifact: [],
+          reviewStatus: 'none',
+          createdAt: event.timestamp,
+          updatedAt: event.timestamp,
+        }
+        nodes[event.taskId] = existing
+      }
       const dep = event.payload.dependsOn
       // 避免重复添加
       if (existing.dependsOn.includes(dep)) break
@@ -155,7 +267,7 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
         dependsOn: [...existing.dependsOn, dep],
         updatedAt: event.timestamp,
       }
-      // 添加边
+      // 添加边（即使目标节点尚不存在也先加边，后续 reconcileDependedBy 会补反向引用）
       edges.push({ from: event.taskId, to: dep })
       // 更新被依赖方的 dependedBy
       const depNode = nodes[dep]
@@ -201,6 +313,50 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
       }
       break
     }
+
+    case 'task_abandon_annotated': {
+      // 回溯抽取的放弃标注：写入放弃原因 + 证据，并把非 completed 的节点标为 cancelled（枯死支线）。
+      // 纯附加、幂等：重放多次结果相同；只挂到已存在的真实节点（挂不上的在服务层降级为文字注记，不进图）。
+      const existing = nodes[event.taskId]
+      if (!existing) break
+      const { reason, confidence, evidenceTurns } = event.payload
+      nodes[event.taskId] = {
+        ...existing,
+        abandonReason: reason,
+        abandonConfidence: confidence,
+        abandonEvidence: [...evidenceTurns],
+        // 保守置 cancelled：仅当当前非 completed（已完成的任务即便方向后来被放弃也保留 completed 状态）
+        ...(existing.status !== 'completed' && { status: 'cancelled' as const }),
+        updatedAt: event.timestamp,
+      }
+      break
+    }
+
+    case 'task_deleted': {
+      // 真删除：把节点从图上移除，并清理所有指向它的边与依赖引用。
+      // 与「放弃(abandon 枯枝，保留留痕)」「取消(cancelled，保留灰化)」区分——删除是用户/Agent
+      // 显式要求"这个任务不要了、从图上拿掉"。幂等：节点已不存在仍清理悬挂引用，重放多次结果相同。
+      delete nodes[event.taskId]
+      // 清理其他节点对该节点的 dependsOn / dependedBy 引用
+      for (const id of Object.keys(nodes)) {
+        const n = nodes[id]!
+        const inDeps = n.dependsOn.includes(event.taskId)
+        const inDependedBy = n.dependedBy.includes(event.taskId)
+        if (inDeps || inDependedBy) {
+          nodes[id] = {
+            ...n,
+            ...(inDeps && { dependsOn: n.dependsOn.filter((d) => d !== event.taskId) }),
+            ...(inDependedBy && { dependedBy: n.dependedBy.filter((d) => d !== event.taskId) }),
+          }
+        }
+      }
+      return {
+        nodes,
+        edges: edges.filter((e) => e.from !== event.taskId && e.to !== event.taskId),
+        forkEdges: forkEdges.filter((e) => e.from !== event.taskId && e.to !== event.taskId),
+        updatedAt: event.timestamp,
+      }
+    }
   }
 
   return { nodes, edges, forkEdges, updatedAt: event.timestamp }
@@ -211,28 +367,6 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
  */
 export function createEmptyGraph(): TaskGraph {
   return { nodes: {}, edges: [], forkEdges: [], updatedAt: Date.now() }
-}
-
-/**
- * 对没有显式边的 Graph 自动补链式边（按创建时间排序）。
- * 补充 @dependsOn 标记被 Agent 忽略时的兜底。
- */
-export function ensureSequentialEdges(graph: TaskGraph): TaskGraph {
-  // 已有显式边则不干预
-  if (graph.edges.length > 0) return graph
-
-  const sorted = Object.values(graph.nodes).sort((a, b) => a.createdAt - b.createdAt)
-  if (sorted.length < 2) return graph
-
-  const newEdges: GraphEdge[] = []
-  for (let i = 1; i < sorted.length; i++) {
-    newEdges.push({ from: sorted[i]!.id, to: sorted[i - 1]!.id })
-    // 同时更新节点的 dependsOn / dependedBy
-    sorted[i]!.dependsOn.push(sorted[i - 1]!.id)
-    sorted[i - 1]!.dependedBy.push(sorted[i]!.id)
-  }
-
-  return { ...graph, edges: [...graph.edges, ...newEdges] }
 }
 
 // ===== 节点辅助函数 =====

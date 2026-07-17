@@ -45,6 +45,16 @@ export interface TaskNode {
   forkFrom?: string
   /** 分叉原因（用户反馈摘要） */
   forkReason?: string
+  /**
+   * 回溯抽取的放弃原因（枯死支线：为什么这个方向被放弃）。
+   * 与 forkReason 语义分离：forkReason=分叉血缘，abandonReason=放弃理由。
+   * 由回溯分析 pass 通读会话 JSONL 后写入，非来自 SDK TaskCreate/Update。
+   */
+  abandonReason?: string
+  /** 放弃判定置信度 0-1 */
+  abandonConfidence?: number
+  /** 支撑放弃判定的会话轮次索引 */
+  abandonEvidence?: number[]
 }
 
 /** Task 执行用量 */
@@ -96,6 +106,8 @@ export type GraphEventType =
   | 'task_dependency_added'
   | 'task_artifact_added'
   | 'task_session_linked'
+  | 'task_abandon_annotated'
+  | 'task_deleted'
 
 /** Graph 事件基础字段 */
 interface GraphEventBase {
@@ -113,6 +125,8 @@ export type GraphEvent =
   | (GraphEventBase & { type: 'task_dependency_added'; payload: TaskDependencyAddedPayload })
   | (GraphEventBase & { type: 'task_artifact_added'; payload: TaskArtifactAddedPayload })
   | (GraphEventBase & { type: 'task_session_linked'; payload: TaskSessionLinkedPayload })
+  | (GraphEventBase & { type: 'task_abandon_annotated'; payload: TaskAbandonAnnotatedPayload })
+  | (GraphEventBase & { type: 'task_deleted'; payload: TaskDeletedPayload })
 
 /** Graph 事件载荷联合类型 */
 export type GraphEventPayload =
@@ -122,6 +136,8 @@ export type GraphEventPayload =
   | TaskDependencyAddedPayload
   | TaskArtifactAddedPayload
   | TaskSessionLinkedPayload
+  | TaskAbandonAnnotatedPayload
+  | TaskDeletedPayload
 
 export interface TaskCreatedPayload {
   subject: string
@@ -136,7 +152,7 @@ export interface TaskUpdatedPayload {
 }
 
 export interface TaskStatusChangedPayload {
-  oldStatus: TaskStatus | null
+  oldStatus?: TaskStatus | null
   newStatus: TaskStatus
 }
 
@@ -153,6 +169,25 @@ export interface TaskSessionLinkedPayload {
   sessionId: string
   /** 如果通过协作委派执行，子 Agent 会话的实际 session ID（可直接用于导航跳转） */
   childSessionId?: string
+}
+
+export interface TaskAbandonAnnotatedPayload {
+  /** 放弃原因（自然语言） */
+  reason: string
+  /** 放弃判定置信度 0-1（Agent 显式标注恒为 1） */
+  confidence: number
+  /** 支撑放弃判定的会话轮次索引（Agent 显式标注为空） */
+  evidenceTurns: number[]
+  /** 抽取来源：'agent'=Agent 干活时用 @abandon 显式标注；'retrospective'=AI 回溯 pass（已停用，保留兼容） */
+  source: 'retrospective' | 'agent'
+}
+
+export interface TaskDeletedPayload {
+  /**
+   * 删除来源。'user'=用户在图上显式删除；'agent'=Agent 调 TaskUpdate(status='deleted')。
+   * 与「放弃(abandon 枯枝，保留留痕)」「取消(cancelled，保留灰化)」语义区分：删除是真从图上移除节点。
+   */
+  source?: 'user' | 'agent'
 }
 
 // ===== Project 元数据 =====
@@ -264,7 +299,7 @@ export interface ForkEdgeLayout {
 export interface TaskItemInput {
   id: string
   subject: string
-  status: 'pending' | 'in_progress' | 'completed' | 'deleted' | 'cancelled'
+  status: TaskStatus | 'deleted'
   description?: string
 }
 
@@ -303,4 +338,38 @@ export interface ExtractGraphInput {
   toolInput: Record<string, unknown>
   /** 已存在的 Task ID（TaskUpdate 时使用） */
   existingTaskId?: string
+}
+
+// ===== 回溯放弃抽取结果 =====
+
+/** 挂不到任务节点、降级为文字注记的放弃（不进图） */
+export interface UnmappedAbandonment {
+  /** 被放弃方向的简短名称 */
+  direction: string
+  /** 放弃原因 */
+  reason: string
+  /** 最能体现放弃的对话原话摘录 */
+  reasonVerbatim: string
+  /** 支撑证据的会话轮次索引 */
+  evidenceTurns: number[]
+  /** 放弃后转向了什么（无则 null） */
+  switchedTo: string | null
+  /** 放弃判定置信度 0-1 */
+  confidence: number
+}
+
+/** 回溯放弃抽取的结果（IPC 返回给渲染层） */
+export interface RetrospectiveResult {
+  /** 刷新后的完整图（渲染层直接 setPersistedGraph） */
+  graph: TaskGraph
+  /** 本轮新增写入图的放弃事件数 */
+  newAbandonments: number
+  /** 挂不到节点、降级为文字注记的放弃 */
+  unmappedNotes: UnmappedAbandonment[]
+  /** 本次分析的轮次范围 */
+  analyzedRange: { start: number; end: number }
+  /** 更新后的水位（已分析到的最新轮次） */
+  lastAnalyzedTurn: number
+  /** 若本次未执行抽取，说明原因（no-new-turns / llm-failed / parse-failed） */
+  skipped?: string
 }

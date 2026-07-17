@@ -20,8 +20,8 @@ import type {
   ForkEdgeLayout,
   TaskItemInput,
 } from './types'
-import { getReadyTasks, topologicalSort, ensureSequentialEdges } from './graph-state'
-import { parseDependsOn, parseForkFrom, stripMetaTags } from './graph-parser'
+import { getReadyTasks, topologicalSort } from './graph-state'
+import { parseDependsOn, parseArtifact, parseUsage, parseForkFrom, parseAbandon, stripMetaTags } from './graph-parser'
 
 // ===== 摘要 =====
 
@@ -198,20 +198,32 @@ export function deriveGraph(items: TaskItemInput[]): TaskGraph {
     const depFromDesc = parseDependsOn(desc)
     const dependsOn = depFromDesc.length > 0 ? depFromDesc : parseDependsOn(item.subject)
     const forkFrom = parseForkFrom(desc) ?? parseForkFrom(item.subject)
+    const artifactFromDesc = parseArtifact(desc)
+    const artifact = artifactFromDesc.length > 0 ? artifactFromDesc : parseArtifact(item.subject)
+    const usage = parseUsage(desc) ?? parseUsage(item.subject)
+    // 枯枝：Agent 在 TaskUpdate description 里写 @abandon:<原因>。实时派生路径也要认它，
+    // 否则流式运行中标了枯枝却不渲染（与持久化 applyEvent 的 task_abandon_annotated 对齐）。
+    const abandonReason = parseAbandon(desc) ?? parseAbandon(item.subject)
     const cleanSubject = stripMetaTags(item.subject)
+    // 与 applyEvent 一致：被放弃且非 completed 的节点置 cancelled（灰化 + 划线），
+    // completed 节点保留 completed 但仍带放弃原因。
+    const rawStatus = item.status as TaskStatus
+    const status = abandonReason && rawStatus !== 'completed' ? 'cancelled' : rawStatus
 
     nodes[item.id] = {
       id: item.id,
       subject: cleanSubject || item.subject || item.id,
       description: stripMetaTags(desc),
-      status: item.status as TaskStatus,
+      status,
       dependsOn,
       dependedBy: [],
-      artifact: [],
+      artifact,
       reviewStatus: 'none',
       createdAt: now,
       updatedAt: now,
+      ...(usage && { usage }),
       ...(forkFrom && { forkFrom }),
+      ...(abandonReason && { abandonReason, abandonConfidence: 1, abandonEvidence: [] }),
     }
   }
 
@@ -227,8 +239,7 @@ export function deriveGraph(items: TaskItemInput[]): TaskGraph {
       edges.push({ from: node.id, to: depId })
     }
     // 分叉边
-    if (node.forkFrom) {
-      const source = nodes[node.forkFrom]
+    if (node.forkFrom && nodes[node.forkFrom]) {
       forkEdges.push({
         from: node.forkFrom,
         to: node.id,
@@ -237,7 +248,7 @@ export function deriveGraph(items: TaskItemInput[]): TaskGraph {
     }
   }
 
-  return ensureSequentialEdges({ nodes, edges, forkEdges, updatedAt: now })
+  return { nodes, edges, forkEdges, updatedAt: now }
 }
 
 // ===== DAG 布局 =====

@@ -55,3 +55,16 @@ export function inferContextWindow(model?: string): number | undefined {
   if (supports1MContext(model)) return ONE_MILLION_CONTEXT_WINDOW
   return DEFAULT_CONTEXT_WINDOW
 }
+
+/**
+ * 为支持 1M 上下文的模型追加 `[1m]` 后缀，让 SDK/API 协商大上下文窗口。
+ * 不支持 1M 的模型原样返回；已带后缀的幂等跳过。
+ *
+ * 使用位置：构建 SDK query options 时对 modelId 做转换。
+ */
+export function resolveAgentSdkModelId(modelId: string): string {
+  if (supports1MContext(modelId) && !modelId.includes('[1m]')) {
+    return `${modelId}[1m]`
+  }
+  return modelId
+}

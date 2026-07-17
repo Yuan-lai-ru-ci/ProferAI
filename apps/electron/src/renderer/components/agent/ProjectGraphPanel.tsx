@@ -17,10 +17,13 @@ import {
   Clock,
   FileText,
   ExternalLink,
+  RefreshCw,
+  CircleSlash,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
-import { currentGraphAtom } from '@/atoms/graph-atoms'
+import { currentGraphAtom, persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import dagre from '@dagrejs/dagre'
 import { type TaskGraph, type TaskNode, type TaskStatus } from '@profer/project-core'
 import { GraphQuestionInput } from './GraphQuestionInput'
@@ -50,6 +53,9 @@ const NODE_H = 100
 const LEVEL_GAP = 80
 const NODE_GAP_Y = 16
 const CANVAS_PAD = 70
+// 孤立节点网格平铺时的单元间距（横向略大以留出卡片呼吸感）
+const GRID_GAP_X = 48
+const GRID_GAP_Y = 28
 
 const MIN_SCALE = 0.25
 const MAX_SCALE = 2.5
@@ -68,14 +74,15 @@ const statusConfig: Record<TaskStatus, { icon: React.ReactElement; color: string
 
 // ===== 数据 hook =====
 
-function useGraphData(): { graph: TaskGraph | null; loading: boolean } {
+function useGraphData(refreshVersion: number): { graph: TaskGraph | null; loading: boolean } {
   const atomGraph = useAtomValue(currentGraphAtom)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
   const [ipcGraph, setIpcGraph] = React.useState<TaskGraph | null>(null)
-  const [loading, setLoading] = React.useState(false)
+  const [loading, setLoading] = React.useState(true)
 
   React.useEffect(() => {
-    if (!sessionId) { setIpcGraph(null); return }
+    if (!sessionId) { setIpcGraph(null); setLoading(false); return }
     let cancelled = false
     // 切换会话立即清空上一会话的残留图，避免 atomGraph 为空时 fallback 到旧 ipcGraph
     setIpcGraph(null)
@@ -83,11 +90,17 @@ function useGraphData(): { graph: TaskGraph | null; loading: boolean } {
     const api = window.electronAPI as { getGraph?: (id: string) => Promise<TaskGraph> }
     if (!api.getGraph) { setLoading(false); return }
     api.getGraph(sessionId).then(g => {
-      if (!cancelled) { setIpcGraph(g); setLoading(false) }
+      if (cancelled) return
+      setIpcGraph(g)
+      // 同步写回 persistedGraphAtomFamily，让 currentGraphAtom 的 baseline
+      // 也有历史数据。流式期间 baseline 不再为空图，实时 TaskItem overlay 才能正常工作。
+      if (g && Object.keys(g.nodes).length > 0) setPersistedGraph(g)
+      setLoading(false)
     }).catch(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [sessionId])
+  }, [sessionId, refreshVersion, setPersistedGraph])
 
+  // 仅在 IPC 已返回且 atom 也为空时才用 ipcGraph，避免 atom 和 ipc 的竞态
   const graph = atomGraph ?? ipcGraph
   return { graph, loading: loading && !graph }
 }
@@ -105,53 +118,81 @@ interface DagreLayout {
 }
 
 /**
- * 用 dagre 计算分层布局。
- * - 依赖边与分叉边都参与布局，使分叉能沿主轴"张开"成分支。
- * - rankdir=LR：被依赖节点在左、依赖方在右，维持原有左→右视觉习惯。
- * - dagre 返回节点中心点坐标，此处转换为左上角坐标供 foreignObject 使用。
+ * 布局：连通子图用 dagre 分层，孤立节点（不参与任何依赖/分叉边）在其下方铺成网格。
+ * - dagre rankdir=LR：被依赖节点在左、依赖方在右。
+ * - 孤立节点若也丢给 dagre 会全挤进 rank 0 堆成一条长竖列（几十个独立任务时尤其糟），
+ *   故单独抽出来按网格平铺，图才看得清。
+ * - dagre 返回中心点坐标，转换为左上角供 foreignObject 使用。
  */
 function computeDagreLayout(graph: TaskGraph): DagreLayout {
-  const g = new dagre.graphlib.Graph()
-  g.setGraph({
-    rankdir: 'LR',
-    nodesep: NODE_GAP_Y,
-    ranksep: LEVEL_GAP,
-    marginx: CANVAS_PAD,
-    marginy: CANVAS_PAD,
-  })
-  g.setDefaultEdgeLabel(() => ({}))
-
   const nodeIds = Object.keys(graph.nodes)
-  for (const id of nodeIds) {
-    g.setNode(id, { width: NODE_W, height: NODE_H })
-  }
+  if (nodeIds.length === 0) return { positions: EMPTY_POSITIONS, width: 0, height: 0 }
 
-  // 依赖边：edges = {from:依赖方, to:被依赖方}，视觉上被依赖方在左 → setEdge(被依赖, 依赖)
+  // 参与任意有效边（两端都存在）的节点 = 连通；其余 = 孤立
+  const connectedIds = new Set<string>()
   for (const e of graph.edges) {
-    if (graph.nodes[e.from] && graph.nodes[e.to]) g.setEdge(e.to, e.from)
+    if (graph.nodes[e.from] && graph.nodes[e.to]) { connectedIds.add(e.from); connectedIds.add(e.to) }
   }
-  // 分叉边：forkEdges = {from:源, to:分叉}，源在左 → setEdge(源, 分叉)
   for (const e of graph.forkEdges) {
-    if (graph.nodes[e.from] && graph.nodes[e.to]) g.setEdge(e.from, e.to)
+    if (graph.nodes[e.from] && graph.nodes[e.to]) { connectedIds.add(e.from); connectedIds.add(e.to) }
   }
-
-  dagre.layout(g)
+  const isolatedIds = nodeIds.filter(id => !connectedIds.has(id))
 
   const positions: NodePosition[] = []
-  let width = 0
-  let height = 0
-  for (const id of nodeIds) {
-    const n = g.node(id)
-    if (!n) continue
-    // dagre 给中心点 → 转左上角
-    const x = n.x - NODE_W / 2
-    const y = n.y - NODE_H / 2
-    positions.push({ id, x, y })
-    width = Math.max(width, x + NODE_W)
-    height = Math.max(height, y + NODE_H)
+  let connectedRight = CANVAS_PAD
+  let connectedBottom = CANVAS_PAD
+
+  // 连通子图：dagre 分层
+  if (connectedIds.size > 0) {
+    const g = new dagre.graphlib.Graph()
+    g.setGraph({
+      rankdir: 'LR',
+      nodesep: NODE_GAP_Y,
+      ranksep: LEVEL_GAP,
+      marginx: CANVAS_PAD,
+      marginy: CANVAS_PAD,
+    })
+    g.setDefaultEdgeLabel(() => ({}))
+    for (const id of connectedIds) g.setNode(id, { width: NODE_W, height: NODE_H })
+    // 依赖边：edges = {from:依赖方, to:被依赖方}，被依赖方在左 → setEdge(被依赖, 依赖)
+    for (const e of graph.edges) {
+      if (connectedIds.has(e.from) && connectedIds.has(e.to)) g.setEdge(e.to, e.from)
+    }
+    // 分叉边：forkEdges = {from:源, to:分叉}，源在左 → setEdge(源, 分叉)
+    for (const e of graph.forkEdges) {
+      if (connectedIds.has(e.from) && connectedIds.has(e.to)) g.setEdge(e.from, e.to)
+    }
+    dagre.layout(g)
+    for (const id of connectedIds) {
+      const n = g.node(id)
+      if (!n) continue
+      const x = n.x - NODE_W / 2
+      const y = n.y - NODE_H / 2
+      positions.push({ id, x, y })
+      connectedRight = Math.max(connectedRight, x + NODE_W)
+      connectedBottom = Math.max(connectedBottom, y + NODE_H)
+    }
   }
 
-  return { positions, width: width + CANVAS_PAD, height: height + CANVAS_PAD }
+  // 孤立节点：网格平铺（放在连通子图下方；若整图无边则占满画布）
+  let right = connectedRight
+  let bottom = connectedBottom
+  if (isolatedIds.length > 0) {
+    const cellW = NODE_W + GRID_GAP_X
+    const cellH = NODE_H + GRID_GAP_Y
+    // 列数略宽于高，避免又细又长；至少 1 列
+    const cols = Math.max(1, Math.ceil(Math.sqrt(isolatedIds.length * 1.8)))
+    const gridTop = connectedIds.size > 0 ? connectedBottom + LEVEL_GAP : CANVAS_PAD
+    isolatedIds.forEach((id, i) => {
+      const x = CANVAS_PAD + (i % cols) * cellW
+      const y = gridTop + Math.floor(i / cols) * cellH
+      positions.push({ id, x, y })
+      right = Math.max(right, x + NODE_W)
+      bottom = Math.max(bottom, y + NODE_H)
+    })
+  }
+
+  return { positions, width: right + CANVAS_PAD, height: bottom + CANVAS_PAD }
 }
 
 // ===== SVG 连线（思维导图风格：依赖→被依赖 左→右） =====
@@ -214,11 +255,14 @@ function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number
   const cfg = statusConfig[node.status]
   const showDesc = node.description && node.description.length > 0
   const isCancelled = node.status === 'cancelled'
+  // 枯死支线：回溯抽取标注了放弃原因的节点，比普通取消更淡、虚线描边、骷髅标记
+  const isAbandoned = !!node.abandonReason
   return (
     <foreignObject x={x} y={y} width={NODE_W} height={NODE_H} className="overflow-visible">
       <button
         type="button"
         onClick={onClick}
+        title={isAbandoned ? `已放弃：${node.abandonReason}` : undefined}
         className={cn(
           'flex items-start gap-2.5 w-full h-full px-3.5 py-3 rounded-xl border-2 text-left',
           'transition-all duration-200 shadow-sm',
@@ -229,23 +273,30 @@ function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number
             : 'hover:border-foreground/30 hover:shadow-md',
           node.status === 'in_progress' && !selected && 'animate-breathe',
           isCancelled && 'opacity-50',
+          isAbandoned && !selected && 'opacity-40 border-dashed !border-amber-400/50',
         )}
       >
-        <span className={cn('flex-shrink-0 mt-0.5', cfg.color)}>{cfg.icon}</span>
+        <span className={cn('flex-shrink-0 mt-0.5', isAbandoned ? 'text-amber-500/70' : cfg.color)}>
+          {isAbandoned ? <CircleSlash className="size-4" /> : cfg.icon}
+        </span>
         <div className="flex-1 min-w-0">
           <div className={cn(
             'text-sm font-semibold leading-tight',
-            isCancelled && 'line-through',
+            (isCancelled || isAbandoned) && 'line-through',
             node.status === 'completed' && 'line-through',
           )}>
             {node.subject}
           </div>
-          {showDesc && (
+          {isAbandoned ? (
+            <div className="mt-1 text-[11px] text-amber-600/80 leading-tight line-clamp-2">
+              放弃：{node.abandonReason}
+            </div>
+          ) : showDesc && (
             <div className="mt-1 text-[11px] text-muted-foreground/70 leading-tight line-clamp-2">
               {node.description}
             </div>
           )}
-          {node.artifact.length > 0 && (
+          {!isAbandoned && node.artifact.length > 0 && (
             <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground/60">
               <FileText className="size-3" />
               {node.artifact.length} 个文件
@@ -322,6 +373,27 @@ function DetailPanel({ node, onClose }: { node: TaskNode; onClose: () => void })
 
       {/* 内容 */}
       <div className="flex-1 px-4 py-3 space-y-4">
+        {/* 放弃原因（回溯抽取标注的枯死支线） */}
+        {node.abandonReason && (
+          <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2.5">
+            <div className="flex items-center gap-1.5 mb-1">
+              <CircleSlash className="size-3.5 text-amber-500/80" />
+              <span className="text-[10px] font-medium text-amber-600/90 uppercase tracking-wider">放弃原因</span>
+              {typeof node.abandonConfidence === 'number' && (
+                <span className="ml-auto text-[10px] font-mono text-amber-600/60">
+                  置信 {Math.round(node.abandonConfidence * 100)}%
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-amber-700/90 dark:text-amber-300/90 leading-relaxed">{node.abandonReason}</p>
+            {node.abandonEvidence && node.abandonEvidence.length > 0 && (
+              <div className="mt-1.5 text-[10px] text-muted-foreground/60">
+                证据轮次：{node.abandonEvidence.map((t) => `Turn ${t}`).join('、')}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 描述 */}
         {node.description && (
           <div>
@@ -411,11 +483,52 @@ function EmptyState() {
   )
 }
 
+// ===== 刷新入口 =====
+
+/**
+ * 手动刷新按钮：从会话 JSONL 重新读取并重放持久化任务图（纯读取，不调 LLM）。
+ * Agent 在对话中标了枯枝（@abandon）、删了节点或改了状态后，点此即可让面板同步到最新任务图。
+ */
+function GraphRefreshButton({ sessionId }: { sessionId: string }): React.ReactElement {
+  const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
+  const [refreshing, setRefreshing] = React.useState(false)
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      const api = window.electronAPI as { getGraph?: (id: string) => Promise<TaskGraph> }
+      if (!api.getGraph) { toast.error('当前版本不支持刷新'); return }
+      const fresh = await api.getGraph(sessionId)
+      setPersistedGraph(fresh)
+    } catch {
+      toast.error('刷新失败，请稍后重试')
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleRefresh}
+      disabled={refreshing}
+      title="从会话记录重新读取任务图"
+      className={cn(
+        'flex-shrink-0 inline-flex items-center justify-center size-7 rounded-full',
+        'text-muted-foreground hover:text-foreground hover:bg-muted transition-colors',
+        refreshing && 'opacity-60 cursor-wait',
+      )}
+    >
+      <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+    </button>
+  )
+}
+
 // ===== 主面板 =====
 
-export function ProjectGraphPanel(): React.ReactElement {
+export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: number }): React.ReactElement {
   React.useEffect(() => { injectBreatheStyle() }, [])
-  const { graph, loading } = useGraphData()
+  const { graph, loading } = useGraphData(refreshVersion)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
   const setGraphQuestion = useSetAtom(graphQuestionAtom)
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -532,6 +645,7 @@ export function ProjectGraphPanel(): React.ReactElement {
             <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
               <div className="h-full bg-emerald-400 rounded-full transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
             </div>
+            {sessionId && <GraphRefreshButton sessionId={sessionId} />}
           </div>
 
           {/* 无界画布 */}

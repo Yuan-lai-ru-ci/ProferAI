@@ -22,12 +22,16 @@ export type {
   TaskDependencyAddedPayload,
   TaskArtifactAddedPayload,
   TaskSessionLinkedPayload,
+  TaskAbandonAnnotatedPayload,
+  TaskDeletedPayload,
   SessionType,
   ProjectStatus,
   ProjectMeta,
   GraphSummary,
   RecentCompletedTask,
   ExtractGraphInput,
+  UnmappedAbandonment,
+  RetrospectiveResult,
   LayoutLevel,
   LayoutResult,
   ForceLayoutOptions,
@@ -43,6 +47,7 @@ export {
   parseArtifact,
   parseUsage,
   parseForkFrom,
+  parseAbandon,
   stripMetaTags,
 } from './graph-parser'
 
@@ -57,7 +62,6 @@ export {
   serializeEvent,
   deserializeEvent,
   parseEventsFromJsonl,
-  ensureSequentialEdges,
 } from './graph-state'
 
 // Graph 查询

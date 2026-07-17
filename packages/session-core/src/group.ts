@@ -177,6 +177,22 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
 }
 
 /**
+ * 统计「可分析轮次」数量 —— 即 user 输入组 + assistant-turn 组之和（不含 system 组）。
+ *
+ * 这是回溯放弃抽取的「水位」计数口径：主进程 retrospective-service 的 renderTurns
+ * 每个 user/assistant-turn 组产出一条编号轮次，其总数恒等于本函数返回值；渲染层用它
+ * 计算「本次新增 N 轮」时必须走同一口径，否则触发判断与 lastAnalyzedTurn 水位会错位。
+ * 两侧都不要传 sessionModelId（合并行为需一致）。
+ */
+export function countTurns(messages: SDKMessage[]): number {
+  let n = 0
+  for (const g of groupIntoTurns(messages)) {
+    if (g.type === 'user' || g.type === 'assistant-turn') n++
+  }
+  return n
+}
+
+/**
  * 后处理：合并相邻同模型的 assistant-turn
  *
  * 当子代理（如 haiku）执行多个工具调用时，中间的 user(tool_result) 消息
