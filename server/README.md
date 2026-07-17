@@ -1,6 +1,6 @@
-# Proma Team Server 部署教程
+# Profer Team Server 部署教程
 
-Proma 团队协作后端 —— Hono + better-sqlite3 + JWT。
+Profer 团队协作后端 —— Hono + better-sqlite3 + JWT。
 
 ## 目录
 
@@ -251,7 +251,7 @@ Base URL: `http://<host>:3456`
 
 ## 客户端配置
 
-在 Proma 客户端中：
+在 Profer 客户端中：
 
 1. 打开 **设置 → 团队工作区**
 2. 点击 **登录团队服务器**

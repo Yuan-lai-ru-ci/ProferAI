@@ -4719,7 +4719,7 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       title: '选择迁移文件',
       filters: [
-        { name: 'Proma 迁移文件', extensions: ['profer-backup', 'profer-share'] },
+        { name: 'Profer 迁移文件', extensions: ['profer-backup', 'profer-share'] },
         { name: '所有文件', extensions: ['*'] },
       ],
       properties: ['openFile'],
@@ -4735,7 +4735,7 @@ export function registerIpcHandlers(): void {
       title: '保存迁移文件',
       defaultPath: defaultName,
       filters: [
-        { name: mode === 'personal' ? 'Proma 个人备份' : 'Proma 分享包', extensions: [ext] },
+        { name: mode === 'personal' ? 'Profer 个人备份' : 'Profer 分享包', extensions: [ext] },
       ],
     })
     return result.canceled ? null : result.filePath

@@ -17,7 +17,7 @@ const VIEWPORT_PADDING = 8
  * 校验 suggestion 触发符是否仍存在于编辑器「当前」文档的指定 range。
  *
  * 用于防御 TipTap suggestion 的异步竞态：插件的 view.update 是 async，handleStart
- * 阶段会 `await items()`（Proma 的 items 走 IPC，耗时）。若在 await 期间用户删除了
+ * 阶段会 `await items()`（Profer 的 items 走 IPC，耗时）。若在 await 期间用户删除了
  * 触发符（如打了 `/` 又立刻删掉 / 全选删除），suggestion 已触发 onExit 并变为
  * inactive；但 await 返回后插件仍会用「过期 props」调用 onStart。此时若继续建弹窗，
  * 会留下一个 plugin state 已 inactive、连 Esc（handleKeyDown 在 !active 时直接返回）

@@ -2,7 +2,7 @@
  * DiffView — @pierre/diffs 渲染组件
  *
  * 接收 old/new 文件内容，使用 @pierre/diffs/react 的 MultiFileDiff 渲染。
- * 背景使用 Proma 主题色（disableBackground），滚动条自定义样式。
+ * 背景使用 Profer 主题色（disableBackground），滚动条自定义样式。
  *
  * 超过 MAX_DIFF_LINES 行的文件不渲染 diff（避免 Myers 算法 O(N*D) 阻塞主线程），
  * 改为纯文本预览。

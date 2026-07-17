@@ -188,7 +188,7 @@ app.get('/health', (c) => c.json({ status: 'ok', time: Date.now() }))
 
 // 全局错误处理
 app.onError((err, c) => {
-  console.error('[Proma] 未处理的错误:', err.message)
+  console.error('[Profer] 未处理的错误:', err.message)
   return c.json({ error: '服务器内部错误' }, 500)
 })
 

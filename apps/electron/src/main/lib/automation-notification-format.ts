@@ -50,7 +50,7 @@ function formatDuration(ms?: number): string {
 
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text
-  return `${text.slice(0, maxLength)}\n\n... [内容过长，请在 Proma 中查看完整会话]`
+  return `${text.slice(0, maxLength)}\n\n... [内容过长，请在 Profer 中查看完整会话]`
 }
 
 export function buildAutomationFeishuCard(payload: AutomationNotificationCardPayload): Record<string, unknown> {

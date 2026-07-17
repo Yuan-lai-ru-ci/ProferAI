@@ -1,4 +1,4 @@
-# Proma Team Server Dockerfile
+# Profer Team Server Dockerfile
 # 构建: docker build -t proma-team-server .
 # 运行: docker compose up -d
 

@@ -23,9 +23,9 @@ const ENDPOINT_OPTIONS = [
 ]
 
 const OUTPUT_OPTIONS = [
-  { value: 'auto', label: '自动：Proma 激活时写入对话框，否则写入当前光标' },
+  { value: 'auto', label: '自动：Profer 激活时写入对话框，否则写入当前光标' },
   { value: 'clipboard', label: '仅复制到剪贴板' },
-  { value: 'profer-input', label: '仅写入 Proma 输入框' },
+  { value: 'profer-input', label: '仅写入 Profer 输入框' },
 ]
 
 const LANGUAGE_OPTIONS = [
@@ -131,7 +131,7 @@ export function VoiceInputSettings(): React.ReactElement {
     <div className="space-y-6">
       <SettingsSection
         title="豆包流式语音输入"
-        description="通过全局快捷键唤起浮窗，实时识别语音，停止后写入 Proma 输入框或当前光标位置。"
+        description="通过全局快捷键唤起浮窗，实时识别语音，停止后写入 Profer 输入框或当前光标位置。"
         action={
           <Button
             variant="outline"
@@ -185,7 +185,7 @@ export function VoiceInputSettings(): React.ReactElement {
                     {micPermission.status === 'granted'
                       ? '已授权，语音输入可正常使用'
                       : micPermission.status === 'denied'
-                      ? '已被系统阻止，请在系统设置中允许 Proma 访问麦克风'
+                      ? '已被系统阻止，请在系统设置中允许 Profer 访问麦克风'
                       : micPermission.status === 'not-determined'
                       ? '未授权，使用语音输入前需要先授权'
                       : '当前系统不支持预检，录音时将自动弹出权限请求'}
@@ -260,12 +260,12 @@ export function VoiceInputSettings(): React.ReactElement {
             description="每行或逗号分隔一个词，会在本次识别请求中直传给豆包，用于改善产品名、技术词和人名识别。"
             value={settings.customHotwords}
             onChange={(customHotwords) => update({ customHotwords })}
-            placeholder={"Proma\nJotai\nShadcnUI\nClaude Code"}
+            placeholder={"Profer\nJotai\nShadcnUI\nClaude Code"}
             minHeight={112}
           />
           <SettingsSelect
             label="输出方式"
-            description="默认写入当前光标位置；如果唤起时 Proma 是当前激活窗口，会写入当前 Chat 或 Agent 输入框。自动粘贴失败时会保留到剪贴板。"
+            description="默认写入当前光标位置；如果唤起时 Profer 是当前激活窗口，会写入当前 Chat 或 Agent 输入框。自动粘贴失败时会保留到剪贴板。"
             value={settings.outputMode}
             onValueChange={(outputMode) => update({ outputMode: outputMode as VoiceDictationSettings['outputMode'] })}
             options={OUTPUT_OPTIONS}

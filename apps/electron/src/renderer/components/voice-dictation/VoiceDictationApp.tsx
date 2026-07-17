@@ -501,7 +501,7 @@ export function VoiceDictationApp(): React.ReactElement {
           <div className="overflow-hidden rounded-lg bg-muted/45">
             <div ref={hintBarRef} className="flex min-h-8 shrink-0 items-center justify-between gap-3 px-3 py-1.5 text-xs leading-4 text-muted-foreground">
               <span className="truncate">
-                Ctrl+～ 停止 · 外部写入光标 · Proma 激活时写入 Chat / Agent
+                Ctrl+～ 停止 · 外部写入光标 · Profer 激活时写入 Chat / Agent
               </span>
               {commitResult && (
                 <span className="flex shrink-0 items-center gap-1.5">

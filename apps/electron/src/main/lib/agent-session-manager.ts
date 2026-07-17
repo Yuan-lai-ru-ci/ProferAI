@@ -31,14 +31,14 @@ import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-
 // Claude Code CLI（或 shell/CI 里）本就设了 CLAUDE_CONFIG_DIR，旧守卫会跳过覆盖 →
 // 进程内的 sdk.forkSession（只读 process.env，不像 orchestrator query 子进程那样显式传参）
 // 会去读用户/CLI 的配置目录，导致 dev/生产/CLI 三方 SDK 会话数据互相污染、fork 报
-// "Session not found"。这里强制指向 Proma 隔离目录，检测到外部不同值时打 warn 以便排查。
+// "Session not found"。这里强制指向 Profer 隔离目录，检测到外部不同值时打 warn 以便排查。
 {
   const promaSdkConfigDir = getSdkConfigDir()
   const ambientConfigDir = process.env.CLAUDE_CONFIG_DIR
   if (ambientConfigDir && ambientConfigDir !== promaSdkConfigDir) {
     console.warn(
       `[Agent 会话] 检测到外部 CLAUDE_CONFIG_DIR=${ambientConfigDir}（可能来自 Claude Code CLI / shell / CI），` +
-      `已强制覆盖为 Proma 隔离目录: ${promaSdkConfigDir}（配置隔离，避免 SDK 会话数据串目录）`,
+      `已强制覆盖为 Profer 隔离目录: ${promaSdkConfigDir}（配置隔离，避免 SDK 会话数据串目录）`,
     )
   }
   process.env.CLAUDE_CONFIG_DIR = promaSdkConfigDir
@@ -621,7 +621,7 @@ export function findOrphanSessions(): SessionHealth[] {
       isOrphan: false,
     }
 
-    // 检查 Proma JSONL
+    // 检查 Profer JSONL
     health.hasPromaJsonl = existsSync(getAgentSessionMessagesPath(session.id))
 
     // 检查 SDK JSONL
@@ -641,7 +641,7 @@ export function findOrphanSessions(): SessionHealth[] {
     // 判定孤儿
     const reasons: string[] = []
     if (!health.hasPromaJsonl && !health.hasSdkJsonl) {
-      reasons.push('Proma 和 SDK JSONL 均缺失')
+      reasons.push('Profer 和 SDK JSONL 均缺失')
     } else if (session.sdkSessionId && !health.hasSdkJsonl) {
       reasons.push('SDK JSONL 缺失（无法 resume，每次打开都会触发 session-not-found 恢复）')
     }
@@ -825,7 +825,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
 
   // 2.5 校验目标消息并确定其所属的 SDK session ID
   // - 当会话经历过 "session not found" 恢复后，sdkSessionId 会被替换为新的，
-  //   但旧消息仍保留在 Proma JSONL 中，其 session_id 指向旧的 SDK session。
+  //   但旧消息仍保留在 Profer JSONL 中，其 session_id 指向旧的 SDK session。
   // - 若目标消息是 sub-agent 输出（parent_tool_use_id 非空），SDK forkSession
   //   会过滤掉 sidechain 后再查 upToMessageId，必然报 "not found"，
   //   这里自动回溯到最近的主线 assistant uuid。
@@ -909,7 +909,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   // 3.5 校验 SDK forkSession 是否真的产生了 JSONL 文件
   // SDK forkSession 在某些边缘场景（如源会话为 collaboration 子会话、project-hash
   // 不匹配等）可能返回 sessionId 但实际未落盘 JSONL。若不校验，后续步骤会创建
-  // Proma 会话元数据但 SDK 侧无对应文件，导致 "No conversation found" 错误。
+  // Profer 会话元数据但 SDK 侧无对应文件，导致 "No conversation found" 错误。
   const forkJsonlPath = findSdkSessionJsonl(forkResult.sessionId)
   if (!forkJsonlPath) {
     throw new Error(
@@ -920,7 +920,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   }
   console.log(`[Agent 会话] SDK forkSession JSONL 已确认: ${forkJsonlPath}`)
 
-  // 4. 创建 Proma 新会话，立即设置 sdkSessionId
+  // 4. 创建 Profer 新会话，立即设置 sdkSessionId
   const forkTitle = `${sourceMeta.title} (fork)`
   const newMeta = createAgentSession(
     forkTitle,
@@ -938,7 +938,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   newMeta.forkSourceDir = sourceDir
   newMeta.forkSourceSdkSessionId = forkSourceSdkSessionId
 
-  // 4.4-7 包装在 try-catch 中，关键步骤失败时回滚已创建的 Proma 会话记录，
+  // 4.4-7 包装在 try-catch 中，关键步骤失败时回滚已创建的 Profer 会话记录，
   // 避免产生孤儿条目（agent-sessions.json 有记录但无有效 SDK session 数据）。
   try {
     // 4.4 计算 fork 目标会话的 cwd（新会话目录），后续多个步骤需要用到
@@ -969,7 +969,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
 
     // 5. 复制源会话工作区文件到新会话目录
     // 仅排除 .claude/（settings.json 启动时会重建）、.DS_Store、.git。
-    // .context/ 必须保留 — Proma 约定 .context/note.md、todo.md、plan/ 等是会话上下文，
+    // .context/ 必须保留 — Profer 约定 .context/note.md、todo.md、plan/ 等是会话上下文，
     // 如果不复制，fork 后这些参考资料会丢失或被 Claude 误回源目录读取。
     if (sourceDir && destDir) {
       if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
@@ -1025,7 +1025,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     console.log(`[Agent 会话] 分叉会话已创建（SDK 原生 fork）: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息, sdkSessionId=${forkResult.sessionId})`)
     return newMeta
   } catch (err) {
-    // 回滚：删除已创建的 Proma 会话记录，避免孤儿条目
+    // 回滚：删除已创建的 Profer 会话记录，避免孤儿条目
     console.error(`[Agent 会话] fork 关键步骤失败，回滚会话记录 (${newMeta.id}):`, err)
     try {
       deleteAgentSession(newMeta.id)
@@ -1180,10 +1180,10 @@ export function truncateSDKMessages(id: string, upToUuidInclusive: string): SDKM
  * 从 SDK session JSONL 中查找指定 assistant message 之后最近的 user message UUID
  *
  * SDK session JSONL（~/.proma/sdk-config/projects/...）中的消息都带有 uuid，
- * 但 Proma 自己构造的 user message 没有 uuid。此函数直接读取 SDK 的 JSONL
+ * 但 Profer 自己构造的 user message 没有 uuid。此函数直接读取 SDK 的 JSONL
  * 来解析 rewindFiles 所需的 user message UUID。
  *
- * 对于 fork 会话：Proma JSONL 中的 UUID 来自**源会话**（fork 时直接复制），
+ * 对于 fork 会话：Profer JSONL 中的 UUID 来自**源会话**（fork 时直接复制），
  * 而 forked SDK JSONL 中的 UUID 已被重映射。因此 fork 会话需要搜索**源**
  * SDK JSONL 来匹配 assistant UUID。通过 forkSourceSdkSessionId 参数指定。
  *
@@ -1214,7 +1214,7 @@ export function resolveUserUuidFromSDK(
         } catch { return false }
       })
       if (!hasUuidAsField) {
-        // Proma JSONL 中的 UUID 来自源会话，forked JSONL 中已重映射
+        // Profer JSONL 中的 UUID 来自源会话，forked JSONL 中已重映射
         const sourceFilePath = findSdkSessionJsonl(forkSourceSdkSessionId, projectDir)
         if (sourceFilePath) {
           console.log(`[Agent 会话] resolveUserUuid: fork 会话 UUID 不匹配（非 .uuid 字段），切换到源会话 ${forkSourceSdkSessionId}`)
@@ -1294,7 +1294,7 @@ function findSdkSessionJsonl(sdkSessionId: string, _projectDir?: string): string
   const sdkConfigDir = getSdkConfigDir()
 
   // 遍历所有项目目录查找匹配的 session JSONL
-  // （SDK 的目录命名规则与 Proma 不完全一致，直接遍历最可靠）
+  // （SDK 的目录命名规则与 Profer 不完全一致，直接遍历最可靠）
   const projectsDir = join(sdkConfigDir, 'projects')
   if (existsSync(projectsDir)) {
     for (const dir of readdirSync(projectsDir)) {
