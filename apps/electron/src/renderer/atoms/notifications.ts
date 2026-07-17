@@ -4,10 +4,11 @@
  * 管理通知开关状态，提供发送桌面通知的工具函数。
  * 使用 Web Notification API（Electron renderer 原生支持）。
  * 支持多场景通知音选择（任务完成、权限审批、计划审批）。
+ * 支持用户自定义音效（最长 10s，存储到 ~/.profer/custom-sounds/）。
  */
 
 import { atom } from 'jotai'
-import type { NotificationSoundId, NotificationSoundType, NotificationSoundSettings } from '@/types/settings'
+import type { NotificationSoundId, NotificationSoundType, NotificationSoundSettings, CustomNotificationSound } from '@/types/settings'
 
 // ===== 音频资源导入 =====
 import soundDing from '@/assets/sound/ding.mp3'
@@ -26,10 +27,12 @@ export interface NotificationSoundMeta {
   id: NotificationSoundId
   label: string
   url: string
+  /** 是否为自定义音效（用于在 UI 中显示删除按钮等） */
+  isCustom?: boolean
 }
 
-/** 所有可用通知音（不含 none） */
-export const NOTIFICATION_SOUNDS: NotificationSoundMeta[] = [
+/** 所有内置通知音（不含 none） */
+export const BUILTIN_NOTIFICATION_SOUNDS: NotificationSoundMeta[] = [
   { id: 'ding', label: 'Ding', url: soundDing },
   { id: 'ding-dong', label: 'Ding Dong', url: soundDingDong },
   { id: 'discord', label: 'Discord', url: soundDiscord },
@@ -40,10 +43,16 @@ export const NOTIFICATION_SOUNDS: NotificationSoundMeta[] = [
   { id: 'quiet', label: 'Quiet', url: soundQuiet },
 ]
 
-/** 音频 URL 映射（快速查找） */
+/** @deprecated 使用 BUILTIN_NOTIFICATION_SOUNDS + customNotificationSoundsAtom */
+export const NOTIFICATION_SOUNDS = BUILTIN_NOTIFICATION_SOUNDS
+
+/** 内置音频 URL 映射（快速查找） */
 const SOUND_URL_MAP: Record<string, string> = Object.fromEntries(
-  NOTIFICATION_SOUNDS.map((s) => [s.id, s.url])
+  BUILTIN_NOTIFICATION_SOUNDS.map((s) => [s.id, s.url])
 )
+
+/** 自定义音效 URL 缓存：fileName → file:// URL */
+const customSoundUrlCache = new Map<string, string>()
 
 /** 各场景的默认通知音 */
 export const DEFAULT_NOTIFICATION_SOUNDS: Required<NotificationSoundSettings> = {
@@ -63,6 +72,27 @@ export const notificationSoundEnabledAtom = atom<boolean>(true)
 /** 各场景通知音配置 */
 export const notificationSoundsAtom = atom<NotificationSoundSettings>({})
 
+/** 用户添加的自定义通知音效列表 */
+export const customNotificationSoundsAtom = atom<CustomNotificationSound[]>([])
+
+// ===== 合并音效列表 =====
+
+/**
+ * 获取所有可用通知音（内置 + 自定义），供 UI 下拉列表使用
+ */
+export function getAllNotificationSounds(customSounds: CustomNotificationSound[]): NotificationSoundMeta[] {
+  if (customSounds.length === 0) return [...BUILTIN_NOTIFICATION_SOUNDS]
+
+  const customMetas: NotificationSoundMeta[] = customSounds.map((cs) => ({
+    id: cs.id,
+    label: cs.label,
+    url: '', // 运行时通过 IPC 获取
+    isCustom: true,
+  }))
+
+  return [...BUILTIN_NOTIFICATION_SOUNDS, ...customMetas]
+}
+
 // ===== 初始化 =====
 
 /**
@@ -71,13 +101,15 @@ export const notificationSoundsAtom = atom<NotificationSoundSettings>({})
 export async function initializeNotifications(
   setEnabled: (enabled: boolean) => void,
   setSoundEnabled: (enabled: boolean) => void,
-  setSounds: (sounds: NotificationSoundSettings) => void
+  setSounds: (sounds: NotificationSoundSettings) => void,
+  setCustomSounds?: (sounds: CustomNotificationSound[]) => void
 ): Promise<void> {
   try {
     const settings = await window.electronAPI.getSettings()
     setEnabled(settings.notificationsEnabled ?? true)
     setSoundEnabled(settings.notificationSoundEnabled ?? true)
     setSounds(settings.notificationSounds ?? {})
+    setCustomSounds?.(settings.customNotificationSounds ?? [])
   } catch (error) {
     console.error('[通知] 初始化失败:', error)
   }
@@ -124,24 +156,70 @@ export async function updateNotificationSound(
   return newSounds
 }
 
+/**
+ * 添加自定义通知音效
+ * 由 UI 在验证时长后调用
+ */
+export async function addCustomNotificationSound(
+  sourcePath: string,
+  label: string
+): Promise<CustomNotificationSound> {
+  const sound = await window.electronAPI.addCustomNotificationSound(sourcePath, label)
+  return sound
+}
+
+/**
+ * 删除自定义通知音效
+ * 返回更新后的自定义音效列表
+ */
+export async function removeCustomNotificationSound(
+  id: string,
+  currentSounds: NotificationSoundSettings,
+  customSounds: CustomNotificationSound[]
+): Promise<{
+  customSounds: CustomNotificationSound[]
+  sounds: NotificationSoundSettings
+}> {
+  const updatedCustom = await window.electronAPI.removeCustomNotificationSound(id)
+
+  // 清理各场景中引用此音效的配置
+  const cleanedSounds: NotificationSoundSettings = { ...currentSounds }
+  let needsClean = false
+  for (const key of ['taskComplete', 'permissionRequest', 'exitPlanMode'] as const) {
+    if (cleanedSounds[key] === id) {
+      cleanedSounds[key] = DEFAULT_NOTIFICATION_SOUNDS[key]
+      needsClean = true
+    }
+  }
+  if (needsClean) {
+    await window.electronAPI.updateSettings({ notificationSounds: cleanedSounds })
+  }
+
+  // 清理自定义音效的 URL 缓存和音频缓存
+  const target = customSounds.find((s) => s.id === id)
+  if (target) {
+    customSoundUrlCache.delete(target.fileName)
+    audioCache.delete(id)
+  }
+
+  return { customSounds: updatedCustom, sounds: cleanedSounds }
+}
+
 // ===== 音频播放 =====
 
 /** 音频元素缓存池（按 soundId 缓存，避免重复创建） */
 const audioCache = new Map<string, HTMLAudioElement>()
 
 /**
- * 获取或创建音频元素
+ * 获取内置音效的音频元素
  */
-function getAudioElement(soundId: NotificationSoundId): HTMLAudioElement | null {
-  if (soundId === 'none') return null
-
+function getBuiltinAudioElement(soundId: string): HTMLAudioElement | null {
   const url = SOUND_URL_MAP[soundId]
   if (!url) return null
 
   let audio = audioCache.get(soundId)
   if (!audio) {
     audio = new Audio(url)
-    // 音频解码/网络失败时剔除损坏实例，下次播放时重建
     audio.onerror = () => audioCache.delete(soundId)
     audioCache.set(soundId, audio)
   }
@@ -149,21 +227,88 @@ function getAudioElement(soundId: NotificationSoundId): HTMLAudioElement | null 
 }
 
 /**
- * 播放指定通知音
+ * 获取自定义音效的音频元素（通过 IPC 获取 file:// URL）
+ */
+async function getCustomAudioElement(fileName: string): Promise<HTMLAudioElement | null> {
+  // 从缓存取 URL
+  let url = customSoundUrlCache.get(fileName)
+  if (!url) {
+    try {
+      url = await window.electronAPI.getCustomSoundUrl(fileName)
+      customSoundUrlCache.set(fileName, url)
+    } catch {
+      console.error(`[通知] 获取自定义音效 URL 失败: ${fileName}`)
+      return null
+    }
+  }
+
+  const cacheKey = `custom:${fileName}`
+  let audio = audioCache.get(cacheKey)
+  if (!audio) {
+    audio = new Audio(url)
+    audio.onerror = () => {
+      audioCache.delete(cacheKey)
+      customSoundUrlCache.delete(fileName)
+    }
+    audioCache.set(cacheKey, audio)
+  }
+  return audio
+}
+
+/**
+ * 播放指定通知音（同步版本，仅处理内置音效和 none）
+ * 对自定义音效，使用异步版本 playNotificationSoundAsync
  */
 export function playNotificationSound(soundId: NotificationSoundId): void {
   try {
-    const audio = getAudioElement(soundId)
-    if (!audio) return
-    audio.currentTime = 0
-    audio.play().catch(() => {})
+    if (soundId === 'none') return
+
+    // 内置音效：直接播放
+    const audio = getBuiltinAudioElement(soundId)
+    if (audio) {
+      audio.currentTime = 0
+      audio.play().catch(() => {})
+      return
+    }
+
+    // 自定义音效：异步播放（不阻塞调用方）
+    // playNotificationSound 保持同步签名兼容性，自定义音效通过 playNotificationSoundAsync
   } catch {
     // 静默失败
   }
 }
 
 /**
- * 根据场景类型播放对应通知音
+ * 异步播放指定通知音（支持自定义音效）
+ */
+export async function playNotificationSoundAsync(soundId: NotificationSoundId, customSounds: CustomNotificationSound[]): Promise<void> {
+  try {
+    if (soundId === 'none') return
+
+    // 内置音效
+    const audio = getBuiltinAudioElement(soundId)
+    if (audio) {
+      audio.currentTime = 0
+      await audio.play().catch(() => {})
+      return
+    }
+
+    // 自定义音效
+    const customSound = customSounds.find((s) => s.id === soundId)
+    if (customSound) {
+      const customAudio = await getCustomAudioElement(customSound.fileName)
+      if (customAudio) {
+        customAudio.currentTime = 0
+        await customAudio.play().catch(() => {})
+      }
+    }
+  } catch {
+    // 静默失败
+  }
+}
+
+/**
+ * 根据场景类型播放对应通知音（同步版本）
  */
 export function playNotificationSoundForType(
   type: NotificationSoundType,
@@ -183,6 +328,8 @@ export interface DesktopNotificationOptions {
   playSound?: boolean
   /** 当前通知音配置（playSound 为 true 时需要） */
   sounds?: NotificationSoundSettings
+  /** 自定义音效列表（用于解析自定义 soundId → file URL） */
+  customSounds?: CustomNotificationSound[]
   /** 点击通知时的导航回调（如导航到对应会话） */
   onNavigate?: () => void
   /** 强制弹出通知，无视窗口焦点状态（用于阻塞操作） */
@@ -204,9 +351,14 @@ export function sendDesktopNotification(
 ): void {
   // 将音频播放和系统通知推迟到下一个宏任务，避免在 React batchedUpdates
   // 同步调用栈中阻塞主线程（audio.currentTime seek + Notification 创建会导致掉帧）
-  setTimeout(() => {
+  setTimeout(async () => {
     if (options?.playSound && options.soundType) {
-      playNotificationSoundForType(options.soundType, options.sounds ?? {})
+      const soundId = (options.sounds?.[options.soundType] ?? DEFAULT_NOTIFICATION_SOUNDS[options.soundType]) as string
+      if (options.customSounds?.length) {
+        await playNotificationSoundAsync(soundId, options.customSounds)
+      } else {
+        playNotificationSound(soundId)
+      }
     }
 
     if (!enabled) return

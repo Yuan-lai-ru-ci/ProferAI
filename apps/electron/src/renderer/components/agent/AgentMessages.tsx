@@ -626,6 +626,9 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
               const isErrorGroup = group.type === 'assistant-turn'
                 && group.assistantMessages.some((m) => !!m.error)
               const shouldDisableActions = isLive && !isErrorGroup
+              // 会话活跃态（streaming 或 backgroundWaiting）时禁用压缩/重试操作，
+              // 防止用户误操作触发与正在运行的 agent session 冲突
+              const isSessionActive = streaming || (streamState?.backgroundWaiting ?? false)
               // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge
               const isLastAssistantTurn = !streaming && stoppedByUser
                 && group.type === 'assistant-turn'
@@ -641,7 +644,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   onRewind={shouldDisableActions ? undefined : onRewind}
                   onRetry={shouldDisableActions ? undefined : onRetry}
                   onRetryInNewSession={shouldDisableActions ? undefined : onRetryInNewSession}
-                  onCompact={shouldDisableActions ? undefined : onCompact}
+                  onCompact={(shouldDisableActions || isSessionActive) ? undefined : onCompact}
                   isStreaming={isLive || undefined}
                   stoppedByUser={isLastAssistantTurn || undefined}
                   sessionModelId={sessionModelId}
@@ -698,6 +701,20 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
             {/* 压缩中指示器：由 isCompacting flag 驱动的尾部元素，compact_boundary 到达时 flag 翻 false 自然消失，
                 视觉上被流中新出现的"上下文已压缩"分隔符无缝替换 */}
             {streamState?.isCompacting && <CompactingIndicator />}
+
+            {/* 后台任务等待态指示器：主轮次文本输出已完成，但后台任务（subagent/Bash 等）仍在执行。
+                此时 running=false、backgroundWaiting=true，AgentRunningIndicator 不渲染，
+                若无此指示器用户会误以为对话已结束从而触发压缩等危险操作 */}
+            {streamState?.backgroundWaiting && !suppressAgentRunning && !streamState?.isCompacting && (
+              <div className="pl-[56px] min-h-[28px]">
+                <div className="flex items-center gap-2">
+                  <Spinner size="sm" className="text-muted-foreground/40" />
+                  <span className="text-[13px] font-light text-muted-foreground/45 tabular-nums">
+                    后台任务执行中
+                  </span>
+                </div>
+              </div>
+            )}
 
           </>
         )}

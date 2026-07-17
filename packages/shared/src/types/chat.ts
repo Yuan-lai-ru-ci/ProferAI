@@ -77,6 +77,36 @@ export interface FileDialogSkippedFile {
   message?: string
 }
 
+/** MinerU 解析结果中的图片文件 */
+export interface PaperImage {
+  /** 文件在 zip 中的相对路径（如 "images/figure_1.png"） */
+  name: string
+  /** 图片二进制数据的 Base64 编码 */
+  data: string
+  /** MIME 类型（如 "image/png"） */
+  mimeType: string
+}
+
+/** 论文精读 — MinerU 解析结果 */
+export interface PaperParseResult {
+  /** 解析后的 Markdown 内容（含 LaTeX 公式、HTML 表格） */
+  markdown: string
+  /** PDF 页数 */
+  pages: number
+  /** 消耗的积分 */
+  creditsUsed: number
+  /** 从 MinerU zip 中提取的图片（客户端自行落盘 + 重写路径） */
+  images?: PaperImage[]
+}
+
+/** 论文精读 — PDF 页数估算结果 */
+export interface PageEstimate {
+  /** 估算页数 */
+  pages: number
+  /** 预计消耗积分 */
+  estimatedCredits: number
+}
+
 // ===== 消息相关 =====
 
 /**
@@ -393,6 +423,12 @@ export const CHAT_IPC_CHANNELS = {
   OPEN_FILE_DIALOG: 'chat:open-file-dialog',
   /** 提取附件文档的文本内容 */
   EXTRACT_ATTACHMENT_TEXT: 'chat:extract-attachment-text',
+  /** 论文精读 — 打开对话框选 PDF 并调用 MinerU 解析 */
+  PARSE_PAPER: 'chat:parse-paper',
+  /** 论文精读 — 给定文件路径直接调用 MinerU 解析 */
+  PARSE_PAPER_BY_PATH: 'chat:parse-paper-by-path',
+  /** 论文精读 — 估算 PDF 页数和积分 */
+  ESTIMATE_PAPER_PAGES: 'chat:estimate-paper-pages',
 
   // 置顶管理
   /** 切换对话置顶状态 */

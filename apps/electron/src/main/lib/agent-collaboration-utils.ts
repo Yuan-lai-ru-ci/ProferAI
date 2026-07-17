@@ -4,13 +4,13 @@
  * 不依赖 Electron 和磁盘服务，便于单元测试。
  */
 
-import type { AgentSessionMeta, PromaPermissionMode } from '@profer/shared'
+import type { AgentSessionMeta, ProferPermissionMode } from '@profer/shared'
 
 export type AgentDelegationRole = 'explore' | 'research' | 'implement' | 'review' | 'custom'
 
 export type AgentDelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 
-const PERMISSION_RANK: Record<PromaPermissionMode, number> = {
+const PERMISSION_RANK: Record<ProferPermissionMode, number> = {
   plan: 0,
   auto: 1,
   bypassPermissions: 2,
@@ -27,7 +27,7 @@ export interface RecoveredDelegationState {
   title: string
   role: AgentDelegationRole
   goal: string
-  permissionMode: PromaPermissionMode
+  permissionMode: ProferPermissionMode
   status: AgentDelegationStatus
   startedAt: number
   completedAt?: number
@@ -38,9 +38,9 @@ export interface RecoveredDelegationState {
  * 取父模式和请求模式中更严格者。
  */
 export function resolveDelegationPermissionMode(
-  parentMode: PromaPermissionMode | undefined,
-  requestedMode: PromaPermissionMode | undefined,
-): PromaPermissionMode {
+  parentMode: ProferPermissionMode | undefined,
+  requestedMode: ProferPermissionMode | undefined,
+): ProferPermissionMode {
   const parent = parentMode ?? 'auto'
   const requested = requestedMode ?? parent
   return PERMISSION_RANK[requested] <= PERMISSION_RANK[parent] ? requested : parent
@@ -53,7 +53,7 @@ export function buildRecoveredDelegationState(input: {
   parentSessionId: string
   delegationId: string
   session: AgentSessionMeta
-  fallbackPermissionMode?: PromaPermissionMode
+  fallbackPermissionMode?: ProferPermissionMode
 }): RecoveredDelegationState {
   const persistedStatus = input.session.delegationStatus
   const status: AgentDelegationStatus = persistedStatus === 'running'
@@ -84,7 +84,7 @@ export function buildDelegationPrompt(input: {
   expectedOutput?: string
 }): string {
   const expectedOutput = input.expectedOutput?.trim()
-  return `你是 Proma 协作子 Agent。你由父 Agent 会话 ${input.parentSessionId} 委派创建，委派 ID 为 ${input.delegationId}。
+  return `你是 Profer 协作子 Agent。你由父 Agent 会话 ${input.parentSessionId} 委派创建，委派 ID 为 ${input.delegationId}。
 
 ## 工作边界
 

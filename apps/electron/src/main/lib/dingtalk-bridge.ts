@@ -4,7 +4,7 @@
  * 核心职责：
  * - 通过 WebSocket 长连接（Stream 模式）接收钉钉消息
  * - 管理连接生命周期（启动/停止/重启/状态推送）
- * - 消息路由到 Proma Agent，通过 sessionWebhook 回复
+ * - 消息路由到 Profer Agent，通过 sessionWebhook 回复
  *
  * 每个 DingTalkBridge 实例对应一个 Bot，由 DingTalkBridgeManager 管理。
  */
@@ -410,7 +410,7 @@ class DingTalkBridge {
 
     const binding = this.commandHandler.ensureBinding(chatId)
     if (!binding) {
-      await this.replyTextViaWebhook(data.sessionWebhook, '请先在 Proma 设置中选择 Agent 渠道。')
+      await this.replyTextViaWebhook(data.sessionWebhook, '请先在 Profer 设置中选择 Agent 渠道。')
       return
     }
     const workspace = getAgentWorkspace(binding.workspaceId)

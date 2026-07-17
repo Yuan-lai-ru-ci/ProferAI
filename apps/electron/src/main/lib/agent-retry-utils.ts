@@ -3,8 +3,8 @@
  *
  * 从 agent-orchestrator.ts 提取的纯函数，用于自动重试决策和延迟计算。
  */
-import type { TypedError, PromaPermissionMode } from '@profer/shared'
-import { PROMA_PERMISSION_MODE_CONFIG } from '@profer/shared'
+import type { TypedError, ProferPermissionMode } from '@profer/shared'
+import { PROFER_PERMISSION_MODE_CONFIG } from '@profer/shared'
 import { isTransientNetworkError, isMalformedResponseError } from './error-patterns'
 
 /** 可自动重试的 TypedError 错误码 */
@@ -25,8 +25,8 @@ export const MAX_AUTO_RETRY_WAIT_MS = 5 * 60_000
 /** 重试单次延迟上限（毫秒） */
 export const RETRY_MAX_DELAY_MS = 15_000
 
-export function sdkPermissionModeForPromaMode(mode: PromaPermissionMode): PromaPermissionMode {
-  return PROMA_PERMISSION_MODE_CONFIG[mode].sdkMode
+export function sdkPermissionModeForProferMode(mode: ProferPermissionMode): ProferPermissionMode {
+  return PROFER_PERMISSION_MODE_CONFIG[mode].sdkMode
 }
 
 /**

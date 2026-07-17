@@ -50,6 +50,7 @@ import {
   notificationsEnabledAtom,
   notificationSoundEnabledAtom,
   notificationSoundsAtom,
+  customNotificationSoundsAtom,
   initializeNotifications,
 } from './atoms/notifications'
 import {
@@ -387,10 +388,11 @@ function NotificationsInitializer(): null {
   const setEnabled = useSetAtom(notificationsEnabledAtom)
   const setSoundEnabled = useSetAtom(notificationSoundEnabledAtom)
   const setSounds = useSetAtom(notificationSoundsAtom)
+  const setCustomSounds = useSetAtom(customNotificationSoundsAtom)
 
   useEffect(() => {
-    initializeNotifications(setEnabled, setSoundEnabled, setSounds)
-  }, [setEnabled, setSoundEnabled, setSounds])
+    initializeNotifications(setEnabled, setSoundEnabled, setSounds, setCustomSounds)
+  }, [setEnabled, setSoundEnabled, setSounds, setCustomSounds])
 
   return null
 }
