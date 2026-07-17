@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, LogIn } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, LogIn, Library } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -61,6 +61,11 @@ import {
   backgroundTasksAtomFamily,
   sessionPersistedPermissionModeAtom,
   sessionExistsAtom,
+  agentStreamErrorsAtom,
+  agentPromptSuggestionsAtom,
+  allPendingPermissionRequestsAtom,
+  allPendingAskUserRequestsAtom,
+  allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -601,11 +606,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const [capabilities, setCapabilities] = React.useState<WorkspaceCapabilities | null>(null)
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
-  // 账号能力：restricted 用户无工作区
-  const [accountCaps, setAccountCaps] = React.useState<{ accountType: string; canSelfConfig: boolean }>({ accountType: 'standard', canSelfConfig: false })
+  // 账号能力：free 用户限 1 个团队工作区
+  const [accountCaps, setAccountCaps] = React.useState<{ membershipTier: string; canSelfConfig: boolean }>({ membershipTier: 'free', canSelfConfig: false })
   React.useEffect(() => {
     window.electronAPI.getAccountCapabilities().then((caps) => {
-      setAccountCaps({ accountType: caps.accountType, canSelfConfig: caps.canSelfConfig })
+      setAccountCaps({ membershipTier: caps.membershipTier, canSelfConfig: caps.canSelfConfig })
     }).catch(() => {})
   }, [])
 
@@ -660,6 +665,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
   const setSessionPendingFiles = useSetAtom(agentSessionPendingFilesAtom)
   const setSessionViewStateMap = useSetAtom(sessionViewStateMapAtom)
+  const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
+  const setAgentPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
+  const setAllPendingPermissionRequests = useSetAtom(allPendingPermissionRequestsAtom)
+  const setAllPendingAskUserRequests = useSetAtom(allPendingAskUserRequestsAtom)
+  const setAllPendingExitPlanRequests = useSetAtom(allPendingExitPlanRequestsAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
   const cleanupMapAtoms = React.useCallback((id: string) => {
@@ -692,6 +702,13 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     setStreamingStates(deleteKey)
     setLiveMessagesMap(deleteKey)
 
+    // per-session 请求/错误/提示词状态：删除/归档后清理 Map 条目，避免跨会话累积
+    setAgentStreamErrors(deleteKey)
+    setAgentPromptSuggestions(deleteKey)
+    setAllPendingPermissionRequests(deleteKey)
+    setAllPendingAskUserRequests(deleteKey)
+    setAllPendingExitPlanRequests(deleteKey)
+
     // 待发送附件：先释放 blob URL 和 window 缓存中的 base64，再删 base map entry。
     // 与文字草稿不同，附件涉及 ObjectURL 和大体积二进制数据，删除/归档时不保留。
     const sessionPending = store.get(agentSessionPendingFilesAtom).get(id)
@@ -714,7 +731,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAllPendingExitPlanRequests, setSessionPendingFiles, store])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
@@ -863,6 +880,14 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       return
     }
     setActiveView('agent-skills')
+  }, [activeView, setActiveView])
+
+  const handleOpenKnowledgeBase = React.useCallback((): void => {
+    if (activeView === 'knowledge-base') {
+      setActiveView('conversations')
+      return
+    }
+    setActiveView('knowledge-base')
   }, [activeView, setActiveView])
 
   // 切换模式时重置归档视图
@@ -1989,6 +2014,25 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               <TooltipContent side="right">Agent 技能</TooltipContent>
             </Tooltip>
           )}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="知识库"
+                onClick={handleOpenKnowledgeBase}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
+                  activeView === 'knowledge-base'
+                    ? 'border-primary/80 bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border/45 bg-foreground/[0.025] text-foreground/45 hover:border-border/70 hover:bg-foreground/[0.045] hover:text-primary',
+                )}
+              >
+                <Library size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">知识库</TooltipContent>
+          </Tooltip>
         </div>
 
         <div className="my-3 h-px w-8 bg-border/70" />
@@ -2128,6 +2172,26 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           />
         </div>
       )}
+
+      {/* 知识库入口：科研论文管理与语义搜索 */}
+      <div className="px-3 pb-0.5">
+        <button
+          type="button"
+          aria-label="知识库"
+          onClick={handleOpenKnowledgeBase}
+          className={cn(
+            'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
+            activeView === 'knowledge-base'
+              ? 'bg-accent-foreground/[0.10] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+              : 'text-foreground/60 hover:bg-accent-foreground/[0.08] hover:text-foreground',
+          )}
+        >
+          <span className="flex items-center gap-3 min-w-0">
+            <Library size={16} className={cn('flex-shrink-0', activeView === 'knowledge-base' ? 'text-accent-foreground' : 'text-foreground/45')} />
+            <span className="truncate">知识库</span>
+          </span>
+        </button>
+      </div>
 
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
       {mode === 'chat' && viewMode === 'active' ? (
@@ -2274,7 +2338,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           <div className="px-2 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
             <span className="px-1.5 text-[11px] font-medium text-foreground/40 select-none">项目</span>
             <div className="flex items-center gap-0.5">
-              {authStatus.isLoggedIn && accountCaps.accountType !== 'restricted' && (
+              {authStatus.isLoggedIn && accountCaps.membershipTier !== 'free' && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button

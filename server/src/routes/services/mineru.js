@@ -147,12 +147,18 @@ async function pollBatchResult(batchId, includeStructuredJson = false) {
   throw new Error(`MinerU 解析超时 (${POLL_TIMEOUT_MS / 1000}s)，请稍后重试`)
 }
 
+/** 图片文件扩展名集合 */
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'tif'])
+
 /**
- * 下载 zip 并提取内容
+ * 下载 zip 并提取内容（markdown + 图片）
+ *
+ * 图片不解码 / 不写入磁盘，直接 base64 透传给客户端，由客户端自行落盘并重写 markdown 路径。
+ * 服务端只做 zip 解压，不做图片处理。
  *
  * @param {string} zipUrl
  * @param {boolean} includeStructuredJson 是否同时提取 content_list.json 等结构化数据
- * @returns {{ markdown: string, contentList?: object, metadata?: object }}
+ * @returns {{ markdown: string, images: Array<{name: string, data: string, mimeType: string}>, contentList?: object, metadata?: object }}
  */
 async function downloadAndExtractContent(zipUrl, includeStructuredJson = false) {
   const resp = await fetch(zipUrl, {
@@ -181,12 +187,29 @@ async function downloadAndExtractContent(zipUrl, includeStructuredJson = false) 
     markdown = entry.getData().toString('utf-8')
   }
 
-  const result = { markdown }
+  // 提取所有图片文件（透传 base64，不落地）
+  const images = []
+  const allEntries = zip.getEntries()
+  for (const ze of allEntries) {
+    if (ze.isDirectory) continue
+    const parts = ze.entryName.split('.')
+    const ext = (parts.pop() || '').toLowerCase()
+    if (IMAGE_EXTS.has(ext)) {
+      const mimeExt = ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext === 'tif' ? 'tiff' : ext
+      images.push({
+        name: ze.entryName,
+        data: ze.getData().toString('base64'),
+        mimeType: `image/${mimeExt}`,
+      })
+    }
+  }
+
+  const result = { markdown, images }
 
   // 可选：提取结构化 JSON
   if (includeStructuredJson) {
     try {
-      const contentListEntry = zip.getEntries().find(
+      const contentListEntry = allEntries.find(
         (e) => e.entryName.endsWith('content_list.json')
       )
       if (contentListEntry) {
@@ -198,7 +221,7 @@ async function downloadAndExtractContent(zipUrl, includeStructuredJson = false) 
 
     // 提取中间 JSON（含阅读顺序、布局等元信息）
     try {
-      const modelEntry = zip.getEntries().find(
+      const modelEntry = allEntries.find(
         (e) => e.entryName.endsWith('model.json') || e.entryName.endsWith('middle.json')
       )
       if (modelEntry) {
@@ -207,6 +230,10 @@ async function downloadAndExtractContent(zipUrl, includeStructuredJson = false) 
     } catch (err) {
       console.warn('[mineru] model/middle.json 提取失败:', err.message)
     }
+  }
+
+  if (images.length > 0) {
+    console.log(`[mineru] 提取了 ${images.length} 张图片 (${(images.reduce((s, i) => s + i.data.length, 0) * 0.75 / 1024 / 1024).toFixed(1)}MB base64)`)
   }
 
   return result
@@ -335,6 +362,7 @@ mineruRoutes.post('/parse', async (c) => {
       markdown: result.markdown,
       pages,
       creditsUsed,
+      images: result.images || [],
     }
 
     // 如果有结构化数据，附加到响应中
