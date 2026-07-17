@@ -4,7 +4,7 @@
  * 解决的真实问题：
  *   1. Agent 看不到引用回复——用户在飞书里"长按 → 回复"某条消息时，
  *      飞书把被引用消息的 messageId 放在 message.parent_id 里。原来
- *      Proma 只把 user text 给 Agent，丢掉了"用户在问哪条消息"这个上下文。
+ *      Profer 只把 user text 给 Agent，丢掉了"用户在问哪条消息"这个上下文。
  *   2. Agent 不知道 chat 类型与发送者——群聊 vs 私聊、用户名等元数据
  *      此前是隐式的（仅在群聊 prefix 里出现）。
  *   3. Agent 看不到被引用的卡片内容——用户引用 Bot 发的卡片提问时，
@@ -12,7 +12,7 @@
  *
  * 借鉴 zara/feishu-claude-code-bridge `src/agent/claude/adapter.ts`
  * 的 BRIDGE_SYSTEM_PROMPT 约定 + `src/bot/quote.ts` 的引用消息抓取，
- * 但 Proma 用动态系统提示词构建，BRIDGE_SYSTEM_PROMPT 作为
+ * 但 Profer 用动态系统提示词构建，BRIDGE_SYSTEM_PROMPT 作为
  * AgentSendInput.userMessage 的前置 XML 块（不是 system prompt）。
  *
  * 约定的 XML 块（教 Agent 见 BRIDGE_USER_MESSAGE_PRELUDE）：
@@ -60,7 +60,7 @@ export interface BuildOptions {
 }
 
 /** 教 Agent 如何看待 bridge 注入的 XML 块。会被前置到每条 userMessage。 */
-export const BRIDGE_USER_MESSAGE_PRELUDE = `<!-- 你正在通过 Proma 飞书桥处理来自飞书的用户消息。bridge 会用 XML 块注入
+export const BRIDGE_USER_MESSAGE_PRELUDE = `<!-- 你正在通过 Profer 飞书桥处理来自飞书的用户消息。bridge 会用 XML 块注入
 当前对话的元数据。下面这些 XML 块**对用户不可见**，不要照抄到回复里。
 
 可能出现的 XML 块：

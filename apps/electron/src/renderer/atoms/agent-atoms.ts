@@ -7,8 +7,8 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@profer/shared'
-import { PROMA_DEFAULT_PERMISSION_MODE } from '@profer/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@profer/shared'
+import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 
@@ -322,6 +322,9 @@ export const agentSidePanelOpenAtom = atomWithStorage<boolean>('profer-agent-sid
 /** 侧面板宽度（全局共享，用户拖拽后持久化） */
 export const agentSidePanelWidthAtom = atomWithStorage<number>('profer-agent-sidepanel-width', 280)
 
+/** 团队工作区 Agent 侧栏宽度（用户拖拽后持久化） */
+export const teamAgentPanelWidthAtom = atomWithStorage<number>('profer-team-agent-panel-width', 360)
+
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
@@ -389,14 +392,14 @@ export const RECENTLY_MODIFIED_TTL_MS = 60_000
 // ===== 权限系统 Atoms =====
 
 /** 新会话默认权限模式 */
-export const agentDefaultPermissionModeAtom = atom<PromaPermissionMode>(PROMA_DEFAULT_PERMISSION_MODE)
+export const agentDefaultPermissionModeAtom = atom<ProferPermissionMode>(PROFER_DEFAULT_PERMISSION_MODE)
 
-/** Per-session 权限模式 Map — sessionId → PromaPermissionMode */
-export const agentPermissionModeMapAtom = atom<Map<string, PromaPermissionMode>>(new Map())
+/** Per-session 权限模式 Map — sessionId → ProferPermissionMode */
+export const agentPermissionModeMapAtom = atom<Map<string, ProferPermissionMode>>(new Map())
 
 /**
  * 按 sessionId 派生该 session 的持久化权限模式。
- * 返回 `undefined`（session 不存在或未设置）或具体的 PromaPermissionMode 字符串，
+ * 返回 `undefined`（session 不存在或未设置）或具体的 ProferPermissionMode 字符串，
  * jotai 用 === 比较，只有值真正变化时才通知下游——避免流式中无关字段更新引发 re-render。
  */
 export const sessionPersistedPermissionModeAtom = atomFamily((sessionId: string) =>

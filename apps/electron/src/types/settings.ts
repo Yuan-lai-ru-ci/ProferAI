@@ -9,8 +9,20 @@ import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, FeishuSession
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode'
 
-/** 可选通知音 ID */
-export type NotificationSoundId = 'ding' | 'ding-dong' | 'discord' | 'done' | 'down-power' | 'food' | 'lite' | 'quiet' | 'none'
+/** 可选通知音 ID（内置 + 自定义） */
+export type NotificationSoundId = string
+
+/** 自定义通知音元数据 */
+export interface CustomNotificationSound {
+  /** 唯一 ID，格式 "custom-{timestamp}-{random}" */
+  id: string
+  /** 用户指定的显示名称 */
+  label: string
+  /** 实际存储的文件名（UUID + 扩展名） */
+  fileName: string
+  /** 添加时间戳 */
+  addedAt: number
+}
 
 /** 各场景通知音配置 */
 export interface NotificationSoundSettings {
@@ -214,6 +226,8 @@ export interface AppSettings {
   notificationSoundEnabled?: boolean
   /** 各场景通知音选择 */
   notificationSounds?: NotificationSoundSettings
+  /** 用户添加的自定义通知音 */
+  customNotificationSounds?: CustomNotificationSound[]
   /** 标签页持久化状态（重启恢复） */
   tabState?: PersistedTabSettings
   /** Agent 思考模式 */
@@ -285,6 +299,16 @@ export const SETTINGS_IPC_CHANNELS = {
   /** 获取/设置开机自启动状态 */
   GET_AUTO_LAUNCH: 'settings:get-auto-launch',
   SET_AUTO_LAUNCH: 'settings:set-auto-launch',
+} as const
+
+/** 自定义通知音 IPC 通道 */
+export const NOTIFICATION_SOUND_IPC_CHANNELS = {
+  /** 添加自定义音效：{ sourcePath, label } → CustomNotificationSound */
+  ADD: 'notification-sound:add',
+  /** 删除自定义音效：{ id } → CustomNotificationSound[] */
+  REMOVE: 'notification-sound:remove',
+  /** 获取自定义音效的文件 URL：{ fileName } → string */
+  GET_URL: 'notification-sound:get-url',
 } as const
 
 /** Scratch Pad IPC 通道 */

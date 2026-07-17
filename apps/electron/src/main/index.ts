@@ -158,7 +158,7 @@ import {
   shouldSuppressVoiceDictationActivate,
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
-import { setPromaVersion } from '@profer/core'
+import { setProferVersion } from '@profer/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
@@ -351,8 +351,10 @@ function getIconPath(): string {
 function saveMainWindowState(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const isMaximized = mainWindow.isMaximized()
-  // 最大化时用恢复尺寸（unmaximize 后的尺寸），避免记录最大化的全屏 bounds
-  const bounds = isMaximized ? mainWindow.getNormalBounds() : mainWindow.getBounds()
+  const isFullScreen = mainWindow.isFullScreen()
+  // 最大化/全屏时用 getNormalBounds() 保存恢复后的尺寸，
+  // 避免 macOS 全屏关闭后下次启动用全屏坐标恢复导致黑屏（Proma PR #1119）
+  const bounds = (isMaximized || isFullScreen) ? mainWindow.getNormalBounds() : mainWindow.getBounds()
   updateSettings({
     mainWindowState: {
       width: bounds.width,
@@ -477,15 +479,26 @@ function createWindow(): void {
   // macOS: 点击关闭按钮时隐藏窗口+应用，而不是退出
   // 同时隐藏应用（类似 Cmd+H），确保点击 Dock 图标时 macOS 能正确触发 activate 事件
   if (process.platform === 'darwin') {
-    mainWindow.on('close', (event) => {
+    mainWindow.on('close', async (event) => {
       if (!getIsQuitting()) {
+        event.preventDefault()
+        // 若当前处于全屏状态，先退出全屏再保存状态，
+        // 避免全屏坐标被持久化导致下次启动黑屏（Proma PR #1119）
+        if (mainWindow?.isFullScreen()) {
+          mainWindow.setFullScreen(false)
+          // 等待 leave-full-screen 事件，超时后无论如何继续
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(() => resolve(), 1000)
+            const onLeave = (): void => { clearTimeout(timeout); resolve() }
+            mainWindow?.once('leave-full-screen', onLeave)
+          })
+        }
         // 隐藏前先刷新挂起的窗口状态保存
         if (windowStateSaveTimer) {
           clearTimeout(windowStateSaveTimer)
           windowStateSaveTimer = null
         }
         saveMainWindowState()
-        event.preventDefault()
         mainWindow?.hide()
         app.hide()
       }
@@ -541,8 +554,8 @@ app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
 async function bootstrap(): Promise<void> {
   // ─── 第一梯队：必须在窗口显示前完成的关键路径 ───
 
-  // 初始化 Proma 版本号（供 User-Agent 等全局标识使用）
-  setPromaVersion(app.getVersion())
+  // 初始化 Profer 版本号（供 User-Agent 等全局标识使用）
+  setProferVersion(app.getVersion())
 
   // 注册自定义协议 profer-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。

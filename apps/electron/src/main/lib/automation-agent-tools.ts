@@ -175,7 +175,14 @@ export async function injectAutomationMcpServer(
   mcpServers: Record<string, Record<string, unknown>>,
   ctx: AutomationAgentToolContext,
 ): Promise<void> {
-  const { z } = await import('zod')
+  // Electron ASAR 环境下动态 ESM import 可能间歇性失败（Issue #1108），
+  // 回退到 CommonJS require 兜底，避免 MCP 工具族在会话中途消失。
+  let z: ZodModule['z']
+  try {
+    ({ z } = await import('zod') as ZodModule)
+  } catch {
+    z = require('zod').z
+  }
   const schemas = buildAutomationSchemas(z)
 
   const server = sdk.createSdkMcpServer({

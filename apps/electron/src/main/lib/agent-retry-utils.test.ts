@@ -10,7 +10,7 @@ import {
   isAutoRetryableCatchError,
   isSessionNotFoundError,
   getRetryDelayMs,
-  sdkPermissionModeForPromaMode,
+  sdkPermissionModeForProferMode,
   MAX_AUTO_RETRY_WAIT_MS,
   RETRY_MAX_DELAY_MS,
 } from './agent-retry-utils'
@@ -149,10 +149,10 @@ describe('getRetryDelayMs', () => {
   })
 })
 
-describe('sdkPermissionModeForPromaMode', () => {
+describe('sdkPermissionModeForProferMode', () => {
   test('返回对应 SDK 权限模式（如果 @profer/shared 常量可用）', () => {
     try {
-      const result = sdkPermissionModeForPromaMode('auto')
+      const result = sdkPermissionModeForProferMode('auto')
       expect(typeof result).toBe('string')
     } catch {
       // @profer/shared 常量在独立测试中可能不可用，跳过

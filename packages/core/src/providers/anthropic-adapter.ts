@@ -36,7 +36,7 @@ import type {
 } from './types.ts'
 import { normalizeAnthropicProviderUrl } from './url-utils.ts'
 import { detectThinkingCapability } from './thinking-capability.ts'
-import { getPromaUserAgent } from './user-agent.ts'
+import { getProferUserAgent } from './user-agent.ts'
 
 // ===== Anthropic 特有类型 =====
 
@@ -274,7 +274,7 @@ export class AnthropicAdapter implements ProviderAdapter {
    *
    * Kimi Coding Plan 要求：
    * - 只使用 Bearer（服务端校验 User-Agent 白名单）
-   * - User-Agent 使用 Proma 自有标识（通过 setPromaVersion 初始化）
+   * - User-Agent 使用 Proma 自有标识（通过 setProferVersion 初始化）
    */
   private buildHeaders(apiKey: string): Record<string, string> {
     const base: Record<string, string> = {
@@ -283,12 +283,12 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
     if (this.providerType === 'kimi-coding' || this.providerType === 'zhipu-coding') {
       base['Authorization'] = `Bearer ${apiKey}`
-      base['User-Agent'] = getPromaUserAgent()
+      base['User-Agent'] = getProferUserAgent()
       return base
     }
     if (this.providerType === 'xiaomi-token-plan') {
       base['Authorization'] = `Bearer ${apiKey}`
-      base['User-Agent'] = getPromaUserAgent()
+      base['User-Agent'] = getProferUserAgent()
       return base
     }
     if (this.providerType === 'minimax') {

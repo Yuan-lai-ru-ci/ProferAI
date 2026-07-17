@@ -478,10 +478,10 @@ class FeishuBridge {
   }
 
   /**
-   * 为 Proma 桌面端会话准备飞书镜像群。
+   * 为 Profer 桌面端会话准备飞书镜像群。
    *
    * 该群只包含用户与当前 Bot。用户在群里继续发送消息时，会通过
-   * source=session-mirror 的绑定回到同一个 Proma session。
+   * source=session-mirror 的绑定回到同一个 Profer session。
    */
   async ensureSessionMirror(session: AgentSessionMeta): Promise<void> {
     if (!this.client) return
@@ -1037,14 +1037,14 @@ class FeishuBridge {
     }
 
     if (!workspaceId) {
-      await this.sendMessage(chatId, '请先在 Proma 设置中创建工作区。')
+      await this.sendMessage(chatId, '请先在 Profer 设置中创建工作区。')
       return
     }
 
     // 渠道/模型：Bot 配置 > 应用设置
     const channelId = this.botConfig.defaultChannelId ?? appSettings.agentChannelId
     if (!channelId) {
-      await this.sendMessage(chatId, '请先在 Proma Agent 设置中选择渠道。')
+      await this.sendMessage(chatId, '请先在 Profer Agent 设置中选择渠道。')
       return
     }
 
@@ -1457,7 +1457,7 @@ class FeishuBridge {
     if (channels.length === 0) {
       await this.sendMessage(
         chatId,
-        '暂无可用渠道。请先在 Proma 设置中配置并启用渠道（需填入 API Key 且至少启用一个模型）。',
+        '暂无可用渠道。请先在 Profer 设置中配置并启用渠道（需填入 API Key 且至少启用一个模型）。',
       )
       return
     }
@@ -1515,7 +1515,7 @@ class FeishuBridge {
       await this.createNewSession(msgCtx)
       targetBinding = this.chatBindings.get(chatId)
       if (!targetBinding) {
-        await this.sendMessage(chatId, '请先发送一条消息创建会话，或在 Proma 设置中选择 Agent 渠道。')
+        await this.sendMessage(chatId, '请先发送一条消息创建会话，或在 Profer 设置中选择 Agent 渠道。')
         return
       }
     }
@@ -1825,7 +1825,7 @@ class FeishuBridge {
       }
     }
 
-    if (payload.kind === 'proma_event' && payload.event.type === 'title_updated') {
+    if (payload.kind === 'profer_event' && payload.event.type === 'title_updated') {
       this.updateSessionMirrorGroupName(sessionId, payload.event.title)
     }
   }

@@ -9,7 +9,12 @@ function makeCaps(
 ): WorkspaceCapabilities {
   return {
     mcpServers: mcpServers.map((s) => ({ ...s, type: 'stdio' as const })),
+    builtinMcpServers: [],
     skills: skills.map((s) => ({ ...s })),
+    memory: {
+      claudeMd: { path: '', exists: false, size: 0 },
+      autoMemory: { directory: '', memoryMdExists: false, fileCount: 0, totalSize: 0 },
+    },
   }
 }
 

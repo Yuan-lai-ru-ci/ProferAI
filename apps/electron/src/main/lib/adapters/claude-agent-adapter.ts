@@ -17,7 +17,7 @@ import type {
   SdkBeta,
   JsonSchemaOutputFormat,
   SDKMessage,
-  PromaPermissionMode,
+  ProferPermissionMode,
 } from '@profer/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
@@ -123,8 +123,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   env: Record<string, string | undefined>
   /** 最大轮次（undefined = SDK 默认） */
   maxTurns?: number
-  /** SDK 权限模式（Proma 当前三种模式直接映射 SDK 原生模式） */
-  sdkPermissionMode: PromaPermissionMode
+  /** SDK 权限模式（Profer 当前三种模式直接映射 SDK 原生模式） */
+  sdkPermissionMode: ProferPermissionMode
   /** 是否跳过权限检查 */
   allowDangerouslySkipPermissions: boolean
   /** 自定义权限处理器（匹配 SDK CanUseTool 签名） */
@@ -576,20 +576,29 @@ const activeQueries = new Map<string, SDKQuery>()
 const activeChannels = new Map<string, MessageChannel>()
 
 /**
- * 排队消息计数器（sessionId → 已入 channel 但尚未被 SDK 消化为独立 turn 的消息数）。
+ * 会话就绪状态（Promise + resolve 对）。
  *
- * 每条 sendQueuedMessage 的消息入 channel 后 SDK 立即从 generator 拉取写入 CLI stdin，
- * channel.hasPending() 永远为 false。此计数器独立追踪"发了多少条，还剩多少条没跑完"。
+ * 与 queryReadyPromises/queryReadyResolvers 不同，此 Map 的条目可以由 sendQueuedMessage
+ * 在 query() 启动前懒创建，从而消除"activeSessions 已设置但 query() 尚未就绪"窗口中的竞态。
  *
- * 不变式：counter>0 ⇒ 至少还有一个未来 turn 待执行 ⇒ 当前 result 不得 close channel。
- * 每次普通 result（非 continuable 暂停）且 counter>0 时 counter--。连续排队消息的最后一个
- * result 会把 counter 降到 0，此时正常 teardown。
+ * 谁先到达谁创建条目；query() 负责调用 resolve()，sendQueuedMessage 负责 await。
  */
-const queuedFollowupCount = new Map<string, number>()
+interface SessionReadyState {
+  promise: Promise<void>
+  resolve: () => void
+}
+const sessionReadyStates = new Map<string, SessionReadyState>()
 
-/** Query 就绪 Promise（在 SDK init 完成前缓冲队列消息） */
-const queryReadyPromises = new Map<string, Promise<void>>()
-const queryReadyResolvers = new Map<string, () => void>()
+function ensureSessionReady(sessionId: string): SessionReadyState {
+  let state = sessionReadyStates.get(sessionId)
+  if (!state) {
+    let resolve!: () => void
+    const promise = new Promise<void>((r) => { resolve = r })
+    state = { promise, resolve }
+    sessionReadyStates.set(sessionId, state)
+  }
+  return state
+}
 
 /** SDK init 超时时间（毫秒） */
 const QUERY_READY_TIMEOUT_MS = 60_000
@@ -673,7 +682,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     }
 
     activeChannels.delete(sessionId)
-    queuedFollowupCount.delete(sessionId)
+    sessionReadyStates.delete(sessionId)
 
     const controller = activeControllers.get(sessionId)
     if (controller) {
@@ -735,9 +744,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     activeControllers.clear()
     activeQueries.clear()
     activeChannels.clear()
-    queryReadyPromises.clear()
-    queryReadyResolvers.clear()
-    queuedFollowupCount.clear()
+    sessionReadyStates.clear()
   }
 
   /**
@@ -752,11 +759,8 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     const controller = new AbortController()
     activeControllers.set(options.sessionId, controller)
 
-    // 创建 Query 就绪 Promise（队列消息会等待此 Promise）
-    const readyPromise = new Promise<void>((resolve) => {
-      queryReadyResolvers.set(options.sessionId, resolve)
-    })
-    queryReadyPromises.set(options.sessionId, readyPromise)
+    // 创建/复用 Query 就绪状态（可能在 sendQueuedMessage 已提前创建）
+    ensureSessionReady(options.sessionId)
 
     // 后台任务等待态：本轮结束时若仍有 background_tasks/session_crons 在飞行，
     // 保持消息通道开启（不 close），让 SDK 子进程存活、在任务完成时自动 yield
@@ -859,9 +863,18 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         // 注意：一旦提供 spawnClaudeCodeProcess，SDK 会完全绕过 spawnLocalProcess，
         // 因此 options.stderr 回调需要在这里手动转发，否则 extractApiError / 重试判断全部失效
         spawnClaudeCodeProcess: (spawnOpts: import('@anthropic-ai/claude-agent-sdk').SpawnOptions) => {
+          // 注入 NODE_OPTIONS 堆内存上限，防止 SDK 子进程在大型代码库中 OOM 无界增长。
+          // 与 spawnOpts.env 中已有 NODE_OPTIONS 合并，避免覆盖。
+          const existingNodeOptions = spawnOpts.env?.NODE_OPTIONS ?? ''
+          const heapLimit = '--max-old-space-size=4096'
+          const mergedNodeOptions = existingNodeOptions.includes('--max-old-space-size')
+            ? existingNodeOptions
+            : [existingNodeOptions, heapLimit].filter(Boolean).join(' ')
+          const childEnv = { ...spawnOpts.env, NODE_OPTIONS: mergedNodeOptions || heapLimit }
+
           const child = spawnChild(spawnOpts.command, spawnOpts.args, {
             cwd: spawnOpts.cwd,
-            env: spawnOpts.env,
+            env: childEnv,
             signal: spawnOpts.signal,
             stdio: ['pipe', 'pipe', 'pipe'],
           })
@@ -914,10 +927,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       activeChannels.set(options.sessionId, channel)
 
       // 通知 Query 已就绪，解除 sendQueuedMessage 的等待
-      const resolveReady = queryReadyResolvers.get(options.sessionId)
-      if (resolveReady) {
-        resolveReady()
-        queryReadyResolvers.delete(options.sessionId)
+      const state = sessionReadyStates.get(options.sessionId)
+      if (state) {
+        state.resolve()
       }
 
       // 终止标记：收到非 keep-open 的 terminal result 后置 true，yield 该 result 后主动 break。
@@ -978,25 +990,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           // 后者由 Stop hook 观察者刷新的 backgroundTasksPending 标识。
           const keepForTasks = backgroundTasksPending
 
-          // 排队消息计数器：channel 入队后 SDK 立即拉取，hasPending() 不可靠，故独立计数。
-          // !keepForReason 说明本轮真正结束（非权限/ExitPlan/AskUser 暂停），此时若
-          // counter>0 表示未来还有排队 turn 待执行 → 保持通道开、不 teardown。
-          let keepForQueue = false
-          if (!keepForReason) {
-            const pendingCount = queuedFollowupCount.get(options.sessionId) ?? 0
-            if (pendingCount > 0) {
-              keepForQueue = true
-              queuedFollowupCount.set(options.sessionId, pendingCount - 1)
-              ;(msg as Record<string, unknown>)._keepChannelOpenForQueue = true
-            }
-          }
-
-          if (keepForQueue) {
-            // 排队消息正在驱动下一轮：保持通道开，UI 维持 running。
-            // 无需 idle timer——消息已被 SDK 拉取，turn 即刻开始。
-            // 若同时有后台任务在飞（keepForTasks），arm idle timer 兜底。
-            if (keepForTasks) armIdleTimer()
-          } else if (keepForTasks && !keepForReason) {
+          if (keepForTasks && !keepForReason) {
             // 本轮主体结束、但仍有后台任务/定时任务在飞行：保持通道开启，
             // 子进程存活并在任务完成时自动 yield task_notification 驱动新一轮。
             // 给消息打注解，让 orchestrator 走"轻量完成"（UI 空闲但保留会话）而非彻底释放。
@@ -1035,12 +1029,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       activeControllers.delete(options.sessionId)
       activeQueries.delete(options.sessionId)
       activeChannels.delete(options.sessionId)
-      queryReadyPromises.delete(options.sessionId)
-      queryReadyResolvers.delete(options.sessionId)
-      // 会话真正结束时清理排队计数器；重试/中止时保留（由 abort 或新 query 的 finally 处理）
-      if (terminateAfterTerminalResult) {
-        queuedFollowupCount.delete(options.sessionId)
-      }
+      sessionReadyStates.delete(options.sessionId)
     }
   }
 
@@ -1051,30 +1040,25 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
    * 不再单独调用 query.streamInput()，避免触发 endInput() 关闭 CLI stdin。
    */
   async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput): Promise<void> {
-    // 等待 Query 就绪（SDK init 可能需要几秒）
-    const readyPromise = queryReadyPromises.get(sessionId)
-    if (readyPromise) {
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error('[Claude 适配器] 等待 SDK 初始化超时，请稍后重试')), QUERY_READY_TIMEOUT_MS)
-      })
-      try {
-        await Promise.race([readyPromise, timeoutPromise])
-      } finally {
-        clearTimeout(timeoutHandle)
-      }
+    // 获取或创建会话就绪状态（可能由 sendQueuedMessage 或 query() 率先创建）
+    const state = ensureSessionReady(sessionId)
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error('[Claude 适配器] 等待 SDK 初始化超时，请稍后重试')), QUERY_READY_TIMEOUT_MS)
+    })
+    try {
+      await Promise.race([state.promise, timeoutPromise])
+    } finally {
+      clearTimeout(timeoutHandle)
     }
 
     const channel = activeChannels.get(sessionId)
     if (!channel) {
       throw new Error(`[Claude 适配器] 无活跃消息通道可注入队列消息: ${sessionId}`)
     }
-    // 先增计数器（消息入 channel 后 SDK 立即拉取，hasPending() 不可靠，需独立追踪）
-    const prev = queuedFollowupCount.get(sessionId) ?? 0
-    queuedFollowupCount.set(sessionId, prev + 1)
     // 通过消息通道入队，generator 会自动 yield 给 SDK
     channel.enqueue(message as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage)
-    console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, queuedCount=${prev + 1}`)
+    console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, priority=${message.priority}`)
   }
 
   /**

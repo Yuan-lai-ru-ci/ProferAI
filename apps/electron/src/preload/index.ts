@@ -6,8 +6,9 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS } from '@profer/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS } from '@profer/shared'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS } from '../types'
+import type { CustomNotificationSound } from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -29,6 +30,14 @@ import type {
   AttachmentSaveInput,
   AttachmentSaveResult,
   FileDialogResult,
+  PaperParseResult,
+  PageEstimate,
+  KBImportInput,
+  KBImportResult,
+  KBSearchResult,
+  PaperMeta,
+  KBStats,
+  ArxivPaper,
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
@@ -65,7 +74,7 @@ import type {
   GitHubReleaseListOptions,
   PermissionRequest,
   PermissionResponse,
-  PromaPermissionMode,
+  ProferPermissionMode,
   AskUserRequest,
   AskUserResponse,
   ExitPlanModeResponse,
@@ -73,7 +82,6 @@ import type {
   SystemPrompt,
   SystemPromptCreateInput,
   SystemPromptUpdateInput,
-  MemoryConfig,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -81,6 +89,7 @@ import type {
   ForkSessionInput,
   RewindSessionInput,
   RewindSessionResult,
+  SessionHealth,
   AgentMessageSearchResult,
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
@@ -221,8 +230,8 @@ export interface ElectronAPI {
   /** 检查是否处于商业模式 */
   getCommercialMode: () => Promise<boolean>
 
-  /** 获取账号能力（商业模式+自配权限+账号类型）。force=true 时先拉服务端刷新再读，用于权限变更即时生效 */
-  getAccountCapabilities: (force?: boolean) => Promise<{ commercialMode: boolean; canSelfConfig: boolean; accountType: string }>
+  /** 获取账号能力（商业模式+自配权限+订阅等级）。force=true 时先拉服务端刷新再读，用于权限变更即时生效 */
+  getAccountCapabilities: (force?: boolean) => Promise<{ commercialMode: boolean; canSelfConfig: boolean; membershipTier: string }>
 
   /** 获取构建目标 */
   getBuildTarget: () => Promise<'oss' | 'commercial'>
@@ -311,6 +320,34 @@ export interface ElectronAPI {
   /** 打开文件选择对话框 */
   openFileDialog: () => Promise<FileDialogResult>
 
+  /** 论文精读 — 打开文件对话框选 PDF → MinerU API 解析 → 返回 Markdown */
+  parsePaper: () => Promise<PaperParseResult | null>
+
+  /** 论文精读 — 给定文件路径，直接调用 MinerU 解析 */
+  parsePaperByPath: (filePath: string) => Promise<PaperParseResult>
+
+  /** 论文精读 — 估算 PDF 页数和积分（本地计算，不调用服务端） */
+  estimatePaperPages: (filePath: string) => Promise<PageEstimate>
+
+  // ===== 知识库相关 =====
+
+  kb: {
+    /** 导入论文到知识库 */
+    import: (input: KBImportInput) => Promise<KBImportResult>
+    /** 语义搜索论文 */
+    search: (query: string, topK?: number) => Promise<KBSearchResult[]>
+    /** 列出所有论文 */
+    listPapers: (tag?: string) => Promise<PaperMeta[]>
+    /** 获取单篇论文完整内容 */
+    getPaper: (paperId: string) => Promise<{ meta: PaperMeta; markdown: string } | null>
+    /** 删除论文 */
+    deletePaper: (paperId: string) => Promise<boolean>
+    /** 获取知识库统计 */
+    getStats: () => Promise<KBStats>
+    /** 搜索 arXiv */
+    searchArxiv: (query: string, maxResults?: number) => Promise<ArxivPaper[]>
+  }
+
   /** 提取附件文档的文本内容 */
   extractAttachmentText: (localPath: string) => Promise<string>
 
@@ -341,6 +378,15 @@ export interface ElectronAPI {
 
   /** 获取开机自启动状态 */
   getAutoLaunch: () => Promise<boolean>
+
+  // ===== 自定义通知音效 =====
+
+  /** 添加自定义通知音效（sourcePath → 主进程复制 + 持久化） */
+  addCustomNotificationSound: (sourcePath: string, label: string) => Promise<CustomNotificationSound>
+  /** 删除自定义通知音效 */
+  removeCustomNotificationSound: (id: string) => Promise<CustomNotificationSound[]>
+  /** 获取自定义音效的文件 URL（用于 HTMLAudioElement 播放） */
+  getCustomSoundUrl: (fileName: string) => Promise<string>
 
   /** 设置开机自启动 */
   setAutoLaunch: (enabled: boolean) => Promise<void>
@@ -469,6 +515,9 @@ export interface ElectronAPI {
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
   rewindSession: (input: RewindSessionInput) => Promise<RewindSessionResult>
 
+  /** 扫描所有会话的孤儿记录和文件系统不一致 */
+  findOrphanSessions: () => Promise<SessionHealth[]>
+
   /** 生成 Agent 会话标题 */
   generateAgentTitle: (input: AgentGenerateTitleInput) => Promise<string | null>
 
@@ -588,16 +637,22 @@ export interface ElectronAPI {
   respondPermission: (response: PermissionResponse) => Promise<void>
 
   /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
-  updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => Promise<void>
+  updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => Promise<void>
 
-  /** 获取全局记忆配置 */
-  getMemoryConfig: () => Promise<MemoryConfig>
-
-  /** 保存全局记忆配置 */
-  setMemoryConfig: (config: MemoryConfig) => Promise<void>
-
-  /** 测试记忆连接 */
-  testMemoryConnection: () => Promise<{ success: boolean; message: string }>
+  /** 获取工作区记忆摘要 */
+  getWorkspaceMemorySummary: (workspaceSlug: string) => Promise<WorkspaceMemorySummary>
+  /** 获取工作区每日 Token 消耗，用于热力图展示。团队工作区返回空数组 */
+  getWorkspaceHeatmapDaily: (workspaceId: string) => Promise<Array<{ date: string; tokens: number }>>
+  /** 读取工作区 CLAUDE.md */
+  readWorkspaceClaudeMd: (workspaceSlug: string) => Promise<SkillFileContent>
+  /** 写入工作区 CLAUDE.md */
+  writeWorkspaceClaudeMd: (workspaceSlug: string, content: string) => Promise<void>
+  /** 列出工作区 auto memory 文件树 */
+  listWorkspaceAutoMemoryFiles: (workspaceSlug: string) => Promise<SkillFileNode[]>
+  /** 读取工作区 auto memory 文件 */
+  readWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string) => Promise<SkillFileContent>
+  /** 写入工作区 auto memory 文件 */
+  writeWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string, content: string) => Promise<void>
 
   // ===== Chat 工具管理 =====
 
@@ -646,17 +701,11 @@ export interface ElectronAPI {
   /** 获取当前会话的 Graph 摘要 */
   getGraphSummary: (sessionId: string) => Promise<import('@profer/project-core').GraphSummary>
 
-  /** 获取项目级聚合 Graph（跨会话合并） */
-  getProjectGraph: (sessionId: string) => Promise<import('@proma/project-core').TaskGraph>
-
-  /** 获取项目级 Graph 摘要（跨会话合并） */
-  getProjectGraphSummary: (sessionId: string) => Promise<import('@proma/project-core').GraphSummary>
-
-  /** 订阅 Graph 数据更新（主进程主动推送） */
-  onGraphUpdated: (callback: (sessionId: string) => void) => () => void
-
   /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => Promise<void>
+
+  /** 回溯放弃抽取：通读会话增量轮次抽取放弃方向写进图，返回刷新后的图 */
+  runRetrospective: (sessionId: string) => Promise<import('@profer/project-core').RetrospectiveResult>
 
   // ===== Agent 附件 =====
 
@@ -1085,7 +1134,7 @@ export interface ElectronAPI {
     revokeDevice: (slotId: string) => Promise<{ ok: boolean; error?: string }>
     getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string; teamEmail?: string }>
     getServerInfo: () => Promise<Array<{ baseUrl: string; email: string; isLoggedIn: boolean }>>
-    getTeamAuth: () => Promise<{ baseUrl: string; token: string } | null>
+    getTeamAuth: () => Promise<{ baseUrl: string; token: string; teamEmail?: string; teamAccountId?: string } | null>
   }
 
   // ===== 同步（Phase 1: 占位类型）=====
@@ -1116,6 +1165,21 @@ export interface ElectronAPI {
     leaveWorkspace: (workspaceId: string) => Promise<void>
     transferOwnership: (input: { workspaceId: string; targetUserId: string }) => Promise<void>
     restoreWorkspace: (workspaceId: string) => Promise<void>
+    getAuditLogs: (workspaceId: string, limit?: number, before?: number) => Promise<Array<{ action: string; user_email: string; entity_type: string; entity_id: string; detail: string; created_at: number }>>
+    getAnnouncements: (workspaceId: string) => Promise<Array<{ id: string; workspaceId: string; authorId: string; authorName: string; title: string; content: string; isPinned: boolean; createdAt: number; updatedAt: number }>>
+    createAnnouncement: (workspaceId: string, title: string, content: string, isPinned: boolean) => Promise<unknown>
+    deleteAnnouncement: (workspaceId: string, announcementId: string) => Promise<{ success: boolean }>
+    getNotificationSettings: () => Promise<{ enabled: boolean; fileUpload: boolean; fileDelete: boolean; memberJoin: boolean; memberLeave: boolean; invitation: boolean }>
+    updateNotificationSettings: (settings: { enabled?: boolean; fileUpload?: boolean; fileDelete?: boolean; memberJoin?: boolean; memberLeave?: boolean; invitation?: boolean }) => Promise<void>
+  }
+
+  // ===== SSE 实时事件 =====
+  sse: {
+    connect: (workspaceId: string) => Promise<void>
+    disconnect: (workspaceId: string) => Promise<void>
+    disconnectAll: () => Promise<void>
+    onEvent: (callback: (workspaceId: string, event: { type: string; data: unknown; workspaceId: string; timestamp: number }) => void) => () => void
+    onConnectionChanged: (callback: (status: { workspaceId: string; status: string }) => void) => () => void
   }
 
   // ===== 技能市场 =====
@@ -1389,6 +1453,43 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG)
   },
 
+  parsePaper: () => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.PARSE_PAPER)
+  },
+
+  parsePaperByPath: (filePath: string) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.PARSE_PAPER_BY_PATH, filePath)
+  },
+
+  estimatePaperPages: (filePath: string) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.ESTIMATE_PAPER_PAGES, filePath)
+  },
+
+  // 知识库
+  kb: {
+    import: (input: KBImportInput) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.IMPORT, input)
+    },
+    search: (query: string, topK?: number) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH, query, topK)
+    },
+    listPapers: (tag?: string) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.LIST_PAPERS, tag)
+    },
+    getPaper: (paperId: string) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_PAPER, paperId)
+    },
+    deletePaper: (paperId: string) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_PAPER, paperId)
+    },
+    getStats: () => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_STATS)
+    },
+    searchArxiv: (query: string, maxResults?: number) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH_ARXIV, query, maxResults)
+    },
+  },
+
   extractAttachmentText: (localPath: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.EXTRACT_ATTACHMENT_TEXT, localPath)
   },
@@ -1444,6 +1545,17 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }): void => callback(payload)
     ipcRenderer.on(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener) }
+  },
+
+  // 自定义通知音效
+  addCustomNotificationSound: (sourcePath: string, label: string) => {
+    return ipcRenderer.invoke(NOTIFICATION_SOUND_IPC_CHANNELS.ADD, sourcePath, label)
+  },
+  removeCustomNotificationSound: (id: string) => {
+    return ipcRenderer.invoke(NOTIFICATION_SOUND_IPC_CHANNELS.REMOVE, id)
+  },
+  getCustomSoundUrl: (fileName: string) => {
+    return ipcRenderer.invoke(NOTIFICATION_SOUND_IPC_CHANNELS.GET_URL, fileName)
   },
 
   // Scratch Pad 持久化
@@ -1600,6 +1712,10 @@ const electronAPI: ElectronAPI = {
 
   rewindSession: (input: RewindSessionInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_SESSION, input)
+  },
+
+  findOrphanSessions: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.FIND_ORPHAN_SESSIONS)
   },
 
   generateAgentTitle: (input: AgentGenerateTitleInput) => {
@@ -1778,20 +1894,37 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PERMISSION_RESPOND, response)
   },
 
-  updateSessionPermissionMode: (sessionId: string, mode: PromaPermissionMode) => {
+  updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode)
   },
 
-  getMemoryConfig: () => {
-    return ipcRenderer.invoke(MEMORY_IPC_CHANNELS.GET_CONFIG)
+  getWorkspaceMemorySummary: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_MEMORY_SUMMARY, workspaceSlug)
   },
 
-  setMemoryConfig: (config: MemoryConfig) => {
-    return ipcRenderer.invoke(MEMORY_IPC_CHANNELS.SET_CONFIG, config)
+  /** 获取工作区每日活跃会话数（用于热力图）。团队工作区返回空数组 */
+  getWorkspaceHeatmapDaily: (workspaceId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_HEATMAP_DAILY, workspaceId) as Promise<Array<{ date: string; tokens: number }>>
   },
 
-  testMemoryConnection: () => {
-    return ipcRenderer.invoke(MEMORY_IPC_CHANNELS.TEST_CONNECTION)
+  readWorkspaceClaudeMd: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_CLAUDE_MD, workspaceSlug)
+  },
+
+  writeWorkspaceClaudeMd: (workspaceSlug: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_CLAUDE_MD, workspaceSlug, content)
+  },
+
+  listWorkspaceAutoMemoryFiles: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_WORKSPACE_AUTO_MEMORY_FILES, workspaceSlug)
+  },
+
+  readWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_AUTO_MEMORY_FILE, workspaceSlug, relativePath)
+  },
+
+  writeWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_AUTO_MEMORY_FILE, workspaceSlug, relativePath, content)
   },
 
   // Chat 工具管理
@@ -1853,22 +1986,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId)
   },
 
-  getProjectGraph: (sessionId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH, sessionId)
-  },
-
-  getProjectGraphSummary: (sessionId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PROJECT_GRAPH_SUMMARY, sessionId)
-  },
-
-  onGraphUpdated: (callback: (sessionId: string) => void) => {
-    const listener = (_: unknown, sessionId: string): void => callback(sessionId)
-    ipcRenderer.on(AGENT_IPC_CHANNELS.GRAPH_UPDATED, listener)
-    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.GRAPH_UPDATED, listener) }
-  },
-
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.APPEND_GRAPH_EVENT, sessionId, event)
+  },
+
+  runRetrospective: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RUN_RETROSPECTIVE, sessionId)
   },
 
   // 工作区文件变化通知
@@ -2607,6 +2730,35 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(TEAM_IPC_CHANNELS.TRANSFER_OWNERSHIP, input),
     restoreWorkspace: (workspaceId: string) =>
       ipcRenderer.invoke(TEAM_IPC_CHANNELS.RESTORE_WORKSPACE, workspaceId),
+    getAuditLogs: (workspaceId: string, limit?: number, before?: number) =>
+      ipcRenderer.invoke('team:get-audit-logs', workspaceId, limit, before),
+    getAnnouncements: (workspaceId: string) =>
+      ipcRenderer.invoke('team:get-announcements', workspaceId),
+    createAnnouncement: (workspaceId: string, title: string, content: string, isPinned: boolean) =>
+      ipcRenderer.invoke('team:create-announcement', workspaceId, title, content, isPinned),
+    deleteAnnouncement: (workspaceId: string, announcementId: string) =>
+      ipcRenderer.invoke('team:delete-announcement', workspaceId, announcementId),
+    getNotificationSettings: () =>
+      ipcRenderer.invoke('team:get-notification-settings'),
+    updateNotificationSettings: (settings: Record<string, unknown>) =>
+      ipcRenderer.invoke('team:update-notification-settings', settings),
+  },
+
+  // ===== SSE 实时事件 =====
+  sse: {
+    connect: (workspaceId: string) => ipcRenderer.invoke('sse:connect', workspaceId),
+    disconnect: (workspaceId: string) => ipcRenderer.invoke('sse:disconnect', workspaceId),
+    disconnectAll: () => ipcRenderer.invoke('sse:disconnect-all'),
+    onEvent: (callback: (workspaceId: string, event: unknown) => void) => {
+      const listener = (_: unknown, event: unknown): void => callback((event as { workspaceId: string }).workspaceId, event)
+      ipcRenderer.on(SSE_IPC_CHANNELS.EVENT, listener)
+      return () => { ipcRenderer.removeListener(SSE_IPC_CHANNELS.EVENT, listener) }
+    },
+    onConnectionChanged: (callback: (status: unknown) => void) => {
+      const listener = (_: unknown, status: unknown): void => callback(status)
+      ipcRenderer.on(SSE_IPC_CHANNELS.CONNECTION_CHANGED, listener)
+      return () => { ipcRenderer.removeListener(SSE_IPC_CHANNELS.CONNECTION_CHANGED, listener) }
+    },
   },
 
   // ===== 技能市场 =====
