@@ -44,8 +44,16 @@ vendor
 
 # git worktrees (managed by proma-worktree skill)
 .worktrees
-# 发布产物(不入库)
+# server 临时/部署产物(不入库)
 server/server-rel.tar.gz
+server/predeploy-tmp/
+server/temp-data/
 
 # 打包内置二进制(体积大，构建产物，不入库)
 apps/electron/resources/bin/
+
+# SQLite 数据库文件（不入库）
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
