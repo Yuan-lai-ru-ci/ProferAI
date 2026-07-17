@@ -48,7 +48,7 @@ export function getConfigDirName(): string {
  * 从旧 Proma 目录迁移到新 Profer 目录（一次性）
  * 如果 ~/.profer/ 或 ~/.profer-dev/ 不存在但对应的旧目录存在，则重命名迁移
  */
-export function migrateFromPromaIfNeeded(): void {
+export function migrateFromProferIfNeeded(): void {
   try {
     const name = getConfigDirName()
     const newDir = join(homedir(), name)

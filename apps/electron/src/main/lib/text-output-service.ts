@@ -10,13 +10,13 @@ import type { VoiceDictationCommitResult, VoiceDictationSettings } from '../../t
 import { getMainWindow } from '../index'
 import { pasteTextAtCurrentCursor } from './text-insertion-service'
 
-let targetWasPromaInput = false
+let targetWasProferInput = false
 
-/** 在显示语音浮窗前记录目标是否为 Proma 主窗口。 */
-export function captureVoiceDictationTarget(forcePromaInput?: boolean): boolean {
+/** 在显示语音浮窗前记录目标是否为 Profer 主窗口。 */
+export function captureVoiceDictationTarget(forceProferInput?: boolean): boolean {
   const mainWindow = getMainWindow()
-  targetWasPromaInput = forcePromaInput ?? BrowserWindow.getFocusedWindow() === mainWindow
-  return targetWasPromaInput
+  targetWasProferInput = forceProferInput ?? BrowserWindow.getFocusedWindow() === mainWindow
+  return targetWasProferInput
 }
 
 export async function commitVoiceDictationText(
@@ -29,11 +29,11 @@ export async function commitVoiceDictationText(
   }
 
   const mainWindow = getMainWindow()
-  const shouldWriteProma =
+  const shouldWriteProfer =
     settings.outputMode === 'profer-input' ||
-    (settings.outputMode === 'auto' && targetWasPromaInput)
+    (settings.outputMode === 'auto' && targetWasProferInput)
 
-  if (shouldWriteProma && mainWindow && !mainWindow.isDestroyed()) {
+  if (shouldWriteProfer && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, { text: trimmed })
     return { mode: 'profer-input', success: true, message: '已写入 Profer 输入框' }
   }
