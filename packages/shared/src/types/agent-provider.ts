@@ -34,6 +34,16 @@ export interface SDKUserMessageInput {
   session_id: string
 }
 
+/** Queue delivery controls shared by Claude and Pi adapters. */
+export interface SendQueuedMessageOptions {
+  /** Cancel the current turn and deliver this input as the next turn. */
+  interrupt?: boolean
+  /** Explicitly mentioned workspace skills, resolved by the adapter before delivery. */
+  skillMentions?: string[]
+  /** Called only after the runtime accepts the message. */
+  onAccepted?: () => void
+}
+
 /**
  * Agent 查询输入（Provider 无关）
  *
@@ -95,7 +105,7 @@ export interface AgentProviderAdapter {
   /** 释放资源 */
   dispose(): void
   /** 向活跃查询注入队列消息（可选，仅支持队列的 Provider 实现） */
-  sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput): Promise<void>
+  sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput, options?: SendQueuedMessageOptions): Promise<void>
   /** 取消队列中的待发送消息（可选） */
   cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */

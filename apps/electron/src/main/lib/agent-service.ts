@@ -28,6 +28,7 @@ import type {
   AgentExternalRunSource,
 } from '@profer/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
+import { PiAgentAdapter } from './adapters/pi-agent-adapter'
 import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
@@ -38,8 +39,9 @@ import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-man
 
 const eventBus = new AgentEventBus()
 const claudeAdapter = new ClaudeAgentAdapter()
-// Pi adapter 仍未接入：router 会给 Pi 会话返回明确错误，绝不静默落到 Claude。
-const adapter = new RuntimeRoutingAgentAdapter({ claude: claudeAdapter })
+const piAdapter = new PiAgentAdapter()
+// Both runtimes remain behind the same orchestrator, credential gate, P0 lifecycle and Plan-mode boundary.
+const adapter = new RuntimeRoutingAgentAdapter({ claude: claudeAdapter, pi: piAdapter })
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
