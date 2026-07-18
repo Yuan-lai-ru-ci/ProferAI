@@ -23,6 +23,7 @@ import type {
   SDKUserMessageInput,
   TypedError,
 } from '@proma/shared'
+import { isCodexFastModeSupportedModel } from '@proma/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -48,6 +49,7 @@ import {
   type AgentRuntimeGuard,
 } from '../agent-runtime-guards'
 import { createPromaAgentsFilesOverride } from './pi-resource-loader-overrides'
+import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -106,6 +108,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   runtimeEnv?: AgentRuntimeEnv
   /** 手动压缩请求：走 pi 原生 session.compact()，而非把 /compact 当普通 prompt 发给模型 */
   compactRequest?: boolean
+  /** ChatGPT Codex Fast Mode；仅 openai-codex 的受支持模型实际注入 priority service tier。 */
+  codexFastMode?: boolean
 }
 
 interface ActivePiSession {
@@ -1284,6 +1288,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
     try {
       const sdk = await import('@earendil-works/pi-coding-agent')
+      const piAi = input.codexFastMode && input.provider === 'openai-codex'
+        ? await import('@earendil-works/pi-ai/compat')
+        : undefined
       restorePiProxyEnv = applyPiProxySettingsForQuery(sdk, input)
       if (active.abortRequested) throw createAbortError()
 
@@ -1324,6 +1331,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
         agentsFilesOverride: createPromaAgentsFilesOverride(),
+        ...(input.codexFastMode && input.provider === 'openai-codex' && {
+          extensionFactories: [createCodexFastModeExtension()],
+        }),
         systemPromptOverride: () => input.systemPrompt,
       })
       await resourceLoader.reload()
@@ -1349,6 +1359,31 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         customTools,
       })
       session.agent.toolExecution = 'sequential'
+      if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
+        // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
+        // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
+        session.agent.streamFn = async (requestModel, context, options) => {
+          const auth = await registry.getApiKeyAndHeaders(requestModel)
+          if (!auth.ok) throw new Error(auth.error)
+
+          const env = auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined
+          const retrySettings = settingsManager.getProviderRetrySettings()
+          const configuredTimeoutMs = settingsManager.getHttpIdleTimeoutMs()
+          const timeoutMs = options?.timeoutMs ?? retrySettings.timeoutMs ?? (configuredTimeoutMs === 0 ? 2_147_483_647 : configuredTimeoutMs)
+          const websocketConnectTimeoutMs = options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs()
+
+          return piAi.stream(requestModel, context, withCodexFastModeServiceTier({
+            ...options,
+            apiKey: auth.apiKey,
+            env,
+            timeoutMs,
+            websocketConnectTimeoutMs,
+            maxRetries: options?.maxRetries ?? retrySettings.maxRetries,
+            maxRetryDelayMs: options?.maxRetryDelayMs ?? retrySettings.maxRetryDelayMs,
+            headers: { ...auth.headers, ...options?.headers },
+          }))
+        }
+      }
       installRuntimeGuardHooks(session, runtimeGuard)
       active.session = session
       resolveActiveReady(active, session)
