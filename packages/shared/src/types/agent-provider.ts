@@ -47,6 +47,8 @@ export interface AgentQueryInput {
   prompt: string
   /** 模型 ID */
   model?: string
+  /** 要使用的 Agent runtime；持久化缺省值由调用方归一化为 Claude。 */
+  agentRuntime?: AgentRuntime
   /** Agent 工作目录 */
   cwd?: string
   /** 中止信号 */

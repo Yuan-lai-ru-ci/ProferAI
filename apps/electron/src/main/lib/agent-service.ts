@@ -14,7 +14,7 @@ import { join, dirname, basename, sep } from 'node:path'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
-import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE, normalizeAgentRuntime } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@profer/shared'
 import type {
   AgentSendInput,
   AgentGenerateTitleInput,
@@ -28,6 +28,7 @@ import type {
   AgentExternalRunSource,
 } from '@profer/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
+import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
@@ -36,7 +37,9 @@ import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-man
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-const adapter = new ClaudeAgentAdapter()
+const claudeAdapter = new ClaudeAgentAdapter()
+// Pi adapter 仍未接入：router 会给 Pi 会话返回明确错误，绝不静默落到 Claude。
+const adapter = new RuntimeRoutingAgentAdapter({ claude: claudeAdapter })
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
@@ -118,10 +121,6 @@ export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
-  const runtime = normalizeAgentRuntime(input.agentRuntime ?? getAgentSessionMeta(input.sessionId)?.agentRuntime)
-  if (runtime === 'pi') {
-    throw new Error('Pi Agent runtime 已完成配置迁移，但执行适配器尚未接入；请改用 Claude runtime。')
-  }
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
   // 开始新一轮执行时清除"完成未确认"标记
@@ -212,13 +211,6 @@ export async function runAgentHeadless(
   const wc = getMainRendererWebContents()
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const startedAt = runInput.startedAt!
-  const runtime = normalizeAgentRuntime(runInput.agentRuntime ?? getAgentSessionMeta(runInput.sessionId)?.agentRuntime)
-  if (runtime === 'pi') {
-    const error = 'Pi Agent runtime 已完成配置迁移，但执行适配器尚未接入；请改用 Claude runtime。'
-    callbacks.onError(error)
-    callbacks.onComplete()
-    return
-  }
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
   }

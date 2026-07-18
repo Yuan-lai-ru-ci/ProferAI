@@ -19,6 +19,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@profer/shared'
+import { normalizeAgentRuntime } from '@profer/shared'
 import {
   PROFER_DEFAULT_PERMISSION_MODE,
   SAFE_TOOLS,
@@ -32,6 +33,7 @@ import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanM
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
+import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectKbMcpServer } from './kb-agent-tools'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
@@ -185,11 +187,9 @@ export class AgentOrchestrator {
    * 对 Kimi Coding Plan / MiniMax Coding Plan：使用 Bearer 认证（ANTHROPIC_AUTH_TOKEN）。
    */
   private async buildSdkEnv(
-    apiKey: string,
-    baseUrl: string | undefined,
-    provider: ProviderType,
-    forceBearerAuth = false,
+    credentials: { apiKey: string; baseUrl: string | undefined; provider: ProviderType; forceBearerAuth: boolean },
   ): Promise<Record<string, string | undefined>> {
+    const { apiKey, baseUrl, provider, forceBearerAuth } = credentials
     // 从 process.env 继承系统变量，但清理所有 ANTHROPIC_ 前缀的变量，
     // 防止本地开发环境（如 ANTHROPIC_AUTH_TOKEN、ANTHROPIC_API_KEY、
     // ANTHROPIC_BASE_URL 等）干扰 SDK 的认证和请求目标。
@@ -514,6 +514,7 @@ export class AgentOrchestrator {
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
     const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, automationContext } = input
+    const agentRuntime = normalizeAgentRuntime(input.agentRuntime ?? getAgentSessionMeta(sessionId)?.agentRuntime)
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -610,13 +611,22 @@ export class AgentOrchestrator {
       return
     }
 
-    let apiKey: string
-    let agentUrl = (channel as any).agentBaseUrl || channel.baseUrl
-    const isOfficialChannel = channel.id?.startsWith('newapi-')
-    const forceBearerAuth = (isCommercialBuild() || isCommercialMode()) && isOfficialChannel
-    if (forceBearerAuth) {
-      const auth = await getTeamAuthWithRefresh()
-      if (!auth) {
+    // Pi adapter 尚未注册：在凭据/团队 refresh 前停止，避免错误 runtime 消耗商业代理或额度。
+    // Router 仍保留相同拒绝作为最终执行边界，防止未来新增调用方绕过此 preflight。
+    if (agentRuntime === 'pi') {
+      reportPreflightError({
+        code: 'runtime_unavailable',
+        title: 'Pi Agent runtime 当前不可用',
+        message: 'Pi 执行适配器尚未接入；请切换到 Claude runtime。',
+        canRetry: false,
+        actions: [],
+      })
+      return
+    }
+
+    const credentialResult = await resolveRuntimeCredentials(channel)
+    if (!credentialResult.ok) {
+      if (credentialResult.code === 'token_expired') {
         reportPreflightError({
           code: 'token_expired',
           title: '团队账号登录已过期',
@@ -624,27 +634,17 @@ export class AgentOrchestrator {
           actions: [{ key: 's', label: '打开设置', action: 'settings' }],
           canRetry: false,
         })
-        return
-      }
-      apiKey = auth.proxyToken || auth.token
-      agentUrl = `${auth.baseUrl}/v1/proxy`
-    } else {
-      try {
-        apiKey = decryptApiKey(channelId)
-      } catch {
+      } else {
         reportPreflightError({
           code: 'api_key_decrypt_failed',
           title: 'API Key 解密失败',
           message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
-          actions: [
-            { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
-          ],
+          actions: [{ key: 's', label: '打开渠道设置', action: 'open_channel_settings' }],
           canRetry: false,
         })
-        return
       }
+      return
     }
-
     // 5. 持久化用户消息（SDKMessage 格式）——在所有 preflight 检查之前写入，
     // 确保即使后续渠道/Key 检查失败，用户输入也不会丢失。
     const userSDKMsg: SDKMessage = {
@@ -686,7 +686,7 @@ export class AgentOrchestrator {
 
     // 3. 构建本轮专属 SDK 环境。绝不修改主进程 process.env，避免并发 session 串扰凭证。
     const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
-    const sdkEnv = await this.buildSdkEnv(apiKey, agentUrl, channel.provider, forceBearerAuth)
+    const sdkEnv = await this.buildSdkEnv(credentialResult.credentials)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
@@ -1121,6 +1121,7 @@ export class AgentOrchestrator {
         : undefined
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
+        agentRuntime,
         prompt: finalPrompt,
         model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID, channel.provider),
         cwd: agentCwd,
