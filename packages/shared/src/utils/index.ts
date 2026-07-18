@@ -26,3 +26,4 @@ export {
   normalizeThinkingSignatureError,
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
+export { supportsProviderPlanQuota } from './channel-plan-quota'

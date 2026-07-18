@@ -1,7 +1,7 @@
 /**
- * Agent 知识库工具
+ * Agent 论文知识库工具
  *
- * 通过 SDK MCP Server 暴露知识库的搜索、列表、读取和导入能力。
+ * 通过 SDK MCP Server 暴露论文知识库的搜索、列表、读取和导入能力。
  * 遵循 injectAutomationMcpServer 的 MCP 模式。
  */
 
@@ -55,15 +55,19 @@ export async function injectKbMcpServer(
   _ctx: KbAgentToolContext,
 ): Promise<void> {
   // 延迟导入，避免循环依赖
-  const { searchPapers, listPapers, getPaper } = await import('./kb-service')
-  const { importPaper } = await import('./kb-service')
+  const { searchPapers, listPapers, getPaper, importPaper } = await import('./kb-paperpipe')
   const { searchArxiv } = await import('./kb-arxiv')
 
   let z: ZodModule['z']
   try {
     ({ z } = await import('zod') as ZodModule)
   } catch {
-    z = require('zod').z
+    // 动态 import 失败时回退到 CJS require（Electron 主进程同时支持 ESM/CJS）
+    if (typeof require !== 'undefined') {
+      z = (require('zod') as ZodModule).z
+    } else {
+      throw new Error('无法加载 zod 模块：import() 和 require() 均不可用')
+    }
   }
   const schemas = buildKbSchemas(z)
 
@@ -73,12 +77,12 @@ export async function injectKbMcpServer(
     tools: [
       sdk.tool(
         'search_knowledge_base',
-        '在科研知识库中语义搜索论文。传入自然语言查询，返回最相关的论文段落及其来源信息（标题、作者、arXiv ID）。当用户问学术/研究问题时，应优先调用此工具检索相关论文，再基于检索结果回答。',
+        '在论文知识库中语义搜索论文。传入自然语言查询，返回最相关的论文段落及其来源信息（标题、作者、arXiv ID）。当用户问学术/研究问题时，应优先调用此工具检索相关论文，再基于检索结果回答。',
         schemas.search,
         async (args) => {
           const results: KBSearchResult[] = await searchPapers(args.query, args.topK ?? 5)
           if (results.length === 0) {
-            return jsonResult({ results: [], message: '知识库中未找到相关论文内容' })
+            return jsonResult({ results: [], message: '论文知识库中未找到相关论文内容' })
           }
           return jsonResult({
             results: results.map((r) => ({
@@ -97,12 +101,12 @@ export async function injectKbMcpServer(
       ),
       sdk.tool(
         'list_papers',
-        '列出知识库中的所有论文。返回论文ID、标题、作者、年份、arXiv ID、标签和摘要。',
+        '列出论文知识库中的所有论文。返回论文ID、标题、作者、年份、arXiv ID、标签和摘要。',
         {},
         async () => {
-          const papers: PaperMeta[] = listPapers()
+          const papers = await listPapers()
           if (papers.length === 0) {
-            return jsonResult({ papers: [], message: '知识库为空，还没有导入论文' })
+            return jsonResult({ papers: [], message: '论文知识库为空，还没有导入论文' })
           }
           return jsonResult({
             papers: papers.map((p) => ({
@@ -123,10 +127,10 @@ export async function injectKbMcpServer(
       ),
       sdk.tool(
         'get_paper',
-        '获取知识库中某篇论文的完整 Markdown 内容（含 LaTeX 公式和表格）。参数 paperId 来自 list_papers 返回的论文 ID。',
+        '获取论文知识库中某篇论文的完整 Markdown 内容（含 LaTeX 公式和表格）。参数 paperId 来自 list_papers 返回的论文 ID。',
         schemas.getPaper,
         async (args) => {
-          const paper = getPaper(args.paperId)
+          const paper = await getPaper(args.paperId)
           if (!paper) {
             throw new Error(`论文不存在: ${args.paperId}`)
           }
@@ -144,7 +148,7 @@ export async function injectKbMcpServer(
       ),
       sdk.tool(
         'import_paper_to_kb',
-        '导入一篇论文到知识库。可传入本地 PDF 的绝对路径（如 C:\\papers\\xxx.pdf），或 arXiv ID（如 "2401.12345"）。论文会通过 MinerU 解析为结构化 Markdown，自动分块并生成向量用于语义搜索。',
+        '导入一篇论文到论文知识库。可传入本地 PDF 的绝对路径（如 C:\\papers\\xxx.pdf），或 arXiv ID（如 "2401.12345"）。论文会通过 MinerU 解析为结构化 Markdown，自动分块并生成向量用于语义搜索。',
         schemas.import,
         async (args) => {
           const source = args.source.trim()
@@ -172,7 +176,7 @@ export async function injectKbMcpServer(
             pageCount: result.paper.pageCount,
             chunkCount: result.chunkCount,
             creditsUsed: result.creditsUsed,
-            message: `论文「${result.paper.title}」已导入知识库（${result.paper.pageCount} 页，${result.chunkCount} 个分块，消耗 ${result.creditsUsed} 积分）`,
+            message: `论文「${result.paper.title}」已导入论文知识库（${result.paper.pageCount} 页，${result.chunkCount} 个分块，消耗 ${result.creditsUsed} 积分）`,
           })
         },
       ),

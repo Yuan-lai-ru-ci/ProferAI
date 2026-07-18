@@ -21,6 +21,7 @@ function getDefaultSettings(): AppSettings {
     environmentCheckSkipped: false,
     notificationsEnabled: true,
     feishuSessionMirror: { mode: 'off' },
+    paperKnowledgeBaseEnabled: true,
   }
 }
 

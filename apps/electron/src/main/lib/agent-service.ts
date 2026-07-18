@@ -305,6 +305,20 @@ export function stopAgent(sessionId: string): void {
   orchestrator.stop(sessionId)
 }
 
+/** 删除运行中会话前停止并等待其真实运行生命周期结束。 */
+export async function stopAgentAndWait(sessionId: string): Promise<void> {
+  await orchestrator.stopAndWait(sessionId)
+}
+
+/** 标记/解除会话删除锁，覆盖 UI、队列和 headless 等所有编排入口。 */
+export function beginAgentSessionDeletion(sessionId: string): void {
+  orchestrator.beginDeletion(sessionId)
+}
+
+export function endAgentSessionDeletion(sessionId: string): void {
+  orchestrator.endDeletion(sessionId)
+}
+
 /**
  * 快照回退：回退到指定消息点，恢复文件 + 截断对话
  */

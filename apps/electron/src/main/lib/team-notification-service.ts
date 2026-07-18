@@ -10,7 +10,7 @@ import type { SSEEvent } from './sse-client'
 
 // ===== 通知设置 =====
 
-interface NotificationSettings {
+export interface NotificationSettings {
   enabled: boolean
   fileUpload: boolean
   fileDelete: boolean

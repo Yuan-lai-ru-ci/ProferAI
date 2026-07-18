@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.14.20",
+  "version": "0.14.24",
   "description": "Profer next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",
   "author": {

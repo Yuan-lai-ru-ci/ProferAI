@@ -30,6 +30,32 @@ interface AgentWorkspacesIndex {
 
 const INDEX_VERSION = 3
 
+/** Windows 保留设备名，用作 slug 时需要回避（否则 mkdir 失败） */
+const WINDOWS_RESERVED_SLUGS = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  'com1',
+  'com2',
+  'com3',
+  'com4',
+  'com5',
+  'com6',
+  'com7',
+  'com8',
+  'com9',
+  'lpt1',
+  'lpt2',
+  'lpt3',
+  'lpt4',
+  'lpt5',
+  'lpt6',
+  'lpt7',
+  'lpt8',
+  'lpt9',
+])
+
 /** 读取工作区索引文件，自动执行版本迁移 */
 /** @internal 供同步/团队管理器使用，普通调用方用 listAgentWorkspaces() */
 export function readIndex(): AgentWorkspacesIndex {
@@ -114,6 +140,10 @@ function slugify(name: string, existingSlugs: Set<string>): string {
     base = `workspace-${Date.now()}`
   }
 
+  if (WINDOWS_RESERVED_SLUGS.has(base)) {
+    base = `workspace-${base}`
+  }
+
   let slug = base
   let counter = 1
   while (existingSlugs.has(slug)) {
@@ -161,7 +191,7 @@ export function getAgentWorkspace(id: string): AgentWorkspace | undefined {
 }
 
 /** 将 ~/.proma/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
-function copyDefaultSkills(workspaceSlug: string): void {
+function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: boolean } = {}): void {
   const defaultDir = getDefaultSkillsDir()
   const targetDir = getWorkspaceSkillsDir(workspaceSlug)
 
@@ -176,11 +206,17 @@ function copyDefaultSkills(workspaceSlug: string): void {
       if (!entry.isDirectory()) continue
       const source = join(defaultDir, entry.name)
       const target = join(targetDir, entry.name)
-      cpSync(source, target, { recursive: true })
+      try {
+        cpSync(source, target, { recursive: true, filter: skillCopyFilter })
+      } catch (err) {
+        console.warn(`[Agent 工作区] 复制默认 Skill 失败 (${workspaceSlug}/${entry.name}):`, err)
+        if (options.throwOnError) throw err
+      }
     }
     console.log(`[Agent 工作区] 已复制默认 Skills 到: ${workspaceSlug}`)
   } catch (err) {
     console.error(`[Agent 工作区] 复制默认 Skills 失败 (${workspaceSlug}):`, err)
+    if (options.throwOnError) throw err
   }
 }
 
@@ -208,9 +244,24 @@ export function createAgentWorkspace(
     type: opts?.type ?? 'personal',
   }
 
-  getAgentWorkspacePath(slug)
-  ensurePluginManifest(slug, name)
-  copyDefaultSkills(slug)
+  try {
+    getAgentWorkspacePath(slug)
+    ensurePluginManifest(slug, name)
+    copyDefaultSkills(slug, { throwOnError: true })
+  } catch (error) {
+    const workspacesRoot = resolve(getAgentWorkspacesDir())
+    const workspaceDir = resolve(join(workspacesRoot, slug))
+    const relativePath = relative(workspacesRoot, workspaceDir)
+    if (relativePath && !relativePath.startsWith('..') && !isAbsolute(relativePath) && existsSync(workspaceDir)) {
+      try {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      } catch (cleanupError) {
+        console.warn(`[Agent 工作区] 创建失败后清理目录失败 (${slug}):`, cleanupError)
+      }
+    }
+    console.error(`[Agent 工作区] 创建工作区失败 (${name}, slug: ${slug}):`, error)
+    throw new Error(`创建项目失败: ${(error as Error)?.message ?? '初始化项目目录失败'}`)
+  }
 
   index.workspaces.unshift(workspace)
   writeIndex(index)
