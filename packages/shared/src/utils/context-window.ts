@@ -41,6 +41,8 @@ export function supports1MContext(modelId: string): boolean {
   if (m.includes('glm-5.2')) return true
   if (m.includes('glm-x-preview[1m]')) return true
   if (m.includes('minimax-m3')) return true
+  // Kimi K3（短 ID 需精确匹配，避免误匹配其他含 "k3" 子串的模型名）
+  if (m === 'k3' || m.startsWith('k3[')) return true
   return false
 }
 

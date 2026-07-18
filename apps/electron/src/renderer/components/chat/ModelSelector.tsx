@@ -27,6 +27,7 @@ import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
+import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import type { Channel, ModelOption } from '@profer/shared'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
@@ -318,6 +319,10 @@ export function ModelSelector({
                       <span className="text-sm font-medium text-muted-foreground">
                         {first.channelName}
                       </span>
+                      {(() => {
+                        const ch = channels.find((c) => c.id === channelId)
+                        return ch ? <ChannelPlanQuotaBadge channel={ch} /> : null
+                      })()}
                     </div>
 
                     {/* 该渠道下的模型列表 */}

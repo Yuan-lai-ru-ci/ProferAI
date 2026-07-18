@@ -3,10 +3,18 @@
  */
 import { Hono } from 'hono'
 import { v4 as uuidv4 } from 'uuid'
-import { getCredits, grantCredits, getCreditTransactions, getCreditSummary, getRequestLogs, getUsageByModel, listAllUsers, ensureCreditRow, db } from '../../db.js'
+import { getCredits, grantCredits, getCreditTransactions, getCreditSummary, getRequestLogs, getUsageByModel, listAllUsers, resetCreditBalance, db, getConfig } from '../../db.js'
 import { logAudit } from '../../audit.js'
-import { MAX_GRANT_AMOUNT, NEWAPI_QUOTA_PER_UNIT, MAX_BATCH_RESET_SIZE, MAX_BATCH_RESET_PER_DAY, DAILY_GRANT_CAP } from '../../config.js'
+import { NEWAPI_QUOTA_PER_UNIT, MAX_BATCH_RESET_SIZE, MAX_BATCH_RESET_PER_DAY } from '../../config.js'
 import { adminOpLimit, ADMIN_OP_LIMITS } from '../../admin-rate-limiter.js'
+
+function dailyGrantCap() { return getConfig('admin.dailyGrantCap') }
+function maxGrantAmount() { return getConfig('admin.maxGrantAmount') }
+
+function parsePositiveQuota(value) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) return null
+  return value
+}
 
 export const adminCredits = new Hono()
 
@@ -19,9 +27,10 @@ adminCredits.get('/summary', (c) => {
 // POST /v1/admin/credits/grant — 手动充值（带日额度上限）
 adminCredits.post('/grant', async (c) => {
   const body = await c.req.json()
-  const { userId, amount, description } = body || {}
-  if (!userId || !amount || amount <= 0) return c.json({ error: 'userId 和 amount(>0) 必填' }, 400)
-  if (amount > MAX_GRANT_AMOUNT) return c.json({ error: `单次充值不能超过 ${MAX_GRANT_AMOUNT} credits，当前输入 ${amount}` }, 400)
+  const { userId, amount: rawAmount, description } = body || {}
+  const amount = parsePositiveQuota(rawAmount)
+  if (!userId || amount === null) return c.json({ error: 'userId 和 amount(正安全整数) 必填', code: 'INVALID_GRANT_AMOUNT' }, 400)
+  if (amount > maxGrantAmount()) return c.json({ error: `单次充值不能超过 ${maxGrantAmount()} credits，当前输入 ${amount}` }, 400)
 
   const adminId = c.get('userId')
 
@@ -36,8 +45,8 @@ adminCredits.post('/grant', async (c) => {
   const dailyTotal = db.prepare(
     'SELECT COALESCE(SUM(amount), 0) as total FROM credit_transactions WHERE reference_id = ? AND type = ? AND reference_type = ? AND created_at > ?'
   ).get(adminId, 'grant', 'admin_grant', todayStart).total
-  if (dailyTotal + amount > DAILY_GRANT_CAP) {
-    return c.json({ error: `今日充值总额已达上限 (${DAILY_GRANT_CAP} quota)` }, 403)
+  if (dailyTotal + amount > dailyGrantCap()) {
+    return c.json({ error: `今日充值总额已达上限 (${dailyGrantCap()} quota)` }, 403)
   }
 
   grantCredits(adminId, userId, amount, description || '管理员手动充值')
@@ -137,11 +146,9 @@ adminCredits.post('/batch-reset', async (c) => {
       const resetQuota = resetUsd * qpu
       const oldBalance = u.credit_balance || 0
 
-      ensureCreditRow(u.id)
       // 保留 lifetime_consumed（不归零），只设新余额。
-      // 前端"总额度 = balance + lifetimeConsumed"用于展示历史累积，归零会导致数据丢失。
-      db.prepare('UPDATE credits SET balance = ?, updated_at = ? WHERE user_id = ?')
-        .run(resetQuota, now, u.id)
+      // 三桶才是真账本；resetCreditBalance 会同步镜像，避免下一次扣款覆盖重置结果。
+      resetCreditBalance(u.id, resetQuota, now)
       db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, reference_type, reference_id, created_at)
         VALUES (?, ?, ?, 'admin_grant', ?, 'admin_reset', ?, ?)`)
         .run(uuidv4(), u.id, resetQuota,

@@ -20,6 +20,8 @@ export const REQUEST_LOG_COLUMNS = Object.freeze([
   'error_message',
   'created_at',
   'new_api_request_id',
+  'actual_quota',
+  'billing_markup',
 ])
 
 export function buildRequestLogInsertSql() {
@@ -49,6 +51,8 @@ export function buildRequestLogValues(params, createdAt = Date.now()) {
     stream,
     errorMessage,
     newApiRequestId,
+    actualQuota,
+    billingMarkup,
   } = params
 
   return [
@@ -68,5 +72,7 @@ export function buildRequestLogValues(params, createdAt = Date.now()) {
     errorMessage || '',
     createdAt,
     newApiRequestId || '',
+    Number.isFinite(Number(actualQuota)) ? Number(actualQuota) : null,
+    Number.isFinite(Number(billingMarkup)) ? Number(billingMarkup) : null,
   ]
 }

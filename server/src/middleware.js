@@ -1,23 +1,25 @@
 import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
-import { JWT_SECRET } from './config.js'
-import { db, getUserByRelayToken, getApiKeyByHash } from './db.js'
+import { JWT_SECRET, ALLOWED_ORIGIN } from './config.js'
+import { db, getCurrentUserAuthorization, getUserByRelayToken, getApiKeyByHash } from './db.js'
+import { applyCurrentAuthorization } from './middleware/auth-context.js'
+import { applyCorsHeaders as applyConfiguredCorsHeaders, applySecurityHeaders } from './middleware/cors.js'
 
 // ===== CORS 中间件 =====
-// 注：生产环境应通过 nginx 或反向代理限制 Origin，当前 * 通配符用于内网/开发环境。
+// 通过 ALLOWED_ORIGIN 环境变量控制，生产环境应设为具体域名。
+// 若未设置且非开发环境，默认收紧为不设置该头（拒绝跨域）。
+export function applyCorsHeaders(c, allowedOrigin = ALLOWED_ORIGIN) {
+  applyConfiguredCorsHeaders(c, allowedOrigin)
+}
+
 export function corsMiddleware(c) {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
-  }
-  for (const [k, v] of Object.entries(headers)) {
-    c.res.headers.set(k, v)
-  }
+  applyConfiguredCorsHeaders(c, ALLOWED_ORIGIN)
+  // 安全响应头（始终设置，无论是否跨域）
+  applySecurityHeaders(c)
+
   if (c.req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers })
+    // 直接返回 Response 时显式带上前面写入的 CORS/安全头。
+    return new Response(null, { status: 204, headers: c.res.headers })
   }
 }
 
@@ -40,10 +42,10 @@ export function authMiddleware(c) {
     if (blacklisted) {
       return c.json({ error: '令牌已注销' }, 401)
     }
-    c.set('userId', payload.sub)
-    c.set('userEmail', payload.email)
+    const authorization = getCurrentUserAuthorization(payload.sub)
+    const authorizationResult = applyCurrentAuthorization(c, authorization)
+    if (authorizationResult) return authorizationResult
     c.set('accessToken', token)
-    c.set('jwtPayload', payload)
   } catch {
     return c.json({ error: '令牌无效或已过期' }, 401)
   }
@@ -84,16 +86,19 @@ export async function proxyAuthMiddleware(c, next) {
     if (rec.status !== 'active') {
       return c.json({ error: 'API Key 已停用' }, 403)
     }
-    if (rec.is_suspended) {
-      return c.json({ error: '账号已被停用' }, 403)
-    }
+    const authorizationResult = applyCurrentAuthorization(c, {
+      id: rec.authorization_user_id,
+      email: rec.email,
+      is_admin: rec.is_admin,
+      is_suspended: rec.is_suspended,
+      membership_tier: rec.membership_tier,
+    })
+    if (authorizationResult) return authorizationResult
     // key 级限额：设了上限且已超，直接拒（quota 单位）
     if (rec.quota_limit != null && rec.quota_used >= rec.quota_limit) {
       return c.json({ error: 'API Key 额度已用尽', code: 'apikey_quota_exceeded' }, 402)
     }
-    // 与 JWT 路径保持同样的 context 形状；额外挂 apiKeyId 供 handler 计费后累加用量
-    c.set('userId', rec.user_id)
-    c.set('jwtPayload', { sub: rec.user_id, membership_tier: rec.membership_tier || 'free' })
+    // 与 JWT 路径保持同样的实时授权 context；额外挂 apiKeyId 供 handler 计费后累加用量。
     c.set('apiKeyId', rec.id)
     await next()
     return
@@ -105,13 +110,8 @@ export async function proxyAuthMiddleware(c, next) {
     if (!user) {
       return c.json({ error: 'relay 令牌无效' }, 401)
     }
-    if (user.is_suspended) {
-      return c.json({ error: '账号已被停用' }, 403)
-    }
-    // 与 JWT 路径保持同样的 context 形状，下游无需区分凭证来源
-    c.set('userId', user.id)
-    c.set('userEmail', user.email)
-    c.set('jwtPayload', { sub: user.id, email: user.email, is_admin: !!user.is_admin, membership_tier: user.membership_tier || 'free' })
+    const authorizationResult = applyCurrentAuthorization(c, user)
+    if (authorizationResult) return authorizationResult
     await next()
     return
   }

@@ -6,7 +6,7 @@
  * 未来可扩展：PiAgentAdapter 等。
  */
 
-import type { SDKMessage } from './agent'
+import type { SDKMessage, TypedError } from './agent'
 
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {
@@ -38,6 +38,27 @@ export interface AgentQueryInput {
 }
 
 /**
+ * Agent 错误处理辅助函数集合
+ *
+ * 这些函数包含 Provider 特化的错误判断逻辑。
+ * 每个 Adapter 实现负责提供自己的错误辅助。
+ */
+export interface AgentErrorHelpers {
+  /** 将原始错误信息转换为用户友好的错误消息 */
+  friendlyErrorMessage(raw: string): string
+  /** 判断是否是 prompt 过长错误 */
+  isPromptTooLongError(...messages: string[]): boolean
+  /** 判断是否是 thinking signature 不兼容错误 */
+  isThinkingSignatureError(...messages: string[]): boolean
+  /** 将 SDK 错误码映射为结构化 TypedError */
+  mapSDKErrorToTypedError(errorCode: string, userMessage: string, originalError?: string): TypedError
+  /** 从 SDK 错误对象中提取详细错误信息 */
+  extractErrorDetails(msg: { error?: string | { message?: string; errorType?: string }; message?: { content?: Array<Record<string, unknown>> } }): { detailedMessage: string; originalError: string }
+  /** 判断 terminal reason 是否应保持 channel 打开 */
+  shouldKeepChannelOpen(terminalReason: string | undefined): boolean
+}
+
+/**
  * Agent Provider 适配器接口
  *
  * 职责：接收查询输入，返回 SDKMessage 异步迭代流。
@@ -61,4 +82,8 @@ export interface AgentProviderAdapter {
   cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
+  /** 错误处理辅助函数（Provider 特化逻辑由 Adapter 提供） */
+  errorHelpers: AgentErrorHelpers
+  /** 判断 provider 是否通过 Anthropic 兼容代理路由（用于团队版代理路径选择） */
+  isAnthropicProxyProvider?(provider: string): boolean
 }

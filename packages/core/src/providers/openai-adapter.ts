@@ -283,7 +283,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       body: JSON.stringify({
         model: input.modelId,
         messages: [{ role: 'user', content: input.prompt }],
-        max_tokens: 50,
+        max_tokens: 300,
       }),
     }
   }

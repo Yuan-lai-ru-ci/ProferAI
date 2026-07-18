@@ -63,7 +63,10 @@ import {
   updateLongTextPasteAsAttachmentEnabled,
   richTextRenderingEnabledAtom,
   updateRichTextRenderingEnabled,
+  paperKnowledgeBaseEnabledAtom,
+  updatePaperKnowledgeBaseEnabled,
 } from '@/atoms/ui-preferences'
+import { activeViewAtom } from '@/atoms/active-view'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Alert, AlertDescription } from '../ui/alert'
@@ -93,6 +96,8 @@ export function GeneralSettings(): React.ReactElement {
   const [stickyUserMessageEnabled, setStickyUserMessageEnabled] = useAtom(stickyUserMessageEnabledAtom)
   const [longTextPasteAsAttachmentEnabled, setLongTextPasteAsAttachmentEnabled] = useAtom(longTextPasteAsAttachmentEnabledAtom)
   const [richTextRenderingEnabled, setRichTextRenderingEnabled] = useAtom(richTextRenderingEnabledAtom)
+  const [paperKnowledgeBaseEnabled, setPaperKnowledgeBaseEnabled] = useAtom(paperKnowledgeBaseEnabledAtom)
+  const setActiveView = useSetAtom(activeViewAtom)
   const [isEditingName, setIsEditingName] = React.useState(false)
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
@@ -675,6 +680,21 @@ export function GeneralSettings(): React.ReactElement {
             checked={autoLaunch}
             onCheckedChange={handleAutoLaunchChange}
           />
+          {/* 论文知识库设置已暂时关闭 */}
+          {false && (
+          <SettingsToggle
+            label="论文知识库"
+            description="在侧边栏显示论文知识库入口，支持 arXiv 和本地论文 PDF 导入与语义搜索"
+            checked={paperKnowledgeBaseEnabled}
+            onCheckedChange={(checked) => {
+              setPaperKnowledgeBaseEnabled(checked)
+              updatePaperKnowledgeBaseEnabled(checked)
+              if (!checked) {
+                setActiveView('conversations')
+              }
+            }}
+          />
+          )}
         </SettingsCard>
       </SettingsSection>
 

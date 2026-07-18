@@ -1,10 +1,8 @@
 /**
  * SubscriptionSettings — 套餐订阅页
  *
- * 新定价方案（2026-07-15 定稿）：
- *   Free → Standard(¥29) → Plus(¥49) → Pro(¥99) + VIP 叠加(¥698 终身)
- *   年付 = 月费×12×0.85，红包×12 一次性到账
- *   Drip 领取制：每日累加到可领池，周日清零
+ * 定价从服务端 /v1/account/config/plans 动态获取，Admin 操控面板可实时调整。
+ * 加载失败时回退到硬编码默认值。
  *
  * 手动收款期：订阅按钮 = 复制微信号联系管理员开通。在线支付后续接入。
  */
@@ -18,8 +16,8 @@ import {
 } from '@/atoms/credits-atoms'
 import { useCreditsLoader } from '@/hooks/useCreditsLoader'
 
-/** 联系管理员微信号 */
-const ADMIN_WECHAT = 'CYBER_YLRC'
+/** 联系管理员微信号（默认值，从 API 动态获取） */
+const ADMIN_WECHAT_DEFAULT = 'CYBER_YLRC'
 
 /** 套餐定义 */
 interface PlanDef {
@@ -33,7 +31,8 @@ interface PlanDef {
   featured?: boolean
 }
 
-const PLANS: PlanDef[] = [
+/** 硬编码兜底套餐（API 加载失败时使用） */
+const PLANS_FALLBACK: PlanDef[] = [
   {
     id: 'free', name: 'Free', monthlyRmb: 0, yearlyRmb: 0,
     welcomeBonus: 0, dailyDrip: 0,
@@ -57,15 +56,76 @@ const PLANS: PlanDef[] = [
   },
 ]
 
-/** VIP 详情 */
-const VIP_PRICE = 698
-const VIP_FEATURES = [
-  '终身买断，一次付费永久有效',
-  '模型消耗 0.8x 倍率（八折）',
-  '套餐购买 9 折',
-  '每日额外 +20 drip',
-  '需另购套餐（VIP 不替代套餐）',
-]
+/** VIP 兜底值 */
+const VIP_PRICE_DEFAULT = 698
+const VIP_DISCOUNT_DEFAULT = 0.9
+const VIP_EXTRA_DRIP_DEFAULT = 20
+
+interface PricingData {
+  plans: Record<'standard' | 'plus' | 'pro', { id: string; name: string; monthlyRmb: number; yearlyRmb: number; welcomeBonus: number; dailyDrip: number }>
+  vip: { price: number; discount: number; extraDrip: number }
+  adminWechat: string
+}
+
+/** 从 API 获取定价数据，失败时返回 null（由调用方回退默认值） */
+async function fetchPricing(): Promise<PricingData | null> {
+  try {
+    const auth = await window.electronAPI.auth.getTeamAuth()
+    if (!auth) return null
+    const resp = await fetch(`${auth.baseUrl}/v1/account/config/plans`, {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    })
+    if (!resp.ok) return null
+    return await resp.json()
+  } catch {
+    return null
+  }
+}
+
+/** 将 API 返回的分值价格转换为元（API 返回人民币分） */
+function rmbToYuan(fen: number): number {
+  return Math.round(fen / 100)
+}
+
+/** 从 API 数据构建 PLAN_DEF 数组，features 从兜底值合并 */
+function buildPlans(data: PricingData): PlanDef[] {
+  const apiPlans = data.plans
+  const standard = apiPlans.standard
+  const plus = apiPlans.plus
+  const pro = apiPlans.pro
+  return [
+    {
+      id: 'free', name: 'Free', monthlyRmb: 0, yearlyRmb: 0,
+      welcomeBonus: 0, dailyDrip: 0,
+      features: PLANS_FALLBACK[0]!.features,
+    },
+    {
+      id: 'standard', name: 'Standard',
+      monthlyRmb: rmbToYuan(standard.monthlyRmb),
+      yearlyRmb: rmbToYuan(standard.yearlyRmb),
+      welcomeBonus: standard.welcomeBonus,
+      dailyDrip: standard.dailyDrip,
+      features: PLANS_FALLBACK[1]!.features,
+    },
+    {
+      id: 'plus', name: 'Plus',
+      monthlyRmb: rmbToYuan(plus.monthlyRmb),
+      yearlyRmb: rmbToYuan(plus.yearlyRmb),
+      welcomeBonus: plus.welcomeBonus,
+      dailyDrip: plus.dailyDrip,
+      features: PLANS_FALLBACK[2]!.features,
+      featured: true,
+    },
+    {
+      id: 'pro', name: 'Pro',
+      monthlyRmb: rmbToYuan(pro.monthlyRmb),
+      yearlyRmb: rmbToYuan(pro.yearlyRmb),
+      welcomeBonus: pro.welcomeBonus,
+      dailyDrip: pro.dailyDrip,
+      features: PLANS_FALLBACK[3]!.features,
+    },
+  ]
+}
 
 /** 兑换码输入组件 */
 function RedeemInput(): React.ReactElement {
@@ -133,14 +193,46 @@ export function SubscriptionSettings(): React.ReactElement {
   useCreditsLoader(60_000)
   const inviteCode = useAtomValue(inviteCodeAtom)
 
+  const [plans, setPlans] = React.useState<PlanDef[]>(PLANS_FALLBACK)
+  const [vipPrice, setVipPrice] = React.useState(VIP_PRICE_DEFAULT)
+  const [vipDiscount, setVipDiscount] = React.useState(VIP_DISCOUNT_DEFAULT)
+  const [vipExtraDrip, setVipExtraDrip] = React.useState(VIP_EXTRA_DRIP_DEFAULT)
+  const [adminWechat, setAdminWechat] = React.useState(ADMIN_WECHAT_DEFAULT)
+  const [pricingLoaded, setPricingLoaded] = React.useState(false)
+
+  // 加载服务端定价
+  React.useEffect(() => {
+    let cancelled = false
+    fetchPricing().then((data) => {
+      if (cancelled || !data) return
+      setPlans(buildPlans(data))
+      setVipPrice(rmbToYuan(data.vip.price))
+      setVipDiscount(data.vip.discount)
+      setVipExtraDrip(data.vip.extraDrip)
+      if (data.adminWechat) setAdminWechat(data.adminWechat)
+      setPricingLoaded(true)
+    }).catch(() => {
+      if (!cancelled) setPricingLoaded(true) // 用兜底值
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const vipFeatures = React.useMemo(() => [
+    '终身买断，一次付费永久有效',
+    `模型消耗 ${(1 / 0.8).toFixed(1)}x 倍率（八折）`,
+    `套餐购买 ${Math.round(vipDiscount * 100)} 折`,
+    `每日额外 +${vipExtraDrip} drip`,
+    '需另购套餐（VIP 不替代套餐）',
+  ], [vipDiscount, vipExtraDrip])
+
   const copyWechat = React.useCallback(async (note?: string) => {
     try {
-      await navigator.clipboard.writeText(ADMIN_WECHAT)
-      toast.success(`已复制微信号 ${ADMIN_WECHAT}${note ? `，备注「${note}」` : ''}`)
+      await navigator.clipboard.writeText(adminWechat)
+      toast.success(`已复制微信号 ${adminWechat}${note ? `，备注「${note}」` : ''}`)
     } catch {
-      toast.error('复制失败，请手动复制微信号 ' + ADMIN_WECHAT)
+      toast.error('复制失败，请手动复制微信号 ' + adminWechat)
     }
-  }, [])
+  }, [adminWechat])
 
   const handleSubscribe = React.useCallback((plan: PlanDef, cycle: 'monthly' | 'yearly') => {
     const price = cycle === 'yearly' ? plan.yearlyRmb : plan.monthlyRmb
@@ -148,8 +240,8 @@ export function SubscriptionSettings(): React.ReactElement {
   }, [copyWechat])
 
   const handleBuyVip = React.useCallback(() => {
-    void copyWechat(`VIP 终身 ¥${VIP_PRICE}`)
-  }, [copyWechat])
+    void copyWechat(`VIP 终身 ¥${vipPrice}`)
+  }, [copyWechat, vipPrice])
 
   return (
     <div className="space-y-5">
@@ -160,7 +252,7 @@ export function SubscriptionSettings(): React.ReactElement {
           <h3 className="text-sm font-semibold">选择套餐</h3>
         </div>
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-          {PLANS.map((plan) => (
+          {plans.map((plan) => (
             <div
               key={plan.id}
               className={cn(
@@ -242,10 +334,10 @@ export function SubscriptionSettings(): React.ReactElement {
             <div className="flex items-center gap-2 mb-2">
               <Crown size={18} className="text-yellow-600" />
               <span className="text-base font-bold">VIP 终身会员</span>
-              <span className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">¥{VIP_PRICE}</span>
+              <span className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">¥{vipPrice}</span>
             </div>
             <ul className="space-y-1">
-              {VIP_FEATURES.map((f) => (
+              {vipFeatures.map((f) => (
                 <li key={f} className="flex items-start gap-1.5 text-xs text-foreground/70">
                   <Check size={12} className="mt-0.5 shrink-0 text-yellow-600" />
                   {f}
@@ -281,7 +373,7 @@ export function SubscriptionSettings(): React.ReactElement {
           <div>
             <div className="text-sm font-semibold text-foreground">Profer 团队版</div>
             <div className="text-xs text-muted-foreground mt-0.5">
-              团队额度共享，联系微信号 {ADMIN_WECHAT} 开通
+              团队额度共享，联系微信号 {adminWechat} 开通
             </div>
           </div>
         </div>

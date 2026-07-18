@@ -6,27 +6,59 @@
  */
 import { db } from './schema.js'
 import { ensureCreditRow, syncCreditBalance, pointsToQuota } from './credits.js'
+import { getPlanDefs, getPlanDefsRedeem, getVipConfig } from './config-store.js'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 
-// ===== 套餐定价常量 =====
+// ===== 时区工具 =====
+
+/** 返回 Asia/Shanghai 时区的当天日期（YYYY-MM-DD），用于 drip 日切。 */
+export function getChinaDate(input = new Date()) {
+  const date = input instanceof Date ? input : new Date(input)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date)
+  const value = (type) => parts.find(part => part.type === type)?.value
+  return `${value('year')}-${value('month')}-${value('day')}`
+}
+
+/** 返回 Asia/Shanghai 自然周的周一日期（YYYY-MM-DD）。 */
+export function getChinaWeekStart(input = new Date()) {
+  const chinaDate = getChinaDate(input)
+  const [year, month, day] = chinaDate.split('-').map(Number)
+  // 以 UTC 承载已换算出的中国日历日期，避免服务器本地时区影响星期计算。
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  const mondayOffset = (utc.getUTCDay() + 6) % 7
+  utc.setUTCDate(utc.getUTCDate() - mondayOffset)
+  return utc.toISOString().slice(0, 10)
+}
+
+function inferDripWeekStart(sub) {
+  return sub.drip_week_start || (sub.drip_last_accrual_date ? getChinaWeekStart(`${sub.drip_last_accrual_date}T12:00:00+08:00`) : null)
+}
+
+/** 在调用方事务内执行；仅清除不属于 currentWeek 的未领 drip。 */
+function expireStaleDrip(sub, currentWeek, now) {
+  const available = sub.drip_available_this_week || 0
+  if (available <= 0) return 0
+  const ownedWeek = inferDripWeekStart(sub)
+  if (ownedWeek === currentWeek) return 0
+
+  db.prepare('UPDATE subscriptions SET drip_available_this_week = 0, drip_week_start = ? WHERE id = ?')
+    .run(currentWeek, sub.id)
+  db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
+    VALUES (?, ?, ?, 'drip_expiry', ?, 'package', 'drip_weekly_clear', ?, ?)`)
+    .run(uuidv4(), sub.user_id, 0,
+      ownedWeek ? `周清零：${ownedWeek} 未领 drip ${Math.round(available / 50000)} 积分` : `周清零：历史未归属 drip ${Math.round(available / 50000)} 积分`,
+      sub.id, now)
+  return available
+}
+
+// ===== 套餐定价（从 config-store 动态获取，Admin 操控面板可实时调整） =====
+// 不再硬编码 PLAN_DEFS / VIP_DISCOUNT / VIP_EXTRA_DRIP；
+// 改为在业务函数内调用 getPlanDefs() / getVipConfig() 获取最新值。
+
 const NEWAPI_QPU = 500000 // quota per $1 unit
-
-const PLAN_DEFS = {
-  standard: { monthlyRmb: 2900, yearlyRmb: 29600, welcomeBonus: 60, dailyDrip: 8 },
-  plus:     { monthlyRmb: 4900, yearlyRmb: 50000, welcomeBonus: 200, dailyDrip: 20 },
-  pro:      { monthlyRmb: 9900, yearlyRmb: 101000, welcomeBonus: 450, dailyDrip: 40 },
-}
-const VIP_DISCOUNT = 0.9   // VIP 套餐 9 折
-const VIP_EXTRA_DRIP = 20  // VIP 额外每日 drip（积分单位）
-
-// 兑换码用套餐定义（独立常量，避免与购买价格耦合）
-const PLAN_DEFS_REDEEM = {
-  standard: { monthlyRmb: 2900, yearlyRmb: 29600, welcomeBonus: 60, dailyDrip: 8 },
-  plus:     { monthlyRmb: 4900, yearlyRmb: 50000, welcomeBonus: 200, dailyDrip: 20 },
-  pro:      { monthlyRmb: 9900, yearlyRmb: 101000, welcomeBonus: 450, dailyDrip: 40 },
-}
-const VIP_EXTRA_DRIP_REDEEM = 20
 
 // ===== 邀请码 =====
 
@@ -92,6 +124,15 @@ export function recordInviteEvent({ inviterId, inviteeId, event, creditsEarned =
 }
 
 // ===== 订单管理 =====
+
+/** 计算套餐订单应收金额（人民币分），价格只由服务端配置和用户 VIP 状态决定。 */
+export function getExpectedSubscriptionAmountRmb(userId, planId, cycle = 'monthly') {
+  const plan = getPlanDefs()[planId]
+  if (!plan || !['monthly', 'yearly'].includes(cycle)) throw new Error('INVALID_SUBSCRIPTION_ORDER')
+  const user = db.prepare('SELECT is_vip FROM users WHERE id = ?').get(userId)
+  const baseRmb = cycle === 'yearly' ? plan.yearlyRmb : plan.monthlyRmb
+  return user?.is_vip ? Math.round(baseRmb * getVipConfig().discount) : baseRmb
+}
 
 /** 创建订单。amountRmb 人民币分，credits 内部换算为 quota 单位存储 */
 export function createOrder({ userId, type, plan = null, cycle = 'monthly', amountRmb, credits, remark = '', createdBy = '' }) {
@@ -187,7 +228,7 @@ export function confirmOrder(orderId, adminUserId) {
         db.prepare('UPDATE users SET is_vip = 1, multiplier = 0.8 WHERE id = ?')
           .run(order.user_id)
         db.prepare(`UPDATE subscriptions SET daily_drip_rate = daily_drip_rate + ? WHERE user_id = ? AND status = 'active'`)
-          .run(VIP_EXTRA_DRIP, order.user_id)
+          .run(getVipConfig().extraDrip, order.user_id)
         db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
           VALUES (?, ?, ?, 'topup', ?, 'purchased', 'order', ?, ?)`)
           .run(uuidv4(), order.user_id, 0,
@@ -196,46 +237,49 @@ export function confirmOrder(orderId, adminUserId) {
         break
 
       case 'subscription': {
-        const plan = PLAN_DEFS[order.plan] || PLAN_DEFS.standard
-        const user = db.prepare('SELECT is_vip FROM users WHERE id = ?').get(order.user_id)
-        const isVip = user?.is_vip || order.plan === 'vip'
+        const plan = getPlanDefs()[order.plan]
         const cycle = order.cycle || 'monthly'
+        if (!plan || !['monthly', 'yearly'].includes(cycle)) throw new Error('INVALID_SUBSCRIPTION_ORDER')
 
-        const baseRmb = cycle === 'yearly' ? plan.yearlyRmb : plan.monthlyRmb
-        const actualRmb = isVip ? Math.round(baseRmb * VIP_DISCOUNT) : baseRmb
+        const expectedAmountRmb = getExpectedSubscriptionAmountRmb(order.user_id, order.plan, cycle)
+        if (order.amount_rmb !== expectedAmountRmb) throw new Error('SUBSCRIPTION_AMOUNT_MISMATCH')
 
+        const user = db.prepare('SELECT is_vip FROM users WHERE id = ?').get(order.user_id)
+        const isVip = !!user?.is_vip
         const bonusMultiplier = cycle === 'yearly' ? 12 : 1
         const welcomeBonusPoints = plan.welcomeBonus * bonusMultiplier
         const welcomeBonusQuota = pointsToQuota(welcomeBonusPoints)
-
-        const dripRate = plan.dailyDrip + (isVip ? VIP_EXTRA_DRIP : 0)
-
+        const dripRate = plan.dailyDrip + (isVip ? getVipConfig().extraDrip : 0)
         const expiresMs = cycle === 'yearly' ? 365 * 86400 * 1000 : 30 * 86400 * 1000
 
-        const existingSub = db.prepare('SELECT id FROM subscriptions WHERE user_id = ?').get(order.user_id)
+        const existingSub = db.prepare('SELECT id, expires_at, welcome_bonus_claimed FROM subscriptions WHERE user_id = ?').get(order.user_id)
+        const expiresAt = Math.max(now, existingSub?.expires_at || 0) + expiresMs
+        const grantWelcomeBonus = !existingSub?.welcome_bonus_claimed
+
         if (existingSub) {
-          db.prepare(`UPDATE subscriptions SET plan = ?, status = 'active', welcome_bonus_claimed = 1,
-            welcome_bonus_amount = ?, daily_drip_rate = ?, vip_discount_applied = ?,
-            started_at = ?, expires_at = ?, renewed_at = ?, destroyed_at = NULL, created_at = ? WHERE user_id = ?`)
-            .run(order.plan, welcomeBonusQuota, dripRate, isVip ? 1 : 0, now, now + expiresMs, now, now, order.user_id)
+          db.prepare(`UPDATE subscriptions SET plan = ?, status = 'active',
+            welcome_bonus_claimed = CASE WHEN welcome_bonus_claimed = 1 THEN 1 ELSE ? END,
+            welcome_bonus_amount = CASE WHEN welcome_bonus_claimed = 1 THEN welcome_bonus_amount ELSE ? END,
+            daily_drip_rate = ?, vip_discount_applied = ?, cycle = ?,
+            expires_at = ?, renewed_at = ?, destroyed_at = NULL WHERE user_id = ?`)
+            .run(order.plan, grantWelcomeBonus ? 1 : 0, welcomeBonusQuota, dripRate, isVip ? 1 : 0, cycle, expiresAt, now, order.user_id)
         } else {
           db.prepare(`INSERT INTO subscriptions (id, user_id, plan, status, welcome_bonus_claimed, welcome_bonus_amount,
-            daily_drip_rate, vip_discount_applied, started_at, expires_at, created_at)
-            VALUES (?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?)`)
-            .run(uuidv4(), order.user_id, order.plan, welcomeBonusQuota, dripRate, isVip ? 1 : 0, now, now + expiresMs, now)
+            daily_drip_rate, vip_discount_applied, cycle, started_at, expires_at, created_at)
+            VALUES (?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(uuidv4(), order.user_id, order.plan, welcomeBonusQuota, dripRate, isVip ? 1 : 0, cycle, now, expiresAt, now)
         }
 
-        db.prepare('UPDATE users SET membership_tier = ? WHERE id = ?')
-          .run(order.plan, order.user_id)
+        db.prepare('UPDATE users SET membership_tier = ? WHERE id = ?').run(order.plan, order.user_id)
 
-        db.prepare('UPDATE users SET balance_package = balance_package + ? WHERE id = ?')
-          .run(welcomeBonusQuota, order.user_id)
-        db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
-          VALUES (?, ?, ?, 'topup', ?, 'package', 'order', ?, ?)`)
-          .run(uuidv4(), order.user_id, welcomeBonusQuota,
-            `${order.plan}${cycle === 'yearly' ? '年付' : '月付'} 首购红包 ${welcomeBonusPoints} 积分` +
-            (isVip ? ` (VIP 9折)` : ''),
-            orderId, now)
+        if (grantWelcomeBonus) {
+          db.prepare('UPDATE users SET balance_package = balance_package + ? WHERE id = ?').run(welcomeBonusQuota, order.user_id)
+          db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
+            VALUES (?, ?, ?, 'topup', ?, 'package', 'order', ?, ?)`)
+            .run(uuidv4(), order.user_id, welcomeBonusQuota,
+              `${order.plan}${cycle === 'yearly' ? '年付' : '月付'} 首购红包 ${welcomeBonusPoints} 积分` + (isVip ? ' (VIP 9折)' : ''),
+              orderId, now)
+        }
 
         syncCreditBalance(order.user_id)
         break
@@ -291,11 +335,13 @@ export function getActiveSubscription(userId) {
 
 /** 获取用户订阅状态（含 drip 信息） */
 export function getSubscriptionStatus(userId) {
-  const sub = db.prepare(
-    "SELECT * FROM subscriptions WHERE user_id = ? AND status IN ('active', 'frozen') ORDER BY created_at DESC LIMIT 1"
-  ).get(userId)
+  const sub = db.prepare(`
+    SELECT s.*, u.membership_tier, u.is_vip, u.multiplier
+    FROM subscriptions s JOIN users u ON u.id = s.user_id
+    WHERE s.user_id = ? AND s.status IN ('active', 'frozen')
+    ORDER BY s.created_at DESC LIMIT 1
+  `).get(userId)
   if (!sub) return null
-  const user = db.prepare('SELECT membership_tier, is_vip, multiplier FROM users WHERE id = ?').get(userId)
   return {
     plan: sub.plan,
     cycle: sub.cycle || 'monthly',
@@ -308,17 +354,26 @@ export function getSubscriptionStatus(userId) {
     dripAvailableThisWeek: sub.drip_available_this_week || 0,
     dripLastAccrualDate: sub.drip_last_accrual_date || null,
     dripLastClaimedDate: sub.drip_last_claimed_date || null,
-    membershipTier: user?.membership_tier || 'free',
-    isVip: !!user?.is_vip,
-    multiplier: user?.multiplier || 1.0,
+    membershipTier: sub.membership_tier || 'free',
+    isVip: !!sub.is_vip,
+    multiplier: sub.multiplier || 1.0,
   }
 }
 
-/** 销毁套餐（不可退订，套餐积分保留到自然消耗） */
+/**
+ * 立即取消套餐权益；套餐余额保留为可用余额，但付费 tier 必须在同一事务内撤销。
+ */
 export function destroySubscription(userId) {
   const now = Date.now()
-  db.prepare("UPDATE subscriptions SET status = 'destroyed', destroyed_at = ? WHERE user_id = ? AND status = 'active'")
-    .run(now, userId)
+  const tx = db.transaction(() => {
+    const result = db.prepare("UPDATE subscriptions SET status = 'destroyed', destroyed_at = ? WHERE user_id = ? AND status = 'active'")
+      .run(now, userId)
+    if (result.changes > 0) {
+      db.prepare("UPDATE users SET membership_tier = 'free' WHERE id = ?").run(userId)
+    }
+    return result.changes > 0
+  })
+  return tx()
 }
 
 /** 冻结套餐（到期未续，套餐积分冻结） */
@@ -337,7 +392,7 @@ export function unfreezeSubscription(userId) {
 
 /** 升级套餐：补差价，红包不补，drip 立即提级 */
 export function upgradeSubscription(userId, newPlan) {
-  const plan = PLAN_DEFS[newPlan]
+  const plan = getPlanDefs()[newPlan]
   if (!plan) throw new Error('INVALID_PLAN')
   const now = Date.now()
   const sub = db.prepare("SELECT * FROM subscriptions WHERE user_id = ? AND status = 'active'").get(userId)
@@ -345,49 +400,104 @@ export function upgradeSubscription(userId, newPlan) {
   if (sub.plan === newPlan) return
 
   const user = db.prepare('SELECT is_vip FROM users WHERE id = ?').get(userId)
-  const dripRate = plan.dailyDrip + (user?.is_vip ? VIP_EXTRA_DRIP : 0)
+  const dripRate = plan.dailyDrip + (user?.is_vip ? getVipConfig().extraDrip : 0)
 
   db.prepare(`UPDATE subscriptions SET plan = ?, daily_drip_rate = ?, updated_at = ? WHERE user_id = ? AND status = 'active'`)
     .run(newPlan, dripRate, now, userId)
   db.prepare('UPDATE users SET membership_tier = ? WHERE id = ?').run(newPlan, userId)
 }
 
-/** 标记到期（由定时任务调用） */
+/** 标记到期（由定时任务调用）。事务内完成：订阅过期 + 降级 tier + 清零套餐积分桶 */
 export function expireSubscription(userId) {
   const now = Date.now()
-  db.prepare("UPDATE subscriptions SET status = 'expired' WHERE user_id = ? AND status = 'active' AND expires_at <= ?")
-    .run(userId, now)
+  const tx = db.transaction(() => {
+    const sub = db.prepare(
+      "SELECT id, plan FROM subscriptions WHERE user_id = ? AND status = 'active' AND expires_at <= ?"
+    ).get(userId, now)
+    if (!sub) return false
+
+    // 1. 标记订阅过期
+    db.prepare("UPDATE subscriptions SET status = 'expired' WHERE id = ?").run(sub.id)
+
+    // 2. 降级 membership_tier
+    db.prepare("UPDATE users SET membership_tier = 'free' WHERE id = ?").run(userId)
+
+    // 3. 清零套餐积分桶（红包 + drip 随套餐失效，直充/返利保留）
+    const user = db.prepare('SELECT balance_package FROM users WHERE id = ?').get(userId)
+    const forfeited = user?.balance_package || 0
+    if (forfeited > 0) {
+      db.prepare('UPDATE users SET balance_package = 0 WHERE id = ?').run(userId)
+      db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
+        VALUES (?, ?, ?, 'expiry', ?, 'package', 'subscription_expiry', ?, ?)`)
+        .run(uuidv4(), userId, -forfeited,
+          `套餐到期：${sub.plan} → free，${Math.round(forfeited / 50000)} 积分失效`,
+          sub.id, now)
+    }
+
+    // 4. 同步 credits.balance
+    syncCreditBalance(userId)
+
+    return true
+  })
+  return tx()
 }
 
 // ===== Drip 领取制 =====
 
-/** 每日 drip 累加：将 daily_drip_rate 加入 drip_available_this_week */
-export function accrueDailyDrip() {
-  const today = new Date().toISOString().slice(0, 10)
-  const now = Date.now()
+function accrueDripForSubscriptions(subs, now) {
+  const today = getChinaDate(now)
+  const currentWeek = getChinaWeekStart(now)
+  const planDefs = getPlanDefs()
+  const vipConfig = getVipConfig()
+  let accrued = 0
+
+  for (const sub of subs) {
+    expireStaleDrip(sub, currentWeek, now)
+    if (sub.drip_last_accrual_date === today) continue
+    const plan = planDefs[sub.plan]
+    if (!plan) continue
+    const dripPoints = plan.dailyDrip + (sub.is_vip ? vipConfig.extraDrip : 0)
+    if (dripPoints <= 0) continue
+
+    const dripQuota = pointsToQuota(dripPoints)
+    db.prepare('UPDATE subscriptions SET drip_available_this_week = drip_available_this_week + ?, drip_last_accrual_date = ?, drip_week_start = ? WHERE id = ?')
+      .run(dripQuota, today, currentWeek, sub.id)
+    accrued++
+  }
+  return accrued
+}
+
+const ACTIVE_DRIP_SUBSCRIPTION_COLUMNS = `s.id, s.user_id, s.plan, s.drip_available_this_week,
+  s.drip_last_accrual_date, s.drip_week_start, u.is_vip`
+
+/** 仅为当前用户累计当天 drip，供账户请求路径使用，绝不扫描其它订阅。 */
+export function accrueDailyDripForUser(userId, now = Date.now()) {
+  if (!userId) return 0
   const tx = db.transaction(() => {
-    const subs = db.prepare(
-      "SELECT id, user_id, daily_drip_rate, drip_available_this_week, drip_last_accrual_date FROM subscriptions WHERE status = 'active' AND (expires_at IS NULL OR expires_at > ?)"
-    ).all(now)
+    const subs = db.prepare(`SELECT ${ACTIVE_DRIP_SUBSCRIPTION_COLUMNS}
+      FROM subscriptions s JOIN users u ON u.id = s.user_id
+      WHERE s.user_id = ? AND s.status = 'active' AND (s.expires_at IS NULL OR s.expires_at > ?)`)
+      .all(userId, now)
+    return accrueDripForSubscriptions(subs, now)
+  })
+  return tx()
+}
 
-    let accrued = 0
-    for (const sub of subs) {
-      if (sub.drip_last_accrual_date === today) continue
-      if (!sub.daily_drip_rate || sub.daily_drip_rate <= 0) continue
-
-      const dripQuota = pointsToQuota(sub.daily_drip_rate)
-      db.prepare('UPDATE subscriptions SET drip_available_this_week = drip_available_this_week + ?, drip_last_accrual_date = ? WHERE id = ?')
-        .run(dripQuota, today, sub.id)
-      accrued++
-    }
-    return accrued
+/** 每日全局 drip 批处理，仅供 scheduler 补偿任务调用。 */
+export function accrueDailyDrip(now = Date.now()) {
+  const tx = db.transaction(() => {
+    const subs = db.prepare(`SELECT ${ACTIVE_DRIP_SUBSCRIPTION_COLUMNS}
+      FROM subscriptions s JOIN users u ON u.id = s.user_id
+      WHERE s.status = 'active' AND (s.expires_at IS NULL OR s.expires_at > ?)`)
+      .all(now)
+    return accrueDripForSubscriptions(subs, now)
   })
   return tx()
 }
 
 /** 领取本周全部 drip：drip_available_this_week → balance_package */
 export function claimDrip(userId) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getChinaDate()
   const now = Date.now()
   const tx = db.transaction(() => {
     const sub = db.prepare(
@@ -410,26 +520,27 @@ export function claimDrip(userId) {
   return tx()
 }
 
-/** 跨周清零未领 drip（周日调用） */
-export function clearWeeklyDrip() {
-  const now = Date.now()
+/**
+ * 跨周清零未领 drip。按中国自然周幂等补偿，不依赖在周日恰好触发。
+ * @returns {{ clearedCount: number, forfeitedQuota: number }}
+ */
+export function clearWeeklyDrip(now = Date.now()) {
+  const currentWeek = getChinaWeekStart(now)
   const tx = db.transaction(() => {
     const subs = db.prepare(
-      "SELECT id, user_id, drip_available_this_week FROM subscriptions WHERE status = 'active' AND drip_available_this_week > 0"
+      "SELECT id, user_id, drip_available_this_week, drip_last_accrual_date, drip_week_start FROM subscriptions WHERE status = 'active' AND drip_available_this_week > 0"
     ).all()
 
-    let cleared = 0
+    let clearedCount = 0
+    let forfeitedQuota = 0
     for (const sub of subs) {
-      const forfeited = sub.drip_available_this_week
-      db.prepare('UPDATE subscriptions SET drip_available_this_week = 0 WHERE id = ?').run(sub.id)
+      const forfeited = expireStaleDrip(sub, currentWeek, now)
       if (forfeited > 0) {
-        db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
-          VALUES (?, ?, ?, 'drip_expiry', ?, 'package', 'drip_weekly_clear', ?, ?)`)
-          .run(uuidv4(), sub.user_id, 0, `周清零：过期未领 drip ${Math.round(forfeited / 50000)} 积分`, sub.id, now)
+        clearedCount++
+        forfeitedQuota += forfeited
       }
-      cleared++
     }
-    return cleared
+    return { clearedCount, forfeitedQuota }
   })
   return tx()
 }
@@ -540,7 +651,7 @@ export function redeemCode(userId, { id: codeId, type, value, cycle }) {
       }
 
       case 'plan': {
-        const plan = PLAN_DEFS_REDEEM[value]
+        const plan = getPlanDefsRedeem()[value]
         if (!plan) throw new Error('INVALID_PLAN')
         const isYearly = cycle === 'yearly'
         const bonusMultiplier = isYearly ? 12 : 1
@@ -551,7 +662,7 @@ export function redeemCode(userId, { id: codeId, type, value, cycle }) {
 
         const user = db.prepare('SELECT is_vip FROM users WHERE id = ?').get(userId)
         const isVip = user?.is_vip || false
-        const actualDripRate = dripRate + (isVip ? VIP_EXTRA_DRIP_REDEEM : 0)
+        const actualDripRate = dripRate + (isVip ? getVipConfig().extraDrip : 0)
 
         const existingSub = db.prepare('SELECT id FROM subscriptions WHERE user_id = ?').get(userId)
         if (existingSub) {
@@ -586,7 +697,7 @@ export function redeemCode(userId, { id: codeId, type, value, cycle }) {
 
         db.prepare('UPDATE users SET is_vip = 1, multiplier = 0.8 WHERE id = ?').run(userId)
         db.prepare(`UPDATE subscriptions SET daily_drip_rate = daily_drip_rate + ? WHERE user_id = ? AND status = 'active'`)
-          .run(VIP_EXTRA_DRIP_REDEEM, userId)
+          .run(getVipConfig().extraDrip, userId)
         db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
           VALUES (?, ?, ?, 'topup', ?, 'purchased', 'redemption', ?, ?)`)
           .run(uuidv4(), userId, 0, `兑换码兑换 VIP 终身会员`, codeId, now)

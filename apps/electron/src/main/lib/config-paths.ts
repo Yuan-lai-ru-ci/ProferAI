@@ -5,7 +5,7 @@
  * 所有用户配置存储在 ~/.profer/ 目录下。
  */
 
-import { join, basename } from 'node:path'
+import { join, basename, resolve, sep } from 'node:path'
 import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 
@@ -704,7 +704,7 @@ export function getAutomationsPath(): string {
 }
 
 /**
- * 获取知识库根目录路径
+ * 获取论文知识库根目录路径
  *
  * 如果目录不存在则自动创建。
  *
@@ -715,14 +715,14 @@ export function getKnowledgeBaseDir(): string {
 
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
-    console.log(`[配置] 已创建知识库目录: ${dir}`)
+    console.log(`[配置] 已创建论文知识库目录: ${dir}`)
   }
 
   return dir
 }
 
 /**
- * 获取知识库索引文件路径
+ * 获取论文知识库索引文件路径
  *
  * @returns ~/.profer/knowledge-base/index.json
  */
@@ -731,7 +731,16 @@ export function getKnowledgeBaseIndexPath(): string {
 }
 
 /**
- * 获取知识库向量数据库路径
+ * 获取论文知识库个人工作台状态文件路径。
+ *
+ * 收藏、个人标签、笔记和阅读位置只保存在当前设备，不同步到 paperpipe。
+ */
+export function getKnowledgeBaseWorkbenchPath(): string {
+  return join(getConfigDir(), 'knowledge-base-workbench.json')
+}
+
+/**
+ * 获取论文知识库向量数据库路径
  *
  * @returns ~/.profer/knowledge-base/vectors.db
  */
@@ -739,21 +748,24 @@ export function getKnowledgeBaseVectorDbPath(): string {
   return join(getKnowledgeBaseDir(), 'vectors.db')
 }
 
-/**
- * 获取指定论文的存储目录路径
- *
- * 如果目录不存在则自动创建。
- *
- * @param paperId 论文 ID
- * @returns ~/.profer/knowledge-base/papers/{id}/
- */
-export function getPaperDir(paperId: string): string {
-  const dir = join(getKnowledgeBaseDir(), 'papers', paperId)
+/** 本地论文目录只接受应用生成的 UUID，避免 renderer/损坏索引影响文件系统路径。 */
+const LOCAL_PAPER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
+/** 仅解析受控本地论文目录；读取和删除场景不得隐式创建路径。 */
+export function resolvePaperDir(paperId: string): string {
+  if (typeof paperId !== 'string' || !LOCAL_PAPER_ID_RE.test(paperId)) {
+    throw new Error('论文标识无效')
   }
+  const root = resolve(getKnowledgeBaseDir(), 'papers')
+  const dir = resolve(root, paperId)
+  if (!dir.startsWith(`${root}${sep}`)) throw new Error('论文标识无效')
+  return dir
+}
 
+/** 仅在导入本地 PDF 的写入流程创建论文目录。 */
+export function getPaperDir(paperId: string): string {
+  const dir = resolvePaperDir(paperId)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   return dir
 }
 

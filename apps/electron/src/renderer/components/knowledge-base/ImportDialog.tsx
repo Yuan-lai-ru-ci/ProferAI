@@ -1,5 +1,5 @@
 /**
- * 知识库导入对话框
+ * 论文知识库导入对话框
  *
  * 支持两种导入方式：
  * 1. 本地 PDF — 文件选择器
@@ -110,7 +110,10 @@ export function ImportDialog({ open, onOpenChange, onImportComplete }: ImportDia
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    setIsDragging(false)
+    // 只在真正离开拖拽区域时才取消高亮，而非进入子元素时误触发
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragging(false)
+    }
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -133,9 +136,9 @@ export function ImportDialog({ open, onOpenChange, onImportComplete }: ImportDia
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh]">
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
         <DialogHeader>
-          <DialogTitle>导入论文到知识库</DialogTitle>
+          <DialogTitle>导入论文到论文知识库</DialogTitle>
           <DialogDescription>
             支持 arXiv 论文导入。论文将通过 MinerU 解析为结构化 Markdown，自动分块并生成索引。
           </DialogDescription>

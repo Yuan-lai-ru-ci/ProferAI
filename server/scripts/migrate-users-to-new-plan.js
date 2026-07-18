@@ -6,6 +6,7 @@
  *   - 所有现有用户 → membership_tier = 'plus'（Plus 套餐）
  *   - 每人 500 积分（25,000,000 quota）到 balance_purchased
  *   - 确保每人有邀请码
+ *   - 确保每人有 subscription 记录（plan=plus, 30天有效期，幂等）
  *
  * 已迁移的用户不重复处理（幂等）。
  *
@@ -32,7 +33,7 @@ const db = new Database(DB_PATH)
 const now = Date.now()
 
 console.log(`${c.bold}老用户迁移 → 新定价方案${c.reset}  DB=${DB_PATH}  模式=${APPLY ? c.yellow + 'APPLY' + c.reset : c.green + 'DRY-RUN' + c.reset}`)
-console.log(`每人: Plus + ${MIGRATION_POINTS}积分(${MIGRATION_QUOTA} quota) + 邀请码\n`)
+console.log(`每人: Plus + ${MIGRATION_POINTS}积分(${MIGRATION_QUOTA} quota) + 邀请码 + 订阅记录\n`)
 
 // 已迁移用户（通过 credit_transactions description 标记去重）
 const alreadyMigrated = new Set(
@@ -65,7 +66,9 @@ function migrate() {
 
     const oldTier = u.membership_tier || 'free'
     const oldVip = u.is_vip ? 'VIP' : '非VIP'
-    console.log(`  ${u.email} [${oldTier}, ${oldVip}] → Plus+${MIGRATION_POINTS}积分`)
+    const hasSub = db.prepare('SELECT 1 FROM subscriptions WHERE user_id = ?').get(u.id)
+    const subNote = hasSub ? '' : ' +订阅记录'
+    console.log(`  ${u.email} [${oldTier}, ${oldVip}] → Plus+${MIGRATION_POINTS}积分${subNote}`)
 
     if (!APPLY) continue
     migrated++
@@ -73,6 +76,15 @@ function migrate() {
     // 设 Plus
     db.prepare('UPDATE users SET membership_tier = ? WHERE id = ?')
       .run('plus', u.id)
+
+    // 确保有 subscription 记录（幂等：已有则跳过）
+    const existingSub = db.prepare('SELECT id FROM subscriptions WHERE user_id = ?').get(u.id)
+    if (!existingSub) {
+      const expiresMs = 30 * 86400 * 1000 // 30 天
+      db.prepare(`INSERT INTO subscriptions (id, user_id, plan, status, daily_drip_rate, started_at, expires_at, created_at)
+        VALUES (?, ?, 'plus', 'active', 20, ?, ?, ?)`)
+        .run(uuidv4(), u.id, now, now + expiresMs, now)
+    }
 
     // 加 500 积分到 balance_purchased
     db.prepare('UPDATE users SET balance_purchased = balance_purchased + ? WHERE id = ?')

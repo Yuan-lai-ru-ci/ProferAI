@@ -51,13 +51,13 @@
  *   │       ├── proxy/
  *   │       │   └── chat.js          ←   AI API 代理转发
  *   │       └── services/
- *   │           ├── kb.js            ←   知识库
+ *   │           ├── kb.js            ←   论文知识库
  *   │           └── mineru.js        ←   论文解析
  *   └── scripts/                 ← 运维脚本（drip/备份/部署/迁移）
  */
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE } from './src/config.js'
+import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, MAX_BODY_SIZE, PAPERPIPE_MAX_BODY_SIZE } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
 import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
@@ -77,17 +77,22 @@ import { adminActivationCodes } from './src/routes/admin/activation-codes.js'
 import { adminOrders } from './src/routes/admin/orders.js'
 import { adminRedemptionCodes } from './src/routes/admin/redemption-codes.js'
 import { adminAudit } from './src/routes/admin/audit.js'
+import { adminConfig } from './src/routes/admin/config.js'
 import { accountChannels } from './src/routes/account/channels.js'
 import { accountCredits } from './src/routes/account/credits.js'
 import { accountApiKeys } from './src/routes/account/api-keys.js'
 import { inviteRoutes } from './src/routes/invite.js'
 import { accountSubscription } from './src/routes/account/subscription.js'
 import { accountRedeem } from './src/routes/account/redeem.js'
+import { accountConfig } from './src/routes/account/config.js'
 import { proxyRoutes } from './src/routes/proxy/chat.js'
 import { mineruRoutes } from './src/routes/services/mineru.js'
 import { kbRoutes } from './src/routes/services/kb.js'
+import { paperpipeRoutes } from './src/routes/services/paperpipe.js'
+import { publicRoutes } from './src/routes/public/plans.js'
 import { creditGateMiddleware } from './src/middleware/credit-gate.js'
 import { tierGateMiddleware } from './src/middleware/tier-gate.js'
+import { contentLengthExceedsLimit, isBodyTooLargeError, limitRequestBody } from './src/middleware/body-limit.js'
 import { feedbackRoutes } from './src/routes/feedback.js'
 
 // ===== 初始化 =====
@@ -100,6 +105,28 @@ app.use('*', async (c, next) => {
   const corsResult = corsMiddleware(c)
   if (corsResult) return corsResult
   await next()
+})
+
+// 非上传请求按实际流量限制 body；Content-Length 仅作为快速拒绝，不能作为安全边界。
+// 文件上传由 files.js 按 MAX_FILE_SIZE 分块读取，保持独立限制。
+app.use('*', async (c, next) => {
+  if (c.req.path.includes('/files/upload')) return await next()
+  const isPaperpipeUpload = c.req.path === '/v1/services/paperpipe/upload'
+  const limit = isPaperpipeUpload ? PAPERPIPE_MAX_BODY_SIZE : MAX_BODY_SIZE
+  if (contentLengthExceedsLimit(c.req.header('content-length'), limit)) {
+    return c.json({ error: `请求体过大，上限 ${Math.round(limit / 1048576)}MB`, code: isPaperpipeUpload ? 'PAPERPIPE_BODY_TOO_LARGE' : 'REQUEST_BODY_TOO_LARGE' }, 413)
+  }
+
+  try {
+    const limitedRequest = limitRequestBody(c.req.raw, limit)
+    if (limitedRequest !== c.req.raw) c.req.raw = limitedRequest
+    await next()
+  } catch (error) {
+    if (isBodyTooLargeError(error)) {
+      return c.json({ error: `请求体过大，上限 ${Math.round(limit / 1048576)}MB`, code: isPaperpipeUpload ? 'PAPERPIPE_BODY_TOO_LARGE' : 'REQUEST_BODY_TOO_LARGE' }, 413)
+    }
+    throw error
+  }
 })
 
 app.route('/v1/auth', authRoutes)
@@ -123,6 +150,7 @@ adminApp.route('/activation-codes', adminActivationCodes)
 adminApp.route('/orders', adminOrders)
 adminApp.route('/redemption-codes', adminRedemptionCodes)
 adminApp.route('/audit', adminAudit)
+adminApp.route('/config', adminConfig)
 app.route('/v1/admin', adminApp)
 
 // Account 路由（需要 auth）
@@ -133,6 +161,7 @@ accountApp.route('/credits', accountCredits)
 accountApp.route('/api-keys', accountApiKeys)
 accountApp.route('/subscription', accountSubscription)
 accountApp.route('/redeem', accountRedeem)
+accountApp.route('/config', accountConfig)
 accountApp.route('/', inviteRoutes)
 app.route('/v1/account', accountApp)
 
@@ -155,6 +184,7 @@ const servicesApp = new Hono()
 servicesApp.use('*', proxyAuthMiddleware)
 servicesApp.route('/mineru', mineruRoutes)
 servicesApp.route('/kb', kbRoutes)
+servicesApp.route('/paperpipe', paperpipeRoutes)
 // 扣费循环触发端点（供外部 cron / automation 调用）
 servicesApp.get('/billing/sweep', adminMiddleware, async (c) => {
   const { sweepUnbilledRequests } = await import('./src/db.js')
@@ -182,6 +212,9 @@ app.get('/admin/*', (c) => {
   if (!existsSync(adminHtmlPath)) return c.text('Admin UI not found', 404)
   return c.html(readFileSync(adminHtmlPath, 'utf-8'))
 })
+
+// 公开路由（无需登录态，供官网等调用）
+app.route('/v1/public', publicRoutes)
 
 // Health check
 app.get('/health', (c) => c.json({ status: 'ok', time: Date.now() }))

@@ -5,8 +5,9 @@
  * 结果缓存到 ~/.profer/heatmap-cache/{workspaceId}.json，
  * 任意会话的 updatedAt 变化时自动重建缓存。
  *
- * 数据来源：每个会话 JSONL 最后一条 SDKResultMessage 的 usage 字段。
- * 日期归属：result 消息的 _createdAt > session.updatedAt > session.createdAt。
+ * 数据来源：每个会话 JSONL 中 **所有** type=result 消息的 usage 字段。
+ * 日期归属：每条 result 消息按自身的 _createdAt 归入对应日期。
+ *   — 一个跨越多天的会话，token 会正确拆分到各天，而不是全部归到最后一天。
  * 自配/代管用户统一走此路径，不依赖服务端 API。
  */
 
@@ -22,15 +23,12 @@ export interface HeatmapDailyEntry {
   tokens: number
 }
 
-/** 单会话 token 提取结果 */
-interface SessionTokenData {
-  /** token 总量（input + output） */
-  tokens: number
-  /** result 消息的 _createdAt 时间戳，0 表示不可用 */
-  lastActiveAt: number
-}
+/** 缓存格式版本：结构变更时递增以自动淘汰旧缓存 */
+const CACHE_VERSION = 2
 
 interface HeatmapCache {
+  /** 缓存格式版本 */
+  version: number
   /** 每个活跃会话的 updatedAt 快照，用于缓存失效判断：sessionId → updatedAt */
   sessionTimestamps: Record<string, number>
   /** 缓存时间戳 */
@@ -54,24 +52,26 @@ function getCachePath(workspaceId: string): string {
 // ── JSONL 读取 ────────────────────────────────────────────
 
 /**
- * 从会话 JSONL 尾部反向扫描最后一条 type=result 消息。
- * 返回 token 总量及该消息的 _createdAt 时间戳。
- * 文件不存在或无合法 result 消息时返回 null。
+ * 逐条解析会话 JSONL 中所有 type=result 消息，
+ * 按每条消息的 _createdAt 日期汇总当日 token 消耗。
+ *
+ * 返回 Map<date, tokens>，key 为 ISO 日期 "YYYY-MM-DD"。
+ * 文件不存在或无合法 result 消息时返回空 Map。
  */
-function extractSessionTokenData(sessionId: string): SessionTokenData | null {
+function extractSessionDailyTokens(sessionId: string): Map<string, number> {
   const filePath = getAgentSessionMessagesPath(sessionId)
-  if (!existsSync(filePath)) return null
+  if (!existsSync(filePath)) return new Map()
 
   let lines: string[]
   try {
     lines = readFileSync(filePath, 'utf-8').split('\n')
   } catch {
-    return null
+    return new Map()
   }
 
-  // 从尾部反向扫，找到第一条 type=result 的消息
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]
+  const dayMap = new Map<string, number>()
+
+  for (const line of lines) {
     if (!line || !line.trim()) continue
 
     let parsed: {
@@ -85,30 +85,35 @@ function extractSessionTokenData(sessionId: string): SessionTokenData | null {
       continue
     }
 
-    if (parsed.type === 'result' && parsed.usage) {
-      return {
-        tokens: (parsed.usage.input_tokens ?? 0) + (parsed.usage.output_tokens ?? 0),
-        lastActiveAt: parsed._createdAt ?? 0,
+    if (parsed.type === 'result' && parsed.usage && parsed._createdAt) {
+      const tokens = (parsed.usage.input_tokens ?? 0) + (parsed.usage.output_tokens ?? 0)
+      if (tokens > 0) {
+        const date = new Date(parsed._createdAt).toISOString().slice(0, 10)
+        dayMap.set(date, (dayMap.get(date) ?? 0) + tokens)
       }
     }
   }
 
-  return null
+  return dayMap
 }
 
 // ── 聚合 ──────────────────────────────────────────────────
 
 /**
- * 扫描工作区下所有非归档会话，按实际活跃日期聚合每日 token 消耗。
- * 日期优先级：result 消息 _createdAt > session.updatedAt > session.createdAt。
+ * 扫描工作区下所有非归档会话，逐条解析 JSONL 中所有 result 消息，
+ * 按每条消息的实际发生日期（_createdAt）聚合每日 token 消耗。
+ *
+ * 与旧实现的区别：
+ * - 旧：只读最后一条 result，全部 token 归到一天 → **不准**
+ * - 新：逐条 result 按日期拆分 → 跨天会话 token 正确分布到各天
+ *
  * 返回按日期升序排列的条目列表（最近 365 天）。
  */
 export function buildWorkspaceTokenDaily(
-  workspaceId: string,
+  _workspaceId: string,
   sessions: Array<{ id: string; createdAt: number; updatedAt?: number; archived?: boolean }>,
 ): HeatmapDailyEntry[] {
-  const now = new Date()
-  const cutoff = new Date(now)
+  const cutoff = new Date()
   cutoff.setDate(cutoff.getDate() - 365)
 
   const dayMap = new Map<string, number>()
@@ -116,20 +121,13 @@ export function buildWorkspaceTokenDaily(
   for (const session of sessions) {
     if (session.archived) continue
 
-    const tokenData = extractSessionTokenData(session.id)
-    if (!tokenData || tokenData.tokens <= 0) continue
+    const sessionDays = extractSessionDailyTokens(session.id)
 
-    // 日期优先级：result._createdAt > updatedAt > createdAt
-    const activeAt =
-      tokenData.lastActiveAt > 0
-        ? tokenData.lastActiveAt
-        : (session.updatedAt ?? session.createdAt)
-
-    const attributionDate = new Date(activeAt)
-    if (attributionDate < cutoff) continue
-
-    const date = attributionDate.toISOString().slice(0, 10)
-    dayMap.set(date, (dayMap.get(date) ?? 0) + tokenData.tokens)
+    for (const [date, tokens] of sessionDays) {
+      // 跳过超出范围的数据（先快速字符串比较：ISO 日期天然可比）
+      if (date < cutoff.toISOString().slice(0, 10)) continue
+      dayMap.set(date, (dayMap.get(date) ?? 0) + tokens)
+    }
   }
 
   return Array.from(dayMap.entries())
@@ -143,6 +141,8 @@ function readCache(workspaceId: string): HeatmapCache | null {
   const path = getCachePath(workspaceId)
   const data = readJsonFileSafe<HeatmapCache>(path)
   if (!data) return null
+  // 版本不匹配 → 淘汰旧缓存
+  if (data.version !== CACHE_VERSION) return null
   if (!Array.isArray(data.daily)) return null
   if (typeof data.sessionTimestamps !== 'object' || data.sessionTimestamps === null) return null
   return data
@@ -195,6 +195,6 @@ export function getWorkspaceHeatmapDaily(
   for (const s of activeSessions) {
     sessionTimestamps[s.id] = s.updatedAt ?? s.createdAt
   }
-  writeCache(workspaceId, { sessionTimestamps, daily, cachedAt: Date.now() })
+  writeCache(workspaceId, { version: CACHE_VERSION, sessionTimestamps, daily, cachedAt: Date.now() })
   return daily
 }

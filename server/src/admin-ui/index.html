@@ -95,6 +95,7 @@ function route(){
     case'credits':renderCredits(c);break;
     case'orders':renderOrders(c);break;
     case'activation':renderActivation(c);break;case'redemption':renderRedemption(c);break;
+    case'pricing':renderPricing(c);break;
   }
 }
 
@@ -425,6 +426,76 @@ load();
 }
 load();
 }
+// ---- Pricing Config ----
+function renderPricing(c){
+  c.innerHTML='<h1 class="page-title">定价配置</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
+  api('/admin/config').then(function(d){
+    var groups=d.groups||{};
+    var groupOrder=['套餐定价','VIP','计费','安全限额','杂项'];
+    var html='<h1 class="page-title">定价配置</h1>';
+
+    html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">'+
+      '<div style="font-size:13px;color:var(--muted)">修改即时生效，无需重启服务。</div>'+
+      '<button class="btn btn-outline btn-sm reset-all-btn">重置全部为默认值</button></div>';
+
+    groupOrder.forEach(function(gname){
+      var items=groups[gname];
+      if(!items||!items.length)return;
+      html+='<div class="card" style="margin-bottom:16px"><div class="card-header"><h2>'+esc(gname)+'</h2></div>'+
+        '<table><thead><tr><th style="width:200px">配置项</th><th>当前值</th><th style="width:100px">单位</th><th style="width:80px">默认值</th><th style="width:80px">操作</th></tr></thead><tbody>';
+
+      items.forEach(function(item){
+        var displayVal=item.value,displayDefault=item.defaultValue,unit='';
+        if(item.type==='int'){
+          if(item.key.indexOf('monthlyRmb')>=0||item.key.indexOf('yearlyRmb')>=0||item.key==='vip.price'){
+            displayVal='¥'+(item.value/100).toFixed(0);displayDefault='¥'+(item.defaultValue/100).toFixed(0);unit='人民币分';
+          }else if(item.key.indexOf('Rmb')<0){unit=item.key.indexOf('quota')>=0?'quota':''}
+        }else if(item.type==='float'){displayVal=item.value.toFixed(2);displayDefault=item.defaultValue.toFixed(2)}
+        var customized=item.isCustomized?'<span class="badge badge-warn" style="margin-left:4px;font-size:10px">自定义</span>':'';
+        html+='<tr><td><strong>'+esc(item.label)+'</strong><div style="font-size:10px;color:var(--muted)">'+esc(item.key)+'</div></td>'+
+          '<td style="font-weight:600;font-family:monospace">'+displayVal+customized+'</td>'+
+          '<td style="font-size:11px;color:var(--muted)">'+esc(unit)+'</td>'+
+          '<td style="font-family:monospace;font-size:12px;color:var(--muted)">'+displayDefault+'</td>'+
+          '<td><button class="btn btn-ghost edit-cfg-btn" data-key="'+esc(item.key)+'" data-val="'+esc(String(item.rawValue))+
+            '" data-type="'+esc(item.type)+'" data-label="'+esc(item.label)+'">编辑</button></td></tr>';
+      });
+
+      html+='</tbody></table></div>';
+    });
+
+    c.innerHTML=html;
+
+    c.querySelectorAll('.edit-cfg-btn').forEach(function(b){
+      b.addEventListener('click',function(){
+        var key=b.dataset.key,curVal=b.dataset.val,type=b.dataset.type,label=b.dataset.label;
+                var newVal=prompt('修改 '+label+' ('+key+'):\n当前值: '+curVal+'\n类型: '+type,curVal);
+        if(newVal===null||newVal===curVal)return;
+        if(newVal.trim()===''){
+          if(!confirm('确定重置「'+label+'」为默认值？'))return;
+          api('/admin/config/reset',{method:'POST',body:JSON.stringify({key:key})}).then(function(){toast('已重置');renderPricing(c)}).catch(function(e){toast(e.message,false)});
+          return;
+        }
+        if(type==='int'&&isNaN(parseInt(newVal))){toast('请输入整数',false);return}
+        if(type==='float'&&isNaN(parseFloat(newVal))){toast('请输入数字',false);return}
+        api('/admin/config/'+encodeURIComponent(key),{method:'PUT',body:JSON.stringify({
+          value:type==='int'?parseInt(newVal):type==='float'?parseFloat(newVal):String(newVal)
+        })}).then(function(r){toast('已更新 '+label);renderPricing(c)}).catch(function(e){toast(e.message,false)});
+      });
+    });
+
+    var resetBtn=c.querySelector('.reset-all-btn');
+    if(resetBtn){
+      resetBtn.addEventListener('click',function(){
+        if(!confirm('确定将所有配置项重置为默认值？此操作不可撤销！'))return;
+        api('/admin/config/reset',{method:'POST',body:JSON.stringify({})}).then(function(){toast('已全部重置');renderPricing(c)}).catch(function(e){toast(e.message,false)});
+      });
+    }
+  }).catch(function(e){
+    c.innerHTML='<h1 class="page-title">定价配置</h1><div class="card"><div class="empty-state"><div class="empty-icon">⚠️</div>'+e.message+'</div></div>';
+  });
+}
+
+
 
 // ---- Orders ----
 function renderOrders(c){
@@ -610,6 +681,7 @@ function init(){
         '<a href="#credits"><span class="nav-icon">💰</span> 额度管理</a>'+
         '<a href="#orders"><span class="nav-icon">📦</span> 订单管理</a>'+
         '<a href="#activation"><span class="nav-icon">🎫</span> 激活码</a><a href="#redemption"><span class="nav-icon">🎁</span> 兑换码</a>'+
+        '<a href="#pricing"><span class="nav-icon">🏷️</span> 定价配置</a>'+
       '</div>'+
       '<div class="sidebar-footer"><a href="#" id="logout-btn">🚪 退出登录</a></div>'+
     '</nav>'+

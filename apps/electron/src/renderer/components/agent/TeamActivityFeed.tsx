@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { Loader2, Upload, Trash2, Pencil, UserPlus, LogIn, UserMinus, Shield, Plus, FolderOpen, Move, RefreshCw } from 'lucide-react'
+import { Loader2, Upload, Trash2, Pencil, UserPlus, LogIn, UserMinus, Shield, Plus, FolderOpen, Move, RefreshCw, type LucideProps } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // ===== 类型 =====
@@ -29,12 +29,12 @@ interface TeamActivityFeedProps {
 // ===== 操作类型映射 =====
 
 interface ActionMeta {
-  icon: React.ComponentType<{ size?: number; className?: string }>
+  icon: React.ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & React.RefAttributes<SVGSVGElement>>
   label: (entry: AuditEntry) => string
   color: string
 }
 
-function getActionMeta(action: string): ActionMeta | null {
+function getActionMeta(action: string): ActionMeta {
   if (action.startsWith('file.upload')) {
     return {
       icon: Upload,

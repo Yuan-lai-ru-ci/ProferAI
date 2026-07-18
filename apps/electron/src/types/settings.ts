@@ -270,6 +270,8 @@ export interface AppSettings {
   mainWindowState?: MainWindowState
   /** 是否开机自启动（默认 false） */
   autoLaunch?: boolean
+  /** 是否在侧边栏显示论文知识库入口（默认 true） */
+  paperKnowledgeBaseEnabled?: boolean
 }
 
 /** 主窗口大小、位置和最大化状态 */

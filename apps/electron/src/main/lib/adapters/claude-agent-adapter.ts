@@ -18,6 +18,7 @@ import type {
   JsonSchemaOutputFormat,
   SDKMessage,
   ProferPermissionMode,
+  ProviderType,
 } from '@profer/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
@@ -667,7 +668,36 @@ function scheduleForceKill(sessionId: string, pid: number): void {
   forceKillTimers.set(sessionId, timer)
 }
 
+const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
+  'anthropic',
+  'anthropic-compatible',
+  'kimi-api',
+  'kimi-coding',
+  'minimax',
+  'xiaomi',
+  'xiaomi-token-plan',
+  'zhipu-coding',
+])
+
 export class ClaudeAgentAdapter implements AgentProviderAdapter {
+  // ---- Provider-agnostic interface requirements ----
+
+  /** 错误处理辅助函数集（Provider 特化） */
+  errorHelpers = {
+    friendlyErrorMessage,
+    isPromptTooLongError,
+    isThinkingSignatureError,
+    mapSDKErrorToTypedError,
+    extractErrorDetails,
+    shouldKeepChannelOpen,
+  }
+
+  /** 判断 provider 是否通过 Anthropic 兼容代理路由 */
+  isAnthropicProxyProvider(provider: string): boolean {
+    return ANTHROPIC_PROXY_PROVIDERS.has(provider as ProviderType)
+  }
+
+  // ---- Adapter lifecycle ----
 
   abort(sessionId: string): void {
     // 先调用 query.close() 强制终止 CLI 子进程及其所有子进程（包括正在运行的 bash 命令）

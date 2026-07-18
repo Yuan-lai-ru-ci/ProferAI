@@ -147,10 +147,12 @@ function getPresetModelsForProvider(provider: ProviderType): ChannelModel[] {
       ]
     case 'kimi-api':
       return [
+        { id: 'k3', name: 'Kimi K3', enabled: true },
         { id: 'kimi-k2.6', name: 'Kimi K2.6', enabled: true },
       ]
     case 'kimi-coding':
       return [
+        { id: 'k3', name: 'Kimi K3', enabled: true },
         { id: 'kimi-for-coding', name: 'Kimi for Coding', enabled: true },
       ]
     case 'zhipu':

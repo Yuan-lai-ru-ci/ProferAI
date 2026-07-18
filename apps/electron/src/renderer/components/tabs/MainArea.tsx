@@ -22,6 +22,7 @@ import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { KnowledgeBasePanel } from '@/components/knowledge-base/KnowledgeBasePanel'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { paperKnowledgeBaseEnabledAtom } from '@/atoms/ui-preferences'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 
@@ -35,6 +36,7 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
+  const paperKnowledgeBaseEnabled = useAtomValue(paperKnowledgeBaseEnabledAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
 
@@ -179,8 +181,8 @@ export function MainArea(): React.ReactElement {
             ) : activeView === 'agent-skills' ? (
               // Agent 技能视图：全屏取代 TabBar + TabContent
               <AgentSkillsView />
-            ) : activeView === 'knowledge-base' ? (
-              // 知识库视图：全屏取代 TabBar + TabContent
+            ) : activeView === 'knowledge-base' && paperKnowledgeBaseEnabled ? (
+              // 论文知识库视图：全屏取代 TabBar + TabContent
               <KnowledgeBasePanel />
             ) : (
               <>

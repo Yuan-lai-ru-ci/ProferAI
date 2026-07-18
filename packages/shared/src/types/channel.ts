@@ -251,4 +251,46 @@ export const CHANNEL_IPC_CHANNELS = {
   GET_BUILD_TARGET: 'channel:get-build-target',
   /** 获取账号能力（商业模式+自配权限+账号类型） */
   GET_ACCOUNT_CAPABILITIES: 'channel:get-account-capabilities',
+  /** 查询订阅 Plan 额度 */
+  GET_PLAN_QUOTA: 'channel:get-plan-quota',
 } as const
+
+/**
+ * 订阅 Plan 的窗口型额度。
+ *
+ * 用于展示类似「每 5 小时」和「每周」这类限频窗口的剩余比例。
+ */
+export interface ChannelPlanQuotaWindow {
+  /** 窗口类型标识 */
+  type: '5h' | 'weekly' | 'custom'
+  /** 展示标签 */
+  label: string
+  /** 剩余额度百分比，0-100 */
+  remainingPercent: number
+  /** 已使用百分比，0-100 */
+  usedPercent: number
+  /** 覆盖展示值。用于余额等无法自然转成百分比的额度。 */
+  remainingLabel?: string
+  /** 是否展示进度条。默认展示。 */
+  showProgress?: boolean
+  /** 重置时间戳（毫秒） */
+  resetAt?: number
+}
+
+/**
+ * 渠道订阅 Plan 额度查询结果。
+ */
+export interface ChannelPlanQuotaResult {
+  /** 当前渠道是否支持订阅额度查询 */
+  supported: boolean
+  /** 渠道供应商类型 */
+  provider: ProviderType
+  /** Plan 展示名称 */
+  planName?: string
+  /** 查询到的窗口额度列表 */
+  windows: ChannelPlanQuotaWindow[]
+  /** 查询时间戳（毫秒） */
+  updatedAt: number
+  /** 不支持或查询失败时的用户可读原因 */
+  message?: string
+}

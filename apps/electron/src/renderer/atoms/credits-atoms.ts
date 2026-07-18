@@ -98,11 +98,21 @@ export const dripAvailablePointsAtom = atom((get) => {
   return Math.round(sub.dripAvailableThisWeek / 5_000) / 10
 })
 
+/** 返回 Asia/Shanghai 时区的当天日期（YYYY-MM-DD），与服务端 getChinaDate() 对齐 */
+function getChinaDate(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+}
+
 /** 今日是否已领 drip */
 export const dripClaimedTodayAtom = atom((get) => {
   const sub = get(subscriptionAtom)
   if (!sub?.dripLastClaimedDate) return false
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getChinaDate()
   return sub.dripLastClaimedDate === today
 })
 

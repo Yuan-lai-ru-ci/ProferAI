@@ -5,9 +5,8 @@ import { Hono } from 'hono'
 import {
   getSubscriptionStatus,
   destroySubscription,
-  upgradeSubscription,
   claimDrip,
-  accrueDailyDrip,
+  accrueDailyDripForUser,
 } from '../../db.js'
 
 export const accountSubscription = new Hono()
@@ -34,8 +33,8 @@ accountSubscription.get('/', (c) => {
 accountSubscription.post('/claim-drip', (c) => {
   const userId = c.get('userId')
 
-  // 先累加今日 drip（幂等，同日不重复）
-  accrueDailyDrip()
+  // 仅累计当前用户，避免领取请求扫描全站 active subscriptions。
+  accrueDailyDripForUser(userId)
 
   const amount = claimDrip(userId)
 
@@ -54,25 +53,22 @@ accountSubscription.post('/destroy', (c) => {
   return c.json({ success: true, message: '套餐已销毁，剩余套餐积分仍可使用' })
 })
 
-// POST /v1/account/subscription/upgrade — 升级套餐
+// POST /v1/account/subscription/upgrade — 自助升级入口
+// 权益只能在支付确认事务中变更；这里绝不能直接修改 plan / membership_tier。
 accountSubscription.post('/upgrade', async (c) => {
-  const userId = c.get('userId')
-  const { plan } = await c.req.json()
-  if (!plan || !['standard', 'plus', 'pro'].includes(plan)) {
+  let body
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: '请求体格式错误' }, 400)
+  }
+
+  if (typeof body.plan !== 'string' || !['standard', 'plus', 'pro'].includes(body.plan)) {
     return c.json({ error: 'plan 必须是 standard / plus / pro' }, 400)
   }
 
-  try {
-    upgradeSubscription(userId, plan)
-  } catch (e) {
-    if (e.message === 'NO_ACTIVE_SUBSCRIPTION') {
-      return c.json({ error: '没有活跃的订阅，请先购买套餐' }, 400)
-    }
-    if (e.message === 'INVALID_PLAN') {
-      return c.json({ error: '无效的套餐等级' }, 400)
-    }
-    throw e
-  }
-
-  return c.json({ success: true, plan })
+  return c.json({
+    error: '自助升级暂不可用，请通过购买订单完成套餐变更',
+    code: 'PAYMENT_REQUIRED_FOR_UPGRADE',
+  }, 409)
 })

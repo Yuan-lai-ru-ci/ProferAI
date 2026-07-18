@@ -50,6 +50,21 @@ describe('quotaToBilledCredits（本地账本整数 quota 单位）', () => {
   })
 })
 
+describe('动态 markup 快照', () => {
+  test('Given 请求冻结的 markup=1.5 When 实际 quota 为 101 Then 向上取整扣 152', () => {
+    const billing = { markup: 1.5 }
+    expect(quotaToBilledCredits(101, billing)).toBe(152)
+    expect(quotaToBilledCost(500000, billing)).toBe(1.5)
+  })
+
+  test('Given 非法 markup 快照 When 换算 Then 不产生负数或非有限扣费', () => {
+    for (const markup of [0, -1, NaN, Infinity]) {
+      expect(quotaToBilledCredits(101, { markup })).toBe(0)
+      expect(quotaToBilledCost(101, { markup })).toBe(0)
+    }
+  })
+})
+
 describe('extractNewApiRequestId', () => {
   test('从响应头取 x-oneapi-request-id', () => {
     const resp = { headers: new Headers({ [NEWAPI_REQUEST_ID_HEADER]: 'req-abc-123' }) }

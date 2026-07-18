@@ -16,6 +16,7 @@ import type {
   ChannelCreateInput,
   ChannelUpdateInput,
   ChannelTestResult,
+  ChannelPlanQuotaResult,
   FetchModelsInput,
   FetchModelsResult,
   ConversationMeta,
@@ -36,8 +37,12 @@ import type {
   KBImportResult,
   KBSearchResult,
   PaperMeta,
+  DeletePaperResult,
   KBStats,
   ArxivPaper,
+  KnowledgeBaseWorkbenchState,
+  KnowledgeBaseWorkbenchPatch,
+  PaperWorkbenchRecord,
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
@@ -61,6 +66,9 @@ import type {
   SkillMeta,
   OtherWorkspaceSkillsGroup,
   WorkspaceCapabilities,
+  WorkspaceMemorySummary,
+  SkillFileContent,
+  SkillFileNode,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -224,6 +232,9 @@ export interface ElectronAPI {
   /** 从供应商拉取可用模型列表（直接传入凭证，无需已保存渠道） */
   fetchModels: (input: FetchModelsInput) => Promise<FetchModelsResult>
 
+  /** 查询渠道订阅 Plan 额度 */
+  getChannelPlanQuota: (channelId: string) => Promise<ChannelPlanQuotaResult>
+
   /** 从服务端同步渠道到本地 */
   syncChannelsFromServer: (serverBaseUrl: string, accessToken: string) => Promise<void>
 
@@ -329,10 +340,10 @@ export interface ElectronAPI {
   /** 论文精读 — 估算 PDF 页数和积分（本地计算，不调用服务端） */
   estimatePaperPages: (filePath: string) => Promise<PageEstimate>
 
-  // ===== 知识库相关 =====
+  // ===== 论文知识库相关 =====
 
   kb: {
-    /** 导入论文到知识库 */
+    /** 导入论文到论文知识库 */
     import: (input: KBImportInput) => Promise<KBImportResult>
     /** 语义搜索论文 */
     search: (query: string, topK?: number) => Promise<KBSearchResult[]>
@@ -341,11 +352,17 @@ export interface ElectronAPI {
     /** 获取单篇论文完整内容 */
     getPaper: (paperId: string) => Promise<{ meta: PaperMeta; markdown: string } | null>
     /** 删除论文 */
-    deletePaper: (paperId: string) => Promise<boolean>
-    /** 获取知识库统计 */
+    deletePaper: (paperId: string) => Promise<DeletePaperResult>
+    /** 获取论文知识库统计 */
     getStats: () => Promise<KBStats>
     /** 搜索 arXiv */
     searchArxiv: (query: string, maxResults?: number) => Promise<ArxivPaper[]>
+    /** 获取设备本地的收藏、标签、笔记和阅读位置 */
+    getWorkbenchState: () => Promise<KnowledgeBaseWorkbenchState>
+    /** 更新单篇论文的设备本地个人状态 */
+    updateWorkbenchRecord: (paperId: string, patch: KnowledgeBaseWorkbenchPatch) => Promise<PaperWorkbenchRecord>
+    /** 删除多篇论文的设备本地个人状态 */
+    deleteWorkbenchRecords: (paperIds: string[]) => Promise<void>
   }
 
   /** 提取附件文档的文本内容 */
@@ -1328,6 +1345,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.FETCH_MODELS, input)
   },
 
+  getChannelPlanQuota: (channelId: string) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_PLAN_QUOTA, channelId)
+  },
+
   syncChannelsFromServer: (serverBaseUrl: string, accessToken: string) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.SYNC_FROM_SERVER, serverBaseUrl, accessToken)
   },
@@ -1465,7 +1486,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.ESTIMATE_PAPER_PAGES, filePath)
   },
 
-  // 知识库
+  // 论文知识库
   kb: {
     import: (input: KBImportInput) => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.IMPORT, input)
@@ -1487,6 +1508,15 @@ const electronAPI: ElectronAPI = {
     },
     searchArxiv: (query: string, maxResults?: number) => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH_ARXIV, query, maxResults)
+    },
+    getWorkbenchState: () => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_WORKBENCH_STATE)
+    },
+    updateWorkbenchRecord: (paperId: string, patch: KnowledgeBaseWorkbenchPatch) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.UPDATE_WORKBENCH_RECORD, paperId, patch)
+    },
+    deleteWorkbenchRecords: (paperIds: string[]) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_WORKBENCH_RECORDS, paperIds)
     },
   },
 
@@ -2749,13 +2779,16 @@ const electronAPI: ElectronAPI = {
     connect: (workspaceId: string) => ipcRenderer.invoke('sse:connect', workspaceId),
     disconnect: (workspaceId: string) => ipcRenderer.invoke('sse:disconnect', workspaceId),
     disconnectAll: () => ipcRenderer.invoke('sse:disconnect-all'),
-    onEvent: (callback: (workspaceId: string, event: unknown) => void) => {
-      const listener = (_: unknown, event: unknown): void => callback((event as { workspaceId: string }).workspaceId, event)
+    onEvent: (callback: (workspaceId: string, event: { type: string; data: unknown; workspaceId: string; timestamp: number }) => void) => {
+      const listener = (_: unknown, event: unknown): void => {
+        const payload = event as { type: string; data: unknown; workspaceId: string; timestamp: number }
+        callback(payload.workspaceId, payload)
+      }
       ipcRenderer.on(SSE_IPC_CHANNELS.EVENT, listener)
       return () => { ipcRenderer.removeListener(SSE_IPC_CHANNELS.EVENT, listener) }
     },
-    onConnectionChanged: (callback: (status: unknown) => void) => {
-      const listener = (_: unknown, status: unknown): void => callback(status)
+    onConnectionChanged: (callback: (status: { workspaceId: string; status: string }) => void) => {
+      const listener = (_: unknown, status: unknown): void => callback(status as { workspaceId: string; status: string })
       ipcRenderer.on(SSE_IPC_CHANNELS.CONNECTION_CHANGED, listener)
       return () => { ipcRenderer.removeListener(SSE_IPC_CHANNELS.CONNECTION_CHANGED, listener) }
     },

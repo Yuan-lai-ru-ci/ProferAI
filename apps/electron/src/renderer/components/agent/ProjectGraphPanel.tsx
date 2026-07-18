@@ -77,7 +77,7 @@ const statusConfig: Record<TaskStatus, { icon: React.ReactElement; color: string
 function useGraphData(refreshVersion: number): { graph: TaskGraph | null; loading: boolean } {
   const atomGraph = useAtomValue(currentGraphAtom)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
-  const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
+  const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId ?? ''))
   const [ipcGraph, setIpcGraph] = React.useState<TaskGraph | null>(null)
   const [loading, setLoading] = React.useState(true)
 
