@@ -14,6 +14,7 @@ import { getAutomationsPath } from './config-paths'
 import {
   AUTOMATION_MAX_HISTORY,
   AUTOMATION_DEFAULT_PERMISSION_MODE,
+  normalizeAgentRuntime,
   type Automation,
   type AutomationRun,
   type CreateAutomationInput,
@@ -40,6 +41,11 @@ function migrateLegacySessionMode(data: AutomationsIndex): boolean {
   for (const a of data.automations) {
     if ((a.sessionMode as string | undefined) === 'new') {
       a.sessionMode = 'daily'
+      changed = true
+    }
+    const agentRuntime = normalizeAgentRuntime(a.agentRuntime)
+    if (a.agentRuntime !== agentRuntime) {
+      a.agentRuntime = agentRuntime
       changed = true
     }
   }
@@ -214,6 +220,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     timeOfDay: input.timeOfDay,
     dayOfWeek: input.dayOfWeek,
     dayOfMonth: input.dayOfMonth,
+    agentRuntime: normalizeAgentRuntime(input.agentRuntime),
     channelId: input.channelId,
     modelId: input.modelId,
     workspaceId: input.workspaceId,
@@ -242,6 +249,14 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
   const now = Date.now()
   if (input.name !== undefined) target.name = input.name
   if (input.prompt !== undefined) target.prompt = input.prompt
+  if (input.agentRuntime !== undefined) {
+    const nextRuntime = normalizeAgentRuntime(input.agentRuntime)
+    if (nextRuntime !== normalizeAgentRuntime(target.agentRuntime)) {
+      // 已复用的会话携带另一 runtime 的 SDK resume ID，不能跨 runtime 继续复用。
+      target.lastSessionId = undefined
+    }
+    target.agentRuntime = nextRuntime
+  }
   if (input.channelId !== undefined) target.channelId = input.channelId
   if (input.modelId !== undefined) target.modelId = input.modelId
   // workspaceId 允许设为空字符串表示「无工作区」；用 undefined 区分「不修改」

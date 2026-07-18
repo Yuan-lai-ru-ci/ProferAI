@@ -4,6 +4,8 @@
  * 包含 Agent SDK 集成所需的事件类型、会话管理、消息持久化和 IPC 通道常量。
  */
 
+import type { AgentRuntime } from './agent-provider'
+
 // ===== Agent 工作区 =====
 
 /** 工作区类型 */
@@ -629,6 +631,8 @@ export interface AgentSessionMeta {
   modelId?: string
   /** SDK 内部会话 ID（用于 resume 衔接上下文） */
   sdkSessionId?: string
+  /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
+  agentRuntime?: AgentRuntime
   /** 所属工作区 ID */
   workspaceId?: string
   /** 是否置顶 */
@@ -962,6 +966,8 @@ export interface AgentSendInput {
   modelId?: string
   /** 工作区 ID（用于确定 cwd） */
   workspaceId?: string
+  /** 本轮请求的 runtime；缺省时由会话元数据（历史会话回退 Claude）决定。 */
+  agentRuntime?: AgentRuntime
   /** 附加的外部目录（绝对路径，传递给 SDK additionalDirectories） */
   additionalDirectories?: string[]
   /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */

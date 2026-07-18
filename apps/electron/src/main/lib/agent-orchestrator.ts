@@ -1122,7 +1122,7 @@ export class AgentOrchestrator {
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
         prompt: finalPrompt,
-        model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID),
+        model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID, channel.provider),
         cwd: agentCwd,
         sdkCliPath: cliPath,
         env: sdkEnv,
@@ -1175,7 +1175,8 @@ export class AgentOrchestrator {
         }),
         // 1M context window: 支持的模型自动启用 beta（Claude: Sonnet 4+ / Opus 4.6+ / 4.7 / 4.8、DeepSeek V4 系列）
         // 未启用时 SDK 默认 200K 并在约 150K 触发压缩；启用后上限提升至 1M
-        ...(supports1MContext(modelId || DEFAULT_MODEL_ID) && {
+        // Beta header 只发给官方 Anthropic；其它兼容/商业代理即使模型同名也不能假定支持。
+        ...(channel.provider === 'anthropic' && supports1MContext(modelId || DEFAULT_MODEL_ID) && {
           betas: ['context-1m-2025-08-07'] as SdkBeta[],
         }),
         onStderr: (data: string) => {

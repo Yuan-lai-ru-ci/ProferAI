@@ -21,6 +21,8 @@ import {
   AUTOMATION_DEFAULT_SESSION_MODE,
   type Automation,
   type AutomationRun,
+  type AgentRuntime,
+  normalizeAgentRuntime,
 } from '@profer/shared'
 import {
   listAutomations,
@@ -117,9 +119,12 @@ export async function runAutomation(automation: Automation, manual = false): Pro
     //  - daily：再叠加一层「同一自然日」+「上下文占用率 < 阈值」双重判断
     //    （基于 automation.lastRunAt 排除 skipped 运行；占用率读不到时按"未知"保守复用）
     const sessionMode = automation.sessionMode ?? AUTOMATION_DEFAULT_SESSION_MODE
+    const agentRuntime: AgentRuntime = normalizeAgentRuntime(automation.agentRuntime)
 
     let reuseSessionId: string | undefined
-    if (automation.lastSessionId && getAgentSessionMeta(automation.lastSessionId)) {
+    const lastSessionMeta = automation.lastSessionId ? getAgentSessionMeta(automation.lastSessionId) : undefined
+    // 旧任务按 Claude 回退；runtime 不同的会话绝不复用，避免跨 SDK resume。
+    if (lastSessionMeta && automation.lastSessionId && normalizeAgentRuntime(lastSessionMeta.agentRuntime) === agentRuntime) {
       if (sessionMode === 'reuse') {
         reuseSessionId = automation.lastSessionId
       } else if (
@@ -142,8 +147,8 @@ export async function runAutomation(automation: Automation, manual = false): Pro
     if (reuseSessionId) {
       targetSessionId = reuseSessionId
     } else {
-      const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId, automation.modelId)
-      updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id })
+      const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId, automation.modelId, agentRuntime)
+      updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id, agentRuntime })
       targetSessionId = created.id
       setLastSessionId(automation.id, created.id)
     }
@@ -194,6 +199,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
           channelId: automation.channelId,
           modelId: automation.modelId,
           workspaceId: automation.workspaceId,
+          agentRuntime,
           permissionModeOverride: automation.permissionMode ?? 'bypassPermissions',
           triggeredBy: 'automation',
           startedAt: runAt,

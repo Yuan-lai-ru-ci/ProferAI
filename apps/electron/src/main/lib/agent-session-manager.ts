@@ -43,15 +43,17 @@ import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-
   }
   process.env.CLAUDE_CONFIG_DIR = proferSdkConfigDir
 }
-import type {
-  AgentSessionMeta,
-  AgentMessage,
-  SDKMessage,
-  ForkSessionInput,
-  AgentMessageSearchResult,
-  AgentSessionReferenceSearchInput,
-  AgentSessionReferenceSearchResult,
-  SessionHealth,
+import {
+  normalizeAgentRuntime,
+  type AgentSessionMeta,
+  type AgentMessage,
+  type SDKMessage,
+  type ForkSessionInput,
+  type AgentMessageSearchResult,
+  type AgentSessionReferenceSearchInput,
+  type AgentSessionReferenceSearchResult,
+  type SessionHealth,
+  type AgentRuntime,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
 import {
@@ -74,12 +76,26 @@ interface AgentSessionsIndex {
 const INDEX_VERSION = 1
 
 /**
+ * 在存储边界统一补全 runtime：历史/非法值绝不进入 Pi，均回退 Claude。
+ * 此处只更新内存对象，不在读取阶段改写用户索引；下一次正常元数据写入会自然持久化。
+ */
+function normalizeSessionRuntime(session: AgentSessionMeta): AgentSessionMeta {
+  const agentRuntime = normalizeAgentRuntime(session.agentRuntime)
+  return session.agentRuntime === agentRuntime ? session : { ...session, agentRuntime }
+}
+
+/**
  * 读取会话索引文件
  */
 function readIndex(): AgentSessionsIndex {
   const indexPath = getAgentSessionsIndexPath()
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
-  if (data) return data
+  if (data) {
+    return {
+      ...data,
+      sessions: Array.isArray(data.sessions) ? data.sessions.map(normalizeSessionRuntime) : [],
+    }
+  }
   return { version: INDEX_VERSION, sessions: [] }
 }
 
@@ -178,6 +194,7 @@ export function createAgentSession(
   channelId?: string,
   workspaceId?: string,
   modelId?: string,
+  agentRuntime: AgentRuntime = 'claude',
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -188,6 +205,7 @@ export function createAgentSession(
     channelId,
     modelId,
     workspaceId,
+    agentRuntime: normalizeAgentRuntime(agentRuntime),
     createdAt: now,
     updatedAt: now,
   }
@@ -478,8 +496,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
-): AgentSessionMeta {
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'agentRuntime' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
 
@@ -491,9 +508,17 @@ export function updateAgentSessionMeta(
   // 非手动归档操作时，若会话已归档则自动恢复为活跃（仅更新 stoppedByUser 不触发解归档）
   const isStoppedByUserOnly = Object.keys(updates).every((k) => k === 'stoppedByUser')
   const autoUnarchive = existing.archived && !('archived' in updates) && !isStoppedByUserOnly
+  const previousRuntime = normalizeAgentRuntime(existing.agentRuntime)
+  const nextRuntime = updates.agentRuntime === undefined
+    ? previousRuntime
+    : normalizeAgentRuntime(updates.agentRuntime)
+  const runtimeChanged = updates.agentRuntime !== undefined && nextRuntime !== previousRuntime
   const updated: AgentSessionMeta = {
     ...existing,
     ...updates,
+    agentRuntime: nextRuntime,
+    // Claude 与 Pi 的 resume ID 不可互用；运行时发生实际切换时由存储层统一失效。
+    ...(runtimeChanged ? { sdkSessionId: undefined } : {}),
     ...(autoUnarchive ? { archived: false } : {}),
     updatedAt: Date.now(),
   }
@@ -809,6 +834,10 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   if (!sourceMeta) {
     throw new Error(`源 Agent 会话不存在: ${sessionId}`)
   }
+  // 当前 fork 实现调用 Claude SDK；Pi 的持久化格式尚未接入，禁止混用 resume/fork ID。
+  if (normalizeAgentRuntime(sourceMeta.agentRuntime) !== 'claude') {
+    throw new Error('Pi runtime 当前不支持原生会话分叉；请新建 Pi 会话继续工作。')
+  }
 
   if (!sourceMeta.sdkSessionId) {
     throw new Error('该会话没有 SDK session，无法分叉')
@@ -926,6 +955,8 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     forkTitle,
     sourceMeta.channelId,
     sourceMeta.workspaceId,
+    undefined,
+    'claude',
   )
 
   updateAgentSessionMeta(newMeta.id, {

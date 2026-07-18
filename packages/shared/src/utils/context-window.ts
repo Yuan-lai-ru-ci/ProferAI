@@ -6,6 +6,8 @@
  * 否则会出现"UI 显示 1M 但实际只 200K"或反过来的不一致。
  */
 
+import type { ProviderType } from '../types/channel'
+
 /** 默认上下文窗口（无法识别模型时使用） */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 
@@ -64,9 +66,38 @@ export function inferContextWindow(model?: string): number | undefined {
  *
  * 使用位置：构建 SDK query options 时对 modelId 做转换。
  */
-export function resolveAgentSdkModelId(modelId: string): string {
-  if (supports1MContext(modelId) && !modelId.includes('[1m]')) {
-    return `${modelId}[1m]`
-  }
-  return modelId
+const AGENT_SDK_1M_PROVIDER_RULES: Partial<Record<ProviderType, readonly string[]>> = {
+  anthropic: ['claude-sonnet-4', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5'],
+  deepseek: ['deepseek-v4'],
+  'kimi-api': ['k3'],
+  'kimi-coding': ['k3'],
+  'zhipu-coding': ['glm-5.2'],
+  minimax: ['minimax-m3'],
+  xiaomi: ['mimo-v2.5'],
+  'xiaomi-token-plan': ['mimo-v2.5'],
+}
+
+function matchesAgentSdk1MRule(modelId: string, rule: string): boolean {
+  const model = modelId.toLowerCase()
+  return rule === 'k3' ? model === 'k3' || model.startsWith('k3[') : model.includes(rule)
+}
+
+/**
+ * 为经过验证的 provider/model 组合选择 Claude SDK 1M 变体。
+ * 自定义 Anthropic-compatible endpoint 不自动加后缀，避免改变商业代理的真实模型 ID。
+ */
+export function resolveAgentSdkModelId(modelId: string, provider?: ProviderType): string {
+  if (!modelId || /\[1m\]$/i.test(modelId)) return modelId
+  if (!provider) return modelId
+  const rules = AGENT_SDK_1M_PROVIDER_RULES[provider]
+  if (!rules?.some(rule => matchesAgentSdk1MRule(modelId, rule))) return modelId
+  return `${modelId}[1m]`
+}
+
+/** 按实际 provider 推断 Agent SDK 上下文窗口，不向未知代理假设 1M 协议。 */
+export function inferAgentSdkContextWindow(modelId: string | undefined, provider?: ProviderType): number | undefined {
+  if (!modelId) return undefined
+  return resolveAgentSdkModelId(modelId, provider) !== modelId || /\[1m\]$/i.test(modelId)
+    ? ONE_MILLION_CONTEXT_WINDOW
+    : DEFAULT_CONTEXT_WINDOW
 }

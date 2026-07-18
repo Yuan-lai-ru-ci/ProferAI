@@ -42,6 +42,7 @@ interface CollaborationToolContext {
   channelId: string
   modelId?: string
   workspaceId?: string
+  agentRuntime?: import('@profer/shared').AgentRuntime
   permissionMode?: ProferPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation'
 }
@@ -618,7 +619,9 @@ function startDelegation(
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
-  const child = createAgentSession(title, ctx.channelId, ctx.workspaceId, effectiveModelId)
+  // 优先从持久化父会话继承，旧会话/无父上下文才安全回退 Claude。
+  const inheritedRuntime = parent?.agentRuntime ?? ctx.agentRuntime ?? 'claude'
+  const child = createAgentSession(title, ctx.channelId, ctx.workspaceId, effectiveModelId, inheritedRuntime)
   const rootSessionId = parent?.rootSessionId ?? parent?.id ?? ctx.sessionId
   updateAgentSessionMeta(child.id, {
     parentSessionId: ctx.sessionId,
