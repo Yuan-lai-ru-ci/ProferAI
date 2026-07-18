@@ -57,6 +57,8 @@ import { removePromaAutoCompactSettings } from './agent-auto-compact-settings'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 import { injectBuiltinMcpServers } from './builtin-mcp/registry'
+import { injectChromeDevtoolsMcpServer } from './builtin-mcp/chrome-devtools'
+import { isBuiltinMcpUserEnabled } from './builtin-mcp/settings'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import type { AgentRuntimeEnv } from './agent-runtime-env'
@@ -1186,6 +1188,9 @@ export class AgentOrchestrator {
 
       // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
       const mcpServers = this.buildMcpServers(workspaceSlug)
+      if (isBuiltinMcpUserEnabled('chrome-devtools')) {
+        injectChromeDevtoolsMcpServer(mcpServers)
+      }
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
       const builtinMcpResult = agentRuntime === 'claude' && sdk
@@ -1354,6 +1359,13 @@ export class AgentOrchestrator {
         'REPL', 'Workflow', 'ScheduleWakeup', 'Monitor', 'PushNotification',
         'CronCreate', 'CronDelete', 'RemoteTrigger',
       ])
+      const PLAN_MODE_READ_ONLY_CHROME_DEVTOOLS = new Set([
+        'mcp__chrome_devtools__list_pages',
+        'mcp__chrome_devtools__take_snapshot',
+        'mcp__chrome_devtools__take_screenshot',
+        'mcp__chrome_devtools__list_network_requests',
+        'mcp__chrome_devtools__performance_stop_trace',
+      ])
 
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
       let planModeEntered = initialPermissionMode === 'plan'
@@ -1473,7 +1485,14 @@ export class AgentOrchestrator {
               }
               return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
             }
-            // MCP 工具（以 mcp__ 开头）允许调用（调研用）
+            // Chrome DevTools MCP 同时包含只读观察和会改变页面状态的操作。
+            // 计划模式只允许快照、截图、网络列表等调研工具；点击、输入、脚本执行等需等计划通过。
+            if (toolName.startsWith('mcp__chrome_devtools__')) {
+              return PLAN_MODE_READ_ONLY_CHROME_DEVTOOLS.has(toolName)
+                ? { behavior: 'allow' as const, updatedInput: input }
+                : { behavior: 'deny' as const, message: '计划模式下不允许执行会改变浏览器页面状态的 Chrome DevTools 操作，请在计划审批通过后再执行' }
+            }
+            // 其他 MCP 工具维持既有策略：计划模式下允许调研用 MCP。
             if (toolName.startsWith('mcp__')) {
               return { behavior: 'allow' as const, updatedInput: input }
             }
