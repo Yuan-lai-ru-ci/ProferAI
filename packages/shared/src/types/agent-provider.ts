@@ -8,6 +8,22 @@
 
 import type { SDKMessage, TypedError } from './agent'
 
+/** Agent runtime 实现。未知/旧持久化值一律按 Claude 回退。 */
+export type AgentRuntime = 'claude' | 'pi'
+
+/** 默认 runtime。Pi 完成执行链路与灰度前，产品默认始终保持 Claude。 */
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
+
+/** 严格校验外部输入是否为受支持 runtime。 */
+export function isAgentRuntime(value: unknown): value is AgentRuntime {
+  return value === 'claude' || value === 'pi'
+}
+
+/** 将历史缺省或未知持久化值安全归一化为 Claude。 */
+export function normalizeAgentRuntime(value: unknown): AgentRuntime {
+  return isAgentRuntime(value) ? value : DEFAULT_AGENT_RUNTIME
+}
+
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {
   type: 'user'

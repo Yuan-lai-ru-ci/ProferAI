@@ -5,6 +5,8 @@
  * 每次执行都新建独立子会话（不污染来源会话，规避 orchestrator 同会话并发守卫）。
  */
 
+import type { AgentRuntime } from './agent-provider'
+
 /** 单次自动运行的记录 */
 export interface AutomationRun {
   /** 本次触发的时间戳 */
@@ -82,6 +84,8 @@ export interface Automation {
   dayOfWeek?: number
   /** 每月几号（1-31），scheduleType==='monthly' 时使用 */
   dayOfMonth?: number
+  /** 本任务运行时使用的 Agent runtime；历史任务缺省时按 Claude 处理。 */
+  agentRuntime?: AgentRuntime
   /** AI 渠道 ID */
   channelId: string
   /** 模型 ID（可选，继承来源会话或渠道默认） */
@@ -127,6 +131,8 @@ export interface CreateAutomationInput {
   timeOfDay?: string
   dayOfWeek?: number
   dayOfMonth?: number
+  /** 本任务运行时使用的 Agent runtime；不传则为 Claude。 */
+  agentRuntime?: AgentRuntime
   channelId: string
   modelId?: string
   workspaceId?: string
@@ -148,6 +154,8 @@ export interface UpdateAutomationInput {
   timeOfDay?: string
   dayOfWeek?: number
   dayOfMonth?: number
+  /** 本任务运行时使用的 Agent runtime。 */
+  agentRuntime?: AgentRuntime
   channelId?: string
   modelId?: string
   /** 工作区（用户可在创建后调整子会话归属的工作区） */
