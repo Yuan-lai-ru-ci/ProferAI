@@ -63,6 +63,8 @@ import type {
   SkillMeta,
   WorkspaceCapabilities,
   WorkspaceMemorySummary,
+  SkillFileContent,
+  SkillFileNode,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -123,6 +125,7 @@ import type {
   PaperMeta,
   KBStats,
   ArxivPaper,
+  KnowledgeBaseWorkbenchPatch,
 } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
@@ -138,6 +141,8 @@ import {
   testChannel,
   testChannelDirect,
   fetchModels,
+  getChannelPlanQuota,
+  getChannelById,
   syncChannelsFromServer,
   isCommercialMode,
 } from './lib/channel-manager'
@@ -201,7 +206,9 @@ import {
   createDelegatedChildSessionMeta,
   findOrphanSessions,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
+import { coordinateAgentSend } from './lib/agent-send-coordinator'
+import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -286,6 +293,9 @@ import { wechatBridge } from './lib/wechat-bridge'
 
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
+
+/** 同一会话的并发删除合并为一条 stop-and-wait 生命周期。 */
+const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
 
 /** 已知编辑器应用名称白名单（macOS） */
 const KNOWN_EDITORS = [
@@ -1270,6 +1280,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 查询订阅 Plan 额度
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.GET_PLAN_QUOTA,
+    async (_, channelId: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> => {
+      return getChannelPlanQuota(channelId)
+    }
+  )
+
   // 从服务端同步渠道
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.SYNC_FROM_SERVER,
@@ -2103,18 +2121,23 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 删除 Agent 会话
+  // 删除 Agent 会话：运行中时先中止并等待 finally 完整退出，避免删除后仍写入 JSONL/工作目录。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DELETE_SESSION,
     async (_, id: string): Promise<void> => {
-      // 清理权限服务中该会话的白名单
-      permissionService.clearSessionWhitelist(id)
-      permissionService.clearSessionPending(id)
-      // 清理 AskUser 服务中的待处理请求
-      askUserService.clearSessionPending(id)
-      // 清理 ExitPlanMode 服务中的待处理请求
-      exitPlanService.clearSessionPending(id)
-      return deleteAgentSession(id)
+      return agentSessionDeletionCoordinator.delete(id, {
+        beginDeletion: beginAgentSessionDeletion,
+        endDeletion: endAgentSessionDeletion,
+        stopAndWait: stopAgentAndWait,
+        // 运行已完全结束后再撤销交互状态并删除持久化数据。
+        clearState: (sessionId) => {
+          permissionService.clearSessionWhitelist(sessionId)
+          permissionService.clearSessionPending(sessionId)
+          askUserService.clearSessionPending(sessionId)
+          exitPlanService.clearSessionPending(sessionId)
+        },
+        deleteSession: deleteAgentSession,
+      })
     }
   )
 
@@ -2477,13 +2500,14 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
-      const session = getAgentSessionMeta(input.sessionId)
-      if (session) {
-        await feishuBridgeManager.startSessionMirrorRun(session).catch((error) => {
-          console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error)
-        })
-      }
-      await runAgent(input, event.sender)
+      await coordinateAgentSend(input, {
+        getSession: getAgentSessionMeta,
+        workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
+        getChannel: getChannelById,
+        startMirror: (session) => feishuBridgeManager.startSessionMirrorRun(session),
+        runAgent: () => runAgent(input, event.sender),
+        onMirrorError: (error) => console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error),
+      })
     }
   )
 
@@ -5558,13 +5582,13 @@ export function registerIpcHandlers(): void {
       searchFiles(workspaceId, options)
   )
 
-  // ===== 知识库（Knowledge Base）相关 =====
+  // ===== 论文知识库（Paper Knowledge Base）相关 =====
 
   ipcMain.handle(
     KB_IPC_CHANNELS.IMPORT,
     async (_, input: KBImportInput): Promise<KBImportResult> => {
       try {
-        const { importPaper } = require('./lib/kb-service')
+        const { importPaper } = require('./lib/kb-paperpipe')
         return await importPaper(input)
       } catch (err: unknown) {
         const e = err as Error
@@ -5578,7 +5602,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     KB_IPC_CHANNELS.SEARCH,
     async (_, query: string, topK?: number): Promise<KBSearchResult[]> => {
-      const { searchPapers } = require('./lib/kb-service')
+      if (typeof query !== 'string' || !query.trim() || query.length > 500) throw new Error('搜索关键词无效')
+      if (topK != null && (!Number.isInteger(topK) || topK < 1 || topK > 50)) throw new Error('搜索数量无效')
+      const { searchPapers } = require('./lib/kb-paperpipe')
       return searchPapers(query, topK)
     }
   )
@@ -5586,7 +5612,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     KB_IPC_CHANNELS.LIST_PAPERS,
     async (_, tag?: string): Promise<PaperMeta[]> => {
-      const { listPapers } = require('./lib/kb-service')
+      const { listPapers } = require('./lib/kb-paperpipe')
       return listPapers(tag)
     }
   )
@@ -5594,15 +5620,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     KB_IPC_CHANNELS.GET_PAPER,
     async (_, paperId: string) => {
-      const { getPaper } = require('./lib/kb-service')
+      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
+      const { getPaper } = require('./lib/kb-paperpipe')
       return getPaper(paperId)
     }
   )
 
   ipcMain.handle(
     KB_IPC_CHANNELS.DELETE_PAPER,
-    async (_, paperId: string): Promise<boolean> => {
-      const { deletePaper } = require('./lib/kb-service')
+    async (_, paperId: string): Promise<import('@profer/shared').DeletePaperResult> => {
+      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
+      const { deletePaper } = require('./lib/kb-paperpipe')
       return deletePaper(paperId)
     }
   )
@@ -5610,16 +5638,41 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     KB_IPC_CHANNELS.GET_STATS,
     async (): Promise<KBStats> => {
-      const { getKBStats } = require('./lib/kb-service')
-      return getKBStats()
+      // 优先 kb-paperpipe，fallback kb-service
+      try {
+        const { getKBStats } = require('./lib/kb-paperpipe')
+        return getKBStats()
+      } catch {
+        const { getKBStats } = require('./lib/kb-service')
+        return getKBStats()
+      }
     }
   )
 
   ipcMain.handle(
     KB_IPC_CHANNELS.SEARCH_ARXIV,
     async (_, query: string, maxResults?: number): Promise<ArxivPaper[]> => {
+      // arXiv 搜索保留本地（kb-arxiv.ts），不依赖 paperpipe
       const { searchArxiv } = require('./lib/kb-arxiv')
       return searchArxiv(query, maxResults)
     }
   )
+
+  ipcMain.handle(KB_IPC_CHANNELS.GET_WORKBENCH_STATE, async () => {
+    const { getKnowledgeBaseWorkbenchState } = require('./lib/kb-workbench-service')
+    return getKnowledgeBaseWorkbenchState()
+  })
+
+  ipcMain.handle(
+    KB_IPC_CHANNELS.UPDATE_WORKBENCH_RECORD,
+    async (_, paperId: string, patch: KnowledgeBaseWorkbenchPatch) => {
+      const { updateKnowledgeBaseWorkbenchRecord } = require('./lib/kb-workbench-service')
+      return updateKnowledgeBaseWorkbenchRecord(paperId, patch)
+    },
+  )
+
+  ipcMain.handle(KB_IPC_CHANNELS.DELETE_WORKBENCH_RECORDS, async (_, paperIds: string[]) => {
+    const { deleteKnowledgeBaseWorkbenchRecords } = require('./lib/kb-workbench-service')
+    deleteKnowledgeBaseWorkbenchRecords(paperIds)
+  })
 }

@@ -6,13 +6,10 @@
  * credits.balance 是镜像汇总，每次操作后同步。
  */
 import { db } from './schema.js'
-import { DEFAULT_CREDIT_GRANT, NEWAPI_QUOTA_PER_UNIT } from '../config.js'
+import { getBillingConfig } from './config-store.js'
 import { v4 as uuidv4 } from 'uuid'
 
 // ===== 常量 =====
-
-/** 积分透支上限（quota 单位，-50 积分 = -2,500,000 quota） */
-const OVERDRAFT_LIMIT = 2_500_000
 
 /** 三桶扣款优先级：balance_package → balance_referral → balance_purchased */
 const BUCKET_ORDER = ['balance_package', 'balance_referral', 'balance_purchased']
@@ -68,7 +65,7 @@ export function getCredits(userId) {
 export function ensureCreditRow(userId) {
   const existing = db.prepare('SELECT user_id FROM credits WHERE user_id = ?').get(userId)
   if (!existing) {
-    const grant = DEFAULT_CREDIT_GRANT
+    const grant = getBillingConfig().defaultCreditGrant
     const now = Date.now()
     db.prepare('INSERT INTO credits (user_id, balance, lifetime_consumed, updated_at) VALUES (?, ?, 0, ?)').run(userId, grant, now)
     // 同步写入 users.balance_package（真账本）— 注册赠送属于套餐积分
@@ -131,7 +128,7 @@ export function deductCredits(userId, amount, { description, referenceType, refe
       balance_purchased: user.balance_purchased || 0,
     }
     // force: 事后对账必须记账，允许无限透支；正常路径不允许超过 OVERDRAFT_LIMIT
-    const effectiveOverdraft = force ? Infinity : OVERDRAFT_LIMIT
+    const effectiveOverdraft = force ? Infinity : getBillingConfig().overdraftLimit
     const available = buckets.balance_package + buckets.balance_referral + buckets.balance_purchased + effectiveOverdraft
     if (available < amount) {
       throw new Error(`INSUFFICIENT_CREDITS:${buckets.balance_package + buckets.balance_referral + buckets.balance_purchased}`)
@@ -177,6 +174,21 @@ export function syncCreditBalance(userId) {
     const total = (totals.balance_package || 0) + (totals.balance_referral || 0) + (totals.balance_purchased || 0)
     db.prepare('UPDATE credits SET balance = ?, updated_at = ? WHERE user_id = ?').run(total, Date.now(), userId)
   }
+}
+
+/**
+ * 管理员重置额度：三桶是真账本，credits.balance 只是镜像。
+ * 重置统一写入 purchased 桶，避免下一次扣款按旧三桶重算时覆盖重置结果。
+ */
+export function resetCreditBalance(userId, amount, now = Date.now()) {
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('额度重置金额必须为非负安全整数')
+  const tx = db.transaction(() => {
+    ensureCreditRow(userId)
+    db.prepare('UPDATE users SET balance_package = 0, balance_referral = 0, balance_purchased = ? WHERE id = ?')
+      .run(amount, userId)
+    db.prepare('UPDATE credits SET balance = ?, updated_at = ? WHERE user_id = ?').run(amount, now, userId)
+  })
+  tx()
 }
 
 // ===== 交易查询 =====

@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, LogIn, Library } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, LogIn, Library } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -19,6 +19,7 @@ import { ModeSwitcher } from './ModeSwitcher'
 import { SearchDialog } from './SearchDialog'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { activeViewAtom } from '@/atoms/active-view'
+import { paperKnowledgeBaseEnabledAtom } from '@/atoms/ui-preferences'
 import { automationFormAtom, automationsAtom } from '@/atoms/automation-atoms'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
@@ -520,6 +521,7 @@ function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
 
 export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
+  const paperKnowledgeBaseEnabled = useAtomValue(paperKnowledgeBaseEnabledAtom)
   const authStatus = useAtomValue(authStatusAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
   const automations = useAtomValue(automationsAtom)
@@ -883,12 +885,13 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   }, [activeView, setActiveView])
 
   const handleOpenKnowledgeBase = React.useCallback((): void => {
+    if (!paperKnowledgeBaseEnabled) return
     if (activeView === 'knowledge-base') {
       setActiveView('conversations')
       return
     }
     setActiveView('knowledge-base')
-  }, [activeView, setActiveView])
+  }, [activeView, setActiveView, paperKnowledgeBaseEnabled])
 
   // 切换模式时重置归档视图
   React.useEffect(() => {
@@ -2015,11 +2018,12 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
             </Tooltip>
           )}
 
+          {paperKnowledgeBaseEnabled && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label="知识库"
+                aria-label="论文知识库"
                 onClick={handleOpenKnowledgeBase}
                 className={cn(
                   'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
@@ -2031,8 +2035,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 <Library size={16} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">知识库</TooltipContent>
+            <TooltipContent side="right">论文知识库</TooltipContent>
           </Tooltip>
+          )}
         </div>
 
         <div className="my-3 h-px w-8 bg-border/70" />
@@ -2173,11 +2178,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         </div>
       )}
 
-      {/* 知识库入口：科研论文管理与语义搜索 */}
+      {paperKnowledgeBaseEnabled && (
       <div className="px-3 pb-0.5">
         <button
           type="button"
-          aria-label="知识库"
+          aria-label="论文知识库"
           onClick={handleOpenKnowledgeBase}
           className={cn(
             'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
@@ -2188,10 +2193,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         >
           <span className="flex items-center gap-3 min-w-0">
             <Library size={16} className={cn('flex-shrink-0', activeView === 'knowledge-base' ? 'text-accent-foreground' : 'text-foreground/45')} />
-            <span className="truncate">知识库</span>
+            <span className="truncate">论文知识库</span>
           </span>
         </button>
       </div>
+      )}
 
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
       {mode === 'chat' && viewMode === 'active' ? (
@@ -3429,6 +3435,11 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   const isCurrent = group.workspace.id === currentWorkspaceId
   /** 最近 1.2 秒内切换到此工作区时，短暂高亮 */
   const justSwitchedTo = isCurrent && workspaceSwitchTs > 0 && Date.now() - workspaceSwitchTs < 1200
+  const isTeamWorkspace = group.workspace.type === 'team'
+  const renderWorkspaceIcon = (size: number, className: string) =>
+    isTeamWorkspace
+      ? <Cloud size={size} className={className} />
+      : <FolderOpen size={size} className={className} />
 
   const [renamingWorkspace, setRenamingWorkspace] = React.useState(false)
   const [workspaceEditName, setWorkspaceEditName] = React.useState('')
@@ -3540,7 +3551,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 : 'text-foreground/65',
             )}
           >
-            <FolderOpen size={13} className="flex-shrink-0 text-foreground/40" />
+            {renderWorkspaceIcon(13, 'flex-shrink-0 text-foreground/40')}
             <input
               ref={workspaceEditRef}
               value={workspaceEditName}
@@ -3568,7 +3579,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               justSwitchedTo && 'animate-workspace-highlight bg-primary/15 rounded-md',
             )}
           >
-            <FolderOpen size={13} className="flex-shrink-0 text-foreground/40" />
+            {renderWorkspaceIcon(13, 'flex-shrink-0 text-foreground/40')}
             <span className="flex-1 min-w-0 truncate text-[13px] font-medium leading-[18px]">
               {group.workspace.name}
             </span>
@@ -3614,7 +3625,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               className="text-xs py-1 [&>svg]:size-3.5"
               onSelect={() => onSelectProject(group.workspace.id)}
             >
-              <FolderOpen size={14} />
+              {renderWorkspaceIcon(14, '')}
               设为当前项目
             </DropdownMenuItem>
             <DropdownMenuItem

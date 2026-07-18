@@ -5,6 +5,7 @@
  *   db/schema.js      — db 实例 + 建表/迁移 + initAdmin + reserveSyncSeq
  *   db/credits.js     — 积分三桶扣款/透支/交易/对账
  *   db/subscription.js — 订阅/订单/邀请/drip/兑换码
+ *   db/config-store.js — 系统配置（套餐定价/计费/VIP/限额）
  *
  * 本文件保留：用户管理、渠道管理、relay 令牌、请求日志、API Keys、仪表盘
  */
@@ -16,23 +17,28 @@ import crypto from 'crypto'
 export { db, initAdmin, reserveSyncSeq } from './db/schema.js'
 export {
   getCredits, ensureCreditRow, grantCredits, refundCredits,
-  deductCredits, syncCreditBalance, pointsToQuota,
+  deductCredits, syncCreditBalance, resetCreditBalance, pointsToQuota,
   getCreditTransactions, getCreditSummary,
 } from './db/credits.js'
 export {
   createInviteCode, getInviterByCode, getUserInviteCode, getUserInvitees, recordInviteEvent,
-  createOrder, confirmOrder, expireOrder, listOrders, getOrder,
+  createOrder, confirmOrder, expireOrder, listOrders, getOrder, getExpectedSubscriptionAmountRmb,
   getActiveSubscription, getSubscriptionStatus,
   destroySubscription, freezeSubscription, unfreezeSubscription, upgradeSubscription, expireSubscription,
-  accrueDailyDrip, claimDrip, clearWeeklyDrip,
+  accrueDailyDrip, accrueDailyDripForUser, claimDrip, clearWeeklyDrip, getChinaDate, getChinaWeekStart,
   createActivationCode, listActivationCodes, validateActivationCode, useActivationCode,
   createRedemptionCode, listRedemptionCodes, validateRedemptionCode, markRedemptionCodeUsed, redeemCode,
 } from './db/subscription.js'
+export {
+  getConfig, getConfigs, getConfigsGrouped, setConfig, setConfigs, resetConfig,
+  getPlanDefs, getPlanDefsRedeem, getVipConfig, getBillingConfig, CONFIG_SCHEMA,
+} from './db/config-store.js'
 
 // 从子模块导入内部使用的函数
 import { db } from './db/schema.js'
 import { deductCredits, ensureCreditRow, syncCreditBalance, getCreditSummary } from './db/credits.js'
 import { claimDrip } from './db/subscription.js'
+import { getBillingConfig } from './db/config-store.js'
 import { DEFAULT_CREDIT_GRANT } from './config.js'
 
 // ===== Admin 用户管理 =====
@@ -63,6 +69,15 @@ export function listAllUsers({ search = '', page = 1, limit = 20 } = {}) {
     ? db.prepare(dataSql).all(searchParam, searchParam, limit, offset)
     : db.prepare(dataSql).all(limit, offset)
   return { users: rows, total, page, limit }
+}
+
+/** 认证中间件使用的最小实时授权投影，禁止泄露用户敏感列。 */
+export function getCurrentUserAuthorization(userId) {
+  if (!userId || typeof userId !== 'string') return undefined
+  return db.prepare(`
+    SELECT id, email, is_admin, is_suspended, membership_tier
+    FROM users WHERE id = ?
+  `).get(userId)
 }
 
 export function getUserById(userId) {
@@ -216,7 +231,7 @@ export async function sweepUnbilledRequests({ batchSize = 100, maxAgeMs = 86400_
   const cutoff = Date.now() - maxAgeMs
   const minCreatedAt = Date.now() - minAgeMs
   const rows = db.prepare(`
-    SELECT id, user_id, new_api_request_id, created_at
+    SELECT id, user_id, new_api_request_id, created_at, billing_markup
     FROM request_logs
     WHERE cost_credits = 0
       AND success = 1
@@ -235,7 +250,11 @@ export async function sweepUnbilledRequests({ batchSize = 100, maxAgeMs = 86400_
 
   for (const row of rows) {
     try {
-      const rec = await reconcileRequestCost(row.new_api_request_id)
+      const billing = Number.isFinite(row.billing_markup) && row.billing_markup > 0
+        ? { markup: row.billing_markup }
+        : getBillingConfig()
+      if (billing.markup !== row.billing_markup) console.warn(`[sweep] request_log=${row.id} 缺少计价快照，使用 legacy 当前 markup`)
+      const rec = await reconcileRequestCost(row.new_api_request_id, billing)
       if (!rec.found || rec.billedCredits <= 0) {
         skipped++
         if (!rec.found && Date.now() - row.created_at > 86400_000 * 4) {
@@ -250,7 +269,7 @@ export async function sweepUnbilledRequests({ batchSize = 100, maxAgeMs = 86400_
         referenceId: row.id,
         force: true,
       })
-      db.prepare('UPDATE request_logs SET cost_credits = ? WHERE id = ?').run(rec.billedCredits, row.id)
+      updateRequestLogCost(row.id, rec.billedCredits, { actualQuota: rec.quota, billingMarkup: billing.markup })
       billed++
     } catch (e) {
       console.warn(`[sweep] 补扣失败 request_log=${row.id}: ${e.message}`)
@@ -265,8 +284,9 @@ export async function sweepUnbilledRequests({ batchSize = 100, maxAgeMs = 86400_
 }
 
 /** 更新单条请求日志的扣费额度 */
-export function updateRequestLogCost(requestId, costCredits) {
-  db.prepare('UPDATE request_logs SET cost_credits = ? WHERE id = ?').run(costCredits, requestId)
+export function updateRequestLogCost(requestId, costCredits, { actualQuota = null, billingMarkup = null } = {}) {
+  db.prepare('UPDATE request_logs SET cost_credits = ?, actual_quota = ?, billing_markup = ? WHERE id = ?')
+    .run(costCredits, actualQuota, billingMarkup, requestId)
 }
 
 /** 根据实际用量调整已扣额度 */
@@ -389,8 +409,8 @@ export function listApiKeys(userId) {
 export function getApiKeyByHash(keyHash) {
   if (!keyHash) return undefined
   return db.prepare(`SELECT ak.id, ak.user_id, ak.status, ak.quota_limit, ak.quota_used,
-           u.is_suspended, u.membership_tier
-    FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id
+           u.id AS authorization_user_id, u.email, u.is_admin, u.is_suspended, u.membership_tier
+    FROM api_keys ak JOIN users u ON u.id = ak.user_id
     WHERE ak.key_hash = ?`).get(keyHash)
 }
 

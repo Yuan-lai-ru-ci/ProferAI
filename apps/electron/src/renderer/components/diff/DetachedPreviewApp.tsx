@@ -63,11 +63,12 @@ export function DetachedPreviewApp(): React.ReactElement {
 
   const handleShowInFolder = React.useCallback(() => {
     if (!data) return
+    const targetPath = getDefaultAppTargetPath(data, data.dirPath)
     window.electronAPI.showItemInFolder(
-      defaultAppTargetPath,
+      targetPath,
       data.basePaths,
     ).catch((err) => console.error('[DetachedPreviewApp] 打开文件位置失败:', err))
-  }, [data, defaultAppTargetPath])
+  }, [data])
 
   if (loading) {
     return (

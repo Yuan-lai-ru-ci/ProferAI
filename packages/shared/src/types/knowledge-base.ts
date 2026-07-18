@@ -1,7 +1,7 @@
 /**
- * 知识库（Knowledge Base）相关类型
+ * 论文知识库（Paper Knowledge Base）相关类型
  *
- * 科研知识库：上传/导入论文 → MinerU 解析 → 语义分块 → Embedding → 本地存储
+ * 论文知识库：上传/导入论文 → MinerU 解析 → 语义分块 → Embedding → 本地存储
  * 支持语义搜索 + Agent 工具调用。
  */
 
@@ -34,6 +34,22 @@ export interface PaperMeta {
   chunkCount: number
   /** 原始文件名 */
   originalFileName?: string
+  /** Paperpipe 远端稳定 ID；仅用于远端 show/remove 与对账。 */
+  remoteId?: string
+  /** 本地与远端的同步状态。 */
+  syncState?: 'pending' | 'synced' | 'failed' | 'local-only'
+  /** 可安全展示的最近同步失败说明。 */
+  syncError?: string
+}
+
+/** 删除论文后的本地/远端一致性结果。 */
+export interface DeletePaperResult {
+  paperId: string
+  localDeleted: boolean
+  remoteDeleted: boolean
+  /** 论文未绑定远端 ID 时仅删除本地。 */
+  remoteStatus: 'deleted' | 'not-found' | 'not-linked' | 'failed'
+  message?: string
 }
 
 // ===== 内容分块 =====
@@ -104,7 +120,7 @@ export interface ArxivPaper {
   publishedAt: string
 }
 
-// ===== 知识库状态 =====
+// ===== 论文知识库状态 =====
 
 export interface KBStats {
   /** 论文总数 */
@@ -113,6 +129,32 @@ export interface KBStats {
   totalChunks: number
   /** 存储占用（字节） */
   storageBytes: number
+}
+
+// ===== 本地个人工作台状态 =====
+
+/** 单篇论文的设备本地个人标注，不会同步到 paperpipe。 */
+export interface PaperWorkbenchRecord {
+  favorite: boolean
+  tags: string[]
+  note: string
+  /** 阅读位置，范围为 0 到 1。 */
+  readingProgress: number
+  updatedAt: number
+}
+
+/** 论文知识库工作台的本地持久化状态。 */
+export interface KnowledgeBaseWorkbenchState {
+  version: 1
+  records: Record<string, PaperWorkbenchRecord>
+}
+
+/** 更新单篇论文个人标注时允许提交的字段。 */
+export interface KnowledgeBaseWorkbenchPatch {
+  favorite?: boolean
+  tags?: string[]
+  note?: string
+  readingProgress?: number
 }
 
 // ===== IPC 输入 =====
@@ -136,4 +178,7 @@ export const KB_IPC_CHANNELS = {
   DELETE_PAPER: 'kb:delete-paper',
   GET_STATS: 'kb:stats',
   SEARCH_ARXIV: 'kb:search-arxiv',
+  GET_WORKBENCH_STATE: 'kb:get-workbench-state',
+  UPDATE_WORKBENCH_RECORD: 'kb:update-workbench-record',
+  DELETE_WORKBENCH_RECORDS: 'kb:delete-workbench-records',
 } as const

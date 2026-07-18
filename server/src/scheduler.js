@@ -4,7 +4,7 @@
  * 从 index.js 抽离，统一管理所有 setInterval 定时任务。
  * 启动时调用 startSchedulers()，返回 stop 函数用于测试/优雅关闭。
  */
-import { db } from './db.js'
+import { db, expireSubscription, accrueDailyDrip, clearWeeklyDrip } from './db.js'
 import {
   WORKSPACE_GRACE_PERIOD_MS,
   INVITATION_RETENTION_MS,
@@ -13,6 +13,32 @@ import {
 } from './config.js'
 import { readFileSync, existsSync, rmSync } from 'node:fs'
 import { join as pathJoin } from 'node:path'
+
+/** 每日 drip 累加补偿器：每日幂等，重启后可安全补跑。 */
+export function runDailyDripAccrual(now = Date.now()) {
+  try {
+    const accrued = accrueDailyDrip(now)
+    if (accrued > 0) console.log(`[订阅] 已为 ${accrued} 个套餐累计当日 drip`)
+    return accrued
+  } catch (err) {
+    console.warn('[订阅] 每日 drip 累加失败:', err.message)
+    return null
+  }
+}
+
+/** 周 drip 清理补偿器：按中国自然周幂等，可安全地被重复调度或在重启后补跑。 */
+export function runWeeklyDripCleanup(now = Date.now()) {
+  try {
+    const result = clearWeeklyDrip(now)
+    if (result.clearedCount > 0) {
+      console.log(`[订阅] 已清零 ${result.clearedCount} 个跨周未领 drip，共 ${result.forfeitedQuota} quota`)
+    }
+    return result
+  } catch (err) {
+    console.warn('[订阅] 周 drip 清理失败:', err.message)
+    return null
+  }
+}
 
 /**
  * 启动所有后台定时任务。返回 { stop } 用于清理。
@@ -117,7 +143,37 @@ export function startSchedulers() {
     }
   }, 6 * 60 * 60 * 1000).unref())
 
-  console.log(`[scheduler] 已启动 6 个定时任务`)
+  // 7. 订阅到期降级（每 1 小时）
+  timers.push(setInterval(() => {
+    try {
+      const expired = db.prepare(
+        "SELECT user_id FROM subscriptions WHERE status = 'active' AND expires_at < ?"
+      ).all(Date.now())
+      let processed = 0
+      for (const { user_id } of expired) {
+        try {
+          if (expireSubscription(user_id)) processed++
+        } catch (e) {
+          console.warn(`[订阅] 用户 ${user_id} 到期处理失败: ${e.message}`)
+        }
+      }
+      if (processed > 0) {
+        console.log(`[订阅] 已将 ${processed} 个到期套餐降级为 free`)
+      }
+    } catch (err) {
+      console.warn('[订阅] 到期处理失败:', err.message)
+    }
+  }, 60 * 60 * 1000).unref())
+
+  // 8. 周 drip 跨周补偿清理：启动时立即补跑，之后每小时执行；按 week key 幂等。
+  runWeeklyDripCleanup()
+  timers.push(setInterval(() => runWeeklyDripCleanup(), 60 * 60 * 1000).unref())
+
+  // 9. 每日 drip 累加：启动时补跑，之后每小时检查；按日期幂等。
+  runDailyDripAccrual()
+  timers.push(setInterval(() => runDailyDripAccrual(), 60 * 60 * 1000).unref())
+
+  console.log(`[scheduler] 已启动 9 个定时任务`)
 
   return {
     stop() {

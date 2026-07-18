@@ -11,7 +11,7 @@ describe('request log SQL', () => {
     const sql = buildRequestLogInsertSql()
     const placeholderCount = (sql.match(/\?/g) || []).length
 
-    expect(REQUEST_LOG_COLUMNS).toHaveLength(16)
+    expect(REQUEST_LOG_COLUMNS).toHaveLength(18)
     expect(placeholderCount).toBe(REQUEST_LOG_COLUMNS.length)
   })
 
@@ -32,6 +32,8 @@ describe('request log SQL', () => {
       stream: false,
       errorMessage: '',
       newApiRequestId: 'napi-123',
+      actualQuota: 101,
+      billingMarkup: 1.5,
     }, 1000)
 
     expect(values).toHaveLength(REQUEST_LOG_COLUMNS.length)
@@ -42,5 +44,7 @@ describe('request log SQL', () => {
     expect(values[12]).toBe(0)
     expect(values[14]).toBe(1000)
     expect(values[15]).toBe('napi-123')
+    expect(values[16]).toBe(101)
+    expect(values[17]).toBe(1.5)
   })
 })

@@ -450,19 +450,11 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
-    const capability = detectThinkingCapability(this.providerType, input.modelId)
 
     const body: Record<string, unknown> = {
       model: input.modelId,
-      max_tokens: 50,
+      max_tokens: 300,
       messages: [{ role: 'user', content: input.prompt }],
-    }
-
-    // 标题生成不需要思考：按模型能力选择禁用方式
-    // - Mythos Preview 不接受 disabled，省略字段即可
-    // - 其它 Claude 显式 disabled（对 manual / adaptive 模型都有效）
-    if (capability.disableStrategy === 'explicit-disabled') {
-      body.thinking = { type: 'disabled' }
     }
 
     return {

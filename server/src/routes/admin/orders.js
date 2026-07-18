@@ -4,16 +4,22 @@
  * 手动充值期：管理员确认收款 → 订单 pending→paid → 自动加积分/设 VIP
  *
  * 🔒 安全加固：
- *   - 单笔金额上限 MAX_ORDER_AMOUNT_RMB（默认 ¥1000）
- *   - 超过 ORDER_DUAL_CONFIRM_THRESHOLD（默认 ¥500）需另一管理员确认
- *   - 同一管理员每日确认总额上限 ORDER_DAILY_CONFIRM_CAP（默认 ¥1000）
+ *   - 单笔金额上限 maxOrderAmount()（默认 ¥1000）
+ *   - 超过 orderDualConfirmThreshold()（默认 ¥500）需另一管理员确认
+ *   - 同一管理员每日确认总额上限 orderDailyConfirmCap()（默认 ¥1000）
  *   - 记录 created_by 用于双人确认校验
  */
 import { Hono } from 'hono'
-import { createOrder, confirmOrder, expireOrder, listOrders, getOrder, db } from '../../db.js'
+import { createOrder, confirmOrder, expireOrder, listOrders, getOrder, getExpectedSubscriptionAmountRmb, db, getConfig } from '../../db.js'
 import { logAudit } from '../../audit.js'
-import { MAX_ORDER_AMOUNT_RMB, ORDER_DUAL_CONFIRM_THRESHOLD, ORDER_DAILY_CONFIRM_CAP } from '../../config.js'
 import { adminOpLimit, ADMIN_OP_LIMITS } from '../../admin-rate-limiter.js'
+
+// 安全限额从 system_config 表动态读取（Admin 操控面板可调），硬编码为兜底默认值。
+function maxOrderAmount() { return getConfig('admin.maxOrderAmount') }
+function orderDualConfirmThreshold() { return getConfig('admin.orderDualConfirmThreshold') }
+function orderDailyConfirmCap() { return getConfig('admin.orderDailyConfirmCap') }
+function dailyGrantCap() { return getConfig('admin.dailyGrantCap') }
+function maxGrantAmount() { return getConfig('admin.maxGrantAmount') }
 
 export const adminOrders = new Hono()
 
@@ -45,14 +51,21 @@ adminOrders.post('/', async (c) => {
   if (!['subscription', 'topup', 'vip'].includes(type)) {
     return c.json({ error: 'type 必须是 subscription / topup / vip' }, 400)
   }
+  const normalizedCycle = cycle || 'monthly'
   if (type === 'subscription') {
     if (!plan) return c.json({ error: 'subscription 订单必须指定 plan (standard/plus/pro)' }, 400)
     if (!['standard', 'plus', 'pro'].includes(plan)) return c.json({ error: 'plan 必须是 standard / plus / pro' }, 400)
+    if (!['monthly', 'yearly'].includes(normalizedCycle)) return c.json({ error: 'cycle 必须是 monthly / yearly' }, 400)
+
+    const expectedAmountRmb = getExpectedSubscriptionAmountRmb(userId, plan, normalizedCycle)
+    if (amountRmb !== expectedAmountRmb) {
+      return c.json({ error: `套餐订单金额必须与服务器定价一致（应为 ¥${(expectedAmountRmb / 100).toFixed(2)}）` }, 400)
+    }
   }
 
   // 🔒 单笔金额上限
-  if (amountRmb > MAX_ORDER_AMOUNT_RMB) {
-    return c.json({ error: `单笔订单金额不能超过 ¥${MAX_ORDER_AMOUNT_RMB / 100}` }, 400)
+  if (amountRmb > maxOrderAmount()) {
+    return c.json({ error: `单笔订单金额不能超过 ¥${maxOrderAmount() / 100}` }, 400)
   }
 
   // 频控
@@ -68,7 +81,7 @@ adminOrders.post('/', async (c) => {
     userId,
     type,
     plan: plan || null,
-    cycle: cycle || 'monthly',
+    cycle: normalizedCycle,
     amountRmb,
     credits: displayPoints,
     remark: remark || '',
@@ -96,14 +109,14 @@ adminOrders.post('/:id/confirm', (c) => {
   if (!order) return c.json({ error: '订单不存在或已处理' }, 404)
 
   // 🔒 金额上限二次校验（防止创建后改配置绕过）
-  if (order.amount_rmb > MAX_ORDER_AMOUNT_RMB) {
-    return c.json({ error: `订单金额超过上限 ¥${MAX_ORDER_AMOUNT_RMB / 100}` }, 400)
+  if (order.amount_rmb > maxOrderAmount()) {
+    return c.json({ error: `订单金额超过上限 ¥${maxOrderAmount() / 100}` }, 400)
   }
 
   // 🔒 大额订单双人确认
-  if (order.amount_rmb >= ORDER_DUAL_CONFIRM_THRESHOLD && order.created_by === adminUserId) {
+  if (order.amount_rmb >= orderDualConfirmThreshold() && order.created_by === adminUserId) {
     return c.json({
-      error: `订单金额 ¥${(order.amount_rmb / 100).toFixed(2)} 超过 ¥${ORDER_DUAL_CONFIRM_THRESHOLD / 100} 阈值，需要其他管理员确认`,
+      error: `订单金额 ¥${(order.amount_rmb / 100).toFixed(2)} 超过 ¥${orderDualConfirmThreshold() / 100} 阈值，需要其他管理员确认`,
       code: 'dual_confirm_required',
     }, 403)
   }
@@ -113,8 +126,8 @@ adminOrders.post('/:id/confirm', (c) => {
   const dailyTotal = db.prepare(
     'SELECT COALESCE(SUM(amount_rmb), 0) as total FROM orders WHERE confirmed_by = ? AND confirmed_at > ? AND status = ?'
   ).get(adminUserId, todayStart, 'paid').total
-  if (dailyTotal + order.amount_rmb > ORDER_DAILY_CONFIRM_CAP) {
-    return c.json({ error: `您今日确认订单总额已达上限 ¥${ORDER_DAILY_CONFIRM_CAP / 100}` }, 403)
+  if (dailyTotal + order.amount_rmb > orderDailyConfirmCap()) {
+    return c.json({ error: `您今日确认订单总额已达上限 ¥${orderDailyConfirmCap() / 100}` }, 403)
   }
 
   // 频控
@@ -128,6 +141,9 @@ adminOrders.post('/:id/confirm', (c) => {
   } catch (e) {
     if (e.message === 'ORDER_NOT_FOUND') {
       return c.json({ error: '订单不存在或已处理' }, 404)
+    }
+    if (e.message === 'SUBSCRIPTION_AMOUNT_MISMATCH' || e.message === 'INVALID_SUBSCRIPTION_ORDER') {
+      return c.json({ error: '订单套餐、周期或金额与当前服务器定价不一致，请重新创建订单' }, 409)
     }
     throw e
   }

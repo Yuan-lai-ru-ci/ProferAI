@@ -21,6 +21,7 @@ import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, 
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
+import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
@@ -484,7 +485,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
-  const stableChannelId = agentChannelId ?? stableChannelIdRef.current
+  const stableChannelId = resolvePlanQuotaChannelId(agentChannelId, stableChannelIdRef.current)
 
   // 已有会话首次打开时，从全局默认值初始化 per-session map。
   // setter 内的 `prev.has(sessionId)` 守卫保证幂等，外层不再订阅 Map atom，
@@ -2414,6 +2415,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           usageUpdatedAt={contextStatus.usageUpdatedAt}
           isCompacting={contextStatus.isCompacting}
           isProcessing={streaming || backgroundWaiting}
+          planQuotaChannelId={stableChannelId}
           sessionId={sessionId}
           onCompact={handleCompact}
         />

@@ -9,7 +9,7 @@
  *   Pro              → 额外允许自配 API
  *
  * 自配 API 权限由 membership_tier 决定（plus/pro 可自配），
- * tier-gate 从 c.get('jwtPayload') 取 membership_tier 即可判断。
+ * tier-gate 从认证中间件刷新的 c.get('jwtPayload') 实时授权快照取 membership_tier。
  */
 /**
  * 模型等级门控中间件 — 拦截 Free/Standard 用户对国际模型的请求。
@@ -20,7 +20,7 @@
  *   Free / Standard → 仅国内模型（DeepSeek、通义千问等）
  *   Plus / Pro       → 全模型（含 Claude、GPT、Gemini 等国际模型）
  *
- * membership_tier 由 proxyAuthMiddleware 注入到 jwtPayload，无需额外 DB 查询。
+ * membership_tier 由 proxyAuthMiddleware 从当前用户记录注入到授权快照，无需重复 DB 查询。
  */
 
 /** 国际模型判定模式：前缀匹配命中任一即为国际模型 */

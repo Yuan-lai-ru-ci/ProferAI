@@ -30,7 +30,8 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
-  dbModule?.db?.close()
+  // db.js 是测试进程共享的 ESM 单例；不能在单个测试文件结束时关闭，
+  // 否则后续数据库回归测试会复用已关闭的连接。
   // Windows 下文件句柄释放有延迟，加重试避免 EBUSY
   if (tempDir) {
     try { rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) } catch {}
@@ -49,6 +50,42 @@ function makeUser(id, grant = 100) {
   db.prepare('UPDATE credits SET balance = ? WHERE user_id = ?').run(grant, id)
   return id
 }
+
+describe('动态计费配置', () => {
+  test('Given DB 默认赠送与透支覆盖 When 建立额度并普通扣款 Then 使用同一运行时配置', () => {
+    const { db, ensureCreditRow, getCredits, deductCredits, setConfigs, resetConfig } = dbModule
+    setConfigs({ 'billing.defaultCreditGrant': 321, 'billing.overdraftLimit': 50 }, 'credit-test')
+    const userId = 'user-dynamic-billing-config'
+    db.prepare('INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(userId, `${userId}@example.com`, 'hash', userId, Date.now())
+
+    ensureCreditRow(userId)
+    ensureCreditRow(userId)
+    expect(getCredits(userId).balance).toBe(321)
+    deductCredits(userId, 371, { description: '动态透支边界' })
+    expect(getCredits(userId).balance).toBe(-50)
+    expect(() => deductCredits(userId, 1, { description: '超过动态透支' })).toThrow(/INSUFFICIENT_CREDITS:-50/)
+
+    resetConfig('billing.defaultCreditGrant')
+    resetConfig('billing.overdraftLimit')
+  })
+})
+
+describe('管理员重置额度账本一致性', () => {
+  test('Given 旧三桶余额 When 管理员重置额度 Then 镜像与真账本一致且后续扣款不会覆盖', () => {
+    const { db, getCredits, resetCreditBalance, deductCredits } = dbModule
+    const userId = makeUser('user-reset-ledger', 100)
+    db.prepare('UPDATE users SET balance_package = 20, balance_referral = 30, balance_purchased = 50 WHERE id = ?').run(userId)
+    resetCreditBalance(userId, 777)
+
+    const buckets = db.prepare('SELECT balance_package, balance_referral, balance_purchased FROM users WHERE id = ?').get(userId)
+    expect(buckets).toEqual({ balance_package: 0, balance_referral: 0, balance_purchased: 777 })
+    expect(getCredits(userId).balance).toBe(777)
+
+    deductCredits(userId, 7, { description: '重置后扣款' })
+    expect(getCredits(userId).balance).toBe(770)
+  })
+})
 
 describe('credits adjustment', () => {
   test('扣费后可按实际用量补退，lifetime_consumed 不会变成负数', () => {

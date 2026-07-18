@@ -118,10 +118,10 @@ export async function fetchActualQuotaByRequestId(requestId, { retries = 4, retr
 }
 
 /** New API quota → Profer 扣费额度（货币单位 × 加价）。用于展示/对外金额。 */
-export function quotaToBilledCost(quota) {
-  if (!quota || quota <= 0) return 0
+export function quotaToBilledCost(quota, billing = { markup: BILLING_MARKUP }) {
+  if (!quota || quota <= 0 || !Number.isFinite(billing?.markup) || billing.markup <= 0) return 0
   const costUnit = quota / NEWAPI_QUOTA_PER_UNIT
-  return costUnit * BILLING_MARKUP
+  return costUnit * billing.markup
 }
 
 /**
@@ -130,21 +130,22 @@ export function quotaToBilledCost(quota) {
  * Profer 本地 credits 账本与 New API 同单位（quota，整数），避免浮点累积误差，
  * 也便于和 New API 实扣对账（1:1 × markup）。余额→货币展示时再 ÷ QUOTA_PER_UNIT。
  */
-export function quotaToBilledCredits(quota) {
-  if (!quota || quota <= 0) return 0
-  return Math.ceil(quota * BILLING_MARKUP)
+export function quotaToBilledCredits(quota, billing = { markup: BILLING_MARKUP }) {
+  if (!quota || quota <= 0 || !Number.isFinite(billing?.markup) || billing.markup <= 0) return 0
+  const billed = Math.ceil(quota * billing.markup)
+  return Number.isSafeInteger(billed) && billed > 0 ? billed : 0
 }
 
 /**
  * 对账一次请求：按 request_id 拿真实 quota，换算成 Profer 扣费额度。
  * @returns {Promise<{billedCredits:number, billedCost:number, quota:number, found:boolean, reason?:string}>}
  */
-export async function reconcileRequestCost(newApiRequestId) {
+export async function reconcileRequestCost(newApiRequestId, billing = { markup: BILLING_MARKUP }) {
   const r = await fetchActualQuotaByRequestId(newApiRequestId)
   if (!r.found) return { billedCredits: 0, billedCost: 0, quota: 0, found: false, reason: r.reason }
   return {
-    billedCredits: quotaToBilledCredits(r.quota),
-    billedCost: quotaToBilledCost(r.quota),
+    billedCredits: quotaToBilledCredits(r.quota, billing),
+    billedCost: quotaToBilledCost(r.quota, billing),
     quota: r.quota,
     found: true,
   }

@@ -1,5 +1,7 @@
 // ===== 服务端配置 =====
 
+import { resolveAllowedOrigin } from './cors-config.js'
+
 export const PORT = process.env.PORT || 3000
 export const JWT_EXPIRES = '7d'
 export const ACCESS_TOKEN_EXPIRES = '1h'
@@ -35,6 +37,20 @@ export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 
 // 文件上传上限 (默认 500MB)
 export const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '524288000', 10)
+
+// JSON 请求体上限 (默认 1MB，防止大 body DoS；文件上传不受此限)
+export const MAX_BODY_SIZE = parseInt(process.env.MAX_BODY_SIZE || '1048576', 10)
+
+// Paperpipe multipart 上传独立于普通 JSON 限制；仍由实际流读取累计约束。
+export const PAPERPIPE_MAX_FILE_SIZE = parseInt(process.env.PAPERPIPE_MAX_FILE_SIZE || String(200 * 1024 * 1024), 10)
+export const PAPERPIPE_MAX_BODY_SIZE = parseInt(
+  process.env.PAPERPIPE_MAX_BODY_SIZE || String(PAPERPIPE_MAX_FILE_SIZE + 1024 * 1024),
+  10,
+)
+
+// CORS 允许的 Origin；未配置时不授权浏览器跨域。
+// 支持逗号分隔的多个域名；开发环境如需跨域必须显式设置为 *。
+export const ALLOWED_ORIGIN = resolveAllowedOrigin(process.env.ALLOWED_ORIGIN)
 
 // 在线状态阈值（2 分钟无心跳视为离线）
 export const ONLINE_THRESHOLD = 120_000

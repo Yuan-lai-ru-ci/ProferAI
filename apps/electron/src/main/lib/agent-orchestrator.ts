@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@profer/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@profer/shared'
 import {
   PROFER_DEFAULT_PERMISSION_MODE,
   SAFE_TOOLS,
@@ -29,8 +29,6 @@ import {
   resolveAgentSdkModelId,
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@profer/shared'
-import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
-import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
@@ -42,8 +40,7 @@ import {
   registerCollaborationEventBus,
 } from './agent-collaboration-tools'
 import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
-import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getProferUserAgent } from '@profer/core'
-import pkg from '../../../package.json' with { type: 'json' }
+import { getAdapter, fetchTitle } from '@profer/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { isCommercialBuild } from './build-target'
@@ -67,17 +64,7 @@ import { sdkPermissionModeForProferMode, extractApiError, isAutoRetryableTypedEr
 import { extractSDKToolSummary, buildContextPrompt, buildRecoveryPrompt, escapeContextAttr, buildReferencedSessionsPrompt, TITLE_PROMPT, MAX_TITLE_LENGTH, DEFAULT_SESSION_TITLE, DEFAULT_MODEL_ID, MAX_CONTEXT_MESSAGES } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
-
-const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
-  'anthropic',
-  'anthropic-compatible',
-  'kimi-api',
-  'kimi-coding',
-  'minimax',
-  'xiaomi',
-  'xiaomi-token-plan',
-  'zhipu-coding',
-])
+import { applySdkCredentials, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
 
 // ===== 类型定义 =====
 
@@ -147,7 +134,8 @@ export function serializeErrorDetail(error: unknown): string {
 export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
-  private activeSessions = new Map<string, number>()
+  /** sessionId → 本轮不可复用的运行令牌；避免并发和旧运行 finally 误清理新状态。 */
+  private activeSessions = new Map<string, string>()
 
   /** 队列消息本地记录（sessionId → UUID 集合，用于防重） */
   private queuedMessageUuids = new Map<string, Set<string>>()
@@ -157,6 +145,12 @@ export class AgentOrchestrator {
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, ProferPermissionMode>()
+
+  /** 每轮真实运行的退出信号；不能以 activeSessions 判断 stop 后是否已退出。 */
+  private runCompletions = new Map<string, { token: string; promise: Promise<void>; resolve: () => void }>()
+
+  /** 删除期间禁止同一会话从 UI、队列或 headless 路径重新进入。 */
+  private deletingSessions = new Set<string>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
@@ -196,8 +190,6 @@ export class AgentOrchestrator {
     provider: ProviderType,
     forceBearerAuth = false,
   ): Promise<Record<string, string | undefined>> {
-    const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
-
     // 从 process.env 继承系统变量，但清理所有 ANTHROPIC_ 前缀的变量，
     // 防止本地开发环境（如 ANTHROPIC_AUTH_TOKEN、ANTHROPIC_API_KEY、
     // ANTHROPIC_BASE_URL 等）干扰 SDK 的认证和请求目标。
@@ -226,29 +218,8 @@ export class AgentOrchestrator {
       CLAUDE_CONFIG_DIR: getSdkConfigDir(),
     }
 
-    // 认证方式按 provider 分支
-    // - Kimi Coding Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Profer UA
-    // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
-    // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
-    // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
-    if (forceBearerAuth) {
-      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-    } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
-      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-      sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
-    } else if (provider === 'minimax') {
-      sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-      sdkEnv.API_TIMEOUT_MS = '3000000'
-      sdkEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
-    } else {
-      sdkEnv.ANTHROPIC_API_KEY = apiKey
-    }
-
-    // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入
-    // 使用统一的 normalizeAnthropicBaseUrlForSdk 规范化，SDK 内部会自动拼接 /v1/messages
-    if (baseUrl && baseUrl !== DEFAULT_ANTHROPIC_URL) {
-      sdkEnv.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(baseUrl)
-    }
+    // 凭证只写入本次 query 的 env，不回写主进程 process.env。
+    applySdkCredentials(sdkEnv, apiKey, baseUrl, provider, forceBearerAuth)
 
     const proxyUrl = await getEffectiveProxyUrl()
     if (proxyUrl) {
@@ -358,7 +329,7 @@ export class AgentOrchestrator {
           console.warn('[Agent 标题生成] 团队账号登录已过期，跳过 AI 标题生成')
           return null
         }
-        const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+        const proxyPath = (this.adapter.isAnthropicProxyProvider?.(channel.provider) ?? true) ? '/v1/proxy/messages' : '/v1/proxy/chat'
         proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
         apiKey = auth.proxyToken || auth.token
       } else {
@@ -430,7 +401,7 @@ export class AgentOrchestrator {
    */
   private prepareSessionNotFoundRecovery(
     sessionId: string,
-    queryOptions: ClaudeAgentQueryOptions,
+    queryOptions: AgentQueryInput & Record<string, unknown>,
     contextualMessage: string,
     agentCwd: string,
     accumulatedMessages: SDKMessage[],
@@ -457,7 +428,7 @@ export class AgentOrchestrator {
    */
   private prepareResumeFallbackRecovery(
     sessionId: string,
-    queryOptions: ClaudeAgentQueryOptions,
+    queryOptions: AgentQueryInput & Record<string, unknown>,
     contextualMessage: string,
     agentCwd: string,
     accumulatedMessages: SDKMessage[],
@@ -546,13 +517,30 @@ export class AgentOrchestrator {
     const stderrChunks: string[] = []
 
     // 0. 并发保护
-    if (this.activeSessions.has(sessionId)) {
+    // 在任意 await 前原子占用会话，商业渠道认证刷新也不得留下并发窗口。
+    const runGeneration = randomUUID()
+    const streamStartedAt = input.startedAt ?? Date.now()
+    if (this.deletingSessions.has(sessionId)) {
+      callbacks.onError('会话正在删除，无法发送消息')
+      callbacks.onComplete([], { startedAt: input.startedAt })
+      return
+    }
+    if (!tryAcquireActiveSession(this.activeSessions, sessionId, runGeneration)) {
       console.warn(`[Agent 编排] 会话 ${sessionId} 正在处理中，拒绝新请求`)
       callbacks.onError('上一条消息仍在处理中，请稍候再试')
       callbacks.onComplete([], { startedAt: input.startedAt })
       return
     }
+    let resolveCompletion!: () => void
+    const completion = new Promise<void>((resolve) => { resolveCompletion = resolve })
+    this.runCompletions.set(sessionId, { token: runGeneration, promise: completion, resolve: resolveCompletion })
+    const releaseActiveRun = (): void => {
+      if (!releaseActiveSession(this.activeSessions, sessionId, runGeneration)) return
+      this.sessionPermissionModes.delete(sessionId)
+      this.queuedMessageUuids.delete(sessionId)
+    }
 
+    try {
     // 0.5 清除上一轮中断标记
     try { updateAgentSessionMeta(sessionId, { stoppedByUser: false }) } catch { /* 会话可能已删除 */ }
 
@@ -657,15 +645,6 @@ export class AgentOrchestrator {
       }
     }
 
-    // 2.1 立即抢占会话槽位（在所有同步检查通过后、第一个 await 之前）
-    // 防止 buildSdkEnv 等 await 期间并发调用绕过上方的检查，导致多条重复消息写入 JSONL
-    // finally 块会通过 generation 匹配来安全清理，不影响正常流程
-    const runGeneration = Date.now()
-    // 优先使用渲染进程传来的 startedAt（确保 STREAM_COMPLETE 竞态保护比较的是同一个值），
-    // 否则用本地 runGeneration 作为回退（headless 模式等无渲染进程场景）
-    const streamStartedAt = input.startedAt ?? runGeneration
-    this.activeSessions.set(sessionId, runGeneration)
-
     // 5. 持久化用户消息（SDKMessage 格式）——在所有 preflight 检查之前写入，
     // 确保即使后续渠道/Key 检查失败，用户输入也不会丢失。
     const userSDKMsg: SDKMessage = {
@@ -678,15 +657,6 @@ export class AgentOrchestrator {
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])
     callbacks.onRunStarted?.({ startedAt: streamStartedAt })
-
-    const releaseActiveRun = (): void => {
-      // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
-      // 主进程仍在 finally 前短暂拒绝下一条消息。
-      if (this.activeSessions.get(sessionId) !== runGeneration) return
-      this.activeSessions.delete(sessionId)
-      this.sessionPermissionModes.delete(sessionId)
-      this.queuedMessageUuids.delete(sessionId)
-    }
     const completeRun = (
       messages?: AgentMessage[],
       opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
@@ -714,34 +684,7 @@ export class AgentOrchestrator {
       callbacks.onComplete(messages, opts)
     }
 
-    // 3. 构建环境变量
-    // 同步凭证到 process.env（SDK in-process 代码可能直接读取 process.env）
-    // 先清理再注入，确保 SDK 无论从 env 选项还是 process.env 都拿到正确值
-    delete process.env.ANTHROPIC_API_KEY
-    delete process.env.ANTHROPIC_AUTH_TOKEN
-    delete process.env.ANTHROPIC_BASE_URL
-    delete process.env.ANTHROPIC_CUSTOM_HEADERS
-    if (forceBearerAuth) {
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-    } else if (channel.provider === 'kimi-coding') {
-      // Kimi Coding Plan：只用 Bearer + 必须带 User-Agent
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
-    } else if (channel.provider === 'xiaomi-token-plan') {
-      // 小米 Token Plan：Bearer + 必须带 User-Agent
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-      process.env.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
-    } else if (channel.provider === 'minimax') {
-      // MiniMax Coding Plan：Claude Code 兼容配置使用 Bearer
-      process.env.ANTHROPIC_AUTH_TOKEN = apiKey
-    } else {
-      process.env.ANTHROPIC_API_KEY = apiKey
-    }
-    // Agent 模式优先使用 agentBaseUrl；商业模式强制走团队服务器代理。
-    if (agentUrl && agentUrl !== 'https://api.anthropic.com') {
-      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(agentUrl)
-    }
-
+    // 3. 构建本轮专属 SDK 环境。绝不修改主进程 process.env，避免并发 session 串扰凭证。
     const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
     const sdkEnv = await this.buildSdkEnv(apiKey, agentUrl, channel.provider, forceBearerAuth)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
@@ -769,7 +712,6 @@ export class AgentOrchestrator {
     let workspaceSlug: string | undefined
     let workspace: import('@profer/shared').AgentWorkspace | undefined
 
-    try {
       // 8. 动态导入 SDK
       const sdk = await import('@anthropic-ai/claude-agent-sdk')
 
@@ -855,7 +797,7 @@ export class AgentOrchestrator {
           sdkProjectSettings.skipWebFetchPreflight = true
           needsWrite = true
         }
-        const autoMemoryDirectory = getWorkspaceAutoMemoryDir(workspaceSlug)
+        const autoMemoryDirectory = workspaceSlug ? getWorkspaceAutoMemoryDir(workspaceSlug) : undefined
         if (sdkProjectSettings.autoMemoryDirectory !== autoMemoryDirectory) {
           sdkProjectSettings.autoMemoryDirectory = autoMemoryDirectory
           needsWrite = true
@@ -1135,16 +1077,14 @@ export class AgentOrchestrator {
             return { behavior: 'allow' as const, updatedInput: input }
 
           case 'plan': {
-            // Plan 模式：只允许只读工具 + Write/Edit 任意 .md 文件（计划文档）
+            // Plan 模式：只允许只读工具；Write/Edit 仅能写入当前会话计划目录。
             if (PLAN_MODE_ALLOWED_TOOLS.has(toolName)) {
               return { behavior: 'allow' as const, updatedInput: input }
             }
-            // 允许 Write/Edit 到任意 .md 文件（计划文档一定是 markdown；非 .md 仍被拒）
             if (toolName === 'Write' || toolName === 'Edit') {
               const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-              if (filePath.toLowerCase().endsWith('.md')) {
-                return { behavior: 'allow' as const, updatedInput: input }
-              }
+              if (isPlanModeMarkdownPath(agentCwd, filePath)) return { behavior: 'allow' as const, updatedInput: input }
+              return { behavior: 'deny' as const, message: '计划模式下仅允许写入当前会话 .context/plan/ 目录内的 Markdown 计划文件' }
             }
             // Bash 工具：只读命令（find、grep、cat 等）允许执行，写操作拒绝
             if (toolName === 'Bash') {
@@ -1154,9 +1094,9 @@ export class AgentOrchestrator {
               }
               return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
             }
-            // MCP 工具（以 mcp__ 开头）允许调用（调研用）
-            if (toolName.startsWith('mcp__')) {
-              return { behavior: 'allow' as const, updatedInput: input }
+            // MCP 默认拒绝：名称无法可靠表达只读性，避免自动化、协作和外部服务产生副作用。
+            if (isPlanModeMcpTool(toolName)) {
+              return { behavior: 'deny' as const, message: '计划模式下不允许调用 MCP 工具；请在计划审批通过后执行可能具有副作用的外部操作' }
             }
             if (DEFERRED_OR_PROACTIVE_TOOLS.has(toolName)) {
               return { behavior: 'deny' as const, message: '计划模式下不允许启动后台、定时、通知或脚本执行能力，请在计划审批通过后再执行' }
@@ -1179,7 +1119,7 @@ export class AgentOrchestrator {
       const maxTurns = appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0
         ? appSettings.agentMaxTurns
         : undefined
-      const queryOptions: ClaudeAgentQueryOptions = {
+      const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
         prompt: finalPrompt,
         model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID),
@@ -1448,7 +1388,7 @@ export class AgentOrchestrator {
                 try { console.error(`[Agent 编排] 完整 assistantMsg (JSON keys):`, Object.keys(assistantMsg)) } catch {}
                 try { console.error(`[Agent 编排] assistantMsg JSON (截断):`, JSON.stringify(assistantMsg).slice(0, 2000)) } catch {}
                 console.error(`[Agent 编排] ═══ SDK assistant 错误 原始数据 结束 ═══`)
-                const { detailedMessage, originalError } = extractErrorDetails(assistantMsg as unknown as Parameters<typeof extractErrorDetails>[0])
+                const { detailedMessage, originalError } = this.adapter.errorHelpers.extractErrorDetails(assistantMsg as unknown as Parameters<typeof this.adapter.errorHelpers.extractErrorDetails>[0])
                 // SDK 的 error 字段可能是字符串（错误码）或对象 {message, errorType}
                 const rawError = assistantMsg.error as unknown
                 let errorCode = (typeof rawError === 'object' && rawError !== null
@@ -1457,10 +1397,10 @@ export class AgentOrchestrator {
                   ?? (typeof rawError === 'string' ? rawError : undefined)
                   ?? 'unknown_error'
                 console.error(`[Agent 编排] rawError 类型=${typeof rawError}, errorCode=${errorCode}`)
-                if (isPromptTooLongError(detailedMessage, originalError)) {
+                if (this.adapter.errorHelpers.isPromptTooLongError(detailedMessage, originalError)) {
                   errorCode = 'prompt_too_long'
                 }
-                const typedError = mapSDKErrorToTypedError(errorCode, friendlyErrorMessage(detailedMessage), originalError)
+                const typedError = this.adapter.errorHelpers.mapSDKErrorToTypedError(errorCode, this.adapter.errorHelpers.friendlyErrorMessage(detailedMessage), originalError)
                 console.error(`[Agent 编排] mapSDKErrorToTypedError 结果:`)
                 console.error(`  code: ${typedError.code}`)
                 console.error(`  title: ${typedError.title || '(空)'}`)
@@ -1604,7 +1544,7 @@ export class AgentOrchestrator {
               // adapter 在"本轮结束但仍有后台任务/定时任务在飞行"时打的注解：
               // 走轻量完成（UI 空闲可输入、host 保留会话），等待 task_notification 自动续轮。
               const keptOpenForTasks = (msg as Record<string, unknown>)._keepChannelOpenForTasks === true
-              const keepChannelOpen = shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
+              const keepChannelOpen = this.adapter.errorHelpers.shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
               // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
               const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
               console.log(
@@ -1716,7 +1656,7 @@ export class AgentOrchestrator {
 
           // Thinking signature 不兼容：先自动清除 SDK resume 关系并用上下文回填重跑一次。
           if (
-            isThinkingSignatureError(apiError?.message ?? '', rawErrorMessage, stderrOutput) &&
+            this.adapter.errorHelpers.isThinkingSignatureError(apiError?.message ?? '', rawErrorMessage, stderrOutput) &&
             canTryThinkingSignatureRecovery(attempt)
           ) {
             thinkingSignatureRecoveryAttempted = true
@@ -1789,21 +1729,21 @@ export class AgentOrchestrator {
 
           let userFacingError: string
           if (apiError) {
-            userFacingError = friendlyErrorMessage(`API 错误 (${apiError.statusCode}):\n${apiError.message}`)
+            userFacingError = this.adapter.errorHelpers.friendlyErrorMessage(`API 错误 (${apiError.statusCode}):\n${apiError.message}`)
           } else {
-            userFacingError = friendlyErrorMessage(errorMessage)
+            userFacingError = this.adapter.errorHelpers.friendlyErrorMessage(errorMessage)
           }
           console.error(`[Agent 编排] userFacingError (friendlyErrorMessage 之后):\n  ${userFacingError}`)
 
           // 保存错误消息到 JSONL
           try {
             // 检测是否为 prompt too long 错误
-            const isPromptTooLong = isPromptTooLongError(
+            const isPromptTooLong = this.adapter.errorHelpers.isPromptTooLongError(
               userFacingError,
               error instanceof Error ? (error.stack ?? error.message) : String(error),
               stderrOutput,
             )
-            const isThinkingSignature = isThinkingSignatureError(
+            const isThinkingSignature = this.adapter.errorHelpers.isThinkingSignatureError(
               apiError?.message ?? '',
               userFacingError,
               rawErrorMessage,
@@ -1910,19 +1850,46 @@ export class AgentOrchestrator {
       }
 
     } finally {
-      // 清理 process.env 中的 API key：防止 Agent 会话结束后凭证残留
-      // 主进程环境变量中，被后续会话或其他模块读取
-      delete process.env.ANTHROPIC_API_KEY
-      delete process.env.ANTHROPIC_AUTH_TOKEN
-      delete process.env.ANTHROPIC_BASE_URL
-      delete process.env.ANTHROPIC_CUSTOM_HEADERS
-
+      // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       releaseActiveRun()
       permissionService.clearSessionPending(sessionId)
       // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
       // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
       exitPlanService.clearSessionPending(sessionId)
+      const currentCompletion = this.runCompletions.get(sessionId)
+      if (currentCompletion?.token === runGeneration) {
+        this.runCompletions.delete(sessionId)
+        currentCompletion.resolve()
+      }
+    }
+  }
+
+  /** 标记会话删除中，阻止其从任意 Agent 入口重新运行。 */
+  beginDeletion(sessionId: string): void {
+    this.deletingSessions.add(sessionId)
+  }
+
+  /** 清理删除锁；仅在删除成功或失败的 finally 中调用。 */
+  endDeletion(sessionId: string): void {
+    this.deletingSessions.delete(sessionId)
+  }
+
+  /** 请求停止并等待 sendMessage 的 finally 真正完成。 */
+  async stopAndWait(sessionId: string, timeoutMs = 15_000): Promise<void> {
+    const completion = this.runCompletions.get(sessionId)?.promise
+    if (!completion) return
+    this.stop(sessionId)
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        completion,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`停止 Agent 会话超时: ${sessionId}`)), timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timeout) clearTimeout(timeout)
     }
   }
 
@@ -2078,6 +2045,9 @@ export class AgentOrchestrator {
     mentionedMcpServers?: string[],
     mentionedSessionIds?: string[],
   ): Promise<string> {
+    if (this.deletingSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话正在删除，无法追加消息: ${sessionId}`)
+    }
     if (!this.activeSessions.has(sessionId)) {
       throw new Error(`[Agent 编排] 会话未运行，无法追加消息: ${sessionId}`)
     }

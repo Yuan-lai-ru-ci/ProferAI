@@ -312,6 +312,9 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_rl_model ON request_logs(model)')
 try { db.exec('ALTER TABLE request_logs ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0') } catch (_) {}
 try { db.exec('ALTER TABLE request_logs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0') } catch (_) {}
 try { db.exec("ALTER TABLE request_logs ADD COLUMN new_api_request_id TEXT NOT NULL DEFAULT ''") } catch (_) {}
+// 请求进入代理时冻结的计价审计快照；旧记录为 NULL，补扫走 legacy fallback。
+try { db.exec('ALTER TABLE request_logs ADD COLUMN actual_quota INTEGER') } catch (_) {}
+try { db.exec('ALTER TABLE request_logs ADD COLUMN billing_markup REAL') } catch (_) {}
 db.exec("CREATE INDEX IF NOT EXISTS idx_rl_unbilled ON request_logs(cost_credits, success, new_api_request_id)")
 
 // 激活码表 — 管理员生成，用于个人用户注册
@@ -409,10 +412,16 @@ db.exec(`
   )
 `)
 db.exec('CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)')
+// 覆盖账户路径按用户+状态读取并按创建时间取最新记录。
+db.exec('CREATE INDEX IF NOT EXISTS idx_subscriptions_user_status_created ON subscriptions(user_id, status, created_at DESC)')
+// 覆盖 scheduler 的 active 到期订阅扫描。
+db.exec('CREATE INDEX IF NOT EXISTS idx_subscriptions_status_expires ON subscriptions(status, expires_at)')
 try { db.exec("ALTER TABLE subscriptions ADD COLUMN cycle TEXT NOT NULL DEFAULT 'monthly'") } catch (_) {}
 try { db.exec("ALTER TABLE subscriptions ADD COLUMN drip_available_this_week INTEGER NOT NULL DEFAULT 0") } catch (_) {}
 try { db.exec("ALTER TABLE subscriptions ADD COLUMN drip_last_accrual_date TEXT DEFAULT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE subscriptions ADD COLUMN drip_last_claimed_date TEXT DEFAULT NULL") } catch (_) {}
+// 未领取 drip 的中国自然周归属；NULL 兼容历史记录，首次清理时按最后累计日推断。
+try { db.exec("ALTER TABLE subscriptions ADD COLUMN drip_week_start TEXT DEFAULT NULL") } catch (_) {}
 
 // 邀请返利记录表
 db.exec(`
@@ -430,6 +439,19 @@ db.exec(`
   )
 `)
 db.exec('CREATE INDEX IF NOT EXISTS idx_invite_records_inviter ON invite_records(inviter_id)')
+
+// ===== 系统配置表（Admin 操控面板） =====
+// key-value 存储，用于动态调整套餐价格/drip/红包/VIP/计费/安全限额等参数。
+// 修改即时生效（config-store.js 内存缓存），无需重启服务。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS system_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    updated_by TEXT DEFAULT ''
+  )
+`)
 
 // ===== 开放 API：用户自建 API Key =====
 // pk_ 前缀的长效 key，供用户通过 HTTP 调 /v1/proxy 访问。

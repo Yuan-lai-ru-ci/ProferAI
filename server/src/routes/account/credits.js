@@ -6,7 +6,7 @@
  * 换算成货币单位返回（quota / NEWAPI_QUOTA_PER_UNIT），与 New API 实扣一致、可对账。
  */
 import { Hono } from 'hono'
-import { db, getRequestLogs, getUsageByModel, getCredits, getUserInviteCode, getSubscriptionStatus, accrueDailyDrip } from '../../db.js'
+import { db, getRequestLogs, getUsageByModel, getCredits, getUserInviteCode, getSubscriptionStatus, accrueDailyDripForUser } from '../../db.js'
 import { NEWAPI_QUOTA_PER_UNIT } from '../../config.js'
 
 export const accountCredits = new Hono()
@@ -23,8 +23,8 @@ accountCredits.get('/', (c) => {
     FROM users WHERE id = ?
   `).get(userId)
   const ic = getUserInviteCode(userId)
-  // 先累加今日 drip（幂等，同日不重复），确保前端显示的 dripAvailableThisWeek 是当天最新值
-  accrueDailyDrip()
+  // 仅累计当前用户，避免一次余额读取扫描全站 active subscriptions。
+  accrueDailyDripForUser(userId)
   const sub = getSubscriptionStatus(userId)
 
   const qpu = NEWAPI_QUOTA_PER_UNIT
