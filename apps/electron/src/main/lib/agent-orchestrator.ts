@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@profer/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentThinkingLevel } from '@profer/shared'
 import { normalizeAgentRuntime } from '@profer/shared'
 import {
   PROFER_DEFAULT_PERMISSION_MODE,
@@ -48,7 +48,7 @@ import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { isCommercialBuild } from './build-target'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, ensurePluginManifest } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
@@ -66,6 +66,8 @@ import { sdkPermissionModeForProferMode, extractApiError, isAutoRetryableTypedEr
 import { extractSDKToolSummary, buildContextPrompt, buildRecoveryPrompt, escapeContextAttr, buildReferencedSessionsPrompt, TITLE_PROMPT, MAX_TITLE_LENGTH, DEFAULT_SESSION_TITLE, DEFAULT_MODEL_ID, MAX_CONTEXT_MESSAGES } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
+import { buildAgentRuntimeEnv } from './agent-runtime-env'
+import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import { applySdkCredentials, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
 
 // ===== 类型定义 =====
@@ -611,19 +613,6 @@ export class AgentOrchestrator {
       return
     }
 
-    // Pi adapter 尚未注册：在凭据/团队 refresh 前停止，避免错误 runtime 消耗商业代理或额度。
-    // Router 仍保留相同拒绝作为最终执行边界，防止未来新增调用方绕过此 preflight。
-    if (agentRuntime === 'pi') {
-      reportPreflightError({
-        code: 'runtime_unavailable',
-        title: 'Pi Agent runtime 当前不可用',
-        message: 'Pi 执行适配器尚未接入；请切换到 Claude runtime。',
-        canRetry: false,
-        actions: [],
-      })
-      return
-    }
-
     const credentialResult = await resolveRuntimeCredentials(channel)
     if (!credentialResult.ok) {
       if (credentialResult.code === 'token_expired') {
@@ -712,13 +701,11 @@ export class AgentOrchestrator {
     let workspaceSlug: string | undefined
     let workspace: import('@profer/shared').AgentWorkspace | undefined
 
-      // 8. 动态导入 SDK
+      // 8. Claude runtime 才需要验证其 bundled CLI；Pi 是 in-process runtime。
       const sdk = await import('@anthropic-ai/claude-agent-sdk')
+      const cliPath = agentRuntime === 'claude' ? resolveSDKCliPath() : undefined
 
-      // 9. 构建 SDK query
-      const cliPath = resolveSDKCliPath()
-
-      if (!existsSync(cliPath)) {
+      if (agentRuntime === 'claude' && (!cliPath || !existsSync(cliPath))) {
         const subpkg = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`
         console.error(`[Agent 编排] SDK native binary 不存在: ${cliPath}`)
         reportPreflightError({
@@ -750,7 +737,7 @@ export class AgentOrchestrator {
       }
 
       console.log(
-        `[Agent 编排] 启动 SDK — binary: ${cliPath}, 模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
+        `[Agent 编排] 启动 ${agentRuntime} runtime — ${agentRuntime === 'claude' ? `binary: ${cliPath}` : 'in-process Pi'}，模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
       )
 
       // 确定 Agent 工作目录
@@ -1119,14 +1106,51 @@ export class AgentOrchestrator {
       const maxTurns = appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0
         ? appSettings.agentMaxTurns
         : undefined
+      const selectedModelId = modelId || DEFAULT_MODEL_ID
+      const allAdditionalDirectories = collectAttachedDirectories({
+        extraDirs: additionalDirectories,
+        sessionMeta,
+        workspaceSlug,
+      })
+      const systemPromptAppend = buildSystemPrompt({
+        workspaceName: workspace?.name,
+        workspaceSlug,
+        sessionId,
+        permissionMode: initialPermissionMode,
+        claudeAvailable,
+        deepSeekSubagentModel: modelRouting.subagentModel,
+      }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+      const piRuntimeEnv = buildAgentRuntimeEnv({
+        proxyUrl: await getEffectiveProxyUrl(),
+        runtimeStatus: getRuntimeStatus(),
+      })
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
         agentRuntime,
         prompt: finalPrompt,
-        model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID, channel.provider),
+        // Pi must receive the channel model unchanged: Claude's `[1m]` suffix is not a provider model ID.
+        model: agentRuntime === 'pi' ? selectedModelId : resolveAgentSdkModelId(selectedModelId, channel.provider),
         cwd: agentCwd,
-        sdkCliPath: cliPath,
-        env: sdkEnv,
+        ...(agentRuntime === 'claude' && { sdkCliPath: cliPath, env: sdkEnv }),
+        ...(agentRuntime === 'pi' && {
+          apiKey: credentialResult.credentials.apiKey,
+          baseUrl: credentialResult.credentials.baseUrl,
+          provider: channel.provider,
+          channelName: channel.name,
+          permissionMode: initialPermissionMode,
+          piAgentDir: getSdkConfigDir(),
+          // Keep Pi JSONL session files below the SDK-isolated config directory, never in another workspace.
+          piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
+          // Pi model credentials stay in its request-local AuthStorage; never pass Claude auth env into Bash/tool processes.
+          runtimeEnv: piRuntimeEnv,
+          thinkingLevel: (appSettings.agentThinking?.type === 'disabled'
+            ? 'off'
+            : appSettings.agentEffort === 'max'
+              ? 'xhigh'
+              : appSettings.agentEffort ?? (appSettings.agentThinking ? 'high' : 'off')) as AgentThinkingLevel,
+          ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
+          ...(userMessage.trim() === '/compact' && { compactRequest: true }),
+        }),
         ...(maxTurns != null && { maxTurns }),
         sdkPermissionMode: sdkPermissionModeForProferMode(initialPermissionMode),
         // permissionMode 负责表达 auto/plan/bypassPermissions。
@@ -1140,32 +1164,20 @@ export class AgentOrchestrator {
         ...(sdkPermissionModeForProferMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Profer 特有指令（角色定义、SubAgent 策略、工作区信息等）
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          append: buildSystemPrompt({
-            workspaceName: workspace?.name,
-            workspaceSlug,
-            sessionId,
-            permissionMode: initialPermissionMode,
-            claudeAvailable,
-            deepSeekSubagentModel: modelRouting.subagentModel,
-          }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : ''),
-        },
+        systemPrompt: agentRuntime === 'pi'
+          ? systemPromptAppend
+          : {
+              type: 'preset',
+              preset: 'claude_code',
+              append: systemPromptAppend,
+            },
         resumeSessionId: existingSdkSessionId,
         // 回退后 resume：从指定消息处继续（SDK 在同一 JSONL 内创建分支）
         ...(rewindResumeAt && { resumeSessionAt: rewindResumeAt }),
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
         // 合并附加目录：用户当次输入 + 会话级 + 工作区级（详见 collectAttachedDirectories）
-        ...(() => {
-          const allDirs = collectAttachedDirectories({
-            extraDirs: additionalDirectories,
-            sessionMeta,
-            workspaceSlug,
-          })
-          return allDirs.length > 0 ? { additionalDirectories: allDirs } : {}
-        })(),
+        ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         // 启用文件检查点，支持 rewindFiles 回退
         enableFileCheckpointing: true,
         // SDK 0.2.52+ 新增选项（从 settings 读取）

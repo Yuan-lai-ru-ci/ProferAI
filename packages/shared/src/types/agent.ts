@@ -108,6 +108,22 @@ export type ThinkingConfig =
  */
 export type AgentEffort = 'low' | 'medium' | 'high' | 'max'
 
+/** Pi runtime thinking level. Claude continues to use ThinkingConfig and AgentEffort. */
+export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/** Models whose Codex OAuth provider can opt into priority service tier. */
+export const CODEX_FAST_MODE_MODEL_IDS = [
+  'gpt-5.4',
+  'gpt-5.5',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+] as const
+
+export function isCodexFastModeSupportedModel(modelId: string | undefined): boolean {
+  return modelId !== undefined && (CODEX_FAST_MODE_MODEL_IDS as readonly string[]).includes(modelId.toLowerCase())
+}
+
 /**
  * 自定义子代理定义
  *
@@ -414,6 +430,7 @@ export type ErrorCode =
   | 'channel_not_found'
   | 'api_key_decrypt_failed'
   | 'runtime_unavailable'
+  | 'agent_runtime_not_found'
   | 'claude_binary_not_found'
   | 'session_busy'
   | 'unknown_error'
