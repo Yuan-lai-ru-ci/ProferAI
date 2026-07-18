@@ -413,6 +413,7 @@ export type ErrorCode =
   | 'windows_shell_missing'
   | 'channel_not_found'
   | 'api_key_decrypt_failed'
+  | 'runtime_unavailable'
   | 'claude_binary_not_found'
   | 'session_busy'
   | 'unknown_error'

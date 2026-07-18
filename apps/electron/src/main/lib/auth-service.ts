@@ -568,8 +568,11 @@ export function scheduleAutoRefresh(): void {
   console.log(`[认证] 将在 ${Math.round(delay / 60000)} 分钟后自动续期 token`)
 }
 
+/** 同一进程内合并并发 refresh，避免 refresh-token 轮换时彼此使用旧快照。 */
+let refreshInFlight: Promise<boolean> | null = null
+
 /** 刷新 accessToken（用 refreshToken 换新的） */
-export async function refreshAuthToken(): Promise<boolean> {
+async function refreshAuthTokenImpl(): Promise<boolean> {
   const tokens = readTokens()
   const servers = listTeamServers()
 
@@ -629,6 +632,18 @@ export async function refreshAuthToken(): Promise<boolean> {
 
   console.warn('[认证] 所有服务器 token 刷新均失败')
   return false
+}
+
+/**
+ * 刷新 accessToken（用 refreshToken 换新的）。并发调用共享同一请求，
+ * 防止服务器轮换 refresh token 后第二个请求覆盖或误报失效。
+ */
+export function refreshAuthToken(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight
+  refreshInFlight = refreshAuthTokenImpl().finally(() => {
+    refreshInFlight = null
+  })
+  return refreshInFlight
 }
 
 /** 当前会话是否处于商业模式（登录时存储的标记，不依赖 token 是否过期） */

@@ -1,7 +1,7 @@
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { ProviderType } from '@profer/shared'
-import { normalizeAnthropicBaseUrlForSdk, getProferUserAgent } from '@profer/core'
-import pkg from '../../../package.json' with { type: 'json' }
+import { normalizeAnthropicBaseUrlForSdk } from '@profer/core'
+import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 
 /** 在任意 await 前原子占用会话；false 表示已有同 session 运行。 */
 export function tryAcquireActiveSession(activeSessions: Map<string, string>, sessionId: string, runToken: string): boolean {
@@ -40,18 +40,7 @@ export function applySdkCredentials(
   provider: ProviderType,
   forceBearerAuth = false,
 ): void {
-  if (forceBearerAuth) {
-    sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-  } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'xiaomi-token-plan') {
-    sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-    sdkEnv.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(pkg.version)}`
-  } else if (provider === 'minimax') {
-    sdkEnv.ANTHROPIC_AUTH_TOKEN = apiKey
-    sdkEnv.API_TIMEOUT_MS = '3000000'
-    sdkEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
-  } else {
-    sdkEnv.ANTHROPIC_API_KEY = apiKey
-  }
+  applyAgentSdkAuthEnv(sdkEnv, provider, apiKey, forceBearerAuth)
   if (baseUrl && baseUrl !== 'https://api.anthropic.com') {
     sdkEnv.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(baseUrl)
   }
