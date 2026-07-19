@@ -68,6 +68,7 @@ import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
 import { buildAgentRuntimeEnv } from './agent-runtime-env'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
+import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { applySdkCredentials, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
 
@@ -834,12 +835,6 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 已合并 ${Object.keys(customMcpServers).length} 个自定义 MCP 服务器`)
       }
 
-      // Claude SDK 原生接收 mcpServers；Pi 必须将同一配置连接后转换为 customTools。
-      // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。
-      const piMcpTools = agentRuntime === 'pi'
-        ? await buildPiMcpTools(mcpServers)
-        : undefined
-
       // 11. 构建动态上下文和最终 prompt
       const dynamicCtx = buildDynamicContext({
         workspaceName: workspace?.name,
@@ -889,6 +884,25 @@ export class AgentOrchestrator {
       const appSettings = getSettings()
       const initialPermissionMode: ProferPermissionMode = permissionModeOverride
         ?? PROFER_DEFAULT_PERMISSION_MODE
+      // Claude SDK 原生接收 mcpServers；Pi 必须将同一配置连接后转换为 customTools。
+      // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。
+      const piCustomTools = agentRuntime === 'pi'
+        ? await (async () => {
+            const piSdk = await import('@earendil-works/pi-coding-agent')
+            const builtin = await buildPiBuiltinTools(piSdk, {
+              sessionId,
+              channelId,
+              modelId,
+              agentRuntime,
+              workspaceId,
+              workspaceSlug,
+              permissionMode: initialPermissionMode,
+              triggeredBy: input.triggeredBy,
+            })
+            const mcpTools = await buildPiMcpTools(mcpServers)
+            return [...builtin.tools, ...mcpTools]
+          })()
+        : undefined
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
@@ -1156,7 +1170,7 @@ export class AgentOrchestrator {
               ? 'xhigh'
               : appSettings.agentEffort ?? (appSettings.agentThinking ? 'high' : 'off')) as AgentThinkingLevel,
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
-          ...(piMcpTools && { customTools: piMcpTools }),
+          ...(piCustomTools && { customTools: piCustomTools }),
           ...(userMessage.trim() === '/compact' && { compactRequest: true }),
         }),
         ...(maxTurns != null && { maxTurns }),
