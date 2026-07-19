@@ -38,20 +38,31 @@ function inferDripWeekStart(sub) {
 }
 
 /** 在调用方事务内执行；仅清除不属于 currentWeek 的未领 drip。 */
+function forfeitDrip(sub, { nextWeekStart = null, referenceType, description }, now) {
+  const available = sub.drip_available_this_week || 0
+  if (available <= 0) return 0
+
+  db.prepare('UPDATE subscriptions SET drip_available_this_week = 0, drip_week_start = ? WHERE id = ?')
+    .run(nextWeekStart, sub.id)
+  db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
+    VALUES (?, ?, ?, 'drip_expiry', ?, 'package', ?, ?, ?)`)
+    .run(uuidv4(), sub.user_id, 0, description(available), referenceType, sub.id, now)
+  return available
+}
+
 function expireStaleDrip(sub, currentWeek, now) {
   const available = sub.drip_available_this_week || 0
   if (available <= 0) return 0
   const ownedWeek = inferDripWeekStart(sub)
   if (ownedWeek === currentWeek) return 0
 
-  db.prepare('UPDATE subscriptions SET drip_available_this_week = 0, drip_week_start = ? WHERE id = ?')
-    .run(currentWeek, sub.id)
-  db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
-    VALUES (?, ?, ?, 'drip_expiry', ?, 'package', 'drip_weekly_clear', ?, ?)`)
-    .run(uuidv4(), sub.user_id, 0,
-      ownedWeek ? `周清零：${ownedWeek} 未领 drip ${Math.round(available / 50000)} 积分` : `周清零：历史未归属 drip ${Math.round(available / 50000)} 积分`,
-      sub.id, now)
-  return available
+  return forfeitDrip(sub, {
+    nextWeekStart: currentWeek,
+    referenceType: 'drip_weekly_clear',
+    description: (amount) => ownedWeek
+      ? `周清零：${ownedWeek} 未领 drip ${Math.round(amount / 50000)} 积分`
+      : `周清零：历史未归属 drip ${Math.round(amount / 50000)} 积分`,
+  }, now)
 }
 
 // ===== 套餐定价（从 config-store 动态获取，Admin 操控面板可实时调整） =====
@@ -222,6 +233,7 @@ export function confirmOrder(orderId, adminUserId) {
           .run(uuidv4(), order.user_id, order.credits,
             `手动充值 ¥${(order.amount_rmb / 100).toFixed(2)} → ${order.credits} 积分`,
             orderId, now)
+        syncCreditBalance(order.user_id)
         break
 
       case 'vip':
@@ -252,17 +264,31 @@ export function confirmOrder(orderId, adminUserId) {
         const dripRate = plan.dailyDrip + (isVip ? getVipConfig().extraDrip : 0)
         const expiresMs = cycle === 'yearly' ? 365 * 86400 * 1000 : 30 * 86400 * 1000
 
-        const existingSub = db.prepare('SELECT id, expires_at, welcome_bonus_claimed FROM subscriptions WHERE user_id = ?').get(order.user_id)
-        const expiresAt = Math.max(now, existingSub?.expires_at || 0) + expiresMs
+        const existingSub = db.prepare(`SELECT id, user_id, status, expires_at, welcome_bonus_claimed,
+          drip_available_this_week, drip_week_start FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`)
+          .get(order.user_id)
+        const isActiveRenewal = existingSub?.status === 'active' && (!existingSub.expires_at || existingSub.expires_at > now)
+        const expiresAt = (isActiveRenewal ? existingSub.expires_at : now) + expiresMs
         const grantWelcomeBonus = !existingSub?.welcome_bonus_claimed
 
         if (existingSub) {
+          if (!isActiveRenewal) {
+            forfeitDrip(existingSub, {
+              referenceType: 'drip_subscription_expiry',
+              description: (amount) => `套餐重新开通：过期未领取 drip ${Math.round(amount / 50000)} 积分失效`,
+            }, now)
+          }
           db.prepare(`UPDATE subscriptions SET plan = ?, status = 'active',
             welcome_bonus_claimed = CASE WHEN welcome_bonus_claimed = 1 THEN 1 ELSE ? END,
             welcome_bonus_amount = CASE WHEN welcome_bonus_claimed = 1 THEN welcome_bonus_amount ELSE ? END,
-            daily_drip_rate = ?, vip_discount_applied = ?, cycle = ?,
-            expires_at = ?, renewed_at = ?, destroyed_at = NULL WHERE user_id = ?`)
-            .run(order.plan, grantWelcomeBonus ? 1 : 0, welcomeBonusQuota, dripRate, isVip ? 1 : 0, cycle, expiresAt, now, order.user_id)
+            daily_drip_rate = ?, vip_discount_applied = ?, cycle = ?, expires_at = ?, renewed_at = ?, destroyed_at = NULL,
+            drip_available_this_week = CASE WHEN ? THEN drip_available_this_week ELSE 0 END,
+            drip_week_start = CASE WHEN ? THEN drip_week_start ELSE NULL END,
+            drip_last_accrual_date = CASE WHEN ? THEN drip_last_accrual_date ELSE NULL END,
+            drip_last_claimed_date = CASE WHEN ? THEN drip_last_claimed_date ELSE NULL END
+            WHERE id = ?`)
+            .run(order.plan, grantWelcomeBonus ? 1 : 0, welcomeBonusQuota, dripRate, isVip ? 1 : 0, cycle, expiresAt, now,
+              isActiveRenewal ? 1 : 0, isActiveRenewal ? 1 : 0, isActiveRenewal ? 1 : 0, isActiveRenewal ? 1 : 0, existingSub.id)
         } else {
           db.prepare(`INSERT INTO subscriptions (id, user_id, plan, status, welcome_bonus_claimed, welcome_bonus_amount,
             daily_drip_rate, vip_discount_applied, cycle, started_at, expires_at, created_at)
@@ -366,28 +392,58 @@ export function getSubscriptionStatus(userId) {
 export function destroySubscription(userId) {
   const now = Date.now()
   const tx = db.transaction(() => {
-    const result = db.prepare("UPDATE subscriptions SET status = 'destroyed', destroyed_at = ? WHERE user_id = ? AND status = 'active'")
-      .run(now, userId)
-    if (result.changes > 0) {
-      db.prepare("UPDATE users SET membership_tier = 'free' WHERE id = ?").run(userId)
-    }
-    return result.changes > 0
+    const sub = db.prepare("SELECT id, user_id, plan, drip_available_this_week FROM subscriptions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1")
+      .get(userId)
+    if (!sub) return false
+
+    db.prepare("UPDATE subscriptions SET status = 'destroyed', destroyed_at = ? WHERE id = ?")
+      .run(now, sub.id)
+    forfeitDrip(sub, {
+      referenceType: 'drip_subscription_expiry',
+      description: (amount) => `套餐销毁：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
+    }, now)
+    db.prepare("UPDATE users SET membership_tier = 'free' WHERE id = ?").run(userId)
+    return true
   })
   return tx()
 }
 
-/** 冻结套餐（到期未续，套餐积分冻结） */
+/** 冻结套餐（到期未续，未领取 drip 随套餐失效） */
 export function freezeSubscription(userId) {
   const now = Date.now()
-  db.prepare("UPDATE subscriptions SET status = 'frozen' WHERE user_id = ? AND status = 'active' AND expires_at <= ?")
-    .run(userId, now)
+  const tx = db.transaction(() => {
+    const sub = db.prepare("SELECT id, user_id, plan, drip_available_this_week FROM subscriptions WHERE user_id = ? AND status = 'active' AND expires_at <= ? ORDER BY created_at DESC LIMIT 1")
+      .get(userId, now)
+    if (!sub) return false
+
+    db.prepare("UPDATE subscriptions SET status = 'frozen' WHERE id = ?").run(sub.id)
+    forfeitDrip(sub, {
+      referenceType: 'drip_subscription_expiry',
+      description: (amount) => `套餐冻结：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
+    }, now)
+    return true
+  })
+  return tx()
 }
 
-/** 续费解冻 */
+/** 仅恢复仍在有效期内的冻结订阅；续费必须走订单确认路径。 */
 export function unfreezeSubscription(userId) {
   const now = Date.now()
-  db.prepare("UPDATE subscriptions SET status = 'active', renewed_at = ? WHERE user_id = ? AND status = 'frozen'")
-    .run(now, userId)
+  const tx = db.transaction(() => {
+    const sub = db.prepare("SELECT id, user_id, plan, drip_available_this_week FROM subscriptions WHERE user_id = ? AND status = 'frozen' AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT 1")
+      .get(userId, now)
+    if (!sub) return false
+
+    // 防御历史数据或旧版本冻结流程遗留的待领取池。
+    forfeitDrip(sub, {
+      referenceType: 'drip_subscription_expiry',
+      description: (amount) => `套餐恢复：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
+    }, now)
+    db.prepare("UPDATE subscriptions SET status = 'active', renewed_at = ? WHERE id = ?")
+      .run(now, sub.id)
+    return true
+  })
+  return tx()
 }
 
 /** 升级套餐：补差价，红包不补，drip 立即提级 */
@@ -412,17 +468,23 @@ export function expireSubscription(userId) {
   const now = Date.now()
   const tx = db.transaction(() => {
     const sub = db.prepare(
-      "SELECT id, plan FROM subscriptions WHERE user_id = ? AND status = 'active' AND expires_at <= ?"
+      "SELECT id, user_id, plan, drip_available_this_week FROM subscriptions WHERE user_id = ? AND status = 'active' AND expires_at <= ?"
     ).get(userId, now)
     if (!sub) return false
 
     // 1. 标记订阅过期
     db.prepare("UPDATE subscriptions SET status = 'expired' WHERE id = ?").run(sub.id)
 
-    // 2. 降级 membership_tier
+    // 2. 未领取 drip 随套餐到期失效，绝不能在续费时复活。
+    forfeitDrip(sub, {
+      referenceType: 'drip_subscription_expiry',
+      description: (amount) => `套餐到期：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
+    }, now)
+
+    // 3. 降级 membership_tier
     db.prepare("UPDATE users SET membership_tier = 'free' WHERE id = ?").run(userId)
 
-    // 3. 清零套餐积分桶（红包 + drip 随套餐失效，直充/返利保留）
+    // 4. 清零套餐积分桶（红包 + drip 随套餐失效，直充/返利保留）
     const user = db.prepare('SELECT balance_package FROM users WHERE id = ?').get(userId)
     const forfeited = user?.balance_package || 0
     if (forfeited > 0) {
@@ -434,7 +496,7 @@ export function expireSubscription(userId) {
           sub.id, now)
     }
 
-    // 4. 同步 credits.balance
+    // 5. 同步 credits.balance
     syncCreditBalance(userId)
 
     return true
@@ -501,17 +563,17 @@ export function claimDrip(userId) {
   const now = Date.now()
   const tx = db.transaction(() => {
     const sub = db.prepare(
-      "SELECT id, drip_available_this_week, drip_last_claimed_date FROM subscriptions WHERE user_id = ? AND status = 'active'"
-    ).get(userId)
+      "SELECT id, drip_available_this_week, drip_last_claimed_date FROM subscriptions WHERE user_id = ? AND status = 'active' AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT 1"
+    ).get(userId, now)
     if (!sub || !sub.drip_available_this_week || sub.drip_available_this_week <= 0) return 0
 
     const amount = sub.drip_available_this_week
+    ensureCreditRow(userId)
     db.prepare('UPDATE subscriptions SET drip_available_this_week = 0, drip_last_claimed_date = ? WHERE id = ?')
       .run(today, sub.id)
     db.prepare('UPDATE users SET balance_package = balance_package + ? WHERE id = ?')
       .run(amount, userId)
-    db.prepare('UPDATE credits SET balance = balance + ?, updated_at = ? WHERE user_id = ?')
-      .run(amount, now, userId)
+    syncCreditBalance(userId)
     db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
       VALUES (?, ?, ?, 'drip_claim', ?, 'package', 'drip_claim', ?, ?)`)
       .run(uuidv4(), userId, amount, `领取本周 drip ${Math.round(amount / 50000)} 积分`, sub.id, now)
@@ -664,12 +726,27 @@ export function redeemCode(userId, { id: codeId, type, value, cycle }) {
         const isVip = user?.is_vip || false
         const actualDripRate = dripRate + (isVip ? getVipConfig().extraDrip : 0)
 
-        const existingSub = db.prepare('SELECT id FROM subscriptions WHERE user_id = ?').get(userId)
+        const existingSub = db.prepare(`SELECT id, user_id, status, expires_at, drip_available_this_week, drip_week_start
+          FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`).get(userId)
+        const isActiveRenewal = existingSub?.status === 'active' && (!existingSub.expires_at || existingSub.expires_at > now)
+        const expiresAt = (isActiveRenewal ? existingSub.expires_at : now) + expiresMs
         if (existingSub) {
+          if (!isActiveRenewal) {
+            forfeitDrip(existingSub, {
+              referenceType: 'drip_subscription_expiry',
+              description: (amount) => `套餐重新开通：过期未领取 drip ${Math.round(amount / 50000)} 积分失效`,
+            }, now)
+          }
           db.prepare(`UPDATE subscriptions SET plan = ?, status = 'active', welcome_bonus_claimed = 1,
             welcome_bonus_amount = ?, daily_drip_rate = ?, vip_discount_applied = ?,
-            cycle = ?, started_at = ?, expires_at = ?, renewed_at = ?, destroyed_at = NULL WHERE user_id = ?`)
-            .run(value, welcomeBonusQuota, actualDripRate, isVip ? 1 : 0, cycle, now, now + expiresMs, now, userId)
+            cycle = ?, started_at = ?, expires_at = ?, renewed_at = ?, destroyed_at = NULL,
+            drip_available_this_week = CASE WHEN ? THEN drip_available_this_week ELSE 0 END,
+            drip_week_start = CASE WHEN ? THEN drip_week_start ELSE NULL END,
+            drip_last_accrual_date = CASE WHEN ? THEN drip_last_accrual_date ELSE NULL END,
+            drip_last_claimed_date = CASE WHEN ? THEN drip_last_claimed_date ELSE NULL END
+            WHERE id = ?`)
+            .run(value, welcomeBonusQuota, actualDripRate, isVip ? 1 : 0, cycle, now, expiresAt, now,
+              isActiveRenewal ? 1 : 0, isActiveRenewal ? 1 : 0, isActiveRenewal ? 1 : 0, isActiveRenewal ? 1 : 0, existingSub.id)
         } else {
           db.prepare(`INSERT INTO subscriptions (id, user_id, plan, status, welcome_bonus_claimed, welcome_bonus_amount,
             daily_drip_rate, vip_discount_applied, cycle, started_at, expires_at, created_at)

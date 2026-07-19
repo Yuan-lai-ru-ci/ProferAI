@@ -86,9 +86,7 @@ async function reconcileAndBill({ newApiRequestId, requestId, userId, billing })
       return 0
     }
     if (rec.billedCredits <= 0) return 0
-    const { deductCredits, claimDrip } = await import('../../db.js')
-    // 当日首次请求自动领取 drip（幂等，无未领 drip 时为空操作）
-    try { claimDrip(userId) } catch (e) { /* drip 领取失败不阻塞请求 */ }
+    const { deductCredits } = await import('../../db.js')
     // force: true — 事后对账必须记账，即使余额不足也透支扣费（余额门禁 creditGateMiddleware 已在转发前拦截）
     deductCredits(userId, rec.billedCredits, {
       description: `API 调用（New API quota ${rec.quota}）`,

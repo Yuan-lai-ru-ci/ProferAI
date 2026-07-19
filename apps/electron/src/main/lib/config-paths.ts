@@ -72,7 +72,9 @@ export function migrateFromProferIfNeeded(): void {
  * 如果目录不存在则自动创建。
  */
 export function getConfigDir(): string {
-  const configDir = join(homedir(), getConfigDirName())
+  // 自动化测试和受控诊断可显式隔离配置根目录；常规运行仍使用用户目录。
+  const override = process.env.PROFER_CONFIG_DIR?.trim()
+  const configDir = override ? resolve(override) : join(homedir(), getConfigDirName())
 
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true })
@@ -730,6 +732,11 @@ export function getKnowledgeBaseIndexPath(): string {
   return join(getKnowledgeBaseDir(), 'index.json')
 }
 
+/** 通用个人资料索引；与历史 Paperpipe 论文 index.json 分开，避免迁移期间互相覆盖。 */
+export function getKnowledgeItemsIndexPath(): string {
+  return join(getKnowledgeBaseDir(), 'items-index.json')
+}
+
 /**
  * 获取论文知识库个人工作台状态文件路径。
  *
@@ -748,8 +755,33 @@ export function getKnowledgeBaseVectorDbPath(): string {
   return join(getKnowledgeBaseDir(), 'vectors.db')
 }
 
-/** 本地论文目录只接受应用生成的 UUID，避免 renderer/损坏索引影响文件系统路径。 */
+/** 通用资料目录；普通资料与历史论文目录分离，避免路径和生命周期混用。 */
+export function getKnowledgeItemsDir(): string {
+  const dir = join(getKnowledgeBaseDir(), 'items')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 本地论文/资料目录只接受应用生成的 UUID，避免 renderer/损坏索引影响文件系统路径。 */
 const LOCAL_PAPER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/** 仅解析受控通用资料目录；读取和删除场景不得隐式创建路径。 */
+export function resolveKnowledgeItemDir(itemId: string): string {
+  if (typeof itemId !== 'string' || !LOCAL_PAPER_ID_RE.test(itemId)) {
+    throw new Error('资料标识无效')
+  }
+  const root = resolve(getKnowledgeItemsDir())
+  const dir = resolve(root, itemId)
+  if (!dir.startsWith(`${root}${sep}`)) throw new Error('资料标识无效')
+  return dir
+}
+
+/** 仅在导入通用资料的写入流程创建资料目录。 */
+export function getKnowledgeItemDir(itemId: string): string {
+  const dir = resolveKnowledgeItemDir(itemId)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
 
 /** 仅解析受控本地论文目录；读取和删除场景不得隐式创建路径。 */
 export function resolvePaperDir(paperId: string): string {

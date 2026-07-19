@@ -123,6 +123,105 @@ describe('周 drip 过期与补偿', () => {
   })
 })
 
+describe('Drip 手动领取与订阅到期', () => {
+  test('Given accrued drip When user has not explicitly claimed Then only the pending pool changes', () => {
+    const { db, accrueDailyDripForUser, claimDrip } = dbModule
+    const userId = makeUser('sub-drip-explicit-claim')
+    const now = Date.parse('2026-07-21T09:00:00+08:00')
+    db.prepare(`INSERT INTO subscriptions
+      (id, user_id, plan, status, daily_drip_rate, started_at, expires_at, created_at)
+      VALUES (?, ?, 'standard', 'active', 8, ?, ?, ?)`)
+      .run('subscription-drip-explicit-claim', userId, now - MONTH_MS, now + MONTH_MS, now)
+
+    expect(accrueDailyDripForUser(userId, now)).toBe(1)
+    const pending = db.prepare('SELECT drip_available_this_week FROM subscriptions WHERE user_id = ?').get(userId).drip_available_this_week
+    expect(pending).toBeGreaterThan(0)
+    expect(getUserBalances(userId).balance_package).toBe(0)
+    expect(db.prepare('SELECT balance FROM credits WHERE user_id = ?').get(userId).balance).toBe(0)
+
+    expect(claimDrip(userId)).toBe(pending)
+    expect(claimDrip(userId)).toBe(0)
+    expect(getUserBalances(userId).balance_package).toBe(pending)
+    expect(db.prepare('SELECT balance FROM credits WHERE user_id = ?').get(userId).balance).toBe(pending)
+    expect(db.prepare('SELECT drip_available_this_week FROM subscriptions WHERE user_id = ?').get(userId).drip_available_this_week).toBe(0)
+    expect(db.prepare("SELECT COUNT(*) AS count FROM credit_transactions WHERE user_id = ? AND type = 'drip_claim'").get(userId).count).toBe(1)
+  })
+
+  test('Given an expired active subscription When claiming or expiring it Then pending drip cannot enter balance and is audited as forfeited', () => {
+    const { db, claimDrip, expireSubscription } = dbModule
+    const userId = makeUser('sub-drip-expired')
+    const now = Date.now()
+    db.prepare(`INSERT INTO subscriptions
+      (id, user_id, plan, status, started_at, expires_at, drip_available_this_week, drip_week_start, created_at)
+      VALUES (?, ?, 'standard', 'active', ?, ?, ?, '2026-07-13', ?)`)
+      .run('subscription-drip-expired', userId, now - MONTH_MS, now - 1, 400000, now)
+
+    expect(claimDrip(userId)).toBe(0)
+    expect(getUserBalances(userId).balance_package).toBe(0)
+    expect(expireSubscription(userId)).toBe(true)
+    expect(db.prepare('SELECT status, drip_available_this_week FROM subscriptions WHERE user_id = ?').get(userId))
+      .toEqual({ status: 'expired', drip_available_this_week: 0 })
+    expect(db.prepare("SELECT COUNT(*) AS count FROM credit_transactions WHERE user_id = ? AND reference_type = 'drip_subscription_expiry'").get(userId).count).toBe(1)
+  })
+
+  test('Given an expired subscription with a pending pool When it is repurchased Then old drip state is reset instead of revived', () => {
+    const { db, confirmOrder } = dbModule
+    const userId = makeUser('sub-drip-repurchase')
+    const now = Date.now()
+    db.prepare(`INSERT INTO subscriptions
+      (id, user_id, plan, status, welcome_bonus_claimed, daily_drip_rate, started_at, expires_at,
+       drip_available_this_week, drip_week_start, drip_last_accrual_date, drip_last_claimed_date, created_at)
+      VALUES (?, ?, 'standard', 'expired', 1, 8, ?, ?, 400000, '2026-07-13', '2026-07-19', '2026-07-19', ?)`)
+      .run('subscription-drip-repurchase', userId, now - MONTH_MS, now - 1, now)
+
+    confirmOrder(makeSubscriptionOrder(userId), 'admin-test')
+    expect(db.prepare(`SELECT status, drip_available_this_week, drip_week_start, drip_last_accrual_date, drip_last_claimed_date
+      FROM subscriptions WHERE user_id = ?`).get(userId)).toEqual({
+      status: 'active', drip_available_this_week: 0, drip_week_start: null, drip_last_accrual_date: null, drip_last_claimed_date: null,
+    })
+  })
+
+  test('Given a topup order When confirmed Then credits mirror is synchronized from the purchased bucket', () => {
+    const { db, createOrder, confirmOrder } = dbModule
+    const userId = makeUser('sub-topup-mirror')
+    const order = createOrder({ userId, type: 'topup', amountRmb: 100, credits: 5 })
+    confirmOrder(order.id, 'admin-test')
+    expect(getUserBalances(userId).balance_purchased).toBe(250000)
+    expect(db.prepare('SELECT balance FROM credits WHERE user_id = ?').get(userId).balance).toBe(250000)
+  })
+
+  test('Given a subscription with pending drip When it is destroyed Then the pool is forfeited and cannot be revived', () => {
+    const { db, destroySubscription } = dbModule
+    const userId = makeUser('sub-drip-destroy', 'standard')
+    const now = Date.now()
+    db.prepare(`INSERT INTO subscriptions
+      (id, user_id, plan, status, started_at, expires_at, drip_available_this_week, drip_week_start, created_at)
+      VALUES (?, ?, 'standard', 'active', ?, ?, ?, '2026-07-20', ?)`)
+      .run('subscription-drip-destroy', userId, now - MONTH_MS, now + MONTH_MS, 400000, now)
+
+    expect(destroySubscription(userId)).toBe(true)
+    expect(db.prepare('SELECT status, drip_available_this_week FROM subscriptions WHERE user_id = ?').get(userId))
+      .toEqual({ status: 'destroyed', drip_available_this_week: 0 })
+    expect(db.prepare("SELECT COUNT(*) AS count FROM credit_transactions WHERE user_id = ? AND reference_type = 'drip_subscription_expiry'").get(userId).count).toBe(1)
+  })
+
+  test('Given an expired subscription with pending drip When it is frozen Then the pool is forfeited and unfreeze rejects it', () => {
+    const { db, freezeSubscription, unfreezeSubscription } = dbModule
+    const userId = makeUser('sub-drip-freeze', 'standard')
+    const now = Date.now()
+    db.prepare(`INSERT INTO subscriptions
+      (id, user_id, plan, status, started_at, expires_at, drip_available_this_week, drip_week_start, created_at)
+      VALUES (?, ?, 'standard', 'active', ?, ?, ?, '2026-07-13', ?)`)
+      .run('subscription-drip-freeze', userId, now - MONTH_MS, now - 1, 400000, now)
+
+    expect(freezeSubscription(userId)).toBe(true)
+    expect(unfreezeSubscription(userId)).toBe(false)
+    expect(db.prepare('SELECT status, drip_available_this_week FROM subscriptions WHERE user_id = ?').get(userId))
+      .toEqual({ status: 'frozen', drip_available_this_week: 0 })
+    expect(db.prepare("SELECT COUNT(*) AS count FROM credit_transactions WHERE user_id = ? AND reference_type = 'drip_subscription_expiry'").get(userId).count).toBe(1)
+  })
+})
+
 describe('subscription P0 regressions', () => {
   test('Given an active paid subscription When destroySubscription tier downgrade fails Then the subscription destruction is rolled back atomically', () => {
     const { db, destroySubscription } = dbModule

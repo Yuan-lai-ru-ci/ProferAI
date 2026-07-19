@@ -21,3 +21,12 @@ export function extractRemotePaperId(data) {
   const candidate = data?.paper?.id ?? data?.paperId ?? data?.id
   return isSafePaperpipeId(candidate) ? candidate : undefined
 }
+
+export function normalizePaperpipeSearchInput(body) {
+  const query = typeof body?.query === 'string' ? body.query.trim() : ''
+  if (!query || query.length > 500) return { error: '搜索关键词不能为空或过长' }
+  const { topK, mode } = body
+  if (topK != null && (!Number.isInteger(topK) || topK < 1 || topK > 50)) return { error: '搜索数量必须在 1 到 50 之间' }
+  if (mode != null && !['fts', 'semantic', 'hybrid'].includes(mode)) return { error: '搜索模式无效' }
+  return { value: { query, ...(topK != null ? { topK } : {}), ...(mode != null ? { mode } : {}) } }
+}

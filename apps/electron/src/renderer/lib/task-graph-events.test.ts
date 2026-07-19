@@ -129,4 +129,17 @@ describe('taskActivityToGraphEvents', () => {
       6000,
     ).events).toEqual([])
   })
+
+  test('preserves explicit empty structured dependencies as a replacement update', () => {
+    expect(taskActivityToGraphEvents(
+      activity('TaskUpdate', { taskId: 't1', dependsOn: [] }),
+      'session-1',
+      7000,
+    ).events).toEqual([
+      {
+        type: 'task_updated', taskId: 't1', timestamp: 7000,
+        payload: { dependsOn: [] },
+      },
+    ])
+  })
 })

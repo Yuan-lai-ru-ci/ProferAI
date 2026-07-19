@@ -11,13 +11,15 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { getKnowledgeBaseDir, getPaperDir, resolvePaperDir } from './config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 import { getTeamAuthWithRefresh } from './auth-service'
 import { parsePaper } from './paper-service'
+import { findPaperMatch, mergePaperMeta, remotePaperToMeta, resolveRemoteSource, selectRemoteMarkdown } from './kb-paperpipe-mapping'
 import type {
+  KBLibrarySnapshot,
   PaperMeta,
   KBSearchResult,
   KBImportInput,
@@ -53,6 +55,22 @@ interface PaperpipePaper {
   categories?: string[]
   added?: string
   source?: 'arxiv' | 'local'
+}
+
+const uploadTokens = new Map<string, string>()
+
+function beginUpload(paperId: string): string {
+  const token = randomUUID()
+  uploadTokens.set(paperId, token)
+  return token
+}
+
+function isCurrentUpload(paperId: string, token: string): boolean {
+  return uploadTokens.get(paperId) === token && readLocalIndex().some((paper) => paper.id === paperId)
+}
+
+function endUpload(paperId: string, token: string): void {
+  if (uploadTokens.get(paperId) === token) uploadTokens.delete(paperId)
 }
 
 async function paperpipeApi<T = unknown>(
@@ -150,7 +168,8 @@ export async function importPaper(input: KBImportInput): Promise<KBImportResult>
     const paperDir = getPaperDir(paperId)
     const originalFileName = filePath.split(/[/\\]/).pop()
 
-    // 保存 MinerU 解析的 Markdown（本地）
+    // 保存受控本地副本，未来 Bridge 具备幂等契约后才能安全重试；绝不持久化用户绝对路径。
+    copyFileSync(filePath, join(paperDir, 'original.pdf'))
     writeFileSync(join(paperDir, 'full.md'), parseResult.markdown, 'utf-8')
 
     // 提取元数据
@@ -172,13 +191,22 @@ export async function importPaper(input: KBImportInput): Promise<KBImportResult>
 
     // 上传完成前明确标为待同步，避免本地成功被误认为远端已建立。
     paperMeta.syncState = 'pending'
+    paperMeta.lastSyncAttemptAt = Date.now()
     syncLocalIndex(paperMeta)
-    uploadPdfToPaperpipe(filePath, paperId)
-      .then((remoteId) => syncLocalIndex({ ...paperMeta, remoteId, syncState: 'synced' }))
+    const uploadToken = beginUpload(paperId)
+    uploadPdfToPaperpipe(join(paperDir, 'original.pdf'), paperId)
+      .then((remoteId) => {
+        if (isCurrentUpload(paperId, uploadToken)) {
+          syncLocalIndex({ id: paperId, remoteId, syncState: 'synced', syncError: undefined, lastSyncAttemptAt: Date.now() })
+        }
+      })
       .catch((err) => {
         console.warn('[KB] paperpipe 上传 PDF 失败（论文已保存本地）:', (err as Error).message)
-        syncLocalIndex({ ...paperMeta, syncState: 'failed', syncError: '远端同步失败，可稍后重试' })
+        if (isCurrentUpload(paperId, uploadToken)) {
+          syncLocalIndex({ id: paperId, syncState: 'failed', syncError: '远端同步失败，已保留本地内容', lastSyncAttemptAt: Date.now() })
+        }
       })
+      .finally(() => endUpload(paperId, uploadToken))
 
     return { paper: paperMeta, creditsUsed: parseResult.creditsUsed, chunkCount: 0 }
   }
@@ -256,6 +284,7 @@ export async function searchPapers(query: string, topK = 5, mode: 'fts' | 'seman
         year?: number
         tags: string[]
         arxivId?: string
+        source?: 'arxiv' | 'local'
       }>
     }>('/search', { method: 'POST', body: { query, topK, mode } })
 
@@ -274,7 +303,7 @@ export async function searchPapers(query: string, topK = 5, mode: 'fts' | 'seman
           title: r.title || r.paperId,
           authors: r.authors || [],
           abstract: r.abstract || '',
-          source: 'arxiv' as const,
+          source: resolveRemoteSource(r.source) ?? 'arxiv',
           pageCount: 0,
           importedAt: Date.now(),
           tags: r.tags || [],
@@ -296,40 +325,28 @@ export async function searchPapers(query: string, topK = 5, mode: 'fts' | 'seman
 /**
  * 列出所有论文（paperpipe 服务端 + 本地合并）
  */
-export async function listPapers(tag?: string): Promise<PaperMeta[]> {
-  const localPapers = readLocalIndex()
-
-  // 从 paperpipe 拉取
+export async function loadLibrarySnapshot(): Promise<KBLibrarySnapshot> {
+  const papers = readLocalIndex()
   try {
     const result = await paperpipeApi<{ papers: PaperpipePaper[] }>('/list')
-    for (const pp of result.papers) {
-      const arxivId = pp.arxivId || pp.arxiv_id
-      if (!localPapers.find((lp) => lp.remoteId === pp.id || lp.id === pp.id || (arxivId != null && lp.arxivId === arxivId))) {
-        localPapers.unshift({
-          id: pp.id,
-          title: pp.title,
-          authors: pp.authors || [],
-          abstract: pp.abstract || '',
-          arxivId,
-          remoteId: pp.id,
-          syncState: 'synced',
-          year: pp.year,
-          source: pp.source || 'arxiv',
-          pageCount: 0,
-          importedAt: Date.now(),
-          tags: pp.tags || [],
-          chunkCount: 0,
-        })
-      }
+    for (const remote of result.papers) {
+      const incoming = remotePaperToMeta(remote)
+      const existingIndex = findPaperMatch(papers, incoming)
+      const merged = mergePaperMeta(existingIndex >= 0 ? papers[existingIndex] : undefined, incoming)
+      if (existingIndex >= 0) papers[existingIndex] = merged
+      else papers.unshift(merged)
     }
+    writeJsonFileAtomic(join(getKnowledgeBaseDir(), 'index.json'), papers)
+    return { papers, stats: computeKBStats(papers), remoteState: 'synced' }
   } catch (err) {
     console.warn('[KB] paperpipe list 失败，仅显示本地论文:', (err as Error).message)
+    return { papers, stats: computeKBStats(papers), remoteState: 'degraded', remoteError: '远端暂不可用，当前显示本地缓存' }
   }
+}
 
-  if (tag) {
-    return localPapers.filter((p) => p.tags.includes(tag))
-  }
-  return localPapers
+export async function listPapers(tag?: string): Promise<PaperMeta[]> {
+  const { papers } = await loadLibrarySnapshot()
+  return tag ? papers.filter((paper) => paper.tags.includes(tag)) : papers
 }
 
 /**
@@ -349,9 +366,9 @@ export async function getPaper(paperId: string): Promise<{ meta: PaperMeta; mark
     }
     // 本地有记录但无内容 → fallback 服务端（arXiv 论文内容在服务端）
     const remoteId = localPaper.remoteId ?? (localPaper.source === 'arxiv' ? localPaper.id : undefined)
-    if ((localPaper.source === 'arxiv' || localPaper.arxivId) && remoteId) {
+    if (remoteId) {
       const serverResult = await getPaperAsync(remoteId)
-      if (serverResult) return serverResult
+      if (serverResult) return { meta: localPaper, markdown: serverResult.markdown }
     }
     return { meta: localPaper, markdown: '' }
   }
@@ -372,17 +389,14 @@ export async function getPaperAsync(paperId: string): Promise<{ meta: PaperMeta;
       year?: number
       tags: string[]
       arxivId?: string
-      summary: string
-      equations: string
-      tldr: string
-      markdown: string
+      summary?: string
+      equations?: string
+      tldr?: string
+      markdown?: string
+      source?: 'arxiv' | 'local'
     }>(`/show/${encodeURIComponent(paperId)}`)
 
-    const combinedMarkdown = [
-      result.summary ? `# Summary\n\n${result.summary}` : '',
-      result.equations ? `# Equations\n\n${result.equations}` : '',
-      result.markdown && !result.summary ? result.markdown : '',
-    ].filter(Boolean).join('\n\n---\n\n')
+    const combinedMarkdown = selectRemoteMarkdown(result)
 
     return {
       meta: {
@@ -392,7 +406,7 @@ export async function getPaperAsync(paperId: string): Promise<{ meta: PaperMeta;
         abstract: result.tldr || '',
         arxivId: result.arxivId,
         year: result.year,
-        source: 'arxiv',
+        source: resolveRemoteSource(result.source) ?? 'arxiv',
         pageCount: 0,
         importedAt: Date.now(),
         tags: result.tags || [],
@@ -413,6 +427,7 @@ export async function deletePaper(paperId: string): Promise<DeletePaperResult> {
   const localPaper = localPapers.find((p) => p.id === paperId)
   if (!localPaper) throw new Error('论文不存在')
 
+  uploadTokens.delete(paperId)
   const remoteId = localPaper.remoteId ?? (localPaper.source === 'arxiv' ? localPaper.id : undefined)
   if (remoteId) {
     try {
@@ -430,35 +445,40 @@ export async function deletePaper(paperId: string): Promise<DeletePaperResult> {
 /**
  * 获取论文知识库统计
  */
-export function getKBStats(): KBStats {
-  const papers = readLocalIndex()
+function computeKBStats(papers: PaperMeta[]): KBStats {
   return {
     totalPapers: papers.length,
-    totalChunks: 0, // paperpipe 管理分块
-    storageBytes: 0,
+    totalChunks: papers.reduce((sum, paper) => sum + paper.chunkCount, 0),
+    storageBytes: 0, // 远端占用不可验证，不伪造全库统计。
   }
+}
+
+export async function getKBStats(): Promise<KBStats> {
+  return (await loadLibrarySnapshot()).stats
 }
 
 // ===== 辅助函数 =====
 
-function syncLocalIndex(newPaper?: PaperMeta | null, removeId?: string): void {
+function syncLocalIndex(newPaper?: Partial<PaperMeta> | null, removeId?: string): void {
   const papers = readLocalIndex()
 
   if (removeId) {
-    const filtered = papers.filter((p) => p.id !== removeId)
-    writeJsonFileAtomic(join(getKnowledgeBaseDir(), 'index.json'), filtered)
+    writeJsonFileAtomic(join(getKnowledgeBaseDir(), 'index.json'), papers.filter((paper) => paper.id !== removeId))
     return
   }
 
-  if (newPaper) {
-    const existing = papers.findIndex((p) => p.id === newPaper.id || (newPaper.arxivId != null && p.arxivId === newPaper.arxivId))
-    if (existing >= 0) {
-      papers[existing] = newPaper
-    } else {
-      papers.unshift(newPaper)
-    }
-    writeJsonFileAtomic(join(getKnowledgeBaseDir(), 'index.json'), papers)
+  if (!newPaper?.id) return
+  const existing = papers.findIndex((paper) => paper.id === newPaper.id)
+  if (existing >= 0) {
+    papers[existing] = { ...papers[existing], ...(newPaper as Omit<PaperMeta, 'id'>), id: newPaper.id }
+  } else {
+    const complete = newPaper as PaperMeta
+    if (typeof complete.title !== 'string' || !complete.source) throw new Error('论文索引记录不完整')
+    const match = findPaperMatch(papers, complete)
+    if (match >= 0) papers[match] = mergePaperMeta(papers[match], complete)
+    else papers.unshift(complete)
   }
+  writeJsonFileAtomic(join(getKnowledgeBaseDir(), 'index.json'), papers)
 }
 
 function extractBasicMetadata(markdown: string, fileName?: string): {

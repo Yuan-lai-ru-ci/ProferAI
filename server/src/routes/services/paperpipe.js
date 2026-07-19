@@ -13,7 +13,7 @@
 import { Hono } from 'hono'
 import { isBodyTooLargeError } from '../../middleware/body-limit.js'
 import { PAPERPIPE_MAX_FILE_SIZE } from '../../config.js'
-import { extractRemotePaperId, hasPdfMagicBytes, isSafePaperpipeId, sanitizePaperFilename } from './paperpipe-helpers.js'
+import { extractRemotePaperId, hasPdfMagicBytes, isSafePaperpipeId, normalizePaperpipeSearchInput, sanitizePaperFilename } from './paperpipe-helpers.js'
 
 export const paperpipeRoutes = new Hono()
 
@@ -228,12 +228,10 @@ paperpipeRoutes.post('/search', async (c) => {
     return c.json({ error: '请求体格式错误' }, 400)
   }
 
-  const { query } = body
-  if (!query || typeof query !== 'string' || query.trim().length === 0) {
-    return c.json({ error: '搜索关键词不能为空' }, 400)
-  }
+  const parsed = normalizePaperpipeSearchInput(body)
+  if (!parsed.value) return c.json({ error: parsed.error }, 400)
 
-  const { status, data } = await bridgeProxy(userId, 'POST', '/search', { query: query.trim() })
+  const { status, data } = await bridgeProxy(userId, 'POST', '/search', parsed.value)
   return c.json(data, status)
 })
 

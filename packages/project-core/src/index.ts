@@ -51,6 +51,16 @@ export {
   stripMetaTags,
 } from './graph-parser'
 
+// SDK task tool name normalization
+export {
+  normalizeTaskGraphToolName,
+  taskGraphToolKind,
+  isStructuredTaskGraphTool,
+  isTaskCreateTool,
+  isTaskUpdateTool,
+  type TaskGraphToolKind,
+} from './task-tool-names'
+
 // Graph 状态
 export {
   buildGraphFromEvents,

@@ -1,5 +1,5 @@
 import type { GraphEvent, TaskStatus } from '@profer/project-core'
-import { parseAbandon, parseDependsOn, parseForkFrom } from '@profer/project-core'
+import { isTaskCreateTool, isTaskUpdateTool, parseAbandon, parseDependsOn, parseForkFrom } from '@profer/project-core'
 import type { ToolActivity } from '@/atoms/agent-atoms'
 import { parseTaskCreateResult } from '@/components/agent/task-progress'
 
@@ -108,7 +108,7 @@ export function taskActivityToGraphEvents(
   /** 同 turn 中上一个 TaskCreate 产出的 Task ID（用于启发式推断） */
   prevTaskId?: string | null,
 ): TaskGraphEventConversion {
-  if (activity.toolName === 'TaskCreate') {
+  if (isTaskCreateTool(activity.toolName)) {
     const parsedResult = parseTaskCreateResult(activity.result)
     const taskId = parsedResult?.id ?? activity.toolUseId
     const subject = typeof activity.input.subject === 'string'
@@ -155,7 +155,7 @@ export function taskActivityToGraphEvents(
     }
   }
 
-  if (activity.toolName !== 'TaskUpdate') return { events: [] }
+  if (!isTaskUpdateTool(activity.toolName)) return { events: [] }
 
   const taskId = taskIdFromInput(activity.input)
   if (!taskId) return { events: [] }
@@ -190,7 +190,8 @@ export function taskActivityToGraphEvents(
     description = enrichDescription(description, activity.input)
   }
 
-  if (subject !== undefined || description !== undefined) {
+  const structuredDependsOn = stringArrayFromInput(activity.input, 'dependsOn')
+  if (subject !== undefined || description !== undefined || activity.input.dependsOn !== undefined) {
     events.push({
       type: 'task_updated',
       taskId,
@@ -198,12 +199,12 @@ export function taskActivityToGraphEvents(
       payload: {
         ...(subject !== undefined && { subject }),
         ...(description !== undefined && { description }),
+        ...(Array.isArray(activity.input.dependsOn) ? { dependsOn: structuredDependsOn } : {}),
       },
     })
   }
 
   // 解析 dependsOn：优先从 description，回退到 subject，再回退到结构化参数
-  const structuredDependsOn = stringArrayFromInput(activity.input, 'dependsOn')
   const dependsOnFromDescription = description ? parseDependsOn(description) : []
   const dependsOn = dependsOnFromDescription.length > 0
     ? dependsOnFromDescription

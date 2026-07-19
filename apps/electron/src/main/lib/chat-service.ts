@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import { CHAT_IPC_CHANNELS } from '@profer/shared'
-import type { ChatSendInput, ChatMessage, GenerateTitleInput, FileAttachment, ChatToolActivity } from '@profer/shared'
+import type { ChatSendInput, ChatMessage, GenerateTitleInput, FileAttachment, ChatToolActivity, KnowledgeReference } from '@profer/shared'
 import {
   getAdapter,
   streamSSE,
@@ -33,6 +33,8 @@ import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getEnabledTools } from './chat-tool-registry'
 import { executeToolCalls } from './chat-tool-executor'
 import { isCommercialBuild } from './build-target'
+import { searchKnowledgeItemsForChat } from './knowledge-item-service'
+import { prepareChatKnowledgeRequest } from './chat-knowledge-request'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
@@ -210,7 +212,7 @@ export async function sendMessage(
   const {
     conversationId, userMessage, channelId,
     modelId, systemMessage, contextLength, contextDividers, attachments,
-    thinkingEnabled, enabledToolIds,
+    thinkingEnabled, enabledToolIds, knowledgeReferences,
   } = input
 
   // 1. 查找渠道
@@ -280,13 +282,28 @@ export async function sendMessage(
     content: userMessage,
     createdAt: Date.now(),
     attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    knowledgeReferences: knowledgeReferences && knowledgeReferences.length > 0 ? knowledgeReferences : undefined,
   }
   appendMessage(conversationId, userMsg)
 
   // 5. 过滤历史并提取文档附件文本
   const filteredHistory = filterHistory(fullHistory, contextDividers, contextLength)
   const enrichedHistory = await enrichHistoryWithDocuments(filteredHistory)
-  const enrichedUserMessage = await enrichMessageWithDocuments(userMessage, attachments)
+  let enrichedUserMessage = await enrichMessageWithDocuments(userMessage, attachments)
+  try {
+    const prepared = await prepareChatKnowledgeRequest(
+      { userMessage, attachments, history: filteredHistory, currentReferences: knowledgeReferences },
+      {
+        enrichMessage: enrichMessageWithDocuments,
+        search: (query, allowedItemIds, options) => searchKnowledgeItemsForChat(query, allowedItemIds, options.topK),
+      },
+    )
+    enrichedUserMessage = prepared.providerUserMessage
+    console.info('[聊天服务] 资料上下文已准备:', { conversationId, references: prepared.effectiveReferences.length, contextChars: prepared.knowledgeContextChars, providerUserMessageChars: prepared.providerUserMessage.length })
+  } catch (error) {
+    // 资料检索失败不能阻断用户原始问题，亦不伪造“已使用资料”。
+    console.warn('[聊天服务] 资料库片段检索失败，已跳过:', error)
+  }
 
   // 6. 创建 AbortController
   const controller = new AbortController()

@@ -20,8 +20,9 @@ import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
 import { TurnFileChangesSummary } from './TurnFileChangesSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './ProcessBlockGroup'
-import { extractToolResultText, parseTaskCreateResult, TASK_TOOL_NAMES } from './task-progress'
+import { extractToolResultText, isTaskProgressTool, parseTaskCreateResult } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
+import { extractReadKnowledgeItems } from './knowledge-read-indicator'
 import { DurationBadge } from './AgentMessages'
 import {
   Message,
@@ -439,7 +440,7 @@ function buildTaskProgressData(
 
   for (let i = 0; i < topLevelBlocks.length; i++) {
     const block = topLevelBlocks[i]!
-    if (block.type === 'tool_use' && TASK_TOOL_NAMES.has((block as SDKToolUseBlock).name)) {
+    if (block.type === 'tool_use' && isTaskProgressTool((block as SDKToolUseBlock).name)) {
       if (firstTaskIndex === -1) firstTaskIndex = i
       taskBlocks.push(block as SDKToolUseBlock)
     }
@@ -646,7 +647,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
 
   const renderTopLevelBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
     // Task 工具块：聚合为卡片，此处用索引定位首个任务工具
-    if (block.type === 'tool_use' && TASK_TOOL_NAMES.has((block as SDKToolUseBlock).name)) {
+    if (block.type === 'tool_use' && isTaskProgressTool((block as SDKToolUseBlock).name)) {
       if (i === firstTaskIndex) {
         return (
           <TaskProgressCard
@@ -685,6 +686,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   const renderProcessGroupBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
     return renderTopLevelBlock(block, i)
   }
+  const readKnowledgeItems = extractReadKnowledgeItems(turn.turnMessages)
 
   return (
     <Message from="assistant">
@@ -715,6 +717,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
             )
           })}
         </div>
+        {readKnowledgeItems.length > 0 && <div className="flex flex-wrap gap-1.5 border-t border-border/40 pt-2 text-xs text-muted-foreground"><span>已读取资料：</span>{readKnowledgeItems.map((item) => <Badge key={item.itemId} variant="secondary" className="max-w-[240px] truncate font-normal">{item.title}</Badge>)}</div>}
         {/* 如果有错误但也有内容块，在末尾显示错误 */}
         {hasError && errorContent && topLevelBlocks.length > 0 && (
           <div className="mt-3 text-sm text-destructive">

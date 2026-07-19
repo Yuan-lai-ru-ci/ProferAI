@@ -6,6 +6,7 @@
  */
 
 import type { ProviderType } from './channel'
+import type { KnowledgeReference } from './knowledge-base'
 
 // ===== 附件相关 =====
 
@@ -138,6 +139,8 @@ export interface ChatMessage {
   attachments?: FileAttachment[]
   /** 工具活动记录（assistant 消息，工具调用历史） */
   toolActivities?: ChatToolActivity[]
+  /** 资料库轻量引用。独立于附件，删除消息时不得删除资料实体。 */
+  knowledgeReferences?: KnowledgeReference[]
 }
 
 // ===== 对话相关 =====
@@ -239,6 +242,8 @@ export interface ChatSendInput {
   contextDividers?: string[]
   /** 文件附件列表 */
   attachments?: FileAttachment[]
+  /** 本轮新增的资料库引用，由主进程根据 itemId 重新标准化。 */
+  knowledgeReferences?: KnowledgeReference[]
   /** 是否启用思考模式 */
   thinkingEnabled?: boolean
   /** 本次请求启用的工具 ID 列表（由前端工具选择器决定） */
@@ -397,6 +402,8 @@ export const CHAT_IPC_CHANNELS = {
   // 消息发送
   /** 发送消息（触发 AI 流式响应） */
   SEND_MESSAGE: 'chat:send-message',
+  /** 向对话追加一条可见、持久的资料引用消息。 */
+  ADD_KNOWLEDGE_REFERENCES: 'chat:add-knowledge-references',
   /** 中止生成 */
   STOP_GENERATION: 'chat:stop-generation',
   /** 删除消息 */

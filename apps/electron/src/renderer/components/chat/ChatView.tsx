@@ -22,6 +22,7 @@ import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentRecommendBanner } from './AgentRecommendBanner'
 import { PromptEditorSidebar } from './PromptEditorSidebar'
+import { KNOWLEDGE_PREVIEW_EVENT, KnowledgePreviewContent } from '@/components/knowledge-base/KnowledgePreviewPanel'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import {
   conversationsAtom,
@@ -32,6 +33,7 @@ import {
   pendingAgentRecommendationAtom,
   conversationModelsAtom,
   chatPendingMessageAtom,
+  chatPendingKnowledgeReferencesAtom,
   channelsAtom,
   INITIAL_MESSAGE_LIMIT,
 } from '@/atoms/chat-atoms'
@@ -74,9 +76,18 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [contextDividers, setContextDividers] = React.useState<string[]>([])
   const [pendingAttachments, setPendingAttachments] = React.useState<PendingAttachment[]>([])
+  const [pendingKnowledgeReferences, setPendingKnowledgeReferences] = React.useState<import('@profer/shared').KnowledgeReference[]>([])
   const [hasMoreMessages, setHasMoreMessages] = React.useState(false)
   const [messagesLoaded, setMessagesLoaded] = React.useState(false)
   const [inlineEditingMessageId, setInlineEditingMessageId] = React.useState<string | null>(null)
+  const [previewReference, setPreviewReference] = React.useState<import('@profer/shared').KnowledgeReference | null>(null)
+  React.useEffect(() => {
+    const handlePreview = (event: Event) => setPreviewReference((event as CustomEvent<import('@profer/shared').KnowledgeReference>).detail)
+    const handleEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreviewReference(null) }
+    window.addEventListener(KNOWLEDGE_PREVIEW_EVENT, handlePreview)
+    window.addEventListener('keydown', handleEscape)
+    return () => { window.removeEventListener(KNOWLEDGE_PREVIEW_EVENT, handlePreview); window.removeEventListener('keydown', handleEscape) }
+  }, [])
 
   // ===== Per-conversation hooks（分屏独立） =====
   const [selectedModel, setSelectedModel] = useConversationModel()
@@ -108,6 +119,8 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   // 从全局 atom 读取快速任务待发送消息
   const globalChatPending = useAtomValue(chatPendingMessageAtom)
   const setGlobalChatPending = useSetAtom(chatPendingMessageAtom)
+  const globalPendingKnowledge = useAtomValue(chatPendingKnowledgeReferencesAtom)
+  const setGlobalPendingKnowledge = useSetAtom(chatPendingKnowledgeReferencesAtom)
 
   // 检测到当前对话的待发送消息时，捕获到本地状态
   React.useEffect(() => {
@@ -116,6 +129,12 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     setChatPendingMessage(globalChatPending)
     setGlobalChatPending(null)
   }, [globalChatPending, conversationId, setGlobalChatPending])
+
+  React.useEffect(() => {
+    if (!globalPendingKnowledge || globalPendingKnowledge.conversationId !== conversationId) return
+    setPendingKnowledgeReferences(globalPendingKnowledge.references)
+    setGlobalPendingKnowledge(null)
+  }, [conversationId, globalPendingKnowledge, setGlobalPendingKnowledge])
 
   // ===== 从 Map 派生当前对话状态 =====
   const conversation = conversations.find((c) => c.id === conversationId) ?? null
@@ -219,6 +238,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     content: string,
     options?: {
       attachments?: FileAttachment[]
+      knowledgeReferences?: import('@profer/shared').KnowledgeReference[]
       consumePendingAttachments?: boolean
       messageCountBeforeSend?: number
       contextDividersOverride?: string[]
@@ -251,6 +271,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     }
 
     const consumePending = options?.consumePendingAttachments ?? true
+    const knowledgeReferences = options?.knowledgeReferences ?? pendingKnowledgeReferences
 
     // 清除当前对话的错误消息
     setChatStreamErrors((prev) => {
@@ -352,6 +373,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
       contextLength,
       contextDividers: options?.contextDividersOverride ?? contextDividers,
       attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
+      knowledgeReferences: knowledgeReferences.length > 0 ? knowledgeReferences : undefined,
       thinkingEnabled: thinkingEnabled || undefined,
       systemMessage: resolveSystemMessage(conversationPromptId, promptConfig, userProfile.userName),
       enabledToolIds: activeToolIds.length > 0 ? activeToolIds : undefined,
@@ -366,9 +388,11 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
         content,
         createdAt: Date.now(),
         attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
+        knowledgeReferences: knowledgeReferences.length > 0 ? knowledgeReferences : undefined,
       },
     ])
 
+    setPendingKnowledgeReferences([])
     window.electronAPI.sendMessage(input).catch((error) => {
       console.error('[ChatView] 发送消息失败:', error)
       setStreamingStates((prev) => {
@@ -383,6 +407,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     selectedModel,
     messages.length,
     pendingAttachments,
+    pendingKnowledgeReferences,
     contextLength,
     contextDividers,
     thinkingEnabled,
@@ -678,12 +703,16 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
             streaming={isStreaming}
             pendingAttachments={pendingAttachments}
             onSetPendingAttachments={setPendingAttachments}
+            pendingKnowledgeReferences={pendingKnowledgeReferences}
+            onSetPendingKnowledgeReferences={setPendingKnowledgeReferences}
             onSend={handleSend}
             onStop={handleStop}
             onClearContext={handleClearContext}
           />
         </div>
       </div>
+
+      {previewReference ? <aside className="flex h-full min-w-[320px] max-w-[55%] flex-[0_1_42%] flex-col border-l border-border bg-background"><header className="flex h-11 shrink-0 items-center border-b border-border px-3"><span className="min-w-0 flex-1 truncate text-sm font-medium">{previewReference.title}</span><button type="button" aria-label="关闭资料预览" onClick={() => setPreviewReference(null)} className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><X className="size-4"/></button></header><KnowledgePreviewContent reference={previewReference}/></aside> : null}
 
       {/* 提示词编辑侧栏 */}
       <div className={cn(

@@ -37,7 +37,6 @@ export {
 // 从子模块导入内部使用的函数
 import { db } from './db/schema.js'
 import { deductCredits, ensureCreditRow, syncCreditBalance, getCreditSummary } from './db/credits.js'
-import { claimDrip } from './db/subscription.js'
 import { getBillingConfig } from './db/config-store.js'
 import { DEFAULT_CREDIT_GRANT } from './config.js'
 
@@ -262,7 +261,6 @@ export async function sweepUnbilledRequests({ batchSize = 100, maxAgeMs = 86400_
         }
         continue
       }
-      try { claimDrip(row.user_id) } catch (_) { /* drip 失败不阻塞 */ }
       deductCredits(row.user_id, rec.billedCredits, {
         description: `后台补扣（New API quota ${rec.quota}）`,
         referenceType: 'api_call_sweep',

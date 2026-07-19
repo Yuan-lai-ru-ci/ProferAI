@@ -17,7 +17,11 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, FileText } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, FileText, Library } from 'lucide-react'
+import type { KnowledgeReference } from '@profer/shared'
+import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
+import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
+// previewPanelOpenMapAtom 由下方现有 atoms import 统一提供。
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -35,7 +39,7 @@ import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -99,7 +103,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
-import { TASK_TOOL_NAMES } from './task-progress'
+import { isTaskProgressTool } from './task-progress'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
@@ -212,22 +216,24 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'size-[36px] rounded-full',
-            isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
-          )}
-          onClick={onToggle}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-        >
-          <Brain className="size-5" />
-        </Button>
-      </PopoverTrigger>
+      <PopoverAnchor asChild>
+        <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn(
+              'size-[36px] rounded-full',
+              isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+            )}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onToggle}
+            aria-expanded={open}
+          >
+            <Brain className="size-5" />
+          </Button>
+        </div>
+      </PopoverAnchor>
       <PopoverContent
         side="top"
         align="center"
@@ -316,22 +322,25 @@ function DisplayOptionsPopover({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'size-[36px] rounded-full',
-            hasEnabledOption ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
-          )}
-          aria-label="显示选项"
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-        >
-          <Eye className="size-5" />
-        </Button>
-      </PopoverTrigger>
+      <PopoverAnchor asChild>
+        <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn(
+              'size-[36px] rounded-full',
+              hasEnabledOption ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+            )}
+            aria-label="显示选项"
+            aria-expanded={open}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <Eye className="size-5" />
+          </Button>
+        </div>
+      </PopoverAnchor>
       <PopoverContent
         side="top"
         align="center"
@@ -857,7 +866,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             // 但展示字段 content 仍要清空——否则上一轮流式文本残留会被兜底气泡渲染成重复消息。
             // task 相关 toolActivities 必须保留，供 currentGraphAtom 派生任务图。
             const taskActivities = state.toolActivities.filter(a =>
-              TASK_TOOL_NAMES.has(a.toolName),
+              isTaskProgressTool(a.toolName),
             )
             if (state.inputTokens !== undefined) {
               // 保留 usage 数据，仅清除流式展示字段
@@ -1814,7 +1823,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       // 确保跨 turn 的 TaskUpdate 能在 aggregateTaskItems 中匹配到
       // 正确命名的 TaskCreate 条目，避免状态更新（completed/in_progress）丢失。
       const carryOver = (existing?.toolActivities ?? []).filter(a =>
-        TASK_TOOL_NAMES.has(a.toolName),
+        isTaskProgressTool(a.toolName),
       )
       map.set(sessionId, {
         running: true,
@@ -2302,6 +2311,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return registerShortcut('toggle-preview-panel', togglePreviewPanel)
   }, [togglePreviewPanel])
 
+  const [knowledgePickerOpen, setKnowledgePickerOpen] = React.useState(false)
+  const [knowledgeReferences, setKnowledgeReferences] = React.useState<KnowledgeReference[]>([])
+  const [availableKnowledgeIds, setAvailableKnowledgeIds] = React.useState<Set<string> | null>(null)
+  const setKnowledgePreviewMap = useSetAtom(agentKnowledgePreviewMapAtom)
+  const setPreviewOpenMapForKnowledge = useSetAtom(previewPanelOpenMapAtom)
+  const openKnowledgePreview = React.useCallback((reference: KnowledgeReference) => {
+    setKnowledgePreviewMap((previous) => { const next = new Map(previous); next.set(sessionId, reference); return next })
+    setPreviewOpenMapForKnowledge((previous) => { const next = new Map(previous); next.set(sessionId, true); return next })
+  }, [sessionId, setKnowledgePreviewMap, setPreviewOpenMapForKnowledge])
+  React.useEffect(() => {
+    void window.electronAPI.getAgentKnowledgeReferences(sessionId).then(setKnowledgeReferences).catch((error) => console.error('[Agent] 加载资料引用失败:', error))
+    void window.electronAPI.knowledge.getLibrarySnapshot().then((snapshot) => setAvailableKnowledgeIds(new Set(snapshot.items.map((item) => item.id)))).catch(() => setAvailableKnowledgeIds(null))
+  }, [sessionId])
   const hasTextInput = inputContent.trim().length > 0
   const isCompacting = contextStatus.isCompacting
   const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting
@@ -2316,6 +2338,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           onModelSelect={handleModelSelect}
         />
       ),
+    },
+    {
+      key: 'knowledge-library',
+      node: <Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-[36px] shrink-0 rounded-full text-primary hover:bg-primary/10 hover:text-primary" onClick={() => setKnowledgePickerOpen(true)}><Library className="size-5"/></Button></TooltipTrigger><TooltipContent side="top"><p>从资料库导入</p></TooltipContent></Tooltip>,
     },
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
     {
@@ -2501,7 +2527,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      <div className="flex flex-col h-full flex-1 min-w-0 max-w-[min(72rem,100%)] mx-auto">
+      <div className="flex h-full min-w-0 flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
 
@@ -2537,6 +2563,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
+          {knowledgeReferences.length > 0 && <div className="mb-2 flex flex-wrap gap-1.5 px-1">{knowledgeReferences.map((reference) => {
+            const unavailable = availableKnowledgeIds !== null && !availableKnowledgeIds.has(reference.itemId)
+            return <span key={reference.itemId} className={cn('inline-flex h-7 max-w-[260px] items-center gap-1 rounded border border-primary/20 bg-primary/5 px-2 text-xs text-primary', unavailable && 'border-destructive/25 bg-destructive/5 text-destructive')}><button type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline disabled:no-underline"><Library className="size-3.5 shrink-0"/><span className="truncate">{unavailable ? `${reference.title}（已删除）` : reference.title}</span></button><button type="button" aria-label={`撤销资料 ${reference.title} 的访问授权`} className="shrink-0 rounded hover:bg-primary/15" onClick={() => void window.electronAPI.removeAgentKnowledgeReference(sessionId, reference.itemId).then(setKnowledgeReferences).catch((error) => toast.error(error instanceof Error ? error.message : '撤销资料授权失败'))}><X className="size-3.5"/></button></span>
+          })}</div>}
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
@@ -2693,6 +2723,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+
+    <KnowledgeReferencePicker open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen} onConfirm={async (itemIds) => {
+      const references = await window.electronAPI.addAgentKnowledgeReferences(sessionId, itemIds)
+      setKnowledgeReferences(references)
+      toast.success(`已向当前 Agent 导入 ${references.length} 份资料`)
+    }} />
 
     {/* 大论文确认弹窗（>50 页） */}
     <ConfirmDialog
