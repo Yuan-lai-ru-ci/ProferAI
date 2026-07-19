@@ -30,6 +30,8 @@ import { cn } from '@/lib/utils'
 import { DiffTabContent } from './DiffTabContent'
 import { DefaultAppOpenButton } from './DefaultAppOpenButton'
 import { getDefaultAppTargetPath, getPreviewFileAccess } from './preview-open-path'
+import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
+import { KnowledgePreviewContent } from '@/components/knowledge-base/KnowledgePreviewPanel'
 
 interface PreviewPanelProps {
   sessionId: string
@@ -45,21 +47,26 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const isSidePanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
+  const knowledgePreviewMap = useAtomValue(agentKnowledgePreviewMapAtom)
+  const setKnowledgePreviewMap = useSetAtom(agentKnowledgePreviewMapAtom)
 
-  const currentFile = fileMap.get(sessionId) ?? null
+  const knowledgeReference = knowledgePreviewMap.get(sessionId) ?? null
+  const currentFile = knowledgeReference ? null : fileMap.get(sessionId) ?? null
 
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const sessionPath = sessionPathMap.get(sessionId) ?? ''
   const isWindows = React.useMemo(() => detectIsWindows(), [])
-  const useStackedWindowsHeader = isWindows && !isSidePanelOpen
+  // 资料预览的元信息已在正文顶部显示，Windows 下不再把标题和关闭操作拆成两行。
+  const useStackedWindowsHeader = isWindows && !isSidePanelOpen && !knowledgeReference
 
-  const fileName = currentFile ? currentFile.filePath.split(/[\\/]/).pop() || currentFile.filePath : '文件预览'
+  const fileName = knowledgeReference?.title ?? (currentFile ? currentFile.filePath.split(/[\\/]/).pop() || currentFile.filePath : '文件预览')
   const defaultAppTargetPath = currentFile ? getDefaultAppTargetPath(currentFile, sessionPath) : ''
   const defaultAppAccess = currentFile ? getPreviewFileAccess(sessionId, currentFile, sessionPath) : undefined
 
   const handleClosePanel = React.useCallback(() => {
+    setKnowledgePreviewMap((previous) => { const next = new Map(previous); next.delete(sessionId); return next })
     setOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, false); return m })
-  }, [sessionId, setOpenMap])
+  }, [sessionId, setKnowledgePreviewMap, setOpenMap])
 
   const handleOpenPreviewTab = React.useCallback(() => {
     if (!currentFile) return
@@ -86,7 +93,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   }, [defaultAppTargetPath, currentFile?.basePaths])
 
   const renderPreviewActions = (): React.ReactElement => (
-    <div className="ml-auto flex items-center gap-0.5 shrink-0">
+    <div className={cn('ml-auto flex items-center gap-0.5 shrink-0', knowledgeReference && 'invisible')}>
       {currentFile && (
         <DefaultAppOpenButton
           filePath={defaultAppTargetPath}
@@ -190,7 +197,10 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
             </div>
           </>
         ) : (
-          <div className="flex items-center h-[34px] px-3">
+          <div
+            className="flex items-center h-[34px] px-3"
+            style={knowledgeReference && isWindows ? { paddingRight: WINDOWS_WINDOW_CONTROLS_SAFE_AREA } : undefined}
+          >
             <span className="text-xs text-muted-foreground truncate">
               {fileName}
             </span>
@@ -201,7 +211,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
 
       {/* 内容区 */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {currentFile ? (
+        {knowledgeReference ? <KnowledgePreviewContent reference={knowledgeReference} onClose={handleClosePanel} /> : currentFile ? (
           <DiffTabContent
             key={`${sessionId}:${currentFile.filePath}`}
             filePath={currentFile.filePath}

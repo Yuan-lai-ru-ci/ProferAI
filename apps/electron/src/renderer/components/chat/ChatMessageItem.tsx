@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { AlertCircle, Pencil, RotateCcw, Trash2 } from 'lucide-react'
+import { AlertCircle, FileText, Library, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import {
   Message,
   MessageHeader,
@@ -37,12 +37,29 @@ import { UserAvatar } from './UserAvatar'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import type { ChatMessage } from '@profer/shared'
+import type { ChatMessage, KnowledgeReference } from '@profer/shared'
 import type { InlineEditSubmitPayload } from './InlineEditForm'
 import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
+import { cn } from '@/lib/utils'
+import { openKnowledgePreview } from '@/components/knowledge-base/KnowledgePreviewPanel'
 
 // 重导出供外部使用
 export type { InlineEditSubmitPayload } from './InlineEditForm'
+
+function KnowledgeReferenceCards({ references }: { references: KnowledgeReference[] }): React.ReactElement {
+  const [availableIds, setAvailableIds] = React.useState<Set<string> | null>(null)
+  React.useEffect(() => {
+    let active = true
+    void window.electronAPI.knowledge.getLibrarySnapshot()
+      .then((snapshot) => { if (active) setAvailableIds(new Set(snapshot.items.map((item) => item.id))) })
+      .catch(() => { if (active) setAvailableIds(null) })
+    return () => { active = false }
+  }, [])
+  return <div className="mb-3 rounded-lg border border-primary/20 bg-primary/[0.03] p-3"><div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-primary"><Library className="size-3.5"/>已导入 {references.length} 份资料</div><div className="space-y-1.5">{references.map((reference) => {
+    const unavailable = availableIds !== null && !availableIds.has(reference.itemId)
+    return <button key={reference.itemId} type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className={cn('flex w-full items-center gap-2 rounded border border-border/60 bg-background/60 px-2 py-1.5 text-left text-xs hover:bg-accent disabled:cursor-not-allowed', unavailable && 'opacity-55')}><FileText className="size-3.5 text-muted-foreground"/><span className="min-w-0 flex-1 truncate">{reference.title}</span>{unavailable ? <span className="shrink-0 text-destructive">已删除，不可读取</span> : <span className="shrink-0 text-muted-foreground">{reference.kind} · {reference.origin === 'arxiv' ? '研究资料' : '本地资料'}</span>}</button>
+  })}</div></div>
+}
 
 /**
  * 格式化消息时间（简略写法）
@@ -164,6 +181,7 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
         )}
 
         <MessageContent className={isInlineEditing ? 'w-full' : undefined}>
+          {message.knowledgeReferences?.length ? <KnowledgeReferenceCards references={message.knowledgeReferences} /> : null}
           {message.role === 'assistant' ? (
             <>
               {/* 工具活动记录（历史消息） */}

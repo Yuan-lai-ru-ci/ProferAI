@@ -5,7 +5,90 @@
  * 支持语义搜索 + Agent 工具调用。
  */
 
-// ===== 论文元数据 =====
+// ===== 通用个人资料库 =====
+
+/** 首期允许长期管理的资料类型。 */
+export type KnowledgeItemKind = 'pdf' | 'word' | 'wps' | 'presentation' | 'spreadsheet' | 'markdown' | 'text'
+
+/** 资料来源：本机文件或 arXiv 研究资料。 */
+export type KnowledgeItemOrigin = 'local' | 'arxiv'
+
+/** 仅研究资料使用的可选元数据，避免污染普通文档。 */
+export interface ResearchMetadata {
+  arxivId?: string
+  doi?: string
+  authors?: string[]
+  abstract?: string
+  year?: number
+  categories?: string[]
+}
+
+/** 通用个人资料的稳定本地实体。正文和原始文件均由主进程受控保存。 */
+export interface KnowledgeItem {
+  id: string
+  title: string
+  kind: KnowledgeItemKind
+  origin: KnowledgeItemOrigin
+  originalFileName?: string
+  mediaType?: string
+  fileSize: number
+  importedAt: number
+  updatedAt: number
+  tags: string[]
+  research?: ResearchMetadata
+  remoteId?: string
+  syncState: 'synced' | 'failed' | 'local-only'
+  syncError?: string
+  lastSyncAttemptAt?: number
+}
+
+/** 会话中持久化的轻量资料引用；绝不能当作普通会话附件处理。 */
+export interface KnowledgeReference {
+  itemId: string
+  title: string
+  kind: KnowledgeItemKind
+  origin: KnowledgeItemOrigin
+  importedAt: number
+}
+
+export interface KnowledgeLibraryIndex {
+  version: 1
+  items: KnowledgeItem[]
+}
+
+export interface KnowledgeSearchResult {
+  item: KnowledgeItem
+  content: string
+  startIndex: number
+  endIndex: number
+  score: number
+}
+
+export interface KnowledgeImportItemResult {
+  filePath: string
+  item?: KnowledgeItem
+  error?: string
+}
+
+export interface KnowledgeImportBatchResult {
+  results: KnowledgeImportItemResult[]
+}
+
+export interface KnowledgeLibrarySnapshot {
+  items: KnowledgeItem[]
+  totalItems: number
+}
+
+export const KNOWLEDGE_IPC_CHANNELS = {
+  IMPORT_ITEMS: 'knowledge:import-items',
+  LIST_ITEMS: 'knowledge:list-items',
+  GET_ITEM: 'knowledge:get-item',
+  DELETE_ITEM: 'knowledge:delete-item',
+  SEARCH_ITEMS: 'knowledge:search-items',
+  GET_LIBRARY_SNAPSHOT: 'knowledge:get-library-snapshot',
+} as const
+
+// ===== 论文元数据（旧 Paperpipe API 兼容层） =====
 
 export interface PaperMeta {
   /** 论文唯一标识 */
@@ -40,6 +123,8 @@ export interface PaperMeta {
   syncState?: 'pending' | 'synced' | 'failed' | 'local-only'
   /** 可安全展示的最近同步失败说明。 */
   syncError?: string
+  /** 最近一次尝试同步到远端的时间戳。 */
+  lastSyncAttemptAt?: number
 }
 
 /** 删除论文后的本地/远端一致性结果。 */
@@ -123,12 +208,22 @@ export interface ArxivPaper {
 // ===== 论文知识库状态 =====
 
 export interface KBStats {
-  /** 论文总数 */
+  /** 当前论文库快照中的论文总数。 */
   totalPapers: number
   /** 分块总数 */
   totalChunks: number
   /** 存储占用（字节） */
   storageBytes: number
+}
+
+/** 一次读取得到的论文库统一快照，列表与统计必须基于同一 papers 集合。 */
+export interface KBLibrarySnapshot {
+  papers: PaperMeta[]
+  stats: KBStats
+  /** 远端列表是否成功参与当前快照。 */
+  remoteState: 'synced' | 'degraded'
+  /** 仅在降级时提供、可安全展示的说明。 */
+  remoteError?: string
 }
 
 // ===== 本地个人工作台状态 =====
@@ -177,6 +272,7 @@ export const KB_IPC_CHANNELS = {
   GET_PAPER: 'kb:get-paper',
   DELETE_PAPER: 'kb:delete-paper',
   GET_STATS: 'kb:stats',
+  GET_LIBRARY_SNAPSHOT: 'kb:get-library-snapshot',
   SEARCH_ARXIV: 'kb:search-arxiv',
   GET_WORKBENCH_STATE: 'kb:get-workbench-state',
   UPDATE_WORKBENCH_RECORD: 'kb:update-workbench-record',

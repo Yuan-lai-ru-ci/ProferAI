@@ -14,7 +14,10 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { CornerDownLeft, Square, Brain, Paperclip, FileText } from 'lucide-react'
+import { CornerDownLeft, Square, Brain, Paperclip, FileText, Library, X } from 'lucide-react'
+import type { KnowledgeReference } from '@profer/shared'
+import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
+import { openKnowledgePreview } from '@/components/knowledge-base/KnowledgePreviewPanel'
 import { ModelSelector } from './ModelSelector'
 import { ClearContextButton } from './ClearContextButton'
 import { ContextSettingsPopover } from './ContextSettingsPopover'
@@ -55,6 +58,10 @@ interface ChatInputProps {
   pendingAttachments: PendingAttachment[]
   /** 设置待发送附件 */
   onSetPendingAttachments: React.Dispatch<React.SetStateAction<PendingAttachment[]>>
+  /** 当前待导入的资料引用 */
+  pendingKnowledgeReferences?: KnowledgeReference[]
+  /** 写入待导入资料引用 */
+  onSetPendingKnowledgeReferences?: React.Dispatch<React.SetStateAction<KnowledgeReference[]>>
   /** 发送消息回调 */
   onSend: (content: string) => void
   /** 停止生成回调 */
@@ -63,7 +70,7 @@ interface ChatInputProps {
   onClearContext?: () => void
 }
 
-export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {
+export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   // 从 Map atom 读写草稿
   const draftsMap = useAtomValue(conversationDraftsAtom)
@@ -85,6 +92,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   const [thinkingEnabled, setThinkingEnabled] = useConversationThinkingEnabled()
   const setPendingAttachments = onSetPendingAttachments
   const [isDragOver, setIsDragOver] = React.useState(false)
+  const [knowledgePickerOpen, setKnowledgePickerOpen] = React.useState(false)
 
   // ref 桥接：addFilesAsAttachments 在后面才定义，但 usePaperReading 需要用它
   const addFilesRef = React.useRef<(files: File[]) => Promise<void>>(async () => {})
@@ -114,9 +122,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     parseByPath(path, pdfNameRef.current ?? undefined)
   }, [parseByPath])
 
-  const canSend = (content.trim().length > 0 || pendingAttachments.length > 0)
-    && selectedModel !== null
-    && !streaming
+  // 资料是本轮问题的结构化附件，不能脱离问题单独“发送”。
+  const canSend = content.trim().length > 0 && selectedModel !== null && !streaming
 
   /**
    * 将文件列表添加为附件
@@ -304,6 +311,13 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   }, [])
 
   const toolbarItems = React.useMemo<ToolbarItem[]>(() => [
+    // 模型选择是 Chat 的一级动作，固定放在最左侧；窄窗口时也优先保留。
+    { key: 'model', node: <ModelSelector /> },
+    // 资料库是第二优先级入口，避免被折叠进“更多”。
+    {
+      key: 'knowledge-library',
+      node: <Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-[36px] shrink-0 rounded-full text-primary hover:bg-primary/10 hover:text-primary" onClick={() => setKnowledgePickerOpen(true)}><Library className="size-5"/></Button></TooltipTrigger><TooltipContent side="top"><p>从资料库导入</p></TooltipContent></Tooltip>,
+    },
     {
       key: 'attach',
       node: (
@@ -352,7 +366,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
         </Tooltip>
       ),
     },
-    { key: 'model', node: <ModelSelector /> },
     {
       key: 'thinking',
       node: (
@@ -432,8 +445,9 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           onDrop={handleDrop}
         >
           {/* 附件预览区域 — Cherry Studio: padding 5px 15px, flex-wrap, gap 4px */}
-          {pendingAttachments.length > 0 && (
+          {(pendingAttachments.length > 0 || pendingKnowledgeReferences.length > 0) && (
             <div className="flex flex-wrap gap-1 px-[15px] pt-[10px] pb-[15px]">
+              {pendingKnowledgeReferences.map((reference) => <span key={reference.itemId} className="inline-flex h-8 max-w-[260px] items-center gap-1 rounded border border-primary/20 bg-primary/5 px-2 text-xs text-primary"><button type="button" onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline"><Library className="size-3.5 shrink-0"/><span className="truncate">{reference.title}</span></button><button type="button" aria-label={`移除资料 ${reference.title}`} onClick={() => onSetPendingKnowledgeReferences?.((items) => items.filter((item) => item.itemId !== reference.itemId))}><X className="size-3.5"/></button></span>)}
               {pendingAttachments.map((att) => (
                 <AttachmentPreviewItem
                   key={att.id}
@@ -460,6 +474,16 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}
           <InputToolbarOverflow items={toolbarItems} trailing={trailingNode} />
         </div>
+
+        <KnowledgeReferencePicker open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen} onConfirm={async (itemIds) => {
+          const snapshot = await window.electronAPI.knowledge.listItems()
+          const itemsById = new Map(snapshot.map((item) => [item.id, item]))
+          const additions = itemIds.map((itemId) => {
+            const item = itemsById.get(itemId)
+            return item ? { itemId: item.id, title: item.title, kind: item.kind, origin: item.origin, importedAt: Date.now() } : null
+          }).filter((item): item is KnowledgeReference => item !== null)
+          onSetPendingKnowledgeReferences?.((current) => [...new Map([...current, ...additions].map((item) => [item.itemId, item])).values()].slice(0, 10))
+        }} />
 
         {/* 大论文确认弹窗（>50 页） */}
         <ConfirmDialog

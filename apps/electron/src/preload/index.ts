@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -43,6 +43,10 @@ import type {
   KnowledgeBaseWorkbenchState,
   KnowledgeBaseWorkbenchPatch,
   PaperWorkbenchRecord,
+  KnowledgeImportBatchResult,
+  KnowledgeItem,
+  KnowledgeLibrarySnapshot,
+  KnowledgeSearchResult,
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
@@ -292,6 +296,9 @@ export interface ElectronAPI {
   /** 发送消息（触发 AI 流式响应） */
   sendMessage: (input: ChatSendInput) => Promise<void>
 
+  /** 向当前对话写入一条可见的资料引用记录。 */
+  addKnowledgeReferences: (conversationId: string, itemIds: string[]) => Promise<ChatMessage>
+
   /** 中止生成 */
   stopGeneration: (conversationId: string) => Promise<void>
 
@@ -340,7 +347,18 @@ export interface ElectronAPI {
   /** 论文精读 — 估算 PDF 页数和积分（本地计算，不调用服务端） */
   estimatePaperPages: (filePath: string) => Promise<PageEstimate>
 
-  // ===== 论文知识库相关 =====
+  // ===== 通用个人资料库相关 =====
+
+  knowledge: {
+    importItems: (filePaths: string[]) => Promise<KnowledgeImportBatchResult>
+    listItems: () => Promise<KnowledgeItem[]>
+    getItem: (itemId: string) => Promise<{ meta: KnowledgeItem; text: string } | null>
+    deleteItem: (itemId: string) => Promise<{ itemId: string; deleted: boolean }>
+    searchItems: (query: string, itemIds?: string[], topK?: number) => Promise<KnowledgeSearchResult[]>
+    getLibrarySnapshot: () => Promise<KnowledgeLibrarySnapshot>
+  }
+
+  // ===== 论文知识库兼容 API =====
 
   kb: {
     /** 导入论文到论文知识库 */
@@ -353,6 +371,8 @@ export interface ElectronAPI {
     getPaper: (paperId: string) => Promise<{ meta: PaperMeta; markdown: string } | null>
     /** 删除论文 */
     deletePaper: (paperId: string) => Promise<DeletePaperResult>
+    /** 获取列表与统计一致的论文库快照 */
+    getLibrarySnapshot: () => Promise<import('@profer/shared').KBLibrarySnapshot>
     /** 获取论文知识库统计 */
     getStats: () => Promise<KBStats>
     /** 搜索 arXiv */
@@ -540,6 +560,13 @@ export interface ElectronAPI {
 
   /** 发送 Agent 消息 */
   sendAgentMessage: (input: AgentSendInput) => Promise<void>
+
+  /** 将资料导入当前 Agent session 的受控 allowlist。 */
+  addAgentKnowledgeReferences: (sessionId: string, itemIds: string[]) => Promise<import('@profer/shared').KnowledgeReference[]>
+  /** 获取当前 Agent session 已导入资料。 */
+  getAgentKnowledgeReferences: (sessionId: string) => Promise<import('@profer/shared').KnowledgeReference[]>
+  /** 撤销当前 Agent session 对一份资料的访问授权。 */
+  removeAgentKnowledgeReference: (sessionId: string, itemId: string) => Promise<import('@profer/shared').KnowledgeReference[]>
 
   /** 中止 Agent 执行 */
   stopAgent: (sessionId: string) => Promise<void>
@@ -1420,6 +1447,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SEND_MESSAGE, input)
   },
 
+  addKnowledgeReferences: (conversationId: string, itemIds: string[]) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES, conversationId, itemIds)
+  },
+
   stopGeneration: (conversationId: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.STOP_GENERATION, conversationId)
   },
@@ -1487,6 +1518,15 @@ const electronAPI: ElectronAPI = {
   },
 
   // 论文知识库
+  knowledge: {
+    importItems: (filePaths: string[]) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.IMPORT_ITEMS, filePaths),
+    listItems: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.LIST_ITEMS),
+    getItem: (itemId: string) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.GET_ITEM, itemId),
+    deleteItem: (itemId: string) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.DELETE_ITEM, itemId),
+    searchItems: (query: string, itemIds?: string[], topK?: number) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SEARCH_ITEMS, query, itemIds, topK),
+    getLibrarySnapshot: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT),
+  },
+
   kb: {
     import: (input: KBImportInput) => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.IMPORT, input)
@@ -1502,6 +1542,9 @@ const electronAPI: ElectronAPI = {
     },
     deletePaper: (paperId: string) => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_PAPER, paperId)
+    },
+    getLibrarySnapshot: () => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT)
     },
     getStats: () => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_STATS)
@@ -1754,6 +1797,18 @@ const electronAPI: ElectronAPI = {
 
   sendAgentMessage: (input: AgentSendInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEND_MESSAGE, input)
+  },
+
+  addAgentKnowledgeReferences: (sessionId: string, itemIds: string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES, sessionId, itemIds)
+  },
+
+  getAgentKnowledgeReferences: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_KNOWLEDGE_REFERENCES, sessionId)
+  },
+
+  removeAgentKnowledgeReference: (sessionId: string, itemId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_KNOWLEDGE_REFERENCE, sessionId, itemId)
   },
 
   stopAgent: (sessionId: string) => {

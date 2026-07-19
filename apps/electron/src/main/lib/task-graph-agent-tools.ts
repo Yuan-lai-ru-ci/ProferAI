@@ -202,8 +202,9 @@ export async function injectTaskGraphMcpServer(
             })
           }
 
-          // 描述/标题更新
-          if (subject || args.description !== undefined) {
+          // 描述/标题/依赖更新。dependsOn 存在时（包括 []）代表完整替换，
+          // 由 graph-state 清理被移除的边和反向 dependedBy。
+          if (subject || args.description !== undefined || dependsOn !== undefined) {
             appendGraphEvent(ctx.sessionId, {
               type: 'task_updated',
               taskId,
@@ -211,20 +212,9 @@ export async function injectTaskGraphMcpServer(
               payload: {
                 ...(subject && { subject }),
                 ...(args.description !== undefined && { description }),
+                ...(dependsOn !== undefined && { dependsOn }),
               },
             })
-          }
-
-          // 依赖边
-          if (dependsOn && dependsOn.length > 0) {
-            for (const dep of dependsOn) {
-              appendGraphEvent(ctx.sessionId, {
-                type: 'task_dependency_added',
-                taskId,
-                timestamp: ts,
-                payload: { dependsOn: dep },
-              })
-            }
           }
 
           // 放弃标注

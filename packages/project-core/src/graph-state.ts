@@ -79,10 +79,10 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
 
   switch (event.type) {
     case 'task_created': {
-      const { subject, description, dependsOn } = event.payload
+      const { subject, description, dependsOn, forkFrom: explicitForkFrom } = event.payload
       const now = event.timestamp
-      // forkFrom 优先从 description 解析（prompt 指示写入 description），回退 subject
-      const forkFrom = (description ? parseForkFrom(description) : null) ?? parseForkFrom(subject)
+      // 结构化字段优先；旧事件仍可从 description 或 subject 回放分叉关系。
+      const forkFrom = explicitForkFrom ?? (description ? parseForkFrom(description) : null) ?? parseForkFrom(subject)
       const artifactFromDescription = description ? parseArtifact(description) : []
       const artifact = artifactFromDescription.length > 0 ? artifactFromDescription : parseArtifact(subject)
       const usage = (description ? parseUsage(description) : null) ?? parseUsage(subject)
@@ -127,19 +127,20 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
     case 'task_updated': {
       const existing = nodes[event.taskId]
       if (!existing) break
-      const { subject, description } = event.payload
+      const { subject, description, dependsOn: explicitDependsOn, forkFrom: explicitForkFrom } = event.payload
       const artifacts = description ? parseArtifact(description) : []
       const usage = description ? parseUsage(description) : null
-      const forkFrom = (description ? parseForkFrom(description) : null) ?? (subject ? parseForkFrom(subject) : null)
+      const forkFrom = explicitForkFrom ?? (description ? parseForkFrom(description) : null) ?? (subject ? parseForkFrom(subject) : null)
 
-      // dependsOn：description 中的 @dependsOn 是 Agent 显式声明的权威列表 → 替换；
-      // subject 中的只是兜底 → 合并。这样 Agent 移除某个 @dependsOn 时边也会同步消失。
+      // 结构化 dependsOn（包括 []）和 description 中的标记都是权威完整列表。
+      // subject 中的只是兜底 → 合并。这样 Agent 移除某个依赖时边也会同步消失。
       const dependsOnFromDescription = description ? parseDependsOn(description) : []
       const dependsOnFromSubject = subject ? parseDependsOn(subject) : []
-      const hasExplicitDependsOn = dependsOnFromDescription.length > 0
-      const newDependsOn = hasExplicitDependsOn
-        ? dependsOnFromDescription
-        : dependsOnFromSubject
+      const hasExplicitDependsOn = explicitDependsOn !== undefined || dependsOnFromDescription.length > 0
+      const newDependsOn = explicitDependsOn
+        ?? (dependsOnFromDescription.length > 0
+          ? dependsOnFromDescription
+          : dependsOnFromSubject)
 
       // 显式替换：清理被移除的旧边 + 被依赖方的 dependedBy
       if (hasExplicitDependsOn) {
@@ -160,15 +161,17 @@ export function applyEvent(graph: TaskGraph, event: GraphEvent): TaskGraph {
         }
       }
 
-      const finalDependsOn = newDependsOn.length > 0
-        ? (hasExplicitDependsOn ? newDependsOn : [...new Set([...existing.dependsOn, ...newDependsOn])])
-        : existing.dependsOn
+      const finalDependsOn = hasExplicitDependsOn
+        ? newDependsOn
+        : (newDependsOn.length > 0
+          ? [...new Set([...existing.dependsOn, ...newDependsOn])]
+          : existing.dependsOn)
 
       nodes[event.taskId] = {
         ...existing,
         ...(subject !== undefined && { subject: stripMetaTags(subject) }),
         ...(description !== undefined && { description: stripMetaTags(description) }),
-        ...(newDependsOn.length > 0 && { dependsOn: finalDependsOn }),
+        ...(hasExplicitDependsOn && { dependsOn: finalDependsOn }),
         ...(artifacts.length > 0 && { artifact: [...new Set([...existing.artifact, ...artifacts])] }),
         ...(usage && { usage }),
         ...(forkFrom && { forkFrom }),

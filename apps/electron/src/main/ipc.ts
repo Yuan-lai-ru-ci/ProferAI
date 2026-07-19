@@ -117,13 +117,14 @@ import type {
   CreateAutomationInput,
   UpdateAutomationInput,
 } from '@profer/shared'
-import { KB_IPC_CHANNELS } from '@profer/shared'
+import { KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
 import type {
   KBImportInput,
   KBImportResult,
   KBSearchResult,
   PaperMeta,
   KBStats,
+  KBLibrarySnapshot,
   ArxivPaper,
   KnowledgeBaseWorkbenchPatch,
 } from '@profer/shared'
@@ -149,6 +150,7 @@ import {
 import {
   listConversations,
   createConversation,
+  appendMessage,
   getConversationMessages,
   getRecentMessages,
   updateConversationMeta,
@@ -1453,6 +1455,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 资料引用是独立消息，不能伪装为附件，否则删除/截断会误删资料实体。
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES,
+    async (_, conversationId: string, itemIds: string[]): Promise<ChatMessage> => {
+      if (typeof conversationId !== 'string' || !conversationId.trim()) throw new Error('对话标识无效')
+      if (!Array.isArray(itemIds) || itemIds.length < 1 || itemIds.length > 10 || itemIds.some((id) => typeof id !== 'string' || id.length > 160)) throw new Error('资料引用数量或标识无效')
+      const { resolveKnowledgeReferences } = require('./lib/knowledge-item-service')
+      const references = resolveKnowledgeReferences(itemIds)
+      const message: ChatMessage = { id: randomUUID(), role: 'user', content: '', createdAt: Date.now(), knowledgeReferences: references }
+      appendMessage(conversationId, message)
+      return message
+    },
+  )
+
   // 中止生成
   ipcMain.handle(
     CHAT_IPC_CHANNELS.STOP_GENERATION,
@@ -2509,6 +2525,35 @@ export function registerIpcHandlers(): void {
         onMirrorError: (error) => console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error),
       })
     }
+  )
+
+  // Agent 资料引用只写 session metadata allowlist，绝不加入附加目录或任意文件路径。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES,
+    async (_, sessionId: string, itemIds: string[]): Promise<import('@profer/shared').KnowledgeReference[]> => {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('Agent 会话标识无效')
+      if (!Array.isArray(itemIds) || itemIds.length < 1 || itemIds.length > 10 || itemIds.some((id) => typeof id !== 'string' || id.length > 160)) throw new Error('资料引用数量或标识无效')
+      const { addKnowledgeReferencesToAgentSession } = require('./lib/agent-knowledge-references')
+      return addKnowledgeReferencesToAgentSession(sessionId, itemIds, { getSession: getAgentSessionMeta, updateSession: updateAgentSessionMeta })
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_KNOWLEDGE_REFERENCES,
+    async (_, sessionId: string): Promise<import('@profer/shared').KnowledgeReference[]> => {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('Agent 会话标识无效')
+      const { getKnowledgeReferencesForAgentSession } = require('./lib/agent-knowledge-references')
+      return getKnowledgeReferencesForAgentSession(sessionId, { getSession: getAgentSessionMeta })
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.REMOVE_KNOWLEDGE_REFERENCE,
+    async (_, sessionId: string, itemId: string): Promise<import('@profer/shared').KnowledgeReference[]> => {
+      if (typeof sessionId !== 'string' || !sessionId.trim() || typeof itemId !== 'string' || !itemId.trim() || itemId.length > 160) throw new Error('资料引用标识无效')
+      const { removeKnowledgeReferenceFromAgentSession } = require('./lib/agent-knowledge-references')
+      return removeKnowledgeReferenceFromAgentSession(sessionId, itemId, { getSession: getAgentSessionMeta, updateSession: updateAgentSessionMeta })
+    },
   )
 
   // 中止 Agent 执行
@@ -5582,7 +5627,47 @@ export function registerIpcHandlers(): void {
       searchFiles(workspaceId, options)
   )
 
-  // ===== 论文知识库（Paper Knowledge Base）相关 =====
+  // ===== 通用个人资料库相关 =====
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.IMPORT_ITEMS, async (_, filePaths: string[]) => {
+    if (!Array.isArray(filePaths) || filePaths.length < 1 || filePaths.length > 10 || filePaths.some((path) => typeof path !== 'string' || !path.trim() || path.length > 4096)) {
+      throw new Error('资料导入数量或路径无效')
+    }
+    const { importKnowledgeItems } = require('./lib/knowledge-item-service')
+    return importKnowledgeItems(filePaths)
+  })
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.LIST_ITEMS, async () => {
+    const { listKnowledgeItems } = require('./lib/knowledge-item-service')
+    return listKnowledgeItems()
+  })
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT, async () => {
+    const { getKnowledgeLibrarySnapshot } = require('./lib/knowledge-item-service')
+    return getKnowledgeLibrarySnapshot()
+  })
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.GET_ITEM, async (_, itemId: string) => {
+    if (typeof itemId !== 'string' || itemId.length > 160) throw new Error('资料标识无效')
+    const { getKnowledgeItem } = require('./lib/knowledge-item-service')
+    return getKnowledgeItem(itemId)
+  })
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.DELETE_ITEM, async (_, itemId: string) => {
+    if (typeof itemId !== 'string' || itemId.length > 160) throw new Error('资料标识无效')
+    const { deleteKnowledgeItem } = require('./lib/knowledge-item-service')
+    return deleteKnowledgeItem(itemId)
+  })
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.SEARCH_ITEMS, async (_, query: string, itemIds?: string[], topK?: number) => {
+    if (typeof query !== 'string' || !query.trim() || query.length > 500) throw new Error('搜索关键词无效')
+    if (itemIds !== undefined && (!Array.isArray(itemIds) || itemIds.length > 10 || itemIds.some((id) => typeof id !== 'string' || id.length > 160))) throw new Error('资料范围无效')
+    if (topK !== undefined && (!Number.isInteger(topK) || topK < 1 || topK > 20)) throw new Error('搜索数量无效')
+    const { searchKnowledgeItems } = require('./lib/knowledge-item-service')
+    return searchKnowledgeItems(query, itemIds, topK)
+  })
+
+  // ===== 论文知识库（Paper Knowledge Base）兼容 API =====
 
   ipcMain.handle(
     KB_IPC_CHANNELS.IMPORT,
@@ -5636,16 +5721,18 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(
+    KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT,
+    async (): Promise<KBLibrarySnapshot> => {
+      const { loadLibrarySnapshot } = require('./lib/kb-paperpipe')
+      return loadLibrarySnapshot()
+    },
+  )
+
+  ipcMain.handle(
     KB_IPC_CHANNELS.GET_STATS,
     async (): Promise<KBStats> => {
-      // 优先 kb-paperpipe，fallback kb-service
-      try {
-        const { getKBStats } = require('./lib/kb-paperpipe')
-        return getKBStats()
-      } catch {
-        const { getKBStats } = require('./lib/kb-service')
-        return getKBStats()
-      }
+      const { getKBStats } = require('./lib/kb-paperpipe')
+      return await getKBStats()
     }
   )
 

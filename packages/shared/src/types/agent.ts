@@ -4,6 +4,8 @@
  * 包含 Agent SDK 集成所需的事件类型、会话管理、消息持久化和 IPC 通道常量。
  */
 
+import type { KnowledgeReference } from './knowledge-base'
+
 // ===== Agent 工作区 =====
 
 /** 工作区类型 */
@@ -639,6 +641,8 @@ export interface AgentSessionMeta {
   attachedDirectories?: string[]
   /** 附加的外部文件路径列表（绝对路径，发送时以父目录作为 SDK additionalDirectories） */
   attachedFiles?: string[]
+  /** 当前会话显式导入的资料 allowlist；不能用 attachedFiles/Directories 替代。 */
+  knowledgeReferences?: KnowledgeReference[]
   /** 分叉来源：源会话的 Profer 工作目录（SDK session 文件在此目录的项目空间中，首次 resume 后清除） */
   forkSourceDir?: string
   /** 分叉来源：源会话的 SDK session ID（用于 rewind 时读取源会话的 file-history-snapshot 和备份文件） */
@@ -1490,6 +1494,12 @@ export const AGENT_IPC_CHANNELS = {
   // 消息发送
   /** 发送消息（触发 Agent 流式响应） */
   SEND_MESSAGE: 'agent:send-message',
+  /** 将资料库条目导入当前 Agent session 的受控 allowlist。 */
+  ADD_KNOWLEDGE_REFERENCES: 'agent:add-knowledge-references',
+  /** 获取当前 Agent session 的资料 allowlist。 */
+  GET_KNOWLEDGE_REFERENCES: 'agent:get-knowledge-references',
+  /** 撤销当前 Agent session 对某份资料的访问授权。 */
+  REMOVE_KNOWLEDGE_REFERENCE: 'agent:remove-knowledge-reference',
   /** 中止 Agent 执行 */
   STOP_AGENT: 'agent:stop',
 

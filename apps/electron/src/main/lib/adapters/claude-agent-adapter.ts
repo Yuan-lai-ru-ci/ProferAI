@@ -29,6 +29,8 @@ import { detectInsufficientCredits } from '@profer/core'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 /** SDK Query 对象类型（从动态导入中推断） */
 type SDKQuery = ReturnType<typeof import('@anthropic-ai/claude-agent-sdk').query>
@@ -436,6 +438,23 @@ export function mapSDKErrorToTypedError(
   }
 
   const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
+  const upstreamBillingPage = /(?:zyloo\.io|dashboard\/billing)/i.test(`${detailedMessage}\n${originalError}`)
+  // 独立上游代理的 402 不代表 Profer 账户 credits 为零。该类错误可能是模型池短暂预扣失败，
+  // 允许用户重试或切换当前 Agent 模型，避免把仍有余额的用户误导为必须充值。
+  if (upstreamBillingPage) {
+    return {
+      code: 'provider_error',
+      title: '模型渠道额度暂不可用',
+      message: '所选模型的上游渠道暂时无法预扣费用；你的 Profer 余额可能仍可用。请重试或切换模型。',
+      actions: [
+        { key: 'r', label: '重试', action: 'retry' },
+        { key: 's', label: '切换模型', action: 'settings' },
+      ],
+      canRetry: true,
+      retryDelayMs: 1000,
+      originalError,
+    }
+  }
 
   // 额度不足：Profer 自有 402 或 New API 上游 403「预扣费额度失败」（含美元文案）。
   // 必须在 errorMap['authentication_failed'] 之前拦截——New API 的额度 403 文本含
@@ -1126,6 +1145,17 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
   }
 }
 
+/** Windows 的 Windows PowerShell 是系统组件，但某些启动器没有把它加入 PATH。 */
+export function getWindowsPowerShellPath(
+  environment: NodeJS.ProcessEnv = process.env,
+  pathExists: (path: string) => boolean = existsSync,
+): string | null {
+  const systemRoot = environment.SystemRoot || environment.WINDIR
+  if (!systemRoot) return null
+  const executable = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  return pathExists(executable) ? executable : null
+}
+
 /**
  * 扫描并强杀所有孤儿 claude-agent-sdk 子进程（应用退出最后兜底）
  *
@@ -1145,8 +1175,13 @@ export function scanAndKillOrphanedClaudeSubprocesses(): void {
   const SCAN_TIMEOUT_MS = 3_000
   try {
     if (process.platform === 'win32') {
+      const powerShellPath = getWindowsPowerShellPath()
+      if (!powerShellPath) {
+        console.warn('[Claude 适配器] 跳过退出扫描：未找到 Windows PowerShell 系统组件')
+        return
+      }
       execFileSync(
-        'powershell',
+        powerShellPath,
         [
           '-NoProfile',
           '-Command',
@@ -1182,6 +1217,7 @@ export function scanAndKillOrphanedClaudeSubprocesses(): void {
       }
     }
   } catch (error) {
-    console.warn('[Claude 适配器] 退出扫描执行失败:', error)
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`[Claude 适配器] 退出扫描执行失败: ${message}`)
   }
 }

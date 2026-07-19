@@ -15,6 +15,8 @@ export const accountSubscription = new Hono()
 // 鉴权由 accountApp.use('*', honoAuthMiddleware) 统一处理
 accountSubscription.get('/', (c) => {
   const userId = c.get('userId')
+  // 与 credits 接口保持一致：仅累计当前用户的待领取池，绝不自动领取。
+  accrueDailyDripForUser(userId)
   const status = getSubscriptionStatus(userId)
 
   if (!status) {

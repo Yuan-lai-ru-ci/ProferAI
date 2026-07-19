@@ -25,7 +25,7 @@ import {
 } from '@profer/project-core'
 import { agentStreamingStatesAtom, type ToolActivity } from './agent-atoms'
 import { currentAgentSessionIdAtom } from './agent-atoms'
-import { aggregateTaskItems, type TaskItem } from '@/components/agent/task-progress'
+import { aggregateTaskItems, isTaskProgressTool, type TaskItem } from '@/components/agent/task-progress'
 
 /**
  * IPC 回退层：流式结束后从 JSONL 加载的持久化 TaskGraph。
@@ -138,9 +138,7 @@ export const currentGraphAtom = atom<TaskGraph | null>((get) => {
     const activities: ToolActivity[] = state.toolActivities
     const taskActivities = activities.filter(
       (a) =>
-        a.toolName === 'TaskCreate' ||
-        a.toolName === 'TaskUpdate' ||
-        a.toolName === 'TodoWrite',
+        isTaskProgressTool(a.toolName),
     )
     if (taskActivities.length > 0) {
       const taskItems = aggregateTaskItems(taskActivities, false)

@@ -1,8 +1,12 @@
+import { isTaskCreateTool, isTaskUpdateTool } from '@profer/project-core'
 import type { ToolActivity } from '@/atoms/agent-atoms'
 
-/** Task 工具名集合（用于聚合判断，与 SDKMessageRenderer 共享语义）
- * 注意：TaskGet/TaskList 是只读查询工具，不纳入聚合，保留为普通工具活动行 */
+/** Task 工具名集合用于静态 callers；MCP 前缀工具由 isTask*Tool 动态识别。 */
 export const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'proma_task_create', 'proma_task_update'])
+
+export function isTaskProgressTool(toolName: string): boolean {
+  return toolName === 'TodoWrite' || isTaskCreateTool(toolName) || isTaskUpdateTool(toolName)
+}
 
 export type TaskItemStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled' | 'deleted'
 
@@ -139,7 +143,7 @@ export function aggregateTaskItems(
   const taskCreateSubjectMap = new Map<string, string>()
 
   for (const activity of activities) {
-    if (activity.toolName !== 'TaskCreate' && activity.toolName !== 'proma_task_create') continue
+    if (!isTaskCreateTool(activity.toolName)) continue
 
     const parsedResult = parseTaskCreateResult(activity.result)
     const taskId = parsedResult?.id ?? activity.toolUseId
@@ -167,7 +171,7 @@ export function aggregateTaskItems(
           })
         }
       }
-    } else if (activity.toolName === 'TaskCreate' || activity.toolName === 'proma_task_create') {
+    } else if (isTaskCreateTool(activity.toolName)) {
       const id = taskCreateIdMap.get(activity.toolUseId) ?? activity.toolUseId
       const subject = typeof activity.input.subject === 'string'
         ? activity.input.subject
@@ -184,7 +188,7 @@ export function aggregateTaskItems(
         activeForm: typeof activity.input.activeForm === 'string' ? activity.input.activeForm : undefined,
         ...(description ? { description } : {}),
       })
-    } else if (activity.toolName === 'TaskUpdate' || activity.toolName === 'proma_task_update') {
+    } else if (isTaskUpdateTool(activity.toolName)) {
       const taskId = taskIdFromInput(activity.input)
       if (!taskId) continue
 

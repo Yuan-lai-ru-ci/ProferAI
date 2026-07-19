@@ -143,12 +143,21 @@ export interface TaskCreatedPayload {
   subject: string
   description: string
   dependsOn: string[]
+  /** 创建时的父任务；用于持久化自动或显式父子分叉关系。 */
+  forkFrom?: string
 }
 
 export interface TaskUpdatedPayload {
   /** 更新的字段 */
   subject?: string
   description?: string
+  /**
+   * 完整依赖列表。存在时（包括空数组）替换旧依赖，而不是追加。
+   * 让结构化 MCP 工具能够表达“清空所有前置任务”。
+   */
+  dependsOn?: string[]
+  /** 分叉来源任务；存在时替换该任务原有父子关系。 */
+  forkFrom?: string
 }
 
 export interface TaskStatusChangedPayload {

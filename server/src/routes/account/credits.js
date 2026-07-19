@@ -16,6 +16,8 @@ accountCredits.get('/', (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ balance: null, lifetimeConsumed: 0 })
 
+  // 仅累计当前用户，避免一次余额读取扫描全站 active subscriptions；累计只写待领取池。
+  accrueDailyDripForUser(userId)
   const row = getCredits(userId)
   const user = db.prepare(`
     SELECT membership_tier, is_vip, multiplier,
@@ -23,8 +25,6 @@ accountCredits.get('/', (c) => {
     FROM users WHERE id = ?
   `).get(userId)
   const ic = getUserInviteCode(userId)
-  // 仅累计当前用户，避免一次余额读取扫描全站 active subscriptions。
-  accrueDailyDripForUser(userId)
   const sub = getSubscriptionStatus(userId)
 
   const qpu = NEWAPI_QUOTA_PER_UNIT

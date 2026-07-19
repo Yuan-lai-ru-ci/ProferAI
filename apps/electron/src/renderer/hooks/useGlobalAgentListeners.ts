@@ -58,31 +58,9 @@ import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, ProferEvent, AgentSessionMeta } from '@profer/shared'
 import { inferContextWindow } from '@profer/shared'
-import { taskActivityToGraphEvents } from '@/lib/task-graph-events'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 
-/** 从 delegate_agent 工具返回的 JSON 中提取 delegationId 和 childSessionId */
-function parseDelegationResult(result: unknown): { delegationId: string; childSessionId: string } | null {
-  if (typeof result !== 'string') return null
-  try {
-    const parsed = JSON.parse(result)
-    // delegate_agent 返回格式：{ delegation: { delegationId, childSessionId, ... }, ... }
-    const delegation = parsed?.delegation
-    if (delegation && typeof delegation === 'object') {
-      const delegationId = typeof delegation.delegationId === 'string' ? delegation.delegationId : null
-      const childSessionId = typeof delegation.childSessionId === 'string' ? delegation.childSessionId : null
-      if (delegationId && childSessionId) return { delegationId, childSessionId }
-    }
-    // 兼容旧格式：直接取顶层字段
-    if (typeof parsed?.delegationId === 'string' && typeof parsed?.childSessionId === 'string') {
-      return { delegationId: parsed.delegationId, childSessionId: parsed.childSessionId }
-    }
-    return null
-  } catch {
-    return null
-  }
-}
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 
@@ -372,8 +350,6 @@ export function useGlobalAgentListeners(): void {
     const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
     /** 正在执行的 git 突变 Bash 命令：toolUseId → sessionId（完成后触发 diff 刷新） */
     const pendingGitMutateTools = new Map<string, string>()
-    /** 当前正在操作的 Task ID — TaskCreate/TaskUpdate 时更新，delegate_agent 时消费 */
-    const currentTaskIdRef = { current: null as string | null }
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
@@ -786,40 +762,6 @@ export function useGlobalAgentListeners(): void {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) =>
               prev.filter((t) => t.toolUseId !== event.toolUseId)
             )
-            // 持久化 Task Graph 事件到 JSONL（供 ProjectGraphPanel IPC 回退读取）
-            try {
-              const streamState = store.get(agentStreamingStatesAtom).get(sessionId)
-              const activity = streamState?.toolActivities.find(a => a.toolUseId === event.toolUseId)
-              if (activity && activity.result != null) {
-                const api = window.electronAPI
-                if (
-                  activity.toolName === 'TaskCreate' || activity.toolName === 'TaskUpdate' ||
-                  activity.toolName === 'proma_task_create' || activity.toolName === 'proma_task_update'
-                ) {
-                  const conversion = taskActivityToGraphEvents(activity, sessionId, Date.now(), currentTaskIdRef.current)
-                  if (conversion.nextCurrentTaskId) {
-                    currentTaskIdRef.current = conversion.nextCurrentTaskId
-                  }
-                  for (const graphEvent of conversion.events) {
-                    void api.appendGraphEvent?.(sessionId, graphEvent)?.catch(() => {})
-                  }
-                } else if (activity.toolName === 'delegate_agent') {
-                  // 委派完成：将 delegationId + childSessionId 关联到当前 Task 节点
-                  const currentTaskId = currentTaskIdRef.current
-                  if (currentTaskId) {
-                    const parsed = parseDelegationResult(activity.result)
-                    if (parsed) {
-                      void api.appendGraphEvent?.(sessionId, {
-                        type: 'task_session_linked',
-                        taskId: currentTaskId,
-                        timestamp: Date.now(),
-                        payload: { sessionId: parsed.delegationId, childSessionId: parsed.childSessionId },
-                      })?.catch(() => {})
-                    }
-                  }
-                }
-              }
-            } catch { /* graph persistence should never break streaming */ }
             // Agent 写类工具完成时，递增 diff 刷新版本号并切换预览文件
             if (pendingWriteTools.has(event.toolUseId)) {
               const entry = pendingWriteTools.get(event.toolUseId)!

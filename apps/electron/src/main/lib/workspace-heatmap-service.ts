@@ -1,12 +1,13 @@
 /**
  * 工作区热力图 Token 聚合服务
  *
- * 扫描会话 JSONL 文件，按天聚合 token 消耗（input + output）。
+ * 扫描会话 JSONL 文件，按天聚合实际 Token 用量（输入、缓存读写与输出）。
  * 结果缓存到 ~/.profer/heatmap-cache/{workspaceId}.json，
  * 任意会话的 updatedAt 变化时自动重建缓存。
  *
  * 数据来源：每个会话 JSONL 中 **所有** type=result 消息的 usage 字段。
- * 日期归属：每条 result 消息按自身的 _createdAt 归入对应日期。
+ * 统计口径：input + cache read + cache creation + output；缺失字段按 0 处理。
+ * 日期归属：每条 result 消息按自身的 _createdAt 和本机时区归入对应自然日。
  *   — 一个跨越多天的会话，token 会正确拆分到各天，而不是全部归到最后一天。
  * 自配/代管用户统一走此路径，不依赖服务端 API。
  */
@@ -24,7 +25,7 @@ export interface HeatmapDailyEntry {
 }
 
 /** 缓存格式版本：结构变更时递增以自动淘汰旧缓存 */
-const CACHE_VERSION = 2
+export const CACHE_VERSION = 3
 
 interface HeatmapCache {
   /** 缓存格式版本 */
@@ -58,6 +59,27 @@ function getCachePath(workspaceId: string): string {
  * 返回 Map<date, tokens>，key 为 ISO 日期 "YYYY-MM-DD"。
  * 文件不存在或无合法 result 消息时返回空 Map。
  */
+export function usageToTotalTokens(usage: {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}): number {
+  return (usage.input_tokens ?? 0)
+    + (usage.cache_read_input_tokens ?? 0)
+    + (usage.cache_creation_input_tokens ?? 0)
+    + (usage.output_tokens ?? 0)
+}
+
+/** 将时间戳格式化为运行 Profer 的设备所在时区的自然日。 */
+export function timestampToLocalDate(timestamp: number): string {
+  const date = new Date(timestamp)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function extractSessionDailyTokens(sessionId: string): Map<string, number> {
   const filePath = getAgentSessionMessagesPath(sessionId)
   if (!existsSync(filePath)) return new Map()
@@ -76,7 +98,12 @@ function extractSessionDailyTokens(sessionId: string): Map<string, number> {
 
     let parsed: {
       type?: string
-      usage?: { input_tokens?: number; output_tokens?: number }
+      usage?: {
+        input_tokens?: number
+        output_tokens?: number
+        cache_read_input_tokens?: number
+        cache_creation_input_tokens?: number
+      }
       _createdAt?: number
     }
     try {
@@ -86,9 +113,9 @@ function extractSessionDailyTokens(sessionId: string): Map<string, number> {
     }
 
     if (parsed.type === 'result' && parsed.usage && parsed._createdAt) {
-      const tokens = (parsed.usage.input_tokens ?? 0) + (parsed.usage.output_tokens ?? 0)
+      const tokens = usageToTotalTokens(parsed.usage)
       if (tokens > 0) {
-        const date = new Date(parsed._createdAt).toISOString().slice(0, 10)
+        const date = timestampToLocalDate(parsed._createdAt)
         dayMap.set(date, (dayMap.get(date) ?? 0) + tokens)
       }
     }
@@ -101,11 +128,10 @@ function extractSessionDailyTokens(sessionId: string): Map<string, number> {
 
 /**
  * 扫描工作区下所有非归档会话，逐条解析 JSONL 中所有 result 消息，
- * 按每条消息的实际发生日期（_createdAt）聚合每日 token 消耗。
+ * 按每条消息的实际发生日期（_createdAt）和本机时区聚合每日总 Token 用量。
  *
- * 与旧实现的区别：
- * - 旧：只读最后一条 result，全部 token 归到一天 → **不准**
- * - 新：逐条 result 按日期拆分 → 跨天会话 token 正确分布到各天
+ * 每条结果都会计入输入、缓存读取、缓存写入和输出 Token；
+ * 跨天会话会按各条 result 的发生时间正确拆分到各自然日。
  *
  * 返回按日期升序排列的条目列表（最近 365 天）。
  */
@@ -115,6 +141,7 @@ export function buildWorkspaceTokenDaily(
 ): HeatmapDailyEntry[] {
   const cutoff = new Date()
   cutoff.setDate(cutoff.getDate() - 365)
+  const cutoffDate = timestampToLocalDate(cutoff.getTime())
 
   const dayMap = new Map<string, number>()
 
@@ -125,7 +152,7 @@ export function buildWorkspaceTokenDaily(
 
     for (const [date, tokens] of sessionDays) {
       // 跳过超出范围的数据（先快速字符串比较：ISO 日期天然可比）
-      if (date < cutoff.toISOString().slice(0, 10)) continue
+      if (date < cutoffDate) continue
       dayMap.set(date, (dayMap.get(date) ?? 0) + tokens)
     }
   }
