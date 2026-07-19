@@ -24,6 +24,8 @@ export interface StreamSSEOptions {
   onEvent: StreamEventCallback
   /** AbortSignal 用于取消请求 */
   signal?: AbortSignal
+  /** 首字节超时（毫秒），默认 30s。超时触发 AbortError，可被重试逻辑捕获并自动重试 */
+  timeoutMs?: number
   /** 自定义 fetch 函数（代理等场景下由调用方注入） */
   fetchFn?: typeof globalThis.fetch
 }
@@ -73,6 +75,14 @@ class HTTPError extends Error {
   }
 }
 
+/** Provider 在 200 流内返回的语义错误，通常不是瞬时网络问题，不应自动重试。 */
+class ProviderStreamError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProviderStreamError'
+  }
+}
+
 /**
  * 计算重试延迟（指数退避 + ±20% jitter）
  *
@@ -95,6 +105,7 @@ function getSSERetryDelayMs(attempt: number, elapsedRetryDelayMs: number): numbe
  * - 无状态码（网络错误 / 流读取中断 / 空响应体）：视为瞬时问题，可重试
  */
 function isRetriableError(error: unknown): boolean {
+  if (error instanceof ProviderStreamError) return false
   if (error instanceof HTTPError) {
     return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500
   }
@@ -174,22 +185,42 @@ export async function streamSSE(options: StreamSSEOptions): Promise<StreamSSERes
   }
 }
 
+function normalizeToolCallOutputIndex(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (typeof value === 'string' && value) return value
+  return undefined
+}
+
 /** 单次 SSE 流式尝试（不含重试逻辑） */
 async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSEResult> {
-  const { request, adapter, onEvent, signal, fetchFn = fetch } = options
+  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = 30_000 } = options
+
+  // 真正的"首字节超时"：仅在等待 HTTP 响应期间计时，收到响应后立即清除。
+  // 使用 setTimeout + clearTimeout 而非 AbortSignal.timeout() 因为后者是绝对超时，
+  // 会无条件 abort 整个流（包括已开始的内容输出），导致正常长回复被截断。
+  // 超时产生的 AbortError 会被外层 streamSSE 的 isRetriableError 识别为可重试，
+  // 从而触发指数退避重试（最多 5 次 / 30s 预算）。
+  const timeoutController = new AbortController()
+  const timer = setTimeout(() => timeoutController.abort(new DOMException('First byte timeout', 'TimeoutError')), timeoutMs)
+  const effectiveSignal = signal
+    ? AbortSignal.any([signal, timeoutController.signal])
+    : timeoutController.signal
 
   // 1. 发起请求（支持通过 fetchFn 注入代理）
   const response = await fetchFn(request.url, {
     method: 'POST',
     headers: request.headers,
     body: request.body,
-    signal,
+    signal: effectiveSignal,
   })
+
+  // 已收到 HTTP 响应头，清除首字节超时——后续流式读取不应受时间限制
+  clearTimeout(timer)
 
   // 2. 错误检查
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new HTTPError(`${adapter.providerType} API 错误 (${response.status})，请求端点：${request.url}: ${text.slice(0, 300)}`, response.status)
+    throw new HTTPError(`${adapter.providerType} API 错误 (${response.status}): ${text.slice(0, 300)}`, response.status)
   }
 
   if (!response.body) {
@@ -206,6 +237,7 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
 
   // 工具调用追踪
   const pendingToolCalls = new Map<string, { id: string; name: string; args: string; metadata?: Record<string, unknown> }>()
+  const toolCallIdsByOutputIndex = new Map<string, string>()
   let currentToolCallId: string | undefined
 
   // 思考块追踪（Anthropic 协议：每个 thinking 块由多个 thinking_delta + signature_delta 组成）
@@ -265,22 +297,30 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
             currentThinking = null
           } else if (event.type === 'tool_call_start') {
             currentToolCallId = event.toolCallId
+            const outputIndex = normalizeToolCallOutputIndex(event.metadata?.outputIndex)
+            if (outputIndex) toolCallIdsByOutputIndex.set(outputIndex, event.toolCallId)
+            const existing = pendingToolCalls.get(event.toolCallId)
             pendingToolCalls.set(event.toolCallId, {
               id: event.toolCallId,
               name: event.toolName,
-              args: '',
-              metadata: event.metadata,
+              args: existing?.args ?? '',
+              metadata: { ...existing?.metadata, ...event.metadata },
             })
           } else if (event.type === 'tool_call_delta') {
-            const tcId = event.toolCallId || currentToolCallId
+            const outputIndex = normalizeToolCallOutputIndex(event.metadata?.outputIndex)
+            const tcId = event.toolCallId || (outputIndex ? toolCallIdsByOutputIndex.get(outputIndex) : undefined) || currentToolCallId
             if (tcId) {
               const pending = pendingToolCalls.get(tcId)
               if (pending) {
-                pending.args += event.argumentsDelta
+                pending.args = event.finalArguments !== undefined
+                  ? event.finalArguments
+                  : pending.args + event.argumentsDelta
               }
             }
           } else if (event.type === 'done' && event.stopReason) {
             stopReason = event.stopReason
+          } else if (event.type === 'error') {
+            throw new ProviderStreamError(event.error)
           }
           onEvent(event)
         }
