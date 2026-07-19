@@ -28,19 +28,39 @@ import {
 type JotaiStore = ReturnType<typeof useStore>
 
 /** 拉取一次余额并写入指定 store。供组件外（如全局错误监听）调用。 */
+function clearCreditsState(store: JotaiStore): void {
+  store.set(creditsBalanceAtom, null)
+  store.set(creditsLifetimeConsumedAtom, 0)
+  store.set(creditsBalancePackageAtom, 0)
+  store.set(creditsBalanceReferralAtom, 0)
+  store.set(creditsBalancePurchasedAtom, 0)
+  store.set(membershipTierAtom, 'free')
+  store.set(isVipAtom, false)
+  store.set(multiplierAtom, 1.0)
+  store.set(inviteCodeAtom, null)
+  store.set(subscriptionAtom, null)
+}
+
 export async function refreshCreditsInto(store: JotaiStore): Promise<void> {
   try {
     const commercial = await window.electronAPI.getCommercialMode().catch(() => false)
     if (!commercial) {
-      store.set(creditsBalanceAtom, null)
+      clearCreditsState(store)
       return
     }
     const auth = await window.electronAPI.auth.getTeamAuth()
-    if (!auth) return
+    if (!auth) {
+      clearCreditsState(store)
+      return
+    }
     const resp = await fetch(`${auth.baseUrl}/v1/account/credits`, {
       headers: { Authorization: `Bearer ${auth.token}` },
     })
-    if (!resp.ok) return
+    if (!resp.ok) {
+      // 认证已失效时不能保留上一个账号的余额或订阅状态；普通服务异常仍保留旧快照。
+      if (resp.status === 401 || resp.status === 403) clearCreditsState(store)
+      return
+    }
     const d = await resp.json()
     // 当前用户本地账本余额：balance 可能为 null（非代管或查询失败）
     store.set(creditsBalanceAtom, d.balance ?? null)
@@ -53,10 +73,8 @@ export async function refreshCreditsInto(store: JotaiStore): Promise<void> {
     store.set(isVipAtom, !!d.isVip)
     store.set(multiplierAtom, d.multiplier ?? 1.0)
     store.set(inviteCodeAtom, d.inviteCode ?? null)
-    // 订阅状态
-    if (d.subscription) {
-      store.set(subscriptionAtom, d.subscription)
-    }
+    // 订阅状态：服务端明确返回 null 时必须清除旧账号/已过期订阅的陈旧卡片。
+    store.set(subscriptionAtom, d.subscription ?? null)
   } catch {
     /* 静默：余额拉取失败不打扰用户 */
   }

@@ -37,6 +37,18 @@ describe('aggregateTaskItems statuses', () => {
     expect(aggregateTaskItems(taskActivities('deleted'), false)).toEqual([])
   })
 
+  test('aggregates the real Claude SDK MCP-prefixed task tools', () => {
+    const items = aggregateTaskItems([
+      activity('mcp__task-graph__proma_task_create', { subject: '结构化任务' }, {
+        toolUseId: 'mcp-create',
+        result: JSON.stringify({ task: { id: 'mcp-1', subject: '结构化任务' } }),
+      }),
+      activity('mcp__task-graph__proma_task_update', { taskId: 'mcp-1', status: 'completed' }),
+    ], false)
+
+    expect(items).toEqual([expect.objectContaining({ id: 'mcp-1', status: 'completed' })])
+  })
+
   test('falls back to the previous status for an unknown value', () => {
     const activities = [
       ...taskActivities('in_progress'),

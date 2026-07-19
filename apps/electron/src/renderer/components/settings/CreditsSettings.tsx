@@ -127,13 +127,18 @@ export function CreditsSettings(): React.ReactElement {
 
   // Drip 领取
   const handleClaimDrip = React.useCallback(async () => {
+    if (dripAvailable <= 0) return
     try {
       const auth = await window.electronAPI.auth.getTeamAuth()
-      if (!auth) return
+      if (!auth) {
+        toast.info('请先登录团队工作区')
+        return
+      }
       const resp = await fetch(`${auth.baseUrl}/v1/account/subscription/claim-drip`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${auth.token}` },
       })
+      if (!resp.ok) throw new Error(`claim-drip failed: ${resp.status}`)
       const d = await resp.json()
       if (d.claimed) {
         toast.success(d.message)
@@ -144,7 +149,7 @@ export function CreditsSettings(): React.ReactElement {
     } catch {
       toast.error('领取失败，请重试')
     }
-  }, [reloadCredits])
+  }, [dripAvailable, reloadCredits])
 
   return (
     <div className="space-y-8">
@@ -265,20 +270,21 @@ export function CreditsSettings(): React.ReactElement {
                 本周可领 <span className="text-green-600">{fmtPointsNum(dripAvailable)}</span> 积分
               </div>
               <div className="text-[11px] text-muted-foreground mt-0.5">
-                每日 +{dripRate} 积分 · {dripClaimed ? '今日已领' : '今日未领'} · 周日清零
+                本周待领取 · 每日 +{dripRate} 积分 · {dripClaimed ? '今日已领' : '今日未领'} · 未领取额度下周一清零
               </div>
             </div>
           </div>
           <button
             onClick={handleClaimDrip}
+            disabled={dripAvailable <= 0}
             className={cn(
-              'rounded-lg px-5 py-2 text-sm font-medium transition-all',
+              'rounded-lg px-5 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-100',
               dripAvailable > 0
                 ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm'
-                : 'bg-muted text-muted-foreground hover:bg-muted/80',
+                : 'bg-muted text-muted-foreground',
             )}
           >
-            {dripAvailable > 0 ? `领取 ${fmtPointsNum(dripAvailable)} 积分` : '领取今日积分'}
+            {dripAvailable > 0 ? `领取本周 ${fmtPointsNum(dripAvailable)} 积分` : '暂无待领取额度'}
           </button>
         </div>
       )}

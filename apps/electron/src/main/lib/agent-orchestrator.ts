@@ -34,7 +34,18 @@ import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfC
 import { getTeamAuthWithRefresh } from './auth-service'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectKbMcpServer } from './kb-agent-tools'
+import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
+import {
+  delegationLinkFromResult,
+  delegationToGraphEvents,
+  isDelegateAgentTool,
+  nativeTaskToolToGraphEvents,
+  structuredTaskAutoLinkEvent,
+  structuredTaskToolCurrentTaskId,
+  type TaskToolInvocation,
+} from './task-graph-event-converter'
+import { appendGraphEvent } from './project-graph-service'
 import {
   injectAgentCollaborationMcpServer,
   registerCollaborationEventBus,
@@ -875,7 +886,9 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 注入 mentioned_tools: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
       }
 
-      const contextualMessage = `${dynamicCtx}\n\n${enrichedMessage}`
+      const knowledgePrompt = buildAgentKnowledgePrompt(sessionMeta?.knowledgeReferences || [])
+      if (knowledgePrompt) console.log(`[Agent 编排] 已注入受控资料读取指令: ${sessionMeta?.knowledgeReferences?.length ?? 0} 份`)
+      const contextualMessage = `${dynamicCtx}${knowledgePrompt ? `\n\n${knowledgePrompt}` : ''}\n\n${enrichedMessage}`
 
       const isCompactCommand = userMessage.trim() === '/compact'
       const finalPrompt = isCompactCommand
@@ -1319,6 +1332,11 @@ export class AgentOrchestrator {
           // 后台任务等待态：result 走轻量完成后置 true，下一轮真正开始（收到 assistant/user/task 消息）时
           // 置回 false 并发 run_resumed，让 UI 从空闲态恢复运行态。
           let awaitingBackgroundWake = false
+          // Native task tools are persisted here, before renderer delivery, so headless
+          // runs and renderer reloads cannot lose graph history.
+          const taskToolUses = new Map<string, TaskToolInvocation>()
+          let currentTaskId: string | null = null
+          let lastCompletedTaskId: string | null = null
 
           while (true) {
             if (!pendingNext) {
@@ -1370,6 +1388,80 @@ export class AgentOrchestrator {
                     syncPlanModeFromToolUse(block.name)
                   }
                 }
+              }
+            }
+
+            // 收集 tool_use，待对应 user.tool_result 到达后写入原生任务图事件。
+            if (msg.type === 'assistant') {
+              const assistantMsg = msg as SDKAssistantMessage
+              if (!assistantMsg.isReplay) {
+                for (const block of assistantMsg.message.content) {
+                  if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+                    taskToolUses.set(block.id, {
+                      toolUseId: block.id,
+                      toolName: block.name,
+                      input: typeof block.input === 'object' && block.input !== null
+                        ? block.input as Record<string, unknown>
+                        : {},
+                    })
+                  }
+                }
+              }
+            }
+
+            // 主进程是任务图持久化权威：仅原生 Task 工具在此转换。
+            // 结构化 MCP handler 已直接 appendGraphEvent，只更新当前任务以关联后续委派。
+            if (msg.type === 'user') {
+              const content = (msg as { message?: { content?: Array<{ type?: string; tool_use_id?: string; content?: unknown }> } }).message?.content
+              for (const block of content ?? []) {
+                if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
+                const invocation = taskToolUses.get(block.tool_use_id)
+                if (!invocation) continue
+                invocation.result = block.content
+
+                if (invocation.toolName === 'TaskCreate' || invocation.toolName === 'TaskUpdate') {
+                  const conversion = nativeTaskToolToGraphEvents(invocation, sessionId, Date.now(), {
+                    currentTaskId,
+                    lastCompletedTaskId,
+                  })
+                  for (const graphEvent of conversion.events) {
+                    appendGraphEvent(sessionId, graphEvent)
+                    if (graphEvent.type === 'task_status_changed' && graphEvent.payload.newStatus === 'completed') {
+                      lastCompletedTaskId = graphEvent.taskId
+                      currentTaskId = null
+                    }
+                  }
+                  if (conversion.nextCurrentTaskId) currentTaskId = conversion.nextCurrentTaskId
+                } else {
+                  const structuredTaskId = structuredTaskToolCurrentTaskId(invocation)
+                  const autoLink = structuredTaskAutoLinkEvent(invocation, Date.now(), {
+                    currentTaskId,
+                    lastCompletedTaskId,
+                  })
+                  if (autoLink) appendGraphEvent(sessionId, autoLink)
+                  if (invocation.toolName.endsWith('proma_task_update') && invocation.input.status === 'completed' && structuredTaskId) {
+                    lastCompletedTaskId = structuredTaskId
+                    currentTaskId = null
+                  } else if (structuredTaskId) {
+                    currentTaskId = structuredTaskId
+                  }
+                  if (isDelegateAgentTool(invocation.toolName) && currentTaskId) {
+                    const delegation = delegationLinkFromResult(block.content)
+                    if (delegation) {
+                      const timestamp = Date.now()
+                      appendGraphEvent(sessionId, {
+                        type: 'task_session_linked',
+                        taskId: currentTaskId,
+                        timestamp,
+                        payload: { sessionId: delegation.delegationId, childSessionId: delegation.childSessionId },
+                      })
+                      for (const graphEvent of delegationToGraphEvents(currentTaskId, delegation, invocation, timestamp)) {
+                        appendGraphEvent(sessionId, graphEvent)
+                      }
+                    }
+                  }
+                }
+                taskToolUses.delete(block.tool_use_id)
               }
             }
 
