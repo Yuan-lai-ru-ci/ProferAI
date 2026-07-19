@@ -651,6 +651,8 @@ export interface AgentSessionMeta {
   sdkSessionId?: string
   /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
   agentRuntime?: AgentRuntime
+  /** ChatGPT Codex Fast Mode；仅 Pi + Codex 的受支持模型实际生效。 */
+  codexFastMode?: boolean
   /** 所属工作区 ID */
   workspaceId?: string
   /** 是否置顶 */
@@ -1670,6 +1672,8 @@ export const AGENT_IPC_CHANNELS = {
   PERMISSION_RESPOND: 'agent:permission:respond',
   /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
   UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
+  /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效）。 */
+  UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
 
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */

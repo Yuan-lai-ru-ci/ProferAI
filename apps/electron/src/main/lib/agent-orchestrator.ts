@@ -1171,6 +1171,7 @@ export class AgentOrchestrator {
               : appSettings.agentEffort ?? (appSettings.agentThinking ? 'high' : 'off')) as AgentThinkingLevel,
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
           ...(piCustomTools && { customTools: piCustomTools }),
+          ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
           ...(userMessage.trim() === '/compact' && { compactRequest: true }),
         }),
         ...(maxTurns != null && { maxTurns }),
