@@ -19,9 +19,9 @@ import {
   AUTOMATION_MAX_CONSECUTIVE_FAILURES,
   AUTOMATION_IPC_CHANNELS,
   AUTOMATION_DEFAULT_SESSION_MODE,
+  type AgentRuntime,
   type Automation,
   type AutomationRun,
-  type AgentRuntime,
   normalizeAgentRuntime,
 } from '@profer/shared'
 import {
@@ -66,6 +66,14 @@ function isSameLocalDay(a: number, b: number): boolean {
 }
 
 function formatScheduleLabel(a: Automation): string {
+  if (a.scheduleType === 'once') {
+    const when = a.scheduledAt
+      ? new Date(a.scheduledAt).toLocaleString('zh-CN', {
+          month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+        })
+      : '指定时间'
+    return `仅运行一次（${when}）`
+  }
   if (a.scheduleType === 'daily') return `每天 ${a.timeOfDay ?? '09:00'}`
   if (a.scheduleType === 'weekly') {
     const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -123,8 +131,11 @@ export async function runAutomation(automation: Automation, manual = false): Pro
 
     let reuseSessionId: string | undefined
     const lastSessionMeta = automation.lastSessionId ? getAgentSessionMeta(automation.lastSessionId) : undefined
-    // 旧任务按 Claude 回退；runtime 不同的会话绝不复用，避免跨 SDK resume。
-    if (lastSessionMeta && automation.lastSessionId && normalizeAgentRuntime(lastSessionMeta.agentRuntime) === agentRuntime) {
+    // 已被用户手动接管（毕业）的会话不再复用，强制新建，避免把定时任务消息注入用户的私人会话
+    if (lastSessionMeta?.automationGraduated) {
+      console.log(`[定时任务] ${automation.name} 上次会话已被用户接管，本次自动开新会话`)
+    }
+    if (automation.lastSessionId && lastSessionMeta && !lastSessionMeta.automationGraduated) {
       if (sessionMode === 'reuse') {
         reuseSessionId = automation.lastSessionId
       } else if (
@@ -151,6 +162,15 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id, agentRuntime })
       targetSessionId = created.id
       setLastSessionId(automation.id, created.id)
+    }
+
+    const targetSessionMeta = getAgentSessionMeta(targetSessionId)
+    const previousAgentRuntime: AgentRuntime = targetSessionMeta?.agentRuntime ?? 'claude'
+    if (targetSessionMeta && previousAgentRuntime !== agentRuntime) {
+      updateAgentSessionMeta(targetSessionId, {
+        agentRuntime,
+        sdkSessionId: undefined,
+      })
     }
 
     await new Promise<void>((resolveRun) => {
@@ -198,8 +218,8 @@ export async function runAutomation(automation: Automation, manual = false): Pro
           automationContext: `这是 Profer 定时任务「${automation.name}」的自动执行（ID: ${automation.id}，${formatScheduleLabel(automation)}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。如发现本任务连续失败、输出价值低、频率不合适或提示词不完整，可以使用 automation 工具读取并更新当前任务。`,
           channelId: automation.channelId,
           modelId: automation.modelId,
-          workspaceId: automation.workspaceId,
           agentRuntime,
+          workspaceId: automation.workspaceId,
           permissionModeOverride: automation.permissionMode ?? 'bypassPermissions',
           triggeredBy: 'automation',
           startedAt: runAt,
