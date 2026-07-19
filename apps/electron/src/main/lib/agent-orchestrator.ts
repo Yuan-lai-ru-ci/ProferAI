@@ -68,6 +68,7 @@ import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
 import { buildAgentRuntimeEnv } from './agent-runtime-env'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
+import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { applySdkCredentials, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
 
 // ===== 类型定义 =====
@@ -833,6 +834,12 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 已合并 ${Object.keys(customMcpServers).length} 个自定义 MCP 服务器`)
       }
 
+      // Claude SDK 原生接收 mcpServers；Pi 必须将同一配置连接后转换为 customTools。
+      // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。
+      const piMcpTools = agentRuntime === 'pi'
+        ? await buildPiMcpTools(mcpServers)
+        : undefined
+
       // 11. 构建动态上下文和最终 prompt
       const dynamicCtx = buildDynamicContext({
         workspaceName: workspace?.name,
@@ -1149,6 +1156,7 @@ export class AgentOrchestrator {
               ? 'xhigh'
               : appSettings.agentEffort ?? (appSettings.agentThinking ? 'high' : 'off')) as AgentThinkingLevel,
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
+          ...(piMcpTools && { customTools: piMcpTools }),
           ...(userMessage.trim() === '/compact' && { compactRequest: true }),
         }),
         ...(maxTurns != null && { maxTurns }),
