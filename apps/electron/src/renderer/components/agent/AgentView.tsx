@@ -22,6 +22,8 @@ import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
+import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
+import { isCodexFastModeSupportedModel } from '@profer/shared'
 import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
@@ -1397,10 +1399,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return map
     })
 
-    // 自动将选中的渠道加入 Agent 可用渠道白名单
-    const updatedChannelIds = agentChannelIds.includes(option.channelId)
-      ? agentChannelIds
-      : [...agentChannelIds, option.channelId]
+    // Pi 可使用所有 enabled 渠道；只有 Claude 模型选择才更新其兼容渠道白名单。
+    const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(
+      agentChannelIds,
+      option.channelId,
+      sessionMeta?.agentRuntime ?? 'claude',
+    )
     if (updatedChannelIds !== agentChannelIds) {
       setAgentChannelIds(updatedChannelIds)
     }
@@ -1415,7 +1419,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       agentModelId: option.modelId,
       agentChannelIds: updatedChannelIds,
     }).catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds])
+  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, sessionMeta?.agentRuntime])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -2403,6 +2407,32 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </Tooltip>
       ),
     },
+    ...(sessionMeta?.agentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
+      ? [{
+          key: 'codex-fast-mode',
+          node: (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant={sessionMeta.codexFastMode ? 'secondary' : 'ghost'}
+                  size="icon"
+                  disabled={streaming || backgroundWaiting}
+                  className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground"
+                  onClick={() => {
+                    window.electronAPI.updateSessionCodexFastMode(sessionId, !sessionMeta.codexFastMode)
+                      .then(() => toast.success(sessionMeta.codexFastMode ? '已切换为标准模式' : '已切换为快速模式'))
+                      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : '切换快速模式失败'))
+                  }}
+                >
+                  <Sparkles className="size-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top"><p>{sessionMeta.codexFastMode ? '标准模式' : '快速模式'}</p></TooltipContent>
+            </Tooltip>
+          ),
+        }]
+      : []),
     {
       key: 'context-usage',
       node: (

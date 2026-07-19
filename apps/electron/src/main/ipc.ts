@@ -2614,6 +2614,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 空闲会话的 Codex Fast Mode：下一轮 Pi 请求读取持久化状态。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE,
+    async (_, sessionId: string, enabled: boolean): Promise<AgentSessionMeta> => {
+      if (typeof enabled !== 'boolean') throw new Error(`无效的 Codex Fast Mode 状态: ${String(enabled)}`)
+      if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
+      if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换快速模式')
+      return updateAgentSessionMeta(sessionId, { codexFastMode: enabled })
+    },
+  )
+
   // ===== 工作区记忆文件管理 =====
 
   ipcMain.handle(
