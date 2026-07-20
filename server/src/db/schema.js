@@ -3,6 +3,8 @@ import { DB_PATH, ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_CREDIT_GRANT } from '../c
 import { hashPassword } from '../utils.js'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
+import { runMigrations } from './migration-runner.js'
+import { teamFileMigrations } from './team-file-migrations.js'
 
 // ===== 数据库初始化 =====
 export const db = new Database(DB_PATH)
@@ -82,9 +84,10 @@ db.exec(`
   );
 `)
 
-// 安全添加列（忽略已存在的情况）
+// 旧版本先补齐上传者展示字段；团队资料库新增结构统一走可审计迁移。
 try { db.exec("ALTER TABLE file_manifests ADD COLUMN uploaded_by TEXT NOT NULL DEFAULT ''") } catch (_) {}
 try { db.exec("ALTER TABLE file_manifests ADD COLUMN uploaded_by_name TEXT NOT NULL DEFAULT ''") } catch (_) {}
+runMigrations(db, teamFileMigrations)
 try { db.exec("ALTER TABLE workspace_members ADD COLUMN last_seen_at INTEGER DEFAULT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0") } catch (_) {}
 try { db.exec("ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT NULL") } catch (_) {}

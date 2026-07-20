@@ -64,8 +64,8 @@ export function inferContextWindow(model?: string): number | undefined {
  *
  * 使用位置：构建 SDK query options 时对 modelId 做转换。
  */
-export function resolveAgentSdkModelId(modelId: string): string {
-  if (supports1MContext(modelId) && !modelId.includes('[1m]')) {
+export function resolveAgentSdkModelId(modelId: string, enable1MContext = supports1MContext(modelId)): string {
+  if (enable1MContext && !modelId.includes('[1m]')) {
     return `${modelId}[1m]`
   }
   return modelId

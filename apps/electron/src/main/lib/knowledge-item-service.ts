@@ -117,6 +117,16 @@ function itemTextPath(itemId: string): string {
   return join(resolveKnowledgeItemDir(itemId), 'extracted.txt')
 }
 
+/** 仅返回本地资料由应用受控保存的原始副本；不暴露用户导入时的源文件路径。 */
+export function getKnowledgeItemStoredFilePath(itemId: string): string | null {
+  const item = readIndex().items.find((candidate) => candidate.id === itemId)
+  if (!item || item.origin !== 'local') return null
+  const extension = extname(item.originalFileName || '').toLowerCase()
+  if (!extension) return null
+  const storedPath = join(resolveKnowledgeItemDir(itemId), `original${extension}`)
+  return existsSync(storedPath) ? storedPath : null
+}
+
 function safeTitle(fileName: string): string {
   return basename(fileName, extname(fileName)).trim().slice(0, 500) || '未命名资料'
 }

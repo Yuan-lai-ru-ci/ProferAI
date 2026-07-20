@@ -66,6 +66,7 @@ import { workspaceRoutes } from './src/routes/workspaces.js'
 import { invitationRoutes } from './src/routes/invitations.js'
 import { syncRoutes } from './src/routes/sync.js'
 import { fileRoutes } from './src/routes/files.js'
+import { fileMetadataRoutes } from './src/routes/file-metadata.js'
 import { heartbeatRoutes } from './src/routes/heartbeat.js'
 import { eventRoutes } from './src/routes/events.js'
 import { announcementRoutes } from './src/routes/announcements.js'
@@ -134,6 +135,7 @@ app.route('/v1/workspaces', workspaceRoutes)
 app.route('/v1/invitations', invitationRoutes)
 app.route('/v1/sync', syncRoutes)
 app.route('/v1/workspaces', fileRoutes)
+app.route('/v1/workspaces', fileMetadataRoutes)
 app.route('/v1/workspaces', eventRoutes)
 app.route('/v1/workspaces', announcementRoutes)
 app.route('/v1/heartbeat', heartbeatRoutes)

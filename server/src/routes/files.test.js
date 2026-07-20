@@ -11,10 +11,12 @@ describe('normalizeFilePath', () => {
     expect(normalizeFilePath('/docs\\plan.md/')).toBe('docs/plan.md')
   })
 
-  test('拒绝路径遍历和空路径', () => {
+  test('拒绝路径遍历、空路径和服务端保留路径', () => {
     expect(normalizeFilePath('../secret.txt')).toBeNull()
     expect(normalizeFilePath('docs/../secret.txt')).toBeNull()
     expect(normalizeFilePath('')).toBeNull()
+    expect(normalizeFilePath('__trash__/entry/a.md')).toBeNull()
+    expect(normalizeFilePath('.trash/ws/entry/a.md')).toBeNull()
   })
 })
 

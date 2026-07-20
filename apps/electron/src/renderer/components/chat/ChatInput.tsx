@@ -14,7 +14,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { CornerDownLeft, Square, Brain, Paperclip, FileText, Library, X } from 'lucide-react'
+import { CornerDownLeft, Square, Brain, Paperclip, Library, X } from 'lucide-react'
 import type { KnowledgeReference } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { openKnowledgePreview } from '@/components/knowledge-base/KnowledgePreviewPanel'
@@ -41,8 +41,6 @@ import {
   useConversationModel,
   useConversationThinkingEnabled,
 } from '@/hooks/useConversationSettings'
-import { usePaperReading, markdownToFile, PAPER_PROMPT } from '@/hooks/usePaperReading'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { cn } from '@/lib/utils'
 import { fileToBase64, formatFileNames } from '@/lib/file-utils'
 import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
@@ -94,33 +92,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [knowledgePickerOpen, setKnowledgePickerOpen] = React.useState(false)
 
-  // ref 桥接：addFilesAsAttachments 在后面才定义，但 usePaperReading 需要用它
-  const addFilesRef = React.useRef<(files: File[]) => Promise<void>>(async () => {})
-
-  // 记录最近拖入的 PDF 真实路径，供论文精读按钮使用
-  const pdfPathRef = React.useRef<string | null>(null)
-  const pdfNameRef = React.useRef<string | null>(null)
-
-  const { isMineruLoading, largePaperConfirm, parseByPath, confirmLargePaper, cancelLargePaper } = usePaperReading({
-    isStreaming: streaming,
-    onParsed: React.useCallback(async (markdown, pages, creditsUsed, pdfName) => {
-      const mdFile = markdownToFile(markdown, pdfName)
-      await addFilesRef.current([mdFile])
-      // 用 .md 替换掉原来的 PDF 附件
-      setPendingAttachments((prev) => prev.filter((a) => !a.filename.toLowerCase().endsWith('.pdf')))
-      onSend(PAPER_PROMPT)
-      toast.success(`论文解析完成（${pages} 页，消耗 ${creditsUsed} 积分）`)
-    }, [onSend, setPendingAttachments]),
-  })
-
-  const handlePaperReading = React.useCallback(() => {
-    const path = pdfPathRef.current
-    if (!path) {
-      toast.warning('请先拖入 PDF 论文文件')
-      return
-    }
-    parseByPath(path, pdfNameRef.current ?? undefined)
-  }, [parseByPath])
 
   // 资料是本轮问题的结构化附件，不能脱离问题单独“发送”。
   const canSend = content.trim().length > 0 && selectedModel !== null && !streaming
@@ -177,7 +148,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
       }
     }
   }, [setPendingAttachments])
-  addFilesRef.current = addFilesAsAttachments
 
   /** 通过 IPC 打开文件选择对话框 */
   const handleOpenFileDialog = React.useCallback(async (): Promise<void> => {
@@ -278,14 +248,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     const files = Array.from(e.dataTransfer.files)
     if (files.length === 0) return
 
-    // 记录第一个 PDF 的真实路径和文件名，供论文精读按钮使用
-    for (const f of files) {
-      if (f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf') {
-        const p = window.electronAPI.getPathForFile?.(f)
-        if (p) { pdfPathRef.current = p; pdfNameRef.current = f.name }
-        break
-      }
-    }
 
     addFilesAsAttachments(files)
   }, [addFilesAsAttachments])
@@ -340,33 +302,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
       ),
     },
     {
-      key: 'paper-reading',
-      node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'size-[36px] shrink-0 rounded-full',
-                isMineruLoading
-                  ? 'text-blue-400'
-                  : 'text-foreground/60 hover:text-foreground'
-              )}
-              onClick={handlePaperReading}
-              disabled={isMineruLoading || streaming || !selectedModel}
-            >
-              <FileText className={cn('size-5', isMineruLoading && 'animate-pulse')} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>论文精读 — 选择 PDF 自动解析为 Markdown</p>
-          </TooltipContent>
-        </Tooltip>
-      ),
-    },
-    {
       key: 'thinking',
       node: (
         <Tooltip>
@@ -394,7 +329,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     { key: 'tools', node: <ToolSelectorPopover /> },
     { key: 'context', node: <ContextSettingsPopover /> },
     { key: 'clear', node: <ClearContextButton onClick={onClearContext} /> },
-  ], [handleOpenFileDialog, handlePaperReading, isMineruLoading, streaming, selectedModel, thinkingEnabled, setThinkingEnabled, onClearContext])
+  ], [handleOpenFileDialog, thinkingEnabled, setThinkingEnabled, onClearContext])
 
   const trailingNode = streaming ? (
     <Tooltip>
@@ -436,7 +371,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
         {/* 卡片式输入容器 — 对标 Cherry Studio: border-radius 17px, 0.5px border */}
         <div
           className={cn(
-            'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
+            'agent-input-surface rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
             'focus-within:border-foreground/20',
             isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
           )}
@@ -485,21 +420,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           onSetPendingKnowledgeReferences?.((current) => [...new Map([...current, ...additions].map((item) => [item.itemId, item])).values()].slice(0, 10))
         }} />
 
-        {/* 大论文确认弹窗（>50 页） */}
-        <ConfirmDialog
-          open={largePaperConfirm !== null}
-          onOpenChange={() => cancelLargePaper()}
-          title="确认论文解析"
-          confirmLabel="继续解析"
-          cancelLabel="取消"
-          variant="default"
-          onConfirm={confirmLargePaper}
-        >
-          <div>
-            <p>这篇论文约 {largePaperConfirm?.pages ?? 0} 页，预计消耗 {largePaperConfirm?.estimatedCredits ?? 0} 积分。</p>
-            <p className="text-muted-foreground mt-1">大于 50 页的论文解析耗时较长且消耗积分较多，是否继续？</p>
-          </div>
-        </ConfirmDialog>
     </div>
   )
 }

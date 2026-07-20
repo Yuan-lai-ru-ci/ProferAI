@@ -18,6 +18,7 @@ import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 import { getTeamAuthWithRefresh } from './auth-service'
 import { parsePaper } from './paper-service'
 import { findPaperMatch, mergePaperMeta, remotePaperToMeta, resolveRemoteSource, selectRemoteMarkdown } from './kb-paperpipe-mapping'
+import { isRetryablePaperpipeSyncError } from './kb-paperpipe-retry-utils'
 import type {
   KBLibrarySnapshot,
   PaperMeta,
@@ -57,20 +58,38 @@ interface PaperpipePaper {
   source?: 'arxiv' | 'local'
 }
 
-const uploadTokens = new Map<string, string>()
+type UploadState = { token: string; deleted: boolean }
+const uploadTokens = new Map<string, UploadState>()
 
 function beginUpload(paperId: string): string {
   const token = randomUUID()
-  uploadTokens.set(paperId, token)
+  uploadTokens.set(paperId, { token, deleted: false })
   return token
 }
 
 function isCurrentUpload(paperId: string, token: string): boolean {
-  return uploadTokens.get(paperId) === token && readLocalIndex().some((paper) => paper.id === paperId)
+  const state = uploadTokens.get(paperId)
+  return state?.token === token && !state.deleted && readLocalIndex().some((paper) => paper.id === paperId)
+}
+
+function markUploadDeleted(paperId: string): boolean {
+  const state = uploadTokens.get(paperId)
+  if (!state) return false
+  state.deleted = true
+  return true
 }
 
 function endUpload(paperId: string, token: string): void {
-  if (uploadTokens.get(paperId) === token) uploadTokens.delete(paperId)
+  if (uploadTokens.get(paperId)?.token === token) uploadTokens.delete(paperId)
+}
+
+async function removeOrphanedRemotePaper(remoteId: string): Promise<void> {
+  try {
+    await paperpipeApi(`/remove/${encodeURIComponent(remoteId)}`, { method: 'DELETE' })
+  } catch (error) {
+    // 本地索引已被删除；保留明确日志，后续可由 Bridge 运维清理，而不能重新写回已删除论文。
+    console.warn('[KB] 清理删除期间创建的远端论文失败:', (error as Error).message)
+  }
 }
 
 async function paperpipeApi<T = unknown>(
@@ -108,8 +127,9 @@ async function paperpipeApi<T = unknown>(
 
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}))
-    const error = new Error(data.message || data.error || `服务端错误 (${resp.status})`) as Error & { status?: number }
+    const error = new Error(data.message || data.error || `服务端错误 (${resp.status})`) as Error & { status?: number; code?: string }
     error.status = resp.status
+    error.code = typeof data.code === 'string' ? data.code : undefined
     throw error
   }
 
@@ -195,9 +215,11 @@ export async function importPaper(input: KBImportInput): Promise<KBImportResult>
     syncLocalIndex(paperMeta)
     const uploadToken = beginUpload(paperId)
     uploadPdfToPaperpipe(join(paperDir, 'original.pdf'), paperId)
-      .then((remoteId) => {
+      .then(async (remoteId) => {
         if (isCurrentUpload(paperId, uploadToken)) {
           syncLocalIndex({ id: paperId, remoteId, syncState: 'synced', syncError: undefined, lastSyncAttemptAt: Date.now() })
+        } else {
+          await removeOrphanedRemotePaper(remoteId)
         }
       })
       .catch((err) => {
@@ -255,12 +277,48 @@ async function uploadPdfToPaperpipe(filePath: string, clientPaperId: string): Pr
 
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}))
-    throw new Error(errData.message || `上传失败 (${resp.status})`)
+    const error = new Error(errData.message || errData.error || `上传失败 (${resp.status})`) as Error & { status?: number; code?: string }
+    error.status = resp.status
+    error.code = typeof errData.code === 'string' ? errData.code : undefined
+    throw error
   }
   const data = await resp.json().catch(() => ({})) as { remoteId?: unknown; paper?: { id?: unknown }; id?: unknown }
   const remoteId = data.remoteId ?? data.paper?.id ?? data.id
   if (typeof remoteId !== 'string' || !remoteId.trim()) throw new Error('服务端未返回远端论文标识')
   return remoteId
+}
+
+/** 从本机受控副本显式重试失败的本地 PDF 同步。 */
+export async function retryPaperpipeSync(paperId: string): Promise<PaperMeta> {
+  const paper = readLocalIndex().find((item) => item.id === paperId)
+  if (!paper || paper.source !== 'local') throw new Error('仅本地 PDF 支持重新同步')
+  if (paper.remoteId || paper.syncState === 'synced') throw new Error('论文已完成远端同步')
+  if (paper.syncState !== 'pending' && paper.syncState !== 'failed') throw new Error('论文当前无需重新同步')
+
+  const originalPdf = join(resolvePaperDir(paperId), 'original.pdf')
+  if (!existsSync(originalPdf)) throw new Error('本地 PDF 副本不存在，无法重新同步')
+  if (uploadTokens.has(paperId)) throw new Error('该论文正在同步，请稍候')
+
+  const token = beginUpload(paperId)
+  syncLocalIndex({ id: paperId, syncState: 'pending', syncError: undefined, lastSyncAttemptAt: Date.now() })
+  try {
+    const remoteId = await uploadPdfToPaperpipe(originalPdf, paperId)
+    if (!isCurrentUpload(paperId, token)) {
+      await removeOrphanedRemotePaper(remoteId)
+      throw new Error('同步已取消或论文已删除')
+    }
+    const updated = { ...paper, remoteId, syncState: 'synced' as const, syncError: undefined, lastSyncAttemptAt: Date.now() }
+    syncLocalIndex(updated)
+    return updated
+  } catch (error) {
+    if (isCurrentUpload(paperId, token)) {
+      const reason = isRetryablePaperpipeSyncError(error) ? '远端暂不可用，可稍后重新同步' : '远端拒绝上传，请检查 PDF、大小或登录状态'
+      syncLocalIndex({ id: paperId, syncState: 'failed', syncError: reason, lastSyncAttemptAt: Date.now() })
+    }
+    throw error
+  } finally {
+    endUpload(paperId, token)
+  }
 }
 
 /**
@@ -427,7 +485,7 @@ export async function deletePaper(paperId: string): Promise<DeletePaperResult> {
   const localPaper = localPapers.find((p) => p.id === paperId)
   if (!localPaper) throw new Error('论文不存在')
 
-  uploadTokens.delete(paperId)
+  const uploadWasPending = markUploadDeleted(paperId)
   const remoteId = localPaper.remoteId ?? (localPaper.source === 'arxiv' ? localPaper.id : undefined)
   if (remoteId) {
     try {
@@ -439,7 +497,7 @@ export async function deletePaper(paperId: string): Promise<DeletePaperResult> {
   }
   if (localPaper.source === 'local') rmSync(resolvePaperDir(paperId), { recursive: true, force: true })
   syncLocalIndex(null, paperId)
-  return { paperId, localDeleted: true, remoteDeleted: Boolean(remoteId), remoteStatus: remoteId ? 'deleted' : 'not-linked' }
+  return { paperId, localDeleted: true, remoteDeleted: Boolean(remoteId), remoteStatus: remoteId ? 'deleted' : uploadWasPending ? 'pending-cleanup' : 'not-linked' }
 }
 
 /**

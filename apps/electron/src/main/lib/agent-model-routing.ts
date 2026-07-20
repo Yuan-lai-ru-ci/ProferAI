@@ -9,6 +9,8 @@ export interface AgentModelRoutingInput {
 export interface AgentModelRoutingPolicy {
   /** 是否命中 DeepSeek 系列主模型 */
   deepSeekFamily: boolean
+  /** 是否为该 provider/model 组合启用 Anthropic 1M context beta */
+  enable1MContext: boolean
   /** 命中时写入 CLAUDE_CODE_SUBAGENT_MODEL；未命中时删除该环境变量以保留 SDK 默认解析 */
   subagentModel?: string
 }
@@ -28,6 +30,9 @@ export function resolveAgentModelRouting(input: AgentModelRoutingInput): AgentMo
 
   return {
     deepSeekFamily,
+    // DeepSeek 的 Anthropic-compatible endpoint 尚未确认支持 Claude 的 `[1m]`
+    // 模型后缀和 `context-1m-2025-08-07` beta；不得擅自改变用户配置的模型 ID。
+    enable1MContext: !deepSeekFamily,
     ...(deepSeekFamily && { subagentModel: DEEPSEEK_SUBAGENT_MODEL_ID }),
   }
 }

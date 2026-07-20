@@ -24,15 +24,35 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # 固定到已在本地验证过的版本，避免 latest 改变 lockfile 或测试行为。
+          bun-version: 1.3.14
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Verify tag matches app version
+        shell: pwsh
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $packageVersion = node -p "require('./apps/electron/package.json').version"
+          if ($tagVersion -ne $packageVersion) {
+            throw "Tag version v$tagVersion does not match apps/electron/package.json version $packageVersion"
+          }
+          "Releasing verified version: $packageVersion"
+
+      - name: Typecheck workspace
+        run: bun run typecheck
+
+      - name: Run unit and regression tests
+        run: bun test --timeout 30000
+
+      - name: Run Node.js server reliability gate
+        run: bun run server:test:node
 
       - name: Build GitHub app
         run: bun run electron:build:github
@@ -41,6 +61,28 @@ jobs:
       - name: Package Windows release
         run: npx electron-builder --win --x64 --publish never
         working-directory: apps/electron
+
+      - name: Smoke test unpacked Windows app
+        shell: pwsh
+        working-directory: apps/electron
+        run: |
+          $appPath = Join-Path $PWD "out/win-unpacked/Profer.exe"
+          if (-not (Test-Path -LiteralPath $appPath)) {
+            throw "Missing unpacked application: $appPath"
+          }
+
+          $process = Start-Process -FilePath $appPath -ArgumentList "--disable-gpu" -PassThru
+          Start-Sleep -Seconds 12
+          if ($process.HasExited) {
+            if ($process.ExitCode -ne 0) {
+              throw "Packaged application exited during smoke test with code $($process.ExitCode)"
+            }
+            throw "Packaged application exited before the smoke-test window completed"
+          }
+
+          # 长驻 Electron 进程存活至观察窗口即视为通过；清理时的强制终止退出码不代表启动失败。
+          Stop-Process -Id $process.Id -Force
+          $process.WaitForExit()
 
       - name: Collect Windows release assets
         shell: pwsh

@@ -11,6 +11,9 @@ services:
     restart: unless-stopped
     ports:
       - "3456:3456"
+    # Linux Docker 默认不解析 host.docker.internal；使默认 Paperpipe Bridge 地址可用。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # 持久化数据：数据库 + 上传文件
       - promadata:/app/data
@@ -22,8 +25,14 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       # === 可选 ===
       - PORT=3456
+      - NODE_ENV=production
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@proma.local}
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-524288000}
+      # === Paperpipe Bridge（生产必须配置密钥；默认 50MB 以控制当前缓冲上传链路的内存峰值） ===
+      - PAPERPIPE_BRIDGE_URL=${PAPERPIPE_BRIDGE_URL:-http://host.docker.internal:9876}
+      - PAPERPIPE_BRIDGE_SECRET=${PAPERPIPE_BRIDGE_SECRET:-}
+      - PAPERPIPE_MAX_FILE_SIZE=${PAPERPIPE_MAX_FILE_SIZE:-52428800}
+      - PAPERPIPE_MAX_BODY_SIZE=${PAPERPIPE_MAX_BODY_SIZE:-53477376}
       - COMMERCIAL_MODE=${COMMERCIAL_MODE:-false}
       - CHANNEL_ENCRYPTION_KEY=${CHANNEL_ENCRYPTION_KEY:-}
       - RELAY_BASE_URL=${RELAY_BASE_URL:-http://127.0.0.1:3080}

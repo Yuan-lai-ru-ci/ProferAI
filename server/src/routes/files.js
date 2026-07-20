@@ -8,6 +8,8 @@ import { MAX_FILE_SIZE, FILES_DIR } from '../config.js'
 import { ensureDir, safePath } from '../utils.js'
 import { authMiddleware } from '../middleware.js'
 import { canModifyRows, normalizeFilePath, safeDecodeURI } from './file-route-utils.js'
+import { ensureManifestDirectory, upsertManifestEntry } from '../team-files/manifest-upsert.js'
+import { moveToTrash, purgeTrash, restoreTrash } from '../team-files/trash-service.js'
 import { broadcastEvent } from '../event-bus.js'
 
 export const fileRoutes = new Hono()
@@ -62,7 +64,7 @@ fileRoutes.get('/:id/files/manifest', (c) => {
   if (access.error) return access.error
 
   const rows = db.prepare(
-    'SELECT * FROM file_manifests WHERE workspace_id = ?'
+    "SELECT * FROM file_manifests WHERE workspace_id = ? AND lifecycle_state = 'active'"
   ).all(wsId)
 
   return c.json(rows.map((r) => ({
@@ -72,6 +74,7 @@ fileRoutes.get('/:id/files/manifest', (c) => {
     size: r.size,
     modifiedAt: r.modified_at,
     sha256: r.sha256,
+    fileId: r.file_id || '',
     uploadedBy: r.uploaded_by || '',
     uploadedByName: r.uploaded_by_name || '',
   })))
@@ -103,13 +106,13 @@ fileRoutes.get('/:id/files/search', (c) => {
 
   const countRow = db.prepare(`
     SELECT COUNT(*) as total FROM file_manifests
-    WHERE workspace_id = ? AND (file_name LIKE ? OR file_path LIKE ?) AND is_directory = 0
+    WHERE workspace_id = ? AND lifecycle_state = 'active' AND (file_name LIKE ? OR file_path LIKE ?) AND is_directory = 0
   `).get(wsId, likePattern, likePattern)
   const total = countRow.total
 
   const rows = db.prepare(`
     SELECT * FROM file_manifests
-    WHERE workspace_id = ? AND (file_name LIKE ? OR file_path LIKE ?) AND is_directory = 0
+    WHERE workspace_id = ? AND lifecycle_state = 'active' AND (file_name LIKE ? OR file_path LIKE ?) AND is_directory = 0
     ORDER BY modified_at DESC
     LIMIT ? OFFSET ?
   `).all(wsId, likePattern, likePattern, limit, offset)
@@ -122,6 +125,7 @@ fileRoutes.get('/:id/files/search', (c) => {
       size: r.size,
       modifiedAt: r.modified_at,
       sha256: r.sha256,
+      fileId: r.file_id || '',
       uploadedBy: r.uploaded_by || '',
       uploadedByName: r.uploaded_by_name || '',
     })),
@@ -161,9 +165,15 @@ fileRoutes.post('/:id/files/mkdir', async (c) => {
   const displayName = user?.display_name || userEmail
   const now = Date.now()
 
-  db.prepare(
-    'INSERT OR REPLACE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?)'
-  ).run(wsId, dirPath, dirPath.split('/').pop(), now, '', userId, displayName)
+  upsertManifestEntry(db, {
+    workspaceId: wsId,
+    path: dirPath,
+    name: dirPath.split('/').pop(),
+    isDirectory: true,
+    actorId: userId,
+    actorName: displayName,
+    modifiedAt: now,
+  })
 
   // 确保所有父目录也在 manifest 中
   const parts = dirPath.split('/')
@@ -174,9 +184,14 @@ fileRoutes.post('/:id/files/mkdir', async (c) => {
       'SELECT 1 FROM file_manifests WHERE workspace_id = ? AND file_path = ?'
     ).get(wsId, parentPath)
     if (!exists && parentPath) {
-      db.prepare(
-        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?)'
-      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '', userId, displayName)
+      ensureManifestDirectory(db, {
+        workspaceId: wsId,
+        path: parentPath,
+        name: parentPath.split('/').pop(),
+        actorId: userId,
+        actorName: displayName,
+        modifiedAt: now,
+      })
     }
   }
 
@@ -270,9 +285,15 @@ function writeUploadedFile(c, wsId, filePath, buffer) {
   const displayName = user?.display_name || userEmail
   const hash = crypto.createHash('sha256').update(buffer).digest('hex')
 
-  db.prepare(
-    'INSERT OR REPLACE INTO file_manifests (workspace_id, file_path, file_name, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(wsId, filePath, filePath.split('/').pop(), buffer.length, Date.now(), hash, userId, displayName)
+  upsertManifestEntry(db, {
+    workspaceId: wsId,
+    path: filePath,
+    name: filePath.split('/').pop(),
+    actorId: userId,
+    actorName: displayName,
+    size: buffer.length,
+    sha256: hash,
+  })
 
   // 自动创建所有父目录条目（确保 buildFileTree 能正确构建层级）
   const now = Date.now()
@@ -284,9 +305,14 @@ function writeUploadedFile(c, wsId, filePath, buffer) {
       'SELECT 1 FROM file_manifests WHERE workspace_id = ? AND file_path = ?'
     ).get(wsId, parentPath)
     if (!exists && parentPath) {
-      db.prepare(
-        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?)'
-      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '', userId, displayName)
+      ensureManifestDirectory(db, {
+        workspaceId: wsId,
+        path: parentPath,
+        name: parentPath.split('/').pop(),
+        actorId: userId,
+        actorName: displayName,
+        modifiedAt: now,
+      })
     }
   }
 
@@ -365,7 +391,7 @@ fileRoutes.post('/:id/files/move', async (c) => {
 
   // 更新 manifest：查找源文件及所有子孙（如果是目录）
   const affected = db.prepare(
-    'SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND (file_path = ? OR file_path LIKE ?)'
+    "SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND lifecycle_state = 'active' AND (file_path = ? OR file_path LIKE ?)"
   ).all(wsId, fromPath, fromPath + '/%')
   if (affected.length === 0) return c.json({ error: '文件不存在' }, 404)
 
@@ -400,9 +426,15 @@ fileRoutes.post('/:id/files/move', async (c) => {
       'SELECT 1 FROM file_manifests WHERE workspace_id = ? AND file_path = ?'
     ).get(wsId, parentPath)
     if (!exists && parentPath) {
-      db.prepare(
-        'INSERT OR IGNORE INTO file_manifests (workspace_id, file_path, file_name, is_directory, size, modified_at, sha256, uploaded_by, uploaded_by_name) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?)'
-      ).run(wsId, parentPath, parentPath.split('/').pop(), now, '', userId, displayName)
+      const actor = db.prepare('SELECT display_name FROM users WHERE id = ?').get(access.userId)
+      ensureManifestDirectory(db, {
+        workspaceId: wsId,
+        path: parentPath,
+        name: parentPath.split('/').pop(),
+        actorId: access.userId,
+        actorName: actor?.display_name || c.get('userEmail'),
+        modifiedAt: now,
+      })
     }
   }
 
@@ -448,7 +480,7 @@ fileRoutes.post('/:id/files/rename', async (c) => {
 
   // 权限校验：仅 owner/admin 或文件上传者可重命名
   const affected = db.prepare(
-    'SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND (file_path = ? OR file_path LIKE ?)'
+    "SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND lifecycle_state = 'active' AND (file_path = ? OR file_path LIKE ?)"
   ).all(wsId, filePath, filePath + '/%')
   if (affected.length === 0) return c.json({ error: '文件不存在' }, 404)
 
@@ -480,6 +512,32 @@ fileRoutes.post('/:id/files/rename', async (c) => {
   return c.json({ success: true, fromPath: filePath, toPath: newPath, newName })
 })
 
+/** 仅 Owner/Admin 可治理的回收站。 */
+fileRoutes.get('/:id/files/trash', (c) => {
+  const mw = authMiddleware(c); if (mw) return mw
+  const wsId = c.req.param('id'); const access = requireWorkspaceMember(c, wsId); if (access.error) return access.error
+  if (!isAdminOrOwner(access.role)) return c.json({ error: '仅 Owner/Admin 可查看回收站' }, 403)
+  const rawLimit = c.req.query('limit') || '50'
+  if (!/^\d+$/.test(rawLimit)) return c.json({ error: 'limit 必须是正整数' }, 400)
+  const limit = Math.min(100, Math.max(1, Number(rawLimit)))
+  const rows = db.prepare("SELECT * FROM file_trash_entries WHERE workspace_id = ? AND state = 'trashed' ORDER BY deleted_at DESC LIMIT ?").all(wsId, limit)
+  return c.json(rows.map((row) => ({ id: row.id, fileId: row.root_file_id, originalPath: row.original_path, deletedBy: row.deleted_by, deletedAt: row.deleted_at, expiresAt: row.expires_at })))
+})
+fileRoutes.post('/:id/files/trash/:entryId/restore', (c) => {
+  const mw = authMiddleware(c); if (mw) return mw
+  const wsId = c.req.param('id'); const access = requireWorkspaceMember(c, wsId); if (access.error) return access.error
+  if (!isAdminOrOwner(access.role)) return c.json({ error: '仅 Owner/Admin 可恢复' }, 403)
+  try { const result = restoreTrash(db, { filesDir: FILES_DIR, workspaceId: wsId, entryId: c.req.param('entryId'), actorId: access.userId }); emitFileChange(wsId, 'restore', { path: result.restoredPath, trashEntryId: c.req.param('entryId') }); broadcastEvent(wsId, 'file_restored', { path: result.restoredPath, trashEntryId: c.req.param('entryId'), userId: access.userId }); return c.json({ success: true, restoredPath: result.restoredPath }) } catch (error) { return c.json({ error: error.message }, error.code === 'TRASH_NOT_FOUND' ? 404 : 500) }
+})
+fileRoutes.delete('/:id/files/trash/:entryId', (c) => {
+  const mw = authMiddleware(c); if (mw) return mw
+  const wsId = c.req.param('id'); const access = requireWorkspaceMember(c, wsId); if (access.error) return access.error
+  if (!isAdminOrOwner(access.role)) return c.json({ error: '仅 Owner/Admin 可永久删除' }, 403)
+  const result = purgeTrash(db, { filesDir: FILES_DIR, workspaceId: wsId, entryId: c.req.param('entryId') })
+  logAudit({ action: 'file.purge', workspaceId: wsId, userId: access.userId, userEmail: c.get('userEmail'), entityType: 'trash', entityId: c.req.param('entryId') })
+  return c.json({ success: true, state: result.state })
+})
+
 /** 删除文件或文件夹（递归） */
 fileRoutes.delete('/:id/files/:path{.+}', async (c) => {
   const mw = authMiddleware(c)
@@ -496,7 +554,7 @@ fileRoutes.delete('/:id/files/:path{.+}', async (c) => {
 
   // 查找所有子文件（通过路径前缀，兼容递归删除目录）
   const children = db.prepare(
-    'SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND (file_path = ? OR file_path LIKE ?)'
+    "SELECT file_path, is_directory, uploaded_by FROM file_manifests WHERE workspace_id = ? AND lifecycle_state = 'active' AND (file_path = ? OR file_path LIKE ?)"
   ).all(wsId, filePath, filePath + '/%')
 
   if (children.length === 0) return c.json({ error: '文件不存在' }, 404)
@@ -505,19 +563,13 @@ fileRoutes.delete('/:id/files/:path{.+}', async (c) => {
     return c.json({ error: '无权删除' }, 403)
   }
 
-  // 删除磁盘文件/目录
-  const localPath = safePath(FILES_DIR, wsId, filePath)
-  if (!localPath) return c.json({ error: '文件路径不合法' }, 400)
-  if (existsSync(localPath)) rmSync(localPath, { recursive: true })
-
-  // 删除所有 manifest 记录
-  db.prepare(
-    'DELETE FROM file_manifests WHERE workspace_id = ? AND (file_path = ? OR file_path LIKE ?)'
-  ).run(wsId, filePath, filePath + '/%')
-
-  emitFileChange(wsId, 'delete', { path: filePath, deletedCount: children.length })
-  logAudit({ action: 'file.delete', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `${children.length} entries deleted` })
-  broadcastEvent(wsId, 'file_deleted', { path: filePath, deletedCount: children.length, userId: access.userId })
-
-  return c.json({ success: true, deletedCount: children.length })
+  try {
+    const result = moveToTrash(db, { filesDir: FILES_DIR, workspaceId: wsId, filePath, actorId: access.userId })
+    emitFileChange(wsId, 'trash', { path: filePath, trashEntryId: result.entryId, deletedCount: result.children.length })
+    logAudit({ action: 'file.trash', workspaceId: wsId, userId: c.get('userId'), userEmail: c.get('userEmail'), entityType: 'file', entityId: filePath, detail: `${result.children.length} entries trashed` })
+    broadcastEvent(wsId, 'file_trashed', { path: filePath, trashEntryId: result.entryId, deletedCount: result.children.length, userId: access.userId })
+    return c.json({ success: true, trashEntryId: result.entryId, expiresAt: result.expiresAt, deletedCount: result.children.length })
+  } catch (error) {
+    return c.json({ error: error.message || '移入回收站失败' }, error.code === 'FILE_NOT_FOUND' ? 404 : 500)
+  }
 })

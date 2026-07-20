@@ -1,0 +1,20 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import Database from 'better-sqlite3'
+import { runMigrations } from '../db/migration-runner.js'
+import { teamFileMigrations } from '../db/team-file-migrations.js'
+import { clearPrimaryOwnerForRemovedMember, getMetadataDetail, patchMetadata, setPreference } from './metadata-service.js'
+
+function setup() {
+  const db = new Database(':memory:')
+  db.exec(`CREATE TABLE file_manifests (workspace_id TEXT NOT NULL, file_path TEXT NOT NULL, file_name TEXT NOT NULL, is_directory INTEGER NOT NULL DEFAULT 0, size INTEGER NOT NULL DEFAULT 0, modified_at INTEGER NOT NULL, sha256 TEXT NOT NULL DEFAULT '', uploaded_by TEXT NOT NULL DEFAULT '', uploaded_by_name TEXT NOT NULL DEFAULT '', PRIMARY KEY(workspace_id,file_path)); CREATE TABLE workspace_members (workspace_id TEXT, user_id TEXT);`)
+  db.prepare(`INSERT INTO file_manifests (workspace_id,file_path,file_name,modified_at,uploaded_by) VALUES ('ws','a.md','a.md',100,'creator')`).run()
+  db.prepare(`INSERT INTO workspace_members VALUES ('ws','creator'),('ws','member'),('ws','owner')`).run()
+  runMigrations(db, teamFileMigrations)
+  return { db, fileId: db.prepare('SELECT file_id FROM file_manifests').get().file_id }
+}
+test('Given 已迁移资料 When Member 编辑他人文件资料 Then 共享字段保存且版本增加', () => { const { db, fileId } = setup(); try { const current = getMetadataDetail(db, 'ws', fileId, 'member'); const result = patchMetadata(db, { workspaceId: 'ws', fileId, actorId: 'member', expectedVersion: current.metadata.version, changes: { description: '协同说明', primaryOwnerId: 'member' } }); assert.equal(result.metadata.description, '协同说明'); assert.equal(result.metadata.primary_owner_id, 'member'); assert.equal(result.metadata.version, 2); assert.equal(db.prepare('SELECT COUNT(*) c FROM file_activities').get().c, 1) } finally { db.close() } })
+test('Given 旧版本编辑请求 When 他人已更新资料 Then 拒绝且不写入', () => { const { db, fileId } = setup(); try { assert.throws(() => patchMetadata(db, { workspaceId: 'ws', fileId, actorId: 'member', expectedVersion: 9, changes: { description: '不应写入' } }), (e) => e.code === 'METADATA_VERSION_CONFLICT'); assert.equal(getMetadataDetail(db, 'ws', fileId, 'member').metadata.description, '') } finally { db.close() } })
+test('Given 受控字典 When 写入归档标签或非成员负责人 Then 拒绝', () => { const { db, fileId } = setup(); try { db.prepare(`INSERT INTO workspace_file_tags VALUES ('ws','tag','标签','',1,'owner',1)`).run(); const version = getMetadataDetail(db, 'ws', fileId, 'member').metadata.version; assert.throws(() => patchMetadata(db, { workspaceId: 'ws', fileId, actorId: 'member', expectedVersion: version, changes: { tagIds: ['tag'] } }), (e) => e.code === 'INVALID_TAG'); assert.throws(() => patchMetadata(db, { workspaceId: 'ws', fileId, actorId: 'member', expectedVersion: version, changes: { primaryOwnerId: 'gone' } }), (e) => e.code === 'INVALID_OWNER') } finally { db.close() } })
+test('Given 每人偏好 When 一人收藏或回传更早访问时间 Then 不影响他人且访问不倒退', () => { const { db, fileId } = setup(); try { setPreference(db, { workspaceId: 'ws', fileId, userId: 'member', isFavorite: true, accessedAt: 200 }); setPreference(db, { workspaceId: 'ws', fileId, userId: 'member', accessedAt: 100 }); const mine = getMetadataDetail(db, 'ws', fileId, 'member').preference; const theirs = getMetadataDetail(db, 'ws', fileId, 'creator').preference; assert.equal(mine.is_favorite, 1); assert.equal(mine.last_accessed_at, 200); assert.equal(theirs.is_favorite, 0) } finally { db.close() } })
+test('Given 被移除成员为负责人 When 清理负责人 Then 资料清空并写活动', () => { const { db, fileId } = setup(); try { const version = getMetadataDetail(db, 'ws', fileId, 'owner').metadata.version; patchMetadata(db, { workspaceId: 'ws', fileId, actorId: 'owner', expectedVersion: version, changes: { primaryOwnerId: 'member' } }); assert.equal(clearPrimaryOwnerForRemovedMember(db, { workspaceId: 'ws', userId: 'member', actorId: 'owner' }), 1); assert.equal(getMetadataDetail(db, 'ws', fileId, 'owner').metadata.primary_owner_id, null); assert.equal(db.prepare(`SELECT COUNT(*) c FROM file_activities WHERE type = 'owner_cleared'`).get().c, 1) } finally { db.close() } })

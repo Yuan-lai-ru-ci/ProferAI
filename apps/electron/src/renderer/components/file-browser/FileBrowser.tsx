@@ -224,8 +224,8 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         const manifest = await window.electronAPI.teamFile.getManifest(workspaceId!, workspaceSlug).catch(() => null)
         // null = 拉取失败（认证/网络）→ 保留当前列表，避免 token 失效误清空文件
         if (manifest === null) return
-        const serverItems: FileEntry[] = manifest.map((f: { name: string; path: string; isDirectory: boolean; size: number; syncStatus?: FileEntry['syncStatus']; localExists?: boolean; uploadedBy?: string; uploadedByName?: string }) => ({
-          name: f.name, path: f.path, isDirectory: f.isDirectory, size: f.size,
+        const serverItems: FileEntry[] = manifest.map((f: { name: string; path: string; isDirectory: boolean; size: number; sha256?: string; syncStatus?: FileEntry['syncStatus']; localExists?: boolean; uploadedBy?: string; uploadedByName?: string }) => ({
+          name: f.name, path: f.path, isDirectory: f.isDirectory, size: f.size, sha256: f.sha256,
           syncStatus: f.syncStatus ?? (f.localExists ? 'synced' : 'cloud-only'),
           uploadedBy: f.uploadedBy ?? '',
           uploadedByName: f.uploadedByName ?? '',
@@ -292,18 +292,16 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         workspaceId, workspaceSlug, filePath: entry.path,
       }).catch(() => false)
       if (ok) {
-        // 同步删除本地文件/文件夹
-        const localPath = `${rootPath}/${entry.path}`
-        window.electronAPI.deleteFile(localPath).catch(() => {})
+        // 主进程仅失效下载缓存；不得由渲染层删除可能是用户原始上传源的本地路径。
         loadRoot()
       }
     }
-  }, [isTeamMode, workspaceId, workspaceSlug, rootPath, loadRoot])
+  }, [isTeamMode, workspaceId, workspaceSlug, loadRoot])
 
   /** 下载云端文件到本地 */
   const handleDownload = React.useCallback(async (entry: FileEntry): Promise<string | null> => {
     if (!isTeamMode || !workspaceId || !workspaceSlug) return null
-    const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+    const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy, sha256: entry.sha256 })
     if (local) loadRoot()
     return local
   }, [isTeamMode, workspaceId, workspaceSlug, loadRoot])
@@ -311,7 +309,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
   /** 团队文件预览前必须先落到本地缓存，Office/PDF 等预览器只能读取本地文件。 */
   const ensureTeamFileLocal = React.useCallback(async (entry: FileEntry): Promise<string | null> => {
     if (!isTeamMode || !workspaceId || !workspaceSlug) return null
-    const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+    const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy, sha256: entry.sha256 })
     if (local && entry.syncStatus === 'cloud-only') void loadRoot()
     return local
   }, [isTeamMode, workspaceId, workspaceSlug, loadRoot])
@@ -395,7 +393,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
   const handleShowInFolder = React.useCallback(async (entry: FileEntry) => {
     if (isTeamMode) {
       if (!entry.isDirectory && workspaceId && workspaceSlug) {
-        const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+        const local = await window.electronAPI.teamFile.download({ workspaceId, workspaceSlug, filePath: entry.path, uploadedBy: entry.uploadedBy, sha256: entry.sha256 })
         if (local) {
           window.electronAPI.showItemInFolder(local).catch(console.error)
           await loadRoot()
@@ -460,8 +458,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         if (isTeamMode && workspaceId && workspaceSlug) {
           const ok = await window.electronAPI.teamFile.delete({ workspaceId, workspaceSlug, filePath }).catch(() => false)
           if (ok) {
-            // 同步删除本地文件/文件夹
-            window.electronAPI.deleteFile(`${rootPath}/${filePath}`).catch(() => {})
+            // 主进程已按来源映射失效缓存；这里不能二次删除用户原始文件。
           }
         } else {
           await window.electronAPI.deleteFile(filePath)

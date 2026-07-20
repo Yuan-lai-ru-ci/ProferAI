@@ -12,5 +12,7 @@ describe('Agent 资料读取提示词', () => {
     expect(prompt).toContain('allowed-id')
     expect(prompt).toContain('mcp__knowledge-base__read_imported_knowledge')
     expect(prompt).toContain('不要尝试通过文件路径、目录或其他工具访问资料')
+    expect(prompt).toContain('直至 hasMore 为 false 后再回答')
+    expect(prompt).toContain('不能因此声称资料只索引了部分')
   })
 })

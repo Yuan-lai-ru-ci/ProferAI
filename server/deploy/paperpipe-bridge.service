@@ -1,0 +1,19 @@
+[Unit]
+Description=paperpipe HTTP Bridge
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/paperpipe-bridge.env
+Environment=HF_ENDPOINT=https://hf-mirror.com
+Type=simple
+User=ecs-user
+Environment=PATH=/home/ecs-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PAPI_BIN=/home/ecs-user/.local/bin/papi
+Environment=PAPERPIPE_DATA_BASE=/data/paperpipe
+Environment=BRIDGE_PORT=9876
+ExecStart=/home/ecs-user/.local/share/uv/tools/paperpipe/bin/python /home/ecs-user/paperpipe-bridge.py --host 172.17.0.1 --port 9876
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

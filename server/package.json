@@ -2,6 +2,9 @@
   "name": "proma-team-server",
   "version": "0.1.2",
   "type": "module",
+  "scripts": {
+    "test:node": "node scripts/run-node-tests.mjs"
+  },
   "dependencies": {
     "@hono/node-server": "^1.0.0",
     "better-sqlite3": "^12.11.1",

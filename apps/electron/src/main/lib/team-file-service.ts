@@ -4,7 +4,8 @@
  * 用户主动上传/下载/删除团队工作区文件。无后台同步。
  */
 
-import { existsSync, writeFileSync, mkdirSync, statSync, readFileSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync, statSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, dirname, resolve, relative, isAbsolute, sep } from 'node:path'
 import { fetch as undiciFetch } from 'undici'
 import { getConfigDir, getWorkspaceFilesDir } from './config-paths'
@@ -17,6 +18,8 @@ export interface TeamFileManifestEntry {
   size: number
   modifiedAt: number
   sha256: string
+  /** 服务端稳定资料身份，路径移动/重命名/覆盖时保持不变。 */
+  fileId?: string
   uploadedBy: string
   uploadedByName: string
   localExists?: boolean
@@ -79,6 +82,29 @@ function forgetLocalSourceTree(workspaceId: string, remotePath: string): void {
   if (changed) writeLocalSources(store)
 }
 
+/**
+ * 清理由团队下载产生的缓存，但绝不删除用户登记的原始本地源文件。
+ * 删除远端条目后必须清理同路径缓存，否则同路径重传会读取旧字节。
+ */
+function removeLocalCacheTree(workspaceId: string, workspaceSlug: string, remotePath: string): void {
+  const protectedSources = new Set(Object.values(readLocalSources())
+    .filter((entry) => entry.workspaceId === workspaceId && (entry.remotePath === remotePath || entry.remotePath.startsWith(`${remotePath}/`)))
+    .map((entry) => resolve(entry.sourcePath)))
+  const remove = (candidate: string): boolean => {
+    const resolved = resolve(candidate)
+    if (protectedSources.has(resolved)) return false
+    const stats = statSync(resolved)
+    if (!stats.isDirectory()) { rmSync(resolved, { force: true }); return true }
+    for (const name of readdirSync(resolved)) remove(join(resolved, name))
+    if (readdirSync(resolved).length === 0) { rmSync(resolved, { recursive: true, force: true }); return true }
+    return false
+  }
+  for (const cacheRoot of [getSafeWorkspaceFilePath(workspaceSlug, remotePath), getSafePrivateCachePath(workspaceId, remotePath)]) {
+    if (!cacheRoot || !existsSync(cacheRoot)) continue
+    try { remove(cacheRoot) } catch (error) { console.warn('[team-file] 清理已删除资料缓存失败:', remotePath, error) }
+  }
+}
+
 /** 物理移动本地缓存文件（目录则递归），配合远程 move/rename 保持 synced 状态 */
 function moveLocalCache(workspaceSlug: string, fromPath: string, toPath: string): void {
   try {
@@ -130,23 +156,48 @@ function moveLocalSourceTree(workspaceId: string, fromPath: string, toPath: stri
   if (changed) writeLocalSources({ ...store, ...moved })
 }
 
-function getSafeWorkspaceFilePath(workspaceSlug: string, filePath: string): string | null {
-  const filesDir = resolve(getWorkspaceFilesDir(workspaceSlug))
-  const targetPath = resolve(filesDir, filePath)
-  const relativePath = relative(filesDir, targetPath)
+function getSafePath(rootDir: string, filePath: string): string | null {
+  const root = resolve(rootDir)
+  const targetPath = resolve(root, filePath)
+  const relativePath = relative(root, targetPath)
   if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return null
   return targetPath
 }
 
-function getExistingLocalFile(workspaceSlug: string, filePath: string): string | null {
-  const localPath = getSafeWorkspaceFilePath(workspaceSlug, filePath)
-  if (!localPath || !existsSync(localPath)) return null
+function getSafeWorkspaceFilePath(workspaceSlug: string, filePath: string): string | null {
+  return getSafePath(getWorkspaceFilesDir(workspaceSlug), filePath)
+}
+
+/** 私有下载缓存只用于不能安全写入工作区文件目录的少数同路径冲突场景。 */
+function getSafePrivateCachePath(workspaceId: string, filePath: string): string | null {
+  return getSafePath(join(getConfigDir(), 'team-file-download-cache', encodeURIComponent(workspaceId)), filePath)
+}
+
+function isExpectedSha256(value?: string): value is string {
+  return typeof value === 'string' && /^[a-f\d]{64}$/i.test(value)
+}
+
+function matchesExpectedSha256(filePath: string, expectedSha256?: string): boolean {
+  if (!isExpectedSha256(expectedSha256)) return true
   try {
-    const stats = statSync(localPath)
-    return stats.isFile() ? localPath : null
+    return createHash('sha256').update(readFileSync(filePath)).digest('hex').toLowerCase() === expectedSha256.toLowerCase()
   } catch {
-    return null
+    return false
   }
+}
+
+function getExistingLocalFile(workspaceId: string, workspaceSlug: string, filePath: string, expectedSha256?: string): string | null {
+  const candidates = [
+    getSafeWorkspaceFilePath(workspaceSlug, filePath),
+    getSafePrivateCachePath(workspaceId, filePath),
+  ]
+  for (const localPath of candidates) {
+    if (!localPath || !existsSync(localPath)) continue
+    try {
+      if (statSync(localPath).isFile() && matchesExpectedSha256(localPath, expectedSha256)) return localPath
+    } catch { /* 尝试下一个缓存位置 */ }
+  }
+  return null
 }
 
 function getExistingFile(filePath: string): string | null {
@@ -160,7 +211,7 @@ function getExistingFile(filePath: string): string | null {
   }
 }
 
-function getOriginalLocalFile(workspaceId: string, filePath: string, uploadedBy?: string): string | null {
+function getOriginalLocalFile(workspaceId: string, filePath: string, uploadedBy?: string, expectedSha256?: string): string | null {
   const authStatus = getAuthStatus()
   if (!authStatus.teamAccountId) return null
   if (uploadedBy && uploadedBy !== authStatus.teamAccountId) return null
@@ -168,11 +219,21 @@ function getOriginalLocalFile(workspaceId: string, filePath: string, uploadedBy?
   const entry = readLocalSources()[getLocalSourceKey(workspaceId, filePath)]
   if (!entry || entry.uploadedBy !== authStatus.teamAccountId) return null
 
-  return getExistingFile(entry.sourcePath)
+  const sourcePath = getExistingFile(entry.sourcePath)
+  return sourcePath && matchesExpectedSha256(sourcePath, expectedSha256) ? sourcePath : null
 }
 
-function writeLocalCache(workspaceSlug: string, filePath: string, buffer: Buffer): string | null {
-  const localPath = getSafeWorkspaceFilePath(workspaceSlug, filePath)
+function isProtectedLocalSource(workspaceId: string, candidatePath: string): boolean {
+  const resolved = resolve(candidatePath)
+  return Object.values(readLocalSources()).some((entry) => entry.workspaceId === workspaceId && resolve(entry.sourcePath) === resolved)
+}
+
+function writeLocalCache(workspaceId: string, workspaceSlug: string, filePath: string, buffer: Buffer): string | null {
+  const workspacePath = getSafeWorkspaceFilePath(workspaceSlug, filePath)
+  // 绝不覆盖用户作为上传来源登记的文件；遇到同路径冲突时隔离到私有缓存。
+  const localPath = workspacePath && !isProtectedLocalSource(workspaceId, workspacePath)
+    ? workspacePath
+    : getSafePrivateCachePath(workspaceId, filePath)
   if (!localPath) return null
   const parent = dirname(localPath)
   if (!existsSync(parent)) mkdirSync(parent, { recursive: true })
@@ -290,7 +351,7 @@ export async function uploadFile(
       } else {
         forgetLocalSource(workspaceId, result.path)
         try {
-          const localPath = writeLocalCache(workspaceSlug, result.path, fileBuffer)
+          const localPath = writeLocalCache(workspaceId, workspaceSlug, result.path, fileBuffer)
           if (!localPath) {
             console.warn('[team-file] 本地缓存路径不合法，跳过写入:', result.path)
           }
@@ -313,11 +374,12 @@ export async function downloadFile(
   workspaceSlug: string,
   filePath: string,
   uploadedBy?: string,
+  expectedSha256?: string,
 ): Promise<string | null> {
-  const originalLocal = getOriginalLocalFile(workspaceId, filePath, uploadedBy)
+  const originalLocal = getOriginalLocalFile(workspaceId, filePath, uploadedBy, expectedSha256)
   if (originalLocal) return originalLocal
 
-  const existingLocal = getExistingLocalFile(workspaceSlug, filePath)
+  const existingLocal = getExistingLocalFile(workspaceId, workspaceSlug, filePath, expectedSha256)
   if (existingLocal) return existingLocal
 
   try {
@@ -327,7 +389,9 @@ export async function downloadFile(
     if (!res || !res.ok) return null
 
     const buffer = Buffer.from(await res.arrayBuffer())
-    const localPath = writeLocalCache(workspaceSlug, filePath, buffer)
+    // 清单与下载请求间若远端再次变更，宁可让调用方刷新清单，也不缓存错误版本。
+    if (isExpectedSha256(expectedSha256) && createHash('sha256').update(buffer).digest('hex').toLowerCase() !== expectedSha256.toLowerCase()) return null
+    const localPath = writeLocalCache(workspaceId, workspaceSlug, filePath, buffer)
     if (!localPath) return null
     return localPath
   } catch {
@@ -346,7 +410,10 @@ export async function deleteRemoteFile(
       `/v1/workspaces/${workspaceId}/files/${encodeURIComponent(filePath)}`,
       { method: 'DELETE' },
     )
-    if (res?.ok) forgetLocalSourceTree(workspaceId, filePath)
+    if (res?.ok) {
+      removeLocalCacheTree(workspaceId, workspaceSlug, filePath)
+      forgetLocalSourceTree(workspaceId, filePath)
+    }
     return !!res?.ok
   } catch {
     return false
@@ -430,17 +497,14 @@ export async function fetchFileManifest(
     return manifest.map((entry) => {
       const localPath = getSafeWorkspaceFilePath(workspaceSlug, entry.path)
       const localExists = !!localPath && existsSync(localPath)
-      let matchesKind = false
-      if (localExists) {
-        try {
-          const stats = statSync(localPath)
-          matchesKind = entry.isDirectory ? stats.isDirectory() : stats.isFile()
-        } catch {
-          matchesKind = false
-        }
+      let hasLocalCache = false
+      if (entry.isDirectory) {
+        try { hasLocalCache = !!localPath && statSync(localPath).isDirectory() } catch { hasLocalCache = false }
+      } else {
+        // 私有缓存只能经 downloadFile 返回真实路径，不能标为已同步后让渲染层拼接工作区路径打开。
+        try { hasLocalCache = !!localPath && statSync(localPath).isFile() && matchesExpectedSha256(localPath, entry.sha256) } catch { hasLocalCache = false }
       }
-      const hasLocalCache = localExists && matchesKind
-      const hasOriginalLocal = !entry.isDirectory && !!getOriginalLocalFile(workspaceId, entry.path, entry.uploadedBy)
+      const hasOriginalLocal = !entry.isDirectory && !!getOriginalLocalFile(workspaceId, entry.path, entry.uploadedBy, entry.sha256)
       const hasLocalFile = hasLocalCache || hasOriginalLocal
       return {
         ...entry,
@@ -452,6 +516,21 @@ export async function fetchFileManifest(
     return null
   }
 }
+
+export interface TeamFileApiResult<T> { ok: boolean; status?: number; data?: T; error?: string }
+export interface TeamTrashEntry { id: string; fileId: string; originalPath: string; deletedBy: string | null; deletedAt: number; expiresAt: number }
+async function metadataRequest<T>(path: string, options: RequestInit = {}): Promise<TeamFileApiResult<T>> {
+  try { const res = await teamFileFetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers as Record<string, string>) } }); if (!res) return { ok: false, error: '未登录' }; const data = await res.json().catch(() => ({})); return res.ok ? { ok: true, status: res.status, data } : { ok: false, status: res.status, error: data.error || '请求失败' } } catch { return { ok: false, error: '网络请求失败' } }
+}
+export const getFileMetadata = (workspaceId: string, fileId: string) => metadataRequest(`/v1/workspaces/${workspaceId}/files/${fileId}/metadata`)
+export const patchFileMetadata = (workspaceId: string, fileId: string, body: Record<string, unknown>) => metadataRequest(`/v1/workspaces/${workspaceId}/files/${fileId}/metadata`, { method: 'PATCH', body: JSON.stringify(body) })
+export const getFileTags = (workspaceId: string) => metadataRequest(`/v1/workspaces/${workspaceId}/file-tags`)
+export const getFileStatuses = (workspaceId: string) => metadataRequest(`/v1/workspaces/${workspaceId}/file-statuses`)
+export const setFilePreference = (workspaceId: string, fileId: string, body: Record<string, unknown>) => metadataRequest(`/v1/workspaces/${workspaceId}/files/${fileId}/preference`, { method: 'PUT', body: JSON.stringify(body) })
+export const getFileActivities = (workspaceId: string, fileId: string, cursor?: string) => metadataRequest(`/v1/workspaces/${workspaceId}/files/${fileId}/activities${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
+export const listTrashEntries = (workspaceId: string) => metadataRequest<TeamTrashEntry[]>(`/v1/workspaces/${workspaceId}/files/trash`)
+export const restoreTrashEntry = (workspaceId: string, entryId: string) => metadataRequest<{ success: boolean; restoredPath: string }>(`/v1/workspaces/${workspaceId}/files/trash/${entryId}/restore`, { method: 'POST' })
+export const purgeTrashEntry = (workspaceId: string, entryId: string) => metadataRequest<{ success: boolean; state: string }>(`/v1/workspaces/${workspaceId}/files/trash/${entryId}`, { method: 'DELETE' })
 
 /** 检查文件是否在本地存在 */
 export function isFileLocal(workspaceSlug: string, filePath: string): boolean {

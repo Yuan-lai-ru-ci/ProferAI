@@ -86,6 +86,8 @@ export const KNOWLEDGE_IPC_CHANNELS = {
   DELETE_ITEM: 'knowledge:delete-item',
   SEARCH_ITEMS: 'knowledge:search-items',
   GET_LIBRARY_SNAPSHOT: 'knowledge:get-library-snapshot',
+  /** 在文件管理器中显示本地资料的受控原始副本。 */
+  SHOW_ITEM_IN_FOLDER: 'knowledge:show-item-in-folder',
 } as const
 
 // ===== 论文元数据（旧 Paperpipe API 兼容层） =====
@@ -133,7 +135,7 @@ export interface DeletePaperResult {
   localDeleted: boolean
   remoteDeleted: boolean
   /** 论文未绑定远端 ID 时仅删除本地。 */
-  remoteStatus: 'deleted' | 'not-found' | 'not-linked' | 'failed'
+  remoteStatus: 'deleted' | 'not-found' | 'not-linked' | 'pending-cleanup' | 'failed'
   message?: string
 }
 
@@ -271,6 +273,7 @@ export const KB_IPC_CHANNELS = {
   LIST_PAPERS: 'kb:list-papers',
   GET_PAPER: 'kb:get-paper',
   DELETE_PAPER: 'kb:delete-paper',
+  RETRY_PAPER_SYNC: 'kb:retry-paper-sync',
   GET_STATS: 'kb:stats',
   GET_LIBRARY_SNAPSHOT: 'kb:get-library-snapshot',
   SEARCH_ARXIV: 'kb:search-arxiv',
