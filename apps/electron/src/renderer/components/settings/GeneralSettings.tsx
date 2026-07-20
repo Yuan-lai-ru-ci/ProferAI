@@ -680,11 +680,11 @@ export function GeneralSettings(): React.ReactElement {
             checked={autoLaunch}
             onCheckedChange={handleAutoLaunchChange}
           />
-          {/* 论文知识库设置已暂时关闭 */}
+          {/* 知识库设置已暂时关闭 */}
           {false && (
           <SettingsToggle
-            label="论文知识库"
-            description="在侧边栏显示论文知识库入口，支持 arXiv 和本地论文 PDF 导入与语义搜索"
+            label="知识库"
+            description="在侧边栏显示知识库入口，支持文档、PDF、表格、演示文稿及 arXiv 资料导入"
             checked={paperKnowledgeBaseEnabled}
             onCheckedChange={(checked) => {
               setPaperKnowledgeBaseEnabled(checked)

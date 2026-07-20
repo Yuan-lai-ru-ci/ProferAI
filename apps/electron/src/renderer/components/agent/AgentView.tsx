@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, FileText, Library } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, Library } from 'lucide-react'
 import type { KnowledgeReference } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
@@ -110,8 +110,6 @@ import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
-import { usePaperReading, markdownToFile, PAPER_PROMPT } from '@/hooks/usePaperReading'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
@@ -612,37 +610,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [errorCopied, setErrorCopied] = React.useState(false)
 
-  // ref 桥接：addFilesAsAttachments 在后面才定义，但 usePaperReading 需要用它
-  const addFilesRef = React.useRef<(files: File[], sourcePaths?: Map<File, string>) => Promise<void>>(async () => {})
-
-  // 记录最近拖入的 PDF 真实路径，供论文精读按钮使用
-  const pdfPathRef = React.useRef<string | null>(null)
-  const pdfNameRef = React.useRef<string | null>(null)
-
-  const { isMineruLoading, largePaperConfirm, parseByPath, confirmLargePaper, cancelLargePaper } = usePaperReading({
-    isStreaming: streaming,
-    onParsed: React.useCallback(async (markdown, pages, creditsUsed, pdfName) => {
-      const mdFile = markdownToFile(markdown, pdfName)
-      await addFilesRef.current([mdFile])
-      // 用 .md 替换掉原来的 PDF 附件
-      setPendingFiles((prev) => prev.filter((f) => !f.filename.toLowerCase().endsWith('.pdf')))
-      setDraftsMap((prev) => {
-        const map = new Map(prev)
-        map.set(sessionId, PAPER_PROMPT)
-        return map
-      })
-      toast.success(`论文解析完成（${pages} 页，消耗 ${creditsUsed} 积分），内容已作为附件加入，点击发送即可`)
-    }, [sessionId, setDraftsMap, setPendingFiles]),
-  })
-
-  const handlePaperReading = React.useCallback(() => {
-    const path = pdfPathRef.current
-    if (!path) {
-      toast.warning('请先拖入 PDF 论文文件')
-      return
-    }
-    parseByPath(path, pdfNameRef.current ?? undefined)
-  }, [parseByPath])
 
   // pendingFiles ref（供 addFilesAsAttachments 读取最新列表，避免闭包旧值）
   const pendingFilesRef = React.useRef(pendingFiles)
@@ -1108,7 +1075,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       toast.error(`以下文件超过 100MB 且无法取得本地路径，已跳过：${formatFileNames(rejectedLargeFiles)}`)
     }
   }, [attachSessionFile, makeUniqueFilename, setPendingFiles])
-  addFilesRef.current = addFilesAsAttachments
+  // 附件添加路径由普通文件选择、拖放与粘贴事件直接调用。
 
   const addLargeDialogFilesAsReferences = React.useCallback(async (files: FileDialogLargeFile[]): Promise<void> => {
     if (files.length === 0) return
@@ -1323,14 +1290,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // 通过 preload 的 webUtils.getPathForFile 获取真实路径
     const pathMap = new Map<string, File>()
     const paths: string[] = []
-    // 记录第一个 PDF 的真实路径和文件名，供论文精读按钮使用
-    for (const f of droppedFiles) {
-      if (f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf') {
-        const pp = window.electronAPI.getPathForFile(f)
-        if (pp) { pdfPathRef.current = pp; pdfNameRef.current = f.name; break }
-      }
-    }
-
     for (const f of droppedFiles) {
       try {
         const p = window.electronAPI.getPathForFile(f)
@@ -1777,19 +1736,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       setPendingFiles([])
     }
 
-    // 构建引用选中文本：内联 XML 拼入 prompt，对话框不展示（parseAttachedFiles 剥离）
+    // 构建引用选中文本：知识库预览仍走既有 quoted_file 契约；其余来源由统一 helper 保留来源语义。
     const quotedSelection = store.get(quotedSelectionMapAtom).get(sessionId)
     if (quotedSelection) {
       const capturedAt = quotedSelection.capturedAt
-      // XML 转义：path 走完整实体编码（&, <, >, "），text 仅需防误闭合外层标签
-      const safePath = quotedSelection.filePath
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-      const safeText = quotedSelection.text.replace(/<\/quoted_file>/gi, '</quoted_file_>')
-      const quotedBlock = `<quoted_file path="${safePath}">\n${safeText}\n</quoted_file>\n\n`
-      fileReferences = fileReferences + quotedBlock
+      if (quotedSelection.sourceType === 'knowledge-preview') {
+        const safePath = quotedSelection.filePath
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+        const safeText = quotedSelection.text.replace(/<\/quoted_file>/gi, '</quoted_file_>')
+        fileReferences += `<quoted_file path="${safePath}">\n${safeText}\n</quoted_file>\n\n`
+      } else {
+        fileReferences += buildQuotedSelectionBlock(quotedSelection)
+      }
 
       store.set(quotedSelectionMapAtom, (prev) => {
         const m = new Map(prev)
@@ -2386,33 +2347,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       ),
     },
     {
-      key: 'paper-reading',
-      node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'size-[36px] shrink-0 rounded-full',
-                isMineruLoading
-                  ? 'text-blue-400'
-                  : 'text-foreground/60 hover:text-foreground'
-              )}
-              onClick={handlePaperReading}
-              disabled={isMineruLoading || streaming || !agentChannelId}
-            >
-              <FileText className={cn('size-5', isMineruLoading && 'animate-pulse')} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>论文精读 — 选择 PDF 自动解析为 Markdown</p>
-          </TooltipContent>
-        </Tooltip>
-      ),
-    },
-    {
       key: 'attach-folder',
       node: (
         <Tooltip>
@@ -2501,8 +2435,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     agentThinking,
     setAgentThinking,
     handleOpenFileDialog,
-    handlePaperReading,
-    isMineruLoading,
     agentChannelId,
     handleAttachFolder,
     contextStatus.inputTokens,
@@ -2595,11 +2527,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
           {knowledgeReferences.length > 0 && <div className="mb-2 flex flex-wrap gap-1.5 px-1">{knowledgeReferences.map((reference) => {
             const unavailable = availableKnowledgeIds !== null && !availableKnowledgeIds.has(reference.itemId)
-            return <span key={reference.itemId} className={cn('inline-flex h-7 max-w-[260px] items-center gap-1 rounded border border-primary/20 bg-primary/5 px-2 text-xs text-primary', unavailable && 'border-destructive/25 bg-destructive/5 text-destructive')}><button type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline disabled:no-underline"><Library className="size-3.5 shrink-0"/><span className="truncate">{unavailable ? `${reference.title}（已删除）` : reference.title}</span></button><button type="button" aria-label={`撤销资料 ${reference.title} 的访问授权`} className="shrink-0 rounded hover:bg-primary/15" onClick={() => void window.electronAPI.removeAgentKnowledgeReference(sessionId, reference.itemId).then(setKnowledgeReferences).catch((error) => toast.error(error instanceof Error ? error.message : '撤销资料授权失败'))}><X className="size-3.5"/></button></span>
+            return <span key={reference.itemId} className={cn('inline-flex h-7 max-w-[260px] items-center gap-1 rounded border border-border/70 bg-background/60 px-2 text-xs text-foreground/80', unavailable && 'border-destructive/25 bg-destructive/5 text-destructive')}><button type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline disabled:no-underline"><Library className="size-3.5 shrink-0 text-muted-foreground"/><span className="truncate">{unavailable ? `${reference.title}（已删除）` : reference.title}</span></button><button type="button" aria-label={`撤销资料 ${reference.title} 的访问授权`} className="shrink-0 rounded hover:bg-accent" onClick={() => void window.electronAPI.removeAgentKnowledgeReference(sessionId, reference.itemId).then(setKnowledgeReferences).catch((error) => toast.error(error instanceof Error ? error.message : '撤销资料授权失败'))}><X className="size-3.5"/></button></span>
           })}</div>}
           <div
             className={cn(
-              'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
+              'agent-input-surface rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
               (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
@@ -2760,21 +2692,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       toast.success(`已向当前 Agent 导入 ${references.length} 份资料`)
     }} />
 
-    {/* 大论文确认弹窗（>50 页） */}
-    <ConfirmDialog
-      open={largePaperConfirm !== null}
-      onOpenChange={() => cancelLargePaper()}
-      title="确认论文解析"
-      confirmLabel="继续解析"
-      cancelLabel="取消"
-      variant="default"
-      onConfirm={confirmLargePaper}
-    >
-      <div>
-        <p>这篇论文约 {largePaperConfirm?.pages ?? 0} 页，预计消耗 {largePaperConfirm?.estimatedCredits ?? 0} 积分。</p>
-        <p className="text-muted-foreground mt-1">大于 50 页的论文解析耗时较长且消耗积分较多，是否继续？</p>
-      </div>
-    </ConfirmDialog>
     </>
   )
 }

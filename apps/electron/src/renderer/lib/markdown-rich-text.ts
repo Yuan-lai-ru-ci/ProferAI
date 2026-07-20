@@ -1,3 +1,4 @@
+import DOMPurify from 'dompurify'
 import MarkdownIt from 'markdown-it'
 
 const VIDEO_EXT_RE = /\.(mp4|webm|ogg|ogv|mov|m4v)(?:[?#].*)?$/i
@@ -371,6 +372,28 @@ export function markdownToHtml(markdown: string): string {
   if (!markdown) return ''
   if (typeof document === 'undefined') return markdownIt.render(preprocessMarkdown(markdown))
   return enhanceMarkdownHtml(markdownIt.render(preprocessMarkdown(markdown)))
+}
+
+/**
+ * 用于 React 的只读资料展示。资料正文来自本地导入或历史同步结果，不能让原始 HTML
+ * 在 React 管理的 DOM 子树中执行或嵌入外部文档；否则外部 DOM 改写会破坏 React 的卸载假设。
+ */
+export function markdownToSafeDisplayHtml(markdown: string): string {
+  const html = markdownToHtml(markdown)
+  // DOMPurify 在无浏览器 DOM 的 Bun/SSR 环境导出 factory；浏览器 renderer 中则是实例。
+  // 单元测试仍须验证安全契约，因此 factory 不可用时走保守的字符串降级。
+  if (typeof DOMPurify.sanitize === 'function') {
+    return DOMPurify.sanitize(html, {
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'base', 'meta', 'link'],
+      FORBID_ATTR: ['style'],
+      ALLOW_DATA_ATTR: true,
+    })
+  }
+  return html
+    .replace(/<(script|style|iframe|object|embed|form|base|meta|link)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(script|style|iframe|object|embed|form|base|meta|link)\b[^>]*\/?\s*>/gi, '')
+    .replace(/\s(?:on[a-z]+|style)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s(href|src)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi, '')
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */

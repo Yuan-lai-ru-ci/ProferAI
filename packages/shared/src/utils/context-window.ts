@@ -84,12 +84,15 @@ function matchesAgentSdk1MRule(modelId: string, rule: string): boolean {
 
 /**
  * 为经过验证的 provider/model 组合选择 Claude SDK 1M 变体。
- * 自定义 Anthropic-compatible endpoint 不自动加后缀，避免改变商业代理的真实模型 ID。
+ * boolean 参数保留给已显式完成协议协商的调用方；provider 参数不会向未知兼容端点修改模型 ID。
  */
-export function resolveAgentSdkModelId(modelId: string, provider?: ProviderType): string {
+export function resolveAgentSdkModelId(modelId: string, provider?: ProviderType): string
+export function resolveAgentSdkModelId(modelId: string, enable1MContext: boolean): string
+export function resolveAgentSdkModelId(modelId: string, providerOrEnabled?: ProviderType | boolean): string {
   if (!modelId || /\[1m\]$/i.test(modelId)) return modelId
-  if (!provider) return modelId
-  const rules = AGENT_SDK_1M_PROVIDER_RULES[provider]
+  if (typeof providerOrEnabled === 'boolean') return providerOrEnabled ? `${modelId}[1m]` : modelId
+  if (!providerOrEnabled) return modelId
+  const rules = AGENT_SDK_1M_PROVIDER_RULES[providerOrEnabled]
   if (!rules?.some(rule => matchesAgentSdk1MRule(modelId, rule))) return modelId
   return `${modelId}[1m]`
 }
