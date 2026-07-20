@@ -50,6 +50,23 @@ function writePiTranscript(sessionId: string, nested = false): string {
 }
 
 describe('Pi runtime 会话持久化隔离', () => {
+  test('Given 创建或更新会话时选择模型 When 重新读取索引 Then modelId 与 channelId 持久化', () => {
+    const created = sessions.createAgentSession('model metadata', 'channel-a', undefined, 'model-a', 'pi')
+
+    expect(sessions.getAgentSessionMeta(created.id)).toMatchObject({
+      channelId: 'channel-a',
+      modelId: 'model-a',
+      agentRuntime: 'pi',
+    })
+
+    sessions.updateAgentSessionMeta(created.id, { channelId: 'channel-b', modelId: 'model-b' })
+    expect(sessions.getAgentSessionMeta(created.id)).toMatchObject({
+      channelId: 'channel-b',
+      modelId: 'model-b',
+      agentRuntime: 'pi',
+    })
+  })
+
   test('Given Pi transcript 存在 When 扫描会话健康度 Then 不误报为 Claude SDK orphan', () => {
     const meta = sessions.createAgentSession('Pi health', undefined, undefined, undefined, 'pi')
     sessions.updateAgentSessionMeta(meta.id, { sdkSessionId: 'pi-session-healthy' })
@@ -100,6 +117,29 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(updated.forkSourceSdkSessionId).toBeUndefined()
     expect(updated.forkSourceDir).toBeUndefined()
     expect(updated.resumeAtMessageUuid).toBeUndefined()
+  })
+
+  test('Given updateSettings fails after runtime switch When restoring snapshot Then SDK/fork/resume metadata survives rollback', () => {
+    const meta = sessions.createAgentSession('runtime rollback')
+    sessions.updateAgentSessionMeta(meta.id, {
+      agentRuntime: 'claude',
+      codexFastMode: true,
+      sdkSessionId: 'claude-session',
+      forkSourceSdkSessionId: 'claude-source',
+      forkSourceDir: 'C:/source',
+      resumeAtMessageUuid: 'assistant-uuid',
+    })
+
+    const snapshot = sessions.snapshotAgentRuntimeMeta(sessions.getAgentSessionMeta(meta.id)!)
+    sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'pi' })
+    const restored = sessions.restoreAgentRuntimeMeta(meta.id, snapshot)
+
+    expect(restored.agentRuntime).toBe('claude')
+    expect(restored.codexFastMode).toBe(true)
+    expect(restored.sdkSessionId).toBe('claude-session')
+    expect(restored.forkSourceSdkSessionId).toBe('claude-source')
+    expect(restored.forkSourceDir).toBe('C:/source')
+    expect(restored.resumeAtMessageUuid).toBe('assistant-uuid')
   })
 
   test('Given a runtime switch When a stale SDK callback tries to save an ID Then it cannot restore the previous runtime session ID', () => {

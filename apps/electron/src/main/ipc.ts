@@ -5,6 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
+import type { WebContents } from 'electron'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync } from 'node:fs'
@@ -208,13 +209,19 @@ import {
   searchAgentSessionReferences,
   createDelegatedChildSessionMeta,
   findOrphanSessions,
+  snapshotAgentRuntimeMeta,
+  restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
+import { validateAgentChannelModelBinding, validateAgentSessionModelUpdate } from './lib/agent-send-binding'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
+import { assertMainWindowSender } from './lib/ipc-sender-guard'
+import type { MainWindowGetter } from './lib/ipc-sender-guard'
+import { getMainWindow } from './lib/main-window-state'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -934,6 +941,17 @@ export function resolveAppIconPath(variantId: string): string | null {
 }
 
 let _ipcHandlersRegistered = false
+
+// 测试可注入主窗口 getter；生产默认使用 index.ts 持有的主窗口引用。
+let mainWindowGetter: MainWindowGetter = getMainWindow
+
+export function setIpcMainWindowGetter(getter: MainWindowGetter): void {
+  mainWindowGetter = getter
+}
+
+function assertSensitiveAgentIpcSender(event: { sender: WebContents }): void {
+  assertMainWindowSender(event, mainWindowGetter)
+}
 
 export function registerIpcHandlers(): void {
   // 幂等守卫：正常启动与启动失败降级路径（index.ts:520 / index.ts:748）都会调用本函数。
@@ -2102,11 +2120,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 创建 Agent 会话
+  // 创建 Agent 会话。modelId 为可选尾参数，兼容旧 preload；传入时由主进程校验渠道归属。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
-    async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
-      const session = createAgentSession(title, channelId, workspaceId, undefined, getSettings().agentRuntime ?? 'claude')
+    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string): Promise<AgentSessionMeta> => {
+      if (modelId !== undefined) {
+        const binding = validateAgentChannelModelBinding(channelId, modelId, channelId ? getChannelById(channelId) : undefined)
+        if (!binding.ok) throw new Error(`${binding.code}: ${binding.message}`)
+      }
+      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'claude')
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -2127,6 +2149,27 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
     async (_, id: string, title: string): Promise<AgentSessionMeta> => {
       return updateAgentSessionMeta(id, { title })
+    }
+  )
+
+  // 空闲会话更新模型。activeSessions 在 backgroundWaiting 期间仍保留，因此两种活跃态都会拒绝。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_MODEL,
+    async (event, id: string, channelId: string, modelId: string): Promise<AgentSessionMeta> => {
+      assertSensitiveAgentIpcSender(event)
+      if (typeof id !== 'string' || !id.trim() || id.length > 200) {
+        throw new Error('AGENT_SESSION_NOT_FOUND: Agent 会话标识无效')
+      }
+      const binding = validateAgentSessionModelUpdate(
+        id,
+        channelId,
+        modelId,
+        getAgentSessionMeta(id),
+        getChannelById(channelId),
+        isAgentSessionActive(id),
+      )
+      if (!binding.ok) throw new Error(`${binding.code}: ${binding.message}`)
+      return updateAgentSessionMeta(id, { channelId, modelId })
     }
   )
 
@@ -2517,6 +2560,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       await coordinateAgentSend(input, {
         getSession: getAgentSessionMeta,
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
@@ -2602,6 +2646,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.PERMISSION_RESPOND,
     async (event, response: PermissionResponse): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       const { requestId, behavior, alwaysAllow } = response
       const sessionId = permissionService.respondToPermission(requestId, behavior, alwaysAllow)
 
@@ -2674,7 +2719,8 @@ export function registerIpcHandlers(): void {
   // 空闲会话切换 runtime，并同步更新新会话默认值；跨 Claude/Pi 时绝不复用另一 runtime 的 SDK 会话 ID。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME,
-    async (_, sessionId: string, runtime: AgentRuntime): Promise<AgentSessionMeta> => {
+    async (event, sessionId: string, runtime: AgentRuntime): Promise<AgentSessionMeta> => {
+      assertSensitiveAgentIpcSender(event)
       if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) {
         throw new Error('Agent 会话标识无效')
       }
@@ -2684,17 +2730,17 @@ export function registerIpcHandlers(): void {
       if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换内核')
 
       // 两项同步写入在同一个 IPC turn 完成，renderer 不会观察到 session/default runtime 的半完成状态。
-      // 先改 session 再改默认设置；若默认设置落盘失败，尽力恢复当前 session runtime。
-      const previousRuntime: AgentRuntime = isAgentRuntime(current.agentRuntime) ? current.agentRuntime : 'claude'
+      // updateAgentSessionMeta 在跨 runtime 时会清理 SDK/fork/resume 字段；切换前必须保存完整快照。
+      const previousRuntime = snapshotAgentRuntimeMeta(current)
       const updated = updateAgentSessionMeta(sessionId, {
         agentRuntime: runtime,
-        ...(previousRuntime !== runtime ? { sdkSessionId: undefined } : {}),
       })
       try {
         updateSettings({ agentRuntime: runtime })
         return updated
       } catch (error) {
-        try { updateAgentSessionMeta(sessionId, { agentRuntime: previousRuntime }) } catch { /* 保留原始设置错误 */ }
+        // 不使用普通 update helper：它会把恢复 runtime 视为一次切换并再次清空快照字段。
+        try { restoreAgentRuntimeMeta(sessionId, previousRuntime) } catch { /* 保留原始设置错误 */ }
         throw error
       }
     },
@@ -2864,6 +2910,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.ASK_USER_RESPOND,
     async (event, response: AskUserResponse): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       const { requestId, answers } = response
       const sessionId = askUserService.respondToAskUser(requestId, answers)
 
@@ -2882,6 +2929,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.EXIT_PLAN_MODE_RESPOND,
     async (event, response: ExitPlanModeResponse): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       const result = exitPlanService.respondToExitPlanMode(response)
 
       if (result) {
@@ -2919,7 +2967,8 @@ export function registerIpcHandlers(): void {
   // 获取所有待处理的交互请求快照（渲染进程重载后恢复状态）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_PENDING_REQUESTS,
-    async (): Promise<import('@profer/shared').PendingRequestsSnapshot> => {
+    async (event): Promise<import('@profer/shared').PendingRequestsSnapshot> => {
+      assertSensitiveAgentIpcSender(event)
       return {
         permissions: permissionService.getPendingRequests(),
         askUsers: askUserService.getPendingRequests(),

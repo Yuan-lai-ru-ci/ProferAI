@@ -13,6 +13,7 @@ import type {
   AgentThinkingLevel,
   AgentProviderAdapter,
   AgentQueryInput,
+  CodexOAuthCredentials,
   ErrorCode,
   JsonSchemaOutputFormat,
   ProferPermissionMode,
@@ -111,6 +112,10 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   compactRequest?: boolean
   /** ChatGPT Codex Fast Mode；仅 openai-codex 的受支持模型实际注入 priority service tier。 */
   codexFastMode?: boolean
+  /** Pi 的 OAuth credential store 使用真实 expires 和 refresh，不读取 ~/.pi。 */
+  codexOAuthCredentials?: CodexOAuthCredentials
+  /** Pi 运行中刷新 OAuth 后，将新凭据回写到 Profer 渠道存储。 */
+  onCodexOAuthCredentialsRefreshed?: (credentials: CodexOAuthCredentials) => void | Promise<void>
 }
 
 interface ActivePiSession {
@@ -1258,7 +1263,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const sessionManager = sessionFile
         ? sdk.SessionManager.open(sessionFile, input.piSessionDir, cwd)
         : sdk.SessionManager.create(cwd, input.piSessionDir)
-      const { authStorage, registry, model } = await buildModel(sdk, input)
+      const { modelRuntime, model } = await buildModel(sdk, input)
       const customTools = [
         ...buildBuiltinToolDefinitions(
           sdk,
@@ -1303,8 +1308,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const { session } = await sdk.createAgentSession({
         cwd,
         agentDir: input.piAgentDir,
-        authStorage,
-        modelRegistry: registry,
+        modelRuntime,
         settingsManager,
         resourceLoader,
         sessionManager,
@@ -1318,10 +1322,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
         // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
         session.agent.streamFn = async (requestModel, context, options) => {
-          const auth = await registry.getApiKeyAndHeaders(requestModel)
-          if (!auth.ok) throw new Error(auth.error)
+          const resolvedAuth = await modelRuntime.getAuth(requestModel)
+          const apiKey = resolvedAuth?.auth.apiKey
+          if (!apiKey) throw new Error(`Pi 未找到 ${requestModel.provider} 的运行时认证凭据`)
 
-          const env = auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined
+          const env = resolvedAuth.env || options?.env ? { ...(resolvedAuth.env ?? {}), ...(options?.env ?? {}) } : undefined
           const retrySettings = settingsManager.getProviderRetrySettings()
           const configuredTimeoutMs = settingsManager.getHttpIdleTimeoutMs()
           const timeoutMs = options?.timeoutMs ?? retrySettings.timeoutMs ?? (configuredTimeoutMs === 0 ? 2_147_483_647 : configuredTimeoutMs)
@@ -1329,13 +1334,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
           return piAi.stream(requestModel, context, withCodexFastModeServiceTier({
             ...options,
-            apiKey: auth.apiKey,
+            apiKey,
             env,
             timeoutMs,
             websocketConnectTimeoutMs,
             maxRetries: options?.maxRetries ?? retrySettings.maxRetries,
             maxRetryDelayMs: options?.maxRetryDelayMs ?? retrySettings.maxRetryDelayMs,
-            headers: { ...auth.headers, ...options?.headers },
+            headers: { ...resolvedAuth.auth.headers, ...options?.headers },
           }))
         }
       }
