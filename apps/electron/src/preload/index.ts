@@ -50,6 +50,7 @@ import type {
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
+  AgentRuntime,
   SDKMessage,
   AgentSendInput,
   AgentStreamEvent,
@@ -688,6 +689,9 @@ export interface ElectronAPI {
   updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => Promise<void>
   /** 切换当前会话的 ChatGPT Codex Fast Mode。 */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
+
+  /** 切换空闲会话的 Agent runtime；跨 runtime 时清除旧 SDK session ID。 */
+  updateSessionAgentRuntime: (sessionId: string, runtime: AgentRuntime) => Promise<AgentSessionMeta>
 
   /** 获取工作区记忆摘要 */
   getWorkspaceMemorySummary: (workspaceSlug: string) => Promise<WorkspaceMemorySummary>
@@ -2004,6 +2008,10 @@ const electronAPI: ElectronAPI = {
 
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
+  },
+
+  updateSessionAgentRuntime: (sessionId: string, runtime: AgentRuntime) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME, sessionId, runtime)
   },
 
   getWorkspaceMemorySummary: (workspaceSlug: string) => {

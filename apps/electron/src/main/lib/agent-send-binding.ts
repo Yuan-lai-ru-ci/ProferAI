@@ -1,4 +1,4 @@
-import type { AgentSendInput, AgentSessionMeta, Channel } from '@profer/shared'
+import { normalizeAgentRuntime, type AgentSendInput, type AgentSessionMeta, type Channel } from '@profer/shared'
 
 export type AgentSendBindingResult =
   | { ok: true }
@@ -19,6 +19,10 @@ export function validateAgentSendBinding(
   }
   if (session.workspaceId !== input.workspaceId) {
     return { ok: false, code: 'AGENT_SESSION_WORKSPACE_MISMATCH', message: 'Agent 会话与工作区归属不匹配' }
+  }
+  // runtime 是会话元数据的归属，不允许过期 renderer / 延迟请求越过切换结果。
+  if (input.agentRuntime !== undefined && input.agentRuntime !== normalizeAgentRuntime(session.agentRuntime)) {
+    return { ok: false, code: 'AGENT_SESSION_RUNTIME_MISMATCH', message: 'Agent 会话内核已切换，请重新发送消息' }
   }
   if (session.workspaceId && !workspaceExists) {
     return { ok: false, code: 'AGENT_WORKSPACE_NOT_FOUND', message: 'Agent 会话所属工作区不存在' }

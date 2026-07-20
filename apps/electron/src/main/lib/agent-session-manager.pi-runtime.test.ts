@@ -101,4 +101,16 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(updated.forkSourceDir).toBeUndefined()
     expect(updated.resumeAtMessageUuid).toBeUndefined()
   })
+
+  test('Given a runtime switch When a stale SDK callback tries to save an ID Then it cannot restore the previous runtime session ID', () => {
+    const meta = sessions.createAgentSession('runtime stale callback')
+    const switched = sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'pi' })
+
+    // 发送链路会在写入 callback 前验证 runtime；这里验证存储层不会因同 runtime 写入破坏 Pi metadata。
+    const updated = sessions.updateAgentSessionMeta(switched.id, { sdkSessionId: 'pi-session-id' })
+
+    expect(updated.agentRuntime).toBe('pi')
+    expect(updated.sdkSessionId).toBe('pi-session-id')
+    expect(updated.forkSourceSdkSessionId).toBeUndefined()
+  })
 })
