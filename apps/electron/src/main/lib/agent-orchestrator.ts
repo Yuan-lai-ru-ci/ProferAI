@@ -80,7 +80,7 @@ import { buildAgentRuntimeEnv } from './agent-runtime-env'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
-import { applySdkCredentials, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
+import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
 
 // ===== 类型定义 =====
 
@@ -494,6 +494,8 @@ export class AgentOrchestrator {
       (m) => m.type === 'assistant' || m.type === 'user' || m.type === 'result'
         || (m.type === 'system' && ['compact_boundary', 'permission_denied'].includes((m as import('@profer/shared').SDKSystemMessage).subtype ?? ''))
     ).filter((m) => {
+      // Pi partial 仅用于实时预览；即使未来调用方误传，也不能污染 JSONL 历史。
+      if (isPartialSDKMessage(m)) return false
       // 过滤 SDK 内部生成的 user 文本消息（如 Skill 展开 prompt），与实时流过滤逻辑一致
       if (m.type === 'user') {
         const content = (m as { message?: { content?: Array<{ type: string }> } }).message?.content
@@ -1437,6 +1439,8 @@ export class AgentOrchestrator {
 
             pendingNext = null
             const msg = iterResult.value
+            // Pi 的 partial 是累计全文预览，不是正式 turn 消息：不得进入持久化、错误终态或重试语义。
+            const isPartialMessage = isPartialSDKMessage(msg)
 
             // 后台任务唤醒：轻量完成后处于等待态，收到新一轮的首条实质消息时
             // 发 run_resumed，让 UI 从"空闲可输入"恢复到"运行中"。
@@ -1537,7 +1541,7 @@ export class AgentOrchestrator {
             }
 
             // 检测 assistant 消息中的 SDK 错误
-            if (msg.type === 'assistant') {
+            if (msg.type === 'assistant' && !isPartialMessage) {
               const assistantMsg = msg as SDKAssistantMessage
               if (assistantMsg.error) {
                 console.error(`[Agent 编排] ═══ SDK assistant 错误 原始数据 ═══`)
@@ -1675,7 +1679,7 @@ export class AgentOrchestrator {
             // - 对 system 消息，仅累积 compact_boundary（上下文压缩分界线需要持久化显示）
             if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'result') {
               const msgRecord = msg as Record<string, unknown>
-              if (!msgRecord.isReplay) {
+              if (!msgRecord.isReplay && !isPartialMessage) {
                 if (msg.type === 'user') {
                   // 仅累积包含 tool_result 的 user 消息（跳过 SDK 重新发出的初始用户消息）
                   const content = (msg as { message?: { content?: Array<{ type: string }> } }).message?.content

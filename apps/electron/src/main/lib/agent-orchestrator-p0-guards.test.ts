@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   applySdkCredentials,
+  isPartialSDKMessage,
   isPlanModeMarkdownPath,
   isPlanModeMcpTool,
   releaseActiveSession,
@@ -42,6 +43,12 @@ describe('AgentOrchestrator P0 guards', () => {
     expect(sdkEnv.ANTHROPIC_BASE_URL).toBe('https://gateway.example')
     expect(process.env.ANTHROPIC_API_KEY).toBe(originalApiKey)
     expect(process.env.ANTHROPIC_BASE_URL).toBe(originalBaseUrl)
+  })
+
+  test('Given Pi partial preview When checking persistence eligibility Then identifies it as non-persistable', () => {
+    expect(isPartialSDKMessage({ type: 'assistant', _partial: true } as never)).toBe(true)
+    expect(isPartialSDKMessage({ type: 'assistant', _partial: false } as never)).toBe(false)
+    expect(isPartialSDKMessage({ type: 'assistant' } as never)).toBe(false)
   })
 
   test('Given Plan 模式 When 写入当前 cwd/.context/plan 下 Markdown Then 允许', () => {
