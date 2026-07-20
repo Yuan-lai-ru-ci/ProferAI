@@ -2121,8 +2121,8 @@ export function registerIpcHandlers(): void {
   // 创建 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
-    async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
-      const session = createAgentSession(title, channelId, workspaceId, undefined, getSettings().agentRuntime ?? 'claude')
+    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string): Promise<AgentSessionMeta> => {
+      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'claude')
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -2143,6 +2143,18 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
     async (_, id: string, title: string): Promise<AgentSessionMeta> => {
       return updateAgentSessionMeta(id, { title })
+    }
+  )
+
+  // 空闲会话更新渠道与模型；运行中及 background waiting 均由 active 状态保护。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_MODEL,
+    async (event, id: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
+      assertSensitiveAgentIpcSender(event)
+      if (isAgentSessionActive(id)) {
+        throw new Error('Agent 正在运行，完成后再切换模型')
+      }
+      return updateAgentSessionMeta(id, { channelId, modelId })
     }
   )
 
