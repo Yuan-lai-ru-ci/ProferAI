@@ -51,8 +51,10 @@ mkdirSync(outDir, { recursive: true })
 console.log(`${color.cyan}[build:cli]${color.reset} 编译 proma CLI → ${color.dim}${outFile}${color.reset}`)
 
 const started = Date.now()
+// 不依赖 shell PATH 中的 bun shim：在 Windows/CI/嵌入式运行器内，
+// 子进程可能无法再次解析 shim。当前 Bun 进程的真实可执行文件始终可用。
 const result = spawnSync(
-  'bun',
+  process.execPath,
   ['build', '--compile', '--outfile', outFile, cliEntry],
   { cwd: join(repoRoot, 'apps/cli'), stdio: 'inherit' },
 )

@@ -5,7 +5,7 @@
  * ProviderType 到 Pi API 协议、baseUrl、认证头和模型 catalog 默认值的映射。
  */
 
-import { extractZhipuCodingTeamApiToken, type ProviderType } from '@profer/shared'
+import { extractZhipuCodingTeamApiToken, type CodexOAuthCredentials, type ProviderType } from '@profer/shared'
 import {
   getProferUserAgent,
   normalizeAnthropicBaseUrlForSdk,
@@ -16,6 +16,7 @@ import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
+type PiAi = typeof import('@earendil-works/pi-ai')
 type PiAiCompat = typeof import('@earendil-works/pi-ai/compat')
 type PiCatalogModel = Model<Api>
 type PiModelCost = PiCatalogModel['cost']
@@ -38,6 +39,62 @@ const CODEX_MAX_TOKENS = 128_000
 const CODEX_54_MINI_CONTEXT_WINDOW = 400_000
 const CODEX_56_CONTEXT_WINDOW = 1_050_000
 const CODEX_THINKING_LEVEL_MAP = { xhigh: 'xhigh', minimal: 'low' } as const
+
+type CodexRuntimeCredential = CodexOAuthCredentials & {
+  type: 'oauth'
+  [key: string]: unknown
+}
+
+/**
+ * Pi 0.80.9 通过 CredentialStore 驱动 OAuth refresh。凭据仅保存在当前 query
+ * 内存中；刷新完成时经回调写回发起本次运行的 Profer channel。
+ */
+export function createCodexRuntimeCredentialStore(
+  initial: CodexOAuthCredentials,
+  onRefreshed?: PiAgentQueryOptions['onCodexOAuthCredentialsRefreshed'],
+) {
+  let credential: CodexRuntimeCredential | undefined = { type: 'oauth', ...initial }
+
+  return {
+    async read(providerId: string): Promise<CodexRuntimeCredential | undefined> {
+      return providerId === 'openai-codex' ? credential : undefined
+    },
+    async list(): Promise<readonly { providerId: string; type: 'oauth' }[]> {
+      return credential ? [{ providerId: 'openai-codex', type: 'oauth' }] : []
+    },
+    async modify(
+      providerId: string,
+      fn: (current: CodexRuntimeCredential | undefined) => Promise<CodexRuntimeCredential | undefined>,
+    ): Promise<CodexRuntimeCredential | undefined> {
+      if (providerId !== 'openai-codex') return undefined
+      const previous = credential
+      credential = await fn(credential)
+
+      if (credential && (
+        previous?.access !== credential.access
+        || previous?.refresh !== credential.refresh
+        || previous?.expires !== credential.expires
+        || previous?.accountId !== credential.accountId
+      )) {
+        try {
+          const { access, refresh, expires, accountId } = credential
+          await onRefreshed?.({
+            access,
+            refresh,
+            expires,
+            ...(accountId ? { accountId } : {}),
+          })
+        } catch (error) {
+          console.warn('[Pi Codex OAuth] 刷新后的凭据回写失败，将在下次执行前重试:', error)
+        }
+      }
+      return credential
+    },
+    async delete(providerId: string): Promise<void> {
+      if (providerId === 'openai-codex') credential = undefined
+    },
+  }
+}
 
 const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
   {
@@ -93,7 +150,13 @@ const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
   },
 ]
 
+let piAiPromise: Promise<PiAi> | undefined
 let piAiCompatPromise: Promise<PiAiCompat> | undefined
+
+function loadPiAi(): Promise<PiAi> {
+  piAiPromise ??= import('@earendil-works/pi-ai')
+  return piAiPromise
+}
 
 function loadPiAiCompat(): Promise<PiAiCompat> {
   piAiCompatPromise ??= import('@earendil-works/pi-ai/compat')
@@ -156,7 +219,7 @@ function findCatalogModelById(models: readonly PiCatalogModel[], modelId: string
 async function getCatalogModels(provider: KnownProvider): Promise<readonly PiCatalogModel[]> {
   try {
     const { getModels } = await loadPiAiCompat()
-    return getModels(provider)
+    return getModels(provider as Parameters<typeof getModels>[0])
   } catch {
     return []
   }
@@ -225,10 +288,6 @@ export function buildPiRequestHeaders(provider: ProviderType, apiKey: string): P
   }
 
   return headers
-}
-
-function shouldUseRuntimeApiKey(provider: ProviderType): boolean {
-  return !usesBearerOnlyAnthropicAuth(provider)
 }
 
 /**
@@ -300,21 +359,29 @@ export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
  * 刷新后的 access token，而不是存储的凭据 JSON。
  */
 async function buildCodexModel(sdk: PiSdk, input: PiAgentQueryOptions) {
-  const authStorage = sdk.AuthStorage.inMemory()
-  // 内置 codex 模型的 provider 字段即 'openai-codex'，token 必须设在该名下。
-  authStorage.setRuntimeApiKey('openai-codex', input.apiKey)
-  const registry = sdk.ModelRegistry.inMemory(authStorage)
+  if (!input.codexOAuthCredentials) {
+    throw new Error('ChatGPT (Codex) OAuth 凭据缺失，请重新登录')
+  }
+
+  const modelRuntime = await sdk.ModelRuntime.create({
+    credentials: createCodexRuntimeCredentialStore(
+      input.codexOAuthCredentials,
+      input.onCodexOAuthCredentialsRefreshed,
+    ),
+    modelsPath: null,
+    allowModelNetwork: false,
+  })
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
-  const model = (resolvedModelId ? registry.find('openai-codex', resolvedModelId) : undefined)
+  const model = (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined)
     ?? (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined)
     // 指定模型缺失时回退到首个内置 codex 模型，避免因模型 ID 漂移直接失败。
-    ?? registry.getAll().find((m) => m.provider === 'openai-codex')
+    ?? modelRuntime.getModels('openai-codex')[0]
   if (!model) {
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
-  return { authStorage, registry, model }
+  return { modelRuntime, model }
 }
 
 /** 列出 Pi SDK 内置的 ChatGPT (Codex) 模型 ID，供渲染层"模型拉取"使用。 */
@@ -326,16 +393,17 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   if (input.provider === 'openai-codex') {
     return buildCodexModel(sdk, input)
   }
-  const authStorage = sdk.AuthStorage.inMemory()
   const providerName = `proma-${input.provider}-${input.sessionId}`
   const resolvedApiKey = resolvePiApiKey(input.provider, input.apiKey)
-  const runtimeApiKey = shouldUseRuntimeApiKey(input.provider) ? resolvedApiKey : undefined
-  if (runtimeApiKey) {
-    authStorage.setRuntimeApiKey(providerName, runtimeApiKey)
-  }
   // pi runtime 统一剥离 `[1m]` 后缀：无论上游从哪条路径传入，注册与查找都用干净 ID。
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
-  const registry = sdk.ModelRegistry.inMemory(authStorage)
+  // 不读取 models.json 或联网目录，保持 Profer 每次查询的 session-local 模型注册。
+  const { InMemoryCredentialStore } = await loadPiAi()
+  const modelRuntime = await sdk.ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsPath: null,
+    allowModelNetwork: false,
+  })
   const api = normalizePiApi(input.provider)
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })
   const baseUrl = normalizePiBaseUrl(input.baseUrl, input.provider)
@@ -343,7 +411,7 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
     throw new Error(`渠道 ${input.channelName ?? input.provider} 缺少 Base URL`)
   }
   const headers = buildPiRequestHeaders(input.provider, resolvedApiKey)
-  registry.registerProvider(providerName, {
+  modelRuntime.registerProvider(providerName, {
     name: input.channelName ?? providerName,
     apiKey: resolvedApiKey,
     ...(headers ? { headers } : {}),
@@ -361,7 +429,7 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
       maxTokens: modelDefaults.maxTokens,
     }],
   })
-  const model = registry.find(providerName, resolvedModelId ?? 'default')
+  const model = modelRuntime.getModel(providerName, resolvedModelId ?? 'default')
   if (!model) throw new Error(`Pi model registration failed: ${resolvedModelId ?? 'default'}`)
-  return { authStorage, registry, model }
+  return { modelRuntime, model }
 }

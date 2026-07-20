@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentThinkingLevel } from '@profer/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, CodexOAuthCredentials, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentThinkingLevel } from '@profer/shared'
 import { normalizeAgentRuntime } from '@profer/shared'
 import {
   PROFER_DEFAULT_PERMISSION_MODE,
@@ -30,7 +30,7 @@ import {
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@profer/shared'
 import { AgentEventBus } from './agent-event-bus'
-import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig } from './channel-manager'
+import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig, persistCodexOAuthCredentials } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
@@ -1194,7 +1194,7 @@ export class AgentOrchestrator {
           piAgentDir: getSdkConfigDir(),
           // Keep Pi JSONL session files below the SDK-isolated config directory, never in another workspace.
           piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
-          // Pi model credentials stay in its request-local AuthStorage; never pass Claude auth env into Bash/tool processes.
+          // Pi 模型凭据仅保留在 request-local ModelRuntime；绝不传入 Bash/tool 子进程环境。
           runtimeEnv: piRuntimeEnv,
           thinkingLevel: (appSettings.agentThinking?.type === 'disabled'
             ? 'off'
@@ -1204,6 +1204,12 @@ export class AgentOrchestrator {
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
           ...(piCustomTools && { customTools: piCustomTools }),
           ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
+          ...(credentialResult.credentials.codexOAuthCredentials && {
+            codexOAuthCredentials: credentialResult.credentials.codexOAuthCredentials,
+            onCodexOAuthCredentialsRefreshed: (credentials: CodexOAuthCredentials) => {
+              persistCodexOAuthCredentials(channelId, credentials)
+            },
+          }),
           ...(userMessage.trim() === '/compact' && { compactRequest: true }),
         }),
         ...(maxTurns != null && { maxTurns }),

@@ -1,6 +1,6 @@
-import type { Channel, ProviderType } from '@profer/shared'
+import type { Channel, CodexOAuthCredentials, ProviderType } from '@profer/shared'
 import { getTeamAuthWithRefresh } from './auth-service'
-import { decryptApiKey, isCommercialMode, resolveChannelAgentBaseUrl } from './channel-manager'
+import { decryptApiKey, isCommercialMode, resolveChannelAgentBaseUrl, resolveCodexOAuthCredentials } from './channel-manager'
 import { isCommercialBuild } from './build-target'
 
 /** 单次 Agent 请求专属的已解析凭据；严禁写入 process.env 或日志。 */
@@ -10,6 +10,8 @@ export interface ResolvedRuntimeCredentials {
   provider: ProviderType
   /** 官方团队渠道使用 Bearer token，不能按普通 API key 处理。 */
   forceBearerAuth: boolean
+  /** Codex 仅供 Pi session-local credential store 使用，不落入工具子进程环境。 */
+  codexOAuthCredentials?: CodexOAuthCredentials
 }
 
 export type ResolveRuntimeCredentialsResult =
@@ -41,6 +43,19 @@ export async function resolveRuntimeCredentials(
   }
 
   try {
+    if (channel.provider === 'openai-codex') {
+      const codexOAuthCredentials = await resolveCodexOAuthCredentials(channel.id)
+      return {
+        ok: true,
+        credentials: {
+          apiKey: codexOAuthCredentials.access,
+          baseUrl: resolveChannelAgentBaseUrl(channel),
+          provider: channel.provider,
+          forceBearerAuth: false,
+          codexOAuthCredentials,
+        },
+      }
+    }
     return {
       ok: true,
       credentials: {
@@ -51,6 +66,6 @@ export async function resolveRuntimeCredentials(
       },
     }
   } catch {
-    return { ok: false, code: 'api_key_decrypt_failed' }
+    return { ok: false, code: channel.provider === 'openai-codex' ? 'token_expired' : 'api_key_decrypt_failed' }
   }
 }

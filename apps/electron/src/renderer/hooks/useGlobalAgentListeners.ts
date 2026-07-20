@@ -60,6 +60,7 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 import { inferContextWindow } from '@profer/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
+import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
@@ -639,13 +640,12 @@ export function useGlobalAgentListeners(): void {
               const map = new Map(prev)
               const current = map.get(sessionId) ?? []
 
-              // UUID 去重：队列消息已被乐观注入，SDK 再次推送时跳过
-              const incomingUuid = msgRecord.uuid as string | undefined
-              if (incomingUuid && current.some((m) => (m as Record<string, unknown>).uuid === incomingUuid)) {
-                return prev
-              }
+              // UUID 去重 / partial upsert：队列用户消息仍保持去重；Pi 使用同一
+              // UUID 推送 _partial 预览与最终消息，因此任一侧为 partial 时必须覆盖。
+              const next = upsertLiveMessageByUuid(current, payload.message)
+              if (next === current) return prev
 
-              map.set(sessionId, [...current, payload.message])
+              map.set(sessionId, next)
               return map
             })
           }
