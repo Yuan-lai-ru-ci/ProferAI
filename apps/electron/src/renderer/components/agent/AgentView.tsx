@@ -41,7 +41,7 @@ import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -65,6 +65,7 @@ import {
   agentChannelIdAtom,
   agentModelIdAtom,
   agentChannelIdsAtom,
+  agentRuntimeAtom,
   agentSessionChannelMapAtom,
   agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
@@ -114,7 +115,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
 import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
@@ -283,6 +284,64 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
             </div>
           </div>
         </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const AGENT_RUNTIME_OPTIONS: Array<{ value: AgentRuntime; label: string; description: string }> = [
+  { value: 'claude', label: 'Claude', description: '使用 Claude Agent SDK' },
+  { value: 'pi', label: 'Pi', description: '使用 Pi Agent SDK' },
+]
+
+function AgentRuntimeSelector({
+  runtime,
+  disabled,
+  onChange,
+}: {
+  runtime: AgentRuntime
+  disabled: boolean
+  onChange: (runtime: AgentRuntime) => void
+}): React.ReactElement {
+  const [open, setOpen] = React.useState(false)
+  const current = AGENT_RUNTIME_OPTIONS.find((option) => option.value === runtime) ?? AGENT_RUNTIME_OPTIONS[0]!
+
+  return (
+    <Popover open={open} onOpenChange={(nextOpen) => setOpen(disabled ? false : nextOpen)}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={disabled}
+              className="h-8 shrink-0 gap-1.5 rounded-md px-2 text-xs font-medium text-foreground/60 hover:bg-muted/50 hover:text-foreground"
+              aria-label={`Agent 内核：${current.label}`}
+            >
+              <Bot className="size-3.5" />
+              <span>{current.label}</span>
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p>{disabled ? 'Agent 运行中，完成后可切换内核' : '切换当前会话下一轮使用的 Agent 内核'}</p>
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent side="top" align="start" sideOffset={8} className="w-48 p-1.5" onOpenAutoFocus={(event) => event.preventDefault()}>
+        {AGENT_RUNTIME_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={cn(
+              'flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted',
+              option.value === runtime && 'bg-muted',
+            )}
+            onClick={() => { onChange(option.value); setOpen(false) }}
+          >
+            <span className="text-xs font-medium">{option.label}</span>
+            <span className="mt-0.5 text-[11px] text-muted-foreground">{option.description}</span>
+          </button>
+        ))}
       </PopoverContent>
     </Popover>
   )
@@ -506,6 +565,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   )
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
+  const [agentRuntime, setAgentRuntime] = useAtom(agentRuntimeAtom)
+  const [runtimeSwitchInFlight, setRuntimeSwitchInFlight] = React.useState(false)
+  // state 渲染前的连续点击也必须串行化，不能仅依赖 disabled 的下一帧更新。
+  const runtimeSwitchInFlightRef = React.useRef(false)
+  // 已加载会话以 metadata 为唯一真相来源；历史缺省 runtime 仍按 Claude 回退。
+  const sessionAgentRuntime: AgentRuntime = sessionMeta
+    ? sessionMeta.agentRuntime ?? 'claude'
+    : agentRuntime
   React.useEffect(() => {
     if (!sessionId) return
     const initialChannelId = sessionMetaChannelId ?? defaultChannelId
@@ -622,11 +689,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = React.useMemo(() => {
-    if (!agentChannelIds || agentChannelIds.length === 0) return false
+    const eligibleChannelIds = sessionAgentRuntime === 'pi'
+      ? undefined
+      : agentChannelIds
     return globalChannels.some(
-      (c) => c.enabled && agentChannelIds.includes(c.id) && c.models.some((m) => m.enabled),
+      (channel) => channel.enabled
+        && (eligibleChannelIds === undefined || eligibleChannelIds.includes(channel.id))
+        && channel.models.some((model) => model.enabled),
     )
-  }, [globalChannels, agentChannelIds])
+  }, [globalChannels, agentChannelIds, sessionAgentRuntime])
   React.useEffect(() => {
     if (!agentChannelId || agentModelId) return
 
@@ -934,6 +1005,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      agentRuntime: sessionAgentRuntime,
       additionalDirectories: Array.from(new Set([...attachedDirs, ...attachedFileDirectories, ...(pendingPrompt.additionalDirectories ?? [])])),
     }
     setPendingPrompt(null)
@@ -974,6 +1046,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: snapshot.channelId,
         modelId: snapshot.modelId,
         workspaceId: snapshot.workspaceId,
+        agentRuntime: snapshot.agentRuntime,
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
         ...(snapshot.additionalDirectories && snapshot.additionalDirectories.length > 0 && {
@@ -991,7 +1064,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -1371,7 +1444,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(
       agentChannelIds,
       option.channelId,
-      sessionMeta?.agentRuntime ?? 'claude',
+      sessionAgentRuntime,
     )
     if (updatedChannelIds !== agentChannelIds) {
       setAgentChannelIds(updatedChannelIds)
@@ -1387,7 +1460,49 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       agentModelId: option.modelId,
       agentChannelIds: updatedChannelIds,
     }).catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, sessionMeta?.agentRuntime])
+  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, sessionAgentRuntime])
+
+  /** 空闲会话切换 runtime：跨 runtime 的 SDK session ID 由主进程原子清除。 */
+  const handleAgentRuntimeChange = React.useCallback(async (runtime: AgentRuntime): Promise<void> => {
+    if (runtime === sessionAgentRuntime) return
+    if (streaming || backgroundWaiting) {
+      toast.info('Agent 运行中，完成后再切换内核')
+      return
+    }
+    if (runtimeSwitchInFlightRef.current) return
+
+    const previousDefaultRuntime = agentRuntime
+    const previousSessionMeta = sessionMeta
+    runtimeSwitchInFlightRef.current = true
+    setRuntimeSwitchInFlight(true)
+    setAgentRuntime(runtime)
+    if (sessionMeta) {
+      setAgentSessions((previous) => previous.map((item) => (
+        item.id === sessionId
+          ? { ...item, agentRuntime: runtime, sdkSessionId: undefined, updatedAt: Date.now() }
+          : item
+      )))
+    }
+
+    try {
+      // 主进程在同一 IPC turn 内持久化 session runtime 与新会话默认 runtime。
+      const updated = await window.electronAPI.updateSessionAgentRuntime(sessionId, runtime)
+      setAgentSessions((previous) => previous.map((item) => item.id === sessionId ? updated : item))
+    } catch (error) {
+      console.error('[AgentView] 切换 Agent Runtime 失败:', error)
+      setAgentRuntime(previousDefaultRuntime)
+      if (previousSessionMeta) {
+        setAgentSessions((previous) => previous.map((item) => item.id === sessionId ? previousSessionMeta : item))
+      }
+      toast.error('Agent 内核切换失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    } finally {
+      runtimeSwitchInFlightRef.current = false
+      setRuntimeSwitchInFlight(false)
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
+    }
+  }, [agentRuntime, backgroundWaiting, sessionAgentRuntime, sessionId, sessionMeta, setAgentRuntime, setAgentSessions, streaming])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -1524,6 +1639,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: agentChannelId,
         modelId: agentModelId || undefined,
         workspaceId: currentWorkspaceId || undefined,
+        agentRuntime: sessionAgentRuntime,
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
         ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
@@ -1542,7 +1658,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       throw error
     }
   }, [
-    agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId,
+    agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
     streaming, backgroundWaiting, permissionMode, attachedDirs, attachedFileDirectories,
     clearStoppedByUser, queueMessageIntoActiveAgent, appendOptimisticPersistedMessage,
     sessionId, setStreamingStates,
@@ -1819,6 +1935,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      agentRuntime: sessionAgentRuntime,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
@@ -1848,7 +1965,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2009,6 +2126,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      agentRuntime: sessionAgentRuntime,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
     }).catch((error) => {
@@ -2030,7 +2148,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, backgroundWaiting, setStreamingStates, store, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setStreamingStates, store, permissionMode])
 
   /** 复制错误信息到剪贴板 */
   const handleCopyError = React.useCallback(async (): Promise<void> => {
@@ -2087,10 +2205,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
+      agentRuntime: sessionAgentRuntime,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
     }).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode])
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -2128,6 +2247,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: agentChannelId,
         modelId: agentModelId || undefined,
         workspaceId: currentWorkspaceId || undefined,
+        agentRuntime: meta.agentRuntime,
         mentionedSessionIds: [sessionId],
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
@@ -2298,9 +2418,19 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       key: 'model',
       node: (
         <ModelSelector
-          filterChannelIds={agentChannelIds}
+          filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
+        />
+      ),
+    },
+    {
+      key: 'runtime',
+      node: (
+        <AgentRuntimeSelector
+          runtime={sessionAgentRuntime}
+          disabled={streaming || backgroundWaiting || runtimeSwitchInFlight}
+          onChange={handleAgentRuntimeChange}
         />
       ),
     },
@@ -2367,7 +2497,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </Tooltip>
       ),
     },
-    ...(sessionMeta?.agentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
+    ...(sessionMeta && sessionAgentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
       ? [{
           key: 'codex-fast-mode',
           node: (
@@ -2428,9 +2558,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     },
   ], [
     agentChannelIds,
+    sessionAgentRuntime,
     agentChannelId,
     agentModelId,
     handleModelSelect,
+    handleAgentRuntimeChange,
     sessionId,
     agentThinking,
     setAgentThinking,
@@ -2444,6 +2576,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     contextStatus.contextWindow,
     contextStatus.isCompacting,
     streaming,
+    backgroundWaiting,
+    runtimeSwitchInFlight,
     handleCompact,
     autoPreviewEnabled,
     processGroupsKeepExpanded,

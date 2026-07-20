@@ -11,7 +11,7 @@ import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSyn
 import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, isProferPermissionMode, normalizePathForCompare } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
@@ -46,6 +46,7 @@ import type {
   FileDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
+  AgentRuntime,
   AgentSendInput,
   AgentWorkspace,
   AgentGenerateTitleInput,
@@ -2105,7 +2106,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
     async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
-      const session = createAgentSession(title, channelId, workspaceId)
+      const session = createAgentSession(title, channelId, workspaceId, undefined, getSettings().agentRuntime ?? 'claude')
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -2521,7 +2522,7 @@ export function registerIpcHandlers(): void {
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
         getChannel: getChannelById,
         startMirror: (session) => feishuBridgeManager.startSessionMirrorRun(session),
-        runAgent: () => runAgent(input, event.sender),
+        startAgent: () => runAgent(input, event.sender),
         onMirrorError: (error) => console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error),
       })
     }
@@ -2667,6 +2668,35 @@ export function registerIpcHandlers(): void {
       if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
       if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换快速模式')
       return updateAgentSessionMeta(sessionId, { codexFastMode: enabled })
+    },
+  )
+
+  // 空闲会话切换 runtime，并同步更新新会话默认值；跨 Claude/Pi 时绝不复用另一 runtime 的 SDK 会话 ID。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME,
+    async (_, sessionId: string, runtime: AgentRuntime): Promise<AgentSessionMeta> => {
+      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) {
+        throw new Error('Agent 会话标识无效')
+      }
+      if (!isAgentRuntime(runtime)) throw new Error(`无效的 Agent runtime: ${String(runtime)}`)
+      const current = getAgentSessionMeta(sessionId)
+      if (!current) throw new Error(`Agent 会话不存在: ${sessionId}`)
+      if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换内核')
+
+      // 两项同步写入在同一个 IPC turn 完成，renderer 不会观察到 session/default runtime 的半完成状态。
+      // 先改 session 再改默认设置；若默认设置落盘失败，尽力恢复当前 session runtime。
+      const previousRuntime: AgentRuntime = isAgentRuntime(current.agentRuntime) ? current.agentRuntime : 'claude'
+      const updated = updateAgentSessionMeta(sessionId, {
+        agentRuntime: runtime,
+        ...(previousRuntime !== runtime ? { sdkSessionId: undefined } : {}),
+      })
+      try {
+        updateSettings({ agentRuntime: runtime })
+        return updated
+      } catch (error) {
+        try { updateAgentSessionMeta(sessionId, { agentRuntime: previousRuntime }) } catch { /* 保留原始设置错误 */ }
+        throw error
+      }
     },
   )
 

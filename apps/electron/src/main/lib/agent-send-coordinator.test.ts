@@ -15,7 +15,7 @@ function deps(overrides: Partial<Parameters<typeof coordinateAgentSend>[1]> = {}
       workspaceExists: () => true,
       getChannel: () => channel,
       startMirror: async () => { calls.push('mirror') },
-      runAgent: async () => { calls.push('run') },
+      startAgent: async () => { calls.push('run') },
       onMirrorError: () => { calls.push('mirror-error') },
       ...overrides,
     },
@@ -29,15 +29,15 @@ describe('SEND_MESSAGE 协调器', () => {
     expect(d.calls).toEqual([])
   })
 
-  test('Given 合法绑定 When 协调发送 Then 镜像后运行 Agent', async () => {
+  test('Given 合法绑定 When 协调发送 Then 先原子启动 Agent 再初始化镜像', async () => {
     const d = deps()
     await coordinateAgentSend(input, d.value)
-    expect(d.calls).toEqual(['mirror', 'run'])
+    expect(d.calls).toEqual(['run', 'mirror'])
   })
 
   test('Given 镜像失败 When 协调发送 Then 记录后仍运行 Agent', async () => {
     const d = deps({ startMirror: async () => { throw new Error('mirror failed') } })
     await coordinateAgentSend(input, d.value)
-    expect(d.calls).toEqual(['mirror-error', 'run'])
+    expect(d.calls).toEqual(['run', 'mirror-error'])
   })
 })

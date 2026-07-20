@@ -31,6 +31,7 @@ import {
   agentChannelIdAtom,
   agentModelIdAtom,
   agentChannelIdsAtom,
+  agentRuntimeAtom,
   agentWorkspacesAtom,
   currentAgentWorkspaceIdAtom,
   currentAgentSessionIdAtom,
@@ -171,6 +172,7 @@ function AgentSettingsInitializer(): null {
   const setAgentChannelId = useSetAtom(agentChannelIdAtom)
   const setAgentModelId = useSetAtom(agentModelIdAtom)
   const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
+  const setAgentRuntime = useSetAtom(agentRuntimeAtom)
   const setAgentWorkspaces = useSetAtom(agentWorkspacesAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
@@ -224,6 +226,7 @@ function AgentSettingsInitializer(): null {
       if (settings.agentModelId && (!settings.agentChannelId || channelIds.has(settings.agentChannelId))) {
         setAgentModelId(settings.agentModelId)
       }
+      setAgentRuntime(settings.agentRuntime ?? 'claude')
 
       // 加载 Agent 启用渠道列表，过滤已删除的渠道
       if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {
@@ -283,7 +286,7 @@ function AgentSettingsInitializer(): null {
       console.error(err)
       setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
     })
-  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded, setAgentSettingsReady])
+  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentRuntime, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded, setAgentSettingsReady])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {
