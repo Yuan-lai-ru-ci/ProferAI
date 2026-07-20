@@ -24,7 +24,10 @@ afterPack: scripts/after-pack.cjs
 asar: true
 asarUnpack:
   - "node_modules/@anthropic-ai/**"
-  # Pi TUI 的 native addon 不能留在 ASAR 内，否则 packaged runtime 无法加载。
+  # Pi 运行闭包中的 WASM / native addon 必须解包，避免 packaged runtime 从 ASAR 加载失败。
+  - "node_modules/@silvia-odwyer/**"
+  - "node_modules/@mariozechner/**"
+  - "node_modules/@napi-rs/**"
   - "node_modules/@earendil-works/pi-tui/native/**"
 
 # 跳过 npm install（代码已被 esbuild/Vite 打包，npm 不识别 workspace:* 协议）
