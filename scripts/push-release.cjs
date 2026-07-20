@@ -95,7 +95,7 @@ function tryRun(cmd, cwd = ROOT) {
   // 4. 完整构建 + 打包 Electron
   console.log('\n[4/6] 打包 Electron...');
   console.log('  [4a] build:main');
-  run('npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk "--define:__PROFER_BUILD_TARGET__=\'\\\"oss\\\"\'"', ELECTRON);
+  run('npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai "--define:__PROFER_BUILD_TARGET__=\'\\\"oss\\\"\'"', ELECTRON);
   console.log('  [4b] build:preload');
   run('npx esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron', ELECTRON);
   console.log('  [4c] build:renderer (vite)');
