@@ -47,6 +47,7 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   Write: FilePenLine,
   Read: FileText,
   Bash: Terminal,
+  PowerShell: Terminal,
   Glob: FolderSearch,
   Grep: Search,
   Task: GitBranch,
@@ -100,6 +101,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   Write: '写入文件',
   Read: '读取文件',
   Bash: '执行命令',
+  PowerShell: '执行 PowerShell',
   Glob: '搜索文件',
   Grep: '搜索内容',
   Task: '任务工具',
@@ -160,7 +162,8 @@ export function getInputSummary(
   input: Record<string, unknown>
 ): string | null {
   switch (toolName) {
-    case 'Bash': {
+    case 'Bash':
+    case 'PowerShell': {
       const command = input.command
       if (typeof command === 'string') {
         return command.length > 80 ? command.slice(0, 80) + '…' : command

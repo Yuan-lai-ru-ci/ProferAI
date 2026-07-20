@@ -91,6 +91,28 @@ export function isSafeBashCommand(command: string): boolean {
   return SAFE_BASH_PATTERNS.some((pattern) => pattern.test(trimmed))
 }
 
+/** Windows PowerShell 的自动允许必须独立于 Bash：仅覆盖不读取内容、不写入、不启动进程的简单查询。 */
+export const SAFE_POWERSHELL_PATTERNS: readonly RegExp[] = [
+  /^(Get-Location|pwd)$/i,
+  /^Get-Date$/i,
+  /^Get-ChildItem$/i,
+  /^Get-Process(?:\s+-Name\s+[A-Za-z0-9_.-]+)?$/i,
+  /^Get-Command\s+[A-Za-z0-9_.-]+$/i,
+  /^Get-Item\s+[^|><;&`$()]+$/i,
+  /^Test-Path\s+[^|><;&`$()]+$/i,
+]
+
+/** PowerShell 命令拼接、管道、重定向、脚本块和子表达式一律不自动允许。 */
+export function hasDangerousPowerShellStructure(command: string): boolean {
+  return /[|><;&`{}]|\$\(|\$[A-Za-z_]/.test(command)
+}
+
+export function isSafePowerShellCommand(command: string): boolean {
+  const trimmed = command.trim()
+  if (hasDangerousPowerShellStructure(trimmed)) return false
+  return SAFE_POWERSHELL_PATTERNS.some((pattern) => pattern.test(trimmed))
+}
+
 /**
  * 判断命令是否为危险命令
  */

@@ -64,6 +64,7 @@ import {
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
+import { createWindowsPowerShellToolDefinition } from './pi-powershell-tool'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -1143,9 +1144,11 @@ function buildBuiltinToolDefinitions(
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
 ): ToolDefinition[] {
+  const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv)
   const definitions = [
     sdk.createReadToolDefinition(cwd),
     sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(runtimeEnv)),
+    ...(powerShellTool ? [powerShellTool] : []),
     sdk.createEditToolDefinition(cwd),
     sdk.createWriteToolDefinition(cwd),
     sdk.createGrepToolDefinition(cwd),

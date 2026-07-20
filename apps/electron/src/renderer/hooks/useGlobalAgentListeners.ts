@@ -716,7 +716,7 @@ export function useGlobalAgentListeners(): void {
           }
 
           // Bash 工具执行 git 突变命令时，标记为待刷新（完成后刷新 diff 列表）
-          if (event.type === 'tool_start' && event.toolName === 'Bash') {
+          if (event.type === 'tool_start' && (event.toolName === 'Bash' || event.toolName === 'PowerShell')) {
             const input = event.input as Record<string, unknown> | undefined
             const command = typeof input?.command === 'string' ? input.command : ''
             if (command && GIT_MUTATING_SUBCOMMANDS.test(command)) {
