@@ -20,8 +20,10 @@ import type {
 import {
   SAFE_TOOLS,
   isSafeBashCommand,
+  isSafePowerShellCommand,
   isDangerousCommand,
   hasDangerousStructure,
+  hasDangerousPowerShellStructure,
 } from '@profer/shared'
 
 /** SDK PermissionBehavior */
@@ -95,8 +97,8 @@ interface PendingPermission {
 interface SessionWhitelist {
   /** 总是允许的工具名（如 'Write', 'Edit'） */
   allowedTools: Set<string>
-  /** 总是允许的 Bash 基础命令（如 'git push', 'npm install'） */
-  allowedBashCommands: Set<string>
+  /** 总是允许的命令工具基础命令（按 `Bash:` / `PowerShell:` 名称空间隔离） */
+  allowedCommandBases: Set<string>
 }
 
 /**
@@ -134,8 +136,14 @@ export class AgentPermissionService {
       // Worker（子代理）的工具调用基本安全审查
       // 避免 UI 等待导致超时死锁，但仍需拦截明确的危险操作
       if (options.agentID) {
-        // 对子代理的 Bash 调用做危险命令检测
-        if (toolName === 'Bash') {
+        // 子代理没有交互式审批通道：PowerShell 仅允许与主 Agent 相同的保守只读查询。
+        // Bash 保留既有危险命令拦截语义，避免改变现有跨平台工作流。
+        if (toolName === 'PowerShell') {
+          const command = typeof input.command === 'string' ? input.command : ''
+          if (!isSafePowerShellCommand(command)) {
+            return { behavior: 'deny' as const, message: '子代理仅允许执行只读 PowerShell 查询', interrupt: true }
+          }
+        } else if (toolName === 'Bash') {
           const command = typeof input.command === 'string' ? input.command : ''
           if (isDangerousCommand(command) || hasDangerousStructure(command)) {
             return { behavior: 'deny' as const, message: '子代理不允许执行危险命令', interrupt: true }
@@ -230,11 +238,10 @@ export class AgentPermissionService {
     // 安全工具白名单
     if (SAFE_TOOLS.includes(toolName)) return true
 
-    // Bash 工具：检查命令是否匹配安全模式
-    if (toolName === 'Bash') {
-      const command = typeof input.command === 'string' ? input.command : ''
-      return isSafeBashCommand(command)
-    }
+    // 命令工具：分别使用对应语法的保守只读规则
+    const command = typeof input.command === 'string' ? input.command : ''
+    if (toolName === 'Bash') return isSafeBashCommand(command)
+    if (toolName === 'PowerShell') return isSafePowerShellCommand(command)
 
     return false
   }
@@ -246,17 +253,19 @@ export class AgentPermissionService {
     const whitelist = this.sessionWhitelists.get(sessionId)
     if (!whitelist) return false
 
-    // 非 Bash 工具：检查工具名是否在白名单中
-    if (toolName !== 'Bash') {
+    // 非命令工具：检查工具名是否在白名单中
+    if (toolName !== 'Bash' && toolName !== 'PowerShell') {
       return whitelist.allowedTools.has(toolName)
     }
 
-    // Bash 工具：即使基础命令在白名单中，也要重新检查完整命令的安全性
+    // 命令工具：即使基础命令在白名单中，也要重新检查对应 shell 的完整语法。
     const command = typeof input.command === 'string' ? input.command : ''
-    if (hasDangerousStructure(command)) return false
-    if (isDangerousCommand(command)) return false
+    const hasDangerousSyntax = toolName === 'PowerShell'
+      ? hasDangerousPowerShellStructure(command)
+      : hasDangerousStructure(command)
+    if (hasDangerousSyntax || isDangerousCommand(command)) return false
     const baseCommand = this.extractBaseCommand(command)
-    return whitelist.allowedBashCommands.has(baseCommand)
+    return whitelist.allowedCommandBases.has(`${toolName}:${baseCommand}`)
   }
 
   /**
@@ -265,13 +274,13 @@ export class AgentPermissionService {
   private addToWhitelist(sessionId: string, toolName: string, input: Record<string, unknown>): void {
     const whitelist = this.getOrCreateWhitelist(sessionId)
 
-    if (toolName !== 'Bash') {
+    if (toolName !== 'Bash' && toolName !== 'PowerShell') {
       whitelist.allowedTools.add(toolName)
     } else {
       const command = typeof input.command === 'string' ? input.command : ''
       const baseCommand = this.extractBaseCommand(command)
       if (baseCommand) {
-        whitelist.allowedBashCommands.add(baseCommand)
+        whitelist.allowedCommandBases.add(`${toolName}:${baseCommand}`)
       }
     }
   }
@@ -285,7 +294,7 @@ export class AgentPermissionService {
 
     const whitelist: SessionWhitelist = {
       allowedTools: new Set(),
-      allowedBashCommands: new Set(),
+      allowedCommandBases: new Set(),
     }
     this.sessionWhitelists.set(sessionId, whitelist)
     return whitelist
@@ -314,7 +323,7 @@ export class AgentPermissionService {
     input: Record<string, unknown>,
     options: CanUseToolOptions,
   ): PermissionRequest {
-    const command = toolName === 'Bash' && typeof input.command === 'string'
+    const command = (toolName === 'Bash' || toolName === 'PowerShell') && typeof input.command === 'string'
       ? input.command
       : undefined
 
@@ -344,6 +353,10 @@ export class AgentPermissionService {
         return typeof input.command === 'string'
           ? `执行命令: ${input.command.slice(0, 200)}`
           : '执行 Bash 命令'
+      case 'PowerShell':
+        return typeof input.command === 'string'
+          ? `执行 PowerShell: ${input.command.slice(0, 200)}`
+          : '执行 PowerShell 命令'
       case 'Write':
         return typeof input.file_path === 'string'
           ? `写入文件: ${input.file_path}`
