@@ -84,6 +84,18 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(sessions.getAgentSessionMeta(second.id)?.sdkSessionId).toBe('pi-keep-id')
   })
 
+  test('Given sessions have distinct channel/model selections When re-reading index Then each selection persists independently', () => {
+    const first = sessions.createAgentSession('first selection', 'channel-a', undefined, 'model-a', 'pi')
+    const second = sessions.createAgentSession('second selection', 'channel-b', undefined, 'model-b', 'pi')
+
+    sessions.updateAgentSessionMeta(first.id, { channelId: 'channel-a-next', modelId: 'model-a-next' })
+
+    const restoredFirst = sessions.getAgentSessionMeta(first.id)
+    const restoredSecond = sessions.getAgentSessionMeta(second.id)
+    expect(restoredFirst).toMatchObject({ channelId: 'channel-a-next', modelId: 'model-a-next' })
+    expect(restoredSecond).toMatchObject({ channelId: 'channel-b', modelId: 'model-b' })
+  })
+
   test('Given a Claude session changes to Pi When updating runtime Then clears all Claude-only resume metadata', () => {
     const meta = sessions.createAgentSession('runtime switch')
     sessions.updateAgentSessionMeta(meta.id, {
