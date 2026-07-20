@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { ProviderType } from '@profer/shared'
+import type { ProviderType, SDKMessage } from '@profer/shared'
 import { normalizeAnthropicBaseUrlForSdk } from '@profer/core'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 
@@ -44,6 +44,11 @@ export function applySdkCredentials(
   if (baseUrl && baseUrl !== 'https://api.anthropic.com') {
     sdkEnv.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(baseUrl)
   }
+}
+
+/** Pi 流式预览仅用于实时 UI，绝不能进入会话历史。 */
+export function isPartialSDKMessage(message: SDKMessage): boolean {
+  return (message as Record<string, unknown>)._partial === true
 }
 
 /** MCP 名称在 Plan 模式下无法可靠判定只读性，必须拒绝。 */
