@@ -167,7 +167,7 @@ function main(): void {
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = 5
+  const totalSteps = 6
   let step = 0
 
   // ── 步骤 1: 构建主进程 ──
@@ -205,7 +205,16 @@ function main(): void {
   )
   printStepResult(results[results.length - 1])
 
-  // ── 步骤 5: electron-builder 打包 ──
+  // ── 步骤 5: 同步主进程运行时依赖 ──
+  step++
+  printStepStart(step, totalSteps, '同步主进程运行时依赖')
+  results.push(
+    runStep('同步运行时依赖', 'bun', ['run', 'sync:runtime-deps'], { verbose: opts.verbose })
+  )
+  printStepResult(results[results.length - 1])
+  if (!results[results.length - 1].success) return printSummary(results)
+
+  // ── 步骤 6: electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 

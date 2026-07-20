@@ -41,7 +41,7 @@
     "dist:win": "bun run build && bun run sync:runtime-deps && electron-builder --win",
     "dist:win-github": "bun run build:github && bun run sync:runtime-deps && electron-builder --win",
     "dist:win-commercial": "bun run build:commercial && bun run sync:runtime-deps && electron-builder --win",
-    "dist:linux": "electron-builder --linux",
+    "dist:linux": "bun run build && bun run sync:runtime-deps && electron-builder --linux",
     "dist:visual": "bun run scripts/dist.ts",
     "dist:fast": "bun run scripts/dist.ts --current-arch --dmg",
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
