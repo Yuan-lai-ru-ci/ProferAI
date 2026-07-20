@@ -52,6 +52,7 @@ export function buildQuotedSelectionBlock(quotedSelection: QuotedSelection): str
 
 function normalizeContextSourceType(value: string | undefined): QuotedSelectionSourceType {
   if (value === 'scratch-pad') return 'scratch-pad'
+  if (value === 'knowledge-preview') return 'knowledge-preview'
   return 'agent-history'
 }
 

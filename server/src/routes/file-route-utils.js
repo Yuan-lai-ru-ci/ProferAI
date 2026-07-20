@@ -1,11 +1,19 @@
 /** 团队文件路由的纯工具函数 */
 
+const RESERVED_PATH_PREFIXES = ['__trash__', '.trash']
+
+/** 服务端私有命名空间永远不能由团队文件 API 读写。 */
+export function isReservedFilePath(path) {
+  return RESERVED_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
+}
+
 export function normalizeFilePath(input) {
   if (typeof input !== 'string') return null
   const normalized = input.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
   if (!normalized || normalized.includes('\0')) return null
   const parts = normalized.split('/')
   if (parts.some((part) => !part || part === '.' || part === '..')) return null
+  if (isReservedFilePath(normalized)) return null
   return normalized
 }
 

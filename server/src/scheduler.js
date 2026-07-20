@@ -13,6 +13,7 @@ import {
 } from './config.js'
 import { readFileSync, existsSync, rmSync } from 'node:fs'
 import { join as pathJoin } from 'node:path'
+import { purgeExpiredTrash } from './team-files/trash-service.js'
 
 /** 每日 drip 累加补偿器：每日幂等，重启后可安全补跑。 */
 export function runDailyDripAccrual(now = Date.now()) {
@@ -88,6 +89,14 @@ export function startSchedulers() {
 
       const hardDeleteWorkspace = db.transaction((wsId) => {
         db.prepare('DELETE FROM sync_envelopes WHERE workspace_id = ?').run(wsId)
+        // 团队资料库关联表无跨工作区级联，工作区硬删时显式清理。
+        db.prepare('DELETE FROM file_tag_links WHERE workspace_id = ?').run(wsId)
+        db.prepare('DELETE FROM file_user_preferences WHERE workspace_id = ?').run(wsId)
+        db.prepare('DELETE FROM file_metadata WHERE workspace_id = ?').run(wsId)
+        db.prepare('DELETE FROM file_activities WHERE workspace_id = ?').run(wsId)
+        db.prepare('DELETE FROM workspace_file_tags WHERE workspace_id = ?').run(wsId)
+        db.prepare('DELETE FROM workspace_file_statuses WHERE workspace_id = ?').run(wsId)
+        db.prepare('DELETE FROM file_trash_entries WHERE workspace_id = ?').run(wsId)
         db.prepare('DELETE FROM file_manifests WHERE workspace_id = ?').run(wsId)
         db.prepare('DELETE FROM workspace_members WHERE workspace_id = ?').run(wsId)
         db.prepare('DELETE FROM invitations WHERE workspace_id = ?').run(wsId)
@@ -105,7 +114,9 @@ export function startSchedulers() {
       for (const { id } of expired) {
         if (filesDirOk && id) {
           const wsDir = pathJoin(FILES_DIR, id)
+          const trashDir = pathJoin(FILES_DIR, '.trash', id)
           if (existsSync(wsDir)) rmSync(wsDir, { recursive: true, force: true })
+          if (existsSync(trashDir)) rmSync(trashDir, { recursive: true, force: true })
         }
         hardDeleteWorkspace(id)
         console.log(`[清理] 已硬删除过期工作区: ${id}`)
@@ -143,7 +154,19 @@ export function startSchedulers() {
     }
   }, 6 * 60 * 60 * 1000).unref())
 
-  // 7. 订阅到期降级（每 1 小时）
+  // 7. 团队文件回收站到期清理：启动补跑，之后每小时检查；单项失败不阻断其余条目。
+  try {
+    const purged = purgeExpiredTrash(db, { filesDir: FILES_DIR })
+    if (purged) console.log(`[回收站] 启动补跑清理 ${purged} 项`)
+  } catch (err) { console.warn('[回收站] 启动清理失败:', err.message) }
+  timers.push(setInterval(() => {
+    try {
+      const purged = purgeExpiredTrash(db, { filesDir: FILES_DIR })
+      if (purged) console.log(`[回收站] 已清理 ${purged} 个到期条目`)
+    } catch (err) { console.warn('[回收站] 到期清理失败:', err.message) }
+  }, 60 * 60 * 1000).unref())
+
+  // 8. 订阅到期降级（每 1 小时）
   timers.push(setInterval(() => {
     try {
       const expired = db.prepare(
@@ -173,7 +196,7 @@ export function startSchedulers() {
   runDailyDripAccrual()
   timers.push(setInterval(() => runDailyDripAccrual(), 60 * 60 * 1000).unref())
 
-  console.log(`[scheduler] 已启动 9 个定时任务`)
+  console.log(`[scheduler] 已启动 10 个定时任务`)
 
   return {
     stop() {

@@ -14,9 +14,9 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
 import { resolvedThemeAtom } from '@/atoms/theme'
-import { quotedSelectionMapAtom } from '@/atoms/preview-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { useShortcut } from '@/hooks/useShortcut'
+import { usePreviewQuotedSelection } from '@/hooks/usePreviewQuotedSelection'
 import { initShortcutRegistry } from '@/lib/shortcut-registry'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
@@ -208,6 +208,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [markdownSaving, setMarkdownSaving] = React.useState(false)
   const [autosaveStatus, setAutosaveStatus] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const lastSavedDraftRef = React.useRef('')
+  const filePathRef = React.useRef(filePath)
+  filePathRef.current = filePath
   const autosaveTimerRef = React.useRef<number | null>(null)
   const [docxHtml, setDocxHtml] = React.useState('')
   const [officeHtml, setOfficeHtml] = React.useState('')
@@ -278,159 +280,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   // ===== 选中文本引用（Quoted Selection）=====
 
-  const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
-  const filePathRef = React.useRef(filePath)
-  filePathRef.current = filePath
-  const shadowRootsRef = React.useRef<Set<ShadowRoot>>(new Set())
-  /** 当前正在展示的截断 toast id；选中回落到上限内或选区消失时主动 dismiss */
-  const lastToastIdRef = React.useRef<string | null>(null)
-
-  const dismissTruncationToast = React.useCallback(() => {
-    if (lastToastIdRef.current) {
-      toast.dismiss(lastToastIdRef.current)
-      lastToastIdRef.current = null
-    }
-  }, [])
-
-  /** 捕获预览面板中的文本选中，写入 quotedSelectionMapAtom */
-  const handleSelectionCapture = React.useCallback(() => {
-    if (!previewOnly) return
-    const container = scrollContainerRef.current
-    if (!container) return
-
-    const deepSel = getDeepSelection(container, shadowRootsRef.current)
-    if (!deepSel) {
-      // 选区消失：先撤掉截断 toast，再判断是否清 Chip
-      dismissTruncationToast()
-      // 若焦点在 ProseMirror 编辑器（输入框），保留 Chip；否则清除
-      const activeEl = document.activeElement
-      if (activeEl && (activeEl.closest?.('.ProseMirror') || activeEl.closest?.('[data-input-mode]'))) return
-      setQuotedSelectionMap((prev) => {
-        const m = new Map(prev)
-        if (!m.has(sessionId)) return prev
-        m.delete(sessionId)
-        return m
-      })
-      return
-    }
-
-    // 实时更新只存文本 + 路径，不计算行号
-    const truncated = deepSel.text.length > MAX_QUOTED_CHARS
-    const newText = truncated ? deepSel.text.slice(0, MAX_QUOTED_CHARS) : deepSel.text
-    const newFilePath = filePathRef.current
-    setQuotedSelectionMap((prev) => {
-      const existing = prev.get(sessionId)
-      // 选区文本与路径都未变 → 跳过 atom 写入，避免触发 AgentView 整树重渲染
-      if (existing && existing.text === newText && existing.filePath === newFilePath) {
-        return prev
-      }
-      const m = new Map(prev)
-      m.set(sessionId, {
-        text: newText,
-        filePath: newFilePath,
-        capturedAt: Date.now(),
-      })
-      return m
-    })
-    // 超过上限时按千位分档 toast；跨档时撤掉上一档，回到上限内则全部撤掉
-    if (truncated) {
-      const k = Math.floor(deepSel.text.length / 1000) * 1000
-      const id = `quoted-chars-cap:${sessionId}:${k}`
-      if (lastToastIdRef.current && lastToastIdRef.current !== id) {
-        toast.dismiss(lastToastIdRef.current)
-      }
-      toast.warning(`已选中 >${k} 字符，仅能发送前 ${MAX_QUOTED_CHARS} 字符`, {
-        id,
-        duration: 3000,
-      })
-      lastToastIdRef.current = id
-    } else {
-      dismissTruncationToast()
-    }
-  }, [previewOnly, sessionId, setQuotedSelectionMap, dismissTruncationToast])
-
-  // 监听选区变化：document selectionchange + 容器内鼠标拖拽轮询
-  React.useEffect(() => {
-    if (!previewOnly) return
-    const container = scrollContainerRef.current
-    if (!container) return
-
-    // 初始化 ShadowRoot 缓存：TreeWalker 一次扫描 + MutationObserver 增量更新
-    const shadowRoots = shadowRootsRef.current
-    shadowRoots.clear()
-    discoverShadowRoots(container, shadowRoots)
-    const mo = new MutationObserver((mutations) => {
-      for (const m of mutations) {
-        for (const node of m.addedNodes) {
-          if (node instanceof HTMLElement && node.shadowRoot) shadowRoots.add(node.shadowRoot)
-          // 递归发现新增子树中的 shadowRoot
-          discoverShadowRoots(node, shadowRoots)
-        }
-        for (const node of m.removedNodes) {
-          if (node instanceof HTMLElement) {
-            if (node.shadowRoot) shadowRoots.delete(node.shadowRoot)
-            // 清理被移除子树中的所有 ShadowRoot 引用，避免 Set 持有已分离节点
-            const stale = new Set<ShadowRoot>()
-            discoverShadowRoots(node, stale)
-            for (const sr of stale) shadowRoots.delete(sr)
-          }
-        }
-      }
-    })
-    mo.observe(container, { childList: true, subtree: true })
-
-    let tracking = false
-    let rafId = 0
-
-    const scheduleCapture = () => {
-      // 快速路径：非拖拽时若 document 选区已折叠（输入框打字/点击），跳过昂贵的树遍历。
-      // @pierre/diffs 使用 open Shadow DOM，Chrome/Electron 会将 shadow 内选区反映到
-      // document.getSelection()，因此键盘选区（Shift+Arrow）也能通过此检查。
-      if (!tracking) {
-        const docSel = document.getSelection()
-        if (!docSel || docSel.isCollapsed) return
-        // 光 DOM 快速检查：选区不在预览容器内也跳过
-        if (!isSelectionInside(container, docSel)) return
-      }
-      if (rafId) return
-      rafId = requestAnimationFrame(() => {
-        rafId = 0
-        handleSelectionCapture()
-      })
-    }
-
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button === 0) tracking = true
-    }
-    const onMouseMove = () => {
-      if (tracking) scheduleCapture()
-    }
-    const onMouseUp = () => {
-      if (tracking) {
-        tracking = false
-        scheduleCapture()
-      }
-    }
-    const onSelectionChange = () => {
-      scheduleCapture()
-    }
-
-    container.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-    document.addEventListener('selectionchange', onSelectionChange)
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId)
-      mo.disconnect()
-      shadowRoots.clear()
-      container.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-      document.removeEventListener('selectionchange', onSelectionChange)
-      // unmount / 切预览 / 切 session 时撤掉残留的截断 toast，避免贴脸 3 秒
-      dismissTruncationToast()
-    }
-  }, [previewOnly, handleSelectionCapture, dismissTruncationToast])
+  usePreviewQuotedSelection({
+    containerRef: scrollContainerRef,
+    sessionId,
+    filePath,
+    enabled: Boolean(previewOnly),
+  })
 
   const fileAccess = React.useMemo(() => ({
     sessionId,

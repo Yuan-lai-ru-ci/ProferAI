@@ -4,14 +4,16 @@
  * 与 files.test.js 风格一致：直接测试 DB 操作逻辑，不经过 HTTP。
  */
 import { describe, expect, test, beforeAll } from 'bun:test'
-import Database from 'better-sqlite3'
+// 该文件是 Bun 回归测试；生产与 *.node.test.mjs 门禁使用 better-sqlite3。
+// Bun 不能加载 better-sqlite3 原生模块，因此此处直接使用兼容的内存 SQLite。
+import { Database } from 'bun:sqlite'
 
 let db
 
 beforeAll(() => {
   db = new Database(':memory:')
-  db.pragma('journal_mode = WAL')
-  db.pragma('foreign_keys = ON')
+  // bun:sqlite 没有 better-sqlite3 的 pragma() 包装；内存库无需 WAL。
+  db.exec('PRAGMA foreign_keys = ON')
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (

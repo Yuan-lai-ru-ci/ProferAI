@@ -39,6 +39,7 @@ RUN mkdir -p /app/data/files
 
 ENV DATA_DIR=/app/data
 ENV PORT=3456
+ENV NODE_ENV=production
 
 USER proma
 

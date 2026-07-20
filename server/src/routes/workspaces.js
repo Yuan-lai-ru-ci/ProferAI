@@ -5,6 +5,7 @@ import { ONLINE_THRESHOLD, INVITATION_TTL, WORKSPACE_GRACE_PERIOD_MS, getSubscri
 import { authMiddleware } from '../middleware.js'
 import { logAudit } from '../audit.js'
 import { broadcastEvent } from '../event-bus.js'
+import { clearPrimaryOwnerForRemovedMember } from '../team-files/metadata-service.js'
 
 export const workspaceRoutes = new Hono()
 
@@ -419,9 +420,20 @@ workspaceRoutes.delete('/:id/members/:uid', async (c) => {
     return c.json({ error: '无移除权限' }, 403)
   }
 
-  db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, targetUid)
+  const target = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, targetUid)
+  if (!target) return c.json({ error: '成员不存在' }, 404)
+  // 当前 owner 必须先完成所有权转让，不能被管理员直接移除，否则工作区会失去可治理的 owner。
+  if (target.role === 'owner') return c.json({ error: '拥有者需先转让所有权' }, 400)
+
+  // 清理负责人和移除成员必须原子完成，避免资料留下不可分配的已离开成员。
+  let clearedOwnerCount = 0
+  db.transaction(() => {
+    clearedOwnerCount = clearPrimaryOwnerForRemovedMember(db, { workspaceId: wsId, userId: targetUid, actorId: userId })
+    db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, targetUid)
+  })()
   logAudit({ action: 'member.remove', workspaceId: wsId, userId, userEmail: c.get('userEmail'), entityType: 'member', entityId: targetUid })
   broadcastEvent(wsId, 'member_changed', { action: 'removed', targetUserId: targetUid, userId })
+  if (clearedOwnerCount) broadcastEvent(wsId, 'file_metadata_updated', { action: 'owners_cleared', actorId: userId, affectedCount: clearedOwnerCount })
   return c.json({ success: true })
 })
 
@@ -437,8 +449,13 @@ workspaceRoutes.post('/:id/leave', async (c) => {
   if (!member) return c.json({ error: '不是工作区成员' }, 404)
   if (member.role === 'owner') return c.json({ error: '拥有者需先转让所有权' }, 400)
 
-  db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, userId)
+  let clearedOwnerCount = 0
+  db.transaction(() => {
+    clearedOwnerCount = clearPrimaryOwnerForRemovedMember(db, { workspaceId: wsId, userId, actorId: userId })
+    db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, userId)
+  })()
   broadcastEvent(wsId, 'member_changed', { action: 'left', userId })
+  if (clearedOwnerCount) broadcastEvent(wsId, 'file_metadata_updated', { action: 'owners_cleared', actorId: userId, affectedCount: clearedOwnerCount })
   return c.json({ success: true })
 })
 

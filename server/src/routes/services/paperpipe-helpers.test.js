@@ -1,7 +1,17 @@
 import { describe, expect, test } from 'bun:test'
-import { extractRemotePaperId, hasPdfMagicBytes, isSafePaperpipeId, normalizePaperpipeSearchInput, sanitizePaperFilename } from './paperpipe-helpers.js'
+import { extractRemotePaperId, getPaperpipeBridgeConfig, hasPdfMagicBytes, isSafePaperpipeId, normalizePaperpipeSearchInput, sanitizePaperFilename } from './paperpipe-helpers.js'
 
 describe('Paperpipe 请求边界', () => {
+  test('Given production environment without internal secret When resolving bridge config Then reject proxying', () => {
+    expect(getPaperpipeBridgeConfig({ NODE_ENV: 'production' })).toEqual({
+      url: 'http://host.docker.internal:9876',
+      secret: undefined,
+      ready: false,
+    })
+    expect(getPaperpipeBridgeConfig({ NODE_ENV: 'production', PAPERPIPE_BRIDGE_SECRET: 'internal-key' }).ready).toBe(true)
+    expect(getPaperpipeBridgeConfig({ NODE_ENV: 'development' }).ready).toBe(true)
+  })
+
   test('Given 路径穿越或分隔符 ID When 校验 Then 拒绝', () => {
     expect(isSafePaperpipeId('../outside')).toBe(false)
     expect(isSafePaperpipeId('a/b')).toBe(false)

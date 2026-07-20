@@ -4,6 +4,16 @@ interface KbAgentToolContext { sessionId: string; workspaceId?: string }
 interface KbToolResult extends Record<string, unknown> { content: Array<{ type: 'text'; text: string }> }
 type ZodModule = typeof import('zod')
 
+const DEFAULT_READ_CHARS = 6_000
+const MAX_READ_CHARS = 12_000
+
+export function pageKnowledgeText(text: string, startIndex = 0, maxChars = DEFAULT_READ_CHARS) {
+  const start = Math.max(0, Math.min(Math.floor(startIndex), text.length))
+  const size = Math.max(1, Math.min(Math.floor(maxChars), MAX_READ_CHARS))
+  const end = Math.min(text.length, start + size)
+  return { content: text.slice(start, end), totalChars: text.length, startIndex: start, endIndex: end, hasMore: end < text.length }
+}
+
 function jsonResult(payload: unknown): KbToolResult { return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] } }
 
 function schemas(z: ZodModule['z']) {
@@ -12,6 +22,8 @@ function schemas(z: ZodModule['z']) {
       itemIds: z.array(z.string()).min(1).max(10).optional().describe('要读取的已导入资料 ID；省略时仅列出资料元数据'),
       query: z.string().max(500).optional().describe('可选：在已导入资料内搜索相关片段'),
       topK: z.number().int().min(1).max(10).optional(),
+      startIndex: z.number().int().min(0).optional().describe('直接读取资料时的起始字符位置；根据上次 endIndex 分页继续读取'),
+      maxChars: z.number().int().min(1).max(MAX_READ_CHARS).optional().describe('直接读取资料时返回的最大字符数，默认 6000，最大 12000'),
     },
   }
 }
@@ -62,9 +74,9 @@ export async function injectKbMcpServer(
         const items = permitted.map(async (id) => {
           const reference = references.find((candidate) => candidate.itemId === id)!
           const loaded = getKnowledgeItem(id)
-          if (loaded) return { itemId: id, title: reference.title, kind: reference.kind, origin: reference.origin, content: loaded.text.slice(0, 6_000), truncated: loaded.text.length > 6_000 }
+          if (loaded) return { itemId: id, title: reference.title, kind: reference.kind, origin: reference.origin, ...pageKnowledgeText(loaded.text, args.startIndex, args.maxChars) }
           const remote = await getPaper(id).catch(() => null)
-          return remote ? { itemId: id, title: reference.title, kind: reference.kind, origin: reference.origin, content: remote.markdown.slice(0, 6_000), truncated: remote.markdown.length > 6_000 } : { itemId: id, title: reference.title, unavailable: true }
+          return remote ? { itemId: id, title: reference.title, kind: reference.kind, origin: reference.origin, ...pageKnowledgeText(remote.markdown, args.startIndex, args.maxChars) } : { itemId: id, title: reference.title, unavailable: true }
         })
         return jsonResult({ items: await Promise.all(items) })
       }, { annotations: { readOnlyHint: true } }),

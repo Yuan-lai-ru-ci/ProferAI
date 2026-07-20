@@ -1,5 +1,20 @@
 const MAX_PAPER_ID_LENGTH = 160
 
+/**
+ * 生产环境不得在无内部密钥时把已认证用户请求代理给 Bridge。
+ * 开发环境允许显式省略，降低本地 fake Bridge 联调门槛。
+ */
+export function getPaperpipeBridgeConfig(env = process.env) {
+  const url = env.PAPERPIPE_BRIDGE_URL?.trim() || 'http://host.docker.internal:9876'
+  const secret = env.PAPERPIPE_BRIDGE_SECRET?.trim()
+  const isProduction = env.NODE_ENV === 'production'
+  return {
+    url,
+    secret,
+    ready: !isProduction || Boolean(secret),
+  }
+}
+
 export function isSafePaperpipeId(value) {
   return typeof value === 'string'
     && value.length > 0
