@@ -43,18 +43,21 @@ import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-
   }
   process.env.CLAUDE_CONFIG_DIR = proferSdkConfigDir
 }
-import type {
-  AgentSessionMeta,
-  AgentMessage,
-  SDKMessage,
-  ForkSessionInput,
-  AgentMessageSearchResult,
-  AgentSessionReferenceSearchInput,
-  AgentSessionReferenceSearchResult,
-  SessionHealth,
+import {
+  normalizeAgentRuntime,
+  type AgentSessionMeta,
+  type AgentMessage,
+  type SDKMessage,
+  type ForkSessionInput,
+  type AgentMessageSearchResult,
+  type AgentSessionReferenceSearchInput,
+  type AgentSessionReferenceSearchResult,
+  type SessionHealth,
+  type AgentRuntime,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
 import {
+  getGraphJsonlPath,
   parseEventsFromJsonl,
   serializeEvent,
 } from '@profer/project-core'
@@ -74,12 +77,26 @@ interface AgentSessionsIndex {
 const INDEX_VERSION = 1
 
 /**
+ * 在存储边界统一补全 runtime：历史/非法值绝不进入 Pi，均回退 Claude。
+ * 此处只更新内存对象，不在读取阶段改写用户索引；下一次正常元数据写入会自然持久化。
+ */
+function normalizeSessionRuntime(session: AgentSessionMeta): AgentSessionMeta {
+  const agentRuntime = normalizeAgentRuntime(session.agentRuntime)
+  return session.agentRuntime === agentRuntime ? session : { ...session, agentRuntime }
+}
+
+/**
  * 读取会话索引文件
  */
 function readIndex(): AgentSessionsIndex {
   const indexPath = getAgentSessionsIndexPath()
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
-  if (data) return data
+  if (data) {
+    return {
+      ...data,
+      sessions: Array.isArray(data.sessions) ? data.sessions.map(normalizeSessionRuntime) : [],
+    }
+  }
   return { version: INDEX_VERSION, sessions: [] }
 }
 
@@ -178,6 +195,7 @@ export function createAgentSession(
   channelId?: string,
   workspaceId?: string,
   modelId?: string,
+  agentRuntime: AgentRuntime = 'claude',
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -188,6 +206,7 @@ export function createAgentSession(
     channelId,
     modelId,
     workspaceId,
+    agentRuntime: normalizeAgentRuntime(agentRuntime),
     createdAt: now,
     updatedAt: now,
   }
@@ -478,7 +497,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'agentRuntime' | 'codexFastMode' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -491,9 +510,24 @@ export function updateAgentSessionMeta(
   // 非手动归档操作时，若会话已归档则自动恢复为活跃（仅更新 stoppedByUser 不触发解归档）
   const isStoppedByUserOnly = Object.keys(updates).every((k) => k === 'stoppedByUser')
   const autoUnarchive = existing.archived && !('archived' in updates) && !isStoppedByUserOnly
+  const previousRuntime = normalizeAgentRuntime(existing.agentRuntime)
+  const nextRuntime = updates.agentRuntime === undefined
+    ? previousRuntime
+    : normalizeAgentRuntime(updates.agentRuntime)
+  const runtimeChanged = updates.agentRuntime !== undefined && nextRuntime !== previousRuntime
   const updated: AgentSessionMeta = {
     ...existing,
     ...updates,
+    agentRuntime: nextRuntime,
+    // Claude 与 Pi 的会话、fork 与 rewind 元数据均不可互用；运行时发生实际切换时由存储层统一失效。
+    ...(runtimeChanged
+      ? {
+          sdkSessionId: undefined,
+          forkSourceSdkSessionId: undefined,
+          forkSourceDir: undefined,
+          resumeAtMessageUuid: undefined,
+        }
+      : {}),
     ...(autoUnarchive ? { archived: false } : {}),
     updatedAt: Date.now(),
   }
@@ -520,13 +554,16 @@ export function deleteAgentSession(id: string): void {
   const removed = index.sessions.splice(idx, 1)[0]!
   writeIndex(index)
 
-  // 删除消息文件
-  const filePath = getAgentSessionMessagesPath(id)
-  if (existsSync(filePath)) {
+  // 删除消息与任务图文件。任务图和会话消息均属于该 Profer session，删除必须同步清理。
+  for (const [label, filePath] of [
+    ['消息', getAgentSessionMessagesPath(id)],
+    ['任务图', getGraphJsonlPath(getAgentSessionsDir(), id)],
+  ] as const) {
+    if (!existsSync(filePath)) continue
     try {
       unlinkSync(filePath)
     } catch (error) {
-      console.warn(`[Agent 会话] 删除消息文件失败 (${id}):`, error)
+      console.warn(`[Agent 会话] 删除${label}文件失败 (${id}):`, error)
     }
   }
 
@@ -568,6 +605,21 @@ export function deleteAgentSession(id: string): void {
           console.log(`[Agent 会话] 已清理 file-history: ${sid}`)
         } catch (e) {
           console.warn(`[Agent 会话] 清理 file-history 失败 (${sid}):`, e)
+        }
+      }
+    }
+
+    // Pi session 文件由 Pi SessionManager 写入独立目录；按 JSONL header 的精确 ID 删除，
+    // 禁止按文件名片段匹配以避免误删另一会话。
+    if (normalizeAgentRuntime(removed.agentRuntime) === 'pi') {
+      for (const sid of sdkSessionIds) {
+        const piSessionFile = findPiSessionJsonl(sid)
+        if (!piSessionFile) continue
+        try {
+          unlinkSync(piSessionFile)
+          console.log(`[Agent 会话] 已清理 Pi session 文件: ${piSessionFile}`)
+        } catch (e) {
+          console.warn('[Agent 会话] 清理 Pi session 文件失败:', e)
         }
       }
     }
@@ -624,9 +676,11 @@ export function findOrphanSessions(): SessionHealth[] {
     // 检查 Profer JSONL
     health.hasProferJsonl = existsSync(getAgentSessionMessagesPath(session.id))
 
-    // 检查 SDK JSONL
+    // 检查 runtime 对应的原生 session JSONL。Claude 与 Pi 的持久化目录和文件名规则不同。
     if (session.sdkSessionId) {
-      health.hasSdkJsonl = findSdkSessionJsonl(session.sdkSessionId) !== undefined
+      health.hasSdkJsonl = normalizeAgentRuntime(session.agentRuntime) === 'pi'
+        ? findPiSessionJsonl(session.sdkSessionId) !== undefined
+        : findSdkSessionJsonl(session.sdkSessionId) !== undefined
     }
 
     // 检查工作区目录
@@ -809,6 +863,10 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   if (!sourceMeta) {
     throw new Error(`源 Agent 会话不存在: ${sessionId}`)
   }
+  // 当前 fork 实现调用 Claude SDK；Pi 的持久化格式尚未接入，禁止混用 resume/fork ID。
+  if (normalizeAgentRuntime(sourceMeta.agentRuntime) !== 'claude') {
+    throw new Error('Pi runtime 当前不支持原生会话分叉；请新建 Pi 会话继续工作。')
+  }
 
   if (!sourceMeta.sdkSessionId) {
     throw new Error('该会话没有 SDK session，无法分叉')
@@ -926,6 +984,8 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     forkTitle,
     sourceMeta.channelId,
     sourceMeta.workspaceId,
+    undefined,
+    'claude',
   )
 
   updateAgentSessionMeta(newMeta.id, {
@@ -1304,6 +1364,36 @@ function findSdkSessionJsonl(sdkSessionId: string, _projectDir?: string): string
   }
 
   return undefined
+}
+
+/** Pi SessionManager 将 session ID 写入 JSONL 首行 header，而文件名带时间前缀。
+ * 读取 header 做精确匹配，避免损坏/截短 ID 时把其他会话误 resume 或误删除。 */
+function findPiSessionJsonl(sdkSessionId: string): string | undefined {
+  const piSessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+  if (!existsSync(piSessionDir)) return undefined
+
+  const matches: string[] = []
+  const scanDirectory = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const candidate = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        scanDirectory(candidate)
+        continue
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      try {
+        const headerLine = readFileSync(candidate, 'utf-8').split('\n', 1)[0]
+        const header = headerLine ? JSON.parse(headerLine) as { type?: unknown; id?: unknown } : undefined
+        if (header?.type === 'session' && header.id === sdkSessionId) matches.push(candidate)
+      } catch {
+        // 损坏或非 Pi 的 JSONL 不参与匹配。
+      }
+    }
+  }
+  scanDirectory(piSessionDir)
+
+  // 正常 UUID 不应重复；遇到重复文件时拒绝恢复/删除，避免任意选择一个产生跨会话混淆。
+  return matches.length === 1 ? matches[0] : undefined
 }
 
 /**

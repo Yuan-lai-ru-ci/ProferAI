@@ -12,17 +12,22 @@ export type ProviderType =
   | 'anthropic'
   | 'anthropic-compatible'
   | 'openai'
+  | 'openai-responses'
   | 'deepseek'
   | 'google'
   | 'kimi-api'
   | 'kimi-coding'
   | 'zhipu'
   | 'zhipu-coding'
+  | 'zhipu-coding-team'
+  | 'ark-coding-plan'
   | 'minimax'
   | 'doubao'
   | 'qwen'
+  | 'qwen-anthropic'
   | 'xiaomi'
   | 'xiaomi-token-plan'
+  | 'openai-codex'
   | 'custom'
 
 /**
@@ -32,17 +37,22 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   anthropic: 'https://api.anthropic.com',
   'anthropic-compatible': '',
   openai: 'https://api.openai.com/v1',
+  'openai-responses': 'https://api.openai.com/v1',
   deepseek: 'https://api.deepseek.com',
   google: 'https://generativelanguage.googleapis.com',
   'kimi-api': 'https://api.moonshot.cn/anthropic',
   'kimi-coding': 'https://api.kimi.com/coding/v1',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   'zhipu-coding': 'https://open.bigmodel.cn/api/anthropic',
+  'zhipu-coding-team': 'https://open.bigmodel.cn/api/anthropic',
+  'ark-coding-plan': 'https://ark.cn-beijing.volces.com/api/plan',
   minimax: 'https://api.minimaxi.com/anthropic',
   doubao: 'https://ark.cn-beijing.volces.com/api/v3',
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  'qwen-anthropic': 'https://dashscope.aliyuncs.com/apps/anthropic',
   xiaomi: 'https://api.xiaomimimo.com/anthropic',
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
+  'openai-codex': '',
   custom: '',
 }
 
@@ -70,17 +80,22 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   anthropic: 'Anthropic',
   'anthropic-compatible': 'Anthropic 兼容格式',
   openai: 'OpenAI',
+  'openai-responses': 'OpenAI Responses 格式',
   deepseek: 'DeepSeek',
   google: 'Google',
   'kimi-api': 'Kimi API (Anthropic 协议)',
   'kimi-coding': 'Kimi Coding Plan',
   zhipu: '智谱 AI',
   'zhipu-coding': '智谱 Coding Plan',
+  'zhipu-coding-team': '智谱 Coding Plan 团队版',
+  'ark-coding-plan': '火山方舟 Coding Plan',
   minimax: 'MiniMax (API&编程包)',
   doubao: '豆包',
   qwen: '通义千问',
+  'qwen-anthropic': '通义千问 (Anthropic 协议)',
   xiaomi: '小米 MiMo (API)',
   'xiaomi-token-plan': '小米 MiMo Token Plan',
+  'openai-codex': 'ChatGPT 订阅 (Codex)',
   custom: 'OpenAI 兼容格式',
 }
 
@@ -97,9 +112,12 @@ export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<Pro
   'kimi-api',
   'kimi-coding',
   'zhipu-coding',
+  'zhipu-coding-team',
+  'ark-coding-plan',
   'minimax',
   'xiaomi',
   'xiaomi-token-plan',
+  'qwen-anthropic',
 ])
 
 /**
@@ -107,6 +125,87 @@ export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<Pro
  */
 export function isAgentCompatibleProvider(provider: ProviderType): boolean {
   return AGENT_COMPATIBLE_PROVIDERS.has(provider)
+}
+
+
+export interface ZhipuTeamCredentials {
+  apiKey: string
+  organization?: string
+  project?: string
+}
+
+function normalizeZhipuCredentialKey(key: string): string {
+  return key.trim().toLowerCase().replace(/[_-]/g, '')
+}
+
+/** Parse the structured secret used by the Zhipu Coding Plan team channel. */
+export function parseZhipuTeamCredentials(secret: string): ZhipuTeamCredentials | null {
+  const trimmed = secret.trim()
+  if (!trimmed) return null
+  const pick = (record: Record<string, unknown>): ZhipuTeamCredentials | null => {
+    const normalized = new Map<string, string>()
+    for (const [key, value] of Object.entries(record)) {
+      if (typeof value === 'string' && value.trim()) normalized.set(normalizeZhipuCredentialKey(key), value.trim())
+    }
+    const apiKey = normalized.get('apikey') ?? normalized.get('apitoken') ?? normalized.get('token')
+      ?? normalized.get('authorization') ?? normalized.get('auth') ?? normalized.get('bearer')
+    if (!apiKey) return null
+    return { apiKey, organization: normalized.get('bigmodelorganization') ?? normalized.get('organization') ?? normalized.get('org'), project: normalized.get('bigmodelproject') ?? normalized.get('project') }
+  }
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return pick(parsed as Record<string, unknown>)
+    } catch { return null }
+  }
+  const entries: Record<string, string> = {}
+  for (const part of trimmed.split(/[;\n]+/)) {
+    const index = part.indexOf('=')
+    if (index > 0) entries[part.slice(0, index).trim()] = part.slice(index + 1).trim()
+  }
+  return pick(entries)
+}
+
+export function extractZhipuCodingTeamApiToken(secret: string): string {
+  const token = parseZhipuTeamCredentials(secret)?.apiKey
+  return token || secret.trim() || secret
+}
+
+/** OAuth credentials stored (encrypted) in Channel.apiKey for the Pi Codex provider. */
+export interface CodexOAuthCredentials {
+  access: string
+  refresh: string
+  expires: number
+  accountId?: string
+}
+
+export function serializeCodexCredentials(credentials: CodexOAuthCredentials): string {
+  return JSON.stringify(credentials)
+}
+
+export function parseCodexCredentials(secret: string): CodexOAuthCredentials | null {
+  const trimmed = secret.trim()
+  if (!trimmed) return null
+  try {
+    const parsed = JSON.parse(trimmed) as Partial<CodexOAuthCredentials>
+    if (typeof parsed.access === 'string' && parsed.access
+      && typeof parsed.refresh === 'string' && parsed.refresh
+      && typeof parsed.expires === 'number') {
+      return {
+        access: parsed.access,
+        refresh: parsed.refresh,
+        expires: parsed.expires,
+        ...(typeof parsed.accountId === 'string' && parsed.accountId ? { accountId: parsed.accountId } : {}),
+      }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+export function isCodexCredentialExpired(credentials: CodexOAuthCredentials, skewMs = 60_000): boolean {
+  return Date.now() >= credentials.expires - skewMs
 }
 
 /**

@@ -2,7 +2,7 @@
  * agent-directory-utils 测试
  */
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
-import { mkdirSync, existsSync, rmdirSync } from 'node:fs'
+import { mkdirSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -15,7 +15,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  if (existsSync(testDir)) rmdirSync(testDir, { recursive: true })
+  if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
 })
 
 describe('collectAttachedDirectories', () => {
