@@ -102,6 +102,29 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(updated.resumeAtMessageUuid).toBeUndefined()
   })
 
+  test('Given updateSettings fails after runtime switch When restoring snapshot Then SDK/fork/resume metadata survives rollback', () => {
+    const meta = sessions.createAgentSession('runtime rollback')
+    sessions.updateAgentSessionMeta(meta.id, {
+      agentRuntime: 'claude',
+      codexFastMode: true,
+      sdkSessionId: 'claude-session',
+      forkSourceSdkSessionId: 'claude-source',
+      forkSourceDir: 'C:/source',
+      resumeAtMessageUuid: 'assistant-uuid',
+    })
+
+    const snapshot = sessions.snapshotAgentRuntimeMeta(sessions.getAgentSessionMeta(meta.id)!)
+    sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'pi' })
+    const restored = sessions.restoreAgentRuntimeMeta(meta.id, snapshot)
+
+    expect(restored.agentRuntime).toBe('claude')
+    expect(restored.codexFastMode).toBe(true)
+    expect(restored.sdkSessionId).toBe('claude-session')
+    expect(restored.forkSourceSdkSessionId).toBe('claude-source')
+    expect(restored.forkSourceDir).toBe('C:/source')
+    expect(restored.resumeAtMessageUuid).toBe('assistant-uuid')
+  })
+
   test('Given a runtime switch When a stale SDK callback tries to save an ID Then it cannot restore the previous runtime session ID', () => {
     const meta = sessions.createAgentSession('runtime stale callback')
     const switched = sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'pi' })
