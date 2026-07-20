@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildModel,
   buildPiRequestHeaders,
-  createCodexRuntimeCredentialStore,
   getCodexCatalogModels,
   listCodexModels,
   requiresPromaUserAgent,
@@ -89,7 +88,6 @@ describe('Pi runtime OpenAI Responses 渠道', () => {
       piSessionDir: '/tmp/pi-session',
     })
 
-    expect(result).toHaveProperty('modelRuntime')
     expect(result.model.id).toBe('gpt-5.1')
     expect(result.model.api).toBe('openai-responses')
     expect(result.model.baseUrl).toBe('https://api.openai.com/v1')
@@ -97,29 +95,6 @@ describe('Pi runtime OpenAI Responses 渠道', () => {
 })
 
 describe('ChatGPT Codex 模型目录补丁', () => {
-  test('Given Pi 刷新 Codex OAuth 凭据 When credential store 写入 Then 将完整凭据回写当前渠道回调', async () => {
-    const refreshed: Array<{ access: string; refresh: string; expires: number; accountId?: string }> = []
-    const store = createCodexRuntimeCredentialStore(
-      { access: 'old-access', refresh: 'old-refresh', expires: 1, accountId: 'acct-1' },
-      async (credentials) => { refreshed.push(credentials) },
-    )
-
-    await store.modify('openai-codex', async () => ({
-      type: 'oauth',
-      access: 'new-access',
-      refresh: 'new-refresh',
-      expires: 2,
-      accountId: 'acct-1',
-    }))
-
-    expect(refreshed).toEqual([{
-      access: 'new-access',
-      refresh: 'new-refresh',
-      expires: 2,
-      accountId: 'acct-1',
-    }])
-  })
-
   test('Given Pi SDK 内置目录缺少 5.6 When listCodexModels Then 补齐 5.6 系列', async () => {
     const models = await listCodexModels()
     const ids = models.map((model) => model.id)
@@ -137,12 +112,6 @@ describe('ChatGPT Codex 模型目录补丁', () => {
       prompt: 'hi',
       apiKey: 'oauth-access-token',
       provider: 'openai-codex',
-      codexOAuthCredentials: {
-        access: 'oauth-access-token',
-        refresh: 'oauth-refresh-token',
-        expires: Date.now() + 60_000,
-        accountId: 'acct-1',
-      },
       model: 'gpt-5.6-terra',
       permissionMode: 'plan',
       systemPrompt: 'system',
@@ -150,7 +119,6 @@ describe('ChatGPT Codex 模型目录补丁', () => {
       piSessionDir: '/tmp/pi-session',
     })
 
-    expect(result).toHaveProperty('modelRuntime')
     expect(result.model.id).toBe('gpt-5.6-terra')
     expect(result.model.provider).toBe('openai-codex')
   })

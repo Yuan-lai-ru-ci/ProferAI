@@ -76,52 +76,6 @@ interface AgentSessionsIndex {
 /** 当前索引版本 */
 const INDEX_VERSION = 1
 
-/** UPDATE_SESSION_AGENT_RUNTIME 需要原子回滚的 runtime-owned 元数据快照。 */
-export interface AgentRuntimeMetaSnapshot {
-  agentRuntime: AgentRuntime
-  codexFastMode?: boolean
-  sdkSessionId?: string
-  forkSourceDir?: string
-  forkSourceSdkSessionId?: string
-  resumeAtMessageUuid?: string
-}
-
-export function snapshotAgentRuntimeMeta(meta: AgentSessionMeta): AgentRuntimeMetaSnapshot {
-  return {
-    agentRuntime: normalizeAgentRuntime(meta.agentRuntime),
-    codexFastMode: meta.codexFastMode,
-    sdkSessionId: meta.sdkSessionId,
-    forkSourceDir: meta.forkSourceDir,
-    forkSourceSdkSessionId: meta.forkSourceSdkSessionId,
-    resumeAtMessageUuid: meta.resumeAtMessageUuid,
-  }
-}
-
-/**
- * 直接替换 runtime-owned 字段，绕过 updateAgentSessionMeta 的 runtime 切换清理规则。
- * 仅用于 updateSettings 失败后的回滚，避免回滚本身再次清空 SDK/fork/resume 元数据。
- */
-export function restoreAgentRuntimeMeta(id: string, snapshot: AgentRuntimeMetaSnapshot): AgentSessionMeta {
-  const index = readIndex()
-  const idx = index.sessions.findIndex((s) => s.id === id)
-  if (idx === -1) throw new Error(`Agent 会话不存在: ${id}`)
-
-  const existing = index.sessions[idx]!
-  const restored: AgentSessionMeta = {
-    ...existing,
-    agentRuntime: snapshot.agentRuntime,
-    codexFastMode: snapshot.codexFastMode,
-    sdkSessionId: snapshot.sdkSessionId,
-    forkSourceDir: snapshot.forkSourceDir,
-    forkSourceSdkSessionId: snapshot.forkSourceSdkSessionId,
-    resumeAtMessageUuid: snapshot.resumeAtMessageUuid,
-    updatedAt: Date.now(),
-  }
-  index.sessions[idx] = restored
-  writeIndex(index)
-  return restored
-}
-
 /**
  * 在存储边界统一补全 runtime：历史/非法值绝不进入 Pi，均回退 Claude。
  * 此处只更新内存对象，不在读取阶段改写用户索引；下一次正常元数据写入会自然持久化。

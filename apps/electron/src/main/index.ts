@@ -129,7 +129,6 @@ import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
-import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { stopAllGenerations } from './lib/chat-service'
@@ -264,7 +263,9 @@ async function recoverEnabledDingTalkBots(): Promise<void> {
 let mainWindow: BrowserWindow | null = null
 
 /** 获取主窗口实例（供其他模块使用） */
-export { getMainWindow }
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow
+}
 
 function installWindowsZoomInFallback(win: BrowserWindow): void {
   if (process.platform !== 'win32') return
@@ -523,10 +524,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
-    setMainWindow(null)
   })
-
-  setMainWindow(mainWindow)
 }
 
 function sendToMainWindow(channel: string, data?: unknown): void {

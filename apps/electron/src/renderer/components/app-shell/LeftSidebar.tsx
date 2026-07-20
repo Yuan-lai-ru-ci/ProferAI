@@ -1084,7 +1084,6 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         undefined,
         agentChannelId || undefined,
         targetWorkspaceId,
-        agentModelId || undefined,
       )
       setAgentSessions((prev) => [meta, ...prev])
       // 从全局默认值初始化 per-session 渠道/模型配置

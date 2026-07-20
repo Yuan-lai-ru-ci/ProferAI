@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentSendInput, AgentSessionMeta, Channel } from '@profer/shared'
-import { validateAgentChannelModelBinding, validateAgentSendBinding, validateAgentSessionModelUpdate } from './agent-send-binding'
+import { validateAgentSendBinding } from './agent-send-binding'
 
 const input = { sessionId: 's1', workspaceId: 'ws1', channelId: 'ch2' } as AgentSendInput
 const session = { id: 's1', workspaceId: 'ws1', channelId: 'ch1' } as AgentSessionMeta
@@ -43,32 +43,6 @@ describe('Agent 消息发送归属校验', () => {
     expect(validateAgentSendBinding({ ...input, modelId: 'other-channel-model' }, session, true, channel))
       .toMatchObject({ ok: false, code: 'AGENT_MODEL_NOT_IN_CHANNEL' })
     expect(validateAgentSendBinding({ ...input, modelId: 'model-disabled' }, session, true, channel))
-      .toMatchObject({ ok: false, code: 'AGENT_MODEL_DISABLED' })
-  })
-})
-
-describe('Agent 会话模型持久化校验', () => {
-  test('Given renderer 未提交完整渠道模型 When 创建或更新 Then 主进程拒绝', () => {
-    expect(validateAgentChannelModelBinding(undefined, 'model-enabled', undefined))
-      .toMatchObject({ ok: false, code: 'AGENT_CHANNEL_NOT_FOUND' })
-    expect(validateAgentChannelModelBinding(channel.id, undefined, channel))
-      .toMatchObject({ ok: false, code: 'AGENT_MODEL_NOT_IN_CHANNEL' })
-  })
-
-  test('Given session 正在运行或 backgroundWaiting When 更新模型 Then 拒绝且不检查 renderer 选择', () => {
-    expect(validateAgentSessionModelUpdate(session.id, channel.id, 'model-enabled', session, channel, true))
-      .toMatchObject({ ok: false, code: 'AGENT_SESSION_ACTIVE' })
-  })
-
-  test('Given session 空闲且模型属于 enabled 渠道 When 更新模型 Then 允许', () => {
-    expect(validateAgentSessionModelUpdate(session.id, channel.id, 'model-enabled', session, channel, false))
-      .toEqual({ ok: true })
-  })
-
-  test('Given session 不存在或渠道模型无效 When 更新模型 Then 返回稳定错误码', () => {
-    expect(validateAgentSessionModelUpdate('missing', channel.id, 'model-enabled', undefined, channel, false))
-      .toMatchObject({ ok: false, code: 'AGENT_SESSION_NOT_FOUND' })
-    expect(validateAgentSessionModelUpdate(session.id, channel.id, 'model-disabled', session, channel, false))
       .toMatchObject({ ok: false, code: 'AGENT_MODEL_DISABLED' })
   })
 })
