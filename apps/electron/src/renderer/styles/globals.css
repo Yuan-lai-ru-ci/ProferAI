@@ -916,7 +916,8 @@
   background-color: hsl(var(--tab-surface) / 0.7);
 }
 
-[data-input-mode] > div:first-child {
+/* 输入模式容器可先挂载资料引用、附件等辅助区；不能再以 first-child 推断输入框。 */
+.agent-input-surface {
   background-color: hsl(var(--input-surface)) !important;
 }
 
@@ -958,7 +959,7 @@
   border-color: hsl(var(--border) / 0.5) !important;
 }
 
-.ui-classic [data-input-mode] > div:first-child {
+.ui-classic .agent-input-surface {
   background-color: hsl(var(--background) / 0.7) !important;
 }
 
@@ -1998,7 +1999,7 @@
 /* ===== CRT 终端：UI 组件终端化 ===== */
 
 /* 输入框容器：去掉圆角、毛玻璃和半透明背景，改用直角实色背景 + 实线边框 */
-.theme-terminal-dark [data-input-mode] > div:first-child {
+.theme-terminal-dark .agent-input-surface {
   border-radius: 0 !important;
   border: 1px solid hsl(var(--border)) !important;
   border-top-width: 1px !important;

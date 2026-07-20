@@ -13,6 +13,7 @@ describe('Agent 辅助模型路由', () => {
     })
 
     expect(policy.deepSeekFamily).toBe(true)
+    expect(policy.enable1MContext).toBe(false)
     expect(policy.subagentModel).toBe(DEEPSEEK_SUBAGENT_MODEL_ID)
   })
 
@@ -38,6 +39,7 @@ describe('Agent 辅助模型路由', () => {
     applyAgentModelRoutingToEnv(env, policy)
 
     expect(policy.deepSeekFamily).toBe(false)
+    expect(policy.enable1MContext).toBe(true)
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined()
   })
 

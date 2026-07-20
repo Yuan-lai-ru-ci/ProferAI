@@ -5505,7 +5505,7 @@ export function registerIpcHandlers(): void {
 
       for (const f of skillFiles) {
         const relPath = f.path.slice(prefix.length) // 去掉 _skills/{slug}/ 前缀
-        const localPath = await downloadFile(input.workspaceId, input.targetWorkspaceSlug, f.path)
+        const localPath = await downloadFile(input.workspaceId, input.targetWorkspaceSlug, f.path, f.uploadedBy, f.sha256)
         if (!localPath) throw new Error(`下载失败: ${f.path}`)
         const { readFileSync } = require('node:fs')
         const destPath = join(targetDir, relPath || 'SKILL.md')
@@ -5587,6 +5587,15 @@ export function registerIpcHandlers(): void {
     moveRemoteFile,
     renameRemoteFile,
     searchFiles,
+    getFileMetadata,
+    patchFileMetadata,
+    getFileTags,
+    getFileStatuses,
+    setFilePreference,
+    getFileActivities,
+    listTrashEntries,
+    restoreTrashEntry,
+    purgeTrashEntry,
   } = require('./lib/team-file-service')
 
   ipcMain.handle(
@@ -5605,8 +5614,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     TEAM_FILE_IPC_CHANNELS.DOWNLOAD,
-    async (_, input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) =>
-      downloadFile(input.workspaceId, input.workspaceSlug, input.filePath, input.uploadedBy)
+    async (_, input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string; sha256?: string }) =>
+      downloadFile(input.workspaceId, input.workspaceSlug, input.filePath, input.uploadedBy, input.sha256)
   )
 
   ipcMain.handle(
@@ -5637,6 +5646,15 @@ export function registerIpcHandlers(): void {
     async (_, workspaceId: string, options: { q: string; page?: number; limit?: number }) =>
       searchFiles(workspaceId, options)
   )
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.GET_METADATA, async (_, workspaceId: string, fileId: string) => getFileMetadata(workspaceId, fileId))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.PATCH_METADATA, async (_, workspaceId: string, fileId: string, body: Record<string, unknown>) => patchFileMetadata(workspaceId, fileId, body))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.GET_TAGS, async (_, workspaceId: string) => getFileTags(workspaceId))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.GET_STATUSES, async (_, workspaceId: string) => getFileStatuses(workspaceId))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.SET_PREFERENCE, async (_, workspaceId: string, fileId: string, body: Record<string, unknown>) => setFilePreference(workspaceId, fileId, body))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.GET_ACTIVITIES, async (_, workspaceId: string, fileId: string, cursor?: string) => getFileActivities(workspaceId, fileId, cursor))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.LIST_TRASH, async (_, workspaceId: string) => listTrashEntries(workspaceId))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.RESTORE_TRASH, async (_, workspaceId: string, entryId: string) => restoreTrashEntry(workspaceId, entryId))
+  ipcMain.handle(TEAM_FILE_IPC_CHANNELS.PURGE_TRASH, async (_, workspaceId: string, entryId: string) => purgeTrashEntry(workspaceId, entryId))
 
   // ===== 通用个人资料库相关 =====
 
@@ -5676,6 +5694,14 @@ export function registerIpcHandlers(): void {
     if (topK !== undefined && (!Number.isInteger(topK) || topK < 1 || topK > 20)) throw new Error('搜索数量无效')
     const { searchKnowledgeItems } = require('./lib/knowledge-item-service')
     return searchKnowledgeItems(query, itemIds, topK)
+  })
+
+  ipcMain.handle(KNOWLEDGE_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER, async (_, itemId: string): Promise<void> => {
+    if (typeof itemId !== 'string' || itemId.length > 160) throw new Error('资料标识无效')
+    const { getKnowledgeItemStoredFilePath } = require('./lib/knowledge-item-service')
+    const storedPath = getKnowledgeItemStoredFilePath(itemId)
+    if (!storedPath) throw new Error('该资料没有可显示的本地文件副本')
+    shell.showItemInFolder(storedPath)
   })
 
   // ===== 论文知识库（Paper Knowledge Base）兼容 API =====
@@ -5729,6 +5755,15 @@ export function registerIpcHandlers(): void {
       const { deletePaper } = require('./lib/kb-paperpipe')
       return deletePaper(paperId)
     }
+  )
+
+  ipcMain.handle(
+    KB_IPC_CHANNELS.RETRY_PAPER_SYNC,
+    async (_, paperId: string): Promise<PaperMeta> => {
+      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
+      const { retryPaperpipeSync } = require('./lib/kb-paperpipe')
+      return retryPaperpipeSync(paperId)
+    },
   )
 
   ipcMain.handle(

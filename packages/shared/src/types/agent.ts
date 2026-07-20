@@ -1183,6 +1183,10 @@ export interface FileEntry {
   syncStatus?: 'synced' | 'syncing' | 'cloud-only' | 'local-only' | 'conflict'
   /** 远程版本修改时间（用于冲突检测） */
   remoteModifiedAt?: number
+  /** 服务端稳定资料身份（团队文件专用）。 */
+  fileId?: string
+  /** 服务端内容 SHA-256（团队文件专用，用于避免复用过期下载缓存）。 */
+  sha256?: string
   /** 上传者 ID */
   uploadedBy?: string
   /** 上传者显示名称 */
@@ -1810,7 +1814,34 @@ export const TEAM_FILE_IPC_CHANNELS = {
   MOVE: 'team-file:move',
   RENAME: 'team-file:rename',
   SEARCH: 'team-file:search',
+  GET_METADATA: 'team-file:get-metadata',
+  PATCH_METADATA: 'team-file:patch-metadata',
+  GET_TAGS: 'team-file:get-tags',
+  GET_STATUSES: 'team-file:get-statuses',
+  SET_PREFERENCE: 'team-file:set-preference',
+  GET_ACTIVITIES: 'team-file:get-activities',
+  LIST_TRASH: 'team-file:list-trash',
+  RESTORE_TRASH: 'team-file:restore-trash',
+  PURGE_TRASH: 'team-file:purge-trash',
 } as const
+
+/** 团队文件回收站中的一项（仅 Owner/Admin 的治理界面使用）。 */
+export interface TeamTrashEntry {
+  id: string
+  fileId: string
+  originalPath: string
+  deletedBy: string | null
+  deletedAt: number
+  expiresAt: number
+}
+
+/** 团队文件 HTTP/IPC 代理的标准结果。 */
+export interface TeamFileApiResult<T> {
+  ok: boolean
+  status?: number
+  data?: T
+  error?: string
+}
 
 /** SSE 实时事件推送 IPC 通道 */
 export const SSE_IPC_CHANNELS = {

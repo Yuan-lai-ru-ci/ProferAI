@@ -182,7 +182,7 @@ export function MainArea(): React.ReactElement {
               // Agent 技能视图：全屏取代 TabBar + TabContent
               <AgentSkillsView />
             ) : activeView === 'knowledge-base' && paperKnowledgeBaseEnabled ? (
-              // 论文知识库视图：全屏取代 TabBar + TabContent
+              // 知识库视图：全屏取代 TabBar + TabContent
               <KnowledgeBasePanel />
             ) : (
               <>

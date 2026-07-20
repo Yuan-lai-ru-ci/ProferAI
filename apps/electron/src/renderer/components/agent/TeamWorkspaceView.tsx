@@ -35,6 +35,8 @@ import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
 import { TeamActivityFeed } from '@/components/agent/TeamActivityFeed'
 import { TeamAnnouncements } from '@/components/agent/TeamAnnouncements'
+import { TeamFileMetadataSheet } from '@/components/team-workspace/TeamFileMetadataSheet'
+import { TeamFileTrashSheet } from '@/components/team-workspace/TeamFileTrashSheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { WindowControls } from '@/components/WindowControls'
 import { cn } from '@/lib/utils'
@@ -147,6 +149,8 @@ export function TeamWorkspaceView(): React.ReactElement {
   const [uploading, setUploading] = React.useState(false)
   const [dragOver, setDragOver] = React.useState(false)
   const [menuOpen, setMenuOpen] = React.useState<string | null>(null)
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = React.useState(false)
+  const [trashOpen, setTrashOpen] = React.useState(false)
   const [preview, setPreview] = React.useState<{ path: string; name: string; download?: () => Promise<string | null> } | null>(null)
   const [memberCount, setMemberCount] = React.useState(0)
   const [onlineCount, setOnlineCount] = React.useState(0)
@@ -167,6 +171,7 @@ export function TeamWorkspaceView(): React.ReactElement {
   const [agentDropOver, setAgentDropOver] = React.useState(false)
   const [editingPath, setEditingPath] = React.useState<string | null>(null)
   const [editingName, setEditingName] = React.useState('')
+  const [metadataEntry, setMetadataEntry] = React.useState<FileEntry | null>(null)
   const editInputRef = React.useRef<HTMLInputElement>(null)
 
   // ===== 右侧 Agent 面板可拖拽宽度 =====
@@ -349,11 +354,11 @@ export function TeamWorkspaceView(): React.ReactElement {
 
   // 关闭菜单
   React.useEffect(() => {
-    if (!menuOpen && !sortMenuOpen && !uploadMenuOpen) return
-    const close = () => { setMenuOpen(null); setSortMenuOpen(false); setUploadMenuOpen(false) }
+    if (!menuOpen && !sortMenuOpen && !uploadMenuOpen && !workspaceMenuOpen) return
+    const close = () => { setMenuOpen(null); setSortMenuOpen(false); setUploadMenuOpen(false); setWorkspaceMenuOpen(false) }
     document.addEventListener('click', close)
     return () => document.removeEventListener('click', close)
-  }, [menuOpen, sortMenuOpen, uploadMenuOpen])
+  }, [menuOpen, sortMenuOpen, uploadMenuOpen, workspaceMenuOpen])
 
   // 加载路径
   React.useEffect(() => {
@@ -393,6 +398,8 @@ export function TeamWorkspaceView(): React.ReactElement {
         return {
           name: f.name as string, path: f.path as string, isDirectory: (f.isDirectory as boolean) ?? false, size: f.size as number,
           syncStatus: (f.syncStatus as FileEntry['syncStatus']) ?? ((f.localExists as boolean) ? 'synced' : 'cloud-only'),
+          fileId: (f.fileId as string) || undefined,
+          sha256: (f.sha256 as string) || undefined,
           uploadedBy: (f.uploadedBy as string) ?? '', uploadedByName: (f.uploadedByName as string) ?? '',
           remoteModifiedAt: (f.modifiedAt as number) ?? undefined,
         }
@@ -760,7 +767,7 @@ export function TeamWorkspaceView(): React.ReactElement {
   const handleDownload = async (entry: FileEntry): Promise<string | null> => {
     if (!teamId || !workspace?.slug) return null
     try {
-      const local = await window.electronAPI.teamFile.download({ workspaceId: teamId, workspaceSlug: workspace.slug, filePath: entry.path, uploadedBy: entry.uploadedBy })
+      const local = await window.electronAPI.teamFile.download({ workspaceId: teamId, workspaceSlug: workspace.slug, filePath: entry.path, uploadedBy: entry.uploadedBy, sha256: entry.sha256 })
       if (local) { toast.success('已下载到本地'); loadFiles(); return local }
       else toast.error('下载失败')
     } catch { toast.error('下载失败') }
@@ -776,7 +783,7 @@ export function TeamWorkspaceView(): React.ReactElement {
       download: teamId && workspace?.slug ? async () => {
         const local = await window.electronAPI.teamFile.download({
           workspaceId: teamId, workspaceSlug: workspace.slug,
-          filePath: entry.path, uploadedBy: entry.uploadedBy,
+          filePath: entry.path, uploadedBy: entry.uploadedBy, sha256: entry.sha256,
         })
         return local
       } : undefined,
@@ -844,6 +851,7 @@ export function TeamWorkspaceView(): React.ReactElement {
       workspaceSlug: workspace.slug,
       filePath: entry.path,
       uploadedBy: entry.uploadedBy,
+      sha256: entry.sha256,
     })
     if (!local) {
       toast.error('文件还没有准备好，无法添加到 Agent')
@@ -905,21 +913,16 @@ export function TeamWorkspaceView(): React.ReactElement {
     }
   }, [addTeamFileToAgent])
 
-  // 删除
+  // 移入服务器回收站；主进程只清理下载缓存，明确登记的用户本地源文件会被保留。
   const handleDelete = async (entry: FileEntry) => {
     if (!teamId || !workspace?.slug) return
     const ok = await window.electronAPI.teamFile.delete({ workspaceId: teamId, workspaceSlug: workspace.slug, filePath: entry.path }).catch(() => false)
     if (ok) {
-      // 同步删除本地文件/文件夹
-      if (filesPath) {
-        const localPath = `${filesPath}/${entry.path}`
-        window.electronAPI.deleteFile(localPath).catch(() => {})
-      }
-      toast.success('已删除')
+      toast.success('已移到回收站，保留 7 天')
       setEntries((prev) => prev.filter((x) => x.path !== entry.path))
       setTimeout(() => loadFiles(), 500)
     } else {
-      toast.error('删除失败')
+      toast.error('移到回收站失败')
     }
   }
 
@@ -1072,7 +1075,7 @@ export function TeamWorkspaceView(): React.ReactElement {
       const entry = filteredEntries.find((e) => e.path === path)
       if (!entry || entry.isDirectory) continue
       try {
-        const local = await window.electronAPI.teamFile.download({ workspaceId: teamId, workspaceSlug: workspace.slug, filePath: path, uploadedBy: entry.uploadedBy })
+        const local = await window.electronAPI.teamFile.download({ workspaceId: teamId, workspaceSlug: workspace.slug, filePath: path, uploadedBy: entry.uploadedBy, sha256: entry.sha256 })
         if (local) count++
       } catch { /* continue */ }
     }
@@ -1097,17 +1100,11 @@ export function TeamWorkspaceView(): React.ReactElement {
     for (const path of pathsToDelete) {
       try {
         const ok = await window.electronAPI.teamFile.delete({ workspaceId: teamId, workspaceSlug: workspace.slug, filePath: path })
-        if (ok) {
-          if (filesPath) {
-            const localPath = `${filesPath}/${path}`
-            window.electronAPI.deleteFile(localPath).catch(() => {})
-          }
-          count++
-        }
+        if (ok) count++
       } catch { /* continue */ }
     }
     setBatchDeleting(false)
-    if (count > 0) { toast.success(`已删除 ${count} 项`); setTimeout(() => loadFiles(), 500) }
+    if (count > 0) { toast.success(`已移到回收站 ${count} 项（保留 7 天）`); setTimeout(() => loadFiles(), 500) }
     else if (count === 0) { loadFiles() } // 删除全部失败则恢复
   }
 
@@ -1233,8 +1230,11 @@ export function TeamWorkspaceView(): React.ReactElement {
                 <Eye size={12} />
               </button>
             )}
+            <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent" title="资料详情" onClick={(e) => { e.stopPropagation(); setMetadataEntry(entry) }}>
+              <History size={12} />
+            </button>
             {canManage(entry) && (
-              <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); handleDelete(entry) }}>
+              <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent hover:text-destructive" title="移到回收站" onClick={(e) => { e.stopPropagation(); handleDelete(entry) }}>
                 <Trash2 size={12} />
               </button>
             )}
@@ -1326,6 +1326,17 @@ export function TeamWorkspaceView(): React.ReactElement {
             >
               <History size={14} />
             </button>
+            {/* Owner/Admin 工作区治理菜单 */}
+            {(workspace?.role === 'owner' || workspace?.role === 'admin') && (
+              <div className="relative" onClick={(event) => event.stopPropagation()}>
+                <button className="h-8 w-8 rounded-md flex items-center justify-center hover:bg-accent text-muted-foreground hover:text-foreground" title="更多团队操作" aria-haspopup="menu" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}>
+                  <MoreHorizontal size={15} />
+                </button>
+                {workspaceMenuOpen && <div className="absolute right-0 top-9 z-[80] w-36 rounded-lg border bg-popover py-1 shadow-lg">
+                  <button className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent" onClick={() => { setWorkspaceMenuOpen(false); setTrashOpen(true) }}><Trash2 size={13} />回收站</button>
+                </div>}
+              </div>
+            )}
             {/* 搜索 */}
             {activePanel === 'files' && (
             <button
@@ -1717,8 +1728,11 @@ export function TeamWorkspaceView(): React.ReactElement {
                       </button>
                       {menuOpen === entry.path && (
                         <div className="absolute right-0 top-8 w-40 bg-popover border rounded-lg shadow-lg py-1 z-50" onClick={(e) => e.stopPropagation()}>
-                          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => { setMenuOpen(null); handlePreview(entry) }}>
+                          {!entry.isDirectory && <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => { setMenuOpen(null); handlePreview(entry) }}>
                             <Eye size={13} />预览
+                          </button>}
+                          <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => { setMenuOpen(null); setMetadataEntry(entry) }}>
+                            <History size={13} />资料详情
                           </button>
                           {entry.syncStatus === 'cloud-only' && (
                             <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left" onClick={() => { setMenuOpen(null); handleDownload(entry) }}>
@@ -1746,7 +1760,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                                 if (entry.syncStatus === 'cloud-only' && teamId && workspace?.slug) {
                                   const local = await window.electronAPI.teamFile.download({
                                     workspaceId: teamId, workspaceSlug: workspace.slug,
-                                    filePath: entry.path, uploadedBy: entry.uploadedBy,
+                                    filePath: entry.path, uploadedBy: entry.uploadedBy, sha256: entry.sha256,
                                   }).catch(() => null)
                                   if (local) {
                                     window.electronAPI.systemOpenFile(
@@ -1781,7 +1795,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                           )}
                           {canManage(entry) && (
                             <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-destructive text-left" onClick={() => { setMenuOpen(null); handleDelete(entry) }}>
-                              <Trash2 size={13} />删除
+                              <Trash2 size={13} />移到回收站
                             </button>
                           )}
                         </div>
@@ -1908,7 +1922,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                   onClick={batchDelete}
                   disabled={batchDeleting}
                 >
-                  <Trash2 size={13} />{batchDeleting ? '删除中...' : '删除'}
+                  <Trash2 size={13} />{batchDeleting ? '移入回收站中...' : '移到回收站'}
                 </button>
               )}
             </div>
@@ -2014,6 +2028,10 @@ export function TeamWorkspaceView(): React.ReactElement {
       {/* 预览弹窗 */}
       <FilePreviewDialog open={!!preview} filePath={preview?.path ?? ''} fileName={preview?.name ?? ''}
         onClose={() => setPreview(null)} teamDownload={preview?.download} />
+      <TeamFileMetadataSheet workspaceId={teamId || ''} entry={metadataEntry} open={!!metadataEntry}
+        onOpenChange={(open) => { if (!open) setMetadataEntry(null) }} />
+      <TeamFileTrashSheet workspaceId={teamId || ''} open={trashOpen} onOpenChange={setTrashOpen}
+        onRestored={() => { setActivePanel('files'); void loadFiles() }} />
     </>
   )
 }

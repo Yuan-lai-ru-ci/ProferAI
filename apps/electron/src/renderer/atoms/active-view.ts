@@ -5,7 +5,7 @@
  * - conversations: 对话视图（Chat/Agent 模式内容）
  * - automations: 定时任务列表视图
  * - agent-skills: Agent 技能（Skills/MCP）全屏管理视图
- * - knowledge-base: 论文知识库视图
+ * - knowledge-base: 知识库视图
  */
 
 import { atom } from 'jotai'

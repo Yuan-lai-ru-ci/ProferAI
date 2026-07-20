@@ -356,6 +356,8 @@ export interface ElectronAPI {
     deleteItem: (itemId: string) => Promise<{ itemId: string; deleted: boolean }>
     searchItems: (query: string, itemIds?: string[], topK?: number) => Promise<KnowledgeSearchResult[]>
     getLibrarySnapshot: () => Promise<KnowledgeLibrarySnapshot>
+    /** 在文件管理器中显示本地资料的受控副本。 */
+    showItemInFolder: (itemId: string) => Promise<void>
   }
 
   // ===== 论文知识库兼容 API =====
@@ -371,6 +373,8 @@ export interface ElectronAPI {
     getPaper: (paperId: string) => Promise<{ meta: PaperMeta; markdown: string } | null>
     /** 删除论文 */
     deletePaper: (paperId: string) => Promise<DeletePaperResult>
+    /** 使用受控本地 PDF 重试失败的远端同步 */
+    retryPaperSync: (paperId: string) => Promise<PaperMeta>
     /** 获取列表与统计一致的论文库快照 */
     getLibrarySnapshot: () => Promise<import('@profer/shared').KBLibrarySnapshot>
     /** 获取论文知识库统计 */
@@ -1240,13 +1244,22 @@ export interface ElectronAPI {
   // ===== 团队文件操作 =====
   teamFile: {
     upload: (input: { workspaceId: string; workspaceSlug: string; fileName: string; fileData: Uint8Array; sourcePath?: string }) => Promise<{ success: boolean; path: string; size: number; error?: string }>
-    download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) => Promise<string | null>
+    download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string; sha256?: string }) => Promise<string | null>
     delete: (input: { workspaceId: string; workspaceSlug: string; filePath: string }) => Promise<boolean>
-    getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }> | null>
+    getManifest: (workspaceId: string, workspaceSlug?: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; fileId?: string; uploadedBy: string; uploadedByName: string; localExists?: boolean; syncStatus?: 'synced' | 'cloud-only' }> | null>
     createDirectory: (input: { workspaceId: string; dirPath: string }) => Promise<boolean>
     move: (input: { workspaceId: string; workspaceSlug: string; fromPath: string; toDir: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string }>
     rename: (input: { workspaceId: string; workspaceSlug: string; path: string; newName: string }) => Promise<{ success: boolean; fromPath: string; toPath?: string; error?: string } | null>
     search: (workspaceId: string, options: { q: string; page?: number; limit?: number }) => Promise<{ files: Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: number; sha256: string; uploadedBy: string; uploadedByName: string }>; total: number; page: number; limit: number; totalPages: number } | null>
+    getMetadata: (workspaceId: string, fileId: string) => Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }>
+    patchMetadata: (workspaceId: string, fileId: string, body: Record<string, unknown>) => Promise<{ ok: boolean; status?: number; data?: unknown; error?: string }>
+    getTags: (workspaceId: string) => Promise<{ ok: boolean; data?: unknown; error?: string }>
+    getStatuses: (workspaceId: string) => Promise<{ ok: boolean; data?: unknown; error?: string }>
+    setPreference: (workspaceId: string, fileId: string, body: Record<string, unknown>) => Promise<{ ok: boolean; status?: number; error?: string }>
+    getActivities: (workspaceId: string, fileId: string, cursor?: string) => Promise<{ ok: boolean; data?: unknown; error?: string }>
+    listTrash: (workspaceId: string) => Promise<{ ok: boolean; status?: number; data?: import('@profer/shared').TeamTrashEntry[]; error?: string }>
+    restoreTrash: (workspaceId: string, entryId: string) => Promise<{ ok: boolean; status?: number; data?: { success: boolean; restoredPath: string }; error?: string }>
+    purgeTrash: (workspaceId: string, entryId: string) => Promise<{ ok: boolean; status?: number; data?: { success: boolean; state: string }; error?: string }>
   }
 }
 
@@ -1527,6 +1540,7 @@ const electronAPI: ElectronAPI = {
     deleteItem: (itemId: string) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.DELETE_ITEM, itemId),
     searchItems: (query: string, itemIds?: string[], topK?: number) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SEARCH_ITEMS, query, itemIds, topK),
     getLibrarySnapshot: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT),
+    showItemInFolder: (itemId: string) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER, itemId),
   },
 
   kb: {
@@ -1544,6 +1558,9 @@ const electronAPI: ElectronAPI = {
     },
     deletePaper: (paperId: string) => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_PAPER, paperId)
+    },
+    retryPaperSync: (paperId: string) => {
+      return ipcRenderer.invoke(KB_IPC_CHANNELS.RETRY_PAPER_SYNC, paperId)
     },
     getLibrarySnapshot: () => {
       return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT)
@@ -2873,7 +2890,7 @@ const electronAPI: ElectronAPI = {
   teamFile: {
     upload: (input: { workspaceId: string; workspaceSlug: string; fileName: string; fileData: Uint8Array; sourcePath?: string }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.UPLOAD, input),
-    download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string }) =>
+    download: (input: { workspaceId: string; workspaceSlug: string; filePath: string; uploadedBy?: string; sha256?: string }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.DOWNLOAD, input),
     delete: (input: { workspaceId: string; workspaceSlug: string; filePath: string }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.DELETE, input),
@@ -2887,6 +2904,15 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.RENAME, input),
     search: (workspaceId: string, options: { q: string; page?: number; limit?: number }) =>
       ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.SEARCH, workspaceId, options),
+    getMetadata: (workspaceId: string, fileId: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.GET_METADATA, workspaceId, fileId),
+    patchMetadata: (workspaceId: string, fileId: string, body: Record<string, unknown>) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.PATCH_METADATA, workspaceId, fileId, body),
+    getTags: (workspaceId: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.GET_TAGS, workspaceId),
+    getStatuses: (workspaceId: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.GET_STATUSES, workspaceId),
+    setPreference: (workspaceId: string, fileId: string, body: Record<string, unknown>) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.SET_PREFERENCE, workspaceId, fileId, body),
+    getActivities: (workspaceId: string, fileId: string, cursor?: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.GET_ACTIVITIES, workspaceId, fileId, cursor),
+    listTrash: (workspaceId: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.LIST_TRASH, workspaceId),
+    restoreTrash: (workspaceId: string, entryId: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.RESTORE_TRASH, workspaceId, entryId),
+    purgeTrash: (workspaceId: string, entryId: string) => ipcRenderer.invoke(TEAM_FILE_IPC_CHANNELS.PURGE_TRASH, workspaceId, entryId),
   },
 }
 

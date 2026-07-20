@@ -13,13 +13,23 @@
 import { Hono } from 'hono'
 import { isBodyTooLargeError } from '../../middleware/body-limit.js'
 import { PAPERPIPE_MAX_FILE_SIZE } from '../../config.js'
-import { extractRemotePaperId, hasPdfMagicBytes, isSafePaperpipeId, normalizePaperpipeSearchInput, sanitizePaperFilename } from './paperpipe-helpers.js'
+import { extractRemotePaperId, getPaperpipeBridgeConfig, hasPdfMagicBytes, isSafePaperpipeId, normalizePaperpipeSearchInput, sanitizePaperFilename } from './paperpipe-helpers.js'
 
 export const paperpipeRoutes = new Hono()
 
-/** paperpipe HTTP Bridge 地址 */
-const BRIDGE_URL = process.env.PAPERPIPE_BRIDGE_URL || 'http://host.docker.internal:9876'
-const BRIDGE_SECRET = process.env.PAPERPIPE_BRIDGE_SECRET?.trim()
+/** Paperpipe HTTP Bridge 配置。生产环境必须有服务间密钥。 */
+const BRIDGE_CONFIG = getPaperpipeBridgeConfig()
+const BRIDGE_URL = BRIDGE_CONFIG.url
+const BRIDGE_SECRET = BRIDGE_CONFIG.secret
+
+function bridgeUnavailableResponse() {
+  return { error: '论文服务尚未完成管理员配置', code: 'PAPERPIPE_BRIDGE_NOT_CONFIGURED' }
+}
+
+function ensureBridgeConfigured(c) {
+  if (BRIDGE_CONFIG.ready) return undefined
+  return c.json(bridgeUnavailableResponse(), 503)
+}
 
 // ===== 工具函数 =====
 
@@ -29,7 +39,7 @@ const BRIDGE_SECRET = process.env.PAPERPIPE_BRIDGE_SECRET?.trim()
 async function bridgeProxy(userId, method, path, body = undefined, timeout = 120_000) {
   const url = `${BRIDGE_URL}${path}`
   const headers = {
-    'X-User-Id': String(userId),
+    ...(userId ? { 'X-User-Id': String(userId) } : {}),
     ...(BRIDGE_SECRET ? { 'X-Paperpipe-Internal-Key': BRIDGE_SECRET } : {}),
   }
   const fetchOpts = {
@@ -105,6 +115,8 @@ async function bridgeUpload(userId, fileBuffer, fileName, clientPaperId) {
 paperpipeRoutes.post('/add', async (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ error: '未提供认证令牌' }, 401)
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
 
   let body
   try { body = await c.req.json() } catch {
@@ -135,6 +147,8 @@ paperpipeRoutes.post('/add', async (c) => {
 paperpipeRoutes.post('/upload', async (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ error: '未提供认证令牌' }, 401)
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
 
   try {
     const formData = await c.req.parseBody()
@@ -183,6 +197,8 @@ paperpipeRoutes.post('/upload', async (c) => {
 paperpipeRoutes.get('/list', async (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ error: '未提供认证令牌' }, 401)
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
 
   const { status, data } = await bridgeProxy(userId, 'GET', '/list')
   return c.json(data, status)
@@ -194,6 +210,8 @@ paperpipeRoutes.get('/list', async (c) => {
 paperpipeRoutes.get('/show/:paperName', async (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ error: '未提供认证令牌' }, 401)
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
 
   const paperName = c.req.param('paperName')
   if (!isSafePaperpipeId(paperName)) return c.json({ error: '论文标识无效' }, 400)
@@ -208,6 +226,8 @@ paperpipeRoutes.get('/show/:paperName', async (c) => {
 paperpipeRoutes.delete('/remove/:paperName', async (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ error: '未提供认证令牌' }, 401)
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
 
   const paperName = c.req.param('paperName')
   if (!isSafePaperpipeId(paperName)) return c.json({ error: '论文标识无效' }, 400)
@@ -222,6 +242,8 @@ paperpipeRoutes.delete('/remove/:paperName', async (c) => {
 paperpipeRoutes.post('/search', async (c) => {
   const userId = c.get('userId')
   if (!userId) return c.json({ error: '未提供认证令牌' }, 401)
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
 
   let body
   try { body = await c.req.json() } catch {
@@ -239,6 +261,10 @@ paperpipeRoutes.post('/search', async (c) => {
  * GET /health — 检查 paperpipe 是否可用
  */
 paperpipeRoutes.get('/health', async (c) => {
-  const { status, data } = await bridgeProxy('default', 'GET', '/health')
+  const unavailable = ensureBridgeConfigured(c)
+  if (unavailable) return unavailable
+
+  // Bridge health 必须是无用户状态、无副作用的基础设施端点。
+  const { status, data } = await bridgeProxy('', 'GET', '/health')
   return c.json(data, status)
 })
