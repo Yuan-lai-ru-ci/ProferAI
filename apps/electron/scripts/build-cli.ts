@@ -15,8 +15,14 @@
  * 在 electron app 的 build 链中调用（见 package.json build:cli）。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import {
+  createBuildCliInvocation,
+  createTemporaryBunPath,
+  tryRemoveTemporaryBun,
+} from './build-cli-runtime'
 
 const color = {
   reset: '\x1b[0m',
@@ -50,18 +56,44 @@ mkdirSync(outDir, { recursive: true })
 
 console.log(`${color.cyan}[build:cli]${color.reset} 编译 proma CLI → ${color.dim}${outFile}${color.reset}`)
 
-const started = Date.now()
-const result = spawnSync(
-  'bun',
-  ['build', '--compile', '--outfile', outFile, cliEntry],
-  { cwd: join(repoRoot, 'apps/cli'), stdio: 'inherit' },
-)
-
-if (result.status !== 0) {
-  fail(`bun build --compile 失败（exit ${result.status}）`)
+// bun build --compile 在 Windows 上会复制自身。若 bun.exe 位于过长路径，
+// 该步骤可能 ENOENT；将当前 Bun 复制到临时短路径后显式指定即可规避。
+let tempBunPath: string | undefined
+if (isWindows) {
+  tempBunPath = createTemporaryBunPath(tmpdir(), Date.now(), process.pid)
+  try {
+    copyFileSync(process.execPath, tempBunPath)
+    console.log(`${color.dim}[build:cli] Windows 短路径 workaround: ${tempBunPath}${color.reset}`)
+  } catch (error) {
+    tempBunPath = undefined
+    console.warn(`${color.yellow}[build:cli] 无法复制 Bun 到临时目录，尝试直接编译: ${error}${color.reset}`)
+  }
 }
-if (!existsSync(outFile)) {
-  fail(`编译完成但未产出二进制: ${outFile}`)
+
+const started = Date.now()
+try {
+  const invocation = createBuildCliInvocation({
+    bunExecutablePath: process.execPath,
+    outFile,
+    cliEntry,
+    compileExecutablePath: tempBunPath,
+  })
+  const result = spawnSync(
+    invocation.command,
+    invocation.args,
+    { cwd: join(repoRoot, 'apps/cli'), stdio: 'inherit' },
+  )
+
+  if (result.status !== 0) {
+    fail(`bun build --compile 失败（exit ${result.status}）`)
+  }
+  if (!existsSync(outFile)) {
+    fail(`编译完成但未产出二进制: ${outFile}`)
+  }
+} finally {
+  if (tempBunPath && !tryRemoveTemporaryBun(unlinkSync, tempBunPath)) {
+    console.warn(`${color.yellow}[build:cli] 无法删除临时 Bun 副本: ${tempBunPath}${color.reset}`)
+  }
 }
 
 const sizeMb = (statSync(outFile).size / 1024 / 1024).toFixed(0)
