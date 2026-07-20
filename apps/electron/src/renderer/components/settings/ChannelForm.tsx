@@ -44,6 +44,7 @@ import type {
 } from '@profer/shared'
 import { normalizeAnthropicProviderUrl } from '@profer/core'
 import { getProviderLogo } from '@/lib/model-logo'
+import { applyModelDiscoveryResult } from '@/lib/channel-model-discovery'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   AlertDialog,
@@ -375,26 +376,14 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
       setFetchResult(result)
 
-      // 用拉取结果作为权威清单替换：
-      // - source==='manual' 的模型一律保留（即便不在新结果里）
-      // - 在新结果里也存在的旧模型保留 enabled 状态
-      // - 新出现的模型默认未启用
-      // - 既不在新结果里、也不是手动添加的旧模型一律丢弃（清除残留）
-      // 失败（result.success===false）时 result.models 为空，等价于清掉所有非手动模型
-      const fetchedModels = result.success ? result.models : []
-      const fetchedById = new Map(fetchedModels.map((m) => [m.id, m]))
-      setModels((prev) => {
-        const manualKept = prev.filter((m) => m.source === 'manual' && !fetchedById.has(m.id))
-        const merged = fetchedModels.map((m) => {
-          const old = prev.find((p) => p.id === m.id)
-          return old ? { ...m, enabled: old.enabled } : { ...m, enabled: false }
-        })
-        return [...manualKept, ...merged]
-      })
+      // 远端发现失败只反馈结果，不能把失败误当成权威空列表。
+      // 否则编辑模式的 auto-save 会错误覆盖用户现有模型配置。
+      if (!result.success) return
+
+      setModels((prev) => applyModelDiscoveryResult(prev, result))
     } catch (error) {
+      // IPC 异常同样只显示失败，保留用户当前全部模型配置。
       setFetchResult({ success: false, message: '拉取模型请求失败', models: [] })
-      // IPC 异常等同样按"拉取结果为空"处理：清掉所有非手动模型，保留手动添加的
-      setModels((prev) => prev.filter((m) => m.source === 'manual'))
     } finally {
       setFetchingModels(false)
     }
