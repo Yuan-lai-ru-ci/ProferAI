@@ -947,41 +947,7 @@ function buildPromaProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOp
         return createJsonToolResult({ todos: [...tasks.values()].filter((task) => task.status !== 'deleted') })
       },
     }),
-    sdk.defineTool({
-      name: 'TodoWrite',
-      label: '更新待办',
-      description: '以 Claude SDK TodoWrite 兼容格式更新当前 turn 的任务列表。',
-      promptSnippet: '更新当前待办列表。',
-      parameters: Type.Object({
-        todos: Type.Array(Type.Object({
-          content: Type.Optional(Type.String()),
-          subject: Type.Optional(Type.String()),
-          status: Type.Union([
-            Type.Literal('pending'),
-            Type.Literal('in_progress'),
-            Type.Literal('completed'),
-            Type.Literal('blocked'),
-            Type.Literal('cancelled'),
-            Type.Literal('error'),
-          ]),
-          activeForm: Type.Optional(Type.String()),
-        })),
-      }),
-      async execute(_toolCallId, params) {
-        const input = params as { todos?: Array<Record<string, unknown>> }
-        tasks.clear()
-        for (const [index, todo] of (input.todos ?? []).entries()) {
-          const id = String(index + 1)
-          tasks.set(id, {
-            id,
-            subject: stringFromInput(todo, ['subject', 'content'], `待办 #${id}`),
-            status: normalizeTaskStatus(todo.status, 'pending'),
-            activeForm: typeof todo.activeForm === 'string' ? todo.activeForm : undefined,
-          })
-        }
-        return createJsonToolResult({ todos: [...tasks.values()] })
-      },
-    }),
+
   ] as unknown as ToolDefinition[]
 
   return definitions.map((tool) =>
