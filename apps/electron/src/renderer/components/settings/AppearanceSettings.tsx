@@ -176,6 +176,9 @@ const ZOOM_HINT = isMac
   ? '使用 ⌘+ 放大、⌘- 缩小、⌘0 恢复默认大小'
   : '使用 Ctrl++ 放大、Ctrl+- 缩小、Ctrl+0 恢复默认大小'
 
+// macOS 专属的 Dock 图标切换暂不对外展示；保留实现，后续可直接恢复。
+const SHOW_MACOS_SETTINGS = false
+
 export function AppearanceSettings(): React.ReactElement {
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
@@ -267,7 +270,7 @@ export function AppearanceSettings(): React.ReactElement {
         </SettingsCard>
       </SettingsSection>
 
-      <AppIconPicker />
+      {SHOW_MACOS_SETTINGS && <AppIconPicker />}
     </div>
   )
 }
