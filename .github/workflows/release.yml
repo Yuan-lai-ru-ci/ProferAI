@@ -38,6 +38,10 @@ jobs:
         run: bun run electron:build:github
         working-directory: .
 
+      - name: Sync external Agent runtime dependencies
+        run: bun run sync:runtime-deps
+        working-directory: apps/electron
+
       - name: Package Windows release
         run: npx electron-builder --win --x64 --publish never
         working-directory: apps/electron

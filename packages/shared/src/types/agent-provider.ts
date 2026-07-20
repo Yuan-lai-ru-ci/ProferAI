@@ -8,6 +8,22 @@
 
 import type { SDKMessage, TypedError } from './agent'
 
+/** Agent runtime 实现。未知/旧持久化值一律按 Claude 回退。 */
+export type AgentRuntime = 'claude' | 'pi'
+
+/** 默认 runtime。Pi 完成执行链路与灰度前，产品默认始终保持 Claude。 */
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
+
+/** 严格校验外部输入是否为受支持 runtime。 */
+export function isAgentRuntime(value: unknown): value is AgentRuntime {
+  return value === 'claude' || value === 'pi'
+}
+
+/** 将历史缺省或未知持久化值安全归一化为 Claude。 */
+export function normalizeAgentRuntime(value: unknown): AgentRuntime {
+  return isAgentRuntime(value) ? value : DEFAULT_AGENT_RUNTIME
+}
+
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {
   type: 'user'
@@ -16,6 +32,16 @@ export interface SDKUserMessageInput {
   priority?: 'now' | 'next' | 'later'
   uuid?: string
   session_id: string
+}
+
+/** Queue delivery controls shared by Claude and Pi adapters. */
+export interface SendQueuedMessageOptions {
+  /** Cancel the current turn and deliver this input as the next turn. */
+  interrupt?: boolean
+  /** Explicitly mentioned workspace skills, resolved by the adapter before delivery. */
+  skillMentions?: string[]
+  /** Called only after the runtime accepts the message. */
+  onAccepted?: () => void
 }
 
 /**
@@ -31,6 +57,8 @@ export interface AgentQueryInput {
   prompt: string
   /** 模型 ID */
   model?: string
+  /** 要使用的 Agent runtime；持久化缺省值由调用方归一化为 Claude。 */
+  agentRuntime?: AgentRuntime
   /** Agent 工作目录 */
   cwd?: string
   /** 中止信号 */
@@ -77,13 +105,17 @@ export interface AgentProviderAdapter {
   /** 释放资源 */
   dispose(): void
   /** 向活跃查询注入队列消息（可选，仅支持队列的 Provider 实现） */
-  sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput): Promise<void>
+  sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput, options?: SendQueuedMessageOptions): Promise<void>
   /** 取消队列中的待发送消息（可选） */
   cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
   /** 错误处理辅助函数（Provider 特化逻辑由 Adapter 提供） */
   errorHelpers: AgentErrorHelpers
+  /**
+   * 多 runtime Router 可按本次请求选择错误处理器；普通 adapter 保持使用 errorHelpers。
+   */
+  getErrorHelpers?(runtime: AgentRuntime): AgentErrorHelpers
   /** 判断 provider 是否通过 Anthropic 兼容代理路由（用于团队版代理路径选择） */
   isAnthropicProxyProvider?(provider: string): boolean
 }

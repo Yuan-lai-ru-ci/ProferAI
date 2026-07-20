@@ -7,7 +7,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
-import { DEFAULT_INTERFACE_VARIANT, DEFAULT_THEME_MODE } from '../../types'
+import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_THEME_MODE } from '../../types'
+import { normalizeAgentRuntime } from '@profer/shared'
 import type { AppSettings } from '../../types'
 
 /** 内存缓存：避免启动时多次 IPC 调用反复读磁盘 */
@@ -22,6 +23,7 @@ function getDefaultSettings(): AppSettings {
     notificationsEnabled: true,
     feishuSessionMirror: { mode: 'off' },
     paperKnowledgeBaseEnabled: true,
+    agentRuntime: DEFAULT_AGENT_RUNTIME,
   }
 }
 
@@ -52,6 +54,7 @@ export function getSettings(): AppSettings {
       environmentCheckSkipped: data.environmentCheckSkipped ?? false,
       notificationsEnabled: data.notificationsEnabled ?? true,
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
+      agentRuntime: normalizeAgentRuntime(data.agentRuntime),
     }
     return _settingsCache
   } catch (error) {
@@ -70,9 +73,15 @@ export function updateSettings(updates: Partial<AppSettings>): AppSettings {
   // 确保缓存已初始化
   if (!_settingsCache) getSettings()
 
+  const normalizedUpdates: Partial<AppSettings> = {
+    ...updates,
+    ...(updates.agentRuntime !== undefined
+      ? { agentRuntime: normalizeAgentRuntime(updates.agentRuntime) }
+      : {}),
+  }
   const updated: AppSettings = {
     ..._settingsCache!,
-    ...updates,
+    ...normalizedUpdates,
   }
 
   const filePath = getSettingsPath()
@@ -80,7 +89,7 @@ export function updateSettings(updates: Partial<AppSettings>): AppSettings {
   try {
     writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8')
     _settingsCache = updated
-    console.log('[设置] 已更新 keys:', Object.keys(updates).join(', '))
+    console.log('[设置] 已更新 keys:', Object.keys(normalizedUpdates).join(', '))
   } catch (error) {
     console.error('[设置] 写入失败:', error)
     throw new Error('写入应用设置失败')
