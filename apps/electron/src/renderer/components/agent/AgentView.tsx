@@ -525,15 +525,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
-  // Per-session 渠道/模型配置（优先读 session map，回退到全局默认值）
+  // Per-session 渠道/模型配置：已加载 metadata 是持久化真源，短暂 local Map 仅在加载前回退。
   const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
   const sessionModelMap = useAtomValue(agentSessionModelMapAtom)
   const setSessionChannelMap = useSetAtom(agentSessionChannelMapAtom)
   const setSessionModelMap = useSetAtom(agentSessionModelMapAtom)
   const [defaultChannelId, setDefaultChannelId] = useAtom(agentChannelIdAtom)
   const [defaultModelId, setDefaultModelId] = useAtom(agentModelIdAtom)
-  const agentChannelId = sessionChannelMap.get(sessionId) ?? defaultChannelId
-  const agentModelId = sessionModelMap.get(sessionId) ?? defaultModelId
   const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
@@ -541,12 +539,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const sessions = useAtomValue(agentSessionsAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const sessionMeta = React.useMemo(
+    () => sessions.find((s) => s.id === sessionId),
+    [sessions, sessionId],
+  )
+  const hasSessionMeta = Boolean(sessionMeta)
+  const sessionMetaChannelId = sessionMeta?.channelId
+  const sessionMetaModelId = sessionMeta?.modelId
+  const agentChannelId = sessionMetaChannelId ?? sessionChannelMap.get(sessionId) ?? defaultChannelId
+  const agentModelId = sessionMetaModelId ?? sessionModelMap.get(sessionId) ?? defaultModelId
   // 从会话元数据派生 workspaceId：会话数据已加载时以自身为准，未加载时回退全局 atom
-  const currentWorkspaceId = React.useMemo(() => {
-    const meta = sessions.find((s) => s.id === sessionId)
-    if (!meta) return globalWorkspaceId // 数据未加载，回退全局
-    return meta.workspaceId ?? null     // 数据已加载，以会话自身为准
-  }, [sessions, sessionId, globalWorkspaceId])
+  const currentWorkspaceId = sessionMeta ? sessionMeta.workspaceId ?? null : globalWorkspaceId
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
@@ -555,16 +559,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
   const stableChannelId = resolvePlanQuotaChannelId(agentChannelId, stableChannelIdRef.current)
 
-  // 已有会话首次打开时，从全局默认值初始化 per-session map。
-  // setter 内的 `prev.has(sessionId)` 守卫保证幂等，外层不再订阅 Map atom，
-  // 避免 setter 写入 → atom 引用变化 → effect 重跑的自循环（React #185）。
-  // 优先使用会话元数据上的 channelId/modelId（如自动任务子会话），回退到全局默认。
-  const sessionMeta = React.useMemo(
-    () => sessions.find((s) => s.id === sessionId),
-    [sessions, sessionId],
-  )
-  const sessionMetaChannelId = sessionMeta?.channelId
-  const sessionMetaModelId = sessionMeta?.modelId
+  // 已有会话以其 metadata 初始化 local Map；metadata 尚未加载时才允许回退全局默认。
+  // setter 内的 `prev.has(sessionId)` 守卫避免写入 → atom 引用变化 → effect 自循环（React #185）。
   const [agentRuntime, setAgentRuntime] = useAtom(agentRuntimeAtom)
   const [runtimeSwitchInFlight, setRuntimeSwitchInFlight] = React.useState(false)
   // state 渲染前的连续点击也必须串行化，不能仅依赖 disabled 的下一帧更新。
@@ -575,8 +571,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     : agentRuntime
   React.useEffect(() => {
     if (!sessionId) return
-    const initialChannelId = sessionMetaChannelId ?? defaultChannelId
-    const initialModelId = sessionMetaModelId ?? defaultModelId
+    const initialChannelId = sessionMetaChannelId ?? (!hasSessionMeta ? defaultChannelId : undefined)
+    const initialModelId = sessionMetaModelId ?? (!hasSessionMeta ? defaultModelId : undefined)
     if (initialChannelId) {
       setSessionChannelMap((prev) => {
         if (prev.has(sessionId)) return prev
@@ -593,7 +589,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     }
-  }, [sessionId, sessionMetaChannelId, sessionMetaModelId, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap])
+  }, [sessionId, sessionMetaChannelId, sessionMetaModelId, hasSessionMeta, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap])
 
   const contextStatus: AgentContextStatus = {
     isCompacting: streamState?.isCompacting ?? false,
@@ -628,7 +624,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
   const setPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
-  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const openSession = useOpenSession()
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
@@ -699,7 +694,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     )
   }, [globalChannels, agentChannelIds, sessionAgentRuntime])
   React.useEffect(() => {
-    if (!agentChannelId || agentModelId) return
+    // 历史空模型会话仅在空闲时自动补全，不能与运行中的本轮 binding 竞争。
+    if (!agentChannelId || agentModelId || streaming || backgroundWaiting) return
 
     const channel = globalChannels.find((c) => c.id === agentChannelId && c.enabled)
     if (!channel) return
@@ -707,15 +703,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const firstModel = channel.models.find((m) => m.enabled)
     if (!firstModel) return
 
-    // 更新 per-session map（带幂等守卫，避免无意义写入导致 effect 自循环）
-    setSessionModelMap((prev) => {
-      if (prev.get(sessionId) === firstModel.id) return prev
-      const map = new Map(prev)
-      map.set(sessionId, firstModel.id)
-      return map
-    })
-    // 全局默认值 + 持久化 IPC 也加幂等：firstModel 与当前 defaultModelId 相同时跳过，
-    // 避免每次 agentChannelId / globalChannels 变化都重复写盘和触发 agentModelIdAtom 更新。
     if (defaultModelId !== firstModel.id) {
       setDefaultModelId(firstModel.id)
       window.electronAPI.updateSettings({
@@ -723,7 +710,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         agentModelId: firstModel.id,
       }).catch(console.error)
     }
-  }, [agentChannelId, agentModelId, globalChannels, sessionId, setSessionModelMap, setDefaultModelId])
+    window.electronAPI.updateAgentSessionModel(sessionId, agentChannelId, firstModel.id)
+      .then((updated) => {
+        setSessionModelMap((prev) => {
+          const map = new Map(prev)
+          map.set(sessionId, updated.modelId ?? firstModel.id)
+          return map
+        })
+        setAgentSessions((prev) => prev.map((session) => session.id === updated.id ? updated : session))
+      })
+      .catch((error) => console.error('[AgentView] 自动补全会话模型持久化失败:', error))
+  }, [agentChannelId, agentModelId, streaming, backgroundWaiting, globalChannels, sessionId, defaultModelId, setSessionModelMap, setDefaultModelId, setAgentSessions])
 
   // 获取当前 session 的工作路径（文件浏览器需要）
   React.useEffect(() => {
@@ -1417,28 +1414,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [sessionId, addFilesAsAttachments, setAttachedDirsMap])
 
-  /** ModelSelector 选择回调 */
+  /** ModelSelector 选择回调：主进程 session metadata 是跨重启真源。 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    // 更新当前会话的 per-session 配置
-    setSessionChannelMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, option.channelId)
-      return map
-    })
-    setSessionModelMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, option.modelId)
-      return map
-    })
-
-    // 模型切换时：清除旧的 contextWindow，让 result 重新提供真实值
-    setStreamingStates((prev) => {
-      const state = prev.get(sessionId)
-      if (!state) return prev
-      const map = new Map(prev)
-      map.set(sessionId, { ...state, contextWindow: undefined })
-      return map
-    })
+    if (streaming || backgroundWaiting) {
+      toast.info('Agent 运行中，完成后再切换模型')
+      return
+    }
 
     // Pi 可使用所有 enabled 渠道；只有 Claude 模型选择才更新其兼容渠道白名单。
     const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(
@@ -1453,14 +1434,37 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // 同时更新全局默认值（新会话继承）
     setDefaultChannelId(option.channelId)
     setDefaultModelId(option.modelId)
-
-    // 持久化到设置
     window.electronAPI.updateSettings({
       agentChannelId: option.channelId,
       agentModelId: option.modelId,
       agentChannelIds: updatedChannelIds,
     }).catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, sessionAgentRuntime])
+
+    window.electronAPI.updateAgentSessionModel(sessionId, option.channelId, option.modelId)
+      .then((updated) => {
+        setSessionChannelMap((prev) => {
+          const map = new Map(prev)
+          if (updated.channelId) map.set(sessionId, updated.channelId)
+          else map.delete(sessionId)
+          return map
+        })
+        setSessionModelMap((prev) => {
+          const map = new Map(prev)
+          if (updated.modelId) map.set(sessionId, updated.modelId)
+          else map.delete(sessionId)
+          return map
+        })
+        setAgentSessions((prev) => prev.map((session) => session.id === updated.id ? updated : session))
+        setStreamingStates((prev) => {
+          const state = prev.get(sessionId)
+          if (!state) return prev
+          const map = new Map(prev)
+          map.set(sessionId, { ...state, contextWindow: undefined })
+          return map
+        })
+      })
+      .catch((error) => console.error('[AgentView] 会话模型持久化失败:', error))
+  }, [sessionId, streaming, backgroundWaiting, setSessionChannelMap, setSessionModelMap, setAgentSessions, setStreamingStates, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, sessionAgentRuntime])
 
   /** 空闲会话切换 runtime：跨 runtime 的 SDK session ID 由主进程原子清除。 */
   const handleAgentRuntimeChange = React.useCallback(async (runtime: AgentRuntime): Promise<void> => {
