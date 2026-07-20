@@ -105,9 +105,7 @@ function tryRun(cmd, cwd = ROOT) {
   run('bun run scripts/build-cli.ts', ELECTRON);
   console.log('  [4e] build:resources');
   run('bun run scripts/copy-resources.ts', ELECTRON);
-  console.log('  [4f] sync:runtime-deps');
-  run('bun run sync:runtime-deps', ELECTRON);
-  console.log('  [4g] electron-builder --win --x64');
+  console.log('  [4f] electron-builder --win --x64');
   const ebOut = run('npx electron-builder --win --x64', ELECTRON);
   const fileMatch = ebOut.match(/file=(out[^\s]*\.exe)/);
   const installer = fileMatch ? fileMatch[1] : `out/Profer-Setup-${VERSION}.exe`;

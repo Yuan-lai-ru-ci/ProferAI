@@ -84,11 +84,9 @@ echo ""
 echo "[3/4] 打包 Electron..."
 cd "$ELECTRON_DIR"
 echo "  构建 main..."
-npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai "--define:__PROFER_BUILD_TARGET__='\"oss\"'" 2>&1 | tail -1
+npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk "--define:__PROFER_BUILD_TARGET__='\"oss\"'" 2>&1 | tail -1
 echo "  构建 renderer..."
 npx vite build 2>&1 | grep "built"
-echo "  同步 runtime 依赖..."
-bun run sync:runtime-deps
 echo "  打包 NSIS..."
 npx electron-builder --win --x64 2>&1 | grep -E "file=|afterPack"
 
