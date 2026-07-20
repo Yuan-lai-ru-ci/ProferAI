@@ -24,7 +24,7 @@ import type {
   SDKUserMessageInput,
   TypedError,
 } from '@proma/shared'
-import { isCodexFastModeSupportedModel } from '@proma/shared'
+import { isCodexFastModeSupportedModel, isOpenAIReasoningSupportedModel } from '@proma/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -50,7 +50,7 @@ import {
   type AgentRuntimeGuard,
 } from '../agent-runtime-guards'
 import { createPromaAgentsFilesOverride } from './pi-resource-loader-overrides'
-import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
+import { createCodexRequestSettingsExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -118,6 +118,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   compactRequest?: boolean
   /** ChatGPT Codex Fast Mode；仅 openai-codex 的受支持模型实际注入 priority service tier。 */
   codexFastMode?: boolean
+  /** 会话级 OpenAI（Codex OAuth / Responses API）思考深度。 */
+  openAIThinkingLevel?: AgentThinkingLevel
 }
 
 interface ActivePiSession {
@@ -1263,8 +1265,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
         agentsFilesOverride: createPromaAgentsFilesOverride(),
-        ...(input.codexFastMode && input.provider === 'openai-codex' && {
-          extensionFactories: [createCodexFastModeExtension()],
+        ...((input.provider === 'openai-codex' || input.provider === 'openai-responses')
+          && model.reasoning
+          && isOpenAIReasoningSupportedModel(input.model) && {
+            extensionFactories: [createCodexRequestSettingsExtension({
+            fastMode: input.codexFastMode,
+            thinkingLevel: input.openAIThinkingLevel,
+          })],
         }),
         systemPromptOverride: () => input.systemPrompt,
       })
