@@ -621,6 +621,19 @@ export class AgentOrchestrator {
       return
     }
 
+    const requestSource = userMessage.includes('<quoted_context source="knowledge-preview"')
+      ? 'knowledge-selection'
+      : userMessage.includes('<quoted_file path="知识库 ·')
+        ? 'legacy-knowledge-selection'
+        : 'agent-message'
+    console.info('[Agent 编排] 请求路由:', {
+      sessionId,
+      requestSource,
+      channelId,
+      modelId: modelId || DEFAULT_MODEL_ID,
+      provider: channel.provider,
+    })
+
     let apiKey: string
     let agentUrl = (channel as any).agentBaseUrl || channel.baseUrl
     const isOfficialChannel = channel.id?.startsWith('newapi-')
@@ -696,7 +709,10 @@ export class AgentOrchestrator {
     }
 
     // 3. 构建本轮专属 SDK 环境。绝不修改主进程 process.env，避免并发 session 串扰凭证。
-    const modelRouting = resolveAgentModelRouting({ modelId: modelId || DEFAULT_MODEL_ID, provider: channel.provider })
+    const configuredModelId = modelId || DEFAULT_MODEL_ID
+    const modelRouting = resolveAgentModelRouting({ modelId: configuredModelId, provider: channel.provider })
+    const oneMillionContextEnabled = modelRouting.enable1MContext && supports1MContext(configuredModelId)
+    const effectiveSdkModelId = resolveAgentSdkModelId(configuredModelId, oneMillionContextEnabled)
     const sdkEnv = await this.buildSdkEnv(apiKey, agentUrl, channel.provider, forceBearerAuth)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
@@ -1135,7 +1151,7 @@ export class AgentOrchestrator {
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
         prompt: finalPrompt,
-        model: resolveAgentSdkModelId(modelId || DEFAULT_MODEL_ID),
+        model: effectiveSdkModelId,
         cwd: agentCwd,
         sdkCliPath: cliPath,
         env: sdkEnv,
@@ -1186,9 +1202,9 @@ export class AgentOrchestrator {
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
         }),
-        // 1M context window: 支持的模型自动启用 beta（Claude: Sonnet 4+ / Opus 4.6+ / 4.7 / 4.8、DeepSeek V4 系列）
-        // 未启用时 SDK 默认 200K 并在约 150K 触发压缩；启用后上限提升至 1M
-        ...(supports1MContext(modelId || DEFAULT_MODEL_ID) && {
+        // 仅对已确认兼容 Anthropic 1M 协议的 provider/model 组合启用 beta。
+        // DeepSeek Anthropic-compatible endpoint 保持用户原始模型 ID，不注入 Claude 专用 beta。
+        ...(oneMillionContextEnabled && {
           betas: ['context-1m-2025-08-07'] as SdkBeta[],
         }),
         onStderr: (data: string) => {
@@ -1251,6 +1267,23 @@ export class AgentOrchestrator {
       const RETRY_VISIBILITY_THRESHOLD = 5
       const canAutoRetry = (attempt: number): boolean =>
         attempt <= MAX_AUTO_RETRIES && retryDelayElapsedMs < MAX_AUTO_RETRY_WAIT_MS
+
+      // 记录交给 SDK 的脱敏路由输入；它证明本地配置，不宣称最终 TLS 对端。
+      let agentUrlForLog: URL | undefined
+      try { agentUrlForLog = new URL(agentUrl) } catch { /* 无效 URL 将由 SDK/上游返回错误 */ }
+      console.info('[Agent 编排] SDK 路由输入:', {
+        sessionId,
+        channelId,
+        provider: channel.provider,
+        configuredModelId,
+        effectiveSdkModelId,
+        oneMillionContextEnabled,
+        betaCount: oneMillionContextEnabled ? 1 : 0,
+        authMode: forceBearerAuth ? 'bearer' : 'api-key',
+        agentUrlOrigin: agentUrlForLog?.origin ?? 'invalid',
+        agentUrlPathname: agentUrlForLog?.pathname ?? '',
+        appProxyEnabled: Boolean(sdkEnv.HTTP_PROXY || sdkEnv.HTTPS_PROXY),
+      })
 
       /** 捕获到的 SDK session ID（用于 resume / recovery） */
       let capturedSdkSessionId = existingSdkSessionId
@@ -1540,6 +1573,15 @@ export class AgentOrchestrator {
                   lastRetryableError = typedError.title
                     ? `${typedError.title}: ${typedError.message}`
                     : typedError.message
+                  console.log(`[Agent 编排] 自动重试决策:`, {
+                    sessionId,
+                    channelId,
+                    modelId: modelId || DEFAULT_MODEL_ID,
+                    provider: channel.provider,
+                    httpStatus: originalError.match(/\b(?:API Error:|HTTP)\s*(\d{3})/i)?.[1] ?? 'unknown',
+                    typedErrorCode: typedError.code,
+                    retryDecision: 'auto_retry',
+                  })
                   console.log(`[Agent 编排] 可重试错误 (assistant error): ${typedError.code} - ${lastRetryableError}`)
                   this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
                   accumulatedMessages.length = 0

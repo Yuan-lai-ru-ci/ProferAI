@@ -4,7 +4,14 @@ import { validateAgentSendBinding } from './agent-send-binding'
 
 const input = { sessionId: 's1', workspaceId: 'ws1', channelId: 'ch2' } as AgentSendInput
 const session = { id: 's1', workspaceId: 'ws1', channelId: 'ch1' } as AgentSessionMeta
-const channel = { id: 'ch2', enabled: true } as Channel
+const channel = {
+  id: 'ch2',
+  enabled: true,
+  models: [
+    { id: 'model-enabled', name: 'Enabled model', enabled: true },
+    { id: 'model-disabled', name: 'Disabled model', enabled: false },
+  ],
+} as Channel
 
 describe('Agent 消息发送归属校验', () => {
   test('Given 不存在 session When 校验 Then 拒绝且返回稳定错误码', () => {
@@ -22,6 +29,13 @@ describe('Agent 消息发送归属校验', () => {
   })
 
   test('Given session 历史渠道不同但请求渠道已启用 When 校验 Then 保留合法切换', () => {
-    expect(validateAgentSendBinding(input, session, true, channel)).toEqual({ ok: true })
+    expect(validateAgentSendBinding({ ...input, modelId: 'model-enabled' }, session, true, channel)).toEqual({ ok: true })
+  })
+
+  test('Given model 不属于渠道或已停用 When 校验 Then 在启动 SDK 前拒绝', () => {
+    expect(validateAgentSendBinding({ ...input, modelId: 'other-channel-model' }, session, true, channel))
+      .toMatchObject({ ok: false, code: 'AGENT_MODEL_NOT_IN_CHANNEL' })
+    expect(validateAgentSendBinding({ ...input, modelId: 'model-disabled' }, session, true, channel))
+      .toMatchObject({ ok: false, code: 'AGENT_MODEL_DISABLED' })
   })
 })

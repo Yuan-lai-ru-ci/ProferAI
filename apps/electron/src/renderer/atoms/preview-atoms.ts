@@ -64,7 +64,7 @@ export const currentSessionPreviewOpenAtom = atom<boolean>((get) => {
 // ===== 引用选中文本（Quoted Selection）=====
 
 /** 选中文本引用的来源 */
-export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad'
+export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad' | 'knowledge-preview'
 
 /** 从预览面板或 Agent 历史中选中的文本引用 */
 export interface QuotedSelection {

@@ -2023,7 +2023,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label="论文知识库"
+                aria-label="知识库"
                 onClick={handleOpenKnowledgeBase}
                 className={cn(
                   'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
@@ -2035,7 +2035,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 <Library size={16} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">论文知识库</TooltipContent>
+            <TooltipContent side="right">知识库</TooltipContent>
           </Tooltip>
           )}
         </div>
@@ -2182,7 +2182,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       <div className="px-3 pb-0.5">
         <button
           type="button"
-          aria-label="论文知识库"
+          aria-label="知识库"
           onClick={handleOpenKnowledgeBase}
           className={cn(
             'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
@@ -2193,7 +2193,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         >
           <span className="flex items-center gap-3 min-w-0">
             <Library size={16} className={cn('flex-shrink-0', activeView === 'knowledge-base' ? 'text-accent-foreground' : 'text-foreground/45')} />
-            <span className="truncate">论文知识库</span>
+            <span className="truncate">知识库</span>
           </span>
         </button>
       </div>

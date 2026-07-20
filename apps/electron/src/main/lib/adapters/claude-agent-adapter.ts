@@ -438,23 +438,6 @@ export function mapSDKErrorToTypedError(
   }
 
   const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
-  const upstreamBillingPage = /(?:zyloo\.io|dashboard\/billing)/i.test(`${detailedMessage}\n${originalError}`)
-  // 独立上游代理的 402 不代表 Profer 账户 credits 为零。该类错误可能是模型池短暂预扣失败，
-  // 允许用户重试或切换当前 Agent 模型，避免把仍有余额的用户误导为必须充值。
-  if (upstreamBillingPage) {
-    return {
-      code: 'provider_error',
-      title: '模型渠道额度暂不可用',
-      message: '所选模型的上游渠道暂时无法预扣费用；你的 Profer 余额可能仍可用。请重试或切换模型。',
-      actions: [
-        { key: 'r', label: '重试', action: 'retry' },
-        { key: 's', label: '切换模型', action: 'settings' },
-      ],
-      canRetry: true,
-      retryDelayMs: 1000,
-      originalError,
-    }
-  }
 
   // 额度不足：Profer 自有 402 或 New API 上游 403「预扣费额度失败」（含美元文案）。
   // 必须在 errorMap['authentication_failed'] 之前拦截——New API 的额度 403 文本含
@@ -643,6 +626,12 @@ const FORCE_KILL_GRACE_MS = 10_000
  * 与 SDK 自动唤醒机制的时限上界对齐：ScheduleWakeup 最长 3600s、非持久 Monitor 最长 3600000ms。
  * 超过此窗口无任何 task_notification/活动，说明 persistent Monitor 已无事件，安全释放子进程。
  */
+/**
+ * SDK 只读取当前 Agent cwd 的项目级设置，不读取用户全局 ~/.claude/settings.json。
+ * 用户级设置可能包含独立 Claude Code 的 Base URL、认证或模型覆盖，不能污染 Profer 渠道。
+ */
+export const SDK_SETTING_SOURCES: import('@anthropic-ai/claude-agent-sdk').SettingSource[] = ['project']
+
 const BACKGROUND_IDLE_TIMEOUT_MS = 60 * 60 * 1000
 
 /**
@@ -855,8 +844,8 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         abortController: controller,
         env: options.env,
         systemPrompt: options.systemPrompt,
-        // 不加载 user 级别的 ~/.claude/settings.json
-        settingSources: ['user', 'project'],
+        // 仅加载当前 Agent cwd 的项目级设置；禁止读取用户全局 ~/.claude/settings.json。
+        settingSources: SDK_SETTING_SOURCES,
 
         // 条件字段
         ...(options.canUseTool && { canUseTool: options.canUseTool }),
