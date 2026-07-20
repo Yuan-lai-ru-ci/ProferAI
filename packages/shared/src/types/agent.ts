@@ -1687,6 +1687,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
   /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效）。 */
   UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
+  /** 切换指定空闲会话的 Agent runtime；跨 runtime 时清除 SDK 会话恢复 ID。 */
+  UPDATE_SESSION_AGENT_RUNTIME: 'agent:update-session-agent-runtime',
 
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */
