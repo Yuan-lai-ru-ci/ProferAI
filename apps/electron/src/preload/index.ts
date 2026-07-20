@@ -682,6 +682,8 @@ export interface ElectronAPI {
 
   /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
   updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => Promise<void>
+  /** 切换当前会话的 ChatGPT Codex Fast Mode。 */
+  updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
 
   /** 获取工作区记忆摘要 */
   getWorkspaceMemorySummary: (workspaceSlug: string) => Promise<WorkspaceMemorySummary>
@@ -1981,6 +1983,10 @@ const electronAPI: ElectronAPI = {
 
   updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode)
+  },
+
+  updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
   },
 
   getWorkspaceMemorySummary: (workspaceSlug: string) => {

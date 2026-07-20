@@ -26,6 +26,7 @@ import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getProferUserAgent } from '@profer/core'
 import { parseMiniMaxGeneralQuotaWindows } from './channel-plan-quota-parsers'
+import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
 import { isCommercialBuild } from './build-target'
 import {
   inferAgentBaseUrl,
@@ -1067,7 +1068,7 @@ export async function getChannelPlanQuota(channelId: string): Promise<import('@p
   }
 
   const provider = channel.provider
-  const supportsPlanQuota = supportsProviderPlanQuota(provider) || channel.baseUrl.includes('api.kimi.com/coding')
+  const supportsPlanQuota = provider === 'openai-codex' || supportsProviderPlanQuota(provider) || channel.baseUrl.includes('api.kimi.com/coding')
   if (!supportsPlanQuota) {
     return createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询')
   }
@@ -1081,6 +1082,20 @@ export async function getChannelPlanQuota(channelId: string): Promise<import('@p
 
   try {
     const proxyUrl = await getEffectiveProxyUrl()
+    if (provider === 'openai-codex') {
+      const response = await getFetchFn(proxyUrl)('https://chatgpt.com/backend-api/wham/usage', withTimeout({
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+          'User-Agent': getProferUserAgent(pkg.version),
+        },
+      }))
+      if (!response.ok) {
+        return createUnsupportedPlanQuota(provider, `ChatGPT Codex 额度查询失败: HTTP ${response.status}`)
+      }
+      return parseCodexPlanQuotaResponse(await response.json())
+    }
     if (provider === 'deepseek') {
       return await queryDeepSeekBalance(apiKey, channel.baseUrl, proxyUrl)
     }

@@ -45,7 +45,7 @@ export function ChannelPlanQuotaBadge({ channel }: { channel: Channel }): React.
     if (!supportsChannelPlanQuota(channel)) return
 
     let cancelled = false
-    fetchChannelPlanQuota(channel.id)
+    fetchChannelPlanQuota(channel.id, channel.updatedAt)
       .then((result) => {
         if (!cancelled) setQuota(result)
       })
@@ -53,7 +53,7 @@ export function ChannelPlanQuotaBadge({ channel }: { channel: Channel }): React.
     return () => {
       cancelled = true
     }
-  }, [channel.id, channel.provider, channel.baseUrl])
+  }, [channel.id, channel.provider, channel.baseUrl, channel.updatedAt])
 
   if (!supportsChannelPlanQuota(channel)) return null
 

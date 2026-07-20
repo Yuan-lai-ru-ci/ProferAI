@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, FeishuSessionMirrorSettings } from '@profer/shared'
+import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, FeishuSessionMirrorSettings, AgentRuntime } from '@profer/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode'
@@ -198,6 +198,9 @@ export type MarkdownFontSize = 'small' | 'medium' | 'large'
 /** 默认 Markdown 字号档位 */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = 'medium'
 
+/** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
+
 /** 应用设置 */
 export interface AppSettings {
   /** 主题模式 */
@@ -210,6 +213,8 @@ export interface AppSettings {
   agentChannelId?: string
   /** Agent 默认模型 ID */
   agentModelId?: string
+  /** 新建 Agent 会话的默认 runtime；历史设置缺省时回退 Claude。 */
+  agentRuntime?: AgentRuntime
   /** Agent 启用的渠道 ID 列表（多选，Switch 开关） */
   agentChannelIds?: string[]
   /** Agent 当前工作区 ID */

@@ -28,6 +28,8 @@ import type {
   AgentExternalRunSource,
 } from '@profer/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
+import { PiAgentAdapter } from './adapters/pi-agent-adapter'
+import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
@@ -36,7 +38,10 @@ import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-man
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-const adapter = new ClaudeAgentAdapter()
+const claudeAdapter = new ClaudeAgentAdapter()
+const piAdapter = new PiAgentAdapter()
+// Both runtimes remain behind the same orchestrator, credential gate, P0 lifecycle and Plan-mode boundary.
+const adapter = new RuntimeRoutingAgentAdapter({ claude: claudeAdapter, pi: piAdapter })
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */

@@ -5,6 +5,7 @@
  */
 
 import type { KnowledgeReference } from './knowledge-base'
+import type { AgentRuntime } from './agent-provider'
 
 // ===== Agent 工作区 =====
 
@@ -107,6 +108,22 @@ export type ThinkingConfig =
  * - max: 最大深度（仅 Opus 4.6）
  */
 export type AgentEffort = 'low' | 'medium' | 'high' | 'max'
+
+/** Pi runtime thinking level. Claude continues to use ThinkingConfig and AgentEffort. */
+export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/** Models whose Codex OAuth provider can opt into priority service tier. */
+export const CODEX_FAST_MODE_MODEL_IDS = [
+  'gpt-5.4',
+  'gpt-5.5',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+] as const
+
+export function isCodexFastModeSupportedModel(modelId: string | undefined): boolean {
+  return modelId !== undefined && (CODEX_FAST_MODE_MODEL_IDS as readonly string[]).includes(modelId.toLowerCase())
+}
 
 /**
  * 自定义子代理定义
@@ -413,6 +430,8 @@ export type ErrorCode =
   | 'windows_shell_missing'
   | 'channel_not_found'
   | 'api_key_decrypt_failed'
+  | 'runtime_unavailable'
+  | 'agent_runtime_not_found'
   | 'claude_binary_not_found'
   | 'session_busy'
   | 'unknown_error'
@@ -631,6 +650,10 @@ export interface AgentSessionMeta {
   modelId?: string
   /** SDK 内部会话 ID（用于 resume 衔接上下文） */
   sdkSessionId?: string
+  /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
+  agentRuntime?: AgentRuntime
+  /** ChatGPT Codex Fast Mode；仅 Pi + Codex 的受支持模型实际生效。 */
+  codexFastMode?: boolean
   /** 所属工作区 ID */
   workspaceId?: string
   /** 是否置顶 */
@@ -966,6 +989,8 @@ export interface AgentSendInput {
   modelId?: string
   /** 工作区 ID（用于确定 cwd） */
   workspaceId?: string
+  /** 本轮请求的 runtime；缺省时由会话元数据（历史会话回退 Claude）决定。 */
+  agentRuntime?: AgentRuntime
   /** 附加的外部目录（绝对路径，传递给 SDK additionalDirectories） */
   additionalDirectories?: string[]
   /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */
@@ -1656,6 +1681,8 @@ export const AGENT_IPC_CHANNELS = {
   PERMISSION_RESPOND: 'agent:permission:respond',
   /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
   UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
+  /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效）。 */
+  UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
 
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */
