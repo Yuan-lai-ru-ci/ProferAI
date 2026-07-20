@@ -21,7 +21,6 @@ import { Button } from '@/components/ui/button'
 import { pendingAgentRecommendationAtom } from '@/atoms/chat-atoms'
 import {
   agentChannelIdAtom,
-  agentModelIdAtom,
   agentWorkspacesAtom,
   agentSessionsAtom,
   currentAgentSessionIdAtom,
@@ -66,7 +65,6 @@ export function AgentRecommendBanner(): React.ReactElement | null {
         undefined,
         agentChannelId,
         defaultWorkspaceId ?? undefined,
-        store.get(agentModelIdAtom) || undefined,
       )
 
       // 2. 迁移 Chat 对话记录到新 Agent 会话

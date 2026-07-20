@@ -20,22 +20,13 @@ import type {
   FetchModelsInput,
   FetchModelsResult,
   ProviderType,
-  CodexOAuthCredentials,
 } from '@profer/shared'
-import {
-  isCodexCredentialExpired,
-  parseCodexCredentials,
-  PROVIDER_DEFAULT_AGENT_URLS,
-  PROVIDER_DEFAULT_URLS,
-  serializeCodexCredentials,
-  supportsProviderPlanQuota,
-} from '@profer/shared'
+import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getProferUserAgent } from '@profer/core'
 import { parseMiniMaxGeneralQuotaWindows } from './channel-plan-quota-parsers'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
-import { refreshCodexOAuth } from './codex-oauth-service'
 import { isCommercialBuild } from './build-target'
 import {
   inferAgentBaseUrl,
@@ -439,54 +430,6 @@ export function decryptApiKey(channelId: string): string {
   }
 
   return decryptKey(channel.apiKey)
-}
-
-/** 同一 Codex channel 的并发 refresh 合并为一次，避免旋转 token 相互覆盖。 */
-const inflightCodexRefresh = new Map<string, Promise<CodexOAuthCredentials>>()
-
-/** 保存 Pi 运行期刷新后的完整 Codex OAuth 凭据到对应 Profer channel。 */
-export function persistCodexOAuthCredentials(channelId: string, credentials: CodexOAuthCredentials): void {
-  const channel = getChannelById(channelId)
-  if (!channel || channel.provider !== 'openai-codex') {
-    throw new Error(`Codex 渠道不存在或类型不匹配: ${channelId}`)
-  }
-
-  const existing = parseCodexCredentials(decryptKey(channel.apiKey))
-  updateChannel(channelId, {
-    apiKey: serializeCodexCredentials({
-      ...credentials,
-      accountId: credentials.accountId ?? existing?.accountId,
-    }),
-  })
-}
-
-/**
- * 读取 channel 中加密存储的完整 Codex OAuth credential，过期时先刷新并回写。
- * Pi runtime 需完整 credential 才能在本次运行期间按真实 expires 自动刷新。
- */
-export async function resolveCodexOAuthCredentials(channelId: string): Promise<CodexOAuthCredentials> {
-  const channel = getChannelById(channelId)
-  if (!channel) throw new Error(`渠道不存在: ${channelId}`)
-
-  const credentials = parseCodexCredentials(decryptKey(channel.apiKey))
-  if (!credentials) throw new Error('ChatGPT 登录凭据无效或缺失，请重新登录')
-  if (!isCodexCredentialExpired(credentials)) return credentials
-
-  const existing = inflightCodexRefresh.get(channelId)
-  if (existing) return existing
-
-  const refreshPromise = (async () => {
-    try {
-      const refreshed = await refreshCodexOAuth(credentials.refresh)
-      const merged = { ...refreshed, accountId: refreshed.accountId ?? credentials.accountId }
-      persistCodexOAuthCredentials(channelId, merged)
-      return merged
-    } finally {
-      inflightCodexRefresh.delete(channelId)
-    }
-  })()
-  inflightCodexRefresh.set(channelId, refreshPromise)
-  return refreshPromise
 }
 
 /**

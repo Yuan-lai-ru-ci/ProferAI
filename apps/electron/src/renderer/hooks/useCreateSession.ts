@@ -12,7 +12,6 @@ import {
 import {
   agentSessionsAtom,
   agentChannelIdAtom,
-  agentModelIdAtom,
   currentAgentWorkspaceIdAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -25,8 +24,6 @@ interface CreateSessionOptions {
   draft?: boolean
   /** 覆盖默认渠道 ID（仅 Agent 会话） */
   channelId?: string
-  /** 覆盖默认模型 ID（仅 Agent 会话） */
-  modelId?: string
 }
 
 interface CreateSessionActions {
@@ -50,7 +47,6 @@ export function useCreateSession(): CreateSessionActions {
   // Agent
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
-  const agentModelId = useAtomValue(agentModelIdAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
 
   const createChat = async (options?: CreateSessionOptions): Promise<string | undefined> => {
@@ -82,7 +78,6 @@ export function useCreateSession(): CreateSessionActions {
         undefined,
         options?.channelId ?? agentChannelId ?? undefined,
         currentWorkspaceId || undefined,
-        options?.modelId ?? agentModelId ?? undefined,
       )
       setAgentSessions((prev) => [meta, ...prev])
       openSession('agent', meta.id, meta.title)
