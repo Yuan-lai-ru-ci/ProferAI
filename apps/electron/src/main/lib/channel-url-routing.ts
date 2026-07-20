@@ -34,7 +34,12 @@ export function inferAgentBaseUrl(provider: ProviderType, baseUrl?: string, agen
     return baseUrl?.trim() ? normalizeBaseUrl(baseUrl) : undefined
   }
 
-  return PROVIDER_DEFAULT_AGENT_URLS[provider] ?? (isAgentCompatibleProvider(provider) ? baseUrl?.trim() : undefined)
+  // Pi runtime 原生支持 OpenAI Completions / Responses；它们没有独立的
+  // Anthropic Agent endpoint，必须复用用户渠道的 Base URL。否则已有 OpenAI
+  // 渠道在切换到 Pi 时会把 undefined 传入模型注册层。
+  const usesPiOpenAiApi = provider === 'openai' || provider === 'openai-responses'
+  return PROVIDER_DEFAULT_AGENT_URLS[provider]
+    ?? (isAgentCompatibleProvider(provider) || usesPiOpenAiApi ? baseUrl?.trim() : undefined)
 }
 
 export function normalizeChannelForCurrentSchema(channel: Channel): { channel: Channel; changed: boolean } {
