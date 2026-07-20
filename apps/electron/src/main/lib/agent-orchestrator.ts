@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentRuntime, AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, ProviderType } from '@proma/shared'
+import type { AgentRuntime, AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, CodexOAuthCredentials, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, ProviderType } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -39,7 +39,7 @@ import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, m
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
-import { decryptApiKey, getChannelById, listChannels, resolveChannelRuntimeApiKey, resolveCodexAccessToken } from './channel-manager'
+import { decryptApiKey, getChannelById, listChannels, persistCodexOAuthCredentials, resolveChannelRuntimeApiKey, resolveCodexOAuthCredentials } from './channel-manager'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
@@ -943,12 +943,16 @@ export class AgentOrchestrator {
     }
 
     let apiKey: string
+    let codexOAuthCredentials: CodexOAuthCredentials | undefined
     try {
-      // ChatGPT (Codex) OAuth 渠道：apiKey 字段存的是加密凭据 JSON，需解析并按需刷新，
-      // 取出可用的 access token 传给 pi runtime；其余渠道直接解密 API Key。
-      apiKey = channel.provider === 'openai-codex'
-        ? await resolveCodexAccessToken(channelId)
-        : decryptApiKey(channelId)
+      // ChatGPT (Codex) OAuth 渠道必须保留完整凭据给 Pi runtime，才能按真实
+      // expires 刷新；其余渠道只需解密 API Key。
+      if (channel.provider === 'openai-codex') {
+        codexOAuthCredentials = await resolveCodexOAuthCredentials(channelId)
+        apiKey = codexOAuthCredentials.access
+      } else {
+        apiKey = decryptApiKey(channelId)
+      }
     } catch (err) {
       if (channel.provider === 'openai-codex') {
         reportPreflightError({
@@ -1617,6 +1621,12 @@ export class AgentOrchestrator {
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
         ...(isCompactCommand ? { compactRequest: true } : {}),
         ...(sessionMeta?.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
+        ...(codexOAuthCredentials && {
+          codexOAuthCredentials,
+          onCodexOAuthCredentialsRefreshed: (credentials: CodexOAuthCredentials) => {
+            persistCodexOAuthCredentials(channelId, credentials)
+          },
+        }),
         ...((channel.provider === 'openai-codex' || channel.provider === 'openai-responses')
           && isOpenAIReasoningSupportedModel(selectedModelId) && {
             openAIThinkingLevel: resolvePiThinkingLevel(appSettings, sessionMeta, channel.provider),
