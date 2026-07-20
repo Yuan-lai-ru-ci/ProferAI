@@ -148,6 +148,7 @@ import {
   syncChannelsFromServer,
   isCommercialMode,
 } from './lib/channel-manager'
+import { listChannelsWithBackgroundSync } from './lib/local-first-channel-listing'
 import {
   listConversations,
   createConversation,
@@ -1225,19 +1226,21 @@ export function registerIpcHandlers(): void {
 
   // ===== 渠道管理相关 =====
 
-  // 获取所有渠道（apiKey 保持加密态）
-  // 商业模式下先从服务端拉取最新渠道，再返回本地列表
+  // 获取所有渠道（apiKey 保持加密态）。本地缓存必须优先返回，
+  // 不能因商业渠道认证/同步的网络等待阻塞对话模型选择器。
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.LIST,
-    async (): Promise<Channel[]> => {
-      try {
-        const { getTeamAuthWithRefresh } = require('./lib/auth-service')
-        const auth = await getTeamAuthWithRefresh()
-        if (auth && isCommercialMode()) {
-          await syncChannelsFromServer(auth.baseUrl, auth.token)
-        }
-      } catch { /* 非商业模式或无网络，使用本地缓存 */ }
-      return listChannels()
+    (): Channel[] => {
+      const { getTeamAuthWithRefresh } = require('./lib/auth-service')
+      return listChannelsWithBackgroundSync({
+        listLocalChannels: listChannels,
+        isCommercialMode,
+        getTeamAuthWithRefresh,
+        syncChannelsFromServer,
+        onSyncFailure: (error) => {
+          console.warn('[渠道管理] 后台同步渠道失败，继续使用本地缓存:', error)
+        },
+      })
     }
   )
 
