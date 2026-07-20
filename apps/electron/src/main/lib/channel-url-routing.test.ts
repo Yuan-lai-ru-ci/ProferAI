@@ -47,4 +47,10 @@ describe('渠道 Chat/Agent URL 路由', () => {
 
     expect(agentUrl).toBe('https://gateway.example.com/anthropic')
   })
+
+  test('Given OpenAI 渠道没有单独 Agent URL When Pi runtime 请求 Then 复用用户配置的 OpenAI Base URL', () => {
+    const agentUrl = inferAgentBaseUrl('openai', 'https://cn.clawnode.cn/v1')
+
+    expect(agentUrl).toBe('https://cn.clawnode.cn/v1')
+  })
 })
