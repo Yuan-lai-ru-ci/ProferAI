@@ -15,6 +15,7 @@ import {
   RETRY_MAX_DELAY_MS,
 } from './agent-retry-utils'
 import type { TypedError } from '@profer/shared'
+import { mapSDKErrorToTypedError } from './adapters/claude-agent-adapter'
 
 function typedError(code: TypedError['code'], message = ''): TypedError {
   return {
@@ -73,6 +74,14 @@ describe('isAutoRetryableTypedError', () => {
 
   test('invalid_request 不可自动重试', () => {
     expect(isAutoRetryableTypedError(typedError('invalid_request', 'Bad request'))).toBe(false)
+  })
+
+  test('上游 billing URL 的 402 不可自动重试', () => {
+    const message = 'API Error: 402 Insufficient credit. Add funds at zyloo.io/dashboard/billing.'
+    const mapped = mapSDKErrorToTypedError('unknown', message, message)
+    expect(mapped.code).toBe('insufficient_credits')
+    expect(mapped.canRetry).toBe(false)
+    expect(isAutoRetryableTypedError(mapped)).toBe(false)
   })
 })
 

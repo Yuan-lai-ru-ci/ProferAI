@@ -17,7 +17,7 @@ export const longTextPasteAsAttachmentEnabledAtom = atom<boolean>(false)
 /** 输入框是否渲染 Markdown 富文本格式（默认关闭，纯文本模式；开启后渲染富文本，仍保留 Mention 引用） */
 export const richTextRenderingEnabledAtom = atom<boolean>(false)
 
-/** 是否在侧边栏显示论文知识库入口 */
+/** 是否在侧边栏显示知识库入口（保留旧设置 key 以兼容已有用户偏好） */
 export const paperKnowledgeBaseEnabledAtom = atom<boolean>(true)
 
 // ===== 初始化 =====
@@ -78,12 +78,12 @@ export async function updateRichTextRenderingEnabled(enabled: boolean): Promise<
 }
 
 /**
- * 更新论文知识库开关并持久化
+ * 更新知识库开关并持久化（保留旧设置 key 以兼容已有用户偏好）
  */
 export async function updatePaperKnowledgeBaseEnabled(enabled: boolean): Promise<void> {
   try {
     await window.electronAPI.updateSettings({ paperKnowledgeBaseEnabled: enabled })
   } catch (error) {
-    console.error('[UI偏好] 更新论文知识库设置失败:', error)
+    console.error('[UI偏好] 更新知识库设置失败:', error)
   }
 }

@@ -29,5 +29,14 @@ export function validateAgentSendBinding(
   if (!channel.enabled) {
     return { ok: false, code: 'AGENT_CHANNEL_DISABLED', message: `Agent 渠道已停用: ${input.channelId}` }
   }
+  if (input.modelId) {
+    const model = channel.models?.find((candidate) => candidate.id === input.modelId)
+    if (!model) {
+      return { ok: false, code: 'AGENT_MODEL_NOT_IN_CHANNEL', message: `所选模型不属于当前 Agent 渠道: ${input.modelId}` }
+    }
+    if (!model.enabled) {
+      return { ok: false, code: 'AGENT_MODEL_DISABLED', message: `所选 Agent 模型已停用: ${input.modelId}` }
+    }
+  }
   return { ok: true }
 }

@@ -54,6 +54,8 @@ jobs:
       - name: Run unit and regression tests
         run: bun test --timeout 30000
 
+      - name: Run Node.js server reliability gate
+        run: bun run server:test:node
       - name: Build GitHub app
         run: bun run electron:build:github
         working-directory: .
