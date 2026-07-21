@@ -1439,6 +1439,10 @@ export class AgentOrchestrator {
 
             pendingNext = null
             const msg = iterResult.value
+            if (msg.type === 'result' && configuredModelId) {
+              const resultRecord = msg as Record<string, unknown>
+              if (!resultRecord._channelModelId) resultRecord._channelModelId = configuredModelId
+            }
             // Pi 的 partial 是累计全文预览，不是正式 turn 消息：不得进入持久化、错误终态或重试语义。
             const isPartialMessage = isPartialSDKMessage(msg)
 

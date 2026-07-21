@@ -20,7 +20,11 @@
  * 避免对整份会话 JSONL 全量 JSON.parse（高频 daily 任务一天可触发数百次）。
  */
 
-import { calculateContextUsageRatio, inferContextWindow } from '@profer/shared'
+import {
+  calculateContextUsageRatio,
+  inferContextWindow,
+  resolveContextWindowFromModelUsage,
+} from '@profer/shared'
 import type { SDKAssistantMessage, SDKResultMessage } from '@profer/shared'
 import { existsSync, readFileSync } from 'node:fs'
 import { getAgentSessionMessagesPath } from './config-paths'
@@ -94,19 +98,10 @@ export function getSessionContextUsageRatio(sessionId: string): number | undefin
  *
  * SDK 0.3.142+ Task 工具默认启用后，单次 result 可能包含多个模型（主对话 + 子 agent），
  * modelUsage 会有多个 entry。result.usage 是聚合值，其中大头通常属于主模型，
- * 所以用**最大** contextWindow 作为分母最接近"主模型视角的占用率"——这样：
- *   - 单 entry（常态）：行为与从前一致
- *   - 多 entry：避免被子 agent 的小窗口拉低、过早误触发 daily 切换阈值
- *
+ * 所以优先用持久化的渠道主模型 ID 精确匹配；历史 result 没有主模型 ID 或匹配失败时，
+ * 再取最大的有效 contextWindow，避免被排列在首位的子 agent 小窗口误导。
  * 每个 entry 优先用 SDK 实测的 contextWindow，缺失时按 modelId 推断。
  */
-function pickResultContextWindow(result: SDKResultMessage): number | undefined {
-  if (!result.modelUsage) return undefined
-  let best: number | undefined
-  for (const [modelId, info] of Object.entries(result.modelUsage)) {
-    const win = info?.contextWindow ?? inferContextWindow(modelId)
-    if (win === undefined) continue
-    if (best === undefined || win > best) best = win
-  }
-  return best
+export function pickResultContextWindow(result: SDKResultMessage): number | undefined {
+  return resolveContextWindowFromModelUsage(result.modelUsage, result._channelModelId)
 }

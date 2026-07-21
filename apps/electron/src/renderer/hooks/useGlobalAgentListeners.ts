@@ -56,8 +56,8 @@ import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTab
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, ProferEvent, AgentSessionMeta } from '@profer/shared'
-import { inferContextWindow } from '@profer/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, ProferEvent, AgentSessionMeta } from '@profer/shared'
+import { inferContextWindow, resolveContextWindowFromModelUsage } from '@profer/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
@@ -239,13 +239,8 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
     }
 
     case 'result': {
-      const rMsg = msg as {
-        subtype: string
-        total_cost_usd?: number
-        modelUsage?: Record<string, { contextWindow?: number }>
-        usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
-      }
-      const contextWindow = rMsg.modelUsage ? Object.values(rMsg.modelUsage)[0]?.contextWindow : undefined
+      const rMsg = msg as SDKResultMessage
+      const contextWindow = resolveContextWindowFromModelUsage(rMsg.modelUsage, rMsg._channelModelId)
       // result.usage 是整个 query 内所有模型调用的累计求和，不能当成当前上下文占用，
       // 否则进度环会虚高、冲破 100%（PR #821 修的正是这个问题）。
       //
