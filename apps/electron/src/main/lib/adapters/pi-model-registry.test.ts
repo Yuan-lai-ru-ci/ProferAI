@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  DEFAULT_CONTEXT_WINDOW,
   buildModel,
   buildPiRequestHeaders,
   getCodexCatalogModels,
@@ -69,6 +70,82 @@ describe('Pi runtime 模型 ID [1m] 剥离', () => {
 
   test('Given undefined When strip Then 返回 undefined', () => {
     expect(stripAgentSdkContextSuffix(undefined)).toBeUndefined()
+  })
+})
+
+describe('Pi runtime DeepSeek V4 1M 上下文', () => {
+  test('Given DeepSeek provider 的 V4 Pro When catalog 未命中网关前缀 Then 仍注册 1M contextWindow', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-deepseek-v4',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'deepseek',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'gateway/deepseek-v4-pro',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.id).toBe('gateway/deepseek-v4-pro')
+    expect(result.model.contextWindow).toBe(1_000_000)
+  })
+
+  test('Given custom provider 的同名 V4 When 未显式声明 1M Then 保持保守默认窗口', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-custom-v4',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'custom',
+      baseUrl: 'https://gateway.example.com/v1',
+      model: 'gateway/deepseek-v4-pro',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.contextWindow).toBe(DEFAULT_CONTEXT_WINDOW)
+  })
+
+  test('Given anthropic-compatible provider 的 V4 When 未显式声明 1M Then 不继承全局 catalog 窗口', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-anthropic-compatible-v4',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'anthropic-compatible',
+      baseUrl: 'https://gateway.example.com',
+      model: 'deepseek-v4-pro',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.contextWindow).toBe(DEFAULT_CONTEXT_WINDOW)
+  })
+
+  test('Given custom provider 显式配置 [1m] When Pi 剥离 SDK 后缀 Then 保留 1M 能力声明', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-custom-v4-explicit',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'custom',
+      baseUrl: 'https://gateway.example.com/v1',
+      model: 'gateway/deepseek-v4-flash[1m]',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.id).toBe('gateway/deepseek-v4-flash')
+    expect(result.model.contextWindow).toBe(1_000_000)
   })
 })
 

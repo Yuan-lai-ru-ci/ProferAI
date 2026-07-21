@@ -14,6 +14,27 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000
 /** 1M 上下文窗口 */
 export const ONE_MILLION_CONTEXT_WINDOW = 1_000_000
 
+export interface ModelUsageContextInfo {
+  contextWindow?: number
+}
+
+/**
+ * 规范化用于上下文能力匹配的模型 ID。
+ * 去除 Claude Agent SDK 私有的 `[1m]` 后缀，并保留最后一个路径段以兼容网关前缀。
+ */
+export function normalizeContextModelId(modelId?: string): string | undefined {
+  const trimmed = modelId?.trim().toLowerCase().replace(/\[1m\]$/i, '')
+  if (!trimmed) return undefined
+  const segments = trimmed.split('/').filter(Boolean)
+  return segments.at(-1) ?? trimmed
+}
+
+/** 仅 DeepSeek V4 Pro / Flash 是当前产品已确认的 1M DeepSeek 模型。 */
+export function isDeepSeekV4Model(modelId?: string): boolean {
+  const model = normalizeContextModelId(modelId)
+  return model != null && /^deepseek-v4-(?:pro|flash)$/.test(model)
+}
+
 /**
  * 判断模型是否支持 1M context window beta（context-1m-2025-08-07）。
  *
@@ -30,18 +51,20 @@ export const ONE_MILLION_CONTEXT_WINDOW = 1_000_000
  */
 export function supports1MContext(modelId: string): boolean {
   if (!modelId) return false
-  const m = modelId.toLowerCase()
-  if (m.includes('haiku')) return false
+  const raw = modelId.trim().toLowerCase()
+  const hasExplicit1MSuffix = /\[1m\]$/i.test(raw)
+  const m = normalizeContextModelId(modelId)
+  if (!m || m.includes('haiku')) return false
   if (m.includes('claude')) {
     if (m.includes('sonnet-4')) return true
     if (m.includes('opus-4-6') || m.includes('opus-4-7') || m.includes('opus-4-8')) return true
     if (m.includes('fable-5')) return true
     return false
   }
-  if (m.includes('deepseek-v4')) return true
+  if (isDeepSeekV4Model(m)) return true
   if (m.includes('mimo-v2.5') || m.includes('mimo-v2-pro')) return true
   if (m.includes('glm-5.2')) return true
-  if (m.includes('glm-x-preview[1m]')) return true
+  if (m.includes('glm-x-preview') && hasExplicit1MSuffix) return true
   if (m.includes('minimax-m3')) return true
   // Kimi K3（短 ID 需精确匹配，避免误匹配其他含 "k3" 子串的模型名）
   if (m === 'k3' || m.startsWith('k3[')) return true
@@ -68,7 +91,6 @@ export function inferContextWindow(model?: string): number | undefined {
  */
 const AGENT_SDK_1M_PROVIDER_RULES: Partial<Record<ProviderType, readonly string[]>> = {
   anthropic: ['claude-sonnet-4', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5'],
-  deepseek: ['deepseek-v4'],
   'kimi-api': ['k3'],
   'kimi-coding': ['k3'],
   'zhipu-coding': ['glm-5.2'],
@@ -78,8 +100,8 @@ const AGENT_SDK_1M_PROVIDER_RULES: Partial<Record<ProviderType, readonly string[
 }
 
 function matchesAgentSdk1MRule(modelId: string, rule: string): boolean {
-  const model = modelId.toLowerCase()
-  return rule === 'k3' ? model === 'k3' || model.startsWith('k3[') : model.includes(rule)
+  const model = normalizeContextModelId(modelId)
+  return model != null && (rule === 'k3' ? model === 'k3' || model.startsWith('k3[') : model.includes(rule))
 }
 
 /**
@@ -92,6 +114,9 @@ export function resolveAgentSdkModelId(modelId: string, providerOrEnabled?: Prov
   if (!modelId || /\[1m\]$/i.test(modelId)) return modelId
   if (typeof providerOrEnabled === 'boolean') return providerOrEnabled ? `${modelId}[1m]` : modelId
   if (!providerOrEnabled) return modelId
+  if (providerOrEnabled === 'deepseek') {
+    return isDeepSeekV4Model(modelId) ? `${modelId}[1m]` : modelId
+  }
   const rules = AGENT_SDK_1M_PROVIDER_RULES[providerOrEnabled]
   if (!rules?.some(rule => matchesAgentSdk1MRule(modelId, rule))) return modelId
   return `${modelId}[1m]`
@@ -103,4 +128,37 @@ export function inferAgentSdkContextWindow(modelId: string | undefined, provider
   return resolveAgentSdkModelId(modelId, provider) !== modelId || /\[1m\]$/i.test(modelId)
     ? ONE_MILLION_CONTEXT_WINDOW
     : DEFAULT_CONTEXT_WINDOW
+}
+
+/**
+ * 从多模型 result 选择本轮上下文窗口。
+ * 优先选择配置的主模型；无法定位时使用最大的实测窗口，避免误取首个子 Agent 模型。
+ */
+export function resolveContextWindowFromModelUsage(
+  modelUsage?: Record<string, ModelUsageContextInfo>,
+  preferredModelId?: string,
+  fallbackModelId?: string,
+): number | undefined {
+  const entries = Object.entries(modelUsage ?? {})
+  const canonicalize = (modelId?: string) => modelId?.trim().toLowerCase().replace(/\[1m\]$/i, '')
+  const preferredCanonical = canonicalize(preferredModelId)
+
+  if (preferredCanonical) {
+    const exactEntry = entries.find(([modelId]) => canonicalize(modelId) === preferredCanonical)
+    if (exactEntry) return exactEntry[1].contextWindow ?? inferContextWindow(exactEntry[0])
+
+    const preferredTail = normalizeContextModelId(preferredModelId)
+    const tailMatches = entries.filter(([modelId]) => normalizeContextModelId(modelId) === preferredTail)
+    if (tailMatches.length === 1) {
+      const [modelId, info] = tailMatches[0]!
+      return info.contextWindow ?? inferContextWindow(modelId)
+    }
+  }
+
+  let largest: number | undefined
+  for (const [modelId, info] of entries) {
+    const window = info.contextWindow ?? inferContextWindow(modelId)
+    if (window != null && (largest == null || window > largest)) largest = window
+  }
+  return largest ?? inferContextWindow(fallbackModelId)
 }

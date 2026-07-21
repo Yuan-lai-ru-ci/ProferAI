@@ -271,6 +271,9 @@ export function convertResultMessage(
   messages: AgentMessage[],
   sessionId: string,
   override?: RuntimeGuardResultOverride,
+  contextWindow?: number,
+  modelId?: string,
+  channelModelId?: string,
 ): SDKMessage {
   const assistants = messages.filter((m): m is AssistantMessage =>
     !!m && typeof m === 'object' && 'role' in m && m.role === 'assistant')
@@ -294,6 +297,8 @@ export function convertResultMessage(
     subtype: override?.subtype ?? (assistantError ? 'error_during_execution' : terminalReason === 'max_tokens' ? 'max_tokens' : 'success'),
     usage,
     total_cost_usd: costValues.length > 0 ? costValues.reduce((sum, cost) => sum + cost, 0) : undefined,
+    ...(contextWindow != null && { modelUsage: { [modelId ?? channelModelId ?? 'default']: { contextWindow } } }),
+    ...((channelModelId ?? modelId) && { _channelModelId: channelModelId ?? modelId }),
     terminal_reason: terminalReason,
     errors: override?.errors ?? (assistantError ? [assistantError] : undefined),
     session_id: sessionId,

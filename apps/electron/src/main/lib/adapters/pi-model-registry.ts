@@ -5,7 +5,12 @@
  * ProviderType 到 Pi API 协议、baseUrl、认证头和模型 catalog 默认值的映射。
  */
 
-import { extractZhipuCodingTeamApiToken, type ProviderType } from '@profer/shared'
+import {
+  ONE_MILLION_CONTEXT_WINDOW,
+  extractZhipuCodingTeamApiToken,
+  isDeepSeekV4Model,
+  type ProviderType,
+} from '@profer/shared'
 import {
   getProferUserAgent,
   normalizeAnthropicBaseUrlForSdk,
@@ -180,13 +185,29 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
   return undefined
 }
 
-async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
+async function resolvePiModelDefaults(
+  input: PiAgentQueryOptions,
+  explicit1MContext = false,
+): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
+  const isDeepSeekV4 = isDeepSeekV4Model(input.model)
+  const explicitCompatibleContextWindow = input.provider !== 'deepseek' && explicit1MContext && isDeepSeekV4
+    ? ONE_MILLION_CONTEXT_WINDOW
+    : undefined
+  const catalogContextWindow = input.provider !== 'deepseek' && isDeepSeekV4
+    ? undefined
+    : catalogModel?.contextWindow
+  const deepSeekCatalogMissContextWindow = !catalogModel && input.provider === 'deepseek' && isDeepSeekV4
+    ? ONE_MILLION_CONTEXT_WINDOW
+    : undefined
   return {
     reasoning: catalogModel?.reasoning ?? true,
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
-    contextWindow: catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    contextWindow: explicitCompatibleContextWindow
+      ?? catalogContextWindow
+      ?? deepSeekCatalogMissContextWindow
+      ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS,
   }
 }
@@ -333,11 +354,12 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   if (runtimeApiKey) {
     authStorage.setRuntimeApiKey(providerName, runtimeApiKey)
   }
-  // pi runtime 统一剥离 `[1m]` 后缀：无论上游从哪条路径传入，注册与查找都用干净 ID。
+  // Pi 请求使用干净模型 ID，但先保留用户显式 `[1m]` 配置，供未知兼容网关声明能力。
+  const explicit1MContext = /\[1m\]$/i.test(input.model ?? '')
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const registry = sdk.ModelRegistry.inMemory(authStorage)
   const api = normalizePiApi(input.provider)
-  const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })
+  const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId }, explicit1MContext)
   const baseUrl = normalizePiBaseUrl(input.baseUrl, input.provider)
   if (!baseUrl) {
     throw new Error(`渠道 ${input.channelName ?? input.provider} 缺少 Base URL`)

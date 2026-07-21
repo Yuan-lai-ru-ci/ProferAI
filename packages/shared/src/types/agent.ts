@@ -304,6 +304,8 @@ export interface SDKResultMessage {
   background_tasks?: SDKBackgroundTaskSummary[]
   session_crons?: SDKSessionCronSummary[]
   session_id?: string
+  /** 渠道配置的主模型 ID，用于多模型 usage 中定位主模型。 */
+  _channelModelId?: string
 }
 
 /** SDK system 消息（init / compact_boundary / permission_denied / task_started / task_progress / task_notification） */

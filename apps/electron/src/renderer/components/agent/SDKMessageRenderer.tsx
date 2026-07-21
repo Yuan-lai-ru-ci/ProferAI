@@ -65,6 +65,7 @@ import {
   THINKING_SIGNATURE_ERROR_TITLE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   isThinkingSignatureError,
+  resolveContextWindowFromModelUsage,
 } from '@profer/shared'
 import type { ToolActivity } from '@/atoms/agent-atoms'
 
@@ -164,7 +165,10 @@ function extractMeta(message: SDKMessage): MessageMeta {
 }
 
 /** 从 turn 消息列表中提取 result 消息的耗时和用量数据 */
-function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; usage?: AgentEventUsage } {
+export function extractTurnUsage(
+  turnMessages: SDKMessage[],
+  sessionModelId?: string,
+): { durationMs?: number; usage?: AgentEventUsage } {
   for (const msg of turnMessages) {
     if (msg.type !== 'result') continue
     const resultMsg = msg as SDKResultMessage
@@ -172,9 +176,10 @@ function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; us
     const durationMs = typeof raw._durationMs === 'number' ? raw._durationMs : undefined
     const u = resultMsg.usage
     if (!u) return { durationMs }
-    const contextWindow = resultMsg.modelUsage
-      ? Object.values(resultMsg.modelUsage)[0]?.contextWindow
-      : undefined
+    const contextWindow = resolveContextWindowFromModelUsage(
+      resultMsg.modelUsage,
+      resultMsg._channelModelId ?? sessionModelId,
+    )
     return {
       durationMs,
       usage: {
@@ -581,7 +586,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   }
 
   // 从 turnMessages 中提取 result 消息的耗时和用量
-  const { durationMs, usage } = extractTurnUsage(turn.turnMessages)
+  const { durationMs, usage } = extractTurnUsage(turn.turnMessages, sessionModelId)
 
   // 只在用户点击停止时显示中断徽章。
   // aborted_streaming / aborted_tools 是流式追加消息时的软中断，语义是继续补充信息。

@@ -24,6 +24,7 @@ import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   isThinkingSignatureError as matchesThinkingSignatureError,
+  resolveContextWindowFromModelUsage,
 } from '@profer/shared'
 import { detectInsufficientCredits } from '@profer/core'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
@@ -1010,11 +1011,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
             modelUsage?: Record<string, { contextWindow?: number }>
             terminal_reason?: string
           }
-          if (resultMsg.modelUsage) {
-            const firstEntry = Object.values(resultMsg.modelUsage)[0]
-            if (firstEntry?.contextWindow) {
-              options.onContextWindow?.(firstEntry.contextWindow)
-            }
+          const contextWindow = resolveContextWindowFromModelUsage(resultMsg.modelUsage, options.model)
+          if (contextWindow != null) {
+            options.onContextWindow?.(contextWindow)
           }
           // 被软中断 / 延迟工具 / hook 暂停等场景产生的 result：不关闭通道，
           // 让 SDK 继续读取通道中已排队（或后续注入）的消息并开启新一轮 turn。
