@@ -14,7 +14,10 @@ export {
   ONE_MILLION_CONTEXT_WINDOW,
   supports1MContext,
   inferContextWindow,
+  normalizeContextModelId,
+  isDeepSeekV4Model,
   resolveAgentSdkModelId,
+  resolveContextWindowFromModelUsage,
 } from './context-window'
 export { calculateContextUsageRatio } from './context-usage'
 export {

@@ -1428,6 +1428,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 event.messages,
                 session.sessionId,
                 runtimeGuard.getResultOverride(event.messages),
+                model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+                model.id,
+                input.model ?? session.model?.id,
               ))
               break
             case 'tool_execution_update':
