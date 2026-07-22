@@ -335,6 +335,12 @@ function buildAgentSessionTrees(sessions: AgentSessionMeta[]): AgentSessionTreeI
       isDelegatedChildSession(session)
       && session.parentSessionId
       && sessionIds.has(session.parentSessionId)
+      // 委派树不得跨项目归并。历史异常数据或并发切换项目产生的错误 workspaceId
+      // 应保持为可见根节点，避免子会话看起来被“合并”进另一个项目。
+      && sessions.some((parent) => (
+        parent.id === session.parentSessionId
+        && parent.workspaceId === session.workspaceId
+      ))
     ) {
       const children = childrenByParentId.get(session.parentSessionId) ?? []
       children.push(session)

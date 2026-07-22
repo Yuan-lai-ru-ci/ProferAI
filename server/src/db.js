@@ -306,7 +306,7 @@ export function adjustCreditDeduction(userId, oldAmount, newAmount, referenceId)
         .run(diff, diff, now, userId)
       db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
         VALUES (?, ?, ?, 'refund', ?, 'balance_purchased', 'api_adjust', ?, ?)`)
-        .run(uuidv4(), userId, diff, `实际用量调整：退还 ${diff} credits`, referenceId, now)
+        .run(uuidv4(), userId, diff, `实际用量调整：退还 ${diff} credits`, `${referenceId}_${now}`, now)
     } else {
       const extra = -diff
       db.prepare('UPDATE users SET balance_purchased = balance_purchased - ? WHERE id = ?').run(extra, userId)
@@ -314,7 +314,7 @@ export function adjustCreditDeduction(userId, oldAmount, newAmount, referenceId)
         .run(extra, extra, now, userId)
       db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
         VALUES (?, ?, ?, 'consumption', ?, 'balance_purchased', 'api_adjust', ?, ?)`)
-        .run(uuidv4(), userId, -extra, `实际用量调整：补扣 ${extra} credits`, referenceId, now)
+        .run(uuidv4(), userId, -extra, `实际用量调整：补扣 ${extra} credits`, `${referenceId}_${now}`, now)
     }
   })
   tx()

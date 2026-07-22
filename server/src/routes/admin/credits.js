@@ -153,7 +153,7 @@ adminCredits.post('/batch-reset', async (c) => {
         VALUES (?, ?, ?, 'admin_grant', ?, 'admin_reset', ?, ?)`)
         .run(uuidv4(), u.id, resetQuota,
           `管理员重置额度：${type} → $${resetUsd}（${resetQuota} quota）`,
-          adminId, now)
+          `${adminId}_${u.id}_${now}`, now)
 
       results.push({
         id: u.id,

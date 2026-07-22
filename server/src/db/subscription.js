@@ -38,7 +38,7 @@ function inferDripWeekStart(sub) {
 }
 
 /** 在调用方事务内执行；仅清除不属于 currentWeek 的未领 drip。 */
-function forfeitDrip(sub, { nextWeekStart = null, referenceType, description }, now) {
+function forfeitDrip(sub, { nextWeekStart = null, referenceType, description, referenceId = null }, now) {
   const available = sub.drip_available_this_week || 0
   if (available <= 0) return 0
 
@@ -46,7 +46,7 @@ function forfeitDrip(sub, { nextWeekStart = null, referenceType, description }, 
     .run(nextWeekStart, sub.id)
   db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
     VALUES (?, ?, ?, 'drip_expiry', ?, 'package', ?, ?, ?)`)
-    .run(uuidv4(), sub.user_id, 0, description(available), referenceType, sub.id, now)
+    .run(uuidv4(), sub.user_id, 0, description(available), referenceType, referenceId || sub.id, now)
   return available
 }
 
@@ -59,6 +59,7 @@ function expireStaleDrip(sub, currentWeek, now) {
   return forfeitDrip(sub, {
     nextWeekStart: currentWeek,
     referenceType: 'drip_weekly_clear',
+    referenceId: `${sub.id}_${currentWeek}`,
     description: (amount) => ownedWeek
       ? `周清零：${ownedWeek} 未领 drip ${Math.round(amount / 50000)} 积分`
       : `周清零：历史未归属 drip ${Math.round(amount / 50000)} 积分`,
@@ -275,6 +276,7 @@ export function confirmOrder(orderId, adminUserId) {
           if (!isActiveRenewal) {
             forfeitDrip(existingSub, {
               referenceType: 'drip_subscription_expiry',
+              referenceId: `${existingSub.id}_${now}`,
               description: (amount) => `套餐重新开通：过期未领取 drip ${Math.round(amount / 50000)} 积分失效`,
             }, now)
           }
@@ -400,6 +402,7 @@ export function destroySubscription(userId) {
       .run(now, sub.id)
     forfeitDrip(sub, {
       referenceType: 'drip_subscription_expiry',
+      referenceId: `${sub.id}_${now}`,
       description: (amount) => `套餐销毁：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
     }, now)
     db.prepare("UPDATE users SET membership_tier = 'free' WHERE id = ?").run(userId)
@@ -419,6 +422,7 @@ export function freezeSubscription(userId) {
     db.prepare("UPDATE subscriptions SET status = 'frozen' WHERE id = ?").run(sub.id)
     forfeitDrip(sub, {
       referenceType: 'drip_subscription_expiry',
+      referenceId: `${sub.id}_${now}`,
       description: (amount) => `套餐冻结：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
     }, now)
     return true
@@ -437,6 +441,7 @@ export function unfreezeSubscription(userId) {
     // 防御历史数据或旧版本冻结流程遗留的待领取池。
     forfeitDrip(sub, {
       referenceType: 'drip_subscription_expiry',
+      referenceId: `${sub.id}_${now}`,
       description: (amount) => `套餐恢复：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
     }, now)
     db.prepare("UPDATE subscriptions SET status = 'active', renewed_at = ? WHERE id = ?")
@@ -478,6 +483,7 @@ export function expireSubscription(userId) {
     // 2. 未领取 drip 随套餐到期失效，绝不能在续费时复活。
     forfeitDrip(sub, {
       referenceType: 'drip_subscription_expiry',
+      referenceId: `${sub.id}_${now}`,
       description: (amount) => `套餐到期：${sub.plan} 未领取 drip ${Math.round(amount / 50000)} 积分失效`,
     }, now)
 
@@ -576,7 +582,7 @@ export function claimDrip(userId) {
     syncCreditBalance(userId)
     db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
       VALUES (?, ?, ?, 'drip_claim', ?, 'package', 'drip_claim', ?, ?)`)
-      .run(uuidv4(), userId, amount, `领取本周 drip ${Math.round(amount / 50000)} 积分`, sub.id, now)
+      .run(uuidv4(), userId, amount, `领取本周 drip ${Math.round(amount / 50000)} 积分`, `${sub.id}_${today}`, now)
     return amount
   })
   return tx()
@@ -734,6 +740,7 @@ export function redeemCode(userId, { id: codeId, type, value, cycle }) {
           if (!isActiveRenewal) {
             forfeitDrip(existingSub, {
               referenceType: 'drip_subscription_expiry',
+              referenceId: `${existingSub.id}_${now}`,
               description: (amount) => `套餐重新开通：过期未领取 drip ${Math.round(amount / 50000)} 积分失效`,
             }, now)
           }

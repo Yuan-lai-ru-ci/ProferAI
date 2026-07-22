@@ -386,7 +386,11 @@ interface MessageResponseProps {
 
 /** 稳定引用的插件数组，避免 react-markdown 每帧重建插件管线 */
 const REMARK_PLUGINS = [remarkGfm, remarkMath]
-const REHYPE_PLUGINS = [rehypeKatex]
+// Agent 输出偶尔会把中文说明或标点放入数学分隔符；这类 KaTeX strict 警告不影响渲染，
+// 且在流式更新时会重复刷屏，因此仅对 Markdown 消息关闭该诊断。
+const REHYPE_PLUGINS: NonNullable<React.ComponentProps<typeof Markdown>['rehypePlugins']> = [
+  [rehypeKatex, { strict: 'ignore' }],
+]
 
 /** 允许 mention:// 协议通过 URL 清洗（react-markdown 默认只放行 http/https） */
 function mentionUrlTransform(url: string): string {
