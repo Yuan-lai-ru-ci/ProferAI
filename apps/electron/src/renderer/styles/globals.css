@@ -2141,6 +2141,36 @@
   border-color: hsl(var(--primary) / 0.35) !important;
 }
 
+/* CRT 终端：追问选中项不使用通用透明按钮样式。
+ * 深绿实底与亮绿描边明确标记选中状态，所有文案统一白色且无辉光。 */
+.theme-terminal-dark .ask-user-banner button.ask-user-option-selected {
+  background: hsl(100 22% 26%) !important;
+  border: 1px solid hsl(100 36% 54%) !important;
+  color: hsl(0 0% 100%) !important;
+  text-shadow: none !important;
+}
+.theme-terminal-dark .ask-user-banner button.ask-user-option-selected > span {
+  color: hsl(0 0% 100%) !important;
+  text-shadow: none !important;
+}
+.theme-terminal-dark .ask-user-banner .ask-user-option-description {
+  color: hsl(90 18% 72%) !important;
+  text-shadow: none !important;
+}
+.theme-terminal-dark .ask-user-banner .ask-user-option-description-selected {
+  color: hsl(0 0% 100%) !important;
+}
+/* 键盘焦点项不能只显示描边；文字与底色同步提升，便于连续导航时阅读。 */
+.theme-terminal-dark .ask-user-banner button.ask-user-option-focused {
+  background: hsl(100 12% 17%) !important;
+  color: hsl(0 0% 100%) !important;
+}
+.theme-terminal-dark .ask-user-banner button.ask-user-option-focused > span,
+.theme-terminal-dark .ask-user-banner .ask-user-option-description-focused {
+  color: hsl(0 0% 100%) !important;
+  text-shadow: none !important;
+}
+
 /* 设置分隔线 — 终端主题保持单线，不动 */
 
 /* ===== CRT 终端：空态欢迎屏 =====
