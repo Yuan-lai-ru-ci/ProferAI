@@ -740,6 +740,9 @@ export interface ElectronAPI {
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
 
+  /** 使用系统终端打开文件夹 */
+  openFolderInTerminal: (folderPath: string) => Promise<void>
+
   /** 在系统文件管理器中显示文件（无工作区限制，支持候选基础目录） */
   showItemInFolder: (filePath: string, candidateBasePaths?: string[]) => Promise<boolean>
 
@@ -1902,6 +1905,10 @@ const electronAPI: ElectronAPI = {
 
   showInFolder: (filePath: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SHOW_IN_FOLDER, filePath)
+  },
+
+  openFolderInTerminal: (folderPath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FOLDER_IN_TERMINAL, folderPath)
   },
 
   /** 在系统文件管理器中显示文件（无工作区限制，支持候选基础目录） */

@@ -1590,6 +1590,8 @@ export const AGENT_IPC_CHANNELS = {
   OPEN_FILE: 'agent:open-file',
   /** 在系统文件管理器中显示文件 */
   SHOW_IN_FOLDER: 'agent:show-in-folder',
+  /** 使用系统终端打开文件夹 */
+  OPEN_FOLDER_IN_TERMINAL: 'agent:open-folder-in-terminal',
   /** 重命名文件/目录 */
   RENAME_FILE: 'agent:rename-file',
   /** 移动文件/目录到目标目录 */

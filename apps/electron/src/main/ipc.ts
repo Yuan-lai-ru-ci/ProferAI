@@ -2985,6 +2985,34 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 使用 macOS 系统 Terminal 在指定工作目录打开会话/工作区文件夹
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.OPEN_FOLDER_IN_TERMINAL,
+    async (_, folderPath: string): Promise<void> => {
+      if (process.platform !== 'darwin') {
+        throw new Error('当前仅支持在 macOS 终端中打开文件夹')
+      }
+      if (!isPathAllowed(folderPath)) {
+        throw new Error('访问路径超出 Agent 工作区范围')
+      }
+
+      const safePath = realpathSync(resolve(folderPath))
+      if (!statSync(safePath).isDirectory()) {
+        throw new Error('只能在终端中打开文件夹')
+      }
+
+      const { spawn } = await import('node:child_process')
+      await new Promise<void>((resolvePromise, reject) => {
+        const child = spawn('open', ['-a', 'Terminal', safePath], { detached: true, stdio: 'ignore' })
+        child.once('error', reject)
+        child.once('spawn', () => {
+          child.unref()
+          resolvePromise()
+        })
+      })
+    }
+  )
+
   // 在系统文件管理器中显示任意路径（无工作区限制，用户主动点击触发）
   ipcMain.handle(
     IPC_CHANNELS.SHOW_ITEM_IN_FOLDER,
