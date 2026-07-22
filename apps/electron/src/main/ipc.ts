@@ -2965,7 +2965,11 @@ export function registerIpcHandlers(): void {
   // ===== Project Graph =====
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_GRAPH,
-    async (_event, sessionId: string) => {
+    async (event, sessionId: string) => {
+      assertSensitiveAgentIpcSender(event)
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+        throw new Error('无效的会话标识')
+      }
       const { loadGraph } = await import('./lib/project-graph-service')
       return loadGraph(sessionId)
     },
@@ -2973,7 +2977,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY,
-    async (_event, sessionId: string) => {
+    async (event, sessionId: string) => {
+      assertSensitiveAgentIpcSender(event)
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+        throw new Error('无效的会话标识')
+      }
       const { getGraphSummary } = await import('./lib/project-graph-service')
       return getGraphSummary(sessionId)
     },
@@ -2981,9 +2989,16 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.APPEND_GRAPH_EVENT,
-    async (_event, sessionId: string, event: import('@profer/project-core').GraphEvent) => {
+    async (event, sessionId: string, graphEvent: import('@profer/project-core').GraphEvent) => {
+      assertSensitiveAgentIpcSender(event)
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+        throw new Error('无效的会话标识')
+      }
+      if (!graphEvent || typeof graphEvent !== 'object' || !graphEvent.type) {
+        throw new Error('无效的图事件')
+      }
       const { appendGraphEvent } = await import('./lib/project-graph-service')
-      appendGraphEvent(sessionId, event)
+      appendGraphEvent(sessionId, graphEvent)
     },
   )
 
