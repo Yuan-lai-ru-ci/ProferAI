@@ -235,7 +235,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
   }
 
   return (
-    <div className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+    <div className="ask-user-banner mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
       {/* 头部 + Tab 栏 */}
       <div className="px-4 pt-3 pb-2">
         <div className="flex items-center justify-between mb-2">
@@ -388,10 +388,10 @@ function QuestionCard({
               className={`
                 flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all outline-none text-left
                 ${isSelected
-                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  ? 'ask-user-option-selected bg-primary text-primary-foreground shadow-sm'
                   : 'bg-muted/50 text-foreground/80 hover:bg-muted'
                 }
-                ${isFocused ? 'ring-2 ring-primary/50 ring-offset-1 ring-offset-card' : ''}
+                ${isFocused ? 'ask-user-option-focused ring-2 ring-primary/50 ring-offset-1 ring-offset-card' : ''}
               `}
               onClick={() => onToggleOption(option.label)}
             >
@@ -400,7 +400,7 @@ function QuestionCard({
               </span>
               <span className="font-medium">{option.label}</span>
               {option.description && (
-                <span className={`text-[11px] ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                <span className={`ask-user-option-description text-[11px] ${isSelected ? 'ask-user-option-description-selected text-primary-foreground/70' : ''} ${isFocused ? 'ask-user-option-description-focused' : 'text-muted-foreground'}`}>
                   {option.description}
                 </span>
               )}
