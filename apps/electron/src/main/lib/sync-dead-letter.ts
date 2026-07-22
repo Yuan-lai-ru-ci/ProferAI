@@ -4,7 +4,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getProferConfigDir } from './config-paths'
+import { getConfigDir } from './config-paths'
 
 interface SyncEnvelope {
   id?: string
@@ -17,7 +17,7 @@ let deadLetterPath: string | null = null
 
 function getDeadLetterPath(): string {
   if (deadLetterPath) return deadLetterPath
-  const dir = join(getProferConfigDir(), 'sync')
+  const dir = join(getConfigDir(), 'sync')
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   deadLetterPath = join(dir, 'dead-letters.jsonl')
   return deadLetterPath
