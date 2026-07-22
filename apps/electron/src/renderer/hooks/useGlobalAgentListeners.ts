@@ -10,6 +10,7 @@
 import { useEffect } from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
+import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import {
   agentStreamingStatesAtom,
   agentStreamErrorsAtom,
@@ -401,7 +402,21 @@ export function useGlobalAgentListeners(): void {
           createdAt: event.startedAt,
           updatedAt: event.startedAt,
         }
-        store.set(agentSessionsAtom, (prev) => upsertAgentSession(prev, upserted))
+        const promotedParent = upserted.parentSessionId
+          ? sessions.find((item) => item.id === upserted.parentSessionId && !item.draft)
+          : undefined
+        store.set(agentSessionsAtom, (prev) => {
+          const withChild = upsertAgentSession(prev, upserted)
+          return promotedParent ? upsertAgentSession(withChild, promotedParent) : withChild
+        })
+        if (promotedParent) {
+          store.set(draftSessionIdsAtom, (previous) => {
+            if (!previous.has(promotedParent.id)) return previous
+            const next = new Set(previous)
+            next.delete(promotedParent.id)
+            return next
+          })
+        }
         const activationModelId = activation.modelId
         if (activationModelId) {
           store.set(agentSessionModelMapAtom, (prev) => {
@@ -1129,6 +1144,18 @@ export function useGlobalAgentListeners(): void {
         .catch(console.error)
     })
 
+    const cleanupSessionUpdated = window.electronAPI.onAgentSessionUpdated(({ session }) => {
+      store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, session))
+      if (!session.draft) {
+        store.set(draftSessionIdsAtom, (previous) => {
+          if (!previous.has(session.id)) return previous
+          const next = new Set(previous)
+          next.delete(session.id)
+          return next
+        })
+      }
+    })
+
     // 定期清理 60s 前的「最近修改」标记，避免 atom 无限增长
     const pruneTimer = setInterval(() => {
       const cutoff = Date.now() - RECENTLY_MODIFIED_TTL_MS
@@ -1219,6 +1246,7 @@ export function useGlobalAgentListeners(): void {
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
+      cleanupSessionUpdated()
       clearInterval(pruneTimer)
       window.removeEventListener('focus', onWindowFocus)
     }

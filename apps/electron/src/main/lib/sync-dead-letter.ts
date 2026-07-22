@@ -5,13 +5,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigDir } from './config-paths'
-
-interface SyncEnvelope {
-  id?: string
-  retryCount?: number
-  lastError?: string
-  [key: string]: unknown
-}
+import type { SyncEnvelope } from './sync-types'
 
 let deadLetterPath: string | null = null
 

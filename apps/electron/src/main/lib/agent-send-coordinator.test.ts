@@ -40,4 +40,10 @@ describe('SEND_MESSAGE 协调器', () => {
     await coordinateAgentSend(input, d.value)
     expect(d.calls).toEqual(['run', 'mirror-error'])
   })
+
+  test('Given 隐藏草稿会话 When 协调发送 Then 不在用户消息持久化前启动镜像', async () => {
+    const d = deps({ getSession: () => ({ ...session, draft: true }) })
+    await coordinateAgentSend(input, d.value)
+    expect(d.calls).toEqual(['run'])
+  })
 })

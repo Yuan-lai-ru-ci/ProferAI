@@ -237,6 +237,8 @@ interface AgentSessionTreeItem {
 }
 
 const PROJECT_SESSION_PREVIEW_LIMIT = 5
+// Electron 不提供系统双击间隔；使用保守窗口避免慢双击先打开项目。
+const PROJECT_TITLE_DOUBLE_CLICK_DELAY_MS = 500
 const PROJECT_SESSION_RECENT_WINDOW_MS = 3 * 86_400_000
 /** 点击"显示更多"时每次额外展开的会话数量 */
 const PROJECT_SESSION_EXPAND_STEP = 10
@@ -414,6 +416,7 @@ function getSyncableDelegatedChildren(
 ): AgentSessionMeta[] {
   return getDirectDelegatedChildren(sessions, parentSessionId).filter((child) => (
     !child.archived
+    && !child.draft
     && !draftSessionIds.has(child.id)
   ))
 }
@@ -555,7 +558,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const [creatingProject, setCreatingProject] = React.useState(false)
   const [newProjectName, setNewProjectName] = React.useState('')
   const newProjectInputRef = React.useRef<HTMLInputElement>(null)
-  const openSessionTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const projectSelectionRequestRef = React.useRef(0)
   const [showJoinDialog, setShowJoinDialog] = React.useState(false)
   const [inviteCode, setInviteCode] = React.useState('')
   const [relativeTimeNow, setRelativeTimeNow] = React.useState(() => Date.now())
@@ -633,11 +636,6 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   React.useEffect(() => {
     const id = window.setInterval(() => setRelativeTimeNow(Date.now()), 60_000)
     return () => window.clearInterval(id)
-  }, [])
-
-  // 清理 openSessionTimerRef
-  React.useEffect(() => {
-    return () => clearTimeout(openSessionTimerRef.current)
   }, [])
 
   // 当 activeTabId 变化时，自动滚动侧边栏使选中项可见
@@ -774,6 +772,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       if (viewMode !== 'active') return []
       const filtered = agentSessions.filter((s) =>
         s.pinned
+        && !s.draft
         && !draftSessionIds.has(s.id)
         && !hasPinnedVisibleParent(s, agentSessions)
       )
@@ -787,6 +786,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       session,
       childSessions: getDirectDelegatedChildren(agentSessions, session.id).filter((child) => (
         !child.archived
+        && !child.draft
         && !draftSessionIds.has(child.id)
       )),
     })),
@@ -812,7 +812,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
 
   /** 已归档 Agent 会话数量（跨项目） */
   const archivedAgentSessionCount = React.useMemo(
-    () => agentSessions.filter((s) => s.archived && !draftSessionIds.has(s.id)).length,
+    () => agentSessions.filter((s) => s.archived && !s.draft && !draftSessionIds.has(s.id)).length,
     [agentSessions, draftSessionIds]
   )
 
@@ -1117,25 +1117,45 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     await createAgentSessionInWorkspace()
   }, [createAgentSessionInWorkspace, setActiveView])
 
-  /** 切换当前项目；点击当前已选中工作区标题时则折叠/展开其会话列表 */
-  const handleSelectProject = React.useCallback((workspaceId: string): void => {
-    if (workspaceId === currentWorkspaceId) {
-      // 点击当前工作区 → 折叠/展开会话列表
-      setCollapsedWorkspaceIds((prev) => toggleSetEntry(prev, workspaceId))
-      return
-    }
+  /** 选择项目并打开其隐藏草稿会话；真实 UI 直接复用 AgentView。 */
+  const handleSelectProject = React.useCallback(async (workspaceId: string): Promise<void> => {
+    const requestId = ++projectSelectionRequestRef.current
     setCurrentWorkspaceId(workspaceId)
     setActiveView('conversations')
     setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, workspaceId))
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
 
-    // 自动选中该工作区最近的一个未归档会话（所有类型的工作区统一行为）
-    const existing = agentSessions.find((s) => !s.archived && s.workspaceId === workspaceId)
-    if (existing) {
-      setCurrentAgentSessionId(existing.id)
-      openSessionTimerRef.current = setTimeout(() => openSession('agent', existing.id, existing.title), 50)
+    try {
+      const session = await window.electronAPI.ensureProjectDraftAgentSession(
+        workspaceId,
+        agentChannelId || undefined,
+        agentModelId || undefined,
+      )
+      setAgentSessions((previous) => {
+        const index = previous.findIndex((item) => item.id === session.id)
+        if (index === -1) return [session, ...previous]
+        const next = [...previous]
+        next[index] = session
+        return next
+      })
+      setDraftSessionIds((previous: Set<string>) => {
+        if (previous.has(session.id)) return previous
+        const next = new Set(previous)
+        next.add(session.id)
+        return next
+      })
+      if (requestId !== projectSelectionRequestRef.current) return
+      setCurrentAgentSessionId(session.id)
+      openSession('agent', session.id, session.title)
+    } catch (error) {
+      console.error('[侧边栏] 创建项目草稿会话失败:', error)
+      toast.error(error instanceof Error ? error.message : '创建项目草稿会话失败')
     }
-  }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView, agentSessions, setCurrentAgentSessionId, openSession])
+  }, [agentChannelId, agentModelId, openSession, setActiveView, setAgentSessions, setCollapsedWorkspaceIds, setCurrentAgentSessionId, setCurrentWorkspaceId, setDraftSessionIds])
+
+  const handleToggleProjectCollapse = React.useCallback((workspaceId: string): void => {
+    setCollapsedWorkspaceIds((previous) => toggleSetEntry(previous, workspaceId))
+  }, [setCollapsedWorkspaceIds])
 
   const canDeleteWorkspace = React.useCallback(
     (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
@@ -1624,6 +1644,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         agentSessions.filter((session) =>
           !session.archived
           && !session.pinned
+          && !session.draft
           && !draftSessionIds.has(session.id)
           // 已被置顶母会话收纳的子会话留在置顶区的母会话下面，避免重复显示为项目根会话
           && !hasPinnedVisibleParent(session, agentSessions)
@@ -1650,7 +1671,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   /** Agent 归档会话按日期分组（跨项目） */
   const agentSessionGroups = React.useMemo(
     () => groupByDate(sortAgentSessionsByUpdatedAtDesc(
-      agentSessions.filter((session) => session.archived && !draftSessionIds.has(session.id))
+      agentSessions.filter((session) => session.archived && !session.draft && !draftSessionIds.has(session.id))
     )),
     [agentSessions, draftSessionIds]
   )
@@ -1677,7 +1698,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       return
     }
 
-    const recent = sessions.find((s) => !s.archived && !draftSessionIds.has(s.id))
+    const recent = isChatMode
+      ? conversations.find((conversation) => !conversation.archived && !draftSessionIds.has(conversation.id))
+      : agentSessions.find((session) => !session.archived && !session.draft && !draftSessionIds.has(session.id))
     if (recent) {
       openSession(targetMode, recent.id, recent.title)
       return
@@ -1726,6 +1749,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     return agentSessions
       .filter((session) =>
         !session.archived
+        && !session.draft
         && !draftSessionIds.has(session.id)
         && (!currentWorkspaceId || session.workspaceId === currentWorkspaceId)
       )
@@ -2415,6 +2439,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                   onShowMore={handleShowMoreSessions}
                   onCollapseExtra={handleCollapseExtraSessions}
                   onSelectProject={handleSelectProject}
+                  onToggleProjectCollapse={handleToggleProjectCollapse}
                   onNewSession={createAgentSessionInWorkspace}
                   onDragStart={handleProjectDragStart}
                   onDragOver={handleProjectDragOver}
@@ -3377,7 +3402,8 @@ interface AgentProjectGroupItemProps {
   dropPosition: 'before' | 'after' | null
   onShowMore: (workspaceId: string) => void
   onCollapseExtra: (workspaceId: string) => void
-  onSelectProject: (workspaceId: string) => void
+  onSelectProject: (workspaceId: string) => void | Promise<void>
+  onToggleProjectCollapse: (workspaceId: string) => void
   onNewSession: (workspaceId: string) => Promise<void>
   onDragStart: (e: React.DragEvent, workspaceId: string) => void
   onDragOver: (e: React.DragEvent, workspaceId: string) => void
@@ -3415,6 +3441,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   onShowMore,
   onCollapseExtra,
   onSelectProject,
+  onToggleProjectCollapse,
   onNewSession,
   onDragStart,
   onDragOver,
@@ -3446,6 +3473,11 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   const [workspaceEditName, setWorkspaceEditName] = React.useState('')
   const workspaceEditRef = React.useRef<HTMLInputElement>(null)
   const justStartedRenamingRef = React.useRef(false)
+  const projectClickTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  React.useEffect(() => () => {
+    if (projectClickTimerRef.current) clearTimeout(projectClickTimerRef.current)
+  }, [])
 
   const handleStartWorkspaceRename = (): void => {
     setWorkspaceEditName(group.workspace.name)
@@ -3570,7 +3602,23 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
             aria-controls={`project-sessions-${group.workspace.id}`}
             onClick={(e) => {
               e.stopPropagation()
-              onSelectProject(group.workspace.id)
+              if (e.target instanceof Element && e.target.closest('[data-project-collapse]')) {
+                onToggleProjectCollapse(group.workspace.id)
+                return
+              }
+              if (projectClickTimerRef.current) clearTimeout(projectClickTimerRef.current)
+              projectClickTimerRef.current = setTimeout(() => {
+                projectClickTimerRef.current = null
+                void onSelectProject(group.workspace.id)
+              }, PROJECT_TITLE_DOUBLE_CLICK_DELAY_MS)
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              if (projectClickTimerRef.current) {
+                clearTimeout(projectClickTimerRef.current)
+                projectClickTimerRef.current = null
+              }
+              onToggleProjectCollapse(group.workspace.id)
             }}
             className={cn(
               'relative flex-1 min-w-0 flex items-center gap-1 px-1 py-1 rounded-md text-left transition-[padding,color,background-color] titlebar-no-drag group-hover/project:pl-4 group-hover/project:pr-11 hover:bg-foreground/[0.025]',
@@ -3584,13 +3632,19 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
             <span className="flex-1 min-w-0 truncate text-[13px] font-medium leading-[18px]">
               {group.workspace.name}
             </span>
-            <ChevronRight
-              size={12}
-              className={cn(
-                'flex-shrink-0 text-foreground/30 transition-transform duration-150',
-                collapsed ? '-rotate-90' : 'rotate-90',
-              )}
-            />
+            <span
+              data-project-collapse
+              title={collapsed ? '展开项目会话' : '收起项目会话'}
+              className="flex-shrink-0 text-foreground/30 transition-colors hover:text-foreground/70"
+            >
+              <ChevronRight
+                size={12}
+                className={cn(
+                  'transition-transform duration-150',
+                  collapsed ? '-rotate-90' : 'rotate-90',
+                )}
+              />
+            </span>
           </button>
         )}
 

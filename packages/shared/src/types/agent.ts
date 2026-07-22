@@ -662,6 +662,8 @@ export interface AgentSessionMeta {
   pinned?: boolean
   /** 是否已归档 */
   archived?: boolean
+  /** 项目入口创建的隐藏会话；首条用户消息持久化后立即晋升。 */
+  draft?: boolean
   /** 附加的外部目录路径列表（绝对路径，作为 SDK additionalDirectories 传递） */
   attachedDirectories?: string[]
   /** 附加的外部文件路径列表（绝对路径，发送时以父目录作为 SDK additionalDirectories） */
@@ -706,6 +708,11 @@ export interface AgentSessionMeta {
   createdAt: number
   /** 更新时间戳 */
   updatedAt: number
+}
+
+/** Whether an Agent session may be shown in user-facing session lists. */
+export function isVisibleAgentSession(session: Pick<AgentSessionMeta, 'draft'>): boolean {
+  return !session.draft
 }
 
 /**
@@ -1479,6 +1486,8 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSIONS: 'agent:list-sessions',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
+  /** 为项目创建或复用隐藏的 Agent 草稿会话 */
+  ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
   /** 更新会话标题 */
@@ -1677,6 +1686,8 @@ export const AGENT_IPC_CHANNELS = {
   // 标题自动生成通知（主进程 → 渲染进程推送）
   /** 标题已更新（首次对话完成后自动生成） */
   TITLE_UPDATED: 'agent:title-updated',
+  /** 会话元数据已更新（例如草稿会话晋升） */
+  SESSION_UPDATED: 'agent:session-updated',
 
   // 工作区配置变化通知（主进程 → 渲染进程推送）
   /** 工作区能力变化（MCP/Skills 文件监听触发） */
