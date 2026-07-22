@@ -27,11 +27,11 @@ const HOST = '47.109.108.57';
 const USER = 'ecs-user';
 const UPDATE_DIR = '/usr/share/nginx/html/profer-updates';
 const TAG = `v${VERSION}`;
-const GH_REPO = 'Yuan-lai-ru-ci/Profer';
+const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
 
-function ssh(cmd, timeout = 15000) {
+function ssh(cmd, timeout = 30000) {
   return new Promise((resolve) => {
-    const p = spawn('ssh', ['-o', 'StrictHostKeyChecking=no', `${USER}@${HOST}`, cmd]);
+    const p = spawn('bash', ['-c', `ssh -o StrictHostKeyChecking=no ${USER}@${HOST} '${cmd.replace(/'/g, "'\\''")}'`]);
     let o = '', e = '';
     p.stdout.on('data', d => o += d);
     p.stderr.on('data', d => e += d);
@@ -41,9 +41,10 @@ function ssh(cmd, timeout = 15000) {
 }
 
 function scp(local, remote) {
-  return new Promise((resolve) => {
-    const p = spawn('scp', ['-o', 'StrictHostKeyChecking=no', '-q', local, `${USER}@${HOST}:${remote}`]);
-    p.on('close', resolve);
+  return new Promise((resolve, reject) => {
+    const src = local.replace(/\\/g, '/'); // Windows 路径 → bash 安全
+    const p = spawn('bash', ['-c', `scp -o StrictHostKeyChecking=no -q '${src.replace(/'/g, "'\\''")}' ${USER}@${HOST}:${remote}`]);
+    p.on('close', (code) => code === 0 ? resolve() : reject(new Error(`scp ${local} → ${remote} 失败 (exit ${code})`)));
     setTimeout(() => { try { p.kill() } catch {} }, 600000); // 10min，大文件够用
   });
 }
@@ -130,7 +131,8 @@ function tryRun(cmd, cwd = ROOT) {
     `sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
     `sudo ln -sf ${UPDATE_DIR}/Profer-Setup-${VERSION}.exe ${UPDATE_DIR}/Profer-latest.exe && ` +
     `sudo chmod -R 755 ${UPDATE_DIR} && ` +
-    `echo OK`
+    `echo OK`,
+    120000  // 大文件 cp 可能需要几十秒
   );
   console.log('  ' + (result.includes('OK') ? '已推送' : result.slice(0, 80)));
 
@@ -139,16 +141,19 @@ function tryRun(cmd, cwd = ROOT) {
   const assets = ['latest.yml', `Profer-Setup-${VERSION}.exe`, `Profer-Setup-${VERSION}.exe.blockmap`]
     .map(f => path.join(outDir, f)).filter(f => fs.existsSync(f));
 
-  if (!tryRun('gh --version').ok) {
-    console.log('  ⚠ 跳过: 未检测到 gh CLI (通道一已成功, 不影响自动更新)。');
-    console.log('    一次性配置后重跑本步即可上传 GitHub:');
-    console.log('      winget install --id GitHub.cli   # 安装');
-    console.log('      gh auth login                    # 浏览器授权');
+  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+  const ghExe = '"C:/Program Files/GitHub CLI/gh.exe"';
+  if (!GITHUB_TOKEN) {
+    console.log('  ⚠ 跳过: 未设置 GITHUB_TOKEN 环境变量 (通道一已成功, 不影响自动更新)。');
+    console.log('    设置后重跑本步即可上传 GitHub:');
+    console.log('      export GITHUB_TOKEN=ghp_xxxx');
   } else {
     tryRun(`git add "${pkgPath}"`, ROOT);
     const commit = tryRun(`git commit -m "chore: release ${TAG}"`, ROOT);
     console.log('  commit: ' + (commit.ok ? 'ok' : '跳过(无版本号变更)'));
 
+    // push 前先 pull --rebase 防冲突
+    tryRun(`git pull --rebase origin main`, ROOT);
     tryRun(`git tag -f ${TAG}`, ROOT);
     const push = tryRun(`git push origin HEAD && git push origin -f ${TAG}`, ROOT);
     console.log('  push: ' + (push.ok ? 'ok' : push.out.slice(-160)));
@@ -157,12 +162,25 @@ function tryRun(cmd, cwd = ROOT) {
     const notesArg = fs.existsSync(notesFile)
       ? `--notes-file "${notesFile}"`
       : `--notes "Profer ${TAG}"`;
-    const assetsArg = assets.map(a => `"${a}"`).join(' ');
-    let rel = tryRun(`gh release create ${TAG} ${assetsArg} --repo ${GH_REPO} --title "${TAG}" ${notesArg}`, ROOT);
+
+    // 先创建 draft（不带资产）
+    let rel = tryRun(`export GITHUB_TOKEN='${GITHUB_TOKEN}' && ${ghExe} release create ${TAG} --repo ${GH_REPO} --title "${TAG}" ${notesArg} --draft`, ROOT);
     if (!rel.ok && /already exists|already_exists|HTTP 422/i.test(rel.out)) {
-      rel = tryRun(`gh release upload ${TAG} ${assetsArg} --repo ${GH_REPO} --clobber`, ROOT);
+      rel = { ok: true, out: '' };
     }
-    console.log('  release: ' + (rel.ok ? 'ok' : rel.out.slice(-200)));
+    if (rel.ok) {
+      // 逐个上传资产
+      for (const a of assets) {
+        const name = path.basename(a);
+        const up = tryRun(`export GITHUB_TOKEN='${GITHUB_TOKEN}' && ${ghExe} release upload ${TAG} "${a}" --repo ${GH_REPO}`, ROOT);
+        console.log(`    ${name}: ${up.ok ? 'ok' : up.out.slice(-80)}`);
+      }
+      // 发布 draft
+      const pub = tryRun(`export GITHUB_TOKEN='${GITHUB_TOKEN}' && ${ghExe} release edit ${TAG} --repo ${GH_REPO} --draft=false`, ROOT);
+      console.log('  publish: ' + (pub.ok ? 'ok' : pub.out.slice(-80)));
+    } else {
+      console.log('  release: ' + rel.out.slice(-200));
+    }
   }
 
   console.log(`\n=== 发布完成 v${VERSION} ===`);

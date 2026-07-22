@@ -22,6 +22,12 @@ export const REQUEST_LOG_COLUMNS = Object.freeze([
   'new_api_request_id',
   'actual_quota',
   'billing_markup',
+  'pricing_audience',
+  'newapi_group',
+  'model_multiplier',
+  'group_multiplier',
+  'effective_multiplier',
+  'pricing_version',
 ])
 
 export function buildRequestLogInsertSql() {
@@ -53,6 +59,12 @@ export function buildRequestLogValues(params, createdAt = Date.now()) {
     newApiRequestId,
     actualQuota,
     billingMarkup,
+    pricingAudience,
+    newApiGroup,
+    modelMultiplier,
+    groupMultiplier,
+    effectiveMultiplier,
+    pricingVersion,
   } = params
 
   return [
@@ -74,5 +86,11 @@ export function buildRequestLogValues(params, createdAt = Date.now()) {
     newApiRequestId || '',
     Number.isFinite(Number(actualQuota)) ? Number(actualQuota) : null,
     Number.isFinite(Number(billingMarkup)) ? Number(billingMarkup) : null,
+    pricingAudience || 'legacy',
+    newApiGroup || '',
+    Number.isFinite(Number(modelMultiplier)) ? Number(modelMultiplier) : null,
+    Number.isFinite(Number(groupMultiplier)) ? Number(groupMultiplier) : null,
+    Number.isFinite(Number(effectiveMultiplier)) ? Number(effectiveMultiplier) : null,
+    pricingVersion || 'legacy',
   ]
 }

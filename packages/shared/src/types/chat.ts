@@ -358,6 +358,8 @@ export interface ModelOption {
   modelName: string
   /** AI 供应商类型 */
   provider: ProviderType
+  /** 当前用户有效模型倍率（代管渠道由服务端注入）。 */
+  multiplier?: number
 }
 
 // ===== 分页加载相关 =====

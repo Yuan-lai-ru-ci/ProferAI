@@ -33,6 +33,9 @@ const CONFIG_SCHEMA = {
   'vip.price': { defaultValue: '69800', type: 'int', label: 'VIP 终身价格', group: 'VIP', min: 0 },
   'vip.discount': { defaultValue: '0.9', type: 'float', label: 'VIP 套餐折扣', group: 'VIP', min: 0, max: 1, allowZero: false },
   'vip.extraDrip': { defaultValue: '20', type: 'int', label: 'VIP 额外 drip', group: 'VIP', min: 0 },
+  'vip.modelDiscount': { defaultValue: '0.8', type: 'float', label: 'VIP 模型折扣倍率', group: 'VIP', min: 0.01, max: 1, allowZero: false },
+  'vip.newApiGroup': { defaultValue: 'vip', type: 'string', label: 'VIP New API 分组', group: 'VIP' },
+  'pricing.modelMultipliers': { defaultValue: '{}', type: 'string', label: '模型倍率目录(JSON)', group: '计费' },
 
   'billing.markup': { defaultValue: '', type: 'float', label: '计费加价倍率', group: '计费', envKey: 'BILLING_MARKUP', min: 0.01, max: 100, allowZero: false },
   'billing.defaultCreditGrant': { defaultValue: '', type: 'int', label: '新用户默认额度(quota)', group: '计费', envKey: 'DEFAULT_CREDIT_GRANT', min: 0, max: Number.MAX_SAFE_INTEGER },
@@ -150,5 +153,18 @@ export function resetConfig(key) {
 export function getBillingConfig() { return Object.freeze({ markup: getConfig('billing.markup'), defaultCreditGrant: getConfig('billing.defaultCreditGrant'), overdraftLimit: getConfig('billing.overdraftLimit') }) }
 export function getPlanDefs() { return { standard: { monthlyRmb: getConfig('plan.standard.monthlyRmb'), yearlyRmb: getConfig('plan.standard.yearlyRmb'), welcomeBonus: getConfig('plan.standard.welcomeBonus'), dailyDrip: getConfig('plan.standard.dailyDrip') }, plus: { monthlyRmb: getConfig('plan.plus.monthlyRmb'), yearlyRmb: getConfig('plan.plus.yearlyRmb'), welcomeBonus: getConfig('plan.plus.welcomeBonus'), dailyDrip: getConfig('plan.plus.dailyDrip') }, pro: { monthlyRmb: getConfig('plan.pro.monthlyRmb'), yearlyRmb: getConfig('plan.pro.yearlyRmb'), welcomeBonus: getConfig('plan.pro.welcomeBonus'), dailyDrip: getConfig('plan.pro.dailyDrip') } } }
 export function getPlanDefsRedeem() { return getPlanDefs() }
-export function getVipConfig() { return { price: getConfig('vip.price'), discount: getConfig('vip.discount'), extraDrip: getConfig('vip.extraDrip') } }
+export function getVipConfig() { return { price: getConfig('vip.price'), discount: getConfig('vip.discount'), extraDrip: getConfig('vip.extraDrip'), modelDiscount: getConfig('vip.modelDiscount'), newApiGroup: getConfig('vip.newApiGroup') } }
+
+/** 模型倍率目录由管理员维护，格式：{"claude-sonnet":0.6,"gpt-5":0.5}。 */
+export function getModelMultipliers() {
+  try {
+    const parsed = JSON.parse(getConfig('pricing.modelMultipliers') || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed).filter(([model, multiplier]) =>
+      typeof model === 'string' && model.trim() && Number.isFinite(Number(multiplier)) && Number(multiplier) > 0
+    ).map(([model, multiplier]) => [model, Number(multiplier)]))
+  } catch {
+    return {}
+  }
+}
 export { CONFIG_SCHEMA }

@@ -15,6 +15,7 @@ export function applyCurrentAuthorization(c, user) {
     email: user.email,
     is_admin: !!user.is_admin,
     membership_tier: user.membership_tier || 'free',
+    is_vip: !!user.is_vip,
   }
   c.set('userId', user.id)
   c.set('userEmail', user.email)
