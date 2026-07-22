@@ -64,12 +64,16 @@ import {
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
+import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
 import { createWindowsPowerShellToolDefinition } from './pi-powershell-tool'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
 type BashToolOptions = import('@earendil-works/pi-coding-agent').BashToolOptions
 type SkillLoadResult = ReturnType<ResourceLoader['getSkills']>
+
+const PI_NATIVE_MAX_RETRIES = 8
+const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
 
 /** Pi SDK 查询选项（扩展通用 AgentQueryInput） */
 export interface PiAgentQueryOptions extends AgentQueryInput {
@@ -92,6 +96,7 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onSessionId?: (sdkSessionId: string) => void
   onModelResolved?: (model: string) => void
   onContextWindow?: (contextWindow: number) => void
+  onRetry?: (update: import('./pi-retry-control').PiRetryUpdate) => void
   thinkingLevel?: AgentThinkingLevel
   maxBudgetUsd?: number
   outputFormat?: JsonSchemaOutputFormat
@@ -1278,7 +1283,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         // - 手动压缩由 session.compact() 触发；
         // - 自动压缩由 Pi 在上下文接近窗口上限或溢出恢复时触发。
         compaction: { enabled: true },
-        retry: { enabled: false },
+        // Continue the same transcript after transient failures so completed tools are not replayed.
+        retry: { enabled: true, maxRetries: PI_NATIVE_MAX_RETRIES, baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS },
         ...buildPiRemoteConnectionSettings(input),
       })
       const resourceLoader = new sdk.DefaultResourceLoader({
@@ -1364,6 +1370,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
       let activeAssistant: AssistantMessageState = {}
       let lastPartialAssistant: AssistantMessage | undefined
+      // Pi emits the failed assistant before agent_end indicates whether it will retry.
+      const retryTerminalGate = createPiRetryTerminalGate<{
+        assistantMessage: AssistantMessage
+        sdkMessage: SDKMessage
+      }>()
 
       const assistantUuidFor = (): string => {
         if (!activeAssistant.uuid) {
@@ -1407,22 +1418,38 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 activeAssistant = {}
                 break
               }
-              runtimeGuard.recordMessage(event.message)
               const isAssistant = isAssistantPiMessage(event.message)
               const converted = convertPiMessage(event.message, session.sessionId, input.model, {
                 final: true,
                 ...(isAssistant && { uuid: assistantUuidFor() }),
               })
-              if (converted && (converted.type !== 'user' || hasToolResult(converted))) queue.push(converted)
+              const isRetryableAssistantError = isAssistant && (event.message as AssistantMessage).stopReason === 'error'
+              if (isRetryableAssistantError && converted?.type === 'assistant') {
+                retryTerminalGate.defer({
+                  assistantMessage: event.message as AssistantMessage,
+                  sdkMessage: converted,
+                })
+              } else {
+                runtimeGuard.recordMessage(event.message)
+                if (converted && (converted.type !== 'user' || hasToolResult(converted))) queue.push(converted)
+              }
               if (isAssistant) {
                 activeAssistant = {}
                 lastPartialAssistant = undefined
               }
               break
             }
-            case 'agent_end':
+            case 'agent_end': {
+              const terminalRetryError = retryTerminalGate.settle(event.willRetry)
               if (active.interrupting && active.pendingInterruptPrompts.length > 0) {
                 break
+              }
+              if (event.willRetry) {
+                break
+              }
+              if (terminalRetryError) {
+                runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
+                queue.push(terminalRetryError.sdkMessage)
               }
               queue.push(convertResultMessage(
                 event.messages,
@@ -1432,6 +1459,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 model.id,
                 input.model ?? session.model?.id,
               ))
+              break
+            }
+            case 'auto_retry_start':
+            case 'auto_retry_end':
+              for (const retry of mapPiNativeRetryEvent(event)) input.onRetry?.(retry)
               break
             case 'tool_execution_update':
               queue.push({
