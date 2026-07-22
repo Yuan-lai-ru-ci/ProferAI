@@ -1169,6 +1169,32 @@
   padding: 0;
 }
 
+/* 代码块始终用高对比选区，覆盖 Shiki token 的内联语法色，避免深色 token 与代码背景混在一起。 */
+:is(
+  .code-block-wrapper pre.shiki,
+  .tiptap pre
+)::selection,
+:is(
+  .code-block-wrapper pre.shiki,
+  .tiptap pre
+) ::selection {
+  background-color: hsl(210 80% 62% / 0.72) !important;
+  color: hsl(0 0% 98%) !important;
+  -webkit-text-fill-color: hsl(0 0% 98%) !important;
+}
+
+:is(
+  .code-block-wrapper pre.shiki,
+  .tiptap pre
+)::-moz-selection,
+:is(
+  .code-block-wrapper pre.shiki,
+  .tiptap pre
+) ::-moz-selection {
+  background-color: hsl(210 80% 62% / 0.72) !important;
+  color: hsl(0 0% 98%) !important;
+}
+
 /* 代码行：限制重排范围，GPU 合成优化 */
 .code-block-wrapper .line {
   display: inline;
