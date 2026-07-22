@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 /**
- * 验证：直接 SQLite INSERT sk- Key → 调推理 API → 检查用量归属
+ * 🔴 仅供本地开发测试。
+ *
+ * ADMIN 令牌必须通过环境变量 NEWAPI_ADMIN_TOKEN 提供。
+ * 用法: NEWAPI_ADMIN_TOKEN=sk-xxx node server/scripts/test-sk-insert.js
+ *
+ * ⚠ 禁止在文件中硬编码令牌。
  */
-const BASE = 'http://172.17.0.1:3080'
-const ADMIN = 'c3ca89935300499bbba430f2441db0fe2fe375ac2405410189cf8618d21115f5'
+const BASE = 'http://172.17.0.1:3080';
+const ADMIN = process.env.NEWAPI_ADMIN_TOKEN;
+if (!ADMIN) {
+  console.error('请在环境变量中设置 NEWAPI_ADMIN_TOKEN');
+  process.exit(1);
+}
 const crypto = require('crypto')
 const { execSync } = require('child_process')
 
