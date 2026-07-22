@@ -530,14 +530,15 @@ function FeedbackSection(): React.ReactElement {
       }
       const resp = await fetch(`${auth.baseUrl}/v1/feedback`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        },
         body: JSON.stringify({
           content: content.trim(),
           contact: contact.trim() || undefined,
           category,
           pageUrl: 'proma://settings/about',
-          teamEmail: auth.teamEmail || undefined,
-          teamAccountId: auth.teamAccountId || undefined,
         }),
       })
       if (!resp.ok) {
