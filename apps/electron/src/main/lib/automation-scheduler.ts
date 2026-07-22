@@ -205,8 +205,14 @@ export async function runAutomation(automation: Automation, manual = false): Pro
         resolveRun()
       }
 
-      // 超时保护：防止 runAgentHeadless 永远不回调导致 automation 永久卡死
-      const timeoutTimer = setTimeout(() => {
+      // 超时保护：先终止 Agent 再标记失败，避免遗留进程继续执行
+      const timeoutTimer = setTimeout(async () => {
+        try {
+          await import('./agent-service').then(m => m.stopAgent(targetSessionId))
+          await new Promise(r => setTimeout(r, 3000))
+        } catch (e) {
+          console.warn(`[定时任务] ${automation.name} 停止 Agent 异常:`, e)
+        }
         finish('error', `执行超时（超过 ${RUN_TIMEOUT_MS / 3600_000} 小时）`)
         console.warn(`[定时任务] ${automation.name} 执行超时，强制结束`)
       }, RUN_TIMEOUT_MS)

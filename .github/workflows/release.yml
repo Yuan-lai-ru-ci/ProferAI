@@ -90,6 +90,26 @@ jobs:
           Stop-Process -Id $process.Id -Force
           $process.WaitForExit()
 
+      - name: Probe packaged Pi runtime closure
+        shell: pwsh
+        working-directory: apps/electron
+        run: |
+          $probePath = Join-Path $PWD "scripts/packaged-pi-probe.cjs"
+          if (-not (Test-Path -LiteralPath $probePath)) {
+            throw "Missing Pi probe script: $probePath"
+          }
+          $unpackedResources = Join-Path $PWD "out/win-unpacked/resources"
+          if (-not (Test-Path -LiteralPath $unpackedResources)) {
+            throw "Missing unpacked resources for Pi probe: $unpackedResources"
+          }
+          $env:ELECTRON_RUN_AS_NODE = "1"
+          $result = & "out/win-unpacked/Profer.exe" $probePath 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host $result
+            throw "Pi runtime closure probe failed with exit code $LASTEXITCODE"
+          }
+          Write-Host "Pi runtime closure verified"
+
       - name: Collect Windows release assets
         shell: pwsh
         working-directory: apps/electron

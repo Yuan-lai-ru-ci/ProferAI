@@ -148,7 +148,7 @@ export function deductCredits(userId, amount, { description, referenceType, refe
     // 扣减各桶 + 写流水
     for (const d of deductions) {
       db.prepare(`UPDATE users SET ${d.bucket} = ${d.bucket} - ? WHERE id = ?`).run(d.amount, userId)
-      db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
+      db.prepare(`INSERT OR IGNORE INTO credit_transactions (id, user_id, amount, type, description, source_balance, reference_type, reference_id, created_at)
         VALUES (?, ?, ?, 'consumption', ?, ?, ?, ?, ?)`)
         .run(uuidv4(), userId, -d.amount, description || '', d.bucket, referenceType || '', referenceId || '', now)
     }
