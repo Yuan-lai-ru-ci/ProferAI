@@ -9,7 +9,7 @@
 
 import { Hono } from 'hono'
 import { db } from '../db.js'
-import { requireAuth } from '../middleware.js'
+import { honoAuthMiddleware } from '../middleware.js'
 import { createRateLimiter } from '../middleware/rate-limit.js'
 
 // ===== 本地计数器（每日限流，零额外 API 调用）=====
@@ -124,7 +124,7 @@ async function createBaseRecord(baseToken, tableId, fields) {
 export const feedbackRoutes = new Hono()
 
 /** 已登录用户提交：从 JWT 取邮箱，不接受 body 中的 email 字段 */
-feedbackRoutes.post('/', requireAuth, async (c) => {
+feedbackRoutes.post('/', honoAuthMiddleware, async (c) => {
   const baseToken = process.env.LARK_FEEDBACK_BASE_TOKEN
   const tableId = process.env.LARK_FEEDBACK_TABLE_ID
 
