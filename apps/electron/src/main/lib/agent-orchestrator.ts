@@ -78,6 +78,7 @@ import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
 import { buildAgentRuntimeEnv } from './agent-runtime-env'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
+import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
@@ -1290,6 +1291,9 @@ export class AgentOrchestrator {
             kind: 'profer_event',
             event: { type: 'context_window', contextWindow: cw },
           })
+        },
+        onRetry: (retry: PiRetryUpdate) => {
+          this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'retry', ...retry } })
         },
       }
 
