@@ -287,7 +287,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_ct_user ON credit_transactions(user_id)'
 db.exec('CREATE INDEX IF NOT EXISTS idx_ct_created ON credit_transactions(created_at)')
 // 防重复扣费：清理历史补扫/即时结算竞争残留（生产有~42条重复），再建唯一索引
 db.exec(`DELETE FROM credit_transactions WHERE id NOT IN (SELECT MIN(id) FROM credit_transactions WHERE reference_type != '' AND reference_id != '' GROUP BY reference_type, reference_id) AND reference_type != '' AND reference_id != ''`)
-db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ct_unique_ref ON credit_transactions(reference_type, reference_id) WHERE reference_type != '' AND reference_id != ''`)'
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ct_unique_ref ON credit_transactions(reference_type, reference_id) WHERE reference_type != '' AND reference_id != ''`)
 try { db.exec("ALTER TABLE credit_transactions ADD COLUMN source_balance TEXT DEFAULT ''") } catch (_) {}
 try { db.exec("ALTER TABLE channels ADD COLUMN agent_base_url TEXT DEFAULT ''") } catch (_) {}
 // 渠道 scope：global（全用户可用）/ test（仅管理员测试用）
