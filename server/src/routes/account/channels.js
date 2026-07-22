@@ -14,6 +14,8 @@ import { listActiveChannels, ensureRelayToken, db } from '../../db.js'
 import { COMMERCIAL_MODE } from '../../config.js'
 import { DEFAULT_MODELS, normalizeChannelForClient } from '../../shared/channel-utils.js'
 import { syncChannelsFromNewApi } from '../../shared/newapi-channel-sync.js'
+import { createPricingContext } from '../../billing/pricing-context.js'
+import { getModelMultipliers, getVipConfig } from '../../db/config-store.js'
 
 export const accountChannels = new Hono()
 
@@ -32,6 +34,8 @@ accountChannels.get('/', async (c) => {
   // 自动从 New API 拉渠道（内部 60s 缓存）
   await syncChannelsFromNewApi(db)
   const channels = listActiveChannels()
+  const user = db.prepare('SELECT is_vip FROM users WHERE id = ?').get(userId)
+  const modelMultipliers = getModelMultipliers()
 
   // 所有用户统一：官方渠道 apiKey = relay 令牌 → 走 proxy → New API 扣费
   const relayToken = ensureRelayToken(userId)
@@ -41,6 +45,10 @@ accountChannels.get('/', async (c) => {
     if (models.length === 0 && DEFAULT_MODELS[ch.provider]) {
       models = DEFAULT_MODELS[ch.provider]
     }
+    models = models.map((model) => {
+      const pricing = createPricingContext(user, model.id, { modelMultipliers, vipConfig: getVipConfig() })
+      return { ...model, multiplier: pricing.effectiveMultiplier }
+    })
     const urls = normalizeChannelForClient(ch)
     return {
       id: ch.id,

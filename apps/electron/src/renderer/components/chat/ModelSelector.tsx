@@ -51,6 +51,7 @@ function buildModelOptions(channels: Channel[], filterChannelId?: string, filter
         modelId: model.id,
         modelName: model.name,
         provider: channel.provider,
+        multiplier: model.multiplier,
       })
     }
   }
@@ -361,6 +362,11 @@ export function ModelSelector({
                           )}>
                             {option.modelName}
                           </span>
+                          {Number.isFinite(option.multiplier) && (
+                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                              {option.multiplier!.toFixed(2)}x
+                            </span>
+                          )}
                         </button>
                       )
                     })}

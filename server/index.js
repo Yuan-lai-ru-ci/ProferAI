@@ -81,6 +81,7 @@ import { adminAudit } from './src/routes/admin/audit.js'
 import { adminConfig } from './src/routes/admin/config.js'
 import { accountChannels } from './src/routes/account/channels.js'
 import { accountCredits } from './src/routes/account/credits.js'
+import { accountPricing } from './src/routes/account/pricing.js'
 import { accountApiKeys } from './src/routes/account/api-keys.js'
 import { inviteRoutes } from './src/routes/invite.js'
 import { accountSubscription } from './src/routes/account/subscription.js'
@@ -160,6 +161,7 @@ const accountApp = new Hono()
 accountApp.use('*', honoAuthMiddleware)
 accountApp.route('/channels', accountChannels)
 accountApp.route('/credits', accountCredits)
+accountApp.route('/pricing', accountPricing)
 accountApp.route('/api-keys', accountApiKeys)
 accountApp.route('/subscription', accountSubscription)
 accountApp.route('/redeem', accountRedeem)

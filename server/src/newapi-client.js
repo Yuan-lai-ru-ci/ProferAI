@@ -262,15 +262,30 @@ export function generateTokenKey() {
  * @param {string} tokenKey
  * @returns {Promise<{ok:boolean, error?:string}>}
  */
-export async function insertNewApiToken(newApiUserId, tokenKey) {
+export async function setNewApiTokenGroup(newApiUserId, tokenKey, group) {
+  if (!newApiUserId || !tokenKey || !group) return { ok: false, error: 'missing_token_or_group' }
+  let db
+  try {
+    db = await _openNewApiDb()
+    const result = db.prepare('UPDATE tokens SET `group` = ? WHERE user_id = ? AND key = ? AND status = 1')
+      .run(group, newApiUserId, tokenKey)
+    return result.changes === 1 ? { ok: true } : { ok: false, error: 'token_not_found' }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  } finally {
+    if (db) db.close()
+  }
+}
+
+export async function insertNewApiToken(newApiUserId, tokenKey, group = 'default') {
   let db
   try {
     db = await _openNewApiDb()
     const now = Math.floor(Date.now() / 1000)
     db.prepare(
       `INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, \`group\`)
-       VALUES (?, ?, 1, 'profer-auto', ?, ?, -1, 0, 1, 'default')`
-    ).run(newApiUserId, tokenKey, now, now)
+       VALUES (?, ?, 1, 'profer-auto', ?, ?, -1, 0, 1, ?)`
+    ).run(newApiUserId, tokenKey, now, now, group)
     return { ok: true }
   } catch (e) {
     return { ok: false, error: e.message }

@@ -321,6 +321,13 @@ try { db.exec("ALTER TABLE request_logs ADD COLUMN new_api_request_id TEXT NOT N
 // 请求进入代理时冻结的计价审计快照；旧记录为 NULL，补扫走 legacy fallback。
 try { db.exec('ALTER TABLE request_logs ADD COLUMN actual_quota INTEGER') } catch (_) {}
 try { db.exec('ALTER TABLE request_logs ADD COLUMN billing_markup REAL') } catch (_) {}
+// 请求级 VIP 定价快照：必须记录路由分组和当时生效的倍率，避免后续改价影响审计。
+try { db.exec("ALTER TABLE request_logs ADD COLUMN pricing_audience TEXT NOT NULL DEFAULT 'legacy'") } catch (_) {}
+try { db.exec("ALTER TABLE request_logs ADD COLUMN newapi_group TEXT NOT NULL DEFAULT ''") } catch (_) {}
+try { db.exec('ALTER TABLE request_logs ADD COLUMN model_multiplier REAL') } catch (_) {}
+try { db.exec('ALTER TABLE request_logs ADD COLUMN group_multiplier REAL') } catch (_) {}
+try { db.exec('ALTER TABLE request_logs ADD COLUMN effective_multiplier REAL') } catch (_) {}
+try { db.exec("ALTER TABLE request_logs ADD COLUMN pricing_version TEXT NOT NULL DEFAULT 'legacy'") } catch (_) {}
 db.exec("CREATE INDEX IF NOT EXISTS idx_rl_unbilled ON request_logs(cost_credits, success, new_api_request_id)")
 
 // 激活码表 — 管理员生成，用于个人用户注册

@@ -11,7 +11,7 @@ describe('request log SQL', () => {
     const sql = buildRequestLogInsertSql()
     const placeholderCount = (sql.match(/\?/g) || []).length
 
-    expect(REQUEST_LOG_COLUMNS).toHaveLength(18)
+    expect(REQUEST_LOG_COLUMNS).toHaveLength(24)
     expect(placeholderCount).toBe(REQUEST_LOG_COLUMNS.length)
   })
 
@@ -34,6 +34,12 @@ describe('request log SQL', () => {
       newApiRequestId: 'napi-123',
       actualQuota: 101,
       billingMarkup: 1.5,
+      pricingAudience: 'vip',
+      newApiGroup: 'vip',
+      modelMultiplier: 0.6,
+      groupMultiplier: 0.8,
+      effectiveMultiplier: 0.48,
+      pricingVersion: 'vip-model-groups-v1',
     }, 1000)
 
     expect(values).toHaveLength(REQUEST_LOG_COLUMNS.length)
@@ -46,5 +52,11 @@ describe('request log SQL', () => {
     expect(values[15]).toBe('napi-123')
     expect(values[16]).toBe(101)
     expect(values[17]).toBe(1.5)
+    expect(values[18]).toBe('vip')
+    expect(values[19]).toBe('vip')
+    expect(values[20]).toBe(0.6)
+    expect(values[21]).toBe(0.8)
+    expect(values[22]).toBe(0.48)
+    expect(values[23]).toBe('vip-model-groups-v1')
   })
 })

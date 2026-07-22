@@ -31,7 +31,7 @@ export {
 } from './db/subscription.js'
 export {
   getConfig, getConfigs, getConfigsGrouped, setConfig, setConfigs, resetConfig,
-  getPlanDefs, getPlanDefsRedeem, getVipConfig, getBillingConfig, CONFIG_SCHEMA,
+  getPlanDefs, getPlanDefsRedeem, getVipConfig, getBillingConfig, getModelMultipliers, CONFIG_SCHEMA,
 } from './db/config-store.js'
 
 // 从子模块导入内部使用的函数
@@ -74,7 +74,7 @@ export function listAllUsers({ search = '', page = 1, limit = 20 } = {}) {
 export function getCurrentUserAuthorization(userId) {
   if (!userId || typeof userId !== 'string') return undefined
   return db.prepare(`
-    SELECT id, email, is_admin, is_suspended, membership_tier
+    SELECT id, email, is_admin, is_suspended, membership_tier, is_vip
     FROM users WHERE id = ?
   `).get(userId)
 }
@@ -171,7 +171,7 @@ export function rotateRelayToken(userId) {
 
 export function getUserByRelayToken(token) {
   if (!token) return undefined
-  return db.prepare('SELECT id, email, is_admin, is_suspended, membership_tier FROM users WHERE relay_token = ?').get(token)
+  return db.prepare('SELECT id, email, is_admin, is_suspended, membership_tier, is_vip FROM users WHERE relay_token = ?').get(token)
 }
 
 // ===== 渠道管理 =====
@@ -282,9 +282,16 @@ export async function sweepUnbilledRequests({ batchSize = 100, maxAgeMs = 86400_
 }
 
 /** 更新单条请求日志的扣费额度 */
-export function updateRequestLogCost(requestId, costCredits, { actualQuota = null, billingMarkup = null } = {}) {
-  db.prepare('UPDATE request_logs SET cost_credits = ?, actual_quota = ?, billing_markup = ? WHERE id = ?')
-    .run(costCredits, actualQuota, billingMarkup, requestId)
+export function updateRequestLogCost(requestId, costCredits, { actualQuota = null, billingMarkup = null, pricing = null } = {}) {
+  db.prepare(`UPDATE request_logs SET cost_credits = ?, actual_quota = ?, billing_markup = ?,
+    pricing_audience = COALESCE(?, pricing_audience), newapi_group = COALESCE(?, newapi_group),
+    model_multiplier = COALESCE(?, model_multiplier), group_multiplier = COALESCE(?, group_multiplier),
+    effective_multiplier = COALESCE(?, effective_multiplier), pricing_version = COALESCE(?, pricing_version)
+    WHERE id = ?`)
+    .run(costCredits, actualQuota, billingMarkup,
+      pricing?.audience ?? null, pricing?.newApiGroup ?? null, pricing?.modelMultiplier ?? null,
+      pricing?.groupMultiplier ?? null, pricing?.effectiveMultiplier ?? null, pricing?.pricingVersion ?? null,
+      requestId)
 }
 
 /** 根据实际用量调整已扣额度 */
