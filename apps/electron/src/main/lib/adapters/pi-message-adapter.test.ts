@@ -44,17 +44,40 @@ describe('convertPiMessage', () => {
     expect(JSON.stringify(message).length).toBeGreaterThan(content.length)
   })
 
-  test('only persists provider errors for terminal Pi failures', () => {
+  test('only persists errors for terminal Pi failures', () => {
     const providerError = 'stream ended before a terminal response event'
     const partialStop = convertPiMessage({
       role: 'assistant', content: [], stopReason: 'stop', errorMessage: providerError,
     } as unknown as AssistantMessage, 'session-1') as { error?: unknown }
     const terminalError = convertPiMessage({
       role: 'assistant', content: [], stopReason: 'error', errorMessage: providerError,
-    } as unknown as AssistantMessage, 'session-1') as { error?: { message?: string } }
+    } as unknown as AssistantMessage, 'session-1') as { error?: { message?: string; errorType?: string } }
 
     expect(partialStop.error).toBeUndefined()
-    expect(terminalError.error?.message).toBe(providerError)
+    expect(terminalError.error).toEqual({
+      message: providerError,
+      errorType: 'network_error',
+    })
+  })
+
+  test('keeps non-network terminal Pi errors as provider_error', () => {
+    const terminalError = convertPiMessage({
+      role: 'assistant', content: [], stopReason: 'error', errorMessage: '529 overloaded',
+    } as unknown as AssistantMessage, 'session-1') as { error?: { message?: string; errorType?: string } }
+
+    expect(terminalError.error).toEqual({ message: '529 overloaded', errorType: 'provider_error' })
+  })
+
+  test.each([
+    'peer closed connection',
+    'incomplete chunked read',
+    'peer closed connection without sending complete message body (incomplete chunked read)',
+  ])('classifies terminal Pi transport error "%s" as network_error', (errorMessage) => {
+    const terminalError = convertPiMessage({
+      role: 'assistant', content: [], stopReason: 'error', errorMessage,
+    } as unknown as AssistantMessage, 'session-1') as { error?: { message?: string; errorType?: string } }
+
+    expect(terminalError.error).toEqual({ message: errorMessage, errorType: 'network_error' })
   })
 
   test('only reports result errors for terminal Pi failures', () => {

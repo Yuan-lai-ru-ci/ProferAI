@@ -10,6 +10,7 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ToolResultMessage, UserMessage } from '@earendil-works/pi-ai/compat'
 import type { SDKMessage } from '@proma/shared'
 import type { RuntimeGuardResultOverride } from '../agent-runtime-guards'
+import { isTransientNetworkError } from '../error-patterns'
 
 function getPiEditItems(input: Record<string, unknown>): Array<Record<string, unknown>> {
   return Array.isArray(input.edits)
@@ -214,6 +215,9 @@ export function convertPiMessage(
     //   Pi SDK 认定本轮已成功，不应在渲染层误导用户。
     // 上述非终态情况的 errorMessage 只写主进程 console，供开发排查；用户侧完全无感知。
     const isTerminalError = assistant.stopReason === 'error'
+    const errorType = assistant.errorMessage && isTransientNetworkError(assistant.errorMessage)
+      ? 'network_error'
+      : 'provider_error'
     if (assistant.errorMessage && !isTerminalError && final) {
       console.warn(
         `[pi-adapter] 忽略非终态 errorMessage（stopReason=${assistant.stopReason}）: ${assistant.errorMessage}`,
@@ -246,7 +250,7 @@ export function convertPiMessage(
       uuid: options.uuid ?? randomUUID(),
       ...(!final && { _partial: true }),
       ...(assistant.errorMessage && isTerminalError && {
-        error: { message: assistant.errorMessage, errorType: 'provider_error' },
+        error: { message: assistant.errorMessage, errorType },
       }),
       ...(channelModelId && { _channelModelId: channelModelId }),
     } as unknown as SDKMessage
