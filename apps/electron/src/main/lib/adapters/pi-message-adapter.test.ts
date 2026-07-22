@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
-import { convertPiMessage } from './pi-message-adapter'
+import { convertPiMessage, convertResultMessage } from './pi-message-adapter'
 
 function writeToolCall(content: string): AssistantMessage {
   return {
@@ -55,5 +55,20 @@ describe('convertPiMessage', () => {
 
     expect(partialStop.error).toBeUndefined()
     expect(terminalError.error?.message).toBe(providerError)
+  })
+
+  test('only reports result errors for terminal Pi failures', () => {
+    const providerError = 'stream ended before a terminal response event'
+    const partialStop = convertResultMessage([{
+      role: 'assistant', content: [], stopReason: 'stop', errorMessage: providerError,
+    } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[] }
+    const terminalError = convertResultMessage([{
+      role: 'assistant', content: [], stopReason: 'error', errorMessage: providerError,
+    } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[] }
+
+    expect(partialStop.subtype).toBe('success')
+    expect(partialStop.errors).toBeUndefined()
+    expect(terminalError.subtype).toBe('error_during_execution')
+    expect(terminalError.errors).toEqual([providerError])
   })
 })

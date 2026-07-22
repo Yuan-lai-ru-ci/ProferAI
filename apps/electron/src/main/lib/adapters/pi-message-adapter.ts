@@ -300,7 +300,7 @@ export function convertResultMessage(
     { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   )
   const lastAssistant = assistants[assistants.length - 1]
-  const assistantError = lastAssistant?.errorMessage
+  const assistantError = lastAssistant?.stopReason === 'error' ? lastAssistant.errorMessage : undefined
   const terminalReason = override?.terminalReason ?? (lastAssistant?.stopReason === 'length' ? 'max_tokens' : 'completed')
   return {
     type: 'result',
