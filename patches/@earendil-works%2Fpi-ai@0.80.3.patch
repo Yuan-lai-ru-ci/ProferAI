@@ -1,5 +1,5 @@
 diff --git a/dist/utils/oauth/openai-codex.d.ts b/dist/utils/oauth/openai-codex.d.ts
-index 2edcbefa03c344b44cd7faa516f47502c68d8d59..433cf42459cb5bce6137682ce4d4df8534ba12ff 100644
+index 2edcbef..433cf42 100644
 --- a/dist/utils/oauth/openai-codex.d.ts
 +++ b/dist/utils/oauth/openai-codex.d.ts
 @@ -14,6 +14,8 @@ export declare const OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD = "device_code";
@@ -31,7 +31,7 @@ index 2edcbefa03c344b44cd7faa516f47502c68d8d59..433cf42459cb5bce6137682ce4d4df85
  //# sourceMappingURL=openai-codex.d.ts.map
 \ No newline at end of file
 diff --git a/dist/utils/oauth/openai-codex.js b/dist/utils/oauth/openai-codex.js
-index 3b5925156d44b0c12409e83f7cb9e5e488cfc754..bbce2d8796ebe2bbb61d8471e24a0409150b4881 100644
+index 3b59251..bbce2d8 100644
 --- a/dist/utils/oauth/openai-codex.js
 +++ b/dist/utils/oauth/openai-codex.js
 @@ -82,9 +82,9 @@ function decodeJwt(token) {
@@ -145,3 +145,15 @@ index 3b5925156d44b0c12409e83f7cb9e5e488cfc754..bbce2d8796ebe2bbb61d8471e24a0409
  }
  export const openaiCodexOAuth = {
      name: "OpenAI (ChatGPT Plus/Pro)",
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index fd52e8b..0236d4a 100644
+--- a/dist/utils/retry.js
++++ b/dist/utils/retry.js
+@@ -55,6 +55,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+     // "stream ended without ..." and "Anthropic stream ended before message_stop"
+     // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
+     "ended without",
++    "upstream request failed",
+     "stream ended before message_stop",
+     "http2 request did not get a response",
+     // Provider-requested retry delay cap failures should flow through the outer
