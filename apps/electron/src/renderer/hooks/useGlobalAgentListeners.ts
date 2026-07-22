@@ -394,20 +394,27 @@ export function useGlobalAgentListeners(): void {
         // 缺失了刚结束 turn 的父会话的快照把父会话冲掉——父会话从列表消失后其子会话
         // 因找不到父而浮到根层。改为单条 upsert 后每个回调只负责自己那一个会话。
         const sessionMeta = sessions.find((item) => item.id === event.sessionId)
-        const upserted: AgentSessionMeta = sessionMeta ?? {
+        const upserted: AgentSessionMeta = event.session ?? sessionMeta ?? {
           id: event.sessionId,
           title: event.title ?? '未命名会话',
           workspaceId: event.workspaceId,
           modelId: event.modelId,
           createdAt: event.startedAt,
           updatedAt: event.startedAt,
+          ...('parentSessionId' in event && event.parentSessionId ? { parentSessionId: event.parentSessionId as string } : {}),
         }
         const promotedParent = upserted.parentSessionId
-          ? sessions.find((item) => item.id === upserted.parentSessionId && !item.draft)
+          ? sessions.find((item) => item.id === upserted.parentSessionId)
           : undefined
         store.set(agentSessionsAtom, (prev) => {
-          const withChild = upsertAgentSession(prev, upserted)
-          return promotedParent ? upsertAgentSession(withChild, promotedParent) : withChild
+          let next = upsertAgentSession(prev, upserted)
+          // 草稿父会话需要在子 Agent 出现时晋升为可见会话
+          if (promotedParent && promotedParent.draft) {
+            next = upsertAgentSession(next, { ...promotedParent, draft: false })
+          } else if (promotedParent) {
+            next = upsertAgentSession(next, promotedParent)
+          }
+          return next
         })
         if (promotedParent) {
           store.set(draftSessionIdsAtom, (previous) => {
@@ -439,16 +446,9 @@ export function useGlobalAgentListeners(): void {
       }
 
       const knownSessions = store.get(agentSessionsAtom)
-      if (knownSessions.some((session) => session.id === event.sessionId)) {
-        applyActivation(knownSessions)
-        return
-      }
-
-      window.electronAPI.listAgentSessions()
-        .then((sessions) => {
-          unstable_batchedUpdates(() => applyActivation(sessions))
-        })
-        .catch(console.error)
+      // 直接用当前列表 apply：applyActivation 内部会通过 upsertAgentSession
+      // 将 event 中的子 Agent 信息插入列表，无需等待 listAgentSessions() 异步返回。
+      applyActivation(knownSessions)
     }
 
     /** 发送阻塞通知（带提示音 + 会话导航） */
@@ -611,8 +611,13 @@ export function useGlobalAgentListeners(): void {
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
 
-        if (payload.kind === 'profer_event' && payload.event.type === 'external_run_started') {
-          activateExternalAgentRun(payload.event)
+        if (payload.kind === 'profer_event') {
+          const proferEvent = payload.event
+          if (proferEvent.type === 'external_run_started') {
+            activateExternalAgentRun(proferEvent)
+          } else if (proferEvent.type === 'delegation_session_updated') {
+            store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, proferEvent.session))
+          }
         }
 
         // 如果收到未知会话的事件（跨工作区场景），立即刷新会话列表

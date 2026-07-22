@@ -55,6 +55,7 @@ interface DelegationRecord {
   delegationId: string
   parentSessionId: string
   childSessionId: string
+  workspaceId?: string
   channelId: string
   modelId?: string
   title: string
@@ -332,7 +333,16 @@ function markDelegationFinished(
   record.completedAt = Date.now()
   record.error = fields.error
   record.resultSummary = fields.resultSummary
-  updateAgentSessionMeta(record.childSessionId, { delegationStatus: status })
+  const child = updateAgentSessionMeta(record.childSessionId, { delegationStatus: status })
+  // 完成状态必须推回父会话所属的渲染进程。不能只依赖随后可能陈旧的全量列表刷新，
+  // 否则子会话可能暂时丢失委派字段，被侧栏当作普通会话展示。
+  _eventBusRef?.emit(record.parentSessionId, {
+    kind: 'profer_event',
+    event: {
+      type: 'delegation_session_updated',
+      session: child,
+    },
+  })
   record.resolveCompletion()
 }
 
@@ -626,7 +636,10 @@ function startDelegation(
     : parent
   // 优先从持久化父会话继承，旧会话/无父上下文才安全回退 Claude。
   const inheritedRuntime = effectiveParent?.agentRuntime ?? ctx.agentRuntime ?? 'claude'
-  const child = createAgentSession(title, ctx.channelId, ctx.workspaceId, effectiveModelId, inheritedRuntime)
+  // 会话持久化后的工作区是唯一权威来源。工具调用上下文可能来自已切换项目的旧流，
+  // 不能让它把子会话创建或执行到另一个项目中。
+  const workspaceId = effectiveParent?.workspaceId ?? ctx.workspaceId
+  const child = createAgentSession(title, ctx.channelId, workspaceId, effectiveModelId, inheritedRuntime)
   const rootSessionId = effectiveParent?.rootSessionId ?? effectiveParent?.id ?? ctx.sessionId
   updateAgentSessionMeta(child.id, {
     parentSessionId: ctx.sessionId,
@@ -646,6 +659,7 @@ function startDelegation(
     delegationId,
     parentSessionId: ctx.sessionId,
     childSessionId: child.id,
+    workspaceId,
     channelId: ctx.channelId,
     modelId: effectiveModelId,
     title,
@@ -660,6 +674,11 @@ function startDelegation(
   delegations.set(delegationId, record)
   pruneFinishedDelegations()
 
+  // 确保父会话已脱离草稿状态，再发送子 Agent 的 external_run_started。
+  if (parent?.draft) {
+    updateAgentSessionMeta(parent.id, { draft: false })
+  }
+
   // 立即通过 eventBus 发送 external_run_started，确保侧边栏在子 Agent 启动时就显示。
   // 事件发到父会话 sessionId，利用父会话已注册的 webContents 将 IPC 推送到前端。
   // 前端 activateExternalAgentRun 会根据 event.sessionId（子会话 ID）来 upsert 子会话。
@@ -670,10 +689,12 @@ function startDelegation(
         type: 'external_run_started',
         source: 'delegation',
         sessionId: child.id,
+        parentSessionId: ctx.sessionId,
         title,
-        workspaceId: ctx.workspaceId,
+        workspaceId,
         modelId: effectiveModelId,
         startedAt: record.startedAt,
+        session: getAgentSessionMeta(child.id),
       },
     })
   }
@@ -692,7 +713,7 @@ function startDelegation(
       userMessage: prompt,
       channelId: ctx.channelId,
       modelId: effectiveModelId,
-      workspaceId: ctx.workspaceId,
+      workspaceId,
       permissionModeOverride: permissionMode,
       triggeredBy: 'delegation',
       startedAt: record.startedAt,
@@ -1015,7 +1036,7 @@ export async function injectAgentCollaborationMcpServer(
           record.completion = completionHandle.completion
           record.resolveCompletion = completionHandle.resolveCompletion
 
-          updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
+          const child = updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
 
           runRegisteredHeadlessAgent(
             {
@@ -1023,7 +1044,7 @@ export async function injectAgentCollaborationMcpServer(
               userMessage: args.message,
               channelId: record.channelId,
               modelId: record.modelId,
-              workspaceId: ctx.workspaceId,
+              workspaceId: child.workspaceId ?? record.workspaceId ?? ctx.workspaceId,
               permissionModeOverride: record.permissionMode,
               triggeredBy: 'delegation',
               startedAt: Date.now(),
@@ -1353,7 +1374,7 @@ export function buildPiCollaborationTools(
         record.completion = completionHandle.completion
         record.resolveCompletion = completionHandle.resolveCompletion
 
-        updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
+        const child = updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
 
         runRegisteredHeadlessAgent(
           {
@@ -1361,7 +1382,7 @@ export function buildPiCollaborationTools(
             userMessage: args.message,
             channelId: record.channelId,
             modelId: record.modelId,
-            workspaceId: ctx.workspaceId,
+            workspaceId: child.workspaceId ?? record.workspaceId ?? ctx.workspaceId,
             permissionModeOverride: record.permissionMode,
             triggeredBy: 'delegation',
             startedAt: Date.now(),

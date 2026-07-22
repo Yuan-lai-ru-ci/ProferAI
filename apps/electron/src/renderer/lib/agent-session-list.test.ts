@@ -80,6 +80,24 @@ describe('upsertAgentSession', () => {
     // 父会话与子会话 a 都必须仍然在列表中
     expect(result.map((s) => s.id).sort()).toEqual(['child-a', 'child-b', 'parent'])
   })
+
+  test('回归：完整委派元数据到达时保留工作区与父子关系', () => {
+    const placeholder = makeSession('child', 10, { parentSessionId: 'parent' })
+    const persistedChild = makeSession('child', 20, {
+      workspaceId: 'project-a',
+      parentSessionId: 'parent',
+      sourceDelegationId: 'delegation-a',
+      delegationStatus: 'completed',
+    })
+
+    const result = upsertAgentSession([placeholder], persistedChild)
+    expect(result[0]).toMatchObject({
+      workspaceId: 'project-a',
+      parentSessionId: 'parent',
+      sourceDelegationId: 'delegation-a',
+      delegationStatus: 'completed',
+    })
+  })
 })
 
 describe('mergeFetchedAgentSessions', () => {

@@ -291,6 +291,7 @@ export async function runAgentHeadless(
             workspaceId: runInput.workspaceId ?? session?.workspaceId,
             modelId: runInput.modelId,
             startedAt: persistedStartedAt,
+            session,
           },
         })
       },

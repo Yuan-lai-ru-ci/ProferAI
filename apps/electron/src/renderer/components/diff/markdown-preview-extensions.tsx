@@ -575,7 +575,7 @@ function createMathView(initialNode: ProseMirrorNode, displayMode: boolean) {
     getHtml: (node) => {
       const latex = String(node.attrs.latex ?? '')
       try {
-        return katex.renderToString(latex, { displayMode, throwOnError: false })
+        return katex.renderToString(latex, { displayMode, throwOnError: false, strict: 'ignore' })
       } catch {
         return latex
       }

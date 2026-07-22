@@ -218,7 +218,7 @@ export const ReasoningContent = React.memo(
         <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
           <Markdown
             remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
+            rehypePlugins={[[rehypeKatex, { strict: 'ignore' }]]}
             components={{
               a: ({ href, children: linkChildren, ...linkProps }) => (
                 <a
