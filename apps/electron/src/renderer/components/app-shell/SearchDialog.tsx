@@ -29,8 +29,10 @@ import {
   agentPendingPromptAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { useCreateSession } from '@/hooks/useCreateSession'
+// Persisted Agent drafts are excluded from search results via session metadata.
 import {
   SessionMiniMapPopover,
   useSessionMiniMapHover,
@@ -214,6 +216,7 @@ export function SearchDialog(): React.ReactElement {
   const [open, setOpen] = useAtom(searchDialogOpenAtom)
   const conversations = useAtomValue(conversationsAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
   const channels = useAtomValue(channelsAtom)
   const currentAgentChannelId = useAtomValue(agentChannelIdAtom)
@@ -233,6 +236,14 @@ export function SearchDialog(): React.ReactElement {
     if (!session?.workspaceId) return undefined
     return workspaceNameMap.get(session.workspaceId)
   }, [agentSessions, workspaceNameMap])
+
+  const hiddenAgentSessionIds = React.useMemo(() => {
+    const ids = new Set(draftSessionIds)
+    for (const session of agentSessions) {
+      if (session.draft) ids.add(session.id)
+    }
+    return ids
+  }, [agentSessions, draftSessionIds])
 
   // query：输入框当前值（实时跟随用户）
   // committedQuery：用户已确认提交的搜索词（点击/回车后才更新），用于结果展示与高亮
@@ -297,10 +308,10 @@ export function SearchDialog(): React.ReactElement {
     const qLower = q.toLowerCase()
     const titles: TitleResult[] = [
       ...conversations
-        .filter((c) => c.title.toLowerCase().includes(qLower))
+        .filter((c) => !draftSessionIds.has(c.id) && c.title.toLowerCase().includes(qLower))
         .map((c) => ({ id: c.id, title: c.title, type: 'chat' as const, archived: c.archived, updatedAt: c.updatedAt })),
       ...agentSessions
-        .filter((s) => s.title.toLowerCase().includes(qLower))
+        .filter((s) => !hiddenAgentSessionIds.has(s.id) && s.title.toLowerCase().includes(qLower))
         .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, updatedAt: s.updatedAt })),
     ]
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -317,7 +328,7 @@ export function SearchDialog(): React.ReactElement {
 
       const titleIds = new Set(titles.map((t) => t.id))
       const chatContent: ContentResult[] = (chatResults as MessageSearchResult[])
-        .filter((r) => !titleIds.has(r.conversationId))
+        .filter((r) => !titleIds.has(r.conversationId) && !draftSessionIds.has(r.conversationId))
         .map((r) => ({
           id: r.conversationId,
           title: r.conversationTitle,
@@ -329,7 +340,7 @@ export function SearchDialog(): React.ReactElement {
           archived: r.archived,
         }))
       const agentContent: ContentResult[] = (agentResults as AgentMessageSearchResult[])
-        .filter((r) => !titleIds.has(r.sessionId))
+        .filter((r) => !titleIds.has(r.sessionId) && !hiddenAgentSessionIds.has(r.sessionId))
         .map((r) => ({
           id: r.sessionId,
           title: r.sessionTitle,
@@ -348,7 +359,7 @@ export function SearchDialog(): React.ReactElement {
     } finally {
       if (token === searchTokenRef.current) setLoading(false)
     }
-  }, [query, conversations, agentSessions])
+  }, [query, conversations, agentSessions, draftSessionIds, hiddenAgentSessionIds])
 
   const handleAgentSearch = React.useCallback(async () => {
     const q = query.trim()

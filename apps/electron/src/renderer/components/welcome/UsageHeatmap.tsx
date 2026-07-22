@@ -104,21 +104,27 @@ function formatLabel(date: string, tokens: number): string {
 
 // ── 组件 ──────────────────────────────────────────────────
 
-export function UsageHeatmap(): React.ReactElement {
-  const workspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+export interface UsageHeatmapProps {
+  /** 显式指定项目时，热力图请求该项目；未传入时沿用当前工作区。 */
+  workspaceId?: string | null
+}
+
+export function UsageHeatmap({ workspaceId }: UsageHeatmapProps = {}): React.ReactElement {
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const targetWorkspaceId = workspaceId !== undefined ? workspaceId : currentWorkspaceId
   const [entries, setEntries] = React.useState<WorkspaceHeatmapEntry[] | null>(null)
   const [loading, setLoading] = React.useState(true)
 
   React.useEffect(() => {
-    if (!workspaceId) { setLoading(false); return }
+    if (!targetWorkspaceId) { setLoading(false); return }
     let cancelled = false
     setLoading(true)
-    window.electronAPI.getWorkspaceHeatmapDaily(workspaceId)
+    window.electronAPI.getWorkspaceHeatmapDaily(targetWorkspaceId)
       .then(d => { if (!cancelled) setEntries(d) })
       .catch(() => { if (!cancelled) setEntries([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [workspaceId])
+  }, [targetWorkspaceId])
 
   // ── 加载态 ──
   if (loading) {

@@ -130,6 +130,7 @@ eventBus.use((sessionId, payload, next) => {
 export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
+  onDraftPromoted?: (session: import('@profer/shared').AgentSessionMeta) => void | Promise<void>,
 ): Promise<void> {
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
@@ -170,6 +171,18 @@ export async function runAgent(
             sessionId: input.sessionId,
             title,
           })
+        }
+      },
+      onRunStarted: async () => {
+        const beforePromotion = getAgentSessionMeta(input.sessionId)
+        const session = beforePromotion?.draft
+          ? updateAgentSessionMeta(input.sessionId, { draft: false })
+          : beforePromotion
+        if (beforePromotion?.draft && session) {
+          await onDraftPromoted?.(session)
+          if (!webContents.isDestroyed()) {
+            webContents.send(AGENT_IPC_CHANNELS.SESSION_UPDATED, { session })
+          }
         }
       },
     })

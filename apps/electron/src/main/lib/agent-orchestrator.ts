@@ -99,7 +99,7 @@ export interface SessionCallbacks {
   /** 发送标题更新 */
   onTitleUpdated: (title: string) => void
   /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
-  onRunStarted?: (opts: { startedAt: number }) => void
+  onRunStarted?: (opts: { startedAt: number }) => void | Promise<void>
 }
 
 // ===== 错误诊断工具 =====
@@ -675,7 +675,7 @@ export class AgentOrchestrator {
       _createdAt: Date.now(),
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])
-    callbacks.onRunStarted?.({ startedAt: streamStartedAt })
+    await callbacks.onRunStarted?.({ startedAt: streamStartedAt })
     const completeRun = (
       messages?: AgentMessage[],
       opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },

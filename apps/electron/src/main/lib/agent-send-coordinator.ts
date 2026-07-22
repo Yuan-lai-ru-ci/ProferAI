@@ -22,6 +22,9 @@ export async function coordinateAgentSend(input: AgentSendInput, deps: Dependenc
   // 先同步启动编排器以原子占用 active session，再等待可能很慢的镜像初始化。
   // 这样 runtime 切换不会落在 mirror await 与实际 Agent 启动之间的空窗。
   const agentRun = deps.startAgent()
-  await deps.startMirror(session).catch(deps.onMirrorError)
+  // 隐藏草稿会话必须等用户消息成功落盘并晋升后才允许创建外部镜像。
+  if (!session.draft) {
+    await deps.startMirror(session).catch(deps.onMirrorError)
+  }
   await agentRun
 }

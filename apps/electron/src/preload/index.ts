@@ -521,6 +521,9 @@ export interface ElectronAPI {
   /** 创建 Agent 会话 */
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => Promise<AgentSessionMeta>
 
+  /** 为项目创建或复用隐藏的 Agent 草稿会话 */
+  ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
+
   /** 获取 Agent 会话 SDKMessage（Phase 4 新格式） */
   getAgentSessionSDKMessages: (id: string) => Promise<SDKMessage[]>
 
@@ -682,6 +685,9 @@ export interface ElectronAPI {
 
   /** 订阅 Agent 标题自动更新事件 */
   onAgentTitleUpdated: (callback: (data: { sessionId: string; title: string }) => void) => () => void
+
+  /** 订阅 Agent 会话元数据更新事件 */
+  onAgentSessionUpdated: (callback: (data: { session: AgentSessionMeta }) => void) => () => void
 
   // ===== Agent 权限系统 =====
 
@@ -1765,6 +1771,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId)
   },
 
+  ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ENSURE_PROJECT_DRAFT_SESSION, workspaceId, channelId, modelId)
+  },
+
   getAgentSessionSDKMessages: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id)
   },
@@ -2002,6 +2012,12 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, data: { sessionId: string; title: string }): void => callback(data)
     ipcRenderer.on(AGENT_IPC_CHANNELS.TITLE_UPDATED, listener)
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.TITLE_UPDATED, listener) }
+  },
+
+  onAgentSessionUpdated: (callback: (data: { session: AgentSessionMeta }) => void) => {
+    const listener = (_: unknown, data: { session: AgentSessionMeta }): void => callback(data)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.SESSION_UPDATED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.SESSION_UPDATED, listener) }
   },
 
   // Agent 权限系统

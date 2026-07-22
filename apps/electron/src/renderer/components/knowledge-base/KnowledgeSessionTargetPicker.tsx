@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { Bot, MessageSquare, Plus, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
+import { isVisibleAgentSession, type AgentSessionMeta, type ConversationMeta } from '@profer/shared'
 
 export type KnowledgeTarget = { kind: 'chat' | 'agent'; sessionId?: string; title?: string }
 
@@ -22,7 +22,7 @@ export function KnowledgeSessionTargetPicker({ open, itemCount, onOpenChange, on
     if (!open) return
     setLoading(true); setQuery('')
     Promise.all([window.electronAPI.listConversations(), window.electronAPI.listAgentSessions()])
-      .then(([nextChats, nextAgents]) => { setChats(nextChats); setAgents(nextAgents) })
+      .then(([nextChats, nextAgents]) => { setChats(nextChats); setAgents(nextAgents.filter(isVisibleAgentSession)) })
       .finally(() => setLoading(false))
   }, [open])
   const select = async (target: KnowledgeTarget) => { setSaving(true); try { await onSelect(target); onOpenChange(false) } finally { setSaving(false) } }

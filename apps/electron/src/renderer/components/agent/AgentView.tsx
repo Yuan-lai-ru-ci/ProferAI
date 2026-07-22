@@ -110,9 +110,9 @@ import { isTaskProgressTool } from './task-progress'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
+import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
-import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
@@ -536,10 +536,18 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
-  const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const sessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
+  const revealRendererDraft = React.useCallback(() => {
+    setDraftSessionIds((previous: Set<string>) => {
+      if (!previous.has(sessionId)) return previous
+      const next = new Set(previous)
+      next.delete(sessionId)
+      return next
+    })
+  }, [sessionId, setDraftSessionIds])
   const sessionMeta = React.useMemo(
     () => sessions.find((s) => s.id === sessionId),
     [sessions, sessionId],
@@ -1050,7 +1058,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           additionalDirectories: snapshot.additionalDirectories,
         }),
       }
-      window.electronAPI.sendAgentMessage(input).catch((error) => {
+      window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
         setStreamingStates((prev) => {
           const current = prev.get(sessionId)
@@ -1061,7 +1069,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories, revealRendererDraft])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -1651,6 +1659,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         ...(payload.mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: payload.mentions.mentionedMcpServers }),
         ...(payload.mentions.mentionedSessionIds.length > 0 && { mentionedSessionIds: payload.mentions.mentionedSessionIds }),
       })
+      revealRendererDraft()
     } catch (error) {
       setStreamingStates((prev) => {
         const current = prev.get(sessionId)
@@ -1665,7 +1674,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
     streaming, backgroundWaiting, permissionMode, attachedDirs, attachedFileDirectories,
     clearStoppedByUser, queueMessageIntoActiveAgent, appendOptimisticPersistedMessage,
-    sessionId, setStreamingStates,
+    revealRendererDraft, sessionId, setStreamingStates,
   ])
 
   /** 发送消息 */
@@ -1891,14 +1900,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       return next
     })
 
-    // 取消 draft 标记，让会话出现在侧边栏
-    setDraftSessionIds((prev: Set<string>) => {
-      if (!prev.has(sessionId)) return prev
-      const next = new Set(prev)
-      next.delete(sessionId)
-      return next
-    })
-
     // 初始化流式状态（startedAt 由渲染进程生成，传递给主进程原样回传，确保竞态保护使用同一个值）
     const streamStartedAt = Date.now()
     setStreamingStates((prev) => {
@@ -1959,7 +1960,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     setInputContent('')
     setInputHtmlContent('')
 
-    window.electronAPI.sendAgentMessage(input).catch((error) => {
+    window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch((error) => {
       console.error('[AgentView] 发送消息失败:', error)
       setStreamingStates((prev) => {
         const current = prev.get(sessionId)
@@ -1969,7 +1970,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)

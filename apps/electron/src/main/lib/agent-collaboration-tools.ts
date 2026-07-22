@@ -619,17 +619,22 @@ function startDelegation(
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
+  // 创建真实子会话是用户对该项目会话的明确操作：先晋升隐藏父会话，
+  // 避免正式子会话挂在不可见父节点下而无法从项目树访问。
+  const effectiveParent = parent?.draft
+    ? updateAgentSessionMeta(parent.id, { draft: false })
+    : parent
   // 优先从持久化父会话继承，旧会话/无父上下文才安全回退 Claude。
-  const inheritedRuntime = parent?.agentRuntime ?? ctx.agentRuntime ?? 'claude'
+  const inheritedRuntime = effectiveParent?.agentRuntime ?? ctx.agentRuntime ?? 'claude'
   const child = createAgentSession(title, ctx.channelId, ctx.workspaceId, effectiveModelId, inheritedRuntime)
-  const rootSessionId = parent?.rootSessionId ?? parent?.id ?? ctx.sessionId
+  const rootSessionId = effectiveParent?.rootSessionId ?? effectiveParent?.id ?? ctx.sessionId
   updateAgentSessionMeta(child.id, {
     parentSessionId: ctx.sessionId,
     rootSessionId,
     sourceDelegationId: delegationId,
     // 继承父会话的定时任务来源，保留自动化血缘；前端以 sourceDelegationId 优先
     // 展示委派徽章，不会被误判为定时任务（#993）。
-    sourceAutomationId: parent?.sourceAutomationId,
+    sourceAutomationId: effectiveParent?.sourceAutomationId,
     delegationRole: role,
     delegationStatus: 'running',
     delegationDepth: (parent?.delegationDepth ?? 0) + 1,

@@ -72,7 +72,7 @@ export function WelcomeView(): React.ReactElement {
           createChat: currentCreateChat,
         } = latestRef.current
 
-        // 1. 优先复用现有非归档、非 draft 会话
+        // 1. 优先复用现有非归档、非内存 draft 会话
         const existing = freshConversations.find(
           (c) => !c.archived && !currentDrafts.has(c.id),
         )
@@ -86,21 +86,7 @@ export function WelcomeView(): React.ReactElement {
           currentSetActiveTabId(result.activeTabId)
           return
         }
-        // 2. 检查是否已有 draft 会话，复用而不是创建新的
-        const draftSession = freshConversations.find(
-          (c) => !c.archived && currentDrafts.has(c.id),
-        )
-        if (draftSession) {
-          const result = openTab(currentTabs, {
-            type: 'chat',
-            sessionId: draftSession.id,
-            title: draftSession.title,
-          })
-          currentSetTabs(result.tabs)
-          currentSetActiveTabId(result.activeTabId)
-          return
-        }
-        // 3. 没有任何会话时才创建新的 draft 会话
+        // 2. 持久化 draft 不自动恢复；没有可见会话时创建新的内存 draft。
         currentCreateChat({ draft: true })
       }).catch(console.error)
     } else {
@@ -117,9 +103,9 @@ export function WelcomeView(): React.ReactElement {
         } = latestRef.current
 
         // Agent 模式：按当前工作区过滤
-        // 1. 优先复用现有非归档、非 draft 会话
+        // 1. 优先复用现有非归档、非内存/持久化 draft 会话
         const existing = freshSessions.find(
-          (s) => !s.archived && s.workspaceId === currentWs && !currentDrafts.has(s.id),
+          (s) => !s.archived && !s.draft && s.workspaceId === currentWs && !currentDrafts.has(s.id),
         )
         if (existing) {
           const result = openTab(currentTabs, {
@@ -131,21 +117,7 @@ export function WelcomeView(): React.ReactElement {
           currentSetActiveTabId(result.activeTabId)
           return
         }
-        // 2. 检查是否已有 draft 会话（当前工作区），复用而不是创建新的
-        const draftSession = freshSessions.find(
-          (s) => !s.archived && s.workspaceId === currentWs && currentDrafts.has(s.id),
-        )
-        if (draftSession) {
-          const result = openTab(currentTabs, {
-            type: 'agent',
-            sessionId: draftSession.id,
-            title: draftSession.title,
-          })
-          currentSetTabs(result.tabs)
-          currentSetActiveTabId(result.activeTabId)
-          return
-        }
-        // 3. 没有任何会话时才创建新的 draft 会话
+        // 2. 持久化项目 draft 只能由项目入口显式打开，不能在此自动恢复。
         currentCreateAgent({ draft: true })
       }).catch(console.error)
     }
