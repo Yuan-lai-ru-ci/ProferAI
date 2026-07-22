@@ -220,6 +220,8 @@ export interface ChannelModel {
   enabled: boolean
   /** 来源标记：手动添加的模型在拉取供应商列表时保留，不会被覆盖清除 */
   source?: 'manual' | 'fetched'
+  /** 服务端代管模式下，当前登录用户实际可见的模型倍率。 */
+  multiplier?: number
 }
 
 /**
