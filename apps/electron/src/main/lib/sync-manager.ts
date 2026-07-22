@@ -192,10 +192,12 @@ async function pushEnvelopes(serverBaseUrl: string, token: string): Promise<bool
     // 超过最大重试次数的信封写入死信队列（不再静默丢弃）
     const deadEnvelopes = _pendingEnvelopes.filter((e) => e.retryCount > MAX_RETRY_COUNT)
     if (deadEnvelopes.length > 0) {
-      const { writeDeadLetterEnvelopes } = await import('./sync-dead-letter')
-      writeDeadLetterEnvelopes(deadEnvelopes).catch((err) => {
+      try {
+        const { writeDeadLetterEnvelopes } = await import('./sync-dead-letter')
+        writeDeadLetterEnvelopes(deadEnvelopes)
+      } catch (err) {
         console.error('[同步] 死信持久化失败:', err)
-      })
+      }
     }
     _pendingEnvelopes = _pendingEnvelopes.filter((e) => e.retryCount <= MAX_RETRY_COUNT)
     saveEnvelopeQueue()

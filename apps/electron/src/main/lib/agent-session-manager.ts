@@ -242,6 +242,7 @@ export function createAgentSession(
   workspaceId?: string,
   modelId?: string,
   agentRuntime: AgentRuntime = 'claude',
+  draft = false,
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -253,6 +254,7 @@ export function createAgentSession(
     modelId,
     workspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
+    ...(draft ? { draft: true } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -303,6 +305,28 @@ export function createAgentSession(
 
   console.log(`[Agent 会话] 已创建会话: ${meta.title} (${meta.id})`)
   return meta
+}
+
+/** 同一项目只保留一个未归档的隐藏草稿会话。函数没有异步间隙，可防止快速重复点击。 */
+export function ensureProjectDraftAgentSession(
+  workspaceId: string,
+  channelId?: string,
+  modelId?: string,
+  agentRuntime: AgentRuntime = 'claude',
+): AgentSessionMeta {
+  const existing = listAgentSessions().find((session) =>
+    session.workspaceId === workspaceId && session.draft && !session.archived,
+  )
+  if (!existing) {
+    return createAgentSession(undefined, channelId, workspaceId, modelId, agentRuntime, true)
+  }
+
+  // SDK 的用户输入以 type: 'user' 持久化；Agent 错误为 assistant/system 消息，不能据此晋升草稿。
+  if (getAgentSessionSDKMessages(existing.id).some((message) => message.type === 'user')) {
+    return updateAgentSessionMeta(existing.id, { draft: false })
+  }
+
+  return existing
 }
 
 /**
@@ -543,7 +567,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'agentRuntime' | 'codexFastMode' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'agentRuntime' | 'codexFastMode' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -1731,6 +1755,7 @@ export async function searchAgentSessionMessages(query: string): Promise<AgentMe
 
   for (const session of index.sessions) {
     if (results.length >= maxResults) break
+    if (session.draft) continue
 
     const filePath = getAgentSessionMessagesPath(session.id)
     if (!existsSync(filePath)) continue
@@ -1894,6 +1919,7 @@ export function searchAgentSessionReferences(input: AgentSessionReferenceSearchI
   const candidates = listAgentSessions()
     .filter((session) => session.workspaceId === workspaceId)
     .filter((session) => !session.archived)
+    .filter((session) => !session.draft)
     .filter((session) => session.id !== input?.excludeSessionId)
 
   const results: AgentSessionReferenceSearchResult[] = []

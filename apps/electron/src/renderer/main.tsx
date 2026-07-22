@@ -77,7 +77,7 @@ import { appModeAtom } from './atoms/app-mode'
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@profer/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
-import { diffCapabilities } from '@profer/shared'
+import { diffCapabilities, isVisibleAgentSession } from '@profer/shared'
 import type { WorkspaceCapabilities } from '@profer/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
@@ -685,7 +685,7 @@ function TabStatePersistenceInitializer(): null {
       // 构建有效 sessionId 集合
       const validSessionIds = new Set([
         ...conversations.map((c) => c.id),
-        ...agentSessions.map((s) => s.id),
+        ...agentSessions.filter(isVisibleAgentSession).map((s) => s.id),
       ])
 
       // 过滤 diff 类型 Tab（不持久化），同时过滤掉已被删除的会话

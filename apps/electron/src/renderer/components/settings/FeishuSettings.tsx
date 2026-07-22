@@ -45,7 +45,7 @@ import { SettingsRow } from './primitives/SettingsRow'
 import { feishuBotStatesAtom, feishuBindingsAtom } from '@/atoms/feishu-atoms'
 import { agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
-import type { FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState, FeishuRegisterAppQRCode, FeishuRegisterAppStatus, FeishuSessionMirrorSettings, FeishuSessionSyncMode } from '@profer/shared'
+import { isVisibleAgentSession, type FeishuTestResult, type FeishuChatBinding, type FeishuBotConfig, type FeishuBotBridgeState, type FeishuRegisterAppQRCode, type FeishuRegisterAppStatus, type FeishuSessionMirrorSettings, type FeishuSessionSyncMode } from '@profer/shared'
 
 // ===== 常量 =====
 
@@ -411,12 +411,12 @@ function FeishuBindingCard({ binding, onUpdate, onRemove }: FeishuBindingCardPro
 
   // 当前绑定工作区下的会话列表
   const workspaceSessions = React.useMemo(
-    () => sessions.filter((s) => s.workspaceId === binding.workspaceId),
+    () => sessions.filter(isVisibleAgentSession).filter((s) => s.workspaceId === binding.workspaceId),
     [sessions, binding.workspaceId]
   )
 
   const currentWorkspace = workspaces.find((w) => w.id === binding.workspaceId)
-  const currentSession = sessions.find((s) => s.id === binding.sessionId)
+  const currentSession = sessions.find((s) => s.id === binding.sessionId && isVisibleAgentSession(s))
 
   return (
     <div className="px-4 py-3 space-y-3">

@@ -196,6 +196,7 @@ import { runAutomationNow, broadcastChanged as broadcastAutomationsChanged } fro
 import {
   listAgentSessions,
   createAgentSession,
+  ensureProjectDraftAgentSession,
   getAgentSessionMeta,
   getAgentSessionSDKMessages,
   updateAgentSessionMeta,
@@ -2133,6 +2134,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 为项目创建或复用隐藏草稿会话。草稿禁止创建飞书镜像，直到首条消息落盘晋升。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.ENSURE_PROJECT_DRAFT_SESSION,
+    async (_, workspaceId: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
+      if (!getAgentWorkspace(workspaceId)) throw new Error('项目不存在')
+      return ensureProjectDraftAgentSession(workspaceId, channelId, modelId, getSettings().agentRuntime ?? 'claude')
+    },
+  )
+
   // 获取 Agent 会话 SDKMessage（Phase 4 新格式）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
@@ -2554,7 +2564,13 @@ export function registerIpcHandlers(): void {
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
         getChannel: getChannelById,
         startMirror: (session) => feishuBridgeManager.startSessionMirrorRun(session),
-        startAgent: () => runAgent(input, event.sender),
+        startAgent: () => runAgent(input, event.sender, async (session) => {
+          try {
+            await feishuBridgeManager.startSessionMirrorRun(session)
+          } catch (error) {
+            console.error('[飞书 Session 镜像] 草稿会话晋升后流式卡片初始化失败:', error)
+          }
+        }),
         onMirrorError: (error) => console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error),
       })
     }

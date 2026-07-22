@@ -1,5 +1,5 @@
 /**
- * TabSwitcher — Ctrl+Tab 会话快速切换器
+ * TabSwitcher - Ctrl+Tab 会话快速切换器
  *
  * 列表按 MRU（最近访问）顺序排列，键盘和鼠标共享同一套选择模型。
  */
@@ -124,7 +124,7 @@ export function TabSwitcher(): ReactElement | null {
       }))
 
     const agentCandidates = agentSessions
-      .filter((session) => !session.archived && !draftSessionIds.has(session.id))
+      .filter((session) => !session.archived && !session.draft && !draftSessionIds.has(session.id))
       .map(buildAgentCandidate)
 
     const allCandidates = [...chatCandidates, ...agentCandidates]

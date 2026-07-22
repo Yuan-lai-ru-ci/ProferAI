@@ -16,6 +16,7 @@ import { agentSessionsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atom
 import { tabsAtom } from '@/atoms/tab-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { Bot, MessageSquare } from 'lucide-react'
+import { isVisibleAgentSession } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 
@@ -38,7 +39,7 @@ export function ModeSwitcher(): React.ReactElement {
   /** 尝试恢复目标模式下的上一个对话/会话，按优先级 fallback */
   const restoreSession = React.useCallback((targetMode: AppMode) => {
     const isChatMode = targetMode === 'chat'
-    const sessions = isChatMode ? conversations : agentSessions
+    const sessions = isChatMode ? conversations : agentSessions.filter(isVisibleAgentSession)
     const lastId = isChatMode ? currentConversationId : currentAgentSessionId
 
     // 1. 上次选中的对话仍存在 → 恢复
