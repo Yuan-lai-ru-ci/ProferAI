@@ -106,7 +106,7 @@ describe('周 drip 过期与补偿', () => {
     expect(clearWeeklyDrip(now)).toEqual({ clearedCount: 1, forfeitedQuota: 123456 })
     expect(clearWeeklyDrip(now)).toEqual({ clearedCount: 0, forfeitedQuota: 0 })
     expect(db.prepare('SELECT drip_available_this_week FROM subscriptions WHERE id = ?').get('subscription-drip-expiry').drip_available_this_week).toBe(0)
-    expect(db.prepare("SELECT COUNT(*) AS count FROM credit_transactions WHERE reference_type = 'drip_weekly_clear' AND reference_id = ?").get('subscription-drip-expiry').count).toBe(1)
+    expect(db.prepare("SELECT COUNT(*) AS count FROM credit_transactions WHERE reference_type = 'drip_weekly_clear' AND reference_id LIKE ?").get('subscription-drip-expiry_%').count).toBe(1)
   })
 
   test('Given 当前周未领取 drip When 清理器执行 Then 保留该周余额', () => {

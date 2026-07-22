@@ -226,12 +226,21 @@ export function getKnowledgeItem(itemId: string): { meta: KnowledgeItem; text: s
   }
 }
 
-export function deleteKnowledgeItem(itemId: string): { itemId: string; deleted: boolean } {
+export async function deleteKnowledgeItem(itemId: string): Promise<{ itemId: string; deleted: boolean }> {
   const index = readIndex()
-  if (!index.items.some((item) => item.id === itemId)) throw new Error('资料不存在')
-  rmSync(resolveKnowledgeItemDir(itemId), { recursive: true, force: true })
-  writeIndex({ version: INDEX_VERSION, items: index.items.filter((item) => item.id !== itemId) })
-  return { itemId, deleted: true }
+  if (index.items.some((item) => item.id === itemId)) {
+    rmSync(resolveKnowledgeItemDir(itemId), { recursive: true, force: true })
+    writeIndex({ version: INDEX_VERSION, items: index.items.filter((item) => item.id !== itemId) })
+    return { itemId, deleted: true }
+  }
+  // 回退到旧 Paperpipe 索引：资料可能仅存在于 index.json 而尚未迁移到 items-index.json
+  const legacyPapers = readLegacyPaperItems()
+  if (legacyPapers.some((item) => item.id === itemId)) {
+    const { deletePaper } = require('./kb-paperpipe')
+    const result = await deletePaper(itemId)
+    return { itemId, deleted: result.localDeleted }
+  }
+  throw new Error('资料不存在')
 }
 
 function keywords(query: string): string[] {

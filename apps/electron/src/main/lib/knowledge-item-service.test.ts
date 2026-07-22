@@ -39,7 +39,7 @@ describe('个人资料受控存储', () => {
     const source = join(root, 'delete-me.md')
     writeFileSync(source, '删除后的内容不能继续读取')
     const item = (await service.importKnowledgeItems([source])).results[0]?.item!
-    service.deleteKnowledgeItem(item.id)
+    await service.deleteKnowledgeItem(item.id)
     expect(service.getKnowledgeItem(item.id)).toBeNull()
     expect(await service.searchKnowledgeItemsForChat('删除内容', [item.id])).toEqual([])
   })

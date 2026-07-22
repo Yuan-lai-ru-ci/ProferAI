@@ -85,7 +85,7 @@ export function grantCredits(adminUserId, targetUserId, amount, description) {
     syncCreditBalance(targetUserId)
     db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, reference_type, reference_id, created_at)
       VALUES (?, ?, ?, 'grant', ?, 'admin_grant', ?, ?)`)
-      .run(uuidv4(), targetUserId, amount, description || '', adminUserId, now)
+      .run(uuidv4(), targetUserId, amount, description || '', `${adminUserId}_${targetUserId}_${now}`, now)
   })
   tx()
 }
@@ -98,7 +98,7 @@ export function refundCredits(userId, amount, { description, referenceId } = {})
       .run(amount, amount, now, userId)
     db.prepare(`INSERT INTO credit_transactions (id, user_id, amount, type, description, reference_type, reference_id, created_at)
       VALUES (?, ?, ?, 'refund', ?, 'api_refund', ?, ?)`)
-      .run(uuidv4(), userId, amount, description || '代理失败自动退款', referenceId || '', now)
+      .run(uuidv4(), userId, amount, description || '代理失败自动退款', referenceId ? `${referenceId}_${now}` : '', now)
   })
   tx()
 }

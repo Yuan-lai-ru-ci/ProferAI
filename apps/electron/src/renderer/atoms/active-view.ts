@@ -8,9 +8,9 @@
  * - knowledge-base: 知识库视图
  */
 
-import { atom } from 'jotai'
+import { atomWithStorage } from 'jotai/utils'
 
 export type ActiveView = 'conversations' | 'automations' | 'agent-skills' | 'knowledge-base'
 
-/** 当前活跃视图（不持久化，每次启动默认显示对话） */
-export const activeViewAtom = atom<ActiveView>('conversations')
+/** 当前活跃视图（持久化到 localStorage，刷新后保持当前页面） */
+export const activeViewAtom = atomWithStorage<ActiveView>('profer-active-view', 'conversations')
