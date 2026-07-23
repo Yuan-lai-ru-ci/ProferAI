@@ -19,6 +19,10 @@ import { getTeamAuthWithRefresh } from './auth-service'
 import { parsePaper } from './paper-service'
 import { findPaperMatch, mergePaperMeta, remotePaperToMeta, resolveRemoteSource, selectRemoteMarkdown } from './kb-paperpipe-mapping'
 import { isRetryablePaperpipeSyncError } from './kb-paperpipe-retry-utils'
+import { getSettings } from './settings-service'
+import { listChannels, decryptApiKey } from './channel-manager'
+import { getFetchFn } from './proxy-fetch'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
 import type {
   KBLibrarySnapshot,
   PaperMeta,
@@ -322,7 +326,7 @@ export async function retryPaperpipeSync(paperId: string): Promise<PaperMeta> {
 }
 
 /**
- * 搜索论文（优先 paperpipe 服务端，fallback 本地关键词）
+ * 搜索论文（优先 paperpipe 服务端，fallback 本地 LLM 语义搜索）
  *
  * @param query 搜索查询
  * @param topK 返回数量
@@ -376,8 +380,8 @@ export async function searchPapers(query: string, topK = 5, mode: 'fts' | 'seman
     console.warn('[KB] paperpipe 搜索失败，回退本地:', (err as Error).message)
   }
 
-  // Fallback：本地关键词搜索
-  return localKeywordSearch(query, topK)
+  // Fallback：本地 LLM 语义搜索（关键词预筛 → LLM 精排）
+  return localLLMSearch(query, topK)
 }
 
 /**
@@ -587,6 +591,201 @@ function extractBasicMetadata(markdown: string, fileName?: string): {
   return { title, authors, abstract, year }
 }
 
+// LLM 搜索每篇候选 chunk 送入模型的截断长度
+const LLM_CHUNK_MAX_CHARS = 800
+// 关键词预筛后最多送入 LLM 的候选 chunk 数
+const MAX_LLM_CANDIDATES = 40
+
+/**
+ * 本地 LLM 语义搜索
+ *
+ * 流程：加载所有论文 chunks → 关键词预筛取 top-N → 调用户渠道 LLM 精排 → 返回 topK。
+ * 任何环节失败都回退到纯关键词搜索。
+ */
+async function localLLMSearch(query: string, topK: number): Promise<KBSearchResult[]> {
+  const papers = readLocalIndex()
+  if (papers.length === 0) return []
+
+  // 1. 加载所有本地 chunks
+  const allChunks: Array<{ chunk: PaperChunk; paper: PaperMeta }> = []
+  for (const paper of papers) {
+    // 仅加载有本地内容的论文（source=local 或 source=arxiv 且本地有缓存 markdown）
+    const paperDir = resolvePaperDir(paper.id)
+    const chunksPath = join(paperDir, 'chunks.json')
+    if (!existsSync(chunksPath)) continue
+
+    const chunks = loadChunksFromFile(chunksPath)
+    for (const c of chunks) {
+      allChunks.push({
+        chunk: { ...c, paperId: paper.id },
+        paper,
+      })
+    }
+  }
+
+  // 无本地 chunks → 回退关键词
+  if (allChunks.length === 0) return localKeywordSearch(query, topK)
+
+  // 2. 关键词预筛
+  const queryLower = query.toLowerCase()
+  const queryTerms = queryLower.split(/\s+/).filter((t) => t.length > 1)
+
+  const scored = allChunks.map(({ chunk, paper }) => {
+    const contentLower = chunk.content.toLowerCase()
+    let kwScore = 0
+    for (const term of queryTerms) {
+      const count = contentLower.split(term).length - 1
+      kwScore += count
+    }
+    // 标题命中加权
+    if (paper.title.toLowerCase().includes(queryLower)) kwScore += 3
+    // 章节标题命中加权
+    if (chunk.sectionTitle?.toLowerCase().includes(queryLower)) kwScore += 1
+    return { chunk, paper, kwScore }
+  })
+
+  scored.sort((a, b) => b.kwScore - a.kwScore)
+
+  // 完全无关键词命中 → 回退关键词
+  if (scored[0].kwScore === 0) return localKeywordSearch(query, topK)
+
+  const candidates = scored.slice(0, MAX_LLM_CANDIDATES)
+
+  // 3. 调 LLM 精排
+  try {
+    const settings = getSettings()
+    const channelId = settings.agentChannelId
+    const modelId = settings.agentModelId || 'deepseek-v4-flash'
+
+    if (!channelId) throw new Error('未配置默认渠道')
+
+    const channels = listChannels()
+    const channel = channels.find((c) => c.id === channelId)
+    if (!channel) throw new Error(`渠道 ${channelId} 不存在`)
+
+    const apiKey = decryptApiKey(channelId)
+    const proxyUrl = await getEffectiveProxyUrl()
+    const fetchFn = getFetchFn(proxyUrl)
+
+    // 构建 prompt：每条候选带编号 + 论文 + 章节 + 内容摘要
+    const chunksText = candidates
+      .map(
+        ({ chunk, paper }, i) =>
+          `[${i}] 论文: ${paper.title}\n章节: ${chunk.sectionTitle || '(无)'}\n内容: ${chunk.content.slice(0, LLM_CHUNK_MAX_CHARS)}`,
+      )
+      .join('\n\n')
+
+    const systemPrompt =
+      `你是一个学术论文检索助手。根据用户的查询，从以下论文片段中选出最相关的 ${topK} 条，按相关性从高到低排序。只返回 JSON，格式: {"results":[{"index":编号,"score":0.0到1.0之间的小数}]}，不要有任何其他文字。`
+
+    const userPrompt = `查询: ${query}\n\n论文片段:\n${chunksText}`
+
+    // Anthropic-compatible API（DeepSeek 等渠道支持此协议）
+    const baseUrl = channel.baseUrl.replace(/\/+$/, '')
+    const endpoint = `${baseUrl}/messages`
+
+    const response = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        Authorization: `Bearer ${apiKey}`,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    })
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '')
+      console.warn(`[KB] LLM 搜索 API 返回 ${response.status}:`, errText.slice(0, 200))
+      throw new Error(`API ${response.status}`)
+    }
+
+    const data: unknown = await response.json()
+    const text = extractTextFromLLMResponse(data)
+
+    // 从 LLM 回复中解析 JSON
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      console.warn('[KB] LLM 搜索响应无 JSON:', text.slice(0, 200))
+      throw new Error('响应解析失败')
+    }
+
+    const parsed: unknown = JSON.parse(jsonMatch[0])
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as Record<string, unknown>).results)) {
+      throw new Error('响应格式不符')
+    }
+
+    const indices = (parsed as { results: Array<{ index: number; score: number }> }).results
+
+    // 映射回实际结果
+    const results: KBSearchResult[] = []
+    for (const item of indices.slice(0, topK)) {
+      if (item.index >= 0 && item.index < candidates.length) {
+        const c = candidates[item.index]
+        results.push({
+          chunk: c.chunk,
+          paper: c.paper,
+          score: Math.min(1, Math.max(0, item.score)),
+        })
+      }
+    }
+
+    if (results.length > 0) {
+      console.log(`[KB] LLM 搜索完成: ${results.length} 条结果`)
+      return results
+    }
+
+    // LLM 返回了结果但无法映射 → 回退
+    throw new Error('无有效结果')
+  } catch (err) {
+    console.warn('[KB] LLM 搜索失败，回退关键词:', (err as Error).message)
+    return localKeywordSearch(query, topK)
+  }
+}
+
+/** 从 Anthropic / OpenAI 两种响应格式中提取文本 */
+function extractTextFromLLMResponse(data: unknown): string {
+  if (!data || typeof data !== 'object') return ''
+  const d = data as Record<string, unknown>
+  // Anthropic 格式: { content: [{ type: "text", text: "..." }] }
+  if (Array.isArray(d.content)) {
+    return (d.content as Array<Record<string, unknown>>)
+      .filter((block) => block.type === 'text')
+      .map((block) => String(block.text || ''))
+      .join('\n')
+  }
+  // OpenAI 兼容格式: { choices: [{ message: { content: "..." } }] }
+  if (Array.isArray(d.choices)) {
+    const choice = d.choices[0] as Record<string, unknown> | undefined
+    const message = choice?.message as Record<string, unknown> | undefined
+    return String(message?.content || '')
+  }
+  return ''
+}
+
+/** 从本地 chunks.json 加载论文分段 */
+function loadChunksFromFile(path: string): Omit<PaperChunk, 'paperId'>[] {
+  try {
+    const raw = readJsonFileSafe<unknown[]>(path)
+    if (!Array.isArray(raw)) return []
+    return raw.filter(
+      (c): c is Omit<PaperChunk, 'paperId'> =>
+        !!c && typeof c === 'object' && typeof (c as Record<string, unknown>).id === 'string' && typeof (c as Record<string, unknown>).content === 'string',
+    )
+  } catch {
+    return []
+  }
+}
+
+/** 纯关键词搜索（LLM 搜索失败时的兜底） */
 function localKeywordSearch(query: string, topK: number): KBSearchResult[] {
   const papers = readLocalIndex()
   const results: KBSearchResult[] = []
