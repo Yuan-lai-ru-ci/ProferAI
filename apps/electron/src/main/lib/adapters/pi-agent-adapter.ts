@@ -5,6 +5,7 @@
  * JSONL 持久化和历史会话展示在 SDK 迁移时一起改名。
  */
 
+import type { Dispatcher } from 'undici'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
@@ -66,6 +67,12 @@ import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
 import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
 import { createWindowsPowerShellToolDefinition } from './pi-powershell-tool'
+import {
+  closePiRequestProxyDispatcher,
+  createPiRequestProxyDispatcher,
+  installPiRequestProxyFetch,
+  runWithPiRequestProxy,
+} from './pi-request-proxy'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -1226,7 +1233,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     const runtimeGuard = createAgentRuntimeGuard(input)
     active.runtimeGuard = runtimeGuard
     let unsubscribe: (() => void) | undefined
-    let restorePiProxyEnv: (() => void) | undefined
+    let requestProxyDispatcher: Dispatcher | undefined
     let partialAssistantCoalescer: PartialMessageCoalescer<{ message: AssistantMessage; uuid: string }> | undefined
 
     const cleanupActiveSession = (): void => {
@@ -1244,8 +1251,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           this.activeSessions.delete(input.sessionId)
         }
       } finally {
-        restorePiProxyEnv?.()
-        restorePiProxyEnv = undefined
+        void closePiRequestProxyDispatcher(requestProxyDispatcher)
+        requestProxyDispatcher = undefined
       }
     }
 
@@ -1254,7 +1261,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const piAi = input.codexFastMode && input.provider === 'openai-codex'
         ? await import('@earendil-works/pi-ai/compat')
         : undefined
-      restorePiProxyEnv = applyPiProxySettingsForQuery(sdk, input)
+      installPiRequestProxyFetch()
+      requestProxyDispatcher = createPiRequestProxyDispatcher({
+        proxyUrl: resolvePiHttpProxy(input),
+        noProxy: getCaseInsensitiveRuntimeEnvValue(input.runtimeEnv?.env, 'NO_PROXY'),
+        httpIdleTimeoutMs: input.httpIdleTimeoutMs,
+      })
       if (active.abortRequested) throw createAbortError()
 
       if (!existsSync(input.piSessionDir)) mkdirSync(input.piSessionDir, { recursive: true })
@@ -1266,7 +1278,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const sessionManager = sessionFile
         ? sdk.SessionManager.open(sessionFile, input.piSessionDir, cwd)
         : sdk.SessionManager.create(cwd, input.piSessionDir)
-      const { authStorage, registry, model } = await buildModel(sdk, input)
+      const { modelRuntime, model } = await buildModel(sdk, input)
       const customTools = [
         ...buildBuiltinToolDefinitions(
           sdk,
@@ -1312,8 +1324,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const { session } = await sdk.createAgentSession({
         cwd,
         agentDir: input.piAgentDir,
-        authStorage,
-        modelRegistry: registry,
+        modelRuntime,
         settingsManager,
         resourceLoader,
         sessionManager,
@@ -1327,10 +1338,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
         // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
         session.agent.streamFn = async (requestModel, context, options) => {
-          const auth = await registry.getApiKeyAndHeaders(requestModel)
-          if (!auth.ok) throw new Error(auth.error)
+          const authResult = await modelRuntime.getAuth(requestModel)
+          if (!authResult?.auth.apiKey) throw new Error('无法获取 ChatGPT (Codex) OAuth access token')
+          const auth = authResult.auth
 
-          const env = auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined
+          const env = authResult.env || options?.env ? { ...(authResult.env ?? {}), ...(options?.env ?? {}) } : undefined
           const retrySettings = settingsManager.getProviderRetrySettings()
           const configuredTimeoutMs = settingsManager.getHttpIdleTimeoutMs()
           const timeoutMs = options?.timeoutMs ?? retrySettings.timeoutMs ?? (configuredTimeoutMs === 0 ? 2_147_483_647 : configuredTimeoutMs)
@@ -1351,6 +1363,14 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       installRuntimeGuardHooks(session, runtimeGuard)
       active.session = session
       resolveActiveReady(active, session)
+
+      // 代理作用域必须只覆盖模型 provider stream：在整个 session.prompt() 链上设
+      // AsyncLocalStorage 会把 MCP/产品工具等同一 Agent loop 中的 fetch 也错误地送进 Codex 代理。
+      const providerStreamFn = session.agent.streamFn
+      session.agent.streamFn = (requestModel, context, options) => runWithPiRequestProxy(
+        requestProxyDispatcher,
+        () => providerStreamFn(requestModel, context, options),
+      )
 
       if (active.abortRequested) {
         await session.abort().catch(() => {})
