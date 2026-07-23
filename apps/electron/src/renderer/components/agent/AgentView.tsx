@@ -1890,6 +1890,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     try {
       const updated = await window.electronAPI.updateSessionOpenAIThinkingLevel(sessionId, thinkingLevel)
       setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? updated : item))
+
+      try {
+        await window.electronAPI.updateSettings({ defaultOpenAIThinkingLevel: thinkingLevel })
+      } catch (error) {
+        console.error('[AgentView] 保存 OpenAI 默认思考深度失败:', error)
+        toast.error('默认思考深度保存失败', { description: getErrorMessage(error) })
+      }
     } catch (error) {
       console.error('[AgentView] 更新 OpenAI 思考深度失败:', error)
       setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? previousSessionMeta : item))
