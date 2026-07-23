@@ -93,9 +93,10 @@ const AGENT_SDK_1M_CONTEXT_PROVIDER_RULES: Partial<Record<ProviderType, readonly
 }
 
 const AGENT_SDK_1M_CONTEXT_DISPLAY_RULES = Object.values(AGENT_SDK_1M_CONTEXT_RULES).flat()
+const EXACT_CONTEXT_RULES = new Set(['k3', 'kimi-k3'])
 
 function matchesContextRule(model: string, pattern: string): boolean {
-  if (pattern.length <= 3) {
+  if (EXACT_CONTEXT_RULES.has(pattern)) {
     return model === pattern || model.startsWith(`${pattern}[`)
   }
   return model.includes(pattern)
@@ -117,6 +118,8 @@ const CONTEXT_WINDOW_CONFIG = {
   /** 1M 上下文模型匹配规则 */
   rules: [
     ...AGENT_SDK_1M_CONTEXT_DISPLAY_RULES,
+    // OpenAI 协议渠道（如 OpenCode Go）使用该真实模型 ID，不应追加 Claude SDK `[1m]` 后缀。
+    'kimi-k3',
     // 已废弃的 MiMo V2 Pro 仅保留历史显示推断，不主动启用 SDK 1M 变体
     'mimo-v2-pro',
   ] as const,

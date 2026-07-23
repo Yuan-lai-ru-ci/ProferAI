@@ -63,11 +63,13 @@ describe('模型上下文窗口', () => {
     expect(resolveAgentSdkModelId('MiniMax-M2.7', 'minimax')).toBe('MiniMax-M2.7')
     expect(resolveAgentSdkModelId('kimi-k2.6', 'kimi-api')).toBe('kimi-k2.6')
     expect(resolveAgentSdkModelId('not-k3-compatible', 'kimi-api')).toBe('not-k3-compatible')
+    expect(resolveAgentSdkModelId('kimi-k3', 'opencode-go-openai')).toBe('kimi-k3')
     expect(resolveAgentSdkModelId('qwen3-max', 'qwen-anthropic')).toBe('qwen3-max')
     expect(resolveAgentSdkModelId('qwen3.6-max-preview', 'qwen-anthropic')).toBe('qwen3.6-max-preview')
     expect(resolveAgentSdkModelId('qwen3.5-397b-a17b', 'qwen-anthropic')).toBe('qwen3.5-397b-a17b')
     expect(resolveAgentSdkModelId('qwen3-coder-next', 'qwen-anthropic')).toBe('qwen3-coder-next')
     expect(resolveAgentSdkModelId('unknown-model', 'anthropic')).toBe('unknown-model')
+    expect(supports1MContext('not-kimi-k3-compatible')).toBe(false)
   })
 
   test('Given Qwen Anthropic 协议渠道 When 模型名命中 1M 规则 Then 保持真实模型 ID', () => {
@@ -102,5 +104,6 @@ describe('模型上下文窗口', () => {
     expect(inferAgentSdkContextWindow('claude-sonnet-5', 'anthropic-compatible')).toBe(ONE_MILLION_CONTEXT_WINDOW)
     expect(inferAgentSdkContextWindow('k3', 'kimi-api')).toBe(ONE_MILLION_CONTEXT_WINDOW)
     expect(inferAgentSdkContextWindow('k3', 'anthropic-compatible')).toBe(ONE_MILLION_CONTEXT_WINDOW)
+    expect(inferAgentSdkContextWindow('kimi-k3', 'opencode-go-openai')).toBe(ONE_MILLION_CONTEXT_WINDOW)
   })
 })
