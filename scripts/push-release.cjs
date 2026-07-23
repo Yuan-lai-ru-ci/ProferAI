@@ -28,10 +28,12 @@ const USER = 'ecs-user';
 const UPDATE_DIR = '/usr/share/nginx/html/profer-updates';
 const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
+// 使用 Git Bash（能访问 Windows 文件系统 + SSH 密钥），不用 WSL bash
+const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
 
 function ssh(cmd, timeout = 30000) {
   return new Promise((resolve) => {
-    const p = spawn('bash', ['-c', `ssh -o StrictHostKeyChecking=no ${USER}@${HOST} '${cmd.replace(/'/g, "'\\''")}'`]);
+    const p = spawn(BASH, ['-c', `ssh -o StrictHostKeyChecking=no ${USER}@${HOST} '${cmd.replace(/'/g, "'\\''")}'`]);
     let o = '', e = '';
     p.stdout.on('data', d => o += d);
     p.stderr.on('data', d => e += d);
@@ -42,19 +44,26 @@ function ssh(cmd, timeout = 30000) {
 
 function scp(local, remote) {
   return new Promise((resolve, reject) => {
-    const src = local.replace(/\\/g, '/'); // Windows 路径 → bash 安全
-    const p = spawn('bash', ['-c', `scp -o StrictHostKeyChecking=no -q '${src.replace(/'/g, "'\\''")}' ${USER}@${HOST}:${remote}`]);
+    const src = local.replace(/\\/g, '/');
+    const p = spawn(BASH, ['-c', `scp -o StrictHostKeyChecking=no -q '${src.replace(/'/g, "'\\''")}' ${USER}@${HOST}:${remote}`]);
     p.on('close', (code) => code === 0 ? resolve() : reject(new Error(`scp ${local} → ${remote} 失败 (exit ${code})`)));
     setTimeout(() => { try { p.kill() } catch {} }, 600000); // 10min，大文件够用
   });
 }
 
+// Windows 原生命令（npx / bun / node / git）
 function run(cmd, cwd = ROOT) {
-  return execSync(cmd, { cwd, encoding: 'utf8', stdio: 'pipe', shell: 'bash' }).trim();
+  return execSync(cmd, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+}
+
+// Git Bash 命令（tar / scp / ssh 等需要 Unix 工具的命令）
+function runBash(cmd, cwd = ROOT) {
+  const wslCwd = cwd.replace(/\\/g, '/').replace(/^([A-Z]):/i, (_, d) => `/${d.toLowerCase()}`);
+  return execSync(`cd '${wslCwd}' && PATH="/usr/bin:$PATH" ${cmd}`, { encoding: 'utf8', stdio: 'pipe', shell: BASH }).trim();
 }
 
 function tryRun(cmd, cwd = ROOT) {
-  try { return { ok: true, out: execSync(cmd, { cwd, encoding: 'utf8', stdio: 'pipe', shell: 'bash' }).trim() }; }
+  try { return { ok: true, out: execSync(cmd, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim() }; }
   catch (e) { return { ok: false, out: ((e.stdout || '') + (e.stderr || '') || e.message || '').trim() }; }
 }
 
@@ -72,9 +81,9 @@ function tryRun(cmd, cwd = ROOT) {
   // 2. 推送服务端
   console.log('\n[2/6] 推送服务端...');
   const tmpTar = path.join(SERVER, 'server-rel.tar.gz');
-  run('tar -czf server-rel.tar.gz index.js package.json src/', SERVER);
+  runBash('tar -czf server-rel.tar.gz --exclude=node_modules .', SERVER);
   await scp(tmpTar, '/tmp/server-rel.tar.gz');
-  const extract = await ssh('sudo mkdir -p /tmp/srv && sudo tar -xzf /tmp/server-rel.tar.gz -C /tmp/srv && sudo docker cp /tmp/srv/. proma-team:/app/ && sudo rm -rf /tmp/srv && sudo docker restart proma-team && echo OK');
+  const extract = await ssh('sudo mkdir -p /tmp/srv && sudo tar -xzf /tmp/server-rel.tar.gz -C /tmp/srv && sudo docker cp /tmp/srv/. proma-team:/app/ && sudo rm -rf /tmp/srv && sudo docker exec proma-team npm install --production && sudo docker restart proma-team && echo OK');
   console.log('  ' + (extract.includes('OK') ? '已推送' : extract.slice(0, 80)));
 
   // 3. 等容器就绪
@@ -90,7 +99,7 @@ function tryRun(cmd, cwd = ROOT) {
   // 4. 完整构建 + 打包 Electron
   console.log('\n[4/6] 打包 Electron...');
   console.log('  [4a] build:main');
-  run('npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai "--define:__PROFER_BUILD_TARGET__=\'\\\"oss\\\"\'"', ELECTRON);
+  run("npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='oss'", ELECTRON);
   console.log('  [4b] build:preload');
   run('npx esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron', ELECTRON);
   console.log('  [4c] build:renderer (vite)');
