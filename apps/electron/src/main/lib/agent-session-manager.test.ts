@@ -181,6 +181,7 @@ describe('Agent 会话 runtime 元数据', () => {
     const settingsPath = join(tempHome, '.proma', 'settings.json')
     const indexPath = join(tempHome, '.proma', 'agent-sessions.json')
     const indexBackupPath = `${indexPath}.bak`
+    mkdirSync(join(tempHome, '.proma'), { recursive: true })
     rmSync(indexPath, { force: true })
     rmSync(indexBackupPath, { force: true })
     writeFileSync(settingsPath, JSON.stringify({

@@ -36,7 +36,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { lowlight } from '@/lib/lowlight'
-import { htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
+import { htmlToClipboardText, htmlToMarkdown, markdownToHtml } from '@/lib/markdown-rich-text'
 import {
   MathBlock,
   MathInline,
@@ -171,6 +171,25 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
   const editor = useEditor({
     extensions,
     content: content || '',
+    editorProps: {
+      handleDOMEvents: {
+        // 草稿保存为 Markdown 时段落必须以空行分隔；复制到系统剪贴板时只保留普通文本换行，
+        // 避免 Windows/外部编辑器再次将 Markdown 段落间隔渲染为额外空白。
+        copy: (_view, event) => {
+          const selection = window.getSelection()
+          if (!selection || selection.isCollapsed || !event.clipboardData) return false
+          const range = selection.getRangeAt(0)
+          const fragment = range.cloneContents()
+          const tempDiv = document.createElement('div')
+          tempDiv.appendChild(fragment)
+          const text = htmlToClipboardText(tempDiv.innerHTML) || selection.toString().replace(/\r\n?/g, '\n')
+          event.preventDefault()
+          event.clipboardData.setData('text/plain', text)
+          event.clipboardData.setData('text/html', '')
+          return true
+        },
+      },
+    },
     onUpdate: ({ editor }) => {
       setContent(editor.getHTML())
     },
