@@ -81,7 +81,7 @@ function tryRun(cmd, cwd = ROOT) {
   // 2. 推送服务端
   console.log('\n[2/6] 推送服务端...');
   const tmpTar = path.join(SERVER, 'server-rel.tar.gz');
-  runBash('tar -czf server-rel.tar.gz --exclude=node_modules .', SERVER);
+  runBash('tar -czf server-rel.tar.gz --exclude=node_modules --exclude=server-rel.tar.gz --exclude=.context .', SERVER);
   await scp(tmpTar, '/tmp/server-rel.tar.gz');
   const extract = await ssh('sudo mkdir -p /tmp/srv && sudo tar -xzf /tmp/server-rel.tar.gz -C /tmp/srv && sudo docker cp /tmp/srv/. proma-team:/app/ && sudo rm -rf /tmp/srv && sudo docker exec proma-team npm install --production && sudo docker restart proma-team && echo OK');
   console.log('  ' + (extract.includes('OK') ? '已推送' : extract.slice(0, 80)));
