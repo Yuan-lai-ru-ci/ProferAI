@@ -57,6 +57,7 @@ import type { PermissionResult, CanUseToolOptions } from './agent-permission-ser
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { removePromaAutoCompactSettings } from './agent-auto-compact-settings'
+import { applyClaudeSdkAttributionSettings, isGitAttributionEnabled } from './agent-git-attribution'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 import { injectBuiltinMcpServers } from './builtin-mcp/registry'
@@ -1219,9 +1220,16 @@ export class AgentOrchestrator {
         if (removePromaAutoCompactSettings(sdkProjectSettings)) {
           needsWrite = true
         }
+        // Proma Git/PR 推广标识：覆盖 Claude SDK 默认 Co-Authored-By / Generated with
+        if (applyClaudeSdkAttributionSettings(
+          sdkProjectSettings,
+          isGitAttributionEnabled(getSettings().gitAttributionEnabled),
+        )) {
+          needsWrite = true
+        }
         if (needsWrite) {
           writeFileSync(settingsPath, JSON.stringify(sdkProjectSettings, null, 2))
-          console.log(`[Agent 编排] 已设置 SDK settings (plansDirectory, skipWebFetchPreflight, autoMemoryDirectory, autoCompact)`)
+          console.log(`[Agent 编排] 已设置 SDK settings (plansDirectory, skipWebFetchPreflight, autoMemoryDirectory, autoCompact, attribution)`)
         }
       }
 

@@ -25,6 +25,7 @@ import {
 import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-manager'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { getSettings } from './settings-service'
+import { applyClaudeSdkAttributionSettings, isGitAttributionEnabled } from './agent-git-attribution'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）
@@ -275,6 +276,13 @@ export function createAgentSession(
       const autoMemoryDirectory = getWorkspaceAutoMemoryDir(ws.slug)
       if (sdkSettings.autoMemoryDirectory !== autoMemoryDirectory) {
         sdkSettings.autoMemoryDirectory = autoMemoryDirectory
+        needsWrite = true
+      }
+      // Proma Git/PR 推广标识：覆盖 Claude SDK 默认 Co-Authored-By
+      if (applyClaudeSdkAttributionSettings(
+        sdkSettings,
+        isGitAttributionEnabled(getSettings().gitAttributionEnabled),
+      )) {
         needsWrite = true
       }
       if (needsWrite) {
