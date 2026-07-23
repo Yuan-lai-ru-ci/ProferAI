@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ToolResultMessage, UserMessage } from '@earendil-works/pi-ai/compat'
-import type { SDKMessage } from '@proma/shared'
+import type { SDKAssistantMessage, SDKMessage } from '@proma/shared'
 import type { RuntimeGuardResultOverride } from '../agent-runtime-guards'
 import { isTransientNetworkError } from '../error-patterns'
 
@@ -155,6 +155,29 @@ function contentToText(content: unknown): string {
 
 export function isAssistantPiMessage(message: AgentMessage): message is AssistantMessage {
   return !!message && typeof message === 'object' && 'role' in message && message.role === 'assistant'
+}
+
+/** Pi's terminal error and any generated assistant content are independent fields. */
+export function getPiAssistantErrorDetails(message: SDKAssistantMessage): {
+  detailedMessage: string
+  originalError: string
+} {
+  const errorMessage = message.error?.message?.trim() || 'Unknown error'
+  return { detailedMessage: errorMessage, originalError: errorMessage }
+}
+
+/** Pi can generate text before a stream failure; preserve it as normal assistant output. */
+export function hasPiAssistantTextContent(message: SDKAssistantMessage): boolean {
+  return message.message.content.some(
+    (block) => block.type === 'text' && 'text' in block && typeof block.text === 'string' && block.text.trim().length > 0,
+  )
+}
+
+/** Copy Pi's generated output without the terminal transport/provider failure. */
+export function stripPiAssistantError(message: SDKAssistantMessage): SDKAssistantMessage {
+  const contentMessage = { ...message }
+  delete contentMessage.error
+  return contentMessage
 }
 
 export function isAbortedAssistantMessage(message: AgentMessage): message is AssistantMessage {

@@ -1104,14 +1104,9 @@ export function AssistantErrorTail({
   const setModelSelectorOpen = useSetAtom(modelSelectorOpenAtom)
   const [detailsOpen, setDetailsOpen] = React.useState(false)
 
-  // standalone 模式（纯错误消息）：把 content 里所有 text 用双换行拼起来一并渲染，保留 markdown 段落结构。
-  // tail 模式（混合消息）：正文已由上层渲染，这里只用 error.message 作为简短提示。
-  const bodyText = standalone
-    ? (message.message?.content
-        ?.filter((b) => b.type === 'text' && 'text' in b)
-        .map((b) => (b as { text: string }).text)
-        .join('\n\n') || errorText)
-    : errorText
+  // Error presentation always uses error.message. Assistant content is not error detail:
+  // Pi may have generated it before a stream failure.
+  const bodyText = errorText
   const isThinkingSignature = errorCode === THINKING_SIGNATURE_ERROR_CODE ||
     isThinkingSignatureError(bodyText, errorText)
   const displayTitle = errorTitle ?? (isThinkingSignature ? THINKING_SIGNATURE_ERROR_TITLE : undefined)
@@ -1281,11 +1276,8 @@ export function AssistantErrorTail({
 function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: ErrorMessageProps): React.ReactElement {
   const meta = extractMeta(message as unknown as SDKMessage)
 
-  // 复用 AssistantErrorTail 的正文/详情/按钮逻辑，只在这里补上「独立错误消息」的 Message 外壳。
-  const copyText = message.message?.content
-    ?.filter((b) => b.type === 'text' && 'text' in b)
-    .map((b) => (b as { text: string }).text)
-    .join('\n\n') || (message.error?.message ?? '未知错误')
+  // Do not copy assistant content carried by an error record.
+  const copyText = message.error?.message ?? 'Unknown error'
 
   return (
     <Message from="assistant">

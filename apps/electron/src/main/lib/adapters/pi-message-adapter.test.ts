@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
-import { convertPiMessage, convertResultMessage } from './pi-message-adapter'
+import type { SDKAssistantMessage } from '@proma/shared'
+import {
+  convertPiMessage,
+  convertResultMessage,
+  getPiAssistantErrorDetails,
+  hasPiAssistantTextContent,
+  stripPiAssistantError,
+} from './pi-message-adapter'
 
 function writeToolCall(content: string): AssistantMessage {
   return {
@@ -78,6 +85,26 @@ describe('convertPiMessage', () => {
     } as unknown as AssistantMessage, 'session-1') as { error?: { message?: string; errorType?: string } }
 
     expect(terminalError.error).toEqual({ message: errorMessage, errorType: 'network_error' })
+  })
+
+  test('keeps generated text separate from a terminal transport error', () => {
+    const body = 'Generated assistant output must not appear inside the error card.'
+    const transportError = 'peer closed connection without sending complete message body (incomplete chunked read)'
+    const terminalError = convertPiMessage({
+      role: 'assistant',
+      content: [{ type: 'text', text: body }],
+      stopReason: 'error',
+      errorMessage: transportError,
+    } as unknown as AssistantMessage, 'session-1') as SDKAssistantMessage
+
+    expect(getPiAssistantErrorDetails(terminalError)).toEqual({
+      detailedMessage: transportError,
+      originalError: transportError,
+    })
+    expect(hasPiAssistantTextContent(terminalError)).toBe(true)
+    expect(stripPiAssistantError(terminalError).error).toBeUndefined()
+    expect(terminalError.message.content).toEqual([{ type: 'text', text: body }])
+    expect(terminalError.error).toEqual({ message: transportError, errorType: 'network_error' })
   })
 
   test('only reports result errors for terminal Pi failures', () => {

@@ -37,6 +37,7 @@ import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSyste
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
+import { getPiAssistantErrorDetails, hasPiAssistantTextContent, stripPiAssistantError } from './adapters/pi-message-adapter'
 import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels, persistCodexOAuthCredentials, resolveChannelRuntimeApiKey, resolveCodexOAuthCredentials } from './channel-manager'
@@ -1891,7 +1892,11 @@ export class AgentOrchestrator {
             if (msg.type === 'assistant' && !isPartialMessage) {
               const assistantMsg = msg as SDKAssistantMessage
               if (assistantMsg.error) {
-                const { detailedMessage, originalError } = extractErrorDetails(assistantMsg as unknown as Parameters<typeof extractErrorDetails>[0])
+                // Pi keeps generated text and the transport failure in separate fields. Claude's
+                // content-first extractor would otherwise promote the text to error details.
+                const { detailedMessage, originalError } = agentRuntime === 'pi'
+                  ? getPiAssistantErrorDetails(assistantMsg)
+                  : extractErrorDetails(assistantMsg as unknown as Parameters<typeof extractErrorDetails>[0])
                 let errorCode = assistantMsg.error.errorType || 'unknown_error'
                 if (isPromptTooLongError(detailedMessage, originalError)) {
                   errorCode = 'prompt_too_long'
@@ -1982,7 +1987,17 @@ export class AgentOrchestrator {
                 }
 
                 // 不可重试 → 终止
+                const hasPiPartialOutput = agentRuntime === 'pi' && hasPiAssistantTextContent(assistantMsg)
+                if (hasPiPartialOutput) {
+                  const partialOutput = stripPiAssistantError(assistantMsg)
+                  if (modelId) partialOutput._channelModelId = modelId
+                  partialOutput._channelProvider = channel.provider
+                  accumulatedMessages.push(partialOutput)
+                  // Reuse the Pi UUID to replace the latest partial frame with normal markdown output.
+                  this.eventBus.emit(sessionId, { kind: 'sdk_message', message: partialOutput })
+                }
                 this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+                accumulatedMessages.length = 0
                 if (typedError.code === 'prompt_too_long') {
                   try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
                 }
