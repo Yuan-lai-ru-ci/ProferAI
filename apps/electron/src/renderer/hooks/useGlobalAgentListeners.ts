@@ -347,15 +347,6 @@ export function useGlobalAgentListeners(): void {
     const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
     /** 正在执行的 git 突变 Bash 命令：toolUseId → sessionId（完成后触发 diff 刷新） */
     const pendingGitMutateTools = new Map<string, string>()
-    /**
-     * 已收到最终 STREAM_COMPLETE 的会话。
-     *
-     * STREAM_EVENT 与 STREAM_COMPLETE 走独立 Electron IPC 通道，不能假设全局到达顺序。
-     * 完成事件之后才到达的旧流式事件不应重新创建 `running: true` 状态，否则
-     * AgentRunningIndicator 会永久计时。新一轮外部运行由 external_run_started 清除标记；
-     * 本地新运行会先由 AgentView 写入 running 状态，因此不会被此标记拦截。
-     */
-    const completedStreamSessions = new Set<string>()
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
@@ -379,8 +370,6 @@ export function useGlobalAgentListeners(): void {
     }
 
     const activateExternalAgentRun = (event: Extract<ProferEvent, { type: 'external_run_started' }>): void => {
-      // 明确的新外部运行开始，允许它的后续流式事件再次驱动 UI。
-      completedStreamSessions.delete(event.sessionId)
       const applyActivation = (sessions: AgentSessionMeta[]): void => {
         const activation = buildExternalAgentRunActivation({
           tabs: store.get(tabsAtom),
@@ -629,14 +618,6 @@ export function useGlobalAgentListeners(): void {
           } else if (proferEvent.type === 'delegation_session_updated') {
             store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, proferEvent.session))
           }
-        }
-
-        // STREAM_COMPLETE 已确认该轮结束后，可能仍有旧 STREAM_EVENT 在另一 IPC
-        // 通道中排队。若会话不处于任何新一轮 running/后台等待态，直接丢弃，
-        // 防止 applyAgentEvent 的默认状态把它重新激活为 running。
-        const currentStreamState = store.get(agentStreamingStatesAtom).get(sessionId)
-        if (completedStreamSessions.has(sessionId) && !currentStreamState?.running && !currentStreamState?.backgroundWaiting) {
-          return
         }
 
         // 如果收到未知会话的事件（跨工作区场景），立即刷新会话列表
@@ -989,7 +970,6 @@ export function useGlobalAgentListeners(): void {
         // 同时将所有未完成的工具活动标记为已完成，防止 subagent spinner 继续转动
         // （complete 事件只清除 retrying，保持 running: true 以防竞态）
         // 竞态保护：通过 startedAt 区分新旧流，防止旧流的 complete 事件重置新流的 running 状态
-        let acceptedCompletion = false
         store.set(agentStreamingStatesAtom, (prev) => {
           const current = prev.get(data.sessionId)
           // 既非运行中、也非软空闲态 → 已彻底结束，忽略重复/陈旧的完成事件。
@@ -1001,7 +981,6 @@ export function useGlobalAgentListeners(): void {
           if (current.startedAt != null && (data.startedAt == null || current.startedAt > data.startedAt)) {
             return prev
           }
-          acceptedCompletion = true
           const map = new Map(prev)
           map.set(data.sessionId, {
             ...current,
@@ -1013,11 +992,6 @@ export function useGlobalAgentListeners(): void {
           })
           return map
         })
-        // 即使随后 AgentView 清掉非运行态的 stream state，仍保留本轮终态水位，
-        // 防止跨通道迟到事件重新创建 running 状态。
-        if (acceptedCompletion && !backgroundTasksPending) {
-          completedStreamSessions.add(data.sessionId)
-        }
 
         // 只有未激活会话才进入"未查看完成"，避免当前页面完成时出现额外未读提醒。
         const currentSessionId = store.get(currentAgentSessionIdAtom)
