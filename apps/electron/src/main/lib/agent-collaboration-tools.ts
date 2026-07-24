@@ -618,7 +618,11 @@ function startDelegation(
   const title = normalizeTitle(args.title, `协作：${task}`)
   const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
   const parentPermissionMode = getCurrentParentPermissionMode(parent, ctx.permissionMode)
-  const permissionMode = resolveDelegationPermissionMode(parentPermissionMode, args.permissionMode)
+  const permissionMode = resolveDelegationPermissionMode(
+    parentPermissionMode,
+    args.permissionMode,
+    ctx.agentRuntime ?? parent?.agentRuntime,
+  )
   const effectiveModelId = args.modelId !== undefined
     ? assertEnabledModelForChannel({
         channelId: ctx.channelId,

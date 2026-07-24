@@ -10,6 +10,7 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ToolResultMessage, UserMessage } from '@earendil-works/pi-ai/compat'
 import type { SDKMessage } from '@profer/shared'
 import type { RuntimeGuardResultOverride } from '../agent-runtime-guards'
+import { isTransientNetworkError } from '../error-patterns'
 
 function getPiEditItems(input: Record<string, unknown>): Array<Record<string, unknown>> {
   return Array.isArray(input.edits)
@@ -246,7 +247,7 @@ export function convertPiMessage(
       uuid: options.uuid ?? randomUUID(),
       ...(!final && { _partial: true }),
       ...(assistant.errorMessage && isTerminalError && {
-        error: { message: assistant.errorMessage, errorType: 'provider_error' },
+        error: { message: assistant.errorMessage, errorType: isTransientNetworkError(assistant.errorMessage) ? 'network_error' : 'provider_error' },
       }),
       ...(channelModelId && { _channelModelId: channelModelId }),
     } as unknown as SDKMessage
@@ -272,6 +273,46 @@ export function convertPiMessage(
   }
 
   return null
+}
+
+/**
+ * 检测 Pi 终态错误消息是否同时携带有效正文内容（#1268 断流保消息）。
+ *
+ * 当 Pi 流式输出中途断连时，stopReason='error' 且同时存在
+ * errorMessage 和已有部分正文；此时应先将正文作为正常消息展示，
+ * 再追加简短错误摘要，而不应把整个正文渲染在红色错误卡片内。
+ */
+export function hasTerminalErrorWithContent(msg: SDKMessage): boolean {
+  if (msg.type !== 'assistant') return false
+  const assistant = msg as SDKAssistantMessage
+  if (!assistant.error) return false
+  const content = assistant.message?.content
+  if (!Array.isArray(content) || content.length === 0) return false
+  return content.some((b) => b.type === 'text' && typeof (b as { text?: string }).text === 'string' && (b as { text?: string }).text!.trim().length > 0)
+}
+
+/**
+ * 从带错误的 SDKMessage 中剥离出纯正文消息（#1268 断流保消息）。
+ *
+ * 返回 contentMessage（不含 error 字段、保留原 uuid 以覆盖流式部分帧）
+ * 和 errorText（用于生成简短错误摘要）。若消息不含正文内容则返回 null。
+ */
+export function stripErrorFromContentMessage(msg: SDKMessage): { contentMessage: SDKMessage; errorText: string } | null {
+  if (!hasTerminalErrorWithContent(msg)) return null
+  const assistant = msg as SDKAssistantMessage
+  const errorText = assistant.error?.message ?? '流式传输中断'
+  // 浅拷贝 message.content 并移除 error 字段，保留 uuid 覆盖流式部分帧
+  const contentMessage: SDKMessage = {
+    ...msg,
+    error: undefined,
+    message: {
+      ...assistant.message,
+      content: assistant.message.content,
+    },
+  } as unknown as SDKMessage
+  // 确保 error 字段被彻底删除（展开运算符可能保留 undefined）
+  delete (contentMessage as Record<string, unknown>).error
+  return { contentMessage, errorText }
 }
 
 export function hasToolResult(message: SDKMessage): boolean {

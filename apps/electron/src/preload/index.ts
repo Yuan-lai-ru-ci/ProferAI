@@ -51,6 +51,7 @@ import type {
   MessageSearchResult,
   AgentSessionMeta,
   AgentRuntime,
+  AgentThinkingLevel,
   SDKMessage,
   AgentSendInput,
   AgentStreamEvent,
@@ -698,6 +699,8 @@ export interface ElectronAPI {
   updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => Promise<void>
   /** 切换当前会话的 ChatGPT Codex Fast Mode。 */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
+  /** 切换当前会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
+  updateSessionOpenAIThinkingLevel: (sessionId: string, level: AgentThinkingLevel | null) => Promise<AgentSessionMeta>
 
   /** 切换空闲会话的 Agent runtime；跨 runtime 时清除旧 SDK session ID。 */
   updateSessionAgentRuntime: (sessionId: string, runtime: AgentRuntime) => Promise<AgentSessionMeta>
@@ -856,7 +859,7 @@ export interface ElectronAPI {
   showInFolder: (filePath: string) => Promise<void>
 
   /** 在系统文件管理器中显示文件（无工作区限制，支持候选基础目录） */
-  showItemInFolder: (filePath: string, candidateBasePaths?: string[]) => Promise<void>
+  showItemInFolder: (filePath: string, candidateBasePaths?: string[]) => Promise<boolean>
 
   /** 解析文件路径并读取内容（供内联预览使用） */
   resolveAndReadFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ resolvedPath: string; content: string } | null>
@@ -2033,6 +2036,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
   },
 
+  updateSessionOpenAIThinkingLevel: (sessionId: string, level: AgentThinkingLevel | null) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_OPENAI_THINKING, sessionId, level)
+  },
+
   updateSessionAgentRuntime: (sessionId: string, runtime: AgentRuntime) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME, sessionId, runtime)
   },
@@ -2263,7 +2270,7 @@ const electronAPI: ElectronAPI = {
   },
 
   /** 在系统文件管理器中显示文件（无工作区限制，支持候选基础目录） */
-  showItemInFolder: (filePath: string, candidateBasePaths?: string[]) => {
+  showItemInFolder: (filePath: string, candidateBasePaths?: string[]): Promise<boolean> => {
     return ipcRenderer.invoke(IPC_CHANNELS.SHOW_ITEM_IN_FOLDER, filePath, candidateBasePaths)
   },
 

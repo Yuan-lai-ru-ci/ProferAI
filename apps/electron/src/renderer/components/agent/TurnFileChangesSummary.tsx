@@ -22,6 +22,12 @@ import { FilePathChip } from '@/components/ai-elements/file-path-chip'
 
 const MUTATING_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
+/**
+ * 本轮实际触及的文件：除改动类工具外也纳入 Read，供正文中裸文件名补全绝对路径。
+ * Grep/Glob 的命中文件只存在于结果文本中，无法安全地归入此映射。
+ */
+const TOUCHED_TOOLS = new Set([...MUTATING_TOOLS, 'Read'])
+
 function getFilePath(toolName: string, input: Record<string, unknown>): string | null {
   if (toolName === 'NotebookEdit') {
     const fp = input.notebook_path
@@ -31,7 +37,7 @@ function getFilePath(toolName: string, input: Record<string, unknown>): string |
   return typeof fp === 'string' ? fp : null
 }
 
-function collectFilePaths(turnMessages: SDKMessage[]): string[] {
+function collectFilePaths(turnMessages: SDKMessage[], tools: Set<string> = MUTATING_TOOLS): string[] {
   const failed = new Set<string>()
   for (const msg of turnMessages) {
     if (msg.type !== 'user') continue
@@ -53,7 +59,7 @@ function collectFilePaths(turnMessages: SDKMessage[]): string[] {
     for (const block of blocks) {
       if (block.type !== 'tool_use') continue
       const tu = block as SDKToolUseBlock
-      if (!MUTATING_TOOLS.has(tu.name)) continue
+      if (!tools.has(tu.name)) continue
       if (failed.has(tu.id)) continue
 
       const filePath = getFilePath(tu.name, tu.input as Record<string, unknown>)
@@ -63,6 +69,31 @@ function collectFilePaths(turnMessages: SDKMessage[]): string[] {
     }
   }
   return paths
+}
+
+/**
+ * 构建「文件名 → 绝对路径」映射，供 Assistant turn 正文的行内文件引用使用。
+ * 同名文件无法仅凭裸文件名区分，因此直接剔除，维持既有 basePaths 降级解析，避免误预览。
+ */
+export function buildTurnFileNameMap(turnMessages: SDKMessage[]): Map<string, string> {
+  const paths = collectFilePaths(turnMessages, TOUCHED_TOOLS)
+  const map = new Map<string, string>()
+  const conflicted = new Set<string>()
+
+  for (const filePath of paths) {
+    const filename = filePath.split(/[\\/]/).pop() || filePath
+    if (conflicted.has(filename)) continue
+
+    const existing = map.get(filename)
+    if (existing && existing !== filePath) {
+      map.delete(filename)
+      conflicted.add(filename)
+      continue
+    }
+    map.set(filename, filePath)
+  }
+
+  return map
 }
 
 export interface TurnFileChangesSummaryProps {

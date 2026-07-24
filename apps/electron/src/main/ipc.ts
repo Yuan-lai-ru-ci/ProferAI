@@ -2720,6 +2720,21 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // Codex 推理档位跨会话记忆
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_OPENAI_THINKING,
+    async (_, sessionId: string, level: AgentThinkingLevel | null): Promise<AgentSessionMeta> => {
+      const validLevels: (AgentThinkingLevel | null)[] = [null, 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+      // level 为 null 表示「使用全局默认」（清除会话级覆盖）
+      if (level !== null && !validLevels.includes(level)) {
+        throw new Error(`无效的推理档位: ${String(level)}`)
+      }
+      if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
+      if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换推理档位')
+      return updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level })
+    },
+  )
+
   // 空闲会话切换 runtime，并同步更新新会话默认值；跨 Claude/Pi 时绝不复用另一 runtime 的 SDK 会话 ID。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME,
@@ -3454,7 +3469,7 @@ export function registerIpcHandlers(): void {
   // 在系统文件管理器中显示任意路径（无工作区限制，用户主动点击触发）
   ipcMain.handle(
     IPC_CHANNELS.SHOW_ITEM_IN_FOLDER,
-    async (_, filePath: string, candidateBasePaths?: string[]): Promise<void> => {
+    async (_, filePath: string, candidateBasePaths?: string[]): Promise<boolean> => {
       const { resolve } = await import('node:path')
       const { existsSync } = await import('node:fs')
       const { resolveTargetPath } = await import('./lib/file-preview-service')
@@ -3462,9 +3477,10 @@ export function registerIpcHandlers(): void {
       const resolvedPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
       if (!existsSync(resolvedPath)) {
         console.warn('[IPC] shell:show-item-in-folder 路径不存在:', resolvedPath)
-        return
+        return false
       }
       shell.showItemInFolder(resolve(resolvedPath))
+      return true
     }
   )
 

@@ -1,46 +1,85 @@
 /**
- * ChatGPT (OpenAI Codex) OAuth 登录服务
+ * ChatGPT (OpenAI Codex) OAuth 登录服务。
  *
- * 复用 Pi SDK（@earendil-works/pi-ai/oauth）内置的 Codex OAuth 流程完成登录：
- * - 登录必须在主进程（Node 侧）执行——SDK 使用 Node crypto 生成 PKCE，并在
- *   本地 127.0.0.1:1455 起回调服务接收授权码，无法在渲染进程运行。
- * - 浏览器由本服务通过 shell.openExternal 打开；SDK 内部的回调服务负责接收
- *   redirect 并完成 code→token 交换，最终返回 { access, refresh, expires, accountId }。
- *
- * token 的加密存储与过期刷新由上层（channel-manager / pi-model-registry）负责，
- * 本服务只封装"跑一次登录流程""刷新一次 token"两个纯操作。
+ * 通过 Pi Coding Agent 的公开 ModelRuntime API 完成 OAuth，避免依赖已删除的
+ * `@earendil-works/pi-ai/oauth` 兼容函数。凭据仅保存在内存 store，持久化仍由
+ * Profer 的 channel-manager 负责。
  */
 
 import { shell } from 'electron'
 import type { CodexOAuthCredentials } from '@profer/shared'
-import { getFetchFn } from './proxy-fetch'
-import { getEffectiveProxyUrl } from './proxy-settings-service'
 
-/** Pi SDK oauth 模块类型（external 包，运行时动态 import） */
-type PiOAuthModule = typeof import('@earendil-works/pi-ai/oauth')
+type PiSdk = typeof import('@earendil-works/pi-coding-agent')
+type OAuthCredential = {
+  type: 'oauth'
+  access: string
+  refresh: string
+  expires: number
+  [key: string]: unknown
+}
 
-let piOAuthPromise: Promise<PiOAuthModule> | undefined
+let piSdkPromise: Promise<PiSdk> | undefined
 
-function loadPiOAuth(): Promise<PiOAuthModule> {
-  piOAuthPromise ??= import('@earendil-works/pi-ai/oauth')
-  return piOAuthPromise
+function loadPiSdk(): Promise<PiSdk> {
+  piSdkPromise ??= import('@earendil-works/pi-coding-agent')
+  return piSdkPromise
+}
+
+/**
+ * Pi 的 ModelRuntime 只依赖 CredentialStore 的结构契约。使用内存实现，避免 Pi
+ * 写入自己的配置目录；上层会在成功后将规范化凭据加密保存到 Profer 的渠道配置。
+ */
+function createEphemeralCredentialStore(initial?: OAuthCredential) {
+  let credential = initial
+  return {
+    async read(_providerId: string): Promise<OAuthCredential | undefined> {
+      return credential
+    },
+    async list(): Promise<readonly { providerId: string; type: 'oauth' }[]> {
+      return credential ? [{ providerId: 'openai-codex', type: 'oauth' }] : []
+    },
+    async modify(
+      _providerId: string,
+      fn: (current: OAuthCredential | undefined) => Promise<OAuthCredential | undefined>,
+    ): Promise<OAuthCredential | undefined> {
+      credential = await fn(credential)
+      return credential
+    },
+    async delete(_providerId: string): Promise<void> {
+      credential = undefined
+    },
+  }
+}
+
+function normalizeCredentials(value: unknown): CodexOAuthCredentials {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Pi OAuth 未返回有效凭据')
+  }
+
+  const credential = value as Partial<OAuthCredential>
+  if (
+    typeof credential.access !== 'string'
+    || typeof credential.refresh !== 'string'
+    || typeof credential.expires !== 'number'
+  ) {
+    throw new Error('Pi OAuth 返回的凭据缺少 access、refresh 或 expires')
+  }
+
+  return {
+    access: credential.access,
+    refresh: credential.refresh,
+    expires: credential.expires,
+    ...(typeof credential.accountId === 'string' && credential.accountId
+      ? { accountId: credential.accountId }
+      : {}),
+  }
 }
 
 /** 进行中的登录流程的取消控制器（同一时刻只允许一个登录流程）。 */
 let activeLoginAbort: AbortController | undefined
 
-/**
- * 创建用于 Codex OAuth HTTP 请求的 fetch。
- *
- * Pi OAuth 支持注入 fetch；通过这里统一复用 Profer 的全局代理配置，避免 OAuth
- * 授权码换 token 和 refresh token 请求绕过用户设置的代理。
- */
-async function getCodexOAuthFetch(): Promise<typeof globalThis.fetch> {
-  return getFetchFn(await getEffectiveProxyUrl())
-}
-
 export interface CodexLoginCallbacks {
-  /** SDK 生成授权 URL 后回调，用于（除自动开浏览器外）通知渲染层展示 URL。 */
+  /** SDK 生成授权 URL 后回调，用于通知渲染层展示 URL。 */
   onAuthUrl?: (url: string) => void
   /** 进度消息回调。 */
   onProgress?: (message: string) => void
@@ -49,46 +88,44 @@ export interface CodexLoginCallbacks {
 /**
  * 发起一次 ChatGPT (Codex) 浏览器 OAuth 登录。
  *
- * 成功返回规范化的 OAuth 凭据；用户取消或失败则抛错。
- * 登录期间自动用系统浏览器打开授权页，SDK 内部回调服务（:1455）接收授权码。
+ * Pi 的公开 OAuth API 由 ModelRuntime 承载；它会启动本地回调服务并完成 code 交换。
  */
 export async function loginCodexOAuth(callbacks?: CodexLoginCallbacks): Promise<CodexOAuthCredentials> {
-  const { loginOpenAICodex } = await loadPiOAuth()
+  const sdk = await loadPiSdk()
 
-  // 取消上一个仍在进行的登录流程，避免 :1455 端口占用与并发回调。
   activeLoginAbort?.abort()
   const abort = new AbortController()
   activeLoginAbort = abort
 
   try {
-    const fetch = await getCodexOAuthFetch()
-    const credentials = await loginOpenAICodex({
-      onAuth: (info: { url: string; instructions?: string }) => {
-        callbacks?.onAuthUrl?.(info.url)
-        // 自动打开系统浏览器进行授权；失败仅记录，用户仍可从 UI 手动打开。
-        shell.openExternal(info.url).catch((err) => {
-          console.error('[Codex OAuth] 打开浏览器失败:', err)
+    const runtime = await sdk.ModelRuntime.create({
+      credentials: createEphemeralCredentialStore(),
+      allowModelNetwork: false,
+    })
+    const credentials = await runtime.login('openai-codex', 'oauth', {
+      signal: abort.signal,
+      prompt: async (prompt) => {
+        // Codex 的固定入口是浏览器授权；其余输入会在 callback 成功时被取消。
+        if (prompt.type === 'select') return 'browser'
+        return new Promise<string>((_resolve, reject) => {
+          const rejectCancelled = () => reject(new Error('登录已取消'))
+          prompt.signal?.addEventListener('abort', rejectCancelled, { once: true })
+          abort.signal.addEventListener('abort', rejectCancelled, { once: true })
         })
       },
-      onProgress: (message: string) => {
-        console.log(`[Codex OAuth] ${message}`)
-        callbacks?.onProgress?.(message)
+      notify: (event) => {
+        if (event.type === 'auth_url') {
+          callbacks?.onAuthUrl?.(event.url)
+          shell.openExternal(event.url).catch((err) => {
+            console.error('[Codex OAuth] 打开浏览器失败:', err)
+          })
+        } else if (event.type === 'progress' || event.type === 'info') {
+          console.log(`[Codex OAuth] ${event.message}`)
+          callbacks?.onProgress?.(event.message)
+        }
       },
-      // 浏览器流程以 :1455 本地回调服务为主路径完成；手动粘贴码不在 v1 UI 中提供，
-      // 用一个永不 resolve 的 promise 占位，交由回调服务赢得竞争。
-      onPrompt: () => new Promise<string>(() => {}),
-      // Pi OAuth 的 token 请求使用显式注入的 fetch，因而会继承 Profer 代理设置。
-      fetch,
     })
-
-    return {
-      access: credentials.access,
-      refresh: credentials.refresh,
-      expires: credentials.expires,
-      ...(typeof credentials.accountId === 'string' && credentials.accountId
-        ? { accountId: credentials.accountId }
-        : {}),
-    }
+    return normalizeCredentials(credentials)
   } finally {
     if (activeLoginAbort === abort) {
       activeLoginAbort = undefined
@@ -102,22 +139,21 @@ export function cancelCodexOAuthLogin(): void {
   activeLoginAbort = undefined
 }
 
-/**
- * 用 refresh token 刷新 Codex OAuth 凭据。
- *
- * 返回新的规范化凭据（含新的 expires）。SDK 在 refresh token 未轮换时会复用旧值。
- */
+/** 使用 refresh token 刷新 Codex OAuth 凭据。 */
 export async function refreshCodexOAuth(refreshToken: string): Promise<CodexOAuthCredentials> {
-  const { refreshOpenAICodexToken } = await loadPiOAuth()
-  const credentials = await refreshOpenAICodexToken(refreshToken, {
-    fetch: await getCodexOAuthFetch(),
+  const sdk = await loadPiSdk()
+  const store = createEphemeralCredentialStore({
+    type: 'oauth',
+    access: '',
+    refresh: refreshToken,
+    expires: 0,
   })
-  return {
-    access: credentials.access,
-    refresh: credentials.refresh,
-    expires: credentials.expires,
-    ...(typeof credentials.accountId === 'string' && credentials.accountId
-      ? { accountId: credentials.accountId }
-      : {}),
-  }
+  const runtime = await sdk.ModelRuntime.create({
+    credentials: store,
+    allowModelNetwork: false,
+  })
+
+  // getAuth() 走 provider 的标准 refresh 流程，并通过 store 原子更新凭据。
+  await runtime.getAuth('openai-codex')
+  return normalizeCredentials(await store.read('openai-codex'))
 }

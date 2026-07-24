@@ -82,6 +82,8 @@ import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
+import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
+import { resolvePiThinkingLevel } from './agent-thinking-level'
 
 // ===== 类型定义 =====
 
@@ -1199,11 +1201,11 @@ export class AgentOrchestrator {
           piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
           // Pi model credentials stay in its request-local AuthStorage; never pass Claude auth env into Bash/tool processes.
           runtimeEnv: piRuntimeEnv,
-          thinkingLevel: (appSettings.agentThinking?.type === 'disabled'
-            ? 'off'
-            : appSettings.agentEffort === 'max'
-              ? 'xhigh'
-              : appSettings.agentEffort ?? (appSettings.agentThinking ? 'high' : 'off')) as AgentThinkingLevel,
+          thinkingLevel: resolvePiThinkingLevel(
+            sessionMeta?.openAIThinkingLevel,
+            { agentThinking: !(appSettings.agentThinking?.type === 'disabled'), agentEffort: appSettings.agentEffort },
+            channel.provider,
+          ),
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
           ...(piCustomTools && { customTools: piCustomTools }),
           ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
@@ -1563,6 +1565,52 @@ export class AgentOrchestrator {
                 try { console.error(`[Agent 编排] 完整 assistantMsg (JSON keys):`, Object.keys(assistantMsg)) } catch {}
                 try { console.error(`[Agent 编排] assistantMsg JSON (截断):`, JSON.stringify(assistantMsg).slice(0, 2000)) } catch {}
                 console.error(`[Agent 编排] ═══ SDK assistant 错误 原始数据 结束 ═══`)
+
+                // #1268 断流保消息：当终端错误同时携带有效正文时，先将正文作为正常消息推送
+                if (hasTerminalErrorWithContent(msg)) {
+                  const separated = stripErrorFromContentMessage(msg)
+                  if (separated) {
+                    console.log(`[Agent 编排] #1268 断流保消息：分离正文（${separated.errorText}），正文长度=${(separated.contentMessage as SDKAssistantMessage).message?.content?.filter((b: { type: string }) => b.type === 'text').map((b) => (b as { text: string }).text).join('').length ?? 0}`)
+                    // 先推送正文消息（无 error 字段），复用原 uuid 覆盖流式部分帧
+                    this.eventBus.emit(sessionId, { kind: 'sdk_message', message: separated.contentMessage })
+                    accumulatedMessages.push(separated.contentMessage)
+                    // 生成简短错误摘要消息
+                    const errorSummary: SDKMessage = {
+                      type: 'assistant',
+                      message: {
+                        content: [{ type: 'text', text: `⚠️ 连接中断：${separated.errorText}` }],
+                      },
+                      parent_tool_use_id: null,
+                      error: { message: separated.errorText, errorType: (assistantMsg.error as { errorType?: string })?.errorType ?? 'network_error' },
+                      _createdAt: Date.now(),
+                    } as unknown as SDKMessage
+                    this.eventBus.emit(sessionId, { kind: 'sdk_message', message: errorSummary })
+                    accumulatedMessages.push(errorSummary)
+                    this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+                    accumulatedMessages.length = 0
+                    // 检查是否可自动重试
+                    const rawError = assistantMsg.error as unknown
+                    const errorCode = (typeof rawError === 'object' && rawError !== null
+                      ? (rawError as Record<string, unknown>).errorType as string
+                      : undefined) ?? 'unknown_error'
+                    if (isAutoRetryableTypedError({ code: errorCode, message: separated.errorText, canRetry: true }) && canAutoRetry(attempt)) {
+                      lastRetryableError = `连接中断：${separated.errorText}`
+                      console.log(`[Agent 编排] 可重试错误 (断流保消息): ${lastRetryableError}`)
+                      stderrChunks.length = 0
+                      shouldRetryFromError = true
+                      break
+                    }
+                    // 不可重试 → 终止
+                    try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+                    completeRun(getAgentSessionMessages(sessionId), {
+                      startedAt: streamStartedAt,
+                      resultSubtype: 'error_during_execution',
+                      resultErrors: [separated.errorText],
+                    })
+                    return
+                  }
+                }
+
                 const { detailedMessage, originalError } = errorHelpers.extractErrorDetails(assistantMsg as unknown as Parameters<typeof errorHelpers.extractErrorDetails>[0])
                 // SDK 的 error 字段可能是字符串（错误码）或对象 {message, errorType}
                 const rawError = assistantMsg.error as unknown

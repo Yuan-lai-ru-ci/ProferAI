@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
-import { TurnFileChangesSummary } from './TurnFileChangesSummary'
+import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './ProcessBlockGroup'
 import { extractToolResultText, isTaskProgressTool, parseTaskCreateResult } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
@@ -32,6 +32,7 @@ import {
   MessageAction,
   MessageResponse,
   UserMessageContent,
+  TurnFileMapProvider,
 } from '@/components/ai-elements/message'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
@@ -634,6 +635,11 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
       completedToolResultIds,
     })
   }, [topLevelBlocks, isStreaming, completedToolResultIds])
+  // 与本轮工具调用同源的映射，让正文内联的裸文件名可靠定位真实文件。
+  const turnFileMap = React.useMemo(
+    () => buildTurnFileNameMap(turn.turnMessages),
+    [turn.turnMessages],
+  )
 
   // 如果只有错误消息
   if (enrichedBlocks.length === 0 && hasError && errorContent) {
@@ -701,36 +707,38 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
         logo={<AssistantLogo model={turn.model} />}
       />
       <MessageContent>
-        <div className={cn('space-y-2')}>
-          {renderItems.map((item, itemIndex) => {
-            if (item.type === 'block') {
-              return renderTopLevelBlock(item.item.block, item.item.index)
-            }
+        <TurnFileMapProvider map={turnFileMap}>
+          <div className={cn('space-y-2')}>
+            {renderItems.map((item, itemIndex) => {
+              if (item.type === 'block') {
+                return renderTopLevelBlock(item.item.block, item.item.index)
+              }
 
-            const groupBlocks = item.items.map((groupItem) => groupItem.block)
-            const firstIndex = item.items[0]?.index ?? 0
-            return (
-              <ProcessBlockGroup
-                key={`process-${firstIndex}`}
-                blocks={groupBlocks}
-                isStreaming={isStreaming}
-                keepExpandedAfterComplete={processGroupsKeepExpanded}
-                isMessageTail={itemIndex === renderItems.length - 1}
-              >
-                {item.items.map((groupItem) => renderProcessGroupBlock(groupItem.block, groupItem.index))}
-              </ProcessBlockGroup>
-            )
-          })}
-        </div>
-        {readKnowledgeItems.length > 0 && <div className="flex flex-wrap gap-1.5 border-t border-border/40 pt-2 text-xs text-muted-foreground"><span>已读取资料：</span>{readKnowledgeItems.map((item) => <Badge key={item.itemId} variant="secondary" className="max-w-[240px] truncate font-normal">{item.title}</Badge>)}</div>}
-        {/* 如果有错误但也有内容块，在末尾显示错误 */}
-        {hasError && errorContent && topLevelBlocks.length > 0 && (
-          <div className="mt-3 text-sm text-destructive">
-            {isThinkingSignatureError(errorContent.error?.message)
-              ? `${THINKING_SIGNATURE_ERROR_TITLE}：${THINKING_SIGNATURE_ERROR_MESSAGE}`
-              : (errorContent.error?.message ?? '未知错误')}
+              const groupBlocks = item.items.map((groupItem) => groupItem.block)
+              const firstIndex = item.items[0]?.index ?? 0
+              return (
+                <ProcessBlockGroup
+                  key={`process-${firstIndex}`}
+                  blocks={groupBlocks}
+                  isStreaming={isStreaming}
+                  keepExpandedAfterComplete={processGroupsKeepExpanded}
+                  isMessageTail={itemIndex === renderItems.length - 1}
+                >
+                  {item.items.map((groupItem) => renderProcessGroupBlock(groupItem.block, groupItem.index))}
+                </ProcessBlockGroup>
+              )
+            })}
           </div>
-        )}
+          {readKnowledgeItems.length > 0 && <div className="flex flex-wrap gap-1.5 border-t border-border/40 pt-2 text-xs text-muted-foreground"><span>已读取资料：</span>{readKnowledgeItems.map((item) => <Badge key={item.itemId} variant="secondary" className="max-w-[240px] truncate font-normal">{item.title}</Badge>)}</div>}
+          {/* 如果有错误但也有内容块，在末尾显示错误 */}
+          {hasError && errorContent && topLevelBlocks.length > 0 && (
+            <div className="mt-3 text-sm text-destructive">
+              {isThinkingSignatureError(errorContent.error?.message)
+                ? `${THINKING_SIGNATURE_ERROR_TITLE}：${THINKING_SIGNATURE_ERROR_MESSAGE}`
+                : (errorContent.error?.message ?? '未知错误')}
+            </div>
+          )}
+        </TurnFileMapProvider>
       </MessageContent>
       {/* 文件改动汇总：流式结束后展示本轮所有 Edit/Write/MultiEdit/NotebookEdit 文件 */}
       {!isStreaming && (
@@ -1154,10 +1162,9 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
   const setSettingsTab = useSetAtom(settingsTabAtom)
   const [detailsOpen, setDetailsOpen] = React.useState(false)
 
-  const contentText = message.message?.content
-    ?.filter((b) => b.type === 'text' && 'text' in b)
-    .map((b) => (b as { text: string }).text)
-    .join('\n') ?? errorText
+  // #1268 断流保消息：错误卡片只显示 error.message，不渲染附着的助手正文
+  // （正文已由编排层分离为独立消息，此处仅为兜底安全网）
+  const contentText = errorText
   const isThinkingSignature = errorCode === THINKING_SIGNATURE_ERROR_CODE ||
     isThinkingSignatureError(contentText, errorText)
   const displayTitle = errorTitle ?? (isThinkingSignature ? THINKING_SIGNATURE_ERROR_TITLE : undefined)
