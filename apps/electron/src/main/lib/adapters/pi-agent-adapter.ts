@@ -355,6 +355,25 @@ function createAbortError(): Error {
   return error
 }
 
+/**
+ * 返回一个 Promise，轮询 active.abortRequested。
+ * 一旦 abortRequested 为 true，立即 reject createAbortError()。
+ * 用于 Promise.race 竞速 session.prompt()——Pi SDK 的 session.abort()
+ * 不会让 session.prompt() 抛异常，所以需要外部竞速来快速退出。
+ */
+function createAbortRace(active: ActivePiSession): Promise<never> {
+  return new Promise((_, reject) => {
+    const check = () => {
+      if (active.abortRequested) {
+        reject(createAbortError())
+        return
+      }
+      setTimeout(check, 100)
+    }
+    check()
+  })
+}
+
 function rejectPendingInterruptPrompts(active: ActivePiSession, error: unknown): void {
   const pending = active.pendingInterruptPrompts.splice(0)
   for (const prompt of pending) {
@@ -1596,7 +1615,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 return
               }
               currentInterrupt?.resolveAccepted()
-              await session.prompt(prompt, { source: 'rpc' })
+              await Promise.race([
+                session.prompt(prompt, { source: 'rpc' }),
+                createAbortRace(active),
+              ])
             } finally {
               if (active.interrupting) {
                 session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
@@ -1644,7 +1666,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     active.abortRequested = true
     rejectPendingInterruptPrompts(active, createAbortError())
     if (!active.session) rejectActiveReady(active, createAbortError())
-    active.session?.abort().catch(() => {})
+    active.session?.abort().catch(err => console.error('[Pi adapter] session.abort() 失败:', err))
   }
 
   async sendQueuedMessage(
