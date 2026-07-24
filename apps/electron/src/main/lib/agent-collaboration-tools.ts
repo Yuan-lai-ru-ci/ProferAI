@@ -678,31 +678,6 @@ function startDelegation(
   delegations.set(delegationId, record)
   pruneFinishedDelegations()
 
-  // 确保父会话已脱离草稿状态，再发送子 Agent 的 external_run_started。
-  if (parent?.draft) {
-    updateAgentSessionMeta(parent.id, { draft: false })
-  }
-
-  // 立即通过 eventBus 发送 external_run_started，确保侧边栏在子 Agent 启动时就显示。
-  // 事件发到父会话 sessionId，利用父会话已注册的 webContents 将 IPC 推送到前端。
-  // 前端 activateExternalAgentRun 会根据 event.sessionId（子会话 ID）来 upsert 子会话。
-  if (_eventBusRef) {
-    _eventBusRef.emit(ctx.sessionId, {
-      kind: 'profer_event',
-      event: {
-        type: 'external_run_started',
-        source: 'delegation',
-        sessionId: child.id,
-        parentSessionId: ctx.sessionId,
-        title,
-        workspaceId,
-        modelId: effectiveModelId,
-        startedAt: record.startedAt,
-        session: getAgentSessionMeta(child.id),
-      },
-    })
-  }
-
   const prompt = buildDelegationPrompt({
     parentSessionId: ctx.sessionId,
     delegationId,
