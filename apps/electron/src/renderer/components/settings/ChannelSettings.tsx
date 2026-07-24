@@ -11,7 +11,7 @@ import { Plus, Pencil, Trash2, Server, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@profer/shared'
-import type { Channel } from '@profer/shared'
+import type { Channel, ProviderType } from '@profer/shared'
 import { getChannelLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
@@ -381,7 +381,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
 // ===== Agent Core 兼容性标签 =====
 
 function AgentCoreChips({ provider }: { provider: string }): React.ReactElement {
-  const supportsClaude = isAgentCompatibleProvider(provider)
+  const supportsClaude = isAgentCompatibleProvider(provider as ProviderType)
 
   return (
     <span className="flex items-center gap-1 shrink-0">
