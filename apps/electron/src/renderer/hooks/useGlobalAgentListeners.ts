@@ -998,14 +998,7 @@ export function useGlobalAgentListeners(): void {
           if (!current || (!current.running && !current.backgroundWaiting)) {
             return prev
           }
-          // 只在两个事件都带有 startedAt 且当前明确属于更新一轮时，才拒绝旧完成事件。
-          // 部分 headless/委派完成路径历史上会遗漏 startedAt；把它当作旧事件会使
-          // STREAM_COMPLETE 永远无法落到 UI，随后任意 SDK 事件便会留下永久 Running。
-          if (
-            current.startedAt != null
-            && data.startedAt != null
-            && current.startedAt > data.startedAt
-          ) {
+          if (current.startedAt != null && (data.startedAt == null || current.startedAt > data.startedAt)) {
             return prev
           }
           acceptedCompletion = true
