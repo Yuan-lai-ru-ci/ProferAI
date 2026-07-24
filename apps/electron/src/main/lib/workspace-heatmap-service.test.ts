@@ -25,6 +25,6 @@ describe('工作区热力图 Token 统计', () => {
   })
 
   test('升级缓存版本以使旧统计口径自动失效', () => {
-    expect(CACHE_VERSION).toBe(3)
+    expect(CACHE_VERSION).toBe(4)
   })
 })
