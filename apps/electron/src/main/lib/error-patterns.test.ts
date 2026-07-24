@@ -16,6 +16,8 @@ describe('isTransientNetworkError', () => {
     'network error',
     'stream closed prematurely',
     'premature close',
+    'peer closed connection',
+    'incomplete chunked read',
   ])('Given 已知瞬时网络错误 "%s" Then 判定为可重试', (msg) => {
     expect(isTransientNetworkError(msg)).toBe(true)
   })

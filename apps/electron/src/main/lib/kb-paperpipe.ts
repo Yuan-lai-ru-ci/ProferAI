@@ -647,7 +647,7 @@ async function localLLMSearch(query: string, topK: number): Promise<KBSearchResu
   scored.sort((a, b) => b.kwScore - a.kwScore)
 
   // 完全无关键词命中 → 回退关键词
-  if (scored[0].kwScore === 0) return localKeywordSearch(query, topK)
+  if (scored[0]?.kwScore === 0) return localKeywordSearch(query, topK)
 
   const candidates = scored.slice(0, MAX_LLM_CANDIDATES)
 
@@ -728,11 +728,11 @@ async function localLLMSearch(query: string, topK: number): Promise<KBSearchResu
     // 映射回实际结果
     const results: KBSearchResult[] = []
     for (const item of indices.slice(0, topK)) {
-      if (item.index >= 0 && item.index < candidates.length) {
-        const c = candidates[item.index]
+      const candidate = candidates[item.index]
+      if (item.index >= 0 && candidate) {
         results.push({
-          chunk: c.chunk,
-          paper: c.paper,
+          chunk: candidate.chunk,
+          paper: candidate.paper,
           score: Math.min(1, Math.max(0, item.score)),
         })
       }

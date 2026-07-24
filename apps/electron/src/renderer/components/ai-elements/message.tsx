@@ -38,6 +38,9 @@ import { LoadingIndicator } from '@/components/ui/loading-indicator'
 import { CodeBlock, MermaidBlock } from '@profer/ui'
 import { detectLanguage } from '@profer/core'
 import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
+import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { useOpenPreview } from '@/components/diff/preview-opener'
+import { useStore } from 'jotai'
 import type { HTMLAttributes, ComponentProps, ReactNode } from 'react'
 import type { FileAttachment } from '@profer/shared'
 
@@ -372,6 +375,18 @@ export function BasePathsProvider({ basePaths, children }: { basePaths?: string[
   return <BasePathsContext.Provider value={basePaths}>{children}</BasePathsContext.Provider>
 }
 
+/**
+ * 本轮「文件名 → 绝对路径」映射上下文 — 由 AssistantTurnRenderer 提供，作用域为单个 turn。
+ * 正文里的内联文件引用通常只有裸文件名（如 `user-profile.md`）；命中本轮实际触及文件的
+ * 映射时，MarkdownInlineCode 会补全绝对路径，让它与底部文件 chip 走同一条可靠解析链路。
+ */
+const TurnFileMapContext = React.createContext<Map<string, string> | undefined>(undefined)
+
+/** 提供本轮文件名→绝对路径映射给所有内嵌的 MessageResponse */
+export function TurnFileMapProvider({ map, children }: { map?: Map<string, string>; children: React.ReactNode }): React.ReactElement {
+  return <TurnFileMapContext.Provider value={map}>{children}</TurnFileMapContext.Provider>
+}
+
 interface MessageResponseProps {
   /** Markdown 内容 */
   children: string
@@ -392,9 +407,26 @@ const REHYPE_PLUGINS: NonNullable<React.ComponentProps<typeof Markdown>['rehypeP
   [rehypeKatex, { strict: 'ignore' }],
 ]
 
-/** 允许 mention:// 协议通过 URL 清洗（react-markdown 默认只放行 http/https） */
+/**
+ * 仅将本机 file:// URL 转为系统路径；拒绝 file://server/share 等远程主机形式。
+ * 路径最终仍由主进程的 FileAccessOptions 校验，不在 renderer 放宽文件访问边界。
+ */
+export function localFileUrlToPath(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'file:' || (parsed.hostname && parsed.hostname !== 'localhost')) return null
+    const pathname = decodeURIComponent(parsed.pathname)
+    if (!pathname) return null
+    // file:///C:/... 在 Windows URL 规范里有一个额外的前导斜杠。
+    return /^\/[A-Za-z]:\//.test(pathname) ? pathname.slice(1) : pathname
+  } catch {
+    return null
+  }
+}
+
+/** 允许 mention:// 和安全的本机 file:// 协议通过 URL 清洗。 */
 function mentionUrlTransform(url: string): string {
-  if (url.startsWith('mention://')) return url
+  if (url.startsWith('mention://') || localFileUrlToPath(url)) return url
   return defaultUrlTransform(url)
 }
 
@@ -409,6 +441,10 @@ const MarkdownLink = React.memo(function MarkdownLink({
   children: linkChildren,
   ...linkProps
 }: React.AnchorHTMLAttributes<HTMLAnchorElement>): React.ReactElement {
+  const ctxBasePaths = React.useContext(BasePathsContext)
+  const store = useStore()
+  const openPreview = useOpenPreview()
+
   // mention:// 协议 → 渲染为 MentionChip
   if (href) {
     const mentionMatch = MENTION_URL_RE.exec(href)
@@ -426,10 +462,24 @@ const MarkdownLink = React.memo(function MarkdownLink({
         if (!href) return
         if (href.startsWith('http://') || href.startsWith('https://')) {
           window.electronAPI.openExternal(href)
-        } else if (href.startsWith('file:///')) {
-          // file:// 协议 → 用系统默认应用打开
-          const filePath = href.replace(/^file:\/\/\//, process.platform === 'win32' ? '' : '/')
-          window.electronAPI.systemOpenFile(filePath).catch(() => {})
+          return
+        }
+
+        const filePathFromUrl = localFileUrlToPath(href)
+        if (filePathFromUrl) {
+          // Markdown 的 [标题](file://...) 链接也走统一预览路径，避免跳到空白页面。
+          // 主进程会用 sessionId 与 FileAccessOptions 保持既有安全校验。
+          const sessionId = store.get(currentAgentSessionIdAtom)
+          if (sessionId) {
+            openPreview(sessionId, {
+              filePath: filePathFromUrl,
+              previewOnly: true,
+              readOnly: true,
+              basePaths: ctxBasePaths,
+            })
+          } else {
+            window.electronAPI.systemOpenFile(filePathFromUrl).catch(() => {})
+          }
         } else if (/^[A-Za-z]:[\\/]/.test(href)) {
           // Windows 绝对路径
           window.electronAPI.systemOpenFile(href).catch(() => {})
@@ -513,6 +563,8 @@ const MarkdownInlineCode = React.memo(function MarkdownInlineCode({
 }: React.HTMLAttributes<HTMLElement> & { basePath?: string; basePaths?: string[] }): React.ReactElement {
   // 兜底：从 context 读附加 basePaths（避免穿透 SDKMessageRenderer / ContentBlock 等中间层）
   const ctxBasePaths = React.useContext(BasePathsContext)
+  // 本轮实际触及的「文件名 → 绝对路径」映射，解决正文里裸文件名无法可靠定位的问题。
+  const turnFileMap = React.useContext(TurnFileMapContext)
   if (codeClassName) {
     return <code className={codeClassName} {...codeProps}>{codeChildren}</code>
   }
@@ -533,7 +585,21 @@ const MarkdownInlineCode = React.memo(function MarkdownInlineCode({
       return <FilePathChip filePath={text.trim()} basePaths={merged.length > 0 ? merged : undefined} />
     }
     if (merged.length > 0 && isRelativeFilePath(text)) {
-      return <FilePathChip filePath={text.trim()} basePaths={merged} />
+      // 裸文件名命中本轮工具实际访问过的路径时，补成绝对路径；同名冲突会从映射中移除，
+      // 因此未命中时继续走既有 basePaths 降级解析，不会误打开别的同名文件。
+      const trimmed = text.trim()
+      if (turnFileMap && turnFileMap.size > 0) {
+        const lineColMatch = trimmed.match(/^(.+?)(:\d+(?::\d+)?)$/)
+        const hasLineCol = !!lineColMatch && !lineColMatch[1]!.endsWith(':')
+        const pathPart = hasLineCol ? lineColMatch![1]! : trimmed
+        const suffix = hasLineCol ? lineColMatch![2]! : ''
+        const baseName = pathPart.split(/[\\/]/).pop() || pathPart
+        const absolutePath = turnFileMap.get(baseName)
+        if (absolutePath) {
+          return <FilePathChip filePath={absolutePath + suffix} basePaths={merged} />
+        }
+      }
+      return <FilePathChip filePath={trimmed} basePaths={merged} />
     }
   }
 

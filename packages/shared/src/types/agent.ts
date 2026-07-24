@@ -657,6 +657,8 @@ export interface AgentSessionMeta {
   agentRuntime?: AgentRuntime
   /** ChatGPT Codex Fast Mode；仅 Pi + Codex 的受支持模型实际生效。 */
   codexFastMode?: boolean
+  /** ChatGPT Codex 推理档位；跨会话持久化（off/low/medium/high/xhigh）。null/undefined 表示未设置，使用全局默认值。 */
+  openAIThinkingLevel?: AgentThinkingLevel | null
   /** 所属工作区 ID */
   workspaceId?: string
   /** 是否置顶 */
@@ -1703,6 +1705,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
   /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效）。 */
   UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
+  /** 切换指定会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
+  UPDATE_SESSION_OPENAI_THINKING: 'agent:update-session-openai-thinking',
   /** 切换指定空闲会话的 Agent runtime；跨 runtime 时清除 SDK 会话恢复 ID。 */
   UPDATE_SESSION_AGENT_RUNTIME: 'agent:update-session-agent-runtime',
 

@@ -15,6 +15,7 @@
         "@types/react": "^18.3.0",
         "@types/react-dom": "^18.3.0",
         "dompurify": "^3.4.2",
+        "jszip": "^3.10.1",
         "rcedit": "^5.0.2",
         "typescript": "^5.0.0",
       },
@@ -38,7 +39,7 @@
     },
     "apps/electron": {
       "name": "@profer/electron",
-      "version": "0.14.69",
+      "version": "0.14.70",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.201",
         "@anthropic-ai/sdk": "^0.93.0",

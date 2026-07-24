@@ -51,6 +51,7 @@ import {
 } from '../agent-runtime-guards'
 import { createProferAgentsFilesOverride } from './pi-resource-loader-overrides'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
+import { createCodexRequestSettingsExtension } from './pi-codex-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -1307,8 +1308,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
         agentsFilesOverride: createProferAgentsFilesOverride(),
-        ...(input.codexFastMode && input.provider === 'openai-codex' && {
-          extensionFactories: [createCodexFastModeExtension()],
+        ...(input.provider === 'openai-codex' && {
+          extensionFactories: [
+            createCodexRequestSettingsExtension({
+              thinkingLevel: input.thinkingLevel ?? 'off',
+              fastMode: input.codexFastMode,
+            }),
+          ],
         }),
         systemPromptOverride: () => input.systemPrompt,
       })
