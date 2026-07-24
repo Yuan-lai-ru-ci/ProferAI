@@ -4,7 +4,7 @@
  * 不依赖 Electron 和磁盘服务，便于单元测试。
  */
 
-import type { AgentSessionMeta, ProferPermissionMode } from '@profer/shared'
+import type { AgentRuntime, AgentSessionMeta, ProferPermissionMode } from '@profer/shared'
 
 export type AgentDelegationRole = 'explore' | 'research' | 'implement' | 'review' | 'custom'
 
@@ -40,7 +40,11 @@ export interface RecoveredDelegationState {
 export function resolveDelegationPermissionMode(
   parentMode: ProferPermissionMode | undefined,
   requestedMode: ProferPermissionMode | undefined,
+  agentRuntime?: AgentRuntime,
 ): ProferPermissionMode {
+  // Pi 子会话目前不支持 Plan 模式下的完整工具集，固定直接执行。
+  if (agentRuntime === 'pi') return 'bypassPermissions'
+
   const parent = parentMode ?? 'auto'
   const requested = requestedMode ?? parent
   return PERMISSION_RANK[requested] <= PERMISSION_RANK[parent] ? requested : parent

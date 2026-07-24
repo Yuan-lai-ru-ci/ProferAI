@@ -1,15 +1,13 @@
 /**
  * ChannelSettings - 渠道配置页
  *
- * 分为两个区块：
- * 1. 渠道管理 — 所有渠道列表 + 添加/编辑/删除（渠道同时用于 Chat 和 Agent）
- * 2. Agent 供应商 — 从已启用的 Anthropic 兼容渠道（Anthropic / DeepSeek / Kimi / MiniMax）中
- *    通过 Switch 开关启用多个 Agent 供应商
+ * 管理所有渠道的添加、编辑、删除与启用状态；每个渠道直接展示可用的 Agent Core。
+ * Chat 与 Agent 视觉上统一为一个列表，Agent 兼容性通过内联标签展示。
  */
 
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
-import { Plus, Pencil, Trash2, Server, Lock, RefreshCw } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@profer/shared'
@@ -58,8 +56,7 @@ export function ChannelSettings(): React.ReactElement {
 
   const [refreshingCaps, setRefreshingCaps] = React.useState(false)
 
-  // 加载账号能力（商业模式 + 自配权限 + 账号类型）。
-  // force=true 时先拉一次服务端刷新，让管理员刚开通的自配权限即时生效，无需用户重新登录。
+  // 加载账号能力（商业模式 + 自配权限）
   const loadCaps = React.useCallback(async (force: boolean) => {
     try {
       const caps = await window.electronAPI.getAccountCapabilities(force)
@@ -73,14 +70,12 @@ export function ChannelSettings(): React.ReactElement {
     }
   }, [])
 
-  // 首次读本地能力；若显示被锁（可能刚被管理员解限），自动强刷一次服务端纠正
   React.useEffect(() => {
     loadCaps(false).then((caps) => {
       if (caps && caps.commercialMode && !caps.canSelfConfig) loadCaps(true)
     })
   }, [loadCaps])
 
-  // 手动刷新权限（解限后无需重登即可生效）
   const handleRefreshCaps = React.useCallback(async () => {
     setRefreshingCaps(true)
     try {
@@ -95,7 +90,7 @@ export function ChannelSettings(): React.ReactElement {
     try {
       const list = await window.electronAPI.listChannels()
       setChannels(list)
-      setGlobalChannels(list) // 同步到全局缓存
+      setGlobalChannels(list)
       return list
     } catch (error) {
       console.error('[渠道设置] 加载渠道列表失败:', error)
@@ -109,7 +104,25 @@ export function ChannelSettings(): React.ReactElement {
     loadChannels()
   }, [loadChannels])
 
-  // 商业模式且无自配权限时：不允许进入创建/编辑视图，自动退回列表
+  // 渠道启用/兼容性变化 → 自动同步 Agent 渠道列表
+  // 当渠道启用且 provider 兼容 Agent 时，自动纳入 agentChannelIds；
+  // 当渠道关闭或不兼容时，自动从 agentChannelIds 移除。
+  React.useEffect(() => {
+    if (loading) return
+    const derivedIds = channels
+      .filter((c) => c.enabled && isAgentCompatibleProvider(c.provider))
+      .map((c) => c.id)
+    const currentIds = agentChannelIdsRef.current
+    const unchanged =
+      derivedIds.length === currentIds.length &&
+      derivedIds.every((id, index) => id === currentIds[index])
+    if (unchanged) return
+    agentChannelIdsRef.current = derivedIds
+    setAgentChannelIds(derivedIds)
+    window.electronAPI.updateSettings({ agentChannelIds: derivedIds }).catch(console.error)
+  }, [channels, loading, setAgentChannelIds])
+
+  // 商业模式且无自配权限时：不允许进入创建/编辑视图
   React.useEffect(() => {
     const locked = commercialMode && !canSelfConfig
     if (!locked || viewMode === 'list') return
@@ -151,23 +164,20 @@ export function ChannelSettings(): React.ReactElement {
     await window.electronAPI.updateSettings(updates).catch(console.error)
   }, [setAgentChannelIds, setAgentChannelId, setAgentModelId])
 
-  /** 删除渠道（通过弹窗确认） */
+  /** 删除渠道 */
   const handleDeleteRequest = (channel: Channel): void => {
     setDeleteTarget(channel)
   }
 
-  /** 确认删除 */
   const handleDeleteConfirm = async (): Promise<void> => {
     if (!deleteTarget) return
     const target = deleteTarget
     try {
       await window.electronAPI.deleteChannel(target.id)
 
-      // 从 Agent 渠道列表中移除
       const newIds = agentChannelIds.filter((id) => id !== target.id)
       setAgentChannelIds(newIds)
 
-      // 如果删除的是当前选中的 Agent 渠道，清空选择
       if (agentChannelId === target.id) {
         setAgentChannelId(null)
         setAgentModelId(null)
@@ -185,7 +195,7 @@ export function ChannelSettings(): React.ReactElement {
     }
   }
 
-  /** 切换渠道启用状态 */
+  /** 切换渠道启用状态 — 同时自动同步 Agent 兼容性 */
   const handleToggle = async (channel: Channel): Promise<void> => {
     try {
       const savedChannel = await window.electronAPI.updateChannel(channel.id, { enabled: !channel.enabled })
@@ -193,34 +203,10 @@ export function ChannelSettings(): React.ReactElement {
         savedChannel,
         savedChannel.enabled && isAgentCompatibleProvider(savedChannel.provider),
       )
-
       await loadChannels()
     } catch (error) {
       console.error('[渠道设置] 切换渠道状态失败:', error)
     }
-  }
-
-  /** 切换 Agent 供应商开关 */
-  const handleToggleAgentProvider = async (channelId: string, enabled: boolean): Promise<void> => {
-    const newIds = enabled
-      ? [...agentChannelIds, channelId]
-      : agentChannelIds.filter((id) => id !== channelId)
-
-    setAgentChannelIds(newIds)
-
-    // 如果关闭的是当前选中的渠道，清空选择
-    if (!enabled && agentChannelId === channelId) {
-      setAgentChannelId(null)
-      setAgentModelId(null)
-      await window.electronAPI.updateSettings({
-        agentChannelIds: newIds,
-        agentChannelId: undefined,
-        agentModelId: undefined,
-      }).catch(console.error)
-      return
-    }
-
-    await window.electronAPI.updateSettings({ agentChannelIds: newIds }).catch(console.error)
   }
 
   /** 表单保存回调 */
@@ -236,7 +222,7 @@ export function ChannelSettings(): React.ReactElement {
     setEditingChannel(null)
   }
 
-  // 表单视图 — 无自配权限的商业模式下禁止访问
+  // 表单视图
   if ((viewMode === 'create' || viewMode === 'edit') && !(commercialMode && !canSelfConfig)) {
     return (
       <ChannelForm
@@ -248,18 +234,17 @@ export function ChannelSettings(): React.ReactElement {
     )
   }
 
-  // Agent 兼容渠道（已启用）：Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax
-  const agentCapableChannels = channels.filter(
-    (c) => isAgentCompatibleProvider(c.provider) && c.enabled
-  )
-
   // 列表视图
   return (
     <div className="space-y-8">
-      {/* 区块一：模型配置 */}
+      {/* 模型配置（Chat 与 Agent 统一） */}
       <SettingsSection
         title="模型配置"
-        description={commercialMode && !canSelfConfig ? '渠道由团队服务器统一管理，无需手动配置' : '管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式'}
+        description={
+          commercialMode && !canSelfConfig
+            ? '渠道由团队服务器统一管理，无需手动配置'
+            : '管理 AI 供应商连接，配置 API Key 和可用模型。支持 Agent 的渠道会显示对应标签'
+        }
         action={
           (commercialMode && !canSelfConfig) ? null : (
             <Button size="sm" onClick={() => setViewMode('create')}>
@@ -312,33 +297,6 @@ export function ChannelSettings(): React.ReactElement {
         )}
       </SettingsSection>
 
-      {/* 区块二：Agent 供应商 */}
-      <SettingsSection
-        title="Agent 供应商"
-        description="启用 Agent 模式可用的供应商，支持同时开启多个渠道，在 Agent 模式下可直接切换"
-      >
-        {loading ? (
-          <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
-        ) : agentCapableChannels.length === 0 ? (
-          <SettingsCard divided={false}>
-            <div className="text-sm text-muted-foreground py-8 text-center">
-              暂无可用的 Anthropic 兼容渠道，请先在上方添加 Anthropic / DeepSeek / Kimi / MiniMax 渠道并启用
-            </div>
-          </SettingsCard>
-        ) : (
-          <SettingsCard>
-            {agentCapableChannels.map((channel) => (
-              <AgentProviderRow
-                key={channel.id}
-                channel={channel}
-                enabled={agentChannelIds.includes(channel.id)}
-                onToggle={(enabled) => handleToggleAgentProvider(channel.id, enabled)}
-              />
-            ))}
-          </SettingsCard>
-        )}
-      </SettingsSection>
-
       {/* 删除确认弹窗 */}
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <AlertDialogContent>
@@ -375,7 +333,6 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
-    isAgentCompatibleProvider(channel.provider) ? '可用于 Agent' : undefined,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -387,9 +344,11 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
       description={description}
       className="group"
     >
-      <div className="flex items-center gap-2">
-        {/* 官方渠道：不显示编辑/删除（key 由服务端统一管理） */}
-        {/* 自建渠道：自配用户可编辑/删除 */}
+      <div className="flex items-center gap-2.5">
+        {/* Agent Core 兼容性标签 */}
+        <AgentCoreChips provider={channel.provider} />
+
+        {/* 操作按钮 */}
         {!isOfficial && (!commercialMode || canSelfConfig) && (
           <>
             <button
@@ -419,33 +378,21 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
   )
 }
 
-// ===== Agent 供应商行子组件 =====
+// ===== Agent Core 兼容性标签 =====
 
-interface AgentProviderRowProps {
-  channel: Channel
-  enabled: boolean
-  onToggle: (enabled: boolean) => void
-}
-
-function AgentProviderRow({ channel, enabled, onToggle }: AgentProviderRowProps): React.ReactElement {
-  const enabledCount = channel.models.filter((m) => m.enabled).length
-  const description = [
-    PROVIDER_LABELS[channel.provider],
-    enabledCount > 0 ? `${enabledCount} 个模型可用` : undefined,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+function AgentCoreChips({ provider }: { provider: string }): React.ReactElement {
+  const supportsClaude = isAgentCompatibleProvider(provider)
 
   return (
-    <SettingsRow
-      label={channel.name}
-      icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
-      description={description}
-    >
-      <Switch
-        checked={enabled}
-        onCheckedChange={onToggle}
-      />
-    </SettingsRow>
+    <span className="flex items-center gap-1 shrink-0">
+      {supportsClaude && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+          Claude
+        </span>
+      )}
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+        Pi
+      </span>
+    </span>
   )
 }

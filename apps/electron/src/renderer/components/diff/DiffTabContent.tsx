@@ -20,6 +20,7 @@ import { usePreviewQuotedSelection } from '@/hooks/usePreviewQuotedSelection'
 import { initShortcutRegistry } from '@/lib/shortcut-registry'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
+import { getPreviewCandidateBasePaths, isAbsoluteFilePath } from './preview-open-path'
 import { PreviewFindBar } from './PreviewFindBar'
 import { MarkdownToc } from './MarkdownToc'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -289,8 +290,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   const fileAccess = React.useMemo(() => ({
     sessionId,
-    candidateBasePaths: basePaths,
-  }), [sessionId, basePaths])
+    // 历史工具调用常只保存相对 filePath；补入会话 CWD 才能在重开后解析真实文件。
+    // 绝对路径不追加该回退，避免失效绝对路径误命中会话目录中的同名文件。
+    candidateBasePaths: getPreviewCandidateBasePaths(
+      basePaths,
+      isAbsoluteFilePath(filePath) ? undefined : dirPath,
+    ),
+  }), [sessionId, basePaths, dirPath, filePath])
 
   const contentCacheScope = React.useMemo(() => JSON.stringify({
     dirPath,

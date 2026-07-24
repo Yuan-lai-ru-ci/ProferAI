@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, Library } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, Library, ChevronDown } from 'lucide-react'
 import type { KnowledgeReference } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
@@ -427,6 +427,93 @@ function DisplayOptionsPopover({
               className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
             />
           </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ===== Codex 推理档位选择器（GPT-5.x 跨会话记忆） =====
+
+const CODEX_THINKING_LABELS: Record<string, string> = {
+  off: '关闭推理',
+  minimal: '最小',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '最高',
+}
+
+function CodexThinkingSelector({
+  sessionId,
+  currentLevel,
+  disabled,
+}: {
+  sessionId: string
+  currentLevel: string | null
+  disabled: boolean
+}): React.ReactElement {
+  const [open, setOpen] = React.useState(false)
+  const displayLabel = currentLevel && CODEX_THINKING_LABELS[currentLevel]
+    ? CODEX_THINKING_LABELS[currentLevel]
+    : '推理'
+
+  const handleSelect = (level: string | null) => {
+    setOpen(false)
+    window.electronAPI.updateSessionOpenAIThinkingLevel(sessionId, level as import('@profer/shared').AgentThinkingLevel | null)
+      .then(() => toast.success(level === null ? '已恢复全局默认推理档位' : `推理档位已设为「${CODEX_THINKING_LABELS[level] ?? level}」`))
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : '切换推理档位失败'))
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={disabled}
+              className={cn(
+                'h-[32px] gap-1 rounded-lg text-foreground/60 hover:text-foreground text-xs font-medium',
+                currentLevel && currentLevel !== 'off' && 'text-amber-500 hover:text-amber-400',
+              )}
+            >
+              <Brain className="size-3.5" />
+              <span>{displayLabel}</span>
+              <ChevronDown className="size-3 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top"><p>推理档位：{displayLabel}</p></TooltipContent>
+      </Tooltip>
+      <PopoverContent className="w-36 p-1" align="start" side="top">
+        <div className="flex flex-col">
+          {[
+            { level: null, label: '全局默认' },
+            { level: 'off', label: '关闭推理' },
+            { level: 'minimal', label: '最小' },
+            { level: 'low', label: '低' },
+            { level: 'medium', label: '中' },
+            { level: 'high', label: '高' },
+            { level: 'xhigh', label: '最高' },
+          ].map(({ level, label }) => (
+            <button
+              key={level ?? '__default__'}
+              type="button"
+              onClick={() => handleSelect(level)}
+              className={cn(
+                'flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors hover:bg-accent',
+                (currentLevel ?? null) === level && 'bg-accent font-medium',
+              )}
+            >
+              <span className="w-4 text-center">
+                {(currentLevel ?? null) === level ? '✓' : ''}
+              </span>
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
       </PopoverContent>
     </Popover>
@@ -2526,6 +2613,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               <TooltipContent side="top"><p>{sessionMeta.codexFastMode ? '标准模式' : '快速模式'}</p></TooltipContent>
             </Tooltip>
           ),
+        },
+        {
+          key: 'codex-thinking-level',
+          node: <CodexThinkingSelector sessionId={sessionId} currentLevel={sessionMeta.openAIThinkingLevel ?? null} disabled={streaming || backgroundWaiting} />,
         }]
       : []),
     {
