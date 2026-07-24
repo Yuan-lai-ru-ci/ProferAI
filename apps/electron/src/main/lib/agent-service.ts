@@ -101,15 +101,7 @@ function getMainRendererWebContents(): WebContents | null {
 // ===== EventBus IPC 转发中间件 =====
 
 eventBus.use((sessionId, payload, next) => {
-  let wc = sessionWebContents.get(sessionId)
-  // 子会话的流式消息需要回退到父会话的 webContents 转发。
-  if (!wc || wc.isDestroyed()) {
-    const meta = getAgentSessionMeta(sessionId)
-    const parentId = meta?.parentSessionId
-    if (parentId) {
-      wc = sessionWebContents.get(parentId)
-    }
-  }
+  const wc = sessionWebContents.get(sessionId)
   if (wc && !wc.isDestroyed()) {
     try {
       wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload } as AgentStreamEvent)
