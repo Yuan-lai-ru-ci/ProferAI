@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ToolResultMessage, UserMessage } from '@earendil-works/pi-ai/compat'
-import type { SDKMessage } from '@profer/shared'
+import type { SDKMessage, SDKAssistantMessage } from '@profer/shared'
 import type { RuntimeGuardResultOverride } from '../agent-runtime-guards'
 import { isTransientNetworkError } from '../error-patterns'
 
