@@ -78,58 +78,27 @@ function tryRun(cmd, cwd = ROOT) {
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
   console.log(`  ${VERSION}`);
 
-  // 2. 推送服务端（失败不阻断打包）
-  console.log('\n[2/6] 推送服务端...');
-  let serverOk = false;
-  try {
-    const tmpTar = path.join(SERVER, 'server-rel.tar.gz');
-    runBash('tar -czf server-rel.tar.gz --exclude=node_modules --exclude=server-rel.tar.gz --exclude=.context .', SERVER);
-    await scp(tmpTar, '/tmp/server-rel.tar.gz');
-    // 先 cp 代码，npm install 放到 restart 前单独跑，给 120s 超时
-    await ssh('sudo mkdir -p /tmp/srv && sudo tar -xzf /tmp/server-rel.tar.gz -C /tmp/srv && sudo docker cp /tmp/srv/. proma-team:/app/ && sudo rm -rf /tmp/srv && echo CP_OK');
-    await ssh('sudo docker exec proma-team timeout 120 npm install --omit=dev 2>&1 || echo NPM_SKIPPED', 150000);
-    const extract = await ssh('sudo docker restart proma-team && echo OK');
-    console.log('  ' + (extract.includes('OK') ? '已推送' : extract.slice(0, 80)));
-    serverOk = true;
-  } catch (e) {
-    console.log('  ⚠ 服务端推送跳过: ' + (e.message || '').slice(0, 60));
-  }
-
-  // 3. 等容器就绪（仅服务端推送成功时）
-  if (serverOk) {
-    console.log('\n[3/6] 等待容器就绪...');
-    for (let i = 0; i < 5; i++) {
-      await new Promise(r => setTimeout(r, 2000));
-      const status = await ssh('sudo docker ps --filter name=proma-team --format "{{.Status}}"');
-      if (status.includes('healthy')) { console.log('  healthy'); break; }
-      if (status.includes('Up') && !status.includes('health')) { console.log('  running (no health check)'); break; }
-      if (i === 4) console.log('  ⚠ 容器未就绪，跳过');
-    }
-  } else {
-    console.log('\n[3/6] 等待容器就绪... ⏭ 跳过（未推送服务端）');
-  }
-
-  // 4. 完整构建 + 打包 Electron
-  console.log('\n[4/6] 打包 Electron...');
-  console.log('  [4a] build:main');
+  // 2. 完整构建 + 打包 Electron
+  console.log('\n[2/4] 打包 Electron...');
+  console.log('  [2a] build:main');
   run("npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='oss'", ELECTRON);
-  console.log('  [4b] build:preload');
+  console.log('  [2b] build:preload');
   run('npx esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron', ELECTRON);
-  console.log('  [4c] build:renderer (vite)');
+  console.log('  [2c] build:renderer (vite)');
   const viteOut = run('npx vite build', ELECTRON);
   console.log('    ' + (viteOut.match(/built in [\d.]+s/)?.[0] || 'OK'));
-  console.log('  [4d] build:cli');
+  console.log('  [2d] build:cli');
   run('bun run scripts/build-cli.ts', ELECTRON);
-  console.log('  [4e] build:resources');
+  console.log('  [2e] build:resources');
   run('bun run scripts/copy-resources.ts', ELECTRON);
-  console.log('  [4f] electron-builder --win --x64');
+  console.log('  [2f] electron-builder --win --x64');
   const ebOut = run('npx electron-builder --win --x64', ELECTRON);
   const fileMatch = ebOut.match(/file=(out[^\s]*\.exe)/);
   const installer = fileMatch ? fileMatch[1] : `out/Profer-Setup-${VERSION}.exe`;
   console.log('  ' + installer);
 
-  // 5. 推送自动更新 (通道一)
-  console.log('\n[5/6] 推送自动更新 (通道一: profer-updates)...');
+  // 3. 上传安装包 (通道一: 自动更新)
+  console.log('\n[3/4] 上传安装包 (通道一: profer-updates)...');
   const outDir = path.join(ELECTRON, 'out');
   const installerPath = path.join(outDir, `Profer-Setup-${VERSION}.exe`);
   const installerSize = fs.statSync(installerPath).size;
@@ -158,8 +127,8 @@ function tryRun(cmd, cwd = ROOT) {
   );
   console.log('  ' + (result.includes('OK') ? '已推送' : result.slice(0, 80)));
 
-  // 6. 更新 GitHub (通道二: 公开 AGPL 发布)
-  console.log('\n[6/6] 更新 GitHub (通道二: git tag + Release)...');
+  // 4. GitHub Release (通道二)
+  console.log('\n[4/4] GitHub Release (通道二)...');
   const assets = ['latest.yml', `Profer-Setup-${VERSION}.exe`, `Profer-Setup-${VERSION}.exe.blockmap`]
     .map(f => path.join(outDir, f)).filter(f => fs.existsSync(f));
 
