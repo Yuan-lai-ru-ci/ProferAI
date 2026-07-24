@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, Library, ChevronDown } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, Library } from 'lucide-react'
 import type { KnowledgeReference } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
@@ -181,18 +181,38 @@ function getUserTextFromSDKMessage(message: SDKMessage): string | null {
 
 // ===== 思考模式 Hover Popover =====
 
+interface OpenAIThinkingConfig {
+  sessionId: string
+  currentLevel: string | null
+  disabled: boolean
+}
+
 interface AgentThinkingPopoverProps {
   agentThinking: import('@profer/shared').ThinkingConfig | undefined
   onToggle: () => void
+  /** Pi + Codex 推理模型时，统一用同一个脑图标控制会话级 reasoning.effort。 */
+  openAIConfig?: OpenAIThinkingConfig
 }
 
-function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverProps): React.ReactElement {
+const OPENAI_THINKING_LABELS: Record<string, string> = {
+  off: '关闭推理',
+  minimal: '最小',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '最高',
+}
+
+function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig }: AgentThinkingPopoverProps): React.ReactElement {
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
   const [effort, setEffort] = useAtom(agentEffortAtom)
   const [open, setOpen] = React.useState(false)
   const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const isEnabled = agentThinking?.type === 'adaptive'
+  const isOpenAIReasoning = Boolean(openAIConfig)
+  const isEnabled = isOpenAIReasoning
+    ? openAIConfig?.currentLevel !== 'off'
+    : agentThinking?.type === 'adaptive'
 
   const handleEffortChange = React.useCallback((v: string) => {
     const value = v as import('@profer/shared').AgentEffort
@@ -215,6 +235,17 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
     }
   }, [])
 
+  const handleOpenAILevelChange = (level: string | null): void => {
+    if (!openAIConfig) return
+    setOpen(false)
+    window.electronAPI.updateSessionOpenAIThinkingLevel(
+      openAIConfig.sessionId,
+      level as import('@profer/shared').AgentThinkingLevel | null,
+    )
+      .then(() => toast.success(level === null ? '已恢复全局默认推理档位' : `推理档位已设为「${OPENAI_THINKING_LABELS[level] ?? level}」`))
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : '切换推理档位失败'))
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
@@ -223,12 +254,14 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
             type="button"
             variant="ghost"
             size="icon"
+            disabled={openAIConfig?.disabled}
             className={cn(
               'size-[36px] rounded-full',
-              isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
+              isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground',
             )}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={onToggle}
+            onClick={() => isOpenAIReasoning ? setOpen((value) => !value) : onToggle()}
+            aria-label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
             aria-expanded={open}
           >
             <Brain className="size-5" />
@@ -239,51 +272,70 @@ function AgentThinkingPopover({ agentThinking, onToggle }: AgentThinkingPopoverP
         side="top"
         align="center"
         sideOffset={8}
-        className="w-auto min-w-[180px] p-2 px-2.5"
+        className={cn('p-2 px-2.5', isOpenAIReasoning ? 'w-36' : 'w-auto min-w-[180px]')}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-xs text-foreground/70">思考模式</span>
-            <Switch
-              checked={isEnabled}
-              onCheckedChange={onToggle}
-              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-            />
-          </div>
-          <div className="h-px bg-border" />
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-xs text-foreground/70">展开思考</span>
-            <Switch
-              checked={thinkingExpanded}
-              onCheckedChange={setThinkingExpanded}
-              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-            />
-          </div>
-          <div className="h-px bg-border" />
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-foreground/70">思考强度</span>
-            <div className="flex gap-0.5">
-              {(['low', 'medium', 'high', 'max'] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => handleEffortChange(v)}
-                  className={cn(
-                    'px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors',
-                    (effort ?? 'high') === v
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-foreground/50 hover:bg-muted hover:text-foreground/70',
-                  )}
-                >
-                  {v === 'low' ? '低' : v === 'medium' ? '中' : v === 'high' ? '高' : '最大'}
-                </button>
-              ))}
+        {isOpenAIReasoning ? (
+          <div className="flex flex-col">
+            <div className="px-2 py-1 text-xs text-muted-foreground">推理档位</div>
+            {[
+              { level: null, label: '全局默认' },
+              { level: 'off', label: '关闭推理' },
+              { level: 'minimal', label: '最小' },
+              { level: 'low', label: '低' },
+              { level: 'medium', label: '中' },
+              { level: 'high', label: '高' },
+              { level: 'xhigh', label: '最高' },
+            ].map(({ level, label }) => (
+              <button
+                key={level ?? '__default__'}
+                type="button"
+                onClick={() => handleOpenAILevelChange(level)}
+                className={cn(
+                  'flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent',
+                  (openAIConfig?.currentLevel ?? null) === level && 'bg-accent font-medium',
+                )}
+              >
+                <span className="w-4 text-center">{(openAIConfig?.currentLevel ?? null) === level ? '✓' : ''}</span>
+                <span>{label}</span>
+              </button>
+            ))}
+            <div className="my-1 h-px bg-border" />
+            <div className="flex items-center justify-between gap-4 px-2 py-1">
+              <span className="text-xs text-foreground/70">展开思考</span>
+              <Switch
+                checked={thinkingExpanded}
+                onCheckedChange={setThinkingExpanded}
+                className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+              />
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-xs text-foreground/70">思考模式</span>
+              <Switch checked={isEnabled} onCheckedChange={onToggle} className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3" />
+            </div>
+            <div className="h-px bg-border" />
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-xs text-foreground/70">展开思考</span>
+              <Switch checked={thinkingExpanded} onCheckedChange={setThinkingExpanded} className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3" />
+            </div>
+            <div className="h-px bg-border" />
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-foreground/70">思考强度</span>
+              <div className="flex gap-0.5">
+                {(['low', 'medium', 'high', 'max'] as const).map((v) => (
+                  <button key={v} type="button" onClick={() => handleEffortChange(v)} className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors', (effort ?? 'high') === v ? 'bg-primary text-primary-foreground' : 'text-foreground/50 hover:bg-muted hover:text-foreground/70')}>
+                    {v === 'low' ? '低' : v === 'medium' ? '中' : v === 'high' ? '高' : '最大'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )
@@ -427,93 +479,6 @@ function DisplayOptionsPopover({
               className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
             />
           </div>
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-// ===== Codex 推理档位选择器（GPT-5.x 跨会话记忆） =====
-
-const CODEX_THINKING_LABELS: Record<string, string> = {
-  off: '关闭推理',
-  minimal: '最小',
-  low: '低',
-  medium: '中',
-  high: '高',
-  xhigh: '最高',
-}
-
-function CodexThinkingSelector({
-  sessionId,
-  currentLevel,
-  disabled,
-}: {
-  sessionId: string
-  currentLevel: string | null
-  disabled: boolean
-}): React.ReactElement {
-  const [open, setOpen] = React.useState(false)
-  const displayLabel = currentLevel && CODEX_THINKING_LABELS[currentLevel]
-    ? CODEX_THINKING_LABELS[currentLevel]
-    : '推理'
-
-  const handleSelect = (level: string | null) => {
-    setOpen(false)
-    window.electronAPI.updateSessionOpenAIThinkingLevel(sessionId, level as import('@profer/shared').AgentThinkingLevel | null)
-      .then(() => toast.success(level === null ? '已恢复全局默认推理档位' : `推理档位已设为「${CODEX_THINKING_LABELS[level] ?? level}」`))
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : '切换推理档位失败'))
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={disabled}
-              className={cn(
-                'h-[32px] gap-1 rounded-lg text-foreground/60 hover:text-foreground text-xs font-medium',
-                currentLevel && currentLevel !== 'off' && 'text-amber-500 hover:text-amber-400',
-              )}
-            >
-              <Brain className="size-3.5" />
-              <span>{displayLabel}</span>
-              <ChevronDown className="size-3 opacity-50" />
-            </Button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top"><p>推理档位：{displayLabel}</p></TooltipContent>
-      </Tooltip>
-      <PopoverContent className="w-36 p-1" align="start" side="top">
-        <div className="flex flex-col">
-          {[
-            { level: null, label: '全局默认' },
-            { level: 'off', label: '关闭推理' },
-            { level: 'minimal', label: '最小' },
-            { level: 'low', label: '低' },
-            { level: 'medium', label: '中' },
-            { level: 'high', label: '高' },
-            { level: 'xhigh', label: '最高' },
-          ].map(({ level, label }) => (
-            <button
-              key={level ?? '__default__'}
-              type="button"
-              onClick={() => handleSelect(level)}
-              className={cn(
-                'flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors hover:bg-accent',
-                (currentLevel ?? null) === level && 'bg-accent font-medium',
-              )}
-            >
-              <span className="w-4 text-center">
-                {(currentLevel ?? null) === level ? '✓' : ''}
-              </span>
-              <span>{label}</span>
-            </button>
-          ))}
         </div>
       </PopoverContent>
     </Popover>
@@ -2543,6 +2508,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             setAgentThinking(next)
             window.electronAPI.updateSettings({ agentThinking: next })
           }}
+          openAIConfig={sessionMeta && sessionAgentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
+            ? {
+                sessionId,
+                currentLevel: sessionMeta.openAIThinkingLevel ?? null,
+                disabled: streaming || backgroundWaiting,
+              }
+            : undefined}
         />
       ),
     },
@@ -2589,36 +2561,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </Tooltip>
       ),
     },
-    ...(sessionMeta && sessionAgentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
-      ? [{
-          key: 'codex-fast-mode',
-          node: (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant={sessionMeta.codexFastMode ? 'secondary' : 'ghost'}
-                  size="icon"
-                  disabled={streaming || backgroundWaiting}
-                  className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground"
-                  onClick={() => {
-                    window.electronAPI.updateSessionCodexFastMode(sessionId, !sessionMeta.codexFastMode)
-                      .then(() => toast.success(sessionMeta.codexFastMode ? '已切换为标准模式' : '已切换为快速模式'))
-                      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : '切换快速模式失败'))
-                  }}
-                >
-                  <Sparkles className="size-5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top"><p>{sessionMeta.codexFastMode ? '标准模式' : '快速模式'}</p></TooltipContent>
-            </Tooltip>
-          ),
-        },
-        {
-          key: 'codex-thinking-level',
-          node: <CodexThinkingSelector sessionId={sessionId} currentLevel={sessionMeta.openAIThinkingLevel ?? null} disabled={streaming || backgroundWaiting} />,
-        }]
-      : []),
+    // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
     {
       key: 'context-usage',
       node: (
@@ -2681,7 +2624,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     setProcessGroupsKeepExpanded,
   ])
 
-  const inputTrailingNode = streaming && !hasTextInput ? (
+  const inputTrailingNode = streaming ? (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
