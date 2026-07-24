@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentThinkingLevel } from '@profer/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentQueryInput, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentThinkingLevel, ErrorCode } from '@profer/shared'
 import { normalizeAgentRuntime } from '@profer/shared'
 import {
   PROFER_DEFAULT_PERMISSION_MODE,
@@ -1622,10 +1622,10 @@ export class AgentOrchestrator {
                     accumulatedMessages.length = 0
                     // 检查是否可自动重试
                     const rawError = assistantMsg.error as unknown
-                    const errorCode = (typeof rawError === 'object' && rawError !== null
-                      ? (rawError as Record<string, unknown>).errorType as string
+                    const errorCode: ErrorCode = (typeof rawError === 'object' && rawError !== null
+                      ? (rawError as Record<string, unknown>).errorType as ErrorCode
                       : undefined) ?? 'unknown_error'
-                    if (isAutoRetryableTypedError({ code: errorCode, message: separated.errorText, canRetry: true }) && canAutoRetry(attempt)) {
+                    if (isAutoRetryableTypedError({ code: errorCode, title: '流式传输中断', message: separated.errorText, actions: [], canRetry: true }) && canAutoRetry(attempt)) {
                       lastRetryableError = `连接中断：${separated.errorText}`
                       console.log(`[Agent 编排] 可重试错误 (断流保消息): ${lastRetryableError}`)
                       stderrChunks.length = 0
