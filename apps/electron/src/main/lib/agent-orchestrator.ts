@@ -84,6 +84,7 @@ import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
 import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
+import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
 
 // ===== 类型定义 =====
 
@@ -1178,6 +1179,7 @@ export class AgentOrchestrator {
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+      const piSystemPrompt = systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories)
       const piRuntimeEnv = buildAgentRuntimeEnv({
         proxyUrl: await getEffectiveProxyUrl(),
         runtimeStatus: getRuntimeStatus(),
@@ -1225,7 +1227,7 @@ export class AgentOrchestrator {
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Profer 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: agentRuntime === 'pi'
-          ? systemPromptAppend
+          ? piSystemPrompt
           : {
               type: 'preset',
               preset: 'claude_code',
@@ -1392,6 +1394,10 @@ export class AgentOrchestrator {
 
         let shouldRetryFromError = false
 
+        // stop 轮询变量（需在 try/catch 外声明以便 catch 块清理）
+        let stopTimer: ReturnType<typeof setTimeout> | null = null
+        let stopResolved = false
+
         try {
           // 获取异步迭代器（手动 .next() 以支持 Promise.race 中断）
           const queryIterable = this.adapter.query(queryOptions)
@@ -1417,6 +1423,22 @@ export class AgentOrchestrator {
           let currentTaskId: string | null = null
           let lastCompletedTaskId: string | null = null
 
+          // stop 信号：轮询 stoppedBySessions，确保 stop() 后事件循环不卡在 pendingNext 上
+          stopResolved = false
+          if (stopTimer) { clearTimeout(stopTimer); stopTimer = null }
+          const stopSignal = new Promise<'stopped'>((resolve) => {
+            const check = () => {
+              if (stopResolved) return
+              if (this.stoppedBySessions.has(sessionId)) {
+                stopResolved = true
+                resolve('stopped')
+                return
+              }
+              stopTimer = setTimeout(check, 200)
+            }
+            check()
+          })
+
           while (true) {
             if (!pendingNext) {
               pendingNext = queryIterator.next()
@@ -1424,12 +1446,22 @@ export class AgentOrchestrator {
 
             const racePromises: Array<Promise<{ kind: string; result: IteratorResult<SDKMessage> | null }>> = [
               pendingNext.then((r) => ({ kind: 'event' as const, result: r })),
+              stopSignal.then((k) => ({ kind: k, result: null })),
             ]
             if (drainTimeoutPromise) {
               racePromises.push(drainTimeoutPromise.then(() => ({ kind: 'drain_timeout' as const, result: null })))
             }
 
             const raceResult = await Promise.race(racePromises)
+
+            if (raceResult.kind === 'stopped') {
+              // 用户主动停止，退出事件循环。后续由 catch 块（!activeSessions.has）
+              // 或 break 后的 stoppedByUser 检查统一处理 completeRun。
+              pendingNext?.catch(() => {})
+              pendingNext = null
+              queryIterator.return?.(undefined as never).catch(() => {})
+              break
+            }
 
             if (raceResult.kind === 'drain_timeout') {
               // 安全网：channel.close() 后 SDK 仍未在超时内关闭 iterator，强制退出
@@ -1823,6 +1855,10 @@ export class AgentOrchestrator {
             continue
           }
 
+          // 事件循环正常退出，清理 stop 轮询定时器
+          stopResolved = true
+          if (stopTimer) { clearTimeout(stopTimer); stopTimer = null }
+
           const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
 
           // 正常完成 — 如果之前有重试，发送 retry_cleared
@@ -1852,6 +1888,9 @@ export class AgentOrchestrator {
           break  // 成功完成，退出重试循环
 
         } catch (error) {
+          stopResolved = true
+          if (stopTimer) { clearTimeout(stopTimer); stopTimer = null }
+
           // 打印 stderr
           const fullStderr = stderrChunks.join('').trim()
           if (fullStderr) {

@@ -13,18 +13,29 @@ describe('Agent 辅助模型路由', () => {
     })
 
     expect(policy.deepSeekFamily).toBe(true)
-    expect(policy.enable1MContext).toBe(false)
+    expect(policy.enable1MContext).toBe(true)
     expect(policy.subagentModel).toBe(DEEPSEEK_SUBAGENT_MODEL_ID)
   })
 
-  test('Given DeepSeek 兼容渠道模型 When 解析模型路由 Then 仍识别为 DeepSeek 系列', () => {
+  test('Given DeepSeek 兼容渠道的 V4 模型 When 解析模型路由 Then 仍启用 1M', () => {
     const policy = resolveAgentModelRouting({
       modelId: 'gateway/deepseek-v4-pro',
       provider: 'custom',
     })
 
     expect(policy.deepSeekFamily).toBe(true)
+    expect(policy.enable1MContext).toBe(true)
     expect(policy.subagentModel).toBe(DEEPSEEK_SUBAGENT_MODEL_ID)
+  })
+
+  test('Given 非 V4 的 DeepSeek 模型 When 解析模型路由 Then 不误启用 1M', () => {
+    const policy = resolveAgentModelRouting({
+      modelId: 'deepseek-reasoner',
+      provider: 'deepseek',
+    })
+
+    expect(policy.deepSeekFamily).toBe(true)
+    expect(policy.enable1MContext).toBe(false)
   })
 
   test('Given 非 DeepSeek 模型 When 应用模型路由 Then 删除残留的 SubAgent 模型环境变量', () => {
