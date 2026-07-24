@@ -78,22 +78,35 @@ function tryRun(cmd, cwd = ROOT) {
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
   console.log(`  ${VERSION}`);
 
-  // 2. 推送服务端
+  // 2. 推送服务端（失败不阻断打包）
   console.log('\n[2/6] 推送服务端...');
-  const tmpTar = path.join(SERVER, 'server-rel.tar.gz');
-  runBash('tar -czf server-rel.tar.gz --exclude=node_modules --exclude=server-rel.tar.gz --exclude=.context .', SERVER);
-  await scp(tmpTar, '/tmp/server-rel.tar.gz');
-  const extract = await ssh('sudo mkdir -p /tmp/srv && sudo tar -xzf /tmp/server-rel.tar.gz -C /tmp/srv && sudo docker cp /tmp/srv/. proma-team:/app/ && sudo rm -rf /tmp/srv && sudo docker exec proma-team npm install --production && sudo docker restart proma-team && echo OK');
-  console.log('  ' + (extract.includes('OK') ? '已推送' : extract.slice(0, 80)));
+  let serverOk = false;
+  try {
+    const tmpTar = path.join(SERVER, 'server-rel.tar.gz');
+    runBash('tar -czf server-rel.tar.gz --exclude=node_modules --exclude=server-rel.tar.gz --exclude=.context .', SERVER);
+    await scp(tmpTar, '/tmp/server-rel.tar.gz');
+    // 先 cp 代码，npm install 放到 restart 前单独跑，给 120s 超时
+    await ssh('sudo mkdir -p /tmp/srv && sudo tar -xzf /tmp/server-rel.tar.gz -C /tmp/srv && sudo docker cp /tmp/srv/. proma-team:/app/ && sudo rm -rf /tmp/srv && echo CP_OK');
+    await ssh('sudo docker exec proma-team timeout 120 npm install --omit=dev 2>&1 || echo NPM_SKIPPED', 150000);
+    const extract = await ssh('sudo docker restart proma-team && echo OK');
+    console.log('  ' + (extract.includes('OK') ? '已推送' : extract.slice(0, 80)));
+    serverOk = true;
+  } catch (e) {
+    console.log('  ⚠ 服务端推送跳过: ' + (e.message || '').slice(0, 60));
+  }
 
-  // 3. 等容器就绪
-  console.log('\n[3/6] 等待容器就绪...');
-  for (let i = 0; i < 10; i++) {
-    await new Promise(r => setTimeout(r, 3000));
-    const status = await ssh('sudo docker ps --filter name=proma-team --format "{{.Status}}"');
-    if (status.includes('healthy')) { console.log('  healthy'); break; }
-    if (status.includes('Up') && !status.includes('health')) { console.log('  running (no health check)'); break; }
-    console.log(`  retry ${i + 1}: ${status?.slice(0, 30) || 'starting...'}`);
+  // 3. 等容器就绪（仅服务端推送成功时）
+  if (serverOk) {
+    console.log('\n[3/6] 等待容器就绪...');
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const status = await ssh('sudo docker ps --filter name=proma-team --format "{{.Status}}"');
+      if (status.includes('healthy')) { console.log('  healthy'); break; }
+      if (status.includes('Up') && !status.includes('health')) { console.log('  running (no health check)'); break; }
+      if (i === 4) console.log('  ⚠ 容器未就绪，跳过');
+    }
+  } else {
+    console.log('\n[3/6] 等待容器就绪... ⏭ 跳过（未推送服务端）');
   }
 
   // 4. 完整构建 + 打包 Electron
