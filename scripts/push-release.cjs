@@ -71,12 +71,20 @@ function tryRun(cmd, cwd = ROOT) {
   console.log(`=== Profer 发布 v${VERSION} ===\n`);
 
   // 1. 更新版本号
-  console.log('[1/6] 版本号...');
+  console.log('[1/4] 版本号...');
   const pkgPath = path.join(ELECTRON, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  const prevVer = pkg.version;
   pkg.version = VERSION;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
-  console.log(`  ${VERSION}`);
+  console.log(`  ${prevVer} → ${VERSION}`);
+
+  // 自动提交未提交的改动（只提交 git 跟踪的文件，忽略 .context/ 等）
+  tryRun('git add -u', ROOT);
+  const autoCommit = tryRun(`git diff --cached --quiet || git commit -m "chore: pre-release for v${VERSION}"`, ROOT);
+  if (!autoCommit.ok && !autoCommit.out.includes('nothing to commit')) {
+    console.log('  ⚠ commit 失败: ' + autoCommit.out.slice(0, 80));
+  }
 
   // 2. 完整构建 + 打包 Electron
   console.log('\n[2/4] 打包 Electron...');
