@@ -2780,7 +2780,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.WRITE_WORKSPACE_CLAUDE_MD,
-    async (_, workspaceSlug: string, content: string): Promise<void> => {
+    async (event, workspaceSlug: string, content: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       writeWorkspaceClaudeMd(workspaceSlug, content)
     }
   )
@@ -2801,7 +2802,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.WRITE_WORKSPACE_AUTO_MEMORY_FILE,
-    async (_, workspaceSlug: string, relativePath: string, content: string): Promise<void> => {
+    async (event, workspaceSlug: string, relativePath: string, content: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       writeWorkspaceAutoMemoryFile(workspaceSlug, relativePath, content)
     }
   )

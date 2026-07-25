@@ -1034,7 +1034,7 @@ function collectAutoMemorySummary(memoryDir: string): WorkspaceMemorySummary['au
   walk(memoryDir, 0)
   return {
     directory: memoryDir,
-    memoryMdExists: existsSync(join(memoryDir, AUTO_MEMORY_INDEX)),
+    indexExists: existsSync(join(memoryDir, AUTO_MEMORY_INDEX)),
     fileCount,
     totalSize,
     updatedAt,
