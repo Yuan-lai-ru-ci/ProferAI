@@ -18,7 +18,7 @@ import { detectGitBash } from './git-bash-detector'
 import { detectWsl } from './wsl-detector'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
 
 /** 运行时状态缓存 */
 let runtimeStatusCache: RuntimeStatus | null = null
@@ -105,11 +105,14 @@ async function loadCachedRuntime(): Promise<RuntimeStatus | null> {
     }
 
     // Windows 下 Git Bash / WSL 的增量重检
-    if (process.platform === 'win32' && !cached.shell?.recommended) {
-      console.log('[运行时初始化] 缓存中无可用 Shell 环境，尝试增量重检...')
+    // 当缓存中至少有一个 Shell 不可用时触发重检，解决「后装了环境但识别不到」的问题
+    const gitBashMissing = !cached.shell?.gitBash?.available
+    const wslMissing = !cached.shell?.wsl?.available
+    if (process.platform === 'win32' && (gitBashMissing || wslMissing || !cached.shell?.recommended)) {
+      console.log('[运行时初始化] 缓存中 Shell 环境不完整，尝试增量重检...')
       try {
-        const gitBashStatus = await detectGitBash()
-        const wslStatus = await detectWsl()
+        const gitBashStatus = gitBashMissing ? await detectGitBash() : cached.shell!.gitBash
+        const wslStatus = wslMissing ? await detectWsl() : cached.shell!.wsl
         let recommended: 'git-bash' | 'wsl' | null = null
         if (gitBashStatus.available) recommended = 'git-bash'
         else if (wslStatus.available) recommended = 'wsl'
@@ -319,6 +322,15 @@ export function isRuntimeInitialized(): boolean {
 export async function reinitializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
   isInitialized = false
   runtimeStatusCache = null
+  // 删除磁盘缓存后强制重新检测，确保「刷新」按钮真正生效
+  // 避免旧缓存中的 shell 信息（如只有 Git Bash 没有 WSL）被复用
+  try {
+    const cachePath = getRuntimeCachePath()
+    if (existsSync(cachePath)) {
+      unlinkSync(cachePath)
+      console.log('[运行时初始化] 已删除磁盘缓存，将强制重新检测')
+    }
+  } catch { /* 缓存删除失败不影响功能 */ }
   return initializeRuntime(options)
 }
 
