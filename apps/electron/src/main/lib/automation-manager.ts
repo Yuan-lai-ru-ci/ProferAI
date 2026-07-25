@@ -14,6 +14,12 @@ import { getAutomationsPath } from './config-paths'
 import {
   AUTOMATION_MAX_HISTORY,
   AUTOMATION_DEFAULT_PERMISSION_MODE,
+  normalizeTimeOfDay,
+  normalizeDayOfWeek,
+  normalizeDayOfMonth,
+  DEFAULT_TIME_OF_DAY,
+  DEFAULT_DAY_OF_WEEK,
+  DEFAULT_DAY_OF_MONTH,
   type Automation,
   type AutomationRun,
   type CreateAutomationInput,
@@ -26,14 +32,13 @@ interface AutomationsIndex {
   automations: Automation[]
 }
 
-const INDEX_VERSION = 2
+const INDEX_VERSION = 3
 
 /**
  * 兼容历史字段：
  * - sessionMode：v1 用过的 'new' 值统一改为 'daily'。
  * - permissionMode：已移除的 'auto' 统一改为默认完全自动模式。
- * - v1 默认值 'new' 的语义是「每次新建会话」；v2 的 'daily' 默认行为是「同日复用、跨日新建」，
- *   高频任务可少占左侧栏 tab，低频任务（间隔 ≥ 24h）的实际行为等价于「每次新建」，对用户无负面影响。
+ * - timeOfDay/dayOfWeek/dayOfMonth：v1/v2 单值 → v3 多值数组（归一化）。
  * - 同时把 index.version bump 到当前值，避免下次启动反复迁移。
  * 返回是否发生改动，由调用方决定是否写回磁盘。
  */
@@ -47,6 +52,31 @@ function migrateLegacyFields(data: AutomationsIndex): boolean {
     const permissionMode = a.permissionMode as string | undefined
     if (permissionMode && permissionMode !== AUTOMATION_DEFAULT_PERMISSION_MODE) {
       a.permissionMode = AUTOMATION_DEFAULT_PERMISSION_MODE
+      changed = true
+    }
+    // v3 多值迁移：单值 → 数组
+    const rawTimeOfDay = a.timeOfDay as unknown
+    if (typeof rawTimeOfDay === 'string') {
+      a.timeOfDay = normalizeTimeOfDay(rawTimeOfDay)
+      changed = true
+    } else if (!Array.isArray(a.timeOfDay)) {
+      a.timeOfDay = []
+      changed = true
+    }
+    const rawDayOfWeek = a.dayOfWeek as unknown
+    if (typeof rawDayOfWeek === 'number') {
+      a.dayOfWeek = normalizeDayOfWeek(rawDayOfWeek)
+      changed = true
+    } else if (!Array.isArray(a.dayOfWeek)) {
+      a.dayOfWeek = []
+      changed = true
+    }
+    const rawDayOfMonth = a.dayOfMonth as unknown
+    if (typeof rawDayOfMonth === 'number') {
+      a.dayOfMonth = normalizeDayOfMonth(rawDayOfMonth)
+      changed = true
+    } else if (!Array.isArray(a.dayOfMonth)) {
+      a.dayOfMonth = []
       changed = true
     }
   }
@@ -119,8 +149,9 @@ function writeIndex(index: AutomationsIndex): void {
 /**
  * 计算下次触发时间戳（从基准时刻 from 起算）
  * - interval：from + 间隔分钟
- * - daily：今天/明天的 timeOfDay
- * - weekly：本周/下周 dayOfWeek 的 timeOfDay
+ * - daily：从 timeOfDay[] 中找今天/明天最近的时间点
+ * - weekly：dayOfWeek[] × timeOfDay[] 求最近未来组合
+ * - monthly：dayOfMonth[] × timeOfDay[] 求最近未来组合
  * - once：直接返回固定的 scheduledAt（不做任何前进推算），跑完后由 appendRun 自动停用
  *
  * 返回值保证为有限正整数。输入非法时回退到 from + 10min 并打印警告。
@@ -154,41 +185,30 @@ export function computeNextRunAt(
       result = from + Math.max(1, minutes) * 60_000
     }
   } else {
-    const timeOfDay = a.timeOfDay ?? '09:00'
-    const parts = timeOfDay.split(':').map(Number)
-    const hh = Number.isFinite(parts[0]) ? parts[0]! : 9
-    const mm = Number.isFinite(parts[1]) ? parts[1]! : 0
-    const next = new Date(from)
-    next.setSeconds(0, 0)
-    next.setHours(hh, mm, 0, 0)
+    // 归一化：处理旧数据单值兼容 + 默认值填充
+    const timesOfDay = (normalizeTimeOfDay(a.timeOfDay as string | string[] | undefined)).length > 0
+      ? normalizeTimeOfDay(a.timeOfDay as string | string[] | undefined)
+      : DEFAULT_TIME_OF_DAY
 
-    if (a.scheduleType === 'daily') {
-      if (next.getTime() <= from) next.setDate(next.getDate() + 1)
-      result = next.getTime()
-    } else if (a.scheduleType === 'monthly') {
-      const daysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate()
-      const targetDom = Number.isFinite(a.dayOfMonth) && a.dayOfMonth! >= 1 && a.dayOfMonth! <= 31
-        ? a.dayOfMonth!
-        : 1
-      // 先重置到当月 1 号再设日，避免当前日期为 31 时进入短月自动溢出（如 3/31 setMonth(3) 会变 5/1）
-      next.setDate(1)
-      next.setDate(Math.min(targetDom, daysInMonth(next.getFullYear(), next.getMonth())))
-      if (next.getTime() <= from) {
-        // 关键：先回到当月 1 号再 +1 月，否则若当前 getDate() 已落在该月最后一天（targetDom 被钳到 30/28），
-        // setMonth 仍会越过短月（如 1/31 → 3/3）。setDate(1) 后再前进月份才是稳定的。
-        next.setDate(1)
-        next.setMonth(next.getMonth() + 1)
-        next.setDate(Math.min(targetDom, daysInMonth(next.getFullYear(), next.getMonth())))
-      }
-      result = next.getTime()
-    } else {
-      // weekly
-      const targetDow = Number.isFinite(a.dayOfWeek) ? a.dayOfWeek! : 1
-      let dayDiff = (targetDow - next.getDay() + 7) % 7
-      if (dayDiff === 0 && next.getTime() <= from) dayDiff = 7
-      next.setDate(next.getDate() + dayDiff)
-      result = next.getTime()
-    }
+    const daysOfWeek = a.scheduleType === 'weekly'
+      ? ((normalizeDayOfWeek(a.dayOfWeek as number | number[] | undefined)).length > 0
+        ? normalizeDayOfWeek(a.dayOfWeek as number | number[] | undefined)
+        : DEFAULT_DAY_OF_WEEK)
+      : undefined
+
+    const daysOfMonth = a.scheduleType === 'monthly'
+      ? ((normalizeDayOfMonth(a.dayOfMonth as number | number[] | undefined)).length > 0
+        ? normalizeDayOfMonth(a.dayOfMonth as number | number[] | undefined)
+        : DEFAULT_DAY_OF_MONTH)
+      : undefined
+
+    result = computeNextRunAtMulti(
+      a.scheduleType as 'daily' | 'weekly' | 'monthly',
+      timesOfDay,
+      from,
+      daysOfWeek,
+      daysOfMonth,
+    )
   }
 
   if (!Number.isFinite(result) || result <= 0) {
@@ -197,6 +217,70 @@ export function computeNextRunAt(
   }
 
   return result
+}
+
+/**
+ * 多值调度核心：遍历 time × day 组合，找 > from 的最小时间戳
+ */
+function computeNextRunAtMulti(
+  scheduleType: 'daily' | 'weekly' | 'monthly',
+  timesOfDay: string[],
+  from: number,
+  daysOfWeek?: number[],
+  daysOfMonth?: number[],
+): number {
+  const FALLBACK_INTERVAL_MS = 10 * 60_000
+  const daysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate()
+  let best: number = Infinity
+
+  for (const tod of timesOfDay) {
+    const parts = tod.split(':').map(Number)
+    const hh = Number.isFinite(parts[0]) ? parts[0]! : 9
+    const mm = Number.isFinite(parts[1]) ? parts[1]! : 0
+
+    if (scheduleType === 'daily') {
+      // 每天：每个时间点试今天，已过则推到明天
+      const next = new Date(from)
+      next.setSeconds(0, 0)
+      next.setHours(hh, mm, 0, 0)
+      if (next.getTime() <= from) next.setDate(next.getDate() + 1)
+      if (next.getTime() < best) best = next.getTime()
+    } else if (scheduleType === 'weekly') {
+      // 每周：dayOfWeek[] × timeOfDay[] 求最近未来组合
+      const ds = daysOfWeek ?? DEFAULT_DAY_OF_WEEK
+      for (const dow of ds) {
+        const next = new Date(from)
+        next.setSeconds(0, 0)
+        next.setHours(hh, mm, 0, 0)
+        let dayDiff = (dow - next.getDay() + 7) % 7
+        // 同一天但时间已过 → 推到下周
+        if (dayDiff === 0 && next.getTime() <= from) dayDiff = 7
+        next.setDate(next.getDate() + dayDiff)
+        if (next.getTime() < best) best = next.getTime()
+      }
+    } else {
+      // 每月：dayOfMonth[] × timeOfDay[] 求最近未来组合
+      const ds = daysOfMonth ?? DEFAULT_DAY_OF_MONTH
+      for (const dom of ds) {
+        const next = new Date(from)
+        next.setSeconds(0, 0)
+        next.setHours(hh, mm, 0, 0)
+        // 先重置到当月 1 号再设日，避免当前日期为 31 时溢出
+        next.setDate(1)
+        const maxDay = daysInMonth(next.getFullYear(), next.getMonth())
+        next.setDate(Math.min(dom, maxDay))
+        if (next.getTime() <= from) {
+          // 推到下个月
+          next.setDate(1)
+          next.setMonth(next.getMonth() + 1)
+          next.setDate(Math.min(dom, daysInMonth(next.getFullYear(), next.getMonth())))
+        }
+        if (next.getTime() < best) best = next.getTime()
+      }
+    }
+  }
+
+  return Number.isFinite(best) ? best : from + FALLBACK_INTERVAL_MS
 }
 
 /** 获取全部定时任务（按 createdAt 升序，保持列表稳定） */
@@ -260,6 +344,11 @@ export function createAutomation(input: CreateAutomationInput): Automation {
   const requestedActive = input.active ?? true
   const active = requestedActive && isAutomationRunnable(input)
 
+  // 归一化多值字段（兼容旧调用传入单值）
+  const timeOfDay = normalizeTimeOfDay(input.timeOfDay)
+  const dayOfWeek = normalizeDayOfWeek(input.dayOfWeek as number | number[] | undefined)
+  const dayOfMonth = normalizeDayOfMonth(input.dayOfMonth as number | number[] | undefined)
+
   const automation: Automation = {
     id: randomUUID(),
     name: input.name,
@@ -267,9 +356,9 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     active,
     scheduleType: input.scheduleType,
     intervalMinutes: input.intervalMinutes,
-    timeOfDay: input.timeOfDay,
-    dayOfWeek: input.dayOfWeek,
-    dayOfMonth: input.dayOfMonth,
+    timeOfDay,
+    dayOfWeek,
+    dayOfMonth,
     scheduledAt: input.scheduledAt,
     maxRuns: normalizeMaxRuns(input.maxRuns),
     agentRuntime: input.agentRuntime,
@@ -315,18 +404,26 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
   if (input.maxRuns !== undefined) applyMaxRunsUpdate(target, input.maxRuns)
 
   // 调度参数变化：重算下次运行时间（从现在起算，避免旧时间戳立即触发）
+  // 数组比较：归一化后比内容
+  const nextTimeOfDay = input.timeOfDay !== undefined ? normalizeTimeOfDay(input.timeOfDay) : undefined
+  const nextDayOfWeek = input.dayOfWeek !== undefined ? normalizeDayOfWeek(input.dayOfWeek as number | number[] | undefined) : undefined
+  const nextDayOfMonth = input.dayOfMonth !== undefined ? normalizeDayOfMonth(input.dayOfMonth as number | number[] | undefined) : undefined
+
+  const arraysEqual = (a: unknown[], b: unknown[]): boolean =>
+    a.length === b.length && a.every((v, i) => v === b[i])
+
   const scheduleChanged =
     (input.scheduleType !== undefined && input.scheduleType !== target.scheduleType) ||
     (input.intervalMinutes !== undefined && input.intervalMinutes !== target.intervalMinutes) ||
-    (input.timeOfDay !== undefined && input.timeOfDay !== target.timeOfDay) ||
-    (input.dayOfWeek !== undefined && input.dayOfWeek !== target.dayOfWeek) ||
-    (input.dayOfMonth !== undefined && input.dayOfMonth !== target.dayOfMonth) ||
+    (nextTimeOfDay !== undefined && !arraysEqual(nextTimeOfDay, target.timeOfDay ?? [])) ||
+    (nextDayOfWeek !== undefined && !arraysEqual(nextDayOfWeek, target.dayOfWeek ?? [])) ||
+    (nextDayOfMonth !== undefined && !arraysEqual(nextDayOfMonth, target.dayOfMonth ?? [])) ||
     (input.scheduledAt !== undefined && input.scheduledAt !== target.scheduledAt)
   if (input.scheduleType !== undefined) target.scheduleType = input.scheduleType
   if (input.intervalMinutes !== undefined) target.intervalMinutes = input.intervalMinutes
-  if (input.timeOfDay !== undefined) target.timeOfDay = input.timeOfDay
-  if (input.dayOfWeek !== undefined) target.dayOfWeek = input.dayOfWeek
-  if (input.dayOfMonth !== undefined) target.dayOfMonth = input.dayOfMonth
+  if (nextTimeOfDay !== undefined) target.timeOfDay = nextTimeOfDay
+  if (nextDayOfWeek !== undefined) target.dayOfWeek = nextDayOfWeek
+  if (nextDayOfMonth !== undefined) target.dayOfMonth = nextDayOfMonth
   if (input.scheduledAt !== undefined) target.scheduledAt = input.scheduledAt
   if (scheduleChanged) {
     target.nextRunAt = computeNextRunAt(target, now)

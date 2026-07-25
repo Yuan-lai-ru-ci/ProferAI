@@ -57,6 +57,24 @@ function assertNonBlank(value: string | undefined, field: string): string {
   return value.trim()
 }
 
+function validTimeOfDayArr(v: unknown): boolean {
+  if (typeof v === 'string') return TIME_OF_DAY_PATTERN.test(v)
+  if (Array.isArray(v)) return v.length > 0 && v.length <= 10 && v.every((t) => typeof t === 'string' && TIME_OF_DAY_PATTERN.test(t))
+  return false
+}
+
+function validDayOfWeekArr(v: unknown): boolean {
+  if (typeof v === 'number') return isFiniteInt(v) && v >= 0 && v <= 6
+  if (Array.isArray(v)) return v.length > 0 && v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
+  return false
+}
+
+function validDayOfMonthArr(v: unknown): boolean {
+  if (typeof v === 'number') return isFiniteInt(v) && v >= 1 && v <= 31
+  if (Array.isArray(v)) return v.length > 0 && v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
+  return false
+}
+
 function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAutomationInput>): void {
   if (input.scheduleType !== undefined && !validScheduleType(input.scheduleType)) {
     throw new Error(`非法的 scheduleType: ${String(input.scheduleType)}`)
@@ -64,14 +82,14 @@ function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAut
   if (input.intervalMinutes !== undefined && (!isFiniteInt(input.intervalMinutes) || input.intervalMinutes < 1)) {
     throw new Error(`非法的 intervalMinutes: ${String(input.intervalMinutes)}`)
   }
-  if (input.timeOfDay !== undefined && !TIME_OF_DAY_PATTERN.test(input.timeOfDay)) {
-    throw new Error(`非法的 timeOfDay: ${String(input.timeOfDay)}`)
+  if (input.timeOfDay !== undefined && !validTimeOfDayArr(input.timeOfDay)) {
+    throw new Error(`非法的 timeOfDay: ${JSON.stringify(input.timeOfDay)}（需为 HH:MM 或最多 10 个的数组）`)
   }
-  if (input.dayOfWeek !== undefined && (!isFiniteInt(input.dayOfWeek) || input.dayOfWeek < 0 || input.dayOfWeek > 6)) {
-    throw new Error(`非法的 dayOfWeek: ${String(input.dayOfWeek)}`)
+  if (input.dayOfWeek !== undefined && !validDayOfWeekArr(input.dayOfWeek)) {
+    throw new Error(`非法的 dayOfWeek: ${JSON.stringify(input.dayOfWeek)}（需为 0-6 整数或数组）`)
   }
-  if (input.dayOfMonth !== undefined && (!isFiniteInt(input.dayOfMonth) || input.dayOfMonth < 1 || input.dayOfMonth > 31)) {
-    throw new Error(`非法的 dayOfMonth: ${String(input.dayOfMonth)}`)
+  if (input.dayOfMonth !== undefined && !validDayOfMonthArr(input.dayOfMonth)) {
+    throw new Error(`非法的 dayOfMonth: ${JSON.stringify(input.dayOfMonth)}（需为 1-31 整数或数组）`)
   }
   if (input.scheduledAt !== undefined && (typeof input.scheduledAt !== 'number' || !Number.isFinite(input.scheduledAt) || input.scheduledAt <= 0)) {
     throw new Error(`非法的 scheduledAt: ${String(input.scheduledAt)}（应为毫秒时间戳）`)
@@ -148,9 +166,12 @@ function buildAutomationSchemas(z: ZodModule['z']) {
       prompt: z.string().describe('每次触发时发送给 Agent 的完整自然语言指令'),
       scheduleType: scheduleType.describe('调度类型：interval 固定间隔，daily 每天定点，weekly 每周定点，monthly 每月定点，once 指定时刻只运行一次'),
       intervalMinutes: z.number().int().min(1).optional().describe('固定间隔分钟数；scheduleType=interval 时必填。间隔可以远大于 10-30 分钟，如 1440=每天、10080=每周'),
-      timeOfDay: z.string().optional().describe('每天/每周/每月触发时间，24 小时制 HH:MM'),
-      dayOfWeek: z.number().int().min(0).max(6).optional().describe('每周触发日，0=周日，1=周一，...，6=周六'),
-      dayOfMonth: z.number().int().min(1).max(31).optional().describe('每月触发日，1-31；scheduleType=monthly 时必填'),
+      timeOfDay: z.union([z.string().regex(TIME_OF_DAY_PATTERN, 'HH:MM 格式'), z.array(z.string().regex(TIME_OF_DAY_PATTERN, 'HH:MM 格式')).min(1).max(10)]).optional()
+        .describe('每天/每周/每月触发时间，24 小时制 HH:MM。支持单个时间或最多 10 个的时间数组'),
+      dayOfWeek: z.union([z.number().int().min(0).max(6), z.array(z.number().int().min(0).max(6)).min(1).max(7)]).optional()
+        .describe('每周触发日，0=周日，1=周一，...，6=周六。支持单日或多选数组'),
+      dayOfMonth: z.union([z.number().int().min(1).max(31), z.array(z.number().int().min(1).max(31)).min(1).max(31)]).optional()
+        .describe('每月触发日，1-31。支持单日或多选数组'),
       scheduledAt: z.number().int().positive().optional().describe('一次性任务的绝对触发时间（毫秒时间戳）；scheduleType=once 时必填。用于"在某个具体时间点跑一次"，如 N 小时/天后或某个日期时刻'),
       maxRuns: z.number().int().min(1).optional().describe('最大运行次数上限（按实际执行次数计，成功+失败都算）；达到后任务自动停用。不传=不限次。可与任意 scheduleType 叠加，如 interval+maxRuns=3 表示"每隔一段时间跑，共跑 3 次就停"'),
       active: z.boolean().optional().describe('创建后是否启用，默认 true'),
@@ -163,9 +184,12 @@ function buildAutomationSchemas(z: ZodModule['z']) {
       prompt: z.string().optional().describe('新的执行提示词'),
       scheduleType: scheduleType.optional().describe('新的调度类型'),
       intervalMinutes: z.number().int().min(1).optional().describe('新的固定间隔分钟数'),
-      timeOfDay: z.string().optional().describe('新的每天/每周/每月触发时间，24 小时制 HH:MM'),
-      dayOfWeek: z.number().int().min(0).max(6).optional().describe('新的每周触发日，0=周日，...，6=周六'),
-      dayOfMonth: z.number().int().min(1).max(31).optional().describe('新的每月触发日，1-31'),
+      timeOfDay: z.union([z.string().regex(TIME_OF_DAY_PATTERN, 'HH:MM 格式'), z.array(z.string().regex(TIME_OF_DAY_PATTERN, 'HH:MM 格式')).min(1).max(10)]).optional()
+        .describe('新的每天/每周/每月触发时间。支持单个时间或数组'),
+      dayOfWeek: z.union([z.number().int().min(0).max(6), z.array(z.number().int().min(0).max(6)).min(1).max(7)]).optional()
+        .describe('新的每周触发日。支持单日或多选数组'),
+      dayOfMonth: z.union([z.number().int().min(1).max(31), z.array(z.number().int().min(1).max(31)).min(1).max(31)]).optional()
+        .describe('新的每月触发日。支持单日或多选数组'),
       scheduledAt: z.number().int().positive().optional().describe('新的一次性触发时间（毫秒时间戳），scheduleType=once 时使用'),
       maxRuns: z.number().int().min(1).optional().describe('新的最大运行次数上限（按实际执行次数计）；改动会重置已执行次数计数'),
       active: z.boolean().optional().describe('启用或暂停任务'),
@@ -248,14 +272,14 @@ export async function injectAutomationMcpServer(
           if (input.scheduleType === 'interval' && args.intervalMinutes === undefined) {
             throw new Error('scheduleType=interval 时 intervalMinutes 必填')
           }
-          if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !input.timeOfDay) {
-            throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填')
+          if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !validTimeOfDayArr(input.timeOfDay)) {
+            throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填（支持字符串或数组）')
           }
-          if (input.scheduleType === 'weekly' && input.dayOfWeek === undefined) {
-            throw new Error('scheduleType=weekly 时 dayOfWeek 必填')
+          if (input.scheduleType === 'weekly' && !validDayOfWeekArr(input.dayOfWeek)) {
+            throw new Error('scheduleType=weekly 时 dayOfWeek 必填（支持数值或数组）')
           }
-          if (input.scheduleType === 'monthly' && input.dayOfMonth === undefined) {
-            throw new Error('scheduleType=monthly 时 dayOfMonth 必填')
+          if (input.scheduleType === 'monthly' && !validDayOfMonthArr(input.dayOfMonth)) {
+            throw new Error('scheduleType=monthly 时 dayOfMonth 必填（支持数值或数组）')
           }
           if (input.scheduleType === 'once' && input.scheduledAt === undefined) {
             throw new Error('scheduleType=once 时 scheduledAt（绝对触发时间戳）必填')
