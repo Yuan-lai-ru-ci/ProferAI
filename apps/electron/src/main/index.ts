@@ -52,6 +52,12 @@ function migrateUserDataFromProferIfNeeded(): void {
   }
 }
 
+// Windows: 设置 AppUserModelId，确保 toast 通知点击能正确路由回应用
+// 必须在 app.whenReady 之前设置，否则 Windows 无法将通知激活事件绑定到本应用
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.profer.app')
+}
+
 // 开发模式用独立锁名，与生产版共存
 if (!app.isPackaged) {
   app.setName('profer-dev')

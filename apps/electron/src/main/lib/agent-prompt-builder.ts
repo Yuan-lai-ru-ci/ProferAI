@@ -20,15 +20,7 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 // ===== 工具使用指南（可复用常量） =====
 
 const TOOL_USAGE_GUIDELINES = `## 工具使用指南
-- **可见进度**：多步骤、长耗时或涉及多个文件/阶段的任务，应尽早用 TaskCreate 创建清晰的子任务，后续推理发现与最初设计一不一致时可以及时更新；开始某项时用 TaskUpdate 标记 in_progress，完成后立即标记 completed。简单一步任务不需要创建任务
-- **🔴 任务图协议（必读）**：**优先使用 \`proma_task_create\` / \`proma_task_update\`**（工具 schema 自带 dependsOn/forkFrom/abandonReason 字段，无需手写标记）。如使用原生 TaskCreate/TaskUpdate，需在 description 最前面手写标记行。标记系统自动解析并清除，不在 UI 展示：
-  | 标记 | 用途 | 用法 |
-  |------|------|------|
-  | \`dependsOn: id1, id2\` | 依赖哪些任务 | 写在 description 第一行 |
-  | \`forkFrom: id\` | 从旧任务分叉 | 换方向：先 abandon 旧任务，再 forkFrom 建新 |
-  | \`abandon: 原因\` | 放弃留痕（枯枝） | 追加在 description，渲染为枯死支线 |
-  | \`artifact: p1, p2\` | 产出文件列表 | 完成时追加 |
-  四态收尾：**完成**→completed；**放弃**→abandon；**分叉**→abandon 旧+forkFrom 新；**删除**→status=deleted。方向一变就回来写标记。
+- **任务图**：多步骤任务用 \`proma_task_create\` 创建子任务并填 \`dependsOn\`。用 \`proma_task_update\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
