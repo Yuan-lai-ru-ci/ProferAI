@@ -33,6 +33,24 @@ const DOCX_EXTS = new Set(['.docx'])
 const OFFICE_PREVIEW_EXTS = new Set(['.xlsx', '.pptx'])
 const LEGACY_OFFICE_EXTS = new Set(['.doc', '.xls', '.ppt'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'])
+const UNSUPPORTED_EXTS = new Set([
+  // 可执行 / 库
+  '.exe', '.dll', '.so', '.dylib', '.bin',
+  // 归档
+  '.zip', '.7z', '.rar', '.tar', '.gz', '.bz2', '.xz', '.zst', '.tgz', '.tbz2', '.txz', '.tlz', '.lz', '.lzma', '.lzo',
+  // 字体
+  '.ttf', '.otf', '.woff', '.woff2',
+  // 编译产物
+  '.wasm', '.class', '.pyc', '.pyo', '.o', '.a', '.lib', '.obj',
+  // 数据库 / 磁盘映像 / 安装包
+  '.db', '.sqlite', '.sqlite3', '.mdb', '.accdb', '.iso', '.dmg', '.pkg', '.msi', '.deb', '.rpm', '.apk', '.ipa',
+  // 二进制数据
+  '.dat', '.data', '.bin', '.raw', '.pak',
+  // 多媒体（不可预览的格式）
+  '.mp3', '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.ogg', '.wav', '.aac', '.flac',
+  // 其他
+  '.psd', '.ai', '.sketch', '.fig', '.blend', '.max', '.3ds', '.fbx', '.glb', '.gltf',
+])
 const FILE_FIND_SHORTCUT_OPTIONS = { exclusive: true }
 
 /**
@@ -248,6 +266,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const isOfficePreview = previewOnly && OFFICE_PREVIEW_EXTS.has(ext)
   const isLegacyOffice = previewOnly && LEGACY_OFFICE_EXTS.has(ext)
   const isImage = previewOnly && IMAGE_EXTS.has(ext)
+  const isUnsupported = previewOnly && UNSUPPORTED_EXTS.has(ext)
 
   React.useEffect(() => {
     initShortcutRegistry()
@@ -417,7 +436,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setLoading(false)
       return // 缓存命中，直接返回，不执行 load()
     } else {
-      if (!isLegacyOffice) setLoading(true)
+      if (!isLegacyOffice && !isUnsupported) setLoading(true)
       setOldContent('')
       setNewContent('')
       setNotFound(false)
@@ -446,6 +465,10 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
         if (!cached) {
           if (previewOnly) {
+            if (isUnsupported) {
+              if (!cancelled) setLoading(false)
+              return
+            }
             if (isPdf) {
               const result = await window.electronAPI.preparePdfPreview(filePath, fileAccess)
               if (cancelled) return
@@ -992,7 +1015,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           {loading ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
           ) : previewOnly ? (
-            isPdf ? (
+            isUnsupported ? (
+              <div className="flex flex-col items-center justify-center h-full gap-1.5 px-4 text-center">
+                <FileQuestion className="size-6 text-muted-foreground/60" />
+                <span className="text-[13px] text-muted-foreground">不支持预览此文件类型</span>
+                <span className="text-[12px] text-muted-foreground/70">{ext.toUpperCase().slice(1)} 为二进制或不可预览格式</span>
+              </div>
+            ) : isPdf ? (
               pdfSrc ? (
                 <div className="relative h-full">
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-filter backdrop-blur-sm border border-border/30 shadow-sm">

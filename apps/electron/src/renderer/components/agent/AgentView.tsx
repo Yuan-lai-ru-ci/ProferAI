@@ -2491,10 +2491,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         />
       ),
     },
+    // 资料库入口已暂时关闭，恢复时取消下面注释即可
+    /*
     {
       key: 'knowledge-library',
       node: <Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-[36px] shrink-0 rounded-full text-primary hover:bg-primary/10 hover:text-primary" onClick={() => setKnowledgePickerOpen(true)}><Library className="size-5"/></Button></TooltipTrigger><TooltipContent side="top"><p>从资料库导入</p></TooltipContent></Tooltip>,
     },
+    */
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
     {
       key: 'thinking',
