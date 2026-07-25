@@ -69,7 +69,7 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * 仅依赖 finally 块清理无法覆盖窗口关闭、渲染进程崩溃、headless 路径主窗口被替换等
  * webContents 提前销毁的场景——destroyed 事件兜底。
  */
-function registerWebContents(sessionId: string, wc: WebContents): void {
+export function registerWebContents(sessionId: string, wc: WebContents): void {
   // 同一 sessionId 切换 webContents 时直接覆盖；旧 wc 的 destroyed 钩子仍由 WeakSet 持有，
   // 触发时会扫描 sessionWebContents 清理所有指向旧 wc 的条目（见下方实现）。
   sessionWebContents.set(sessionId, wc)
@@ -83,6 +83,14 @@ function registerWebContents(sessionId: string, wc: WebContents): void {
   })
 }
 
+/**
+ * 从 session → webContents 映射中移除指定会话。
+ * 用于子会话 headless runner 完成后的清理，避免映射残留。
+ */
+export function unregisterWebContents(sessionId: string): void {
+  sessionWebContents.delete(sessionId)
+}
+
 function isMainRendererWindow(win: BrowserWindow): boolean {
   if (win.isDestroyed()) return false
   const url = win.webContents.getURL()
@@ -93,7 +101,7 @@ function isMainRendererWindow(win: BrowserWindow): boolean {
     && !url.includes('window=detached-preview')
 }
 
-function getMainRendererWebContents(): WebContents | null {
+export function getMainRendererWebContents(): WebContents | null {
   const win = BrowserWindow.getAllWindows().find(isMainRendererWindow)
   return win && !win.webContents.isDestroyed() ? win.webContents : null
 }

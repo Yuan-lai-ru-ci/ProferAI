@@ -28,16 +28,23 @@ import type { Automation } from '@profer/shared'
 
 /** 把调度配置格式化为可读文案 */
 function formatSchedule(a: Automation): string {
-  if (a.scheduleType === 'daily') return `每天 ${a.timeOfDay ?? '09:00'}`
+  const times = (Array.isArray(a.timeOfDay) ? a.timeOfDay : a.timeOfDay ? [a.timeOfDay] : []).join(' / ')
+  const timesStr = times || '09:00'
+
+  if (a.scheduleType === 'daily') return `每天 ${timesStr}`
   if (a.scheduleType === 'weekly') {
     const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-    return `每${names[a.dayOfWeek ?? 1]} ${a.timeOfDay ?? '09:00'}`
+    const days = (Array.isArray(a.dayOfWeek) ? a.dayOfWeek : a.dayOfWeek !== undefined ? [a.dayOfWeek] : [1])
+      .map((d) => names[d])
+      .join('')
+    return `每${days} ${timesStr}`
   }
   if (a.scheduleType === 'monthly') {
-    const dom = a.dayOfMonth ?? 1
-    // 29-31 号在短月会自动落在当月最后一天，列表里追加提示避免用户误以为漏跑
-    const suffix = dom >= 29 ? '（短月落在最后一天）' : ''
-    return `每月 ${dom} 号 ${a.timeOfDay ?? '09:00'}${suffix}`
+    const doms = (Array.isArray(a.dayOfMonth) ? a.dayOfMonth : a.dayOfMonth !== undefined ? [a.dayOfMonth] : [1])
+    const domStr = doms.length <= 3 ? doms.map((d) => `${d} 号`).join(' / ') : `${doms.length} 个日期`
+    const hasShort = doms.some((d) => d >= 29)
+    const suffix = hasShort ? '（短月落在最后一天）' : ''
+    return `每月 ${domStr} ${timesStr}${suffix}`
   }
   const min = a.intervalMinutes
   if (min < 60) return `每 ${min} 分钟`

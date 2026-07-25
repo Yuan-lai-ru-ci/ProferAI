@@ -75,12 +75,12 @@ export interface Automation {
   scheduleType: AutomationScheduleType
   /** 运行间隔（分钟），scheduleType==='interval' 时使用 */
   intervalMinutes: number
-  /** 触发时刻 "HH:MM"，scheduleType==='daily'|'weekly'|'monthly' 时使用 */
-  timeOfDay?: string
-  /** 星期几（0=周日 … 6=周六），scheduleType==='weekly' 时使用 */
-  dayOfWeek?: number
-  /** 每月几号（1-31），scheduleType==='monthly' 时使用 */
-  dayOfMonth?: number
+  /** 触发时刻 "HH:MM"，scheduleType==='daily'|'weekly'|'monthly' 时使用。支持多个时间点。 */
+  timeOfDay?: string[]
+  /** 星期几（0=周日 … 6=周六），scheduleType==='weekly' 时使用。支持多选。 */
+  dayOfWeek?: number[]
+  /** 每月几号（1-31），scheduleType==='monthly' 时使用。支持多个日期。 */
+  dayOfMonth?: number[]
   /** 一次性任务的绝对触发时间戳，scheduleType==='once' 时使用 */
   scheduledAt?: number
   /**
@@ -135,15 +135,55 @@ export const AUTOMATION_MAX_HISTORY = 20
 /** 连续失败达到此次数自动暂停任务 */
 export const AUTOMATION_MAX_CONSECUTIVE_FAILURES = 5
 
+/**
+ * 归一化 timeOfDay：接受 string | string[] | undefined，返回排序去重的 string[]
+ * 旧数据单值 "09:00" 自动转为 ["09:00"]
+ */
+export function normalizeTimeOfDay(input?: string | string[]): string[] {
+  if (!input) return []
+  const arr = Array.isArray(input) ? input : [input]
+  return [...new Set(arr)].filter(Boolean).sort()
+}
+
+/**
+ * 归一化 dayOfWeek：接受 number | number[] | undefined，返回排序去重的 number[]
+ * 旧数据单值 1 自动转为 [1]
+ */
+export function normalizeDayOfWeek(input?: number | number[]): number[] {
+  if (input === undefined || input === null) return []
+  const arr = Array.isArray(input) ? input : [input]
+  return [...new Set(arr)].filter((d) => Number.isFinite(d) && d >= 0 && d <= 6).sort((a, b) => a - b)
+}
+
+/**
+ * 归一化 dayOfMonth：接受 number | number[] | undefined，返回排序去重的 number[]
+ * 旧数据单值 1 自动转为 [1]
+ */
+export function normalizeDayOfMonth(input?: number | number[]): number[] {
+  if (input === undefined || input === null) return []
+  const arr = Array.isArray(input) ? input : [input]
+  return [...new Set(arr)].filter((d) => Number.isFinite(d) && d >= 1 && d <= 31).sort((a, b) => a - b)
+}
+
+/** timeOfDay 默认值 */
+export const DEFAULT_TIME_OF_DAY: string[] = ['09:00']
+/** dayOfWeek 默认值 */
+export const DEFAULT_DAY_OF_WEEK: number[] = [1]
+/** dayOfMonth 默认值 */
+export const DEFAULT_DAY_OF_MONTH: number[] = [1]
+
 /** 创建定时任务的输入 */
 export interface CreateAutomationInput {
   name: string
   prompt: string
   scheduleType: AutomationScheduleType
   intervalMinutes: number
-  timeOfDay?: string
-  dayOfWeek?: number
-  dayOfMonth?: number
+  /** 触发时刻（可多个）；兼容旧调用传单值 string */
+  timeOfDay?: string | string[]
+  /** 星期几（可多选）；兼容旧调用传单值 number */
+  dayOfWeek?: number | number[]
+  /** 每月几号（可多选）；兼容旧调用传单值 number */
+  dayOfMonth?: number | number[]
   /** 一次性任务的绝对触发时间戳，scheduleType==='once' 时必填 */
   scheduledAt?: number
   /** 最大运行次数上限（实际执行次数），达到后自动停用；不传 = 不限次 */
@@ -168,9 +208,12 @@ export interface UpdateAutomationInput {
   prompt?: string
   scheduleType?: AutomationScheduleType
   intervalMinutes?: number
-  timeOfDay?: string
-  dayOfWeek?: number
-  dayOfMonth?: number
+  /** 触发时刻（可多个）；兼容旧调用传单值 string */
+  timeOfDay?: string | string[]
+  /** 星期几（可多选）；兼容旧调用传单值 number */
+  dayOfWeek?: number | number[]
+  /** 每月几号（可多选）；兼容旧调用传单值 number */
+  dayOfMonth?: number | number[]
   /** 一次性任务的绝对触发时间戳，scheduleType==='once' 时使用 */
   scheduledAt?: number
   /** 最大运行次数上限（实际执行次数）；传 0 或负数等价于不限次。改动会重置已执行次数计数 */

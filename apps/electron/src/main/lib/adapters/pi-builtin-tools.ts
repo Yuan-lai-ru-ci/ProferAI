@@ -399,6 +399,24 @@ function validScheduleType(v: unknown): v is AutomationScheduleType {
   return v === 'interval' || v === 'daily' || v === 'weekly' || v === 'monthly' || v === 'once'
 }
 
+function validTimeOfDayArr(v: unknown): boolean {
+  if (typeof v === 'string') return TIME_OF_DAY_PATTERN.test(v)
+  if (Array.isArray(v)) return v.length > 0 && v.length <= 10 && v.every((t) => typeof t === 'string' && TIME_OF_DAY_PATTERN.test(t))
+  return false
+}
+
+function validDayOfWeekArr(v: unknown): boolean {
+  if (typeof v === 'number') return isFiniteInt(v) && v >= 0 && v <= 6
+  if (Array.isArray(v)) return v.length > 0 && v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
+  return false
+}
+
+function validDayOfMonthArr(v: unknown): boolean {
+  if (typeof v === 'number') return isFiniteInt(v) && v >= 1 && v <= 31
+  if (Array.isArray(v)) return v.length > 0 && v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
+  return false
+}
+
 function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAutomationInput>): void {
   if (input.scheduleType !== undefined && !validScheduleType(input.scheduleType)) {
     throw new Error(`非法的 scheduleType: ${String(input.scheduleType)}`)
@@ -406,14 +424,14 @@ function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAut
   if (input.intervalMinutes !== undefined && (!isFiniteInt(input.intervalMinutes) || input.intervalMinutes < 1)) {
     throw new Error(`非法的 intervalMinutes: ${String(input.intervalMinutes)}`)
   }
-  if (input.timeOfDay !== undefined && !TIME_OF_DAY_PATTERN.test(input.timeOfDay)) {
-    throw new Error(`非法的 timeOfDay: ${String(input.timeOfDay)}`)
+  if (input.timeOfDay !== undefined && !validTimeOfDayArr(input.timeOfDay)) {
+    throw new Error(`非法的 timeOfDay: ${JSON.stringify(input.timeOfDay)}（需为 HH:MM 或数组）`)
   }
-  if (input.dayOfWeek !== undefined && (!isFiniteInt(input.dayOfWeek) || input.dayOfWeek < 0 || input.dayOfWeek > 6)) {
-    throw new Error(`非法的 dayOfWeek: ${String(input.dayOfWeek)}`)
+  if (input.dayOfWeek !== undefined && !validDayOfWeekArr(input.dayOfWeek)) {
+    throw new Error(`非法的 dayOfWeek: ${JSON.stringify(input.dayOfWeek)}（需为 0-6 整数或数组）`)
   }
-  if (input.dayOfMonth !== undefined && (!isFiniteInt(input.dayOfMonth) || input.dayOfMonth < 1 || input.dayOfMonth > 31)) {
-    throw new Error(`非法的 dayOfMonth: ${String(input.dayOfMonth)}`)
+  if (input.dayOfMonth !== undefined && !validDayOfMonthArr(input.dayOfMonth)) {
+    throw new Error(`非法的 dayOfMonth: ${JSON.stringify(input.dayOfMonth)}（需为 1-31 整数或数组）`)
   }
   if (input.scheduledAt !== undefined && (typeof input.scheduledAt !== 'number' || !Number.isFinite(input.scheduledAt) || input.scheduledAt <= 0)) {
     throw new Error(`非法的 scheduledAt: ${String(input.scheduledAt)}（应为毫秒时间戳）`)
@@ -478,9 +496,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           Type.Literal('once'),
         ], { description: '调度类型' }),
         intervalMinutes: Type.Optional(Type.Number({ description: '固定间隔分钟数；scheduleType=interval 时必填' })),
-        timeOfDay: Type.Optional(Type.String({ description: '每天/每周/每月触发时间，24 小时制 HH:MM' })),
-        dayOfWeek: Type.Optional(Type.Number({ description: '每周触发日，0=周日，...，6=周六' })),
-        dayOfMonth: Type.Optional(Type.Number({ description: '每月触发日，1-31' })),
+        timeOfDay: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: '每天/每周/每月触发时间，HH:MM。支持单个时间或数组' })),
+        dayOfWeek: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '每周触发日，0=周日，...，6=周六。支持单日或数组' })),
+        dayOfMonth: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '每月触发日，1-31。支持单日或数组' })),
         scheduledAt: Type.Optional(Type.Number({ description: '一次性任务的绝对触发时间（毫秒时间戳）；scheduleType=once 时必填' })),
         maxRuns: Type.Optional(Type.Number({ description: '最大运行次数上限；达到后任务自动停用' })),
         active: Type.Optional(Type.Boolean({ description: '创建后是否启用，默认 true' })),
@@ -497,9 +515,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           prompt: assertNonBlank(args.prompt as string, 'prompt'),
           scheduleType: args.scheduleType as AutomationScheduleType,
           intervalMinutes: (args.intervalMinutes as number) ?? 10,
-          timeOfDay: args.timeOfDay as string | undefined,
-          dayOfWeek: args.dayOfWeek as number | undefined,
-          dayOfMonth: args.dayOfMonth as number | undefined,
+          timeOfDay: args.timeOfDay as string | string[] | undefined,
+          dayOfWeek: args.dayOfWeek as number | number[] | undefined,
+          dayOfMonth: args.dayOfMonth as number | number[] | undefined,
           scheduledAt: args.scheduledAt as number | undefined,
           maxRuns: args.maxRuns as number | undefined,
           agentRuntime: (args.agentRuntime as AgentRuntime | undefined) ?? ctx.agentRuntime,
@@ -514,14 +532,14 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
         if (input.scheduleType === 'interval' && args.intervalMinutes === undefined) {
           throw new Error('scheduleType=interval 时 intervalMinutes 必填')
         }
-        if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !input.timeOfDay) {
-          throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填')
+        if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !validTimeOfDayArr(input.timeOfDay)) {
+          throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填（支持字符串或数组）')
         }
-        if (input.scheduleType === 'weekly' && input.dayOfWeek === undefined) {
-          throw new Error('scheduleType=weekly 时 dayOfWeek 必填')
+        if (input.scheduleType === 'weekly' && !validDayOfWeekArr(input.dayOfWeek)) {
+          throw new Error('scheduleType=weekly 时 dayOfWeek 必填（支持数值或数组）')
         }
-        if (input.scheduleType === 'monthly' && input.dayOfMonth === undefined) {
-          throw new Error('scheduleType=monthly 时 dayOfMonth 必填')
+        if (input.scheduleType === 'monthly' && !validDayOfMonthArr(input.dayOfMonth)) {
+          throw new Error('scheduleType=monthly 时 dayOfMonth 必填（支持数值或数组）')
         }
         if (input.scheduleType === 'once' && input.scheduledAt === undefined) {
           throw new Error('scheduleType=once 时 scheduledAt（绝对触发时间戳）必填')
@@ -547,9 +565,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           Type.Literal('once'),
         ])),
         intervalMinutes: Type.Optional(Type.Number({ description: '新的固定间隔分钟数' })),
-        timeOfDay: Type.Optional(Type.String({ description: '新的每天/每周/每月触发时间' })),
-        dayOfWeek: Type.Optional(Type.Number({ description: '新的每周触发日' })),
-        dayOfMonth: Type.Optional(Type.Number({ description: '新的每月触发日' })),
+        timeOfDay: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: '新的每天/每周/每月触发时间。支持单个时间或数组' })),
+        dayOfWeek: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '新的每周触发日。支持单日或数组' })),
+        dayOfMonth: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '新的每月触发日。支持单日或数组' })),
         scheduledAt: Type.Optional(Type.Number({ description: '新的一次性触发时间（毫秒时间戳）' })),
         maxRuns: Type.Optional(Type.Number({ description: '新的最大运行次数上限' })),
         active: Type.Optional(Type.Boolean({ description: '启用或暂停任务' })),
@@ -566,9 +584,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           prompt: (args.prompt as string)?.trim(),
           scheduleType: args.scheduleType as AutomationScheduleType | undefined,
           intervalMinutes: args.intervalMinutes as number | undefined,
-          timeOfDay: args.timeOfDay as string | undefined,
-          dayOfWeek: args.dayOfWeek as number | undefined,
-          dayOfMonth: args.dayOfMonth as number | undefined,
+          timeOfDay: args.timeOfDay as string | string[] | undefined,
+          dayOfWeek: args.dayOfWeek as number | number[] | undefined,
+          dayOfMonth: args.dayOfMonth as number | number[] | undefined,
           scheduledAt: args.scheduledAt as number | undefined,
           maxRuns: args.maxRuns as number | undefined,
           active: args.active as boolean | undefined,

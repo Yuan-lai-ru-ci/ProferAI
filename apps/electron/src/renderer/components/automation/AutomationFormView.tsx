@@ -89,9 +89,9 @@ function getDraftSignature(draft: AutomationDraft): string {
     prompt: draft.prompt.trim(),
     scheduleType: draft.scheduleType,
     intervalMinutes: draft.intervalMinutes,
-    timeOfDay: draft.timeOfDay ?? '',
-    dayOfWeek: draft.dayOfWeek ?? '',
-    dayOfMonth: draft.dayOfMonth ?? '',
+    timeOfDay: draft.timeOfDay,
+    dayOfWeek: draft.dayOfWeek,
+    dayOfMonth: draft.dayOfMonth,
     channelId: draft.channelId,
     modelId: draft.modelId ?? '',
     workspaceId: draft.workspaceId ?? '',
@@ -715,58 +715,178 @@ export function AutomationFormView(): React.ReactElement | null {
             </div>
           )}
 
-          {/* daily 模式：时刻 */}
+          {/* daily 模式：多时刻标签 */}
           {form.scheduleType === 'daily' && (
             <div className="flex flex-col gap-2">
-              <Label htmlFor="auto-time">时刻</Label>
-              <input
-                id="auto-time"
-                type="time"
-                value={form.timeOfDay ?? '09:00'}
-                onChange={(e) => update({ timeOfDay: e.target.value })}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </div>
-          )}
-
-          {/* weekly 模式：星期 + 时刻 同一行 */}
-          {form.scheduleType === 'weekly' && (
-            <div className="flex flex-col gap-2">
-              <Label>每周</Label>
-              <div className="flex items-center gap-2">
-                <Select
-                  value={String(form.dayOfWeek ?? 1)}
-                  onValueChange={(v) => update({ dayOfWeek: Number(v) })}
-                >
-                  <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {AUTOMATION_WEEKDAY_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <input
-                  type="time"
-                  value={form.timeOfDay ?? '09:00'}
-                  onChange={(e) => update({ timeOfDay: e.target.value })}
-                  className="flex h-9 w-[120px] shrink-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
+              <Label>时刻（支持多个）</Label>
+              <div className="flex flex-wrap gap-2">
+                {form.timeOfDay.map((t, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs text-primary"
+                  >
+                    {t}
+                    <button
+                      type="button"
+                      onClick={() => update({ timeOfDay: form.timeOfDay.filter((_, j) => j !== i) })}
+                      className="ml-0.5 rounded-full hover:bg-primary/20 p-0.5"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={form.timeOfDay.length >= 10}
+                      className="inline-flex items-center gap-1 rounded-md border border-dashed border-muted-foreground/40 px-2 py-1 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary disabled:opacity-40"
+                    >
+                      + 添加时刻
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-48 p-2" align="start">
+                    <div className="flex flex-col gap-1">
+                      <div className="text-[11px] text-muted-foreground mb-1">快捷预设</div>
+                      {['07:00', '08:00', '09:00', '12:00', '14:00', '18:00', '20:00', '22:00'].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          disabled={form.timeOfDay.includes(preset)}
+                          onClick={() => update({ timeOfDay: [...form.timeOfDay, preset].sort() })}
+                          className="rounded px-2 py-1 text-left text-xs hover:bg-foreground/[0.06] disabled:opacity-30"
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                      <div className="border-t mt-1 pt-1">
+                        <div className="text-[11px] text-muted-foreground mb-1">自定义</div>
+                        <input
+                          type="time"
+                          className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const val = (e.target as HTMLInputElement).value
+                              if (val && /^([01]\d|2[0-3]):[0-5]\d$/.test(val) && !form.timeOfDay.includes(val)) {
+                                update({ timeOfDay: [...form.timeOfDay, val].sort() })
+                              }
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
           )}
 
-          {/* monthly 模式：日期网格 + 时刻 */}
+          {/* weekly 模式：星期多选 + 多时刻 */}
+          {form.scheduleType === 'weekly' && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
+                <Label>星期</Label>
+                <div className="flex gap-1">
+                  {AUTOMATION_WEEKDAY_OPTIONS.map((opt) => {
+                    const active = form.dayOfWeek.includes(opt.value)
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          if (active && form.dayOfWeek.length <= 1) return // 至少保留 1 个
+                          update({ dayOfWeek: active ? form.dayOfWeek.filter((d) => d !== opt.value) : [...form.dayOfWeek, opt.value].sort((a, b) => a - b) })
+                        }}
+                        className={cn(
+                          'flex-1 h-8 rounded-md text-xs font-medium transition-colors',
+                          active
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-foreground/[0.04] text-muted-foreground hover:bg-foreground/[0.08]',
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>时刻（支持多个）</Label>
+                <div className="flex flex-wrap gap-2">
+                  {form.timeOfDay.map((t, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs text-primary"
+                    >
+                      {t}
+                      <button
+                        type="button"
+                        onClick={() => update({ timeOfDay: form.timeOfDay.filter((_, j) => j !== i) })}
+                        className="ml-0.5 rounded-full hover:bg-primary/20 p-0.5"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        disabled={form.timeOfDay.length >= 10}
+                        className="inline-flex items-center gap-1 rounded-md border border-dashed border-muted-foreground/40 px-2 py-1 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary disabled:opacity-40"
+                      >
+                        + 添加时刻
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-2" align="start">
+                      <div className="flex flex-col gap-1">
+                        <div className="text-[11px] text-muted-foreground mb-1">快捷预设</div>
+                        {['07:00', '08:00', '09:00', '12:00', '14:00', '18:00', '20:00', '22:00'].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            disabled={form.timeOfDay.includes(preset)}
+                            onClick={() => update({ timeOfDay: [...form.timeOfDay, preset].sort() })}
+                            className="rounded px-2 py-1 text-left text-xs hover:bg-foreground/[0.06] disabled:opacity-30"
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                        <div className="border-t mt-1 pt-1">
+                          <div className="text-[11px] text-muted-foreground mb-1">自定义</div>
+                          <input
+                            type="time"
+                            className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const val = (e.target as HTMLInputElement).value
+                                if (val && /^([01]\d|2[0-3]):[0-5]\d$/.test(val) && !form.timeOfDay.includes(val)) {
+                                  update({ timeOfDay: [...form.timeOfDay, val].sort() })
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* monthly 模式：日期多选 + 多时刻 */}
           {form.scheduleType === 'monthly' && (
-            <div className="flex flex-col gap-2">
-              <Label>每月</Label>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
+                <Label>日期（支持多选）</Label>
                 <Popover open={dayPopoverOpen} onOpenChange={setDayPopoverOpen}>
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      className="flex h-9 flex-1 items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm hover:bg-foreground/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="flex h-9 items-center justify-between rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm hover:bg-foreground/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     >
-                      <span>{form.dayOfMonth ?? 1} 号</span>
+                      <span>{form.dayOfMonth.length === 0 ? '未选择' : form.dayOfMonth.length <= 3 ? form.dayOfMonth.map((d) => `${d} 号`).join('、') : `${form.dayOfMonth.length} 个日期`}</span>
                     </button>
                   </PopoverTrigger>
                   <PopoverContent className="w-56 p-2" align="start">
@@ -778,12 +898,15 @@ export function AutomationFormView(): React.ReactElement | null {
                       ))}
                       {Array.from({ length: 31 }, (_, i) => {
                         const day = i + 1
-                        const selected = (form.dayOfMonth ?? 1) === day
+                        const selected = form.dayOfMonth.includes(day)
                         return (
                           <button
                             key={day}
                             type="button"
-                            onClick={() => { update({ dayOfMonth: day }); setDayPopoverOpen(false) }}
+                            onClick={() => {
+                              if (selected && form.dayOfMonth.length <= 1) return
+                              update({ dayOfMonth: selected ? form.dayOfMonth.filter((d) => d !== day) : [...form.dayOfMonth, day].sort((a, b) => a - b) })
+                            }}
                             className={cn(
                               'flex h-7 items-center justify-center rounded-md text-[13px] transition-colors',
                               selected
@@ -798,18 +921,74 @@ export function AutomationFormView(): React.ReactElement | null {
                     </div>
                   </PopoverContent>
                 </Popover>
-                <input
-                  type="time"
-                  value={form.timeOfDay ?? '09:00'}
-                  onChange={(e) => update({ timeOfDay: e.target.value })}
-                  className="flex h-9 w-[120px] shrink-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
+                {form.dayOfMonth.some((d) => d >= 29) && (
+                  <span className="pl-2.5 text-xs text-muted-foreground leading-relaxed">
+                    如当月无对应日期，将在当月最后一天执行
+                  </span>
+                )}
               </div>
-              {form.dayOfMonth !== undefined && form.dayOfMonth >= 29 && (
-                <span className="pl-2.5 text-xs text-muted-foreground leading-relaxed">
-                  如当月无 {form.dayOfMonth} 日，将在当月最后一天执行
-                </span>
-              )}
+              <div className="flex flex-col gap-2">
+                <Label>时刻（支持多个）</Label>
+                <div className="flex flex-wrap gap-2">
+                  {form.timeOfDay.map((t, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs text-primary"
+                    >
+                      {t}
+                      <button
+                        type="button"
+                        onClick={() => update({ timeOfDay: form.timeOfDay.filter((_, j) => j !== i) })}
+                        className="ml-0.5 rounded-full hover:bg-primary/20 p-0.5"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        disabled={form.timeOfDay.length >= 10}
+                        className="inline-flex items-center gap-1 rounded-md border border-dashed border-muted-foreground/40 px-2 py-1 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary disabled:opacity-40"
+                      >
+                        + 添加时刻
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-2" align="start">
+                      <div className="flex flex-col gap-1">
+                        <div className="text-[11px] text-muted-foreground mb-1">快捷预设</div>
+                        {['07:00', '08:00', '09:00', '12:00', '14:00', '18:00', '20:00', '22:00'].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            disabled={form.timeOfDay.includes(preset)}
+                            onClick={() => update({ timeOfDay: [...form.timeOfDay, preset].sort() })}
+                            className="rounded px-2 py-1 text-left text-xs hover:bg-foreground/[0.06] disabled:opacity-30"
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                        <div className="border-t mt-1 pt-1">
+                          <div className="text-[11px] text-muted-foreground mb-1">自定义</div>
+                          <input
+                            type="time"
+                            className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const val = (e.target as HTMLInputElement).value
+                                if (val && /^([01]\d|2[0-3]):[0-5]\d$/.test(val) && !form.timeOfDay.includes(val)) {
+                                  update({ timeOfDay: [...form.timeOfDay, val].sort() })
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
             </div>
           )}
 

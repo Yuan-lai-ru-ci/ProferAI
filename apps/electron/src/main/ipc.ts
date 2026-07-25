@@ -5001,6 +5001,25 @@ export function registerIpcHandlers(): void {
     }
   }
 
+  /** 校验 timeOfDay：单个或数组，每个必须是 HH:MM */
+  const validTimeOfDayArr = (v: unknown): boolean => {
+    if (typeof v === 'string') return validTimeOfDay(v)
+    if (Array.isArray(v)) return v.length > 0 && v.length <= 10 && v.every((t) => typeof t === 'string' && validTimeOfDay(t))
+    return false
+  }
+  /** 校验 dayOfWeek：单个或数组，每个必须是 0-6 */
+  const validDayOfWeekArr = (v: unknown): boolean => {
+    if (typeof v === 'number') return isFiniteInt(v) && v >= 0 && v <= 6
+    if (Array.isArray(v)) return v.length > 0 && v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
+    return false
+  }
+  /** 校验 dayOfMonth：单个或数组，每个必须是 1-31 */
+  const validDayOfMonthArr = (v: unknown): boolean => {
+    if (typeof v === 'number') return isFiniteInt(v) && v >= 1 && v <= 31
+    if (Array.isArray(v)) return v.length > 0 && v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
+    return false
+  }
+
   const validateAutomationFields = (i: Partial<CreateAutomationInput | UpdateAutomationInput>): void => {
     if (i.scheduleType !== undefined && !validScheduleType(i.scheduleType)) {
       throw new Error(`非法的 scheduleType: ${String(i.scheduleType)}`)
@@ -5008,14 +5027,14 @@ export function registerIpcHandlers(): void {
     if (i.intervalMinutes !== undefined && (!isFiniteInt(i.intervalMinutes) || i.intervalMinutes < 1)) {
       throw new Error(`非法的 intervalMinutes: ${String(i.intervalMinutes)}`)
     }
-    if (i.timeOfDay !== undefined && !validTimeOfDay(i.timeOfDay)) {
-      throw new Error(`非法的 timeOfDay: ${String(i.timeOfDay)}`)
+    if (i.timeOfDay !== undefined && !validTimeOfDayArr(i.timeOfDay)) {
+      throw new Error(`非法的 timeOfDay: ${JSON.stringify(i.timeOfDay)}（需为 HH:MM 或最多 10 个的数组）`)
     }
-    if (i.dayOfWeek !== undefined && (!isFiniteInt(i.dayOfWeek) || i.dayOfWeek < 0 || i.dayOfWeek > 6)) {
-      throw new Error(`非法的 dayOfWeek: ${String(i.dayOfWeek)}`)
+    if (i.dayOfWeek !== undefined && !validDayOfWeekArr(i.dayOfWeek)) {
+      throw new Error(`非法的 dayOfWeek: ${JSON.stringify(i.dayOfWeek)}（需为 0-6 整数或数组）`)
     }
-    if (i.dayOfMonth !== undefined && (!isFiniteInt(i.dayOfMonth) || i.dayOfMonth < 1 || i.dayOfMonth > 31)) {
-      throw new Error(`非法的 dayOfMonth: ${String(i.dayOfMonth)}`)
+    if (i.dayOfMonth !== undefined && !validDayOfMonthArr(i.dayOfMonth)) {
+      throw new Error(`非法的 dayOfMonth: ${JSON.stringify(i.dayOfMonth)}（需为 1-31 整数或数组）`)
     }
     if (i.permissionMode !== undefined && !validPermissionMode(i.permissionMode)) {
       throw new Error(`非法的 permissionMode: ${String(i.permissionMode)}`)
@@ -5040,9 +5059,9 @@ export function registerIpcHandlers(): void {
       // channelId / workspaceId 允许为空（草稿态），但此时任务不能被启用
       validateAutomationFields(input)
       if (input.scheduleType === 'interval' && !isFiniteInt(input.intervalMinutes)) throw new Error('scheduleType=interval 时 intervalMinutes 必填')
-      if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !validTimeOfDay(input.timeOfDay)) throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填')
-      if (input.scheduleType === 'weekly' && !isFiniteInt(input.dayOfWeek)) throw new Error('scheduleType=weekly 时 dayOfWeek 必填')
-      if (input.scheduleType === 'monthly' && input.dayOfMonth === undefined) throw new Error('scheduleType=monthly 时 dayOfMonth 必填')
+      if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !validTimeOfDayArr(input.timeOfDay)) throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填（支持数组）')
+      if (input.scheduleType === 'weekly' && !validDayOfWeekArr(input.dayOfWeek)) throw new Error('scheduleType=weekly 时 dayOfWeek 必填（支持数组）')
+      if (input.scheduleType === 'monthly' && !validDayOfMonthArr(input.dayOfMonth)) throw new Error('scheduleType=monthly 时 dayOfMonth 必填（支持数组）')
       const a = createAutomation(input)
       broadcastAutomationsChanged()
       return a

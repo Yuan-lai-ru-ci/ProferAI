@@ -1610,15 +1610,25 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             nextPrompt = undefined
             try {
               if (active.abortRequested) {
-                currentInterrupt?.rejectAccepted(createAbortError())
-                rejectPendingInterruptPrompts(active, createAbortError())
-                return
+                // 如果还有待处理的 interrupt 消息，清除 abortRequested 继续处理；
+                // 否则才是真正的 abort（停止整个会话），拒绝所有并退出。
+                if (active.pendingInterruptPrompts.length > 0) {
+                  active.abortRequested = false
+                  currentInterrupt?.resolveAccepted()
+                } else {
+                  currentInterrupt?.rejectAccepted(createAbortError())
+                  rejectPendingInterruptPrompts(active, createAbortError())
+                  return
+                }
+              } else {
+                currentInterrupt?.resolveAccepted()
               }
-              currentInterrupt?.resolveAccepted()
-              await Promise.race([
-                session.prompt(prompt, { source: 'rpc' }),
-                createAbortRace(active),
-              ])
+              if (!active.abortRequested) {
+                await Promise.race([
+                  session.prompt(prompt, { source: 'rpc' }),
+                  createAbortRace(active),
+                ])
+              }
             } finally {
               if (active.interrupting) {
                 session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
@@ -1626,8 +1636,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               active.interrupting = false
             }
             if (active.abortRequested) {
-              rejectPendingInterruptPrompts(active, createAbortError())
-              return
+              // 同上：还有 pending interrupt → 继续；否则彻底终止
+              if (active.pendingInterruptPrompts.length > 0) {
+                active.abortRequested = false
+              } else {
+                rejectPendingInterruptPrompts(active, createAbortError())
+                return
+              }
             }
             if (runtimeGuard.shouldStopBeforeNextTurn()) {
               rejectPendingInterruptPrompts(active, createAbortError())
@@ -1669,6 +1684,27 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     active.session?.abort().catch(err => console.error('[Pi adapter] session.abort() 失败:', err))
   }
 
+  /**
+   * 软中断当前 turn，但保留活跃 session 以便继续注入下一条用户消息。
+   *
+   * 与 abort() 的区别：不杀 session，允许立即续跑新消息。
+   * 设置 abortRequested 让 createAbortRace 竞速退出 session.prompt()，
+   * 并调用 session.abort() 让 Pi SDK 底层终止当前 prompt 流。
+   */
+  async interruptQuery(sessionId: string): Promise<void> {
+    const active = this.activeSessions.get(sessionId)
+    if (!active) return
+    active.abortRequested = true
+    rejectPendingInterruptPrompts(active, createAbortError())
+    if (!active.session) rejectActiveReady(active, createAbortError())
+    try {
+      await active.session?.abort()
+      console.log(`[Pi adapter] 已软中断当前 turn: sessionId=${sessionId}`)
+    } catch (err) {
+      console.warn(`[Pi adapter] 软中断 session.abort() 失败:`, err)
+    }
+  }
+
   async sendQueuedMessage(
     sessionId: string,
     message: SDKUserMessageInput,
@@ -1677,7 +1713,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     const active = this.activeSessions.get(sessionId)
     if (!active) throw new Error('当前会话没有正在运行的 Agent')
     const session = await waitForActiveSession(active)
-    if (active.abortRequested) throw createAbortError()
+    // abortRequested 检查：interrupt 路径豁免（interruptQuery 已在此前设置该标志），
+    // 普通队列消息在会话已中止时应拒绝。
+    if (!options?.interrupt && active.abortRequested) throw createAbortError()
     if (active.runtimeGuard?.shouldStopBeforeNextTurn()) {
       session.agent.clearAllQueues()
       const stopOverride = active.runtimeGuard.getLimitResultOverride()
@@ -1703,6 +1741,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       if (session.isStreaming) {
         // Pi 没有单独的 interrupt()；公开取消 API 是 abort()。
         // 这里把 abort 产生的内部 aborted 终态压住，再由 query 的 prompt chain 发送新消息。
+        active.abortRequested = true
         active.interrupting = true
         active.interruptAbortPromise ??= session.abort()
           .finally(() => {

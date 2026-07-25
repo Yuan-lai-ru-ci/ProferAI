@@ -30,9 +30,9 @@ export interface AutomationDraft {
   prompt: string
   scheduleType: AutomationScheduleType
   intervalMinutes: number
-  timeOfDay?: string
-  dayOfWeek?: number
-  dayOfMonth?: number
+  timeOfDay: string[]
+  dayOfWeek: number[]
+  dayOfMonth: number[]
   channelId: string
   modelId?: string
   workspaceId?: string
@@ -61,9 +61,9 @@ export function createEmptyDraft(): AutomationDraft {
     prompt: '',
     scheduleType: 'interval',
     intervalMinutes: 10,
-    timeOfDay: '09:00',
-    dayOfWeek: 1,
-    dayOfMonth: 1,
+    timeOfDay: ['09:00'],
+    dayOfWeek: [1],
+    dayOfMonth: [1],
     channelId: '',
     permissionMode: AUTOMATION_DEFAULT_PERMISSION_MODE,
     sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
@@ -82,9 +82,9 @@ export function automationToDraft(a: Automation): AutomationDraft {
     prompt: a.prompt,
     scheduleType: a.scheduleType,
     intervalMinutes: a.intervalMinutes,
-    timeOfDay: a.timeOfDay,
-    dayOfWeek: a.dayOfWeek,
-    dayOfMonth: a.dayOfMonth,
+    timeOfDay: Array.isArray(a.timeOfDay) ? a.timeOfDay : (a.timeOfDay ? [a.timeOfDay] : ['09:00']),
+    dayOfWeek: Array.isArray(a.dayOfWeek) ? a.dayOfWeek : (a.dayOfWeek !== undefined ? [a.dayOfWeek] : [1]),
+    dayOfMonth: Array.isArray(a.dayOfMonth) ? a.dayOfMonth : (a.dayOfMonth !== undefined ? [a.dayOfMonth] : [1]),
     channelId: a.channelId,
     modelId: a.modelId,
     workspaceId: a.workspaceId,

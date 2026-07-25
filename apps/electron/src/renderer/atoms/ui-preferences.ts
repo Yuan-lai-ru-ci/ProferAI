@@ -18,7 +18,7 @@ export const longTextPasteAsAttachmentEnabledAtom = atom<boolean>(false)
 export const richTextRenderingEnabledAtom = atom<boolean>(false)
 
 /** 是否在侧边栏显示知识库入口（保留旧设置 key 以兼容已有用户偏好） */
-export const paperKnowledgeBaseEnabledAtom = atom<boolean>(true)
+export const paperKnowledgeBaseEnabledAtom = atom<boolean>(false)
 
 // ===== 初始化 =====
 
@@ -36,7 +36,8 @@ export async function initializeUiPreferences(
     setStickyUserMessageEnabled(settings.stickyUserMessageEnabled ?? true)
     setLongTextPasteAsAttachmentEnabled?.(settings.longTextPasteAsAttachmentEnabled ?? false)
     setRichTextRenderingEnabled?.(settings.richTextRenderingEnabled ?? false)
-    setPaperKnowledgeBaseEnabled?.(settings.paperKnowledgeBaseEnabled ?? true)
+    // 知识库已暂时关闭，强制为 false，不读持久化值
+    setPaperKnowledgeBaseEnabled?.(false)
   } catch (error) {
     console.error('[UI偏好] 初始化失败:', error)
   }
