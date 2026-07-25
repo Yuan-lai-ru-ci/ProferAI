@@ -57,3 +57,13 @@ apps/electron/resources/bin/
 *.db-wal
 *.db-shm
 *.sqlite
+
+# Profer 开发日志与临时文件
+.context/*.log
+.context/*.err.log
+.context/*.out.log
+.context/*.pid
+.context/*.ps1
+.context/*.diff
+nul
+scripts/_fix_define2.py
