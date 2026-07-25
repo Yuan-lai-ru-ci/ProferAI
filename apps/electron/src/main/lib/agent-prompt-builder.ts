@@ -34,6 +34,8 @@ interface SystemPromptContext {
   claudeAvailable?: boolean
   /** DeepSeek 系列主模型下，运行时固定注入给 SubAgent 的模型 */
   deepSeekSubagentModel?: string
+  /** 当前 runtime 是否为 Pi（影响记忆/文件提示词） */
+  isPiRuntime?: boolean
 }
 
 interface WorkspacePromptPaths {
@@ -136,6 +138,25 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 固定路由到 \`${DEEP
 Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，不要通过 \`model\` 参数指定 haiku/sonnet/opus 等 Claude 模型别名，否则会导致调用失败。`)
   }
 
+  // Pi Runtime 信息（仅 Pi 会话注入）
+  if (ctx.isPiRuntime) {
+    sections.push(`## Pi Agent Runtime
+
+当前会话运行在 Pi Agent 运行时上。你仍然遵循 Profer Agent 的统一行为规范，但底层工具、权限和消息流由 Profer 的 Pi adapter 桥接：
+
+- 使用 Profer 暴露给你的 Read、Write、Edit、Bash、Grep、Glob、LS、Skill 和产品工具完成任务
+- 调用 \`write\` 时必须在同一次调用中同时提供 \`path\` 和完整的字符串 \`content\`；不要只提供路径。需要创建空文件时显式传入 \`content: ""\`
+- 遵循本提示词中的工作区、权限、计划模式、Context 和知识维护规则
+- 不要假设当前处于 Claude Code CLI 原生运行环境，也不要依赖只存在于 Claude runtime 的内置配置
+- 当 Profer 提供附加目录时，可以按提示中的绝对路径直接访问这些用户授权范围
+
+### Pi Runtime 与文件记忆
+
+- **可以读取**：你可以通过 Read 工具读取工作区 CLAUDE.md、\`workspace-files/.context/memory-archive/\` 主题文件和工作区级 Context，获取历史经验和项目规则
+- **不要写入长期记忆文件**：\`.claude/memory/\` 的自动记忆和 \`memory-archive/\` 的主题记忆都是 Claude Agent SDK 原生持久化机制，Pi runtime 没有对等能力；**不要尝试写入或更新这些文件**
+- **会话级 Context 正常使用**：当前 cwd 下的 \`.context/\`（note.md、todo.md、plan/）可以正常读写
+- **新发现的经验**：在回复末尾建议用户在后续 Claude 会话中手动沉淀`)}
+
   // 用户信息
   sections.push(`## 用户信息
 
@@ -212,7 +233,8 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 
 Claude Agent SDK 可能会维护工作区级 auto memory 文件，目录由 Profer 指向工作区根目录的 \`.claude/memory/\`：
 - **用途**：沉淀跨会话学习到的经验、用户偏好、误判纠正、问题状态变化和易错点
-- **入口文件**：\`.claude/memory/MEMORY.md\` 只放主题索引和路由；详细内容拆到同目录或子目录下的主题文件
+- **入口文件**：\`.claude/memory/MEMORY.md\` 只放主题索引和路由，保持短索引（<20 行），不在其中堆砌正文
+- **主题文件**：详细内容按索引路由到 \`workspace-files/.context/memory-archive/\` 下的对应主题文件；这些文件通过索引间接关联，不在 \`.claude/memory/\` 同目录
 - **使用要求**：不要把它当聊天流水账；只有明确重复出现、用户明确要求记住，或删掉后未来 Agent 明显会犯错的稳定经验才写入
 - **会话内维护**：当用户确认问题已解决、否定先前判断、说明问题仍存在/加重，或明确表达长期偏好时，判断是否应更新 memory；纠正旧记忆时应修订或标注旧结论，而不是只追加冲突新结论
 - **弱信号处理**：一次性偏好、临时过程和证据不足的判断，不要直接写入 auto memory；可在最终回复中建议用户确认后再沉淀
@@ -258,15 +280,15 @@ Context 用来承载正在进行的任务状态、长期工作区资料和可搜
 | 场景 | 处理方式 |
 |------|---------|
 | 项目硬规则、架构边界、常用命令、入口索引 | → 小幅更新 CLAUDE.md |
-| 用户偏好、误判纠正、问题解决/未解决/加重、跨会话经验 | → 必要时小幅更新 .claude/memory/MEMORY.md 或主题文件 |
+| 用户偏好、误判纠正、问题解决/未解决/加重、跨会话经验 | → 更新 .claude/memory/MEMORY.md 索引 + workspace-files/.context/memory-archive/ 主题文件 |
 | 重复流程、固定检查清单、可复用工作方式 | → 搜索/创建/更新 Skill |
 | 当前任务的临时计划、进度、交接和中间结论 | → 写入会话级 .context/ |
-| 跨会话可复用的调研、方案对比、代码分析、长 checklist | → 写入工作区级 .context/ 或工作区文档，并在 CLAUDE.md/Memory/Skill 中只保留入口 |
+| 跨会话可复用的调研、方案对比、代码分析、长 checklist | → 写入 workspace-files/.context/ 或工作区文档，并在 CLAUDE.md/Memory/Skill 中只保留入口 |
 | 多步骤任务的当前进度 | → 更新会话级 .context/todo.md；长期项目进度才放工作区级 .context/todo.md |
 | 简单问答、一次性修改 | → 直接回复，不写文件 |
 | 执行计划 | → 写入 .context/plan/ 目录 |
 
-维护这些长期文件前，先按需搜索当前会话、会话级 Context、工作区级 Context、CLAUDE.md、auto memory 索引和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
+维护这些长期文件前，先按需搜索当前会话、会话级 Context、工作区级 Context、CLAUDE.md、auto memory 索引（MEMORY.md）、memory-archive 主题文件和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
 
   // 任务完成标准
   sections.push(`## 任务完成标准

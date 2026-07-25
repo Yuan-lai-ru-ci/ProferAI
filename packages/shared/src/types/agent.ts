@@ -960,7 +960,7 @@ export interface WorkspaceMemorySummary {
     /** 绝对目录路径 */
     directory: string
     /** MEMORY.md 是否存在 */
-    memoryMdExists: boolean
+    indexExists: boolean
     /** 文本文件数量 */
     fileCount: number
     /** 总大小（字节） */
