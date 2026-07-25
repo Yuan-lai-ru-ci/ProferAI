@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
   RuntimeStatus,
@@ -430,6 +430,13 @@ export interface ElectronAPI {
   removeCustomNotificationSound: (id: string) => Promise<CustomNotificationSound[]>
   /** 获取自定义音效的文件 URL（用于 HTMLAudioElement 播放） */
   getCustomSoundUrl: (fileName: string) => Promise<string>
+
+  // ===== 桌面通知（通过主进程弹出原生 Notification） =====
+
+  /** 通过主进程弹出桌面通知（Windows 点击可靠） */
+  showDesktopNotification: (title: string, body: string) => Promise<void>
+  /** 注册桌面通知点击回调（返回清理函数） */
+  onDesktopNotificationClicked: (callback: () => void) => () => void
 
   /** 设置开机自启动 */
   setAutoLaunch: (enabled: boolean) => Promise<void>
@@ -1664,6 +1671,16 @@ const electronAPI: ElectronAPI = {
   },
   getCustomSoundUrl: (fileName: string) => {
     return ipcRenderer.invoke(NOTIFICATION_SOUND_IPC_CHANNELS.GET_URL, fileName)
+  },
+
+  // 桌面通知（通过主进程弹出原生 Notification，Windows 点击可靠）
+  showDesktopNotification: (title: string, body: string) => {
+    return ipcRenderer.invoke(DESKTOP_NOTIFICATION_IPC_CHANNELS.SHOW, { title, body })
+  },
+  onDesktopNotificationClicked: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on(DESKTOP_NOTIFICATION_IPC_CHANNELS.CLICKED, listener)
+    return () => { ipcRenderer.removeListener(DESKTOP_NOTIFICATION_IPC_CHANNELS.CLICKED, listener) }
   },
 
   // Scratch Pad 持久化

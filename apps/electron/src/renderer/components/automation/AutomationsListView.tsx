@@ -17,6 +17,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Clock, Pause, Play, Power, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { detectIsWindows } from '@/lib/platform'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   automationsAtom,
@@ -53,6 +54,7 @@ function formatSchedule(a: Automation): string {
 }
 
 export function AutomationsListView(): React.ReactElement {
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
@@ -85,7 +87,15 @@ export function AutomationsListView(): React.ReactElement {
     <div className="h-full flex flex-col overflow-hidden">
       {/* 标题栏 */}
       {/* 空列表时隐藏右上角「新建」按钮，避免与空状态中心按钮重复 */}
-      <div className="titlebar-drag-region flex items-center justify-between max-w-5xl w-full mx-auto px-8 pt-8 pb-6 flex-shrink-0">
+      <div
+        className="titlebar-drag-region flex items-center justify-between px-8 pt-8 pb-6 flex-shrink-0"
+        style={{
+          maxWidth: isWindows ? 'min(64rem, calc(100% - 126px))' : '64rem',
+          width: isWindows ? 'calc(100% - 126px)' : '100%',
+          marginLeft: isWindows ? 0 : 'auto',
+          marginRight: isWindows ? '126px' : 'auto',
+        }}
+      >
         <h1 className="text-2xl font-semibold text-foreground">定时任务</h1>
         {automations.length > 0 && (
           <button

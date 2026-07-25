@@ -76,19 +76,15 @@ function buildTaskGraphSchemas(z: ZodModule['z']) {
   return {
     create: {
       subject: z.string().describe('任务标题'),
-      description: z.string().optional().describe('任务描述（自动注入 dependsOn/forkFrom 标记行）'),
-      dependsOn: z.array(z.string()).optional().describe('依赖的任务 ID 列表'),
-      forkFrom: z.string().optional().describe('从哪个旧任务分叉而来'),
-      activeForm: z.string().optional().describe('进行时态描述（如 "正在实现登录功能"）'),
+      description: z.string().optional().describe('任务说明'),
+      dependsOn: z.array(z.string()).optional().describe('必须先完成的任务 ID（此任务等它们完成才能开始）'),
     },
     update: {
       taskId: z.string().describe('要更新的任务 ID'),
       status: z.enum(['pending', 'in_progress', 'completed', 'failed', 'cancelled']).optional()
-        .describe('任务状态'),
-      subject: z.string().optional().describe('新的任务标题'),
-      description: z.string().optional().describe('新的任务描述'),
-      dependsOn: z.array(z.string()).optional().describe('依赖的任务 ID 列表（会替换旧的依赖）'),
-      abandonReason: z.string().optional().describe('放弃此方向的原因（写入后节点渲染为枯枝）'),
+        .describe('新状态'),
+      dependsOn: z.array(z.string()).optional().describe('必须先完成的任务 ID（发现遗漏的依赖关系时在此补上）'),
+      abandonReason: z.string().optional().describe('放弃原因'),
     },
   }
 }
@@ -117,26 +113,22 @@ export async function injectTaskGraphMcpServer(
       // ===== proma_task_create =====
       sdk.tool(
         'proma_task_create',
-        '创建任务图节点（带结构化参数）。与 TaskCreate 不同，此工具的 schema 直接暴露 dependsOn（依赖列表）、forkFrom（分叉来源）字段，无需手写内联标记。创建后任务自动出现在项目图中。',
+        '创建任务。依赖用 dependsOn 数组直填。用此工具替代 TaskCreate。',
         schemas.create,
         async (args) => {
           const taskId = randomUUID()
           const subject = args.subject
           const rawDescription = args.description ?? ''
           const dependsOn = args.dependsOn ?? []
-          const forkFrom = args.forkFrom
-          const activeForm = args.activeForm
 
-          // 注入结构化参数到 description
-          const description = buildEnrichedDescription(rawDescription, dependsOn, forkFrom)
+          const description = buildEnrichedDescription(rawDescription, dependsOn, undefined)
 
-          // 写入 task_created 事件
           const createdEvent: GraphEvent = {
             type: 'task_created',
             taskId,
             timestamp: now(),
             payload: {
-              subject: activeForm ? `${subject} [${activeForm}]` : subject,
+              subject,
               description,
               dependsOn,
             },
@@ -169,13 +161,12 @@ export async function injectTaskGraphMcpServer(
       // ===== proma_task_update =====
       sdk.tool(
         'proma_task_update',
-        '更新任务图节点（带结构化参数）。与 TaskUpdate 不同，此工具的 schema 直接暴露 dependsOn、abandonReason 字段，无需手写内联标记。',
+        '更新任务状态/依赖/放弃。发现遗漏的依赖关系时在此补 dependsOn。用此工具替代 TaskUpdate。',
         schemas.update,
         async (args) => {
           const taskId = args.taskId
           const status = args.status
-          const subject = args.subject
-          let rawDescription = args.description ?? ''
+          let rawDescription = ''
           const dependsOn = args.dependsOn
           const abandonReason = args.abandonReason
 
@@ -202,17 +193,16 @@ export async function injectTaskGraphMcpServer(
             })
           }
 
-          // 描述/标题/依赖更新。dependsOn 存在时（包括 []）代表完整替换，
+          // 依赖更新。dependsOn 存在时（包括 []）代表完整替换，
           // 由 graph-state 清理被移除的边和反向 dependedBy。
-          if (subject || args.description !== undefined || dependsOn !== undefined) {
+          if (dependsOn !== undefined) {
             appendGraphEvent(ctx.sessionId, {
               type: 'task_updated',
               taskId,
               timestamp: ts,
               payload: {
-                ...(subject && { subject }),
-                ...(args.description !== undefined && { description }),
-                ...(dependsOn !== undefined && { dependsOn }),
+                description: buildEnrichedDescription(rawDescription, dependsOn, undefined),
+                dependsOn,
               },
             })
           }

@@ -53,6 +53,7 @@ import {
   notificationSoundsAtom,
   customNotificationSoundsAtom,
   initializeNotifications,
+  initDesktopNotificationListener,
 } from './atoms/notifications'
 import {
   stickyUserMessageEnabledAtom,
@@ -396,6 +397,7 @@ function NotificationsInitializer(): null {
 
   useEffect(() => {
     initializeNotifications(setEnabled, setSoundEnabled, setSounds, setCustomSounds)
+    initDesktopNotificationListener()
   }, [setEnabled, setSoundEnabled, setSounds, setCustomSounds])
 
   return null
