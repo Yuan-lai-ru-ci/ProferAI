@@ -2,7 +2,8 @@
  * 桌面通知状态管理
  *
  * 管理通知开关状态，提供发送桌面通知的工具函数。
- * 使用 Web Notification API（Electron renderer 原生支持）。
+ * Windows 上通过主进程弹出 Electron 原生 Notification（点击可靠）；
+ * macOS/Linux 使用 Web Notification API。
  * 支持多场景通知音选择（任务完成、权限审批、计划审批）。
  * 支持用户自定义音效（最长 10s，存储到 ~/.profer/custom-sounds/）。
  */
@@ -320,6 +321,27 @@ export function playNotificationSoundForType(
 
 // ===== 桌面通知 =====
 
+/**
+ * 当前待处理的桌面通知点击回调。
+ * 主进程通知 clicked 时触发，执行后自动清空。
+ * 同一时间通常只有一个活跃通知（阻塞型或最新的任务完成型）。
+ */
+let pendingNavigateCallback: (() => void) | null = null
+
+/**
+ * 初始化桌面通知 click 监听（应在应用启动时调用一次）。
+ * 主进程弹出原生 Notification → 用户点击 → IPC 回调 → 执行导航。
+ */
+export function initDesktopNotificationListener(): void {
+  if (typeof window !== 'undefined' && window.electronAPI?.onDesktopNotificationClicked) {
+    window.electronAPI.onDesktopNotificationClicked(() => {
+      const cb = pendingNavigateCallback
+      pendingNavigateCallback = null
+      cb?.()
+    })
+  }
+}
+
 /** 发送桌面通知的附加选项 */
 export interface DesktopNotificationOptions {
   /** 通知音场景类型（启用时按此类型播放对应音效） */
@@ -341,6 +363,8 @@ export interface DesktopNotificationOptions {
  *
  * 提示音：无论窗口是否聚焦都会播放（阻塞操作需要立即引起注意）。
  * 桌面通知：仅在窗口未聚焦且通知已启用时发送。
+ * Windows 上通过主进程 Electron 原生 Notification 弹出（点击可靠），
+ * macOS/Linux 使用 Web Notification API（onclick 在这些平台可靠）。
  * 点击通知会聚焦应用窗口，并可选导航到对应会话。
  */
 export function sendDesktopNotification(
@@ -364,10 +388,38 @@ export function sendDesktopNotification(
     if (!enabled) return
     if (!options?.force && document.hasFocus()) return
 
+    // 注册点击导航回调
+    pendingNavigateCallback = options?.onNavigate ?? null
+
+    // Windows：通过主进程弹出 Electron 原生 Notification（点击可靠）
+    if (window.electronAPI?.showDesktopNotification) {
+      window.electronAPI.showDesktopNotification(title, body).catch(() => {
+        // 主进程通知失败 → 回退到 Web Notification
+        fallbackWebNotification(title, body, options)
+      })
+    } else {
+      // 降级：直接使用 Web Notification API
+      fallbackWebNotification(title, body, options)
+    }
+  }, 0)
+}
+
+/**
+ * 使用 Web Notification API 发送通知（macOS / Linux / 回退）。
+ * 这些平台 onclick 可靠，可直接设置导航回调。
+ */
+function fallbackWebNotification(
+  title: string,
+  body: string,
+  options?: DesktopNotificationOptions
+): void {
+  try {
     const notification = new Notification(title, { body, silent: true })
     notification.onclick = () => {
       window.focus()
       options?.onNavigate?.()
     }
-  }, 0)
+  } catch {
+    // Notification API 不可用，静默忽略
+  }
 }

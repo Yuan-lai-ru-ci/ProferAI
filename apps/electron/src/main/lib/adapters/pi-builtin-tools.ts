@@ -179,25 +179,23 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
     sdk.defineTool({
       name: 'mcp__task-graph__proma_task_create',
       label: '创建项目任务',
-      description: '创建任务图节点，支持结构化依赖和分叉来源；创建后任务自动出现在项目图中。',
+      description: '创建任务。依赖用 dependsOn 数组直填。用此工具替代 TaskCreate。',
       parameters: Type.Object({
         subject: Type.String({ minLength: 1 }),
         description: Type.Optional(Type.String()),
         dependsOn: Type.Optional(Type.Array(Type.String())),
-        forkFrom: Type.Optional(Type.String()),
-        activeForm: Type.Optional(Type.String()),
       }),
       async execute(_toolCallId, params) {
-        const args = params as { subject: string; description?: string; dependsOn?: string[]; forkFrom?: string; activeForm?: string }
+        const args = params as { subject: string; description?: string; dependsOn?: string[] }
         const taskId = randomUUID()
-        const description = enrichTaskDescription(args.description ?? '', args.dependsOn, args.forkFrom)
+        const description = enrichTaskDescription(args.description ?? '', args.dependsOn, undefined)
         const timestamp = Date.now()
         const createdEvent: GraphEvent = {
           type: 'task_created',
           taskId,
           timestamp,
           payload: {
-            subject: args.activeForm ? `${args.subject} [${args.activeForm}]` : args.subject,
+            subject: args.subject,
             description,
             dependsOn: args.dependsOn ?? [],
           },
@@ -215,19 +213,17 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
     sdk.defineTool({
       name: 'mcp__task-graph__proma_task_update',
       label: '更新项目任务',
-      description: '更新任务图节点，支持状态、标题、描述、依赖和放弃原因。',
+      description: '更新任务状态/依赖/放弃。发现遗漏的依赖关系时在此补 dependsOn。用此工具替代 TaskUpdate。',
       parameters: Type.Object({
         taskId: Type.String({ minLength: 1 }),
         status: Type.Optional(Type.Union([
           Type.Literal('pending'), Type.Literal('in_progress'), Type.Literal('completed'), Type.Literal('failed'), Type.Literal('cancelled'),
         ])),
-        subject: Type.Optional(Type.String()),
-        description: Type.Optional(Type.String()),
         dependsOn: Type.Optional(Type.Array(Type.String())),
         abandonReason: Type.Optional(Type.String()),
       }),
       async execute(_toolCallId, params) {
-        const args = params as { taskId: string; status?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'; subject?: string; description?: string; dependsOn?: string[]; abandonReason?: string }
+        const args = params as { taskId: string; status?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'; dependsOn?: string[]; abandonReason?: string }
         if (!queryNodeById(ctx.sessionId, args.taskId)) {
           return jsonToolResult({ error: 'TASK_NOT_FOUND', taskId: args.taskId, message: '当前会话任务图中不存在该任务，已拒绝写入。' })
         }
@@ -235,16 +231,12 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
         if (args.status) {
           appendGraphEvent(ctx.sessionId, { type: 'task_status_changed', taskId: args.taskId, timestamp, payload: { newStatus: args.status } })
         }
-        if (args.subject || args.description !== undefined || args.dependsOn !== undefined) {
+        if (args.dependsOn !== undefined) {
           appendGraphEvent(ctx.sessionId, {
             type: 'task_updated',
             taskId: args.taskId,
             timestamp,
-            payload: {
-              ...(args.subject && { subject: args.subject }),
-              ...(args.description !== undefined && { description: args.description }),
-              ...(args.dependsOn !== undefined && { dependsOn: args.dependsOn }),
-            },
+            payload: { dependsOn: args.dependsOn },
           })
         }
         if (args.abandonReason) {

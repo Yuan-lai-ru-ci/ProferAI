@@ -4,7 +4,7 @@
  * 负责注册主进程和渲染进程之间的通信处理器
  */
 
-import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
+import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, Notification } from 'electron'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync } from 'node:fs'
@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel } from '@profer/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
 import type {
@@ -5938,4 +5938,38 @@ export function registerIpcHandlers(): void {
     const { deleteKnowledgeBaseWorkbenchRecords } = require('./lib/kb-workbench-service')
     deleteKnowledgeBaseWorkbenchRecords(paperIds)
   })
+
+  // ===== 桌面通知（主进程弹出原生 Notification，点击可靠） =====
+
+  ipcMain.handle(
+    DESKTOP_NOTIFICATION_IPC_CHANNELS.SHOW,
+    async (event, payload: { title: string; body: string }) => {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender)
+      if (!senderWindow) return
+
+      try {
+        const notification = new Notification({
+          title: payload.title,
+          body: payload.body.slice(0, 200),
+          silent: true,
+        })
+
+        notification.on('click', () => {
+          // 聚焦窗口
+          if (senderWindow.isMinimized()) senderWindow.restore()
+          senderWindow.show()
+          senderWindow.focus()
+
+          // 回调渲染进程，触发导航
+          if (!senderWindow.isDestroyed()) {
+            senderWindow.webContents.send(DESKTOP_NOTIFICATION_IPC_CHANNELS.CLICKED)
+          }
+        })
+
+        notification.show()
+      } catch (err) {
+        console.warn('[桌面通知] 弹出失败:', err)
+      }
+    },
+  )
 }

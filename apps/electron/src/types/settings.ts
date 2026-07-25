@@ -318,6 +318,14 @@ export const NOTIFICATION_SOUND_IPC_CHANNELS = {
   GET_URL: 'notification-sound:get-url',
 } as const
 
+/** 桌面通知 IPC 通道（主进程弹出原生 Notification） */
+export const DESKTOP_NOTIFICATION_IPC_CHANNELS = {
+  /** 渲染进程 → 主进程：请求弹出桌面通知 */
+  SHOW: 'desktop-notification:show',
+  /** 主进程 → 渲染进程：用户点击了通知 */
+  CLICKED: 'desktop-notification:clicked',
+} as const
+
 /** Scratch Pad IPC 通道 */
 export const SCRATCH_PAD_IPC_CHANNELS = {
   /** 从磁盘加载 scratch-pad.md 内容 */
