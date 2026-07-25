@@ -13,7 +13,7 @@ function makeCaps(
     skills: skills.map((s) => ({ ...s })),
     memory: {
       claudeMd: { path: '', exists: false, size: 0 },
-      autoMemory: { directory: '', memoryMdExists: false, fileCount: 0, totalSize: 0 },
+      autoMemory: { directory: '', indexExists: false, fileCount: 0, totalSize: 0 },
     },
   }
 }

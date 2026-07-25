@@ -1178,6 +1178,7 @@ export class AgentOrchestrator {
         permissionMode: initialPermissionMode,
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,
+        isPiRuntime: agentRuntime === 'pi',
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const piSystemPrompt = systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories)
       const piRuntimeEnv = buildAgentRuntimeEnv({
