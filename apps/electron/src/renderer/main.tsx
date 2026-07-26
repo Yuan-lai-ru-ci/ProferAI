@@ -684,10 +684,26 @@ function TabStatePersistenceInitializer(): null {
         return
       }
 
-      // 构建有效 sessionId 集合
+      // 构建有效 sessionId 集合。普通 draft 仍不恢复，但如果刷新前正打开的是
+      // 项目入口创建的持久化 draft，则必须恢复该 tab；否则 Ctrl+R 会把用户正在
+      // 使用的项目临时会话过滤掉。该会话仍保留 draft 标记，不会出现在侧栏列表。
+      const persistedDraftAgentTabIds = new Set(
+        tabState.tabs
+          .filter((tab): tab is TabItem => (
+            typeof tab === 'object'
+            && tab !== null
+            && 'type' in tab
+            && 'sessionId' in tab
+            && tab.type === 'agent'
+            && typeof tab.sessionId === 'string'
+          ))
+          .map((tab) => tab.sessionId),
+      )
       const validSessionIds = new Set([
         ...conversations.map((c) => c.id),
-        ...agentSessions.filter(isVisibleAgentSession).map((s) => s.id),
+        ...agentSessions
+          .filter((session) => isVisibleAgentSession(session) || persistedDraftAgentTabIds.has(session.id))
+          .map((session) => session.id),
       ])
 
       // 过滤 diff 类型 Tab（不持久化），同时过滤掉已被删除的会话
