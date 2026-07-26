@@ -28,7 +28,12 @@ import {
   runRegisteredHeadlessAgent,
   stopRegisteredAgent,
 } from './agent-headless-runner-registry'
-import { getMainRendererWebContents, registerWebContents, unregisterWebContents } from './agent-service'
+import {
+  getMainRendererWebContents,
+  isAgentSessionActive,
+  registerWebContents,
+  unregisterWebContents,
+} from './agent-service'
 import {
   MAX_RUNNING_DELEGATIONS_PER_PARENT,
   buildRecoveredDelegationState,
@@ -83,6 +88,14 @@ const DELEGATION_GOAL_CHAR_LIMIT = 1_000
 const MAX_RETAINED_FINISHED_DELEGATIONS = 200
 
 const delegations = new Map<string, DelegationRecord>()
+
+/**
+ * 自动续跑按父会话串行：最后多个子会话可能几乎同时结束，锁确保只启动一轮父 Agent。
+ * 已消费的委派 ID 不再触发同一批续跑；后续新委派仍可形成新批次。
+ */
+const parentAutoContinuationLocks = new Set<string>()
+const autoContinuedDelegationIds = new Set<string>()
+const AUTO_CONTINUATION_SUMMARY_LIMIT = 24_000
 
 // ===== 阻塞事件追踪 =====
 
@@ -199,7 +212,10 @@ function pruneFinishedDelegations(): void {
   finished
     .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0))
     .slice(0, excess)
-    .forEach((item) => delegations.delete(item.delegationId))
+    .forEach((item) => {
+      delegations.delete(item.delegationId)
+      autoContinuedDelegationIds.delete(item.delegationId)
+    })
 }
 
 function jsonResult(payload: unknown): CollaborationToolResult {
@@ -347,6 +363,71 @@ function markDelegationFinished(
     },
   })
   record.resolveCompletion()
+  scheduleParentAutoContinuation(record.parentSessionId)
+}
+
+function buildParentAutoContinuationPrompt(records: DelegationRecord[]): string {
+  const summaries = records.map((record) => {
+    const detail = record.status === 'failed'
+      ? `错误：${record.error || '未知错误'}`
+      : record.resultSummary || '子会话未返回可摘要的 assistant 文本。'
+    return `### ${record.title}\n- 委派 ID：${record.delegationId}\n- 状态：${record.status}\n${truncateText(detail, RESULT_SUMMARY_CHAR_LIMIT)}`
+  }).join('\n\n')
+
+  return truncateText(
+    `所有协作子会话均已结束。请基于下列结果继续完成用户的原始任务；核验子会话的结论，不要把未验证内容当作事实。\n\n${summaries}`,
+    AUTO_CONTINUATION_SUMMARY_LIMIT,
+  )
+}
+
+/** 在同一父会话的全部 live 委派结束后，启动一轮携带结果的父会话。 */
+function scheduleParentAutoContinuation(parentSessionId: string): void {
+  if (parentAutoContinuationLocks.has(parentSessionId)) return
+  const parentRecords = Array.from(delegations.values())
+    .filter((record) => record.parentSessionId === parentSessionId)
+  if (parentRecords.some((record) => record.status === 'running')) return
+
+  const completed = parentRecords.filter((record) => !autoContinuedDelegationIds.has(record.delegationId))
+  if (completed.length === 0) return
+
+  const parent = getAgentSessionMeta(parentSessionId)
+  if (!parent || parent.stoppedByUser || isAgentSessionActive(parentSessionId)) {
+    console.info('[协作] 跳过父会话自动续跑', {
+      parentSessionId,
+      reason: !parent ? 'parent_missing' : parent.stoppedByUser ? 'stopped_by_user' : 'parent_active',
+    })
+    return
+  }
+
+  parentAutoContinuationLocks.add(parentSessionId)
+  completed.forEach((record) => autoContinuedDelegationIds.add(record.delegationId))
+  runRegisteredHeadlessAgent(
+    {
+      sessionId: parentSessionId,
+      userMessage: buildParentAutoContinuationPrompt(completed),
+      channelId: parent.channelId,
+      modelId: parent.modelId,
+      workspaceId: parent.workspaceId,
+      permissionModeOverride: parent.permissionMode,
+      agentRuntime: parent.agentRuntime,
+      // 父会话恢复后仍应能继续委派；delegation 标记会禁止协作工具。
+      triggeredBy: 'user',
+      startedAt: Date.now(),
+    },
+    {
+      source: 'delegation',
+      onError: (error) => {
+        console.error(`[协作] 父会话自动续跑失败: parentSessionId=${parentSessionId}`, error)
+      },
+      onComplete: () => {
+        parentAutoContinuationLocks.delete(parentSessionId)
+      },
+      onTitleUpdated: () => {},
+    },
+  ).catch((error: unknown) => {
+    console.error(`[协作] 启动父会话自动续跑失败: parentSessionId=${parentSessionId}`, error)
+    parentAutoContinuationLocks.delete(parentSessionId)
+  })
 }
 
 function getDelegationSummary(record: DelegationRecord): Record<string, unknown> {
