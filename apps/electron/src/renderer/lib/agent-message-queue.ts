@@ -31,6 +31,20 @@ export function removeQueuedMessage(
   return queue.filter((item) => item.id !== messageId)
 }
 
+/** Stop 明确放弃已经进入运行中队列的消息；返回新数组避免遗留引用可被后续 drain 消费。 */
+export function discardQueuedMessagesOnStop(_queue: AgentQueuedMessage[]): AgentQueuedMessage[] {
+  return []
+}
+
+/** in-flight 队列发送失败时，只有仍属于同一未停止 epoch 的消息才允许回队。 */
+export function shouldRestoreQueuedMessageAfterFailure(
+  sendEpoch: number,
+  currentEpoch: number,
+  stoppingOrStopped: boolean,
+): boolean {
+  return sendEpoch === currentEpoch && !stoppingOrStopped
+}
+
 export function restoreQueuedMessageToFront(
   queue: AgentQueuedMessage[],
   message: AgentQueuedMessage,
@@ -73,6 +87,11 @@ export interface QueuedMessageSendPayload {
   rawText: string
   sdkText: string
   mentions: ParsedQueuedMessageMentions
+}
+
+/** Main 已结束旧 run、renderer 尚未收到 complete 时，queue 可安全降级为新 run。 */
+export function isQueueTargetNoLongerActiveError(error: unknown): boolean {
+  return error instanceof Error && /^\[Agent 编排\] 会话未运行，无法追加消息: /.test(error.message)
 }
 
 function escapeHtml(text: string): string {

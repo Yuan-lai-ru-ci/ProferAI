@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.14.75",
+  "version": "0.14.79",
   "description": "Profer next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -134,7 +134,7 @@
     "cmdk": "^1.1.1",
     "concurrently": "^9.2.1",
     "dingtalk-stream-sdk-nodejs": "^2.0.4",
-    "electron": "^39.5.1",
+    "electron": "^39.7.0",
     "electron-builder": "^25.1.8",
     "electron-updater": "^6.7.3",
     "electronmon": "^2.0.4",

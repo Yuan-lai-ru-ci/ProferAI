@@ -17,6 +17,7 @@ import {
   SettingsRow,
   SettingsToggle,
   SettingsInput,
+  SettingsSelect,
 } from './primitives'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/popover'
 import {
@@ -71,7 +72,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Alert, AlertDescription } from '../ui/alert'
 import { proxyConfigAtom, loadProxyConfigAtom, updateProxyConfigAtom } from '@/atoms/proxy-atoms'
-import type { ProxyMode } from '@profer/shared'
+import type { ProxyMode, RuntimeStatus } from '@profer/shared'
 import type { NotificationSoundId, NotificationSoundType, NotificationSoundSettings } from '@/types/settings'
 
 /** emoji-mart 选择回调的 emoji 对象类型 */
@@ -98,11 +99,13 @@ export function GeneralSettings(): React.ReactElement {
   const [richTextRenderingEnabled, setRichTextRenderingEnabled] = useAtom(richTextRenderingEnabledAtom)
   const [paperKnowledgeBaseEnabled, setPaperKnowledgeBaseEnabled] = useAtom(paperKnowledgeBaseEnabledAtom)
   const setActiveView = useSetAtom(activeViewAtom)
+  const [shellRuntimeStatus, setShellRuntimeStatus] = React.useState<RuntimeStatus | null>(null)
   const [isEditingName, setIsEditingName] = React.useState(false)
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
   const [archiveAfterDays, setArchiveAfterDays] = React.useState<number>(7)
   const [autoLaunch, setAutoLaunch] = React.useState(false)
+  const [shellPreference, setShellPreference] = React.useState<'auto' | 'git-bash' | 'wsl'>('auto')
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   // ── Proxy 状态 ──
@@ -230,7 +233,12 @@ export function GeneralSettings(): React.ReactElement {
     window.electronAPI.getSettings().then((settings) => {
       setArchiveAfterDays(settings.archiveAfterDays ?? 7)
       setAutoLaunch(settings.autoLaunch ?? false)
+      setShellPreference(settings.agentShellPreference ?? 'auto')
     }).catch(console.error)
+
+    window.electronAPI.getRuntimeStatus().then((status) => {
+      if (status) setShellRuntimeStatus(status)
+    }).catch(() => {})
   }, [])
 
   // ── Proxy 初始化 ──
@@ -679,6 +687,26 @@ export function GeneralSettings(): React.ReactElement {
             description="系统启动时自动运行 Profer"
             checked={autoLaunch}
             onCheckedChange={handleAutoLaunchChange}
+          />
+
+          <SettingsSelect
+            label="Agent Shell 环境"
+            description="Windows 上 Agent 执行命令的 Shell。切换后新会话生效，不影响已打开的会话。"
+            value={shellPreference}
+            onValueChange={async (value) => {
+              const pref = value as 'auto' | 'git-bash' | 'wsl'
+              setShellPreference(pref)
+              try {
+                await window.electronAPI.updateSettings({ agentShellPreference: pref })
+              } catch (error) {
+                console.error('[通用设置] 更新 Shell 偏好失败:', error)
+              }
+            }}
+            options={[
+              { value: 'auto', label: '自动检测（优先 Git Bash）' },
+              { value: 'git-bash', label: `Git Bash${!shellRuntimeStatus?.shell?.gitBash?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.gitBash?.version ? ` (v${shellRuntimeStatus.shell.gitBash.version})` : ''}` },
+              { value: 'wsl', label: `WSL${!shellRuntimeStatus?.shell?.wsl?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.wsl?.defaultDistro ? ` (${shellRuntimeStatus.shell.wsl.defaultDistro})` : ''}` },
+            ]}
           />
           {/* 知识库设置已暂时关闭 */}
           {false && (

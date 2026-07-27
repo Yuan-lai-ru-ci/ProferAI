@@ -1068,6 +1068,10 @@ export async function getChannelPlanQuota(channelId: string): Promise<import('@p
   }
 
   const provider = channel.provider
+  if (channel.serverManaged) {
+    return createUnsupportedPlanQuota(provider, 'Profer 代管渠道不支持查询第三方订阅额度')
+  }
+
   const supportsPlanQuota = provider === 'openai-codex' || supportsProviderPlanQuota(provider) || channel.baseUrl.includes('api.kimi.com/coding')
   if (!supportsPlanQuota) {
     return createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询')

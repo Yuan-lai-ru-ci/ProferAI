@@ -74,12 +74,19 @@ function formatScheduleLabel(a: Automation): string {
       : '指定时间'
     return `仅运行一次（${when}）`
   }
-  if (a.scheduleType === 'daily') return `每天 ${a.timeOfDay ?? '09:00'}`
+  const times = (a.timeOfDay?.length ? a.timeOfDay : ['09:00']).join('、')
+  if (a.scheduleType === 'daily') return `每天 ${times}`
   if (a.scheduleType === 'weekly') {
     const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-    return `每${names[a.dayOfWeek ?? 1]} ${a.timeOfDay ?? '09:00'}`
+    const days = (a.dayOfWeek?.length ? a.dayOfWeek : [1])
+      .map((day) => names[day] ?? `星期${day}`)
+      .join('、')
+    return `每${days} ${times}`
   }
-  if (a.scheduleType === 'monthly') return `每月 ${a.dayOfMonth ?? 1} 号 ${a.timeOfDay ?? '09:00'}`
+  if (a.scheduleType === 'monthly') {
+    const days = (a.dayOfMonth?.length ? a.dayOfMonth : [1]).join('、')
+    return `每月 ${days} 号 ${times}`
+  }
   const min = a.intervalMinutes
   if (min < 60) return `每 ${min} 分钟`
   if (min < 1440) return `每 ${min / 60} 小时`

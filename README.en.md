@@ -1,16 +1,14 @@
-﻿# Profer
+# Profer
 
 Proma is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client.
 
 It is not just another chat box. Proma is meant to become a long-lived Agent workbench for your personal workflows: use Chat for simple answers, use Agent when the task needs to act on files, tools, projects, and longer context.
 
-![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
-
-[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/Profer/releases) | [Commercial Version](https://proma.cool/download)
+![Proma Poster](<https://img.erlich.fun/personal-blog/uPic/pb.png>)[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/Profer/releases) | [Commercial Version](https://proma.cool/download)
 
 ## What Proma Can Do
 
-- **Chat mode**: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.
+- **Chat mode: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.**
 - **Agent mode**: general-purpose Agent powered by `@anthropic-ai/claude-agent-sdk`, with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions.
 - **SubAgents / Tasks**: complex tasks can be delegated through the Claude Agent SDK Agent tool, with sub-agent calls and results shown in the message stream.
 - **Skills & MCP**: each workspace can manage its own Skills, MCP servers, and workspace files.
@@ -33,10 +31,10 @@ If you want fewer API setup steps, you can also use the [Proma commercial versio
 ### First Setup
 
 1. Open Proma and finish the environment check. Agent mode depends on local tooling, especially Git, Node.js / Bun, and a usable shell.
-2. Go to **Settings > Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
+2. Go to **Settings &gt; Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
 3. Chat mode can use OpenAI, Anthropic, Google, or OpenAI-compatible channels.
 4. Agent mode requires an Anthropic or Anthropic-compatible channel, such as Anthropic, DeepSeek, Kimi API, or Kimi Coding Plan.
-5. Go to **Settings > Agent** and choose the default Agent channel, model, and workspace.
+5. Go to **Settings &gt; Agent** and choose the default Agent channel, model, and workspace.
 6. Configure memory, web search, or Feishu / DingTalk / WeChat bridges from their corresponding settings tabs if needed.
 
 ## Choosing A Mode
@@ -63,36 +61,26 @@ In short: **use Chat when you need an answer; use Agent when you need work to be
 
 Use Chat for lightweight but practical analysis: compare audience needs, generate a table, and shape first-screen README copy quickly.
 
-![Proma Chat analysis](./docs/assets/screenshots/proma-chat-demo.png)
-
-### Agent Workbench
+![Proma Chat analysis](<./docs/assets/screenshots/proma-chat-demo.png>)\### Agent Workbench
 
 Agent works inside a workspace, reads project files, progresses through tasks, outputs structured findings, and keeps reusable files visible in the right-side workspace panel.
 
-![Proma Agent workbench](./docs/assets/screenshots/proma-agent-demo.png)
-
-### Skills
+![Proma Agent workbench](<./docs/assets/screenshots/proma-agent-demo.png>)\### Skills
 
 Each workspace can keep its own reusable Skills. The `feedback-synthesis` Skill shown here turns scattered feedback, interviews, and issues into themes, evidence, and priority suggestions.
 
-![Proma workspace Skills](./docs/assets/screenshots/proma-skills-demo.png)
-
-### Skills & MCP
+![Proma workspace Skills](<./docs/assets/screenshots/proma-skills-demo.png>)\### Skills & MCP
 
 The same workspace can manage stdio and HTTP MCP servers, enabling or disabling external context per project.
 
-![Proma MCP settings](./docs/assets/screenshots/proma-mcp-demo.png)
-
-### Streaming Voice Input
+![Proma MCP settings](<./docs/assets/screenshots/proma-mcp-demo.png>)\### Streaming Voice Input
 
 Proma supports Doubao-powered streaming voice input, both inside Proma and across the desktop:
 
 - Inside Proma: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript into the active Proma input box.
 - Outside Proma: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript at the current cursor position. If there is no active cursor, Proma writes the transcript to the clipboard.
 
-![Proma voice input](./docs/assets/screenshots/proma-typeless-input.png)
-
-## Supported Providers
+![Proma voice input](<./docs/assets/screenshots/proma-typeless-input.png>)\## Supported Providers
 
 | Provider | Chat | Agent | Protocol |
 | --- | --- | --- | --- |
@@ -116,7 +104,7 @@ Agent mode is powered by Claude Agent SDK, so it currently requires an Anthropic
 
 Proma stores data in local files so it is easy to back up, migrate, and inspect.
 
-```text
+```
 ~/.proma/
 ├── channels.json
 ├── conversations.json
@@ -143,7 +131,7 @@ API keys are encrypted through Electron `safeStorage` before being written to `c
 
 Proma is a Bun workspace monorepo.
 
-```text
+```
 proma-v2/
 ├── packages/
 │   ├── shared/     # shared types, IPC constants, config, utilities
@@ -217,7 +205,7 @@ bun run dist:fast
 
 Proma's core communication path is:
 
-```text
+```
 shared types and IPC constants
   -> main/ipc.ts handlers
   -> preload/index.ts window.electronAPI bridge
@@ -268,16 +256,15 @@ Before opening a PR, please check:
 
 Proma currently has a PR bounty program. You can leave your email in the PR description for follow-up.
 
-![Proma PR Bounty](https://img.erlich.fun/personal-blog/uPic/PR%20%E8%B5%A0%E9%87%91%201.png)
-
-## Star History
+![Proma PR Bounty](<https://img.erlich.fun/personal-blog/uPic/PR%20%E8%B5%A0%E9%87%91%201.png>)\## Star History
 
 <a href="https://www.star-history.com/?repos=Yuan-lai-ru-ci%2FProma&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&theme=dark&legend=top-left" />
    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
- </picture>
+
+</picture>
 </a>
 
 ## Credits

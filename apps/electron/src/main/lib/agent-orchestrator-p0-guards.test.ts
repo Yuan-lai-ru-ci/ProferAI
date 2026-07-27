@@ -6,6 +6,8 @@ import {
   isPlanModeMcpTool,
   releaseActiveSession,
   tryAcquireActiveSession,
+  tryReserveQueuedMessage,
+  shouldPreInterruptQueuedMessage,
 } from './agent-orchestrator-p0-guards'
 
 describe('AgentOrchestrator P0 guards', () => {
@@ -30,6 +32,29 @@ describe('AgentOrchestrator P0 guards', () => {
 
     expect(releaseActiveSession(sessions, 'session-1', 'run-a')).toBe(false)
     expect(sessions.get('session-1')).toBe('run-b')
+  })
+
+  test('Given 同一 queue UUID 被重复提交 When 预留消息 Then 只接受一次', () => {
+    const uuids = new Set<string>()
+
+    expect(tryReserveQueuedMessage(uuids, 'message-1')).toBe(true)
+    expect(tryReserveQueuedMessage(uuids, 'message-1')).toBe(false)
+    expect(uuids).toEqual(new Set(['message-1']))
+  })
+
+  test('Given queue 注入失败后已释放 UUID When 重试 Then 可再次预留', () => {
+    const uuids = new Set<string>()
+    expect(tryReserveQueuedMessage(uuids, 'message-1')).toBe(true)
+
+    uuids.delete('message-1')
+
+    expect(tryReserveQueuedMessage(uuids, 'message-1')).toBe(true)
+  })
+
+  test('Given Pi interrupt queue When deciding pre-interrupt Then reserve-and-abort stays inside Pi adapter', () => {
+    expect(shouldPreInterruptQueuedMessage('pi', true)).toBe(false)
+    expect(shouldPreInterruptQueuedMessage('claude', true)).toBe(true)
+    expect(shouldPreInterruptQueuedMessage('pi', false)).toBe(false)
   })
 
   test('Given 本轮 SDK env When 注入凭证 Then 仅写入 query env 且 process env 不变', () => {

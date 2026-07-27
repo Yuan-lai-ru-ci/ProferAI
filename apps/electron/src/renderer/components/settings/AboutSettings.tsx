@@ -333,8 +333,7 @@ function ShellEnvironmentCard(): React.ReactElement | null {
   const handleCheck = async () => {
     setIsChecking(true)
     try {
-      // 触发重新初始化运行时（后续可以添加此 IPC 方法）
-      const status = await window.electronAPI.getRuntimeStatus()
+      const status = await window.electronAPI.reinitRuntime()
       setRuntimeStatus(status)
     } catch (error) {
       console.error('[Shell 环境检测] 检测失败:', error)

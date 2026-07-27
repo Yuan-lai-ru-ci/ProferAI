@@ -1,11 +1,12 @@
 import { type Channel, type ChannelPlanQuotaResult, type ProviderType } from '@profer/shared'
 
 const PLAN_QUOTA_PROVIDERS = new Set<ProviderType>([
-  'deepseek', 'kimi-coding', 'minimax', 'zhipu', 'zhipu-coding', 'zhipu-coding-team', 'openai-codex',
+  'deepseek', 'kimi-coding', 'minimax', 'zhipu-coding', 'openai-codex',
 ])
 
-export function supportsChannelPlanQuota(channel: Pick<Channel, 'provider' | 'baseUrl'> | null | undefined): boolean {
-  if (!channel) return false
+export function supportsChannelPlanQuota(channel: Pick<Channel, 'provider' | 'baseUrl' | 'serverManaged'> | null | undefined): boolean {
+  // Profer 代管渠道的额度由 Profer 账户计费，不应使用其服务端凭据查询第三方账户数据。
+  if (!channel || channel.serverManaged) return false
   return PLAN_QUOTA_PROVIDERS.has(channel.provider) || channel.baseUrl.includes('api.kimi.com/coding')
 }
 

@@ -2370,10 +2370,18 @@ export function registerIpcHandlers(): void {
         .map((automation) => automation.id)
 
       for (const sessionId of affectedSessionIds) {
-        if (isAgentSessionActive(sessionId)) {
-          stopAgent(sessionId)
-        }
-        deleteAgentSession(sessionId)
+        await agentSessionDeletionCoordinator.delete(sessionId, {
+          beginDeletion: beginAgentSessionDeletion,
+          endDeletion: endAgentSessionDeletion,
+          stopAndWait: stopAgentAndWait,
+          clearState: (id) => {
+            permissionService.clearSessionWhitelist(id)
+            permissionService.clearSessionPending(id)
+            askUserService.clearSessionPending(id)
+            exitPlanService.clearSessionPending(id)
+          },
+          deleteSession: deleteAgentSession,
+        })
       }
       for (const automationId of affectedAutomationIds) {
         deleteAutomation(automationId)
@@ -2605,12 +2613,15 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 中止 Agent 执行
+  // 中止 Agent 执行。必须等待底层 run 的 finally 完成后才向渲染层返回，
+  // 否则用户刚点击「停止」就发送下一条消息时，编排器仍持有 active session，
+  // 新消息会被并发保护拒绝，造成必须重复发送一次的体验问题。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_AGENT,
-    async (_, sessionId: string): Promise<void> => {
+    async (event, sessionId: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
       feishuBridgeManager.stopSessionMirrorRun(sessionId)
-      stopAgent(sessionId)
+      await stopAgentAndWait(sessionId)
     }
   )
 
@@ -2620,6 +2631,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.QUEUE_MESSAGE,
     async (event, input: import('@profer/shared').AgentQueueMessageInput): Promise<string> => {
+      assertSensitiveAgentIpcSender(event)
       return queueAgentMessage(input, event.sender)
     }
   )

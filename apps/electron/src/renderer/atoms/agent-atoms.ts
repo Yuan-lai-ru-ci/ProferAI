@@ -62,6 +62,11 @@ export function finalizeStreamingActivities(
 export interface AgentStreamState {
   running: boolean
   /**
+   * renderer 已请求停止、仍在等待主进程的真实 run completion。
+   * Phase 0 过渡标记：停止超时/失败时不得据此伪装为空闲。
+   */
+  stopping?: boolean
+  /**
    * 后台任务等待态（软空闲）：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
    * 此状态下 running 为 false，但服务端 activeSessions 仍保留，新消息必须走注入通道而非新建 run。
    */

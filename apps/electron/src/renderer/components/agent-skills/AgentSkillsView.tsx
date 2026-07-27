@@ -164,12 +164,11 @@ export function AgentSkillsView(): React.ReactElement {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* 标题栏 + 工作区切换 */}
-      {/* 不加 titlebar-drag-region：与 DropdownMenu 嵌套时 drag/no-drag 会让 Radix 拿不到
-          pointerdown，下拉打不开。窗口拖拽由 AppShell 顶部 0–50px 的全局 drag 层兜底。
-          pt-14 让按钮整体位于全局 drag 层（0–50px, z-50）下方，避免被吃掉点击。 */}
-      <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center justify-between px-8 pt-14 pb-4">
-        <div className="flex items-center gap-2.5">
+      {/* 顶部 50px 留给 AppShell 的全局 drag-region。不能把含 pt-14 的外层设为
+          no-drag，否则它的布局盒会覆盖窗口顶端并抵消全局拖拽区。交互控件从 56px
+          开始的内层才设为 no-drag，以同时保证窗口拖动和 Radix Popover 点击可用。 */}
+      <div className="mx-auto mt-14 flex w-full max-w-6xl shrink-0 items-center justify-between gap-3 px-4 pb-4 sm:px-6 lg:px-8">
+        <div className="titlebar-no-drag flex items-center gap-2.5">
           <Blocks className="size-6 text-foreground/70" />
           <h1 className="text-2xl font-semibold text-foreground">Agent 技能</h1>
         </div>
@@ -213,7 +212,7 @@ export function AgentSkillsView(): React.ReactElement {
       </div>
 
       {/* 工具条 */}
-      <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center gap-3 px-8 pb-4">
+      <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-2 px-4 pb-4 sm:px-6 lg:px-8">
         {/* Skills / 市场 / MCP / 记忆 切换 */}
         <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
           <div
@@ -237,7 +236,7 @@ export function AgentSkillsView(): React.ReactElement {
               key={value}
               onClick={() => setTab(value)}
               className={cn(
-                'relative z-[1] flex min-w-[90px] items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors duration-200',
+                'relative z-[1] flex min-w-[72px] items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors duration-200 sm:min-w-[90px] sm:px-3',
                 tab === value ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
               )}
             >
@@ -249,7 +248,7 @@ export function AgentSkillsView(): React.ReactElement {
         </div>
 
         {/* 搜索框 */}
-        <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
+        <div className="flex h-8 min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
           <Search size={14} className="shrink-0 text-foreground/40" />
           <input
             value={search}
@@ -286,7 +285,7 @@ export function AgentSkillsView(): React.ReactElement {
 
       {/* 内容 */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        <div className="mx-auto w-full max-w-6xl px-8 pb-10">
+        <div className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6 lg:px-8">
           {tab === 'marketplace' && isTeamWorkspace ? (
             marketLoading ? (
               <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>

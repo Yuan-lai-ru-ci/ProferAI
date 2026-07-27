@@ -169,6 +169,24 @@ accountApp.route('/config', accountConfig)
 accountApp.route('/', inviteRoutes)
 app.route('/v1/account', accountApp)
 
+// 公开模型列表（无需认证，放在最前面避免被 use(*) 中间件拦截）
+const RELAY_BASE_URL = process.env.RELAY_BASE_URL || 'http://localhost:3080'
+const RELAY_API_KEY = process.env.RELAY_API_KEY || ''
+app.get('/v1/models', async (c) => {
+  try {
+    const resp = await fetch(`${RELAY_BASE_URL}/v1/models`, {
+      headers: { Authorization: `Bearer ${RELAY_API_KEY}` },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!resp.ok) return c.json({ error: '获取模型列表失败' }, resp.status)
+    return c.json(await resp.json())
+  } catch (err) {
+    console.error('[models] 获取失败:', err.message)
+    return c.json({ error: `获取模型列表失败: ${err.message}` }, 502)
+  }
+})
+// 兼容带 /proma 前缀的路径（nginx strip 后仍匹配 /proma/v1/models）
+
 // Proxy 路由（需要 auth）
 // 用 proxyAuthMiddleware：兼容长效 relay 令牌和标准 accessToken，
 // 避免客户端把 1h accessToken 当渠道 key 长期持有导致中途 401
