@@ -7,6 +7,7 @@ describe('Pi thinking level resolver', () => {
       { agentThinking: { type: 'adaptive' }, agentEffort: 'medium' },
       { openAIThinkingLevel: 'off' },
       'openai-codex',
+      'gpt-5.5',
     )).toBe('off')
   })
 
