@@ -25,4 +25,27 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain(join(workspaceRoot, 'workspace-files', '.context'))
     expect(prompt).toContain(join(workspaceRoot, '.claude', 'memory', 'MEMORY.md'))
   })
+
+  test('Pi 获得结果导向但可控的行动阶梯，Claude 不获得 Pi 专属段落', () => {
+    const piPrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'bypassPermissions',
+      isPiRuntime: true,
+    })
+    const claudePrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'bypassPermissions',
+      isPiRuntime: false,
+    })
+
+    expect(piPrompt).toContain('低风险、可逆的本地操作')
+    expect(piPrompt).toContain('高风险、不可逆或外部副作用')
+    expect(piPrompt).toContain('最小相关验证')
+    expect(piPrompt).toContain('两次独立证据')
+    expect(claudePrompt).not.toContain('### Pi Runtime 自主执行准则')
+  })
 })

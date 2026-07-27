@@ -5,7 +5,7 @@
  */
 import type { TypedError, ProferPermissionMode } from '@profer/shared'
 import { PROFER_PERMISSION_MODE_CONFIG } from '@profer/shared'
-import { isTransientNetworkError, isMalformedResponseError } from './error-patterns'
+import { isTransientNetworkError, isMalformedResponseError, classifyNetworkError, getCategoryRetryDelayMultiplier, type NetworkErrorCategory } from './error-patterns'
 
 /** 可自动重试的 TypedError 错误码 */
 export const AUTO_RETRYABLE_ERROR_CODES: ReadonlySet<string> = new Set([
@@ -96,12 +96,33 @@ export function isSessionNotFoundError(errorMessage: string, stderr?: string): b
 
 /**
  * 计算重试延迟（指数退避 + ±20% jitter）
+ *
+ * @param attempt 当前重试尝试次数（从 1 开始）
+ * @param elapsedRetryDelayMs 已累计的重试等待时间
+ * @param errorCategory 可选的网络错误分类，用于调整退避倍数。
+ *   stream_interrupted → 立即重试（0ms）；
+ *   timeout → ×1.5；dns/connection_refused → ×2。
  */
-export function getRetryDelayMs(attempt: number, elapsedRetryDelayMs: number): number {
+export function getRetryDelayMs(
+  attempt: number,
+  elapsedRetryDelayMs: number,
+  errorCategory?: NetworkErrorCategory,
+): number {
   const remainingMs = MAX_AUTO_RETRY_WAIT_MS - elapsedRetryDelayMs
   if (remainingMs <= 0) return 0
 
   const base = Math.min(1000 * Math.pow(2, attempt - 1), RETRY_MAX_DELAY_MS)
+  const multiplier = errorCategory ? getCategoryRetryDelayMultiplier(errorCategory) : 1.0
   const jitter = base * (Math.random() * 0.4 - 0.2)
-  return Math.min(remainingMs, Math.max(0, Math.round(base + jitter)))
+  return Math.min(remainingMs, Math.max(0, Math.round((base + jitter) * multiplier)))
+}
+
+/**
+ * 从原始错误消息中提取网络错误分类
+ *
+ * 供 orchestrator 在捕获 catch 错误后使用，
+ * 将分类信息传入 getRetryDelayMs 以实现差异化退避。
+ */
+export function classifyCatchError(rawErrorMessage?: string, stderr?: string): NetworkErrorCategory {
+  return classifyNetworkError(rawErrorMessage, stderr)
 }

@@ -277,6 +277,8 @@ export interface AppSettings {
   autoLaunch?: boolean
   /** 是否在侧边栏显示论文知识库入口（默认 true） */
   paperKnowledgeBaseEnabled?: boolean
+  /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
+  agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
 }
 
 /** 主窗口大小、位置和最大化状态 */

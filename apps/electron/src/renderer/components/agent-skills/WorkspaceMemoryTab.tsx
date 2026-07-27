@@ -403,7 +403,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 min-[760px]:grid-cols-2">
         <MemoryStatCard
           icon={<BookOpen size={18} />}
           title="项目指令"
@@ -425,14 +425,14 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
       </div>
 
       <SettingsCard divided={false}>
-        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 p-4 min-[760px]:flex-row min-[760px]:items-center min-[760px]:justify-between">
           <div className="min-w-0">
             <div className="text-sm font-medium text-foreground">从历史会话生成工作区记忆</div>
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            <div className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
               新建一个 Agent 会话，读取当前工作区{historyRangeLabel}的工作会话，沉淀并更新 CLAUDE.md 与 auto memory 文件。
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Select
               value={historyRange}
               onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)}
@@ -457,8 +457,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
         </div>
       </SettingsCard>
 
-      <div className="grid min-h-[520px] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <SettingsCard divided={false} className="min-h-0 overflow-hidden">
+      <div className="grid min-h-[520px] gap-4 min-[900px]:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
+        <SettingsCard divided={false} className="min-h-[180px] overflow-hidden min-[900px]:min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
               <div className="text-[13px] font-medium text-foreground/75">记忆文件</div>
@@ -510,9 +510,9 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
           </div>
         </SettingsCard>
 
-        <SettingsCard divided={false} className="min-h-0 overflow-hidden">
+        <SettingsCard divided={false} className="min-h-[360px] overflow-hidden min-[900px]:min-h-0">
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/50 px-4 py-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 px-3 py-3 sm:px-4">
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-foreground">
                   {selected?.title ?? '未选择文件'}
@@ -521,7 +521,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                   {selected?.absolutePath ?? '从左侧选择一个记忆文件'}
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2">
                 {selected && (
                   <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
                     <button
@@ -551,6 +551,9 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 {selected && (
                   <DefaultAppOpenButton
                     filePath={selected.absolutePath}
+                    // SYSTEM_OPEN_FILE 采用默认拒绝策略；记忆文件不属于会话目录，
+                    // 必须显式携带工作区授权上下文，否则按钮可渲染但主进程会静默拒绝打开。
+                    access={{ workspaceSlug }}
                     variant="labeled"
                     className="h-8 max-w-[170px] border border-border/60 bg-background px-2 shadow-sm"
                   />

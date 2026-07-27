@@ -9,10 +9,10 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import { Shield, ShieldAlert, Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { allPendingPermissionRequestsAtom, agentStreamingStatesAtom, finalizeStreamingActivities } from '@/atoms/agent-atoms'
+import { allPendingPermissionRequestsAtom } from '@/atoms/agent-atoms'
 import type { DangerLevel } from '@profer/shared'
 
 /** 危险等级对应的图标颜色 */
@@ -34,11 +34,11 @@ function formatToolName(toolName: string): string {
 /** PermissionBanner 属性接口 */
 interface PermissionBannerProps {
   sessionId: string
+  onRequestStop: () => void
 }
 
-export function PermissionBanner({ sessionId }: PermissionBannerProps): React.ReactElement | null {
+export function PermissionBanner({ sessionId, onRequestStop }: PermissionBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingPermissionRequestsAtom)
-  const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [responding, setResponding] = React.useState(false)
   const respondRef = React.useRef<(behavior: 'allow' | 'deny', alwaysAllow?: boolean) => void>()
@@ -63,25 +63,14 @@ export function PermissionBanner({ sessionId }: PermissionBannerProps): React.Re
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [request?.requestId])
 
-  /** 关闭权限请求 & 终止 Agent */
+  /** 关闭权限请求，并经统一入口请求停止 Agent。 */
   const handleDismiss = (): void => {
-    setStreamingStates((prev) => {
-      const current = prev.get(sessionId)
-      if (!current || !current.running) return prev
-      const map = new Map(prev)
-      map.set(sessionId, {
-        ...current,
-        running: false,
-        ...finalizeStreamingActivities(current.toolActivities),
-      })
-      return map
-    })
     setAllRequests((prev) => {
       const map = new Map(prev)
       map.delete(sessionId)
       return map
     })
-    window.electronAPI.stopAgent(sessionId).catch(console.error)
+    onRequestStop()
   }
 
   if (!request) return null

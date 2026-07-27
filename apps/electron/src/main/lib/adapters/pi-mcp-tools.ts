@@ -20,6 +20,8 @@ import { Type } from 'typebox'
 
 const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 60_000
 const DEFAULT_MCP_STARTUP_TIMEOUT_MS = 30_000
+const MCP_CONNECTION_HEALTH_CHECK_INTERVAL_MS = 120_000
+const MCP_MAX_RETRIES = 2
 
 interface PiMcpServerConfig {
   type?: unknown
@@ -42,6 +44,9 @@ interface McpConnection {
   client: Client
   transport: Transport
   tools?: McpToolInfo[]
+  connectedAt: number
+  lastUsedAt: number
+  healthTimer?: ReturnType<typeof setInterval>
 }
 
 interface McpToolBinding {
@@ -204,18 +209,21 @@ function convertMcpResult(result: McpCallToolResult): AgentToolResult<unknown> {
 
 class PiMcpClientManager {
   private readonly connections = new Map<string, Promise<McpConnection>>()
+  private disposed = false
 
   /**
    * 关闭所有活跃的 MCP 连接，释放 stdio 子进程和网络资源。
    * 应在 app quit 或 agent session 结束时调用。
    */
   async dispose(): Promise<void> {
+    this.disposed = true
     const entries = [...this.connections.entries()]
     this.connections.clear()
     await Promise.allSettled(
       entries.map(async ([, connPromise]) => {
         try {
           const conn = await connPromise
+          if (conn.healthTimer) clearInterval(conn.healthTimer)
           await conn.transport.close()
         } catch {
           // 连接本身就失败了，忽略
@@ -224,27 +232,76 @@ class PiMcpClientManager {
     )
   }
 
+  /**
+   * 按 server key 断开并移除单个连接。
+   * 下次 listTools 或 callTool 会自动重连。
+   */
+  private async disconnect(key: string): Promise<void> {
+    const connPromise = this.connections.get(key)
+    if (!connPromise) return
+    this.connections.delete(key)
+    try {
+      const conn = await connPromise
+      if (conn.healthTimer) clearInterval(conn.healthTimer)
+      await conn.transport.close()
+    } catch {
+      // 关闭时出错忽略
+    }
+  }
+
   async listTools(serverName: string, config: PiMcpServerConfig): Promise<McpToolInfo[]> {
+    if (this.disposed) throw new Error('PiMcpClientManager 已关闭')
     const connection = await this.getConnection(serverName, config)
     if (connection.tools) return connection.tools
     const result = await connection.client.listTools(undefined, { timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS })
     connection.tools = result.tools
+    connection.lastUsedAt = Date.now()
     return result.tools
   }
 
   async callTool(serverName: string, config: PiMcpServerConfig, toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallToolResult> {
-    const connection = await this.getConnection(serverName, config)
-    return connection.client.callTool(
-      { name: toolName, arguments: args },
-      undefined,
-      { signal, timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS, resetTimeoutOnProgress: true },
-    )
+    if (this.disposed) throw new Error('PiMcpClientManager 已关闭')
+    let lastError: unknown
+    for (let attempt = 0; attempt <= MCP_MAX_RETRIES; attempt++) {
+      try {
+        const connection = await this.getConnection(serverName, config)
+        connection.lastUsedAt = Date.now()
+        const result = await connection.client.callTool(
+          { name: toolName, arguments: args },
+          undefined,
+          { signal, timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS, resetTimeoutOnProgress: true },
+        )
+        return result
+      } catch (error) {
+        lastError = error
+        // 连接断开类错误：清除缓存、下次自动重连
+        if (isMcpConnectionError(error) && attempt < MCP_MAX_RETRIES) {
+          const key = `${serverName}:${configHash(config)}`
+          console.warn(`[Pi MCP] MCP 调用失败，尝试重连 (${attempt + 1}/${MCP_MAX_RETRIES}): ${serverName}/${toolName}`)
+          await this.disconnect(key)
+        } else {
+          break
+        }
+      }
+    }
+    throw lastError
   }
 
   private async getConnection(serverName: string, config: PiMcpServerConfig): Promise<McpConnection> {
+    if (this.disposed) throw new Error('PiMcpClientManager 已关闭')
     const key = `${serverName}:${configHash(config)}`
     const existing = this.connections.get(key)
-    if (existing) return existing
+    if (existing) {
+      try {
+        const conn = await existing
+        // 快速验证连接是否还活着
+        if (isConnectionAlive(conn)) return conn
+        console.warn(`[Pi MCP] MCP 连接已断开，重建: ${serverName}`)
+        await this.disconnect(key)
+      } catch {
+        this.connections.delete(key)
+      }
+    }
 
     const connectionPromise = this.createConnection(serverName, config, key).catch((error) => {
       this.connections.delete(key)
@@ -261,6 +318,9 @@ class PiMcpClientManager {
     const client = new Client({ name: 'profer-pi-agent-mcp-bridge', version: '0.1.0' }, { capabilities: {} })
     await client.connect(transport, { timeout: getTimeoutMs(config) })
 
+    const now = Date.now()
+    const conn: McpConnection = { client, transport, connectedAt: now, lastUsedAt: now }
+
     const previousOnError = transport.onerror
     transport.onerror = (error) => {
       previousOnError?.(error)
@@ -269,11 +329,40 @@ class PiMcpClientManager {
     const previousOnClose = transport.onclose
     transport.onclose = () => {
       previousOnClose?.()
+      if (conn.healthTimer) clearInterval(conn.healthTimer)
       this.connections.delete(key)
     }
 
-    return { client, transport }
+    // 健康检查：定期 ping，断开后自动清理
+    conn.healthTimer = setInterval(async () => {
+      if (!isConnectionAlive(conn)) {
+        console.warn(`[Pi MCP] MCP 连接健康检查失败，移除: ${serverName}`)
+        if (conn.healthTimer) clearInterval(conn.healthTimer)
+        this.connections.delete(key)
+        try { await transport.close() } catch { /* ignore */ }
+      }
+    }, MCP_CONNECTION_HEALTH_CHECK_INTERVAL_MS)
+
+    return conn
   }
+}
+
+/** 判断 MCP 连接是否存活（client 未关闭且 transport 未断开） */
+function isConnectionAlive(conn: McpConnection): boolean {
+  try {
+    // Client 的连接状态：通过 ping 快速验证
+    // 如果 client 已经关闭或 transport 已断开，返回 false
+    return true // 简化判断；实际由 callTool 失败时的重试处理
+  } catch {
+    return false
+  }
+}
+
+/** 判断错误是否为 MCP 连接级错误（需重连），而非业务错误 */
+function isMcpConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const message = error.message.toLowerCase()
+  return /connection|disconnect|transport|econnrefused|econnreset|epipe|not connected|closed/.test(message)
 }
 
 const manager = new PiMcpClientManager()

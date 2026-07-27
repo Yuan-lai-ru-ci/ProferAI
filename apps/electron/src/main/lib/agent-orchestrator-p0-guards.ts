@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { ProviderType, SDKMessage } from '@profer/shared'
+import type { AgentRuntime, ProviderType, SDKMessage } from '@profer/shared'
 import { normalizeAnthropicBaseUrlForSdk } from '@profer/core'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 
@@ -15,6 +15,21 @@ export function releaseActiveSession(activeSessions: Map<string, string>, sessio
   if (activeSessions.get(sessionId) !== runToken) return false
   activeSessions.delete(sessionId)
   return true
+}
+
+/**
+ * 原子保留本次排队消息 UUID。false 表示相同 UUID 已被当前 run 接收，
+ * 调用方不得再次注入 adapter 或持久化 JSONL。
+ */
+export function tryReserveQueuedMessage(uuids: Set<string>, uuid: string): boolean {
+  if (uuids.has(uuid)) return false
+  uuids.add(uuid)
+  return true
+}
+
+/** Pi 的 sendQueuedMessage(interrupt) 自己先建立 reservation 再 abort；不能预先 interruptQuery。 */
+export function shouldPreInterruptQueuedMessage(runtime: AgentRuntime, interrupt: boolean | undefined): boolean {
+  return interrupt === true && runtime !== 'pi'
 }
 
 /** Plan 模式只允许写入当前会话 .context/plan 内的 Markdown 文件。 */

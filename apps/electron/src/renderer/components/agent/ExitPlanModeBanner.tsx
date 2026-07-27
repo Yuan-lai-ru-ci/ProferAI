@@ -11,7 +11,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import {
   Check,
   ShieldCheck,
@@ -21,7 +21,7 @@ import {
   FileText,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { allPendingExitPlanRequestsAtom, agentStreamingStatesAtom, finalizeStreamingActivities } from '@/atoms/agent-atoms'
+import { allPendingExitPlanRequestsAtom } from '@/atoms/agent-atoms'
 import type { ExitPlanModeAction, ExitPlanAllowedPrompt } from '@profer/shared'
 
 /** 选项定义 */
@@ -66,11 +66,11 @@ const PLAN_OPTIONS: PlanOption[] = [
 
 interface ExitPlanModeBannerProps {
   sessionId: string
+  onRequestStop: () => void
 }
 
-export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): React.ReactElement | null {
+export function ExitPlanModeBanner({ sessionId, onRequestStop }: ExitPlanModeBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingExitPlanRequestsAtom)
-  const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [focusedIdx, setFocusedIdx] = React.useState(0)
   const [showFeedback, setShowFeedback] = React.useState(false)
@@ -120,25 +120,14 @@ export function ExitPlanModeBanner({ sessionId }: ExitPlanModeBannerProps): Reac
 
   handleActionRef.current = handleAction
 
-  /** 关闭计划审批 & 终止 Agent */
+  /** 关闭计划审批，并经统一入口请求停止 Agent。 */
   const handleDismiss = (): void => {
-    setStreamingStates((prev) => {
-      const current = prev.get(sessionId)
-      if (!current || !current.running) return prev
-      const map = new Map(prev)
-      map.set(sessionId, {
-        ...current,
-        running: false,
-        ...finalizeStreamingActivities(current.toolActivities),
-      })
-      return map
-    })
     setAllRequests((prev) => {
       const map = new Map(prev)
       map.delete(sessionId)
       return map
     })
-    window.electronAPI.stopAgent(sessionId).catch(console.error)
+    onRequestStop()
   }
 
   // 键盘导航：只在 requestId 变化时重建 handler，内部通过 ref 读取最新值

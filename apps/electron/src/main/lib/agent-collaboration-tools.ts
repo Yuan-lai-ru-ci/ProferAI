@@ -391,10 +391,17 @@ function scheduleParentAutoContinuation(parentSessionId: string): void {
   if (completed.length === 0) return
 
   const parent = getAgentSessionMeta(parentSessionId)
-  if (!parent || parent.stoppedByUser || isAgentSessionActive(parentSessionId)) {
+  // 历史会话可能缺少渠道；无渠道无法安全启动父会话，必须跳过而非将 undefined 传入运行器。
+  if (!parent || !parent.channelId || parent.stoppedByUser || isAgentSessionActive(parentSessionId)) {
     console.info('[协作] 跳过父会话自动续跑', {
       parentSessionId,
-      reason: !parent ? 'parent_missing' : parent.stoppedByUser ? 'stopped_by_user' : 'parent_active',
+      reason: !parent
+        ? 'parent_missing'
+        : !parent.channelId
+          ? 'parent_channel_missing'
+          : parent.stoppedByUser
+            ? 'stopped_by_user'
+            : 'parent_active',
     })
     return
   }
@@ -689,6 +696,33 @@ function stopDelegation(parentSessionId: string, delegationId: string): Record<s
     delegation: getDelegationSummary(record),
     stopped: true,
   }
+}
+
+/**
+ * 停止指定父会话的所有运行中子会话（级联取消）
+ *
+ * 当用户在 UI 停止父 Agent 时，其委派的协作子会话也应一并停止。
+ * 此函数由 AgentOrchestrator.stop() 调用，确保级联取消。
+ *
+ * @returns 实际停止的子会话数量
+ */
+export function stopDelegationsForParent(parentSessionId: string): number {
+  let stopped = 0
+  for (const record of delegations.values()) {
+    if (record.parentSessionId === parentSessionId && record.status === 'running') {
+      try {
+        stopRegisteredAgent(record.childSessionId)
+        markDelegationFinished(record, 'cancelled')
+        stopped++
+      } catch (err) {
+        console.error(`[协作] 级联停止子会话失败: delegationId=${record.delegationId}`, err)
+      }
+    }
+  }
+  if (stopped > 0) {
+    console.log(`[协作] 已级联停止 ${stopped} 个协作子会话 (父会话: ${parentSessionId})`)
+  }
+  return stopped
 }
 
 function startDelegation(

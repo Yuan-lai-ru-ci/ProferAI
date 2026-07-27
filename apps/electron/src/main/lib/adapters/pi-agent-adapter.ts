@@ -66,6 +66,7 @@ import {
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
+import { runPiPromptChain, type PiInterruptReservation } from './pi-prompt-chain'
 import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
 import { createWindowsPowerShellToolDefinition } from './pi-powershell-tool'
 import {
@@ -74,6 +75,7 @@ import {
   installPiRequestProxyFetch,
   runWithPiRequestProxy,
 } from './pi-request-proxy'
+import { createPiHarness, type PiHarnessToolCall } from '../pi-harness'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -142,10 +144,8 @@ interface ActivePiSession {
   runtimeGuard?: AgentRuntimeGuard
 }
 
-interface PendingInterruptPrompt {
-  content: string
-  resolveAccepted: () => void
-  rejectAccepted: (error: unknown) => void
+interface PendingInterruptPrompt extends PiInterruptReservation {
+  /** Reservation is registered before async prompt preparation / abort. */
 }
 
 interface ProferTaskItem {
@@ -353,25 +353,6 @@ function createAbortError(): Error {
   const error = new Error('Agent 执行已停止')
   error.name = 'AbortError'
   return error
-}
-
-/**
- * 返回一个 Promise，轮询 active.abortRequested。
- * 一旦 abortRequested 为 true，立即 reject createAbortError()。
- * 用于 Promise.race 竞速 session.prompt()——Pi SDK 的 session.abort()
- * 不会让 session.prompt() 抛异常，所以需要外部竞速来快速退出。
- */
-function createAbortRace(active: ActivePiSession): Promise<never> {
-  return new Promise((_, reject) => {
-    const check = () => {
-      if (active.abortRequested) {
-        reject(createAbortError())
-        return
-      }
-      setTimeout(check, 100)
-    }
-    check()
-  })
 }
 
 function rejectPendingInterruptPrompts(active: ActivePiSession, error: unknown): void {
@@ -584,21 +565,50 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
   }
 }
 
+/** 轻量 session-id → file-path 索引缓存，避免每次 resume 时递归扫描磁盘 */
+const sessionFileIndex = new Map<string, string>()
+let sessionDirIndexed: string | undefined
+
 function findSessionFile(sessionDir: string, sdkSessionId: string): string | undefined {
   if (!existsSync(sessionDir)) return undefined
-  const matches: string[] = []
+
+  // 复用上次索引；如果 sessionDir 变了则重建
+  if (sessionDirIndexed !== sessionDir) {
+    sessionFileIndex.clear()
+    sessionDirIndexed = sessionDir
+  }
+
+  if (sessionFileIndex.has(sdkSessionId)) {
+    const cached = sessionFileIndex.get(sdkSessionId)!
+    // 验证缓存文件还存在
+    if (existsSync(cached)) return cached
+    sessionFileIndex.delete(sdkSessionId)
+  }
+
+  // 缓存未命中：扫描磁盘（仅一次）
   const scanDirectory = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = readdirSync(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
       const candidate = join(directory, entry.name)
       if (entry.isDirectory()) {
         scanDirectory(candidate)
         continue
       }
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      // 已经在索引中的文件跳过
+      const alreadyIndexed = [...sessionFileIndex.values()].includes(candidate)
+      if (alreadyIndexed) continue
       try {
         const headerLine = readFileSync(candidate, 'utf-8').split('\n', 1)[0]
         const header = headerLine ? JSON.parse(headerLine) as { type?: unknown; id?: unknown } : undefined
-        if (header?.type === 'session' && header.id === sdkSessionId) matches.push(candidate)
+        if (header?.type === 'session' && typeof header.id === 'string' && header.id) {
+          sessionFileIndex.set(header.id, candidate)
+        }
       } catch {
         // 非 Pi JSONL 或损坏文件不能作为 resume 候选。
       }
@@ -606,7 +616,7 @@ function findSessionFile(sessionDir: string, sdkSessionId: string): string | und
   }
   scanDirectory(sessionDir)
   // Pi 文件按 cwd 分子目录存储；不能对 session ID 做 includes 模糊匹配，重复 ID 也不能任选。
-  return matches.length === 1 ? matches[0] : undefined
+  return sessionFileIndex.get(sdkSessionId)
 }
 
 function isPathWithinRoot(path: string, root: string): boolean {
@@ -753,6 +763,7 @@ function resolveGuardedRealPath(path: string): string {
 
 interface ToolWrapOptions {
   canUseTool?: PiAgentQueryOptions['canUseTool']
+  onToolCall?: (call: PiHarnessToolCall) => void
 }
 
 function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
@@ -760,8 +771,9 @@ function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
   options: ToolWrapOptions,
 ): ToolDefinition<TParams, TDetails, TState> {
   const canUseTool = options.canUseTool
+  const onToolCall = options.onToolCall
   const executionMode = 'sequential' as const
-  if (!canUseTool) return { ...definition, executionMode }
+  if (!canUseTool && !onToolCall) return { ...definition, executionMode }
   return {
     ...definition,
     executionMode,
@@ -780,6 +792,7 @@ function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
         }
         updatedParams = restorePiInput(definition.name, rawInput, permission.updatedInput)
       }
+      onToolCall?.({ name: definition.name, input: updatedParams })
       return definition.execute(
         toolCallId,
         updatedParams as typeof params,
@@ -835,7 +848,11 @@ function normalizeStringArray(value: unknown): string[] | undefined {
   return items.length > 0 ? items : undefined
 }
 
-function buildPromaProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOptions['canUseTool']): ToolDefinition[] {
+function buildPromaProductToolDefinitions(
+  sdk: PiSdk,
+  canUseTool: PiAgentQueryOptions['canUseTool'],
+  onToolCall?: ToolWrapOptions['onToolCall'],
+): ToolDefinition[] {
   const tasks = new Map<string, ProferTaskItem>()
   let nextTaskId = 1
 
@@ -1032,7 +1049,7 @@ function buildPromaProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOp
   ] as unknown as ToolDefinition[]
 
   return definitions.map((tool) =>
-    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
+    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
 }
 
 const WSL_EXPORT_ENV_KEYS = [
@@ -1175,6 +1192,7 @@ function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
+  onToolCall?: ToolWrapOptions['onToolCall'],
 ): ToolDefinition[] {
   const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv)
   const definitions = [
@@ -1189,15 +1207,16 @@ function buildBuiltinToolDefinitions(
   ] as unknown as ToolDefinition[]
 
   return definitions.map((tool) =>
-    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
+    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
 }
 
 function wrapCustomToolDefinitions(
   tools: ToolDefinition[] | undefined,
   canUseTool: PiAgentQueryOptions['canUseTool'],
+  onToolCall?: ToolWrapOptions['onToolCall'],
 ): ToolDefinition[] {
   return (tools ?? []).map((tool) =>
-    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
+    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
 }
 
 export function installRuntimeGuardHooks(session: AgentSession, guard: AgentRuntimeGuard): void {
@@ -1299,15 +1318,18 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ? sdk.SessionManager.open(sessionFile, input.piSessionDir, cwd)
         : sdk.SessionManager.create(cwd, input.piSessionDir)
       const { modelRuntime, model } = await buildModel(sdk, input)
+      const harness = input.compactRequest ? undefined : createPiHarness({ userPrompt: input.prompt })
+      const onToolCall: ToolWrapOptions['onToolCall'] = (call) => harness?.recordToolCall(call)
       const customTools = [
         ...buildBuiltinToolDefinitions(
           sdk,
           cwd,
           input.canUseTool,
           input.runtimeEnv,
+          onToolCall,
         ),
-        ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
-        ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
+        ...buildPromaProductToolDefinitions(sdk, input.canUseTool, onToolCall),
+        ...wrapCustomToolDefinitions(input.customTools, input.canUseTool, onToolCall),
       ]
 
       const settingsManager = sdk.SettingsManager.inMemory({
@@ -1493,6 +1515,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 break
               }
               if (terminalRetryError) {
+                harness?.markTerminalFailure()
                 runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
                 queue.push(terminalRetryError.sdkMessage)
               }
@@ -1589,72 +1612,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           })
           .finally(cleanupActiveSession)
       } else {
-        const runPromptChain = async (): Promise<void> => {
-          let nextPrompt: string | undefined = appendOutputFormatInstruction(input.prompt, input.outputFormat)
-          let nextInterrupt: PendingInterruptPrompt | undefined
-          while (nextPrompt !== undefined) {
-            const currentInterrupt = nextInterrupt
-            nextInterrupt = undefined
-            if (runtimeGuard.shouldStopBeforeNextTurn()) {
-              currentInterrupt?.rejectAccepted(createAbortError())
-              rejectPendingInterruptPrompts(active, createAbortError())
-              return
-            }
-            let prompt: string
-            try {
-              prompt = await preparePromptWithPromaSkills(resourceLoader, nextPrompt, input.skillMentions)
-            } catch (error) {
-              currentInterrupt?.rejectAccepted(error)
-              throw error
-            }
-            nextPrompt = undefined
-            try {
-              if (active.abortRequested) {
-                // 如果还有待处理的 interrupt 消息，清除 abortRequested 继续处理；
-                // 否则才是真正的 abort（停止整个会话），拒绝所有并退出。
-                if (active.pendingInterruptPrompts.length > 0) {
-                  active.abortRequested = false
-                  currentInterrupt?.resolveAccepted()
-                } else {
-                  currentInterrupt?.rejectAccepted(createAbortError())
-                  rejectPendingInterruptPrompts(active, createAbortError())
-                  return
-                }
-              } else {
-                currentInterrupt?.resolveAccepted()
-              }
-              if (!active.abortRequested) {
-                await Promise.race([
-                  session.prompt(prompt, { source: 'rpc' }),
-                  createAbortRace(active),
-                ])
-              }
-            } finally {
-              if (active.interrupting) {
-                session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
-              }
-              active.interrupting = false
-            }
-            if (active.abortRequested) {
-              // 同上：还有 pending interrupt → 继续；否则彻底终止
-              if (active.pendingInterruptPrompts.length > 0) {
-                active.abortRequested = false
-              } else {
-                rejectPendingInterruptPrompts(active, createAbortError())
-                return
-              }
-            }
-            if (runtimeGuard.shouldStopBeforeNextTurn()) {
-              rejectPendingInterruptPrompts(active, createAbortError())
-              return
-            }
-            const pendingInterrupt = active.pendingInterruptPrompts.shift()
-            nextInterrupt = pendingInterrupt
-            nextPrompt = pendingInterrupt?.content
-          }
-        }
-
-        runPromptChain()
+        runPiPromptChain(
+          appendOutputFormatInstruction(input.prompt, input.outputFormat),
+          active,
+          {
+            prompt: (prompt) => session.prompt(prompt, { source: 'rpc' }),
+            prepareInitialPrompt: (prompt) => preparePromptWithPromaSkills(resourceLoader, prompt, input.skillMentions),
+            shouldStopBeforeNextTurn: () => runtimeGuard.shouldStopBeforeNextTurn(),
+            rejectPendingInterruptPrompts: (error) => rejectPendingInterruptPrompts(active, error),
+            createAbortError,
+            dropTrailingAbortedAssistant: () => {
+              session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
+            },
+            createFollowUpPrompt: () => harness?.createFollowUpPrompt(),
+            markBlocked: () => harness?.markBlocked(),
+          },
+        )
           .then(() => queue.close())
           .catch((error) => queue.fail(error))
           .finally(cleanupActiveSession)
@@ -1688,8 +1661,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
    * 软中断当前 turn，但保留活跃 session 以便继续注入下一条用户消息。
    *
    * 与 abort() 的区别：不杀 session，允许立即续跑新消息。
-   * 设置 abortRequested 让 createAbortRace 竞速退出 session.prompt()，
-   * 并调用 session.abort() 让 Pi SDK 底层终止当前 prompt 流。
+   * 调用 session.abort() 让 Pi SDK 底层终止当前 prompt 流；prompt chain 会等待它实际 settle。
    */
   async interruptQuery(sessionId: string): Promise<void> {
     const active = this.activeSessions.get(sessionId)
@@ -1721,6 +1693,39 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const stopOverride = active.runtimeGuard.getLimitResultOverride()
       throw new Error(stopOverride?.errors[0] ?? 'Agent 已达到运行限制，无法继续追加消息')
     }
+    if (options?.interrupt) {
+      // Must reserve before any async skill preparation or abort. Otherwise the prompt chain may finish
+      // between the abort and reservation, making the first "send now" click disappear.
+      const contentReady = active.resourceLoader
+        ? preparePromptWithPromaSkills(active.resourceLoader, message.message.content, options?.skillMentions)
+        : Promise.resolve(message.message.content)
+      const accepted = new Promise<void>((resolve, reject) => {
+        active.pendingInterruptPrompts.push({
+          contentReady,
+          resolveAccepted: resolve,
+          rejectAccepted: reject,
+        })
+      })
+      accepted.catch(() => {})
+      // Always abort after reservation. isStreaming can transiently be false while the prompt chain still owns the turn.
+      active.abortRequested = true
+      active.interrupting = true
+      active.interruptAbortPromise ??= session.abort()
+        .finally(() => {
+          active.interruptAbortPromise = undefined
+        })
+      try {
+        await active.interruptAbortPromise
+        await accepted
+      } catch (error) {
+        // If preparation/abort failed before the chain consumed this reservation, remove and reject it.
+        const index = active.pendingInterruptPrompts.findIndex((prompt) => prompt.contentReady === contentReady)
+        if (index >= 0) active.pendingInterruptPrompts.splice(index, 1)
+        throw error
+      }
+      options.onAccepted?.()
+      return
+    }
     const content = active.resourceLoader
       ? await preparePromptWithPromaSkills(active.resourceLoader, message.message.content, options?.skillMentions)
       : message.message.content
@@ -1728,30 +1733,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       session.agent.clearAllQueues()
       const stopOverride = active.runtimeGuard.getLimitResultOverride()
       throw new Error(stopOverride?.errors[0] ?? 'Agent 已达到运行限制，无法继续追加消息')
-    }
-    if (options?.interrupt) {
-      const accepted = new Promise<void>((resolve, reject) => {
-        active.pendingInterruptPrompts.push({
-          content,
-          resolveAccepted: resolve,
-          rejectAccepted: reject,
-        })
-      })
-      accepted.catch(() => {})
-      if (session.isStreaming) {
-        // Pi 没有单独的 interrupt()；公开取消 API 是 abort()。
-        // 这里把 abort 产生的内部 aborted 终态压住，再由 query 的 prompt chain 发送新消息。
-        active.abortRequested = true
-        active.interrupting = true
-        active.interruptAbortPromise ??= session.abort()
-          .finally(() => {
-            active.interruptAbortPromise = undefined
-          })
-        await active.interruptAbortPromise
-      }
-      await accepted
-      options.onAccepted?.()
-      return
     }
     if (message.priority === 'now') {
       await session.steer(content)

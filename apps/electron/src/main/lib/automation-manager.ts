@@ -371,7 +371,12 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     sourceSessionId: input.sourceSessionId,
     createdAt: now,
     updatedAt: now,
-    nextRunAt: computeNextRunAt(input, now),
+    nextRunAt: computeNextRunAt({
+      ...input,
+      timeOfDay,
+      dayOfWeek,
+      dayOfMonth,
+    }, now),
     runCount: 0,
     runHistory: [],
   }
