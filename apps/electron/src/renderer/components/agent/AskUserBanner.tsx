@@ -6,12 +6,12 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import { Send, X } from 'lucide-react'
 import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
-import { allPendingAskUserRequestsAtom, agentStreamingStatesAtom, finalizeStreamingActivities } from '@/atoms/agent-atoms'
+import { allPendingAskUserRequestsAtom } from '@/atoms/agent-atoms'
 import type { AskUserQuestion } from '@profer/shared'
 
 interface QuestionAnswer {
@@ -32,11 +32,11 @@ function safeUrlTransform(url: string): string {
 /** AskUserBanner 属性接口 */
 interface AskUserBannerProps {
   sessionId: string
+  onRequestStop: () => void
 }
 
-export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactElement | null {
+export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingAskUserRequestsAtom)
-  const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [answers, setAnswers] = React.useState<Map<number, QuestionAnswer>>(new Map())
   const [submitting, setSubmitting] = React.useState(false)
@@ -139,28 +139,14 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [request?.requestId])
 
-  /** 关闭问题 & 终止 Agent */
+  /** 关闭问题，并经统一入口请求停止 Agent。 */
   const handleDismiss = (): void => {
-    // 立即标记 streaming 停止，避免 UI 残留
-    setStreamingStates((prev) => {
-      const current = prev.get(sessionId)
-      if (!current || !current.running) return prev
-      const map = new Map(prev)
-      map.set(sessionId, {
-        ...current,
-        running: false,
-        ...finalizeStreamingActivities(current.toolActivities),
-      })
-      return map
-    })
-    // 清除当前 session 所有待处理的 AskUser 请求
     setAllRequests((prev) => {
       const map = new Map(prev)
       map.delete(sessionId)
       return map
     })
-    // 终止 Agent
-    window.electronAPI.stopAgent(sessionId).catch(console.error)
+    onRequestStop()
   }
 
   if (!request) return null

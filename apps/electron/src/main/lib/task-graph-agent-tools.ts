@@ -144,11 +144,6 @@ export async function injectTaskGraphMcpServer(
           }
           appendGraphEvent(ctx.sessionId, linkedEvent)
 
-          // 写入 fork 边（如有）
-          if (forkFrom) {
-            // forkFrom 信息已在 task_created 的 description 中，applyEvent 会解析
-            // 这里不额外写事件，因为 graph-state 的 task_created case 会解析 forkFrom
-          }
 
           // 返回与 SDK TaskCreate 兼容的格式，让渲染层的 parseTaskCreateResult 能识别
           return jsonResult({

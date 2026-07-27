@@ -50,6 +50,7 @@ import { appendGraphEvent } from './project-graph-service'
 import {
   injectAgentCollaborationMcpServer,
   registerCollaborationEventBus,
+  stopDelegationsForParent,
 } from './agent-collaboration-tools'
 import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
 import { getAdapter, fetchTitle } from '@profer/core'
@@ -72,7 +73,7 @@ import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 
 // 已提取的工具模块
-import { sdkPermissionModeForProferMode, extractApiError, isAutoRetryableTypedError, isAutoRetryableCatchError, isSessionNotFoundError, getRetryDelayMs, MAX_AUTO_RETRIES, MAX_AUTO_RETRY_WAIT_MS } from './agent-retry-utils'
+import { sdkPermissionModeForProferMode, extractApiError, isAutoRetryableTypedError, isAutoRetryableCatchError, isSessionNotFoundError, getRetryDelayMs, classifyCatchError, MAX_AUTO_RETRIES, MAX_AUTO_RETRY_WAIT_MS } from './agent-retry-utils'
 import { extractSDKToolSummary, buildContextPrompt, buildRecoveryPrompt, escapeContextAttr, buildReferencedSessionsPrompt, TITLE_PROMPT, MAX_TITLE_LENGTH, DEFAULT_SESSION_TITLE, DEFAULT_MODEL_ID, MAX_CONTEXT_MESSAGES } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
@@ -81,7 +82,7 @@ import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
-import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
+import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, shouldPreInterruptQueuedMessage, tryAcquireActiveSession, tryReserveQueuedMessage } from './agent-orchestrator-p0-guards'
 import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
@@ -154,7 +155,7 @@ export function serializeErrorDetail(error: unknown): string {
 export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
-  /** sessionId → 本轮不可复用的运行令牌；避免并发和旧运行 finally 误清理新状态。 */
+  /** sessionId → 本轮不可复用的运行令牌；直到 owner finally 才释放。 */
   private activeSessions = new Map<string, string>()
 
   /** 队列消息本地记录（sessionId → UUID 集合，用于防重） */
@@ -166,7 +167,7 @@ export class AgentOrchestrator {
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, ProferPermissionMode>()
 
-  /** 每轮真实运行的退出信号；不能以 activeSessions 判断 stop 后是否已退出。 */
+  /** 每轮真实运行的退出信号；仅 owner finally 可以 resolve。 */
   private runCompletions = new Map<string, { token: string; promise: Promise<void>; resolve: () => void }>()
 
   /** 删除期间禁止同一会话从 UI、队列或 headless 路径重新进入。 */
@@ -245,20 +246,37 @@ export class AgentOrchestrator {
       sdkEnv.HTTP_PROXY = proxyUrl
     }
 
-    // Windows 平台：配置 Shell 环境
+    // Windows 平台：配置 Shell 环境（支持用户偏好）
     if (process.platform === 'win32') {
       const runtimeStatus = getRuntimeStatus()
       const shellStatus = runtimeStatus?.shell
+      const shellPreference = getSettings().agentShellPreference ?? 'auto'
 
       if (shellStatus) {
-        if (shellStatus.gitBash?.available && shellStatus.gitBash.path) {
+        let shellSet = false
+
+        // 用户明确偏好 + 该 shell 可用 → 直接使用
+        if (shellPreference === 'git-bash' && shellStatus.gitBash?.available && shellStatus.gitBash.path) {
           sdkEnv.CLAUDE_CODE_SHELL = shellStatus.gitBash.path
-          console.log(`[Agent 编排] 配置 Shell 环境: Git Bash (${shellStatus.gitBash.path})`)
-        } else if (shellStatus.wsl?.available) {
+          console.log(`[Agent 编排] 配置 Shell 环境: Git Bash（用户偏好）(${shellStatus.gitBash.path})`)
+          shellSet = true
+        } else if (shellPreference === 'wsl' && shellStatus.wsl?.available) {
           sdkEnv.CLAUDE_CODE_SHELL = 'wsl'
-          console.log(`[Agent 编排] 配置 Shell 环境: WSL ${shellStatus.wsl.version} (${shellStatus.wsl.defaultDistro})`)
-        } else {
-          console.warn('[Agent 编排] Windows 平台未检测到可用的 Shell 环境（Git Bash / WSL）')
+          console.log(`[Agent 编排] 配置 Shell 环境: WSL（用户偏好）${shellStatus.wsl.version} (${shellStatus.wsl.defaultDistro})`)
+          shellSet = true
+        }
+
+        // 自动模式或偏好 shell 不可用 → fallback
+        if (!shellSet) {
+          if (shellStatus.gitBash?.available && shellStatus.gitBash.path) {
+            sdkEnv.CLAUDE_CODE_SHELL = shellStatus.gitBash.path
+            console.log(`[Agent 编排] 配置 Shell 环境: Git Bash (${shellStatus.gitBash.path})`)
+          } else if (shellStatus.wsl?.available) {
+            sdkEnv.CLAUDE_CODE_SHELL = 'wsl'
+            console.log(`[Agent 编排] 配置 Shell 环境: WSL ${shellStatus.wsl.version} (${shellStatus.wsl.defaultDistro})`)
+          } else {
+            console.warn('[Agent 编排] Windows 平台未检测到可用的 Shell 环境（Git Bash / WSL）')
+          }
         }
         sdkEnv.CLAUDE_BASH_NO_LOGIN = '1'
       }
@@ -541,27 +559,27 @@ export class AgentOrchestrator {
 
     // 0. 并发保护
     // 在任意 await 前原子占用会话，商业渠道认证刷新也不得留下并发窗口。
-    const runGeneration = randomUUID()
     const streamStartedAt = input.startedAt ?? Date.now()
     if (this.deletingSessions.has(sessionId)) {
       callbacks.onError('会话正在删除，无法发送消息')
       callbacks.onComplete([], { startedAt: input.startedAt })
       return
     }
+    const runGeneration = randomUUID()
     if (!tryAcquireActiveSession(this.activeSessions, sessionId, runGeneration)) {
-      console.warn(`[Agent 编排] 会话 ${sessionId} 正在处理中，拒绝新请求`)
-      callbacks.onError('上一条消息仍在处理中，请稍候再试')
+      const stopping = this.stoppedBySessions.has(sessionId)
+      console.warn(`[Agent 编排] 会话 ${sessionId} 正在${stopping ? '停止' : '处理中'}，拒绝新请求`)
+      callbacks.onError(stopping ? 'Agent 正在停止，请稍候再试' : '上一条消息仍在处理中，请稍候再试')
       callbacks.onComplete([], { startedAt: input.startedAt })
       return
     }
     let resolveCompletion!: () => void
     const completion = new Promise<void>((resolve) => { resolveCompletion = resolve })
     this.runCompletions.set(sessionId, { token: runGeneration, promise: completion, resolve: resolveCompletion })
-    const releaseActiveRun = (): void => {
-      if (!releaseActiveSession(this.activeSessions, sessionId, runGeneration)) return
-      this.sessionPermissionModes.delete(sessionId)
-      this.queuedMessageUuids.delete(sessionId)
-    }
+    const releaseActiveRun = (): boolean => releaseActiveSession(this.activeSessions, sessionId, runGeneration)
+    type CompleteOptions = { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] }
+    // completeRun 必须延后到 owner finally 才通知 renderer；因此状态必须与 finally 同作用域。
+    let pendingTerminalCompletion: { messages?: AgentMessage[]; opts?: CompleteOptions } | null = null
 
     try {
     // 0.5 清除上一轮中断标记
@@ -590,7 +608,8 @@ export class AgentOrchestrator {
         console.error('[Agent 编排] 持久化 preflight error 失败:', e)
       }
       callbacks.onError(errorContent)
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      // owner finally 释放 activeSessions 后才发 complete，避免 renderer 先进入 idle。
+      pendingTerminalCompletion = { messages: [], opts: { startedAt: input.startedAt } }
     }
 
     // 1. Windows 平台：检查 Shell 环境可用性
@@ -681,13 +700,14 @@ export class AgentOrchestrator {
     await callbacks.onRunStarted?.({ startedAt: streamStartedAt })
     const completeRun = (
       messages?: AgentMessage[],
-      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
+      opts?: CompleteOptions,
     ): void => {
-      releaseActiveRun()
-      callbacks.onComplete(messages, opts)
+      // 真正的 complete 必须等 owner finally 释放 activeSessions 后才通知 renderer，
+      // 否则 UI 会先开放发送、主进程仍拒绝，导致用户草稿被清空。
+      pendingTerminalCompletion = { messages, opts }
     }
     // 轻量完成：turn 主体结束但仍有后台任务在飞行。
-    // 关键区别——不调用 releaseActiveRun，保留 activeSessions/activeChannels/sessionPermissionModes，
+    // 关键区别——不释放 active ownership，保留 adapter 通道与权限状态，
     // 以便 ① adapter 保持的通道在任务完成时自动续轮 ② 用户在等待期手动注入消息能复用通道。
     // UI 侧通过 backgroundTasksPending 进入"空闲可输入"态（spinner 停、输入框启用）。
     const idleComplete = (
@@ -699,11 +719,10 @@ export class AgentOrchestrator {
     const failRun = (
       error: string,
       messages?: AgentMessage[],
-      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
+      opts?: CompleteOptions,
     ): void => {
-      releaseActiveRun()
       callbacks.onError(error)
-      callbacks.onComplete(messages, opts)
+      completeRun(messages, opts)
     }
 
     // 3. 构建本轮专属 SDK 环境。绝不修改主进程 process.env，避免并发 session 串扰凭证。
@@ -1184,6 +1203,7 @@ export class AgentOrchestrator {
       const piRuntimeEnv = buildAgentRuntimeEnv({
         proxyUrl: await getEffectiveProxyUrl(),
         runtimeStatus: getRuntimeStatus(),
+        shellPreference: getSettings().agentShellPreference,
       })
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
@@ -1351,7 +1371,8 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] 已切换到上下文回填模式，立即重试`)
           } else {
             const retryAttempt = Math.max(1, attempt - 1 - invisibleRecoveryAttempts)
-            const delayMs = getRetryDelayMs(retryAttempt, retryDelayElapsedMs)
+            const errorCategory = classifyCatchError(lastRetryableError, stderrChunks.join('\n'))
+            const delayMs = getRetryDelayMs(retryAttempt, retryDelayElapsedMs, errorCategory)
             if (delayMs <= 0) {
               console.log(`[Agent 编排] 自动重试等待预算已耗尽 (${MAX_AUTO_RETRY_WAIT_MS}ms)，停止重试`)
               break
@@ -1382,8 +1403,8 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] 第 ${retryAttempt} 次重试${retryAttempt <= RETRY_VISIBILITY_THRESHOLD ? '(静默)' : ''}，等待 ${delaySec}s...`)
             await new Promise((r) => setTimeout(r, delayMs))
 
-            // 等待期间如果会话被中止，退出
-            if (!this.activeSessions.has(sessionId)) {
+            // 等待期间如果用户停止或本 run 已不再拥有会话，退出。
+            if (this.stoppedBySessions.has(sessionId) || this.activeSessions.get(sessionId) !== runGeneration) {
               const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
               this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
               try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
@@ -1456,8 +1477,8 @@ export class AgentOrchestrator {
             const raceResult = await Promise.race(racePromises)
 
             if (raceResult.kind === 'stopped') {
-              // 用户主动停止，退出事件循环。后续由 catch 块（!activeSessions.has）
-              // 或 break 后的 stoppedByUser 检查统一处理 completeRun。
+              // 用户主动停止，退出事件循环；break 后的 stoppedByUser 检查统一完成回调，
+              // active ownership 则保留到 owner finally 才释放。
               pendingNext?.catch(() => {})
               pendingNext = null
               queryIterator.return?.(undefined as never).catch(() => {})
@@ -1875,7 +1896,7 @@ export class AgentOrchestrator {
           try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
           // Plan 模式：Agent 完成规划后注入"接受计划"建议
-          if (initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.has(sessionId)) {
+          if (initialPermissionMode === 'plan' && planModeEntered && this.activeSessions.get(sessionId) === runGeneration) {
             this.eventBus.emit(sessionId, {
               kind: 'sdk_message',
               message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
@@ -1901,8 +1922,8 @@ export class AgentOrchestrator {
             console.error(`[Agent 编排] stderr 为空`)
           }
 
-          // 用户主动中止
-          if (!this.activeSessions.has(sessionId)) {
+          // 用户主动中止：stopping 时仍保留 active ownership，直到 finally 真实释放。
+          if (this.stoppedBySessions.has(sessionId)) {
             const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
             console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
@@ -2124,15 +2145,23 @@ export class AgentOrchestrator {
     } finally {
       // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
-      releaseActiveRun()
-      permissionService.clearSessionPending(sessionId)
-      // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
-      // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
-      exitPlanService.clearSessionPending(sessionId)
-      const currentCompletion = this.runCompletions.get(sessionId)
-      if (currentCompletion?.token === runGeneration) {
-        this.runCompletions.delete(sessionId)
-        currentCompletion.resolve()
+      // 只有仍持有本 generation 的 finally 能释放并清理 session scoped state。
+      if (releaseActiveRun()) {
+        this.sessionPermissionModes.delete(sessionId)
+        this.queuedMessageUuids.delete(sessionId)
+        permissionService.clearSessionPending(sessionId)
+        // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
+        // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
+        exitPlanService.clearSessionPending(sessionId)
+        const currentCompletion = this.runCompletions.get(sessionId)
+        if (currentCompletion?.token === runGeneration) {
+          this.runCompletions.delete(sessionId)
+          currentCompletion.resolve()
+        }
+        // ownership 已释放，renderer 此时收到 STREAM_COMPLETE 后可安全开始下一轮。
+        if (pendingTerminalCompletion) {
+          callbacks.onComplete(pendingTerminalCompletion.messages, pendingTerminalCompletion.opts)
+        }
       }
     }
   }
@@ -2166,21 +2195,21 @@ export class AgentOrchestrator {
   }
 
   /**
-   * 中止指定会话的 Agent 执行
-   *
-   * 先从 activeSessions 移除（供 sendMessage catch 块检测用户中止），
-   * 再调用 adapter.abort() 中止底层 SDK 进程。
+   * 中止指定会话；Stop 仅标记并 abort，运行所有权由 owner finally 释放。
    */
   stop(sessionId: string): void {
-    this.activeSessions.delete(sessionId)
-    this.sessionPermissionModes.delete(sessionId)
+    if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
     this.stoppedBySessions.add(sessionId)
-    this.queuedMessageUuids.delete(sessionId)
     this.adapter.abort(sessionId)
-    console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
+    try {
+      stopDelegationsForParent(sessionId)
+    } catch (err) {
+      console.error(`[Agent 编排] 级联停止子会话失败: sessionId=${sessionId}`, err)
+    }
+    console.log(`[Agent 编排] 已请求中止会话: ${sessionId}`)
   }
 
-  /** 检查指定会话是否正在处理中 */
+  /** 检查指定会话是否正在处理或停止中。 */
   isActive(sessionId: string): boolean {
     return this.activeSessions.has(sessionId)
   }
@@ -2291,14 +2320,13 @@ export class AgentOrchestrator {
 
   /** 中止所有活跃的 Agent 会话（应用退出时调用） */
   stopAll(): void {
-    if (this.activeSessions.size > 0) {
-      console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
+    const activeSessionIds = Array.from(this.activeSessions.keys())
+    if (activeSessionIds.length > 0) {
+      console.log(`[Agent 编排] 正在请求中止所有活跃会话 (${activeSessionIds.length} 个)...`)
+      for (const sessionId of activeSessionIds) this.stop(sessionId)
     }
-    // 即便 activeSessions 为空，也要调 dispose 清理可能残留的 pidMap / 子进程
+    // 应用退出时仍需立即释放 adapter 资源；正常运行的 ownership 将由各自 finally 结算。
     this.adapter.dispose()
-    this.activeSessions.clear()
-    this.sessionPermissionModes.clear()
-    this.queuedMessageUuids.clear()
   }
 
   // ===== 队列消息管理 =====
@@ -2325,8 +2353,12 @@ export class AgentOrchestrator {
     if (this.deletingSessions.has(sessionId)) {
       throw new Error(`[Agent 编排] 会话正在删除，无法追加消息: ${sessionId}`)
     }
-    if (!this.activeSessions.has(sessionId)) {
+    const queueRunId = this.activeSessions.get(sessionId)
+    if (!queueRunId) {
       throw new Error(`[Agent 编排] 会话未运行，无法追加消息: ${sessionId}`)
+    }
+    if (this.stoppedBySessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话正在停止，无法追加消息: ${sessionId}`)
     }
 
     if (!this.adapter.sendQueuedMessage) {
@@ -2335,9 +2367,9 @@ export class AgentOrchestrator {
 
     const uuid = presetUuid || randomUUID()
 
-    // 防重记录
+    // 同一 UUID 的重试必须是幂等的：已被当前 run 接收的消息不再重复注入或落盘。
     const uuids = this.queuedMessageUuids.get(sessionId) ?? new Set<string>()
-    uuids.add(uuid)
+    if (!tryReserveQueuedMessage(uuids, uuid)) return uuid
     this.queuedMessageUuids.set(sessionId, uuids)
 
     // 注入 mention 引用指令（Skill/MCP/会话）— 仅影响发往 SDK 的 prompt，不影响持久化。
@@ -2375,9 +2407,10 @@ export class AgentOrchestrator {
     }
 
     try {
-      // interrupt=true：先软中断当前 turn 再注入（下一轮消费本条）；
-      // 否则排队不打断：消息直接入 channel FIFO，priority:'next' 告知 CLI 等当前 turn 完成后再处理。
-      if (opts?.interrupt && this.adapter.interruptQuery) {
+      // Claude 需要先软中断再注入；Pi 的 interrupt 路径必须由 adapter 自己先 reservation 再 abort，
+      // 否则 prompt chain 会在 reservation 前结束，导致 IPC 永久等待。
+      const runtime = normalizeAgentRuntime(getAgentSessionMeta(sessionId)?.agentRuntime)
+      if (shouldPreInterruptQueuedMessage(runtime, opts?.interrupt) && this.adapter.interruptQuery) {
         try {
           await this.adapter.interruptQuery(sessionId)
         } catch (error) {
@@ -2388,6 +2421,10 @@ export class AgentOrchestrator {
       await this.adapter.sendQueuedMessage(sessionId, sdkMessage, {
         interrupt: opts?.interrupt,
       })
+      // adapter await 期间 run 可能已停止或被替换；旧 run 不得再持久化本条消息。
+      if (this.activeSessions.get(sessionId) !== queueRunId || this.stoppedBySessions.has(sessionId)) {
+        throw new Error(`[Agent 编排] 追加消息所属运行已结束或正在停止: ${sessionId}`)
+      }
       console.log(`[Agent 编排] 追加消息已注入: sessionId=${sessionId}, uuid=${uuid}, interrupt=${!!opts?.interrupt}`)
 
       // 立即持久化到 JSONL — 仅存原始文本（rawText），不含 prompt 工程块

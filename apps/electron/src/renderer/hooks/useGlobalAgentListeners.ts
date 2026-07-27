@@ -988,6 +988,8 @@ export function useGlobalAgentListeners(): void {
             // backgroundTasksPending=true → 进入/保持软空闲态（通道仍开着，handleSend 走注入路径）；
             // false → 真正结束，清除软空闲态，新消息回到新建 run 路径。
             backgroundWaiting: backgroundTasksPending,
+            // 只有主进程确认的 STREAM_COMPLETE 才能结束 renderer 的 stopping 过渡态。
+            stopping: false,
             ...finalizeStreamingActivities(current.toolActivities),
           })
           return map

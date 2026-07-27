@@ -635,11 +635,12 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
   ] as unknown as ToolDefinition[]
 }
 
-// ===== Collaboration 工具（占位，下阶段实现） =====
+// ===== Collaboration 工具 =====
 
-// collaboration 逻辑较重（涉及子会话生命周期管理、EventBus 订阅、BlockedEvent 冒泡），
-// 需要独立桥接文件。当前阶段先确保 automation 和 profer-cloud 可用。
-// TODO: 从 agent-collaboration-tools.ts 提取核心逻辑到 service 层，再桥接到 Pi。
+// collaboration 逻辑已通过 buildPiCollaborationTools 桥接完成（agent-collaboration-tools.ts）。
+// 工具包括：list_available_agent_models、delegate_agent、delegate_agents、
+// wait_for_delegations、list_delegations、get_delegation_results、
+// stop_delegation、stop_delegations、answer_delegation_question、continue_delegation。
 
 // ===== Profer Cloud 工具 =====
 

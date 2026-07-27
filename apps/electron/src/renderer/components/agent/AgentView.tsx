@@ -26,6 +26,7 @@ import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
+import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
 import { isCodexFastModeSupportedModel } from '@profer/shared'
 import { PermissionBanner } from './PermissionBanner'
@@ -124,11 +125,14 @@ import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
 import {
   buildQueuedMessageSendPayload,
   createAgentQueuedMessage,
+  discardQueuedMessagesOnStop,
   moveQueuedMessage,
+  isQueueTargetNoLongerActiveError,
   parseQueuedMessageMentions,
   queuedTextToParagraphHtml,
   removeQueuedMessage,
   restoreQueuedMessageToFront,
+  shouldRestoreQueuedMessageAfterFailure,
 } from '@/lib/agent-message-queue'
 import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
@@ -192,6 +196,8 @@ interface AgentThinkingPopoverProps {
   onToggle: () => void
   /** Pi + Codex 推理模型时，统一用同一个脑图标控制会话级 reasoning.effort。 */
   openAIConfig?: OpenAIThinkingConfig
+  /** 将已持久化的会话档位即时同步回 renderer，避免菜单停留在旧状态。 */
+  onOpenAIThinkingUpdated: (session: import('@profer/shared').AgentSessionMeta) => void
 }
 
 const OPENAI_THINKING_LABELS: Record<string, string> = {
@@ -203,7 +209,7 @@ const OPENAI_THINKING_LABELS: Record<string, string> = {
   xhigh: '最高',
 }
 
-function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig }: AgentThinkingPopoverProps): React.ReactElement {
+function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIThinkingUpdated }: AgentThinkingPopoverProps): React.ReactElement {
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
   const [effort, setEffort] = useAtom(agentEffortAtom)
   const [open, setOpen] = React.useState(false)
@@ -242,7 +248,12 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig }: AgentTh
       openAIConfig.sessionId,
       level as import('@profer/shared').AgentThinkingLevel | null,
     )
-      .then(() => toast.success(level === null ? '已恢复全局默认推理档位' : `推理档位已设为「${OPENAI_THINKING_LABELS[level] ?? level}」`))
+      .then((updatedSession) => {
+        // IPC 已将档位持久化；同步回 renderer 的会话列表，避免菜单仍显示旧的
+        // 「全局默认」状态、让用户误以为点击没有生效。
+        onOpenAIThinkingUpdated(updatedSession)
+        toast.success(level === null ? '已恢复全局默认推理档位' : `推理档位已设为「${OPENAI_THINKING_LABELS[level] ?? level}」`)
+      })
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : '切换推理档位失败'))
   }
 
@@ -576,6 +587,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
+  // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
+  const queueStopEpochRef = React.useRef(0)
+  const stopInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
   // Per-session 渠道/模型配置：已加载 metadata 是持久化真源，短暂 local Map 仅在加载前回退。
   const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
@@ -614,10 +628,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
+  const globalChannels = useAtomValue(channelsAtom)
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
   const stableChannelId = resolvePlanQuotaChannelId(agentChannelId, stableChannelIdRef.current)
+  // 仅官方支持查询的订阅渠道才允许 ContextUsageBadge 发起额度请求。
+  const planQuotaChannelId = globalChannels.some(
+    (channel) => channel.id === stableChannelId && supportsChannelPlanQuota(channel),
+  ) ? stableChannelId : undefined
 
   // 已有会话以其 metadata 初始化 local Map；metadata 尚未加载时才允许回退全局默认。
   // setter 内的 `prev.has(sessionId)` 守卫避免写入 → atom 引用变化 → effect 自循环（React #185）。
@@ -740,7 +759,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [pendingFiles])
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
-  const globalChannels = useAtomValue(channelsAtom)
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = React.useMemo(() => {
@@ -1668,60 +1686,68 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     clearStoppedByUser()
 
-    // interrupt 由实时 streaming 决定（避免外层快照与内层不一致的竞态）
+    const startNewRun = async (): Promise<void> => {
+      const streamStartedAt = Date.now()
+      const additionalDirectoriesForRun = new Set(attachedDirs)
+      for (const dir of attachedFileDirectories) additionalDirectoriesForRun.add(dir)
+
+      setStreamingStates((prev) => {
+        const map = new Map(prev)
+        const existing = prev.get(sessionId)
+        map.set(sessionId, {
+          running: true,
+          content: '',
+          toolActivities: [],
+          model: agentModelId || undefined,
+          startedAt: streamStartedAt,
+          inputTokens: existing?.inputTokens,
+          contextWindow: existing?.contextWindow,
+        })
+        return map
+      })
+
+      appendOptimisticPersistedMessage(createUserSDKMessage(payload.rawText, message.id, streamStartedAt))
+      try {
+        await window.electronAPI.sendAgentMessage({
+          sessionId,
+          userMessage: payload.rawText,
+          channelId: agentChannelId,
+          modelId: agentModelId || undefined,
+          workspaceId: currentWorkspaceId || undefined,
+          agentRuntime: sessionAgentRuntime,
+          startedAt: streamStartedAt,
+          permissionModeOverride: permissionMode,
+          ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
+          ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
+          ...(payload.mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: payload.mentions.mentionedMcpServers }),
+          ...(payload.mentions.mentionedSessionIds.length > 0 && { mentionedSessionIds: payload.mentions.mentionedSessionIds }),
+        })
+        revealRendererDraft()
+      } catch (error) {
+        setStreamingStates((prev) => {
+          const current = prev.get(sessionId)
+          if (!current) return prev
+          const map = new Map(prev)
+          map.set(sessionId, { ...current, running: false })
+          return map
+        })
+        throw error
+      }
+    }
+
+    // renderer 的 streaming 快照可能落后于 main 的旧 run completion。仅对明确的“会话未运行”
+    // 响应降级为新 run；其他 queue 失败必须交由调用方恢复队列，不能盲目重复执行。
     if (streaming || backgroundWaiting) {
-      await queueMessageIntoActiveAgent(message, payload.rawText, payload.sdkText, payload.mentions, streaming)
+      try {
+        await queueMessageIntoActiveAgent(message, payload.rawText, payload.sdkText, payload.mentions, streaming)
+      } catch (error) {
+        if (!isQueueTargetNoLongerActiveError(error)) throw error
+        await startNewRun()
+      }
       return
     }
 
-    // 非运行态：新建一次 run（复用 handleSend 正常分支的启动模式）
-    const streamStartedAt = Date.now()
-    const additionalDirectoriesForRun = new Set(attachedDirs)
-    for (const dir of attachedFileDirectories) additionalDirectoriesForRun.add(dir)
-
-    setStreamingStates((prev) => {
-      const map = new Map(prev)
-      const existing = prev.get(sessionId)
-      map.set(sessionId, {
-        running: true,
-        content: '',
-        toolActivities: [],
-        model: agentModelId || undefined,
-        startedAt: streamStartedAt,
-        inputTokens: existing?.inputTokens,
-        contextWindow: existing?.contextWindow,
-      })
-      return map
-    })
-
-    appendOptimisticPersistedMessage(createUserSDKMessage(payload.rawText, undefined, streamStartedAt))
-
-    try {
-      await window.electronAPI.sendAgentMessage({
-        sessionId,
-        userMessage: payload.rawText,
-        channelId: agentChannelId,
-        modelId: agentModelId || undefined,
-        workspaceId: currentWorkspaceId || undefined,
-        agentRuntime: sessionAgentRuntime,
-        startedAt: streamStartedAt,
-        permissionModeOverride: permissionMode,
-        ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
-        ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
-        ...(payload.mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: payload.mentions.mentionedMcpServers }),
-        ...(payload.mentions.mentionedSessionIds.length > 0 && { mentionedSessionIds: payload.mentions.mentionedSessionIds }),
-      })
-      revealRendererDraft()
-    } catch (error) {
-      setStreamingStates((prev) => {
-        const current = prev.get(sessionId)
-        if (!current) return prev
-        const map = new Map(prev)
-        map.set(sessionId, { ...current, running: false })
-        return map
-      })
-      throw error
-    }
+    await startNewRun()
   }, [
     agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
     streaming, backgroundWaiting, permissionMode, attachedDirs, attachedFileDirectories,
@@ -1736,6 +1762,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const effectiveText = text || suggestion || ''
     const pendingFilesSnapshot = pendingFilesRef.current
     if (!messagesLoaded || (!effectiveText && pendingFilesSnapshot.length === 0) || !agentChannelId || !hasAvailableModel) return
+    if (streamState?.stopping) {
+      toast.info('Agent 正在停止', { description: '停止完成前不会发送或清除你的草稿。' })
+      return
+    }
     const additionalDirectoriesForRun = new Set(attachedDirs)
     for (const dir of attachedFileDirectories) {
       additionalDirectoriesForRun.add(dir)
@@ -2022,7 +2052,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2041,18 +2071,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!message) return
     queuedSendInFlightRef.current = true
     sendingQueuedMessageIdsRef.current.add(messageId)
+    const sendEpoch = queueStopEpochRef.current
     setQueuedMessages((prev) => removeQueuedMessage(prev, messageId))
     sendPlainTextAgentMessage(message)
       .catch((error) => {
         console.error('[AgentView] 队列消息发送失败:', error)
         toast.error('队列消息发送失败', { description: String(error) })
-        setQueuedMessages((prev) => restoreQueuedMessageToFront(prev, message))
+        if (shouldRestoreQueuedMessageAfterFailure(sendEpoch, queueStopEpochRef.current, streamState?.stopping === true || stoppedByUser)) {
+          setQueuedMessages((prev) => restoreQueuedMessageToFront(prev, message))
+        }
       })
       .finally(() => {
         sendingQueuedMessageIdsRef.current.delete(messageId)
         queuedSendInFlightRef.current = false
       })
-  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages])
+  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streamState?.stopping])
 
   const handleRecallQueuedMessage = React.useCallback((messageId: string): void => {
     const message = queuedMessages.find((item) => item.id === messageId)
@@ -2103,38 +2136,50 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     autoSendingQueuedRef.current = true
     queuedSendInFlightRef.current = true
     sendingQueuedMessageIdsRef.current.add(message.id)
+    const sendEpoch = queueStopEpochRef.current
     setQueuedMessages((prev) => removeQueuedMessage(prev, message.id))
     sendPlainTextAgentMessage(message)
       .catch((error) => {
         console.error('[AgentView] 自动发送队列消息失败:', error)
         toast.error('自动发送队列消息失败', { description: String(error) })
-        setQueuedMessages((prev) => restoreQueuedMessageToFront(prev, message))
+        if (shouldRestoreQueuedMessageAfterFailure(sendEpoch, queueStopEpochRef.current, streamState?.stopping === true || stoppedByUser)) {
+          setQueuedMessages((prev) => restoreQueuedMessageToFront(prev, message))
+        }
       })
       .finally(() => {
         sendingQueuedMessageIdsRef.current.delete(message.id)
         queuedSendInFlightRef.current = false
         autoSendingQueuedRef.current = false
       })
-  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming])
+  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping])
 
-  /** 停止生成 */
+  /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
+    if (stopInFlightRef.current || streamState?.stopping) return
+    stopInFlightRef.current = true
+
+    // 用户明确停止时，丢弃此前已经进入“运行中追加”队列的消息；停止之后的草稿不入队，见 handleSend。
+    // 先失效在飞消息的 restore 资格，再清空当前队列。
+    queueStopEpochRef.current += 1
+    setQueuedMessages(discardQueuedMessagesOnStop)
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
-      // 允许在 streaming (running=true) 或 backgroundWaiting (running=false 但有后台任务) 时停止。
-      // 纯 idle 态 (running=false, backgroundWaiting=false) 则无需操作。
       if (!current || (!current.running && !current.backgroundWaiting)) return prev
       const map = new Map(prev)
-      map.set(sessionId, {
-        ...current,
-        running: false,
-        ...finalizeStreamingActivities(current.toolActivities),
-      })
+      map.set(sessionId, { ...current, stopping: true })
       return map
     })
 
-    window.electronAPI.stopAgent(sessionId).catch(console.error)
-  }, [sessionId, setStreamingStates])
+    window.electronAPI.stopAgent(sessionId)
+      .catch((error) => {
+        // timeout/reject 只说明尚未确认结束，必须保持 stopping，不能伪装为空闲。
+        console.error('[AgentView] 停止 Agent 未完成:', error)
+        toast.error('停止 Agent 尚未完成', { description: '请稍候，草稿已保留。' })
+      })
+      .finally(() => {
+        stopInFlightRef.current = false
+      })
+  }, [sessionId, streamState?.stopping, setStreamingStates, setQueuedMessages])
 
   /** 手动发送 /compact 命令 */
   const handleCompact = React.useCallback((): void => {
@@ -2468,7 +2513,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [sessionId])
   const hasTextInput = inputContent.trim().length > 0
   const isCompacting = contextStatus.isCompacting
-  const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting
+  const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
     {
@@ -2510,6 +2555,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               : { type: 'adaptive' as const }
             setAgentThinking(next)
             window.electronAPI.updateSettings({ agentThinking: next })
+          }}
+          onOpenAIThinkingUpdated={(updatedSession) => {
+            setAgentSessions((sessions) => sessions.map((session) => (
+              session.id === updatedSession.id ? updatedSession : session
+            )))
           }}
           openAIConfig={sessionMeta && sessionAgentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
             ? {
@@ -2577,7 +2627,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           usageUpdatedAt={contextStatus.usageUpdatedAt}
           isCompacting={contextStatus.isCompacting}
           isProcessing={streaming || backgroundWaiting}
-          planQuotaChannelId={stableChannelId}
+          planQuotaChannelId={planQuotaChannelId}
           sessionId={sessionId}
           onCompact={handleCompact}
         />
@@ -2627,7 +2677,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     setProcessGroupsKeepExpanded,
   ])
 
-  const inputTrailingNode = streaming ? (
+  const inputTrailingNode = (streaming || streamState?.stopping) ? (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
@@ -2636,6 +2686,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           size="icon"
           className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
           onClick={handleStop}
+          disabled={streamState?.stopping}
         >
           <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
         </Button>
@@ -2689,14 +2740,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         />
 
         {/* 权限请求横幅 */}
-        <PermissionBanner sessionId={sessionId} />
+        <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
 
         {/* AskUserQuestion 交互式问答横幅 */}
-        <AskUserBanner sessionId={sessionId} />
+        <AskUserBanner sessionId={sessionId} onRequestStop={handleStop} />
 
 
         {/* ExitPlanMode 计划审批横幅 */}
-        <ExitPlanModeBanner sessionId={sessionId} />
+        <ExitPlanModeBanner sessionId={sessionId} onRequestStop={handleStop} />
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
