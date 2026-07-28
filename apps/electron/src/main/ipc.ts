@@ -4216,6 +4216,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 查询系统实际接受的全局快捷键，供快捷键地图标示未注册项。
+  ipcMain.handle(
+    QUICK_TASK_IPC_CHANNELS.GET_GLOBAL_SHORTCUT_REGISTRATION_STATUS,
+    async (): Promise<Record<string, boolean>> => {
+      const { getGlobalShortcutRegistrationStatus } = await import('./lib/global-shortcut-service')
+      return getGlobalShortcutRegistrationStatus()
+    }
+  )
+
   // ===== 语音输入 =====
 
   ipcMain.handle(

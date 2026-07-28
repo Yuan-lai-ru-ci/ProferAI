@@ -341,6 +341,8 @@ export const QUICK_TASK_IPC_CHANNELS = {
   FOCUS: 'quick-task:focus',
   /** 重新注册全局快捷键（设置变更后） */
   REREGISTER_GLOBAL_SHORTCUTS: 'quick-task:reregister-global-shortcuts',
+  /** 查询当前已成功注册的全局快捷键 */
+  GET_GLOBAL_SHORTCUT_REGISTRATION_STATUS: 'quick-task:get-global-shortcut-registration-status',
 } as const
 
 /** 语音输入 IPC 通道 */
