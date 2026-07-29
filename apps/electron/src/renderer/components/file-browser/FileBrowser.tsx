@@ -12,6 +12,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
+import { toast } from 'sonner'
 import {
   ChevronRight,
   Trash2,
@@ -43,9 +44,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
-import type { FileEntry } from '@proma/shared'
+import type { FileAccessOptions, FileEntry } from '@proma/shared'
 import { FileTypeIcon } from './FileTypeIcon'
 import { DefaultAppMenuItem } from './DefaultAppMenuItem'
 import {
@@ -84,37 +86,68 @@ export function isPathUnderRoot(rootPath: string, targetPath: string): boolean {
   return targetPath.startsWith(root + '/') || targetPath.startsWith(root + '\\')
 }
 
-interface FileBrowserProps {
+export type FileScope = 'project' | 'session'
+
+export interface FileBrowserRoot {
+  path: string
+  scope: FileScope
+}
+
+interface ScopedFileEntry extends FileEntry {
+  scope: FileScope
   rootPath: string
+}
+
+interface FileBrowserProps {
+  /** 单根兼容入口。新代码应优先使用 roots。 */
+  rootPath?: string
+  /** 同一项目会话中可见的所有物理根，会合并为一个连续文件树。 */
+  roots?: FileBrowserRoot[]
   /** 隐藏内置顶部工具栏（面包屑 + 按钮），由外部自行渲染 */
   hideToolbar?: boolean
   /** 嵌入模式：不使用内部 ScrollArea 和 h-full，由外部容器控制布局和滚动 */
   embedded?: boolean
   /** 隐藏"目录为空"提示（当外部已有附加目录等内容时使用） */
   hideEmpty?: boolean
+  /** 当前文件树的 IPC 路径访问上下文。 */
+  access?: FileAccessOptions
+  /** 当前项目共享文件根；存在时，会话文件可移入此目录。 */
+  projectRootPath?: string | null
   /** 点击添加到聊天（在文件操作菜单中显示） */
   onAddToChat?: (entry: FileEntry) => void
   /** 单击文件时在内联预览面板中显示（替代外部窗口预览） */
   onFilePreview?: (filePath: string) => void
 }
 
-export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
-  const [entries, setEntries] = React.useState<FileEntry[]>([])
+function sortEntries(entries: ScopedFileEntry[]): ScopedFileEntry[] {
+  return entries.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty, access, projectRootPath, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
+  const browserRoots = React.useMemo<FileBrowserRoot[]>(() => {
+    if (roots && roots.length > 0) return roots.filter((root) => Boolean(root.path))
+    return rootPath ? [{ path: rootPath, scope: 'project' }] : []
+  }, [rootPath, roots])
+  const [entries, setEntries] = React.useState<ScopedFileEntry[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
 
   // ===== Agent 写入文件时的自动定位 =====
   const autoReveal = useAtomValue(fileBrowserAutoRevealAtom)
-  // 仅当目标路径落在本实例 rootPath 内才响应；以 ts 标识本次脉冲
-  const revealForThisRoot = React.useMemo(() => {
-    if (!autoReveal || !rootPath) return null
-    if (!isPathUnderRoot(rootPath, autoReveal.path)) return null
-    return autoReveal
-  }, [autoReveal, rootPath])
+  const revealRoot = React.useMemo(() => {
+    if (!autoReveal) return null
+    return browserRoots
+      .filter((root) => isPathUnderRoot(root.path, autoReveal.path))
+      .sort((a, b) => b.path.length - a.path.length)[0] ?? null
+  }, [autoReveal, browserRoots])
+  const revealForThisRoot = revealRoot ? autoReveal : null
   const revealAncestors = React.useMemo(
-    () => revealForThisRoot ? computeRevealAncestors(rootPath, revealForThisRoot.path) : new Set<string>(),
-    [revealForThisRoot, rootPath],
+    () => revealForThisRoot && revealRoot ? computeRevealAncestors(revealRoot.path, revealForThisRoot.path) : new Set<string>(),
+    [revealForThisRoot, revealRoot],
   )
   const revealTarget = revealForThisRoot?.path ?? null
   const revealTs = revealForThisRoot?.ts ?? 0
@@ -137,13 +170,13 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     if (!currentSessionId) return new Set()
     const inner = recentlyModifiedMap.get(currentSessionId)
     if (!inner) return new Set()
-    // 仅保留落在本实例 rootPath 下的路径
+    // 仅保留落在当前合并根之一的路径
     const set = new Set<string>()
     for (const p of inner.keys()) {
-      if (isPathUnderRoot(rootPath, p)) set.add(p)
+      if (browserRoots.some((root) => isPathUnderRoot(root.path, p))) set.add(p)
     }
     return set
-  }, [recentlyModifiedMap, currentSessionId, rootPath])
+  }, [recentlyModifiedMap, currentSessionId, browserRoots])
 
   // 选中状态
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
@@ -157,14 +190,20 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
   const selectedCount = selectedPaths.size
 
-  /** 加载根目录 */
+  /** 加载并合并所有可见根目录。 */
   const loadRoot = React.useCallback(async () => {
-    if (!rootPath) return
+    if (browserRoots.length === 0) {
+      setEntries([])
+      return
+    }
     setLoading(true)
     setError(null)
     try {
-      const items = await window.electronAPI.listDirectory(rootPath)
-      setEntries(items)
+      const groups = await Promise.all(browserRoots.map(async (root) => {
+        const items = await window.electronAPI.listDirectory(root.path, access)
+        return items.map((entry): ScopedFileEntry => ({ ...entry, scope: root.scope, rootPath: root.path }))
+      }))
+      setEntries(sortEntries(groups.flat()))
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       setError(msg)
@@ -172,7 +211,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     } finally {
       setLoading(false)
     }
-  }, [rootPath])
+  }, [browserRoots, access])
 
   React.useEffect(() => {
     loadRoot()
@@ -206,8 +245,8 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
   /** 在文件夹中显示 */
   const handleShowInFolder = React.useCallback((entry: FileEntry) => {
-    window.electronAPI.showInFolder(entry.path).catch(console.error)
-  }, [])
+    window.electronAPI.showInFolder(entry.path, access).catch(console.error)
+  }, [access])
 
   /** 在系统终端中打开文件夹 */
   const handleOpenInTerminal = React.useCallback((entry: FileEntry) => {
@@ -229,7 +268,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     // 同名检查
     const parentDir = filePath.substring(0, filePath.lastIndexOf('/'))
     try {
-      const siblings = await window.electronAPI.listDirectory(parentDir)
+      const siblings = await window.electronAPI.listDirectory(parentDir, access)
       const conflict = siblings.some((s) => s.name === newName && s.path !== filePath)
       if (conflict) {
         return '同名文件已存在'
@@ -239,7 +278,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     }
 
     try {
-      await window.electronAPI.renameFile(filePath, newName)
+      await window.electronAPI.renameFile(filePath, newName, access)
       await loadRoot()
       setRenamingPath(null)
       setSelectedPaths(new Set())
@@ -247,7 +286,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     } catch (err) {
       return err instanceof Error ? err.message : '重命名失败'
     }
-  }, [loadRoot])
+  }, [loadRoot, access])
 
   /** 触发删除（支持多选） */
   const handleRequestDelete = React.useCallback((entry: FileEntry) => {
@@ -262,10 +301,10 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       if (selectedPaths.size > 1) {
         // 批量删除
         for (const path of selectedPaths) {
-          await window.electronAPI.deleteFile(path)
+          await window.electronAPI.deleteFile(path, access)
         }
       } else {
-        await window.electronAPI.deleteFile(deleteTarget.path)
+        await window.electronAPI.deleteFile(deleteTarget.path, access)
       }
       setSelectedPaths(new Set())
       await loadRoot()
@@ -273,7 +312,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       console.error('[FileBrowser] 删除失败:', err)
     }
     setDeleteTarget(null)
-  }, [deleteTarget, selectedPaths, loadRoot])
+  }, [deleteTarget, selectedPaths, loadRoot, access])
 
   /** 移动文件 */
   const handleMove = React.useCallback(async (entry: FileEntry) => {
@@ -284,10 +323,10 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
       if (selectedPaths.size > 1) {
         for (const path of selectedPaths) {
-          await window.electronAPI.moveFile(path, result.path)
+          await window.electronAPI.moveFile(path, result.path, access)
         }
       } else {
-        await window.electronAPI.moveFile(entry.path, result.path)
+        await window.electronAPI.moveFile(entry.path, result.path, access)
       }
       setSelectedPaths(new Set())
       await loadRoot()
@@ -296,16 +335,35 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     } finally {
       setMoving(false)
     }
-  }, [selectedPaths, loadRoot])
+  }, [selectedPaths, loadRoot, access])
 
-  // 显示根路径最后两段作为面包屑
+  /** 将当前会话私有文件移入共享项目根。 */
+  const handlePromoteToProject = React.useCallback(async (entry: ScopedFileEntry) => {
+    if (!projectRootPath || entry.scope !== 'session') return
+    setMoving(true)
+    try {
+      await window.electronAPI.moveFile(entry.path, projectRootPath, access)
+      setSelectedPaths(new Set())
+      await loadRoot()
+    } catch (err) {
+      console.error('[FileBrowser] 移入项目失败:', err)
+      toast.error('移入项目失败', {
+        description: err instanceof Error ? err.message : '无法移动文件',
+      })
+    } finally {
+      setMoving(false)
+    }
+  }, [projectRootPath, loadRoot, access])
+
+  // 显示首个根路径最后两段作为面包屑（嵌入模式由 SidePanel 自己提供文件 Tab 语义）。
   const breadcrumb = React.useMemo(() => {
-    const parts = rootPath.split('/').filter(Boolean)
-    return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : rootPath
-  }, [rootPath])
+    const primaryRoot = browserRoots[0]?.path ?? ''
+    const parts = primaryRoot.split('/').filter(Boolean)
+    return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : primaryRoot
+  }, [browserRoots])
 
   const fileTree = (
-    <div className="file-tree-guide-scope py-1" onClick={handleBackgroundClick}>
+    <div className={cn('file-tree-guide-scope', embedded ? 'py-0' : 'py-1')} onClick={handleBackgroundClick}>
       {error && (
         <div className="px-3 py-2 text-xs text-destructive">{error}</div>
       )}
@@ -318,6 +376,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         <FileTreeItem
           key={entry.path}
           entry={entry}
+          access={access}
           depth={0}
           selectedPaths={selectedPaths}
           selectedCount={selectedCount}
@@ -337,6 +396,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           onRename={handleRename}
           onDelete={handleRequestDelete}
           onMove={handleMove}
+          onPromoteToProject={projectRootPath ? handlePromoteToProject : undefined}
           onRefresh={loadRoot}
           onClearSelection={() => setSelectedPaths(new Set())}
           onAddToChat={onAddToChat}
@@ -351,7 +411,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       {/* 顶部工具栏（可由外部接管） */}
       {!hideToolbar && (
         <div className="flex items-center gap-1 px-3 pr-10 h-[48px] border-b flex-shrink-0">
-          <span className="text-xs text-muted-foreground truncate flex-1" title={rootPath}>
+          <span className="text-xs text-muted-foreground truncate flex-1" title={browserRoots[0]?.path}>
             {breadcrumb}
           </span>
           <Button
@@ -359,7 +419,10 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
             variant="ghost"
             size="icon"
             className="h-7 w-7 flex-shrink-0"
-            onClick={() => window.electronAPI.openFile(rootPath).catch(console.error)}
+            onClick={() => {
+              const path = browserRoots[0]?.path
+              if (path) window.electronAPI.openFile(path, access).catch(console.error)
+            }}
             title="在 Finder 中打开"
           >
             <ExternalLink className="size-3.5" />
@@ -416,7 +479,8 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 // ===== FileTreeItem 子组件 =====
 
 interface FileTreeItemProps {
-  entry: FileEntry
+  entry: ScopedFileEntry
+  access?: FileAccessOptions
   depth: number
   selectedPaths: Set<string>
   selectedCount: number
@@ -442,6 +506,7 @@ interface FileTreeItemProps {
   onRename: (filePath: string, newName: string) => Promise<string | null>
   onDelete: (entry: FileEntry) => void
   onMove: (entry: FileEntry) => void
+  onPromoteToProject?: (entry: ScopedFileEntry) => void
   onRefresh: () => Promise<void>
   onClearSelection: () => void
   onAddToChat?: (entry: FileEntry) => void
@@ -450,6 +515,7 @@ interface FileTreeItemProps {
 
 function FileTreeItem({
   entry,
+  access,
   depth,
   selectedPaths,
   selectedCount,
@@ -469,13 +535,14 @@ function FileTreeItem({
   onRename,
   onDelete,
   onMove,
+  onPromoteToProject,
   onRefresh,
   onClearSelection,
   onAddToChat,
   onFilePreview,
 }: FileTreeItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
-  const [children, setChildren] = React.useState<FileEntry[]>([])
+  const [children, setChildren] = React.useState<ScopedFileEntry[]>([])
   const [childrenLoaded, setChildrenLoaded] = React.useState(false)
   const [flash, setFlash] = React.useState(false)
   const rowRef = React.useRef<HTMLDivElement>(null)
@@ -484,8 +551,8 @@ function FileTreeItem({
   // 当 refreshVersion 变化时，已展开的文件夹自动重新加载子项
   React.useEffect(() => {
     if (expanded && childrenLoaded && entry.isDirectory) {
-      window.electronAPI.listDirectory(entry.path)
-        .then((items) => setChildren(items))
+      window.electronAPI.listDirectory(entry.path, access)
+        .then((items) => setChildren(items.map((child) => ({ ...child, scope: entry.scope, rootPath: entry.rootPath }))))
         .catch((err) => console.error('[FileTreeItem] 刷新子目录失败:', err))
     }
   }, [refreshVersion]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -511,9 +578,9 @@ function FileTreeItem({
       const run = async (): Promise<void> => {
         if (!childrenLoaded) {
           try {
-            const items = await window.electronAPI.listDirectory(entry.path)
+            const items = await window.electronAPI.listDirectory(entry.path, access)
             if (!cancelled) {
-              setChildren(items)
+              setChildren(items.map((child) => ({ ...child, scope: entry.scope, rootPath: entry.rootPath })))
               setChildrenLoaded(true)
             }
           } catch (err) {
@@ -565,16 +632,16 @@ function FileTreeItem({
 
     if (!expanded && !childrenLoaded) {
       try {
-        const items = await window.electronAPI.listDirectory(entry.path)
-        setChildren(items)
+        const items = await window.electronAPI.listDirectory(entry.path, access)
+        setChildren(items.map((child) => ({ ...child, scope: entry.scope, rootPath: entry.rootPath })))
         setChildrenLoaded(true)
 
         // 首次展开空目录时，延迟重试一次（应对 Agent 正在写入文件的时序问题）
         if (items.length === 0) {
           setTimeout(async () => {
             try {
-              const retryItems = await window.electronAPI.listDirectory(entry.path)
-              if (retryItems.length > 0) setChildren(retryItems)
+              const retryItems = await window.electronAPI.listDirectory(entry.path, access)
+              if (retryItems.length > 0) setChildren(retryItems.map((child) => ({ ...child, scope: entry.scope, rootPath: entry.rootPath })))
             } catch { /* 静默忽略 */ }
           }, 800)
         }
@@ -603,8 +670,8 @@ function FileTreeItem({
   const handleRefreshAfterDelete = async (): Promise<void> => {
     if (childrenLoaded) {
       try {
-        const items = await window.electronAPI.listDirectory(entry.path)
-        setChildren(items)
+        const items = await window.electronAPI.listDirectory(entry.path, access)
+        setChildren(items.map((child) => ({ ...child, scope: entry.scope, rootPath: entry.rootPath })))
       } catch {
         await onRefresh()
       }
@@ -766,7 +833,14 @@ function FileTreeItem({
             )}
           </div>
         ) : (
-          <span className="relative z-10 truncate text-xs flex-1">{entry.name}</span>
+          <>
+            <span className="relative z-10 truncate text-xs flex-1">{entry.name}</span>
+            {entry.scope === 'session' && (
+              <span className="relative z-10 flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+                会话文件
+              </span>
+            )}
+          </>
         )}
 
         {/* 右侧操作按钮占位（始终占位，避免行宽跳动） */}
@@ -825,8 +899,26 @@ function FileTreeItem({
                 {menuSelectedCount === 1 && !entry.isDirectory && (
                   <DefaultAppMenuItem
                     filePath={entry.path}
+                    access={access}
                     className="text-xs py-1 [&>svg]:size-3.5"
                   />
+                )}
+                {onPromoteToProject && entry.scope === 'session' && menuSelectedCount === 1 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuItem
+                        className="text-xs py-1 [&>svg]:size-3.5"
+                        disabled={moving}
+                        onSelect={() => { void onPromoteToProject(entry) }}
+                      >
+                        <FolderInput />
+                        移入项目
+                      </DropdownMenuItem>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      <p>移动到项目根目录，其他会话也可访问</p>
+                    </TooltipContent>
+                  </Tooltip>
                 )}
                 <DropdownMenuItem
                   className="text-xs py-1 [&>svg]:size-3.5"
@@ -879,6 +971,7 @@ function FileTreeItem({
             <FileTreeItem
               key={child.path}
               entry={child}
+              access={access}
               depth={depth + 1}
               selectedPaths={selectedPaths}
               selectedCount={selectedCount}
@@ -898,6 +991,7 @@ function FileTreeItem({
               onRename={onRename}
               onDelete={onDelete}
               onMove={onMove}
+              onPromoteToProject={onPromoteToProject}
               onRefresh={handleRefreshAfterDelete}
               onClearSelection={onClearSelection}
               onAddToChat={onAddToChat}

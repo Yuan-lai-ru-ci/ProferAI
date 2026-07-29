@@ -21,6 +21,7 @@ import type {
 } from "@proma/shared";
 import { FileMentionList } from "@/components/file-browser/FileMentionList";
 import type { FileMentionRef } from "@/components/file-browser/FileMentionList";
+import { resolveFileMentionPath } from "@/components/file-browser/file-mention-path";
 import { cn } from "@/lib/utils";
 import {
   createMentionPopup,
@@ -97,7 +98,7 @@ function getRootMenuItems(): RootMenuItem[] {
     {
       id: "skills",
       label: "调用 Skill",
-      description: "选择当前工作区已启用的 Skill",
+      description: "选择当前 Proma 工作区已启用的 Skill",
       icon: Sparkles,
       kind: "page",
     },
@@ -118,7 +119,7 @@ function getRootMenuItems(): RootMenuItem[] {
     {
       id: "files",
       label: "引用文件",
-      description: "选择会话文件或工作区文件",
+      description: "选择会话文件或项目文件",
       icon: FileText,
       kind: "page",
     },
@@ -529,8 +530,12 @@ const AgentCommandMenu = React.forwardRef<
               ref={fileListRef}
               sessionEntries={fileResult.sessionEntries}
               workspaceEntries={fileResult.workspaceEntries}
-              onSelect={(file: Pick<FileIndexEntry, "name" | "path">) =>
-                onInsertMention("@", file.path, file.name)
+              onSelect={(file: Pick<FileIndexEntry, "name" | "path" | "type" | "source">) =>
+                onInsertMention(
+                  "@",
+                  resolveFileMentionPath(file, workspacePathRef.current),
+                  file.name,
+                )
               }
               onBack={() => setPage("root")}
               embedded

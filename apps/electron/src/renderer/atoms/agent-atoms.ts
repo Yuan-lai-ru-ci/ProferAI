@@ -388,9 +388,9 @@ export const agentSidePanelWidthAtom = atomWithStorage<number>('proma-agent-side
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
-export type AgentSidePanelTab = 'session' | 'workspace' | 'changes' | 'chat'
+export type AgentSidePanelTab = 'files' | 'changes' | 'chat'
 
-/** 侧面板当前 Tab：会话文件 / 工作区文件 / 文件改动 / Chat（per-session Map） */
+/** 侧面板当前 Tab：Files / 文件改动 / Chat（per-session Map） */
 export const agentDiffPanelTabAtom = atom<Map<string, AgentSidePanelTab>>(new Map())
 
 /** Diff 视图模式：'split' | 'unified'，默认使用统一预览 */
