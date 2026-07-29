@@ -1141,9 +1141,7 @@
 /* 设置卡片样式：只有默认深色主题用透明，其他都用卡片背景 */
 .settings-card {
   background: hsl(var(--card));
-  box-shadow:
-    0 1px 2px 0 rgb(0 0 0 / 0.03),
-    0 1px 3px 0 rgb(0 0 0 / 0.06);
+  box-shadow: var(--shadow-sm);
 }
 .dark:not([class*="theme-"]) .settings-card {
   background: transparent;

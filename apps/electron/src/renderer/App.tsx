@@ -6,7 +6,6 @@ import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { EnvironmentCheckDialog } from './components/environment/EnvironmentCheckDialog'
 import { MigrationImportDialog } from './components/migration/MigrationImportDialog'
 import { TooltipProvider } from './components/ui/tooltip'
-import { SettingsDialog } from './components/settings/SettingsDialog'
 import { ShortcutGuideDialog } from './components/shortcuts/ShortcutGuideDialog'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { conversationsAtom } from './atoms/chat-atoms'
@@ -103,7 +102,6 @@ export default function App(): React.ReactElement {
     <TooltipProvider delayDuration={200}>
       <AppShell contextValue={contextValue} />
       <PlanningReminderRail />
-      <SettingsDialog />
       <ShortcutGuideDialog />
       <TutorialBanner />
       <GlobalEnvironmentCheckDialog />

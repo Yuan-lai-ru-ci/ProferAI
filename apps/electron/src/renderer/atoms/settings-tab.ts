@@ -11,6 +11,7 @@
  */
 
 import { atom } from 'jotai'
+import type { TabType } from './tab-atoms'
 
 export type SettingsTab = 'general' | 'channels' | 'proxy' | 'appearance' | 'about' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'voice-input' | 'migration' | 'storage'
 export type ToolSettingsFocus = 'memory' | 'web-search' | 'nano-banana' | 'custom-tools'
@@ -29,3 +30,14 @@ export const channelFormDirtyAtom = atom(false)
 
 /** 外部请求关闭设置面板（如 Cmd+W），SettingsPanel 监听后弹出确认对话框 */
 export const settingsCloseRequestedAtom = atom(false)
+
+/**
+ * 从设置工作区离开时暂存的会话导航目标。
+ * 渠道表单有未保存内容时，SettingsPanel 确认放弃后再执行该导航。
+ */
+export interface SettingsSessionNavigation {
+  type: TabType
+  sessionId: string
+  title: string
+}
+export const settingsPendingSessionNavigationAtom = atom<SettingsSessionNavigation | null>(null)
