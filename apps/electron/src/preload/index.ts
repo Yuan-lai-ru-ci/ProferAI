@@ -32,6 +32,7 @@ import type {
   AttachmentSaveInput,
   AttachmentSaveResult,
   FileDialogResult,
+  FileOrFolderDialogResult,
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
@@ -112,7 +113,9 @@ import type {
   CreateAutomationInput,
   UpdateAutomationInput,
   Todo,
+  TodoListQuery,
   CalendarEvent,
+  CalendarEventListQuery,
   PlanningGroup,
   PlanningGroupScope,
   PlanningTag,
@@ -711,6 +714,9 @@ export interface ElectronAPI {
   /** 打开文件夹选择对话框 */
   openFolderDialog: () => Promise<{ path: string; name: string } | null>
 
+  /** 打开支持文件与文件夹混合选择的 Composer 对话框 */
+  openFileOrFolderDialog: () => Promise<FileOrFolderDialogResult>
+
   /** 附加外部目录到 Agent 会话 */
   attachDirectory: (input: AgentAttachDirectoryInput) => Promise<string[]>
 
@@ -1111,7 +1117,7 @@ export interface ElectronAPI {
   // ===== 任务 / 日程（Planning）=====
   /** 打开或聚焦单例独立任务/日程窗口。 */
   openPlanningWindow: () => Promise<void>
-  listTodos: () => Promise<Todo[]>
+  listTodos: (query?: TodoListQuery) => Promise<Todo[]>
   createTodo: (input: CreateTodoInput) => Promise<Todo>
   /** 在主进程原子地关联项目并创建 Todo 的 Agent 会话。 */
   startTodoAgent: (input: StartTodoAgentInput) => Promise<StartTodoAgentResult>
@@ -1119,7 +1125,7 @@ export interface ElectronAPI {
   onTodoAgentSessionReady: (callback: (activation: TodoAgentSessionActivation) => void) => () => void
   updateTodo: (input: UpdateTodoInput) => Promise<Todo | undefined>
   deleteTodo: (id: string) => Promise<boolean>
-  listCalendarEvents: () => Promise<CalendarEvent[]>
+  listCalendarEvents: (query?: CalendarEventListQuery) => Promise<CalendarEvent[]>
   createCalendarEvent: (input: CreateCalendarEventInput) => Promise<CalendarEvent>
   updateCalendarEvent: (input: UpdateCalendarEventInput) => Promise<CalendarEvent | undefined>
   deleteCalendarEvent: (id: string) => Promise<boolean>
@@ -1903,6 +1909,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FOLDER_DIALOG)
   },
 
+  openFileOrFolderDialog: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FILE_OR_FOLDER_DIALOG)
+  },
+
   attachDirectory: (input: AgentAttachDirectoryInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ATTACH_DIRECTORY, input)
   },
@@ -2533,7 +2543,7 @@ const electronAPI: ElectronAPI = {
 
   // ===== 任务 / 日程（Planning）=====
   openPlanningWindow: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.OPEN_WINDOW),
-  listTodos: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TODOS),
+  listTodos: (query?: TodoListQuery) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TODOS, query),
   createTodo: (input: CreateTodoInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_TODO, input),
   startTodoAgent: (input: StartTodoAgentInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.START_TODO_AGENT, input),
   onTodoAgentSessionReady: (callback: (activation: TodoAgentSessionActivation) => void) => {
@@ -2543,7 +2553,7 @@ const electronAPI: ElectronAPI = {
   },
   updateTodo: (input: UpdateTodoInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_TODO, input),
   deleteTodo: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TODO, id),
-  listCalendarEvents: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS),
+  listCalendarEvents: (query?: CalendarEventListQuery) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS, query),
   createCalendarEvent: (input: CreateCalendarEventInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_CALENDAR_EVENT, input),
   updateCalendarEvent: (input: UpdateCalendarEventInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_CALENDAR_EVENT, input),
   deleteCalendarEvent: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_CALENDAR_EVENT, id),

@@ -77,6 +77,17 @@ export interface FileDialogSkippedFile {
   message?: string
 }
 
+/** Agent Composer 混合选择器中返回的目录；目录只授权访问，不作为消息附件复制。 */
+export interface FileDialogDirectory {
+  name: string
+  path: string
+}
+
+/** 支持同时选择文件与文件夹的 Agent Composer 选择结果。 */
+export interface FileOrFolderDialogResult extends FileDialogResult {
+  directories: FileDialogDirectory[]
+}
+
 // ===== 消息相关 =====
 
 /**
