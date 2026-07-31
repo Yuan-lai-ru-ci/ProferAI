@@ -54,6 +54,7 @@ import themeForestMorning from '@/assets/theme-previews/theme-forest-morning.web
 import themeOceanDark from '@/assets/theme-previews/theme-ocean-dark.webp'
 import themeForestNight from '@/assets/theme-previews/theme-forest-night.webp'
 import themeMorandiNight from '@/assets/theme-previews/theme-morandi-night.webp'
+import themeMistPaperDark from '@/assets/theme-previews/theme-mist-paper-dark.svg'
 import themeTerminalDark from '@/assets/theme-previews/theme-terminal-dark.png'
 
 /** 主题选项 */
@@ -135,6 +136,12 @@ const SPECIAL_STYLES: readonly SpecialStyle[] = [
     image: themeMorandiNight,
     imageScale: 1.15,
     objectPosition: '44% 58%',
+  },
+  {
+    id: 'mist-paper-dark',
+    name: '雾纸暖灰',
+    variant: 'dark',
+    image: themeMistPaperDark,
   },
   {
     id: 'terminal-dark',
@@ -235,7 +242,7 @@ export function AppearanceSettings(): React.ReactElement {
           {/* 特殊风格 - 标签在上，卡片在下 */}
           <div className="px-4 py-3 space-y-2">
             <div className="text-sm font-medium text-foreground">特殊风格</div>
-            <div className="grid grid-cols-7 gap-3">
+            <div className="grid grid-cols-4 xl:grid-cols-8 gap-3">
               {SPECIAL_STYLES.map((style) => (
                 <StyleCard
                   key={style.id}

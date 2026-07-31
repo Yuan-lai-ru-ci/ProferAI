@@ -176,6 +176,7 @@ export const THEME_STYLES = [
   'forest-dark',
   'slate-light',
   'slate-dark',
+  'mist-paper-dark',
   'terminal-dark',
 ] as const
 
