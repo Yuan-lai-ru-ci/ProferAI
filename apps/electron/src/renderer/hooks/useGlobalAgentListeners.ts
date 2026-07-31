@@ -16,6 +16,7 @@ import {
   agentStreamErrorsAtom,
   agentSessionsAtom,
   agentMessageRefreshAtom,
+  agentPendingPromptAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
   allPendingExitPlanRequestsAtom,
@@ -57,9 +58,10 @@ import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTab
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, ProferEvent, AgentSessionMeta } from '@profer/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, ProferEvent, AgentSessionMeta, TodoAgentSessionActivation } from '@profer/shared'
 import { inferContextWindow, resolveContextWindowFromModelUsage } from '@profer/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
+import { buildTodoAgentPrompt } from '@/lib/todo-agent-prompt'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 
@@ -1163,6 +1165,26 @@ export function useGlobalAgentListeners(): void {
       }
     })
 
+    // 独立规划窗口启动 Todo Agent 后，主进程通过 TODO_AGENT_SESSION_READY 把会话交接给主窗口。
+    // 这里接管：写入会话列表、定位到 agent Tab、切到执行工作区、再注入待发送的任务提示。
+    // 与 PlanningView.startTodoInWorkspace（主窗口中启动）保持同等效果，补齐跨窗口断链。
+    const cleanupTodoSessionReady = window.electronAPI.onTodoAgentSessionReady(
+      ({ todo, session }) => {
+        store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, session))
+        if (session.workspaceId) {
+          store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
+          window.electronAPI.updateSettings({ agentWorkspaceId: session.workspaceId })
+            .catch(console.error)
+        }
+        makeNavigateToSession(session.id, session.title)()
+        store.set(agentPendingPromptAtom, {
+          sessionId: session.id,
+          // non-Pi runtime 需要内联 Todo 快照，Pi 走 mcp__planning__get_todo。
+          message: buildTodoAgentPrompt(todo.id, session.agentRuntime === 'pi', todo),
+        })
+      },
+    )
+
     // 定期清理 60s 前的「最近修改」标记，避免 atom 无限增长
     const pruneTimer = setInterval(() => {
       const cutoff = Date.now() - RECENTLY_MODIFIED_TTL_MS
@@ -1254,6 +1276,7 @@ export function useGlobalAgentListeners(): void {
       cleanupError()
       cleanupTitleUpdated()
       cleanupSessionUpdated()
+      cleanupTodoSessionReady()
       clearInterval(pruneTimer)
       window.removeEventListener('focus', onWindowFocus)
     }

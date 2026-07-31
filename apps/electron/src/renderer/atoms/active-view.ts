@@ -10,7 +10,7 @@
 
 import { atomWithStorage } from 'jotai/utils'
 
-export type ActiveView = 'conversations' | 'automations' | 'agent-skills' | 'knowledge-base'
+export type ActiveView = 'conversations' | 'planning' | 'agent-skills' | 'knowledge-base'
 
 /** 当前活跃视图（持久化到 localStorage，刷新后保持当前页面） */
 export const activeViewAtom = atomWithStorage<ActiveView>('profer-active-view', 'conversations')

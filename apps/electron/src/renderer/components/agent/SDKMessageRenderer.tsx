@@ -46,6 +46,7 @@ import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
+import { planningTabAtom } from '@/atoms/planning-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { environmentCheckDialogOpenAtom } from '@/atoms/environment'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
@@ -1036,6 +1037,7 @@ function ScheduledRunBadge(): React.ReactElement {
   const automations = useAtomValue(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
   const setActiveView = useSetAtom(activeViewAtom)
+  const setPlanningTab = useSetAtom(planningTabAtom)
 
   const session = sessions.find((s) => s.id === activeSessionId)
   // 委派子会话恰由定时任务触发的父会话创建时会同时带 sourceAutomationId 与
@@ -1047,7 +1049,8 @@ function ScheduledRunBadge(): React.ReactElement {
 
   const handleClick = (): void => {
     if (!automation) return
-    setActiveView('automations')
+    setPlanningTab('automations')
+    setActiveView('planning')
     setForm({
       open: true,
       draft: automationToDraft(automation),

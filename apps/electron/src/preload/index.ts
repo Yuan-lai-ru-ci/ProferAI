@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -1178,6 +1178,35 @@ export interface ElectronAPI {
   cleanupTempStorage: () => Promise<unknown>
   /** 取消迁移导入（清理临时解压目录） */
   migrationCancelImport: (tempDir: string) => Promise<void>
+
+  // ===== 任务 / 日程（Planning）=====
+  /** 打开或聚焦单例独立任务/日程窗口。 */
+  openPlanningWindow: () => Promise<void>
+  listTodos: () => Promise<Todo[]>
+  createTodo: (input: CreateTodoInput) => Promise<Todo>
+  startTodoAgent: (input: StartTodoAgentInput) => Promise<StartTodoAgentResult>
+  updateTodo: (input: UpdateTodoInput) => Promise<Todo | undefined>
+  deleteTodo: (id: string) => Promise<boolean>
+  listCalendarEvents: () => Promise<CalendarEvent[]>
+  createCalendarEvent: (input: CreateCalendarEventInput) => Promise<CalendarEvent>
+  updateCalendarEvent: (input: UpdateCalendarEventInput) => Promise<CalendarEvent | undefined>
+  deleteCalendarEvent: (id: string) => Promise<boolean>
+  listPlanningGroups: (scope: PlanningGroupScope) => Promise<PlanningGroup[]>
+  createPlanningGroup: (input: CreatePlanningGroupInput) => Promise<PlanningGroup>
+  updatePlanningGroup: (input: UpdatePlanningGroupInput) => Promise<PlanningGroup | undefined>
+  deletePlanningGroup: (scope: PlanningGroupScope, id: string) => Promise<boolean>
+  listPlanningTags: () => Promise<PlanningTag[]>
+  createPlanningTag: (input: CreatePlanningTagInput) => Promise<PlanningTag>
+  updatePlanningTag: (input: UpdatePlanningTagInput) => Promise<PlanningTag | undefined>
+  deletePlanningTag: (id: string) => Promise<boolean>
+  listActivePlanningReminders: () => Promise<ActivePlanningReminder[]>
+  acknowledgePlanningReminder: (id: string) => Promise<PlanningReminder | undefined>
+  snoozePlanningReminder: (input: SnoozePlanningReminderInput) => Promise<PlanningReminder | undefined>
+  onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => () => void
+  onPlanningChanged: (callback: (change: PlanningChange) => void) => () => void
+  onPlanningAgentOperation: (callback: (operation: PlanningAgentOperation) => void) => () => void
+  /** 独立规划窗口启动 Todo Agent 时，主窗口在此接收会话交接并接管打开/发送任务。 */
+  onTodoAgentSessionReady: (callback: (activation: TodoAgentSessionActivation) => void) => () => void
 
   // ===== 定时任务（Automation）=====
   /** 获取全部定时任务 */
@@ -2801,6 +2830,49 @@ const electronAPI: ElectronAPI = {
 
   migrationCancelImport: (tempDir: string) => {
     return ipcRenderer.invoke('migration:cancelImport', tempDir)
+  },
+
+  // ===== 任务 / 日程（Planning）=====
+  openPlanningWindow: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.OPEN_WINDOW),
+  listTodos: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TODOS),
+  createTodo: (input: CreateTodoInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_TODO, input),
+  startTodoAgent: (input: StartTodoAgentInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.START_TODO_AGENT, input),
+  updateTodo: (input: UpdateTodoInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_TODO, input),
+  deleteTodo: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TODO, id),
+  listCalendarEvents: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS),
+  createCalendarEvent: (input: CreateCalendarEventInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_CALENDAR_EVENT, input),
+  updateCalendarEvent: (input: UpdateCalendarEventInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_CALENDAR_EVENT, input),
+  deleteCalendarEvent: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_CALENDAR_EVENT, id),
+  listPlanningGroups: (scope: PlanningGroupScope) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_GROUPS, scope),
+  createPlanningGroup: (input: CreatePlanningGroupInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_GROUP, input),
+  updatePlanningGroup: (input: UpdatePlanningGroupInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_GROUP, input),
+  deletePlanningGroup: (scope: PlanningGroupScope, id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_GROUP, scope, id),
+  listPlanningTags: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TAGS),
+  createPlanningTag: (input: CreatePlanningTagInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_TAG, input),
+  updatePlanningTag: (input: UpdatePlanningTagInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_TAG, input),
+  deletePlanningTag: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TAG, id),
+  listActivePlanningReminders: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS),
+  acknowledgePlanningReminder: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, id),
+  snoozePlanningReminder: (input: SnoozePlanningReminderInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, input),
+  onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => {
+    const listener = (_: unknown, reminders: ActivePlanningReminder[]): void => callback(reminders)
+    ipcRenderer.on(PLANNING_IPC_CHANNELS.REMINDER_DUE, listener)
+    return () => { ipcRenderer.removeListener(PLANNING_IPC_CHANNELS.REMINDER_DUE, listener) }
+  },
+  onPlanningChanged: (callback: (change: PlanningChange) => void) => {
+    const listener = (_: unknown, change: PlanningChange): void => callback(change)
+    ipcRenderer.on(PLANNING_IPC_CHANNELS.CHANGED, listener)
+    return () => { ipcRenderer.removeListener(PLANNING_IPC_CHANNELS.CHANGED, listener) }
+  },
+  onPlanningAgentOperation: (callback: (operation: PlanningAgentOperation) => void) => {
+    const listener = (_: unknown, operation: PlanningAgentOperation): void => callback(operation)
+    ipcRenderer.on(PLANNING_IPC_CHANNELS.AGENT_OPERATION, listener)
+    return () => { ipcRenderer.removeListener(PLANNING_IPC_CHANNELS.AGENT_OPERATION, listener) }
+  },
+  onTodoAgentSessionReady: (callback: (activation: TodoAgentSessionActivation) => void) => {
+    const listener = (_: unknown, activation: TodoAgentSessionActivation): void => callback(activation)
+    ipcRenderer.on(PLANNING_IPC_CHANNELS.TODO_AGENT_SESSION_READY, listener)
+    return () => { ipcRenderer.removeListener(PLANNING_IPC_CHANNELS.TODO_AGENT_SESSION_READY, listener) }
   },
 
   // ===== 定时任务（Automation）=====

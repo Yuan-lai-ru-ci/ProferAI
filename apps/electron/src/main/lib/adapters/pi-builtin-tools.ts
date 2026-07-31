@@ -13,7 +13,7 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
-import type { AgentRuntime, ProferPermissionMode, KnowledgeReference } from '@profer/shared'
+import type { AgentRuntime, ProferPermissionMode, KnowledgeReference, Todo } from '@profer/shared'
 import type {
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -30,6 +30,7 @@ import {
   runAutomationNow,
 } from '../automation-scheduler'
 import { getAgentSessionMeta } from '../agent-session-manager'
+import { getTodo } from '../planning-manager'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
 import {
@@ -156,6 +157,26 @@ export function buildPiKnowledgeBaseTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCo
             : { itemId: id, title: currentItem.title, unavailable: true }
         }))
         return jsonToolResult({ items })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+// ===== 规划中心工具 =====
+
+/** Pi 的 Todo 启动提示依赖此工具读取 SQLite 中的最新原始任务，避免把过期快照塞进首条消息。 */
+export function buildPiPlanningTools(sdk: PiSdk): ToolDefinition[] {
+  return [
+    sdk.defineTool({
+      name: 'mcp__planning__get_todo',
+      label: '读取规划 Todo',
+      description: '读取本地规划中心中某个 Todo 的原始最新记录，包含说明、优先级、时间、分组、标签、提醒和关联会话。',
+      parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
+      async execute(_toolCallId, params) {
+        const { id } = params as { id: string }
+        const todo: Todo | undefined = getTodo(id.trim())
+        if (!todo) throw new Error(`Todo 不存在: ${id}`)
+        return jsonToolResult({ todo })
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -679,8 +700,9 @@ export async function buildPiBuiltinTools(
   try {
     tools.push(...buildPiKnowledgeBaseTools(sdk, ctx))
     tools.push(...buildPiTaskGraphTools(sdk, ctx))
+    tools.push(...buildPiPlanningTools(sdk))
   } catch (error) {
-    console.error('[Pi 桥接] 注入知识库或任务图工具失败:', error)
+    console.error('[Pi 桥接] 注入知识库、任务图或规划中心工具失败:', error)
   }
 
   // Automation 是 Profer 已有的本地能力，不依赖上游 builtin-MCP catalog。
