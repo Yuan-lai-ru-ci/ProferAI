@@ -56,3 +56,6 @@ export * from './automation'
 
 // 论文知识库（Paper Knowledge Base）相关类型
 export * from './knowledge-base'
+
+// 本地任务与日程（Planning）相关类型
+export * from './planning'

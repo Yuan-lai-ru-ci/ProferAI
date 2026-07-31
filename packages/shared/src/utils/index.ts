@@ -30,3 +30,12 @@ export {
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
 export { supportsProviderPlanQuota } from './channel-plan-quota'
+// 定时任务触发时间展开（日历视图展示用，多值调度适配）
+export {
+  getAutomationOccurrencesByDay,
+  AUTOMATION_OCCURRENCE_SAMPLES_PER_DAY,
+} from './automation-schedule'
+export type {
+  AutomationScheduleFields,
+  AutomationOccurrenceDay,
+} from './automation-schedule'

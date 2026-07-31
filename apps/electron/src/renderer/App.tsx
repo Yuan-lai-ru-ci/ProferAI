@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useAtom, useStore } from 'jotai'
 import { AppShell } from './components/app-shell/AppShell'
+import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { TooltipProvider } from './components/ui/tooltip'
 import { conversationsAtom } from './atoms/chat-atoms'
@@ -110,6 +111,7 @@ export default function App(): React.ReactElement {
   // 显示主界面
   return (
     <TooltipProvider delayDuration={200}>
+      <PlanningReminderRail />
       <AppShell contextValue={contextValue} />
       <React.Suspense fallback={null}>
         <SettingsDialog />

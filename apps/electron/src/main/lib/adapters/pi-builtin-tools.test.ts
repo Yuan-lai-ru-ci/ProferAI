@@ -19,6 +19,7 @@ mock.module('electron', () => ({
 
 const {
   buildPiKnowledgeBaseTools,
+  buildPiPlanningTools,
   buildPiTaskGraphTools,
 } = await import('./pi-builtin-tools')
 
@@ -52,6 +53,14 @@ describe('Pi Profer in-process tool bridges', () => {
       'mcp__knowledge-base__list_imported_knowledge',
       'mcp__knowledge-base__read_imported_knowledge',
     ])
+  })
+
+  test('Given Pi runtime When building planning tools Then it exposes the Todo reader required by Todo Agent handoff', () => {
+    const { sdk, tools } = createPiSdkStub()
+
+    buildPiPlanningTools(sdk)
+
+    expect(tools.map((tool) => tool.name)).toEqual(['mcp__planning__get_todo'])
   })
 
   test('Given Pi runtime When building task graph tools Then it exposes Profer structured task tools', () => {

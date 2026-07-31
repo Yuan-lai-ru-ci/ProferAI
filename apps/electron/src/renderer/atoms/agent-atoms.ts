@@ -200,7 +200,7 @@ export function isActivityGroup(item: ActivityGroup | ToolActivity): item is Act
 }
 
 
-/** 待自动发送的 Agent 提示（从设置页"对话完成配置"触发） */
+/** 待自动发送的 Agent 提示（从设置页"对话完成配置"、规划中心启动 Todo Agent 等触发） */
 export interface AgentPendingPrompt {
   sessionId: string
   message: string
