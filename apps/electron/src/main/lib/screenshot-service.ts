@@ -80,9 +80,8 @@ function getScreenshotWindow(scale: number): BrowserWindow {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      offscreen: { deviceScaleFactor: scale } as unknown as boolean,
-      // Electron >=28 运行时接受 offscreen 对象（含 deviceScaleFactor），
-      // 但 TS 类型仅声明为 boolean。已在 Electron 39 验证。
+      offscreen: { deviceScaleFactor: scale },
+      // Electron >=40 支持 offscreen 对象类型。已在 Electron 39-43 验证。
       // 若升级 Electron 后截图全白/崩溃，优先检查此处。
     },
   })

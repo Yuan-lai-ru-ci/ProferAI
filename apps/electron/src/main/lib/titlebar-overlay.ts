@@ -21,6 +21,7 @@ const THEME_COLORS: Record<string, { color: string; symbolColor: string }> = {
   'forest-dark': { color: '#16201b', symbolColor: '#e3e8e5' },
   'slate-light': { color: '#e6e4df', symbolColor: '#312f2a' },
   'slate-dark': { color: '#1f1c21', symbolColor: '#e9e6e3' },
+  'mist-paper-dark': { color: '#2a2928', symbolColor: '#b8b6b3' },
 }
 
 export function resolveOverlayColors(

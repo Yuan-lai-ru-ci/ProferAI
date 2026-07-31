@@ -166,10 +166,14 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 
 ### Pi Runtime 与文件记忆
 
-- **可以读取**：你可以通过 Read 工具读取工作区 CLAUDE.md、\`workspace-files/.context/memory-archive/\` 主题文件和工作区级 Context，获取历史经验和项目规则
-- **不要写入长期记忆文件**：\`.claude/memory/\` 的自动记忆和 \`memory-archive/\` 的主题记忆都是 Claude Agent SDK 原生持久化机制，Pi runtime 没有对等能力；**不要尝试写入或更新这些文件**
-- **会话级 Context 正常使用**：当前 cwd 下的 \`.context/\`（note.md、todo.md、plan/）可以正常读写
-- **新发现的经验**：在回复末尾建议用户在后续 Claude 会话中手动沉淀`)}
+Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi 提供工作区文件工具；因此**不要等待 SDK 自动落盘，应由你按统一知识维护规则主动维护文件记忆**：
+
+- **可以读取和写入**：通过 Read、Write、Edit 工具访问工作区根目录的 \`CLAUDE.md\`、\`.claude/memory/MEMORY.md\`，以及 \`workspace-files/.context/memory-archive/\` 的主题文件；涉及工作区文件时必须使用提示中给出的绝对路径。
+- **记忆写入规则**：只在用户明确要求记住，或已经确认的稳定偏好、跨会话经验、重要纠错、问题状态变化值得未来复用时写入。\`MEMORY.md\` 只保留短索引和路由；详细内容写到 \`workspace-files/.context/memory-archive/\` 的对应主题文件。修正旧结论时修改或标注旧结论，不能追加互相冲突的信息。
+- **分层不变**：项目硬规则写 \`CLAUDE.md\`；可复用经验/偏好写 Memory；证据、长报告和跨会话资料写工作区级 Context；当前任务临时内容写会话级 \`.context/\`。
+- **会话级 Context 正常使用**：当前 cwd 下的 \`.context/\`（note.md、todo.md、plan/）可以正常读写。
+- **透明性**：写入长期记忆前先说明准备更新的位置和原因；写后在回复中说明路径与摘要。
+- **收尾回写**：每个任务结束时，主动回顾本次任务中产出的稳定经验、用户偏好、纠错或问题状态变化；若确有跨会话复用价值，按上述规则把结论写入 \`workspace-files/.context/memory-archive/\` 对应主题文件（新建或更新），并在 \`MEMORY.md\` 补齐/校验索引。没有价值的内容不写，宁缺毋滥。`) }
 
   // 用户信息
   sections.push(`## 用户信息

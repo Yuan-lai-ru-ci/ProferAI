@@ -16,6 +16,7 @@ import type { FSWatcher } from 'node:fs'
 import type { BrowserWindow } from 'electron'
 import { AGENT_IPC_CHANNELS } from '@profer/shared'
 import { getAgentWorkspacesDir } from './config-paths'
+import { listAgentWorkspaces, getWorkspaceAttachedDirectories } from './agent-workspace-manager'
 
 /** debounce 延迟（ms） */
 const DEBOUNCE_MS = 300
@@ -49,6 +50,10 @@ let mainWin: BrowserWindow | null = null
  */
 export function startWorkspaceWatcher(win: BrowserWindow): void {
   mainWin = win
+
+  // 恢复工作区级附加目录监听（独立于根目录 watcher；即使根目录不存在也应恢复）
+  restoreWorkspaceAttachedWatchers()
+
   const watchDir = getAgentWorkspacesDir()
 
   if (!existsSync(watchDir)) {
@@ -135,6 +140,34 @@ export function stopWorkspaceWatcher(): void {
   }
   attachedWatchers.clear()
   mainWin = null
+}
+
+/**
+ * 启动后恢复所有工作区级附加目录的文件监听。
+ *
+ * 会话级附加目录由 LIST_SESSIONS 恢复（见 ipc.ts），但工作区级附加目录持久化在各工作区
+ * config.json 的 attachedDirectories 里，启动时若不主动恢复，重启后目录变更不会再触发
+ * 文件树刷新（需手动重新附加才能恢复）。对应上游 Proma issue #1314。
+ *
+ * watchAttachedDirectory 内部按路径去重，工作区级与会话级附加同一目录不会重复监听。
+ */
+export function restoreWorkspaceAttachedWatchers(): void {
+  let restored = 0
+  try {
+    const workspaces = listAgentWorkspaces()
+    for (const ws of workspaces) {
+      const dirs = getWorkspaceAttachedDirectories(ws.slug)
+      for (const dir of dirs) {
+        watchAttachedDirectory(dir)
+        restored++
+      }
+    }
+    if (restored > 0) {
+      console.log(`[工作区监听] 已恢复 ${restored} 个工作区级附加目录监听`)
+    }
+  } catch (error) {
+    console.error('[工作区监听] 恢复工作区级附加目录监听失败:', error)
+  }
 }
 
 /**

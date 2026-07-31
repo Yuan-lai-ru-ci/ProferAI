@@ -726,6 +726,12 @@ export interface ElectronAPI {
   readWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string) => Promise<SkillFileContent>
   /** 写入工作区 auto memory 文件 */
   writeWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string, content: string) => Promise<void>
+  /** 列出工作区 memory-archive 主题记忆文件树 */
+  listWorkspaceMemoryArchiveFiles: (workspaceSlug: string) => Promise<SkillFileNode[]>
+  /** 读取工作区 memory-archive 主题记忆文件 */
+  readWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string) => Promise<SkillFileContent>
+  /** 写入工作区 memory-archive 主题记忆文件 */
+  writeWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string, content: string) => Promise<void>
 
   // ===== Chat 工具管理 =====
 
@@ -2117,6 +2123,18 @@ const electronAPI: ElectronAPI = {
 
   writeWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string, content: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_AUTO_MEMORY_FILE, workspaceSlug, relativePath, content)
+  },
+
+  listWorkspaceMemoryArchiveFiles: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_WORKSPACE_MEMORY_ARCHIVE_FILES, workspaceSlug)
+  },
+
+  readWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_MEMORY_ARCHIVE_FILE, workspaceSlug, relativePath)
+  },
+
+  writeWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_MEMORY_ARCHIVE_FILE, workspaceSlug, relativePath, content)
   },
 
   // Chat 工具管理
