@@ -1,6 +1,6 @@
 /**
  * Set Windows exe icon + version info using npm rcedit (v5.x, ESM)
- * electron-builder's bundled rcedit (2.6.0) doesn't work with Electron 39+.
+ * electron-builder's bundled rcedit (2.6.0) doesn't work with Electron 39-43.
  */
 import { rcedit } from 'rcedit'
 import { existsSync, copyFileSync } from 'node:fs'
