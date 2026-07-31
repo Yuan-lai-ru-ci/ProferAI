@@ -14,6 +14,7 @@ import {
   getAgentWorkspacesIndexPath,
   getAgentWorkspacesDir,
   getAgentWorkspacePath,
+  resolveWorkspaceFilesDir,
   getWorkspaceMcpPath,
   getWorkspaceSkillsDir,
   getInactiveSkillsDir,
@@ -1093,7 +1094,10 @@ export function getWorkspaceMemorySummary(workspaceSlug: string): WorkspaceMemor
   const memoryDir = getWorkspaceAutoMemoryPath(workspaceSlug)
   return {
     claudeMd: fileSummary(getWorkspaceClaudeMdPath(workspaceSlug)),
-    autoMemory: collectAutoMemorySummary(memoryDir),
+    autoMemory: {
+      ...collectAutoMemorySummary(memoryDir),
+      memoryArchivePath: getWorkspaceMemoryArchivePath(workspaceSlug),
+    },
   }
 }
 
@@ -1166,6 +1170,56 @@ export function writeWorkspaceAutoMemoryFile(workspaceSlug: string, relativePath
   }
   writeFileSync(abs, content, 'utf-8')
   console.log(`[Agent 工作区] 已更新 auto memory 文件: ${workspaceSlug}/${relativePath}`)
+}
+
+// ===== memory-archive 主题记忆目录管理 =====
+
+/**
+ * memory-archive 主题记忆目录（workspace-files/.context/memory-archive）绝对路径。
+ * 该目录承载 Claude 与 Pi 两个 runtime 通过统一知识维护规则写入的专题记忆正文，
+ * 在能力中心与 MEMORY.md 索引并列展示，确保 Pi 主动写入的内容可被用户审计。
+ */
+export function getWorkspaceMemoryArchivePath(workspaceSlug: string): string {
+  return join(resolveWorkspaceFilesDir(workspaceSlug), '.context', 'memory-archive')
+}
+
+export function listWorkspaceMemoryArchiveFiles(workspaceSlug: string): SkillFileNode[] {
+  const dir = getWorkspaceMemoryArchivePath(workspaceSlug)
+  if (!existsSync(dir)) return []
+  return buildMemoryFileTree(dir, dir, 0)
+}
+
+export function readWorkspaceMemoryArchiveFile(workspaceSlug: string, relativePath: string): SkillFileContent {
+  const dir = getWorkspaceMemoryArchivePath(workspaceSlug)
+  const abs = resolveAutoMemoryFilePath(dir, relativePath)
+  if (!existsSync(abs)) throw new Error(`文件不存在: ${relativePath}`)
+  const st = statSync(abs)
+  if (!st.isFile()) throw new Error(`目标不是文件: ${relativePath}`)
+  if (st.size > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`文件过大（${(st.size / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  const binary = isLikelyBinaryFile(abs, st.size)
+  return {
+    relativePath: relative(dir, abs).split(/[\\/]/).join('/'),
+    isText: !binary,
+    size: st.size,
+    content: binary ? undefined : readFileSync(abs, 'utf-8'),
+  }
+}
+
+export function writeWorkspaceMemoryArchiveFile(workspaceSlug: string, relativePath: string, content: string): void {
+  const dir = getWorkspaceMemoryArchivePath(workspaceSlug)
+  const abs = resolveAutoMemoryFilePath(dir, relativePath)
+  const byteLen = Buffer.byteLength(content, 'utf-8')
+  if (byteLen > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  const parent = dirname(abs)
+  if (!existsSync(parent)) {
+    mkdirSync(parent, { recursive: true })
+  }
+  writeFileSync(abs, content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 memory-archive 文件: ${workspaceSlug}/${relativePath}`)
 }
 
 // ===== Skill 子文件管理 =====

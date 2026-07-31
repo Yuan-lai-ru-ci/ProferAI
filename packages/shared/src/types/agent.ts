@@ -625,6 +625,9 @@ export type ProferEvent =
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
   | { type: 'run_resumed'; sessionId: string }
+  // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
+  // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
+  | { type: 'run_idle'; sessionId: string }
 
 /** 外部入口触发 Agent 运行的来源 */
 export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation' | 'automation'
@@ -967,6 +970,8 @@ export interface WorkspaceMemorySummary {
     totalSize: number
     /** 最近修改时间戳 */
     updatedAt?: number
+    /** memory-archive 主题记忆目录（workspace-files/.context/memory-archive）绝对路径 */
+    memoryArchivePath?: string
   }
 }
 
@@ -1607,6 +1612,12 @@ export const AGENT_IPC_CHANNELS = {
   READ_WORKSPACE_AUTO_MEMORY_FILE: 'agent:read-workspace-auto-memory-file',
   /** 写入工作区 auto memory 文件 */
   WRITE_WORKSPACE_AUTO_MEMORY_FILE: 'agent:write-workspace-auto-memory-file',
+  /** 列出工作区 memory-archive 主题记忆文件树 */
+  LIST_WORKSPACE_MEMORY_ARCHIVE_FILES: 'agent:list-workspace-memory-archive-files',
+  /** 读取工作区 memory-archive 主题记忆文件 */
+  READ_WORKSPACE_MEMORY_ARCHIVE_FILE: 'agent:read-workspace-memory-archive-file',
+  /** 写入工作区 memory-archive 主题记忆文件 */
+  WRITE_WORKSPACE_MEMORY_ARCHIVE_FILE: 'agent:write-workspace-memory-archive-file',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */

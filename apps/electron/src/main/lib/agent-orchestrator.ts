@@ -86,6 +86,7 @@ import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPla
 import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
+import { detectAttachedDirectoryProjects } from './attached-directory-project-detector'
 
 // ===== 类型定义 =====
 
@@ -568,7 +569,14 @@ export class AgentOrchestrator {
     const runGeneration = randomUUID()
     if (!tryAcquireActiveSession(this.activeSessions, sessionId, runGeneration)) {
       const stopping = this.stoppedBySessions.has(sessionId)
-      console.warn(`[Agent 编排] 会话 ${sessionId} 正在${stopping ? '停止' : '处理中'}，拒绝新请求`)
+      // 诊断：runCompletions 里仍挂着该 session 的 completion 说明 owner finally 尚未跑到
+      //（锁未释放），常用于定位「界面看似空闲但主进程仍占用」的锁泄漏/等待态。
+      const hungCompletion = this.runCompletions.get(sessionId)
+      console.warn(
+        `[Agent 编排] 会话 ${sessionId} 正在${stopping ? '停止' : '处理中'}，拒绝新请求; ` +
+        `activeSessionsToken=${this.activeSessions.get(sessionId) ?? '(empty/hung)'}, ` +
+        `runCompletionsPending=${hungCompletion ? 'true(finally未释放)' : 'false'}`,
+      )
       callbacks.onError(stopping ? 'Agent 正在停止，请稍候再试' : '上一条消息仍在处理中，请稍候再试')
       callbacks.onComplete([], { startedAt: input.startedAt })
       return
@@ -1190,6 +1198,8 @@ export class AgentOrchestrator {
         sessionMeta,
         workspaceSlug,
       })
+      const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
+      const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
       const systemPromptAppend = buildSystemPrompt({
         workspaceName: workspace?.name,
         workspaceSlug,
@@ -1198,8 +1208,8 @@ export class AgentOrchestrator {
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,
         isPiRuntime: agentRuntime === 'pi',
-      }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
-      const piSystemPrompt = systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories)
+      }) + attachedDirectoriesPrompt + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+      const piSystemPrompt = systemPromptAppend
       const piRuntimeEnv = buildAgentRuntimeEnv({
         proxyUrl: await getEffectiveProxyUrl(),
         runtimeStatus: getRuntimeStatus(),
@@ -2162,6 +2172,11 @@ export class AgentOrchestrator {
         if (pendingTerminalCompletion) {
           callbacks.onComplete(pendingTerminalCompletion.messages, pendingTerminalCompletion.opts)
         }
+        // 会话已空闲：通知协作层重查「父会话自动续跑」。
+        // 场景：父会话发起 delegation 后结束等待子会话，期间用户手动压缩（/compact 占用了
+        // active ownership）→ 子会话完成触发的 scheduleParentAutoContinuation 因 parent_active
+        // 被跳过；此事件在压缩 run 结束后发出，协作层据此重新检查并续跑父会话，避免结果丢失。
+        this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'run_idle', sessionId } })
       }
     }
   }

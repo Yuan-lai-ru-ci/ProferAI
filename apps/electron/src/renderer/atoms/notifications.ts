@@ -329,18 +329,25 @@ export function playNotificationSoundForType(
  */
 let pendingNavigateCallback: (() => void) | null = null
 
+/** 是否已初始化 IPC click 监听（防止重复注册） */
+let listenerInitialized = false
+
 /**
- * 初始化桌面通知 click 监听（应在应用启动时调用一次）。
+ * 初始化桌面通知 click 监听（应在应用启动时调用一次，幂等）。
  * 主进程弹出原生 Notification → 用户点击 → IPC 回调 → 执行导航。
  */
 export function initDesktopNotificationListener(): void {
-  if (typeof window !== 'undefined' && window.electronAPI?.onDesktopNotificationClicked) {
-    window.electronAPI.onDesktopNotificationClicked(() => {
-      const cb = pendingNavigateCallback
-      pendingNavigateCallback = null
-      cb?.()
-    })
-  }
+  if (listenerInitialized) return
+  if (typeof window === 'undefined' || !window.electronAPI?.onDesktopNotificationClicked) return
+
+  listenerInitialized = true
+  window.electronAPI.onDesktopNotificationClicked(() => {
+    const cb = pendingNavigateCallback
+    pendingNavigateCallback = null
+    // 同步执行导航回调（Jotai store.set 触发 React 调度，
+    // 主进程 focus 后浏览器恢复活跃，React 会立即处理重渲染）
+    cb?.()
+  })
 }
 
 /** 发送桌面通知的附加选项 */

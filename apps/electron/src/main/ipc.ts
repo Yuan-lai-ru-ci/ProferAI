@@ -290,6 +290,9 @@ import {
   listWorkspaceAutoMemoryFiles,
   readWorkspaceAutoMemoryFile,
   writeWorkspaceAutoMemoryFile,
+  listWorkspaceMemoryArchiveFiles,
+  readWorkspaceMemoryArchiveFile,
+  writeWorkspaceMemoryArchiveFile,
 } from './lib/agent-workspace-manager'
 import { getAllToolInfos } from './lib/chat-tool-registry'
 import { updateToolState, updateToolCredentials, getToolCredentials, addCustomTool, deleteCustomTool } from './lib/chat-tool-config'
@@ -2840,6 +2843,28 @@ export function registerIpcHandlers(): void {
     async (event, workspaceSlug: string, relativePath: string, content: string): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
       writeWorkspaceAutoMemoryFile(workspaceSlug, relativePath, content)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_WORKSPACE_MEMORY_ARCHIVE_FILES,
+    async (_, workspaceSlug: string) => {
+      return listWorkspaceMemoryArchiveFiles(workspaceSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_WORKSPACE_MEMORY_ARCHIVE_FILE,
+    async (_, workspaceSlug: string, relativePath: string): Promise<SkillFileContent> => {
+      return readWorkspaceMemoryArchiveFile(workspaceSlug, relativePath)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_WORKSPACE_MEMORY_ARCHIVE_FILE,
+    async (event, workspaceSlug: string, relativePath: string, content: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      writeWorkspaceMemoryArchiveFile(workspaceSlug, relativePath, content)
     }
   )
 
