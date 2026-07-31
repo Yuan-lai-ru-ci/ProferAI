@@ -179,6 +179,67 @@
 
   /* ===== 特殊风格主题 ===== */
 
+  /* 雾纸暖灰 (mist-paper-dark) — 安静的暖石墨工作台
+   * 保留原生深色不变；该主题仅在“特殊风格”中启用。
+   * 以画布、框架、输入、卡片、浮层五级明度建立精致层次，
+   * 陶土灰只用于主操作、键盘焦点与当前导航识别。
+   */
+  .theme-mist-paper-dark {
+    /* 用户校准后的暖雾石墨：低饱和暖灰，保证主画布、框架与浮层可辨。 */
+    --background: 35 3.3333333333333335% 16%;
+    --foreground: 35 3.3333333333333335% 71%;
+    /* 对话正文专用 token：用户校准为比通用文字更柔和时可独立维护。 */
+    --mist-paper-message-foreground: 35 3.3333333333333335% 71%;
+    --muted: 35 3.3333333333333335% 19%;
+    --muted-foreground: 35 3.3333333333333335% 55%;
+    --border: 35 3.3333333333333335% 29%;
+    --input: 35 3.3333333333333335% 29%;
+    --ring: 221 18% 62%;
+    --primary: 221 18% 38%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 35 3.3333333333333335% 19%;
+    --secondary-foreground: 35 3.3333333333333335% 71%;
+    --accent: 35 3.3333333333333335% 24%;
+    --accent-foreground: 35 3.3333333333333335% 78%;
+    --destructive: 0 58% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --stop-hover-bg: hsl(0 35% 23%);
+    --card: 35 3.3333333333333335% 32%;
+    --card-foreground: 35 3.3333333333333335% 71%;
+    --popover: 35 3.3333333333333335% 26%;
+    --popover-foreground: 35 3.3333333333333335% 71%;
+    --dialog: 35 3.3333333333333335% 30%;
+    --dialog-foreground: 35 3.3333333333333335% 71%;
+    --content-area: 35 3.3333333333333335% 17%;
+    --sidebar-surface: 35 3.3333333333333335% 16%;
+    --tabbar-surface: 35 3.3333333333333335% 16%;
+    --input-surface: 35 3.3333333333333335% 20%;
+    --tab-surface: 35 3.3333333333333335% 32%;
+    --tooltip: 35 3.3333333333333335% 36%;
+    --tooltip-foreground: 0 0% 98%;
+    --tooltip-muted: 35 3.3333333333333335% 76%;
+    --code-bg: 35 3.3333333333333335% 15%;
+    --dashed-border: 35 3.3333333333333335% 92% / 0.26;
+    --dashed-border-hover: 221 18% 62% / 0.68;
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.34);
+    --shadow-sm: 0 2px 5px 0 rgb(0 0 0 / 0.42), inset 0 1px 0 0 hsl(0 0% 100% / 0.045);
+    --shadow-md: 0 8px 20px -5px rgb(0 0 0 / 0.52), 0 2px 5px 0 rgb(0 0 0 / 0.32), inset 0 1px 0 0 hsl(0 0% 100% / 0.055);
+    --shadow-lg: 0 18px 38px -9px rgb(0 0 0 / 0.60), 0 8px 16px -3px rgb(0 0 0 / 0.40), inset 0 1px 0 0 hsl(0 0% 100% / 0.065);
+    --shadow-xl: 0 36px 72px -18px rgb(0 0 0 / 0.68), 0 18px 32px -8px rgb(0 0 0 / 0.50), inset 0 1px 0 0 hsl(0 0% 100% / 0.075);
+  }
+
+  /* 高使用频率表面需要专用 token，避免 backdrop 透明度把输入区混回主画布。 */
+  .theme-mist-paper-dark .agent-input-surface {
+    background-color: hsl(var(--input-surface) / 0.98);
+    border-color: hsl(var(--border) / 0.92);
+    box-shadow: var(--shadow-md);
+  }
+
+  .theme-mist-paper-dark .agent-input-surface:focus-within {
+    border-color: hsl(var(--ring) / 0.72);
+    box-shadow: 0 0 0 3px hsl(var(--ring) / 0.14), var(--shadow-md);
+  }
+
   /* 晴空碧海 (ocean-light) */
   .theme-ocean-light {
     --background: 205 35% 94%;            /* #ecf2f7 背景（侧边栏）- 调浅 */
@@ -919,6 +980,24 @@
 /* 输入模式容器可先挂载资料引用、附件等辅助区；不能再以 first-child 推断输入框。 */
 .agent-input-surface {
   background-color: hsl(var(--input-surface)) !important;
+}
+
+/* 雾纸暖灰：经典界面默认以 background 覆盖输入表面，这里恢复专用输入 token。 */
+.ui-classic.theme-mist-paper-dark .agent-input-surface {
+  background-color: hsl(var(--input-surface)) !important;
+}
+
+/* 雾纸暖灰对话正文独立于设置与全局文字，避免主题正文过亮。代码块仍保留 Shiki 高亮。 */
+.theme-mist-paper-dark .message-item .prose {
+  --tw-prose-body: hsl(var(--mist-paper-message-foreground));
+  --tw-prose-headings: hsl(var(--mist-paper-message-foreground));
+  --tw-prose-bold: hsl(var(--mist-paper-message-foreground));
+  --tw-prose-bullets: hsl(var(--mist-paper-message-foreground) / 0.7);
+  --tw-prose-counters: hsl(var(--mist-paper-message-foreground) / 0.7);
+}
+
+.theme-mist-paper-dark .message-item .prose :is(p, li, blockquote, strong, em, h1, h2, h3, h4, h5, h6) {
+  color: hsl(var(--mist-paper-message-foreground));
 }
 
 /* 经典界面：视觉规则对齐 upstream。 */
