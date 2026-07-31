@@ -1,13 +1,13 @@
 /**
  * electron-builder afterPack hook — patch Windows exe icon + version info
- * electron-builder v25 + Electron 39+ requires rcedit >= 3.x (bundled with npm rcedit)
+ * electron-builder v25 + Electron 43 requires rcedit >= 3.x (bundled with npm rcedit)
  */
 const { execFileSync } = require('node:child_process')
 const { existsSync } = require('node:fs')
 const { join } = require('node:path')
 
 function findRcedit() {
-  // Prefer npm rcedit v5.x (works with Electron 39+)
+  // Prefer npm rcedit v5.x (works with Electron 39-43)
   const projDir = join(__dirname, '..')
   const npmRcedit = join(projDir, '..', '..', 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe')
   if (existsSync(npmRcedit)) return npmRcedit
