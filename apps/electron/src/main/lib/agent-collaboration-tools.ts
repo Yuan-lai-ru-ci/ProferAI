@@ -192,9 +192,27 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
         }
       }
     }
+
+    // 会话 run 结束（active 释放）：若该会话是某个父会话，重查自动续跑。
+    // 堵住 #1313 竞态：父会话发起 delegation 后空闲等待，期间手动压缩占用了 active ownership，
+    // 子会话完成触发的续跑被 parent_active 跳过；压缩 run 结束后发出此事件，在此重查并续跑。
+    if (event.type === 'run_idle') {
+      const parentSessionId = event.sessionId
+      if (parentSessionId && isDelegationParent(parentSessionId)) {
+        scheduleParentAutoContinuation(parentSessionId)
+      }
+    }
   })
 
   console.log('[协作工具] EventBus 阻塞事件监听已注册')
+}
+
+/** 该会话是否是某个委派的父会话（存在委派记录或存在 sourceDelegationId 的子会话） */
+function isDelegationParent(parentSessionId: string): boolean {
+  for (const record of delegations.values()) {
+    if (record.parentSessionId === parentSessionId) return true
+  }
+  return listAgentSessions().some((s) => s.parentSessionId === parentSessionId)
 }
 
 function getPendingBlockedEvents(delegationId: string): BlockedEvent[] {

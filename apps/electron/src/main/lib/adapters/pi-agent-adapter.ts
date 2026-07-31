@@ -8,6 +8,7 @@
 import type { Dispatcher } from 'undici'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
@@ -568,6 +569,9 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
 /** 轻量 session-id → file-path 索引缓存，避免每次 resume 时递归扫描磁盘 */
 const sessionFileIndex = new Map<string, string>()
 let sessionDirIndexed: string | undefined
+let sessionFileIndexedPaths: Set<string> | undefined
+/** 递归扫描的最大目录深度，防止极端深层嵌套（异常数据 / 错误挂载）拖慢甚至爆栈。 */
+const SESSION_SCAN_MAX_DEPTH = 24
 
 function findSessionFile(sessionDir: string, sdkSessionId: string): string | undefined {
   if (!existsSync(sessionDir)) return undefined
@@ -575,6 +579,7 @@ function findSessionFile(sessionDir: string, sdkSessionId: string): string | und
   // 复用上次索引；如果 sessionDir 变了则重建
   if (sessionDirIndexed !== sessionDir) {
     sessionFileIndex.clear()
+    sessionFileIndexedPaths = new Set<string>()
     sessionDirIndexed = sessionDir
   }
 
@@ -586,7 +591,8 @@ function findSessionFile(sessionDir: string, sdkSessionId: string): string | und
   }
 
   // 缓存未命中：扫描磁盘（仅一次）
-  const scanDirectory = (directory: string): void => {
+  const scanDirectory = (directory: string, depth = 0): void => {
+    if (depth > SESSION_SCAN_MAX_DEPTH) return
     let entries: import('node:fs').Dirent[]
     try {
       entries = readdirSync(directory, { withFileTypes: true })
@@ -596,13 +602,13 @@ function findSessionFile(sessionDir: string, sdkSessionId: string): string | und
     for (const entry of entries) {
       const candidate = join(directory, entry.name)
       if (entry.isDirectory()) {
-        scanDirectory(candidate)
+        scanDirectory(candidate, depth + 1)
         continue
       }
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      // 已经在索引中的文件跳过
-      const alreadyIndexed = [...sessionFileIndex.values()].includes(candidate)
-      if (alreadyIndexed) continue
+      // 已经在索引中的文件跳过（用 Set 避免每次 O(n) 遍历）
+      if (sessionFileIndexedPaths?.has(candidate)) continue
+      sessionFileIndexedPaths?.add(candidate)
       try {
         const headerLine = readFileSync(candidate, 'utf-8').split('\n', 1)[0]
         const header = headerLine ? JSON.parse(headerLine) as { type?: unknown; id?: unknown } : undefined
@@ -1052,6 +1058,8 @@ function buildPromaProductToolDefinitions(
     wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
 }
 
+const FORCE_KILL_WSL_GRACE_MS = 800
+
 const WSL_EXPORT_ENV_KEYS = [
   'PROFER_CLI',
   'HTTP_PROXY',
@@ -1114,6 +1122,7 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
         let settled = false
         let timedOut = false
         let timeoutHandle: NodeJS.Timeout | undefined
+        let forceKillTimer: NodeJS.Timeout | undefined
 
         const cleanup = (): void => {
           if (timeoutHandle) clearTimeout(timeoutHandle)
@@ -1125,8 +1134,46 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
           cleanup()
           fn()
         }
+        const clearForceKill = (): void => {
+          if (forceKillTimer) {
+            clearTimeout(forceKillTimer)
+            forceKillTimer = undefined
+          }
+        }
+        /**
+         * 优先软终止，再兜底强杀：WSL 下 `wsl.exe --exec bash -lc` 的 SIGTERM
+         * （TerminateProcess）只终止 wsl.exe 宿主，WSL 会话内前台命令可能残留。
+         * 与 Claude 适配器一致，Windows 用 taskkill /F /T 级联杀 wsl.exe 进程树，
+         * 其它平台用 SIGKILL。仅在 abort / timeout 需要强制终止时触发。
+         */
+        const forceKillChild = (): void => {
+          forceKillTimer = undefined
+          if (child.pid === undefined) return
+          try {
+            process.kill(child.pid, 0)
+          } catch {
+            // 已退出，无需强杀
+            return
+          }
+          try {
+            if (process.platform === 'win32') {
+              execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => {})
+            } else {
+              process.kill(child.pid, 'SIGKILL')
+            }
+            console.warn(`[Pi 适配器] force-killed residual WSL bash pid=${child.pid}`)
+          } catch (error) {
+            console.warn(`[Pi 适配器] force-kill pid=${child.pid} 失败:`, error)
+          }
+        }
         const killChild = (): void => {
+          if (child.killed && forceKillTimer) return
           if (!child.killed) child.kill('SIGTERM')
+          // SIGTERM（对 wsl.exe 实为 TerminateProcess）可能不立即终止会话内命令，
+          // 若子进程在窗口期内未自行退出，用 taskkill /T / SIGKILL 兜底强杀进程树。
+          clearForceKill()
+          forceKillTimer = setTimeout(forceKillChild, FORCE_KILL_WSL_GRACE_MS)
+          forceKillTimer.unref?.()
         }
         const onAbort = (): void => {
           killChild()
@@ -1144,6 +1191,8 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
           settle(() => reject(error))
         })
         child.on('close', (code) => {
+          // 进程已真正退出，无需再强杀；清除尚未触发的兜底 timer（避免无谓的 taskkill）。
+          clearForceKill()
           if (options.signal?.aborted) {
             settle(() => reject(new Error('aborted')))
           } else if (timedOut) {

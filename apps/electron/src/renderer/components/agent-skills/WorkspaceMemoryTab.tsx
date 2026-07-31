@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 type SelectedMemoryFile =
   | { kind: 'claude'; relativePath: 'CLAUDE.md'; title: string; absolutePath: string }
   | { kind: 'auto'; relativePath: string; title: string; absolutePath: string }
+  | { kind: 'archive'; relativePath: string; title: string; absolutePath: string }
 
 interface WorkspaceMemoryTabProps {
   workspaceSlug: string
@@ -94,6 +95,20 @@ function autoMemoryPath(summary: WorkspaceMemorySummary, relativePath: string): 
   return `${trimmedDir}${sep}${normalizedRelative}`
 }
 
+/**
+ * 拼出 memory-archive 主题记忆文件的绝对路径。
+ * 目录来自摘要的 autoMemory.memoryArchivePath（Windows 用反斜杠）；
+ * 与 autoMemoryPath 的分隔符归一化规则保持一致。
+ */
+function joinArchivePath(summary: WorkspaceMemorySummary, relativePath: string): string {
+  const directory = summary.autoMemory.memoryArchivePath
+  if (!directory) return relativePath
+  const sep = directory.includes('\\') && !directory.includes('/') ? '\\' : '/'
+  const normalizedRelative = relativePath.replace(/[\\/]/g, sep)
+  const trimmedDir = directory.replace(/[\\/]+$/, '')
+  return `${trimmedDir}${sep}${normalizedRelative}`
+}
+
 /** 取绝对路径的父目录，兼容 / 与 \ 两种分隔符 */
 function dirnameOf(absolutePath: string): string {
   const idx = Math.max(absolutePath.lastIndexOf('/'), absolutePath.lastIndexOf('\\'))
@@ -135,6 +150,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
   const [summary, setSummary] = React.useState<WorkspaceMemorySummary | null>(null)
   const [autoFiles, setAutoFiles] = React.useState<SkillFileNode[]>([])
+  const [archiveFiles, setArchiveFiles] = React.useState<SkillFileNode[]>([])
   const [selected, setSelected] = React.useState<SelectedMemoryFile | null>(null)
   const [editText, setEditText] = React.useState('')
   const [loading, setLoading] = React.useState(true)
@@ -164,12 +180,14 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   )
 
   const refreshSummaryAndTree = React.useCallback(async (): Promise<WorkspaceMemorySummary> => {
-    const [nextSummary, files] = await Promise.all([
+    const [nextSummary, files, archive] = await Promise.all([
       window.electronAPI.getWorkspaceMemorySummary(workspaceSlug),
       window.electronAPI.listWorkspaceAutoMemoryFiles(workspaceSlug),
+      window.electronAPI.listWorkspaceMemoryArchiveFiles(workspaceSlug),
     ])
     setSummary(nextSummary)
     setAutoFiles(files)
+    setArchiveFiles(archive)
     return nextSummary
   }, [workspaceSlug])
 
@@ -177,13 +195,20 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   const persistTarget = React.useCallback(async (target: SelectedMemoryFile, text: string): Promise<void> => {
     if (target.kind === 'claude') {
       await window.electronAPI.writeWorkspaceClaudeMd(workspaceSlug, text)
+    } else if (target.kind === 'archive') {
+      await window.electronAPI.writeWorkspaceMemoryArchiveFile(workspaceSlug, target.relativePath, text)
     } else {
       await window.electronAPI.writeWorkspaceAutoMemoryFile(workspaceSlug, target.relativePath, text)
     }
     const nextSummary = await refreshSummaryAndTree()
-    const nextAbsolute = target.kind === 'claude'
-      ? nextSummary.claudeMd.path
-      : autoMemoryPath(nextSummary, target.relativePath)
+    let nextAbsolute: string
+    if (target.kind === 'claude') {
+      nextAbsolute = nextSummary.claudeMd.path
+    } else if (target.kind === 'archive') {
+      nextAbsolute = joinArchivePath(nextSummary, target.relativePath)
+    } else {
+      nextAbsolute = autoMemoryPath(nextSummary, target.relativePath)
+    }
     // 仅当用户仍停留在同一文件时才回写 absolutePath，避免覆盖已切换到别处的 selected
     setSelected((prev) => (prev && prev.kind === target.kind && prev.relativePath === target.relativePath
       ? { ...prev, absolutePath: nextAbsolute }
@@ -275,6 +300,28 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     }
   }, [summary, workspaceSlug, flushPendingSave])
 
+  const openArchiveFile = React.useCallback(async (relativePath: string, knownSummary?: WorkspaceMemorySummary): Promise<void> => {
+    await flushPendingSave()
+    setLoadingFile(true)
+    try {
+      const currentSummary = knownSummary ?? summary ?? await window.electronAPI.getWorkspaceMemorySummary(workspaceSlug)
+      const file = await window.electronAPI.readWorkspaceMemoryArchiveFile(workspaceSlug, relativePath)
+      setSelected({
+        kind: 'archive',
+        relativePath: file.relativePath,
+        title: file.relativePath,
+        absolutePath: joinArchivePath(currentSummary, file.relativePath),
+      })
+      setEditText(file.content ?? '')
+      setIsDirty(false)
+    } catch (err) {
+      console.error('[工作区记忆] 读取 memory-archive 文件失败:', err)
+      toast.error(err instanceof Error ? err.message : '读取 memory-archive 文件失败')
+    } finally {
+      setLoadingFile(false)
+    }
+  }, [summary, workspaceSlug, flushPendingSave])
+
   const refresh = React.useCallback(async (): Promise<void> => {
     await flushPendingSave()
     setLoading(true)
@@ -282,6 +329,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
       const nextSummary = await refreshSummaryAndTree()
       if (selected?.kind === 'auto') {
         await openAutoFile(selected.relativePath, nextSummary)
+      } else if (selected?.kind === 'archive') {
+        await openArchiveFile(selected.relativePath, nextSummary)
       } else {
         await openClaude(nextSummary)
       }
@@ -302,14 +351,16 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     setLoading(true)
     void (async () => {
       try {
-        const [nextSummary, files, claudeFile] = await Promise.all([
+        const [nextSummary, files, archive, claudeFile] = await Promise.all([
           window.electronAPI.getWorkspaceMemorySummary(workspaceSlug),
           window.electronAPI.listWorkspaceAutoMemoryFiles(workspaceSlug),
+          window.electronAPI.listWorkspaceMemoryArchiveFiles(workspaceSlug),
           window.electronAPI.readWorkspaceClaudeMd(workspaceSlug),
         ])
         if (cancelled) return
         setSummary(nextSummary)
         setAutoFiles(files)
+        setArchiveFiles(archive)
         setSelected({
           kind: 'claude',
           relativePath: 'CLAUDE.md',
@@ -395,6 +446,11 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   const visibleAutoFiles = React.useMemo(
     () => filterNodes(withVirtualMemoryIndex(autoFiles), search),
     [autoFiles, search],
+  )
+
+  const visibleArchiveFiles = React.useMemo(
+    () => filterNodes(archiveFiles, search),
+    [archiveFiles, search],
   )
 
   if (loading || !summary) {
@@ -506,6 +562,33 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                   ))
                 )}
               </div>
+              <div className="mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                Memory Archive
+              </div>
+              {visibleArchiveFiles.length === 0 ? (
+                <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无主题记忆文件</div>
+              ) : (
+                <div className="space-y-0.5">
+                  {visibleArchiveFiles.map((node) => (
+                    <MemoryTreeNode
+                      key={node.relativePath}
+                      node={node}
+                      level={0}
+                      selectedPath={selected?.kind === 'archive' ? selected.relativePath : null}
+                      expanded={expanded}
+                      onToggle={(path) => {
+                        setExpanded((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(path)) next.delete(path)
+                          else next.add(path)
+                          return next
+                        })
+                      }}
+                      onOpen={(path) => void openArchiveFile(path, summary)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </SettingsCard>
