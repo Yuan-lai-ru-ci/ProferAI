@@ -7,7 +7,7 @@
 import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, FeishuSessionMirrorSettings, AgentRuntime } from '@profer/shared'
 
 /** 通知音场景类型 */
-export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode'
+export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode' | 'planningReminder'
 
 /** 可选通知音 ID（内置 + 自定义） */
 export type NotificationSoundId = string
@@ -32,6 +32,8 @@ export interface NotificationSoundSettings {
   permissionRequest?: NotificationSoundId
   /** 计划审批 */
   exitPlanMode?: NotificationSoundId
+  /** 任务/日程提醒 */
+  planningReminder?: NotificationSoundId
 }
 
 /** 语音输入供应商 */
@@ -273,6 +275,8 @@ export interface AppSettings {
   autoCleanupArchivedDays?: number
   /** 主窗口状态（大小、位置、是否最大化） */
   mainWindowState?: MainWindowState
+  /** 规划中心独立窗口状态（大小、位置、是否最大化） */
+  planningWindowState?: MainWindowState
   /** 是否开机自启动（默认 false） */
   autoLaunch?: boolean
   /** 是否在侧边栏显示论文知识库入口（默认 true） */

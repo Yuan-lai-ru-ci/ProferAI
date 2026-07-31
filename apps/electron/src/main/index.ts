@@ -151,6 +151,8 @@ import {
   stopBridgeSelfHealing,
 } from './lib/bridge-registry'
 import { startScheduler, stopScheduler } from './lib/automation-scheduler'
+import { startPlanningReminderScheduler, stopPlanningReminderScheduler } from './lib/planning-reminder-scheduler'
+import { destroyPlanningWindow } from './lib/planning-window'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
 import { getFeishuMultiBotConfig } from './lib/feishu-config'
 import { stopFeishuSyncSleepBlocker, syncFeishuSyncSleepBlocker } from './lib/feishu-sleep-blocker'
@@ -661,6 +663,7 @@ async function bootstrap(): Promise<void> {
     safeRun('startAllBridges', () => { startAllBridges().catch(() => {}) })
     safeRun('startBridgeSelfHealing', startBridgeSelfHealing)
     safeRun('startScheduler', startScheduler)
+    safeRun('startPlanningReminderScheduler', startPlanningReminderScheduler)
     if (mainWindow) {
       safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
     }
@@ -848,6 +851,10 @@ app.on('before-quit', () => {
   stopAllBridges()
   // 停止定时任务调度器
   stopScheduler()
+  // 停止任务/日程提醒调度器
+  stopPlanningReminderScheduler()
+  // 销毁规划窗口
+  destroyPlanningWindow()
   // 停止同步引擎
   const { stopSyncEngine } = require('./lib/sync-manager')
   stopSyncEngine()

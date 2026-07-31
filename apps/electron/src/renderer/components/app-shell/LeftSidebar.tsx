@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, LogIn, Library } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, CalendarDays, ChevronRight, Blocks, GitBranch, LogIn, Library } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -155,9 +155,9 @@ function AutomationSidebarEntry({ count, active, onClick }: AutomationSidebarEnt
     >
       <span className="flex items-center gap-3 min-w-0">
         <span className={cn('flex-shrink-0 w-[18px] h-[18px] automation-entry-icon', active ? 'text-accent-foreground' : 'text-foreground/45')}>
-          <AlarmClock size={16} className="block" />
+          <CalendarDays size={16} className="block" />
         </span>
-        <span className="truncate">自动任务</span>
+        <span className="truncate">规划中心</span>
       </span>
       <span
         className={cn(
@@ -865,10 +865,10 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
   }, [authStatus.isLoggedIn, setWorkspacesStable])
 
-  /** 打开自动任务列表 */
+  /** 打开规划中心（Todo · 日程 · 定时任务） */
   const handleOpenAutomations = React.useCallback((): void => {
     // 已激活时再次点击切回对话列表（编辑页则先关表单回列表）（#972）
-    if (activeView === 'automations') {
+    if (activeView === 'planning') {
       if (store.get(automationFormAtom).open) {
         setAutomationForm({ open: false, draft: null })
         return
@@ -877,7 +877,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       return
     }
     setAutomationForm({ open: false, draft: null })
-    setActiveView('automations')
+    setActiveView('planning')
   }, [activeView, setAutomationForm, setActiveView, store])
 
   /** 打开 Agent 技能视图 */
@@ -1996,21 +1996,21 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label={`自动任务，${automationCount} 个任务已创建`}
+                aria-label={`规划中心，${automationCount} 个定时任务`}
                 onClick={handleOpenAutomations}
                 className={cn(
                   'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
-                  activeView === 'automations'
+                  activeView === 'planning'
                     ? 'border-primary/80 bg-primary text-primary-foreground shadow-sm'
                     : 'border-border/45 bg-foreground/[0.025] text-foreground/45 hover:border-border/70 hover:bg-foreground/[0.045] hover:text-primary',
                 )}
               >
-                <AlarmClock size={16} />
+                <CalendarDays size={16} />
                 {automationCount > 0 && (
                   <span
                     className={cn(
                       'absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums',
-                      activeView === 'automations'
+                      activeView === 'planning'
                         ? 'bg-primary-foreground text-primary'
                         : 'bg-primary text-primary-foreground',
                     )}
@@ -2021,7 +2021,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              自动任务（{automationCount} 个任务已创建）
+              规划中心（{automationCount} 个定时任务）
             </TooltipContent>
           </Tooltip>
 
@@ -2192,7 +2192,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       <div className="px-3 pt-2 pb-0.5">
         <AutomationSidebarEntry
           count={automationCount}
-          active={activeView === 'automations'}
+          active={activeView === 'planning'}
           onClick={handleOpenAutomations}
         />
       </div>

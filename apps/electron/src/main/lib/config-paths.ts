@@ -705,6 +705,11 @@ export function getAutomationsPath(): string {
   return join(getConfigDir(), 'automations.json')
 }
 
+/** 获取本地任务/日程（Planning）SQLite 数据库路径。 */
+export function getPlanningDatabasePath(): string {
+  return join(getConfigDir(), 'planning.db')
+}
+
 /**
  * 获取论文知识库根目录路径
  *
