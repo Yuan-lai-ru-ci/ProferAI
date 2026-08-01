@@ -175,6 +175,7 @@ import { selectAndParsePaper, parsePaper, estimatePaperPages } from './lib/paper
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import { updateWindowFrameAppearance } from './lib/titlebar-overlay'
 import { setDockBadgeCount } from './lib/dock-badge-service'
 
 import { checkEnvironment } from './lib/environment-checker'
@@ -1760,6 +1761,7 @@ export function registerIpcHandlers(): void {
           interfaceVariant: result.interfaceVariant,
         }
         BrowserWindow.getAllWindows().forEach((win) => {
+          updateWindowFrameAppearance(win)
           // 跳过发起者窗口，避免重复应用
           if (win.webContents.id !== event.sender.id) {
             win.webContents.send(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, payload)
@@ -1823,6 +1825,7 @@ export function registerIpcHandlers(): void {
     const isDark = nativeTheme.shouldUseDarkColors
     console.log(`[设置] 系统主题变化: ${isDark ? '深色' : '浅色'}`)
     BrowserWindow.getAllWindows().forEach((win) => {
+      updateWindowFrameAppearance(win)
       win.webContents.send(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, isDark)
     })
   })

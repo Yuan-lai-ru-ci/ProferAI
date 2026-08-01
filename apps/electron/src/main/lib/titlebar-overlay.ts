@@ -45,19 +45,36 @@ export function resolveOverlayColors(
   return { color: colors.color, symbolColor: colors.symbolColor, height: OVERLAY_HEIGHT }
 }
 
-export function updateWindowTitleBarOverlay(win: BrowserWindow): void {
-  if (process.platform !== 'win32') return
-  if (win.isDestroyed()) return
+export function getWindowFrameColor(): string {
+  const settings = getSettings()
+  return resolveOverlayColors(
+    settings.themeMode,
+    settings.themeStyle,
+    nativeTheme.shouldUseDarkColors
+  ).color
+}
 
+/**
+ * 同步 Windows 原生窗口外壳颜色。
+ *
+ * `titleBarStyle: 'hidden'` 仍保留一圈由 Windows/DWM 合成的非客户区；若 BrowserWindow
+ * 未显式设置 backgroundColor，Electron 会以默认白色填充该区域，在深色主题静止时也会
+ * 显示为白边。用与标题栏一致的颜色同时更新窗口底色，避免窗口壳与 renderer 脱节。
+ */
+export function updateWindowFrameAppearance(win: BrowserWindow): void {
+  if (process.platform !== 'win32' || win.isDestroyed()) return
+
+  const settings = getSettings()
+  const { color, symbolColor, height } = resolveOverlayColors(
+    settings.themeMode,
+    settings.themeStyle,
+    nativeTheme.shouldUseDarkColors
+  )
+
+  win.setBackgroundColor(color)
   try {
-    const settings = getSettings()
-    const { color, symbolColor, height } = resolveOverlayColors(
-      settings.themeMode,
-      settings.themeStyle,
-      nativeTheme.shouldUseDarkColors
-    )
     win.setTitleBarOverlay({ color, symbolColor, height })
   } catch {
-    // frameless 窗口（如 quick-task）不支持 setTitleBarOverlay，静默忽略
+    // frameless 窗口（如 quick-task）不支持 setTitleBarOverlay，背景色仍需更新。
   }
 }
