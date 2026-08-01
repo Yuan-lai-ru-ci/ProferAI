@@ -28,29 +28,40 @@ import {
 import type { Automation } from '@profer/shared'
 
 /** 把调度配置格式化为可读文案 */
-function formatSchedule(a: Automation): string {
-  const times = (Array.isArray(a.timeOfDay) ? a.timeOfDay : a.timeOfDay ? [a.timeOfDay] : []).join(' / ')
-  const timesStr = times || '09:00'
+interface ScheduleText {
+  summary: string
+  detail?: string
+}
 
-  if (a.scheduleType === 'daily') return `每天 ${timesStr}`
+/**
+ * 列表右栏须保持紧凑，避免多时刻文字溢出覆盖任务摘要；完整计划由 hover 提示提供。
+ */
+function formatSchedule(a: Automation): ScheduleText {
+  const times = Array.isArray(a.timeOfDay) ? a.timeOfDay : a.timeOfDay ? [a.timeOfDay] : []
+  const timesStr = (times.length ? times : ['09:00']).join(' / ')
+  const timeSummary = times.length > 1 ? `${times.length} 个时刻` : timesStr
+
+  if (a.scheduleType === 'daily') {
+    return { summary: `每天 ${timeSummary}`, detail: `每天 ${timesStr}` }
+  }
   if (a.scheduleType === 'weekly') {
     const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
     const days = (Array.isArray(a.dayOfWeek) ? a.dayOfWeek : a.dayOfWeek !== undefined ? [a.dayOfWeek] : [1])
       .map((d) => names[d])
       .join('')
-    return `每${days} ${timesStr}`
+    return { summary: `每${days} ${timeSummary}`, detail: `每${days} ${timesStr}` }
   }
   if (a.scheduleType === 'monthly') {
     const doms = (Array.isArray(a.dayOfMonth) ? a.dayOfMonth : a.dayOfMonth !== undefined ? [a.dayOfMonth] : [1])
     const domStr = doms.length <= 3 ? doms.map((d) => `${d} 号`).join(' / ') : `${doms.length} 个日期`
     const hasShort = doms.some((d) => d >= 29)
     const suffix = hasShort ? '（短月落在最后一天）' : ''
-    return `每月 ${domStr} ${timesStr}${suffix}`
+    return { summary: `每月 ${domStr} ${timeSummary}`, detail: `每月 ${domStr} ${timesStr}${suffix}` }
   }
   const min = a.intervalMinutes
-  if (min < 60) return `每 ${min} 分钟`
-  if (min < 1440) return `每 ${min / 60} 小时`
-  return `每 ${min / 1440} 天`
+  if (min < 60) return { summary: `每 ${min} 分钟` }
+  if (min < 1440) return { summary: `每 ${min / 60} 小时` }
+  return { summary: `每 ${min / 1440} 天` }
 }
 
 export function AutomationsListView(): React.ReactElement {
@@ -222,12 +233,19 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
             </div>
             {/* 右侧槽位固定宽度，只切透明度，避免 hover 时列表行横向跳动。 */}
             <div className="relative h-7 w-24 shrink-0">
-              <span className={cn(
-                'absolute right-0 top-1/2 -translate-y-1/2 text-[12px] tabular-nums whitespace-nowrap transition-opacity group-hover:opacity-0',
-                variant === 'active' ? 'text-foreground/55' : 'text-foreground/35',
-              )}>
-                {variant === 'paused' ? '已暂停' : formatSchedule(a)}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={cn(
+                    'absolute right-0 top-1/2 -translate-y-1/2 text-[12px] tabular-nums whitespace-nowrap transition-opacity group-hover:opacity-0',
+                    variant === 'active' ? 'text-foreground/55' : 'text-foreground/35',
+                  )}>
+                    {variant === 'paused' ? '已暂停' : formatSchedule(a).summary}
+                  </span>
+                </TooltipTrigger>
+                {variant === 'active' && formatSchedule(a).detail && (
+                  <TooltipContent side="top">{formatSchedule(a).detail}</TooltipContent>
+                )}
+              </Tooltip>
               <div className="pointer-events-none absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                 <Tooltip>
                   <TooltipTrigger asChild>
