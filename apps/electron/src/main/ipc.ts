@@ -5259,22 +5259,22 @@ export function registerIpcHandlers(): void {
     }
   }
 
-  /** 校验 timeOfDay：单个或数组，每个必须是 HH:MM */
+  /** 校验 timeOfDay：单个或数组，每个必须是 HH:MM。空数组合法（非 daily/weekly/monthly 不依赖该字段）。 */
   const validTimeOfDayArr = (v: unknown): boolean => {
     if (typeof v === 'string') return validTimeOfDay(v)
-    if (Array.isArray(v)) return v.length > 0 && v.length <= 10 && v.every((t) => typeof t === 'string' && validTimeOfDay(t))
+    if (Array.isArray(v)) return v.length <= 10 && v.every((t) => typeof t === 'string' && validTimeOfDay(t))
     return false
   }
-  /** 校验 dayOfWeek：单个或数组，每个必须是 0-6 */
+  /** 校验 dayOfWeek：单个或数组，每个必须是 0-6。空数组合法（非 weekly 不依赖该字段）。 */
   const validDayOfWeekArr = (v: unknown): boolean => {
     if (typeof v === 'number') return isFiniteInt(v) && v >= 0 && v <= 6
-    if (Array.isArray(v)) return v.length > 0 && v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
+    if (Array.isArray(v)) return v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
     return false
   }
-  /** 校验 dayOfMonth：单个或数组，每个必须是 1-31 */
+  /** 校验 dayOfMonth：单个或数组，每个必须是 1-31。空数组合法（非 monthly 不依赖该字段）。 */
   const validDayOfMonthArr = (v: unknown): boolean => {
     if (typeof v === 'number') return isFiniteInt(v) && v >= 1 && v <= 31
-    if (Array.isArray(v)) return v.length > 0 && v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
+    if (Array.isArray(v)) return v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
     return false
   }
 
