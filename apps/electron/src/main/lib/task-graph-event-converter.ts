@@ -1,9 +1,10 @@
-import type { GraphEvent, TaskStatus } from '@profer/project-core'
+import type { GraphEvent, TaskStatus, TaskNode } from '@profer/project-core'
 import {
   isStructuredTaskGraphTool,
   parseAbandon,
   parseDependsOn,
 } from '@profer/project-core'
+import { loadGraph } from './project-graph-service'
 
 export interface TaskToolInvocation {
   toolUseId: string
@@ -136,6 +137,38 @@ export function structuredTaskToolCurrentTaskId(invocation: TaskToolInvocation):
   return taskIdFromInput(invocation.input)
 }
 
+/**
+ * 从持久化 graph 中取最近更新的完成/普通任务 id，作为内存 auto-link 上下文的跨 run 兜底。
+ *
+ * 背景：agent-orchestrator 的 currentTaskId/lastCompletedTaskId 是单次 SDK query 的内存变量，
+ * 跨 run（用户再次发消息 / 新会话重用）会重新归 null，导致跨 run 创建的新任务失去自动串联。
+ * 这里通过重放 JSONL 取最近完成任务补齐该缺口，让任务图随推进逐渐连成依赖链。
+ *
+ * @returns 最近完成的任务 id；若无完成任务则回退到最近更新的任意任务 id；图为空返回 null
+ */
+export function resolveRecentAutoLinkTaskId(sessionId: string): string | null {
+  // 读盘失败（文件被锁/IO 错误等）不能破坏整个 run，降级为无持久化兑底，回到内存逻辑。
+  let graph
+  try {
+    graph = loadGraph(sessionId)
+  } catch {
+    return null
+  }
+  const nodes = Object.values(graph.nodes)
+  if (nodes.length === 0) return null
+
+  const byUpdatedAt = (a: TaskNode, b: TaskNode) => b.updatedAt - a.updatedAt
+  // 优先：最近更新的 completed 任务（自然的推进锚点）
+  const recentlyCompleted = nodes
+    .filter((n) => n.status === 'completed')
+    .sort(byUpdatedAt)[0]
+  if (recentlyCompleted) return recentlyCompleted.id
+
+  // 回退：最近更新的任意任务（含 in_progress / pending / cancelled，作为大致推进锚点）
+  const latest = nodes.sort(byUpdatedAt)[0]
+  return latest?.id ?? null
+}
+
 /** Adds the same durable auto-link semantics to structured MCP task creation. */
 export function structuredTaskAutoLinkEvent(
   invocation: TaskToolInvocation,
@@ -152,11 +185,13 @@ export function structuredTaskAutoLinkEvent(
     parseDependsOn(description).length > 0 ||
     stringValue(invocation.input, 'forkFrom') !== undefined
   if (hasExplicitRelationship) return undefined
+
   if (context.currentTaskId && context.currentTaskId !== taskId) {
     return { type: 'task_updated', taskId, timestamp, payload: { forkFrom: context.currentTaskId } }
   }
-  if (context.lastCompletedTaskId && context.lastCompletedTaskId !== taskId) {
-    return { type: 'task_updated', taskId, timestamp, payload: { dependsOn: [context.lastCompletedTaskId] } }
+  const linkTarget = context.lastCompletedTaskId
+  if (linkTarget && linkTarget !== taskId) {
+    return { type: 'task_updated', taskId, timestamp, payload: { dependsOn: [linkTarget] } }
   }
   return undefined
 }

@@ -42,6 +42,7 @@ import {
   delegationToGraphEvents,
   isDelegateAgentTool,
   nativeTaskToolToGraphEvents,
+  resolveRecentAutoLinkTaskId,
   structuredTaskAutoLinkEvent,
   structuredTaskToolCurrentTaskId,
   type TaskToolInvocation,
@@ -1454,6 +1455,17 @@ export class AgentOrchestrator {
           const taskToolUses = new Map<string, TaskToolInvocation>()
           let currentTaskId: string | null = null
           let lastCompletedTaskId: string | null = null
+          // 跨 run 自动串联兜底：单次 query 的内存在每次 run 重新归 null，导致跨 run 创建的新任务
+          // 丢失“最近完成任务”上下文而孤立。这里在 run 启动时读一次持久化 graph，把最近完成/最近更新的
+          // 任务 id（惰性读盘、run 内缓存）；auto-link 在内存无值时回退到它，从而让任务图随推进逐渐连成依赖链。
+          let persistedRecentTaskId: string | null = null
+          let resolvedPersistedRecentTask = false
+          const resolvePersistedRecentTask = (): string | null => {
+            if (resolvedPersistedRecentTask) return persistedRecentTaskId
+            resolvedPersistedRecentTask = true
+            persistedRecentTaskId = resolveRecentAutoLinkTaskId(sessionId)
+            return persistedRecentTaskId
+          }
 
           // stop 信号：轮询 stoppedBySessions，确保 stop() 后事件循环不卡在 pendingNext 上
           stopResolved = false
@@ -1571,7 +1583,7 @@ export class AgentOrchestrator {
                 if (invocation.toolName === 'TaskCreate' || invocation.toolName === 'TaskUpdate') {
                   const conversion = nativeTaskToolToGraphEvents(invocation, sessionId, Date.now(), {
                     currentTaskId,
-                    lastCompletedTaskId,
+                    lastCompletedTaskId: lastCompletedTaskId ?? resolvePersistedRecentTask(),
                   })
                   for (const graphEvent of conversion.events) {
                     appendGraphEvent(sessionId, graphEvent)
@@ -1585,7 +1597,7 @@ export class AgentOrchestrator {
                   const structuredTaskId = structuredTaskToolCurrentTaskId(invocation)
                   const autoLink = structuredTaskAutoLinkEvent(invocation, Date.now(), {
                     currentTaskId,
-                    lastCompletedTaskId,
+                    lastCompletedTaskId: lastCompletedTaskId ?? resolvePersistedRecentTask(),
                   })
                   if (autoLink) appendGraphEvent(sessionId, autoLink)
                   if (invocation.toolName.endsWith('proma_task_update') && invocation.input.status === 'completed' && structuredTaskId) {

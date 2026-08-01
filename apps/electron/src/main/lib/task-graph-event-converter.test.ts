@@ -5,6 +5,7 @@ import {
   delegationToGraphEvents,
   isDelegateAgentTool,
   nativeTaskToolToGraphEvents,
+  structuredTaskAutoLinkEvent,
   structuredTaskToolCurrentTaskId,
 } from './task-graph-event-converter'
 
@@ -80,5 +81,45 @@ describe('nativeTaskToolToGraphEvents', () => {
       { type: 'task_session_linked', taskId: 'delegation:d-1', timestamp: 1000, payload: { sessionId: 'd-1', childSessionId: 's-child' } },
       { type: 'task_status_changed', taskId: 'delegation:d-1', timestamp: 1000, payload: { newStatus: 'in_progress' } },
     ])
+  })
+})
+
+describe('structuredTaskAutoLinkEvent 跨 run 兜底', () => {
+  const createToolCall = (id: string) => ({
+    toolUseId: 'use-' + id, toolName: 'mcp__task-graph__proma_task_create',
+    input: { subject: '新增子任务' },
+    result: JSON.stringify({ task: { id } }),
+  })
+
+  test('内存无 completion 时，用持久化兑底 lastCompletedTaskId 连边上一步任务', () => {
+    const evt = structuredTaskAutoLinkEvent(createToolCall('new-b'), 2000, {
+      currentTaskId: null,
+      // 模拟 orchestrator 已用 resolveRecentAutoLinkTaskId 填充：即使本 run 内无完成任务，
+      // 也回退到持久化 graph 的最近完成任务 a，让跨 run 新任务自动串联。
+      lastCompletedTaskId: 'a',
+    })
+    expect(evt).toEqual({
+      type: 'task_updated', taskId: 'new-b', timestamp: 2000,
+      payload: { dependsOn: ['a'] },
+    })
+  })
+
+  test('显式 dependsOn 优先于兑底，不额外加边', () => {
+    const evt = structuredTaskAutoLinkEvent({
+      toolUseId: 'use-x', toolName: 'mcp__task-graph__proma_task_create',
+      input: { subject: '独立任务', dependsOn: ['x1'] },
+      result: JSON.stringify({ task: { id: 'new-c' } }),
+    }, 3000, { currentTaskId: null, lastCompletedTaskId: 'a' })
+    expect(evt).toBeUndefined()
+  })
+
+  test('currentTaskId 存在时优先生效 forkFrom，不重复连 dependsOn', () => {
+    const evt = structuredTaskAutoLinkEvent(createToolCall('fork-b'), 4000, {
+      currentTaskId: 'parent', lastCompletedTaskId: 'a',
+    })
+    expect(evt).toEqual({
+      type: 'task_updated', taskId: 'fork-b', timestamp: 4000,
+      payload: { forkFrom: 'parent' },
+    })
   })
 })
