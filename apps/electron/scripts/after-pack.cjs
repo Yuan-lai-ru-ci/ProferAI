@@ -1,21 +1,19 @@
 /**
- * electron-builder afterPack hook — patch Windows exe icon + version info
- * electron-builder v25 + Electron 43 requires rcedit >= 3.x (bundled with npm rcedit)
+ * electron-builder afterPack hook — 给 Windows exe 打 Profer 图标 + 版本信息
+ * electron-builder v25 + Electron 43 需 rcedit >= 3.x（用仓库 node_modules 里的 rcedit）
  */
 const { execFileSync } = require('node:child_process')
 const { existsSync } = require('node:fs')
 const { join } = require('node:path')
 
 function findRcedit() {
-  // Prefer npm rcedit v5.x (works with Electron 39-43)
   const projDir = join(__dirname, '..')
   const npmRcedit = join(projDir, '..', '..', 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe')
   if (existsSync(npmRcedit)) return npmRcedit
-  // Fallback: winCodeSign cache (may be too old)
   const { readdirSync } = require('node:fs')
   const { tmpdir } = require('node:os')
   const cacheDir = join(tmpdir(), '..', '..', 'Local', 'electron-builder', 'Cache', 'winCodeSign')
-  for (const dir of readdirSync(cacheDir)) {
+  for (const dir of readdirSync(cacheDir, { encoding: 'utf8' })) {
     const p = join(cacheDir, dir, 'rcedit-x64.exe')
     if (existsSync(p)) return p
   }
@@ -31,7 +29,6 @@ module.exports = async function (context) {
 
   try {
     const rcedit = findRcedit()
-    // rcedit <filename> [options] — filename MUST come first
     execFileSync(rcedit, [
       exePath,
       '--set-icon', icoPath,
@@ -39,7 +36,7 @@ module.exports = async function (context) {
       '--set-version-string', 'FileDescription', 'Profer',
       '--set-version-string', 'CompanyName', 'Profer Team',
     ], { stdio: 'ignore' })
-    console.log('  [afterPack] fixed exe icon + metadata')
+    console.log('  [afterPack] Profer icon + metadata patched')
   } catch (err) {
     console.warn('  [afterPack] rcedit failed:', err.message || err)
   }
