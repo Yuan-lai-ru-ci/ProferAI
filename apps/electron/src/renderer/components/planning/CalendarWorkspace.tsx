@@ -185,6 +185,8 @@ export function CalendarWorkspace(): React.ReactElement {
   const selected = events.find((event) => event.id === selectedId)
   const selectedTodo = todos.find((todo) => todo.id === selectedTodoId)
   const openTodos = todos.filter((todo) => todo.status === 'open')
+  /** 日程中显示的 todo（含已完成）；已完成项以灰色展示，故不再按状态过滤。 */
+  const scheduleTodos = todos
   const activeAutomations = automations.filter((automation) => automation.active)
   const calendarGroupUsageCounts = React.useMemo(() => {
     const counts = new Map<string, number>()
@@ -454,7 +456,7 @@ export function CalendarWorkspace(): React.ReactElement {
       </div>
       <div className="relative grid min-h-0 flex-1 grid-cols-1">
         <div ref={calendarBodyRef} className="min-h-0 overflow-hidden">
-          {mode === 'month' ? <MonthCalendar monthStart={rangeStart} today={today} events={events} todos={openTodos} automations={activeAutomations} onSelectEvent={selectEvent} onSelectTodo={selectTodo} /> : <WeekCalendar weekStart={rangeStart} events={events} todos={openTodos} automations={activeAutomations} draftPreview={showDraftPreview && createOpen ? draft : undefined} quickCreateOpen={createOpen} onNavigate={navigate} onSelectEvent={selectEvent} onCreateAt={openCreate} onSelectTodo={selectTodo} />}
+          {mode === 'month' ? <MonthCalendar monthStart={rangeStart} today={today} events={events} todos={scheduleTodos} automations={activeAutomations} onSelectEvent={selectEvent} onSelectTodo={selectTodo} /> : <WeekCalendar weekStart={rangeStart} events={events} todos={scheduleTodos} automations={activeAutomations} draftPreview={showDraftPreview && createOpen ? draft : undefined} quickCreateOpen={createOpen} onNavigate={navigate} onSelectEvent={selectEvent} onCreateAt={openCreate} onSelectTodo={selectTodo} />}
         </div>
         {selected && <CalendarEventDetail event={selected} groups={groups} tags={tags} todos={openTodos} tagUsageCounts={tagUsageCounts} onCreateTag={createPlanningTag} onRenameTag={renamePlanningTag} onDeleteTag={deletePlanningTag} onClose={() => setSelectedId(null)} onSave={updateEvent} onDelete={requestDeleteEvent} />}
         {selectedTodo && <CalendarTodoDetail todo={selectedTodo} onClose={() => setSelectedTodoId(null)} />}
@@ -517,11 +519,12 @@ function MonthCalendar({ monthStart, today, events, todos, automations, onSelect
     return result
   }, [automations, events, todos, visibleDays])
 
-  return <div className="flex h-full min-h-0 flex-col"><div className="grid shrink-0 grid-cols-7 border-b border-border/60 text-center text-xs text-muted-foreground">{['日', '一', '二', '三', '四', '五', '六'].map((day) => <div key={day} className="py-2.5">{day}</div>)}</div><div className="grid min-h-0 flex-1 grid-cols-7" style={{ gridTemplateRows: `repeat(${weekCount}, minmax(0, 1fr))` }}>{cells.map((day, index) => { const valid = day > 0 && day <= days; const timestamp = valid ? startOfDay(new Date(monthDate.getFullYear(), monthDate.getMonth(), day, 9).getTime()) : undefined; const items = timestamp === undefined ? undefined : itemsByDay.get(timestamp); return <div key={index} className="flex min-h-0 flex-col border-b border-r border-border/50 p-2 last:border-r-0 hover:bg-muted/20 sm:p-2.5"><time className={cn('inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs tabular-nums', timestamp === today && 'bg-primary text-primary-foreground')}>{valid ? day : ''}</time><div className="mt-1.5 min-h-0 flex-1 space-y-1 overflow-y-auto scrollbar-thin">{items?.events.map((event) => <CalendarEventMarker key={event.id} event={event} onSelect={() => onSelectEvent(event.id)} className="flex w-full min-w-0 items-center gap-1 px-1.5 py-0.5 text-left text-[11px]" />)}{items?.todos.map((todo) => <TodoCalendarMarker key={todo.id} todo={todo} onSelect={() => onSelectTodo(todo.id)} className="bg-amber-500/15 text-amber-800 dark:text-amber-200" />)}{items?.automations.map((entry) => <AutomationCalendarMarker key={entry.automation.id} automation={entry.automation} occurrenceCount={entry.count} className="flex min-w-0 items-center gap-1 bg-violet-500/15 px-1.5 py-0.5 text-[11px] text-violet-700 dark:text-violet-300" />)}</div></div> })}</div></div>
+  return <div className="flex h-full min-h-0 flex-col"><div className="grid shrink-0 grid-cols-7 border-b border-border/60 text-center text-xs text-muted-foreground">{['日', '一', '二', '三', '四', '五', '六'].map((day) => <div key={day} className="py-2.5">{day}</div>)}</div><div className="grid min-h-0 flex-1 grid-cols-7" style={{ gridTemplateRows: `repeat(${weekCount}, minmax(0, 1fr))` }}>{cells.map((day, index) => { const valid = day > 0 && day <= days; const timestamp = valid ? startOfDay(new Date(monthDate.getFullYear(), monthDate.getMonth(), day, 9).getTime()) : undefined; const items = timestamp === undefined ? undefined : itemsByDay.get(timestamp); return <div key={index} className="flex min-h-0 flex-col border-b border-r border-border/50 p-2 last:border-r-0 hover:bg-muted/20 sm:p-2.5"><time className={cn('inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs tabular-nums', timestamp === today && 'bg-primary text-primary-foreground')}>{valid ? day : ''}</time><div className="mt-1.5 min-h-0 flex-1 space-y-1 overflow-y-auto scrollbar-thin">{items?.events.map((event) => <CalendarEventMarker key={event.id} event={event} onSelect={() => onSelectEvent(event.id)} className="flex w-full min-w-0 items-center gap-1 px-1.5 py-0.5 text-left text-[11px]" />)}{items?.todos.map((todo) => <TodoCalendarMarker key={todo.id} todo={todo} onSelect={() => onSelectTodo(todo.id)} />)}{items?.automations.map((entry) => <AutomationCalendarMarker key={entry.automation.id} automation={entry.automation} occurrenceCount={entry.count} className="flex min-w-0 items-center gap-1 bg-violet-500/15 px-1.5 py-0.5 text-[11px] text-violet-700 dark:text-violet-300" />)}</div></div> })}</div></div>
 }
 
-function TodoCalendarMarker({ todo, onSelect, className }: { todo: Todo; onSelect: () => void; className: string }): React.ReactElement {
-  return <Tooltip delayDuration={250}><TooltipTrigger asChild><button type="button" onClick={(event) => { event.stopPropagation(); onSelect() }} className={cn('flex w-full min-w-0 items-center gap-1 px-1.5 py-0.5 text-left text-[11px] shadow-sm', className)}><ListTodo className="size-3 shrink-0" /><span className="truncate">{todo.title}</span></button></TooltipTrigger><TooltipContent side="right" className="w-72 rounded-none p-3"><TodoPreviewContent todo={todo} /></TooltipContent></Tooltip>
+function TodoCalendarMarker({ todo, onSelect, className }: { todo: Todo; onSelect: () => void; className?: string }): React.ReactElement {
+  const completed = todo.status === 'completed'
+  return <Tooltip delayDuration={250}><TooltipTrigger asChild><button type="button" onClick={(event) => { event.stopPropagation(); onSelect() }} className={cn('flex w-full min-w-0 items-center gap-1 px-1.5 py-0.5 text-left text-[11px] shadow-sm', completed ? 'bg-muted/60 text-muted-foreground line-through opacity-70' : 'bg-amber-500/15 text-amber-800 dark:text-amber-200', className)}><ListTodo className="size-3 shrink-0" /><span className="truncate">{todo.title}</span></button></TooltipTrigger><TooltipContent side="right" className="w-72 rounded-none p-3"><TodoPreviewContent todo={todo} /></TooltipContent></Tooltip>
 }
 
 function TodoPreviewContent({ todo }: { todo: Todo }): React.ReactElement {
@@ -671,7 +674,8 @@ interface WeekView {
   dayItems: Map<number, WeekDayItems>
 }
 
-function buildWeekView(weekStart: number, events: CalendarEvent[], todos: Todo[], automations: Automation[]): WeekView {
+/** 仅用于冒烟测试导出的内部归组逻辑。 */
+export function buildWeekView(weekStart: number, events: CalendarEvent[], todos: Todo[], automations: Automation[]): WeekView {
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
   const items = new Map<number, { allDayEvents: CalendarEvent[]; allDayTodos: Todo[]; timedItems: TimedItem[] }>()
   for (const day of days) items.set(day, { allDayEvents: [], allDayTodos: [], timedItems: [] })
@@ -726,7 +730,7 @@ function WeekHeaderPanel({ week, today, active }: { week: WeekView; today: numbe
 function WeekAllDayPanel({ week, active, onSelectEvent, onSelectTodo }: { week: WeekView; active: boolean; onSelectEvent: (id: string) => void; onSelectTodo: (id: string) => void }): React.ReactElement {
   return <div aria-hidden={!active} className={cn('grid w-1/3 min-w-0 shrink-0 grid-cols-7 snap-start', !active && 'pointer-events-none')}>{week.days.map((day) => {
     const items = week.dayItems.get(day)!
-    return <div key={day} className="min-h-12 min-w-0 border-r border-border/60 p-1.5">{items.allDayEvents.map((event) => <CalendarEventMarker key={event.id} event={event} onSelect={() => onSelectEvent(event.id)} className="mb-1 flex w-full min-w-0 items-center gap-1 px-1.5 py-1 text-left text-[11px] shadow-sm" />)}{items.allDayTodos.map((todo) => <div key={todo.id} className="mb-1"><TodoCalendarMarker todo={todo} onSelect={() => onSelectTodo(todo.id)} className="bg-amber-500/20 text-amber-900 dark:text-amber-100" /></div>)}</div>
+    return <div key={day} className="min-h-12 min-w-0 border-r border-border/60 p-1.5">{items.allDayEvents.map((event) => <CalendarEventMarker key={event.id} event={event} onSelect={() => onSelectEvent(event.id)} className="mb-1 flex w-full min-w-0 items-center gap-1 px-1.5 py-1 text-left text-[11px] shadow-sm" />)}{items.allDayTodos.map((todo) => <div key={todo.id} className="mb-1"><TodoCalendarMarker todo={todo} onSelect={() => onSelectTodo(todo.id)} /></div>)}</div>
   })}</div>
 }
 
@@ -763,7 +767,7 @@ function WeekTimePanel({ week, hours, hourHeight, today, currentMinute, dragSele
           const event = segment.item.event
           return <CalendarEventMarker key={`event-${event.id}`} event={event} onSelect={() => onSelectEvent(event.id)} className="absolute z-10 overflow-hidden border-l-2 border-primary-foreground/50 px-1.5 py-1 text-left text-[11px] shadow-sm" style={style}><span className="block truncate font-medium">{event.title}</span>{height >= 28 && <span className="block truncate text-primary-foreground/75">{formatTime(segment.startAt)}–{formatTime(segment.endAt)}</span>}</CalendarEventMarker>
         }
-        if (segment.item.kind === 'todo') return <div key={`todo-${segment.item.id}`} className="absolute z-20" style={style}><TodoCalendarMarker todo={segment.item.todo} onSelect={() => onSelectTodo(segment.item.id)} className="h-full bg-amber-500/20 text-amber-900 dark:text-amber-100" /></div>
+        if (segment.item.kind === 'todo') return <div key={`todo-${segment.item.id}`} className="absolute z-20" style={style}><TodoCalendarMarker todo={segment.item.todo} onSelect={() => onSelectTodo(segment.item.id)} className="h-full" /></div>
         return <AutomationCalendarMarker key={`automation-${segment.item.id}`} automation={segment.item.automation} occurrenceCount={segment.item.count} iconClassName="mt-0.5" className="absolute z-20 flex items-start gap-1 overflow-hidden bg-violet-500/20 px-1 py-0.5 text-[10px] text-violet-900 shadow-sm dark:text-violet-100" style={style} />
       })}
       {selection && <div aria-hidden="true" className="pointer-events-none absolute inset-x-1 z-20 overflow-hidden border border-primary/70 border-l-2 bg-primary/15 px-1.5 py-1 text-[11px] text-primary shadow-sm" style={{ top: `${selection.startMinute / 60 * hourHeight}px`, height: `${(selection.endMinute - selection.startMinute) / 60 * hourHeight}px` }}>{selection.endMinute - selection.startMinute >= 30 && <span className="block truncate font-medium">新建日程 · {formatTime(atLocalMinute(day, selection.startMinute))}–{formatTime(atLocalMinute(day, selection.endMinute))}</span>}</div>}
