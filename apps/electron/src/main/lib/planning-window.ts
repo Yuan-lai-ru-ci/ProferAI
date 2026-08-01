@@ -14,7 +14,11 @@ const PLANNING_WINDOW_TITLE = 'Profer · 规划中心'
 let planningWindow: BrowserWindow | null = null
 
 function getIconPath(): string | undefined {
-  const resourcesDir = join(__dirname, 'resources')
+  // 开发态资源由 build:resources 复制到 dist/resources；
+  // 打包态资源位于 app.asar 同级的 process.resourcesPath。
+  const resourcesDir = app.isPackaged
+    ? process.resourcesPath
+    : join(__dirname, 'resources')
   const filename = process.platform === 'darwin'
     ? 'icon.icns'
     : process.platform === 'win32'

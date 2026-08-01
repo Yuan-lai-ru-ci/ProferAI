@@ -147,6 +147,9 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  # 注入 NSIS 自定义段：安装完成后刷新 Windows Shell 图标缓存。
+  # 覆盖安装到同一路径时，避免任务栏/桌面快捷方式仍显示旧（electron 默认）图标。
+  include: scripts/nsis-icon-refresh.nsh
 
 # ============================================
 # 发布配置

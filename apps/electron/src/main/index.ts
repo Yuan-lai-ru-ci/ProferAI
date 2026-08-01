@@ -52,9 +52,10 @@ function migrateUserDataFromProferIfNeeded(): void {
   }
 }
 
-// Windows: 设置 AppUserModelId，确保 toast 通知点击能正确路由回应用
-// 必须在 app.whenReady 之前设置，否则 Windows 无法将通知激活事件绑定到本应用
-if (process.platform === 'win32') {
+// 仅正式 Windows 安装版声明 AUMID，使任务栏与 Profer.exe / 开始菜单快捷方式绑定。
+// 开发版由裸 electron.exe 承载，刻意不声明 AUMID：任务栏使用 Electron 默认图标，
+// 避免开发环境向 Windows Shell 注册或污染生产 com.profer.app 身份。
+if (process.platform === 'win32' && app.isPackaged) {
   app.setAppUserModelId('com.profer.app')
 }
 
@@ -153,6 +154,7 @@ import {
 import { startScheduler, stopScheduler } from './lib/automation-scheduler'
 import { startPlanningReminderScheduler, stopPlanningReminderScheduler } from './lib/planning-reminder-scheduler'
 import { destroyPlanningWindow } from './lib/planning-window'
+import { getWindowFrameColor, updateWindowFrameAppearance } from './lib/titlebar-overlay'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
 import { getFeishuMultiBotConfig } from './lib/feishu-config'
 import { stopFeishuSyncSleepBlocker, syncFeishuSyncSleepBlocker } from './lib/feishu-sleep-blocker'
@@ -168,6 +170,7 @@ import {
   shouldSuppressVoiceDictationActivate,
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
+import { maintainDevShellShortcut } from './lib/dev-shell-shortcut'
 import { setProferVersion } from '@profer/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
@@ -406,6 +409,9 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     icon: iconExists ? iconPath : undefined,
+    // Windows 非客户区/DWM 在静止窗口时也可能露出 BrowserWindow 底色。
+    // 显式使用当前主题框架色，避免 Electron 默认白色形成一圈白边。
+    backgroundColor: getWindowFrameColor(),
     show: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -414,7 +420,21 @@ function createWindow(): void {
     },
     ...titleBarOptions,
   })
+  // Windows 开发运行时的 Electron 壳不会稳定继承 BrowserWindow 构造参数中的图标；
+  // 显式设置一次，确保任务栏窗口图标使用当前资源文件。
+  if (process.platform === 'win32' && iconExists) {
+    mainWindow.setIcon(iconPath)
+    // 任务栏按钮图标 = 进程身份（AUMID）决定，不随 WM_SETICON。显式提供 appIconPath
+    // （微软 RelaunchIconResource 允许 .ico 路径），与 setAppUserModelId 的 AUMID 配合。
+    if (app.isPackaged) {
+      mainWindow.setAppDetails({
+        appId: 'com.profer.app',
+        appIconPath: iconPath,
+      })
+    }
+  }
   installWindowsZoomInFallback(mainWindow)
+  updateWindowFrameAppearance(mainWindow)
 
   // Load the renderer
   const isDev = !app.isPackaged
@@ -601,6 +621,10 @@ async function bootstrap(): Promise<void> {
 
   // ─── 窗口 + 托盘：用户看到界面的临界点 ───
   createWindow()
+
+  // 开发态由裸 electron.exe 承载；维护 .dev AUMID 的专属 Shell 快捷方式，
+  // 防止它注册为 Electron 或污染正式 Profer 的任务栏身份。
+  safeRun('maintainDevShellShortcut', maintainDevShellShortcut)
   createTray({
     showMainWindow: showAndFocusMainWindow,
     openAgentSession: (sessionId, title) => {

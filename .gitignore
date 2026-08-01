@@ -65,5 +65,18 @@ apps/electron/resources/bin/
 .context/*.pid
 .context/*.ps1
 .context/*.diff
+# 任意层级 .context 目录下都忽略调试残留（图片/日志）
+.context/**/*.png
+.context/**/*.log
+.context/**/*.err.log
+.context/**/*.out.log
+**/.context/**/*.log
+**/.context/**/*.err.log
+**/.context/**/*.out.log
+**/.context/**/*.png
+**/.context/**/*.log.err
+**/.context/**/*.out.err
+**/.context/**/*.log.out
+**/.context/**/*.err
 nul
 scripts/_fix_define2.py

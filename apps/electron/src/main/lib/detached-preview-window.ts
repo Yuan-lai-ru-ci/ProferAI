@@ -7,6 +7,7 @@
 
 import { app, BrowserWindow, screen, shell } from 'electron'
 import type { Rectangle } from 'electron'
+import { existsSync } from 'fs'
 import { basename, join } from 'path'
 import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@profer/shared'
 import { VITE_DEV_SERVER_URL } from './config-paths'
@@ -14,6 +15,21 @@ import { VITE_DEV_SERVER_URL } from './config-paths'
 const previewDataById = new Map<string, DetachedPreviewWindowData>()
 const previewWindowsById = new Map<string, BrowserWindow>()
 const previewIdBySignature = new Map<string, string>()
+
+function getIconPath(): string | undefined {
+  // 开发态资源由 build:resources 复制到 dist/resources；
+  // 打包态资源位于 app.asar 同级的 process.resourcesPath。
+  const resourcesDir = app.isPackaged
+    ? process.resourcesPath
+    : join(__dirname, 'resources')
+  const filename = process.platform === 'darwin'
+    ? 'icon.icns'
+    : process.platform === 'win32'
+      ? 'icon.ico'
+      : 'icon.png'
+  const iconPath = join(resourcesDir, filename)
+  return existsSync(iconPath) ? iconPath : undefined
+}
 
 function makePreviewId(): string {
   return `preview-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -93,11 +109,13 @@ export function openDetachedPreviewWindow(
   previewIdBySignature.set(signature, id)
 
   const bounds = centerBoundsNearSource(sourceWindow)
+  const iconPath = getIconPath()
   const win = new BrowserWindow({
     ...bounds,
     minWidth: 640,
     minHeight: 480,
     title: data.title,
+    icon: iconPath,
     show: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -105,6 +123,11 @@ export function openDetachedPreviewWindow(
       nodeIntegration: false,
     },
   })
+
+  // Electron 开发壳可能不稳定继承构造参数中的 Windows 图标，显式补设一次。
+  if (process.platform === 'win32' && iconPath) {
+    win.setIcon(iconPath)
+  }
 
   previewWindowsById.set(id, win)
   installDetachedPreviewShortcuts(win)
