@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import {
   createPowerShellInvocation,
   createWindowsPowerShellToolDefinition,
+  DEFAULT_TIMEOUT_SECONDS,
   executePowerShellCommand,
   getWindowsPowerShellPath,
+  terminateWindowsProcessTree,
 } from './pi-powershell-tool'
 
 const WINDOWS_POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
@@ -62,6 +64,55 @@ describe('Pi Windows PowerShell tool', () => {
     expect(result.timedOut).toBe(true)
     expect(result.aborted).toBe(false)
   }, 5_000)
+
+  test('Given a Windows command whose child never closes after timeout When executing Then force-settles and requests process-tree termination', async () => {
+    let treePid: number | undefined
+    const result = await executePowerShellCommand('never-closes', {
+      cwd: 'C:\\',
+      executable: WINDOWS_POWERSHELL,
+      timeoutSeconds: 1,
+      platform: 'win32',
+      terminationGraceMs: 10,
+      terminateProcessTree: (pid) => { treePid = pid },
+      spawnProcess: (() => {
+        const listeners = new Map<string, Array<(...args: never[]) => void>>()
+        return {
+          pid: 4242,
+          killed: false,
+          kill: () => true,
+          stdout: { on: () => undefined },
+          stderr: { on: () => undefined },
+          once: (event: string, handler: (...args: never[]) => void) => {
+            listeners.set(event, [handler])
+            return undefined
+          },
+        }
+      }) as never,
+    })
+
+    expect(result.timedOut).toBe(true)
+    expect(result.exitCode).toBeNull()
+    expect(treePid).toBe(4242)
+  }, 3_000)
+
+  test('Given a Windows PowerShell pid When terminating its process tree Then invokes taskkill with /T /F', () => {
+    let executable: string | undefined
+    let args: string[] | undefined
+    let unrefCalled = false
+    terminateWindowsProcessTree(99, ((file: string, input: string[]) => {
+      executable = file
+      args = input
+      return { unref: () => { unrefCalled = true } }
+    }) as never)
+
+    expect(executable).toBe('taskkill.exe')
+    expect(args).toEqual(['/pid', '99', '/T', '/F'])
+    expect(unrefCalled).toBe(true)
+  })
+
+  test('Given no explicit timeout When defining the tool Then its advertised default is 30 seconds', () => {
+    expect(DEFAULT_TIMEOUT_SECONDS).toBe(30)
+  })
 
   test('Given an aborted signal When executing Then terminates the command and reports cancellation', async () => {
     const controller = new AbortController()

@@ -20,7 +20,7 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 // ===== 工具使用指南（可复用常量） =====
 
 const TOOL_USAGE_GUIDELINES = `## 工具使用指南
-- **任务图**：多步骤任务用 \`proma_task_create\` 创建子任务并填 \`dependsOn\`。用 \`proma_task_update\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。
+- **任务图**：多步骤任务用 \`proma_task_create\` 创建子任务并填 \`dependsOn\`。用 \`proma_task_update\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`proma_task_create\` 落成节点，再补依赖/分叉边，别只口头描述。
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
