@@ -414,19 +414,19 @@ function validScheduleType(v: unknown): v is AutomationScheduleType {
 
 function validTimeOfDayArr(v: unknown): boolean {
   if (typeof v === 'string') return TIME_OF_DAY_PATTERN.test(v)
-  if (Array.isArray(v)) return v.length > 0 && v.length <= 10 && v.every((t) => typeof t === 'string' && TIME_OF_DAY_PATTERN.test(t))
+  if (Array.isArray(v)) return v.length <= 10 && v.every((t) => typeof t === 'string' && TIME_OF_DAY_PATTERN.test(t))
   return false
 }
 
 function validDayOfWeekArr(v: unknown): boolean {
   if (typeof v === 'number') return isFiniteInt(v) && v >= 0 && v <= 6
-  if (Array.isArray(v)) return v.length > 0 && v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
+  if (Array.isArray(v)) return v.length <= 7 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 0 && d <= 6)
   return false
 }
 
 function validDayOfMonthArr(v: unknown): boolean {
   if (typeof v === 'number') return isFiniteInt(v) && v >= 1 && v <= 31
-  if (Array.isArray(v)) return v.length > 0 && v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
+  if (Array.isArray(v)) return v.length <= 31 && v.every((d) => typeof d === 'number' && isFiniteInt(d) && d >= 1 && d <= 31)
   return false
 }
 
