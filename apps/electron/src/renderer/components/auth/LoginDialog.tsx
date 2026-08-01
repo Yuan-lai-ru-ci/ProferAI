@@ -5,7 +5,7 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Globe, Mail, Lock, User, Ticket, LogIn, UserPlus, Server, Monitor } from 'lucide-react'
+import { Mail, Lock, User, Ticket, LogIn, UserPlus, Monitor } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -34,8 +34,6 @@ interface LoginResult {
 export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.ReactElement {
   const [, setAuthStatus] = useAtom(authStatusAtom)
   const [mode, setMode] = React.useState<'login' | 'register'>('login')
-  const [serverUrl, setServerUrl] = React.useState('')
-  const [showServerUrl, setShowServerUrl] = React.useState(false)
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
   const [displayName, setDisplayName] = React.useState('')
@@ -43,15 +41,6 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
   const [loading, setLoading] = React.useState(false)
   const [deviceLimit, setDeviceLimit] = React.useState<NonNullable<LoginResult['deviceLimit']> | null>(null)
   const [revoking, setRevoking] = React.useState<string | null>(null)
-
-  // 商业版预填服务器地址
-  React.useEffect(() => {
-    window.electronAPI.getBuildTarget().then((target) => {
-      if (target === 'commercial') {
-        setServerUrl('http://47.109.108.57/proma')
-      }
-    }).catch(() => {})
-  }, [])
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
@@ -64,7 +53,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
 
     setLoading(true)
     try {
-      const params: Record<string, string> = { serverUrl, email, password, displayName }
+      const params: Record<string, string> = { email, password, displayName }
       if (mode === 'register') {
         params.inviteCode = inviteCode.trim()
       }
@@ -97,7 +86,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
   const handleRevokeAndLogin = async (slotId: string): Promise<void> => {
     setRevoking(slotId)
     try {
-      const result = await window.electronAPI.auth.login({ serverUrl, email, password, revokeSlotId: slotId }) as unknown as LoginResult
+      const result = await window.electronAPI.auth.login({ email, password, revokeSlotId: slotId }) as unknown as LoginResult
       if (result.success) {
         setAuthStatus({ isLoggedIn: true, teamAccountId: result.teamAccountId, teamEmail: result.teamEmail })
         toast.success(`已登录: ${result.teamEmail}`)
@@ -159,7 +148,6 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
               <UserPlus size={14} />注册
             </button>
           </div>
-
         </div>
 
         {/* 表单 */}
@@ -233,25 +221,6 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
             <Input id="password" type="password" value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="至少8位，含大小写字母和数字" className="h-9" required />
-          </div>
-
-          {/* 服务器地址（可折叠） */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowServerUrl(!showServerUrl)}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <Server size={11} />
-              {showServerUrl ? '隐藏服务器设置' : '服务器设置'}
-            </button>
-            {showServerUrl && (
-              <div className="mt-1.5">
-                <Input id="server-url" value={serverUrl}
-                  onChange={(e) => setServerUrl(e.target.value)}
-                  placeholder="https://team.example.com" className="h-8 text-xs" />
-              </div>
-            )}
           </div>
 
           {/* 提交按钮 */}

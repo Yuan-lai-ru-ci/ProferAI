@@ -17,6 +17,9 @@ import { getDeviceAuthInfo } from './identity-service'
 import { encryptToken, decryptToken } from './token-crypto'
 import type { TeamServerConfig } from '@profer/shared'
 
+/** 默认团队服务地址（商业版内置，认证页不向用户暴露服务器配置）。 */
+export const DEFAULT_TEAM_SERVER_URL = 'http://47.109.108.57/proma'
+
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
 const API_PREFIX = '/v1'
 
@@ -179,16 +182,16 @@ function resolveCommercialMode(serverCommercialMode?: boolean): boolean {
 /**
  * 登录团队服务器（自动注册服务器配置）
  *
- * @param serverUrl 团队服务器地址，如 http://47.109.108.57/proma
  * @param email 邮箱
  * @param password 密码
  */
 export async function login(
-  serverUrl: string,
   email: string,
   password: string,
   revokeSlotId?: string,
 ): Promise<LoginResult> {
+  const serverUrl = DEFAULT_TEAM_SERVER_URL
+
   // 自动注册服务器配置
   const servers = readTeamServers()
   let server = servers.find((s) => s.baseUrl === serverUrl)
@@ -311,7 +314,6 @@ export async function login(
  * 注册账户（邀请码制）
  */
 export async function register(
-  serverUrl: string,
   email: string,
   password: string,
   displayName: string,
@@ -319,6 +321,7 @@ export async function register(
   activationCode?: string,
   invitationToken?: string,
 ): Promise<LoginResult> {
+  const serverUrl = DEFAULT_TEAM_SERVER_URL
   const url = `${serverUrl}${API_PREFIX}/auth/register`
 
   try {
