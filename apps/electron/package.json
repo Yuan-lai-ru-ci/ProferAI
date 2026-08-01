@@ -1,12 +1,9 @@
 {
   "name": "@profer/electron",
-  "version": "0.14.81",
-  "description": "Profer next gen ai software with general agents - Electron App",
+  "version": "0.14.82",
+  "description": "Profer",
   "main": "dist/main.cjs",
-  "author": {
-    "name": "Yuan-lai-ru-ci",
-    "email": "yuanlairuci@users.noreply.github.com"
-  },
+  "author": "Profer Team",
   "private": true,
   "type": "module",
   "scripts": {
