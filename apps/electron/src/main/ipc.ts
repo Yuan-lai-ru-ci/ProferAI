@@ -5411,8 +5411,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.LOGIN,
-    async (_, credentials: { serverUrl: string; email: string; password: string; revokeSlotId?: string }) => {
-      const result = await login(credentials.serverUrl, credentials.email, credentials.password, credentials.revokeSlotId)
+    async (_, credentials: { email: string; password: string; revokeSlotId?: string }) => {
+      const result = await login(credentials.email, credentials.password, credentials.revokeSlotId)
       console.log('[AUTH IPC] login result:', JSON.stringify({ success: result.success, teamAccountId: result.teamAccountId, teamEmail: result.teamEmail }))
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
@@ -5436,8 +5436,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.REGISTER,
-    async (_, credentials: { serverUrl: string; email: string; password: string; displayName: string; inviteCode?: string }) => {
-      const result = await register(credentials.serverUrl, credentials.email, credentials.password, credentials.displayName, credentials.inviteCode)
+    async (_, credentials: { email: string; password: string; displayName: string; inviteCode?: string }) => {
+      const result = await register(credentials.email, credentials.password, credentials.displayName, credentials.inviteCode)
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
         startSyncEngine()
