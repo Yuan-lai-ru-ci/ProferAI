@@ -4,8 +4,7 @@
  * 由侧边栏 Automations 入口触发显示，全屏占据中间内容区（隐藏 TabBar）。
  *
  * 结构：
- * - 顶部：标题 "定时任务" + 「+ 新建」按钮
- * - 内容：分组列表
+ * - 内容：分组列表（页标题与「+ 新建」按钮由规划中心提供）
  *   - Current（启用中）：active=true
  *   - Paused（已暂停 / 草稿）：active=false
  * - 每行：名称 + prompt 摘要 + 调度文案
@@ -17,7 +16,6 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Clock, Pause, Play, Power, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { detectIsWindows } from '@/lib/platform'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   automationsAtom,
@@ -65,7 +63,6 @@ function formatSchedule(a: Automation): ScheduleText {
 }
 
 export function AutomationsListView(): React.ReactElement {
-  const isWindows = React.useMemo(() => detectIsWindows(), [])
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
@@ -96,36 +93,12 @@ export function AutomationsListView(): React.ReactElement {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* 标题栏 */}
-      {/* 空列表时隐藏右上角「新建」按钮，避免与空状态中心按钮重复 */}
-      <div
-        className="titlebar-drag-region flex items-center justify-between px-8 pt-8 pb-6 flex-shrink-0"
-        style={{
-          maxWidth: isWindows ? 'min(64rem, calc(100% - 126px))' : '64rem',
-          width: isWindows ? 'calc(100% - 126px)' : '100%',
-          marginLeft: isWindows ? 0 : 'auto',
-          marginRight: isWindows ? '126px' : 'auto',
-        }}
-      >
-        <h1 className="text-2xl font-semibold text-foreground">定时任务</h1>
-        {automations.length > 0 && (
-          <button
-            type="button"
-            onClick={handleCreate}
-            className="titlebar-no-drag flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors duration-100 shadow-sm"
-          >
-            <Plus size={14} />
-            <span>新建定时任务</span>
-          </button>
-        )}
-      </div>
-
-      {/* 列表内容 */}
+      {/* 规划中心已提供页标题与「新建」操作，这里直接呈现列表，避免重复标题造成大块留白。 */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {automations.length === 0 ? (
           <EmptyState onCreate={handleCreate} />
         ) : (
-          <div className="flex flex-col gap-8 max-w-5xl w-full mx-auto px-8 pb-8">
+          <div className="flex flex-col gap-8 w-full px-2 pb-8 pt-2">
             {current.length > 0 && (
               <Section title="启用中" automations={current} onEdit={handleEdit} onRefresh={refreshList} variant="active" />
             )}
