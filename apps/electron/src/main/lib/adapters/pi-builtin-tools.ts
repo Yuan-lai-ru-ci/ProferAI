@@ -33,6 +33,7 @@ import { getAgentSessionMeta } from '../agent-session-manager'
 import { getTodo } from '../planning-manager'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
+import { teamMemoryOperations } from '../team-memory-agent-tools'
 import {
   fetchWebPage,
   formatFetchResults,
@@ -51,6 +52,8 @@ export interface PiBuiltinToolsContext {
   modelId?: string
   agentRuntime?: AgentRuntime
   workspaceId?: string
+  /** 团队共享记忆仅能在团队工作区会话中注册。 */
+  isTeamWorkspace?: boolean
   workspaceSlug?: string
   permissionMode?: ProferPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation'
@@ -460,6 +463,18 @@ function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAut
   }
 }
 
+function buildTeamMemoryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  if (!ctx.isTeamWorkspace || !ctx.workspaceId) return []
+  const ops = teamMemoryOperations(ctx.workspaceId)
+  return [
+    sdk.defineTool({ name: 'mcp__team-memory__list_team_memories', label: '列出团队记忆', description: '列出当前团队工作区的共享知识记忆。团队记忆不含成员个人记忆。', parameters: Type.Object({}), async execute() { return jsonToolResult(await ops.list()) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__read_team_memory', label: '读取团队记忆', description: '按需读取一篇当前团队的共享知识记忆。', parameters: Type.Object({ memoryId: Type.String() }), async execute(_, params) { return jsonToolResult(await ops.read((params as { memoryId: string }).memoryId)) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__search_team_memories', label: '搜索团队记忆', description: '按标题和路径搜索当前团队的共享知识记忆。', parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }) }), async execute(_, params) { return jsonToolResult(await ops.search((params as { query: string }).query)) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__create_team_memory', label: '创建团队记忆', description: '仅在用户明确确认要沉淀跨成员可复用项目事实时创建团队记忆。', parameters: Type.Object({ path: Type.String(), title: Type.String(), content: Type.String(), changeSummary: Type.Optional(Type.String()) }), async execute(_, params) { return jsonToolResult(await ops.create(params as { path: string; title: string; content: string; changeSummary?: string })) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__update_team_memory', label: '更新团队记忆', description: '更新前先读取；发生版本冲突时必须向用户说明，不能自动覆盖。', parameters: Type.Object({ memoryId: Type.String(), expectedVersion: Type.Integer({ minimum: 1 }), path: Type.Optional(Type.String()), title: Type.Optional(Type.String()), content: Type.Optional(Type.String()), changeSummary: Type.Optional(Type.String()) }), async execute(_, params) { const { memoryId, expectedVersion, ...input } = params as { memoryId: string; expectedVersion: number; path?: string; title?: string; content?: string; changeSummary?: string }; return jsonToolResult(await ops.update(memoryId, expectedVersion, input)) } }),
+  ] as unknown as ToolDefinition[]
+}
+
 function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
   return [
     sdk.defineTool({
@@ -701,6 +716,7 @@ export async function buildPiBuiltinTools(
     tools.push(...buildPiKnowledgeBaseTools(sdk, ctx))
     tools.push(...buildPiTaskGraphTools(sdk, ctx))
     tools.push(...buildPiPlanningTools(sdk))
+    tools.push(...buildTeamMemoryTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入知识库、任务图或规划中心工具失败:', error)
   }

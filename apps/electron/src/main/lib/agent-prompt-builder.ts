@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Agent 系统 Prompt 构建器
  *
  * 负责构建 Agent 的完整系统提示词和每条消息的动态上下文。
@@ -36,6 +36,8 @@ interface SystemPromptContext {
   deepSeekSubagentModel?: string
   /** 当前 runtime 是否为 Pi（影响记忆/文件提示词） */
   isPiRuntime?: boolean
+  /** 当前工作区是否为团队工作区 */
+  isTeamWorkspace?: boolean
 }
 
 interface WorkspacePromptPaths {
@@ -204,6 +206,17 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - 跨会话有参考价值的内容（调研报告、架构分析等） → 工作区级 \`.context/\`
 - 用户明确指定了位置时，按用户要求
 - 新会话开始时，**两个目录都要检查**以恢复完整上下文`)
+  }
+
+  if (ctx.isTeamWorkspace) {
+    sections.push(`## 团队共享知识记忆
+
+当前会话属于团队工作区。团队共享知识记忆独立于本地 CLAUDE.md 与个人 Auto Memory，所有团队成员和团队 Agent 共同可见。
+- 先用 \`list_team_memories\` 或 \`search_team_memories\` 按需查找，再用 \`read_team_memory\` 读取相关项目背景、决策、规范和经验；不要假定每轮都会自动注入全部记忆。
+- 只有用户明确确认、且结论能跨成员复用时，才创建或更新团队记忆；写入前说明目标文档、原因与影响。
+- 团队记忆绝不写入个人偏好、私人路径、凭据、未经确认的猜测或完整聊天记录。
+- 更新前必须先读取当前版本并传 expectedVersion。若工具返回版本冲突，保留双方内容并向用户说明，绝不自动重试覆盖。
+- Agent 不可归档、恢复历史版本或强制覆盖团队记忆；这些治理操作只由团队管理员在界面完成。`)
   }
 
   // 不确定性处理策略

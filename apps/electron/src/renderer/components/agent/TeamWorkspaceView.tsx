@@ -12,7 +12,7 @@ import {
   Plus, Search, Users, FolderOpen, FolderPlus, FolderUp, Trash2, Download,
   MoreHorizontal, Eye, Loader2, Cloud, CloudOff, ChevronDown, ChevronRight,
   ExternalLink, FolderSearch, ArrowUpDown, ArrowUp, Square, CheckSquare,
-  PanelRightClose, PanelRightOpen, MessageSquarePlus, Pencil, Bell, RefreshCw, History,
+  PanelRightClose, PanelRightOpen, MessageSquare, MessageSquarePlus, Pencil, Bell, RefreshCw, History,
 } from 'lucide-react'
 import {
   agentSessionsAtom,
@@ -23,6 +23,7 @@ import {
   unviewedCompletedSessionIdsAtom,
   workspaceFilesVersionAtom,
   teamAgentPanelWidthAtom,
+  teamWorkspaceLayoutModeAtom,
 } from '@/atoms/agent-atoms'
 import { TabContent } from '@/components/tabs/TabContent'
 import { CompactModelSelectorCtx } from '@/components/chat/ModelSelector'
@@ -37,6 +38,8 @@ import { TeamActivityFeed } from '@/components/agent/TeamActivityFeed'
 import { TeamAnnouncements } from '@/components/agent/TeamAnnouncements'
 import { TeamFileMetadataSheet } from '@/components/team-workspace/TeamFileMetadataSheet'
 import { TeamFileTrashSheet } from '@/components/team-workspace/TeamFileTrashSheet'
+import { TeamMemoryPanel } from '@/components/team-workspace/TeamMemoryPanel'
+import { TeamMemoryEditor } from '@/components/team-workspace/TeamMemoryEditor'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { WindowControls } from '@/components/WindowControls'
 import { cn } from '@/lib/utils'
@@ -168,14 +171,19 @@ export function TeamWorkspaceView(): React.ReactElement {
   const [batchDeleting, setBatchDeleting] = React.useState(false)
   const [dragSourceInternal, setDragSourceInternal] = React.useState(false)
   const [agentPanelCollapsed, setAgentPanelCollapsed] = React.useState(false)
+  // 对话主模式工作区栏，和文件模式 Agent 侧栏使用同一套收起/展开模型。
+  const [contextRailCollapsed, setContextRailCollapsed] = React.useState(false)
   const [agentDropOver, setAgentDropOver] = React.useState(false)
   const [editingPath, setEditingPath] = React.useState<string | null>(null)
   const [editingName, setEditingName] = React.useState('')
   const [metadataEntry, setMetadataEntry] = React.useState<FileEntry | null>(null)
+  const [contextTab, setContextTab] = React.useState<'files' | 'memory'>('files')
+  const [editingMemoryId, setEditingMemoryId] = React.useState<string | undefined>(undefined)
   const editInputRef = React.useRef<HTMLInputElement>(null)
 
   // ===== 右侧 Agent 面板可拖拽宽度 =====
   const [agentPanelWidth, setAgentPanelWidth] = useAtom(teamAgentPanelWidthAtom)
+  const [layoutMode, setLayoutMode] = useAtom(teamWorkspaceLayoutModeAtom)
   const [isDraggingAgentPanel, setIsDraggingAgentPanel] = React.useState(false)
   const agentPanelDraggingRef = React.useRef(false)
   const clampedAgentPanelWidth = clampTeamAgentPanelWidth(agentPanelWidth)
@@ -263,6 +271,54 @@ export function TeamWorkspaceView(): React.ReactElement {
     prevIsPanelOpenRef.current = !agentPanelCollapsed
   }, [windowWidth, agentPanelCollapsed, setAgentPanelCollapsed])
 
+  // 工作区栏与 Agent 侧栏保持同一响应阈值和交互：窄窗自动收起，用户可手动展开。
+  const contextRailUserOverrideRef = React.useRef(false)
+  const contextRailPrevWidthRef = React.useRef<number | null>(null)
+  const contextRailPrevLayoutModeRef = React.useRef(layoutMode)
+  const contextRailPrevOpenRef = React.useRef(!contextRailCollapsed)
+  React.useEffect(() => {
+    const previousWidth = contextRailPrevWidthRef.current
+    const firstRender = previousWidth === null
+    const crossedToNarrow = previousWidth !== null && previousWidth >= AUTO_HIDE_PANEL_WIDTH
+    const enteredChatMode = contextRailPrevLayoutModeRef.current !== 'chat' && layoutMode === 'chat'
+    if (layoutMode === 'chat' && (firstRender || crossedToNarrow || enteredChatMode) && windowWidth < AUTO_HIDE_PANEL_WIDTH && !contextRailCollapsed && !contextRailUserOverrideRef.current) {
+      setContextRailCollapsed(true)
+    }
+    if (windowWidth >= AUTO_HIDE_PANEL_WIDTH) contextRailUserOverrideRef.current = false
+    if (layoutMode === 'chat' && windowWidth < AUTO_HIDE_PANEL_WIDTH && !contextRailCollapsed && !contextRailPrevOpenRef.current) contextRailUserOverrideRef.current = true
+    contextRailPrevWidthRef.current = windowWidth
+    contextRailPrevLayoutModeRef.current = layoutMode
+    contextRailPrevOpenRef.current = !contextRailCollapsed
+  }, [layoutMode, windowWidth, contextRailCollapsed])
+
+  // 切换到对话主模式时，Agent 不能保留为收起的竖条。
+  React.useEffect(() => {
+    if (layoutMode === 'chat' && agentPanelCollapsed) setAgentPanelCollapsed(false)
+  }, [layoutMode, agentPanelCollapsed])
+
+  const LayoutModeToggle = () => (
+    <div className="titlebar-no-drag flex shrink-0 items-center rounded-md border border-border/70 bg-muted/40 p-0.5" role="group" aria-label="团队工作区主视图">
+      <button
+        type="button"
+        aria-pressed={layoutMode === 'files'}
+        title="文件为主"
+        onClick={() => setLayoutMode('files')}
+        className={cn('flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors', layoutMode === 'files' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+      >
+        <FolderOpen size={13} /><span className="hidden lg:inline">文件</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={layoutMode === 'chat'}
+        title="对话为主"
+        onClick={() => setLayoutMode('chat')}
+        className={cn('flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors', layoutMode === 'chat' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+      >
+        <MessageSquare size={13} /><span className="hidden lg:inline">对话</span>
+      </button>
+    </div>
+  )
+
   // ===== 活动面板 / 公告 / 文件浏览器切换 =====
   const [activePanel, setActivePanel] = React.useState<'files' | 'announcements' | 'activity'>('files')
   // SSE 事件版本号，用于触发活动面板和公告刷新
@@ -301,6 +357,11 @@ export function TeamWorkspaceView(): React.ReactElement {
       }
     }
   }, [activePanel, teamId])
+
+  // 团队资料、活动与共享记忆均复用此团队 SSE 连接。
+  React.useEffect(() => {
+    if (teamId) void window.electronAPI.sse.connect(teamId).catch((error) => console.error('[团队工作区] SSE 连接失败:', error))
+  }, [teamId])
 
   // 监听 SSE 事件刷新活动面板和公告
   React.useEffect(() => {
@@ -1252,7 +1313,8 @@ export function TeamWorkspaceView(): React.ReactElement {
     <>
       <div className="h-full flex gap-2 min-w-0"
       >
-      {/* ===== 左侧：文件管理区 ===== */}
+      {/* ===== 文件为主：完整文件管理区 ===== */}
+      {layoutMode === 'files' ? (
       <div className={cn(
         'relative flex flex-col flex-1 min-w-0 h-full bg-content-area rounded-2xl shadow-xl dark:shadow-sm overflow-hidden transition-all duration-200',
         dragOver && 'ring-2 ring-primary/40 shadow-primary/20 shadow-2xl',
@@ -1280,6 +1342,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                 )}
               </span>
             )}
+            <LayoutModeToggle />
             <div className="titlebar-no-drag flex shrink-0 items-center gap-1 overflow-visible whitespace-nowrap">
             {/* 排序 */}
             <div className="relative">
@@ -1928,9 +1991,36 @@ export function TeamWorkspaceView(): React.ReactElement {
             </div>
           )}
         </div>
+      ) : (
+        <TeamWorkspaceContextRail
+          entries={sortItems(filteredEntries.filter((entry) => isDirectChild(entry.path, currentPath || '')).slice(0, 8))}
+          currentPath={currentPath}
+          workspaceId={teamId || ''}
+          contextTab={contextTab}
+          onContextTabChange={setContextTab}
+          onEditMemory={(memoryId) => setEditingMemoryId(memoryId)}
+          collapsed={layoutMode === 'chat' && contextRailCollapsed}
+          onExpand={() => setContextRailCollapsed(false)}
+          onCollapse={() => setContextRailCollapsed(true)}
+          onOpenFiles={() => {
+            setContextTab('files')
+            setLayoutMode('files')
+          }}
+          onOpenEntry={(entry) => entry.isDirectory ? setCurrentPath(entry.path) : handlePreview(entry)}
+          onGoUp={() => setCurrentPath((path) => {
+            if (!path) return null
+            const parent = path.split('/').slice(0, -1).join('/')
+            return parent || null
+          })}
+          onUpload={() => {
+            setLayoutMode('files')
+            requestAnimationFrame(() => fileInputRef.current?.click())
+          }}
+        />
+      )}
 
         {/* ===== 右侧：AI 对话面板 ===== */}
-        {agentPanelCollapsed ? (
+        {layoutMode === 'files' && agentPanelCollapsed ? (
           <div
             className={cn(
               'relative flex h-full w-11 flex-shrink-0 flex-col overflow-hidden rounded-2xl bg-content-area shadow-xl dark:shadow-sm',
@@ -1955,21 +2045,24 @@ export function TeamWorkspaceView(): React.ReactElement {
         ) : (
         <div
           className={cn(
-            'relative flex flex-col flex-shrink-0 min-h-0 bg-content-area rounded-2xl shadow-xl dark:shadow-sm overflow-hidden',
-            !isDraggingAgentPanel && 'transition-all duration-200',
+            'relative flex flex-col min-h-0 bg-content-area rounded-2xl shadow-xl dark:shadow-sm overflow-hidden',
+            layoutMode === 'chat' ? 'order-1 flex-1 min-w-0' : 'flex-shrink-0',
+            layoutMode === 'files' && !isDraggingAgentPanel && 'transition-all duration-200',
             agentDropOver && 'ring-2 ring-primary/50',
           )}
-          style={{ width: clampedAgentPanelWidth }}
+          style={layoutMode === 'chat' ? undefined : { width: clampedAgentPanelWidth }}
           onDragOverCapture={handleAgentDragOver}
           onDropCapture={handleAgentDrop}
           onDragOver={handleAgentDragOver}
           onDragLeave={handleAgentDragLeave}
           onDrop={handleAgentDrop}
         >
-          <div
-            className="titlebar-no-drag absolute left-0 top-0 bottom-0 z-[60] w-3 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-primary/10 active:bg-primary/40"
-            onMouseDown={handleAgentPanelResizeMouseDown}
-          />
+          {layoutMode === 'files' && (
+            <div
+              className="titlebar-no-drag absolute left-0 top-0 bottom-0 z-[60] w-3 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-primary/10 active:bg-primary/40"
+              onMouseDown={handleAgentPanelResizeMouseDown}
+            />
+          )}
           {agentDropOver && (
             <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/60 bg-primary/5 backdrop-blur-[1px]">
               <div className="flex items-center gap-2 rounded-lg bg-background/95 px-3 py-2 text-xs font-medium text-primary shadow-lg">
@@ -1980,20 +2073,26 @@ export function TeamWorkspaceView(): React.ReactElement {
           )}
           <div className="titlebar-drag-region relative flex h-11 items-center gap-2 border-b border-border/50 bg-background px-3 flex-shrink-0">
             <div className="pointer-events-none absolute inset-0 titlebar-drag-region" />
+            {layoutMode === 'chat' && <LayoutModeToggle />}
             <span className="flex-1 text-xs font-medium text-muted-foreground truncate">
               {workspace ? `${workspace.name} · Agent` : 'AI 对话'}
             </span>
-            <button
-              type="button"
-              className="titlebar-no-drag flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title="收起 Agent"
-              onClick={() => setAgentPanelCollapsed(true)}
-            >
-              <PanelRightClose size={14} />
-            </button>
+            {layoutMode === 'files' && (
+              <button
+                type="button"
+                className="titlebar-no-drag flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="收起 Agent"
+                onClick={() => setAgentPanelCollapsed(true)}
+              >
+                <PanelRightClose size={14} />
+              </button>
+            )}
+            {layoutMode === 'chat' && <WindowControls variant="inline" className="titlebar-no-drag -mr-1" />}
           </div>
           <div className="flex-1 min-h-0 flex flex-col titlebar-no-drag">
-            {teamAgentTabId ? (
+            {editingMemoryId !== undefined ? (
+              <TeamMemoryEditor workspaceId={teamId || ''} memoryId={editingMemoryId || undefined} onClose={() => setEditingMemoryId(undefined)} />
+            ) : teamAgentTabId ? (
               <CompactModelSelectorCtx.Provider value={true}>
                 <div className="flex-1 min-h-0"><TabContent tabId={teamAgentTabId} /></div>
               </CompactModelSelectorCtx.Provider>
@@ -2033,6 +2132,97 @@ export function TeamWorkspaceView(): React.ReactElement {
       <TeamFileTrashSheet workspaceId={teamId || ''} open={trashOpen} onOpenChange={setTrashOpen}
         onRestored={() => { setActivePanel('files'); void loadFiles() }} />
     </>
+  )
+}
+
+function TeamWorkspaceContextRail({
+  entries,
+  workspaceId,
+  contextTab,
+  onContextTabChange,
+  collapsed,
+  onExpand,
+  onCollapse,
+  onEditMemory,
+  currentPath,
+  onOpenFiles,
+  onOpenEntry,
+  onGoUp,
+  onUpload,
+}: {
+  entries: FileEntry[]
+  workspaceId: string
+  contextTab: 'files' | 'memory'
+  onContextTabChange: (tab: 'files' | 'memory') => void
+  collapsed: boolean
+  onExpand: () => void
+  onCollapse: () => void
+  onEditMemory: (memoryId?: string) => void
+  currentPath: string | null
+  onOpenFiles: () => void
+  onOpenEntry: (entry: FileEntry) => void
+  onGoUp: () => void
+  onUpload: () => void
+}) {
+  return (
+    <aside className={cn(
+      'order-2 flex h-full shrink-0 flex-col overflow-hidden rounded-2xl bg-content-area shadow-xl dark:shadow-sm transition-all duration-200',
+      collapsed ? 'w-11' : 'w-[300px]',
+    )} aria-label="团队资料">
+      {collapsed ? (
+        <button type="button" onClick={onExpand} title="展开工作区" className="titlebar-no-drag flex h-full w-full flex-col items-center justify-start gap-2 px-1 py-4 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground">
+          <FolderOpen size={18} className="text-blue-500" />
+          <span className="[writing-mode:vertical-rl] text-xs font-medium tracking-[0.18em]">工作区</span>
+        </button>
+      ) : <>
+      {/* 窄屏是独立的工具导轨，不能把桌面 Tab 强行压成竖排文字。 */}
+      <div className="titlebar-no-drag relative z-[60] flex h-11 shrink-0 items-center gap-2 border-b border-border/50 bg-background px-3">
+        <div className="flex min-w-0 flex-1 rounded-md bg-muted/50 p-0.5">
+          <button type="button" onClick={() => onContextTabChange('files')} className={cn('flex-1 rounded px-1 py-1 text-[10px]', contextTab === 'files' && 'bg-background text-primary shadow-sm')}>文件</button>
+          <button type="button" onClick={() => onContextTabChange('memory')} className={cn('flex-1 rounded px-1 py-1 text-[10px]', contextTab === 'memory' && 'bg-background text-primary shadow-sm')}>记忆</button>
+        </div>
+        {currentPath && <button type="button" onClick={onGoUp} title="返回上一级" className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><FolderUp size={14} /></button>}
+        <button type="button" onClick={onCollapse} title="收起工作区" className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose size={14} /></button>
+        <button type="button" onClick={onOpenFiles} title="查看全部文件" className="flex h-7 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"><LayoutGrid size={13} />全部</button>
+      </div>
+      {contextTab === 'memory' ? (
+        <div className="flex-1 min-h-0"><TeamMemoryPanel workspaceId={workspaceId} onOpen={onEditMemory} /></div>
+      ) : <><div className="flex-1 overflow-y-auto p-2">
+        {currentPath && <p className="mb-2 truncate px-2 text-[10px] text-muted-foreground">{currentPath}</p>}
+        {entries.length === 0 ? (
+          <div className="flex h-32 flex-col items-center justify-center gap-2 px-2 text-center text-xs text-muted-foreground">
+            <Cloud size={20} strokeWidth={1} />
+            <span>暂无团队资料</span>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {entries.map((entry) => (
+              <button
+                key={entry.path}
+                type="button"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData('application/x-profer-team-file', createTeamFileDragPayload(entry))
+                  event.dataTransfer.effectAllowed = 'copy'
+                }}
+                onClick={() => onOpenEntry(entry)}
+                className="group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent/60"
+                title={entry.path}
+              >
+                <FileTypeIcon name={entry.name} isDirectory={entry.isDirectory} size={18} />
+                <span className="min-w-0 flex-1 truncate text-xs">{entry.name}</span>
+                {!entry.isDirectory && entry.size != null && <span className="text-[10px] text-muted-foreground">{formatSize(entry.size)}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="shrink-0 border-t border-border/50 p-2">
+        <button type="button" onClick={onUpload} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border text-xs font-medium hover:bg-accent">
+          <Upload size={13} />上传资料
+        </button>
+      </div></>}</>}
+    </aside>
   )
 }
 
