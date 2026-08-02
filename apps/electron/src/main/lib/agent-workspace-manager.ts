@@ -1443,6 +1443,9 @@ function isNewerVersion(a: string, b: string): boolean {
 
 /** 将远程团队工作区合并到本地索引，侧边栏即可展示 */
 export function syncTeamWorkspacesToIndex(teamWorkspaces: AgentWorkspace[]): void {
+  // 远端请求失败时调用方不得传空数组。空数组只代表服务端成功确认用户没有团队，
+  // 否则会把仍可访问的团队条目当成“已被踢出”删除，且 UI 没有恢复入口。
+  if (!Array.isArray(teamWorkspaces)) throw new Error('团队工作区同步数据非法')
   const index = readIndex()
   let changed = false
   const serverIds = new Set(teamWorkspaces.map((w) => w.id))

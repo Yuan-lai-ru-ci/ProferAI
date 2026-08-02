@@ -69,6 +69,11 @@ export interface ActivePlanningReminder extends PlanningReminder {
 
 export interface Todo {
   id: string
+  /** 团队规划记录的协作字段；个人 SQLite 记录保持未定义。 */
+  assigneeId?: string
+  createdBy?: string
+  updatedBy?: string
+  version?: number
   title: string
   notes?: string
   status: TodoStatus
@@ -88,6 +93,11 @@ export interface Todo {
 
 export interface CalendarEvent {
   id: string
+  /** 团队规划记录的协作字段；个人 SQLite 记录保持未定义。 */
+  assigneeId?: string
+  createdBy?: string
+  updatedBy?: string
+  version?: number
   title: string
   notes?: string
   startAt: number
@@ -132,6 +142,8 @@ export interface CreateTodoInput {
   /** 创建来源的 Agent Session；仅应用内部创建时使用，并自动写入关联。 */
   sessionId?: string
   workspaceId?: string
+  /** 团队规划中的单一负责人；个人规划忽略。 */
+  assigneeId?: string
 }
 
 export interface StartTodoAgentInput {
@@ -164,6 +176,8 @@ export interface UpdateTodoInput {
   groupId?: string | null
   tagIds?: string[]
   workspaceId?: string | null
+  /** 团队规划中的单一负责人；传 null/undefined 表示取消指派。 */
+  assigneeId?: string | null
   /** 可选版本号，用于拒绝跨窗口的旧草稿覆盖。 */
   expectedUpdatedAt?: number
   status?: TodoStatus
@@ -180,6 +194,8 @@ export interface CreateCalendarEventInput {
   reminders?: CreatePlanningReminderInput[]
   workspaceId?: string
   todoId?: string
+  /** 团队规划中的单一负责人；个人规划忽略。 */
+  assigneeId?: string
 }
 
 export interface UpdateCalendarEventInput {
@@ -193,11 +209,15 @@ export interface UpdateCalendarEventInput {
   tagIds?: string[]
   workspaceId?: string | null
   todoId?: string | null
+  /** 团队规划中的单一负责人；传 null/undefined 表示取消指派。 */
+  assigneeId?: string | null
   /** 详情面板保存时携带的版本号，用于拒绝跨窗口的旧草稿覆盖。 */
   expectedUpdatedAt?: number
 }
 
 export interface CreatePlanningGroupInput {
+  /** 团队模式时由主进程路由到 Team Server。 */
+  workspaceId?: string
   scope: PlanningGroupScope
   name: string
   color?: string
@@ -205,6 +225,8 @@ export interface CreatePlanningGroupInput {
 }
 
 export interface UpdatePlanningGroupInput {
+  /** 团队模式时由主进程路由到 Team Server。 */
+  workspaceId?: string
   id: string
   /** 作为要更新分组的归属选择器，不能借此移动分组。 */
   scope: PlanningGroupScope
@@ -214,11 +236,15 @@ export interface UpdatePlanningGroupInput {
 }
 
 export interface CreatePlanningTagInput {
+  /** 团队模式时由主进程路由到 Team Server。 */
+  workspaceId?: string
   name: string
   color?: string
 }
 
 export interface UpdatePlanningTagInput {
+  /** 团队模式时由主进程路由到 Team Server。 */
+  workspaceId?: string
   id: string
   name?: string
   color?: string | null

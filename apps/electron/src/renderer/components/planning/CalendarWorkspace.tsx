@@ -6,6 +6,7 @@ import { PLANNING_CONFLICT_ERROR, AUTOMATION_OCCURRENCE_SAMPLES_PER_DAY, getAuto
 import type { Automation, CalendarEvent, PlanningGroup, PlanningTag, Todo } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { automationsAtom } from '@/atoms/automation-atoms'
+import { agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { calendarEventsAtom, calendarPlanningGroupsAtom, planningCalendarCreateRequestAtom, planningTagsAtom, todosAtom } from '@/atoms/planning-atoms'
 import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
@@ -62,6 +63,7 @@ interface EventDraft {
   groupId: string
   tagIds: string[]
   todoId: string
+  assigneeId: string
 }
 
 type EventSaveResult =
@@ -158,10 +160,14 @@ function draftFromEvent(event?: CalendarEvent, startAt = Math.ceil(Date.now() / 
     groupId: event?.groupId ?? '__none__',
     tagIds: event?.tags.map((tag) => tag.id) ?? [],
     todoId: event?.todoId ?? '__none__',
+    assigneeId: event?.assigneeId ?? '__none__',
   }
 }
 
 export function CalendarWorkspace(): React.ReactElement {
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const teamWorkspaceId = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.type === 'team' ? currentWorkspaceId ?? undefined : undefined
   const calendarRef = React.useRef<HTMLElement>(null)
   const calendarBodyRef = React.useRef<HTMLDivElement>(null)
   const [events, setEvents] = useAtom(calendarEventsAtom)
@@ -180,6 +186,11 @@ export function CalendarWorkspace(): React.ReactElement {
   const [eventPendingDeletion, setEventPendingDeletion] = React.useState<CalendarEvent | null>(null)
   const [draft, setDraft] = React.useState<EventDraft>(() => draftFromEvent())
   const [saving, setSaving] = React.useState(false)
+  const [teamMembers, setTeamMembers] = React.useState<Array<{ id: string; displayName: string }>>([])
+  React.useEffect(() => {
+    if (!teamWorkspaceId) { setTeamMembers([]); return }
+    void window.electronAPI.team.getMembers(teamWorkspaceId).then((items) => setTeamMembers((items as Array<{ userId?: unknown; displayName?: unknown }>).flatMap((item) => typeof item.userId === 'string' && item.userId ? [{ id: item.userId, displayName: typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName : '未命名成员' }] : []))).catch(() => setTeamMembers([]))
+  }, [teamWorkspaceId])
   const today = useLocalDayStart()
 
   const selected = events.find((event) => event.id === selectedId)
@@ -221,7 +232,7 @@ export function CalendarWorkspace(): React.ReactElement {
 
   const createCalendarGroup = React.useCallback(async (name: string): Promise<PlanningGroup | undefined> => {
     try {
-      const group = await window.electronAPI.createPlanningGroup({ scope: 'calendar', name })
+      const group = await window.electronAPI.createPlanningGroup({ scope: 'calendar', name, workspaceId: teamWorkspaceId })
       setGroups((current) => [...current, group].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-CN')))
       return group
     } catch (error) {
@@ -233,7 +244,7 @@ export function CalendarWorkspace(): React.ReactElement {
 
   const renameCalendarGroup = React.useCallback(async (group: PlanningGroup, name: string): Promise<PlanningGroup | undefined> => {
     try {
-      const updated = await window.electronAPI.updatePlanningGroup({ id: group.id, scope: 'calendar', name })
+      const updated = await window.electronAPI.updatePlanningGroup({ id: group.id, scope: 'calendar', name, workspaceId: teamWorkspaceId })
       if (!updated) throw new Error('分组不存在')
       setGroups((current) => current.map((item) => item.id === updated.id ? updated : item))
       setEvents((current) => current.map((event) => event.groupId === updated.id ? { ...event, group: updated } : event))
@@ -248,7 +259,7 @@ export function CalendarWorkspace(): React.ReactElement {
 
   const deleteCalendarGroup = React.useCallback(async (group: PlanningGroup): Promise<boolean> => {
     try {
-      const deleted = await window.electronAPI.deletePlanningGroup('calendar', group.id)
+      const deleted = await window.electronAPI.deletePlanningGroup('calendar', group.id, teamWorkspaceId)
       if (!deleted) throw new Error('分组不存在')
       setGroups((current) => current.filter((item) => item.id !== group.id))
       setEvents((current) => current.map((event) => event.groupId === group.id ? { ...event, groupId: undefined, group: undefined } : event))
@@ -270,7 +281,7 @@ export function CalendarWorkspace(): React.ReactElement {
   }, [events, todos])
   const createPlanningTag = React.useCallback(async (name: string): Promise<PlanningTag | undefined> => {
     try {
-      const tag = await window.electronAPI.createPlanningTag({ name })
+      const tag = await window.electronAPI.createPlanningTag({ name, workspaceId: teamWorkspaceId })
       setTags((current) => [...current, tag].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')))
       toast.success('已创建标签')
       return tag
@@ -282,7 +293,7 @@ export function CalendarWorkspace(): React.ReactElement {
   }, [setTags])
   const renamePlanningTag = React.useCallback(async (tag: PlanningTag, name: string): Promise<PlanningTag | undefined> => {
     try {
-      const updated = await window.electronAPI.updatePlanningTag({ id: tag.id, name })
+      const updated = await window.electronAPI.updatePlanningTag({ id: tag.id, name, workspaceId: teamWorkspaceId })
       if (!updated) throw new Error('标签不存在')
       setTags((current) => current.map((item) => item.id === updated.id ? updated : item))
       setEvents((current) => current.map((event) => ({ ...event, tags: event.tags.map((item) => item.id === updated.id ? updated : item) })))
@@ -296,7 +307,7 @@ export function CalendarWorkspace(): React.ReactElement {
   }, [setEvents, setTags])
   const deletePlanningTag = React.useCallback(async (tag: PlanningTag): Promise<boolean> => {
     try {
-      if (!await window.electronAPI.deletePlanningTag(tag.id)) throw new Error('标签不存在')
+      if (!await window.electronAPI.deletePlanningTag(tag.id, teamWorkspaceId)) throw new Error('标签不存在')
       setTags((current) => current.filter((item) => item.id !== tag.id))
       setEvents((current) => current.map((event) => ({ ...event, tags: event.tags.filter((item) => item.id !== tag.id) })))
       setDraft((current) => ({ ...current, tagIds: current.tagIds.filter((id) => id !== tag.id) }))
@@ -326,6 +337,8 @@ export function CalendarWorkspace(): React.ReactElement {
         groupId: draft.groupId === '__none__' ? undefined : draft.groupId,
         tagIds: draft.tagIds,
         todoId: draft.todoId === '__none__' ? undefined : draft.todoId,
+        assigneeId: draft.assigneeId === '__none__' ? undefined : draft.assigneeId,
+        workspaceId: teamWorkspaceId,
       })
       setEvents((current) => [...current, event].sort((a, b) => a.startAt - b.startAt))
       setSelectedTodoId(null)
@@ -358,7 +371,9 @@ export function CalendarWorkspace(): React.ReactElement {
         groupId: next.groupId === '__none__' ? null : next.groupId,
         tagIds: next.tagIds,
         todoId: next.todoId === '__none__' ? null : next.todoId,
+        assigneeId: next.assigneeId === '__none__' ? null : next.assigneeId,
         expectedUpdatedAt,
+        workspaceId: teamWorkspaceId,
       })
       if (!event) throw new Error('日程不存在')
       setEvents((current) => current.map((item) => item.id === id ? event : item))
@@ -382,7 +397,7 @@ export function CalendarWorkspace(): React.ReactElement {
     const event = eventPendingDeletion
     if (!event) return
     try {
-      await window.electronAPI.deleteCalendarEvent(event.id)
+      await window.electronAPI.deleteCalendarEvent(event.id, teamWorkspaceId)
       setEvents((current) => current.filter((item) => item.id !== event.id))
       setSelectedId(null)
       setEventPendingDeletion(null)
@@ -458,7 +473,7 @@ export function CalendarWorkspace(): React.ReactElement {
         <div ref={calendarBodyRef} className="min-h-0 overflow-hidden">
           {mode === 'month' ? <MonthCalendar monthStart={rangeStart} today={today} events={events} todos={scheduleTodos} automations={activeAutomations} onSelectEvent={selectEvent} onSelectTodo={selectTodo} /> : <WeekCalendar weekStart={rangeStart} events={events} todos={scheduleTodos} automations={activeAutomations} draftPreview={showDraftPreview && createOpen ? draft : undefined} quickCreateOpen={createOpen} onNavigate={navigate} onSelectEvent={selectEvent} onCreateAt={openCreate} onSelectTodo={selectTodo} />}
         </div>
-        {selected && <CalendarEventDetail event={selected} groups={groups} tags={tags} todos={openTodos} tagUsageCounts={tagUsageCounts} onCreateTag={createPlanningTag} onRenameTag={renamePlanningTag} onDeleteTag={deletePlanningTag} onClose={() => setSelectedId(null)} onSave={updateEvent} onDelete={requestDeleteEvent} />}
+        {selected && <CalendarEventDetail event={selected} groups={groups} tags={tags} todos={openTodos} tagUsageCounts={tagUsageCounts} teamMembers={teamMembers} showAssignee={!!teamWorkspaceId} onCreateTag={createPlanningTag} onRenameTag={renamePlanningTag} onDeleteTag={deletePlanningTag} onClose={() => setSelectedId(null)} onSave={updateEvent} onDelete={requestDeleteEvent} />}
         {selectedTodo && <CalendarTodoDetail todo={selectedTodo} onClose={() => setSelectedTodoId(null)} />}
       </div>
       <CalendarQuickCreatePopover open={createOpen} anchor={createAnchor} draft={draft} setDraft={setDraft} groups={groups} saving={saving} onCreateGroup={createCalendarGroup} onOpenChange={handleCreateOpenChange} onSave={() => void createEvent()} />
@@ -1008,7 +1023,7 @@ function WeekCalendar({ weekStart, events, todos, automations, draftPreview, qui
   )
 }
 
-function CalendarEventDetail({ event, groups, tags, todos, tagUsageCounts, onCreateTag, onRenameTag, onDeleteTag, onClose, onSave, onDelete }: { event: CalendarEvent; groups: Array<{ id: string; name: string }>; tags: PlanningTag[]; todos: Todo[]; tagUsageCounts: Map<string, number>; onCreateTag: (name: string) => Promise<PlanningTag | undefined>; onRenameTag: (tag: PlanningTag, name: string) => Promise<PlanningTag | undefined>; onDeleteTag: (tag: PlanningTag) => Promise<boolean>; onClose: () => void; onSave: (id: string, draft: EventDraft, expectedUpdatedAt: number, silent?: boolean) => Promise<EventSaveResult>; onDelete: (event: CalendarEvent) => Promise<void> }): React.ReactElement {
+function CalendarEventDetail({ event, groups, tags, todos, tagUsageCounts, teamMembers, showAssignee, onCreateTag, onRenameTag, onDeleteTag, onClose, onSave, onDelete }: { event: CalendarEvent; groups: Array<{ id: string; name: string }>; tags: PlanningTag[]; todos: Todo[]; tagUsageCounts: Map<string, number>; teamMembers: Array<{ id: string; displayName: string }>; showAssignee: boolean; onCreateTag: (name: string) => Promise<PlanningTag | undefined>; onRenameTag: (tag: PlanningTag, name: string) => Promise<PlanningTag | undefined>; onDeleteTag: (tag: PlanningTag) => Promise<boolean>; onClose: () => void; onSave: (id: string, draft: EventDraft, expectedUpdatedAt: number, silent?: boolean) => Promise<EventSaveResult>; onDelete: (event: CalendarEvent) => Promise<void> }): React.ReactElement {
   const [draft, setDraft] = React.useState(() => draftFromEvent(event))
   const [saveState, setSaveState] = React.useState<'saved' | 'saving' | 'failed' | 'invalid' | 'conflict'>('saved')
   const [saveGeneration, setSaveGeneration] = React.useState(0)
@@ -1109,7 +1124,7 @@ function CalendarEventDetail({ event, groups, tags, todos, tagUsageCounts, onCre
         : saveState === 'conflict' ? '此日程已在其他窗口更新'
           : '已自动保存'
 
-  return <PlanningFloatingInspector label="日程详情" onClose={handleClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">日程详情</p><div className="mt-1 flex items-center gap-2"><p className="text-xs text-muted-foreground">{statusLabel}</p>{saveState === 'conflict' && <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={reloadLatest}>重新加载</Button>}</div></div><CalendarEventFields draft={draft} setDraft={setDraft} groups={groups} tags={tags} todos={todos} tagUsageCounts={tagUsageCounts} onCreateTag={onCreateTag} onRenameTag={onRenameTag} onDeleteTag={onDeleteTag} /><div className="flex items-center justify-between border-t border-border/60 pt-4"><Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void onDelete(event)}><Trash2 size={15} />删除</Button><span className="text-xs text-muted-foreground">编辑后自动保存</span></div></div></PlanningFloatingInspector>
+  return <PlanningFloatingInspector label="日程详情" onClose={handleClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">日程详情</p><div className="mt-1 flex items-center gap-2"><p className="text-xs text-muted-foreground">{statusLabel}</p>{saveState === 'conflict' && <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={reloadLatest}>重新加载</Button>}</div></div><CalendarEventFields draft={draft} setDraft={setDraft} groups={groups} tags={tags} todos={todos} tagUsageCounts={tagUsageCounts} teamMembers={teamMembers} showAssignee={showAssignee} onCreateTag={onCreateTag} onRenameTag={onRenameTag} onDeleteTag={onDeleteTag} /><div className="flex items-center justify-between border-t border-border/60 pt-4"><Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void onDelete(event)}><Trash2 size={15} />删除</Button><span className="text-xs text-muted-foreground">编辑后自动保存</span></div></div></PlanningFloatingInspector>
 }
 
 function CalendarTodoDetail({ todo, onClose }: { todo: Todo; onClose: () => void }): React.ReactElement {
@@ -1179,7 +1194,7 @@ function CalendarQuickCreatePopover({ open, anchor, draft, setDraft, groups, sav
   )
 }
 
-function CalendarEventFields({ draft, setDraft, groups, tags, todos, tagUsageCounts, onCreateTag, onRenameTag, onDeleteTag }: { draft: EventDraft; setDraft: React.Dispatch<React.SetStateAction<EventDraft>>; groups: Array<{ id: string; name: string }>; tags: PlanningTag[]; todos: Todo[]; tagUsageCounts: Map<string, number>; onCreateTag: (name: string) => Promise<PlanningTag | undefined>; onRenameTag: (tag: PlanningTag, name: string) => Promise<PlanningTag | undefined>; onDeleteTag: (tag: PlanningTag) => Promise<boolean> }): React.ReactElement {
+function CalendarEventFields({ draft, setDraft, groups, tags, todos, tagUsageCounts, teamMembers, showAssignee, onCreateTag, onRenameTag, onDeleteTag }: { draft: EventDraft; setDraft: React.Dispatch<React.SetStateAction<EventDraft>>; groups: Array<{ id: string; name: string }>; tags: PlanningTag[]; todos: Todo[]; tagUsageCounts: Map<string, number>; teamMembers: Array<{ id: string; displayName: string }>; showAssignee: boolean; onCreateTag: (name: string) => Promise<PlanningTag | undefined>; onRenameTag: (tag: PlanningTag, name: string) => Promise<PlanningTag | undefined>; onDeleteTag: (tag: PlanningTag) => Promise<boolean> }): React.ReactElement {
   const update = <K extends keyof EventDraft>(key: K, value: EventDraft[K]): void => setDraft((current) => ({ ...current, [key]: value }))
   const setAllDay = (allDay: boolean): void => setDraft((current) => {
     const startAt = allDay ? startOfDay(current.startAt) : current.startAt
@@ -1191,5 +1206,5 @@ function CalendarEventFields({ draft, setDraft, groups, tags, todos, tagUsageCou
     return { ...current, startAt: normalizedStartAt, endAt: current.endAt < normalizedStartAt ? (current.allDay ? nextDayStart(normalizedStartAt) : normalizedStartAt + DEFAULT_EVENT_DURATION) : current.endAt }
   })
   const setEnd = (endAt: number): void => setDraft((current) => ({ ...current, endAt: current.allDay ? nextDayStart(endAt) : endAt }))
-  return <div className="space-y-5"><div><label className="mb-2 block text-sm font-medium" htmlFor="calendar-event-title">标题</label><Input id="calendar-event-title" autoFocus value={draft.title} onChange={(event) => update('title', event.target.value)} placeholder="例如：产品评审" className="text-base" /></div><div className="flex items-center justify-between rounded-md border border-border/60 px-3 py-2"><div><p className="text-sm font-medium">全天</p><p className="text-xs text-muted-foreground">不占用具体小时段</p></div><input type="checkbox" checked={draft.allDay} onChange={(event) => setAllDay(event.target.checked)} className="size-4 accent-primary" /></div><div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-2 text-sm font-medium">开始<TodoDatePicker value={draft.startAt} onChange={(value) => { if (value !== undefined) setStart(value) }} dateOnly={draft.allDay} allowClear={false} timeRequired={!draft.allDay} label="选择开始日期时间" className="h-10 w-full justify-start rounded-none border border-border/60 bg-transparent px-3 text-foreground hover:bg-muted/40" /></label><label className="grid gap-2 text-sm font-medium">结束<TodoDatePicker value={draft.allDay ? Math.max(draft.startAt, previousDayStart(draft.endAt)) : draft.endAt} onChange={(value) => { if (value !== undefined) setEnd(value) }} dateOnly={draft.allDay} allowClear={false} timeRequired={!draft.allDay} label="选择结束日期时间" className="h-10 w-full justify-start rounded-none border border-border/60 bg-transparent px-3 text-foreground hover:bg-muted/40" /></label></div><div><label className="mb-2 block text-sm font-medium" htmlFor="calendar-event-notes">更多信息</label><Textarea id="calendar-event-notes" value={draft.notes} onChange={(event) => update('notes', event.target.value)} placeholder="补充地点、议程、会议链接或其他上下文；Agent 可以读取这里的内容。" className="min-h-28 resize-y" /></div><div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-2 text-sm font-medium">日程分组<Select value={draft.groupId} onValueChange={(value) => update('groupId', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">不分组</SelectItem>{groups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></label><label className="grid gap-2 text-sm font-medium">关联 Todo<Select value={draft.todoId} onValueChange={(value) => update('todoId', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">不关联 Todo</SelectItem>{todos.map((todo) => <SelectItem key={todo.id} value={todo.id}>{todo.title}</SelectItem>)}</SelectContent></Select></label></div><div><div className="mb-2 flex items-center justify-between"><p className="text-sm font-medium">标签</p><PlanningTagManager tags={tags} getUsageCount={(id) => tagUsageCounts.get(id) ?? 0} onCreate={onCreateTag} onRename={onRenameTag} onDelete={onDeleteTag} onCreated={(tag) => update('tagIds', draft.tagIds.includes(tag.id) ? draft.tagIds : [...draft.tagIds, tag.id])} /></div><div className="flex flex-wrap gap-1.5">{tags.length ? tags.map((tag) => { const selected = draft.tagIds.includes(tag.id); return <button key={tag.id} type="button" onClick={() => update('tagIds', selected ? draft.tagIds.filter((id) => id !== tag.id) : [...draft.tagIds, tag.id])} className={cn('rounded-md px-2 py-1 text-xs transition-colors', selected ? 'bg-primary text-primary-foreground' : 'bg-muted/60 text-muted-foreground hover:bg-muted')}>#{tag.name}</button> }) : <span className="text-xs text-muted-foreground">暂无标签，请先创建</span>}</div></div></div>
+  return <div className="space-y-5"><div><label className="mb-2 block text-sm font-medium" htmlFor="calendar-event-title">标题</label><Input id="calendar-event-title" autoFocus value={draft.title} onChange={(event) => update('title', event.target.value)} placeholder="例如：产品评审" className="text-base" /></div><div className="flex items-center justify-between rounded-md border border-border/60 px-3 py-2"><div><p className="text-sm font-medium">全天</p><p className="text-xs text-muted-foreground">不占用具体小时段</p></div><input type="checkbox" checked={draft.allDay} onChange={(event) => setAllDay(event.target.checked)} className="size-4 accent-primary" /></div><div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-2 text-sm font-medium">开始<TodoDatePicker value={draft.startAt} onChange={(value) => { if (value !== undefined) setStart(value) }} dateOnly={draft.allDay} allowClear={false} timeRequired={!draft.allDay} label="选择开始日期时间" className="h-10 w-full justify-start rounded-none border border-border/60 bg-transparent px-3 text-foreground hover:bg-muted/40" /></label><label className="grid gap-2 text-sm font-medium">结束<TodoDatePicker value={draft.allDay ? Math.max(draft.startAt, previousDayStart(draft.endAt)) : draft.endAt} onChange={(value) => { if (value !== undefined) setEnd(value) }} dateOnly={draft.allDay} allowClear={false} timeRequired={!draft.allDay} label="选择结束日期时间" className="h-10 w-full justify-start rounded-none border border-border/60 bg-transparent px-3 text-foreground hover:bg-muted/40" /></label></div><div><label className="mb-2 block text-sm font-medium" htmlFor="calendar-event-notes">更多信息</label><Textarea id="calendar-event-notes" value={draft.notes} onChange={(event) => update('notes', event.target.value)} placeholder="补充地点、议程、会议链接或其他上下文；Agent 可以读取这里的内容。" className="min-h-28 resize-y" /></div><div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-2 text-sm font-medium">日程分组<Select value={draft.groupId} onValueChange={(value) => update('groupId', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">不分组</SelectItem>{groups.map((group) => <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>)}</SelectContent></Select></label><label className="grid gap-2 text-sm font-medium">关联 Todo<Select value={draft.todoId} onValueChange={(value) => update('todoId', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">不关联 Todo</SelectItem>{todos.map((todo) => <SelectItem key={todo.id} value={todo.id}>{todo.title}</SelectItem>)}</SelectContent></Select></label>{showAssignee && <label className="grid gap-2 text-sm font-medium">负责人<Select value={draft.assigneeId} onValueChange={(value) => update('assigneeId', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">未指派</SelectItem>{teamMembers.map((member) => <SelectItem key={`event-assignee-${member.id}`} value={member.id}>{member.displayName}</SelectItem>)}</SelectContent></Select></label>}</div><div><div className="mb-2 flex items-center justify-between"><p className="text-sm font-medium">标签</p><PlanningTagManager tags={tags} getUsageCount={(id) => tagUsageCounts.get(id) ?? 0} onCreate={onCreateTag} onRename={onRenameTag} onDelete={onDeleteTag} onCreated={(tag) => update('tagIds', draft.tagIds.includes(tag.id) ? draft.tagIds : [...draft.tagIds, tag.id])} /></div><div className="flex flex-wrap gap-1.5">{tags.length ? tags.map((tag) => { const selected = draft.tagIds.includes(tag.id); return <button key={tag.id} type="button" onClick={() => update('tagIds', selected ? draft.tagIds.filter((id) => id !== tag.id) : [...draft.tagIds, tag.id])} className={cn('rounded-md px-2 py-1 text-xs transition-colors', selected ? 'bg-primary text-primary-foreground' : 'bg-muted/60 text-muted-foreground hover:bg-muted')}>#{tag.name}</button> }) : <span className="text-xs text-muted-foreground">暂无标签，请先创建</span>}</div></div></div>
 }
