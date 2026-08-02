@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Bot, CalendarDays, Check, ChevronRight, ExternalLink, Flag, ListTodo, Plus, Trash2 } from 'lucide-react'
+import { Bot, CalendarDays, Check, ChevronRight, Flag, ListTodo, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PLANNING_CONFLICT_ERROR } from '@profer/shared'
 import type { PlanningGroup, Todo } from '@profer/shared'
@@ -48,6 +48,7 @@ function PlanningStat({ label, value }: { label: string; value: number }): React
 
 export function PlanningView({ standalone = false }: { standalone?: boolean } = {}): React.ReactElement {
   const [tab, setTab] = useAtom(planningTabAtom)
+  const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
   const automations = useAtomValue(automationsAtom)
   const todos = useAtomValue(todosAtom)
   const todayEnd = endOfToday()
@@ -69,6 +70,17 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
     setPlanningTab('todos')
     setSelectedTodoId(nextPlannedTodo.id)
   }, [nextPlannedTodo, setPlanningTab, setSelectedTodoId])
+  const handleTabKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number): void => {
+    let nextIndex: number | undefined
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % TABS.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + TABS.length) % TABS.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = TABS.length - 1
+    if (nextIndex === undefined) return
+    event.preventDefault()
+    setTab(TABS[nextIndex].id)
+    tabButtonRefs.current[nextIndex]?.focus()
+  }, [setTab])
   const createAutomation = (): void => {
     let maxN = 0
     for (const automation of automations) {
@@ -86,12 +98,6 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
   const triggerCalendarCreate = React.useCallback(() => {
     requestCalendarCreate((count) => count + 1)
   }, [requestCalendarCreate])
-  const openPlanningWindow = React.useCallback((): void => {
-    void window.electronAPI.openPlanningWindow().catch((error) => {
-      console.error('[任务/日程] 打开独立窗口失败:', error)
-      toast.error('打开独立窗口失败')
-    })
-  }, [])
   useShortcut('new-session', React.useCallback(() => {
     if (tab === 'todos') triggerTodoCreate()
     else if (tab === 'calendar') triggerCalendarCreate()
@@ -107,18 +113,8 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
             <h1 className="text-2xl font-semibold tracking-tight text-wrap-balance">任务/日程</h1>
             {tab === 'todos' && <div className="titlebar-no-drag flex items-center gap-1.5 text-xs text-muted-foreground"><PlanningStat label="待完成" value={openTodoCount} /><PlanningStat label="今天" value={todayTodoCount} /><PlanningStat label="本周" value={weekTodoCount} /></div>}
           </div>
-          <p className="mt-1.5 text-sm text-muted-foreground">安排待办、日程与定时任务</p>
         </div>
         <div className="titlebar-no-drag flex items-center gap-2">
-          {!standalone && (
-            <button
-              type="button"
-              onClick={openPlanningWindow}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border/50 bg-card px-3.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted/60 active:scale-[0.98]"
-            >
-              <ExternalLink size={16} /> 独立窗口
-            </button>
-          )}
           {tab === 'todos' && (
             <button
               type="button"
@@ -152,8 +148,8 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
         </div>
       </header>
       <div className={cn('titlebar-no-drag flex w-full items-center justify-between gap-5', standalone ? 'px-5' : 'px-6 sm:px-8 xl:px-10')}>
-        <nav className="inline-flex shrink-0 rounded-2xl border border-border/40 bg-muted/45 p-1 shadow-sm" aria-label="任务日程视图">
-          {TABS.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={cn('min-h-9 rounded-xl px-3.5 text-sm transition-colors', tab === item.id ? 'bg-card font-semibold text-foreground shadow-sm ring-1 ring-border/35' : 'text-muted-foreground hover:bg-background/60 hover:text-foreground')}>{item.label}</button>)}
+        <nav className="inline-flex h-8 shrink-0 rounded-xl border border-border/40 bg-muted/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
+          {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-7 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-card font-semibold text-foreground shadow-sm ring-1 ring-border/35' : 'text-muted-foreground hover:bg-background/60 hover:text-foreground')}>{item.label}</button>)}
         </nav>
         {tab === 'todos' && <div className="flex min-w-0 items-center justify-end gap-2 text-sm text-muted-foreground"><span className="hidden shrink-0 sm:inline">{todayLabel}</span><span className="hidden h-3 w-px bg-border/70 sm:inline" />{nextPlannedTodo ? <button type="button" onClick={openNextPlannedTodo} className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-right transition-colors hover:bg-muted/55 hover:text-foreground" title={`查看：${nextPlannedTodo.title}`}><span className="shrink-0 text-xs">下一项</span><span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span><span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span></button> : <span className="text-xs sm:text-sm">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>}</div>}
       </div>
