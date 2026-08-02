@@ -49,6 +49,20 @@ describe('aggregateTaskItems statuses', () => {
     expect(items).toEqual([expect.objectContaining({ id: 'mcp-1', status: 'completed' })])
   })
 
+  test('uses the real task ID from an SDK MCP content envelope', () => {
+    const items = aggregateTaskItems([
+      activity('mcp__task-graph__proma_task_create', { subject: '结构化任务' }, {
+        toolUseId: 'tool-use-id-must-not-become-a-node-id',
+        result: JSON.stringify({
+          content: [{ type: 'text', text: JSON.stringify({ task: { id: 'mcp-1', subject: '结构化任务' } }) }],
+        }),
+      }),
+      activity('mcp__task-graph__proma_task_update', { taskId: 'mcp-1', status: 'completed' }),
+    ], false)
+
+    expect(items).toEqual([expect.objectContaining({ id: 'mcp-1', status: 'completed' })])
+  })
+
   test('falls back to the previous status for an unknown value', () => {
     const activities = [
       ...taskActivities('in_progress'),

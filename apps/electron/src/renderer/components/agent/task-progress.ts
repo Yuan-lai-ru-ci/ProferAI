@@ -48,6 +48,13 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
  */
 export function extractToolResultText(content: unknown): string | undefined {
   if (typeof content === 'string') return content
+
+  // MCP tool results may arrive either as the content-block array itself or
+  // serialized in the SDK envelope: `{ content: [{ type: 'text', text: '…' }] }`.
+  // Normalize both shapes before parsing the embedded task payload.
+  if (isRecord(content) && Array.isArray(content.content)) {
+    return extractToolResultText(content.content)
+  }
   if (!Array.isArray(content)) return undefined
 
   const text = content
