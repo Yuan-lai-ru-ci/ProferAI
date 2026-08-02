@@ -118,10 +118,13 @@ interface DagreLayout {
 }
 
 /**
- * 布局：连通子图用 dagre 分层，孤立节点（不参与任何依赖/分叉边）在其下方铺成网格。
- * - dagre rankdir=LR：被依赖节点在左、依赖方在右。
- * - 孤立节点若也丢给 dagre 会全挤进 rank 0 堆成一条长竖列（几十个独立任务时尤其糟），
- *   故单独抽出来按网格平铺，图才看得清。
+ * 布局：连通子图按分量用 dagre 分别布局（偏链分量竖排 TB、分支分量横排 LR），
+ * 孤立节点（不参与任何依赖/分叉边）在下方铺成网格。
+ *
+ * - dagre LR：被依赖节点在左、依赖方在右；TB：被依赖在上、依赖方在下。
+ * - 长依赖链（agent 拆任务最常见形态）若用 LR 会被横向拉成一根长条（实测 12 节点 ≈3800px 宽、高度为 0，
+ *   “一字排开”），故把偏链分量改为 TB 竖排，让流程从上往下、整条链一屏纵览。
+ * - 孤立节点若丢给 dagre 会全挤进 rank 0 堆成一条长竖列，故单独抽出按网格平铺。
  * - dagre 返回中心点坐标，转换为左上角供 foreignObject 使用。
  */
 function computeDagreLayout(graph: TaskGraph): DagreLayout {
@@ -139,60 +142,171 @@ function computeDagreLayout(graph: TaskGraph): DagreLayout {
   const isolatedIds = nodeIds.filter(id => !connectedIds.has(id))
 
   const positions: NodePosition[] = []
-  let connectedRight = CANVAS_PAD
-  let connectedBottom = CANVAS_PAD
+  let right = CANVAS_PAD
+  let bottom = CANVAS_PAD
 
-  // 连通子图：dagre 分层
-  if (connectedIds.size > 0) {
-    const g = new dagre.graphlib.Graph()
-    g.setGraph({
-      rankdir: 'LR',
-      nodesep: NODE_GAP_Y,
-      ranksep: LEVEL_GAP,
-      marginx: CANVAS_PAD,
-      marginy: CANVAS_PAD,
-    })
-    g.setDefaultEdgeLabel(() => ({}))
-    for (const id of connectedIds) g.setNode(id, { width: NODE_W, height: NODE_H })
-    // 依赖边：edges = {from:依赖方, to:被依赖方}，被依赖方在左 → setEdge(被依赖, 依赖)
-    for (const e of graph.edges) {
-      if (connectedIds.has(e.from) && connectedIds.has(e.to)) g.setEdge(e.to, e.from)
-    }
-    // 分叉边：forkEdges = {from:源, to:分叉}，源在左 → setEdge(源, 分叉)
-    for (const e of graph.forkEdges) {
-      if (connectedIds.has(e.from) && connectedIds.has(e.to)) g.setEdge(e.from, e.to)
-    }
-    dagre.layout(g)
-    for (const id of connectedIds) {
-      const n = g.node(id)
-      if (!n) continue
-      const x = n.x - NODE_W / 2
-      const y = n.y - NODE_H / 2
-      positions.push({ id, x, y })
-      connectedRight = Math.max(connectedRight, x + NODE_W)
-      connectedBottom = Math.max(connectedBottom, y + NODE_H)
-    }
+  // ---- 连通节点：按无向连通分量分组，逐分量独立布局 ----
+  const comps = findConnectedComponents(graph, connectedIds)
+  // 存储每个分量布局后的相对偏移（分量内坐标基准为 0,0）+ 尺寸
+  const laidComps: { offsets: Map<string, NodePosition>; width: number; height: number }[] = []
+
+  for (const comp of comps) {
+    const isChainLike = isChainLikeComponent(graph, comp)
+    const sub = layoutOneComponent(graph, comp, isChainLike)
+    if (sub) laidComps.push(sub)
   }
 
-  // 孤立节点：网格平铺（放在连通子图下方；若整图无边则占满画布）
-  let right = connectedRight
-  let bottom = connectedBottom
+  // 将各分量沿水平方向依次拼接（保持从左到右；若总宽超过一定阈值则换行，避免整体过宽）
+  const COMP_GAP = LEVEL_GAP * 1.5
+  let cursorX = CANVAS_PAD
+  let cursorY = CANVAS_PAD
+  let compMaxH = 0
+  // 预估拼合总宽，超过视口容忍宽度（约 3200px）就垂直堆叠换行，避免又宽又长
+  const MAX_COMPONENT_ROW_W = 3200
+  let rowW = 0
+
+  for (const c of laidComps) {
+    const wouldRowW = rowW + c.width + (rowW > 0 ? COMP_GAP : 0)
+    if (rowW > 0 && wouldRowW > MAX_COMPONENT_ROW_W) {
+      // 换行：新的一行列，从左侧重新开始，y 下移一行
+      cursorX = CANVAS_PAD
+      cursorY += compMaxH + COMP_GAP
+      rowW = 0
+      compMaxH = 0
+    }
+    const dx = cursorX + (rowW > 0 ? COMP_GAP : 0)
+    for (const pos of c.offsets.values()) {
+      positions.push({ id: pos.id, x: pos.x + dx, y: pos.y + cursorY })
+      right = Math.max(right, pos.x + dx + NODE_W)
+      bottom = Math.max(bottom, pos.y + cursorY + NODE_H)
+    }
+    rowW += c.width + (rowW > 0 ? COMP_GAP : 0)
+    compMaxH = Math.max(compMaxH, c.height)
+  }
+
+  // 孤立节点：网格平铺（放在全部连通分量下方；若整图无边则占满画布）
+  let gridTop = connectedIds.size > 0 ? bottom + LEVEL_GAP : CANVAS_PAD
+  let rightForGrid = connectedIds.size > 0 ? right : CANVAS_PAD
   if (isolatedIds.length > 0) {
     const cellW = NODE_W + GRID_GAP_X
     const cellH = NODE_H + GRID_GAP_Y
     // 列数略宽于高，避免又细又长；至少 1 列
     const cols = Math.max(1, Math.ceil(Math.sqrt(isolatedIds.length * 1.8)))
-    const gridTop = connectedIds.size > 0 ? connectedBottom + LEVEL_GAP : CANVAS_PAD
     isolatedIds.forEach((id, i) => {
       const x = CANVAS_PAD + (i % cols) * cellW
       const y = gridTop + Math.floor(i / cols) * cellH
       positions.push({ id, x, y })
-      right = Math.max(right, x + NODE_W)
+      rightForGrid = Math.max(rightForGrid, x + NODE_W)
       bottom = Math.max(bottom, y + NODE_H)
     })
   }
 
-  return { positions, width: right + CANVAS_PAD, height: bottom + CANVAS_PAD }
+  return { positions, width: rightForGrid + CANVAS_PAD, height: bottom + CANVAS_PAD }
+}
+
+/** 找出连通 nodes 的无向连通分量（基于依赖边 + 分叉边） */
+function findConnectedComponents(graph: TaskGraph, connected: Set<string>): string[][] {
+  const adj = new Map<string, Set<string>>()
+  const ensure = (id: string) => { if (!adj.has(id)) adj.set(id, new Set()) }
+  for (const id of connected) ensure(id)
+  const attach = (a: string, b: string) => {
+    if (!connected.has(a) || !connected.has(b)) return
+    ensure(a); ensure(b)
+    adj.get(a)!.add(b); adj.get(b)!.add(a)
+  }
+  for (const e of graph.edges) attach(e.from, e.to)
+  for (const e of graph.forkEdges) attach(e.from, e.to)
+
+  const seen = new Set<string>()
+  const comps: string[][] = []
+  for (const start of connected) {
+    if (seen.has(start)) continue
+    const comp: string[] = []
+    const stack = [start]
+    seen.add(start)
+    while (stack.length) {
+      const cur = stack.pop()!
+      comp.push(cur)
+      for (const nb of adj.get(cur) ?? []) {
+        if (!seen.has(nb)) { seen.add(nb); stack.push(nb) }
+      }
+    }
+    comps.push(comp)
+  }
+  return comps
+}
+
+/**
+ * 判断一个连通分量是否“偏链”（适合 TB 竖排）：
+ * 节点度（依赖+分叉构成的无向度）≤2 的占比高、且链有足够长度时，LR 会横向拉成长条，改竖排更佳。
+ */
+function isChainLikeComponent(graph: TaskGraph, comp: string[]): boolean {
+  // 少于 5 个节点就算拉平也短，无需竖排
+  if (comp.length < 5) return false
+  const compSet = new Set(comp)
+  const degree = new Map<string, number>()
+  for (const id of comp) degree.set(id, 0)
+  const bump = (a: string, b: string) => {
+    if (compSet.has(a) && compSet.has(b)) {
+      degree.set(a, (degree.get(a) ?? 0) + 1)
+      degree.set(b, (degree.get(b) ?? 0) + 1)
+    }
+  }
+  for (const e of graph.edges) bump(e.from, e.to)
+  for (const e of graph.forkEdges) bump(e.from, e.to)
+
+  let lowDeg = 0
+  for (const [_, d] of degree) if (d <= 2) lowDeg++
+  const chainRatio = lowDeg / comp.length
+  // 偏链判断：低度节点占比高（无复杂分支）才竖排，避免破坏真正的树状/网状横排视觉
+  return chainRatio >= 0.7
+}
+
+/** 对单个连通分量 dagre 布局，返回相对偏移（基准 0,0）与尺寸 */
+function layoutOneComponent(
+  graph: TaskGraph,
+  comp: string[],
+  isChainLike: boolean,
+): { offsets: Map<string, NodePosition>; width: number; height: number } | null {
+  if (comp.length === 0) return null
+  const compSet = new Set(comp)
+  const g = new dagre.graphlib.Graph()
+  // 偏链分量竖排（长链从上往下），否则横排（分支/网状从左到右）
+  g.setGraph({
+    rankdir: isChainLike ? 'TB' : 'LR',
+    nodesep: isChainLike ? LEVEL_GAP : NODE_GAP_Y,
+    ranksep: isChainLike ? NODE_GAP_Y : LEVEL_GAP,
+    marginx: 0,
+    marginy: 0,
+  })
+  g.setDefaultEdgeLabel(() => ({}))
+  for (const id of comp) g.setNode(id, { width: NODE_W, height: NODE_H })
+  for (const e of graph.edges) {
+    if (compSet.has(e.from) && compSet.has(e.to)) {
+      // 依赖边：edges = {from:依赖方, to:被依赖方}，被依赖方在左/上 → setEdge(被依赖, 依赖)
+      g.setEdge(e.to, e.from)
+    }
+  }
+  for (const e of graph.forkEdges) {
+    if (compSet.has(e.from) && compSet.has(e.to)) g.setEdge(e.from, e.to)
+  }
+  dagre.layout(g)
+
+  const offsets = new Map<string, NodePosition>()
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const id of comp) {
+    const n = g.node(id)
+    if (!n) continue
+    const x = n.x - NODE_W / 2
+    const y = n.y - NODE_H / 2
+    offsets.set(id, { id, x, y })
+    minX = Math.min(minX, x); minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + NODE_W); maxY = Math.max(maxY, y + NODE_H)
+  }
+  // 平移到 0 基准，方便拼接（避免 dagre margin 平移带回偏）
+  const norm = new Map<string, NodePosition>()
+  for (const pos of offsets.values()) norm.set(pos.id, { id: pos.id, x: pos.x - minX, y: pos.y - minY })
+  return { offsets: norm, width: maxX - minX, height: maxY - minY }
 }
 
 // ===== SVG 连线（思维导图风格：依赖→被依赖 左→右） =====
@@ -216,20 +330,46 @@ const FORK_LINE_COLOR = '#fbbf24'
 function computeEdges(graph: TaskGraph, positions: NodePosition[]): EdgeData[] {
   const posMap = new Map(positions.map(p => [p.id, p]))
 
-  // 左节点右边缘 → 右节点左边缘 的贝塞尔曲线
+  // 贝塞尔连线：按两端相对位置自适应方向。
+  // - 目标在源右侧（横排 LR）→ 从左节点右边缘连向右节点左边缘（水平贝塞尔）
+  // - 目标在源下方（竖排 TB）→ 从上节点底边缘连向下节点顶边缘（垂直贝塞尔）
+  // 这样无论连通分量用 LR 还是 TB，连线都能贴着卡片边缘自然引出。
   const makeEdge = (
-    leftId: string, rightId: string, lineColor: string, isFork: boolean,
+    srcId: string, tgtId: string, lineColor: string, isFork: boolean,
   ): EdgeData | null => {
-    const leftPos = posMap.get(leftId)
-    const rightPos = posMap.get(rightId)
-    if (!leftPos || !rightPos) return null
-    const x1 = leftPos.x + NODE_W
-    const y1 = leftPos.y + NODE_H / 2
-    const x2 = rightPos.x
-    const y2 = rightPos.y + NODE_H / 2
+    const srcPos = posMap.get(srcId)
+    const tgtPos = posMap.get(tgtId)
+    if (!srcPos || !tgtPos) return null
+    const srcCx = srcPos.x + NODE_W / 2
+    const srcCy = srcPos.y + NODE_H / 2
+    const tgtCx = tgtPos.x + NODE_W / 2
+    const tgtCy = tgtPos.y + NODE_H / 2
+    // 垂直差更显著（或右侧距离很近，基本同列但上下排布）→ 竖排连线
+    const useVertical = Math.abs(tgtCy - srcCy) > Math.abs(tgtCx - srcCx)
+
+    if (useVertical) {
+      // 上节点底边缘 → 下节点顶边缘，垂直贝塞尔（控制点沿垂直方向凸出）
+      const top = srcCy < tgtCy ? srcPos : tgtPos
+      const bottom = srcCy < tgtCy ? tgtPos : srcPos
+      const x1 = top.x + NODE_W / 2
+      const y1 = top.y + NODE_H
+      const x2 = bottom.x + NODE_W / 2
+      const y2 = bottom.y
+      const cy = (y1 + y2) / 2
+      const d = `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`
+      return { from: srcId, to: tgtId, d, x1, y1, x2, y2, lineColor, isFork }
+    }
+
+    // 左节点右边缘 → 右节点左边缘，水平贝塞尔
+    const left = srcCx < tgtCx ? srcPos : tgtPos
+    const right = srcCx < tgtCx ? tgtPos : srcPos
+    const x1 = left.x + NODE_W
+    const y1 = left.y + NODE_H / 2
+    const x2 = right.x
+    const y2 = right.y + NODE_H / 2
     const cx = (x1 + x2) / 2
     const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`
-    return { from: leftId, to: rightId, d, x1, y1, x2, y2, lineColor, isFork }
+    return { from: srcId, to: tgtId, d, x1, y1, x2, y2, lineColor, isFork }
   }
 
   const result: EdgeData[] = []
@@ -585,22 +725,30 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
     return () => window.removeEventListener('wheel', onWheel, { capture: true })
   }, [])
 
-  // 初始镜头：定位到第一个 in_progress（否则 pending）节点
+  // 初始镜头：自动适配全图 + 居中（若图能一屏放下则全貌可见，避免"长链一字排开看不到头"）
   const initialCameraSet = React.useRef(false)
   React.useEffect(() => {
     if (initialCameraSet.current || !layout || positions.length === 0 || !containerRef.current) return
-    const activeNode = positions.find(p => {
-      const n = graph?.nodes[p.id]
-      return n && (n.status === 'in_progress' || n.status === 'pending')
-    })
-    if (!activeNode) return
     const rect = containerRef.current.getBoundingClientRect()
-    const cx = rect.width / 2 - activeNode.x - NODE_W / 2
-    const cy = rect.height / 2 - activeNode.y - NODE_H / 2
+    if (rect.width <= 0 || rect.height <= 0) return
+
+    // 布局中心点（相对画板）
+    const layoutCx = layout.width / 2
+    const layoutCy = layout.height / 2
+
+    // fit 比例：让整张图适配容器（水平取最小，避免被框边裁掉），并限制最小可读缩放
+    const fitScale = Math.max(
+      MIN_SCALE,
+      Math.min(rect.width / layout.width, rect.height / layout.height),
+    )
+    // 拖拽/平移到布局中心
+    const cx = rect.width / 2 - layoutCx * fitScale
+    const cy = rect.height / 2 - layoutCy * fitScale
+    setScale(fitScale)
     setTx(cx)
     setTy(cy)
     initialCameraSet.current = true
-  }, [layout, positions, graph])
+  }, [layout, positions])
 
   // 平移（拖拽）— 点击空白区域同时关闭选中
   const handleMouseDown = React.useCallback((e: React.MouseEvent) => {
