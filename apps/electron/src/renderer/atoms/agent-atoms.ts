@@ -11,6 +11,11 @@ import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, Re
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
+import {
+  DEFAULT_TEAM_WORKSPACE_LAYOUT_MODE,
+  TEAM_WORKSPACE_LAYOUT_MODE_STORAGE_KEY,
+  type TeamWorkspaceLayoutMode,
+} from '@/lib/team-layout-mode'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -331,6 +336,12 @@ export const agentSidePanelWidthAtom = atomWithStorage<number>('profer-agent-sid
 
 /** 团队工作区 Agent 侧栏宽度（用户拖拽后持久化） */
 export const teamAgentPanelWidthAtom = atomWithStorage<number>('profer-team-agent-panel-width', 360)
+
+/** 团队工作区主布局（文件 / 对话），用户选择后持久化 */
+export const teamWorkspaceLayoutModeAtom = atomWithStorage<TeamWorkspaceLayoutMode>(
+  TEAM_WORKSPACE_LAYOUT_MODE_STORAGE_KEY,
+  DEFAULT_TEAM_WORKSPACE_LAYOUT_MODE,
+)
 
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())

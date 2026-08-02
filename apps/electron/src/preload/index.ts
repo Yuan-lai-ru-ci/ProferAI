@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -1297,6 +1297,17 @@ export interface ElectronAPI {
     listTeamSkills: (workspaceId: string) => Promise<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>
     installTeamSkill: (input: { workspaceId: string; skillSlug: string; targetWorkspaceSlug: string }) => Promise<{ success: boolean; skillSlug: string }>
     checkForUpdates: (workspaceSlug: string) => Promise<Array<import('@profer/shared').SkillMeta>>
+  }
+
+  // ===== 团队共享知识记忆 =====
+  teamMemory: {
+    list: (workspaceId: string, includeArchived?: boolean) => Promise<TeamMemoryApiResult<Array<Omit<TeamMemoryDocument, 'content'>>>>
+    read: (workspaceId: string, memoryId: string) => Promise<TeamMemoryApiResult<TeamMemoryDocument>>
+    create: (workspaceId: string, input: { path: string; title: string; content: string; changeSummary?: string }) => Promise<TeamMemoryApiResult<TeamMemoryDocument>>
+    update: (workspaceId: string, memoryId: string, input: { expectedVersion: number; path?: string; title?: string; content?: string; changeSummary?: string }) => Promise<TeamMemoryApiResult<TeamMemoryDocument>>
+    listRevisions: (workspaceId: string, memoryId: string) => Promise<TeamMemoryApiResult<TeamMemoryRevision[]>>
+    archive: (workspaceId: string, memoryId: string) => Promise<TeamMemoryApiResult<TeamMemoryDocument>>
+    unarchive: (workspaceId: string, memoryId: string) => Promise<TeamMemoryApiResult<TeamMemoryDocument>>
   }
 
   // ===== 团队文件操作 =====
@@ -3029,6 +3040,17 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.INSTALL_TEAM_SKILL, input),
     checkForUpdates: (workspaceSlug: string) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.CHECK_FOR_UPDATES, workspaceSlug),
+  },
+
+  // ===== 团队共享知识记忆 =====
+  teamMemory: {
+    list: (workspaceId: string, includeArchived?: boolean) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.LIST, workspaceId, includeArchived),
+    read: (workspaceId: string, memoryId: string) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.READ, workspaceId, memoryId),
+    create: (workspaceId: string, input: { path: string; title: string; content: string; changeSummary?: string }) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.CREATE, workspaceId, input),
+    update: (workspaceId: string, memoryId: string, input: { expectedVersion: number; path?: string; title?: string; content?: string; changeSummary?: string }) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.UPDATE, workspaceId, memoryId, input),
+    listRevisions: (workspaceId: string, memoryId: string) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.LIST_REVISIONS, workspaceId, memoryId),
+    archive: (workspaceId: string, memoryId: string) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.ARCHIVE, workspaceId, memoryId),
+    unarchive: (workspaceId: string, memoryId: string) => ipcRenderer.invoke(TEAM_MEMORY_IPC_CHANNELS.UNARCHIVE, workspaceId, memoryId),
   },
 
   // ===== 团队文件操作 =====

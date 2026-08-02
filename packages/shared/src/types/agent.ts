@@ -1858,6 +1858,47 @@ export const TEAM_FILE_IPC_CHANNELS = {
   PURGE_TRASH: 'team-file:purge-trash',
 } as const
 
+/** 团队共享知识记忆文档。个人工作区记忆不使用此类型。 */
+export interface TeamMemoryDocument {
+  id: string
+  path: string
+  title: string
+  content: string
+  version: number
+  createdBy: string
+  updatedBy: string
+  createdAt: number
+  updatedAt: number
+  archivedAt?: number
+}
+
+export interface TeamMemoryRevision {
+  id: string
+  version: number
+  changeSummary: string
+  editedBy: string
+  editedAt: number
+}
+
+export interface TeamMemoryApiResult<T> {
+  ok: boolean
+  status?: number
+  data?: T
+  error?: string
+  conflict?: { code: 'TEAM_MEMORY_VERSION_CONFLICT'; current: TeamMemoryDocument }
+}
+
+/** 团队共享知识记忆 IPC 通道。 */
+export const TEAM_MEMORY_IPC_CHANNELS = {
+  LIST: 'team-memory:list',
+  READ: 'team-memory:read',
+  CREATE: 'team-memory:create',
+  UPDATE: 'team-memory:update',
+  LIST_REVISIONS: 'team-memory:list-revisions',
+  ARCHIVE: 'team-memory:archive',
+  UNARCHIVE: 'team-memory:unarchive',
+} as const
+
 /** 团队文件回收站中的一项（仅 Owner/Admin 的治理界面使用）。 */
 export interface TeamTrashEntry {
   id: string

@@ -35,6 +35,7 @@ import { getTeamAuthWithRefresh } from './auth-service'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectKbMcpServer } from './kb-agent-tools'
+import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
 import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
 import {
@@ -883,6 +884,9 @@ export class AgentOrchestrator {
         sessionId,
         workspaceId,
       })
+      if (workspace?.type === 'team') {
+        await injectTeamMemoryMcpServer(sdk, mcpServers, { workspaceId })
+      }
       await injectAgentCollaborationMcpServer(sdk, mcpServers, {
         sessionId,
         channelId,
@@ -961,6 +965,7 @@ export class AgentOrchestrator {
               modelId,
               agentRuntime,
               workspaceId,
+              isTeamWorkspace: workspace?.type === 'team',
               workspaceSlug,
               permissionMode: initialPermissionMode,
               triggeredBy: input.triggeredBy,
@@ -1209,6 +1214,7 @@ export class AgentOrchestrator {
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,
         isPiRuntime: agentRuntime === 'pi',
+        isTeamWorkspace: workspace?.type === 'team',
       }) + attachedDirectoriesPrompt + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const piSystemPrompt = systemPromptAppend
       const piRuntimeEnv = buildAgentRuntimeEnv({

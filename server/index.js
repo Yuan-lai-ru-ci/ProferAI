@@ -71,6 +71,7 @@ import { heartbeatRoutes } from './src/routes/heartbeat.js'
 import { eventRoutes } from './src/routes/events.js'
 import { planningRoutes } from './src/routes/planning.js'
 import { announcementRoutes } from './src/routes/announcements.js'
+import { teamMemoryRoutes } from './src/routes/team-memories.js'
 import { adminUsers } from './src/routes/admin/users.js'
 import { adminChannels } from './src/routes/admin/channels.js'
 import { adminCredits } from './src/routes/admin/credits.js'
@@ -141,6 +142,7 @@ app.route('/v1/workspaces', fileMetadataRoutes)
 app.route('/v1/workspaces', eventRoutes)
 app.route('/v1/workspaces', planningRoutes)
 app.route('/v1/workspaces', announcementRoutes)
+app.route('/v1/workspaces', teamMemoryRoutes)
 app.route('/v1/heartbeat', heartbeatRoutes)
 
 // Admin 路由（需要 auth + admin 双重鉴权）
