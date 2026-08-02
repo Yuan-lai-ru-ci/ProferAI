@@ -34,3 +34,17 @@ test('创建者与负责人相同只收到一条，确认不会影响其他成�
     assert.equal(listActiveDeliveries(db, 'ws', 'owner').length, 0)
   } finally { db.close() }
 })
+
+test('origin=todo_due_at 的自动完工提醒与手动提醒一样会被正常到期投递', () => {
+  const db = setup()
+  try {
+    // 追加一条 origin='todo_due_at' 的自动完工提醒，模拟“团队 todo 基于 due_at 自动生成的提醒”。
+    db.prepare("INSERT INTO planning_reminders(workspace_id,id,target_type,target_id,trigger_at,origin,created_by,created_at,updated_at) VALUES ('ws','r2','todo','todo',1000,'todo_due_at','author',?,?)").run(1000, 1000)
+    const first = dispatchDuePlanningReminders(db, 1000)
+    // r1(manual) + r2(todo_due_at) 都应各投递给作者和负责人
+    assert.equal(first.length, 4)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM planning_reminder_deliveries').get().n, 4)
+    // 再次扫描不重复投递
+    assert.equal(dispatchDuePlanningReminders(db, 2000).length, 0)
+  } finally { db.close() }
+})

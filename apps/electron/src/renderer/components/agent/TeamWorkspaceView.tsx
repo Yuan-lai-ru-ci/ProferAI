@@ -71,6 +71,9 @@ function isTeamFileTransfer(dataTransfer: DataTransfer): boolean {
 const MIN_TEAM_AGENT_PANEL_WIDTH = 300
 const MAX_TEAM_AGENT_PANEL_WIDTH = 640
 
+/** 新建团队记忆的哨兵值：与"未打开编辑器(undefined)"区分，使新建也要能触发编辑器渲染。 */
+const NEW_TEAM_MEMORY_SENTINEL = '__new_team_memory__'
+
 function clampTeamAgentPanelWidth(width: number): number {
   return Math.max(MIN_TEAM_AGENT_PANEL_WIDTH, Math.min(MAX_TEAM_AGENT_PANEL_WIDTH, width))
 }
@@ -1998,7 +2001,7 @@ export function TeamWorkspaceView(): React.ReactElement {
           workspaceId={teamId || ''}
           contextTab={contextTab}
           onContextTabChange={setContextTab}
-          onEditMemory={(memoryId) => setEditingMemoryId(memoryId)}
+          onEditMemory={(memoryId) => setEditingMemoryId(memoryId ?? NEW_TEAM_MEMORY_SENTINEL)}
           collapsed={layoutMode === 'chat' && contextRailCollapsed}
           onExpand={() => setContextRailCollapsed(false)}
           onCollapse={() => setContextRailCollapsed(true)}
@@ -2091,7 +2094,7 @@ export function TeamWorkspaceView(): React.ReactElement {
           </div>
           <div className="flex-1 min-h-0 flex flex-col titlebar-no-drag">
             {editingMemoryId !== undefined ? (
-              <TeamMemoryEditor workspaceId={teamId || ''} memoryId={editingMemoryId || undefined} onClose={() => setEditingMemoryId(undefined)} />
+              <TeamMemoryEditor workspaceId={teamId || ''} memoryId={editingMemoryId === NEW_TEAM_MEMORY_SENTINEL ? undefined : editingMemoryId} onClose={() => setEditingMemoryId(undefined)} />
             ) : teamAgentTabId ? (
               <CompactModelSelectorCtx.Provider value={true}>
                 <div className="flex-1 min-h-0"><TabContent tabId={teamAgentTabId} /></div>
