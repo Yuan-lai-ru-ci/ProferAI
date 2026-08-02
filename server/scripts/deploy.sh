@@ -67,7 +67,11 @@ if [ "${1:-}" = "--dry-run" ]; then
   TMP_VOL="${CONTAINER}-dryrun-data"
   docker rm -f "$TMP_CONTAINER" >/dev/null 2>&1 || true
   log "临时容器 ${TMP_CONTAINER} 在端口 ${DRYRUN_PORT} 起新镜像（全新空数据卷）..."
-  docker run -d --name "$TMP_CONTAINER" --env-file .env -e PORT=3456 \
+  # 显式 DATA_DIR：.env 若带历史 DB_PATH 相对路径，默认 cwd 不一定可写，
+  # 会让 dry-run 在迁移前 SQLITE_CANTOPEN 而误报新镜像不可启动。
+  # 新 volume 的挂载根目录由 Docker 以 root 创建；dry-run 只验证镜像启动，
+  # 因此以 root 初始化临时空库，正式容器仍使用 compose 的持久卷权限。
+  docker run -d --user root --name "$TMP_CONTAINER" --env-file .env -e PORT=3456 -e DATA_DIR=/app/data -e DB_PATH=/app/data/proma-team.db \
     -p "${DRYRUN_PORT}:3456" -v "${TMP_VOL}:/app/data" "${IMAGE}:latest" >/dev/null \
     || fail "临时容器启动失败"
   if wait_healthy "$TMP_CONTAINER" "$HEALTH_TIMEOUT"; then

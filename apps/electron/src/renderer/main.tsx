@@ -397,37 +397,40 @@ function PlanningInitializer(): null {
   const setTodoGroups = useSetAtom(todoPlanningGroupsAtom)
   const setCalendarGroups = useSetAtom(calendarPlanningGroupsAtom)
   const setTags = useSetAtom(planningTagsAtom)
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const isTeamWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.type === 'team'
 
   useEffect(() => {
     let disposed = false
     const latestRequest = { todos: 0, calendarEvents: 0, todoGroups: 0, calendarGroups: 0, tags: 0 }
     const loadTodos = (): void => {
       const requestId = ++latestRequest.todos
-      void window.electronAPI.listTodos().then((todos) => {
+      void window.electronAPI.listTodos(isTeamWorkspace && currentWorkspaceId ? { workspaceId: currentWorkspaceId } : undefined).then((todos) => {
         if (!disposed && requestId === latestRequest.todos) setTodos(todos)
       }).catch((error: unknown) => console.error('[任务/日程] 加载 Todo 失败:', error))
     }
     const loadCalendarEvents = (): void => {
       const requestId = ++latestRequest.calendarEvents
-      void window.electronAPI.listCalendarEvents().then((events) => {
+      void window.electronAPI.listCalendarEvents(isTeamWorkspace && currentWorkspaceId ? { workspaceId: currentWorkspaceId } : undefined).then((events) => {
         if (!disposed && requestId === latestRequest.calendarEvents) setCalendarEvents(events)
       }).catch((error: unknown) => console.error('[任务/日程] 加载日程失败:', error))
     }
     const loadTodoGroups = (): void => {
       const requestId = ++latestRequest.todoGroups
-      void window.electronAPI.listPlanningGroups('todo').then((groups) => {
+      void window.electronAPI.listPlanningGroups('todo', isTeamWorkspace ? currentWorkspaceId ?? undefined : undefined).then((groups) => {
         if (!disposed && requestId === latestRequest.todoGroups) setTodoGroups(groups)
       }).catch((error: unknown) => console.error('[任务/日程] 加载 Todo 分组失败:', error))
     }
     const loadCalendarGroups = (): void => {
       const requestId = ++latestRequest.calendarGroups
-      void window.electronAPI.listPlanningGroups('calendar').then((groups) => {
+      void window.electronAPI.listPlanningGroups('calendar', isTeamWorkspace ? currentWorkspaceId ?? undefined : undefined).then((groups) => {
         if (!disposed && requestId === latestRequest.calendarGroups) setCalendarGroups(groups)
       }).catch((error: unknown) => console.error('[任务/日程] 加载日程分组失败:', error))
     }
     const loadTags = (): void => {
       const requestId = ++latestRequest.tags
-      void window.electronAPI.listPlanningTags().then((tags) => {
+      void window.electronAPI.listPlanningTags(isTeamWorkspace ? currentWorkspaceId ?? undefined : undefined).then((tags) => {
         if (!disposed && requestId === latestRequest.tags) setTags(tags)
       }).catch((error: unknown) => console.error('[任务/日程] 加载标签失败:', error))
     }
@@ -440,9 +443,20 @@ function PlanningInitializer(): null {
       if (includes('tags')) loadTags()
     }
     load()
+    // TeamWorkspaceView normally负责连接 SSE；规划中心改走 MainArea 后仍需显式建立连接。
+    if (isTeamWorkspace && currentWorkspaceId) {
+      void window.electronAPI.sse.connect(currentWorkspaceId).catch((error) => console.error('[团队规划] SSE 连接失败:', error))
+    }
     const unsubscribe = window.electronAPI.onPlanningChanged((change) => load(change.resources))
-    return () => { disposed = true; unsubscribe() }
-  }, [setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
+    // 团队规划的远端改动从 Team Server SSE 到达；仅刷新当前团队工作区，
+    // 本地规划仍沿用主进程 planning:changed 广播。
+    const unsubscribeSse = window.electronAPI.sse.onEvent((workspaceId, event) => {
+      if (!isTeamWorkspace || workspaceId !== currentWorkspaceId || event.type !== 'planning_changed') return
+      const data = event.data as { resources?: string[] }
+      load(data.resources)
+    })
+    return () => { disposed = true; unsubscribe(); unsubscribeSse() }
+  }, [currentWorkspaceId, isTeamWorkspace, setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
 
   return null
 }

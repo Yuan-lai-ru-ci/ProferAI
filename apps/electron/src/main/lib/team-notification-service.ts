@@ -17,6 +17,7 @@ export interface NotificationSettings {
   memberJoin: boolean
   memberLeave: boolean
   invitation: boolean
+  planningReminder: boolean
 }
 
 const DEFAULT_SETTINGS: NotificationSettings = {
@@ -26,6 +27,7 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   memberJoin: true,
   memberLeave: false,
   invitation: true,
+  planningReminder: true,
 }
 
 // ===== 通知服务 =====
@@ -203,6 +205,15 @@ class TeamNotificationService {
           }
         }
         return { title: '', body: '' }
+      }
+      case 'planning_reminder_due': {
+        if (!this.settings.planningReminder) return { title: '', body: '' }
+        const recipientId = data.recipientId as string | undefined
+        if (recipientId && recipientId !== this.currentUserId) return { title: '', body: '' }
+        return {
+          title: '📌 团队事项提醒',
+          body: (data.targetTitle as string) || '有团队事项到期',
+        }
       }
       case 'invitation_changed': {
         if (!this.settings.invitation) return { title: '', body: '' }

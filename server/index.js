@@ -69,6 +69,7 @@ import { fileRoutes } from './src/routes/files.js'
 import { fileMetadataRoutes } from './src/routes/file-metadata.js'
 import { heartbeatRoutes } from './src/routes/heartbeat.js'
 import { eventRoutes } from './src/routes/events.js'
+import { planningRoutes } from './src/routes/planning.js'
 import { announcementRoutes } from './src/routes/announcements.js'
 import { adminUsers } from './src/routes/admin/users.js'
 import { adminChannels } from './src/routes/admin/channels.js'
@@ -138,6 +139,7 @@ app.route('/v1/sync', syncRoutes)
 app.route('/v1/workspaces', fileRoutes)
 app.route('/v1/workspaces', fileMetadataRoutes)
 app.route('/v1/workspaces', eventRoutes)
+app.route('/v1/workspaces', planningRoutes)
 app.route('/v1/workspaces', announcementRoutes)
 app.route('/v1/heartbeat', heartbeatRoutes)
 

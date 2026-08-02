@@ -14,6 +14,7 @@ import {
 import { readFileSync, existsSync, rmSync } from 'node:fs'
 import { join as pathJoin } from 'node:path'
 import { purgeExpiredTrash } from './team-files/trash-service.js'
+import { dispatchDuePlanningReminders } from './team-planning/reminder-service.js'
 
 /** 每日 drip 累加补偿器：每日幂等，重启后可安全补跑。 */
 export function runDailyDripAccrual(now = Date.now()) {
@@ -166,7 +167,19 @@ export function startSchedulers() {
     } catch (err) { console.warn('[回收站] 到期清理失败:', err.message) }
   }, 60 * 60 * 1000).unref())
 
-  // 8. 订阅到期降级（每 1 小时）
+  // 8. 团队规划提醒：服务端统一判定到期，事务内幂等创建创建者/负责人的用户级投递。
+  try {
+    const dispatched = dispatchDuePlanningReminders(db)
+    if (dispatched.length) console.log(`[团队规划] 启动补发 ${dispatched.length} 条提醒投递`)
+  } catch (err) { console.warn('[团队规划] 启动提醒扫描失败:', err.message) }
+  timers.push(setInterval(() => {
+    try {
+      const dispatched = dispatchDuePlanningReminders(db)
+      if (dispatched.length) console.log(`[团队规划] 已投递 ${dispatched.length} 条到期提醒`)
+    } catch (err) { console.warn('[团队规划] 提醒扫描失败:', err.message) }
+  }, 30 * 1000).unref())
+
+  // 9. 订阅到期降级（每 1 小时）
   timers.push(setInterval(() => {
     try {
       const expired = db.prepare(
@@ -188,15 +201,15 @@ export function startSchedulers() {
     }
   }, 60 * 60 * 1000).unref())
 
-  // 8. 周 drip 跨周补偿清理：启动时立即补跑，之后每小时执行；按 week key 幂等。
+  // 10. 周 drip 跨周补偿清理：启动时立即补跑，之后每小时执行；按 week key 幂等。
   runWeeklyDripCleanup()
   timers.push(setInterval(() => runWeeklyDripCleanup(), 60 * 60 * 1000).unref())
 
-  // 9. 每日 drip 累加：启动时补跑，之后每小时检查；按日期幂等。
+  // 11. 每日 drip 累加：启动时补跑，之后每小时检查；按日期幂等。
   runDailyDripAccrual()
   timers.push(setInterval(() => runDailyDripAccrual(), 60 * 60 * 1000).unref())
 
-  console.log(`[scheduler] 已启动 10 个定时任务`)
+  console.log(`[scheduler] 已启动 11 个定时任务`)
 
   return {
     stop() {
