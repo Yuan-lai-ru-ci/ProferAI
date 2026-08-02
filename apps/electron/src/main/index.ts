@@ -716,7 +716,8 @@ async function bootstrap(): Promise<void> {
           }
           console.log(`[启动] 团队工作区同步完成: ${(teamWs as unknown[]).length} 个`)
         }).catch((err: unknown) => {
-          console.error('[启动] 团队工作区同步失败:', err)
+          // 同步失败绝不能清空本地团队索引；保留上一次成功结果，下一次启动/登录会再试。
+          console.error('[启动] 团队工作区同步失败（已保留本地团队列表）:', err)
         })
       }, 3000)
     } else if (getAuthStatus().isLoggedIn) {
@@ -736,7 +737,8 @@ async function bootstrap(): Promise<void> {
           }
           console.log(`[启动] 团队工作区同步完成: ${(teamWs as unknown[]).length} 个`)
         }).catch((err: unknown) => {
-          console.error('[启动] 团队工作区同步失败:', err)
+          // 同步失败绝不能清空本地团队索引；保留上一次成功结果，下一次启动/登录会再试。
+          console.error('[启动] 团队工作区同步失败（已保留本地团队列表）:', err)
         })
       }, 3000)
     }

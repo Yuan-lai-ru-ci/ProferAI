@@ -100,7 +100,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const activeView = useAtomValue(activeViewAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
-  const showTeamWorkspaceView = isTeamWorkspace && appMode === 'agent' && activeView !== 'agent-skills'
+  // 团队工作区的默认 Agent 页仍展示文件主区；规划中心必须进入 MainArea，
+  // 否则 TeamWorkspaceView 会覆盖其中的 PlanningView。
+  const showTeamWorkspaceView = isTeamWorkspace && appMode === 'agent' && activeView !== 'agent-skills' && activeView !== 'planning'
 
   // 窗口标题设为用户名
   React.useEffect(() => {

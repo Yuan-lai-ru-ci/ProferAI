@@ -55,15 +55,12 @@ async function authedFetch(
 
 /** 列出当前用户的团队工作区（远程） */
 export async function listTeamWorkspaces(includeDeleted = false): Promise<AgentWorkspace[]> {
-  try {
-    const query = includeDeleted ? '?include_deleted=true' : ''
-    const res = await authedFetch(`/v1/workspaces${query}`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return (await res.json()) as AgentWorkspace[]
-  } catch (err) {
-    console.error('[团队] 列出团队工作区失败:', err)
-    return []
-  }
+  const query = includeDeleted ? '?include_deleted=true' : ''
+  const res = await authedFetch(`/v1/workspaces${query}`)
+  if (!res.ok) throw new Error(`列出团队工作区失败: HTTP ${res.status}`)
+  const result = await res.json()
+  if (!Array.isArray(result)) throw new Error('列出团队工作区失败: 服务端响应格式非法')
+  return result as AgentWorkspace[]
 }
 
 /** 创建团队工作区 */

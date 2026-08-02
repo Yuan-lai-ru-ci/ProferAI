@@ -646,7 +646,7 @@ export function TeamWorkspaceSettings(): React.ReactElement {
 /** 通知设置行（内嵌组件） */
 function NotificationSettingsRow(): React.ReactElement {
   const [settings, setSettings] = React.useState<{
-    enabled: boolean; fileUpload: boolean; fileDelete: boolean; memberJoin: boolean; memberLeave: boolean; invitation: boolean
+    enabled: boolean; fileUpload: boolean; fileDelete: boolean; memberJoin: boolean; memberLeave: boolean; invitation: boolean; planningReminder?: boolean
   } | null>(null)
 
   React.useEffect(() => {
@@ -683,6 +683,10 @@ function NotificationSettingsRow(): React.ReactElement {
         <label className="flex items-center justify-between py-0.5">
           <span className="text-xs text-muted-foreground">文件删除</span>
           <input type="checkbox" checked={settings.fileDelete} onChange={(e) => toggle('fileDelete', e.target.checked)} disabled={!settings.enabled} className="rounded" />
+        </label>
+        <label className="flex items-center justify-between py-0.5">
+          <span className="text-xs text-muted-foreground">团队事项到期</span>
+          <input type="checkbox" checked={settings.planningReminder ?? true} onChange={(e) => toggle('planningReminder', e.target.checked)} disabled={!settings.enabled} className="rounded" />
         </label>
         <label className="flex items-center justify-between py-0.5">
           <span className="text-xs text-muted-foreground">新成员加入</span>

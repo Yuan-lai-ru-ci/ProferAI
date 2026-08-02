@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -1188,26 +1188,26 @@ export interface ElectronAPI {
   // ===== 任务 / 日程（Planning）=====
   /** 打开或聚焦单例独立任务/日程窗口。 */
   openPlanningWindow: () => Promise<void>
-  listTodos: () => Promise<Todo[]>
+  listTodos: (input?: TodoListQuery & { workspaceId?: string }) => Promise<Todo[]>
   createTodo: (input: CreateTodoInput) => Promise<Todo>
   startTodoAgent: (input: StartTodoAgentInput) => Promise<StartTodoAgentResult>
   updateTodo: (input: UpdateTodoInput) => Promise<Todo | undefined>
-  deleteTodo: (id: string) => Promise<boolean>
-  listCalendarEvents: () => Promise<CalendarEvent[]>
+  deleteTodo: (id: string, workspaceId?: string) => Promise<boolean>
+  listCalendarEvents: (input?: CalendarEventListQuery & { workspaceId?: string }) => Promise<CalendarEvent[]>
   createCalendarEvent: (input: CreateCalendarEventInput) => Promise<CalendarEvent>
   updateCalendarEvent: (input: UpdateCalendarEventInput) => Promise<CalendarEvent | undefined>
-  deleteCalendarEvent: (id: string) => Promise<boolean>
-  listPlanningGroups: (scope: PlanningGroupScope) => Promise<PlanningGroup[]>
+  deleteCalendarEvent: (id: string, workspaceId?: string) => Promise<boolean>
+  listPlanningGroups: (scope: PlanningGroupScope, workspaceId?: string) => Promise<PlanningGroup[]>
   createPlanningGroup: (input: CreatePlanningGroupInput) => Promise<PlanningGroup>
   updatePlanningGroup: (input: UpdatePlanningGroupInput) => Promise<PlanningGroup | undefined>
-  deletePlanningGroup: (scope: PlanningGroupScope, id: string) => Promise<boolean>
-  listPlanningTags: () => Promise<PlanningTag[]>
+  deletePlanningGroup: (scope: PlanningGroupScope, id: string, workspaceId?: string) => Promise<boolean>
+  listPlanningTags: (workspaceId?: string) => Promise<PlanningTag[]>
   createPlanningTag: (input: CreatePlanningTagInput) => Promise<PlanningTag>
   updatePlanningTag: (input: UpdatePlanningTagInput) => Promise<PlanningTag | undefined>
-  deletePlanningTag: (id: string) => Promise<boolean>
-  listActivePlanningReminders: () => Promise<ActivePlanningReminder[]>
-  acknowledgePlanningReminder: (id: string) => Promise<PlanningReminder | undefined>
-  snoozePlanningReminder: (input: SnoozePlanningReminderInput) => Promise<PlanningReminder | undefined>
+  deletePlanningTag: (id: string, workspaceId?: string) => Promise<boolean>
+  listActivePlanningReminders: (workspaceId?: string) => Promise<ActivePlanningReminder[]>
+  acknowledgePlanningReminder: (id: string, workspaceId?: string) => Promise<PlanningReminder | undefined>
+  snoozePlanningReminder: (input: SnoozePlanningReminderInput, workspaceId?: string) => Promise<PlanningReminder | undefined>
   onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => () => void
   onPlanningChanged: (callback: (change: PlanningChange) => void) => () => void
   onPlanningAgentOperation: (callback: (operation: PlanningAgentOperation) => void) => () => void
@@ -2852,26 +2852,26 @@ const electronAPI: ElectronAPI = {
 
   // ===== 任务 / 日程（Planning）=====
   openPlanningWindow: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.OPEN_WINDOW),
-  listTodos: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TODOS),
+  listTodos: (input?: TodoListQuery & { workspaceId?: string }) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TODOS, input),
   createTodo: (input: CreateTodoInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_TODO, input),
   startTodoAgent: (input: StartTodoAgentInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.START_TODO_AGENT, input),
   updateTodo: (input: UpdateTodoInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_TODO, input),
-  deleteTodo: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TODO, id),
-  listCalendarEvents: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS),
+  deleteTodo: (id: string, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TODO, id, workspaceId),
+  listCalendarEvents: (input?: CalendarEventListQuery & { workspaceId?: string }) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS, input),
   createCalendarEvent: (input: CreateCalendarEventInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_CALENDAR_EVENT, input),
   updateCalendarEvent: (input: UpdateCalendarEventInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_CALENDAR_EVENT, input),
-  deleteCalendarEvent: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_CALENDAR_EVENT, id),
-  listPlanningGroups: (scope: PlanningGroupScope) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_GROUPS, scope),
+  deleteCalendarEvent: (id: string, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_CALENDAR_EVENT, id, workspaceId),
+  listPlanningGroups: (scope: PlanningGroupScope, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_GROUPS, scope, workspaceId),
   createPlanningGroup: (input: CreatePlanningGroupInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_GROUP, input),
   updatePlanningGroup: (input: UpdatePlanningGroupInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_GROUP, input),
-  deletePlanningGroup: (scope: PlanningGroupScope, id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_GROUP, scope, id),
-  listPlanningTags: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TAGS),
+  deletePlanningGroup: (scope: PlanningGroupScope, id: string, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_GROUP, scope, id, workspaceId),
+  listPlanningTags: (workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TAGS, workspaceId),
   createPlanningTag: (input: CreatePlanningTagInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_TAG, input),
   updatePlanningTag: (input: UpdatePlanningTagInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_TAG, input),
-  deletePlanningTag: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TAG, id),
-  listActivePlanningReminders: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS),
-  acknowledgePlanningReminder: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, id),
-  snoozePlanningReminder: (input: SnoozePlanningReminderInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, input),
+  deletePlanningTag: (id: string, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_TAG, id, workspaceId),
+  listActivePlanningReminders: (workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS, workspaceId),
+  acknowledgePlanningReminder: (id: string, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, id, workspaceId),
+  snoozePlanningReminder: (input: SnoozePlanningReminderInput, workspaceId?: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, input, workspaceId),
   onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => {
     const listener = (_: unknown, reminders: ActivePlanningReminder[]): void => callback(reminders)
     ipcRenderer.on(PLANNING_IPC_CHANNELS.REMINDER_DUE, listener)
