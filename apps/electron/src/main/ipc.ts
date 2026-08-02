@@ -11,7 +11,7 @@ import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSyn
 import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
@@ -248,6 +248,7 @@ import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
+import { listTeamMemories, readTeamMemory, createTeamMemory, updateTeamMemory, listTeamMemoryRevisions, archiveTeamMemory } from './lib/team-memory-service'
 import type { CleanupOptions } from './lib/storage-service'
 import {
   listAgentWorkspaces,
@@ -6142,6 +6143,14 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(TEAM_FILE_IPC_CHANNELS.LIST_TRASH, async (_, workspaceId: string) => listTrashEntries(workspaceId))
   ipcMain.handle(TEAM_FILE_IPC_CHANNELS.RESTORE_TRASH, async (_, workspaceId: string, entryId: string) => restoreTrashEntry(workspaceId, entryId))
   ipcMain.handle(TEAM_FILE_IPC_CHANNELS.PURGE_TRASH, async (_, workspaceId: string, entryId: string) => purgeTrashEntry(workspaceId, entryId))
+
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.LIST, async (_, workspaceId: string, includeArchived?: boolean) => listTeamMemories(workspaceId, includeArchived))
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.READ, async (_, workspaceId: string, memoryId: string) => readTeamMemory(workspaceId, memoryId))
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.CREATE, async (event, workspaceId: string, input) => { assertSensitiveAgentIpcSender(event); return createTeamMemory(workspaceId, input) })
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.UPDATE, async (event, workspaceId: string, memoryId: string, input) => { assertSensitiveAgentIpcSender(event); return updateTeamMemory(workspaceId, memoryId, input) })
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.LIST_REVISIONS, async (_, workspaceId: string, memoryId: string) => listTeamMemoryRevisions(workspaceId, memoryId))
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.ARCHIVE, async (event, workspaceId: string, memoryId: string) => { assertSensitiveAgentIpcSender(event); return archiveTeamMemory(workspaceId, memoryId, true) })
+  ipcMain.handle(TEAM_MEMORY_IPC_CHANNELS.UNARCHIVE, async (event, workspaceId: string, memoryId: string) => { assertSensitiveAgentIpcSender(event); return archiveTeamMemory(workspaceId, memoryId, false) })
 
   // ===== 通用个人资料库相关 =====
 
