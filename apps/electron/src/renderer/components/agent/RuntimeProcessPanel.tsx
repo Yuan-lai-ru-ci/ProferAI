@@ -13,6 +13,16 @@ import * as React from 'react'
 import { Loader2, Terminal, X, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { useAtom } from 'jotai'
 import { cn } from '@/lib/utils'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { sdkBackgroundTasksAtomFamily } from '@/atoms/agent-atoms'
 import type { SessionProcessInfo, SDKBackgroundTaskSummary } from '@profer/shared'
 
@@ -51,6 +61,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const [rows, setRows] = React.useState<MergedRow[]>([])
   const [loading, setLoading] = React.useState(false)
   const [killing, setKilling] = React.useState<string | null>(null)
+  const [pendingKill, setPendingKill] = React.useState<MergedRow | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
   const refresh = React.useCallback(async () => {
@@ -97,8 +108,6 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const handleKill = React.useCallback(
     async (row: MergedRow) => {
       if (!row.proc?.pid || !row.proc.startTime) return
-      const location = row.proc.cwd ? `\n项目目录：${row.proc.cwd}` : ''
-      if (!window.confirm(`确定结束进程 ${row.proc.pid}（${row.proc.name}）？${location}\n将先尝试优雅停止；若超时，才强制结束整棵进程树。`)) return
       setKilling(row.proc.sdkTaskId ?? String(row.proc.pid))
       setError(null)
       try {
@@ -115,6 +124,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
         setError(e instanceof Error ? e.message : 'kill 失败')
       } finally {
         setKilling(null)
+        setPendingKill(null)
       }
     },
     [sessionId, refresh],
@@ -197,7 +207,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
                     type="button"
                     disabled={isKilling}
                     className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                    onClick={() => void handleKill(row)}
+                    onClick={() => setPendingKill(row)}
                   >
                     {isKilling ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />}
                     {isKilling ? '结束中' : '结束'}
@@ -210,6 +220,33 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
           })}
         </div>
       )}
+
+      <AlertDialog open={pendingKill !== null} onOpenChange={(open) => !open && setPendingKill(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>结束运行服务？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将先尝试优雅停止；若超时，才会强制结束整棵进程树。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {pendingKill?.proc && (
+            <div className="space-y-1 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
+              <div><span className="text-muted-foreground">进程：</span>{pendingKill.proc.name}（PID {pendingKill.proc.pid}）</div>
+              {pendingKill.proc.cwd && <div className="break-all"><span className="text-muted-foreground">项目目录：</span>{pendingKill.proc.cwd}</div>}
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={killing !== null}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!pendingKill || killing !== null}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => pendingKill && void handleKill(pendingKill)}
+            >
+              {killing ? '结束中…' : '结束服务'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }
