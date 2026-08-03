@@ -129,7 +129,13 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const count = rows.length
 
   return (
-    <section className={cn('border-b border-border/50', className)} aria-label="运行服务">
+    <section
+      className={cn(
+        'relative -mb-3 rounded-t-[17px] rounded-b-xl border-[0.5px] border-border bg-muted/25 pb-3 shadow-sm',
+        className,
+      )}
+      aria-label="运行服务"
+    >
       <div className="flex h-9 items-center gap-2 px-4 text-xs text-foreground/65">
         <button type="button" onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 hover:text-foreground">
           {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -142,7 +148,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
         </button>
       </div>
       {error && <div className="border-t border-border/40 px-4 py-1.5 text-[11px] text-destructive">{error}</div>}
-      {open && <div className="border-t border-border/40">
+      {open && <div className="border-t border-border/40 pb-3">
         {rows.map((row, i) => {
           const isLoadingRow = killing === (row.proc?.sdkTaskId ?? String(row.proc?.pid ?? i))
           const isOwned = row.proc?.source === 'pi-owned'
