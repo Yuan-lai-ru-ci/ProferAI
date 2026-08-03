@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@profer/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult } from '@profer/shared'
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -1078,6 +1078,18 @@ export interface BackgroundTask {
  */
 export const backgroundTasksAtomFamily = atomFamily((sessionId: string) =>
   atom<BackgroundTask[]>([])
+)
+
+/**
+ * SDK 后台任务摘要原子家族（result 消息携带的 background_tasks）
+ *
+ * SDK 的 result 消息会携带 background_tasks（含 command/status/type），
+ * 用于「会话内显示在跑什么后台任务/命令」。按 sessionId 隔离。
+ * 与 backgroundTasksAtomFamily 的区别：前者是 agent/shell 抽象任务事件，
+ * 这里是 SDK 在 result 时给的更完整后台任务摘要（可含 command）。
+ */
+export const sdkBackgroundTasksAtomFamily = atomFamily((sessionId: string) =>
+  atom<SDKBackgroundTaskSummary[]>([])
 )
 
 // ===== Graph 追问状态 =====
