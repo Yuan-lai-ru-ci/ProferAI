@@ -110,6 +110,53 @@ export async function isSameProcess(pid: number, expectStartTime?: number): Prom
 }
 
 /**
+ * 按会话工作目录枚举该目录下运行中的真实进程（不依赖 SDK background_tasks）。
+ *
+ * 用 Get-CimInstance 枚举全部进程，筛掉本进程自身与无关项，保留满足以下任一条件的：
+ *  - CommandLine 包含 sessionPath（dev server 等工作目录在会话内）
+ *  - 或监听端口（后续可并入端口信息）
+ * 用后台任务/tool 无关，纯 OS 视角，能补到 SDK 未标记为后台的真实 dev server。
+ */
+export async function listSessionDirProcesses(sessionPath: string): Promise<MonitoredProcess[]> {
+  if (!sessionPath) return []
+  const portPids = await listPortPidMapWin()
+  const out = await psAsync(
+    'Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine,@{N="cts";E={$_.CreationDate.ToString("o")}} | ConvertTo-Json -Compress',
+  )
+  if (!out) return []
+  const results: MonitoredProcess[] = []
+  try {
+    const arr = JSON.parse(out)
+    const items = Array.isArray(arr) ? arr : [arr]
+    const normPath = sessionPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    for (const it of items) {
+      const pid = Number(it.ProcessId)
+      if (Number.isNaN(pid) || pid <= 0 || pid === process.pid) continue
+      const cmd = it.CommandLine ?? ''
+      const lowCmd = cmd.replace(/\\/g, '/').toLowerCase()
+      // 只关心与开发/脚本相关的进程，避免把系统进程都列进来
+      if (!lowCmd.includes(normPath)) continue
+      // 排除本应用自身进程（Profer node/electron）避免噪音
+      if (lowCmd.includes('claude-agent-sdk') && !lowCmd.includes(normPath)) continue
+      let startTime: number | undefined
+      if (it.cts) {
+        const t = Math.floor(new Date(it.cts).getTime())
+        if (!Number.isNaN(t)) startTime = t
+      }
+      // 该进程监听的端口
+      const ports: number[] = []
+      for (const [port, pids] of portPids) {
+        if (pids.includes(pid)) ports.push(port)
+      }
+      results.push({ pid, name: it.Name ?? '', cmd, startTime, ports })
+    }
+  } catch {
+    /* 忽略 */
+  }
+  return results
+}
+
+/**
  * 把 SDK 后台任务（type:'shell'）匹配到真实 OS 进程。
  * 优先「端口命中」（command 含端口 → 该端口监听 pid），端口缺失退化为命令首关键字+node 匹配。
  */

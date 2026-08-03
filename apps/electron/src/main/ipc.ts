@@ -242,7 +242,7 @@ import {
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
-import { mapSdkShellTasks, isSameProcess, killProcessTree, type MonitoredProcess } from './lib/process-monitor'
+import { mapSdkShellTasks, listSessionDirProcesses, isSameProcess, killProcessTree, type MonitoredProcess } from './lib/process-monitor'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
@@ -2324,14 +2324,26 @@ export function registerIpcHandlers(): void {
   )
 
   // 列出会话关联的运行中真实 OS 进程（进程视图）
-  // 入参携带渲染层从 SDK result 抽取的 sdkShellTasks（type:'shell' 的 command 含端口），
-  // 由主进程用 mapSdkShellTasks 匹配到真实 PID/端口。
+  // 主通道：按会话工作目录 sessionPath 枚举真实进程（不管 SDK 是否标记后台）。
+  // 辅通道：SDK 后台任务（type:'shell'）匹配，补齐目录枚举遗漏的。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES,
     async (event, input: ListSessionProcessesInput): Promise<SessionProcessInfo[]> => {
       assertSensitiveAgentIpcSender(event)
-      const matched: MonitoredProcess[] = await mapSdkShellTasks(input.sessionId, input.sdkShellTasks ?? [])
-      return matched.map((m) => ({
+      const results = new Map<number, MonitoredProcess>()
+      // ① 按会话目录枚举真实进程（主通道）
+      if (input.sessionPath) {
+        const byDir = await listSessionDirProcesses(input.sessionPath)
+        for (const p of byDir) {
+          results.set(p.pid, { ...p, sessionId: input.sessionId })
+        }
+      }
+      // ② SDK 后台任务匹配（辅通道）
+      const bySdk = await mapSdkShellTasks(input.sessionId, input.sdkShellTasks ?? [])
+      for (const p of bySdk) {
+        if (!results.has(p.pid)) results.set(p.pid, p)
+      }
+      return [...results.values()].map((m) => ({
         pid: m.pid,
         name: m.name,
         cmd: m.cmd,
