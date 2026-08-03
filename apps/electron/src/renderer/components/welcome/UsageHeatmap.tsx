@@ -115,16 +115,33 @@ export function UsageHeatmap({ workspaceId }: UsageHeatmapProps = {}): React.Rea
   const [entries, setEntries] = React.useState<WorkspaceHeatmapEntry[] | null>(null)
   const [loading, setLoading] = React.useState(true)
 
+  const refresh = React.useCallback(
+    (opts?: { silent?: boolean }) => {
+      if (!targetWorkspaceId) {
+        setLoading(false)
+        return
+      }
+      if (!opts?.silent) setLoading(true)
+      window.electronAPI.getWorkspaceHeatmapDaily(targetWorkspaceId)
+        .then((d) => setEntries(d))
+        .catch(() => setEntries((prev) => prev ?? []))
+        .finally(() => setLoading(false))
+    },
+    [targetWorkspaceId],
+  )
+
+  // 首次挂载 + 工作区切换时拉取
   React.useEffect(() => {
-    if (!targetWorkspaceId) { setLoading(false); return }
-    let cancelled = false
-    setLoading(true)
-    window.electronAPI.getWorkspaceHeatmapDaily(targetWorkspaceId)
-      .then(d => { if (!cancelled) setEntries(d) })
-      .catch(() => { if (!cancelled) setEntries([]) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [targetWorkspaceId])
+    refresh()
+  }, [refresh])
+
+  // 页面停留期间也保持实时：60s 静默轮询，让热力图跟上当天/会话的最新用量
+  // （旧实现只在 mount 时拉一次，长时间停留在欢迎页时热力图不变）。
+  React.useEffect(() => {
+    if (!targetWorkspaceId) return
+    const timer = window.setInterval(() => refresh({ silent: true }), 60_000)
+    return () => window.clearInterval(timer)
+  }, [refresh, targetWorkspaceId])
 
   // ── 加载态 ──
   if (loading) {

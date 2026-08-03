@@ -257,7 +257,7 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
                     ${isActive
                       ? 'bg-primary text-primary-foreground shadow-sm'
                       : hasAnswer
-                        ? 'bg-primary/15 text-primary'
+                        ? 'ask-user-question-tab-answered bg-primary/15 text-primary'
                         : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground'
                     }
                   `}

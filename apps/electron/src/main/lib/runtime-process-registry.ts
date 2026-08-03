@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRuntimeProcessesPath } from './config-paths'
-import { isSameProcess, listPortPidMapWin, listProcessesWin, listSessionDirProcesses, type MonitoredProcess } from './process-monitor'
+import { extractRequestedPort, isSameProcess, listPortPidMapWin, listProcessesWin, type MonitoredProcess } from './process-monitor'
 
 /**
  * Persisted ownership records for long-running services launched by a runtime.
@@ -107,9 +107,12 @@ export function registerPendingPiRuntimeProcess(
   data.records.push(record)
   save(data)
   // A follow-up observation catches detached/nohup children even when the user
-  // never opens the panel at precisely the right moment.
-  const timer = setTimeout(() => { void listOwnedRuntimeProcesses(sessionId) }, 2_000)
-  timer.unref?.()
+  // never opens the panel at precisely the right moment. Scheduling is coalesced
+  // per session: high-frequency bash calls during a run create many observations
+  // in a short window, but each is a full OS process scan (multiple PowerShell
+  // queries). A single debounced timer per session refreshes all pending records
+  // in one pass instead of launching N concurrent scans.
+  scheduleNextObservation(sessionId)
   return record
 }
 
@@ -119,9 +122,8 @@ function commandTokens(command: string): string[] {
 }
 
 function requestedPort(command: string): number | undefined {
-  const match = command.match(/(?:--port|-p)\s+(\d{2,5})\b/i)
-  const port = match ? Number(match[1]) : undefined
-  return port && port > 0 && port <= 65535 ? port : undefined
+  // 统一走 process-monitor 的健壮端口提取（锚定 + 范围校验），避免两处端口解析策略分叉。
+  return extractRequestedPort(command)
 }
 
 function compatible(record: RuntimeProcessRecord, process: MonitoredProcess): boolean {
@@ -135,45 +137,131 @@ function compatible(record: RuntimeProcessRecord, process: MonitoredProcess): bo
   return tokens.length === 0 || tokens.some((token) => cmd.includes(token))
 }
 
+/** 每个 sessionId 的合并观测定时器；同一会话短窗口内多次登记只复用一个 timer。 */
+const observationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const OBSERVE_DELAY_MS = 2_000
+/** 单次调度的最大追踪轮次，防止 pending 迟迟不确认时无限自续（不会并发，是串行节流）。 */
+const MAX_TRACK_ATTEMPTS = 6
+
+/**
+ * 合并调度一次会话观测：同一 sessionId 的 pending 定时器幂等（短窗口内的
+ * 多个 spawn 只触发一轮扫描）。timer 触发时一次性刷新该会话所有 pending 记录。
+ * 若扫描后仍有未确认的 pending 记录，则有限次数地自续追踪（confirmed/likelyService
+ * 才有必要跟踪 detached/nohup 子进程；纯短命令会被 60s 窗口自动清理）。
+ */
+function scheduleNextObservation(sessionId: string, tracks = 0): void {
+  const existing = observationTimers.get(sessionId)
+  if (existing) return // already scheduled; coalesce into the pending pass
+  const timer = setTimeout(async () => {
+    observationTimers.delete(sessionId)
+    try {
+      const pending = await listOwnedRuntimeProcesses(sessionId)
+      // 只要还有未确认的服务型记录就继续有限追踪，捕获 detached/nohup 子进程。
+      const stillTracking = pending.some((r) => r.status === 'pending' && r.likelyService)
+      if (stillTracking && tracks + 1 < MAX_TRACK_ATTEMPTS) {
+        scheduleNextObservation(sessionId, tracks + 1)
+      }
+    } catch {
+      // 观测失败不抛：不注册表崩溃，也不影响后续手动刷新。
+    }
+  }, OBSERVE_DELAY_MS)
+  // 不阻止进程退出，避免长会话期间的孤儿定时器阻碍 Electron 收尾。
+  if (typeof timer.ref === 'function' && typeof timer.unref === 'function') timer.unref()
+  observationTimers.set(sessionId, timer)
+}
+
+/**
+ * 把一条 pending 记录与共享的 OS 进程快照匹配（端口证据优先，其次 cwd 内命令关键字）。
+ * @param portPids  本次调用共享的「端口 → 监听 pid」映射（避免逐记录重复查询）
+ * @param processes 本次调用共享的「pid → name/cmd/startTime」全量映射
+ */
+export function matchRecordAgainstSnapshot(
+  record: RuntimeProcessRecord,
+  portPids: Map<number, number[]>,
+  processes: Map<number, { name: string; cmd: string; startTime?: number }>,
+): { pid: number; startTime?: number; ports: number[] } | undefined {
+  const port = requestedPort(record.command)
+  // 显式端口是最强的归属证据：其子命令可能不含项目路径，且避免误选同目录 wrapper。
+  if (port !== undefined) {
+    for (const pid of portPids.get(port) ?? []) {
+      const info = processes.get(pid)
+      if (info && compatible(record, { pid, ...info, ports: [port] })) {
+        return { pid, startTime: info.startTime, ports: [port] }
+      }
+    }
+    return undefined
+  }
+  // 无显式端口时退化为 cwd 内命令关键字匹配（等价于按会话工作目录枚举，但复用共享快照）。
+  const normPath = record.cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  for (const [pid, info] of processes) {
+    if (pid === process.pid) continue // 排除本应用自身进程，避免噪音
+    const lowCmd = info.cmd.replace(/\\/g, '/').toLowerCase()
+    if (!lowCmd.includes(normPath)) continue
+    if (lowCmd.includes('claude-agent-sdk') && !lowCmd.includes(normPath)) continue
+    if (compatible(record, { pid, ...info, ports: [] })) {
+      return { pid, startTime: info.startTime, ports: [] }
+    }
+  }
+  return undefined
+}
+
 /** Refresh records using only their launch-time cwd and command evidence; never scans arbitrary directories. */
 export async function listOwnedRuntimeProcesses(sessionId: string): Promise<RuntimeProcessRecord[]> {
   const data = load()
   const now = Date.now()
+  const pending = data.records.filter(
+    (r) => r.sessionId === sessionId && r.status !== 'exited',
+  ).filter((r) => !(r.pid && r.startTime))
+  // 已确认 pid 的记录：只做双因子防转世校验（单条 PowerShell/记录，无法合并）。
+  const confirmed = data.records.filter((r) => r.sessionId === sessionId && r.pid && r.startTime && r.status !== 'exited')
   let changed = false
-  for (const record of data.records.filter((r) => r.sessionId === sessionId && r.status !== 'exited')) {
-    if (record.pid && record.startTime && await isSameProcess(record.pid, record.startTime)) {
-      record.lastObservedAt = now
-      continue
-    }
-    const [candidates, portPids, processes] = await Promise.all([
-      listSessionDirProcesses(record.cwd), listPortPidMapWin(), listProcessesWin(),
-    ])
-    const port = requestedPort(record.command)
-    // A listener on the explicitly requested port is direct ownership evidence.
-    // Its child command may not contain the project path, so obtain it from the
-    // global PID map instead of accidentally selecting a same-directory wrapper.
-    const listener = port === undefined ? undefined : (portPids.get(port) ?? [])
-      .map((pid) => {
-        const info = processes.get(pid)
-        return info ? { pid, ...info, ports: [port] } satisfies MonitoredProcess : undefined
-      })
-      .find((p): p is MonitoredProcess => p !== undefined && compatible(record, p))
-    // If the caller requested a port, do not fall back to fuzzy command matches:
-    // a concurrently running agent command can contain the same tokens.
-    const found = port === undefined ? candidates.find((p) => compatible(record, p)) : listener
-    if (found) {
-      record.pid = found.pid
-      record.startTime = found.startTime
-      record.ports = found.ports
-      record.status = 'running'
-      record.lastObservedAt = now
-      changed = true
-    } else if (record.pid) {
-      record.status = 'exited'
-      record.lastObservedAt = now
-      changed = true
+
+  // 尚未定位到 pid 的记录：一次性拉取共享快照（端口表 + 全量进程表），在 JS 内过滤。
+  if (pending.length > 0) {
+    const [portPids, processes] = await Promise.all([listPortPidMapWin(), listProcessesWin()])
+    for (const record of pending) {
+      const found = matchRecordAgainstSnapshot(record, portPids, processes)
+      if (found) {
+        record.pid = found.pid
+        record.startTime = found.startTime
+        record.ports = found.ports
+        record.status = 'running'
+        record.lastObservedAt = now
+        changed = true
+      }
     }
   }
+
+  // 已确认 pid 且仍健在的记录：双因子校验通过则跳过；失效的收集后统一重匹配。
+  // 先批量做 isSameProcess，再把所有失效记录用「一次共享快照」重匹配，避免多条失效
+  // 记录各自拉一遍全量 PowerShell 快照（并发扩倍）。
+  const deadOnes: { record: RuntimeProcessRecord }[] = []
+  for (const record of confirmed) {
+    if (await isSameProcess(record.pid!, record.startTime)) {
+      record.lastObservedAt = now
+    } else {
+      deadOnes.push({ record })
+    }
+  }
+  if (deadOnes.length > 0) {
+    const [portPids, processes] = await Promise.all([listPortPidMapWin(), listProcessesWin()])
+    for (const { record } of deadOnes) {
+      const refound = matchRecordAgainstSnapshot(record, portPids, processes)
+      if (refound) {
+        record.pid = refound.pid
+        record.startTime = refound.startTime
+        record.ports = refound.ports
+        record.status = 'running'
+        record.lastObservedAt = now
+        changed = true
+      } else {
+        record.status = 'exited'
+        record.lastObservedAt = now
+        changed = true
+      }
+    }
+  }
+
   // Unknown/short commands are observations, not permanent UI clutter. Known
   // service commands get a longer window because they may daemonize slowly.
   const kept = data.records.filter((r) => {
