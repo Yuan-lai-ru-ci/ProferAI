@@ -1066,6 +1066,36 @@ export interface MoveSessionToWorkspaceInput {
   targetWorkspaceId: string
 }
 
+/**
+ * 会话关联的运行进程视图项（进程视图 IPC 返回）
+ */
+export interface SessionProcessInfo {
+  pid: number
+  name: string
+  cmd: string
+  /** 启动时间戳（ms），用于 PID 转世双因子校验 */
+  startTime?: number
+  /** 该进程监听的端口 */
+  ports: number[]
+  /** 关联的 SDK 后台任务 id（type:'shell'） */
+  sdkTaskId?: string
+}
+
+/** 列出会话运行进程的输入 */
+export interface ListSessionProcessesInput {
+  sessionId: string
+  /** 该会话的 SDK 后台任务摘要（含 type:'shell' 的 command），由渲染层从 result 抽取 */
+  sdkShellTasks: SDKBackgroundTaskSummary[]
+}
+
+/** 结束会话关联进程树的输入 */
+export interface KillProcessInput {
+  sessionId: string
+  pid: number
+  /** 期望的进程启动时间戳，用于 PID 转世双因子防误杀；缺失则拒绝 */
+  startTime?: number
+}
+
 /** Fork（分叉）会话输入 */
 export interface ForkSessionInput {
   /** Profer 会话 ID */
@@ -1518,6 +1548,10 @@ export const AGENT_IPC_CHANNELS = {
   SEARCH_SESSION_REFERENCES: 'agent:search-session-references',
   /** 迁移会话到另一个工作区 */
   MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
+  /** 列出会话关联的运行中的真实 OS 进程（进程视图） */
+  LIST_SESSION_PROCESSES: 'agent:list-session-processes',
+  /** 结束/终止会话关联的进程树（kill） */
+  KILL_PROCESS: 'agent:kill-process',
   /** 分叉会话（从指定消息处创建新会话） */
   FORK_SESSION: 'agent:fork-session',
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
