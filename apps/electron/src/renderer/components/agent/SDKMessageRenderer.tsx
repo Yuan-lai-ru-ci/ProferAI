@@ -1445,7 +1445,9 @@ export function MessageGroupRenderer({ group, allMessages, historicalTaskSubject
   if (group.type === 'system') {
     const subtype = group.message.subtype
     if (subtype === 'compact_boundary') return <div data-message-id={groupId}><CompactBoundaryDivider /></div>
-    if (subtype === 'compacting') return <div data-message-id={groupId}><CompactingIndicator /></div>
+    // `compacting` remains in the message stream to drive live state, but its sole
+    // visible indicator is rendered at the list tail by AgentMessages from isCompacting.
+    if (subtype === 'compacting') return null
     if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
     return null
   }
