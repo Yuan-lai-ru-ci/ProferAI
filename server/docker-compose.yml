@@ -28,6 +28,8 @@ services:
       - NODE_ENV=production
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@proma.local}
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-524288000}
+      # JSON/非文件请求体上限（图片识别等转发的请求体，如 base64 图片会膨胀，默认 1MB 过小）
+      - MAX_BODY_SIZE=${MAX_BODY_SIZE:-52428800}
       # === Paperpipe Bridge（生产必须配置密钥；默认 50MB 以控制当前缓冲上传链路的内存峰值） ===
       - PAPERPIPE_BRIDGE_URL=${PAPERPIPE_BRIDGE_URL:-http://host.docker.internal:9876}
       - PAPERPIPE_BRIDGE_SECRET=${PAPERPIPE_BRIDGE_SECRET:-}
