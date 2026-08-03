@@ -1252,7 +1252,7 @@ function buildBuiltinToolDefinitions(
   runtimeEnv: AgentRuntimeEnv | undefined,
   onToolCall?: ToolWrapOptions['onToolCall'],
 ): ToolDefinition[] {
-  const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv)
+  const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId)
   const definitions = [
     sdk.createReadToolDefinition(cwd),
     sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv)),
