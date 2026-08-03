@@ -2729,9 +2729,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           onCompact={handleCompact}
         />
 
-        {/* 会话运行进程面板（运行中后台任务/进程视图） */}
-        <RuntimeProcessPanel sessionId={sessionId} />
-
         {/* 权限请求横幅 */}
         <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
 
@@ -2760,6 +2757,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             onDrop={handleDrop}
           >
             {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
+            {/* 与输入区共用同一外框的运行服务上半区。 */}
+            <RuntimeProcessPanel sessionId={sessionId} />
             {/* 无 Agent 渠道或无可用模型提示 */}
             {(!agentChannelId || !hasAvailableModel) && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
