@@ -125,13 +125,17 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   React.useEffect(() => { void refresh() }, [refresh])
   React.useEffect(() => { if (rows.length > 0 || sdkTasks.length > 0) void refresh() }, [sdkTasks])
 
-  if (rows.length === 0 && !loading && !error) return null
+  // Keep the composer visually stable while the initial process query runs.
+  // A service rail appears only after there is an actual owned/pending record to show.
+  if (rows.length === 0) return null
   const count = rows.length
 
   return (
     <section
       className={cn(
-        'relative -mb-3 rounded-t-[17px] rounded-b-xl border-[0.5px] border-border bg-muted/25 pb-3 shadow-sm',
+        // The rail ends square beneath the composer: the composer's own top corners
+        // cut into it, producing a connected dock instead of two touching cards.
+        'relative -mb-px rounded-t-[17px] border-[0.5px] border-border bg-muted/25 shadow-sm',
         className,
       )}
       aria-label="运行服务"
@@ -148,7 +152,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
         </button>
       </div>
       {error && <div className="border-t border-border/40 px-4 py-1.5 text-[11px] text-destructive">{error}</div>}
-      {open && <div className="border-t border-border/40 pb-3">
+      {open && <div className="border-t border-border/40">
         {rows.map((row, i) => {
           const isLoadingRow = killing === (row.proc?.sdkTaskId ?? String(row.proc?.pid ?? i))
           const isOwned = row.proc?.source === 'pi-owned'
