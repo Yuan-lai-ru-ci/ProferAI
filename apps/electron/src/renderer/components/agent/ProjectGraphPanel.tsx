@@ -118,12 +118,12 @@ interface DagreLayout {
 }
 
 /**
- * 布局：连通子图按分量用 dagre 分别布局（偏链分量竖排 TB、分支分量横排 LR），
+ * 布局：连通子图按分量用 dagre 分别布局（横向纵深过深的分量竖排 TB，其余横排 LR），
  * 孤立节点（不参与任何依赖/分叉边）在下方铺成网格。
  *
  * - dagre LR：被依赖节点在左、依赖方在右；TB：被依赖在上、依赖方在下。
- * - 长依赖链（agent 拆任务最常见形态）若用 LR 会被横向拉成一根长条（实测 12 节点 ≈3800px 宽、高度为 0，
- *   “一字排开”），故把偏链分量改为 TB 竖排，让流程从上往下、整条链一屏纵览。
+ * - 布局默认横排；仅当某分量的 LR 横排纵深层级超过 VERTICAL_BEYOND_LR_DEPTH（横向拖得太远）
+ *   时才转 TB 竖排回归，避免普通任务链被过早竖排。
  * - 孤立节点若丢给 dagre 会全挤进 rank 0 堆成一条长竖列，故单独抽出按网格平铺。
  * - dagre 返回中心点坐标，转换为左上角供 foreignObject 使用。
  */
@@ -237,29 +237,71 @@ function findConnectedComponents(graph: TaskGraph, connected: Set<string>): stri
 }
 
 /**
- * 判断一个连通分量是否“偏链”（适合 TB 竖排）：
- * 节点度（依赖+分叉构成的无向度）≤2 的占比高、且链有足够长度时，LR 会横向拉成长条，改竖排更佳。
+ * 横向纵深阈值（层数，即 dagre LR 的 rank 跨度 = 最长链边数）。
+ * 只有当横排会铺到超过这个层数（横向拖得太远）时才转竖排，否则保持横排。
+ * 调大 → 更晚竖排（更多情况横排）；调小 → 更早竖排。
+ */
+const VERTICAL_BEYOND_LR_DEPTH = 6
+
+/**
+ * 判断一个连通分量是否“横向铺得太后”（适合 TB 竖排回归）：
+ * 以该分量在 LR 横排下的纵深层级（有向最长链长度）为判据，而不是节点数/度数占比。
+ * 常规任务链（几层横向就能放下）保持横排；只有横向会无限拉长的深链才改竖排。
  */
 function isChainLikeComponent(graph: TaskGraph, comp: string[]): boolean {
-  // 少于 5 个节点就算拉平也短，无需竖排
-  if (comp.length < 5) return false
-  const compSet = new Set(comp)
-  const degree = new Map<string, number>()
-  for (const id of comp) degree.set(id, 0)
-  const bump = (a: string, b: string) => {
-    if (compSet.has(a) && compSet.has(b)) {
-      degree.set(a, (degree.get(a) ?? 0) + 1)
-      degree.set(b, (degree.get(b) ?? 0) + 1)
+  const depth = maxDagDepth(graph, new Set(comp))
+  return depth > VERTICAL_BEYOND_LR_DEPTH
+}
+
+/**
+ * 计算连通分量内 DAG 的最长有向路径边长（拓扑序 DP）。
+ * 依赖边和被依赖方在左/上：依赖边方向为 e.to → e.from；分叉边方向为 e.from → e.to。
+ * 与 layoutOneComponent 中 dagre 建边方向保持一致，保证判据 = 实际 LR 横铺层数（rank span）。
+ */
+function maxDagDepth(
+  graph: TaskGraph,
+  compSet: Set<string>,
+): number {
+  if (compSet.size === 0) return 0
+  const edges: Array<[string, string]> = []
+  const indeg = new Map<string, number>()
+  const out = new Map<string, string[]>()
+  const ensure = (id: string) => {
+    if (!indeg.has(id)) { indeg.set(id, 0); out.set(id, []) }
+  }
+  for (const id of compSet) ensure(id)
+  const addEdge = (from: string, to: string) => {
+    if (compSet.has(from) && compSet.has(to)) {
+      edges.push([from, to])
+      out.get(from)!.push(to)
+      indeg.set(to, (indeg.get(to) ?? 0) + 1)
     }
   }
-  for (const e of graph.edges) bump(e.from, e.to)
-  for (const e of graph.forkEdges) bump(e.from, e.to)
+  for (const e of graph.edges) addEdge(e.to, e.from)   // 被依赖 → 依赖
+  for (const e of graph.forkEdges) addEdge(e.from, e.to) // 分叉边
 
-  let lowDeg = 0
-  for (const [_, d] of degree) if (d <= 2) lowDeg++
-  const chainRatio = lowDeg / comp.length
-  // 偏链判断：低度节点占比高（无复杂分支）才竖排，避免破坏真正的树状/网状横排视觉
-  return chainRatio >= 0.7
+  const dist = new Map<string, number>()
+  for (const id of compSet) dist.set(id, 0)
+  // Kahn 拓扑排序求最长路径边长
+  const queue: string[] = []
+  for (const id of compSet) if ((indeg.get(id) ?? 0) === 0) queue.push(id)
+  let maxDist = 0
+  const indegCopy = new Map(indeg)
+  while (queue.length) {
+    const cur = queue.shift()!
+    for (const nb of out.get(cur) ?? []) {
+      const nd = (dist.get(cur) ?? 0) + 1
+      if (nd > (dist.get(nb) ?? 0)) dist.set(nb, nd)
+      if (nd > maxDist) maxDist = nd
+      indegCopy.set(nb, (indegCopy.get(nb) ?? 0) - 1)
+      if ((indegCopy.get(nb) ?? 0) === 0) queue.push(nb)
+    }
+  }
+  // 若存在环（通常不会），退化为按节点数粗判，避免返回 0
+  if (edges.length > 0 && maxDist === 0 && compSet.size > 1) {
+    return compSet.size
+  }
+  return maxDist
 }
 
 /** 对单个连通分量 dagre 布局，返回相对偏移（基准 0,0）与尺寸 */
