@@ -204,18 +204,19 @@
     --destructive: 0 58% 50%;
     --destructive-foreground: 0 0% 100%;
     --stop-hover-bg: hsl(0 35% 23%);
-    --card: 35 3.3333333333333335% 32%;
+    /* 设置页再收一档：Dialog 贴近暖石墨，卡片只保留克制的 3% 层次差。 */
+    --card: 35 3.3333333333333335% 25%;
     --card-foreground: 35 3.3333333333333335% 71%;
-    --popover: 35 3.3333333333333335% 26%;
+    --popover: 35 3.3333333333333335% 22%;
     --popover-foreground: 35 3.3333333333333335% 71%;
-    --dialog: 35 3.3333333333333335% 30%;
+    --dialog: 35 3.3333333333333335% 22%;
     --dialog-foreground: 35 3.3333333333333335% 71%;
     --content-area: 35 3.3333333333333335% 17%;
     --sidebar-surface: 35 3.3333333333333335% 16%;
     --tabbar-surface: 35 3.3333333333333335% 16%;
     --input-surface: 35 3.3333333333333335% 20%;
-    --tab-surface: 35 3.3333333333333335% 32%;
-    --tooltip: 35 3.3333333333333335% 36%;
+    --tab-surface: 35 3.3333333333333335% 25%;
+    --tooltip: 35 3.3333333333333335% 29%;
     --tooltip-foreground: 0 0% 98%;
     --tooltip-muted: 35 3.3333333333333335% 76%;
     --code-bg: 35 3.3333333333333335% 15%;
@@ -2218,6 +2219,14 @@
 .theme-terminal-dark .sticky-user-banner:hover {
   background: hsl(var(--muted)) !important;
   border-color: hsl(var(--primary) / 0.35) !important;
+}
+
+/* 雾纸暖灰：已回答但未激活的题目 Tab 原本复用 primary/15，
+ * 与 22% 的 Dialog 背景过于接近，切换后像是题目消失。保持温和提示但增加可读底色和边界。 */
+.theme-mist-paper-dark .ask-user-banner .ask-user-question-tab-answered {
+  background-color: hsl(var(--primary) / 0.32);
+  color: hsl(0 0% 96%);
+  box-shadow: inset 0 0 0 1px hsl(var(--ring) / 0.28);
 }
 
 /* CRT 终端：追问选中项不使用通用透明按钮样式。
