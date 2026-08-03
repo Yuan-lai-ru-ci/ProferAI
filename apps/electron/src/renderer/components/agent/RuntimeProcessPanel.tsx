@@ -135,7 +135,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       className={cn(
         // The rail ends square beneath the composer: the composer's own top corners
         // cut into it, producing a connected dock instead of two touching cards.
-        'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 shadow-sm',
+        'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
         className,
       )}
       aria-label="运行服务"
