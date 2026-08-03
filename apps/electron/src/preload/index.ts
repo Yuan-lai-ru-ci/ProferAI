@@ -101,6 +101,9 @@ import type {
   ChatToolMeta,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
+  ListSessionProcessesInput,
+  KillProcessInput,
+  SessionProcessInfo,
   RewindSessionInput,
   RewindSessionResult,
   SessionHealth,
@@ -564,6 +567,8 @@ export interface ElectronAPI {
 
   /** 迁移 Agent 会话到另一个工作区 */
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
+  listSessionProcesses: (input: ListSessionProcessesInput) => Promise<SessionProcessInfo[]>
+  killProcess: (input: KillProcessInput) => Promise<{ ok: boolean; message: string }>
 
   /** 分叉 Agent 会话 */
   forkAgentSession: (input: ForkSessionInput) => Promise<AgentSessionMeta>
@@ -1883,6 +1888,14 @@ const electronAPI: ElectronAPI = {
 
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE, input)
+  },
+
+  listSessionProcesses: (input: ListSessionProcessesInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES, input)
+  },
+
+  killProcess: (input: KillProcessInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.KILL_PROCESS, input)
   },
 
   forkAgentSession: (input: ForkSessionInput) => {
