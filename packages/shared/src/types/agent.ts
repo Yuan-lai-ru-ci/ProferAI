@@ -1079,6 +1079,12 @@ export interface SessionProcessInfo {
   ports: number[]
   /** 关联的 SDK 后台任务 id（type:'shell'） */
   sdkTaskId?: string
+  /** 归属证据：Pi 在启动点登记，或 Claude SDK 的活跃后台任务。 */
+  source?: 'pi-owned' | 'sdk'
+  /** Pi 实际执行服务时的工作目录。 */
+  cwd?: string
+  /** 聊天已结束但已登记服务仍存活时为 true。 */
+  persistsAfterChat?: boolean
 }
 
 /** 列出会话运行进程的输入 */
@@ -1086,8 +1092,6 @@ export interface ListSessionProcessesInput {
   sessionId: string
   /** 该会话的 SDK 后台任务摘要（含 type:'shell' 的 command），由渲染层从 result 抽取 */
   sdkShellTasks: SDKBackgroundTaskSummary[]
-  /** 会话工作目录（用于按目录枚举真实进程，主通道；可空则以 sdkShellTasks 匹配为辅） */
-  sessionPath?: string
 }
 
 /** 结束会话关联进程树的输入 */
@@ -1096,6 +1100,8 @@ export interface KillProcessInput {
   pid: number
   /** 期望的进程启动时间戳，用于 PID 转世双因子防误杀；缺失则拒绝 */
   startTime?: number
+  /** SDK 任务仅作展示补充，当前仅允许结束启动点已登记的 owned 进程。 */
+  source?: 'pi-owned' | 'sdk'
 }
 
 /** Fork（分叉）会话输入 */

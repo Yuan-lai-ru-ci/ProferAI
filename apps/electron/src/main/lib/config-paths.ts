@@ -258,6 +258,11 @@ export function getAgentSessionsIndexPath(): string {
   return join(getConfigDir(), 'agent-sessions.json')
 }
 
+/** 由 Agent 启动且需跨聊天管理的运行进程登记表。 */
+export function getRuntimeProcessesPath(): string {
+  return join(getConfigDir(), 'runtime-processes.json')
+}
+
 /**
  * 获取 Agent 会话消息目录路径
  *
