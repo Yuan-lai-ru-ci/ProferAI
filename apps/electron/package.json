@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.14.86",
+  "version": "0.15.0",
   "description": "Profer",
   "main": "dist/main.cjs",
   "author": "Profer Team",
