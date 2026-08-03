@@ -22,6 +22,7 @@ import {
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
+  sdkBackgroundTasksAtomFamily,
   fileBrowserAutoRevealAtom,
   recentlyModifiedPathsAtom,
   RECENTLY_MODIFIED_TTL_MS,
@@ -58,7 +59,7 @@ import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTab
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, ProferEvent, AgentSessionMeta, TodoAgentSessionActivation } from '@profer/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, SDKBackgroundTaskSummary, ProferEvent, AgentSessionMeta, TodoAgentSessionActivation } from '@profer/shared'
 import { inferContextWindow, resolveContextWindowFromModelUsage } from '@profer/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { buildTodoAgentPrompt } from '@/lib/todo-agent-prompt'
@@ -665,6 +666,14 @@ export function useGlobalAgentListeners(): void {
               map.set(sessionId, next)
               return map
             })
+
+            // result 消息携带 SDK 后台任务摘要（含 command/status/type）→存入 atom 供面板显示
+            if (msgRecord.type === 'result') {
+              const tasks = (msgRecord as { background_tasks?: SDKBackgroundTaskSummary[] }).background_tasks
+              if (Array.isArray(tasks)) {
+                store.set(sdkBackgroundTasksAtomFamily(sessionId), tasks)
+              }
+            }
           }
         }
 
