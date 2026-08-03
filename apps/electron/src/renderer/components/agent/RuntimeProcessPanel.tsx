@@ -137,8 +137,16 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
     // A single delayed reconciliation catches services that daemonize shortly after launch
     // without coupling expensive OS scans to every Agent state update.
     const reconciliationTimer = window.setTimeout(() => void refresh(), 3_000)
-    return () => window.clearTimeout(reconciliationTimer)
-  }, [refresh])
+    const unsubscribe = window.electronAPI.onRuntimeProcessesChanged(({ sessionId: changedSessionId }) => {
+      // Profer's controlled launcher has a real shell PID at this point. Refresh
+      // only the active session, rather than reacting to every streamed task update.
+      if (changedSessionId === sessionId) void refresh()
+    })
+    return () => {
+      window.clearTimeout(reconciliationTimer)
+      unsubscribe()
+    }
+  }, [refresh, sessionId])
 
   // Do not render an empty rail while the initial query is in flight.
   if (rows.length === 0) return null

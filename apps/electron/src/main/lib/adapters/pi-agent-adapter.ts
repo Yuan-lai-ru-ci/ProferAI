@@ -77,7 +77,7 @@ import {
   runWithPiRequestProxy,
 } from './pi-request-proxy'
 import { createPiHarness, type PiHarnessToolCall } from '../pi-harness'
-import { registerPendingPiRuntimeProcess } from '../runtime-process-registry'
+import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -1101,7 +1101,7 @@ function buildWslCommand(command: string, env: NodeJS.ProcessEnv | undefined): s
     : command
 }
 
-function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
+function createWslBashOperations(runtimeEnv: AgentRuntimeEnv, sessionId: string): BashOperations {
   return {
     exec(command, cwd, options) {
       return new Promise((resolve, reject) => {
@@ -1120,6 +1120,10 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
         })
+        // This PID is the Profer-controlled Windows wsl.exe launcher. The
+        // eventual Linux listener remains pending until a WSL-aware observer
+        // exists, so it is never offered as an unsafe kill target.
+        if (child.pid) registerPiRuntimeProcessShell(sessionId, command, cwd, child.pid)
         let settled = false
         let timedOut = false
         let timeoutHandle: NodeJS.Timeout | undefined
@@ -1215,6 +1219,65 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
   }
 }
 
+function createControlledLocalBashOperations(
+  sessionId: string,
+  shellPath: string | undefined,
+): BashOperations {
+  return {
+    exec(command, cwd, options) {
+      return new Promise((resolve, reject) => {
+        if (options.signal?.aborted) {
+          reject(new Error('aborted'))
+          return
+        }
+        // Pi's public API lets Profer replace BashOperations. Keep the command
+        // transport deliberately simple here: current Windows runtime selection
+        // supplies Git Bash explicitly; other hosts resolve `bash` via PATH.
+        const child = spawn(shellPath ?? 'bash', ['-c', command], {
+          cwd,
+          env: options.env ?? process.env,
+          detached: process.platform !== 'win32',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        })
+        if (child.pid) registerPiRuntimeProcessShell(sessionId, command, cwd, child.pid)
+        let timedOut = false
+        let settled = false
+        let timeoutHandle: NodeJS.Timeout | undefined
+        const killTree = (): void => {
+          if (!child.pid) return
+          try {
+            if (process.platform === 'win32') execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => {})
+            else process.kill(-child.pid, 'SIGKILL')
+          } catch {
+            try { child.kill('SIGKILL') } catch { /* already exited */ }
+          }
+        }
+        const finish = (fn: () => void): void => {
+          if (settled) return
+          settled = true
+          if (timeoutHandle) clearTimeout(timeoutHandle)
+          options.signal?.removeEventListener('abort', onAbort)
+          fn()
+        }
+        const onAbort = (): void => killTree()
+        child.stdout?.on('data', options.onData)
+        child.stderr?.on('data', options.onData)
+        child.once('error', (error) => finish(() => reject(error)))
+        child.once('close', (code) => finish(() => {
+          if (options.signal?.aborted) reject(new Error('aborted'))
+          else if (timedOut) reject(new Error(`timeout:${options.timeout}`))
+          else resolve({ exitCode: code })
+        }))
+        if (options.timeout !== undefined && options.timeout > 0) {
+          timeoutHandle = setTimeout(() => { timedOut = true; killTree() }, options.timeout * 1_000)
+        }
+        options.signal?.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  }
+}
+
 function createPromaBashToolOptions(
   sessionId: string,
   runtimeEnv: AgentRuntimeEnv | undefined,
@@ -1233,13 +1296,13 @@ function createPromaBashToolOptions(
 
   if (runtimeEnv?.shellKind === 'wsl') {
     return {
-      operations: createWslBashOperations(runtimeEnv),
+      operations: createWslBashOperations(runtimeEnv, sessionId),
       spawnHook,
     }
   }
 
   return {
-    ...(runtimeEnv?.shellPath && { shellPath: runtimeEnv.shellPath }),
+    operations: createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath),
     spawnHook,
   }
 }
