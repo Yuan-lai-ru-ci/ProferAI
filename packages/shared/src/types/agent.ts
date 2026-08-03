@@ -1086,6 +1086,8 @@ export interface ListSessionProcessesInput {
   sessionId: string
   /** 该会话的 SDK 后台任务摘要（含 type:'shell' 的 command），由渲染层从 result 抽取 */
   sdkShellTasks: SDKBackgroundTaskSummary[]
+  /** 会话工作目录（用于按目录枚举真实进程，主通道；可空则以 sdkShellTasks 匹配为辅） */
+  sessionPath?: string
 }
 
 /** 结束会话关联进程树的输入 */

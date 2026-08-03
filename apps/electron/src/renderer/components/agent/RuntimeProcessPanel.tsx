@@ -12,9 +12,9 @@
 
 import * as React from 'react'
 import { Loader2, Terminal, X, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { sdkBackgroundTasksAtomFamily } from '@/atoms/agent-atoms'
+import { sdkBackgroundTasksAtomFamily, agentSessionPathMapAtom } from '@/atoms/agent-atoms'
 import type { SessionProcessInfo, SDKBackgroundTaskSummary } from '@profer/shared'
 
 interface RuntimeProcessPanelProps {
@@ -36,8 +36,20 @@ interface MergedRow {
   proc?: SessionProcessInfo
 }
 
+function inferProcType(name: string, cmd: string): string {
+  const n = name.toLowerCase()
+  const c = cmd.toLowerCase()
+  if (c.includes('vite')) return 'dev-server'
+  if (c.includes('node') || n.includes('node')) return 'node'
+  if (n.includes('python')) return 'python'
+  if (c.includes('bun')) return 'bun'
+  return n || 'process'
+}
+
 export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPanelProps): React.ReactElement | null {
   const [sdkTasks] = useAtom(sdkBackgroundTasksAtomFamily(sessionId))
+  const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
+  const sessionPath = sessionPathMap.get(sessionId) ?? undefined
   const [open, setOpen] = React.useState(false)
   const [rows, setRows] = React.useState<MergedRow[]>([])
   const [loading, setLoading] = React.useState(false)
@@ -53,26 +65,39 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       const procs: SessionProcessInfo[] = await window.electronAPI.listSessionProcesses({
         sessionId,
         sdkShellTasks: shellTasks,
+        sessionPath,
       })
-      setRows(
-        sdkTasks.map((t) => {
-          const proc = procs.find((p) => p.sdkTaskId === t.id)
-          return {
-            sdkTaskId: t.id,
-            type: t.type,
-            description: t.description ?? '',
-            command: t.command,
-            status: t.status ?? 'running',
-            proc,
-          }
-        }),
-      )
+      // 主数据 = 目录枚举/匹配到的真实进程；SDK 任务作为类型/状态补充
+      const rowsFromProcs: MergedRow[] = procs.map((p) => {
+        const sdk = p.sdkTaskId ? sdkTasks.find((t) => t.id === p.sdkTaskId) : undefined
+        return {
+          sdkTaskId: sdk?.id,
+          type: sdk?.type ?? inferProcType(p.name, p.cmd),
+          description: sdk?.description ?? p.name,
+          command: sdk?.command ?? p.cmd,
+          status: sdk?.status ?? 'running',
+          proc: p,
+        }
+      })
+      // 未匹配到真实 pid 的 SDK 后台任务也展示（如已结束但仍列出的）
+      const coveredSdkIds = new Set(procs.filter((p) => p.sdkTaskId).map((p) => p.sdkTaskId))
+      const extraRows: MergedRow[] = sdkTasks
+        .filter((t) => !coveredSdkIds.has(t.id))
+        .map((t) => ({
+          sdkTaskId: t.id,
+          type: t.type,
+          description: t.description ?? '',
+          command: t.command,
+          status: t.status ?? 'running',
+        }))
+      setRows([...rowsFromProcs, ...extraRows])
     } catch (e) {
       setError(e instanceof Error ? e.message : '拉取进程失败')
     } finally {
       setLoading(false)
     }
-  }, [sessionId, sdkTasks])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, sdkTasks, sessionPath])
 
   const handleKill = React.useCallback(
     async (row: MergedRow) => {
@@ -110,7 +135,8 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sdkTasks])
 
-  const count = sdkTasks.length
+  // 运行中计数：优先真实进程数（展开后），未展开时退化到 SDK 任务数（免费实时）
+  const count = rows.length > 0 ? rows.length : sdkTasks.length
 
   return (
     <div className={cn('w-full px-2.5', className)}>
