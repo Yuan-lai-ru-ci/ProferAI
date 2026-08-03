@@ -52,7 +52,6 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const [loading, setLoading] = React.useState(false)
   const [killing, setKilling] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
-  const [refreshing, setRefreshing] = React.useState(false)
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
@@ -121,51 +120,96 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
     [sessionId, refresh],
   )
 
-  // Mount-time fetch makes a persistent service visible without a separate empty-state card.
-  React.useEffect(() => { void refresh() }, [refresh])
-  React.useEffect(() => { if (rows.length > 0 || sdkTasks.length > 0) void refresh() }, [sdkTasks])
+  React.useEffect(() => {
+    void refresh()
+  }, [refresh])
 
-  // Keep the composer visually stable while the initial process query runs.
-  // A service rail appears only after there is an actual owned/pending record to show.
+  React.useEffect(() => {
+    if (rows.length > 0 || sdkTasks.length > 0) void refresh()
+  }, [sdkTasks])
+
+  // Do not render an empty rail while the initial query is in flight.
   if (rows.length === 0) return null
+
   const count = rows.length
+  const railClassName = cn(
+    'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
+    className,
+  )
 
   return (
-    <section
-      className={cn(
-        // The rail ends square beneath the composer: the composer's own top corners
-        // cut into it, producing a connected dock instead of two touching cards.
-        'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
-        className,
-      )}
-      aria-label="运行服务"
-    >
+    <section className={railClassName} aria-label="运行服务">
       <div className="flex h-9 items-center gap-2 px-4 text-xs text-foreground/65">
-        <button type="button" onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 hover:text-foreground">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex items-center gap-1.5 hover:text-foreground"
+        >
           {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
           <Terminal className="size-3.5" />
-          <span>运行服务</span><span className="font-medium text-primary">{count}</span>
+          <span>运行服务</span>
+          <span className="font-medium text-primary">{count}</span>
         </button>
         {loading && <Loader2 className="size-3 animate-spin" />}
-        <button type="button" className="ml-auto inline-flex items-center gap-1 text-[11px] hover:text-foreground" onClick={() => void refresh()}>
-          <RefreshCw className="size-3" />刷新
+        <button
+          type="button"
+          className="ml-auto inline-flex items-center gap-1 text-[11px] hover:text-foreground"
+          onClick={() => void refresh()}
+        >
+          <RefreshCw className="size-3" />
+          刷新
         </button>
       </div>
+
       {error && <div className="border-t border-border/40 px-4 py-1.5 text-[11px] text-destructive">{error}</div>}
-      {open && <div className="border-t border-border/40">
-        {rows.map((row, i) => {
-          const isLoadingRow = killing === (row.proc?.sdkTaskId ?? String(row.proc?.pid ?? i))
-          const isOwned = row.proc?.source === 'pi-owned'
-          const canKill = isOwned && Boolean(row.proc?.pid && row.proc.startTime) && row.proc?.status !== 'pending'
-          return <div key={row.sdkTaskId ?? String(row.proc?.pid ?? i)} className="flex min-w-0 items-center gap-2 px-4 py-2 text-xs hover:bg-muted/25">
-            {row.status === 'pending' ? <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" /> : <span className="size-2 shrink-0 rounded-full bg-primary" />}
-            <span className="shrink-0 text-foreground/75">{isOwned ? 'Pi 已登记' : 'SDK 任务'}</span>
-            <span className="shrink-0 font-mono text-[11px] text-foreground/55">{row.proc?.ports.length ? `:${row.proc.ports.join(',')}` : row.proc?.pid ? `PID ${row.proc.pid}` : '正在确认'}</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/55" title={row.command ?? row.description}>{row.command || row.description || '—'}</span>
-            {canKill ? <button type="button" disabled={isLoadingRow} className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-destructive hover:bg-destructive/10 disabled:opacity-50" onClick={() => void handleKill(row)}>{isLoadingRow ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />}{isLoadingRow ? '结束中' : '结束'}</button> : <span className="shrink-0 text-[11px] text-foreground/35">{row.status === 'pending' ? '确认中' : '未定位'}</span>}
-          </div>
-        })}
-      </div>}
+
+      {open && (
+        <div className="border-t border-border/40">
+          {rows.map((row, index) => {
+            const rowId = row.proc?.sdkTaskId ?? String(row.proc?.pid ?? index)
+            const isKilling = killing === rowId
+            const isOwned = row.proc?.source === 'pi-owned'
+            const isPending = row.status === 'pending'
+            const canKill = isOwned && Boolean(row.proc?.pid && row.proc.startTime) && !isPending
+            const processLabel = row.proc?.ports.length
+              ? `:${row.proc.ports.join(',')}`
+              : row.proc?.pid
+                ? `PID ${row.proc.pid}`
+                : '正在确认'
+
+            return (
+              <div key={rowId} className="flex min-w-0 items-center gap-2 px-4 py-2 text-xs hover:bg-muted/25">
+                {isPending ? (
+                  <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />
+                ) : (
+                  <span className="size-2 shrink-0 rounded-full bg-primary" />
+                )}
+                <span className="shrink-0 text-foreground/75">{isOwned ? 'Pi 已登记' : 'SDK 任务'}</span>
+                <span className="shrink-0 font-mono text-[11px] text-foreground/55">{processLabel}</span>
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/55"
+                  title={row.command ?? row.description}
+                >
+                  {row.command || row.description || '—'}
+                </span>
+                {canKill ? (
+                  <button
+                    type="button"
+                    disabled={isKilling}
+                    className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                    onClick={() => void handleKill(row)}
+                  >
+                    {isKilling ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />}
+                    {isKilling ? '结束中' : '结束'}
+                  </button>
+                ) : (
+                  <span className="shrink-0 text-[11px] text-foreground/35">{isPending ? '确认中' : '未定位'}</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }
