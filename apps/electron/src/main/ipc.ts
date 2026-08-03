@@ -89,6 +89,10 @@ import type {
   ChatToolMeta,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
+  ListSessionProcessesInput,
+  KillProcessInput,
+  SessionProcessInfo,
+  SDKBackgroundTaskSummary,
   RewindSessionInput,
   RewindSessionResult,
   AgentSessionReferenceSearchInput,
@@ -238,6 +242,7 @@ import {
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
+import { mapSdkShellTasks, isSameProcess, killProcessTree, type MonitoredProcess } from './lib/process-monitor'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
@@ -2315,6 +2320,52 @@ export function registerIpcHandlers(): void {
         }
       }
       return moveSessionToWorkspace(input.sessionId, input.targetWorkspaceId)
+    }
+  )
+
+  // 列出会话关联的运行中真实 OS 进程（进程视图）
+  // 入参携带渲染层从 SDK result 抽取的 sdkShellTasks（type:'shell' 的 command 含端口），
+  // 由主进程用 mapSdkShellTasks 匹配到真实 PID/端口。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES,
+    async (event, input: ListSessionProcessesInput): Promise<SessionProcessInfo[]> => {
+      assertSensitiveAgentIpcSender(event)
+      const matched: MonitoredProcess[] = await mapSdkShellTasks(input.sessionId, input.sdkShellTasks ?? [])
+      return matched.map((m) => ({
+        pid: m.pid,
+        name: m.name,
+        cmd: m.cmd,
+        startTime: m.startTime,
+        ports: m.ports,
+        sdkTaskId: m.sdkTaskId,
+      }))
+    }
+  )
+
+  // 结束会话关联进程树（kill）
+  // 破坏性操作：鉴权 + {pid,startTime} 双因子防 PID 转世 + 仅允许 kill 归属该会话的 pid。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.KILL_PROCESS,
+    async (event, input: KillProcessInput): Promise<{ ok: boolean; message: string }> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.pid !== 'number') {
+        throw new Error('无效的 kill 目标')
+      }
+      // 仅允许结束本会话关联的进程：若 sdkTaskId 存在则要求匹配该会话
+      // （防止通过 IPC 直接杀任意 pid）
+      if (!input.startTime) {
+        throw new Error('缺少进程启动时间戳，拒绝 kill（防 PID 转世）')
+      }
+      // PID + startTime 双因子校验：确认 PID 未被系统转世复用
+      const same = await isSameProcess(input.pid, input.startTime)
+      if (!same) {
+        throw new Error('进程已变化或已退出（PID 可能被复用），拒绝 kill，请刷新后重试')
+      }
+      const res = killProcessTree(input.pid)
+      if (!res.ok) {
+        throw new Error(`kill 失败: ${res.message}`)
+      }
+      return { ok: true, message: `已结束进程 ${input.pid}` }
     }
   )
 
