@@ -30,6 +30,7 @@ import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
 import { isCodexFastModeSupportedModel } from '@profer/shared'
 import { PermissionBanner } from './PermissionBanner'
+import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
@@ -2459,20 +2460,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return () => window.removeEventListener('proma:focus-input', handler)
   }, [])
 
-  // 清理本会话在全局 window.__pendingAgentFileData 中的 base64 数据。
-  // AgentView 卸载时（切标签页/关标签页）释放 ObjectURL 和 base64，
-  // 防止 100MB 级文件在内存中累积到下次重启。
-  // session 删除/归档由 cleanupMapAtoms 处理，此处仅覆盖卸载路径。
-  React.useEffect(() => {
-    return () => {
-      const files = pendingFilesRef.current
-      if (files.length === 0) return
-      for (const f of files) {
-        if (f.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(f.previewUrl)
-        window.__pendingAgentFileData?.delete(f.id)
-      }
-    }
-  }, [])
+  // 待发送附件按 sessionId 保存在 atom 中，切换标签会卸载 AgentView，但不能释放
+  // ObjectURL 或删除 base64 缓存；否则返回该会话时缩略图会指向已撤销的 blob URL，
+  // 发送也会因缓存丢失而失败。删除/归档会话时由 LeftSidebar.cleanupMapAtoms 统一清理。
 
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
   const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
@@ -2738,6 +2728,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
         />
+
+        {/* 会话运行进程面板（运行中后台任务/进程视图） */}
+        <RuntimeProcessPanel sessionId={sessionId} />
 
         {/* 权限请求横幅 */}
         <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
