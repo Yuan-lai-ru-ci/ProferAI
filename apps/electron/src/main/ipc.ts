@@ -242,7 +242,7 @@ import {
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
-import { mapSdkShellTasks, isSameProcess, killProcessTree, type MonitoredProcess } from './lib/process-monitor'
+import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
@@ -2334,16 +2334,17 @@ export function registerIpcHandlers(): void {
       const results = new Map<number, SessionProcessInfo>()
       const owned = await listOwnedRuntimeProcesses(input.sessionId)
       for (const record of owned) {
-        if (!record.pid) continue // pending records have not been safely attributed to an OS PID yet
-        results.set(record.pid, {
+        const key = record.pid ?? -Math.abs(record.launchedAt)
+        results.set(key, {
           pid: record.pid,
-          name: 'Pi service',
+          name: record.pid ? 'Pi service' : 'Pi launch observation',
           cmd: record.command,
           startTime: record.startTime,
           ports: record.ports,
           source: 'pi-owned',
+          status: record.status === 'running' ? 'running' : 'pending',
           cwd: record.cwd,
-          persistsAfterChat: true,
+          persistsAfterChat: Boolean(record.pid),
         })
       }
       const bySdk = await mapSdkShellTasks(input.sessionId, input.sdkShellTasks ?? [])
@@ -2382,12 +2383,12 @@ export function registerIpcHandlers(): void {
       if (!same) {
         throw new Error('进程已变化或已退出（PID 可能被复用），拒绝 kill，请刷新后重试')
       }
-      const res = killProcessTree(input.pid)
+      const res = await terminateProcessTreeGracefully(input.pid, input.startTime)
       if (!res.ok) {
-        throw new Error(`kill 失败: ${res.message}`)
+        throw new Error(`结束失败: ${res.message}`)
       }
       markOwnedRuntimeProcessExited(input.sessionId, input.pid, input.startTime)
-      return { ok: true, message: `已结束进程 ${input.pid}` }
+      return { ok: true, message: res.message }
     }
   )
 

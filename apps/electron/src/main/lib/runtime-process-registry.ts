@@ -14,6 +14,9 @@ export interface RuntimeProcessRecord {
   sessionId: string
   runtime: 'pi'
   source: 'pi-owned'
+  launcher: 'bash' | 'powershell'
+  /** true when command matches a known long-running shape; unknown commands are still observed. */
+  likelyService: boolean
   command: string
   cwd: string
   shellPid?: number
@@ -80,21 +83,33 @@ export function resolveServiceWorkingDirectory(command: string, fallbackCwd: str
   return requested && /^[a-z]:[\\/]/i.test(requested) ? requested : fallbackCwd
 }
 
-export function registerPendingPiRuntimeProcess(sessionId: string, command: string, cwd: string): RuntimeProcessRecord | undefined {
-  if (!isLongRunningServiceCommand(command)) return undefined
+export function registerPendingPiRuntimeProcess(
+  sessionId: string,
+  command: string,
+  cwd: string,
+  launcher: 'bash' | 'powershell' = 'bash',
+): RuntimeProcessRecord | undefined {
+  // All shell calls get a short-lived observation record. This prevents custom
+  // scripts and unfamiliar frameworks from being invisible merely because they
+  // are absent from a product-maintained command regexp.
+  const likelyService = isLongRunningServiceCommand(command)
   const serviceCwd = resolveServiceWorkingDirectory(command, cwd)
   const data = load()
   const now = Date.now()
   // Avoid duplicate records caused by a retry or duplicate tool event in a short window.
-  const existing = data.records.find((r) => r.sessionId === sessionId && r.command === command && r.cwd === serviceCwd
+  const existing = data.records.find((r) => r.sessionId === sessionId && r.command === command && r.cwd === serviceCwd && r.launcher === launcher
     && r.status !== 'exited' && now - r.launchedAt < 15_000)
   if (existing) return existing
   const record: RuntimeProcessRecord = {
-    id: randomUUID(), sessionId, runtime: 'pi', source: 'pi-owned', command, cwd: serviceCwd,
+    id: randomUUID(), sessionId, runtime: 'pi', source: 'pi-owned', launcher, likelyService, command, cwd: serviceCwd,
     ports: [], launchedAt: now, lastObservedAt: now, status: 'pending',
   }
   data.records.push(record)
   save(data)
+  // A follow-up observation catches detached/nohup children even when the user
+  // never opens the panel at precisely the right moment.
+  const timer = setTimeout(() => { void listOwnedRuntimeProcesses(sessionId) }, 2_000)
+  timer.unref?.()
   return record
 }
 
@@ -159,8 +174,14 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
       changed = true
     }
   }
-  // pending records are retained for 10 minutes: services sometimes daemonize after a shell exits.
-  const kept = data.records.filter((r) => r.status !== 'exited' || now - r.lastObservedAt < 7 * 24 * 60 * 60 * 1000)
+  // Unknown/short commands are observations, not permanent UI clutter. Known
+  // service commands get a longer window because they may daemonize slowly.
+  const kept = data.records.filter((r) => {
+    if (r.status === 'exited') return now - r.lastObservedAt < 7 * 24 * 60 * 60 * 1000
+    if (r.status === 'pending' && !r.likelyService) return now - r.launchedAt < 60_000
+    if (r.status === 'pending') return now - r.launchedAt < 10 * 60 * 1000
+    return true
+  })
   if (kept.length !== data.records.length) { data.records = kept; changed = true }
   if (changed) save(data)
   return data.records.filter((r) => r.sessionId === sessionId && r.status !== 'exited')
