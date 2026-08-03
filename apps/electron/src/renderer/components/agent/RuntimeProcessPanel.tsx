@@ -71,7 +71,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
           type: sdk?.type ?? inferProcType(p.name, p.cmd),
           description: sdk?.description ?? p.name,
           command: sdk?.command ?? p.cmd,
-          status: sdk?.status ?? 'running',
+          status: p.status ?? sdk?.status ?? 'running',
           proc: p,
         }
       })
@@ -97,9 +97,9 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
 
   const handleKill = React.useCallback(
     async (row: MergedRow) => {
-      if (!row.proc) return
+      if (!row.proc?.pid || !row.proc.startTime) return
       const location = row.proc.cwd ? `\n项目目录：${row.proc.cwd}` : ''
-      if (!window.confirm(`确定结束进程 ${row.proc.pid}（${row.proc.name}）？${location}\n该操作会结束整棵进程树。`)) return
+      if (!window.confirm(`确定结束进程 ${row.proc.pid}（${row.proc.name}）？${location}\n将先尝试优雅停止；若超时，才强制结束整棵进程树。`)) return
       setKilling(row.proc.sdkTaskId ?? String(row.proc.pid))
       setError(null)
       try {
@@ -137,7 +137,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const count = rows.length > 0 ? rows.length : sdkTasks.length
 
   return (
-    <div className={cn('w-full px-2.5', className)}>
+    <div className={cn('w-full px-2.5 md:px-[18px]', className)}>
       {/* 折叠头 */}
       <button
         type="button"
@@ -157,7 +157,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
 
       {/* 展开内容 */}
       {open && (
-        <div className="mt-1 rounded-md border border-border/50 bg-muted/20">
+        <div className="mt-1 overflow-x-auto rounded-md border border-border/50 bg-muted/20">
           {error && (
             <div className="flex items-center justify-between px-2.5 py-1.5 text-[11px] text-destructive">
               <span>{error}</span>
@@ -170,7 +170,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
           {rows.length === 0 && !loading ? (
             <div className="px-2.5 py-2 text-[11px] text-foreground/50">没有本会话已登记的运行服务</div>
           ) : (
-            <table className="w-full text-xs">
+            <table className="min-w-[680px] w-full text-xs">
               <thead>
                 <tr className="border-b border-border/50 bg-muted/30">
                   <th className="text-left py-1 px-2 font-medium text-foreground/50 text-[11px]">来源</th>
@@ -194,7 +194,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
                           {row.status}
                         </span>
                       </td>
-                      <td className="py-1 px-2 font-mono text-[10px]">{row.proc?.pid ?? '—'}</td>
+                      <td className="py-1 px-2 font-mono text-[10px]">{row.proc?.pid ?? '确认中'}</td>
                       <td className="py-1 px-2 font-mono text-[10px]">{row.proc?.ports.join(',') || '—'}</td>
                       <td className="py-1 px-2">
                         <div className="truncate max-w-[220px]" title={row.command ?? row.description}>
@@ -203,7 +203,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
                         </div>
                       </td>
                       <td className="py-1 px-2 text-right">
-                        {row.proc?.source === 'pi-owned' ? (
+                        {row.proc?.source === 'pi-owned' && row.proc.pid && row.proc.status !== 'pending' ? (
                           <button
                             type="button"
                             disabled={isLoadingRow}
@@ -214,7 +214,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
                             {isLoadingRow ? '结束中' : '结束'}
                           </button>
                         ) : (
-                          <span className="text-[10px] text-foreground/30">未定位</span>
+                          <span className="text-[10px] text-foreground/30">{row.proc?.status === 'pending' ? '确认中' : '未定位'}</span>
                         )}
                       </td>
                     </tr>

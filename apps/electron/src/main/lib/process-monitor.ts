@@ -223,6 +223,28 @@ export async function getProcessInfo(pid: number): Promise<MonitoredProcess | nu
   }
 }
 
+/**
+ * Prefer a graceful console/process-tree termination, then force-kill only if
+ * the recorded PID is still the same process after the grace window.
+ */
+export async function terminateProcessTreeGracefully(
+  pid: number,
+  startTime: number,
+  graceMs = 2_500,
+): Promise<{ ok: boolean; message: string; forced: boolean }> {
+  await new Promise<void>((resolve) => {
+    try {
+      execFile('taskkill.exe', ['/pid', String(pid), '/T'], { windowsHide: true }, () => resolve())
+    } catch { resolve() }
+  })
+  await new Promise((resolve) => setTimeout(resolve, graceMs))
+  if (!await isSameProcess(pid, startTime)) {
+    return { ok: true, message: `已优雅结束进程 ${pid}`, forced: false }
+  }
+  const forced = killProcessTree(pid)
+  return { ok: forced.ok, message: forced.ok ? `优雅停止超时，已强制结束进程树 ${pid}` : forced.message, forced: true }
+}
+
 /** kill 进程树（Windows taskkill /T /F 杀整棵子树；posix 预留） */
 export function killProcessTree(pid: number): { ok: boolean; message: string } {
   try {

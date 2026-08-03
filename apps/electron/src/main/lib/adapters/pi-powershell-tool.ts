@@ -6,6 +6,7 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentRuntimeEnv } from '../agent-runtime-env'
 import { mergeRuntimeEnv } from '../agent-runtime-env'
+import { registerPendingPiRuntimeProcess } from '../runtime-process-registry'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -192,6 +193,7 @@ export function createWindowsPowerShellToolDefinition(
     environment?: NodeJS.ProcessEnv
     pathExists?: (path: string) => boolean
   } = {},
+  sessionId?: string,
 ): ToolDefinition | undefined {
   const platform = options.platform ?? process.platform
   if (platform !== 'win32') return undefined
@@ -209,6 +211,7 @@ export function createWindowsPowerShellToolDefinition(
     }),
     async execute(_toolCallId, params, signal) {
       const input = params as { command: string; timeout?: number }
+      if (sessionId) registerPendingPiRuntimeProcess(sessionId, input.command, cwd, 'powershell')
       const result = await executePowerShellCommand(input.command, {
         cwd,
         env: runtimeEnv?.env,

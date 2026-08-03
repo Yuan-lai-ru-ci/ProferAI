@@ -1070,7 +1070,8 @@ export interface MoveSessionToWorkspaceInput {
  * 会话关联的运行进程视图项（进程视图 IPC 返回）
  */
 export interface SessionProcessInfo {
-  pid: number
+  /** 尚在确认归属的启动观察项没有 PID。 */
+  pid?: number
   name: string
   cmd: string
   /** 启动时间戳（ms），用于 PID 转世双因子校验 */
@@ -1081,6 +1082,8 @@ export interface SessionProcessInfo {
   sdkTaskId?: string
   /** 归属证据：Pi 在启动点登记，或 Claude SDK 的活跃后台任务。 */
   source?: 'pi-owned' | 'sdk'
+  /** pending 表示已经登记、正在确认，尚不可结束。 */
+  status?: 'pending' | 'running'
   /** Pi 实际执行服务时的工作目录。 */
   cwd?: string
   /** 聊天已结束但已登记服务仍存活时为 true。 */
