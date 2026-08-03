@@ -75,12 +75,21 @@ export function isLongRunningServiceCommand(command: string): boolean {
 }
 
 /** Called synchronously from Pi's public BashSpawnHook, before Pi creates the shell. */
+function normalizeShellWorkingDirectory(path: string): string | undefined {
+  if (/^[a-z]:[\\/]/i.test(path)) return path
+  // Git Bash exposes Windows drives as /d/project. Pi's BashSpawnHook reports
+  // that form even when the actual child is a native Windows process.
+  const gitBashDrivePath = path.match(/^\/([a-z])\/(.+)$/i)
+  const [, drive, rest] = gitBashDrivePath ?? []
+  return drive && rest ? `${drive.toUpperCase()}:/${rest}` : undefined
+}
+
 export function resolveServiceWorkingDirectory(command: string, fallbackCwd: string): string {
   // Bash commands often use `cd <project> && npm run dev`; Pi's tool cwd remains
   // the session directory, so capture the command's explicit project cwd instead.
   const match = command.match(/(?:^|[;&\n])\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&]+))\s*&&/i)
   const requested = match?.[1] ?? match?.[2] ?? match?.[3]
-  return requested && /^[a-z]:[\\/]/i.test(requested) ? requested : fallbackCwd
+  return requested ? normalizeShellWorkingDirectory(requested) ?? fallbackCwd : fallbackCwd
 }
 
 export function registerPendingPiRuntimeProcess(
