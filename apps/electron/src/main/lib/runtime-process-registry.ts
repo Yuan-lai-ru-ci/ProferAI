@@ -265,10 +265,15 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
   const confirmed = data.records.filter((r) => r.sessionId === sessionId && r.pid && r.startTime && r.status !== 'exited')
   let changed = false
 
-  // 尚未定位到 pid 的记录：一次性拉取共享快照（端口表 + 全量进程表），在 JS 内过滤。
-  if (pending.length > 0) {
+  // Unknown/short commands are intentionally launch observations only. They
+  // must never be upgraded from a broad cwd/token scan: otherwise ordinary
+  // `git diff` / test commands can be falsely bound to a long-lived Node/Electron
+  // process in the same workspace and remain visible as fake services.
+  const confirmablePending = pending.filter((record) => record.likelyService)
+  // 尚未定位到 pid 的服务候选：一次性拉取共享快照（端口表 + 全量进程表），在 JS 内过滤。
+  if (confirmablePending.length > 0) {
     const [portPids, processes] = await Promise.all([listPortPidMapWin(), listProcessesWin()])
-    for (const record of pending) {
+    for (const record of confirmablePending) {
       const found = matchRecordAgainstSnapshot(record, portPids, processes)
       if (found) {
         record.pid = found.pid
@@ -281,11 +286,22 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
     }
   }
 
+  // Pre-control versions could incorrectly upgrade non-service observations by
+  // cwd coincidence. Retire those legacy false positives rather than showing
+  // them as services indefinitely.
+  for (const record of confirmed) {
+    if (!record.likelyService) {
+      record.status = 'exited'
+      record.lastObservedAt = now
+      changed = true
+    }
+  }
+  const confirmedServices = confirmed.filter((record) => record.likelyService)
   // 已确认 pid 且仍健在的记录：双因子校验通过则跳过；失效的收集后统一重匹配。
   // 先批量做 isSameProcess，再把所有失效记录用「一次共享快照」重匹配，避免多条失效
   // 记录各自拉一遍全量 PowerShell 快照（并发扩倍）。
   const deadOnes: { record: RuntimeProcessRecord }[] = []
-  for (const record of confirmed) {
+  for (const record of confirmedServices) {
     if (await isSameProcess(record.pid!, record.startTime)) {
       record.lastObservedAt = now
     } else {
