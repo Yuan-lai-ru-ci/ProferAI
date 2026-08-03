@@ -63,19 +63,22 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const [killing, setKilling] = React.useState<string | null>(null)
   const [pendingKill, setPendingKill] = React.useState<MergedRow | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const sdkTasksRef = React.useRef(sdkTasks)
+  sdkTasksRef.current = sdkTasks
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const shellTasks = sdkTasks.filter((t): t is SDKBackgroundTaskSummary & { type: 'shell' } => t.type === 'shell')
+      const currentSdkTasks = sdkTasksRef.current
+      const shellTasks = currentSdkTasks.filter((t): t is SDKBackgroundTaskSummary & { type: 'shell' } => t.type === 'shell')
       const procs: SessionProcessInfo[] = await window.electronAPI.listSessionProcesses({
         sessionId,
         sdkShellTasks: shellTasks,
       })
       // 主数据 = 目录枚举/匹配到的真实进程；SDK 任务作为类型/状态补充
       const rowsFromProcs: MergedRow[] = procs.map((p) => {
-        const sdk = p.sdkTaskId ? sdkTasks.find((t) => t.id === p.sdkTaskId) : undefined
+        const sdk = p.sdkTaskId ? currentSdkTasks.find((t) => t.id === p.sdkTaskId) : undefined
         return {
           sdkTaskId: sdk?.id,
           type: sdk?.type ?? inferProcType(p.name, p.cmd),
@@ -87,7 +90,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       })
       // 未匹配到真实 pid 的 SDK 后台任务也展示（如已结束但仍列出的）
       const coveredSdkIds = new Set(procs.filter((p) => p.sdkTaskId).map((p) => p.sdkTaskId))
-      const extraRows: MergedRow[] = sdkTasks
+      const extraRows: MergedRow[] = currentSdkTasks
         .filter((t) => !coveredSdkIds.has(t.id))
         .map((t) => ({
           sdkTaskId: t.id,
@@ -102,8 +105,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
     } finally {
       setLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, sdkTasks])
+  }, [sessionId])
 
   const handleKill = React.useCallback(
     async (row: MergedRow) => {
@@ -132,11 +134,11 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
 
   React.useEffect(() => {
     void refresh()
+    // A single delayed reconciliation catches services that daemonize shortly after launch
+    // without coupling expensive OS scans to every Agent state update.
+    const reconciliationTimer = window.setTimeout(() => void refresh(), 3_000)
+    return () => window.clearTimeout(reconciliationTimer)
   }, [refresh])
-
-  React.useEffect(() => {
-    if (rows.length > 0 || sdkTasks.length > 0) void refresh()
-  }, [sdkTasks])
 
   // Do not render an empty rail while the initial query is in flight.
   if (rows.length === 0) return null
