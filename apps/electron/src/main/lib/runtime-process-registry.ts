@@ -340,7 +340,10 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
     save(data)
     emitChanged(sessionId)
   }
-  return data.records.filter((r) => r.sessionId === sessionId && r.status !== 'exited')
+  // The service rail is deliberately not a shell command history. Unknown
+  // commands remain short-lived internal observations, but only known
+  // long-running candidates may surface to users as “确认中”.
+  return data.records.filter((r) => r.sessionId === sessionId && r.status !== 'exited' && r.likelyService)
 }
 
 export function markOwnedRuntimeProcessExited(sessionId: string, pid: number, startTime?: number): void {
