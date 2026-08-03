@@ -2,19 +2,18 @@
  * RuntimeProcessPanel — 会话运行进程面板（期一 M4）
  *
  * 展示该会话的运行中的后台任务/进程：
- *  - SDK 后台任务（sdkBackgroundTasksAtomFamily，来自 result.background_tasks，免费实时）
- *  - 真实 OS 进程（经 IPC listSessionProcesses 按 sdkShellTasks 匹配到 pid/端口）
+ *  - Pi 在 Bash 启动点登记并确认到 PID 的服务（聊天结束后仍保留）
+ *  - Claude SDK 活跃后台任务（补充来源）
  *  - 一键 kill（IPC killProcess，{pid,startTime} 双因子防转世；二次确认）
  *
- * 设计：默认收起（PowerShell 采集中等耗时 ~5s，避免频繁触发慢操作）。
- * 用户展开时才拉取真实进程；SDK 任务则实时（免费）。折叠面板含会话级徽标。
+ * 不按 Profer 会话临时目录扫描：外部项目 dev server 的真实 cwd 并不在那里。
  */
 
 import * as React from 'react'
 import { Loader2, Terminal, X, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom } from 'jotai'
 import { cn } from '@/lib/utils'
-import { sdkBackgroundTasksAtomFamily, agentSessionPathMapAtom } from '@/atoms/agent-atoms'
+import { sdkBackgroundTasksAtomFamily } from '@/atoms/agent-atoms'
 import type { SessionProcessInfo, SDKBackgroundTaskSummary } from '@profer/shared'
 
 interface RuntimeProcessPanelProps {
@@ -48,8 +47,6 @@ function inferProcType(name: string, cmd: string): string {
 
 export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPanelProps): React.ReactElement | null {
   const [sdkTasks] = useAtom(sdkBackgroundTasksAtomFamily(sessionId))
-  const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
-  const sessionPath = sessionPathMap.get(sessionId) ?? undefined
   const [open, setOpen] = React.useState(false)
   const [rows, setRows] = React.useState<MergedRow[]>([])
   const [loading, setLoading] = React.useState(false)
@@ -65,7 +62,6 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       const procs: SessionProcessInfo[] = await window.electronAPI.listSessionProcesses({
         sessionId,
         sdkShellTasks: shellTasks,
-        sessionPath,
       })
       // 主数据 = 目录枚举/匹配到的真实进程；SDK 任务作为类型/状态补充
       const rowsFromProcs: MergedRow[] = procs.map((p) => {
@@ -97,12 +93,13 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, sdkTasks, sessionPath])
+  }, [sessionId, sdkTasks])
 
   const handleKill = React.useCallback(
     async (row: MergedRow) => {
       if (!row.proc) return
-      if (!window.confirm(`确定结束进程 ${row.proc.pid}（${row.proc.name}）？\n该操作会结束整棵进程树。`)) return
+      const location = row.proc.cwd ? `\n项目目录：${row.proc.cwd}` : ''
+      if (!window.confirm(`确定结束进程 ${row.proc.pid}（${row.proc.name}）？${location}\n该操作会结束整棵进程树。`)) return
       setKilling(row.proc.sdkTaskId ?? String(row.proc.pid))
       setError(null)
       try {
@@ -110,6 +107,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
           sessionId,
           pid: row.proc.pid,
           startTime: row.proc.startTime,
+          source: row.proc.source,
         })
         if (!res.ok) setError(res.message)
         // 成功则下次展开时刷新
@@ -148,7 +146,7 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       >
         {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         <Terminal className="size-3.5" />
-        <span>运行中 {count > 0 && <span className="text-primary font-medium">{count}</span>}</span>
+        <span>运行服务 {count > 0 && <span className="text-primary font-medium">{count}</span>}</span>
         {count > 0 && (
           <span className="ml-auto inline-flex size-4 items-center rounded-full bg-primary/10 text-[10px] text-primary">
             {count}
@@ -170,12 +168,12 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
           )}
 
           {rows.length === 0 && !loading ? (
-            <div className="px-2.5 py-2 text-[11px] text-foreground/50">没有运行中的后台任务/进程</div>
+            <div className="px-2.5 py-2 text-[11px] text-foreground/50">没有本会话已登记的运行服务</div>
           ) : (
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border/50 bg-muted/30">
-                  <th className="text-left py-1 px-2 font-medium text-foreground/50 text-[11px]">类型</th>
+                  <th className="text-left py-1 px-2 font-medium text-foreground/50 text-[11px]">来源</th>
                   <th className="text-left py-1 px-2 font-medium text-foreground/50 text-[11px]">状态</th>
                   <th className="text-left py-1 px-2 font-medium text-foreground/50 text-[11px]">PID</th>
                   <th className="text-left py-1 px-2 font-medium text-foreground/50 text-[11px]">端口</th>
@@ -188,7 +186,9 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
                   const isLoadingRow = killing === (row.proc?.sdkTaskId ?? String(row.proc?.pid ?? i))
                   return (
                     <tr key={row.sdkTaskId ?? String(row.proc?.pid ?? i)} className="border-b border-border/30 last:border-b-0 hover:bg-muted/30">
-                      <td className="py-1 px-2 text-[11px] text-foreground/70">{row.type}</td>
+                      <td className="py-1 px-2 text-[11px] text-foreground/70" title={row.proc?.cwd}>
+                        {row.proc?.source === 'pi-owned' ? 'Pi 已登记' : row.proc?.source === 'sdk' ? 'SDK 任务' : row.type}
+                      </td>
                       <td className="py-1 px-2">
                         <span className={cn('text-[11px]', row.status === 'running' ? 'text-primary' : row.status === 'failed' ? 'text-destructive' : 'text-foreground/50')}>
                           {row.status}
@@ -199,10 +199,11 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
                       <td className="py-1 px-2">
                         <div className="truncate max-w-[220px]" title={row.command ?? row.description}>
                           <span className="font-mono text-[10px] text-foreground/60">{row.command?.slice(0, 60) || row.description || '—'}</span>
+                          {row.proc?.persistsAfterChat && <span className="ml-1 text-[10px] text-amber-600">聊天结束后仍运行</span>}
                         </div>
                       </td>
                       <td className="py-1 px-2 text-right">
-                        {row.proc ? (
+                        {row.proc?.source === 'pi-owned' ? (
                           <button
                             type="button"
                             disabled={isLoadingRow}

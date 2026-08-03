@@ -77,6 +77,7 @@ import {
   runWithPiRequestProxy,
 } from './pi-request-proxy'
 import { createPiHarness, type PiHarnessToolCall } from '../pi-harness'
+import { registerPendingPiRuntimeProcess } from '../runtime-process-registry'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -1214,16 +1215,23 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
   }
 }
 
-function createPromaBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined): BashToolOptions | undefined {
-  if (!runtimeEnv) return undefined
+function createPromaBashToolOptions(
+  sessionId: string,
+  runtimeEnv: AgentRuntimeEnv | undefined,
+): BashToolOptions | undefined {
+  const spawnHook: NonNullable<BashToolOptions['spawnHook']> = ({ command, cwd, env }) => {
+    // Pi exposes this public pre-spawn hook. Record ownership here, while the
+    // command/cwd still describe the actual Agent launch rather than a later
+    // renderer-side directory guess. PID is confirmed by the registry monitor.
+    registerPendingPiRuntimeProcess(sessionId, command, cwd)
+    return {
+      command,
+      cwd,
+      env: runtimeEnv ? mergeRuntimeEnv(env, runtimeEnv.env) : env,
+    }
+  }
 
-  const spawnHook: NonNullable<BashToolOptions['spawnHook']> = ({ command, cwd, env }) => ({
-    command,
-    cwd,
-    env: mergeRuntimeEnv(env, runtimeEnv.env),
-  })
-
-  if (runtimeEnv.shellKind === 'wsl') {
+  if (runtimeEnv?.shellKind === 'wsl') {
     return {
       operations: createWslBashOperations(runtimeEnv),
       spawnHook,
@@ -1231,13 +1239,14 @@ function createPromaBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined): Ba
   }
 
   return {
-    ...(runtimeEnv.shellPath && { shellPath: runtimeEnv.shellPath }),
+    ...(runtimeEnv?.shellPath && { shellPath: runtimeEnv.shellPath }),
     spawnHook,
   }
 }
 
 function buildBuiltinToolDefinitions(
   sdk: PiSdk,
+  sessionId: string,
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
@@ -1246,7 +1255,7 @@ function buildBuiltinToolDefinitions(
   const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv)
   const definitions = [
     sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(runtimeEnv)),
+    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv)),
     ...(powerShellTool ? [powerShellTool] : []),
     sdk.createEditToolDefinition(cwd),
     sdk.createWriteToolDefinition(cwd),
@@ -1372,6 +1381,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const customTools = [
         ...buildBuiltinToolDefinitions(
           sdk,
+          input.sessionId,
           cwd,
           input.canUseTool,
           input.runtimeEnv,

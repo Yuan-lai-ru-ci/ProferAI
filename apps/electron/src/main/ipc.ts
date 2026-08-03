@@ -242,7 +242,8 @@ import {
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
-import { mapSdkShellTasks, listSessionDirProcesses, isSameProcess, killProcessTree, type MonitoredProcess } from './lib/process-monitor'
+import { mapSdkShellTasks, isSameProcess, killProcessTree, type MonitoredProcess } from './lib/process-monitor'
+import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
@@ -2323,34 +2324,38 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 列出会话关联的运行中真实 OS 进程（进程视图）
-  // 主通道：按会话工作目录 sessionPath 枚举真实进程（不管 SDK 是否标记后台）。
-  // 辅通道：SDK 后台任务（type:'shell'）匹配，补齐目录枚举遗漏的。
+  // 列出会话关联的运行中真实 OS 进程（进程视图）。
+  // 权威来源是 Pi 在 shell 启动点写入的 ownership registry；SDK 后台任务仅作补充。
+  // 不再按 renderer 提供的 sessionPath 扫描，避免把会话临时目录误作项目工作目录。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES,
     async (event, input: ListSessionProcessesInput): Promise<SessionProcessInfo[]> => {
       assertSensitiveAgentIpcSender(event)
-      const results = new Map<number, MonitoredProcess>()
-      // ① 按会话目录枚举真实进程（主通道）
-      if (input.sessionPath) {
-        const byDir = await listSessionDirProcesses(input.sessionPath)
-        for (const p of byDir) {
-          results.set(p.pid, { ...p, sessionId: input.sessionId })
-        }
+      const results = new Map<number, SessionProcessInfo>()
+      const owned = await listOwnedRuntimeProcesses(input.sessionId)
+      for (const record of owned) {
+        if (!record.pid) continue // pending records have not been safely attributed to an OS PID yet
+        results.set(record.pid, {
+          pid: record.pid,
+          name: 'Pi service',
+          cmd: record.command,
+          startTime: record.startTime,
+          ports: record.ports,
+          source: 'pi-owned',
+          cwd: record.cwd,
+          persistsAfterChat: true,
+        })
       }
-      // ② SDK 后台任务匹配（辅通道）
       const bySdk = await mapSdkShellTasks(input.sessionId, input.sdkShellTasks ?? [])
       for (const p of bySdk) {
-        if (!results.has(p.pid)) results.set(p.pid, p)
+        if (!results.has(p.pid)) {
+          results.set(p.pid, {
+            pid: p.pid, name: p.name, cmd: p.cmd, startTime: p.startTime, ports: p.ports,
+            sdkTaskId: p.sdkTaskId, source: 'sdk',
+          })
+        }
       }
-      return [...results.values()].map((m) => ({
-        pid: m.pid,
-        name: m.name,
-        cmd: m.cmd,
-        startTime: m.startTime,
-        ports: m.ports,
-        sdkTaskId: m.sdkTaskId,
-      }))
+      return [...results.values()]
     }
   )
 
@@ -2363,8 +2368,12 @@ export function registerIpcHandlers(): void {
       if (!input || typeof input.pid !== 'number') {
         throw new Error('无效的 kill 目标')
       }
-      // 仅允许结束本会话关联的进程：若 sdkTaskId 存在则要求匹配该会话
-      // （防止通过 IPC 直接杀任意 pid）
+      // 仅允许结束本会话在启动点登记过的进程，防止 renderer 借 IPC 杀任意 PID。
+      const owned = await listOwnedRuntimeProcesses(input.sessionId)
+      const isOwned = owned.some((record) => record.pid === input.pid && record.startTime === input.startTime && record.status === 'running')
+      if (!isOwned) {
+        throw new Error('该进程不属于本会话或已失效，拒绝结束')
+      }
       if (!input.startTime) {
         throw new Error('缺少进程启动时间戳，拒绝 kill（防 PID 转世）')
       }
@@ -2377,6 +2386,7 @@ export function registerIpcHandlers(): void {
       if (!res.ok) {
         throw new Error(`kill 失败: ${res.message}`)
       }
+      markOwnedRuntimeProcessExited(input.sessionId, input.pid, input.startTime)
       return { ok: true, message: `已结束进程 ${input.pid}` }
     }
   )
