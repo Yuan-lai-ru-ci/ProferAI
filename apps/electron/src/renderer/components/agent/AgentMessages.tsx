@@ -405,12 +405,17 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
   const [skipFadeIn, setSkipFadeIn] = React.useState(false)
   const prevSessionIdRef = React.useRef<string | null>(null)
   const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
+  // Long histories can contain hundreds of expensive Markdown/tool renderers.
+  // Keep the full SDK array for all operations, but mount recent turn groups first.
+  const [visibleGroupStart, setVisibleGroupStart] = React.useState<number | null>(null)
+  const HISTORY_GROUP_PAGE_SIZE = 30
 
   React.useEffect(() => {
     if (sessionId !== prevSessionIdRef.current) {
       prevSessionIdRef.current = sessionId
       setReady(false)
       setSkipFadeIn(false)
+      setVisibleGroupStart(null)
     }
   }, [sessionId])
 
@@ -546,6 +551,15 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     return groupIntoTurns(allSDKMessages, sessionModelId)
   }, [allSDKMessages, sessionModelId])
 
+  // `null` derives the initial slice during the very first render after message
+  // hydration, avoiding a full-history mount before the reset effect can run.
+  const resolvedVisibleGroupStart = visibleGroupStart ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)
+  const visibleGroups = allGroups.slice(resolvedVisibleGroupStart)
+  const hasEarlierGroups = resolvedVisibleGroupStart > 0
+  const loadEarlierGroups = React.useCallback(() => {
+    setVisibleGroupStart((start) => Math.max(0, (start ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)) - HISTORY_GROUP_PAGE_SIZE))
+  }, [allGroups.length])
+
   // 跨 turn 历史 TaskCreate id → subject 映射：顶层算一次，避免每个 AssistantTurnRenderer
   // 都对全量 allMessages 做 O(M) 扫描（流式期间 useMemo 因 allMessages 引用变化失效，
   // 长会话会触发 O(T × M) 雪崩）。
@@ -564,7 +578,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
   // 迷你地图数据 — 直接使用统一的 allGroups（无需去重）
   const minimapItems: MinimapItem[] = React.useMemo(
-    () => allGroups.map((group) => ({
+    () => visibleGroups.map((group) => ({
       id: getGroupId(group),
       role: group.type === 'user' ? 'user' as const
         : group.type === 'system' ? 'status' as const
@@ -573,7 +587,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       avatar: group.type === 'user' ? userProfile.avatar : undefined,
       model: group.type === 'assistant-turn' ? group.model : undefined,
     })),
-    [allGroups, userProfile.avatar]
+    [visibleGroups, userProfile.avatar]
   )
 
   // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
@@ -589,7 +603,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
   // 所有用户消息的数据 — 供 StickyUserMessage 使用
   const allUserMessagesData = React.useMemo(() => {
-    return allGroups
+    return visibleGroups
       .filter((g): g is MessageGroup & { type: 'user' } => g.type === 'user')
       .map((g) => {
         const rawText = extractUserText(g.message) ?? ''
@@ -600,7 +614,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           attachments: files.map((f) => ({ filename: f.filename, isImage: sdkIsImageFile(f.filename) })),
         }
       })
-  }, [allGroups])
+  }, [visibleGroups])
 
   // 实时消息中是否已有可渲染的助手内容
   // 流式中：通过 liveGroupSet 精确判断（只有 streaming 时 liveGroupSet 才非空）
@@ -616,12 +630,23 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
       <ConversationContent>
+        {hasEarlierGroups && (
+          <div className="flex justify-center py-3">
+            <button
+              type="button"
+              className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={loadEarlierGroups}
+            >
+              加载更早消息（还剩 {resolvedVisibleGroupStart} 组）
+            </button>
+          </div>
+        )}
         {!hasContent && !streaming ? (
           <EmptyState />
         ) : (
           <>
             {/* 统一消息渲染（持久化 + 实时合并为一个列表，确保 system 消息位置正确） */}
-            {allGroups.map((group, idx) => {
+            {visibleGroups.map((group) => {
               const isLive = liveGroupSet.has(group)
               const isErrorGroup = group.type === 'assistant-turn'
                 && group.assistantMessages.some((m) => !!m.error)
@@ -632,7 +657,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
               // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge
               const isLastAssistantTurn = !streaming && stoppedByUser
                 && group.type === 'assistant-turn'
-                && idx === allGroups.findLastIndex((g) => g.type === 'assistant-turn')
+                && getGroupId(group) === getGroupId(allGroups.findLast((g) => g.type === 'assistant-turn') ?? group)
               return (
                 <MessageGroupRenderer
                   key={getGroupId(group)}
