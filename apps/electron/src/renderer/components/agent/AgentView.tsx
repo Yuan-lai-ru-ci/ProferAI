@@ -2746,11 +2746,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             const unavailable = availableKnowledgeIds !== null && !availableKnowledgeIds.has(reference.itemId)
             return <span key={reference.itemId} className={cn('inline-flex h-7 max-w-[260px] items-center gap-1 rounded border border-border/70 bg-background/60 px-2 text-xs text-foreground/80', unavailable && 'border-destructive/25 bg-destructive/5 text-destructive')}><button type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline disabled:no-underline"><Library className="size-3.5 shrink-0 text-muted-foreground"/><span className="truncate">{unavailable ? `${reference.title}（已删除）` : reference.title}</span></button><button type="button" aria-label={`撤销资料 ${reference.title} 的访问授权`} className="shrink-0 rounded hover:bg-accent" onClick={() => void window.electronAPI.removeAgentKnowledgeReference(sessionId, reference.itemId).then(setKnowledgeReferences).catch((error) => toast.error(error instanceof Error ? error.message : '撤销资料授权失败'))}><X className="size-3.5"/></button></span>
           })}</div>}
-          {/* 服务轨与输入框共享此唯一 gutter；负 1px 边框重叠，消除两张 surface 之间的缝。 */}
-          <RuntimeProcessPanel sessionId={sessionId} className="relative z-0" />
-          <div
+          {/* 有服务轨时，两个 surface 合为连续轮廓：顶角归服务轨、底角归输入框。 */}
+          <div className="composer-stack">
+            <RuntimeProcessPanel sessionId={sessionId} className="relative z-0" />
+            <div
             className={cn(
-              'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
+              'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200 [.composer-stack:has(.service-rail)_&]:rounded-t-none [.composer-stack:has(.service-rail)_&]:border-t-0',
               (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
@@ -2867,6 +2868,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
             {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}
             <InputToolbarOverflow items={inputToolbarItems} trailing={inputTrailingNode} />
+            </div>
           </div>
         </div>
         )}
