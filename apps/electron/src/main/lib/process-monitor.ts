@@ -19,6 +19,27 @@ import type { SDKBackgroundTaskSummary } from '@profer/shared'
 const EXEC_TIMEOUT_MS = 8000
 const PS = 'powershell.exe'
 
+/**
+ * 从命令字符串提取「显式请求的监听端口」；支持常见形态：
+ *   --port 5177 / -p 5177 / --port=5177 / -p=5177 / :5177（URL/冒号后缀）
+ * 只接受 1-65535 的合法端口，且尽量锚定到参数/URL 位置，避免把命令中任意出现的
+ * 2-5 位数字（如 pid、重试次数、日志计数）误当成端口。
+ */
+export function extractRequestedPort(command: string): number | undefined {
+  const c = (command ?? '').trim()
+  if (!c) return undefined
+  // 优先参数形态：--port <n>、--port=<n>、-p <n>、-p=<n>（右侧需为单词边界/行尾）
+  const param = c.match(/(?:--port|-p)\s*=?\s*(\d{1,5})(?:\b|$)/i)
+  let port = param ? Number(param[1]) : undefined
+  // 参数形态缺位时，回退到 URL/冒号形式（主机名:port），如 http://host:8080、localhost:5177。
+  // 要求冒号前是主机名字符集，避免把路径中的裸数字当端口。
+  if (port === undefined) {
+    const portOnly = c.match(/(?:https?:\/\/[^\s/:]*|localhost|[a-z0-9.-]+):(\d{1,5})(?:\/|\b|$)/i)
+    port = portOnly ? Number(portOnly[1]) : undefined
+  }
+  return port !== undefined && Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined
+}
+
 export interface MonitoredProcess {
   pid: number
   name: string
@@ -171,8 +192,7 @@ export async function mapSdkShellTasks(
 
   for (const task of tasks) {
     const cmd = task.command ?? ''
-    const portMatch = cmd.match(/(?:--port|-p)?\s*[: =]?\s*(\d{2,5})/i)
-    const port = portMatch ? parseInt(portMatch[1]!, 10) : undefined
+    const port = extractRequestedPort(cmd)
 
     let found: MonitoredProcess | undefined
     if (port && portPids.has(port)) {

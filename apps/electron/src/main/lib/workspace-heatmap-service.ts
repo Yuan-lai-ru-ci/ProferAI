@@ -4,11 +4,13 @@
  * 扫描会话 JSONL 文件，按天聚合实际 Token 用量（输入、缓存读写与输出）。
  * 结果缓存到 ~/.profer/heatmap-cache/{workspaceId}.json。
  *
- * 缓存策略：按天增量快照。
+ * 缓存策略：按天增量快照（缓存只作「加速层」，不作为权威数据源）。
  *   — 缓存记录 lastSnapshotDate（最后一次快照到的本地日期）。
- *   — 如果 lastSnapshotDate === 今天 → 缓存有效，零 I/O 直接返回。
- *   — 如果 lastSnapshotDate < 今天 → 只扫描昨天和今天的 result 做增量追加。
- *   — 历史日期的数据永不重建：昨天的 token 用量不会因为今天继续聊天而改变。
+ *   — 无缓存 → 全量扫描建立初始缓存。
+ *   — lastSnapshotDate < 今天 → 增量扫描 [lastSnapshotDate, 今天] 合并。
+ *   — lastSnapshotDate === 今天 → 当天数据仍在增长，仍重扫 [今天, 今天] 合并，
+ *     确保当天后续产生的 result 不会因旧实现直接 return 缓存而被永久丢弃。
+ *   — 历史缺失缺口（脏缓存遗留）无法靠增量补齐，由上层删除脏缓存后重建一次。
  *
  * 数据来源：每个会话 JSONL 中 **所有** type=result 消息的 usage 字段。
  * 统计口径：input + cache read + cache creation + output；缺失字段按 0 处理。
@@ -230,10 +232,16 @@ function writeCache(workspaceId: string, cache: HeatmapCache): void {
 /**
  * 获取工作区热力图每日 token 数据。
  *
- * 缓存策略（按天增量快照）：
- *   1. 缓存命中（lastSnapshotDate === 今天）→ 直接返回，零 I/O。
- *   2. 有缓存但 lastSnapshotDate < 今天 → 只扫描 [昨天, 今天] 的增量。
- *   3. 无缓存 → 全量扫描，建立初始缓存。
+ * 缓存策略（按天增量快照，缓存只作为「加速层」，不作为权威数据源）：
+ *   1. 无缓存 → 全量扫描，建立初始缓存。
+ *   2. lastSnapshotDate < 今天 → 增量扫描 [lastSnapshotDate, 今天] 合并进缓存。
+ *      fromDate 从 lastSnapshotDate 当天开始（而非下一天），确保快照日当天后续
+ *      产生的 result 也能被合并，不会因边界而被永久跳过。
+ *   3. lastSnapshotDate === 今天 → 当天数据仍在持续增长，重扫 [今天, 今天] 合并，
+ *      保证停留页面期间/当天后续的新 result 不会丢失。（旧实现此处直接 return 缓存，
+ *      导致当天后续数据被永久丢弃）
+ *
+ * 历史数据缺口（如脏缓存遗留的丢失日期）无法靠增量补齐，应由上层删除脏缓存后重建一次。
  */
 export function getWorkspaceHeatmapDaily(
   workspaceId: string,
@@ -244,45 +252,48 @@ export function getWorkspaceHeatmapDaily(
 
   const cache = readCache(workspaceId)
 
-  // ── 情况 1：缓存已覆盖今天，零 I/O 直接返回 ──
-  if (cache && cache.lastSnapshotDate === today) {
-    return cache.daily
+  // ── 情况 1：无缓存（首次访问或版本淘汰），全量构建 ──
+  if (!cache) {
+    const daily = buildWorkspaceTokenDaily(workspaceId, sessions)
+    writeCache(workspaceId, { version: CACHE_VERSION, lastSnapshotDate: today, daily, cachedAt: Date.now() })
+    return daily
   }
 
-  // ── 情况 2：有缓存但需要增量更新 ──
-  if (cache && cache.lastSnapshotDate < today) {
-    // 扫描从 lastSnapshotDate 后一天到今天的增量
-    const fromDate = nextDay(cache.lastSnapshotDate)
-    const incremental = incrementalScan(activeSessions, fromDate, today)
+  // ── 情况 2 & 3：从缓存的 lastSnapshotDate 当天一直合并到今天的增量 ──
+  // fromDate 取 lastSnapshotDate 当天而不是 nextDay，避免快照日当天新数据被边界跳过。
+  const fromDate = cache.lastSnapshotDate <= today ? cache.lastSnapshotDate : today
+  const incremental = incrementalScan(activeSessions, fromDate, today)
 
-    if (incremental.size > 0) {
-      // 合并：把增量数据并入 daily 数组
-      const dailyMap = new Map<string, number>(cache.daily.map((d) => [d.date, d.tokens]))
-      for (const [date, tokens] of incremental) {
-        dailyMap.set(date, (dailyMap.get(date) ?? 0) + tokens)
-      }
-      const daily = Array.from(dailyMap.entries())
-        .map(([date, tokens]) => ({ date, tokens }))
-        .sort((a, b) => a.date.localeCompare(b.date))
+  // 合并增量：对 fromDate 当天覆盖、其后日期累加（详见 mergeDaily）。
+  const daily = mergeDaily(cache.daily, incremental, fromDate)
 
-      writeCache(workspaceId, { version: CACHE_VERSION, lastSnapshotDate: today, daily, cachedAt: Date.now() })
-      return daily
-    }
-
-    // 增量扫描无新数据，只更新 lastSnapshotDate 避免重复扫描
-    writeCache(workspaceId, { ...cache, lastSnapshotDate: today, cachedAt: Date.now() })
-    return cache.daily
-  }
-
-  // ── 情况 3：无缓存（首次访问或版本淘汰），全量构建 ──
-  const daily = buildWorkspaceTokenDaily(workspaceId, sessions)
   writeCache(workspaceId, { version: CACHE_VERSION, lastSnapshotDate: today, daily, cachedAt: Date.now() })
   return daily
 }
 
-/** 返回 ISO 日期 "YYYY-MM-DD" 的下一天。 */
-function nextDay(date: string): string {
-  const d = new Date(date + 'T00:00:00')
-  d.setDate(d.getDate() + 1)
-  return timestampToLocalDate(d.getTime())
+/**
+ * 将增量扫描结果合并进已有 daily 数组（纯函数，便于单测）。
+ *
+ * 合并规则（含对漏算 bug 的修正逻辑）：
+ *   - 对 fromDate 当天采用「覆盖」：缓存中该天的旧值以最近一次扫描为准，避免重复累计。
+ *   - 对 fromDate 之后的日期采用「累加」：缓存本不该有这些天的记录，属增量补录。
+ *
+ * @returns 合并后按日期升序排列的 daily 数组（不修改入参）。
+ */
+export function mergeDaily(
+  daily: HeatmapDailyEntry[],
+  incremental: Map<string, number>,
+  fromDate: string,
+): HeatmapDailyEntry[] {
+  const dailyMap = new Map<string, number>(daily.map((d) => [d.date, d.tokens]))
+  for (const [date, tokens] of incremental) {
+    if (date === fromDate) {
+      dailyMap.set(date, tokens)
+    } else {
+      dailyMap.set(date, (dailyMap.get(date) ?? 0) + tokens)
+    }
+  }
+  return Array.from(dailyMap.entries())
+    .map(([date, tokens]) => ({ date, tokens }))
+    .sort((a, b) => a.date.localeCompare(b.date))
 }
