@@ -2746,7 +2746,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             const unavailable = availableKnowledgeIds !== null && !availableKnowledgeIds.has(reference.itemId)
             return <span key={reference.itemId} className={cn('inline-flex h-7 max-w-[260px] items-center gap-1 rounded border border-border/70 bg-background/60 px-2 text-xs text-foreground/80', unavailable && 'border-destructive/25 bg-destructive/5 text-destructive')}><button type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline disabled:no-underline"><Library className="size-3.5 shrink-0 text-muted-foreground"/><span className="truncate">{unavailable ? `${reference.title}（已删除）` : reference.title}</span></button><button type="button" aria-label={`撤销资料 ${reference.title} 的访问授权`} className="shrink-0 rounded hover:bg-accent" onClick={() => void window.electronAPI.removeAgentKnowledgeReference(sessionId, reference.itemId).then(setKnowledgeReferences).catch((error) => toast.error(error instanceof Error ? error.message : '撤销资料授权失败'))}><X className="size-3.5"/></button></span>
           })}</div>}
-          {/* 服务轨与输入框共享此唯一 gutter；输入框以自身顶部圆角覆盖服务轨的下缘。 */}
+          {/* 服务轨与输入框共享此唯一 gutter；负 1px 边框重叠，消除两张 surface 之间的缝。 */}
           <RuntimeProcessPanel sessionId={sessionId} className="relative z-0" />
           <div
             className={cn(
