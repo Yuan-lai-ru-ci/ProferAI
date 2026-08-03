@@ -569,6 +569,8 @@ export interface ElectronAPI {
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
   listSessionProcesses: (input: ListSessionProcessesInput) => Promise<SessionProcessInfo[]>
   killProcess: (input: KillProcessInput) => Promise<{ ok: boolean; message: string }>
+  /** Pi 运行进程登记或状态变化（用于即时刷新服务栏） */
+  onRuntimeProcessesChanged: (callback: (data: { sessionId: string }) => void) => () => void
 
   /** 分叉 Agent 会话 */
   forkAgentSession: (input: ForkSessionInput) => Promise<AgentSessionMeta>
@@ -1896,6 +1898,12 @@ const electronAPI: ElectronAPI = {
 
   killProcess: (input: KillProcessInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.KILL_PROCESS, input)
+  },
+
+  onRuntimeProcessesChanged: (callback: (data: { sessionId: string }) => void) => {
+    const listener = (_: unknown, data: { sessionId: string }): void => callback(data)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.RUNTIME_PROCESSES_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.RUNTIME_PROCESSES_CHANGED, listener) }
   },
 
   forkAgentSession: (input: ForkSessionInput) => {

@@ -6,7 +6,7 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentRuntimeEnv } from '../agent-runtime-env'
 import { mergeRuntimeEnv } from '../agent-runtime-env'
-import { registerPendingPiRuntimeProcess } from '../runtime-process-registry'
+import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -39,6 +39,8 @@ export interface ExecutePowerShellOptions {
   platform?: NodeJS.Platform
   terminationGraceMs?: number
   terminateProcessTree?: (pid: number) => void
+  /** Called immediately after PowerShell is spawned, before any command output. */
+  onSpawn?: (pid: number) => void
 }
 
 /** Windows PowerShell 5.1 是系统组件；使用 SystemRoot 绝对路径避免启动器 PATH 不完整。 */
@@ -112,6 +114,8 @@ export function executePowerShellCommand(command: string, options: ExecutePowerS
       reject(error)
       return
     }
+
+    if (typeof child.pid === 'number') options.onSpawn?.(child.pid)
 
     let output = ''
     let timedOut = false
@@ -218,6 +222,9 @@ export function createWindowsPowerShellToolDefinition(
         timeoutSeconds: input.timeout,
         signal,
         executable,
+        onSpawn: (pid) => {
+          if (sessionId) registerPiRuntimeProcessShell(sessionId, input.command, cwd, pid, 'powershell')
+        },
       })
       return {
         content: [{ type: 'text', text: formatPowerShellResult(result) }],

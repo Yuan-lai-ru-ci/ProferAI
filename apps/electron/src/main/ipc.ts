@@ -243,7 +243,7 @@ import {
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
-import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited } from './lib/runtime-process-registry'
+import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
@@ -996,6 +996,14 @@ export function registerIpcHandlers(): void {
     return
   }
   _ipcHandlersRegistered = true
+
+  onRuntimeProcessRegistryChanged((sessionId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send(AGENT_IPC_CHANNELS.RUNTIME_PROCESSES_CHANGED, { sessionId })
+      }
+    }
+  })
 
   console.log('[IPC] 正在注册 IPC 处理器...')
 

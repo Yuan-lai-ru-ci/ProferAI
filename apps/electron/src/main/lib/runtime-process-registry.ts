@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRuntimeProcessesPath } from './config-paths'
 import { extractRequestedPort, isSameProcess, listPortPidMapWin, listProcessesWin, type MonitoredProcess } from './process-monitor'
@@ -31,6 +32,16 @@ export interface RuntimeProcessRecord {
 interface RegistryFile {
   version: 1
   records: RuntimeProcessRecord[]
+}
+
+const registryEvents = new EventEmitter()
+export const RUNTIME_PROCESS_REGISTRY_CHANGED = 'runtime-process-registry-changed'
+export function onRuntimeProcessRegistryChanged(listener: (sessionId: string) => void): () => void {
+  registryEvents.on(RUNTIME_PROCESS_REGISTRY_CHANGED, listener)
+  return () => registryEvents.off(RUNTIME_PROCESS_REGISTRY_CHANGED, listener)
+}
+function emitChanged(sessionId: string): void {
+  registryEvents.emit(RUNTIME_PROCESS_REGISTRY_CHANGED, sessionId)
 }
 
 function load(): RegistryFile {
@@ -97,6 +108,7 @@ export function registerPendingPiRuntimeProcess(
   command: string,
   cwd: string,
   launcher: 'bash' | 'powershell' = 'bash',
+  shellPid?: number,
 ): RuntimeProcessRecord | undefined {
   // All shell calls get a short-lived observation record. This prevents custom
   // scripts and unfamiliar frameworks from being invisible merely because they
@@ -108,13 +120,25 @@ export function registerPendingPiRuntimeProcess(
   // Avoid duplicate records caused by a retry or duplicate tool event in a short window.
   const existing = data.records.find((r) => r.sessionId === sessionId && r.command === command && r.cwd === serviceCwd && r.launcher === launcher
     && r.status !== 'exited' && now - r.launchedAt < 15_000)
-  if (existing) return existing
+  if (existing) {
+    // A pre-spawn observation may already exist. Upgrade it as soon as Profer's
+    // controlled launcher receives the real OS PID; do not create a duplicate.
+    if (shellPid && existing.shellPid !== shellPid) {
+      existing.shellPid = shellPid
+      existing.lastObservedAt = now
+      save(data)
+      emitChanged(sessionId)
+    }
+    return existing
+  }
   const record: RuntimeProcessRecord = {
     id: randomUUID(), sessionId, runtime: 'pi', source: 'pi-owned', launcher, likelyService, command, cwd: serviceCwd,
     ports: [], launchedAt: now, lastObservedAt: now, status: 'pending',
+    ...(shellPid && { shellPid }),
   }
   data.records.push(record)
   save(data)
+  emitChanged(sessionId)
   // A follow-up observation catches detached/nohup children even when the user
   // never opens the panel at precisely the right moment. Scheduling is coalesced
   // per session: high-frequency bash calls during a run create many observations
@@ -123,6 +147,22 @@ export function registerPendingPiRuntimeProcess(
   // in one pass instead of launching N concurrent scans.
   scheduleNextObservation(sessionId)
   return record
+}
+
+/**
+ * Records a PID obtained directly from Profer's own shell spawn. This is launch
+ * evidence, not yet the managed service PID: package managers and `nohup &`
+ * frequently fork the eventual listener, so the normal observer still confirms
+ * `{pid,startTime,ports}` before enabling termination.
+ */
+export function registerPiRuntimeProcessShell(
+  sessionId: string,
+  command: string,
+  cwd: string,
+  shellPid: number,
+  launcher: 'bash' | 'powershell' = 'bash',
+): RuntimeProcessRecord | undefined {
+  return registerPendingPiRuntimeProcess(sessionId, command, cwd, launcher, shellPid)
 }
 
 function commandTokens(command: string): string[] {
@@ -280,7 +320,10 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
     return true
   })
   if (kept.length !== data.records.length) { data.records = kept; changed = true }
-  if (changed) save(data)
+  if (changed) {
+    save(data)
+    emitChanged(sessionId)
+  }
   return data.records.filter((r) => r.sessionId === sessionId && r.status !== 'exited')
 }
 
@@ -291,4 +334,5 @@ export function markOwnedRuntimeProcessExited(sessionId: string, pid: number, st
   record.status = 'exited'
   record.lastObservedAt = Date.now()
   save(data)
+  emitChanged(sessionId)
 }

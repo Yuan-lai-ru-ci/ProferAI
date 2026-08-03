@@ -1563,6 +1563,8 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSION_PROCESSES: 'agent:list-session-processes',
   /** 结束/终止会话关联的进程树（kill） */
   KILL_PROCESS: 'agent:kill-process',
+  /** Pi 受控 launcher 已登记或确认了本会话运行进程 */
+  RUNTIME_PROCESSES_CHANGED: 'agent:runtime-processes-changed',
   /** 分叉会话（从指定消息处创建新会话） */
   FORK_SESSION: 'agent:fork-session',
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
