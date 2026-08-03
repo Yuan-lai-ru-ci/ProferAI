@@ -19,7 +19,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useAtom } from 'jotai'
+import { sdkBackgroundTasksAtomFamily } from '@/atoms/agent-atoms'
 import type { AgentWorkspace, AgentSessionMeta } from '@profer/shared'
 
 interface MoveSessionDialogProps {
@@ -41,6 +44,12 @@ export function MoveSessionDialog({
 }: MoveSessionDialogProps): React.ReactElement {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = React.useState<string>('')
   const [moving, setMoving] = React.useState(false)
+  // 该会话的 SDK 后台任务（免费数据）：存在 type:'shell' 运行中任务 → 提示迁移可能 EPERM
+  const [sdkTasks] = useAtom(sdkBackgroundTasksAtomFamily(sessionId))
+  const runningShellTasks = React.useMemo(
+    () => sdkTasks.filter((t) => t.type === 'shell' && t.status === 'running'),
+    [sdkTasks]
+  )
 
   // 过滤掉当前工作区
   const availableWorkspaces = React.useMemo(
@@ -85,6 +94,16 @@ export function MoveSessionDialog({
             选择目标工作区，会话将完整迁移过去。
           </DialogDescription>
         </DialogHeader>
+
+        {runningShellTasks.length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              该会话有 <strong>{runningShellTasks.length}</strong> 个运行中的后台进程
+              （如 dev server）。直接迁移可能因文件占用失败（EPERM），建议先停止这些进程再迁移。
+            </span>
+          </div>
+        )}
 
         {availableWorkspaces.length === 0 ? (
           <p className="text-sm text-muted-foreground py-2">
