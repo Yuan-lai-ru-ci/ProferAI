@@ -1,0 +1,190 @@
+/**
+ * process-monitor — 会话运行进程采集（期一 / M1b-M2）
+ *
+ * 用 PowerShell（Get-CimInstance / Get-NetTCPConnection，Windows 先行）枚举真实
+ * OS 进程 + 端口映射，并把 SDK 后台任务（type:'shell'）的 command 匹配到真实 PID。
+ *
+ * 设计原则：
+ *  - 零第三方依赖；统一走 powershell.exe。⚠️ 实测 tasklist/netstat 在本进程 spawn
+ *    ETIMEDOUT；PowerShell 通道稳定但 Get-NetTCPConnection 单次约 4-5s、Get-CimInstance
+ *    约 1.6s。**所有采集均为异步（execFile），绝不用 execFileSync**，避免阻塞主进程/冻结 UI。
+ *  - pid 无转世：项带 startTime（CreationDate），kill 前 {pid,startTime} 双因子（isSameProcess）。
+ *  - 接口预留跨平台：Windows 实装；mac/linux TODO（ps + ss|lsof）。
+ *  - 超时给足 8s（PowerShell 冷启动 + 大表扫描）。
+ */
+
+import { execFile, execFileSync } from 'node:child_process'
+import type { SDKBackgroundTaskSummary } from '@profer/shared'
+
+const EXEC_TIMEOUT_MS = 8000
+const PS = 'powershell.exe'
+
+export interface MonitoredProcess {
+  pid: number
+  name: string
+  cmd: string
+  startTime?: number
+  ports: number[]
+  sessionId?: string
+  sdkTaskId?: string
+}
+
+/** 异步执行 PowerShell，失败/超时返回空串（不抛） */
+function psAsync(cmd: string): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        PS,
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cmd],
+        { encoding: 'utf8', timeout: EXEC_TIMEOUT_MS, windowsHide: true },
+        (err, stdout) => resolve(err ? '' : (stdout ?? '')),
+      )
+    } catch {
+      resolve('')
+    }
+  })
+}
+
+/** 端口 → 监听 pid 映射（Get-NetTCPConnection -State Listen） */
+export async function listPortPidMapWin(): Promise<Map<number, number[]>> {
+  const map = new Map<number, number[]>()
+  const out = await psAsync(
+    'Get-NetTCPConnection -State Listen | Select-Object LocalPort,OwningProcess | ConvertTo-Json -Compress',
+  )
+  if (!out) return map
+  try {
+    const arr = JSON.parse(out)
+    const items = Array.isArray(arr) ? arr : [arr]
+    for (const it of items) {
+      const port = Number(it.LocalPort)
+      const pid = Number(it.OwningProcess)
+      if (!Number.isNaN(port) && !Number.isNaN(pid) && pid > 0) {
+        const list = map.get(port) ?? []
+        if (!list.includes(pid)) list.push(pid)
+        map.set(port, list)
+      }
+    }
+  } catch { /* 忽略 */ }
+  return map
+}
+
+/** 枚举全部进程（pid → name/cmd/startTime） */
+export async function listProcessesWin(): Promise<Map<number, { name: string; cmd: string; startTime?: number }>> {
+  const map = new Map<number, { name: string; cmd: string; startTime?: number }>()
+  const out = await psAsync(
+    'Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine,@{N="cts";E={$_.CreationDate.ToString("o")}} | ConvertTo-Json -Compress',
+  )
+  if (!out) return map
+  try {
+    const arr = JSON.parse(out)
+    const items = Array.isArray(arr) ? arr : [arr]
+    for (const it of items) {
+      const pid = Number(it.ProcessId)
+      if (Number.isNaN(pid) || pid <= 0) continue
+      let startTime: number | undefined
+      if (it.cts) {
+        const t = Math.floor(new Date(it.cts).getTime())
+        if (!Number.isNaN(t)) startTime = t
+      }
+      map.set(pid, { name: it.Name ?? '', cmd: it.CommandLine ?? '', startTime })
+    }
+  } catch { /* 忽略 */ }
+  return map
+}
+
+/** pid + startTime 双因子（防 PID 转世）。startTime 缺失 → 拒绝（false）。容差 2s。 */
+export async function isSameProcess(pid: number, expectStartTime?: number): Promise<boolean> {
+  if (!expectStartTime) return false
+  const out = await psAsync(
+    `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if($p){ $p | Select-Object @{N='cts';E={$p.CreationDate.ToString('o')}} | ConvertTo-Json -Compress }`,
+  )
+  if (!out) return false
+  try {
+    const it = JSON.parse(out)
+    const cd = it && it.cts ? Math.floor(new Date(it.cts).getTime()) : undefined
+    if (typeof cd !== 'number') return false
+    return Math.abs(cd - expectStartTime) < 2000
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 把 SDK 后台任务（type:'shell'）匹配到真实 OS 进程。
+ * 优先「端口命中」（command 含端口 → 该端口监听 pid），端口缺失退化为命令首关键字+node 匹配。
+ */
+export async function mapSdkShellTasks(
+  sessionId: string,
+  sdkTasks: SDKBackgroundTaskSummary[],
+): Promise<MonitoredProcess[]> {
+  const tasks = (sdkTasks ?? []).filter((t) => t.type === 'shell')
+  if (tasks.length === 0) return []
+  const [portPids, procs] = await Promise.all([listPortPidMapWin(), listProcessesWin()])
+  const results: MonitoredProcess[] = []
+
+  for (const task of tasks) {
+    const cmd = task.command ?? ''
+    const portMatch = cmd.match(/(?:--port|-p)?\s*[: =]?\s*(\d{2,5})/i)
+    const port = portMatch ? parseInt(portMatch[1]!, 10) : undefined
+
+    let found: MonitoredProcess | undefined
+    if (port && portPids.has(port)) {
+      for (const pid of portPids.get(port)!) {
+        const info = procs.get(pid)
+        if (!info) continue
+        const lowCmd = info.cmd.toLowerCase()
+        const lowTask = cmd.toLowerCase()
+        const similar =
+          info.name.toLowerCase().includes('node') ||
+          (lowCmd.length > 8 && lowTask.length > 8 && lowCmd.includes(lowTask.slice(0, 8)))
+        if (similar || lowCmd.includes(`:${port}`)) {
+          found = { pid, name: info.name, cmd: info.cmd, startTime: info.startTime, ports: [port], sessionId, sdkTaskId: task.id }
+          break
+        }
+      }
+    }
+    if (!found && cmd.trim().length > 0) {
+      const key = cmd.trim().split(/\s+/)[0]?.toLowerCase()
+      if (key) {
+        for (const [pid, info] of procs) {
+          const lowCmd = info.cmd.toLowerCase()
+          if (info.name.toLowerCase().includes('node') && lowCmd.includes(key)) {
+            found = { pid, name: info.name, cmd: info.cmd, startTime: info.startTime, ports: [], sessionId, sdkTaskId: task.id }
+            break
+          }
+        }
+      }
+    }
+    if (found) results.push(found)
+  }
+  return results
+}
+
+/** 获取单进程信息（展示 / kill 前 double-check） */
+export async function getProcessInfo(pid: number): Promise<MonitoredProcess | null> {
+  const out = await psAsync(
+    `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if($p){ $p | Select-Object ProcessId,Name,CommandLine,@{N='cts';E={$p.CreationDate.ToString('o')}} | ConvertTo-Json -Compress }`,
+  )
+  if (!out) return null
+  try {
+    const it = JSON.parse(out)
+    if (!it || it.ProcessId == null) return null
+    const cd = it.cts ? Math.floor(new Date(it.cts).getTime()) : undefined
+    return { pid: Number(it.ProcessId), name: it.Name ?? '', cmd: it.CommandLine ?? '', startTime: cd, ports: [] }
+  } catch {
+    return null
+  }
+}
+
+/** kill 进程树（Windows taskkill /T /F 杀整棵子树；posix 预留） */
+export function killProcessTree(pid: number): { ok: boolean; message: string } {
+  try {
+    execFileSync('taskkill.exe', ['/pid', String(pid), '/T', '/F'], {
+      stdio: 'ignore', timeout: EXEC_TIMEOUT_MS, windowsHide: true,
+    })
+    return { ok: true, message: `killed ${pid}` }
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException
+    return { ok: false, message: e?.message ?? 'kill failed' }
+  }
+}
