@@ -403,6 +403,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
 
   return (
     <div
+      data-profer-navigation-region="right-panel"
       className={cn(
         'relative z-0 h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl dark:shadow-md',
         shouldAnimate && 'transition-[width] duration-300 ease-in-out',

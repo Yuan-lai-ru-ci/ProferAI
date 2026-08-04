@@ -160,6 +160,7 @@ export function InputToolbarOverflow({
 
   return (
     <div
+      data-profer-navigation-region="toolbar"
       className={cn(
         'flex items-center justify-between px-2 py-1 h-[48px] gap-4',
         className

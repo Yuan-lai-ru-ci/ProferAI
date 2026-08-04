@@ -59,6 +59,23 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const prevIsPanelOpenRef = React.useRef(isPanelOpen)
 
   React.useEffect(() => {
+    const focusRightPanel = (): void => {
+      setSidePanelOpen(true)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const panel = document.querySelector<HTMLElement>('[data-profer-navigation-region="right-panel"]')
+          const target = panel && Array.from(panel.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          )).find((element) => element.offsetParent !== null)
+          target?.focus()
+        })
+      })
+    }
+    window.addEventListener('proma:focus-right-panel', focusRightPanel)
+    return () => window.removeEventListener('proma:focus-right-panel', focusRightPanel)
+  }, [setSidePanelOpen])
+
+  React.useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth)
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
@@ -258,6 +275,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         {/* 右侧边栏：个人模式显示文件面板；团队模式文件已在主区域 */}
         {!isTeamWorkspace && showRightPanel && (
           <div
+            data-profer-navigation-region="right-panel"
             className={cn(
               'relative z-[60] flex items-stretch crt-sidebar transition-[padding] duration-300 ease-in-out',
               isPanelOpen ? 'p-2 pl-0' : 'p-0'

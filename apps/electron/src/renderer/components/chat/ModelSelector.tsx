@@ -26,6 +26,7 @@ import {
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
+import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import type { Channel, ModelOption } from '@profer/shared'
@@ -226,6 +227,30 @@ export function ModelSelector({
       if (target) handleSelect(target)
     }
   }
+
+  React.useEffect(() => {
+    if (!open) return
+    return navigationController.register((action) => {
+      if (action === 'back') {
+        setOpen(false)
+        return true
+      }
+      if (action === 'previous' || action === 'next') {
+        if (flatOptions.length === 0) return true
+        setHighlightIndex((prev) => {
+          if (action === 'next') return prev < flatOptions.length - 1 ? prev + 1 : 0
+          return prev > 0 ? prev - 1 : flatOptions.length - 1
+        })
+        return true
+      }
+      if (action === 'confirm') {
+        const target = flatOptions[highlightIndex >= 0 ? highlightIndex : 0]
+        if (target) handleSelect(target)
+        return true
+      }
+      return false
+    }, 100)
+  }, [open, flatOptions, highlightIndex, handleSelect])
 
   if (channelsLoaded && modelOptions.length === 0) {
     return (

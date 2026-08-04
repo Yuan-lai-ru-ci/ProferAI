@@ -2706,7 +2706,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      <div className="flex h-full min-w-0 flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
+      <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex h-full min-w-0 flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
 

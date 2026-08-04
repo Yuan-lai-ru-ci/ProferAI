@@ -109,7 +109,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
     else createAutomation()
   }, [createAutomation, tab, triggerCalendarCreate, triggerTodoCreate]), true, { exclusive: true })
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-content-area">
+    <div data-profer-navigation-region="planning" tabIndex={-1} className="flex h-full flex-col overflow-hidden bg-content-area">
       {/* AppShell 已提供独立的 Windows 顶部拖拽条；这里不能再声明 drag-region，
           否则 Electron 的命中区域会覆盖右上角 WindowControls，导致最小化/最大化/关闭失效。 */}
       <header className={cn('flex w-full items-start justify-between gap-6', standalone ? 'px-5 pb-5 pt-8' : 'px-6 pb-6 pt-8 sm:px-8 xl:px-10')}>
