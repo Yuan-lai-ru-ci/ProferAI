@@ -12,6 +12,7 @@ import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
 import { allPendingAskUserRequestsAtom } from '@/atoms/agent-atoms'
+import { isEditableTarget } from '@/lib/navigation-controller'
 import type { AskUserQuestion } from '@profer/shared'
 
 interface QuestionAnswer {
@@ -103,8 +104,9 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
       const itemCount = q.options.length + 1
       const lastTab = curTab >= qs.length - 1
 
-      // 自由文本输入框内：仅 Enter 生效（输入法组合中跳过）
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      // 自由文本与富文本编辑器内：仅 Enter 生效（输入法组合中跳过）。
+      // ProseMirror/contenteditable 必须保留箭头键给原生光标移动。
+      if (isEditableTarget(e.target)) {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
           e.preventDefault()
           if (lastTab) submitRef.current?.()

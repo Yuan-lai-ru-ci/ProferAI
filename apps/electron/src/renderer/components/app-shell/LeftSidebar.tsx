@@ -100,6 +100,8 @@ import {
 import { detectIsMac } from '@/lib/platform'
 import { SidebarBalanceBar } from '@/components/app-shell/SidebarBalanceBar'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
+import { navigationController } from '@/lib/navigation-controller'
+import type { NavigationAction } from '@/lib/navigation-actions'
 import {
   replaceAgentSessionInFreshnessOrder,
   sortAgentSessionsByUpdatedAtDesc,
@@ -144,6 +146,7 @@ function AutomationSidebarEntry({ count, active, onClick }: AutomationSidebarEnt
   return (
     <button
       type="button"
+      data-profer-navigation-item="planning"
       aria-label={`自动任务，${count} 个任务已创建`}
       onClick={onClick}
       className={cn(
@@ -186,6 +189,7 @@ function SkillsSidebarEntry({ count, updateCount, active, onClick }: SkillsSideb
     <button
       type="button"
       aria-label={`Agent 技能，${count} 个能力${hasUpdate ? `，${updateCount} 个可更新` : ''}`}
+      data-profer-navigation-item="agent-skills"
       onClick={onClick}
       className={cn(
         'group w-full flex items-center justify-between px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
@@ -543,6 +547,56 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const setAgentMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
+
+  // 键盘与手柄共用左栏的 DOM 顺序；项目标题和会话行采用 roving focus。
+  React.useEffect(() => {
+    return navigationController.register((action: NavigationAction) => {
+      const focused = document.activeElement
+      const current = focused?.closest<HTMLElement>('[data-profer-navigation-item]')
+      if (!current) return false
+      // mode 切换按钮是独立的“开关”，不参与下面这条纵向主链；否则从项目往上
+      // 会跳到 agent/chat 切换按钮，破坏“区专管左右切模式”的直觉。
+      const items = Array.from(document.querySelectorAll<HTMLElement>('[data-profer-navigation-item]'))
+        .filter((item) => item.dataset.proferNavigationItem !== 'mode')
+      const index = items.indexOf(current)
+      if (index < 0) return false
+
+      if (action === 'previous' || action === 'next') {
+        const delta = action === 'next' ? 1 : -1
+        const target = items[index + delta]
+        // 主链最顶（新建会话）再↑：进入顶部的 mode 切换按钮（预选态跟随当前激活）。
+        if (!target && action === 'previous') {
+          const modeBtn = document.querySelector<HTMLElement>(
+            '[data-profer-navigation-item="mode"][data-profer-navigation-active="true"]',
+          ) || document.querySelector<HTMLElement>('[data-profer-navigation-item="mode"]')
+          if (modeBtn) {
+            modeBtn.focus()
+            return true
+          }
+        }
+        if (!target) {
+          // 已在边界：不再消费该方向，让外层（NavigationInputProvider）把焦点
+          // 穿出左栏回到主内容/编辑框，避免用户上到 Agent 后按↓被“吃掉”而卡死。
+          return false
+        }
+        target.focus()
+        target.scrollIntoView({ block: 'nearest' })
+        return true
+      }
+      if (action === 'confirm') {
+        current.click()
+        return true
+      }
+      if (current.dataset.proferNavigationItem === 'project' && (action === 'left' || action === 'right')) {
+        const expanded = current.getAttribute('aria-expanded') === 'true'
+        if ((action === 'left' && expanded) || (action === 'right' && !expanded)) {
+          current.querySelector<HTMLElement>('[data-project-collapse]')?.click()
+          return true
+        }
+      }
+      return false
+    }, 20)
+  }, [])
 
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
@@ -1967,6 +2021,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               <button
                 type="button"
                 aria-label={mode === 'agent' ? '新建 Agent 会话' : '新建 Chat 对话'}
+                data-profer-navigation-item="new-session"
                 onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
                 className="size-10 flex items-center justify-center rounded-[12px] text-foreground/70 bg-primary/5 hover:bg-primary/10 hover:text-foreground transition-[background-color,border-color,color] duration-150 titlebar-no-drag border border-border/60 hover:border-border"
               >
@@ -1997,6 +2052,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               <button
                 type="button"
                 aria-label={`规划中心，${automationCount} 个定时任务`}
+                data-profer-navigation-item="planning"
                 onClick={handleOpenAutomations}
                 className={cn(
                   'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
@@ -2031,6 +2087,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 <button
                   type="button"
                   aria-label="Agent 技能"
+                  data-profer-navigation-item="agent-skills"
                   onClick={handleOpenSkills}
                   className={cn(
                     'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
@@ -2169,6 +2226,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       {/* 新对话/新会话按钮 + 搜索按钮 */}
       <div className="px-3 pt-2 flex items-center gap-1.5">
         <button
+          data-profer-navigation-item="new-session"
           onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
           className="flex-1 flex items-center gap-2 px-3 py-2 rounded-[10px] text-[13px] font-medium text-foreground/70 bg-primary/5 hover:bg-primary/10 hover:text-foreground transition-[background-color,border-color,color] duration-150 titlebar-no-drag border border-border/60 hover:border-border"
         >
@@ -2970,6 +3028,8 @@ const ConversationItem = React.memo(function ConversationItem({
         <div
           ref={preview.setAnchorRef}
           role="button"
+          data-profer-navigation-item="session"
+          data-profer-navigation-active={active ? 'true' : undefined}
           tabIndex={0}
           onClick={() => onSelect(conversation.id, conversation.title)}
           onKeyDown={(e) => {
@@ -3216,6 +3276,8 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
         <div
           ref={preview.setAnchorRef}
           role="button"
+          data-profer-navigation-item="session"
+          data-profer-navigation-active={active ? 'true' : undefined}
           tabIndex={0}
           onClick={() => onSelect(session.id, session.title)}
           onKeyDown={(e) => {
@@ -3600,6 +3662,8 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
         ) : (
           <button
             type="button"
+            data-profer-navigation-item="project"
+            data-profer-navigation-active={isCurrent ? 'true' : undefined}
             aria-expanded={!collapsed}
             aria-controls={`project-sessions-${group.workspace.id}`}
             onClick={(e) => {

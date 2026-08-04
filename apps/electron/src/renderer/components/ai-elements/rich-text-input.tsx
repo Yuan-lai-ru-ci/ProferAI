@@ -326,6 +326,9 @@ export function RichTextInput({
     editable: !disabled,
     editorProps: {
       attributes: {
+        // tabindex=0 让空间导航把编辑器视为可达目标（[tabindex]:not([tabindex="-1"])），
+        // 从而左栏/右栏的箭头可以进入输入区；裸的 contenteditable 因无 tabindex 无法被聚焦。
+        tabindex: '0',
         class: cn(
           'prose dark:prose-invert max-w-none focus:outline-none',
           'min-h-[101px] w-full text-[15px] leading-[1.6]',

@@ -41,6 +41,7 @@ export type ConversationContentProps = ComponentProps<typeof StickToBottom.Conte
 export function ConversationContent({ className, ...props }: ConversationContentProps): React.ReactElement {
   return (
     <StickToBottom.Content
+      scrollClassName="profer-scroll-region"
       className={cn('flex flex-col gap-1 py-4 px-8', className)}
       {...props}
     />

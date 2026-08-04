@@ -151,6 +151,8 @@ export function TabBarItem({
       <button
         ref={buttonRef}
         type="button"
+        role="tab"
+        aria-selected={isActive}
         className={cn(
           'group relative flex items-center gap-1.5 px-3 h-[34px] w-full',
           'text-xs transition-colors select-none cursor-pointer',
