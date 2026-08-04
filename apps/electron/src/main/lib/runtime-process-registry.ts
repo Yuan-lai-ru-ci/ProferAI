@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRuntimeProcessesPath } from './config-paths'
-import { extractRequestedPort, isSameProcess, listPortPidMapWin, listProcessesWin, type MonitoredProcess } from './process-monitor'
+import { captureOsSnapshotWin, extractRequestedPort, type MonitoredProcess } from './process-monitor'
 
 /**
  * Persisted ownership records for long-running services launched by a runtime.
@@ -186,11 +186,27 @@ function compatible(record: RuntimeProcessRecord, process: MonitoredProcess): bo
   return tokens.length === 0 || tokens.some((token) => cmd.includes(token))
 }
 
+/**
+ * 用共享进程快照批量校验 {pid,startTime} 双因子（防 PID 转世），替代逐条 PowerShell。
+ * 快照里的 startTime 来自同一 CreationDate，直接与记录的期望值比对（容差 2s）。
+ */
+function isSameInSnapshot(
+  processes: Map<number, { name: string; cmd: string; startTime?: number }>,
+  pid: number,
+  expectStartTime?: number,
+): boolean {
+  if (!expectStartTime) return false
+  const info = processes.get(pid)
+  if (!info || typeof info.startTime !== 'number') return false
+  return Math.abs(info.startTime - expectStartTime) < 2000
+}
+
 /** 每个 sessionId 的合并观测定时器；同一会话短窗口内多次登记只复用一个 timer。 */
 const observationTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const OBSERVE_DELAY_MS = 2_000
-/** 单次调度的最大追踪轮次，防止 pending 迟迟不确认时无限自续（不会并发，是串行节流）。 */
-const MAX_TRACK_ATTEMPTS = 6
+/** 单次调度的最大追踪轮次，防止 pending 迟迟不确认时无限自续（不会并发，是串行节流）。
+ *  3 轮（每 2s 一轮）足以覆盖 dev server 的启动确认，更长窗口收益小且持续占 CPU。 */
+const MAX_TRACK_ATTEMPTS = 3
 
 /**
  * 合并调度一次会话观测：同一 sessionId 的 pending 定时器幂等（短窗口内的
@@ -270,11 +286,19 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
   // `git diff` / test commands can be falsely bound to a long-lived Node/Electron
   // process in the same workspace and remain visible as fake services.
   const confirmablePending = pending.filter((record) => record.likelyService)
-  // 尚未定位到 pid 的服务候选：一次性拉取共享快照（端口表 + 全量进程表），在 JS 内过滤。
-  if (confirmablePending.length > 0) {
-    const [portPids, processes] = await Promise.all([listPortPidMapWin(), listProcessesWin()])
+  const confirmedServices = confirmed.filter((record) => record.likelyService)
+  // 本次调用只拉一次共享 OS 快照（netstat 端口 + 全量进程），供 pending 匹配、
+  // confirmed 双因子校验、dead 重匹配三处共用，避免并发/串行拉起多条 PowerShell。
+  const needSnapshot = confirmablePending.length > 0 || confirmedServices.length > 0
+  let snapshot: { portPids: Map<number, number[]>; processes: Map<number, { name: string; cmd: string; startTime?: number }> } | null = null
+  if (needSnapshot) {
+    snapshot = await captureOsSnapshotWin()
+  }
+
+  // 尚未定位到 pid 的服务候选：用共享快照在 JS 内过滤。
+  if (confirmablePending.length > 0 && snapshot) {
     for (const record of confirmablePending) {
-      const found = matchRecordAgainstSnapshot(record, portPids, processes)
+      const found = matchRecordAgainstSnapshot(record, snapshot.portPids, snapshot.processes)
       if (found) {
         record.pid = found.pid
         record.startTime = found.startTime
@@ -296,22 +320,20 @@ export async function listOwnedRuntimeProcesses(sessionId: string): Promise<Runt
       changed = true
     }
   }
-  const confirmedServices = confirmed.filter((record) => record.likelyService)
-  // 已确认 pid 且仍健在的记录：双因子校验通过则跳过；失效的收集后统一重匹配。
-  // 先批量做 isSameProcess，再把所有失效记录用「一次共享快照」重匹配，避免多条失效
-  // 记录各自拉一遍全量 PowerShell 快照（并发扩倍）。
+  // 已确认 pid 且仍健在的记录：用同一快照批量做双因子校验（快照已含 startTime，
+  // 无需逐条再查 PowerShell）；失效的收集后统一用同一快照重匹配。
   const deadOnes: { record: RuntimeProcessRecord }[] = []
   for (const record of confirmedServices) {
-    if (await isSameProcess(record.pid!, record.startTime)) {
+    const same = snapshot ? isSameInSnapshot(snapshot.processes, record.pid!, record.startTime) : false
+    if (same) {
       record.lastObservedAt = now
     } else {
       deadOnes.push({ record })
     }
   }
-  if (deadOnes.length > 0) {
-    const [portPids, processes] = await Promise.all([listPortPidMapWin(), listProcessesWin()])
+  if (deadOnes.length > 0 && snapshot) {
     for (const { record } of deadOnes) {
-      const refound = matchRecordAgainstSnapshot(record, portPids, processes)
+      const refound = matchRecordAgainstSnapshot(record, snapshot.portPids, snapshot.processes)
       if (refound) {
         record.pid = refound.pid
         record.startTime = refound.startTime
