@@ -1539,6 +1539,8 @@ export const AGENT_IPC_CHANNELS = {
   ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
+  /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
+  RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
   /** 更新会话标题 */
   UPDATE_TITLE: 'agent:update-title',
   /** 更新会话模型选择 */
@@ -1561,6 +1563,8 @@ export const AGENT_IPC_CHANNELS = {
   MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
   /** 列出会话关联的运行中的真实 OS 进程（进程视图） */
   LIST_SESSION_PROCESSES: 'agent:list-session-processes',
+  /** 轻量：会话登记过的存活/待确认进程计数（仅读 registry，**不派 OS 扫描**） */
+  GET_SESSION_PROCESS_COUNT: 'agent:get-session-process-count',
   /** 结束/终止会话关联的进程树（kill） */
   KILL_PROCESS: 'agent:kill-process',
   /** Pi 受控 launcher 已登记或确认了本会话运行进程 */

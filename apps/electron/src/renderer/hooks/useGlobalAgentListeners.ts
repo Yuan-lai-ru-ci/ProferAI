@@ -948,6 +948,29 @@ export function useGlobalAgentListeners(): void {
       }
     )
 
+    // 大刷新会清空 renderer Jotai，但 main 中的 Agent run 仍可能继续执行。
+    // listener 已安装后再请求重连：main 会先绑定新 webContents 并按顺序回放本轮事件。
+    // 若 run 尚未产出任何事件，也先写入 running 占位，保留停止和追加消息能力。
+    window.electronAPI.restoreActiveAgentStreams()
+      .then((sessionIds) => {
+        store.set(agentStreamingStatesAtom, (prev) => {
+          let next: Map<string, AgentStreamState> | null = null
+          for (const sessionId of sessionIds) {
+            const current = (next ?? prev).get(sessionId)
+            if (current?.running || current?.backgroundWaiting) continue
+            if (!next) next = new Map(prev)
+            next.set(sessionId, {
+              running: true,
+              content: '',
+              toolActivities: [],
+              startedAt: undefined,
+            })
+          }
+          return next ?? prev
+        })
+      })
+      .catch((error) => console.error('[Agent] 刷新后恢复活跃流失败:', error))
+
     // ===== 2. 流式完成 =====
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: AgentStreamCompletePayload) => {
