@@ -2189,8 +2189,12 @@
   outline: 2px solid hsl(var(--ring));
   outline-offset: 2px;
   box-shadow: 0 0 0 4px hsl(var(--ring) / 0.16);
-  background-color: hsl(var(--primary) / 0.10);
-  transition: outline-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+  transition: outline-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* 对话编辑器覆盖整个输入面板，焦点态只保留边框反馈；背景染色会被误认为禁用遮罩。 */
+[data-profer-navigation-region="conversation"] .ProseMirror:focus-visible {
+  background-color: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {
