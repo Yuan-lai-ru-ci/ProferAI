@@ -241,7 +241,7 @@ import {
   snapshotAgentRuntimeMeta,
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams } from './lib/agent-service'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
@@ -2195,6 +2195,12 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // renderer 刷新后重新绑定所有仍活跃的 Agent 流，并回放本轮实时事件。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS,
+    async (event): Promise<string[]> => restoreActiveAgentStreams(event.sender),
+  )
+
   // 更新 Agent 会话标题
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
@@ -2329,6 +2335,23 @@ export function registerIpcHandlers(): void {
         }
       }
       return moveSessionToWorkspace(input.sessionId, input.targetWorkspaceId)
+    }
+  )
+
+  // 轻量查询：会话当前可展示为服务进程的数量。为了与 `LIST_SESSION_PROCESSES`
+  // 展开时完全同源（避免折叠/展开数字跳变），这里直接复用 `listOwnedRuntimeProcesses`
+  // 并按与 IPC 相同的 key（pid ?? launchedAt）去重。listOwnedRuntimeProcesses 本身
+  // 只对该会话有登记记录时才派 OS 扫描确认 pid，普通会话零扫描、直接读盘返回。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_SESSION_PROCESS_COUNT,
+    async (event, sessionId: string): Promise<number> => {
+      assertSensitiveAgentIpcSender(event)
+      const owned = await listOwnedRuntimeProcesses(sessionId)
+      const keys = new Set<number>()
+      for (const record of owned) {
+        keys.add(record.pid ?? -Math.abs(record.launchedAt))
+      }
+      return keys.size
     }
   )
 

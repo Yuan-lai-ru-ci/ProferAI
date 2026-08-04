@@ -568,6 +568,7 @@ export interface ElectronAPI {
   /** 迁移 Agent 会话到另一个工作区 */
   moveAgentSessionToWorkspace: (input: MoveSessionToWorkspaceInput) => Promise<AgentSessionMeta>
   listSessionProcesses: (input: ListSessionProcessesInput) => Promise<SessionProcessInfo[]>
+  getSessionProcessCount: (sessionId: string) => Promise<number>
   killProcess: (input: KillProcessInput) => Promise<{ ok: boolean; message: string }>
   /** Pi 运行进程登记或状态变化（用于即时刷新服务栏） */
   onRuntimeProcessesChanged: (callback: (data: { sessionId: string }) => void) => () => void
@@ -688,6 +689,9 @@ export interface ElectronAPI {
 
   /** 重命名/移动 Skill 目录下的文件或目录 */
   renameSkillEntry: (workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string) => Promise<void>
+
+  /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
+  restoreActiveAgentStreams: () => Promise<string[]>
 
   /** 订阅 Agent 流式事件（返回清理函数） */
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
@@ -1852,6 +1856,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id)
   },
 
+  restoreActiveAgentStreams: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS)
+  },
+
   updateAgentSessionTitle: (id: string, title: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_TITLE, id, title)
   },
@@ -1894,6 +1902,10 @@ const electronAPI: ElectronAPI = {
 
   listSessionProcesses: (input: ListSessionProcessesInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES, input)
+  },
+
+  getSessionProcessCount: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_PROCESS_COUNT, sessionId)
   },
 
   killProcess: (input: KillProcessInput) => {
