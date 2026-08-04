@@ -167,9 +167,9 @@ function psAsync(cmd: string): Promise<string> {
  * 用 netstat -ano 采集「监听端口 → pid」映射。实测替代 Get-NetTCPConnection（~3.3s）
  * 后降到 ~360ms。
  */
-const PS_PORT_CMD = `netstat -ano -p TCP | Select-String 'LISTENING' | ForEach-Object { $t = ($_ -split "\\s+") | Where-Object { $_ }; if ($t.Count -ge 5) { $mp = [regex]::Match($t[1], ':([0-9]+)$'); if ($mp.Success) { [PSCustomObject]@{ Port=[int]$mp.Groups[1].Value; PID=[int]$t[-1] } } } } | Group-Object Port | ForEach-Object { [PSCustomObject]@{ Port=[int]$_.Name; PIDs=@($_.Group | ForEach-Object { $_.PID } | Select-Object -Unique) } } | ConvertTo-Json -Compress`
+const PS_PORT_CMD = `netstat -ano | Select-String 'LISTENING' | ForEach-Object { $t = ($_ -split "\\s+") | Where-Object { $_ }; if ($t.Count -ge 5) { $mp = [regex]::Match($t[1], ':([0-9]+)$'); if ($mp.Success) { [PSCustomObject]@{ Port=[int]$mp.Groups[1].Value; PID=[int]$t[-1] } } } } | Group-Object Port | ForEach-Object { [PSCustomObject]@{ Port=[int]$_.Name; PIDs=@($_.Group | ForEach-Object { $_.PID } | Select-Object -Unique) } } | ConvertTo-Json -Compress`
 
-/** 端口 → 监听 pid 映射（netstat -ano -p TCP） */
+/** 端口 → 监听 pid 映射（netstat -ano；不用 -p TCP，否则会漏掉 IPv6 监听端口） */
 export async function listPortPidMapWin(): Promise<Map<number, number[]>> {
   const map = new Map<number, number[]>()
   const out = await psAsync(PS_PORT_CMD)
@@ -202,7 +202,7 @@ export async function captureOsSnapshotWin(): Promise<{
   // netstat 端口 + Get-CimInstance 进程，一次往返（管道内 ~380ms）
   const mergedCmd = `
 $pids = @{}
-netstat -ano -p TCP | Select-String 'LISTENING' | ForEach-Object {
+netstat -ano | Select-String 'LISTENING' | ForEach-Object {
   $t = ($_ -split \"\\s+\") | Where-Object { $_ }
   if ($t.Count -ge 5) {
     $mp = [regex]::Match($t[1], ':([0-9]+)$')

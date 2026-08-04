@@ -97,6 +97,29 @@ export function AgentSkillsView(): React.ReactElement {
   const isTeamWorkspace = currentWs?.type === 'team'
   const teamWorkspaceId = (currentWs as { id?: string; teamId?: string } | undefined)?.teamId || currentWorkspaceId
 
+  // 顶部 Skills/市场/MCP/记忆 切换按钮（团队工作区多一个团队市场）：roving focus，
+  // 支持 ←/→ 循环切换 + Home/End。与规划中心 Todo/日程/定时任务 tab 行为一致。
+  const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
+  const tabList: Array<{ value: CapabilityTab; label: string; count: number }> = [
+    { value: 'skills', label: 'Skills', count: data.skills.length },
+    ...(isTeamWorkspace ? [{ value: 'marketplace' as const, label: '团队市场', count: marketSkills.length }] : []),
+    { value: 'mcp', label: 'MCP', count: mcpCount },
+    { value: 'memory', label: '记忆', count: memoryCount },
+  ]
+  const handleTabKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number): void => {
+    let nextIndex: number | undefined
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabList.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabList.length) % tabList.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = tabList.length - 1
+    if (nextIndex === undefined) return
+    const next = tabList[nextIndex]
+    if (!next) return
+    event.preventDefault()
+    setTab(next.value)
+    tabButtonRefs.current[nextIndex]?.focus()
+  }, [setTab, tabList])
+
   React.useEffect(() => {
     if (tab === 'marketplace' && isTeamWorkspace && teamWorkspaceId) {
       setMarketLoading(true)
@@ -163,7 +186,7 @@ export function AgentSkillsView(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div data-profer-navigation-region="agent-skills" className="flex h-full flex-col overflow-hidden">
       {/* 顶部 50px 留给 AppShell 的全局 drag-region。不能把含 pt-14 的外层设为
           no-drag，否则它的布局盒会覆盖窗口顶端并抵消全局拖拽区。交互控件从 56px
           开始的内层才设为 no-drag，以同时保证窗口拖动和 Radix Popover 点击可用。 */}
@@ -226,15 +249,15 @@ export function AgentSkillsView(): React.ReactElement {
               : 'translate-x-0',
             )}
           />
-          {[
-            { value: 'skills' as const, label: 'Skills', count: data.skills.length },
-            ...(isTeamWorkspace ? [{ value: 'marketplace' as const, label: '团队市场', count: marketSkills.length }] : []),
-            { value: 'mcp' as const, label: 'MCP', count: mcpCount },
-            { value: 'memory' as const, label: '记忆', count: memoryCount },
-          ].map(({ value, label, count }) => (
+          {tabList.map(({ value, label, count }, index) => (
             <button
               key={value}
+              ref={(element) => { tabButtonRefs.current[index] = element }}
+              type="button"
+              data-agent-skill-tab={value}
+              aria-selected={tab === value}
               onClick={() => setTab(value)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
               className={cn(
                 'relative z-[1] flex min-w-[72px] items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors duration-200 sm:min-w-[90px] sm:px-3',
                 tab === value ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',

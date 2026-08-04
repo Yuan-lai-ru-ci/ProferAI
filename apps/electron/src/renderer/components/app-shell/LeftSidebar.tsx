@@ -532,8 +532,48 @@ function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
   return next
 }
 
+/** 全屏可进入视图（规划中心 / Agent 技能）对应的 navigation-region 选择器 */
+function enterableViewSelector(item: string): string | null {
+  if (item === 'planning') return '[data-profer-navigation-region="planning"]'
+  if (item === 'agent-skills') return '[data-profer-navigation-region="agent-skills"]'
+  return null
+}
+
+/** 进入全屏视图后把焦点移交进其内容区，让用户能在视图内继续用方向键/手柄操作。
+ *  React 渲染是异步的，点击触发视图切换后需等下一帧再聚焦，否则找不到刚渲染的 region。
+ *  对 agent-skills 优先聚焦当前激活的顶部 tab（Skills/市场/MCP/记忆，默认进入即 Skills），
+ *  因为 region 内首个可聚焦控件是工作区切换下拉，不是 tab。 */
+function focusEnterableViewItem(item: string): void {
+  const selector = enterableViewSelector(item)
+  if (!selector) return
+  requestAnimationFrame(() => {
+    const region = document.querySelector<HTMLElement>(selector)
+    let target: HTMLElement | null | undefined
+    // 技能页：优先激活 tab（或默认 Skills）
+    if (item === 'agent-skills') {
+      target = region?.querySelector<HTMLElement>(
+        '[data-agent-skill-tab][aria-selected="true"]',
+      ) ?? region?.querySelector<HTMLElement>('[data-agent-skill-tab="skills"]')
+    }
+    if (!target) {
+      // 通用回退：region 内首个 focusable（tablist/按钮等）；无则可聚焦的 region 容器（tabIndex=-1）。
+      target = region?.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"]), [role="tab"]',
+      ) ?? region
+    }
+    if (target) {
+      target.focus()
+      target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+  })
+}
+
 export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
+  // 持续持有最新 activeView 的稳定引用，供 navigation consumer（useEffect [] 注册一次）
+  // 读取最新视图状态，避免陈旧闭包（不能在 [] 闭包里直接读 activeView 变量）。
+  const activeViewRef = React.useRef(activeView)
+  activeViewRef.current = activeView
   const paperKnowledgeBaseEnabled = useAtomValue(paperKnowledgeBaseEnabledAtom)
   const authStatus = useAtomValue(authStatusAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
@@ -585,6 +625,23 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       }
       if (action === 'confirm') {
         current.click()
+        return true
+      }
+      // 全屏可进入视图（规划中心 / Agent 技能）的“进入/返回”：
+      // - right（→/手柄右拨）：进入对应视图并移交焦点进内容区；已激活则只移交焦点，
+      //   绝不靠再次 right 切回对话区（否则会“按一下右又跳回对话”）。
+      // - left（←）：仅当已在对应视图时返回对话区（复用 onClick toggle 语义）。
+      if ((current.dataset.proferNavigationItem === 'planning'
+        || current.dataset.proferNavigationItem === 'agent-skills')
+        && (action === 'left' || action === 'right')) {
+        const item = current.dataset.proferNavigationItem
+        const isActive = activeViewRef.current === item
+        if (action === 'right') {
+          if (!isActive) current.click() // 未激活才进入（避免 toggle 回对话）
+          focusEnterableViewItem(item) // 已激活/刚进入都移交焦点进内容区
+        } else if (isActive) {
+          current.click() // left + 已在对应视图：切回对话区
+        }
         return true
       }
       if (current.dataset.proferNavigationItem === 'project' && (action === 'left' || action === 'right')) {
