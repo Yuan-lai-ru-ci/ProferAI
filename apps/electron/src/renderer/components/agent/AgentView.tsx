@@ -525,10 +525,10 @@ function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactEl
           type="button"
           onClick={onClick}
           className={cn(
-            'flex items-center gap-1.5 h-[32px] rounded-lg transition-colors',
+            'flex items-center gap-1.5 h-9 rounded-lg transition-[transform,background-color,border-color,color] duration-150 ease-out active:scale-[0.97]',
             hasData
-              ? 'px-2.5 bg-muted/40 hover:bg-muted/70 text-xs'
-              : 'size-[32px] justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-accent/50',
+              ? 'px-2.5 bg-muted/40 text-xs hover:bg-accent/70 hover:text-accent-foreground'
+              : 'w-9 justify-center text-muted-foreground/40 hover:bg-accent/70 hover:text-accent-foreground',
           )}
         >
           <GitBranch className={cn('size-[14px] flex-shrink-0', hasData && 'text-muted-foreground')} />
@@ -2751,7 +2751,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             <RuntimeProcessPanel sessionId={sessionId} />
             <div
               className={cn(
-                'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200 [.composer-stack:has(.service-rail)_&]:-mt-5',
+                'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 [.composer-stack:has(.service-rail)_&]:-mt-5',
                 (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
                 isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
               )}

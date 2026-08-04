@@ -2192,6 +2192,22 @@
   transition: outline-color 120ms ease, box-shadow 120ms ease;
 }
 
+/* 工具栏焦点使用内嵌小圆角方框，而不是外扩圆环：避免与圆形上下文用量指示器混淆。
+ * 覆盖 Button 自带 ring，保持键盘/手柄导航的焦点可见性。 */
+[data-profer-navigation-region="toolbar"] button {
+  /* 工具栏 hover 与焦点共用小圆角方框；不再与 rounded-full 的圆形 hover 混用。
+   * Button 基础类会过渡 box-shadow；焦点在按钮间移动时会短暂泄露旧 ring。 */
+  border-radius: 6px !important;
+  transition-property: transform, background-color, border-color, color !important;
+}
+
+[data-profer-navigation-region="toolbar"] button:focus-visible {
+  outline: none !important;
+  outline-offset: 0;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 2px hsl(var(--ring)) !important;
+}
+
 /* 对话编辑器覆盖整个输入面板，焦点态只保留边框反馈；背景染色会被误认为禁用遮罩。 */
 [data-profer-navigation-region="conversation"] .ProseMirror:focus-visible {
   background-color: transparent;
