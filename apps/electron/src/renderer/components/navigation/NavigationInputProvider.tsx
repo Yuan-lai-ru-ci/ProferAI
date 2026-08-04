@@ -80,6 +80,80 @@ function focusConversation(): boolean {
   return false
 }
 
+/**
+ * Shared spatial fallback used by both the keyboard path and the gamepad
+ * consumer so ordinary controls (titlebar, toolbar, panels, main area) respond
+ * to directional navigation exactly the same way on both inputs.
+ *
+ * Order mirrors the keyboard handler: editor guard → conversation scroll →
+ * region spatial nav → global spatial nav → confirm/back activation.
+ *
+ * Returns true when the action has been consumed.
+ */
+function runGlobalSpatialFallback(action: NavigationAction): boolean {
+  const origin = document.activeElement
+  if (!(origin instanceof HTMLElement)) return false
+
+  // 编辑区：方向/确认保留给光标，不抢。
+  if (isEditableTarget(origin)) return false
+
+  // 左栏项由 LeftSidebar 高优先级 consumer 前置于 fallback 消费；
+  // 若仍落到这里（理论上不应发生），也不在此重复处理。
+  if (origin.closest('[data-profer-navigation-item]')) return false
+
+  const isDirection = action === 'previous' || action === 'next' || action === 'left' || action === 'right'
+
+  // 对话区裸上下 = 滚动消息页面（与键盘 Section 3 一致）。
+  if ((action === 'previous' || action === 'next')) {
+    const nearestRegion = origin.closest<HTMLElement>('[data-profer-navigation-region]')
+    if (nearestRegion?.dataset.proferNavigationRegion === 'conversation') {
+      const scroller = conversationScroller()
+      if (scroller) {
+        scroller.scrollBy({ top: action === 'next' ? 96 : -96 })
+        return true
+      }
+    }
+  }
+
+  if (isDirection) {
+    const direction = action as Extract<NavigationAction, 'previous' | 'next' | 'left' | 'right'>
+    const items = Array.from(document.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => element !== origin && element.offsetParent !== null && element.getAttribute('aria-hidden') !== 'true')
+      .map((element, index) => ({ id: String(index), rect: element.getBoundingClientRect(), element }))
+    const target = findSpatialNavigationTarget(
+      { id: '__origin__', rect: origin.getBoundingClientRect() },
+      items,
+      direction,
+    )
+    const targetItem = target && items.find((item) => item.id === target.id)
+    if (targetItem) {
+      targetItem.element.focus()
+      targetItem.element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      return true
+    }
+    // 无方向目标：不吞动作，交给更高层语义（如 confirm/back）。
+    return false
+  }
+
+  // confirm：激活当前可见控件（非破坏性）。
+  if (action === 'confirm') {
+    const tag = origin.tagName
+    if (tag === 'BUTTON' || tag === 'A' || origin.getAttribute('role') === 'tab') {
+      origin.click()
+      return true
+    }
+    // 其它可聚焦控件聚焦即代表“已接收”，不模拟点击以防误触发。
+    return true
+  }
+  // back：从任意普通控件退回主内容编辑框（非破坏性）。
+  if (action === 'back') {
+    return focusInput()
+  }
+
+  return false
+}
+
 /** Main-window bridge for keyboard and Gamepad API navigation actions. */
 export function NavigationInputProvider(): null {
   useGamepadNavigation()
@@ -107,6 +181,14 @@ export function NavigationInputProvider(): null {
             return true
           }
         }
+      }
+      // 普通控件（标题栏/工具栏/面板/主区）的方向浏览、确认与返回：
+      // 键盘在 onKeyDown Section 6 直接处理，手柄唯一入口就是走 controller，
+      // 因此在这里补齐同一套全局空间导航兜底，让两者行为一致。
+      // 左栏项与已打开的弹层由更高优先级 consumer 先行消费，到不了这里。
+      if (action === 'previous' || action === 'next' || action === 'left' || action === 'right'
+        || action === 'confirm' || action === 'back') {
+        return runGlobalSpatialFallback(action)
       }
       return false
     }, -100)
