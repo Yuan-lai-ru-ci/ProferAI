@@ -56,6 +56,13 @@ export { eventBus as agentEventBus }
 const sessionWebContents = new Map<string, WebContents>()
 
 /**
+ * 当前活跃 run 的可回放事件。renderer 刷新会丢掉 Jotai 内存，但 main 中的
+ * orchestrator 仍在运行；保存本轮已发出的事件可让新 renderer 重建相同 UI 状态。
+ * 最终历史仍由 session JSONL 保存，故这里只保留 active run，结束立即释放。
+ */
+const activeStreamEventBacklogs = new Map<string, AgentStreamPayload[]>()
+
+/**
  * 已挂载 destroyed 回收钩子的 webContents 集合。
  *
  * 同一个主窗口 webContents 可能被多次注册（飞书 Bridge 每条消息触发一次 runAgentHeadless），
@@ -91,6 +98,24 @@ export function unregisterWebContents(sessionId: string): void {
   sessionWebContents.delete(sessionId)
 }
 
+/**
+ * renderer 刷新后的重连入口：先把当前 webContents 绑定为活跃 run 的接收方，
+ * 再同步回放本轮事件。调用方必须先安装 STREAM_EVENT listener，避免回放丢失。
+ */
+export function restoreActiveAgentStreams(webContents: WebContents): string[] {
+  const restored: string[] = []
+  for (const [sessionId, backlog] of activeStreamEventBacklogs) {
+    if (!orchestrator.isActive(sessionId)) continue
+    registerWebContents(sessionId, webContents)
+    restored.push(sessionId)
+    for (const payload of backlog) {
+      if (webContents.isDestroyed()) break
+      webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload } as AgentStreamEvent)
+    }
+  }
+  return restored
+}
+
 function isMainRendererWindow(win: BrowserWindow): boolean {
   if (win.isDestroyed()) return false
   const url = win.webContents.getURL()
@@ -107,6 +132,13 @@ export function getMainRendererWebContents(): WebContents | null {
 }
 
 // ===== EventBus IPC 转发中间件 =====
+
+// 必须先于 IPC 转发记录，确保刷新重连时能按原顺序回放所有已发生的实时事件。
+eventBus.use((sessionId, payload, next) => {
+  const backlog = activeStreamEventBacklogs.get(sessionId)
+  if (backlog) backlog.push(payload)
+  next()
+})
 
 eventBus.use((sessionId, payload, next) => {
   const wc = sessionWebContents.get(sessionId)
@@ -134,6 +166,8 @@ export async function runAgent(
 ): Promise<void> {
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
+  // 被 active-run 并发保护拒绝的请求不能清空已有 run 的恢复记录。
+  if (!orchestrator.isActive(input.sessionId)) activeStreamEventBacklogs.set(input.sessionId, [])
   // 开始新一轮执行时清除"完成未确认"标记
   try {
     updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
@@ -211,6 +245,7 @@ export async function runAgent(
     // 避免被拒绝的请求误删仍在运行的会话映射
     if (!orchestrator.isActive(input.sessionId)) {
       sessionWebContents.delete(input.sessionId)
+      activeStreamEventBacklogs.delete(input.sessionId)
     }
   }
 }
@@ -237,6 +272,8 @@ export async function runAgentHeadless(
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
   }
+  // 同理：外部入口的重复请求不得覆盖仍在运行的会话快照。
+  if (!orchestrator.isActive(runInput.sessionId)) activeStreamEventBacklogs.set(runInput.sessionId, [])
 
   try {
     await orchestrator.sendMessage(runInput, {
@@ -314,6 +351,7 @@ export async function runAgentHeadless(
   } finally {
     if (!orchestrator.isActive(runInput.sessionId)) {
       sessionWebContents.delete(runInput.sessionId)
+      activeStreamEventBacklogs.delete(runInput.sessionId)
     }
   }
 }
