@@ -26,6 +26,30 @@ function focusInput(): boolean {
   return false
 }
 
+/** 判断当前焦点是否已在编辑输入（ProseMirror）内 */
+function isFocusedInInput(): boolean {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement)) return false
+  return Boolean(active.closest('[data-input-mode="agent"], [data-input-mode="chat"]'))
+    || Boolean(active.closest('.ProseMirror'))
+}
+
+/** 聚焦当前激活输入框底部工具栏（Agent 或 Chat 的 InputToolbarOverflow） */
+function focusToolbar(): boolean {
+  const toolbar = document.querySelector<HTMLElement>(
+    '[data-input-mode="agent"] [data-profer-navigation-region="toolbar"], [data-input-mode="chat"] [data-profer-navigation-region="toolbar"]',
+  )
+  if (!toolbar) return false
+  // 工具栏区域的可聚焦首个控件（按钮等），无则聚焦容器本身。
+  const first = toolbar.querySelector<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )
+  const target = first ?? toolbar
+  target.focus()
+  target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  return true
+}
+
 function activeConversationRegion(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[data-profer-navigation-region="conversation"]')
 }
@@ -139,7 +163,14 @@ function runGlobalSpatialFallback(action: NavigationAction): boolean {
   // confirm：激活当前可见控件（非破坏性）。
   if (action === 'confirm') {
     const tag = origin.tagName
-    if (tag === 'BUTTON' || tag === 'A' || origin.getAttribute('role') === 'tab') {
+    const role = origin.getAttribute('role')
+    // 原生可点击元素，以及带 WAI-ARIA 激活角色（button/checkbox/switch/radio
+    // /menuitem/tab/link）的可聚焦容器（如规划中心的 Todo 行、技能/MCP 卡片），
+    // 确认时直接触发原生 click，让键盘 Enter/Space 与手柄 A 键行为一致。
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT'
+      || role === 'tab' || role === 'button' || role === 'checkbox' || role === 'switch'
+      || role === 'radio' || role === 'menuitem' || role === 'menuitemcheckbox'
+      || role === 'menuitemradio' || role === 'link') {
       origin.click()
       return true
     }
@@ -262,7 +293,10 @@ export function NavigationInputProvider(): null {
           if (inConversation) focusTitlebar()
           else focusConversation()
         } else if (action === 'next') {
-          focusInput()
+          // alt+↓：已聚焦编辑输入 → 向下进底部工具栏；否则进编辑输入。
+          // 让对话框按 Alt+↓ 能一路从编辑框走到工具栏（原实现恒 return focusInput 到不了工具栏）。
+          if (isFocusedInInput()) focusToolbar()
+          else focusInput()
         } else if (action === 'left' || action === 'right') {
           // 在 mode 区：Alt+左右 = 直接切换 Agent↔Chat（交给 ModeSwitcher）；
           // 在别处：Alt+←=project、Alt+→=右栏。

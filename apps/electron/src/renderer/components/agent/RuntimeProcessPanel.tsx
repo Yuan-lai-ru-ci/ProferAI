@@ -63,8 +63,27 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   const [killing, setKilling] = React.useState<string | null>(null)
   const [pendingKill, setPendingKill] = React.useState<MergedRow | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // registry 轻量计数：仅读盘不派 OS 扫描，决定折叠轨是否初始显示。
+  const [registeredCount, setRegisteredCount] = React.useState(0)
   const sdkTasksRef = React.useRef(sdkTasks)
   sdkTasksRef.current = sdkTasks
+
+  // 初始加载会话登记过的进程数（轻量，不派 PowerShell）；也会在每次 registry
+  // 变更事件时刷新，保证「agent 一登记进程，面板就出现」而不需要用户展开。
+  const refreshRegisteredCount = React.useCallback(async () => {
+    try {
+      const n = await window.electronAPI.getSessionProcessCount(sessionId)
+      setRegisteredCount(n)
+    } catch { /* 保持现状 */ }
+  }, [sessionId])
+  React.useEffect(() => {
+    void refreshRegisteredCount()
+    // 注册表变化时同步刷新轻量计数，让「agent 一登记进程，面板即出现」
+    const unsubscribe = window.electronAPI.onRuntimeProcessesChanged(({ sessionId: changedSessionId }) => {
+      if (changedSessionId === sessionId) void refreshRegisteredCount()
+    })
+    return () => unsubscribe()
+  }, [refreshRegisteredCount])
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
@@ -146,14 +165,20 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
     }
   }, [refresh, sessionId, open])
 
-  // 面板可见性：SDK 后台活动任务（内存 atom，零 OS 开销）即可显示折叠轨；
-  // 展开后的 OS 级进程行来自 rows。这样打开会话时不派 PowerShell 扫描也能看到入口。
+  // 面板可见性：SDK 后台活动任务 / registry 登记过进程（两者都不派 OS 扫描）
+  // 即可显示折叠轨；真实进程行在展开后才拉取。这样既有入口可点，又避免打开
+  // 会话时不必要地触发全量 PowerShell 扫描。
   const hasSdkActive = sdkTasks.some((t) => t.status !== 'exited' && t.status !== 'completed')
-  const showRail = hasSdkActive || rows.length > 0
+  const showRail = hasSdkActive || registeredCount > 0 || rows.length > 0
   if (!showRail) return null
 
-  // 计数：已扫描则用真实进程行；否则用 SDK 活动任务数（轻量，不派扫描）
-  const count = rows.length > 0 ? rows.length : sdkTasks.filter((t) => t.status !== 'exited' && t.status !== 'completed').length
+  // 计数：已扫描则用真实进程行（含 SDK 任务补充）；否则用 registry 服务数（与
+  // listOwnedRuntimeProcesses 同口径，避免折叠/展开数字跳变）。仅当 registry 为 0
+  // 但有 SDK 活动任务时才回落 SDK 数兜底（纯 SDK 任务会话）。
+  const sdkActiveCount = sdkTasks.filter((t) => t.status !== 'exited' && t.status !== 'completed').length
+  const count = rows.length > 0
+    ? rows.length
+    : (registeredCount > 0 ? registeredCount : (hasSdkActive ? sdkActiveCount : 0))
   const railClassName = cn(
     'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
     className,
