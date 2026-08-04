@@ -838,11 +838,11 @@
   color: #000000 !important;
 }
 
-/* 预选（候选）态：普通←/→ 移动高亮，尚未真正切换。主题中性、不抢生效色的视觉。 */
+/* 预选（候选）态：普通←/→ 移动高亮，尚未真正切换。主题中性、不抢生效色的视觉。
+   仅用淡淡的背景与文字强调，不带方框/阴影。 */
 .mode-btn-preview {
-  outline: 1.5px dashed hsl(var(--ring) / 0.7);
-  outline-offset: -1px;
-  box-shadow: inset 0 0 0 2px hsl(var(--ring) / 0.18);
+  background-color: hsl(var(--ring) / 0.10);
+  color: inherit !important;
 }
 
 /* ===== 莫兰迪主题：会话/工作区选中状态 ===== */
