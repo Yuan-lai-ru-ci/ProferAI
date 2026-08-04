@@ -87,6 +87,7 @@ type SkillLoadResult = ReturnType<ResourceLoader['getSkills']>
 const PI_NATIVE_MAX_RETRIES = 8
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
 
+
 /** Pi SDK 查询选项（扩展通用 AgentQueryInput） */
 export interface PiAgentQueryOptions extends AgentQueryInput {
   apiKey: string
@@ -825,6 +826,43 @@ function createTextToolResult(text: string, details?: unknown): AgentToolResult<
   } as AgentToolResult<unknown>
 }
 
+function isCompactionNoopError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /nothing to compact|already compacted/i.test(message)
+}
+
+/**
+ * Pi 在 agent_end 之后才会决定一条失败消息是否触发 overflow 压缩。
+ * 只有当上下文确已溢出时，才把这条错误类“挂起”，等匹配的压缩生命周期到终态
+ * 再放行，避免外层编排器在 Pi 调用 agent.continue() 前就销毁 session。
+ */
+function isPiContextOverflow(message: AssistantMessage, contextWindow: number | undefined): boolean {
+  if (message.stopReason === 'error' && isPromptTooLongError(message.errorMessage)) return true
+
+  if (contextWindow && message.stopReason === 'length' && message.usage?.output === 0) {
+    const inputTokens = (message.usage.input ?? 0) + (message.usage.cacheRead ?? 0)
+    return inputTokens >= contextWindow * 0.99
+  }
+
+  return false
+}
+
+export function shouldDeferPiOverflowTerminalMessage(
+  message: AssistantMessage,
+  contextWindow: number | undefined,
+): boolean {
+  return message.stopReason !== 'stop' && isPiContextOverflow(message, contextWindow)
+}
+
+export function shouldDeferPiOverflowTerminalError(
+  message: AssistantMessage | undefined,
+  contextWindow: number | undefined,
+  willRetry: boolean,
+  abortRequested: boolean,
+): boolean {
+  return !willRetry && !abortRequested && !!message && shouldDeferPiOverflowTerminalMessage(message, contextWindow)
+}
+
 function stringFromInput(input: Record<string, unknown>, keys: string[], fallback = ''): string {
   for (const key of keys) {
     const value = input[key]
@@ -1506,7 +1544,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
         // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
-        session.agent.streamFn = async (requestModel, context, options) => {
+        session.agent.streamFunction = async (requestModel, context, options) => {
           const authResult = await modelRuntime.getAuth(requestModel)
           if (!authResult?.auth.apiKey) throw new Error('无法获取 ChatGPT (Codex) OAuth access token')
           const auth = authResult.auth
@@ -1535,8 +1573,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
       // 代理作用域必须只覆盖模型 provider stream：在整个 session.prompt() 链上设
       // AsyncLocalStorage 会把 MCP/产品工具等同一 Agent loop 中的 fetch 也错误地送进 Codex 代理。
-      const providerStreamFn = session.agent.streamFn
-      session.agent.streamFn = (requestModel, context, options) => runWithPiRequestProxy(
+      const providerStreamFn = session.agent.streamFunction
+      session.agent.streamFunction = (requestModel, context, options) => runWithPiRequestProxy(
         requestProxyDispatcher,
         () => providerStreamFn(requestModel, context, options),
       )
@@ -1564,6 +1602,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         assistantMessage: AssistantMessage
         sdkMessage: SDKMessage
       }>()
+      // Pi 在 agent_end 之后可能才触发 overflow 自动压缩：在这些情况下延迟上报终态，
+      // 等 compaction 生命周期到终态（compaction_end / agent_settled）再 settle。
+      let pendingNativeOverflowRecovery = false
+      let pendingTerminalResult: SDKMessage | undefined
 
       const assistantUuidFor = (): string => {
         if (!activeAssistant.uuid) {
@@ -1629,11 +1671,28 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               break
             }
             case 'agent_end': {
-              const terminalRetryError = retryTerminalGate.settle(event.willRetry)
-              if (active.interrupting && active.pendingInterruptPrompts.length > 0) {
+              if (active.abortRequested || (active.interrupting && active.pendingInterruptPrompts.length > 0)) {
+                // 用户停止或插入新 prompt 时，当前 loop 的错误与 result 都不得泄漏到下一轮。
+                retryTerminalGate.settle(true)
+                pendingNativeOverflowRecovery = false
+                pendingTerminalResult = undefined
                 break
               }
+              const deferredRetryError = retryTerminalGate.peek()
+              // Pi 在 agent_end 之后才检测 overflow 并压缩。此时若先将错误交给 orchestrator，
+              // 会触发外层恢复或清理，打断同 transcript 的 continue（压缩）。
+              const waitsForNativeOverflowRecovery = shouldDeferPiOverflowTerminalError(
+                deferredRetryError?.assistantMessage,
+                model.contextWindow,
+                event.willRetry,
+                active.abortRequested,
+              )
+              const terminalRetryError = waitsForNativeOverflowRecovery
+                ? undefined
+                : retryTerminalGate.settle(event.willRetry)
+              if (waitsForNativeOverflowRecovery) pendingNativeOverflowRecovery = true
               if (event.willRetry) {
+                // native retry 会在同一 session 中调用 continue()，不要向上游发送终态。
                 break
               }
               if (terminalRetryError) {
@@ -1641,17 +1700,21 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
                 queue.push(terminalRetryError.sdkMessage)
               }
-              queue.push(convertResultMessage(
+              // Pi can start auto-compaction after agent_end but before session.prompt()
+              // resolves. Defer the terminal result until then, otherwise the orchestrator's
+              // result-drain timeout may dispose the session and abort compaction.
+              pendingTerminalResult = convertResultMessage(
                 event.messages,
                 session.sessionId,
                 runtimeGuard.getResultOverride(event.messages),
                 model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
                 model.id,
                 input.model ?? session.model?.id,
-              ))
+              )
               break
             }
             case 'auto_retry_start':
+            case 'auto_retry_attempt_start':
             case 'auto_retry_end':
               for (const retry of mapPiNativeRetryEvent(event)) input.onRetry?.(retry)
               break
@@ -1673,9 +1736,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 session_id: session.sessionId,
               } as unknown as SDKMessage)
               break
-            case 'compaction_end':
+            case 'compaction_end': {
+              // overflow 恢复：agent_end 时挂起的溢出错误，此刻依据压缩结果放行。
+              if (pendingNativeOverflowRecovery && event.reason === 'overflow') {
+                pendingNativeOverflowRecovery = false
+                const recovered = !event.aborted && event.result !== undefined && event.willRetry
+                const terminalRetryError = retryTerminalGate.settle(
+                  recovered || active.abortRequested || active.interrupting,
+                )
+                if (terminalRetryError) {
+                  harness?.markTerminalFailure()
+                  runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
+                  queue.push(terminalRetryError.sdkMessage)
+                }
+              }
               // 压缩结束：成功则发 compact_boundary 分界线（前端持久化显示「上下文已压缩」），
-              // 失败/中止则不发分界线（compacting 指示器会在本轮 result 到达时随 isCompacting 翻 false 消失）。
+              // 失败/中止则发状态消息收起底部压缩进度追踪。
               if (!event.aborted && event.result) {
                 queue.push({
                   type: 'system',
@@ -1683,6 +1759,35 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                   session_id: session.sessionId,
                   summary: event.result.summary,
                 } as unknown as SDKMessage)
+              } else if (event.aborted) {
+                queue.push({
+                  type: 'system',
+                  subtype: 'status',
+                  session_id: session.sessionId,
+                  compact_result: 'failed',
+                  compact_error: '上下文压缩已取消。',
+                } as unknown as SDKMessage)
+              } else if (event.errorMessage && !isCompactionNoopError(event.errorMessage)) {
+                queue.push({
+                  type: 'system',
+                  subtype: 'status',
+                  session_id: session.sessionId,
+                  compact_result: 'failed',
+                  compact_error: event.errorMessage,
+                } as unknown as SDKMessage)
+              }
+              break
+            }
+            case 'agent_settled':
+              // 防御上游缺少 compaction_end 的异常事件序列，不能无限吞掉已 deferred 的错误。
+              if (pendingNativeOverflowRecovery) {
+                pendingNativeOverflowRecovery = false
+                const terminalRetryError = retryTerminalGate.settle(active.abortRequested || active.interrupting)
+                if (terminalRetryError) {
+                  harness?.markTerminalFailure()
+                  runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
+                  queue.push(terminalRetryError.sdkMessage)
+                }
               }
               break
           }
@@ -1750,7 +1855,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             markBlocked: () => harness?.markBlocked(),
           },
         )
-          .then(() => queue.close())
+          .then(() => {
+            // 若 agent_end 已把终态 result 存入 pendingTerminalResult（等待 overflow 压缩），
+            // 在 prompt 链最终落定后必须 flush 出来，否则上层会因本轮无 result 而误判。
+            if (pendingTerminalResult) {
+              queue.push(pendingTerminalResult)
+              pendingTerminalResult = undefined
+            }
+            queue.close()
+          })
           .catch((error) => queue.fail(error))
           .finally(cleanupActiveSession)
       }
