@@ -80,3 +80,9 @@ apps/electron/resources/bin/
 **/.context/**/*.err
 nul
 scripts/_fix_define2.py
+
+# Pi upgrade / package 中途备份与运行日志（不纳入版本控制）
+package.json.bak-*
+patches/*.patch.bak-*
+dev-run.log
+*.upgrade-backup
