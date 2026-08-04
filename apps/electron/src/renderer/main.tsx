@@ -93,6 +93,7 @@ import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { UpdateDialog } from './components/settings/UpdateDialog'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
+import { NavigationInputProvider } from './components/navigation/NavigationInputProvider'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import './styles/globals.css'
 import 'katex/dist/katex.min.css'
@@ -1071,6 +1072,7 @@ if (isQuickTaskWindow) {
       <TabStatePersistenceInitializer />
       <ScratchPadPersistence />
       <GlobalShortcuts />
+      <NavigationInputProvider />
       <TabSwitcher />
       <App />
       <UpdateDialog />

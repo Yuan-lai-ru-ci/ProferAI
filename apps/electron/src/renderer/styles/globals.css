@@ -838,6 +838,13 @@
   color: #000000 !important;
 }
 
+/* 预选（候选）态：普通←/→ 移动高亮，尚未真正切换。主题中性、不抢生效色的视觉。 */
+.mode-btn-preview {
+  outline: 1.5px dashed hsl(var(--ring) / 0.7);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 2px hsl(var(--ring) / 0.18);
+}
+
 /* ===== 莫兰迪主题：会话/工作区选中状态 ===== */
 /* 莫兰迪夜：淡紫灰背景 + 温暖杏粉文字 */
 .theme-slate-dark .session-item-selected.session-item-selected,
@@ -2170,6 +2177,29 @@
 @media (prefers-reduced-motion: reduce) {
   .theme-terminal-dark .ProseMirror:focus {
     animation: none;
+  }
+}
+
+/* 空间导航：键盘/手柄焦点必须独立于 hover 清晰可见。 */
+[data-profer-navigation-item]:focus-visible,
+[data-profer-navigation-region] button:focus-visible,
+[data-profer-navigation-region] [href]:focus-visible,
+[data-profer-navigation-region] input:focus-visible,
+[data-profer-navigation-region] [tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px hsl(var(--ring) / 0.16);
+  background-color: hsl(var(--primary) / 0.10);
+  transition: outline-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-profer-navigation-item]:focus-visible,
+  [data-profer-navigation-region] button:focus-visible,
+  [data-profer-navigation-region] [href]:focus-visible,
+  [data-profer-navigation-region] input:focus-visible,
+  [data-profer-navigation-region] [tabindex]:not([tabindex="-1"]):focus-visible {
+    transition: none;
   }
 }
 

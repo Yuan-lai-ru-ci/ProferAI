@@ -133,25 +133,27 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
   )
 
   React.useEffect(() => {
+    if (!open) return
     void refresh()
-    // A single delayed reconciliation catches services that daemonize shortly after launch
-    // without coupling expensive OS scans to every Agent state update.
+    // 面板刚展开：先立即刷一次，再延迟一轮捕捉 daemonize 的服务。
     const reconciliationTimer = window.setTimeout(() => void refresh(), 3_000)
     const unsubscribe = window.electronAPI.onRuntimeProcessesChanged(({ sessionId: changedSessionId }) => {
-      // Profer's controlled launcher has a real shell PID at this point. Refresh
-      // only the active session, rather than reacting to every streamed task update.
       if (changedSessionId === sessionId) void refresh()
     })
     return () => {
       window.clearTimeout(reconciliationTimer)
       unsubscribe()
     }
-  }, [refresh, sessionId])
+  }, [refresh, sessionId, open])
 
-  // Do not render an empty rail while the initial query is in flight.
-  if (rows.length === 0) return null
+  // 面板可见性：SDK 后台活动任务（内存 atom，零 OS 开销）即可显示折叠轨；
+  // 展开后的 OS 级进程行来自 rows。这样打开会话时不派 PowerShell 扫描也能看到入口。
+  const hasSdkActive = sdkTasks.some((t) => t.status !== 'exited' && t.status !== 'completed')
+  const showRail = hasSdkActive || rows.length > 0
+  if (!showRail) return null
 
-  const count = rows.length
+  // 计数：已扫描则用真实进程行；否则用 SDK 活动任务数（轻量，不派扫描）
+  const count = rows.length > 0 ? rows.length : sdkTasks.filter((t) => t.status !== 'exited' && t.status !== 'completed').length
   const railClassName = cn(
     'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
     className,

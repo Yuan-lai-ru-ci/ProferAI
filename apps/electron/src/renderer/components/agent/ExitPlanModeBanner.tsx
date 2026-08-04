@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { allPendingExitPlanRequestsAtom } from '@/atoms/agent-atoms'
+import { isEditableTarget } from '@/lib/navigation-controller'
 import type { ExitPlanModeAction, ExitPlanAllowedPrompt } from '@profer/shared'
 
 /** 选项定义 */
@@ -137,8 +138,9 @@ export function ExitPlanModeBanner({ sessionId, onRequestStop }: ExitPlanModeBan
     const handleKeyDown = (e: KeyboardEvent): void => {
       const curFocusIdx = focusedIdxRef.current
 
-      // 反馈输入框内：仅 Enter 提交（输入法组合中跳过）
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      // 反馈输入框与富文本编辑器内：仅 Enter 提交（输入法组合中跳过）。
+      // ProseMirror/contenteditable 必须保留箭头键给原生光标移动。
+      if (isEditableTarget(e.target)) {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
           e.preventDefault()
           if (feedbackTextRef.current.trim()) {

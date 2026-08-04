@@ -20,6 +20,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Search, X, MessageSquare, Bot, Archive, Loader2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogPortal, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { navigationController } from '@/lib/navigation-controller'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { conversationsAtom, channelsAtom } from '@/atoms/chat-atoms'
 import {
@@ -439,6 +440,29 @@ export function SearchDialog(): React.ReactElement {
       setSelectedIndex((prev) => Math.max(prev - 1, 0))
     }
   }, [query, committedQuery, hasSearched, allResults, selectedIndex, runSearch, navigateToResult])
+
+  React.useEffect(() => {
+    if (!open) return
+    return navigationController.register((action) => {
+      if (action === 'back') {
+        setOpen(false)
+        return true
+      }
+      if (action === 'previous' || action === 'next') {
+        if (allResults.length === 0) return true
+        const delta = action === 'next' ? 1 : -1
+        setSelectedIndex((prev) => Math.max(0, Math.min(prev + delta, allResults.length - 1)))
+        return true
+      }
+      if (action === 'confirm') {
+        const trimmed = query.trim()
+        if (trimmed !== committedQuery || !hasSearched) void runSearch()
+        else if (allResults[selectedIndex]) navigateToResult(allResults[selectedIndex]!)
+        return true
+      }
+      return false
+    }, 100)
+  }, [open, allResults, query, committedQuery, hasSearched, selectedIndex, runSearch, navigateToResult, setOpen])
 
   // 自动滚动选中项到可视区域
   React.useEffect(() => {
