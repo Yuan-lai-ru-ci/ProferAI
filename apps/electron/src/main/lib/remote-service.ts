@@ -37,6 +37,7 @@ import {
   updateAgentSessionMeta,
 } from './agent-session-manager'
 import { getAgentSessionsDir } from './config-paths'
+import { listAgentWorkspaces } from './agent-workspace-manager'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -126,23 +127,10 @@ function resolveStaticRoot(): string | null {
     } catch { /* ignore */ }
     return explicit
   }
-  // 首选：独立 tablet 构建产物 dist/tablet（index.html + assets 同层）
-  const candidates = [
-    join(__dirname, 'tablet'),
-    join(__dirname, '..', 'dist', 'tablet'),
-    join(process.cwd(), 'apps', 'electron', 'dist', 'tablet'),
-  ]
-  for (const c of candidates) {
-    try {
-      if (existsSync(join(c, 'index.html'))) {
-        tabletIndexRel = '.'
-        return c
-      }
-    } catch {
-      /* continue */
-    }
-  }
-  // 回退：旧格式 dist/renderer 下的 tablet 子目录
+  // 首选（2026-08-05 起）：vite 多入口产物 dist/renderer/tablet。
+  // 这是唯一权威产物 —— build:renderer 一次构建桌面+平板两套入口。
+  // ⚠️ 之前 dist/tablet（vite.tablet.config.ts 独立构建）排在前面，
+  // 曾出现陈旧独立产物长期抢占、平板一直加载旧 UI 的事故，故必须让多入口产物优先。
   const oldCandidates = [
     join(__dirname, 'renderer'),
     join(__dirname, '..', 'dist', 'renderer'),
@@ -152,6 +140,22 @@ function resolveStaticRoot(): string | null {
     try {
       if (existsSync(join(c, 'tablet', 'index.html'))) {
         tabletIndexRel = 'tablet'
+        return c
+      }
+    } catch {
+      /* continue */
+    }
+  }
+  // 弃用路径：独立构建产物 dist/tablet（仅兼容历史部署，新代码不应再生成）
+  const candidates = [
+    join(__dirname, 'tablet'),
+    join(__dirname, '..', 'dist', 'tablet'),
+    join(process.cwd(), 'apps', 'electron', 'dist', 'tablet'),
+  ]
+  for (const c of candidates) {
+    try {
+      if (existsSync(join(c, 'index.html'))) {
+        tabletIndexRel = '.'
         return c
       }
     } catch {
@@ -344,6 +348,18 @@ function buildSessionList() {
   }))
 }
 
+/** 工作区（项目）列表（脱敏，仅暴露平板端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
+function buildWorkspaceList() {
+  return listAgentWorkspaces().map((w) => ({
+    id: w.id,
+    name: w.name,
+    slug: w.slug,
+    type: w.type,
+    createdAt: w.createdAt,
+    updatedAt: w.updatedAt,
+  }))
+}
+
 /** 渠道列表（脱敏，仅暴露平板端发消息需要的字段） */
 function buildChannelList() {
   return listSwitchableChannels().map((c) => ({
@@ -373,6 +389,10 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
 
     case 'list_sessions': {
       return { ok: true, data: buildSessionList() }
+    }
+
+    case 'list_workspaces': {
+      return { ok: true, data: buildWorkspaceList() }
     }
 
     case 'list_channels': {
@@ -613,7 +633,8 @@ export function startRemoteService(): string | null {
       let body: string
       try {
         const parsed = JSON.parse(raw.toString())
-        reqId = parsed?.requestId ?? null
+        // 命令追踪 ID：优先 _cmdId（平板 ws-client 新协议），兼容旧的 requestId
+        reqId = parsed?._cmdId ?? parsed?.requestId ?? null
         body = raw.toString()
       } catch {
         body = raw.toString()
