@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { injectCodexFastMode, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
-import { injectOpenAIThinkingLevel } from './pi-codex-request-settings'
+import { injectOpenAIThinkingLevel, injectDeepSeekV4ThinkingSettings } from './pi-codex-request-settings'
 
 describe('Pi Codex Fast Mode', () => {
   test.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
@@ -70,5 +70,44 @@ describe('Pi Codex Thinking Level', () => {
 
   test('Given non-object payload Then 不注入', () => {
     expect(injectOpenAIThinkingLevel('not-a-request', 'high')).toBe('not-a-request')
+  })
+})
+
+describe('Pi DeepSeek V4 Thinking Settings', () => {
+  test.each(['deepseek-v4-pro', 'deepseek-v4-flash', 'gateway/deepseek-v4-pro'])(
+    'Given %s + thinking enabled Then replaces budget thinking with max effort',
+    (model) => {
+      const result = injectDeepSeekV4ThinkingSettings({
+        model,
+        thinking: { type: 'enabled', budget_tokens: 1024, display: 'summarized' },
+      }, true) as Record<string, unknown>
+      expect(result.thinking).toEqual({ type: 'enabled' })
+      expect(result.output_config).toEqual({ effort: 'max' })
+    },
+  )
+
+  test('Given enabled V4 request with output config Then preserves other output settings', () => {
+    const result = injectDeepSeekV4ThinkingSettings({
+      model: 'deepseek-v4-pro',
+      output_config: { format: { type: 'text' }, effort: 'high' },
+    }, true) as Record<string, unknown>
+    expect(result.output_config).toEqual({ format: { type: 'text' }, effort: 'max' })
+  })
+
+  test('Given V4 thinking disabled Then explicitly disables without retaining budget', () => {
+    const result = injectDeepSeekV4ThinkingSettings({
+      model: 'deepseek-v4-pro',
+      thinking: { type: 'enabled', budget_tokens: 1024, display: 'summarized' },
+    }, false) as Record<string, unknown>
+    expect(result.thinking).toEqual({ type: 'disabled' })
+  })
+
+  test('Given old or unsupported DeepSeek model Then leaves payload unchanged', () => {
+    const payload = { model: 'deepseek-reasoner', thinking: { type: 'enabled', budget_tokens: 1024 } }
+    expect(injectDeepSeekV4ThinkingSettings(payload, true)).toBe(payload)
+  })
+
+  test('Given non-object payload Then leaves payload unchanged', () => {
+    expect(injectDeepSeekV4ThinkingSettings('not-a-request', true)).toBe('not-a-request')
   })
 })
