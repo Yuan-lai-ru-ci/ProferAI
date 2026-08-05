@@ -548,7 +548,16 @@ function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactEl
   )
 }
 
-export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
+/** 平板远程模式下从输入工具栏隐藏的项（依赖桌面文件系统/语音/全局设置，浏览器环境无意义） */
+const TABLET_HIDDEN_TOOLBAR_KEYS = new Set(['thinking', 'speech', 'attach-file', 'attach-folder', 'auto-preview'])
+
+export interface AgentViewProps {
+  sessionId: string
+  /** 平板远程模式：隐藏无意义的工具栏项，触控目标加大到 44px */
+  tabletMode?: boolean
+}
+
+export function AgentView({ sessionId, tabletMode = false }: AgentViewProps): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
@@ -2183,10 +2192,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [sessionId, streamState?.stopping, setStreamingStates, setQueuedMessages])
 
   /** 手动发送 /compact 命令 */
+  const compactInFlightRef = React.useRef(false)
   const handleCompact = React.useCallback((): void => {
     // 防护：streaming（active turn 进行中）或 backgroundWaiting（后台任务等待态）
     // 都不允许发送 /compact，避免与活跃的 agent session 冲突导致卡死
     if (!agentChannelId || streaming || backgroundWaiting) return
+    // 防重入：压缩 run 在飞行中（乐观 isCompacting 尚未生效的毫秒级窗口 + 整个压缩 run 期间）
+    // 拒绝第二次压缩指令，避免一次按压（touch + 合成 mouse 等）发出两条 /compact。
+    if (compactInFlightRef.current) return
+    compactInFlightRef.current = true
 
     const streamStartedAt = Date.now()
     const localUuid = crypto.randomUUID()
@@ -2250,6 +2264,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         map.set(sessionId, { ...current, isCompacting: false, compactInFlight: false })
         return map
       })
+    }).finally(() => {
+      // 压缩 run 结束后才释放防重入锁（sendAgentMessage 的 promise 在整轮 run 完成后 resolve）
+      compactInFlightRef.current = false
     })
   }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setStreamingStates, store, permissionMode])
 
@@ -2505,7 +2522,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const isCompacting = contextStatus.isCompacting
   const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
 
-  const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
+  // 触控目标尺寸：平板 44px（size-11），桌面保持 36px
+  const toolBtnSize = tabletMode ? 'size-11' : 'size-[36px]'
+
+  const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => {
+    const items: ToolbarItem[] = [
     {
       key: 'model',
       node: (
@@ -2571,7 +2592,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               type="button"
               variant="ghost"
               size="icon"
-              className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground"
+              className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
               onClick={handleOpenFileDialog}
             >
               <Paperclip className="size-5" />
@@ -2592,7 +2613,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               type="button"
               variant="ghost"
               size="icon"
-              className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground"
+              className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
               onClick={handleAttachFolder}
             >
               <FolderPlus className="size-5" />
@@ -2638,7 +2659,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       key: 'graph',
       node: <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
     },
-  ], [
+  ]
+    return tabletMode
+      ? items.filter((item) => !TABLET_HIDDEN_TOOLBAR_KEYS.has(item.key))
+      : items
+  }, [
     agentChannelIds,
     sessionAgentRuntime,
     agentChannelId,
@@ -2665,6 +2690,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     processGroupsKeepExpanded,
     setAutoPreviewEnabled,
     setProcessGroupsKeepExpanded,
+    tabletMode,
   ])
 
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
@@ -2674,7 +2700,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           type="button"
           variant="ghost"
           size="icon"
-          className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
+          className={cn(
+            toolBtnSize,
+            'rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]',
+          )}
           onClick={handleStop}
           disabled={streamState?.stopping}
         >
@@ -2691,7 +2720,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       variant="ghost"
       size="icon"
       className={cn(
-        'size-[36px] rounded-full',
+        toolBtnSize,
+        'rounded-full',
         canSend
           ? 'text-primary hover:bg-primary/10'
           : 'text-foreground/30 cursor-not-allowed'
@@ -2706,7 +2736,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex h-full min-w-0 flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
+      <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex h-full min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
 

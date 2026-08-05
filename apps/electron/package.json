@@ -20,7 +20,7 @@
     "watch:main-commercial": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='\"commercial\"' --watch=forever",
     "watch:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron --watch=forever",
     "build:renderer": "vite build",
-    "build:tablet": "vite build -c vite.tablet.config.ts",
+    "build:tablet": "echo '[tablet] 独立构建已废弃：平板产物由 build:renderer 多入口一并产出（dist/renderer/tablet），此命令仅作兼容' && vite build",
     "build:resources": "bun run scripts/copy-resources.ts",
     "build:cli": "bun run scripts/build-cli.ts",
     "sync:runtime-deps": "bun run scripts/sync-runtime-deps.ts",

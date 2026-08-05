@@ -209,13 +209,16 @@ export class WsClient {
       return Promise.reject(new Error('连接未就绪，请稍候重试'))
     }
     return new Promise<T>((resolve, reject) => {
-      const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-      this.pendingCommands.set(requestId, { resolve: resolve as (r: unknown) => void, reject })
-      this.ws!.send(JSON.stringify({ ...payload, requestId }))
+      // 追踪 ID 用独立字段 _cmdId，绝不覆盖业务 payload 里的 requestId
+      // （respond_ask_user / respond_permission / respond_exit_plan_mode 的业务 requestId 是 UUID，
+      //  与命令追踪 ID 重名冲突曾被展开覆盖，导致主进程收到命令 ID 去查 pending → “提问请求不存在”）。
+      const cmdId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      this.pendingCommands.set(cmdId, { resolve: resolve as (r: unknown) => void, reject })
+      this.ws!.send(JSON.stringify({ ...payload, _cmdId: cmdId }))
       // 超时兜底
       setTimeout(() => {
-        if (this.pendingCommands.has(requestId)) {
-          this.pendingCommands.delete(requestId)
+        if (this.pendingCommands.has(cmdId)) {
+          this.pendingCommands.delete(cmdId)
           reject(new Error('指令超时'))
         }
       }, 15000)
@@ -230,6 +233,10 @@ export class WsClient {
 
   listSessions(): Promise<unknown> {
     return this.sendCommand({ type: 'list_sessions' })
+  }
+
+  listWorkspaces(): Promise<unknown> {
+    return this.sendCommand({ type: 'list_workspaces' })
   }
 
   listChannels(): Promise<unknown> {

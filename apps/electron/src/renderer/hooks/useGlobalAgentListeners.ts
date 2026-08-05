@@ -891,6 +891,37 @@ export function useGlobalAgentListeners(): void {
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               'permissionRequest'
             )
+          } else if (event.type === 'ask_user_resolved') {
+            // AskUser 已解决：从队列移除对应请求（双端在线时，另一端回答后也必须清理本地队列，
+            // 否则 AskUserBanner 永远显示残留的最旧请求 → 回答发旧 requestId → “提问请求不存在”）。
+            store.set(allPendingAskUserRequestsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((r) => r.requestId !== event.requestId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
+          } else if (event.type === 'permission_resolved') {
+            // 权限已解决：清理队列（与 ask_user_resolved 同理，防止跨端残留）
+            store.set(allPendingPermissionRequestsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((r) => r.requestId !== event.requestId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
+          } else if (event.type === 'exit_plan_mode_resolved') {
+            // ExitPlanMode 已解决：清理队列（与 ask_user_resolved 同理）
+            store.set(allPendingExitPlanRequestsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((r) => r.requestId !== event.requestId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
           } else if (event.type === 'exit_plan_mode_request') {
             // ExitPlanMode 请求入队
             store.set(allPendingExitPlanRequestsAtom, (prev) => {
