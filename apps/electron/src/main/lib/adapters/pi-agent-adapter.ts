@@ -52,7 +52,7 @@ import {
 } from '../agent-runtime-guards'
 import { createProferAgentsFilesOverride } from './pi-resource-loader-overrides'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
-import { createCodexRequestSettingsExtension } from './pi-codex-request-settings'
+import { createCodexRequestSettingsExtension, createDeepSeekV4RequestSettingsExtension } from './pi-codex-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -111,6 +111,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onContextWindow?: (contextWindow: number) => void
   onRetry?: (update: import('./pi-retry-control').PiRetryUpdate) => void
   thinkingLevel?: AgentThinkingLevel
+  /** DeepSeek V4 思考总开关；强度由 V4 协议固定为 max。 */
+  deepSeekV4ThinkingEnabled?: boolean
   maxBudgetUsd?: number
   outputFormat?: JsonSchemaOutputFormat
   /** Proma 聚合的附加目录；Pi 内置工具 factory 不接收多 root 参数，编排层会把它们注入 systemPrompt。 */
@@ -1501,6 +1503,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         retry: { enabled: true, maxRetries: PI_NATIVE_MAX_RETRIES, baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS },
         ...buildPiRemoteConnectionSettings(input),
       })
+      const extensionFactories = [
+        ...(input.provider === 'openai-codex'
+          ? [createCodexRequestSettingsExtension({
+              thinkingLevel: input.thinkingLevel ?? 'off',
+              fastMode: input.codexFastMode,
+            })]
+          : []),
+        ...(input.provider === 'deepseek'
+          ? [createDeepSeekV4RequestSettingsExtension({
+              thinkingEnabled: input.deepSeekV4ThinkingEnabled ?? true,
+            })]
+          : []),
+      ]
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: input.piAgentDir,
@@ -1509,14 +1524,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
         agentsFilesOverride: createProferAgentsFilesOverride(),
-        ...(input.provider === 'openai-codex' && {
-          extensionFactories: [
-            createCodexRequestSettingsExtension({
-              thinkingLevel: input.thinkingLevel ?? 'off',
-              fastMode: input.codexFastMode,
-            }),
-          ],
-        }),
+        ...(extensionFactories.length > 0 && { extensionFactories }),
         systemPromptOverride: () => input.systemPrompt,
       })
       await resourceLoader.reload()

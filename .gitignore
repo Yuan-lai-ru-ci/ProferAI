@@ -86,3 +86,9 @@ package.json.bak-*
 patches/*.patch.bak-*
 dev-run.log
 *.upgrade-backup
+
+# Tablet remote 开发模式目录与本地产物（不入库/不打包）
+apps/electron/.profer-dev/
+apps/electron/remote-test-*.log
+apps/electron/dist/renderer/tablet/
+*.remote-token.json
