@@ -8,7 +8,7 @@
 
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import type { AgentThinkingLevel } from '@profer/shared'
-import { isCodexFastModeSupportedModel } from '@profer/shared'
+import { isCodexFastModeSupportedModel, isDeepSeekV4Model } from '@profer/shared'
 import { injectCodexFastMode as doInjectCodexFastMode } from './pi-codex-fast-mode'
 
 type ProviderPayload = Record<string, unknown>
@@ -87,6 +87,46 @@ export function createCodexRequestSettingsExtension(settings: {
         updated = doInjectCodexFastMode(updated)
       }
 
+      return updated === event.payload ? undefined : updated
+    })
+  }
+}
+
+/**
+ * 为 DeepSeek V4 Anthropic-compatible 请求应用其专有思考协议。
+ *
+ * Pi 0.80.9 会把通用 reasoning 模型转成旧式 `budget_tokens` 请求；DeepSeek V4
+ * 需要无 budget 的 thinking 开关，并通过 `output_config.effort` 控制强度。
+ */
+export function injectDeepSeekV4ThinkingSettings(payload: unknown, thinkingEnabled: boolean): unknown {
+  if (!isProviderPayload(payload)) return payload
+  const modelId = typeof payload.model === 'string' ? payload.model : undefined
+  if (!isDeepSeekV4Model(modelId)) return payload
+
+  if (!thinkingEnabled) {
+    return {
+      ...payload,
+      thinking: { type: 'disabled' },
+    }
+  }
+
+  return {
+    ...payload,
+    thinking: { type: 'enabled' },
+    output_config: {
+      ...(isProviderPayload(payload.output_config) ? payload.output_config : {}),
+      effort: 'max',
+    },
+  }
+}
+
+/** 为 Pi + DeepSeek V4 的每轮 Anthropic Messages 请求注入思考开关与 max 强度。 */
+export function createDeepSeekV4RequestSettingsExtension(settings: {
+  thinkingEnabled: boolean
+}): (pi: ExtensionAPI) => void {
+  return (pi) => {
+    pi.on('before_provider_request', (event) => {
+      const updated = injectDeepSeekV4ThinkingSettings(event.payload, settings.thinkingEnabled)
       return updated === event.payload ? undefined : updated
     })
   }

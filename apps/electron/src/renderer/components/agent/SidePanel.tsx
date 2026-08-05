@@ -70,6 +70,26 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const [isOpen, setIsOpen] = useAtom(agentSidePanelOpenAtom)
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
+  // 收起右侧边栏时，若焦点仍停留在面板内的控件上，把焦点移出回输入框，
+  // 避免焦点悬空在 `opacity-0/pointer-events-none` 的隐藏面板里，导致后续方向导航/确认落空。
+  const prevOpenRef = React.useRef(isOpen)
+  React.useEffect(() => {
+    const wasOpen = prevOpenRef.current
+    prevOpenRef.current = isOpen
+    if (wasOpen && !isOpen) {
+      const activeEl = document.activeElement
+      if (activeEl instanceof HTMLElement
+        && activeEl.closest('[data-profer-navigation-region="right-panel"]')) {
+        const mirror = document.querySelector<HTMLElement>(
+          '[data-input-mode="agent"] .ProseMirror, [data-input-mode="chat"] .ProseMirror',
+        )
+        if (mirror) mirror.focus()
+        else (document.activeElement as HTMLElement | null)?.blur()
+      }
+    }
+  }, [isOpen])
+
+
   // Tab 系统
   const previewFileMap = useAtomValue(previewFileMapAtom)
   const selectedFilePath = previewFileMap.get(sessionId)?.filePath

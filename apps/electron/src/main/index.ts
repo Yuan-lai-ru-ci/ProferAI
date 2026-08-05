@@ -132,6 +132,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
+import { startRemoteService, stopRemoteService } from './lib/remote-service'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
@@ -607,6 +608,9 @@ async function bootstrap(): Promise<void> {
   // Register IPC handlers
   registerIpcHandlers()
 
+  // 平板版远程服务（显式开关：PROFER_REMOTE=1 或 --tablet；默认不启动）
+  safeRun('startRemoteService', startRemoteService)
+
   // Set dock icon on macOS
   if (process.platform === 'darwin' && app.dock) {
     await app.dock.show()
@@ -881,6 +885,8 @@ app.on('before-quit', () => {
   stopPlanningReminderScheduler()
   // 销毁规划窗口
   destroyPlanningWindow()
+  // 停止平板版远程服务
+  stopRemoteService()
   // 停止同步引擎
   const { stopSyncEngine } = require('./lib/sync-manager')
   stopSyncEngine()

@@ -1246,6 +1246,7 @@ export class AgentOrchestrator {
             { agentThinking: !(appSettings.agentThinking?.type === 'disabled'), agentEffort: appSettings.agentEffort },
             channel.provider,
           ),
+          deepSeekV4ThinkingEnabled: appSettings.agentThinking?.type !== 'disabled',
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
           ...(piCustomTools && { customTools: piCustomTools }),
           ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
