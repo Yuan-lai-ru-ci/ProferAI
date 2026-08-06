@@ -2,13 +2,13 @@
  * 模型等级门控中间件 — 拦截 Free/Standard 用户对国际模型的请求。
  *
  * 在 proxyAuthMiddleware 之后、creditGateMiddleware 之前挂载。
+ * 仅对平台渠道（统配 proxy）生效；自配 API Key 的用户直连不走本中间件。
  *
  * 门控规则：
- *   Free / Standard → 仅国内模型（DeepSeek、通义千问等）
- *   Plus / Pro       → 全模型（含 Claude、GPT、Gemini 等国际模型）
- *   Pro              → 额外允许自配 API
+ *   Free / Standard → 平台渠道仅国内模型（DeepSeek、通义千问等）；自配 Key 不受限
+ *   Plus / Pro       → 平台渠道全模型（含 Claude、GPT、Gemini 等国际模型）
  *
- * 自配 API 权限由 membership_tier 决定（plus/pro 可自配），
+ * 自配 API 权限已对所有用户开放（由 auth 返回 canSelfConfigApi），
  * tier-gate 从认证中间件刷新的 c.get('jwtPayload') 实时授权快照取 membership_tier。
  */
 /**
