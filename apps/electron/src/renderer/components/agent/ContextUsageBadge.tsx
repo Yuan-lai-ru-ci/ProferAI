@@ -271,6 +271,9 @@ export function ContextUsageBadge({
 
   const startPress = React.useCallback(() => {
     if (isProcessing) return
+    // 防重入：一次物理按压可能同时触发 touchstart 与合成的 mousedown（iPad/触屏），
+    // 若已触发过压缩或按压循环仍在跑，忽略后续事件，避免发出两次压缩指令。
+    if (pressTriggeredRef.current || animFrameRef.current != null) return
     pressTriggeredRef.current = false
     setIsPressing(true)
     setPressProgress(0)
@@ -299,10 +302,11 @@ export function ContextUsageBadge({
   }, [isProcessing, onCompact, cancelPressAnim])
 
   const endPress = React.useCallback(() => {
-    if (!pressTriggeredRef.current) {
-      setIsPressing(false)
-      setPressProgress(0)
-    }
+    // 无论本次按压是否已触发压缩，物理按压结束时都重置状态，
+    // 让下一次独立的按压可以重新开始；pressTriggeredRef 在 startPress 中拦截重复事件。
+    pressTriggeredRef.current = false
+    setIsPressing(false)
+    setPressProgress(0)
     cancelPressAnim()
   }, [cancelPressAnim])
 

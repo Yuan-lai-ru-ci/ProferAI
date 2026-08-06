@@ -152,7 +152,8 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className={cn(
+      {/* 标题栏右侧已自带关闭按钮（见 DialogHeader），关闭 DialogContent 默认注入的右上角 X，避免两个关闭按钮 */}
+      <DialogContent hideClose className={cn(
         'max-w-[calc(56rem-18px)] h-[calc(80vh-24px)] flex flex-col p-0 gap-0',
         state.status === 'image' && 'max-w-[calc(64rem-18px)] h-[calc(90vh-24px)]',
       )}>

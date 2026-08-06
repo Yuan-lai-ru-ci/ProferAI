@@ -201,6 +201,12 @@ export type MarkdownFontSize = 'small' | 'medium' | 'large'
 /** 默认 Markdown 字号档位 */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = 'medium'
 
+/** 界面缩放档位（桌面默认标准，平板端默认大号，见 atoms/ui-scale.ts） */
+export type UiScale = 'standard' | 'large' | 'xlarge' | 'huge' | 'massive' | 'max'
+
+/** 默认界面缩放档位 */
+export const DEFAULT_UI_SCALE: UiScale = 'standard'
+
 /** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
 
@@ -262,6 +268,8 @@ export interface AppSettings {
   richTextRenderingEnabled?: boolean
   /** Markdown 预览字号档位（默认 'medium'，对应 15px） */
   markdownFontSize?: MarkdownFontSize
+  /** 界面缩放档位（默认 'standard' 100%；平板端无缓存时默认 'large' 110%） */
+  uiScale?: UiScale
   /** 上次是否在 Scratch Pad 页（用于重启恢复） */
   scratchPadActive?: boolean
   /** 应用图标变体 ID（dock + window icon），'default' 或 logo 变体 id */
@@ -282,6 +290,8 @@ export interface AppSettings {
   autoLaunch?: boolean
   /** 是否在侧边栏显示论文知识库入口（默认 true） */
   paperKnowledgeBaseEnabled?: boolean
+  /** 是否启用局域网平板模式（试验版）；启动后自动恢复。 */
+  tabletModeEnabled?: boolean
   /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
   agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
 }
@@ -302,6 +312,15 @@ export interface PersistedTabSettings {
 }
 
 /** 设置 IPC 通道 */
+export interface TabletModeStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  localUrl: string | null
+  lanUrl: string | null
+  token: string | null
+}
+
 export const SETTINGS_IPC_CHANNELS = {
   GET: 'settings:get',
   UPDATE: 'settings:update',
@@ -313,6 +332,9 @@ export const SETTINGS_IPC_CHANNELS = {
   /** 获取/设置开机自启动状态 */
   GET_AUTO_LAUNCH: 'settings:get-auto-launch',
   SET_AUTO_LAUNCH: 'settings:set-auto-launch',
+  /** 平板模式（试验版）运行时控制 */
+  GET_TABLET_MODE_STATUS: 'settings:get-tablet-mode-status',
+  SET_TABLET_MODE_ENABLED: 'settings:set-tablet-mode-enabled',
 } as const
 
 /** 自定义通知音 IPC 通道 */

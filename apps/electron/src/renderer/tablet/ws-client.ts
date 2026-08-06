@@ -4,14 +4,22 @@
  * 职责：
  *  - 管理 WebSocket 连接（含 token 鉴权、自动重连、心跳）
  *  - 发送指令（list_sessions / list_channels / send_message / create_session /
- *    session_detail / stop_agent / ping）
- *  - 分发事件（hello / agent_event / command_result）
+ *    session_detail / stop_agent / ping，以及 Chat 工具全套指令）
+ *  - 分发事件（hello / agent_event / chat_event / command_result）
  *
- * 所有 Agent 工作流事件通过 agent_event 推送，这里统一交给订阅者处理。
+ * 所有 Agent 工作流事件通过 agent_event 推送，Chat 流式事件通过 chat_event 推送，
+ * 这里统一交给对应订阅者处理。
  */
 
 export type AgentWorkflowEvent = {
   sessionId: string
+  payload: unknown
+}
+
+export type ChatWorkflowEvent = {
+  conversationId: string
+  /** 桌面 CHAT_IPC_CHANNELS 同名通道（chat:stream:chunk 等） */
+  channel: string
   payload: unknown
 }
 
@@ -26,6 +34,7 @@ type CommandResultMessage = {
 type InboundMessage =
   | { kind: 'hello'; serverTime: number }
   | { kind: 'agent_event'; sessionId: string; payload: unknown }
+  | { kind: 'chat_event'; conversationId: string; channel: string; payload: unknown }
   | CommandResultMessage
 
 export interface WsClientOptions {
@@ -37,6 +46,8 @@ export interface WsClientOptions {
   onStatusChange?: (status: 'connecting' | 'open' | 'closed' | 'error', info?: string) => void
   /** Agent 工作流事件回调 */
   onAgentEvent?: (evt: AgentWorkflowEvent) => void
+  /** Chat 流式事件回调 */
+  onChatEvent?: (evt: ChatWorkflowEvent) => void
   /** 指令结果回调（按 requestId 分发） */
   onCommandResult?: (result: CommandResultMessage) => void
 }
@@ -52,6 +63,7 @@ export class WsClient {
 
   onStatusChange?: WsClientOptions['onStatusChange']
   onAgentEvent?: WsClientOptions['onAgentEvent']
+  onChatEvent?: WsClientOptions['onChatEvent']
   onCommandResult?: WsClientOptions['onCommandResult']
 
   constructor(options: WsClientOptions) {
@@ -59,6 +71,7 @@ export class WsClient {
     this.token = options.token
     this.onStatusChange = options.onStatusChange
     this.onAgentEvent = options.onAgentEvent
+    this.onChatEvent = options.onChatEvent
     this.onCommandResult = options.onCommandResult
   }
 
@@ -140,6 +153,13 @@ export class WsClient {
       case 'agent_event':
         this.onAgentEvent?.({
           sessionId: msg.sessionId,
+          payload: msg.payload,
+        })
+        break
+      case 'chat_event':
+        this.onChatEvent?.({
+          conversationId: msg.conversationId,
+          channel: msg.channel,
           payload: msg.payload,
         })
         break
@@ -239,6 +259,10 @@ export class WsClient {
     return this.sendCommand({ type: 'list_workspaces' })
   }
 
+  getUserProfile(): Promise<unknown> {
+    return this.sendCommand({ type: 'get_user_profile' })
+  }
+
   listChannels(): Promise<unknown> {
     return this.sendCommand({ type: 'list_channels' })
   }
@@ -297,6 +321,96 @@ export class WsClient {
 
   stopAgent(sessionId: string): Promise<unknown> {
     return this.sendCommand({ type: 'stop_agent', sessionId })
+  }
+
+  // ===== Chat（聊天工具）指令 =====
+
+  listConversations(): Promise<unknown> {
+    return this.sendCommand({ type: 'list_conversations' })
+  }
+
+  createConversation(payload: { title?: string; modelId?: string; channelId?: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'create_conversation', ...payload })
+  }
+
+  getConversationMessages(conversationId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'get_conversation_messages', conversationId })
+  }
+
+  getRecentMessages(conversationId: string, limit: number): Promise<unknown> {
+    return this.sendCommand({ type: 'get_recent_messages', conversationId, limit })
+  }
+
+  updateConversationTitle(conversationId: string, title: string): Promise<unknown> {
+    return this.sendCommand({ type: 'update_conversation_title', conversationId, title })
+  }
+
+  updateConversationModel(conversationId: string, modelId?: string, channelId?: string): Promise<unknown> {
+    return this.sendCommand({ type: 'update_conversation_model', conversationId, modelId, channelId })
+  }
+
+  deleteConversation(conversationId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'delete_conversation', conversationId })
+  }
+
+  toggleConversationPin(conversationId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'toggle_conversation_pin', conversationId })
+  }
+
+  toggleConversationArchive(conversationId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'toggle_conversation_archive', conversationId })
+  }
+
+  searchChatMessages(query: string): Promise<unknown> {
+    return this.sendCommand({ type: 'search_chat_messages', query })
+  }
+
+  chatSendMessage(payload: {
+    conversationId: string
+    userMessage: string
+    channelId: string
+    modelId?: string
+    contextLength?: number
+    contextDividers?: string[]
+    attachments?: unknown[]
+    knowledgeReferences?: unknown[]
+    thinkingEnabled?: boolean
+    systemMessage?: string
+    enabledToolIds?: string[]
+  }): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_send_message', ...payload })
+  }
+
+  chatStopGeneration(conversationId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_stop_generation', conversationId })
+  }
+
+  chatDeleteMessage(conversationId: string, messageId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_delete_message', conversationId, messageId })
+  }
+
+  chatTruncateMessagesFrom(conversationId: string, messageId: string, preserveFirstMessageAttachments?: boolean): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_truncate_messages_from', conversationId, messageId, preserveFirstMessageAttachments })
+  }
+
+  chatUpdateContextDividers(conversationId: string, dividers: string[]): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_update_context_dividers', conversationId, dividers })
+  }
+
+  chatGenerateTitle(input: { userMessage: string; channelId: string; modelId?: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_generate_title', ...input })
+  }
+
+  chatSaveAttachment(input: { conversationId: string; filename: string; mediaType: string; data: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_save_attachment', ...input })
+  }
+
+  chatDeleteAttachment(localPath: string): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_delete_attachment', localPath })
+  }
+
+  chatReadAttachment(localPath: string): Promise<unknown> {
+    return this.sendCommand({ type: 'chat_read_attachment', localPath })
   }
 }
 

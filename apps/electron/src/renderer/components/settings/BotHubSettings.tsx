@@ -17,6 +17,7 @@ import { DingTalkSettings } from './DingTalkSettings'
 import { WeChatSettings } from './WeChatSettings'
 import { BotDefaultSettings } from './BotDefaultSettings'
 import { ProferLogoSettings } from './ProferLogoSettings'
+import { TabletModeSettings } from './TabletModeSettings'
 import feishuLogo from '@/assets/bots/feishu.png'
 import dingtalkLogo from '@/assets/bots/dingding.png'
 import wechatLogo from '@/assets/bots/wechat.png'
@@ -24,7 +25,7 @@ import proferModelLogo from '@/assets/models/profer.png'
 
 // ===== 类型 =====
 
-type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'defaults' | 'logos'
+type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'tablet' | 'defaults' | 'logos'
 
 interface BotPlatformDef {
   id: BotPlatformId
@@ -59,6 +60,13 @@ const PLATFORMS: readonly BotPlatformDef[] = [
     iconBgClass: 'bg-orange-500/15',
   },
   {
+    id: 'tablet',
+    name: '平板模式（试验版）',
+    iconChar: '▣',
+    iconBgClass: 'bg-violet-500/15',
+    iconTextClass: 'text-violet-600',
+  },
+  {
     id: 'defaults',
     name: '用法',
     iconChar: '⚙',
@@ -89,7 +97,7 @@ function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React
   const dingtalkBotStates = useAtomValue(dingtalkBotStatesAtom)
   const wechatState = useAtomValue(wechatBridgeStateAtom)
 
-  if (platformId === 'defaults' || platformId === 'logos') return null
+  if (platformId === 'defaults' || platformId === 'logos' || platformId === 'tablet') return null
 
   const statusMap: Record<string, string> = {
     feishu: getPlatformStatus(feishuBotStates),
@@ -168,6 +176,8 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
       return <DingTalkSettings />
     case 'wechat':
       return <WeChatSettings />
+    case 'tablet':
+      return <TabletModeSettings />
     case 'defaults':
       return <BotDefaultSettings />
     case 'logos':

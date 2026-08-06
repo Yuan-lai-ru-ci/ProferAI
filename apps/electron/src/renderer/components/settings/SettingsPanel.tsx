@@ -61,14 +61,14 @@ import { SubscriptionSettings } from "./SubscriptionSettings";
 import { OpenApiSettings } from "./OpenApiSettings";
 
 /** 设置 Tab 定义 */
-interface TabItem {
+export interface SettingsTabItem {
   id: SettingsTab;
   label: string;
   icon: React.ReactNode;
 }
 
 /** 基础 Tabs（所有模式都有） */
-const BASE_TABS: TabItem[] = [
+const BASE_TABS: SettingsTabItem[] = [
   { id: "general", label: "通用设置", icon: <Settings size={16} /> },
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
@@ -78,39 +78,39 @@ const BASE_TABS: TabItem[] = [
 ];
 
 /** Agent 模式专属 Tab */
-const AGENT_TAB: TabItem = {
+const AGENT_TAB: SettingsTabItem = {
   id: "agent",
   label: "Agent 配置",
   icon: <Plug size={16} />,
 };
-const TOOLS_TAB: TabItem = {
+const TOOLS_TAB: SettingsTabItem = {
   id: "tools",
   label: "Chat 工具",
   icon: <Wrench size={16} />,
 };
-const BOTS_TAB: TabItem = {
+const BOTS_TAB: SettingsTabItem = {
   id: "bots",
   label: "远程连接",
   icon: <Bot size={16} />,
 };
-const TUTORIAL_TAB: TabItem = {
+const TUTORIAL_TAB: SettingsTabItem = {
   id: "tutorial",
   label: "Profer 教程",
   icon: <GraduationCap size={16} />,
 };
-const SHORTCUTS_TAB: TabItem = {
+const SHORTCUTS_TAB: SettingsTabItem = {
   id: "shortcuts",
   label: "快捷键管理",
   icon: <Keyboard size={16} />,
 };
-const VOICE_INPUT_TAB: TabItem = {
+const VOICE_INPUT_TAB: SettingsTabItem = {
   id: "voice-input",
   label: "语音输入",
   icon: <Mic size={16} />,
 };
 
 /** 尾部 Tabs */
-const TAIL_TABS: TabItem[] = [
+const TAIL_TABS: SettingsTabItem[] = [
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "data-management", label: "数据管理", icon: <Database size={16} /> },
   { id: "team", label: "团队管理", icon: <Users size={16} /> },
@@ -158,10 +158,13 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
 
 interface SettingsPanelProps {
   onClose?: () => void;
+  /** 受限环境（如平板）传入的 tab 白名单；不传时按 appMode 推导完整列表 */
+  tabsOverride?: SettingsTabItem[];
 }
 
 export function SettingsPanel({
   onClose,
+  tabsOverride,
 }: SettingsPanelProps): React.ReactElement {
   const [activeTab, setActiveTab] = useAtom(settingsTabAtom);
   const channelFormDirty = useAtomValue(channelFormDirtyAtom);
@@ -194,6 +197,12 @@ export function SettingsPanel({
     setPendingAction(null)
   }
 
+  // 白名单回退：受限环境（平板）的 activeTab 可能来自外部入口（默认 general / 余额条 credits），
+  // 不在白名单时回落到白名单首项，避免渲染未暴露的桌面设置页（如登录/订阅/代理）。
+  const effectiveTab: SettingsTab = tabsOverride
+    ? (tabsOverride.some((t) => t.id === activeTab) ? activeTab : tabsOverride[0]!.id)
+    : activeTab
+
   /** 切换标签页时检测是否有未保存内容，tutorial 特殊处理：打开 New Tab 并关闭设置 */
   const handleTabChange = (tabId: SettingsTab): void => {
     if (tabId === 'tutorial') {
@@ -203,8 +212,8 @@ export function SettingsPanel({
       setSettingsOpen(false)
       return
     }
-    if (tabId === activeTab) return
-    if (activeTab === 'channels' && channelFormDirty) {
+    if (tabId === effectiveTab) return
+    if (effectiveTab === 'channels' && channelFormDirty) {
       setPendingAction({ type: 'tab', tabId })
       return
     }
@@ -213,7 +222,7 @@ export function SettingsPanel({
 
   /** 关闭设置面板时检测是否有未保存内容 */
   const handleClose = (): void => {
-    if (activeTab === 'channels' && channelFormDirty) {
+    if (effectiveTab === 'channels' && channelFormDirty) {
       setPendingAction({ type: 'close' })
       return
     }
@@ -222,14 +231,15 @@ export function SettingsPanel({
 
   // Cmd+W 等外部关闭请求：弹出确认对话框
   React.useEffect(() => {
-    if (closeRequested && activeTab === 'channels') {
+    if (closeRequested && effectiveTab === 'channels') {
       setPendingAction({ type: 'close' })
       setCloseRequested(false)
     }
-  }, [closeRequested, activeTab, setCloseRequested])
+  }, [closeRequested, effectiveTab, setCloseRequested])
 
-  // Agent 模式时在渠道后插入 Agent Tab，工具 tab 两种模式都显示
+  // 受限环境（平板）传入白名单时直接使用；否则 Agent 模式在渠道后插入 Agent Tab，工具 tab 两种模式都显示
   const tabs = React.useMemo(() => {
+    if (tabsOverride) return tabsOverride
     if (appMode === "agent") {
       return [
         ...BASE_TABS,
@@ -251,10 +261,10 @@ export function SettingsPanel({
       SHORTCUTS_TAB,
       ...TAIL_TABS,
     ];
-  }, [appMode]);
+  }, [appMode, tabsOverride]);
 
   // 当前 tab 标题
-  const activeTabLabel = tabs.find((t) => t.id === activeTab)?.label ?? "设置";
+  const activeTabLabel = tabs.find((t) => t.id === effectiveTab)?.label ?? "设置";
 
   return (
     <div className="flex flex-col h-full">
@@ -284,7 +294,7 @@ export function SettingsPanel({
                 onClick={() => handleTabChange(tab.id)}
                 className={cn(
                   "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
-                  activeTab === tab.id
+                  effectiveTab === tab.id
                     ? "bg-muted text-foreground font-medium"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                 )}
@@ -301,7 +311,7 @@ export function SettingsPanel({
 
         {/* 右侧内容区域 */}
         <ScrollArea className="flex-1">
-          <div className="px-6 py-4">{renderTabContent(activeTab)}</div>
+          <div className="px-6 py-4">{renderTabContent(effectiveTab)}</div>
         </ScrollArea>
       </div>
 

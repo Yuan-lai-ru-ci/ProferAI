@@ -19,27 +19,28 @@ import { Provider, createStore, useSetAtom, useAtomValue } from 'jotai'
 import { Toaster } from 'sonner'
 import '@fontsource-variable/inter/index.css'
 import '@/styles/globals.css'
-import { installElectronApiStub, setTabletRemoteClient, emitTabletAgentStreamEvent, emitTabletAgentStreamComplete, consumeTabletStoppedByUser } from './electronapi-stub'
-import { defaultWsUrl, WsClient, type AgentWorkflowEvent } from './ws-client'
+import { installElectronApiStub, setTabletRemoteClient, emitTabletAgentStreamEvent, emitTabletAgentStreamComplete, emitTabletChatStreamEvent, consumeTabletStoppedByUser } from './electronapi-stub'
+import { defaultWsUrl, WsClient, type AgentWorkflowEvent, type ChatWorkflowEvent } from './ws-client'
 // ===== 复用桌面组件 / atom（必须位于模块顶部，确保 ESM 正常收集）=====
 import { AgentView } from '@/components/agent'
+import { ChatView } from '@/components/chat'
 import { LeftSidebar } from '@/components/app-shell/LeftSidebar'
 import { SettingsDialog, type SettingsTabItem } from '@/components/settings'
 import { useGlobalAgentListeners } from '@/hooks/useGlobalAgentListeners'
+import { useGlobalChatListeners } from '@/hooks/useGlobalChatListeners'
 import { userProfileAtom } from '@/atoms/user-profile'
-import { channelsAtom, channelsLoadedAtom } from '@/atoms/chat-atoms'
+import { channelsAtom, channelsLoadedAtom, conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
 import { agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentStreamingStatesAtom } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { initTabletUiScale } from '@/atoms/ui-scale'
+import { UiScaleContainer } from '@/components/UiScaleContainer'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Menu, Plus, Palette } from 'lucide-react'
-import { isAgentCompatibleProvider } from '@profer/shared'
+import { isAgentCompatibleProvider, type ProviderType, type AgentStreamPayload } from '@profer/shared'
 
 // ===== 先安装 electronAPI stub（必须在任何复用组件求值前）=====
 installElectronApiStub()
-// 平板默认略微放大 UI（触屏友好）：无本地缓存时取 110%，已有用户选择则保持
-initTabletUiScale()
 
 // ===== Token 存取 =====
 function getStoredToken(): string { return localStorage.getItem('profer-remote-token') || '' }
@@ -50,6 +51,10 @@ interface ChannelInfo { id: string; name: string; provider: string; models: { id
 interface SessionInfo { id: string; title: string; channelId?: string; modelId?: string; workspaceId?: string; agentRuntime?: 'claude' | 'pi'; permissionMode?: string; active: boolean; updatedAt?: number }
 
 const tabletStore = createStore()
+
+// 平板默认略微放大 UI（触屏友好）：无本地缓存时取 110%，已有用户选择则保持。
+// 必须在渲染前写入 tabletStore 的 uiScaleAtom（atom 默认值在模块加载时已固定）
+initTabletUiScale(tabletStore)
 
 // ===== 平板设置系统：直接搬运桌面 SettingsDialog，tab 白名单只保留平板可用的「外观」=====
 // （主题/界面大小/Markdown 字号均为本地持久化，不依赖 Electron IPC；其余 tab 大量依赖
@@ -90,8 +95,12 @@ function TabletApp(): React.ReactElement {
       {/* AgentView/LeftSidebar 组件树大量使用 Tooltip，缺少 Provider 会批量抛错 */}
       <TooltipProvider>
         <Toaster theme="system" position="top-center" richColors />
-        <App />
-        {/* 设置入口：LeftSidebar 底部头像/设置按钮置位 settingsOpenAtom，此处渲染原版 Dialog */}
+        {/* 等比缩放容器：内容整体 scale(s)，容器反补偿保持视口内，区域不放大 */}
+        <UiScaleContainer>
+          <App />
+        </UiScaleContainer>
+        {/* 设置入口：LeftSidebar 底部头像/设置按钮置位 settingsOpenAtom，此处渲染原版 Dialog；
+            Portal 到 body，不随缩放容器变换 */}
         <SettingsDialog tabsOverride={TABLET_SETTINGS_TABS} />
       </TooltipProvider>
     </Provider>
@@ -101,10 +110,13 @@ function TabletApp(): React.ReactElement {
 function App(): React.ReactElement {
   // useGlobalAgentListeners：桌面 Agent 事件 → atoms 的完整逻辑；事件源由 WS 桥喂入
   useGlobalAgentListeners()
+  // useGlobalChatListeners：桌面 Chat 流式事件（chunk/reasoning/complete/error/tool-activity）→ atoms
+  useGlobalChatListeners()
 
   const [tokenInput, setTokenInput] = useState(getStoredToken())
   const setChannels = useSetAtom(channelsAtom)
   const setChannelsLoaded = useSetAtom(channelsLoadedAtom)
+  const setConversations = useSetAtom(conversationsAtom)
   const setAgentChannelId = useSetAtom(agentChannelIdAtom)
   const setAgentModelId = useSetAtom(agentModelIdAtom)
   const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
@@ -112,8 +124,12 @@ function App(): React.ReactElement {
   const setNativeWorkspaces = useSetAtom(agentWorkspacesAtom)
   const setNativeSessionId = useSetAtom(currentAgentSessionIdAtom)
   const setNativeWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
+  const setNativeConversationId = useSetAtom(currentConversationIdAtom)
   const setNativeAppMode = useSetAtom(appModeAtom)
+  const appMode = useAtomValue(appModeAtom)
   const nativeActiveSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const nativeConversationId = useAtomValue(currentConversationIdAtom)
+  const conversations = useAtomValue(conversationsAtom)
   const userProfile = useAtomValue(userProfileAtom)
   const clientRef = useRef<WsClient | null>(null)
 
@@ -122,9 +138,19 @@ function App(): React.ReactElement {
   const [errMsg, setErrMsg] = useState<string | undefined>(undefined)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [currentTitle, setCurrentTitle] = useState('')
   // 窄屏时侧栏以抽屉承载；宽屏保持与原生工作台一致的左侧导航。
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // 横屏且 ≥1024px 时使用固定侧栏布局（landscape:min-[1024px]）；竖屏/小屏走抽屉+顶栏。
+  // 竖屏时标题由顶栏承担（AgentHeader 隐藏），横屏时 AgentHeader 自带标题。
+  const [landscapeWide, setLandscapeWide] = useState(() => window.matchMedia('(orientation: landscape) and (min-width: 1024px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(orientation: landscape) and (min-width: 1024px)')
+    const onChange = (): void => setLandscapeWide(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
 
   // ===== WS 管理 =====
   const connect = useCallback((token: string) => {
@@ -137,10 +163,12 @@ function App(): React.ReactElement {
           setConnection('open'); setErrMsg(undefined)
           void loadChannels(client)
           void loadSessions(client)
+          void loadConversations(client)
         } else if (status === 'error') setConnection('error')
         else setConnection('connecting')
       },
       onAgentEvent: (evt) => handleAgentEvent(client, evt),
+      onChatEvent: (evt) => handleChatEvent(evt),
     })
     clientRef.current = client
     setTabletRemoteClient(client)
@@ -162,7 +190,7 @@ function App(): React.ReactElement {
       setChannels(ch as never)
       setChannelsLoaded(true)
       // agentChannelIdsAtom：桌面从 enabled + Agent 兼容 provider 派生（见 ChannelSettings）
-      setAgentChannelIds(ch.filter((c) => isAgentCompatibleProvider(c.provider)).map((c) => c.id))
+      setAgentChannelIds(ch.filter((c) => isAgentCompatibleProvider(c.provider as ProviderType)).map((c) => c.id))
       // AgentView 从 sessionMeta / agentChannelIdAtom / agentModelIdAtom 解析渠道与模型；
       // 默认渠道取第一个可用，避免“请先设置 Agent 供应商”的桌面提示出现在平板上。
       if (ch.length > 0) {
@@ -235,6 +263,13 @@ function App(): React.ReactElement {
     } catch (e) { console.error('拉取会话失败', e) }
   }, [setNativeSessions, setNativeWorkspaces, setNativeWorkspaceId])
 
+  const loadConversations = useCallback(async (client: WsClient) => {
+    try {
+      const data = await client.listConversations() as Array<{ id: string; title: string }>
+      setConversations((Array.isArray(data) ? data : []) as never)
+    } catch (e) { console.error('拉取对话列表失败', e) }
+  }, [setConversations])
+
   // ===== 打开会话：AgentView 自行加载持久化消息与流式状态，平板只切换 sessionId =====
   const openSession = useCallback(async (sessionId: string, title?: string) => {
     setSidebarOpen(false)
@@ -243,6 +278,15 @@ function App(): React.ReactElement {
     setNativeAppMode('agent')
     setCurrentTitle(title || '')
   }, [setNativeSessionId, setNativeAppMode])
+
+  /** 打开 Chat 对话：ChatView 自行加载消息与流式状态，平板只切换 conversationId 与模式 */
+  const openChatConversation = useCallback((conversationId: string, title?: string) => {
+    setSidebarOpen(false)
+    setCurrentChatId(conversationId)
+    setNativeConversationId(conversationId)
+    setNativeAppMode('chat')
+    setCurrentTitle(title || '')
+  }, [setNativeConversationId, setNativeAppMode])
 
   useEffect(() => {
     setNativeAppMode('agent')
@@ -256,9 +300,35 @@ function App(): React.ReactElement {
     }
   }, [nativeActiveSessionId, currentSessionId, sessions, openSession])
 
+  // 与 Agent 同构：LeftSidebar（useOpenSession）写入 currentConversationIdAtom，
+  // 这里接回平板 Chat 对话切换（含模式切换按钮与侧栏选择两条路径）。
+  useEffect(() => {
+    if (nativeConversationId && nativeConversationId !== currentChatId) {
+      const conv = conversations.find((item) => item.id === nativeConversationId)
+      openChatConversation(nativeConversationId, conv?.title)
+    }
+  }, [nativeConversationId, currentChatId, conversations, openChatConversation])
+
+  // Chat 模式下刷新后恢复最近对话（appMode 持久化可能停在 chat，此时 conversationId 为空）
+  useEffect(() => {
+    if (connection === 'open' && appMode === 'chat' && !currentChatId) {
+      const first = conversations.find((c) => !c.archived)
+      if (first) openChatConversation(first.id, first.title)
+    }
+  }, [connection, appMode, currentChatId, conversations, openChatConversation])
+
+  // 顶栏标题：优先实时取列表最新标题（标题可被重命名/Agent 自动更新；Chat 对话同理）
+  const activeTitle = appMode === 'chat'
+    ? (currentChatId ? (conversations.find((c) => c.id === currentChatId)?.title ?? currentTitle) : currentTitle)
+    : (currentSessionId ? (sessions.find((s) => s.id === currentSessionId)?.title ?? currentTitle) : currentTitle)
+
   // ===== Agent 事件：喂给 electronAPI 桥（useGlobalAgentListeners 消费），并在回合结束后刷新会话列表 =====
+  const handleChatEvent = useCallback((evt: ChatWorkflowEvent) => {
+    emitTabletChatStreamEvent(evt.channel, evt.payload)
+  }, [])
+
   const handleAgentEvent = useCallback((client: WsClient, evt: AgentWorkflowEvent) => {
-    emitTabletAgentStreamEvent({ sessionId: evt.sessionId, payload: evt.payload })
+    emitTabletAgentStreamEvent({ sessionId: evt.sessionId, payload: evt.payload as AgentStreamPayload })
     const p = evt.payload as { kind?: string; event?: { type?: string } } | null
     if (p && p.kind === 'profer_event' && p.event && (p.event.type === 'run_completed' || p.event.type === 'run_idle')) {
       // 桥接桌面 STREAM_COMPLETE：useGlobalAgentListeners 只有它会把 running 置 false
@@ -289,6 +359,20 @@ function App(): React.ReactElement {
       }
     } catch (e) { setErrMsg('创建会话失败: ' + String(e)) }
   }, [openSession, loadSessions])
+
+  /** 新建 Chat 对话（空态按钮；LeftSidebar 的“新建对话”走它自己的 handleNewConversation） */
+  const createConversation = useCallback(async () => {
+    const client = clientRef.current
+    if (!client || !client.isOpen()) return
+    try {
+      const meta = await client.createConversation({}) as { id: string; title: string }
+      if (meta?.id) {
+        // 插入会话列表头部，LeftSidebar 立即可见（与桌面 handleNewConversation 一致）
+        setConversations((prev) => [meta, ...prev] as never)
+        openChatConversation(meta.id, meta.title)
+      }
+    } catch (e) { setErrMsg('创建对话失败: ' + String(e)) }
+  }, [openChatConversation, setConversations])
 
   // 提交 token
   const submitToken = useCallback(() => {
@@ -334,7 +418,7 @@ function App(): React.ReactElement {
   if (connection !== 'open') {
     // 未连接：token 页
     return (
-      <div className="flex h-[100dvh] w-full items-center justify-center bg-background text-foreground p-6">
+      <div className="flex h-full w-full items-center justify-center bg-background text-foreground p-6">
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-1.5">
             <div className="text-xl font-semibold italic tracking-tight">Profer</div>
@@ -357,33 +441,52 @@ function App(): React.ReactElement {
   }
 
   // 已连接：桌面式布局（左侧会话栏 + 主区，无右侧栏；对话区整体复用桌面 AgentView）
+  // 断点约定：横屏且 ≥1024px 显示固定侧栏（iPad 横屏/桌面浏览器）；其余一律抽屉+顶栏——
+  // 竖屏不管宽度（含 iPad Pro 12.9" 竖屏 1024px）都走抽屉，避免固定侧栏挤压对话区。
   return (
-    <div className="flex h-[100dvh] w-full overflow-hidden bg-background p-0 text-foreground md:p-2">
+    <div className="flex h-full w-full overflow-hidden bg-background p-0 text-foreground landscape:min-[1024px]:p-2">
       <NativeTabletSidebar mobileOpen={sidebarOpen} onDismiss={() => setSidebarOpen(false)} />
 
       {/* 主区 */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-content-area md:ml-2 md:rounded-[24px] md:border md:border-border/70 md:shadow-xl">
-        {/* 窄屏顶栏：仅汉堡入口（会话标题由 AgentView 自带 AgentHeader 承担，避免双标题）；
-            宽屏（md+）无顶栏，AgentView 从顶部开始。 */}
-        <div className="flex h-12 shrink-0 items-center border-b border-border bg-tabbar-surface px-2 md:hidden">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-content-area landscape:min-[1024px]:ml-2 landscape:min-[1024px]:rounded-[24px] landscape:min-[1024px]:border landscape:min-[1024px]:border-border/70 landscape:min-[1024px]:shadow-xl">
+        {/* 顶栏（非固定侧栏布局时显示）：汉堡 + 当前会话标题（标题由外部承担，AgentView 隐藏 AgentHeader）；
+            横屏固定侧栏布局无顶栏，标题由 AgentHeader 自带。 */}
+        <div className="flex h-12 shrink-0 items-center border-b border-border bg-tabbar-surface px-2 landscape:min-[1024px]:hidden">
           <Button type="button" variant="ghost" size="icon" onClick={() => setSidebarOpen(true)} className="mr-1 size-10 shrink-0 rounded-[12px] text-foreground/65 hover:bg-foreground/[0.06]" aria-label="打开导航"><Menu className="size-[18px]" /></Button>
+          <div className="flex-1 min-w-0 px-1">
+            <span className="block truncate text-sm font-medium text-foreground">{activeTitle}</span>
+          </div>
         </div>
 
-        {/* 对话区：完整复用桌面 AgentView。
+        {/* 对话区：完整复用桌面 AgentView / ChatView。
             注意：必须是 flex 容器（flex flex-col）——AgentView 根是 flex-1，StickToBottom 滚动容器是
             height:100%，依赖整条父链的高度约束；若此处是普通块级元素，滚动容器被内容撑开后溢出，
             对话区将无法滚动（历史消息被 overflow-hidden 截断）。 */}
         <div className="flex min-h-0 flex-1 flex-col touch-pan-y">
-          {currentSessionId ? (
-            <AgentView sessionId={currentSessionId} tabletMode />
-          ) : (
-            <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-              <div className="max-w-sm space-y-2">
-                <div className="text-[22px] font-semibold tracking-tight text-foreground">{userProfile.userName}，早上好</div>
-                <p className="mt-16 text-[13px] leading-5 text-muted-foreground">开始你的第一个 Agent 会话，Token 消耗热力图将在这里显示</p>
-                <Button type="button" variant="outline" size="sm" onClick={createSession} className="mt-3 h-9 gap-1.5"><Plus className="size-3.5" />新建会话</Button>
+          {appMode === 'chat' ? (
+            currentChatId ? (
+              <ChatView conversationId={currentChatId} />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                <div className="max-w-sm space-y-2">
+                  <div className="text-[22px] font-semibold tracking-tight text-foreground">{userProfile.userName}，早上好</div>
+                  <p className="mt-16 text-[13px] leading-5 text-muted-foreground">开始你的第一个 Chat 对话，与 Agent 共享渠道与模型</p>
+                  <Button type="button" variant="outline" size="sm" onClick={createConversation} className="mt-3 h-9 gap-1.5"><Plus className="size-3.5" />新建对话</Button>
+                </div>
               </div>
-            </div>
+            )
+          ) : (
+            currentSessionId ? (
+              <AgentView sessionId={currentSessionId} tabletMode hideAgentHeader={!landscapeWide} />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                <div className="max-w-sm space-y-2">
+                  <div className="text-[22px] font-semibold tracking-tight text-foreground">{userProfile.userName}，早上好</div>
+                  <p className="mt-16 text-[13px] leading-5 text-muted-foreground">开始你的第一个 Agent 会话，Token 消耗热力图将在这里显示</p>
+                  <Button type="button" variant="outline" size="sm" onClick={createSession} className="mt-3 h-9 gap-1.5"><Plus className="size-3.5" />新建会话</Button>
+                </div>
+              </div>
+            )
           )}
         </div>
       </div>
@@ -395,8 +498,8 @@ function App(): React.ReactElement {
 function NativeTabletSidebar({ mobileOpen, onDismiss }: { mobileOpen: boolean; onDismiss: () => void }): React.ReactElement {
   return (
     <>
-      <div className="hidden h-full shrink-0 md:block"><LeftSidebar width={288} tabletMode /></div>
-      <div className={`fixed inset-0 z-50 md:hidden ${mobileOpen ? 'pointer-events-auto' : 'pointer-events-none'}`} aria-hidden={!mobileOpen}>
+      <div className="hidden h-full shrink-0 landscape:min-[1024px]:block"><LeftSidebar width={288} tabletMode /></div>
+      <div className={`fixed inset-0 z-50 landscape:min-[1024px]:hidden ${mobileOpen ? 'pointer-events-auto' : 'pointer-events-none'}`} aria-hidden={!mobileOpen}>
         <button type="button" className={`absolute inset-0 z-0 bg-black/40 transition-opacity duration-200 ${mobileOpen ? 'opacity-100' : 'opacity-0'}`} onClick={onDismiss} aria-label="关闭会话导航" tabIndex={mobileOpen ? 0 : -1} />
         <div className={`absolute inset-y-0 left-0 z-10 touch-pan-y transition-transform duration-200 ease-out ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
           <LeftSidebar width={288} tabletMode />

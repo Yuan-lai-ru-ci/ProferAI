@@ -555,9 +555,11 @@ export interface AgentViewProps {
   sessionId: string
   /** 平板远程模式：隐藏无意义的工具栏项，触控目标加大到 44px */
   tabletMode?: boolean
+  /** 平板竖屏等场景：标题由外部顶栏承担时隐藏内置 AgentHeader（避免双标题） */
+  hideAgentHeader?: boolean
 }
 
-export function AgentView({ sessionId, tabletMode = false }: AgentViewProps): React.ReactElement {
+export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = false }: AgentViewProps): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
@@ -2737,8 +2739,8 @@ export function AgentView({ sessionId, tabletMode = false }: AgentViewProps): Re
     <>
     <AgentSessionProvider sessionId={sessionId}>
       <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex h-full min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
-        {/* Agent Header */}
-        <AgentHeader sessionId={sessionId} />
+        {/* Agent Header（平板竖屏由外部顶栏承担标题时隐藏，避免双标题） */}
+        {!hideAgentHeader && <AgentHeader sessionId={sessionId} />}
 
         {/* 消息区域 */}
         <AgentMessages
@@ -2757,6 +2759,7 @@ export function AgentView({ sessionId, tabletMode = false }: AgentViewProps): Re
           onFork={handleFork}
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
+          tabletMode={tabletMode}
         />
 
         {/* 权限请求横幅 */}
@@ -2894,6 +2897,7 @@ export function AgentView({ sessionId, tabletMode = false }: AgentViewProps): Re
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
+              tabletMode={tabletMode}
             />
 
             {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}

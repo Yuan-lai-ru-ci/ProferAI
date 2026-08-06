@@ -21,13 +21,14 @@
 
 import { createServer, Server as HttpServer, IncomingMessage } from 'node:http'
 import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
-import { basename, join, normalize } from 'node:path'
+import { basename, join, normalize, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
-import { WebSocketServer, WebSocket } from 'ws'
-import { AddressInfo } from 'node:net'
+import WebSocket, { WebSocketServer, type RawData } from 'ws'
+import type { AddressInfo } from 'node:net'
 
 import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, updateAgentPermissionMode } from './agent-service'
+import { getUserProfile } from './user-profile-service'
 import {
   listAgentSessions,
   getAgentSessionMeta,
@@ -36,12 +37,27 @@ import {
   createAgentSession,
   updateAgentSessionMeta,
 } from './agent-session-manager'
-import { getAgentSessionsDir } from './config-paths'
+import { getAgentSessionsDir, getConfigDir } from './config-paths'
 import { listAgentWorkspaces } from './agent-workspace-manager'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService } from './agent-exit-plan-service'
+import {
+  listConversations,
+  createConversation,
+  getConversationMessages,
+  getRecentMessages,
+  updateConversationMeta,
+  deleteConversation,
+  deleteMessage,
+  truncateMessagesFrom,
+  updateContextDividers,
+  searchConversationMessages,
+} from './conversation-manager'
+import { sendMessage, stopGeneration, generateTitle } from './chat-service'
+import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './attachment-service'
+import { chatEventBus } from './chat-stream-bus'
 
 /** 默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -55,6 +71,15 @@ let tabletIndexRel = 'tablet'
 /** 访问令牌（首次启动生成并持久化，或由环境变量指定） */
 let accessToken: string | null = null
 
+/**
+ * 平板静态页 CSP。
+ *  - index.html 含内联主题初始化脚本 + React inline style → 需 unsafe-inline；
+ *  - 平板 WebSocket 连接同源（ws://host:port/ws）→ connect-src 需 ws:/wss:。
+ * 仅作用于 remote-service 提供的静态资源；桌面版（vite/打包）不受影响。
+ */
+const TABLET_STATIC_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:;"
+
 /** HTTP + WebSocket 服务实例 */
 let httpServer: HttpServer | null = null
 let wss: WebSocketServer | null = null
@@ -62,15 +87,21 @@ let wss: WebSocketServer | null = null
 /** agentEventBus 订阅句柄 */
 let eventBusUnsubscribe: (() => void) | null = null
 
+/** chatEventBus 订阅句柄（Chat 流式事件 → WS chat_event 广播） */
+let chatBusUnsubscribe: (() => void) | null = null
+
 /** 记录当前监听地址（用于启动日志提示） */
 let listenAddress: string | null = null
 
 /** 是否已执行启动检查（避免重复启动） */
 let isStarted = false
 
-/** token 持久化文件（config 目录） */
+/** 由设置页在当前运行期显式开启；启动参数仍保持兼容。 */
+let runtimeEnabled = false
+
+/** token 持久化文件（统一存配置目录，与 getConfigDir 一致；不再依赖进程 cwd） */
 function getTokenFilePath(): string {
-  return join(process.env.PROFER_CONFIG_DIR || '.profer-dev', 'remote-token.json')
+  return join(getConfigDir(), 'remote-token.json')
 }
 
 /** 加载或生成访问令牌 */
@@ -87,10 +118,27 @@ function loadOrCreateToken(): string {
   } catch {
     /* 忽略，重新生成 */
   }
+  // 迁移：旧版 token 写在 cwd 相对路径（PROFER_CONFIG_DIR 或 .profer-dev/remote-token.json），
+  // 与配置目录不一致会导致换目录启动后重新生成 token。此处检测旧位置并原值迁移，避免平板重新输入。
+  const legacyDir = process.env.PROFER_CONFIG_DIR?.trim() || '.profer-dev'
+  if (resolve(legacyDir) !== getConfigDir()) {
+    try {
+      const legacyPath = join(legacyDir, 'remote-token.json')
+      if (existsSync(legacyPath)) {
+        const raw = JSON.parse(readFileSync(legacyPath, 'utf-8'))
+        if (raw?.token) {
+          mkdirSync(getConfigDir(), { recursive: true })
+          writeFileSync(tokenPath, JSON.stringify({ token: raw.token, createdAt: raw.createdAt ?? Date.now(), migratedFrom: legacyPath }, null, 2), 'utf-8')
+          return raw.token
+        }
+      }
+    } catch {
+      /* 忽略，继续生成新 token */
+    }
+  }
   const token = randomUUID().replace(/-/g, '')
   try {
-    const { mkdirSync, writeFileSync } = require('node:fs')
-    mkdirSync(process.env.PROFER_CONFIG_DIR || '.profer-dev', { recursive: true })
+    mkdirSync(getConfigDir(), { recursive: true })
     writeFileSync(tokenPath, JSON.stringify({ token, createdAt: Date.now() }, null, 2), 'utf-8')
   } catch (e) {
     console.error('[Remote] 无法持久化 token:', e)
@@ -101,7 +149,48 @@ function loadOrCreateToken(): string {
 /** 是否启用远程服务（显式开关） */
 export function isRemoteEnabled(): boolean {
   if (process.env.PROFER_REMOTE === '1') return true
-  return process.argv.includes('--tablet')
+  return runtimeEnabled || process.argv.includes('--tablet')
+}
+
+export interface RemoteServiceStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  localUrl: string | null
+  lanUrl: string | null
+  token: string | null
+}
+
+function getLanUrl(port: number): string | null {
+  try {
+    for (const name of Object.keys(networkInterfaces())) {
+      for (const net of networkInterfaces()[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) return `http://${net.address}:${port}`
+      }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+/** 供设置页显示的最小连接状态；Token 仅在服务实际监听后返回。 */
+export function getRemoteServiceStatus(): RemoteServiceStatus {
+  const port = getPort()
+  return {
+    enabled: isRemoteEnabled(),
+    running: isStarted && listenAddress !== null,
+    port,
+    localUrl: listenAddress,
+    lanUrl: listenAddress ? getLanUrl(port) : null,
+    token: listenAddress ? accessToken : null,
+  }
+}
+
+/** 设置页运行时切换开关；不会修改启动参数。 */
+export function setRemoteServiceEnabled(enabled: boolean): RemoteServiceStatus {
+  runtimeEnabled = enabled
+  if (enabled) startRemoteService()
+  else stopRemoteService()
+  return getRemoteServiceStatus()
 }
 
 /** 解析监听端口 */
@@ -179,7 +268,7 @@ function getTabletIndexPath(): string | null {
  * 路径穿越防护：解析结果必须位于 staticRoot 内。
  */
 function safeResolveStatic(rootPath: string, urlPath: string, tabletIndexRel2: string): string | null {
-  let relative = decodeURIComponent(urlPath.split('?')[0])
+  let relative = decodeURIComponent(urlPath.split('?')[0] ?? '')
   // 根路径或 index.html → tablet 首页
   if (relative === '/' || relative === '' || relative === '/index.html') {
     const home = join(rootPath, tabletIndexRel2, 'index.html')
@@ -233,7 +322,11 @@ function serveStatic(res: {
       woff: 'font/woff',
       ttf: 'font/ttf',
     }
-    res.writeHead(200, { 'content-type': mimeMap[ext] || 'application/octet-stream' })
+    res.writeHead(200, {
+      'content-type': mimeMap[ext] || 'application/octet-stream',
+      // 消除 Electron “Insecure Content-Security-Policy” 警告（仅静态资源，含平板首页与 assets）
+      'content-security-policy': TABLET_STATIC_CSP,
+    })
     res.end(data)
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -248,10 +341,7 @@ function checkToken(req: IncomingMessage): boolean {
   const queryToken = url.searchParams.get('token')
   if (queryToken === accessToken) return true
   const header = req.headers['x-profer-token']
-  if (header === accessToken) return true
-  // WS 使用的 header 形式
-  if (header === accessToken) return true
-  return false
+  return header === accessToken
 }
 
 // ===== 指令处理：平板客户端 → 主进程 Agent =====
@@ -393,6 +483,10 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
 
     case 'list_workspaces': {
       return { ok: true, data: buildWorkspaceList() }
+    }
+
+    case 'get_user_profile': {
+      return { ok: true, data: getUserProfile() }
     }
 
     case 'list_channels': {
@@ -576,6 +670,192 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       return { ok: true, data: { stopped: true } }
     }
 
+    // ===== Chat（聊天工具）指令 =====
+
+    case 'list_conversations': {
+      return { ok: true, data: listConversations() }
+    }
+
+    case 'create_conversation': {
+      const title = typeof parsed.title === 'string' ? parsed.title : undefined
+      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
+      const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : undefined
+      const meta = createConversation(title, modelId, channelId)
+      return { ok: true, data: meta }
+    }
+
+    case 'get_conversation_messages': {
+      const id = parsed.conversationId as string
+      if (!id) return { ok: false, error: '缺少 conversationId' }
+      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: getConversationMessages(id) }
+    }
+
+    case 'get_recent_messages': {
+      const id = parsed.conversationId as string
+      const limit = Number.isInteger(parsed.limit) ? (parsed.limit as number) : 50
+      if (!id) return { ok: false, error: '缺少 conversationId' }
+      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: getRecentMessages(id, Math.max(1, Math.min(500, limit))) }
+    }
+
+    case 'update_conversation_title': {
+      const id = parsed.conversationId as string
+      const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
+      if (!id || !title) return { ok: false, error: '缺少 conversationId 或 title' }
+      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: updateConversationMeta(id, { title }) }
+    }
+
+    case 'update_conversation_model': {
+      const id = parsed.conversationId as string
+      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
+      const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : undefined
+      if (!id) return { ok: false, error: '缺少 conversationId' }
+      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: updateConversationMeta(id, { modelId, channelId }) }
+    }
+
+    case 'delete_conversation': {
+      const id = parsed.conversationId as string
+      if (!id) return { ok: false, error: '缺少 conversationId' }
+      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      deleteConversation(id)
+      return { ok: true, data: { deleted: true } }
+    }
+
+    case 'toggle_conversation_pin': {
+      const id = parsed.conversationId as string
+      if (!id) return { ok: false, error: '缺少 conversationId' }
+      const current = listConversations().find((c) => c.id === id)
+      if (!current) return { ok: false, error: '对话不存在' }
+      const newPinned = !current.pinned
+      const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
+      if (newPinned && current.archived) updates.archived = false
+      return { ok: true, data: updateConversationMeta(id, updates) }
+    }
+
+    case 'toggle_conversation_archive': {
+      const id = parsed.conversationId as string
+      if (!id) return { ok: false, error: '缺少 conversationId' }
+      const current = listConversations().find((c) => c.id === id)
+      if (!current) return { ok: false, error: '对话不存在' }
+      const newArchived = !current.archived
+      const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
+      if (newArchived && current.pinned) updates.pinned = false
+      return { ok: true, data: updateConversationMeta(id, updates) }
+    }
+
+    case 'search_chat_messages': {
+      const query = typeof parsed.query === 'string' ? parsed.query.trim() : ''
+      if (!query) return { ok: false, error: '缺少查询词' }
+      return { ok: true, data: searchConversationMessages(query) }
+    }
+
+    case 'chat_send_message': {
+      const conversationId = parsed.conversationId as string
+      const userMessage = typeof parsed.userMessage === 'string' ? parsed.userMessage : ''
+      const channelId = parsed.channelId as string
+      if (!conversationId || !userMessage) return { ok: false, error: '缺少 conversationId 或 userMessage' }
+      if (!channelId) return { ok: false, error: '缺少 channelId（无法确定 API Key）' }
+      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      // 异步执行，不阻塞 WS 响应；流式事件通过 chat_event 推回客户端
+      void sendMessage(
+        {
+          conversationId,
+          userMessage,
+          messageHistory: [],
+          channelId,
+          modelId: parsed.modelId as string,
+          contextLength: typeof parsed.contextLength === 'number' ? parsed.contextLength : undefined,
+          contextDividers: Array.isArray(parsed.contextDividers) ? parsed.contextDividers as string[] : undefined,
+          attachments: Array.isArray(parsed.attachments) ? parsed.attachments as never : undefined,
+          knowledgeReferences: Array.isArray(parsed.knowledgeReferences) ? parsed.knowledgeReferences as never : undefined,
+          thinkingEnabled: parsed.thinkingEnabled === true ? true : undefined,
+          systemMessage: typeof parsed.systemMessage === 'string' ? parsed.systemMessage : undefined,
+          enabledToolIds: Array.isArray(parsed.enabledToolIds) ? parsed.enabledToolIds as string[] : undefined,
+        },
+        null,
+      ).catch((e) => {
+        console.error('[Remote] chat_send_message 执行异常:', e)
+      })
+      return { ok: true, data: { accepted: true } }
+    }
+
+    case 'chat_stop_generation': {
+      const conversationId = parsed.conversationId as string
+      if (!conversationId) return { ok: false, error: '缺少 conversationId' }
+      stopGeneration(conversationId)
+      return { ok: true, data: { stopped: true } }
+    }
+
+    case 'chat_delete_message': {
+      const conversationId = parsed.conversationId as string
+      const messageId = parsed.messageId as string
+      if (!conversationId || !messageId) return { ok: false, error: '缺少 conversationId 或 messageId' }
+      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: deleteMessage(conversationId, messageId) }
+    }
+
+    case 'chat_truncate_messages_from': {
+      const conversationId = parsed.conversationId as string
+      const messageId = parsed.messageId as string
+      if (!conversationId || !messageId) return { ok: false, error: '缺少 conversationId 或 messageId' }
+      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: truncateMessagesFrom(conversationId, messageId, parsed.preserveFirstMessageAttachments === true) }
+    }
+
+    case 'chat_update_context_dividers': {
+      const conversationId = parsed.conversationId as string
+      const dividers = Array.isArray(parsed.dividers) ? parsed.dividers as string[] : null
+      if (!conversationId || !dividers) return { ok: false, error: '缺少 conversationId 或 dividers' }
+      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      return { ok: true, data: updateContextDividers(conversationId, dividers) }
+    }
+
+    case 'chat_generate_title': {
+      const userMessage = typeof parsed.userMessage === 'string' ? parsed.userMessage : ''
+      const channelId = parsed.channelId as string
+      const modelId = parsed.modelId as string
+      if (!userMessage || !channelId || !modelId) return { ok: false, error: '缺少 userMessage / channelId / modelId' }
+      return { ok: true, data: await generateTitle({ userMessage, channelId, modelId }) }
+    }
+
+    case 'chat_save_attachment': {
+      const conversationId = parsed.conversationId as string
+      const filename = typeof parsed.filename === 'string' ? parsed.filename : ''
+      const mediaType = typeof parsed.mediaType === 'string' ? parsed.mediaType : ''
+      const data = typeof parsed.data === 'string' ? parsed.data : ''
+      if (!conversationId || !filename || !mediaType || !data) return { ok: false, error: '缺少附件数据' }
+      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      try {
+        return { ok: true, data: saveAttachment({ conversationId, filename, mediaType, data }) }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : '附件保存失败' }
+      }
+    }
+
+    case 'chat_delete_attachment': {
+      const localPath = parsed.localPath as string
+      if (!localPath) return { ok: false, error: '缺少 localPath' }
+      try {
+        deleteAttachment(localPath)
+        return { ok: true, data: { deleted: true } }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : '附件删除失败' }
+      }
+    }
+
+    case 'chat_read_attachment': {
+      const localPath = parsed.localPath as string
+      if (!localPath) return { ok: false, error: '缺少 localPath' }
+      try {
+        return { ok: true, data: readAttachmentAsBase64(localPath) }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : '附件读取失败' }
+      }
+    }
+
     default: {
       return { ok: false, error: `未知指令: ${type}` }
     }
@@ -607,7 +887,8 @@ export function startRemoteService(): string | null {
   const port = getPort()
   httpServer = createServer((req, res) => {
     // 健康检查
-    if (req.url === '/health') {
+    // 健康检查（容忍 query，如 /health?token=xxx）
+    if ((req.url || '').split('?')[0] === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true, time: Date.now() }))
       return
@@ -619,7 +900,7 @@ export function startRemoteService(): string | null {
 
   wss = new WebSocketServer({ server: httpServer, path: '/ws' })
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     // 鉴权：WS 连接同样校验 token（query 或 header）
     if (!checkToken(req)) {
       ws.close(4001, 'unauthorized')
@@ -628,7 +909,7 @@ export function startRemoteService(): string | null {
     console.log('[Remote] 平板客户端已连接')
 
     // 收到指令
-    ws.on('message', (raw) => {
+    ws.on('message', (raw: RawData) => {
       let reqId: unknown = null
       let body: string
       try {
@@ -667,10 +948,24 @@ export function startRemoteService(): string | null {
     }
   })
 
+  // 订阅 chatEventBus，把 Chat 流式事件（chunk/reasoning/complete/error/tool-activity）
+  // 广播给所有平板客户端；channel 使用桌面 CHAT_IPC_CHANNELS 同名通道，
+  // 平板 stub 按通道名分发到 onStreamChunk 等注册器。
+  chatBusUnsubscribe = chatEventBus.on((conversationId, channel, payload) => {
+    const frame = JSON.stringify({ kind: 'chat_event', conversationId, channel, payload })
+    for (const client of wss?.clients ?? []) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(frame)
+      }
+    }
+  })
+
   // 监听地址：默认 0.0.0.0（局域网设备可访问，平板通过电脑局域网 IP:端口 访问）。
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
   const HOST = process.env.PROFER_REMOTE_HOST || '0.0.0.0'
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    isStarted = false
+    listenAddress = null
     if (err.code === 'EADDRINUSE') {
       console.error(`[Remote] 端口 ${port} 被占用，请通过 PROFER_REMOTE_PORT 更换端口`)
     } else {
@@ -712,6 +1007,8 @@ export function startRemoteService(): string | null {
 export function stopRemoteService(): void {
   eventBusUnsubscribe?.()
   eventBusUnsubscribe = null
+  chatBusUnsubscribe?.()
+  chatBusUnsubscribe = null
   try {
     wss?.close()
   } catch { /* ignore */ }
