@@ -549,7 +549,7 @@ function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactEl
 }
 
 /** 平板远程模式下从输入工具栏隐藏的项（依赖桌面文件系统/语音/全局设置，浏览器环境无意义） */
-const TABLET_HIDDEN_TOOLBAR_KEYS = new Set(['thinking', 'speech', 'attach-file', 'attach-folder', 'auto-preview'])
+const TABLET_HIDDEN_TOOLBAR_KEYS = new Set(['thinking', 'speech', 'attach-file', 'attach-folder', 'auto-preview', 'graph'])
 
 export interface AgentViewProps {
   sessionId: string
@@ -2874,15 +2874,18 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               onPasteLongText={handlePasteLongText}
               longTextPasteThreshold={longTextPasteAsAttachmentEnabled ? LONG_TEXT_ATTACHMENT_THRESHOLD : undefined}
               placeholder={
-                isCompacting
-                  ? '正在压缩上下文，完成后可继续对话...'
-                  : agentChannelId && hasAvailableModel
-                  ? sendWithCmdEnter
-                    ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
-                    : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
-                  : !agentChannelId
-                    ? '请先在设置中选择 Agent 供应商'
-                    : '暂无可用模型，请先在设置中启用渠道'
+                // 平板触屏：输入框保持干净，不显示占位提示文字
+                tabletMode
+                  ? ''
+                  : isCompacting
+                    ? '正在压缩上下文，完成后可继续对话...'
+                    : agentChannelId && hasAvailableModel
+                      ? sendWithCmdEnter
+                        ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
+                        : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
+                      : !agentChannelId
+                        ? '请先在设置中选择 Agent 供应商'
+                        : '暂无可用模型，请先在设置中启用渠道'
               }
               disabled={!agentChannelId || !hasAvailableModel}
               autoFocusTrigger={sessionId}
@@ -2909,13 +2912,15 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       </div>
     </AgentSessionProvider>
 
-    {/* 任务图悬浮画板 */}
-    <Dialog open={graphDialogOpen} onOpenChange={setGraphDialogOpen}>
-      <DialogContent className="w-[85vw] max-w-[1200px] h-[80vh] max-h-[850px] p-0 gap-0" hideClose={false}>
-        <DialogTitle className="sr-only">任务图</DialogTitle>
-        <ProjectGraphPanel refreshVersion={graphRefreshVersion} />
-      </DialogContent>
-    </Dialog>
+    {/* 任务图悬浮画板（平板版不渲染：无 IPC getGraph 桥接，画板没有数据来源） */}
+    {!tabletMode && (
+      <Dialog open={graphDialogOpen} onOpenChange={setGraphDialogOpen}>
+        <DialogContent className="w-[85vw] max-w-[1200px] h-[80vh] max-h-[850px] p-0 gap-0" hideClose={false}>
+          <DialogTitle className="sr-only">任务图</DialogTitle>
+          <ProjectGraphPanel refreshVersion={graphRefreshVersion} />
+        </DialogContent>
+      </Dialog>
+    )}
 
     {/* 回退确认弹窗 */}
     <AlertDialog

@@ -81,6 +81,8 @@ interface AuthTokenStore {
     relayToken?: string
     /** 订阅等级（free/standard/plus/pro），决定工作区配额、模型门控 */
     membershipTier?: string
+    /** 服务端下发的自配 API 权限（权威值；admin 可单独关闭任意用户） */
+    canSelfConfigApi?: boolean
     tokenExpiresAt: number
     teamAccountId: string
     teamEmail: string
@@ -270,6 +272,7 @@ export async function login(
       refreshToken: data.refreshToken,
       relayToken: data.relayToken || undefined,
       membershipTier: data.membershipTier || 'free',
+      canSelfConfigApi: data.canSelfConfigApi ?? false,
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
@@ -392,6 +395,7 @@ export async function register(
       refreshToken: data.refreshToken,
       relayToken: data.relayToken || undefined,
       membershipTier: data.membershipTier || 'free',
+      canSelfConfigApi: data.canSelfConfigApi ?? false,
       tokenExpiresAt: data.expiresAt,
       teamAccountId: data.userId,
       teamEmail: data.email,
@@ -616,6 +620,7 @@ async function refreshAuthTokenImpl(): Promise<boolean> {
           relayToken: data.relayToken ?? token.relayToken,
           refreshToken: data.refreshToken ?? token.refreshToken,
           membershipTier: data.membershipTier ?? token.membershipTier,
+          canSelfConfigApi: data.canSelfConfigApi ?? token.canSelfConfigApi ?? false,
           tokenExpiresAt: data.expiresAt,
           commercialMode,
           isAdmin: data.isAdmin ?? token.isAdmin,
@@ -810,8 +815,18 @@ export async function revokeRemoteDevice(slotId: string): Promise<{ ok: boolean;
   }
 }
 
-/** 代管模式下当前用户是否允许自配 API（plus/pro/VIP 可自配，不依赖 token 过期） */
+/**
+ * 代管模式下当前用户是否允许自配 API。
+ * 优先采用服务端下发的 canSelfConfigApi（权威值，admin 可单独开关）；
+ * 旧 token 无该字段时回退到按 tier 判断（plus/pro/VIP 可自配）。
+ */
 export function isSelfConfigAllowed(): boolean {
+  const tokens = readTokens()
+  for (const serverId of Object.keys(tokens)) {
+    const t = tokens[serverId]
+    if (!t) continue
+    if (t.canSelfConfigApi !== undefined) return t.canSelfConfigApi
+  }
   const tier = getMembershipTier()
   return tier === 'plus' || tier === 'pro' || tier === 'vip'
 }

@@ -92,3 +92,9 @@ apps/electron/.profer-dev/
 apps/electron/remote-test-*.log
 apps/electron/dist/renderer/tablet/
 *.remote-token.json
+
+# Tablet App（Capacitor 壳）：原生平台工程、同步产物与本地 APK 不入库
+tablet-app/android/
+tablet-app/web/
+tablet-app/node_modules/
+tablet-app/dist/

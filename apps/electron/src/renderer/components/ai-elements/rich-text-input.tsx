@@ -335,7 +335,7 @@ export function RichTextInput({
         class: cn(
           'prose dark:prose-invert max-w-none focus:outline-none',
           tabletMode
-            ? 'min-h-[40px] w-full text-[15px] leading-[1.4]'
+            ? 'min-h-[var(--tablet-input-h,40px)] w-full text-[15px] leading-[1.4]'
             : 'min-h-[101px] w-full text-[15px] leading-[1.6]',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_pre]:rounded-md [&_pre]:p-3',
@@ -681,7 +681,7 @@ export function RichTextInput({
       className={cn(
         'rich-text-input relative w-full overflow-y-auto scrollbar-thin transition-[max-height] duration-200 ease-in-out',
         isManuallyCollapsed
-          ? tabletMode ? 'max-h-[40px]' : 'max-h-[101px]'
+          ? tabletMode ? 'max-h-[var(--tablet-input-h,40px)]' : 'max-h-[101px]'
           : isExpanded ? 'max-h-[500px]' : 'max-h-[200px]',
         disabled && 'opacity-50 cursor-not-allowed',
         className

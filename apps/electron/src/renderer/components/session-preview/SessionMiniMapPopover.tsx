@@ -45,7 +45,22 @@ interface UseSessionMiniMapHoverReturn {
   handleMouseLeave: () => void
   handlePanelMouseEnter: () => void
   handlePanelMouseLeave: () => void
+  // ---- 触屏长按预览（轻触不触发；长按后抬起保持预览，并拦截随后的 click 避免误打开会话） ----
+  handleTouchStart: (e: React.TouchEvent) => void
+  handleTouchMove: (e: React.TouchEvent) => void
+  handleTouchEnd: () => void
+  handleTouchCancel: () => void
+  /** 消费“长按已触发”标记：列表项 onClick 中调用，长按后返回 true（应跳过打开会话） */
+  shouldSuppressClick: () => boolean
 }
+
+/** 触屏上点击列表项时浏览器会合成 mouseenter，导致预览误弹出；纯触屏（无精确悬停）只允许长按触发 */
+const TOUCH_ONLY_MEDIA = '(hover: none)'
+/** 长按后手指位移超过该阈值视为滚动/取消 */
+const TOUCH_MOVE_TOLERANCE = 12
+
+const isTouchOnly = (): boolean =>
+  typeof window !== 'undefined' && window.matchMedia?.(TOUCH_ONLY_MEDIA)?.matches === true
 
 interface SessionMiniMapPopoverProps {
   target: SessionMiniMapTarget
@@ -83,11 +98,23 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
   const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
 
+  // ---- 触屏长按状态 ----
+  const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  const longPressTriggeredRef = React.useRef(false)
+  const suppressClickRef = React.useRef(false)
+  const touchStartPointRef = React.useRef<{ x: number; y: number } | null>(null)
+  const touchOnlyRef = React.useRef(isTouchOnly())
+  /** 长按打开预览后挂的“触摸外部关闭”监听清理器 */
+  const outsideCloseCleanupRef = React.useRef<(() => void) | null>(null)
+
   React.useEffect(() => {
     return () => {
       if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
       if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+      outsideCloseCleanupRef.current?.()
+      outsideCloseCleanupRef.current = null
     }
   }, [])
 
@@ -96,6 +123,7 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
     if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
     setIsOpen(false)
     setIsLeaving(false)
   }, [disabled])
@@ -104,8 +132,10 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
     anchorRef.current = node
   }, [])
 
+  // 触屏上忽略合成 mouseenter（纯触屏只能长按触发预览，避免轻触/滑动时预览误弹出）
   const handleMouseEnter = React.useCallback((): void => {
     if (disabled) return
+    if (touchOnlyRef.current) return
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
     setIsLeaving(false)
@@ -116,6 +146,7 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
 
   const closeWithDelay = React.useCallback((): void => {
     if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
     leaveTimerRef.current = setTimeout(() => {
       setIsLeaving(true)
       fadeTimerRef.current = setTimeout(() => {
@@ -131,6 +162,95 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
     setIsLeaving(false)
   }, [])
 
+  // ---- 触屏长按 ----
+
+  /** 长按已触发后保持预览打开；触摸面板外任意位置时关闭（面板自身 touch stopPropagation 保护）。
+   *  用 bubble 阶段监听：面板内的 onTouchStart stopPropagation 能拦下，触摸面板内容不会误关。 */
+  const armOutsideClose = React.useCallback((): void => {
+    outsideCloseCleanupRef.current?.()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onOutsideTouch = (): void => {
+      cleanup()
+      setIsOpen(false)
+      setIsLeaving(false)
+    }
+    const cleanup = (): void => {
+      window.removeEventListener('touchstart', onOutsideTouch)
+      if (timer) clearTimeout(timer)
+    }
+    // 延迟一帧再挂监听：当前 touchstart 的冒泡已结束，不会立刻把刚打开的预览关掉
+    timer = setTimeout(() => {
+      window.addEventListener('touchstart', onOutsideTouch)
+    }, 0)
+    outsideCloseCleanupRef.current = cleanup
+  }, [])
+
+  const handleTouchStart = React.useCallback((e: React.TouchEvent): void => {
+    if (disabled) return
+    // 触摸任意列表项：若已有预览打开，先关闭（新的长按 600ms 后才打开新预览）
+    if (isOpen) {
+      setIsOpen(false)
+      setIsLeaving(false)
+    }
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    const touch = e.touches[0]
+    if (!touch) return
+    touchStartPointRef.current = { x: touch.clientX, y: touch.clientY }
+    longPressTriggeredRef.current = false
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true
+      setIsLeaving(false)
+      setIsOpen(true)
+      armOutsideClose()
+    }, delayMs)
+  }, [disabled, delayMs, isOpen, armOutsideClose])
+
+  const handleTouchMove = React.useCallback((e: React.TouchEvent): void => {
+    // 长按未触发时位移超阈值视为滚动，取消长按；长按已触发（预览已开）时位移也视为取消（手指滑动离开）
+    const start = touchStartPointRef.current
+    if (!start) return
+    const touch = e.touches[0]
+    if (!touch) return
+    const dx = touch.clientX - start.x
+    const dy = touch.clientY - start.y
+    if (Math.hypot(dx, dy) > TOUCH_MOVE_TOLERANCE) {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+      touchStartPointRef.current = null
+      if (longPressTriggeredRef.current) {
+        longPressTriggeredRef.current = false
+        setIsOpen(false)
+        setIsLeaving(false)
+      }
+    }
+  }, [])
+
+  const handleTouchEnd = React.useCallback((): void => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    touchStartPointRef.current = null
+    // 长按已触发：预览保持打开，并拦截随后的合成 click（避免误打开会话）
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false
+      suppressClickRef.current = true
+    }
+  }, [])
+
+  const handleTouchCancel = React.useCallback((): void => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    touchStartPointRef.current = null
+    longPressTriggeredRef.current = false
+    suppressClickRef.current = false
+  }, [])
+
+  /** 消费“长按已触发”标记；返回 true 表示应跳过本次 click 的默认行为 */
+  const shouldSuppressClick = React.useCallback((): boolean => {
+    const suppress = suppressClickRef.current
+    suppressClickRef.current = false
+    return suppress
+  }, [])
+
   return {
     anchorRef,
     setAnchorRef,
@@ -140,6 +260,11 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
     handleMouseLeave: closeWithDelay,
     handlePanelMouseEnter,
     handlePanelMouseLeave: closeWithDelay,
+    handleTouchStart,
+    handleTouchMove,
+    handleTouchEnd,
+    handleTouchCancel,
+    shouldSuppressClick,
   }
 }
 
@@ -413,6 +538,9 @@ function SessionMiniMapPopoverContent({
       style={{ top: position.top, left: position.left, width: PANEL_WIDTH, height: position.height }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      // 触屏长按预览：面板内触摸不冒泡到 window，避免“外部触摸关闭”把正在查看的预览关掉
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
     >
       <div
         className={cn(

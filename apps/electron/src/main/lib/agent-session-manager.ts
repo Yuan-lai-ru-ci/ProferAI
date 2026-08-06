@@ -715,6 +715,27 @@ export function deleteAgentSession(id: string): void {
 }
 
 /**
+ * 删除指定工作区（项目）下的全部会话（索引条目 + 消息/任务图文件 + session 工作目录 + SDK 关联数据）。
+ *
+ * 供删除工作区时级联清理使用：正常流程由 ipc DELETE_WORKSPACE handler 先行处理
+ * （含停止运行中 Agent、清理权限/提问状态等运行时资源），此函数作为 manager 层防御性兜底，
+ * 防止其他调用路径删除工作区后残留孤儿会话 —— 孤儿会话会让平板端把 workspaceId
+ * 归纳成“幽灵项目”显示（electronapi-stub 的 list_workspaces 回退路径）。
+ *
+ * @returns 删除的会话数量
+ */
+export function deleteAgentSessionsByWorkspace(workspaceId: string): number {
+  const index = readIndex()
+  const affected = index.sessions.filter((s) => s.workspaceId === workspaceId)
+  if (affected.length === 0) return 0
+  for (const session of affected) {
+    deleteAgentSession(session.id)
+  }
+  console.log(`[Agent 会话] 已级联删除工作区 ${workspaceId} 的 ${affected.length} 个会话`)
+  return affected.length
+}
+
+/**
  * 扫描所有会话，检测孤儿记录和文件系统不一致。
  *
  * 检测项：

@@ -462,9 +462,13 @@ function RailRecentButton({
             ref={preview.setAnchorRef}
             type="button"
             aria-label={`打开${item.type === 'agent' ? 'Agent 会话' : 'Chat 对话'}：${item.title}`}
-            onClick={() => onSelect(item)}
+            onClick={() => { if (preview.shouldSuppressClick()) return; onSelect(item) }}
             onMouseEnter={preview.handleMouseEnter}
             onMouseLeave={preview.handleMouseLeave}
+            onTouchStart={preview.handleTouchStart}
+            onTouchMove={preview.handleTouchMove}
+            onTouchEnd={preview.handleTouchEnd}
+            onTouchCancel={preview.handleTouchCancel}
             className={cn(
               'relative size-10 flex items-center justify-center overflow-hidden rounded-[12px] transition-colors titlebar-no-drag',
               item.active
@@ -2493,7 +2497,8 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
           <div className="px-2 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
             <span className="ml-[4px] px-1.5 text-[13px] font-medium leading-[18px] text-foreground/40 select-none">项目</span>
             <div className="flex items-center gap-0.5">
-              {authStatus.isLoggedIn && accountCaps.membershipTier !== 'free' && (
+              {/* 平板版暂时隐藏团队版功能：不展示“加入团队工作区”入口 */}
+              {authStatus.isLoggedIn && accountCaps.membershipTier !== 'free' && !tabletMode && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -2722,7 +2727,8 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
       {deleteDialog}
       {projectDeleteDialog}
       {moveDialog}
-      {showJoinDialog && (
+      {/* 平板版暂时隐藏团队版功能：加入团队工作区对话框同样不渲染 */}
+      {showJoinDialog && !tabletMode && (
         <AlertDialog open={showJoinDialog} onOpenChange={setShowJoinDialog}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -3091,7 +3097,7 @@ const ConversationItem = React.memo(function ConversationItem({
           data-profer-navigation-item="session"
           data-profer-navigation-active={active ? 'true' : undefined}
           tabIndex={0}
-          onClick={() => onSelect(conversation.id, conversation.title)}
+          onClick={() => { if (preview.shouldSuppressClick()) return; onSelect(conversation.id, conversation.title) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
@@ -3100,6 +3106,10 @@ const ConversationItem = React.memo(function ConversationItem({
           }}
           onMouseEnter={preview.handleMouseEnter}
           onMouseLeave={preview.handleMouseLeave}
+          onTouchStart={preview.handleTouchStart}
+          onTouchMove={preview.handleTouchMove}
+          onTouchEnd={preview.handleTouchEnd}
+          onTouchCancel={preview.handleTouchCancel}
           onDoubleClick={(e) => {
             e.stopPropagation()
             startEdit()
@@ -3339,7 +3349,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
           data-profer-navigation-item="session"
           data-profer-navigation-active={active ? 'true' : undefined}
           tabIndex={0}
-          onClick={() => onSelect(session.id, session.title)}
+          onClick={() => { if (preview.shouldSuppressClick()) return; onSelect(session.id, session.title) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
@@ -3348,6 +3358,10 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
           }}
           onMouseEnter={preview.handleMouseEnter}
           onMouseLeave={preview.handleMouseLeave}
+          onTouchStart={preview.handleTouchStart}
+          onTouchMove={preview.handleTouchMove}
+          onTouchEnd={preview.handleTouchEnd}
+          onTouchCancel={preview.handleTouchCancel}
           onDoubleClick={(e) => {
             e.stopPropagation()
             startEdit()
