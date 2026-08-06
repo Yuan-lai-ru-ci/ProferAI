@@ -74,11 +74,14 @@ let accessToken: string | null = null
 /**
  * 平板静态页 CSP。
  *  - index.html 含内联主题初始化脚本 + React inline style → 需 unsafe-inline；
- *  - 平板 WebSocket 连接同源（ws://host:port/ws）→ connect-src 需 ws:/wss:。
+ *  - 平板 WebSocket 连接同源（ws://host:port/ws）→ connect-src 需 ws:/wss:；
+ *  - Markdown 代码高亮使用 shiki（oniguruma WASM），WebAssembly 编译在 CSP 中属于
+ *    eval 类操作 → 必须加 'wasm-unsafe-eval'（仅放行 WASM，不放行 JS eval）。
+ *    若缺此项，平板打开含代码块的会话会报 CompileError 且初始化链中断。
  * 仅作用于 remote-service 提供的静态资源；桌面版（vite/打包）不受影响。
  */
 const TABLET_STATIC_CSP =
-  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:;"
+  "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:;"
 
 /** HTTP + WebSocket 服务实例 */
 let httpServer: HttpServer | null = null
