@@ -1082,6 +1082,24 @@ export function TeamWorkspaceView(): React.ReactElement {
     return sortFn(root)
   }, [filteredEntries, sortItems])
 
+  // 列表视图：定位当前路径对应的树节点。根目录直接渲染整棵树；
+  // 文件夹内部必须取树中该节点的 children（treeEntries 只含根级节点，
+  // 直接用 isDirectChild 过滤会漏掉深层文件 → 文件夹内列表永远为空）。
+  const listRootEntries = React.useMemo(() => {
+    if (!currentPath) return treeEntries
+    const findNode = (nodes: FileEntry[]): FileEntry | null => {
+      for (const n of nodes) {
+        if (n.path === currentPath) return n
+        if (n.children) {
+          const found = findNode(n.children)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    return findNode(treeEntries)?.children ?? []
+  }, [treeEntries, currentPath])
+
   // 批量选择
   const toggleSelect = (path: string) => {
     setSelectedPaths((prev) => {
@@ -1960,12 +1978,10 @@ export function TeamWorkspaceView(): React.ReactElement {
                     })}
                   </div>
                 )}
-                {/* 树状条目 */}
-                {treeEntries.filter((e) => isDirectChild(e.path, currentPath || '')).map((entry) => {
-                  // 去除路径前缀，让子目录展示相对路径
-                  const displayEntry = currentPath ? { ...entry, name: entry.path.slice(currentPath.length + 1) } : entry
-                  return <TreeRow key={entry.path} entry={displayEntry} depth={0} />
-                })}
+                {/* 树状条目：根目录渲染整棵树，文件夹内部渲染当前节点 children */}
+                {listRootEntries.map((entry) => (
+                  <TreeRow key={entry.path} entry={entry} depth={0} />
+                ))}
               </div>
             )}
           </ScrollArea>

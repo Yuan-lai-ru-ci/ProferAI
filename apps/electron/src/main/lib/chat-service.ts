@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import { CHAT_IPC_CHANNELS } from '@profer/shared'
+import { pushChatStream } from './chat-stream-bus'
 import type { ChatSendInput, ChatMessage, GenerateTitleInput, FileAttachment, ChatToolActivity, KnowledgeReference } from '@profer/shared'
 import {
   getAdapter,
@@ -207,7 +208,7 @@ function filterHistory(
  */
 export async function sendMessage(
   input: ChatSendInput,
-  webContents: WebContents,
+  webContents: WebContents | null,
 ): Promise<void> {
   const {
     conversationId, userMessage, channelId,
@@ -219,14 +220,14 @@ export async function sendMessage(
   const channels = listChannels()
   const channel = channels.find((c) => c.id === channelId)
   if (!channel) {
-    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+    pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
       error: '渠道不存在',
     })
     return
   }
   if (!channel.enabled) {
-    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+    pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
       error: '当前渠道已停用，请重新选择可用模型',
     })
@@ -234,7 +235,7 @@ export async function sendMessage(
   }
   const selectedChannelModel = channel.models.find((m) => m.id === modelId)
   if (!selectedChannelModel || !selectedChannelModel.enabled) {
-    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+    pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
       error: '当前模型配置已失效，请在模型选择器中重新选择',
     })
@@ -250,7 +251,7 @@ export async function sendMessage(
   if (shouldUseCommercialProxy) {
     const auth = await getTeamAuthWithRefresh()
     if (!auth) {
-      webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+      pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
         conversationId,
         error: '团队账号登录已过期，请重新登录后再使用商业渠道',
       })
@@ -264,7 +265,7 @@ export async function sendMessage(
     try {
       apiKey = decryptApiKey(channelId)
     } catch {
-      webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+      pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
         conversationId,
         error: '解密 API Key 失败',
       })
@@ -343,14 +344,14 @@ export async function sendMessage(
       switch (event.type) {
         case 'chunk':
           accumulatedContent += event.delta ?? ''
-          webContents.send(CHAT_IPC_CHANNELS.STREAM_CHUNK, {
+          pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_CHUNK, {
             conversationId,
             delta: event.delta,
           })
           break
         case 'reasoning':
           accumulatedReasoning += event.delta ?? ''
-          webContents.send(CHAT_IPC_CHANNELS.STREAM_REASONING, {
+          pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_REASONING, {
             conversationId,
             delta: event.delta,
           })
@@ -361,7 +362,7 @@ export async function sendMessage(
             toolName: event.toolName!,
             type: 'start',
           })
-          webContents.send(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
+          pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
             conversationId,
             activity: { type: 'start', toolName: event.toolName!, toolCallId: event.toolCallId! },
           })
@@ -504,7 +505,7 @@ export async function sendMessage(
       console.warn(`[聊天服务] 模型返回空内容且无生成附件，跳过保存 (对话 ${conversationId})`)
     }
 
-    webContents.send(CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
+    pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
       conversationId,
       model: modelId,
       messageId: (accumulatedContent.trim() || accumulatedGeneratedAttachments.length > 0) ? assistantMsgId : undefined,
@@ -535,13 +536,13 @@ export async function sendMessage(
           // 索引更新失败不影响主流程
         }
 
-        webContents.send(CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
+        pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
           conversationId,
           model: modelId,
           messageId: assistantMsgId,
         })
       } else {
-        webContents.send(CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
+        pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
           conversationId,
           model: modelId,
         })
@@ -579,7 +580,7 @@ export async function sendMessage(
       }
     }
 
-    webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
+    pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
       error: displayError,
       ...(insufficient ? { code: 'insufficient_credits', errorTitle: '额度不足' } : {}),

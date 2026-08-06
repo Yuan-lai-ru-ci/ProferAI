@@ -36,6 +36,13 @@
         touch-action: pan-y;
         background: hsl(var(--background));
       }
+      /* 严格对齐桌面 Profer 字号：锁定 16px rem 基准，并禁用 iOS/Safari 的
+         text autosizing（否则横屏/小字号会被系统自动放大，与桌面观感不一致）。 */
+      html {
+        font-size: 16px;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
       body { margin: 0; user-select: none; -webkit-user-select: none; }
       input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-select: text; }
       button { touch-action: manipulation; }

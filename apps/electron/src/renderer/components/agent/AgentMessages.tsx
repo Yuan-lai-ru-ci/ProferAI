@@ -111,6 +111,8 @@ interface AgentMessagesProps {
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
   onCompact?: () => void
+  /** 平板远程模式不显示桌面端的用户消息悬浮置顶导航条。 */
+  tabletMode?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
@@ -395,7 +397,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -746,7 +748,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       </ConversationContent>
       <ScrollMinimap items={minimapItems} />
       <ConversationScrollButton />
-      {allUserMessagesData.length > 0 && (
+      {!tabletMode && allUserMessagesData.length > 0 && (
         <StickyUserMessage userMessages={allUserMessagesData} />
       )}
     </Conversation>

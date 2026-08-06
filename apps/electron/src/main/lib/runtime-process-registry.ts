@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRuntimeProcessesPath } from './config-paths'
-import { captureOsSnapshotWin, extractRequestedPort, type MonitoredProcess } from './process-monitor'
+import { extractRequestedPort, listAliveProcesses, listPortPidMapWin, listProcessTree, type MonitoredProcess } from './process-monitor'
 
 /**
  * Persisted ownership records for long-running services launched by a runtime.
@@ -110,10 +110,9 @@ export function registerPendingPiRuntimeProcess(
   launcher: 'bash' | 'powershell' = 'bash',
   shellPid?: number,
 ): RuntimeProcessRecord | undefined {
-  // All shell calls get a short-lived observation record. This prevents custom
-  // scripts and unfamiliar frameworks from being invisible merely because they
-  // are absent from a product-maintained command regexp.
   const likelyService = isLongRunningServiceCommand(command)
+  // 只登记长期运行的服务命令；短命令/工具命令（git diff、测试等）不进登记表、不落盘、不调度巡检。
+  if (!likelyService) return undefined
   const serviceCwd = resolveServiceWorkingDirectory(command, cwd)
   const data = load()
   const now = Date.now()
@@ -139,13 +138,9 @@ export function registerPendingPiRuntimeProcess(
   data.records.push(record)
   save(data)
   emitChanged(sessionId)
-  // A follow-up observation catches detached/nohup children even when the user
-  // never opens the panel at precisely the right moment. Scheduling is coalesced
-  // per session: high-frequency bash calls during a run create many observations
-  // in a short window, but each is a full OS process scan (multiple PowerShell
-  // queries). A single debounced timer per session refreshes all pending records
-  // in one pass instead of launching N concurrent scans.
-  scheduleNextObservation(sessionId)
+  // 低频巡检：不随每次命令立即扫描，统一由 30s 全局巡检确认服务进程；
+  // 无活跃记录时巡检自动停止，新登记会重新唤醒。
+  scheduleInspection()
   return record
 }
 
@@ -187,58 +182,66 @@ function compatible(record: RuntimeProcessRecord, process: MonitoredProcess): bo
 }
 
 /**
- * 用共享进程快照批量校验 {pid,startTime} 双因子（防 PID 转世），替代逐条 PowerShell。
- * 快照里的 startTime 来自同一 CreationDate，直接与记录的期望值比对（容差 2s）。
+ * 低频全局巡检（30s 节奏）。相比旧实现（每命令 2s 后全量 OS 快照 ×3 轮），
+ * 本巡检：
+ *  - 只处理登记过的服务记录，不扫全系统；
+ *  - pending 匹配走 shellPid 子进程树遍历（每次 ~几十 ms）；
+ *  - 已确认记录只做批量单点存活校验（~20ms/批）；
+ *  - 端口证据仅在命令含显式端口时按需查询，且一次调用合并所有需要端口的记录。
  */
-function isSameInSnapshot(
-  processes: Map<number, { name: string; cmd: string; startTime?: number }>,
-  pid: number,
-  expectStartTime?: number,
-): boolean {
-  if (!expectStartTime) return false
-  const info = processes.get(pid)
-  if (!info || typeof info.startTime !== 'number') return false
-  return Math.abs(info.startTime - expectStartTime) < 2000
-}
+const INSPECT_INTERVAL_MS = 30_000
+let inspectTimer: ReturnType<typeof setTimeout> | null = null
+let inspectInFlight = false
 
-/** 每个 sessionId 的合并观测定时器；同一会话短窗口内多次登记只复用一个 timer。 */
-const observationTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const OBSERVE_DELAY_MS = 2_000
-/** 单次调度的最大追踪轮次，防止 pending 迟迟不确认时无限自续（不会并发，是串行节流）。
- *  3 轮（每 2s 一轮）足以覆盖 dev server 的启动确认，更长窗口收益小且持续占 CPU。 */
-const MAX_TRACK_ATTEMPTS = 3
-
-/**
- * 合并调度一次会话观测：同一 sessionId 的 pending 定时器幂等（短窗口内的
- * 多个 spawn 只触发一轮扫描）。timer 触发时一次性刷新该会话所有 pending 记录。
- * 若扫描后仍有未确认的 pending 记录，则有限次数地自续追踪（confirmed/likelyService
- * 才有必要跟踪 detached/nohup 子进程；纯短命令会被 60s 窗口自动清理）。
- */
-function scheduleNextObservation(sessionId: string, tracks = 0): void {
-  const existing = observationTimers.get(sessionId)
-  if (existing) return // already scheduled; coalesce into the pending pass
-  const timer = setTimeout(async () => {
-    observationTimers.delete(sessionId)
-    try {
-      const pending = await listOwnedRuntimeProcesses(sessionId)
-      // 只要还有未确认的服务型记录就继续有限追踪，捕获 detached/nohup 子进程。
-      const stillTracking = pending.some((r) => r.status === 'pending' && r.likelyService)
-      if (stillTracking && tracks + 1 < MAX_TRACK_ATTEMPTS) {
-        scheduleNextObservation(sessionId, tracks + 1)
-      }
-    } catch {
-      // 观测失败不抛：不注册表崩溃，也不影响后续手动刷新。
-    }
-  }, OBSERVE_DELAY_MS)
-  // 不阻止进程退出，避免长会话期间的孤儿定时器阻碍 Electron 收尾。
+function scheduleInspection(): void {
+  if (inspectTimer) return
+  const timer = setTimeout(() => {
+    inspectTimer = null
+    void inspectOnce()
+  }, INSPECT_INTERVAL_MS)
+  // 不阻止进程退出：长会话期间孤儿定时器不应阻碍 Electron 收尾。
   if (typeof timer.ref === 'function' && typeof timer.unref === 'function') timer.unref()
-  observationTimers.set(sessionId, timer)
+  inspectTimer = timer
 }
 
 /**
- * 把一条 pending 记录与共享的 OS 进程快照匹配（端口证据优先，其次 cwd 内命令关键字）。
- * @param portPids  本次调用共享的「端口 → 监听 pid」映射（避免逐记录重复查询）
- * @param processes 本次调用共享的「pid → name/cmd/startTime」全量映射
+ * 在 shellPid 子进程树内匹配 pending 记录（端口证据优先，其次树内命令关键字）。
+ * 输入是 shell 的实际后代，不含全系统进程。
+ */
+export function matchRecordInTree(
+  record: RuntimeProcessRecord,
+  tree: Map<number, MonitoredProcess> | undefined,
+  portMap: Map<number, number[]> | null,
+): { pid: number; startTime?: number; ports: number[] } | undefined {
+  if (!tree || tree.size === 0) return undefined
+  const port = requestedPort(record.command)
+  // 显式端口是最强的归属证据：其子命令可能不含项目路径，且避免误选同目录 wrapper。
+  if (port !== undefined && portMap) {
+    for (const pid of portMap.get(port) ?? []) {
+      const info = tree.get(pid)
+      if (info && compatible(record, { ...info, ports: [port] })) {
+        return { pid, startTime: info.startTime, ports: [port] }
+      }
+    }
+  }
+  // 无显式端口（或端口未命中）：树内按 cwd 内的命令关键字匹配。
+  const normPath = record.cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  for (const [pid, info] of tree) {
+    if (pid === process.pid) continue
+    const lowCmd = info.cmd.replace(/\\/g, '/').toLowerCase()
+    if (!lowCmd.includes(normPath)) continue
+    if (lowCmd.includes('claude-agent-sdk') && !lowCmd.includes(normPath)) continue
+    if (compatible(record, { ...info, ports: [] })) {
+      return { pid, startTime: info.startTime, ports: [] }
+    }
+  }
+  return undefined
+}
+
+/**
+ * 兼容导出（仅测试使用）：按共享全量快照匹配 pending 记录。
+ * 运行路径已改用 matchRecordInTree（shellPid 子进程树，不扫全系统）；
+ * 本函数保留纯函数形态供单测覆盖匹配语义，不参与巡检。
  */
 export function matchRecordAgainstSnapshot(
   record: RuntimeProcessRecord,
@@ -256,7 +259,7 @@ export function matchRecordAgainstSnapshot(
     }
     return undefined
   }
-  // 无显式端口时退化为 cwd 内命令关键字匹配（等价于按会话工作目录枚举，但复用共享快照）。
+  // 无显式端口时退化为 cwd 内命令关键字匹配。
   const normPath = record.cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
   for (const [pid, info] of processes) {
     if (pid === process.pid) continue // 排除本应用自身进程，避免噪音
@@ -270,101 +273,93 @@ export function matchRecordAgainstSnapshot(
   return undefined
 }
 
-/** Refresh records using only their launch-time cwd and command evidence; never scans arbitrary directories. */
-export async function listOwnedRuntimeProcesses(sessionId: string): Promise<RuntimeProcessRecord[]> {
-  const data = load()
-  const now = Date.now()
-  const pending = data.records.filter(
-    (r) => r.sessionId === sessionId && r.status !== 'exited',
-  ).filter((r) => !(r.pid && r.startTime))
-  // 已确认 pid 的记录：只做双因子防转世校验（单条 PowerShell/记录，无法合并）。
-  const confirmed = data.records.filter((r) => r.sessionId === sessionId && r.pid && r.startTime && r.status !== 'exited')
-  let changed = false
+/** 单轮巡检：处理全部非 exited 记录，返回是否有变更。 */
+async function inspectOnce(): Promise<void> {
+  if (inspectInFlight) return
+  inspectInFlight = true
+  try {
+    const data = load()
+    const now = Date.now()
+    let changed = false
+    const changedSessions = new Set<string>()
+    const active = data.records.filter((r) => r.status !== 'exited')
+    const pendingServices = active.filter((r) => r.status === 'pending' && r.likelyService)
+    const confirmed = active.filter((r) => r.status === 'running' && r.pid && r.startTime)
 
-  // Unknown/short commands are intentionally launch observations only. They
-  // must never be upgraded from a broad cwd/token scan: otherwise ordinary
-  // `git diff` / test commands can be falsely bound to a long-lived Node/Electron
-  // process in the same workspace and remain visible as fake services.
-  const confirmablePending = pending.filter((record) => record.likelyService)
-  const confirmedServices = confirmed.filter((record) => record.likelyService)
-  // 本次调用只拉一次共享 OS 快照（netstat 端口 + 全量进程），供 pending 匹配、
-  // confirmed 双因子校验、dead 重匹配三处共用，避免并发/串行拉起多条 PowerShell。
-  const needSnapshot = confirmablePending.length > 0 || confirmedServices.length > 0
-  let snapshot: { portPids: Map<number, number[]>; processes: Map<number, { name: string; cmd: string; startTime?: number }> } | null = null
-  if (needSnapshot) {
-    snapshot = await captureOsSnapshotWin()
-  }
-
-  // 尚未定位到 pid 的服务候选：用共享快照在 JS 内过滤。
-  if (confirmablePending.length > 0 && snapshot) {
-    for (const record of confirmablePending) {
-      const found = matchRecordAgainstSnapshot(record, snapshot.portPids, snapshot.processes)
-      if (found) {
-        record.pid = found.pid
-        record.startTime = found.startTime
-        record.ports = found.ports
-        record.status = 'running'
-        record.lastObservedAt = now
-        changed = true
+    // 1) pending 服务：按 shellPid 分组，每棵树一次遍历。
+    if (pendingServices.length > 0) {
+      const needPort = pendingServices.some((r) => requestedPort(r.command) !== undefined)
+      const portMap = needPort ? await listPortPidMapWin() : null
+      const trees = new Map<number, Map<number, MonitoredProcess>>()
+      for (const rec of pendingServices) {
+        const root = rec.shellPid
+        if (!root) continue // 无 shellPid 无法树遍历，保持 pending 至超时清理
+        if (!trees.has(root)) trees.set(root, await listProcessTree(root))
+        const found = matchRecordInTree(rec, trees.get(root), portMap)
+        if (found) {
+          rec.pid = found.pid
+          rec.startTime = found.startTime
+          rec.ports = found.ports
+          rec.status = 'running'
+          rec.lastObservedAt = now
+          changed = true
+          changedSessions.add(rec.sessionId)
+        }
       }
     }
-  }
 
-  // Pre-control versions could incorrectly upgrade non-service observations by
-  // cwd coincidence. Retire those legacy false positives rather than showing
-  // them as services indefinitely.
-  for (const record of confirmed) {
-    if (!record.likelyService) {
-      record.status = 'exited'
-      record.lastObservedAt = now
+    // 2) confirmed：批量单点存活校验；老版本误升级的非服务记录立即退役。
+    if (confirmed.length > 0) {
+      const alive = await listAliveProcesses(confirmed.map((r) => r.pid!))
+      for (const rec of confirmed) {
+        if (!rec.likelyService) {
+          rec.status = 'exited'
+          rec.lastObservedAt = now
+          changed = true
+          changedSessions.add(rec.sessionId)
+          continue
+        }
+        const info = alive.get(rec.pid!)
+        const same = info != null && typeof info.startTime === 'number' && Math.abs(info.startTime - rec.startTime!) < 2000
+        if (same) {
+          rec.lastObservedAt = now
+        } else {
+          rec.status = 'exited'
+          rec.lastObservedAt = now
+          changed = true
+          changedSessions.add(rec.sessionId)
+        }
+      }
+    }
+
+    // 3) 过期清理（沿用既有窗口：exited 7 天、pending 非服务 60s、pending 服务 10min）。
+    const kept = data.records.filter((r) => {
+      if (r.status === 'exited') return now - r.lastObservedAt < 7 * 24 * 60 * 60 * 1000
+      if (r.status === 'pending' && !r.likelyService) return now - r.launchedAt < 60_000
+      if (r.status === 'pending') return now - r.launchedAt < 10 * 60 * 1000
+      return true
+    })
+    if (kept.length !== data.records.length) {
+      data.records = kept
       changed = true
     }
-  }
-  // 已确认 pid 且仍健在的记录：用同一快照批量做双因子校验（快照已含 startTime，
-  // 无需逐条再查 PowerShell）；失效的收集后统一用同一快照重匹配。
-  const deadOnes: { record: RuntimeProcessRecord }[] = []
-  for (const record of confirmedServices) {
-    const same = snapshot ? isSameInSnapshot(snapshot.processes, record.pid!, record.startTime) : false
-    if (same) {
-      record.lastObservedAt = now
-    } else {
-      deadOnes.push({ record })
-    }
-  }
-  if (deadOnes.length > 0 && snapshot) {
-    for (const { record } of deadOnes) {
-      const refound = matchRecordAgainstSnapshot(record, snapshot.portPids, snapshot.processes)
-      if (refound) {
-        record.pid = refound.pid
-        record.startTime = refound.startTime
-        record.ports = refound.ports
-        record.status = 'running'
-        record.lastObservedAt = now
-        changed = true
-      } else {
-        record.status = 'exited'
-        record.lastObservedAt = now
-        changed = true
-      }
-    }
-  }
 
-  // Unknown/short commands are observations, not permanent UI clutter. Known
-  // service commands get a longer window because they may daemonize slowly.
-  const kept = data.records.filter((r) => {
-    if (r.status === 'exited') return now - r.lastObservedAt < 7 * 24 * 60 * 60 * 1000
-    if (r.status === 'pending' && !r.likelyService) return now - r.launchedAt < 60_000
-    if (r.status === 'pending') return now - r.launchedAt < 10 * 60 * 1000
-    return true
-  })
-  if (kept.length !== data.records.length) { data.records = kept; changed = true }
-  if (changed) {
-    save(data)
-    emitChanged(sessionId)
+    if (changed) {
+      save(data)
+      for (const sid of changedSessions) emitChanged(sid)
+    }
+    // 仍有活跃记录 → 保持 30s 巡检节奏；全部退出/过期后停止，新登记会重新唤醒。
+    if (data.records.some((r) => r.status !== 'exited')) scheduleInspection()
+  } finally {
+    inspectInFlight = false
   }
-  // The service rail is deliberately not a shell command history. Unknown
-  // commands remain short-lived internal observations, but only known
-  // long-running candidates may surface to users as “确认中”.
+}
+
+/** Refresh records using only their launch-time cwd and command evidence; never scans arbitrary directories. */
+export async function listOwnedRuntimeProcesses(sessionId: string): Promise<RuntimeProcessRecord[]> {
+  // 面板手动刷新 = 立即触发一轮巡检（防并发由 inspectInFlight 保证），再返回当前状态。
+  await inspectOnce()
+  const data = load()
   return data.records.filter((r) => r.sessionId === sessionId && r.status !== 'exited' && r.likelyService)
 }
 

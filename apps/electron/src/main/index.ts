@@ -132,7 +132,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { startRemoteService, stopRemoteService } from './lib/remote-service'
+import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
@@ -608,8 +608,14 @@ async function bootstrap(): Promise<void> {
   // Register IPC handlers
   registerIpcHandlers()
 
-  // 平板版远程服务（显式开关：PROFER_REMOTE=1 或 --tablet；默认不启动）
-  safeRun('startRemoteService', startRemoteService)
+  // 平板版远程服务：显式启动参数兼容保留，设置页开启后下次启动自动恢复。
+  safeRun('startRemoteService', () => {
+    if (getSettings().tabletModeEnabled === true) {
+      setRemoteServiceEnabled(true)
+    } else {
+      startRemoteService()
+    }
+  })
 
   // Set dock icon on macOS
   if (process.platform === 'darwin' && app.dock) {
