@@ -61,17 +61,21 @@ import type {
 
 interface ChatViewProps {
   conversationId: string
+  /** 平板模式：隐藏输入框占位提示文字等触屏简化 */
+  tabletMode?: boolean
+  /** 隐藏 ChatHeader（平板竖屏由外部顶栏承担标题，避免双顶栏） */
+  hideChatHeader?: boolean
 }
 
-export function ChatView({ conversationId }: ChatViewProps): React.ReactElement {
+export function ChatView({ conversationId, tabletMode = false, hideChatHeader = false }: ChatViewProps): React.ReactElement {
   return (
     <ConversationProvider conversationId={conversationId}>
-      <ChatViewInner conversationId={conversationId} />
+      <ChatViewInner conversationId={conversationId} tabletMode={tabletMode} hideChatHeader={hideChatHeader} />
     </ConversationProvider>
   )
 }
 
-function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
+function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = false }: ChatViewProps): React.ReactElement {
   // ===== 本地状态（每个实例独立） =====
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [contextDividers, setContextDividers] = React.useState<string[]>([])
@@ -636,7 +640,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
       {/* 主内容区域 */}
       <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex flex-col h-full flex-1 min-w-0">
         {/* Header 在 max-w 外，按钮可到达最右侧 */}
-        <ChatHeader conversation={conversation} />
+        {!hideChatHeader && <ChatHeader conversation={conversation} />}
         <div className="flex flex-col flex-1 w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden min-h-0">
           {/* 中间：消息区域 */}
           <ChatMessages
@@ -708,6 +712,8 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
             onSend={handleSend}
             onStop={handleStop}
             onClearContext={handleClearContext}
+            placeholder={tabletMode ? '' : undefined}
+            tabletMode={tabletMode}
           />
         </div>
       </div>
@@ -716,7 +722,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
 
       {/* 提示词编辑侧栏 */}
       <div className={cn(
-        'relative flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden titlebar-drag-region',
+        'chat-prompt-sidebar relative flex-shrink-0 transition-[width] duration-300 ease-in-out overflow-hidden titlebar-drag-region',
         promptSidebarOpen ? 'w-[300px] border-l' : 'w-10'
       )}>
         <div className={cn(

@@ -156,7 +156,7 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
           <div className="px-3.5 py-2.5">
             {/* 头部：头像 + 用户名 + 提示 */}
             <div className="flex items-center gap-2 mb-1">
-              <UserAvatar avatar={userProfile.avatar} size={18} />
+              <UserAvatar avatar={userProfile.avatar} size={18} className="tablet-hide-avatar-portrait" />
               <span className="text-xs font-medium text-foreground/60">{userProfile.userName}</span>
               <ChevronUp className="size-3 text-muted-foreground ml-auto" />
             </div>

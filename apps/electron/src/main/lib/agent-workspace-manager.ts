@@ -22,6 +22,7 @@ import {
   parseSkillVersion,
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
+import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
 import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
 
 interface AgentWorkspacesIndex {
@@ -326,6 +327,17 @@ export function deleteAgentWorkspace(id: string): void {
   const relativePath = relative(workspacesRoot, workspaceDir)
   if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
     throw new Error(`工作区目录路径异常，已跳过删除: ${workspaceDir}`)
+  }
+
+  // 防御性级联清理：删除仍指向该工作区的会话（索引 + 消息/任务图文件 + session 目录 + SDK 数据）。
+  // 正常流程由 ipc DELETE_WORKSPACE handler 先行删除（含停止运行中 Agent、清理运行时状态），
+  // 这里兜底防止其他调用路径绕过后残留孤儿会话 —— 孤儿会话会让平板端把 workspaceId
+  // 归纳成“幽灵项目”显示（electronapi-stub 的 list_workspaces 回退路径）。
+  // 注意：必须在移除索引条目之前执行，deleteAgentSession 需要依赖工作区解析 session 工作目录。
+  try {
+    deleteAgentSessionsByWorkspace(id)
+  } catch (error) {
+    console.warn(`[Agent 工作区] 级联清理会话失败 (${target.slug}):`, error)
   }
 
   // 先移除索引条目并落盘，再删目录：

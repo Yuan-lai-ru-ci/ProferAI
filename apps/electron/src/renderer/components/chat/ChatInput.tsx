@@ -66,9 +66,13 @@ interface ChatInputProps {
   onStop: () => void
   /** 清除上下文回调 */
   onClearContext?: () => void
+  /** 自定义占位文字（平板触屏传空串保持输入框干净） */
+  placeholder?: string
+  /** 平板模式：输入框尺寸/占位与 Agent 一致（40px，竖屏 60px） */
+  tabletMode?: boolean
 }
 
-export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext }: ChatInputProps): React.ReactElement {
+export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext, placeholder, tabletMode = false }: ChatInputProps): React.ReactElement {
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   // 从 Map atom 读写草稿
   const draftsMap = useAtomValue(conversationDraftsAtom)
@@ -403,9 +407,10 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
             onChange={setContent}
             onSubmit={handleSend}
             onPasteFiles={handlePasteFiles}
-            placeholder={sendWithCmdEnter ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行)' : '输入消息... (Enter 发送，Shift+Enter 换行)'}
+            placeholder={placeholder ?? (sendWithCmdEnter ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行)' : '输入消息... (Enter 发送，Shift+Enter 换行)')}
             autoFocusTrigger={conversationId}
             sendWithCmdEnter={sendWithCmdEnter}
+            tabletMode={tabletMode}
           />
 
           {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}

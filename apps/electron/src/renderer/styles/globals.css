@@ -2342,3 +2342,62 @@
 .animate-workspace-highlight {
   animation: workspace-highlight 1.2s ease-out;
 }
+
+/* ===== 平板竖屏：隐藏消息头像，节省文字位置 =====
+ * 平板模式根容器（tablet/main.tsx 的 .tablet-app-root）下，竖屏时隐藏
+ * 消息区用户头像（Agent/Chat 消息头部 + 吸顶用户消息条）。
+ * 桌面版不受影响；平板横屏保留头像。
+ */
+@media (orientation: portrait) {
+  .tablet-app-root .tablet-hide-avatar-portrait {
+    display: none;
+  }
+  /* 吸顶用户消息条原本按 35px 头像+间距缩进 46px 对齐文本，竖屏头像隐藏后收回 */
+  .tablet-app-root .sticky-user-banner {
+    margin-left: 0;
+  }
+}
+
+/* ===== 平板竖屏：设置弹窗去掉左侧导航、放宽内容区 =====
+ * 平板设置只有少量 tab（外观等），竖屏下 160px 左侧导航会挤压内容区；
+ * 隐藏导航后内容全宽。body.tablet-mode 由 tablet/main.tsx 挂载时标记，
+ * 覆盖 Portal 到 body 的弹窗（radix Dialog 默认 Portal）。桌面版不受影响。
+ */
+@media (orientation: portrait) {
+  body.tablet-mode .tablet-settings-dialog {
+    width: 94vw;
+    max-width: 94vw;
+    height: 92vh;
+    max-height: 92vh;
+  }
+  body.tablet-mode .settings-nav {
+    display: none;
+  }
+  body.tablet-mode .tablet-settings-dialog .px-6 {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
+
+/* ===== 平板竖屏：隐藏 Chat 提示词编辑侧栏 =====
+ * ChatView 最右侧的提示词编辑侧栏在平板上无功能（平板不支持提示词编辑），
+ * 收起态也常驻 40px 窄条，竖屏下挤压并可能与内容区视觉重合；直接隐藏。
+ */
+@media (orientation: portrait) {
+  body.tablet-mode .chat-prompt-sidebar {
+    display: none;
+  }
+}
+
+/* ===== 平板输入框高度：竖屏 +20px（40px → 60px），方便触屏输入 =====
+ * --tablet-input-h 由 rich-text-input tabletMode 分支消费（min-h/max-h 折叠态）；
+ * 竖屏覆盖变量值即可，展开态（200px/500px）不受影响，桌面版不消费该变量。
+ */
+:root {
+  --tablet-input-h: 40px;
+}
+@media (orientation: portrait) {
+  body.tablet-mode {
+    --tablet-input-h: 60px;
+  }
+}

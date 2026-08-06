@@ -21,6 +21,7 @@ interface TabletRemoteClient {
   getUserProfile(): Promise<unknown>
   listChannels(): Promise<unknown>
   createSession(payload: { title?: string; channelId?: string; workspaceId?: string; modelId?: string }): Promise<unknown>
+  ensureProjectDraftSession(payload: { workspaceId: string; channelId?: string; modelId?: string }): Promise<unknown>
   renameSession(sessionId: string, title: string): Promise<unknown>
   getSdkMessages(sessionId: string): Promise<unknown>
   sendMessage(payload: { sessionId: string; userMessage: string; channelId: string; modelId?: string; workspaceId?: string }): Promise<unknown>
@@ -253,8 +254,9 @@ export function installElectronApiStub(): void {
     },
     ensureProjectDraftAgentSession: async (workspaceId: string, channelId?: string, modelId?: string) => {
       if (!remoteClient) throw new Error('平板连接未就绪')
-      const created = await remoteClient.createSession({ workspaceId, channelId, modelId }) as { sessionId: string; title: string }
-      return { id: created.sessionId, title: created.title, channelId, modelId, workspaceId, draft: true, createdAt: Date.now(), updatedAt: Date.now() }
+      // 复用语义：项目已有草稿会话则返回它（不再每次新建），对齐桌面 ensureProjectDraftAgentSession
+      const created = await remoteClient.ensureProjectDraftSession({ workspaceId, channelId, modelId }) as { sessionId: string; title: string; draft?: boolean }
+      return { id: created.sessionId, title: created.title, channelId, modelId, workspaceId, draft: created.draft ?? true, createdAt: Date.now(), updatedAt: Date.now() }
     },
     updateAgentSessionTitle: (id: string, title: string) => remoteClient?.renameSession(id, title) ?? Promise.reject(new Error('平板连接未就绪')),
     getAgentSessionMeta: async (id: string) => {
@@ -262,7 +264,7 @@ export function installElectronApiStub(): void {
       return sessions.find((session) => session.id === id)
     },
     // 优先走真实工作区列表（list_workspaces 由 remote-service 返回桌面同构数据，含真实项目名称）；
-    // 旧版服务端无此指令时回退为从会话归纳 workspaceId（仅作兜底，名称不再硬编码为 ID 前缀）。
+    // 旧版服务端无此指令时只兜底默认工作区（不再从会话归纳 workspaceId，避免孤儿会话伪装成幽灵项目）。
     listAgentWorkspaces: async () => {
       if (remoteClient) {
         try {
@@ -278,19 +280,13 @@ export function installElectronApiStub(): void {
             }))
           }
         } catch {
-          /* 服务端不支持时走下面的归纳回退 */
+          /* 服务端不支持时走下面的兜底 */
         }
       }
-      const sessions = await (remoteClient?.listSessions() ?? Promise.resolve([])) as Array<{ workspaceId?: string }>
-      const ids = [...new Set(sessions.map((session) => session.workspaceId).filter((id): id is string => Boolean(id)))]
-      return (ids.length ? ids : ['default']).map((id) => ({
-        id,
-        name: id === 'default' ? '默认工作区' : id,
-        slug: id,
-        type: 'personal',
-        createdAt: 0,
-        updatedAt: 0,
-      }))
+      // 兜底：服务端不支持 list_workspaces 时，只回退默认工作区。
+      // ⚠️ 不能从历史会话归纳全部 workspaceId：被删除项目的会话仍然存在（孤儿会话），
+      // 归纳会把已删除项目以 UUID 名字伪装成“幽灵项目”重新出现在平板侧栏。
+      return [{ id: 'default', name: '默认工作区', slug: 'default', type: 'personal', createdAt: 0, updatedAt: 0 }]
     },
 
     // ---- 降级：只读/空数据，维持复用组件可渲染 ----
@@ -364,6 +360,9 @@ export function installElectronApiStub(): void {
       if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
       return remoteClient.searchChatMessages(query)
     },
+    // remote-service 暂无 Agent 会话消息搜索指令：显式返回空数组（不能靠 Proxy 兜底 undefined，
+    // SearchDialog 的 runSearch 会对两个结果统一 .filter，undefined 会让整个内容搜索崩溃）。
+    searchAgentSessionMessages: () => Promise.resolve([]),
     sendMessage: (input: Record<string, unknown>) => {
       if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
       const conv = input as {
@@ -442,7 +441,7 @@ export function installElectronApiStub(): void {
     getModels: () => Promise.resolve([]),
     getWorkspaceCapabilities: () => Promise.resolve(null),
     getWorkspaceHeatmapDaily: () => Promise.resolve([]),
-    getAccountCapabilities: () => Promise.resolve({ membershipTier: 'free', canSelfConfig: false }),
+    getAccountCapabilities: () => Promise.resolve({ membershipTier: 'free', canSelfConfig: true }),
     getWorkspaceFilesPath: () => Promise.resolve(null),
     getGitRepoStatus: () => Promise.resolve(null),
     getWorkspaceDirectories: () => Promise.resolve([]),

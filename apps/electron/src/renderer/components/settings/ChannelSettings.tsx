@@ -260,7 +260,7 @@ export function ChannelSettings(): React.ReactElement {
               <Server size={18} className="text-primary shrink-0" />
               <div className="flex-1">
                 <div className="text-sm font-medium">渠道由服务端统一管理</div>
-                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端。如需自行添加 API Key，请让管理员开通自配权限后点「刷新权限」</div>
+                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端。你当前没有自配 API 权限（可能被管理员单独关闭），如需自行添加 API Key，请联系管理员开通后点「刷新权限」</div>
               </div>
               <Button size="sm" variant="outline" onClick={handleRefreshCaps} disabled={refreshingCaps} className="shrink-0">
                 <RefreshCw size={14} className={refreshingCaps ? 'animate-spin' : ''} />

@@ -35,9 +35,11 @@ import {
   getAgentSessionMessages,
   getAgentSessionSDKMessages,
   createAgentSession,
+  ensureProjectDraftAgentSession,
   updateAgentSessionMeta,
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir } from './config-paths'
+import { getSettings } from './settings-service'
 import { listAgentWorkspaces } from './agent-workspace-manager'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
@@ -640,6 +642,21 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const modelId = parsed.modelId as string | undefined
       const meta = createAgentSession(title, channelId, workspaceId, modelId)
       return { ok: true, data: { sessionId: meta.id, title: meta.title } }
+    }
+
+    // 语义对齐桌面 ensureProjectDraftAgentSession：项目已有草稿会话则复用（发过消息则晋升正式），否则创建
+    case 'ensure_project_draft_session': {
+      const workspaceId = parsed.workspaceId as string
+      const channelId = parsed.channelId as string | undefined
+      const modelId = parsed.modelId as string | undefined
+      if (!workspaceId) return { ok: false, error: '缺少 workspaceId' }
+      const meta = ensureProjectDraftAgentSession(
+        workspaceId,
+        channelId,
+        modelId,
+        getSettings().agentRuntime ?? 'claude',
+      )
+      return { ok: true, data: { sessionId: meta.id, title: meta.title, draft: meta.draft ?? true } }
     }
 
     case 'send_message': {
