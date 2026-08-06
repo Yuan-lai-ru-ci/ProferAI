@@ -315,6 +315,11 @@ export class WsClient {
     return this.sendCommand({ type: 'create_session', ...payload })
   }
 
+  /** 项目草稿会话复用语义（对齐桌面 ensureProjectDraftAgentSession）：已有则复用，没有才创建 */
+  ensureProjectDraftSession(payload: { workspaceId: string; channelId?: string; modelId?: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'ensure_project_draft_session', ...payload })
+  }
+
   sendMessage(payload: { sessionId: string; userMessage: string; channelId: string; modelId?: string; workspaceId?: string }): Promise<unknown> {
     return this.sendCommand({ type: 'send_message', ...payload })
   }

@@ -2,7 +2,7 @@
  * Profer Tablet UI — 桌面式平板界面
  *
  * 完整复用桌面真实组件（与 LeftSidebar 同一搬运策略）：
- *  - 对话区：桌面 <AgentView> 100% 复用（AgentHeader + AgentMessages + 审批横幅 + composer + 任务图 Dialog）
+ *  - 对话区：桌面 <AgentView> 100% 复用（AgentHeader + AgentMessages + 审批横幅 + composer；任务图工具栏项与 Dialog 在 tabletMode 下隐藏）
  *  - 左侧会话栏：桌面 <LeftSidebar> 复用
  *  - 数据源：WsClient → remote-service；electronAPI 桥把 IPC 命令/事件映射为 WS 命令/事件
  *
@@ -42,9 +42,39 @@ import { isAgentCompatibleProvider, type ProviderType, type AgentStreamPayload }
 // ===== 先安装 electronAPI stub（必须在任何复用组件求值前）=====
 installElectronApiStub()
 
+// ===== 平板模式标记：Portal 到 body 的组件（设置弹窗等）需要 CSS 定向（竖屏差异化布局）=====
+if (typeof document !== 'undefined') {
+  document.body.classList.add('tablet-mode')
+}
+
 // ===== Token 存取 =====
 function getStoredToken(): string { return localStorage.getItem('profer-remote-token') || '' }
 function storeToken(t: string): void { localStorage.setItem('profer-remote-token', t) }
+
+// ===== 服务器地址存取（App 化必需：Capacitor WebView 内 window.location.host 是 localhost，
+// 无法像浏览器场景那样从页面来源自动推导电脑 IP；显式配置后覆盖 defaultWsUrl）=====
+function getStoredServerUrl(): string { return localStorage.getItem('profer-remote-server') || '' }
+function storeServerUrl(u: string): void { u ? localStorage.setItem('profer-remote-server', u) : localStorage.removeItem('profer-remote-server') }
+
+/**
+ * 规范化服务器地址为 WS URL。支持输入形式：
+ *  - http://192.168.1.10:7788 / https://host:port  → ws(s)://host:port/ws
+ *  - ws://192.168.1.10:7788 / ws://192.168.1.10:7788/ws → 补 /ws 或原样
+ *  - 192.168.1.10:7788（无协议）→ ws://192.168.1.10:7788/ws
+ *  - 空字符串 → null（调用方回退 defaultWsUrl 自动推导）
+ */
+function normalizeWsUrl(raw: string): string | null {
+  const s = raw.trim().replace(/\/+$/, '')
+  if (!s) return null
+  if (/^https?:\/\//i.test(s)) {
+    const proto = /^https:/i.test(s) ? 'wss:' : 'ws:'
+    return `${proto}${s.replace(/^https?:/i, '')}/ws`
+  }
+  if (/^wss?:\/\//i.test(s)) {
+    return s.endsWith('/ws') ? s : `${s}/ws`
+  }
+  return `ws://${s}/ws`
+}
 
 // ===== 类型 =====
 interface ChannelInfo { id: string; name: string; provider: string; models: { id: string; name: string }[] }
@@ -114,6 +144,7 @@ function App(): React.ReactElement {
   useGlobalChatListeners()
 
   const [tokenInput, setTokenInput] = useState(getStoredToken())
+  const [serverInput, setServerInput] = useState(getStoredServerUrl())
   const setChannels = useSetAtom(channelsAtom)
   const setChannelsLoaded = useSetAtom(channelsLoadedAtom)
   const setConversations = useSetAtom(conversationsAtom)
@@ -153,10 +184,11 @@ function App(): React.ReactElement {
   }, [])
 
   // ===== WS 管理 =====
-  const connect = useCallback((token: string) => {
+  const connect = useCallback((token: string, serverInput?: string) => {
     if (clientRef.current) clientRef.current.disconnect()
+    const url = normalizeWsUrl(serverInput ?? getStoredServerUrl()) ?? defaultWsUrl()
     const client = new WsClient({
-      url: defaultWsUrl(),
+      url,
       token,
       onStatusChange: (status) => {
         if (status === 'open') {
@@ -204,14 +236,40 @@ function App(): React.ReactElement {
     try {
       const data = await client.listSessions() as SessionInfo[]
       if (!Array.isArray(data)) return
-      setSessions(data)
+
+      // 平板版暂时隐藏团队版功能：先拉工作区列表识别团队工作区（type === 'team'），
+      // 其工作区与会话整体排除——项目分组、置顶、最近、归档列表都不会出现团队内容。
+      let teamWorkspaceIds = new Set<string>()
+      let realWorkspaces = new Map<string, { id: string; name: string; slug: string; type: string; createdAt: number; updatedAt: number }>()
+      try {
+        const wsList = await client.listWorkspaces() as Array<{ id: string; name: string; slug: string; type?: string; createdAt?: number; updatedAt?: number }> | undefined
+        if (Array.isArray(wsList)) {
+          for (const w of wsList) {
+            if (w.type === 'team') {
+              teamWorkspaceIds.add(w.id)
+              continue
+            }
+            realWorkspaces.set(w.id, {
+              id: w.id,
+              name: w.name,
+              slug: w.slug,
+              type: w.type ?? 'personal',
+              createdAt: w.createdAt ?? 0,
+              updatedAt: w.updatedAt ?? 0,
+            })
+          }
+        }
+      } catch { /* 服务端不支持，走归纳回退 */ }
+
+      const personalSessions = data.filter((s) => !teamWorkspaceIds.has(s.workspaceId ?? ''))
+      setSessions(personalSessions)
       // 原生 LeftSidebar 直接读取这些 atoms；平板只替换数据传输层。
-      setNativeSessions(data as never)
+      setNativeSessions(personalSessions as never)
 
       // 陈旧 streaming 兜底：主进程返回 active=false 的会话若本地仍标记 running，
       // 说明完成事件在断线/事件丢失时没送达（平板没有桌面 STREAM_COMPLETE IPC 保底）。
       // 以主进程权威状态为准强制清理，否则停止按钮会永远亮着、点击也无效（stop 守卫直接 return）。
-      const remoteActiveIds = new Set(data.filter((s) => s.active).map((s) => s.id))
+      const remoteActiveIds = new Set(personalSessions.filter((s) => s.active).map((s) => s.id))
       const staleIds = new Set<string>()
       for (const [sid, st] of tabletStore.get(agentStreamingStatesAtom)) {
         if (st?.running && !remoteActiveIds.has(sid)) staleIds.add(sid)
@@ -229,24 +287,7 @@ function App(): React.ReactElement {
 
       // 优先从服务端获取真实项目（工作区）列表，带真实项目名称；
       // 旧版服务端无 list_workspaces 指令时回退为从会话归纳 workspaceId。
-      let realWorkspaces = new Map<string, { id: string; name: string; slug: string; type: string; createdAt: number; updatedAt: number }>()
-      try {
-        const wsList = await client.listWorkspaces() as Array<{ id: string; name: string; slug: string; type?: string; createdAt?: number; updatedAt?: number }> | undefined
-        if (Array.isArray(wsList)) {
-          for (const w of wsList) {
-            realWorkspaces.set(w.id, {
-              id: w.id,
-              name: w.name,
-              slug: w.slug,
-              type: w.type ?? 'personal',
-              createdAt: w.createdAt ?? 0,
-              updatedAt: w.updatedAt ?? 0,
-            })
-          }
-        }
-      } catch { /* 服务端不支持，走归纳回退 */ }
-
-      const workspaceIds = [...new Set(data.map((session) => session.workspaceId).filter((id): id is string => Boolean(id)))]
+      const workspaceIds = [...new Set(personalSessions.map((session) => session.workspaceId).filter((id): id is string => Boolean(id)))]
       // 无会话时也展示服务端真实项目，避免只能看到“默认工作区”
       const ids = workspaceIds.length > 0 ? workspaceIds : (realWorkspaces.size > 0 ? [...realWorkspaces.keys()] : ['default'])
       const workspaces = ids.map((id) => realWorkspaces.get(id) ?? {
@@ -374,26 +415,32 @@ function App(): React.ReactElement {
     } catch (e) { setErrMsg('创建对话失败: ' + String(e)) }
   }, [openChatConversation, setConversations])
 
-  // 提交 token
+  // 提交 token（服务器地址留空则自动推导，浏览器场景行为不变）
   const submitToken = useCallback(() => {
     const t = tokenInput.trim()
     if (!t) { setErrMsg('请输入访问令牌'); return }
     storeToken(t)
+    storeServerUrl(serverInput)
     setErrMsg(undefined)
     setConnection('connecting')
-    setTimeout(() => connect(t), 0)
-  }, [tokenInput, connect])
+    setTimeout(() => connect(t, serverInput), 0)
+  }, [tokenInput, serverInput, connect])
 
   const logout = useCallback(() => {
     clientRef.current?.disconnect()
     localStorage.removeItem('profer-remote-token')
+    localStorage.removeItem('profer-remote-server')
     setConnection('idle'); setSessions([]); setCurrentSessionId(null)
     setTokenInput('')
+    setServerInput('')
   }, [])
 
-  // 初次挂载自动连接
+  // 初次挂载自动连接（App 场景用已存的显式服务器地址）
   useEffect(() => {
-    if (getStoredToken()) { setConnection('connecting'); setTimeout(() => connect(getStoredToken()), 0) }
+    if (getStoredToken()) {
+      setConnection('connecting')
+      setTimeout(() => connect(getStoredToken(), getStoredServerUrl()), 0)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -425,6 +472,12 @@ function App(): React.ReactElement {
             <div className="text-sm text-muted-foreground">在电脑上以 <code className="px-1.5 py-0.5 rounded bg-muted/60 font-mono text-xs">--tablet</code> 启动后连接</div>
           </div>
           <input
+            value={serverInput}
+            onChange={(e) => setServerInput(e.target.value)}
+            placeholder="服务器地址，如 http://192.168.1.10:7788（留空自动）"
+            className="w-full rounded-lg border border-border bg-background px-3.5 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/60"
+          />
+          <input
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
             placeholder="访问令牌"
@@ -444,7 +497,7 @@ function App(): React.ReactElement {
   // 断点约定：横屏且 ≥1024px 显示固定侧栏（iPad 横屏/桌面浏览器）；其余一律抽屉+顶栏——
   // 竖屏不管宽度（含 iPad Pro 12.9" 竖屏 1024px）都走抽屉，避免固定侧栏挤压对话区。
   return (
-    <div className="flex h-full w-full overflow-hidden bg-background p-0 text-foreground landscape:min-[1024px]:p-2">
+    <div className="tablet-app-root flex h-full w-full overflow-hidden bg-background p-0 text-foreground landscape:min-[1024px]:p-2">
       <NativeTabletSidebar mobileOpen={sidebarOpen} onDismiss={() => setSidebarOpen(false)} />
 
       {/* 主区 */}
@@ -465,7 +518,7 @@ function App(): React.ReactElement {
         <div className="flex min-h-0 flex-1 flex-col touch-pan-y">
           {appMode === 'chat' ? (
             currentChatId ? (
-              <ChatView conversationId={currentChatId} />
+              <ChatView conversationId={currentChatId} tabletMode hideChatHeader={!landscapeWide} />
             ) : (
               <div className="flex h-full flex-col items-center justify-center px-6 text-center">
                 <div className="max-w-sm space-y-2">

@@ -36,12 +36,12 @@ const PLANS_FALLBACK: PlanDef[] = [
   {
     id: 'free', name: 'Free', monthlyRmb: 0, yearlyRmb: 0,
     welcomeBonus: 0, dailyDrip: 0,
-    features: ['50 积分/月试用', '国内模型（DeepSeek / 通义千问）', 'Agent / Skill / MCP / 自动化全开'],
+    features: ['注册赠 10 积分体验', '自配 API Key（自带 Key 全模型自由）', '平台渠道国内模型（DeepSeek / 通义千问）', 'Agent / Skill / MCP / 自动化全开'],
   },
   {
     id: 'standard', name: 'Standard', monthlyRmb: 29, yearlyRmb: 296,
     welcomeBonus: 60, dailyDrip: 8,
-    features: ['首购红包 60 积分', '每日 drip 8 积分', '国内模型（DeepSeek / 通义千问）', 'Agent / Skill / MCP / 自动化全开'],
+    features: ['首购红包 60 积分', '每日 drip 8 积分', '自配 API Key（自带 Key 全模型自由）', '平台渠道国内模型（DeepSeek / 通义千问）', 'Agent / Skill / MCP / 自动化全开'],
   },
   {
     id: 'plus', name: 'Plus', monthlyRmb: 49, yearlyRmb: 500,
