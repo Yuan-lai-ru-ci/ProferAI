@@ -179,6 +179,7 @@ import { selectAndParsePaper, parsePaper, estimatePaperPages } from './lib/paper
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import { getRemoteServiceStatus, setRemoteServiceEnabled } from './lib/remote-service'
 import { updateWindowFrameAppearance } from './lib/titlebar-overlay'
 import { setDockBadgeCount } from './lib/dock-badge-service'
 
@@ -1786,6 +1787,31 @@ export function registerIpcHandlers(): void {
 
       return result
     }
+  )
+
+  // 获取平板模式服务状态。Token 只在服务实际监听后随状态返回。
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.GET_TABLET_MODE_STATUS,
+    async () => getRemoteServiceStatus(),
+  )
+
+  // 设置平板模式（试验版）。开启后立即监听局域网，关闭后立即断开。
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_ENABLED,
+    async (_event, enabled: boolean) => {
+      if (typeof enabled !== 'boolean') throw new Error('平板模式开关参数无效')
+      if (!enabled) {
+        const status = setRemoteServiceEnabled(false)
+        updateSettings({ tabletModeEnabled: false })
+        return status
+      }
+
+      setRemoteServiceEnabled(true)
+      // listen 是异步的；状态会在 UI 随后刷新时带回地址和 Token。
+      const status = getRemoteServiceStatus()
+      updateSettings({ tabletModeEnabled: true })
+      return status
+    },
   )
 
   // 同步更新应用设置（用于 beforeunload 场景）

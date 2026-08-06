@@ -27,10 +27,15 @@ import {
   markdownFontSizeAtom,
   updateMarkdownFontSize,
 } from '@/atoms/markdown-font-size'
+import {
+  uiScaleAtom,
+  updateUiScale,
+  UI_SCALE_OPTIONS,
+} from '@/atoms/ui-scale'
 import { previewModePreferenceAtom, type PreviewModePreference } from '@/atoms/preview-atoms'
 import { cn } from '@/lib/utils'
 import { detectIsWindows } from '@/lib/platform'
-import type { ThemeMode, ThemeStyle, MarkdownFontSize } from '../../../types'
+import type { ThemeMode, ThemeStyle, MarkdownFontSize, UiScale } from '../../../types'
 
 // ===== Logo 资源导入（用于图标选择器） =====
 import proferBlackLogo from '@/assets/bots/profer-logos/profer-black.png'
@@ -191,6 +196,10 @@ export function AppearanceSettings(): React.ReactElement {
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
   const [markdownFontSize, setMarkdownFontSize] = useAtom(markdownFontSizeAtom)
+  // 界面大小控件仅面向平板/浏览器端（UiScaleContainer 等比缩放）；
+  // Electron 桌面保持原版行为（Ctrl+± 浏览器级缩放），不渲染控件避免“调了无效果”。
+  const isElectron = React.useMemo(() => navigator.userAgent.includes('Electron'), [])
+  const [uiScale, setUiScale] = useAtom(uiScaleAtom)
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
 
   /** 切换主题模式 */
@@ -223,6 +232,13 @@ export function AppearanceSettings(): React.ReactElement {
     updateMarkdownFontSize(size)
   }, [setMarkdownFontSize])
 
+  /** 切换界面大小 */
+  const handleUiScaleChange = React.useCallback((value: string) => {
+    const scale = value as UiScale
+    setUiScale(scale)
+    updateUiScale(scale)
+  }, [setUiScale])
+
   return (
     <div className="space-y-6">
       <SettingsSection
@@ -254,10 +270,20 @@ export function AppearanceSettings(): React.ReactElement {
             </div>
           </div>
 
-          <SettingsRow
-            label="界面缩放"
-            description={ZOOM_HINT}
-          />
+          {isElectron ? (
+            <SettingsRow
+              label="界面缩放"
+              description={ZOOM_HINT}
+            />
+          ) : (
+            <SettingsSegmentedControl
+              label="界面大小"
+              description="整体等比缩放界面（触屏设备推荐 110% 或更大）"
+              value={uiScale}
+              onValueChange={handleUiScaleChange}
+              options={UI_SCALE_OPTIONS}
+            />
+          )}
 
           <SettingsSegmentedControl
             label="Markdown 字号"

@@ -225,6 +225,8 @@ export interface LeftSidebarProps {
   width?: number
   /** 拖拽过程中禁用 CSS transition，保证即时响应 */
   noTransition?: boolean
+  /** 平板等受限环境：隐藏 Chat/Agent 模式切换与侧栏折叠按钮（无 Chat 数据源、宽度固定） */
+  tabletMode?: boolean
 }
 
 /** 日期分组标签 */
@@ -568,7 +570,7 @@ function focusEnterableViewItem(item: string): void {
   })
 }
 
-export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.ReactElement {
+export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   // 持续持有最新 activeView 的稳定引用，供 navigation consumer（useEffect [] 注册一次）
   // 读取最新视图状态，避免陈旧闭包（不能在 [] 闭包里直接读 activeView 变量）。
@@ -2257,27 +2259,28 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       {/* macOS 需要避开左上角红绿灯；边栏覆盖全局标题栏拖拽层，因此留白自身也要可拖拽。 */}
       <div className={cn('w-full flex-shrink-0 titlebar-drag-region', isMac ? 'h-[30px]' : 'h-1')} />
 
-      {/* 模式切换器 + 折叠按钮 */}
+      {/* 模式切换器（Agent/Chat，与桌面原版一致）+ 折叠按钮（原版位置；收起为 60px 窄图标条） */}
       <div className="titlebar-drag-region flex items-start gap-1.5 px-3">
         <div className="flex-1 min-w-0">
           <ModeSwitcher />
         </div>
         <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => setSidebarCollapsed(true)}
-              className={cn(
-                'sidebar-collapse-button mt-2 size-10 flex-shrink-0 flex items-center justify-center rounded-[10px] text-foreground/40 titlebar-no-drag',
-                isClassic
-                  ? 'bg-muted hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors'
-                  : 'bg-primary/5 hover:bg-primary/10 hover:text-foreground/60 transition-[background-color,border-color,color] duration-150 border border-border/60 hover:border-border'
-              )}
-            >
-              <PanelLeftClose size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">收起侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'})</TooltipContent>
-        </Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className={cn(
+                  'sidebar-collapse-button mt-2 size-10 flex-shrink-0 flex items-center justify-center rounded-[10px] text-foreground/40 titlebar-no-drag',
+                  tabletMode && 'ml-auto',
+                  isClassic
+                    ? 'bg-muted hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors'
+                    : 'bg-primary/5 hover:bg-primary/10 hover:text-foreground/60 transition-[background-color,border-color,color] duration-150 border border-border/60 hover:border-border'
+                )}
+              >
+                <PanelLeftClose size={14} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">收起侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+B'})</TooltipContent>
+          </Tooltip>
       </div>
 
       {/* 新对话/新会话按钮 + 搜索按钮 */}

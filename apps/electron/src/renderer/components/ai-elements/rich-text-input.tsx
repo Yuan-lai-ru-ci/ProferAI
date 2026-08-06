@@ -115,6 +115,8 @@ interface RichTextInputProps {
   onHtmlChange?: (html: string) => void
   /** 是否使用 Cmd/Ctrl+Enter 发送（而非 Enter） */
   sendWithCmdEnter?: boolean
+  /** 平板模式：输入框压扁为单行高度（约 40px），减少触屏下输入区占用 */
+  tabletMode?: boolean
   className?: string
 }
 
@@ -147,6 +149,7 @@ export function RichTextInput({
   htmlValue,
   onHtmlChange,
   sendWithCmdEnter = false,
+  tabletMode = false,
 }: RichTextInputProps): React.ReactElement {
   const [isExpanded, setIsExpanded] = useState(false)
   const inputIdRef = useRef(`rich-text-input-${Math.random().toString(36).slice(2)}`)
@@ -331,7 +334,9 @@ export function RichTextInput({
         tabindex: '0',
         class: cn(
           'prose dark:prose-invert max-w-none focus:outline-none',
-          'min-h-[101px] w-full text-[15px] leading-[1.6]',
+          tabletMode
+            ? 'min-h-[40px] w-full text-[15px] leading-[1.4]'
+            : 'min-h-[101px] w-full text-[15px] leading-[1.6]',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_pre]:rounded-md [&_pre]:p-3',
           '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-sm [&_code]:text-foreground',
@@ -676,7 +681,7 @@ export function RichTextInput({
       className={cn(
         'rich-text-input relative w-full overflow-y-auto scrollbar-thin transition-[max-height] duration-200 ease-in-out',
         isManuallyCollapsed
-          ? 'max-h-[101px]'
+          ? tabletMode ? 'max-h-[40px]' : 'max-h-[101px]'
           : isExpanded ? 'max-h-[500px]' : 'max-h-[200px]',
         disabled && 'opacity-50 cursor-not-allowed',
         className
@@ -707,7 +712,7 @@ export function RichTextInput({
       <style>{`
         .ProseMirror {
           outline: none;
-          padding: 9px 15px 0px;
+          padding: ${tabletMode ? '5px 15px 0px' : '9px 15px 0px'};
           font-style: normal;
         }
         .ProseMirror p {

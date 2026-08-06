@@ -11,12 +11,14 @@
  *    安全空实现或明确报错，避免复用组件崩溃或出现“可点但无效果”的伪按钮。
  */
 
-import type { AgentStreamEvent, AgentStreamCompletePayload } from '@profer/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, StreamChunkEvent, StreamReasoningEvent, StreamCompleteEvent, StreamErrorEvent, StreamToolActivityEvent, GenerateTitleInput } from '@profer/shared'
+import { CHAT_IPC_CHANNELS, BUILTIN_DEFAULT_ID, BUILTIN_DEFAULT_PROMPT } from '@profer/shared'
 
 /** WsClient 满足的最小远程命令面（与 ws-client.ts 方法一一对应） */
 interface TabletRemoteClient {
   listSessions(): Promise<unknown>
   listWorkspaces(): Promise<unknown>
+  getUserProfile(): Promise<unknown>
   listChannels(): Promise<unknown>
   createSession(payload: { title?: string; channelId?: string; workspaceId?: string; modelId?: string }): Promise<unknown>
   renameSession(sessionId: string, title: string): Promise<unknown>
@@ -26,6 +28,42 @@ interface TabletRemoteClient {
   updateSessionRuntime(sessionId: string, runtime: 'claude' | 'pi'): Promise<unknown>
   updatePermissionMode(sessionId: string, mode: 'auto' | 'plan' | 'bypassPermissions'): Promise<unknown>
   stopAgent(sessionId: string): Promise<unknown>
+  // ---- 交互式问答/审批响应（AskUserQuestion / 权限审批 / ExitPlanMode） ----
+  respondPermission(requestId: string, behavior: 'allow' | 'deny', alwaysAllow?: boolean): Promise<unknown>
+  respondAskUser(requestId: string, answers: Record<string, string>): Promise<unknown>
+  respondExitPlanMode(requestId: string, action: 'approve_auto' | 'approve_edit' | 'deny' | 'feedback', feedback?: string): Promise<unknown>
+  // ---- Chat（聊天工具）----
+  listConversations(): Promise<unknown>
+  createConversation(payload: { title?: string; modelId?: string; channelId?: string }): Promise<unknown>
+  getConversationMessages(conversationId: string): Promise<unknown>
+  getRecentMessages(conversationId: string, limit: number): Promise<unknown>
+  updateConversationTitle(conversationId: string, title: string): Promise<unknown>
+  updateConversationModel(conversationId: string, modelId?: string, channelId?: string): Promise<unknown>
+  deleteConversation(conversationId: string): Promise<unknown>
+  toggleConversationPin(conversationId: string): Promise<unknown>
+  toggleConversationArchive(conversationId: string): Promise<unknown>
+  searchChatMessages(query: string): Promise<unknown>
+  chatSendMessage(payload: {
+    conversationId: string
+    userMessage: string
+    channelId: string
+    modelId?: string
+    contextLength?: number
+    contextDividers?: string[]
+    attachments?: unknown[]
+    knowledgeReferences?: unknown[]
+    thinkingEnabled?: boolean
+    systemMessage?: string
+    enabledToolIds?: string[]
+  }): Promise<unknown>
+  chatStopGeneration(conversationId: string): Promise<unknown>
+  chatDeleteMessage(conversationId: string, messageId: string): Promise<unknown>
+  chatTruncateMessagesFrom(conversationId: string, messageId: string, preserveFirstMessageAttachments?: boolean): Promise<unknown>
+  chatUpdateContextDividers(conversationId: string, dividers: string[]): Promise<unknown>
+  chatGenerateTitle(input: GenerateTitleInput): Promise<unknown>
+  chatSaveAttachment(input: { conversationId: string; filename: string; mediaType: string; data: string }): Promise<unknown>
+  chatDeleteAttachment(localPath: string): Promise<unknown>
+  chatReadAttachment(localPath: string): Promise<unknown>
 }
 
 let remoteClient: TabletRemoteClient | null = null
@@ -47,6 +85,13 @@ const agentSessionUpdatedListeners = new Set<Listener<{ session: unknown }>>()
 const todoAgentSessionReadyListeners = new Set<Listener<unknown>>()
 const runtimeProcessesChangedListeners = new Set<Listener<unknown>>()
 
+// ---- Chat 流式事件注册器（useGlobalChatListeners 消费；WS chat_event 按通道喂回） ----
+const chatChunkListeners = new Set<Listener<StreamChunkEvent>>()
+const chatReasoningListeners = new Set<Listener<StreamReasoningEvent>>()
+const chatCompleteListeners = new Set<Listener<StreamCompleteEvent>>()
+const chatErrorListeners = new Set<Listener<StreamErrorEvent>>()
+const chatToolActivityListeners = new Set<Listener<StreamToolActivityEvent>>()
+
 function register<T>(set: Set<Listener<T>>, cb: Listener<T>): () => void {
   set.add(cb)
   return () => { set.delete(cb) }
@@ -67,7 +112,29 @@ export function emitTabletAgentStreamEvent(event: AgentStreamEvent): void {
   emitTo(agentStreamEventListeners, event)
 }
 
-/** 供未来 WS 协议扩展时调用（当前 remote-service 暂无对应事件源）。 */
+export function emitTabletChatStreamEvent(channel: string, payload: unknown): void {
+  switch (channel) {
+    case CHAT_IPC_CHANNELS.STREAM_CHUNK:
+      emitTo(chatChunkListeners, payload as StreamChunkEvent)
+      break
+    case CHAT_IPC_CHANNELS.STREAM_REASONING:
+      emitTo(chatReasoningListeners, payload as StreamReasoningEvent)
+      break
+    case CHAT_IPC_CHANNELS.STREAM_COMPLETE:
+      emitTo(chatCompleteListeners, payload as StreamCompleteEvent)
+      break
+    case CHAT_IPC_CHANNELS.STREAM_ERROR:
+      emitTo(chatErrorListeners, payload as StreamErrorEvent)
+      break
+    case CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY:
+      emitTo(chatToolActivityListeners, payload as StreamToolActivityEvent)
+      break
+    default:
+      console.warn('[Tablet] 未知 Chat 流式通道:', channel)
+  }
+}
+
+/** 供 future WS 协议扩展时调用（当前 remote-service 暂无对应事件源）。 */
 export function emitTabletAgentStreamComplete(payload: AgentStreamCompletePayload): void {
   emitTo(agentStreamCompleteListeners, payload)
 }
@@ -112,6 +179,12 @@ export function installElectronApiStub(): void {
     onAgentSessionUpdated: (cb: Listener<{ session: unknown }>) => register(agentSessionUpdatedListeners, cb),
     onTodoAgentSessionReady: (cb: Listener<unknown>) => register(todoAgentSessionReadyListeners, cb),
     onRuntimeProcessesChanged: (cb: Listener<unknown>) => register(runtimeProcessesChangedListeners, cb),
+    // ---- Chat 流式事件注册器（useGlobalChatListeners 消费；WS chat_event 按通道喂回） ----
+    onStreamChunk: (cb: Listener<StreamChunkEvent>) => register(chatChunkListeners, cb),
+    onStreamReasoning: (cb: Listener<StreamReasoningEvent>) => register(chatReasoningListeners, cb),
+    onStreamComplete: (cb: Listener<StreamCompleteEvent>) => register(chatCompleteListeners, cb),
+    onStreamError: (cb: Listener<StreamErrorEvent>) => register(chatErrorListeners, cb),
+    onStreamToolActivity: (cb: Listener<StreamToolActivityEvent>) => register(chatToolActivityListeners, cb),
     // 大刷新后恢复活跃流：平板刷新时事件已通过 WS 继续推送（断线期间的历史事件丢失），
     // 无需 main 回放，返回空列表即可（桌面调用方会遍历 sessionIds 写 streaming 占位）。
     restoreActiveAgentStreams: () => Promise.resolve([]),
@@ -223,9 +296,135 @@ export function installElectronApiStub(): void {
     // ---- 降级：只读/空数据，维持复用组件可渲染 ----
     getSettings: () => Promise.resolve({}),
     updateSettings: safeNoop,
+    // 真实用户档案：从主进程 user-profile-service 读取（LeftSidebar 挂载时自动消费写入 userProfileAtom，
+    // 侧栏底部用户名/头像即真实值）；旧版服务端无 get_user_profile 指令时回退默认档案。
+    getUserProfile: async () => {
+      if (remoteClient) {
+        try {
+          const profile = await remoteClient.getUserProfile() as { userName?: string; avatar?: string } | undefined
+          if (profile && typeof profile === 'object') {
+            return {
+              userName: profile.userName || 'Profer 用户',
+              avatar: profile.avatar || '',
+            }
+          }
+        } catch {
+          /* 服务端不支持，走兜底 */
+        }
+      }
+      return { userName: 'Profer 用户', avatar: '' }
+    },
     getSystemTheme: () => Promise.resolve(true),
-    listConversations: () => Promise.resolve([]),
-    getUserProfile: () => Promise.resolve({ userName: 'Profer 用户', avatar: '' }),
+    // SystemPromptSelector（ChatHeader）挂载时拉取提示词配置并 setConfig 覆写 promptConfigAtom：
+    // 必须返回桌面同构默认配置，否则 Proxy 兜底的 undefined 会把 promptConfigAtom 覆写成 undefined，
+    // 导致 defaultPromptIdAtom 等派生 atom 抛 “Cannot read properties of undefined (reading 'defaultPromptId')”，
+    // 整个 Chat 视图（含 LeftSidebar 新建对话）崩溃。
+    getSystemPromptConfig: () => Promise.resolve({
+      prompts: [BUILTIN_DEFAULT_PROMPT],
+      defaultPromptId: BUILTIN_DEFAULT_ID,
+      appendDateTimeAndUserName: true,
+    }),
+    // 工具选择器：平板不修改工具开关，返回空列表（避免 undefined 覆写 chatToolsAtom）
+    getChatTools: () => Promise.resolve([]),
+    // ---- Chat（聊天工具）命令映射：桌面 ChatView / LeftSidebar / useGlobalChatListeners 的 IPC 命令 → WS 远程命令 ----
+    listConversations: () => remoteClient?.listConversations() ?? Promise.resolve([]),
+    createConversation: (title?: string, modelId?: string, channelId?: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.createConversation({ title, modelId, channelId })
+    },
+    getConversationMessages: (conversationId: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.getConversationMessages(conversationId)
+    },
+    getRecentMessages: (conversationId: string, limit: number) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.getRecentMessages(conversationId, limit)
+    },
+    updateConversationTitle: (conversationId: string, title: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.updateConversationTitle(conversationId, title)
+    },
+    updateConversationModel: (conversationId: string, modelId?: string, channelId?: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.updateConversationModel(conversationId, modelId, channelId)
+    },
+    deleteConversation: (conversationId: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.deleteConversation(conversationId)
+    },
+    togglePinConversation: (conversationId: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.toggleConversationPin(conversationId)
+    },
+    toggleArchiveConversation: (conversationId: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.toggleConversationArchive(conversationId)
+    },
+    searchConversationMessages: (query: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.searchChatMessages(query)
+    },
+    sendMessage: (input: Record<string, unknown>) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      const conv = input as {
+        conversationId: string
+        userMessage: string
+        channelId: string
+        modelId?: string
+        contextLength?: number
+        contextDividers?: string[]
+        attachments?: unknown[]
+        knowledgeReferences?: unknown[]
+        thinkingEnabled?: boolean
+        systemMessage?: string
+        enabledToolIds?: string[]
+      }
+      return remoteClient.chatSendMessage({
+        conversationId: conv.conversationId,
+        userMessage: conv.userMessage,
+        channelId: conv.channelId,
+        modelId: conv.modelId,
+        contextLength: conv.contextLength,
+        contextDividers: conv.contextDividers,
+        attachments: conv.attachments,
+        knowledgeReferences: conv.knowledgeReferences,
+        thinkingEnabled: conv.thinkingEnabled,
+        systemMessage: conv.systemMessage,
+        enabledToolIds: conv.enabledToolIds,
+      })
+    },
+    stopGeneration: (conversationId: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatStopGeneration(conversationId)
+    },
+    deleteMessage: (conversationId: string, messageId: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatDeleteMessage(conversationId, messageId)
+    },
+    truncateMessagesFrom: (conversationId: string, messageId: string, preserveFirstMessageAttachments?: boolean) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatTruncateMessagesFrom(conversationId, messageId, preserveFirstMessageAttachments)
+    },
+    updateContextDividers: (conversationId: string, dividers: string[]) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatUpdateContextDividers(conversationId, dividers)
+    },
+    generateTitle: (input: GenerateTitleInput) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatGenerateTitle(input)
+    },
+    saveAttachment: (input: { conversationId: string; filename: string; mediaType: string; data: string }) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatSaveAttachment(input)
+    },
+    deleteAttachment: (localPath: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatDeleteAttachment(localPath)
+    },
+    readAttachment: (localPath: string) => {
+      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      return remoteClient.chatReadAttachment(localPath)
+    },
     getChannels: () => Promise.resolve([]),
     // ModelSelector 打开时会调用 listChannels 刷新渠道列表：
     // 必须返回 WS 真实渠道，否则空数组会覆盖平板已喂好的 channelsAtom，模型选择器变成空列表。
@@ -253,6 +452,9 @@ export function installElectronApiStub(): void {
     getAgentKnowledgeReferences: () => Promise.resolve([]),
     knowledge: {
       getLibrarySnapshot: () => Promise.resolve({ items: [] }),
+      // 知识库引用选择器：平板暂不支持知识库，返回空列表（必须显式返回数组，
+      // 否则 Proxy 兜底的 undefined 会让调用方 snapshot.map 崩溃）
+      listItems: () => Promise.resolve([]),
     },
     searchAgentSessionReferences: () => Promise.resolve([]),
     getPathForFile: () => Promise.resolve(''),
@@ -276,6 +478,14 @@ export function installElectronApiStub(): void {
     saveFilesToAgentSession: () => unsupported('保存文件到会话'),
     addAgentKnowledgeReferences: () => unsupported('知识库引用'),
     removeAgentKnowledgeReference: () => unsupported('知识库引用'),
+    migrateChatToAgent: () => unsupported('Chat 迁移到 Agent'),
+    // 提示词编辑（PromptEditorSidebar/SystemPromptSelector 的 CRUD）：平板不暴露设置入口，
+    // 必须明确拒绝，避免 Proxy 兜底 undefined 污染 promptConfigAtom / selectedPromptIdAtom。
+    createSystemPrompt: () => unsupported('提示词编辑'),
+    deleteSystemPrompt: () => unsupported('提示词编辑'),
+    updateSystemPrompt: () => unsupported('提示词编辑'),
+    setDefaultPrompt: () => unsupported('提示词编辑'),
+    updateAppendSetting: () => unsupported('提示词编辑'),
     killProcess: () => unsupported('进程管理'),
   }
 

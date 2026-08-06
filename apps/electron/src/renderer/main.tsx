@@ -66,6 +66,10 @@ import {
   markdownFontSizeAtom,
   initializeMarkdownFontSize,
 } from './atoms/markdown-font-size'
+import {
+  uiScaleAtom,
+  initializeUiScale,
+} from './atoms/ui-scale'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
 import {
@@ -576,6 +580,22 @@ function MarkdownFontSizeInitializer(): null {
 }
 
 /**
+ * 界面缩放初始化组件
+ *
+ * 从主进程加载持久化的 UI 缩放档位，同步到 atom + localStorage + DOM
+ * （localStorage 已有缓存时模块加载即已应用，此处仅校正 settings.json 权威值）。
+ */
+function UiScaleInitializer(): null {
+  const setUiScale = useSetAtom(uiScaleAtom)
+
+  useEffect(() => {
+    initializeUiScale(setUiScale)
+  }, [setUiScale])
+
+  return null
+}
+
+/**
  * Chat IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Chat 流式事件
@@ -1034,6 +1054,7 @@ if (isQuickTaskWindow) {
       <React.StrictMode>
         <ThemeInitializer />
         <MarkdownFontSizeInitializer />
+        <UiScaleInitializer />
         <DetachedPreviewApp />
         <Toaster position="top-right" />
       </React.StrictMode>
@@ -1060,6 +1081,7 @@ if (isQuickTaskWindow) {
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />
+      <UiScaleInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />
       <ChatToolInitializer />

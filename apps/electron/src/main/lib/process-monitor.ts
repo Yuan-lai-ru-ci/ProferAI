@@ -383,6 +383,67 @@ export async function getProcessInfo(pid: number): Promise<MonitoredProcess | nu
   }
 }
 
+/** 通用 WMI 过滤查询：一次调用返回匹配进程（服务端过滤，避免全量枚举传输）。 */
+async function queryWinProcesses(filter: string): Promise<Array<{ ProcessId: number; Name: string; CommandLine: string; cts?: string }>> {
+  const cmd = `Get-CimInstance Win32_Process -Filter '${filter}' | Select-Object ProcessId,Name,CommandLine,@{N='cts';E={$_.CreationDate.ToString('o')}} | ConvertTo-Json -Compress`
+  const out = await psAsync(cmd)
+  if (!out) return []
+  try {
+    const arr = JSON.parse(out)
+    return Array.isArray(arr) ? arr : [arr]
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 从 rootPid 出发按父链逐层枚举子进程树（不含 root 自身）。
+ *
+ * Windows 上子进程的 ParentProcessId 在父退出后仍保留旧值（不 reparent），因此即使
+ * shell（bash/powershell）已退出，Start-Process / nohup 启动的孤儿服务仍可按旧父 PID 查到。
+ * 每层一次 WQL 过滤查询（ParentProcessId=a OR b …），BFS 逐层，maxDepth 防极端深树。
+ * 相比全量枚举（Get-CimInstance 无 Filter），单树遍历只触碰 shell 的实际后代，开销从 ~400ms 降到 ~几十 ms。
+ */
+export async function listProcessTree(rootPid: number, maxDepth = 8): Promise<Map<number, MonitoredProcess>> {
+  const out = new Map<number, MonitoredProcess>()
+  if (!Number.isInteger(rootPid) || rootPid <= 0) return out
+  const seen = new Set<number>([rootPid])
+  let frontier = [rootPid]
+  for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
+    const filter = frontier.map((pid) => `ParentProcessId=${pid}`).join(' OR ')
+    const rows = await queryWinProcesses(filter)
+    const next: number[] = []
+    for (const row of rows) {
+      const pid = Number(row.ProcessId)
+      if (!Number.isInteger(pid) || pid <= 0 || seen.has(pid)) continue
+      seen.add(pid)
+      const startTime = row.cts ? Math.floor(new Date(row.cts).getTime()) : undefined
+      out.set(pid, { pid, name: row.Name ?? '', cmd: row.CommandLine ?? '', startTime, ports: [] })
+      next.push(pid)
+    }
+    frontier = next
+  }
+  return out
+}
+
+/**
+ * 批量按 PID 查询存活进程（一次 WQL OR 查询），用于已确认记录的存活校验。
+ * 相对全量快照，只触碰登记过的 pid，开销 ~20ms/批。
+ */
+export async function listAliveProcesses(pids: number[]): Promise<Map<number, { name: string; cmd: string; startTime?: number }>> {
+  const out = new Map<number, { name: string; cmd: string; startTime?: number }>()
+  const unique = [...new Set(pids.filter((p) => Number.isInteger(p) && p > 0))]
+  if (unique.length === 0) return out
+  const rows = await queryWinProcesses(unique.map((p) => `ProcessId=${p}`).join(' OR '))
+  for (const row of rows) {
+    const pid = Number(row.ProcessId)
+    if (!Number.isInteger(pid) || pid <= 0) continue
+    const startTime = row.cts ? Math.floor(new Date(row.cts).getTime()) : undefined
+    out.set(pid, { name: row.Name ?? '', cmd: row.CommandLine ?? '', startTime })
+  }
+  return out
+}
+
 /**
  * Prefer a graceful console/process-tree termination, then force-kill only if
  * the recorded PID is still the same process after the grace window.

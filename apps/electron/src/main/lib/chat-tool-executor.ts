@@ -9,6 +9,7 @@ import type { ToolCall, ToolResult } from '@profer/core'
 import type { WebContents } from 'electron'
 import type { FileAttachment } from '@profer/shared'
 import { CHAT_IPC_CHANNELS } from '@profer/shared'
+import { pushChatStream } from './chat-stream-bus'
 import { isWebSearchToolCall, executeWebSearchTool } from './chat-tools/web-search-tool'
 import { isCustomHttpToolCall, executeHttpTool } from './chat-tools/http-tool-executor'
 import { isAgentRecommendToolCall, executeAgentRecommendTool } from './chat-tools/agent-recommend-tool'
@@ -18,8 +19,8 @@ import { getChatToolsConfig } from './chat-tool-config'
 
 /** 工具执行上下文 */
 export interface ToolExecutionContext {
-  /** webContents 用于推送工具活动事件 */
-  webContents: WebContents
+  /** webContents 用于推送工具活动事件；可为 null（平板远程调用，事件走 chatEventBus） */
+  webContents: WebContents | null
   /** 对话 ID */
   conversationId: string
   /** 当前用户消息的附件列表 */
@@ -79,7 +80,7 @@ export async function executeToolCalls(
     results.push(result)
 
     // 推送工具结果事件给前端
-    context.webContents.send(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
+    pushChatStream(context.webContents, context.conversationId, CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
       conversationId: context.conversationId,
       activity: {
         type: 'result',
