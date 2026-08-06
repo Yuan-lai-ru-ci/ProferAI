@@ -50,7 +50,7 @@ const CONFIG_SCHEMA = {
 }
 
 const ENV_FALLBACKS = {
-  'billing.markup': '1.0', 'billing.defaultCreditGrant': '2500000', 'billing.overdraftLimit': '2500000',
+  'billing.markup': '1.0', 'billing.defaultCreditGrant': '500000', 'billing.overdraftLimit': '2500000',
   'admin.maxOrderAmount': '100000', 'admin.orderDualConfirmThreshold': '50000', 'admin.orderDailyConfirmCap': '100000',
   'admin.dailyGrantCap': '50000000', 'admin.maxGrantAmount': '500000000',
 }

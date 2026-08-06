@@ -91,8 +91,9 @@ export const CHANNEL_ENCRYPTION_KEY = (() => {
 })()
 
 // 新用户注册时赠送的默认额度（单位：New API quota，500000 = $1）
-// 默认 2,500,000 = 50 积分 = $5。可用 DEFAULT_CREDIT_GRANT 覆盖。
-export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '2500000', 10)
+// 默认 500,000 = 10 积分 = $1（仅作平台渠道体验包；自配 API Key 不依赖此额度）。
+// 可用 DEFAULT_CREDIT_GRANT 覆盖，管理员也可在后台动态调整。
+export const DEFAULT_CREDIT_GRANT = parseInt(process.env.DEFAULT_CREDIT_GRANT || '500000', 10)
 
 // 单次手动充值/发放上限（防呆）。单位 quota（500000=$1）。默认 5 亿 quota = $1000。
 export const MAX_GRANT_AMOUNT = parseInt(process.env.MAX_GRANT_AMOUNT || '500000000', 10)
@@ -132,23 +133,25 @@ export const NEWAPI_USER_INITIAL_QUOTA = parseInt(process.env.NEWAPI_USER_INITIA
 export const PER_USER_NEWAPI_KEY = process.env.PER_USER_NEWAPI_KEY === 'true'
 
 // ===== 订阅制账号体系 =====
-// membership_tier 决定工作区配额 + 模型门控 + 自配 API 权限。
+// membership_tier 决定工作区配额 + 平台渠道模型门控。
+// 自配 API 权限对所有用户开放（free/standard 均可自配 Key 直连，全模型自由、不扣积分），
+// 平台渠道（统配 proxy）仍按 tier 门控：free/standard 仅国内模型，plus/pro 可用国际模型。
 // 要加新等级：在此对象加一行即可。
 // 设备数统一 4 台，不再按等级区分。
-// 初始赠送额度：50 积分（2,500,000 quota），统一给所有新注册用户。
+// 初始赠送额度：10 积分（500,000 quota），统一给所有新注册用户（体验包，后台可调）。
 export const SUBSCRIPTION_CAPS = {
   free: {
     label: '免费用户',
     maxWorkspaces: 1,
     maxDevices: 4,
-    defaultCreditGrant: parseInt(process.env.DEFAULT_CREDIT_GRANT || '2500000', 10),
-    canSelfConfig: false,
+    defaultCreditGrant: parseInt(process.env.DEFAULT_CREDIT_GRANT || '500000', 10),
+    canSelfConfig: true,
   },
   standard: {
     label: '标准用户',
     maxWorkspaces: Infinity,
     maxDevices: 4,
-    canSelfConfig: false,
+    canSelfConfig: true,
   },
   plus: {
     label: 'Plus 用户',
