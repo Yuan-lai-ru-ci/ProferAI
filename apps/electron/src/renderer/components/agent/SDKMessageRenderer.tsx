@@ -34,7 +34,6 @@ import {
   UserMessageContent,
   TurnFileMapProvider,
 } from '@/components/ai-elements/message'
-import { StreamingCursor } from '@/components/ai-elements/streaming-text'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
 import { Button } from '@/components/ui/button'
@@ -731,8 +730,6 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
               )
             })}
           </div>
-          {/* 流式输出中的打字光标：仅实时消息（isStreaming=true）末尾显示 */}
-          {isStreaming && <StreamingCursor />}
           {readKnowledgeItems.length > 0 && <div className="flex flex-wrap gap-1.5 border-t border-border/40 pt-2 text-xs text-muted-foreground"><span>已读取资料：</span>{readKnowledgeItems.map((item) => <Badge key={item.itemId} variant="secondary" className="max-w-[240px] truncate font-normal">{item.title}</Badge>)}</div>}
           {/* 如果有错误但也有内容块，在末尾显示错误 */}
           {hasError && errorContent && topLevelBlocks.length > 0 && (
