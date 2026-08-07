@@ -159,5 +159,5 @@ nsis:
 publish:
   provider: github
   owner: Yuan-lai-ru-ci
-  repo: Profer
+  repo: ProferAI
   releaseType: release

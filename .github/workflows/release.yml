@@ -159,3 +159,86 @@ jobs:
             apps/electron/release-assets/*.exe.blockmap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: build (macos-latest, mac, arm64 + x64)
+    runs-on: macos-latest
+
+    env:
+      # 无签名证书：跳过 macOS 代码签名/公证，避免 CI 因找不到证书失败
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches app version
+        shell: bash
+        run: |
+          tagVersion="${GITHUB_REF_NAME#v}"
+          packageVersion=$(node -p "require('./apps/electron/package.json').version")
+          if [ "$tagVersion" != "$packageVersion" ]; then
+            echo "Tag version v$tagVersion does not match apps/electron/package.json version $packageVersion"
+            exit 1
+          fi
+          echo "Releasing verified version: $packageVersion"
+
+      - name: Typecheck workspace
+        run: bun run typecheck
+
+      - name: Build GitHub app
+        run: bun run electron:build:github
+
+      # Pi runtime is external to the main-process bundle; copy its dependency closure into appDir before electron-builder.
+      - name: Sync external Agent runtime dependencies
+        run: bun run sync:runtime-deps
+        working-directory: apps/electron
+
+      - name: Package macOS release (arm64 + x64)
+        run: npx electron-builder --mac --arm64 --x64 --publish never
+        working-directory: apps/electron
+
+      - name: Collect macOS release assets
+        shell: bash
+        working-directory: apps/electron
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release-assets
+          cp -v "out/latest-mac.yml" "release-assets/"
+          cp -v out/Profer-${version}-arm64.dmg "release-assets/" || true
+          cp -v out/Profer-${version}-arm64.zip "release-assets/" || true
+          cp -v out/Profer-${version}-x64.dmg "release-assets/" || true
+          cp -v out/Profer-${version}-x64.zip "release-assets/" || true
+          ls -la release-assets/
+          # 确保至少存在一份 macOS 产物
+          if ls release-assets/Profer-*.dmg >/dev/null 2>&1; then
+            echo "macOS dmg assets collected"
+          else
+            echo "No macOS dmg found in out/:"
+            ls -la out/
+            exit 1
+          fi
+
+      - name: Upload macOS release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            apps/electron/release-assets/latest-mac.yml
+            apps/electron/release-assets/*.dmg
+            apps/electron/release-assets/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
