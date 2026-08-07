@@ -1,0 +1,7 @@
+# Bun 配置（根 workspace）
+# 仅配置 bun test 的全局行为；其余使用默认值。
+
+[test]
+# 每个测试文件运行前先执行 preload，统一 mock electron，
+# 避免源码模块真实加载 electron 导致 mock.module 失效（详见 test/preload-electron-mock.ts）
+preload = ["./test/preload-electron-mock.ts"]
