@@ -1,127 +1,73 @@
+<div align="center">
+
+<img src="./docs/assets/profer-banner.svg" alt="Profer" width="100%" />
+
 # Profer
 
-**基于 Claude Agent SDK 的通用 AI Agent 桌面应用** — 多模型接入、协作子 Agent、定时任务自动化、平板远程接入与团队工作区。
+**基于 Claude Agent SDK 的通用 AI Agent 桌面应用**
 
-Profer 在强大本地 AI Agent 的基础上，叠加了团队协作层：个人工作区 + 团队工作区双模式、Skills 共享市场、文件云端同步、邀请制成员管理。简单问题用 Chat，复杂任务交给 Agent，团队知识沉淀在工作区。
+多模型接入 · 协作子 Agent · 定时任务自动化 · 平板远程接入 · 团队工作区
 
----
+[![GitHub Release](https://img.shields.io/github/v/release/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=Release)](https://github.com/Yuan-lai-ru-ci/ProferAI/releases)
+[![License](https://img.shields.io/github/license/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=License)](./LICENSE)
+[![Electron](https://img.shields.io/badge/Electron-43-47848F?style=flat-square&logo=electron)](https://www.electronjs.org/)
+[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.3.201-8B5CF6?style=flat-square)](https://github.com/anthropics/claude-agent-sdk)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
+[![Stars](https://img.shields.io/github/stars/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=Stars)](https://github.com/Yuan-lai-ru-ci/ProferAI)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Yuan-lai-ru-ci/ProferAI/pulls)
 
-## 为什么选择 Profer
-
-与个人 AI 工具不同，Profer 解决的是**团队怎么一起用好 AI** 的问题：
-
-| | 个人 AI 工具 | Profer |
-|---|---|---|
-| 工作区 | 单用户本地 | **个人 + 团队双模式**，类似 Notion |
-| 知识沉淀 | 随对话流失 | **工作区持久化**：Skills、文件、配置、知识库 |
-| 团队协作 | 无 | **邀请制工作区**：成员、角色、权限 |
-| Skill 复用 | 手动拷贝 | **团队市场**：发布、安装、版本管理 |
-| 文件共享 | 网盘 + AI 割裂 | **工作区内文件云端同步**，拖入 Agent 即用 |
-| 品牌 | 固定 | **可定制**：Logo、名称、配色 |
+</div>
 
 ---
 
-## 核心概念
-
-```
-┌─ 侧边栏 ────────────────────┐
-│  👤 用户名                    │
-│                              │
-│  📁 个人工作区                 │  ← 纯本地，完全私密
-│    └ 我的项目                 │
-│                              │
-│  🏢 产品团队                  │  ← 团队工作区，云端同步
-│    ├ 需求文档                 │
-│    ├ 技术方案                 │
-│    ├ 团队 Skills              │
-│    └ 成员: 12人 (我是 Admin)  │
-│                              │
-│  🏢 前端架构组                 │  ← 另一个团队
-│    └ ...                     │
-│                              │
-│  [+ 创建 / 加入工作区]         │
-└──────────────────────────────┘
-```
-
-每个工作区拥有独立的 Skills、MCP 服务器、文件、知识库和对话历史。个人工作区纯本地，团队工作区自动同步。
+Profer 是本地优先（local-first）的 AI 桌面应用：**简单问题用 Chat，复杂任务交给 Agent**。在强大本地 AI Agent 的基础上，叠加了团队协作层——个人工作区 + 团队工作区双模式、Skills 共享市场、文件云端同步、邀请制成员管理。团队知识沉淀在工作区，而不是随对话流失。
 
 ---
 
-## 现在能做什么
+## ✨ 核心特性
 
-### Agent 模式（双运行时）
-
-基于 `@anthropic-ai/claude-agent-sdk` 的通用 Agent，同时支持 **Claude** 与 **Pi** 两套 Agent Runtime 并行切换：
-
-- **任务图与长任务**：多步骤任务拆分子任务、依赖编排、流式输出、计划确认
-- **协作子 Agent**：复杂任务并行拆分给多个真实子会话，独立推进后汇总结果
-- **SubAgent / Skills / MCP**：完整 Agent 生态，工作区隔离、权限模式、文件操作
-- **定时任务 Automation**：持久化调度（interval / daily / weekly / monthly），运行历史、失败保护，适合日报周报、自动检查等无人值守场景
-
-### 团队协作（Profer 独有）
-
-- **团队工作区**：创建团队工作区，邀请成员加入，按角色（Owner / Admin / Member / Viewer）控制权限
-- **Skills 共享**：将本地 Skill 发布到团队市场，成员一键安装，版本自动更新
-- **文件同步**：团队工作区文件云端镜像，按需下载，SHA256 冲突检测
-- **品牌定制**：为每个工作区自定义 Logo、名称、品牌色，侧边栏和标题栏即时生效
-- **邀请管理**：生成邀请链接或邀请码，一次性 token，7 天过期
-
-### 平板远程接入
-
-移动端（Capacitor + Android）通过本地 HTTP/WS 服务远程接入电脑端 Profer：平板 Chat、设置系统、UI 缩放、断线重连与状态同步，让桌面 Agent 能力延伸到平板。
-
-### Chat 模式
-
-多模型对话、附件解析（PDF / Office / 图片）、Markdown / Mermaid / KaTeX / 代码高亮渲染、并排对比、系统提示词、上下文管理。
-
-### Skills & MCP
-
-每个工作区独立配置 Skills 和 MCP Server。全屏「Agent 技能」视图支持搜索、启用切换、更新、导入、卸载。Skills 可在工作区之间导入，也可发布到团队市场。
-
-### 远程机器人
-
-飞书 / Lark / 钉钉 / 微信桥接。用手机或群聊触发本机 Agent 工作流。
-
-### 桌面体验
-
-自动更新、代理设置、文件预览、全局快捷键、快速任务窗口、流式语音输入（豆包，支持全局输入）。亮色 / 暗色 / 多款精修主题。
+| 特性 | 说明 |
+| --- | --- |
+| 🤖 **通用 Agent** | 基于 `@anthropic-ai/claude-agent-sdk`，任务图拆解、子任务依赖编排、流式输出、计划确认，支持 **Claude / Pi 双运行时**切换 |
+| 🧩 **协作子 Agent** | 复杂任务并行拆分给多个真实子会话独立推进，完成后汇总结果，全程可见可追踪 |
+| ⏰ **定时任务自动化** | 持久化调度（interval / daily / weekly / monthly），运行历史、失败保护、结果复盘，适合日报周报、自动检查等无人值守场景 |
+| 📱 **平板远程接入** | Capacitor + Android 客户端通过本地 HTTP/WS 远程接入电脑端，平板 Chat、设置同步、断线重连 |
+| 👥 **团队工作区** | 邀请制团队（Owner / Admin / Member / Viewer 角色权限），Skills 共享市场、文件云端同步、品牌定制 |
+| 💬 **多模型 Chat** | 多供应商对话、附件解析（PDF / Office / 图片）、Markdown / Mermaid / KaTeX / 代码高亮、并排对比、上下文管理 |
+| 🧠 **Skills & MCP** | 每工作区独立配置 Skills 与 MCP Server，全屏技能视图支持搜索、启用、更新、导入、卸载与团队发布 |
+| 🔌 **远程机器人** | 飞书 / Lark / 钉钉 / 微信桥接，手机或群聊即可触发本机 Agent 工作流 |
+| 🎨 **桌面体验** | 自动更新、全局快捷键、快速任务窗口、流式语音输入（豆包）、亮色 / 暗色 / 多款精修主题 |
 
 ---
 
-## 快速开始
+## 🚀 快速开始
 
 ### 下载安装
 
-从 [GitHub Releases](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) 下载最新版本。提供 macOS Apple Silicon / Intel 和 Windows 安装包。
+从 [GitHub Releases](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) 下载最新版本，提供 **macOS Apple Silicon / Intel** 与 **Windows** 安装包。
+
+### 首次配置
+
+1. 打开 Profer，完成环境检查（Agent 依赖 Git、Node.js / Bun 及可用 Shell）
+2. **设置 → 模型配置**：添加 AI 渠道（Anthropic、DeepSeek、Kimi、智谱、豆包、通义千问等）
+3. **设置 → Agent 配置**：选择默认渠道、模型和工作区，即可开始使用
 
 ### 配置团队服务器（可选）
 
-团队协作功能需要后端服务。我们提供轻量级同步服务器（Hono + SQLite），可在任意 Linux 服务器上一键部署：
+团队协作功能需要后端服务（轻量级 Hono + SQLite，可一键部署到任意 Linux 服务器）：
 
 ```bash
-# 在服务器上
 git clone https://github.com/Yuan-lai-ru-ci/ProferAI.git
 cd ProferAI/server
 npm install
 nohup node index.js > server.log 2>&1 &
 ```
 
-# nginx 反代（示例）
-# location /proma/ { proxy_pass http://127.0.0.1:3456/; }
-```
-
-然后在 Profer 设置 → **品牌定制** 中配置团队服务器地址即可。
-
-### 首次配置
-
-1. 打开 Profer，完成环境检查（Agent 依赖 Git、Node.js / Bun 及可用 Shell）
-2. **设置 → 模型配置**，添加 AI 渠道（Anthropic、DeepSeek、Kimi 等）
-3. **设置 → Agent 配置**，选择默认渠道、模型和工作区
-4. （可选）侧边栏底部 → **登录团队账户**，连接团队服务器
+然后在 Profer 设置 → **品牌定制** 中配置团队服务器地址，即可邀请成员、共享 Skills、云端同步文件。
 
 ---
 
-## 支持的模型渠道
+## 🤖 支持的模型渠道
 
 | 供应商 | Chat | Agent | 协议 |
 | --- | --- | --- | --- |
@@ -139,29 +85,25 @@ nohup node index.js > server.log 2>&1 &
 
 ---
 
-## 技术栈
+## 🛠️ 技术栈
 
 | 层级 | 技术 |
 | --- | --- |
 | 运行时 | Bun |
 | 桌面框架 | Electron 43 |
-| 前端 | React 18 + TypeScript |
-| 状态管理 | Jotai |
+| 前端 | React 18 + TypeScript + Jotai |
 | 样式 | Tailwind CSS + Radix UI |
-| 富文本输入 | TipTap |
-| 图表 / 公式 | Beautiful Mermaid + KaTeX |
-| 代码高亮 | Shiki |
-| 构建 | Vite + esbuild |
-| 分发 | electron-builder |
+| 富文本 / 图表 | TipTap · Beautiful Mermaid · KaTeX · Shiki |
+| 构建 | Vite + esbuild + electron-builder |
 | Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201` |
 | 平板端 | Capacitor（Android） |
 | 团队后端 | Hono + better-sqlite3 + JWT |
 
 ---
 
-## 开发
+## 👷 本地开发
 
-Profer 是 Bun workspace monorepo：
+Bun workspace monorepo：
 
 ```text
 profer/
@@ -179,17 +121,17 @@ profer/
 ```
 
 ```bash
-bun install           # 安装依赖
-bun run dev           # 开发模式（Vite + Electron + 热重载）
-bun run typecheck     # 类型检查
-bun test              # 测试
+bun install        # 安装依赖
+bun run dev        # 开发模式（Vite + Electron + 热重载）
+bun run typecheck  # 类型检查
+bun test           # 测试
 ```
 
 ---
 
-## 贡献
+## 🤝 贡献
 
-欢迎提交 PR。提交前请确认：
+欢迎提交 PR！提交前请确认：
 
 - 使用 Bun，不混用 npm / pnpm lockfile
 - 状态管理使用 Jotai
@@ -199,12 +141,10 @@ bun test              # 测试
 
 ---
 
-## 许可证
+## 📄 许可证
 
 Profer 基于 [Proma](https://github.com/ErlichLiu/Proma) 开发，社区版采用 [AGPL-3.0](./LICENSE) 协议。
 
----
+## 🙏 致谢
 
-## 致谢
-
-基于 [Proma](https://github.com/ErlichLiu/Proma) by Erlich Liu 构建。感谢 Shiki、Beautiful Mermaid、Cherry Studio、Lobe Icons、Craft Agents OSS、MemOS 等项目。
+感谢 [Proma](https://github.com/ErlichLiu/Proma) by Erlich Liu，以及 Shiki、Beautiful Mermaid、Cherry Studio、Lobe Icons、Craft Agents OSS、MemOS 等开源项目。

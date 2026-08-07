@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="Profer — General-purpose AI Agent Desktop App">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f0c29"/>
+      <stop offset="0.55" stop-color="#1e1b4b"/>
+      <stop offset="1" stop-color="#312e81"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1280" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#818cf8"/>
+      <stop offset="0.5" stop-color="#c084fc"/>
+      <stop offset="1" stop-color="#f0abfc"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.85" cy="0.3" r="0.65">
+      <stop offset="0" stop-color="#a855f7" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <rect width="1280" height="320" fill="url(#glow)"/>
+
+  <!-- 背景网格点 -->
+  <g fill="#6366f1" opacity="0.22">
+    <circle cx="60" cy="40" r="2.5"/><circle cx="140" cy="80" r="2"/>
+    <circle cx="230" cy="35" r="2.5"/><circle cx="320" cy="70" r="2"/>
+    <circle cx="410" cy="30" r="2.5"/><circle cx="500" cy="85" r="2"/>
+    <circle cx="590" cy="45" r="2.5"/><circle cx="680" cy="25" r="2"/>
+    <circle cx="1200" cy="280" r="2.5"/><circle cx="1120" cy="300" r="2"/>
+    <circle cx="1030" cy="290" r="2.5"/><circle cx="940" cy="305" r="2"/>
+    <circle cx="850" cy="295" r="2.5"/><circle cx="760" cy="310" r="2"/>
+    <circle cx="60" cy="285" r="2.5"/><circle cx="160" cy="300" r="2"/>
+    <circle cx="270" cy="290" r="2.5"/><circle cx="380" cy="305" r="2"/>
+  </g>
+
+  <!-- 右侧终端窗口 -->
+  <g transform="translate(830,58)">
+    <rect width="340" height="204" rx="12" fill="#0b0a1f" stroke="#4338ca" stroke-width="1.5"/>
+    <circle cx="24" cy="26" r="6" fill="#f87171"/>
+    <circle cx="46" cy="26" r="6" fill="#fbbf24"/>
+    <circle cx="68" cy="26" r="6" fill="#34d399"/>
+    <line x1="12" y1="44" x2="328" y2="44" stroke="#312e81" stroke-width="1"/>
+    <text x="24" y="74" font-family="'Cascadia Code', Consolas, 'Courier New', monospace" font-size="15" fill="#e2e8f0">$ profer agent "整理并发布"</text>
+    <text x="24" y="104" font-family="'Cascadia Code', Consolas, 'Courier New', monospace" font-size="15" fill="#a78bfa">▸ 创建任务图 · 3 个子任务</text>
+    <text x="24" y="134" font-family="'Cascadia Code', Consolas, 'Courier New', monospace" font-size="15" fill="#a78bfa">▸ 子代理并行验证密钥与构建</text>
+    <text x="24" y="164" font-family="'Cascadia Code', Consolas, 'Courier New', monospace" font-size="15" fill="#34d399">✔ 已推送 GitHub · 扫描通过</text>
+  </g>
+
+  <!-- 左侧标题 -->
+  <text x="72" y="128" font-family="'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="72" font-weight="800" fill="#ffffff">Profer</text>
+  <text x="76" y="192" font-family="'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="26" font-weight="500" fill="#c7d2fe">General-purpose AI Agent Desktop App</text>
+
+  <!-- 特性标签 -->
+  <g font-family="'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600">
+    <rect x="76" y="226" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
+    <text x="136" y="248" text-anchor="middle" fill="#e0e7ff">Multi-model</text>
+    <rect x="208" y="226" width="128" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
+    <text x="272" y="248" text-anchor="middle" fill="#e0e7ff">Collab Agents</text>
+    <rect x="348" y="226" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
+    <text x="408" y="248" text-anchor="middle" fill="#e0e7ff">Automations</text>
+    <rect x="480" y="226" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
+    <text x="540" y="248" text-anchor="middle" fill="#e0e7ff">Tablet Remote</text>
+  </g>
+</svg>
