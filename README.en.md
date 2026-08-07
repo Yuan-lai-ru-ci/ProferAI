@@ -40,6 +40,12 @@ Profer is a local-first AI desktop app: **use Chat for simple questions, hand co
 
 ---
 
+## 📸 Screenshot
+
+<img src="./docs/assets/screenshots/profer-main-demo.png" alt="Profer main UI" width="100%" />
+
+---
+
 ## 🚀 Quick Start
 
 ### Download

@@ -40,6 +40,12 @@ Profer 是本地优先（local-first）的 AI 桌面应用：**简单问题用 C
 
 ---
 
+## 📸 界面预览
+
+<img src="./docs/assets/screenshots/profer-main-demo.png" alt="Profer 主界面" width="100%" />
+
+---
+
 ## 🚀 快速开始
 
 ### 下载安装
