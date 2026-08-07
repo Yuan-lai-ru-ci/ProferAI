@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { ChevronRight, Search, Undo2, X } from 'lucide-react'
+import { Box, ChevronRight, FolderSearch, Search, Undo2, X } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -13,6 +13,8 @@ import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { agentDiffUnseenFilesAtom, agentDiffDataAtom, agentSelectedWorktreeAtom } from '@/atoms/agent-atoms'
 import type { ChangedFileEntry, ChangeSource, UntrackedFileEntry, WorktreeInfo } from '@profer/shared'
 import { WorktreeSelector } from './WorktreeSelector'
+import { groupSessionFileChanges } from '@/lib/session-file-changes'
+import type { SessionFileChange } from '@/lib/session-file-changes'
 
 /** 按目录分组后的数据结构 */
 interface FileGroup {
@@ -47,6 +49,12 @@ interface DiffChangesListProps {
   workspaceSlug?: string
   /** 用于自动发现 worktree 的仓库候选路径 */
   worktreeRepoPaths?: string[]
+  /** 本会话在非 Git 目录中 Agent 成功写入的文件 */
+  nonGitFileChanges?: SessionFileChange[]
+  /** 当前 Agent run ID，用于将文件变更划分为本轮和更早 */
+  currentFileChangeRunId?: string
+  /** 点击非 Git 文件时打开纯文件预览 */
+  onPlainFileClick?: (filePath: string) => void
 }
 
 /** 文件来源 badge 的颜色和文案 */
@@ -68,6 +76,9 @@ export const DiffChangesList = React.memo(function DiffChangesList({
   extraPaths,
   workspaceSlug,
   worktreeRepoPaths,
+  nonGitFileChanges = [],
+  currentFileChangeRunId,
+  onPlainFileClick,
 }: DiffChangesListProps): React.ReactElement {
   // Worktree 选择状态（内联 WorktreeSelector）
   const selectedWorktreeMap = useAtomValue(agentSelectedWorktreeAtom)
@@ -205,6 +216,15 @@ export const DiffChangesList = React.memo(function DiffChangesList({
     return { fileGroups: result, matchedFilesCount: matched }
   }, [files, searchQuery])
 
+  // 非 Git 文件变更分组（按当前 runId 分为「本轮」和「更早」）
+  const nonGitFileGroups = React.useMemo(() => {
+    const filtered = searchQuery.toLowerCase().trim()
+      ? nonGitFileChanges.filter((f) => f.path.toLowerCase().includes(searchQuery.toLowerCase().trim()))
+      : nonGitFileChanges
+    return groupSessionFileChanges(filtered, currentFileChangeRunId)
+  }, [nonGitFileChanges, currentFileChangeRunId, searchQuery])
+  const hasNonGitChanges = nonGitFileGroups.current.length > 0 || nonGitFileGroups.earlier.length > 0
+
   const filteredUntrackedFiles = React.useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
     if (!q) return untrackedFiles
@@ -213,7 +233,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
 
   const isEmpty = fileGroups.length === 0 && filteredUntrackedFiles.length === 0
   const hasAnyChanges = files.length > 0 || untrackedFiles.length > 0
-  const shouldShowSearch = isGitRepo && (hasAnyChanges || searchQuery.length > 0)
+  const shouldShowSearch = (isGitRepo || hasNonGitChanges) && (hasAnyChanges || hasNonGitChanges || searchQuery.length > 0)
   const shouldShowWorktreeSelector = Boolean(workspaceSlug || (worktreeRepoPaths?.length ?? 0) > 0)
 
   return (
@@ -245,7 +265,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
             {searchQuery && (
               <>
                 <span className="text-[10px] text-muted-foreground/50 flex-shrink-0 tabular-nums">
-                  {matchedFilesCount + filteredUntrackedFiles.length}
+                  {matchedFilesCount + filteredUntrackedFiles.length + nonGitFileGroups.current.length + nonGitFileGroups.earlier.length}
                 </span>
                 <button
                   type="button"
@@ -261,9 +281,41 @@ export const DiffChangesList = React.memo(function DiffChangesList({
         </div>
       )}
 
-      {!isGitRepo && (
+      {!isGitRepo && !hasNonGitChanges && (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
           <p className="text-[12px] text-center">当前目录不是 Git 仓库</p>
+        </div>
+      )}
+      {!isGitRepo && hasNonGitChanges && (
+        <div className="flex flex-col">
+          {nonGitFileGroups.current.length > 0 && (
+            <div>
+              <div className="flex items-center px-2 py-2 text-[13px] font-medium text-muted-foreground border-b border-border/20">
+                本轮改动
+              </div>
+              {nonGitFileGroups.current.map((change) => (
+                <NonGitFileRow
+                  key={change.path}
+                  change={change}
+                  onClick={() => onPlainFileClick?.(change.path)}
+                />
+              ))}
+            </div>
+          )}
+          {nonGitFileGroups.earlier.length > 0 && (
+            <div>
+              <div className="flex items-center px-2 py-2 text-[13px] font-medium text-muted-foreground border-b border-border/20">
+                更早改动
+              </div>
+              {nonGitFileGroups.earlier.map((change) => (
+                <NonGitFileRow
+                  key={change.path}
+                  change={change}
+                  onClick={() => onPlainFileClick?.(change.path)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
       {isGitRepo && !hasAnyChanges && (
@@ -465,6 +517,48 @@ function UntrackedFileRow({
       </Tooltip>
       <span className="ml-1.5 rounded px-1 py-0.5 text-[12px] leading-none shrink-0 bg-amber-500/10 text-amber-500">
         新文件
+      </span>
+    </div>
+  )
+}
+
+/** 非 Git 项目文件变更行（Agent 写入的非 Git 目录文件） */
+function NonGitFileRow({
+  change,
+  onClick,
+}: {
+  change: SessionFileChange
+  onClick?: () => void
+}): React.ReactElement {
+  const parts = change.path.split('/')
+  const fileName = parts.pop()!
+  const dir = parts.join('/')
+  const isCreated = change.kind === 'created'
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className="flex items-center w-full px-2 pl-3 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
+      onClick={onClick}
+    >
+      <FileTypeIcon name={fileName} isDirectory={false} size={16} />
+      <Tooltip delayDuration={900}>
+        <TooltipTrigger asChild>
+          <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+            <span className="shrink-0">{fileName}</span>
+            {dir && (
+              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+            )}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-[400px] break-all">{change.path}</TooltipContent>
+      </Tooltip>
+      <span className={cn(
+        'ml-auto rounded px-1 py-0.5 text-[12px] leading-none shrink-0',
+        isCreated ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500',
+      )}>
+        {isCreated ? '新建' : '已编辑'}
       </span>
     </div>
   )

@@ -290,8 +290,10 @@ export interface AppSettings {
   autoLaunch?: boolean
   /** 是否在侧边栏显示论文知识库入口（默认 true） */
   paperKnowledgeBaseEnabled?: boolean
-  /** 是否启用局域网平板模式（试验版）；启动后自动恢复。 */
+  /** 是否启用局域网移动模式（试验版）；启动后自动恢复。 */
   tabletModeEnabled?: boolean
+  /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */
+  tabletModePort?: number
   /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
   agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
 }
@@ -316,6 +318,8 @@ export interface TabletModeStatus {
   enabled: boolean
   running: boolean
   port: number
+  /** 未显式配置时的默认端口（正式版 7788 / 开发版 7789），UI 用于显示“默认/自定义”状态 */
+  defaultPort: number
   localUrl: string | null
   lanUrl: string | null
   token: string | null
@@ -332,9 +336,11 @@ export const SETTINGS_IPC_CHANNELS = {
   /** 获取/设置开机自启动状态 */
   GET_AUTO_LAUNCH: 'settings:get-auto-launch',
   SET_AUTO_LAUNCH: 'settings:set-auto-launch',
-  /** 平板模式（试验版）运行时控制 */
+  /** 移动模式（试验版）运行时控制 */
   GET_TABLET_MODE_STATUS: 'settings:get-tablet-mode-status',
   SET_TABLET_MODE_ENABLED: 'settings:set-tablet-mode-enabled',
+  /** 设置移动模式服务端口（保存并热应用；服务运行时自动重启） */
+  SET_TABLET_MODE_PORT: 'settings:set-tablet-mode-port',
 } as const
 
 /** 自定义通知音 IPC 通道 */

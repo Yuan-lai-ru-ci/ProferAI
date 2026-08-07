@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * 验证平板 UI 构建产物完整性。
+ * 验证移动端 UI 构建产物完整性。
  * 在 build 链末尾调用，确保 dist/renderer/tablet/index.html 已由 vite 多入口产出，
  * 并且引用的入口 chunk 确实包含平板特有代码。
  *
  * 背景（2026-08-05 事故）：tablet/index.html 曾误写 <script src="/main.tsx">，
- * vite 把它解析成桌面入口，平板 UI 代码完全未打包，但旧校验只看 index.html 存在，
+ * vite 把它解析成桌面入口，移动端 UI 代码完全未打包，但旧校验只看 index.html 存在，
  * 导致平板页面一直加载桌面应用而无人发现。因此这里必须检查入口 chunk 内容特征。
  */
 const fs = require('fs')
@@ -20,10 +20,10 @@ const candidates = [
 
 const found = candidates.find((p) => fs.existsSync(p))
 if (!found) {
-  console.error('[verify:tablet] 未找到平板 UI 产物 index.html。请先运行 build:renderer。')
+  console.error('[verify:tablet] 未找到移动端 UI 产物 index.html。请先运行 build:renderer。')
   process.exit(1)
 }
-console.log(`[verify:tablet] 平板 UI 产物已就绪: ${found}`)
+console.log(`[verify:tablet] 移动端 UI 产物已就绪: ${found}`)
 
 // ---- 解析入口 chunk：<script type="module" crossorigin src="..."> ----
 const html = fs.readFileSync(found, 'utf-8')

@@ -3,6 +3,10 @@
  *
  * 特殊风格选择 + 主题模式切换（浅色/深色/跟随系统/特殊风格）。
  * 通过 Jotai atom 管理状态，持久化到 ~/.proma/settings.json。
+ *
+ * tabletMode（平板远程模式）：
+ *  - 界面大小只保留 100%～150% 四档（175%/200% 在平板上过度放大、挤压可视内容）
+ *  - 隐藏「Agent 预览展开方式」（平板无 MainArea/TabBar 渲染预览面板，且 WS 无 read_file，功能不可用）
  */
 
 import * as React from 'react'
@@ -191,7 +195,7 @@ const ZOOM_HINT = isMac
 // macOS 专属的 Dock 图标切换暂不对外展示；保留实现，后续可直接恢复。
 const SHOW_MACOS_SETTINGS = false
 
-export function AppearanceSettings(): React.ReactElement {
+export function AppearanceSettings({ tabletMode = false }: { tabletMode?: boolean }): React.ReactElement {
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
@@ -201,6 +205,11 @@ export function AppearanceSettings(): React.ReactElement {
   const isElectron = React.useMemo(() => navigator.userAgent.includes('Electron'), [])
   const [uiScale, setUiScale] = useAtom(uiScaleAtom)
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
+  // 平板端裁剪到 100%～150%（175%/200% 过度放大，触屏设备无意义）
+  const scaleOptions = React.useMemo(
+    () => (tabletMode ? UI_SCALE_OPTIONS.filter((o) => o.value !== 'massive' && o.value !== 'max') : UI_SCALE_OPTIONS),
+    [tabletMode],
+  )
 
   /** 切换主题模式 */
   const handleThemeChange = React.useCallback((value: string) => {
@@ -258,7 +267,7 @@ export function AppearanceSettings(): React.ReactElement {
           {/* 特殊风格 - 标签在上，卡片在下 */}
           <div className="px-4 py-3 space-y-2">
             <div className="text-sm font-medium text-foreground">特殊风格</div>
-            <div className="grid grid-cols-4 xl:grid-cols-8 gap-3">
+            <div className="tablet-special-grid grid grid-cols-4 xl:grid-cols-8 gap-3">
               {SPECIAL_STYLES.map((style) => (
                 <StyleCard
                   key={style.id}
@@ -281,7 +290,7 @@ export function AppearanceSettings(): React.ReactElement {
               description="整体等比缩放界面（触屏设备推荐 110% 或更大）"
               value={uiScale}
               onValueChange={handleUiScaleChange}
-              options={UI_SCALE_OPTIONS}
+              options={scaleOptions}
             />
           )}
 
@@ -293,13 +302,15 @@ export function AppearanceSettings(): React.ReactElement {
             options={MARKDOWN_FONT_SIZE_OPTIONS}
           />
 
-          <SettingsSegmentedControl
-            label="Agent 预览展开方式"
-            description="点击文件、工具结果「预览」按钮时的默认展开位置；拖拽预览 Tab 出标签栏可即时切换为侧边分屏"
-            value={previewModePref}
-            onValueChange={(v) => setPreviewModePref(v as PreviewModePreference)}
-            options={PREVIEW_MODE_OPTIONS}
-          />
+          {!tabletMode && (
+            <SettingsSegmentedControl
+              label="Agent 预览展开方式"
+              description="点击文件、工具结果「预览」按钮时的默认展开位置；拖拽预览 Tab 出标签栏可即时切换为侧边分屏"
+              value={previewModePref}
+              onValueChange={(v) => setPreviewModePref(v as PreviewModePreference)}
+              options={PREVIEW_MODE_OPTIONS}
+            />
+          )}
         </SettingsCard>
       </SettingsSection>
 

@@ -9,6 +9,7 @@
  * - htmlToMarkdown 转换
  * - IME composition 处理
  * - Enter 提交 / Shift+Enter 换行
+ * - tabletMode（触屏无 Shift 键）：Enter 换行，Ctrl/Cmd+Enter 或发送按钮提交
  * - 代码块内 Enter 换行例外
  * - 自动扩高
  */
@@ -115,7 +116,7 @@ interface RichTextInputProps {
   onHtmlChange?: (html: string) => void
   /** 是否使用 Cmd/Ctrl+Enter 发送（而非 Enter） */
   sendWithCmdEnter?: boolean
-  /** 平板模式：输入框压扁为单行高度（约 40px），减少触屏下输入区占用 */
+  /** 移动模式：输入框压扁为单行高度（约 40px），减少触屏下输入区占用 */
   tabletMode?: boolean
   className?: string
 }
@@ -482,7 +483,9 @@ export function RichTextInput({
           }
 
           // 判断是发送还是换行
-          const isSend = cmdEnterMode ? hasCmd : (!hasShift && !hasCmd)
+          // tabletMode：触屏软键盘没有 Shift 修饰键，普通 Enter 一律换行（拆分段/硬换行），
+          // 发送由发送按钮或 Ctrl/Cmd+Enter 承担；桌面模式保持 Enter 发送 / Shift+Enter 换行。
+          const isSend = tabletMode ? hasCmd : (cmdEnterMode ? hasCmd : (!hasShift && !hasCmd))
 
           if (isSend) {
             event.preventDefault()
@@ -644,15 +647,17 @@ export function RichTextInput({
     }
   }, [editor, placeholder])
 
-  // 自动聚焦：组件挂载时 + autoFocusTrigger 变化时
+  // 自动聚焦：组件挂载时 + autoFocusTrigger 变化时。
+  // 平板触屏禁用：切换 Agent/Chat 模式、打开会话都会重挂载输入框，自动聚焦会弹出软键盘；
+  // 触屏用户点击输入框时主动聚焦即可。
   useEffect(() => {
-    if (editor && !disabled) {
+    if (editor && !disabled && !tabletMode) {
       const timer = setTimeout(() => {
         editor.commands.focus()
       }, 100)
       return () => clearTimeout(timer)
     }
-  }, [editor, disabled, autoFocusTrigger])
+  }, [editor, disabled, autoFocusTrigger, tabletMode])
 
   // 语音输入回填：优先插入到当前编辑器的光标位置。
   useEffect(() => {

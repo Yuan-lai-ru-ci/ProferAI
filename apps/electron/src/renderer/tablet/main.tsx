@@ -15,8 +15,9 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
+import { createPortal } from 'react-dom'
 import { Provider, createStore, useSetAtom, useAtomValue } from 'jotai'
-import { Toaster } from 'sonner'
+import { Toaster, toast } from 'sonner'
 import '@fontsource-variable/inter/index.css'
 import '@/styles/globals.css'
 import { installElectronApiStub, setTabletRemoteClient, emitTabletAgentStreamEvent, emitTabletAgentStreamComplete, emitTabletChatStreamEvent, consumeTabletStoppedByUser } from './electronapi-stub'
@@ -35,14 +36,21 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { initTabletUiScale } from '@/atoms/ui-scale'
 import { UiScaleContainer } from '@/components/UiScaleContainer'
 import { Button } from '@/components/ui/button'
-import { TooltipProvider } from '@/components/ui/tooltip'
-import { Menu, Plus, Palette } from 'lucide-react'
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from '@/components/ui/alert-dialog'
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
+import { Menu, Plus, Palette, Link, Loader2, Bell } from 'lucide-react'
 import { isAgentCompatibleProvider, type ProviderType, type AgentStreamPayload } from '@profer/shared'
+import { tabletConnectionStatusAtom, tabletNotifyCompleteAtom, tabletUnbindRequestAtom } from '@/atoms/tablet-settings'
 
 // ===== 先安装 electronAPI stub（必须在任何复用组件求值前）=====
 installElectronApiStub()
 
-// ===== 平板模式标记：Portal 到 body 的组件（设置弹窗等）需要 CSS 定向（竖屏差异化布局）=====
+// ===== Capacitor 原生 App 环境检测 =====
+// App 内 WebView 沉浸式全屏，系统状态栏（通知栏）会盖住顶部内容；浏览器模式 env() 为 0 无需处理。
+const isNativeApp = typeof window !== 'undefined' && !!((window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.())
+const SAFE_AREA_CLS = isNativeApp ? 'tablet-safe-area' : ''
+
+// ===== 移动模式标记：Portal 到 body 的组件（设置弹窗等）需要 CSS 定向（竖屏差异化布局）=====
 if (typeof document !== 'undefined') {
   document.body.classList.add('tablet-mode')
 }
@@ -55,6 +63,26 @@ function storeToken(t: string): void { localStorage.setItem('profer-remote-token
 // 无法像浏览器场景那样从页面来源自动推导电脑 IP；显式配置后覆盖 defaultWsUrl）=====
 function getStoredServerUrl(): string { return localStorage.getItem('profer-remote-server') || '' }
 function storeServerUrl(u: string): void { u ? localStorage.setItem('profer-remote-server', u) : localStorage.removeItem('profer-remote-server') }
+
+// ===== 上次视图存取（整页重载 / 断线重连后恢复现场）=====
+// 进程被系统回收或断线重连后，内存态（当前会话/模式）丢失；记录最近打开的视图，
+// 连接就绪后优先恢复，避免每次都回到第一个会话。
+function getLastView(): { mode: 'agent' | 'chat'; sessionId?: string; conversationId?: string } | null {
+  try {
+    const raw = localStorage.getItem('profer-remote-last-view')
+    if (!raw) return null
+    const v = JSON.parse(raw) as { mode?: string; sessionId?: string; conversationId?: string }
+    if (v.mode !== 'agent' && v.mode !== 'chat') return null
+    return v as { mode: 'agent' | 'chat'; sessionId?: string; conversationId?: string }
+  } catch { /* ignore */ }
+  return null
+}
+function saveLastView(v: { mode: 'agent' | 'chat'; sessionId?: string; conversationId?: string }): void {
+  try { localStorage.setItem('profer-remote-last-view', JSON.stringify(v)) } catch { /* ignore */ }
+}
+function clearLastView(): void {
+  try { localStorage.removeItem('profer-remote-last-view') } catch { /* ignore */ }
+}
 
 /**
  * 规范化服务器地址为 WS URL。支持输入形式：
@@ -78,7 +106,7 @@ function normalizeWsUrl(raw: string): string | null {
 
 // ===== 类型 =====
 interface ChannelInfo { id: string; name: string; provider: string; models: { id: string; name: string }[] }
-interface SessionInfo { id: string; title: string; channelId?: string; modelId?: string; workspaceId?: string; agentRuntime?: 'claude' | 'pi'; permissionMode?: string; active: boolean; updatedAt?: number }
+interface SessionInfo { id: string; title: string; channelId?: string; modelId?: string; workspaceId?: string; agentRuntime?: 'claude' | 'pi'; permissionMode?: string; active: boolean; createdAt?: number; updatedAt?: number; pinned?: boolean; archived?: boolean; draft?: boolean }
 
 const tabletStore = createStore()
 
@@ -86,12 +114,41 @@ const tabletStore = createStore()
 // 必须在渲染前写入 tabletStore 的 uiScaleAtom（atom 默认值在模块加载时已固定）
 initTabletUiScale(tabletStore)
 
-// ===== 平板设置系统：直接搬运桌面 SettingsDialog，tab 白名单只保留平板可用的「外观」=====
-// （主题/界面大小/Markdown 字号均为本地持久化，不依赖 Electron IPC；其余 tab 大量依赖
-// electronAPI 能力，在平板上会显示空壳/伪状态，故不暴露）
+// ===== 平板设置系统：直接搬运桌面 SettingsDialog，tab 白名单只保留平板可用的「连接 / 外观 / 通知」=====
+// （连接/通知为本设备本地能力：localStorage + WS 状态，不依赖 Electron IPC；外观全部本地持久化。
+// 其余 tab 大量依赖 electronAPI 能力，在平板上会显示空壳/伪状态，故不暴露）
 const TABLET_SETTINGS_TABS: SettingsTabItem[] = [
+  { id: 'connection', label: '连接', icon: <Link size={16} /> },
   { id: 'appearance', label: '外观设置', icon: <Palette size={16} /> },
+  { id: 'notifications', label: '通知', icon: <Bell size={16} /> },
 ]
+
+// ===== Agent 完成提醒音（Web Audio API 合成，零插件依赖，浏览器与 Capacitor WebView 通用）=====
+let tabletChimeCtx: AudioContext | null = null
+function playTabletCompleteChime(): void {
+  try {
+    const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctor) return
+    tabletChimeCtx = tabletChimeCtx ?? new Ctor()
+    const ctx = tabletChimeCtx
+    if (ctx.state === 'suspended') void ctx.resume()
+    const now = ctx.currentTime
+    // 双音短促提示（E5 → A5，各 350ms），音量 0.22 不刺耳
+    ;[659.25, 880].forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      const t0 = now + i * 0.12
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0.0001, t0)
+      gain.gain.exponentialRampToValueAtTime(0.22, t0 + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t0)
+      osc.stop(t0 + 0.4)
+    })
+  } catch { /* 忽略：设备不支持音频时静默 */ }
+}
 
 // ===== 停止超时兜底 =====
 // 点击停止后若 10s 内没有 run_idle 确认（SDK abort 延迟 / 事件丢失 / 会话本就不 active 被 stop 守卫跳过），
@@ -164,8 +221,8 @@ function App(): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const clientRef = useRef<WsClient | null>(null)
 
-  // 界面状态
-  const [connection, setConnection] = useState<'idle' | 'connecting' | 'open' | 'error'>('idle')
+  // 界面状态：reconnecting = 已绑定但断线，保持主界面 + 横幅自动重连（不再回登录页“重新校验”）
+  const [connection, setConnection] = useState<'idle' | 'connecting' | 'open' | 'reconnecting' | 'error' | 'unauthorized'>('idle')
   const [errMsg, setErrMsg] = useState<string | undefined>(undefined)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
@@ -173,6 +230,9 @@ function App(): React.ReactElement {
   const [currentTitle, setCurrentTitle] = useState('')
   // 窄屏时侧栏以抽屉承载；宽屏保持与原生工作台一致的左侧导航。
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // 解绑确认弹窗：解绑 = 清除本机保存的服务器地址/令牌并断开连接，回到连接页
+  const [unbindConfirmOpen, setUnbindConfirmOpen] = useState(false)
+  const hasStoredBinding = Boolean(getStoredToken() || getStoredServerUrl())
   // 横屏且 ≥1024px 时使用固定侧栏布局（landscape:min-[1024px]）；竖屏/小屏走抽屉+顶栏。
   // 竖屏时标题由顶栏承担（AgentHeader 隐藏），横屏时 AgentHeader 自带标题。
   const [landscapeWide, setLandscapeWide] = useState(() => window.matchMedia('(orientation: landscape) and (min-width: 1024px)').matches)
@@ -181,6 +241,22 @@ function App(): React.ReactElement {
     const onChange = (): void => setLandscapeWide(mq.matches)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
+  }, [])
+
+  // 浮动顶栏的视觉视口偏移跟踪：键盘弹起/浏览器滚动导致 visualViewport 相对布局视口偏移时
+  // （offsetTop > 0），顶栏 top 同步跟随，保证始终锚定在用户可视区域顶部。
+  const [visualTop, setVisualTop] = useState(0)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = (): void => setVisualTop(vv.offsetTop)
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
   }, [])
 
   // ===== WS 管理 =====
@@ -196,6 +272,14 @@ function App(): React.ReactElement {
           void loadChannels(client)
           void loadSessions(client)
           void loadConversations(client)
+        } else if (status === 'unauthorized') {
+          // token 无效：服务端已拒绝对话且客户端已停止自动重连，停留登录页提示用户重新输入
+          setConnection('unauthorized')
+          setErrMsg('访问令牌无效或已失效，请查看电脑端启动日志中的 Token 后重新输入')
+        } else if (status === 'closed') {
+          // 断线（后台冻结/网络变化）：已绑定场景保持主界面，横幅提示自动重连；
+          // 不再切回登录页，避免用户误以为需要重新输入 token
+          setConnection('reconnecting')
         } else if (status === 'error') setConnection('error')
         else setConnection('connecting')
       },
@@ -237,6 +321,18 @@ function App(): React.ReactElement {
       const data = await client.listSessions() as SessionInfo[]
       if (!Array.isArray(data)) return
 
+      // 字段兜底：服务端列表为脱敏形状，若旧版服务端缺 createdAt/updatedAt 等字段，
+      // 补齐默认值后再喂给桌面组件（LeftSidebar 分组/排序/树形导航依赖这些字段，
+      // 缺失时可能引发读取 undefined 属性崩溃）。
+      const normalizedSessions: SessionInfo[] = data.map((s) => ({
+        ...s,
+        createdAt: s.createdAt ?? 0,
+        updatedAt: s.updatedAt ?? s.createdAt ?? 0,
+        pinned: s.pinned ?? false,
+        archived: s.archived ?? false,
+        draft: s.draft ?? false,
+      }))
+
       // 平板版暂时隐藏团队版功能：先拉工作区列表识别团队工作区（type === 'team'），
       // 其工作区与会话整体排除——项目分组、置顶、最近、归档列表都不会出现团队内容。
       let teamWorkspaceIds = new Set<string>()
@@ -261,7 +357,7 @@ function App(): React.ReactElement {
         }
       } catch { /* 服务端不支持，走归纳回退 */ }
 
-      const personalSessions = data.filter((s) => !teamWorkspaceIds.has(s.workspaceId ?? ''))
+      const personalSessions = normalizedSessions.filter((s) => !teamWorkspaceIds.has(s.workspaceId ?? ''))
       setSessions(personalSessions)
       // 原生 LeftSidebar 直接读取这些 atoms；平板只替换数据传输层。
       setNativeSessions(personalSessions as never)
@@ -318,6 +414,7 @@ function App(): React.ReactElement {
     setNativeSessionId(sessionId)
     setNativeAppMode('agent')
     setCurrentTitle(title || '')
+    saveLastView({ mode: 'agent', sessionId })
   }, [setNativeSessionId, setNativeAppMode])
 
   /** 打开 Chat 对话：ChatView 自行加载消息与流式状态，平板只切换 conversationId 与模式 */
@@ -327,6 +424,7 @@ function App(): React.ReactElement {
     setNativeConversationId(conversationId)
     setNativeAppMode('chat')
     setCurrentTitle(title || '')
+    saveLastView({ mode: 'chat', conversationId })
   }, [setNativeConversationId, setNativeAppMode])
 
   useEffect(() => {
@@ -350,13 +448,8 @@ function App(): React.ReactElement {
     }
   }, [nativeConversationId, currentChatId, conversations, openChatConversation])
 
-  // Chat 模式下刷新后恢复最近对话（appMode 持久化可能停在 chat，此时 conversationId 为空）
-  useEffect(() => {
-    if (connection === 'open' && appMode === 'chat' && !currentChatId) {
-      const first = conversations.find((c) => !c.archived)
-      if (first) openChatConversation(first.id, first.title)
-    }
-  }, [connection, appMode, currentChatId, conversations, openChatConversation])
+  // Chat 模式下刷新后恢复最近对话 → 已合并到下方“恢复上次视图” effect
+  // （appMode 持久化可能停在 chat，此时 conversationId 为空，由恢复逻辑统一处理）
 
   // 顶栏标题：优先实时取列表最新标题（标题可被重命名/Agent 自动更新；Chat 对话同理）
   const activeTitle = appMode === 'chat'
@@ -375,12 +468,19 @@ function App(): React.ReactElement {
       // 桥接桌面 STREAM_COMPLETE：useGlobalAgentListeners 只有它会把 running 置 false
       // （桌面由 IPC 送达；平板 WS 无此消息，必须由 run_idle 事件代理触发），
       // 否则 streaming 状态永不结束 → 停止按钮永不消失。
+      const stoppedByUser = consumeTabletStoppedByUser(evt.sessionId)
       emitTabletAgentStreamComplete({
         sessionId: evt.sessionId,
         messages: [],
-        stoppedByUser: consumeTabletStoppedByUser(evt.sessionId),
+        stoppedByUser,
         startedAt: Date.now(),
       })
+      // Agent 完成提醒音：开关开启、非用户主动停止、且完成会话不是当前正在查看的会话
+      // （自己盯着屏幕看时不需要提醒；正在看其他会话 / Chat 模式时值得提示）
+      if (!stoppedByUser && tabletStore.get(tabletNotifyCompleteAtom)) {
+        const viewingId = tabletStore.get(currentAgentSessionIdAtom)
+        if (viewingId !== evt.sessionId) playTabletCompleteChime()
+      }
       // 会话已空闲：撤销该会话的停止超时兜底定时器
       const timer = pendingStopTimers.get(evt.sessionId)
       if (timer) { clearTimeout(timer); pendingStopTimers.delete(evt.sessionId) }
@@ -426,31 +526,89 @@ function App(): React.ReactElement {
     setTimeout(() => connect(t, serverInput), 0)
   }, [tokenInput, serverInput, connect])
 
-  const logout = useCallback(() => {
+  /** 解绑：断开连接并清除本机保存的服务器地址与访问令牌，回到连接页重新绑定 */
+  const unbind = useCallback(() => {
     clientRef.current?.disconnect()
     localStorage.removeItem('profer-remote-token')
     localStorage.removeItem('profer-remote-server')
-    setConnection('idle'); setSessions([]); setCurrentSessionId(null)
+    clearLastView()
+    setConnection('idle'); setSessions([]); setCurrentSessionId(null); setCurrentChatId(null)
     setTokenInput('')
     setServerInput('')
+    setSidebarOpen(false)
+    toast.success('已解绑此设备，可重新输入服务器地址与访问令牌')
   }, [])
+
+  // 连接状态同步到设置页 atom（「连接」tab 的状态徽标）
+  useEffect(() => {
+    tabletStore.set(tabletConnectionStatusAtom, connection)
+  }, [connection])
+
+  // 设置页「解绑此设备」请求：计数变化时执行完整解绑流程（弹窗确认已在设置页内完成）
+  const unbindRequestCount = useAtomValue(tabletUnbindRequestAtom)
+  useEffect(() => {
+    if (unbindRequestCount > 0) unbind()
+  }, [unbindRequestCount, unbind])
 
   // 初次挂载自动连接（App 场景用已存的显式服务器地址）
   useEffect(() => {
     if (getStoredToken()) {
       setConnection('connecting')
-      setTimeout(() => connect(getStoredToken(), getStoredServerUrl()), 0)
+      const t = setTimeout(() => connect(getStoredToken(), getStoredServerUrl()), 0)
+      // 卸载时清理：开发 StrictMode 双挂载/页面销毁时断开，避免残留连接
+      return () => { clearTimeout(t); clientRef.current?.disconnect() }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 首次连入后自动打开最近会话；没有会话时保持空状态。
+  // ===== 连接就绪后恢复上次视图（整页重载 / 断线重连 / 冷启动都回到上次位置）=====
+  // 优先 last-view 记录（含模式与会话 ID）；记录缺失或目标已不存在时按持久化 appMode 兜底
+  // （chat → 最近非归档对话；agent → 第一个会话），并接管原“首次连入自动打开第一个会话”逻辑。
   useEffect(() => {
-    const client = clientRef.current
-    if (connection === 'open' && !currentSessionId && sessions[0] && client?.isOpen()) {
-      void openSession(sessions[0].id, sessions[0].title)
+    if (connection !== 'open') return
+    if (currentSessionId || currentChatId) return
+    const last = getLastView()
+    if (last?.mode === 'chat') {
+      const conv = last.conversationId ? conversations.find((c) => c.id === last.conversationId) : undefined
+      if (conv) { openChatConversation(conv.id, conv.title); return }
+      const first = conversations.find((c) => !c.archived)
+      if (first) { openChatConversation(first.id, first.title); return }
     }
-  }, [connection, currentSessionId, sessions, openSession])
+    if (last?.mode === 'agent') {
+      const s = last.sessionId ? sessions.find((x) => x.id === last.sessionId) : undefined
+      if (s) { void openSession(s.id, s.title); return }
+      if (sessions[0]) { void openSession(sessions[0].id, sessions[0].title); return }
+    }
+    // 无记录：按持久化 appMode 兜底
+    if (appMode === 'chat') {
+      const first = conversations.find((c) => !c.archived)
+      if (first) { openChatConversation(first.id, first.title); return }
+    }
+    if (sessions[0]) void openSession(sessions[0].id, sessions[0].title)
+  }, [connection, currentSessionId, currentChatId, sessions, conversations, appMode, openSession, openChatConversation])
+
+  // ===== 前后台切换：恢复前台时立即检测/重连 WebSocket =====
+  // Android 后台可能冻结 WebView、网络休眠导致 WS 失效；恢复前台主动检查，
+  // 已断则立即重连（不等 2s 定时器），仍连则 reconnectNow 内部 no-op，完全无感。
+  useEffect(() => {
+    const onVisibility = (): void => {
+      if (document.hidden) return
+      clientRef.current?.reconnectNow()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    // Capacitor App 插件（若已安装 @capacitor/app）：原生 resume 事件同样兜底
+    const appPlugin = (window as unknown as {
+      Capacitor?: { Plugins?: { App?: { addListener: (event: string, cb: () => void) => Promise<{ remove: () => void }> } } }
+    })?.Capacitor?.Plugins?.App
+    let resumeHandle: { remove: () => void } | null = null
+    if (appPlugin?.addListener) {
+      void appPlugin.addListener('resume', () => clientRef.current?.reconnectNow()).then((h) => { resumeHandle = h })
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      resumeHandle?.remove()
+    }
+  }, [])
 
   // 抽屉遵循原生弹层习惯：Escape 可立即返回工作区。
   useEffect(() => {
@@ -462,10 +620,19 @@ function App(): React.ReactElement {
   }, [])
 
   // ============ 渲染 ============
-  if (connection !== 'open') {
-    // 未连接：token 页
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-background text-foreground p-6">
+  // 登录页只在两种情况下出现：未绑定（从未输入过 token / 已解绑）或 token 被服务端拒绝（4001）。
+  // 已绑定但断线（closed/connecting/error）→ 保持主界面 + 顶部横幅提示自动重连，不再“重新校验”。
+  const showLogin = connection === 'unauthorized' || !hasStoredBinding
+  const reconnectBannerText = connection === 'error'
+    ? '连接失败，正在自动重连…'
+    : connection === 'reconnecting'
+      ? '连接已断开，正在重连…'
+      : '正在连接…'
+  return (
+    <>
+      {showLogin ? (
+        // 未连接：token 页
+        <div className={`flex h-full w-full items-center justify-center bg-background text-foreground p-6 ${SAFE_AREA_CLS}`}>
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-1.5">
             <div className="text-xl font-semibold italic tracking-tight">Profer</div>
@@ -488,29 +655,79 @@ function App(): React.ReactElement {
           <button onClick={submitToken} className="w-full rounded-lg bg-primary text-primary-foreground py-3 text-sm font-medium active:scale-[0.98] transition">
             {connection === 'connecting' ? '连接中…' : '连接'}
           </button>
+          {hasStoredBinding && (
+            <div className="space-y-2">
+              {/* 已绑定状态指示：明确当前并非“未连接”，而是已保存绑定信息 */}
+              <div className="flex items-center justify-center gap-1.5 text-[12px] text-muted-foreground">
+                <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden />
+                <span className="truncate">
+                  已绑定{getStoredServerUrl() ? `：${getStoredServerUrl()}` : '（自动地址）'}
+                </span>
+              </div>
+              <button
+              type="button"
+              onClick={() => setUnbindConfirmOpen(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border py-2 text-[12px] text-foreground/70 hover:text-destructive hover:border-destructive/40 transition-colors"
+            >
+              <Link className="size-3.5" />
+              解绑并重新连接
+            </button>
+            </div>
+          )}
         </div>
       </div>
-    )
-  }
+      ) : (
+        <>
+        {/* 断线重连横幅：已绑定场景切屏回来若 WS 已断，主界面不消失，顶部横幅提示自动重连；
+            连接恢复后横幅自动消失。Portal 到 body 避开 UiScaleContainer 的 transform。 */}
+        {connection !== 'open' && createPortal(
+          <div
+            className="fixed inset-x-0 z-40 flex justify-center px-4"
+            style={{ top: `calc(${visualTop}px + ${landscapeWide ? '12px' : '60px'} + env(safe-area-inset-top))` }}
+          >
+            <div className="pointer-events-auto flex items-center gap-2 rounded-full bg-amber-500/95 px-4 py-1.5 text-[12px] font-medium text-white shadow-lg">
+              <Loader2 className="size-3.5 animate-spin" />
+              <span>{reconnectBannerText}</span>
+            </div>
+          </div>,
+          document.body
+        )}
+        {/* 已连接：桌面式布局（左侧会话栏 + 主区，无右侧栏；对话区整体复用桌面 AgentView）。
+            断点约定：横屏且 ≥1024px 显示固定侧栏（iPad 横屏/桌面浏览器）；其余一律抽屉+顶栏——
+            竖屏不管宽度（含 iPad Pro 12.9" 竖屏 1024px）都走抽屉，避免固定侧栏挤压对话区。 */}
+        {/* 浮动顶栏（竖屏/窄屏；横屏固定侧栏布局由 AgentHeader 自带标题）。
+            Portal 到 body 是关键：UiScaleContainer 的 transform 是定位 containing block，
+            顶栏若渲染在容器内，fixed 会退化为相对容器定位，键盘弹起触发文档滚动时被顶出屏幕；
+            Portal 后 fixed 相对视口 + visualViewport.offsetTop 驱动，永远锚定可视区域顶部，
+            键盘弹起/滚动都不影响。 */}
+        {!landscapeWide && createPortal(
+          <div
+            className="fixed inset-x-0 z-30 flex h-12 items-center bg-tabbar-surface/90 px-2 backdrop-blur-md"
+            style={{ top: `calc(${visualTop}px + env(safe-area-inset-top))` }}
+          >
+            <Button type="button" variant="ghost" size="icon" onClick={() => setSidebarOpen(true)} className="mr-1 size-10 shrink-0 rounded-[12px] text-foreground/65 hover:bg-foreground/[0.06]" aria-label="打开导航"><Menu className="size-[18px]" /></Button>
+            <div className="flex-1 min-w-0 px-1">
+              <span className="block truncate text-sm font-medium text-foreground">{activeTitle}</span>
+            </div>
+            {/* 顶栏解绑入口：Link 图标 + 绿色状态点表示“已绑定”，避免 Unlink（断链图标）被误读为未连接 */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button type="button" variant="ghost" size="icon" onClick={() => setUnbindConfirmOpen(true)} className="relative size-10 shrink-0 rounded-[12px] text-foreground/65 hover:bg-foreground/[0.06]" aria-label="已绑定，点击解绑">
+                  <Link className="size-[18px]" />
+                  <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-emerald-500" aria-hidden />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">已绑定 · 点击解绑</TooltipContent>
+            </Tooltip>
+          </div>,
+          document.body
+        )}
 
-  // 已连接：桌面式布局（左侧会话栏 + 主区，无右侧栏；对话区整体复用桌面 AgentView）
-  // 断点约定：横屏且 ≥1024px 显示固定侧栏（iPad 横屏/桌面浏览器）；其余一律抽屉+顶栏——
-  // 竖屏不管宽度（含 iPad Pro 12.9" 竖屏 1024px）都走抽屉，避免固定侧栏挤压对话区。
-  return (
-    <div className="tablet-app-root flex h-full w-full overflow-hidden bg-background p-0 text-foreground landscape:min-[1024px]:p-2">
+        <div className={`tablet-app-root flex h-full w-full overflow-hidden bg-background p-0 text-foreground landscape:min-[1024px]:p-2 ${SAFE_AREA_CLS}`}>
       <NativeTabletSidebar mobileOpen={sidebarOpen} onDismiss={() => setSidebarOpen(false)} />
 
-      {/* 主区 */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-content-area landscape:min-[1024px]:ml-2 landscape:min-[1024px]:rounded-[24px] landscape:min-[1024px]:border landscape:min-[1024px]:border-border/70 landscape:min-[1024px]:shadow-xl">
-        {/* 顶栏（非固定侧栏布局时显示）：汉堡 + 当前会话标题（标题由外部承担，AgentView 隐藏 AgentHeader）；
-            横屏固定侧栏布局无顶栏，标题由 AgentHeader 自带。 */}
-        <div className="flex h-12 shrink-0 items-center border-b border-border bg-tabbar-surface px-2 landscape:min-[1024px]:hidden">
-          <Button type="button" variant="ghost" size="icon" onClick={() => setSidebarOpen(true)} className="mr-1 size-10 shrink-0 rounded-[12px] text-foreground/65 hover:bg-foreground/[0.06]" aria-label="打开导航"><Menu className="size-[18px]" /></Button>
-          <div className="flex-1 min-w-0 px-1">
-            <span className="block truncate text-sm font-medium text-foreground">{activeTitle}</span>
-          </div>
-        </div>
-
+      {/* 主区（竖屏 pt-12 为浮动顶栏预留高度，滚动内容从悬浮条下方穿过；横屏无顶栏不需要） */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-content-area pt-12 landscape:min-[1024px]:pt-0 landscape:min-[1024px]:ml-2 landscape:min-[1024px]:rounded-[24px] landscape:min-[1024px]:border landscape:min-[1024px]:border-border/70 landscape:min-[1024px]:shadow-xl">
         {/* 对话区：完整复用桌面 AgentView / ChatView。
             注意：必须是 flex 容器（flex flex-col）——AgentView 根是 flex-1，StickToBottom 滚动容器是
             height:100%，依赖整条父链的高度约束；若此处是普通块级元素，滚动容器被内容撑开后溢出，
@@ -543,7 +760,26 @@ function App(): React.ReactElement {
           )}
         </div>
       </div>
-    </div>
+        </div>
+        </>
+      )}
+
+      {/* 解绑确认弹窗（Portal 到 body，不随缩放容器变换） */}
+      <AlertDialog open={unbindConfirmOpen} onOpenChange={setUnbindConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>解绑此设备？</AlertDialogTitle>
+            <AlertDialogDescription>
+              解绑后将清除本机保存的服务器地址和访问令牌，断开当前连接并回到连接页，需要重新输入才能继续使用。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={unbind}>确认解绑</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -554,7 +790,7 @@ function NativeTabletSidebar({ mobileOpen, onDismiss }: { mobileOpen: boolean; o
       <div className="hidden h-full shrink-0 landscape:min-[1024px]:block"><LeftSidebar width={288} tabletMode /></div>
       <div className={`fixed inset-0 z-50 landscape:min-[1024px]:hidden ${mobileOpen ? 'pointer-events-auto' : 'pointer-events-none'}`} aria-hidden={!mobileOpen}>
         <button type="button" className={`absolute inset-0 z-0 bg-black/40 transition-opacity duration-200 ${mobileOpen ? 'opacity-100' : 'opacity-0'}`} onClick={onDismiss} aria-label="关闭会话导航" tabIndex={mobileOpen ? 0 : -1} />
-        <div className={`absolute inset-y-0 left-0 z-10 touch-pan-y transition-transform duration-200 ease-out ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className={`absolute inset-y-0 left-0 z-10 touch-pan-y transition-transform duration-200 ease-out ${SAFE_AREA_CLS} ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
           <LeftSidebar width={288} tabletMode />
         </div>
       </div>
@@ -569,7 +805,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>,
 )
 
-// ===== 全局错误捕获：便于定位 =====
+// ===== 全局错误捕获：便于定位（仅开发模式；生产环境不显示红色错误横幅） =====
 type ErrInfo = { msg: string; stack?: string }
 const errs: ErrInfo[] = []
 function renderErrBanner(): void {
@@ -581,11 +817,13 @@ function renderErrBanner(): void {
     el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;padding:10px;font:12px monospace;max-height:40vh;overflow:auto;white-space:pre-wrap;word-break:break-all;'
     document.body.appendChild(el)
   }
-  el.textContent = '[平板 UI 运行错误]\n' + errs.map((e, i) => `${i}. ${e.msg}${e.stack ? '\n' + e.stack.slice(0, 400) : ''}`).join('\n\n')
+  el.textContent = '[移动端 UI 运行错误]\n' + errs.map((e, i) => `${i}. ${e.msg}${e.stack ? '\n' + e.stack.slice(0, 400) : ''}`).join('\n\n')
 }
-window.addEventListener('error', (ev) => { errs.push({ msg: ev.message || 'unknown', stack: ev.error?.stack }); renderErrBanner() })
-window.addEventListener('unhandledrejection', (ev) => {
-  const r = ev.reason
-  const msg = r && typeof r === 'object' && 'message' in r ? String((r as { message: unknown }).message) : String(r)
-  errs.push({ msg: 'UnhandledRejection: ' + msg }); renderErrBanner()
-})
+if (import.meta.env.DEV) {
+  window.addEventListener('error', (ev) => { errs.push({ msg: ev.message || 'unknown', stack: ev.error?.stack }); renderErrBanner() })
+  window.addEventListener('unhandledrejection', (ev) => {
+    const r = ev.reason
+    const msg = r && typeof r === 'object' && 'message' in r ? String((r as { message: unknown }).message) : String(r)
+    errs.push({ msg: 'UnhandledRejection: ' + msg }); renderErrBanner()
+  })
+}

@@ -608,7 +608,9 @@ async function bootstrap(): Promise<void> {
   // Register IPC handlers
   registerIpcHandlers()
 
-  // 平板版远程服务：显式启动参数兼容保留，设置页开启后下次启动自动恢复。
+  // 平板版远程服务：显式启动参数（--tablet / PROFER_REMOTE=1）兼容保留；
+  // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
+  // 开发版默认端口 7789、正式版 7788，端口已隔离，dev 与打包版并存不会互相抢占。
   safeRun('startRemoteService', () => {
     if (getSettings().tabletModeEnabled === true) {
       setRemoteServiceEnabled(true)

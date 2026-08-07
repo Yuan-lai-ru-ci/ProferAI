@@ -2110,6 +2110,8 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
             <TooltipContent side="right">搜索</TooltipContent>
           </Tooltip>
 
+          {/* 规划中心入口：平板版隐藏（无规划中心能力），与展开态保持一致 */}
+          {!tabletMode && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -2143,8 +2145,10 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
               规划中心（{automationCount} 个定时任务）
             </TooltipContent>
           </Tooltip>
+          )}
 
-          {mode === 'agent' && (
+          {/* Agent 技能入口：平板版隐藏（无 Agent 技能能力），与展开态保持一致 */}
+          {mode === 'agent' && !tabletMode && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -2310,17 +2314,19 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
         </Tooltip>
       </div>
 
-      {/* 自动任务入口：作为任务中心入口放在置顶区上方，不参与置顶列表层级。 */}
-      <div className="px-3 pt-2 pb-0.5">
-        <AutomationSidebarEntry
-          count={automationCount}
-          active={activeView === 'planning'}
-          onClick={handleOpenAutomations}
-        />
-      </div>
+      {/* 自动任务入口：作为任务中心入口放在置顶区上方，不参与置顶列表层级。平板版隐藏（无规划中心能力） */}
+      {!tabletMode && (
+        <div className="px-3 pt-2 pb-0.5">
+          <AutomationSidebarEntry
+            count={automationCount}
+            active={activeView === 'planning'}
+            onClick={handleOpenAutomations}
+          />
+        </div>
+      )}
 
-      {/* Agent 技能入口：Skills / MCP 能力中心，仅 Agent 模式可见 */}
-      {mode === 'agent' && (
+      {/* Agent 技能入口：Skills / MCP 能力中心，仅 Agent 模式可见；平板版隐藏 */}
+      {mode === 'agent' && !tabletMode && (
         <div className="px-3 pb-0.5">
           <SkillsSidebarEntry
             count={capabilities?.skills.length ?? 0}

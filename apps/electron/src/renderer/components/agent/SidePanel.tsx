@@ -32,6 +32,8 @@ import {
   workspaceAttachedFilesMapAtom,
   agentPendingFilesAtomFamily,
   agentDiffRefreshVersionAtom,
+  agentNonGitFileChangesAtom,
+  agentFileChangesCurrentRunAtom,
   fileBrowserAutoRevealAtom,
   agentSelectedWorktreeAtom,
 } from '@/atoms/agent-atoms'
@@ -134,6 +136,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
   const diffRefreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
   const diffRefreshVersion = diffRefreshVersionMap.get(sessionId) ?? 0
+  const nonGitFileChangesMap = useAtomValue(agentNonGitFileChangesAtom)
+  const nonGitFileChanges = nonGitFileChangesMap.get(sessionId) ?? []
+  const fileChangesCurrentRunMap = useAtomValue(agentFileChangesCurrentRunAtom)
+  const fileChangesCurrentRunId = fileChangesCurrentRunMap.get(sessionId)
   const hasFileChanges = filesVersion > 0
 
   // 派生当前工作区信息
@@ -456,6 +462,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                 onFileClick={handleDiffFileClick}
                 workspaceSlug={workspaceSlug || undefined}
                 worktreeRepoPaths={worktreeRepoPathsMemo}
+                nonGitFileChanges={nonGitFileChanges}
+                currentFileChangeRunId={fileChangesCurrentRunId}
+                onPlainFileClick={handleFilePreview}
               />
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>

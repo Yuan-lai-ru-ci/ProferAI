@@ -61,7 +61,7 @@ const PLATFORMS: readonly BotPlatformDef[] = [
   },
   {
     id: 'tablet',
-    name: '平板模式（试验版）',
+    name: '移动模式（试验版）',
     iconChar: '▣',
     iconBgClass: 'bg-violet-500/15',
     iconTextClass: 'text-violet-600',

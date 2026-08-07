@@ -417,10 +417,12 @@ export interface ElectronAPI {
   /** 同步更新应用设置（用于 beforeunload 场景） */
   updateSettingsSync: (updates: Partial<AppSettings>) => boolean
 
-  /** 获取平板模式（试验版）状态与连接信息 */
+  /** 获取移动模式（试验版）状态与连接信息 */
   getTabletModeStatus: () => Promise<TabletModeStatus>
-  /** 启用或关闭平板模式（试验版） */
+  /** 启用或关闭移动模式（试验版） */
   setTabletModeEnabled: (enabled: boolean) => Promise<TabletModeStatus>
+  /** 设置移动模式服务端口（保存并热应用，服务运行中自动重启） */
+  setTabletModePort: (port: number) => Promise<TabletModeStatus>
 
   /** 获取系统主题（是否深色模式） */
   getSystemTheme: () => Promise<boolean>
@@ -1707,6 +1709,9 @@ const electronAPI: ElectronAPI = {
 
   setTabletModeEnabled: (enabled: boolean) => {
     return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_ENABLED, enabled) as Promise<TabletModeStatus>
+  },
+  setTabletModePort: (port: number) => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_PORT, port) as Promise<TabletModeStatus>
   },
 
   getSystemTheme: () => {

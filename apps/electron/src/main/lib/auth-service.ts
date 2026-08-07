@@ -288,6 +288,14 @@ export async function login(
     // 启动主动 token 续期：过期前自动刷新，用户无感
     scheduleAutoRefresh()
 
+    // 恢复该账号上次登出时的加密渠道备份（仅当本地无渠道时生效）
+    try {
+      const { restoreChannelsForAccount } = require('./channel-manager')
+      restoreChannelsForAccount(data.userId)
+    } catch (err) {
+      console.warn('[认证] 渠道备份恢复失败（非致命）:', err)
+    }
+
     // 商业模式下自动同步渠道
     if (commercialMode) {
       try {
@@ -517,6 +525,17 @@ export async function logout(): Promise<void> {
   }
 
   writeTokens({})
+
+  // 将当前渠道配置加密备份（按账号隔离），再清空活跃配置文件：
+  // 备份让同一账号下次登录时能自动恢复自配渠道；清空保持「登出后旧渠道不残留磁盘」的安全行为。
+  try {
+    const { backupChannelsForAccount } = require('./channel-manager')
+    const tokensBefore = tokens
+    const accountId = Object.keys(tokensBefore)
+      .map((id) => tokensBefore[id]?.teamAccountId)
+      .find((id) => !!id)
+    if (accountId) backupChannelsForAccount(accountId)
+  } catch { /* 非致命 */ }
 
   // 清除渠道配置：防止登出后旧渠道残留磁盘，下个用户可见
   try {

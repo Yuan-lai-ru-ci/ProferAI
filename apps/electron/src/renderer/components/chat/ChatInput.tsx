@@ -68,7 +68,7 @@ interface ChatInputProps {
   onClearContext?: () => void
   /** 自定义占位文字（平板触屏传空串保持输入框干净） */
   placeholder?: string
-  /** 平板模式：输入框尺寸/占位与 Agent 一致（40px，竖屏 60px） */
+  /** 移动模式：输入框尺寸/占位与 Agent 一致（40px，竖屏 60px） */
   tabletMode?: boolean
 }
 

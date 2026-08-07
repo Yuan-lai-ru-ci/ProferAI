@@ -27,7 +27,9 @@ function getCacheTtl(result: ChannelPlanQuotaResult): number {
 
 export function getCachedPlanQuota(channelId: string, channelUpdatedAt?: number): ChannelPlanQuotaResult | null {
   const cached = quotaCache.get(channelId)
-  if (!cached || cached.channelUpdatedAt !== channelUpdatedAt) return null
+  // result 必须有效：历史缺陷曾把 undefined 写入缓存（IPC 实现缺失/平板 stub 兜底），
+  // 二次查询读 cached.result.updatedAt 会抛 TypeError。
+  if (!cached || !cached.result || cached.channelUpdatedAt !== channelUpdatedAt) return null
   if (Date.now() - cached.result.updatedAt >= getCacheTtl(cached.result)) return null
   return cached.result
 }
@@ -45,6 +47,17 @@ export async function fetchChannelPlanQuota(
 
   const request = window.electronAPI.getChannelPlanQuota(channelId)
     .then((result) => {
+      // 兜底：IPC 实现异常或平板 stub 返回 undefined 时，写入明确的“不支持”结果，
+      // 避免缓存中出现 result: undefined（二次查询会读 result.updatedAt 崩溃）。
+      if (!result || typeof result !== 'object') {
+        result = {
+          supported: false,
+          provider: 'custom',
+          windows: [],
+          updatedAt: Date.now(),
+          message: '订阅额度查询失败',
+        }
+      }
       quotaCache.set(channelId, { result, channelUpdatedAt })
       return result
     })
