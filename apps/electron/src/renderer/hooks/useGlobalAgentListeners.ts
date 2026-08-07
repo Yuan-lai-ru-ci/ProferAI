@@ -44,6 +44,8 @@ import {
   unviewedCompletedSessionIdsAtom,
   agentSessionPathMapAtom,
   agentDiffRefreshVersionAtom,
+  agentNonGitFileChangesAtom,
+  agentFileChangesCurrentRunAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -68,6 +70,7 @@ import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
+import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
@@ -346,10 +349,12 @@ export function useGlobalAgentListeners(): void {
   const store = useStore()
 
   useEffect(() => {
-    /** 正在执行的写工具：toolUseId → { path, sessionId } */
-    const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
+    /** 正在执行的写工具：toolUseId → { path, sessionId, toolName, runId } */
+    const pendingWriteTools = new Map<string, { path: string; sessionId: string; toolName: string; runId: string }>()
     /** 正在执行的 git 突变 Bash 命令：toolUseId → sessionId（完成后触发 diff 刷新） */
     const pendingGitMutateTools = new Map<string, string>()
+    /** 每轮只自动打开一次文件改动面板，避免连续写入打断用户 */
+    const autoActivatedChangeTurns = new Map<string, string>()
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
@@ -715,6 +720,20 @@ export function useGlobalAgentListeners(): void {
 
           // RightSidePanel 由用户完全控制，Agent 行为不影响其开关状态
 
+          // 跟踪当前 run 的 startedAt，用于非 Git 文件变更的 run 分组
+          if (event.type !== 'prompt_suggestion') {
+            const activeState = store.get(agentStreamingStatesAtom).get(sessionId)
+            if (activeState?.startedAt != null) {
+              const activeRunId = String(activeState.startedAt)
+              store.set(agentFileChangesCurrentRunAtom, (prev) => {
+                if (prev.get(sessionId) === activeRunId) return prev
+                const map = new Map(prev)
+                map.set(sessionId, activeRunId)
+                return map
+              })
+            }
+          }
+
           // Agent 修改文件时，触发右侧文件浏览器自动定位（展开父目录 + 滚动 + 高亮）
           if (event.type === 'tool_start' && WRITE_TOOLS.has(event.toolName)) {
             const input = event.input as Record<string, unknown> | undefined
@@ -722,7 +741,8 @@ export function useGlobalAgentListeners(): void {
               (input?.file_path as string | undefined)
               ?? (input?.path as string | undefined)
               ?? (input?.notebook_path as string | undefined)
-            pendingWriteTools.set(event.toolUseId, { path: targetPath || '', sessionId })
+            const runId = store.get(agentFileChangesCurrentRunAtom).get(sessionId) ?? String(Date.now())
+            pendingWriteTools.set(event.toolUseId, { path: targetPath || '', sessionId, toolName: event.toolName, runId })
             if (typeof targetPath === 'string' && targetPath.length > 0) {
               const now = Date.now()
               store.set(fileBrowserAutoRevealAtom, { sessionId, path: targetPath, ts: now })
@@ -793,6 +813,35 @@ export function useGlobalAgentListeners(): void {
               const entry = pendingWriteTools.get(event.toolUseId)!
               const writtenPath = entry.path
               pendingWriteTools.delete(event.toolUseId)
+
+              // 记录非 Git 文件变更（无论是否 Git 项目都记，DiffChangesList 按场景决定展示）
+              if (writtenPath) {
+                const kind = getSessionFileChangeKind(entry.toolName)
+                const fileChange = {
+                  path: writtenPath,
+                  kind,
+                  runId: entry.runId,
+                  updatedAt: Date.now(),
+                }
+                store.set(agentNonGitFileChangesAtom, (prev) => {
+                  const existing = prev.get(sessionId) ?? []
+                  const next = upsertSessionFileChange(existing, fileChange)
+                  const map = new Map(prev)
+                  map.set(sessionId, next)
+                  return map
+                })
+
+                // 非 Git 项目每轮首次写入自动切到「文件改动」面板
+                const prevActivatedRunId = autoActivatedChangeTurns.get(sessionId)
+                if (prevActivatedRunId !== entry.runId && store.get(agentSidePanelOpenAtom)) {
+                  autoActivatedChangeTurns.set(sessionId, entry.runId)
+                  store.set(agentDiffPanelTabAtom, (prev) => {
+                    const m = new Map(prev)
+                    m.set(sessionId, 'changes')
+                    return m
+                  })
+                }
+              }
               store.set(agentDiffRefreshVersionAtom, (prev) => {
                 const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
               })

@@ -2343,25 +2343,11 @@
   animation: workspace-highlight 1.2s ease-out;
 }
 
-/* ===== 平板竖屏：隐藏消息头像，节省文字位置 =====
- * 平板模式根容器（tablet/main.tsx 的 .tablet-app-root）下，竖屏时隐藏
- * 消息区用户头像（Agent/Chat 消息头部 + 吸顶用户消息条）。
- * 桌面版不受影响；平板横屏保留头像。
- */
-@media (orientation: portrait) {
-  .tablet-app-root .tablet-hide-avatar-portrait {
-    display: none;
-  }
-  /* 吸顶用户消息条原本按 35px 头像+间距缩进 46px 对齐文本，竖屏头像隐藏后收回 */
-  .tablet-app-root .sticky-user-banner {
-    margin-left: 0;
-  }
-}
 
-/* ===== 平板竖屏：设置弹窗去掉左侧导航、放宽内容区 =====
- * 平板设置只有少量 tab（外观等），竖屏下 160px 左侧导航会挤压内容区；
- * 隐藏导航后内容全宽。body.tablet-mode 由 tablet/main.tsx 挂载时标记，
- * 覆盖 Portal 到 body 的弹窗（radix Dialog 默认 Portal）。桌面版不受影响。
+/* ===== 平板竖屏：设置弹窗改为纵向布局（顶部横条 tab + 内容区全宽） =====
+ * 平板设置只有少量 tab，竖屏下 160px 左侧导航会挤压内容区；
+ * 改成顶部横向 tab 条（保留切换入口——多个 tab 时必须能切换），内容全宽。
+ * body.tablet-mode 由 tablet/main.tsx 挂载时标记，覆盖 Portal 到 body 的弹窗（radix Dialog 默认 Portal）。桌面版不受影响。
  */
 @media (orientation: portrait) {
   body.tablet-mode .tablet-settings-dialog {
@@ -2370,12 +2356,37 @@
     height: 92vh;
     max-height: 92vh;
   }
+  body.tablet-mode .settings-body {
+    flex-direction: column;
+  }
   body.tablet-mode .settings-nav {
-    display: none;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    width: 100%;
+    height: auto;
+    padding: 6px 10px;
+    border-right: none;
+    border-bottom: 1px solid hsl(var(--border) / 0.5);
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+  }
+  body.tablet-mode .settings-nav nav {
+    flex-direction: row;
+    gap: 2px;
+  }
+  body.tablet-mode .settings-nav nav button {
+    white-space: nowrap;
   }
   body.tablet-mode .tablet-settings-dialog .px-6 {
     padding-left: 20px;
     padding-right: 20px;
+  }
+  /* 特殊风格 8 宫格：手机窄屏（<430px）4 列固定 99px 卡片会溢出，改 2 列居中 */
+  body.tablet-mode .tablet-special-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-items: center;
   }
 }
 
@@ -2399,5 +2410,118 @@
 @media (orientation: portrait) {
   body.tablet-mode {
     --tablet-input-h: 60px;
+  }
+}
+
+/* ===== 平板竖屏：消息内容区向左拓宽 40px 并对齐 =====
+ * 保留头像/模型标识，但把 assistant 与 user 消息内容区左缩进从 46px 收窄到 6px
+ * （相当于向左扩 40px），竖屏下获得更多文字观看空间，且两边气泡对齐。
+ */
+@media (orientation: portrait) {
+  body.tablet-mode .message-item .message-content {
+    padding-left: 6px;
+  }
+}
+
+/* ===== 平板 App 状态栏安全区（Capacitor WebView 沉浸式） =====
+ * App 内 WebView 延伸到系统状态栏后面，顶部内容会被状态栏遮挡。
+ * 仅在原生 App 环境由 main.tsx 动态添加 tablet-safe-area 类（浏览器 env() 为 0，不影响）。
+ * padding-top 用 max() 保证无状态栏设备（沉浸横屏）为 0；!important 覆盖 Tailwind 的 p-* 工具类。
+ */
+.tablet-safe-area {
+  padding-top: max(env(safe-area-inset-top), 0px) !important;
+}
+
+/* ===== 移动模式：隐藏滚动条（触控滚动，滚动条多余且占视觉空间） =====
+ * 平板所有滚动都靠手指惯性，自定义滚动条无意义；桌面版不受影响。
+ */
+body.tablet-mode *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+body.tablet-mode * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* ===== 平板竖屏：模型名只留图标 =====
+ * 消息头部（MessageHeader）的模型完整名称在竖屏窄屏下占空间，隐藏文本只留模型 logo。
+ */
+@media (orientation: portrait) {
+  body.tablet-mode .message-header-model {
+    display: none;
+  }
+}
+
+/* ===== 平板竖屏：工具栏模型选择器只显示图标 =====
+ * ModelSelector 触发按钮（agent/chat 输入工具栏共用 model-selector-trigger class）
+ * 竖屏窄屏下隐藏模型名文本与下拉箭头，只留模型 logo 图标；点击仍可打开选择弹窗。
+ */
+@media (orientation: portrait) {
+  body.tablet-mode .model-selector-trigger span {
+    display: none;
+  }
+  body.tablet-mode .model-selector-trigger .lucide-chevron-down {
+    display: none;
+  }
+}
+
+/* ===== 流式输出动效 =====
+ * 1) streaming-cursor：流式文本末尾的闪烁打字光标（跟随 currentColor，适配主题）
+ * 2) stream-char：新字符淡入 + 轻微上浮（打字机墨水感）
+ * 注意：stream-char 需要 white-space: pre-wrap 保留连续空格与换行宽度。
+ */
+@keyframes stream-cursor-blink {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  vertical-align: text-bottom;
+  animation: stream-cursor-blink 1.1s step-end infinite;
+}
+
+@keyframes stream-char-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.2em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stream-char {
+  display: inline-block;
+  white-space: pre-wrap;
+  animation: stream-char-in 160ms ease-out both;
+}
+
+/* StreamingText 头部合并文本：保留换行（HTML 文本节点中的 \n 默认会被折叠为空格） */
+.streaming-head {
+  white-space: pre-wrap;
+}
+
+/* StreamingText 容器：与 MessageResponse(prose) 的字体大小/行高对齐，
+ * 避免流式结束切换回 markdown 渲染时发生视觉跳动 */
+.streaming-text {
+  display: block;
+  font-size: var(--md-preview-font-size, 15px);
+  line-height: 1.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-cursor,
+  .stream-char {
+    animation: none !important;
   }
 }

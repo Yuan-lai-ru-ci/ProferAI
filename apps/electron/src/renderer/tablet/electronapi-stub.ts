@@ -18,6 +18,20 @@ import { CHAT_IPC_CHANNELS, BUILTIN_DEFAULT_ID, BUILTIN_DEFAULT_PROMPT } from '@
 interface TabletRemoteClient {
   listSessions(): Promise<unknown>
   listWorkspaces(): Promise<unknown>
+  createWorkspace(name: string): Promise<unknown>
+  deleteSession(sessionId: string): Promise<unknown>
+  /** 分叉会话 */
+  forkSession(payload: { sessionId: string; upToMessageUuid?: string }): Promise<unknown>
+  /** 快照回退 */
+  rewindSession(payload: { sessionId: string; assistantMessageUuid: string }): Promise<unknown>
+  /** 置顶/取消置顶 */
+  toggleSessionPin(sessionId: string): Promise<unknown>
+  /** 归档/取消归档 */
+  toggleSessionArchive(sessionId: string): Promise<unknown>
+  /** 移动会话到项目 */
+  moveSessionToWorkspace(payload: { sessionId: string; targetWorkspaceId: string }): Promise<unknown>
+  /** 设置推理档位（null=恢复全局默认） */
+  updateSessionThinkingLevel(sessionId: string, level: string | null): Promise<unknown>
   getUserProfile(): Promise<unknown>
   listChannels(): Promise<unknown>
   createSession(payload: { title?: string; channelId?: string; workspaceId?: string; modelId?: string }): Promise<unknown>
@@ -25,6 +39,17 @@ interface TabletRemoteClient {
   renameSession(sessionId: string, title: string): Promise<unknown>
   getSdkMessages(sessionId: string): Promise<unknown>
   sendMessage(payload: { sessionId: string; userMessage: string; channelId: string; modelId?: string; workspaceId?: string }): Promise<unknown>
+  /** 向正在运行的 Agent 注入消息（对齐桌面 queueAgentMessage：interrupt 软打断 / uuid 幂等） */
+  queueMessage(payload: {
+    sessionId: string
+    userMessage: string
+    rawUserMessage?: string
+    uuid?: string
+    interrupt?: boolean
+    mentionedSkills?: string[]
+    mentionedMcpServers?: string[]
+    mentionedSessionIds?: string[]
+  }): Promise<unknown>
   updateSessionModel(sessionId: string, channelId: string, modelId?: string): Promise<unknown>
   updateSessionRuntime(sessionId: string, runtime: 'claude' | 'pi'): Promise<unknown>
   updatePermissionMode(sessionId: string, mode: 'auto' | 'plan' | 'bypassPermissions'): Promise<unknown>
@@ -192,7 +217,7 @@ export function installElectronApiStub(): void {
 
     // ---- 命令映射：Agent 核心动作 → WS 远程命令 ----
     sendAgentMessage: (input: Record<string, unknown>) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.sendMessage({
         sessionId: String(input.sessionId || ''),
         userMessage: String(input.userMessage || ''),
@@ -201,64 +226,89 @@ export function installElectronApiStub(): void {
         workspaceId: input.workspaceId as string | undefined,
       })
     },
-    queueAgentMessage: (input: Record<string, unknown>) => {
-      // 平板上消息队列与直接发送等价（不打断当前 turn 的语义由主进程 agent 队列承担）
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
-      return remoteClient.sendMessage({
-        sessionId: String(input.sessionId || ''),
-        userMessage: String(input.userMessage || ''),
-        channelId: String(input.channelId || ''),
-        modelId: input.modelId as string | undefined,
-        workspaceId: input.workspaceId as string | undefined,
-      })
+    queueAgentMessage: async (input: Record<string, unknown>) => {
+      // 平板队列消息必须走主进程 queue_message 指令（注入正在运行的 Agent）：
+      // 直接降级为 send_message 会被编排器并发保护拒绝（"上一条消息仍在处理中"），
+      // 表现为“队列消息立即插入不了”。这里保留 uuid/interrupt/mention 语义。
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
+      try {
+        return await remoteClient.queueMessage({
+          sessionId: String(input.sessionId || ''),
+          userMessage: String(input.userMessage || ''),
+          rawUserMessage: typeof input.rawUserMessage === 'string' ? input.rawUserMessage : undefined,
+          uuid: typeof input.uuid === 'string' ? input.uuid : undefined,
+          interrupt: input.interrupt === true,
+          mentionedSkills: Array.isArray(input.mentionedSkills) ? input.mentionedSkills as string[] : undefined,
+          mentionedMcpServers: Array.isArray(input.mentionedMcpServers) ? input.mentionedMcpServers as string[] : undefined,
+          mentionedSessionIds: Array.isArray(input.mentionedSessionIds) ? input.mentionedSessionIds as string[] : undefined,
+        })
+      } catch (error) {
+        // 目标不再活跃（上一轮 turn 已结束、renderer 尚未同步）：与桌面
+        // isQueueTargetNoLongerActiveError → startNewRun 降级一致，转为直接发送新 run。
+        if (error instanceof Error && /^\[Agent 编排\] 会话未运行，无法追加消息: /.test(error.message)) {
+          return remoteClient.sendMessage({
+            sessionId: String(input.sessionId || ''),
+            userMessage: String(input.userMessage || ''),
+            channelId: String(input.channelId || ''),
+            modelId: input.modelId as string | undefined,
+            workspaceId: input.workspaceId as string | undefined,
+          })
+        }
+        throw error
+      }
     },
     getAgentSessionSDKMessages: (sessionId: string) =>
       remoteClient?.getSdkMessages(sessionId) ?? Promise.resolve([]),
     updateAgentSessionModel: (sessionId: string, channelId: string, modelId?: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
-      return remoteClient.updateSessionModel(sessionId, channelId, modelId)
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
+      return remoteClient.updateSessionModel(sessionId, channelId, modelId).then((r) => {
+        // 契约兜底：旧版服务端可能只返回 { channelId, modelId }，补全 id 等字段，
+        // 保证桌面组件 .then((updated) => updated.id / updated.updatedAt) 拿到完整对象。
+        const updated = (r ?? {}) as Record<string, unknown>
+        return { ...updated, id: updated.id ?? sessionId }
+      })
     },
     updateSessionAgentRuntime: (sessionId: string, runtime: 'claude' | 'pi') => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.updateSessionRuntime(sessionId, runtime)
     },
     updateSessionPermissionMode: (sessionId: string, mode: 'auto' | 'plan' | 'bypassPermissions') => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.updatePermissionMode(sessionId, mode)
     },
     // ---- 交互式问答/审批响应：AskUserQuestion、权限审批、ExitPlanMode 的选项必须真正回传给主进程 ----
     respondAskUser: ({ requestId, answers }: { requestId: string; answers: Record<string, string> }) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.respondAskUser(requestId, answers)
     },
     respondPermission: ({ requestId, behavior, alwaysAllow }: { requestId: string; behavior: 'allow' | 'deny'; alwaysAllow?: boolean }) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.respondPermission(requestId, behavior, alwaysAllow ?? false)
     },
     respondExitPlanMode: ({ requestId, action, feedback }: { requestId: string; action: string; feedback?: string }) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.respondExitPlanMode(requestId, action as 'approve_auto' | 'approve_edit' | 'deny' | 'feedback', feedback)
     },
     stopAgent: (sessionId: string) => {
       // 记录用户主动停止标记：run_idle 桥接 STREAM_COMPLETE 时用（stoppedByUser 展示“已停止”）
       if (sessionId) tabletStoppedByUser.add(String(sessionId))
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.stopAgent(sessionId)
     },
     // ---- 命令映射：LeftSidebar 会话管理（已在 WebSocket 建连后注入） ----
     listAgentSessions: () => remoteClient?.listSessions() ?? Promise.resolve([]),
     createAgentSession: async (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => {
-      if (!remoteClient) throw new Error('平板连接未就绪')
+      if (!remoteClient) throw new Error('移动端连接未就绪')
       const created = await remoteClient.createSession({ title, channelId, workspaceId, modelId }) as { sessionId: string; title: string }
       return { id: created.sessionId, title: created.title, channelId, modelId, workspaceId, createdAt: Date.now(), updatedAt: Date.now() }
     },
     ensureProjectDraftAgentSession: async (workspaceId: string, channelId?: string, modelId?: string) => {
-      if (!remoteClient) throw new Error('平板连接未就绪')
+      if (!remoteClient) throw new Error('移动端连接未就绪')
       // 复用语义：项目已有草稿会话则返回它（不再每次新建），对齐桌面 ensureProjectDraftAgentSession
       const created = await remoteClient.ensureProjectDraftSession({ workspaceId, channelId, modelId }) as { sessionId: string; title: string; draft?: boolean }
       return { id: created.sessionId, title: created.title, channelId, modelId, workspaceId, draft: created.draft ?? true, createdAt: Date.now(), updatedAt: Date.now() }
     },
-    updateAgentSessionTitle: (id: string, title: string) => remoteClient?.renameSession(id, title) ?? Promise.reject(new Error('平板连接未就绪')),
+    updateAgentSessionTitle: (id: string, title: string) => remoteClient?.renameSession(id, title) ?? Promise.reject(new Error('移动端连接未就绪')),
     getAgentSessionMeta: async (id: string) => {
       const sessions = await (remoteClient?.listSessions() ?? Promise.resolve([])) as Array<{ id: string }>
       return sessions.find((session) => session.id === id)
@@ -288,6 +338,37 @@ export function installElectronApiStub(): void {
       // 归纳会把已删除项目以 UUID 名字伪装成“幽灵项目”重新出现在平板侧栏。
       return [{ id: 'default', name: '默认工作区', slug: 'default', type: 'personal', createdAt: 0, updatedAt: 0 }]
     },
+    // 删除会话：走 remote-service 的 delete_session 指令（对齐桌面 stop-and-wait + 清理持久化语义）。
+    // ⚠️ 必须显式 stub：缺省时 Proxy noop 会让 UI“假删除成功”（本地列表移除、主进程未删，刷新后复活）。
+    deleteAgentSession: async (sessionId: string) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      await remoteClient.deleteSession(sessionId)
+    },
+    // 创建项目：通过 remote-service 的 create_workspace 指令在远端主实例创建。
+    // ⚠️ 必须显式 stub：缺省时 Proxy 兜底 noop 返回 undefined，
+    // 会让左侧栏把 undefined 塞进 workspaces 列表 → find(w => w.id) 读 undefined.id 崩溃（必现白屏）。
+    createAgentWorkspace: async (name: string) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      const created = await remoteClient.createWorkspace(name) as
+        | { id: string; name: string; slug: string; type?: string; createdAt?: number; updatedAt?: number }
+        | undefined
+      if (!created || typeof created !== 'object') {
+        throw new Error('创建工作区失败：远端返回异常')
+      }
+      return {
+        id: created.id,
+        name: created.name,
+        slug: created.slug,
+        type: created.type ?? 'personal',
+        createdAt: created.createdAt ?? 0,
+        updatedAt: created.updatedAt ?? 0,
+      }
+    },
+    // 重命名/删除/排序：平板暂无对应指令，显式拒绝（绝不能靠 Proxy 兜底 noop，
+    // 否则“删除成功”是假的、重命名静默失败，且可能污染列表/造成桌面索引不一致）。
+    updateAgentWorkspace: () => unsupported('重命名项目'),
+    deleteAgentWorkspace: () => unsupported('删除项目'),
+    reorderAgentWorkspaces: () => unsupported('项目排序'),
 
     // ---- 降级：只读/空数据，维持复用组件可渲染 ----
     getSettings: () => Promise.resolve({}),
@@ -325,46 +406,46 @@ export function installElectronApiStub(): void {
     // ---- Chat（聊天工具）命令映射：桌面 ChatView / LeftSidebar / useGlobalChatListeners 的 IPC 命令 → WS 远程命令 ----
     listConversations: () => remoteClient?.listConversations() ?? Promise.resolve([]),
     createConversation: (title?: string, modelId?: string, channelId?: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.createConversation({ title, modelId, channelId })
     },
     getConversationMessages: (conversationId: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.getConversationMessages(conversationId)
     },
     getRecentMessages: (conversationId: string, limit: number) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.getRecentMessages(conversationId, limit)
     },
     updateConversationTitle: (conversationId: string, title: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.updateConversationTitle(conversationId, title)
     },
     updateConversationModel: (conversationId: string, modelId?: string, channelId?: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.updateConversationModel(conversationId, modelId, channelId)
     },
     deleteConversation: (conversationId: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.deleteConversation(conversationId)
     },
     togglePinConversation: (conversationId: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.toggleConversationPin(conversationId)
     },
     toggleArchiveConversation: (conversationId: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.toggleConversationArchive(conversationId)
     },
     searchConversationMessages: (query: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.searchChatMessages(query)
     },
     // remote-service 暂无 Agent 会话消息搜索指令：显式返回空数组（不能靠 Proxy 兜底 undefined，
     // SearchDialog 的 runSearch 会对两个结果统一 .filter，undefined 会让整个内容搜索崩溃）。
     searchAgentSessionMessages: () => Promise.resolve([]),
     sendMessage: (input: Record<string, unknown>) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       const conv = input as {
         conversationId: string
         userMessage: string
@@ -393,38 +474,49 @@ export function installElectronApiStub(): void {
       })
     },
     stopGeneration: (conversationId: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatStopGeneration(conversationId)
     },
     deleteMessage: (conversationId: string, messageId: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatDeleteMessage(conversationId, messageId)
     },
     truncateMessagesFrom: (conversationId: string, messageId: string, preserveFirstMessageAttachments?: boolean) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatTruncateMessagesFrom(conversationId, messageId, preserveFirstMessageAttachments)
     },
     updateContextDividers: (conversationId: string, dividers: string[]) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatUpdateContextDividers(conversationId, dividers)
     },
     generateTitle: (input: GenerateTitleInput) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatGenerateTitle(input)
     },
     saveAttachment: (input: { conversationId: string; filename: string; mediaType: string; data: string }) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatSaveAttachment(input)
     },
     deleteAttachment: (localPath: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatDeleteAttachment(localPath)
     },
     readAttachment: (localPath: string) => {
-      if (!remoteClient) return Promise.reject(new Error('平板连接未就绪'))
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.chatReadAttachment(localPath)
     },
     getChannels: () => Promise.resolve([]),
+    // ChannelPlanQuotaBadge（Chat 模型选择器/会话头部展示渠道额度）会调用 getChannelPlanQuota：
+    // 必须返回明确的“不支持”结果对象，不能靠 Proxy 兜底 undefined——fetchChannelPlanQuota
+    // 会把返回值写进缓存，若写入 undefined，后续切换模型时 getCachedPlanQuota 读
+    // cached.result.updatedAt 会抛 “Cannot read properties of undefined (reading 'updatedAt')”。
+    getChannelPlanQuota: () => Promise.resolve({
+      supported: false,
+      provider: 'custom',
+      windows: [],
+      updatedAt: Date.now(),
+      message: '平板暂不支持订阅额度查询',
+    }),
     // ModelSelector 打开时会调用 listChannels 刷新渠道列表：
     // 必须返回 WS 真实渠道，否则空数组会覆盖平板已喂好的 channelsAtom，模型选择器变成空列表。
     // 注意：WS 返回的是桌面渠道原始形状，没有平板补丁后的 enabled 语义（桌面 enabled 由
@@ -464,8 +556,35 @@ export function installElectronApiStub(): void {
     notifications: { show: safeNoop },
 
     // ---- 降级：明确拒绝（调用方 catch → toast 提示“平板暂不支持”） ----
-    forkAgentSession: () => unsupported('分叉会话'),
-    rewindSession: () => unsupported('回退会话'),
+    forkAgentSession: async (input: { sessionId: string; upToMessageUuid?: string }) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      // remote 已返回桌面同构 buildSessionItem（含 createdAt/updatedAt/draft/pinned 等），
+      // 直接透传，保证 fork 后 setAgentSessions 插入的元数据与桌面一致（LeftSidebar 渲染/排序依赖）。
+      return remoteClient.forkSession(input) as Promise<Record<string, unknown>>
+    },
+    rewindSession: async (input: { sessionId: string; assistantMessageUuid: string }) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      return remoteClient.rewindSession(input) as Promise<{ remainingMessages: number; fileRewind?: { canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number } }>
+    },
+    // 置顶/归档/移动/推理档位：走 remote 指令（对齐桌面 IPC 语义），
+    // 必须显式 stub——否则 Proxy noop 会让“置顶/归档成功”是假的，
+    // 且 LeftSidebar 读 updated.pinned/updated.id 会拿到 undefined 崩溃。
+    togglePinAgentSession: async (id: string) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      return remoteClient.toggleSessionPin(id) as Promise<Record<string, unknown>>
+    },
+    toggleArchiveAgentSession: async (id: string) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      return remoteClient.toggleSessionArchive(id) as Promise<Record<string, unknown>>
+    },
+    moveAgentSessionToWorkspace: async (input: { sessionId: string; targetWorkspaceId: string }) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      return remoteClient.moveSessionToWorkspace(input) as Promise<Record<string, unknown>>
+    },
+    updateSessionOpenAIThinkingLevel: async (sessionId: string, level: string | null) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      return remoteClient.updateSessionThinkingLevel(sessionId, level) as Promise<Record<string, unknown>>
+    },
     attachFile: () => unsupported('附加本地文件'),
     attachDirectory: () => unsupported('附加本地目录'),
     detachFile: () => unsupported('移除本地文件'),

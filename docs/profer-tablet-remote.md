@@ -1,8 +1,8 @@
-# Profer 平板版（Remote Service）使用说明
+# Profer 移动版（Remote Service）使用说明
 
 ## 这是什么
 
-Profer 平板版 = 在**不传输图像**的前提下，把 Agent 的**工作过程与用户输入**传到平板等外部设备，
+Profer 移动版 = 在**不传输图像**的前提下，把 Agent 的**工作过程与用户输入**传到平板/手机等外部设备，
 用**触控友好的 Web UI** 呈现。电脑继续跑 Agent（算力在下沉），平板只是客户端 UI。
 
 - 电脑端：Electron 主进程内新增一个 HTTP + WebSocket 服务（remote-service），仅绑定 `127.0.0.1`
@@ -28,11 +28,17 @@ bun run build:main       # 主进程（含 remote-service）
 bun run build            # 全量（含 verify:tablet 校验平板产物）
 ```
 
-平板 UI 产物位于 `dist/renderer/tablet/`。
+移动端 UI 产物位于 `dist/renderer/tablet/`。
 
 ## 启动（显式开关，默认不启动）
 
-以任意方式启动 Profer，只要满足以下之一即启用平板版：
+以任意方式启动 Profer，只要满足以下之一即启用移动版：
+
+> **推荐：设置页自动恢复**。在「设置 → 远程连接 → 移动模式」里打开「启用移动端连接」后，
+> Profer 每次启动都会自动开启平板连接（正式版与开发版一致），无需每次手动开启；
+> 关闭开关后，下次启动不再自动开启。
+
+以下为显式启动方式（`--tablet` / `PROFER_REMOTE=1` 不持久化，仅本次启动生效）：
 
 ```bash
 # 方式一：环境变量
@@ -46,13 +52,13 @@ PROFER_REMOTE=1 <启动Profer命令>
 
 ```
 [Remote] 本机访问:  http://127.0.0.1:7788
-[Remote] 平板访问:  http://<电脑局域网IP>:7788
+[Remote] 移动端访问:  http://<电脑局域网IP>:7788
 [Remote] 访问 Token: xxxx（首次在平板输入一次）
 ```
 
 > 默认端口 7788，可用 `PROFER_REMOTE_PORT` 修改。
 > Token 默认生成并持久化；可用 `PROFER_REMOTE_TOKEN` 指定固定值。
-> 平板 UI 静态目录默认 `dist/renderer/tablet`；可用 `PROFER_REMOTE_STATIC` 覆盖。
+> 移动端 UI 静态目录默认 `dist/renderer/tablet`；可用 `PROFER_REMOTE_STATIC` 覆盖。
 
 ## 平板使用
 

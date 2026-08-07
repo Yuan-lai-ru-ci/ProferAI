@@ -1,7 +1,8 @@
 import * as React from 'react'
-import { Copy, Loader2, Tablet, Wifi } from 'lucide-react'
+import { Copy, Loader2, RotateCcw, Save, Tablet, Wifi } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { SettingsCard, SettingsSection, SettingsToggle } from './primitives'
 import type { TabletModeStatus } from '../../../types'
 
@@ -28,10 +29,14 @@ function ConnectionValue({ label, value, secret = false }: { label: string; valu
   )
 }
 
-/** 局域网平板端的连接与凭据设置。 */
+/** 局域网移动端的连接与凭据设置。 */
 export function TabletModeSettings(): React.ReactElement {
   const [status, setStatus] = React.useState<TabletModeStatus | null>(null)
   const [saving, setSaving] = React.useState(false)
+  const [portInput, setPortInput] = React.useState('')
+  const [savingPort, setSavingPort] = React.useState(false)
+  /** 用户手动编辑过端口输入后，不再被状态刷新覆盖 */
+  const portDirtyRef = React.useRef(false)
 
   const refresh = React.useCallback(async (): Promise<TabletModeStatus | null> => {
     try {
@@ -39,8 +44,8 @@ export function TabletModeSettings(): React.ReactElement {
       setStatus(next)
       return next
     } catch (error) {
-      console.error('[平板模式] 读取状态失败:', error)
-      toast.error('读取平板模式状态失败')
+      console.error('[移动模式] 读取状态失败:', error)
+      toast.error('读取移动模式状态失败')
       return null
     }
   }, [])
@@ -48,6 +53,11 @@ export function TabletModeSettings(): React.ReactElement {
   React.useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // 状态就绪后同步端口输入框（用户已编辑时以用户输入为准）
+  React.useEffect(() => {
+    if (status && !portDirtyRef.current) setPortInput(String(status.port))
+  }, [status?.port])
 
   // 服务监听是异步的；启用后短暂轮询，直到主进程回传局域网地址与 Token。
   React.useEffect(() => {
@@ -65,43 +75,165 @@ export function TabletModeSettings(): React.ReactElement {
     try {
       const next = await window.electronAPI.setTabletModeEnabled(enabled)
       setStatus(next)
-      toast.success(enabled ? '平板模式已开启' : '平板模式已关闭')
+      toast.success(enabled ? '移动模式已开启' : '移动模式已关闭')
     } catch (error) {
-      console.error('[平板模式] 切换失败:', error)
-      toast.error(error instanceof Error ? error.message : '切换平板模式失败')
+      console.error('[移动模式] 切换失败:', error)
+      toast.error(error instanceof Error ? error.message : '切换移动模式失败')
       await refresh()
     } finally {
       setSaving(false)
     }
   }
 
+  // 端口输入校验：1024-65535 的整数（避开系统/特权端口）
+  const parsedPort = Number(portInput)
+  const portEmpty = portInput.trim() === ''
+  const portValid =
+    !portEmpty && Number.isInteger(parsedPort) && parsedPort >= 1024 && parsedPort <= 65535
+  const portChanged = portValid && status != null && parsedPort !== status.port
+  /** 当前是否使用自定义端口（非默认） */
+  const isCustomPort = status != null && status.port !== status.defaultPort
+
+  const savePort = async (): Promise<void> => {
+    if (!portValid) {
+      toast.error('端口必须是 1024-65535 之间的整数')
+      return
+    }
+    setSavingPort(true)
+    try {
+      const wasRunning = status?.running === true
+      const next = await window.electronAPI.setTabletModePort(parsedPort)
+      setStatus(next)
+      portDirtyRef.current = false
+      setPortInput(String(next.port))
+      if (wasRunning && !next.running) {
+        toast.warning(`端口 ${parsedPort} 可能被占用，服务重启失败，请换一个端口`)
+      } else {
+        toast.success(`端口已更新为 ${parsedPort}`)
+      }
+    } catch (error) {
+      console.error('[移动模式] 保存端口失败:', error)
+      toast.error(error instanceof Error ? error.message : '保存端口失败')
+      await refresh()
+    } finally {
+      setSavingPort(false)
+    }
+  }
+
+  // 恢复默认端口（正式版 7788 / 开发版 7789）
+  const resetPort = async (): Promise<void> => {
+    setSavingPort(true)
+    try {
+      const wasRunning = status?.running === true
+      const next = await window.electronAPI.setTabletModePort(0)
+      setStatus(next)
+      portDirtyRef.current = false
+      setPortInput(String(next.port))
+      if (wasRunning && !next.running) {
+        toast.warning(`端口 ${next.port} 可能被占用，服务重启失败`)
+      } else {
+        toast.success(`已恢复默认端口 ${next.port}`)
+      }
+    } catch (error) {
+      console.error('[移动模式] 恢复默认端口失败:', error)
+      toast.error(error instanceof Error ? error.message : '恢复默认端口失败')
+      await refresh()
+    } finally {
+      setSavingPort(false)
+    }
+  }
+
   if (!status) {
-    return <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在加载平板模式...</div>
+    return <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在加载移动模式...</div>
   }
 
   return (
     <div className="space-y-6">
-      <SettingsSection title="平板模式（试验版）" description="将 Agent 工作区连接到同一局域网内的平板浏览器。">
-        <SettingsCard>
+      <SettingsSection title="移动模式（试验版）" description="将 Agent 工作区连接到同一局域网内的移动设备浏览器。">
+        <SettingsCard divided>
           <SettingsToggle
-            label="启用平板连接"
+            label="启用移动端连接"
             description="开启后立即启动本机服务，并在下次启动 Profer 时自动恢复。"
             checked={status.enabled}
             onCheckedChange={(enabled) => void toggle(enabled)}
             disabled={saving}
           />
+          <div className="flex flex-col gap-2.5 px-4 py-3.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-foreground">服务端口</div>
+                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  移动端访问本机的监听端口。被其他程序占用时，可改用其他端口，随时可恢复默认。
+                </p>
+              </div>
+              {isCustomPort && (
+                <span className="mt-0.5 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium leading-4 text-muted-foreground">
+                  自定义端口
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={5}
+                placeholder={String(status.defaultPort)}
+                value={portInput}
+                onChange={(e) => {
+                  portDirtyRef.current = true
+                  setPortInput(e.target.value.replace(/\D/g, ''))
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && portChanged && !savingPort) void savePort()
+                }}
+                aria-label="移动模式服务端口"
+                aria-invalid={!portValid && !portEmpty}
+                className={`w-32 flex-shrink-0 tabular-nums ${
+                  !portValid && !portEmpty ? 'border-destructive focus-visible:ring-destructive/30' : ''
+                }`}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!portChanged || savingPort}
+                onClick={() => void savePort()}
+              >
+                {savingPort ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                保存
+              </Button>
+              {isCustomPort && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={savingPort}
+                  onClick={() => void resetPort()}
+                >
+                  <RotateCcw className="size-3.5" />
+                  恢复默认
+                </Button>
+              )}
+            </div>
+            {!portValid && !portEmpty && (
+              <p className="text-xs leading-4 text-destructive">端口需为 1024-65535 之间的整数</p>
+            )}
+            {portValid && !portChanged && !isCustomPort && (
+              <p className="text-xs leading-4 text-muted-foreground">使用默认端口 {status.defaultPort}</p>
+            )}
+          </div>
         </SettingsCard>
       </SettingsSection>
 
       {status.enabled && (
         <SettingsSection
           title="连接信息"
-          description={status.running ? '请在平板浏览器打开以下局域网地址，并输入连接 Token。' : '正在启动服务，请稍候...'}
+          description={status.running ? '请在移动设备浏览器打开以下局域网地址，并输入连接 Token。' : '正在启动服务，请稍候...'}
         >
           <SettingsCard divided={false}>
             {status.running && status.lanUrl ? (
               <>
-                <ConnectionValue label="平板访问地址" value={status.lanUrl} />
+                <ConnectionValue label="移动端访问地址" value={status.lanUrl} />
                 {status.token && <ConnectionValue label="连接 Token" value={status.token} secret />}
               </>
             ) : (
@@ -110,14 +242,14 @@ export function TabletModeSettings(): React.ReactElement {
           </SettingsCard>
           <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
             <Wifi className="mt-0.5 size-4 shrink-0 text-amber-600" />
-            <span>仅支持同一局域网。Token 等同连接凭据，请勿分享给不受信任的人；关闭开关会立即断开平板连接。</span>
+            <span>仅支持同一局域网。Token 等同连接凭据，请勿分享给不受信任的人；关闭开关会立即断开移动端连接。</span>
           </div>
         </SettingsSection>
       )}
 
       <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
         <Tablet className="mt-0.5 size-4 shrink-0" />
-        <span>这是试验版功能。平板与电脑需连接同一个 Wi‑Fi 或局域网，默认端口为 {status.port}。</span>
+        <span>这是试验版功能。手机/平板与电脑需连接同一个 Wi‑Fi 或局域网。</span>
       </div>
     </div>
   )

@@ -1,7 +1,7 @@
 {
   "name": "profer-tablet",
   "version": "0.1.0",
-  "description": "Profer 平板版客户端（Capacitor 壳，装载 Profer 桌面端 remote-service 的平板 Web UI）",
+  "description": "Profer 移动版客户端（Capacitor 壳，装载 Profer 桌面端 remote-service 的移动端 Web UI）",
   "private": true,
   "type": "module",
   "scripts": {

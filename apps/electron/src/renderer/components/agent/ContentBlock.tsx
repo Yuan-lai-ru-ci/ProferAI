@@ -23,6 +23,7 @@ import { thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { MessageResponse } from '@/components/ai-elements/message'
+import { StreamingText, isPlainStreamText } from '@/components/ai-elements/streaming-text'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
@@ -742,7 +743,11 @@ export function ContentBlock({ block, allMessages, basePath, basePaths, animate 
           </div>
         )}
         {cleanText && (
-          <MessageResponse basePath={basePath} basePaths={basePaths}>{cleanText}</MessageResponse>
+          isStreaming && isPlainStreamText(cleanText) ? (
+            <StreamingText text={cleanText} />
+          ) : (
+            <MessageResponse basePath={basePath} basePaths={basePaths}>{cleanText}</MessageResponse>
+          )
         )}
       </>
     )
