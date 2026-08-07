@@ -32,6 +32,7 @@ import {
   conversationContextLengthAtom,
   conversationThinkingEnabledAtom,
   conversationParallelModeAtom,
+  conversationDraftsAtom,
 } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
@@ -58,6 +59,8 @@ import {
   agentSessionStreamingStateAtomFamily,
   agentSessionDraftAtomFamily,
   agentSessionDraftHtmlAtomFamily,
+  agentSessionDraftsAtom,
+  agentSessionDraftHtmlAtom,
   agentPendingFilesAtomFamily,
   backgroundTasksAtomFamily,
   sessionPersistedPermissionModeAtom,
@@ -592,6 +595,20 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
   const [currentConversationId, setCurrentConversationId] = useAtom(currentConversationIdAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
+
+  // 输入框草稿标记：订阅两个 draft map，任一命中即认为该会话输入框里有未发送内容。
+  // 输入框每次按键会重写整 Map（AgentView 已用 family 切片避免自身重渲染），
+  // 侧边栏需聚合展示，只能订阅整 Map；行数有限，可接受。
+  const agentDraftMap = useAtomValue(agentSessionDraftsAtom)
+  const agentDraftHtmlMap = useAtomValue(agentSessionDraftHtmlAtom)
+  const conversationDraftMap = useAtomValue(conversationDraftsAtom)
+  /** 输入框有内容的 Agent 会话 ID 集合（markdown + html 任一命中） */
+  const agentDraftIds = React.useMemo(() => {
+    const ids = new Set<string>()
+    for (const id of agentDraftMap.keys()) ids.add(id)
+    for (const id of agentDraftHtmlMap.keys()) ids.add(id)
+    return ids
+  }, [agentDraftMap, agentDraftHtmlMap])
   const setAgentMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
 
   // 键盘与手柄共用左栏的 DOM 顺序；项目标题和会话行采用 roving focus。
@@ -2379,6 +2396,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                         active={conv.id === activeSessionId}
                         streaming={streamingIds.has(conv.id)}
                         showPinIcon={false}
+                        hasDraft={conversationDraftMap.has(conv.id)}
                         relativeTimeNow={relativeTimeNow}
                         onSelect={handleSelectConversation}
                         onRequestDelete={handleRequestDelete}
@@ -2411,6 +2429,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                       active={conv.id === activeSessionId}
                       streaming={streamingIds.has(conv.id)}
                       showPinIcon={!!conv.pinned}
+                      hasDraft={conversationDraftMap.has(conv.id)}
                       relativeTimeNow={relativeTimeNow}
                       onSelect={handleSelectConversation}
                       onRequestDelete={handleRequestDelete}
@@ -2451,6 +2470,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                             active={treeActive}
                             indicatorStatus={rowStatus}
                             showPinIcon={false}
+                            hasDraft={agentDraftIds.has(item.session.id)}
                             delegationSummary={childCount > 0
                               ? {
                                 total: childCount,
@@ -2478,6 +2498,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                                   session={childSession}
                                   activeSessionId={activeSessionId}
                                   agentIndicatorMap={agentIndicatorMap}
+                                  hasDraft={agentDraftIds.has(childSession.id)}
                                   relativeTimeNow={relativeTimeNow}
                                   workspaceName={childSession.workspaceId ? workspaceNameMap.get(childSession.workspaceId) : undefined}
                                   onSelect={handleSelectAgentSession}
@@ -2567,6 +2588,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                   collapsed={collapsedWorkspaceIds.has(group.workspace.id)}
                   activeSessionId={activeSessionId}
                   agentIndicatorMap={agentIndicatorMap}
+                  agentDraftIds={agentDraftIds}
                   expandedDelegationParentIds={expandedDelegationParentIds}
                   relativeTimeNow={relativeTimeNow}
                   dragging={dragProjectId === group.workspace.id}
@@ -2630,6 +2652,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                         active={conv.id === activeSessionId}
                         streaming={streamingIds.has(conv.id)}
                         showPinIcon={!!conv.pinned}
+                        hasDraft={conversationDraftMap.has(conv.id)}
                         relativeTimeNow={relativeTimeNow}
                         onSelect={handleSelectConversation}
                         onRequestDelete={handleRequestDelete}
@@ -2656,6 +2679,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
                         active={session.id === activeSessionId}
                         indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
                         showPinIcon={!!session.pinned}
+                        hasDraft={agentDraftIds.has(session.id)}
                         leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
                         workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
                         relativeTimeNow={relativeTimeNow}
@@ -3001,6 +3025,8 @@ interface ConversationItemProps {
   streaming: boolean
   /** 是否在标题旁显示 Pin 图标 */
   showPinIcon: boolean
+  /** 输入框是否有未发送内容（草稿标记） */
+  hasDraft?: boolean
   relativeTimeNow: number
   onSelect: (id: string, title: string) => void
   onRequestDelete: (id: string) => void
@@ -3014,6 +3040,7 @@ const ConversationItem = React.memo(function ConversationItem({
   active,
   streaming,
   showPinIcon,
+  hasDraft,
   relativeTimeNow,
   onSelect,
   onRequestDelete,
@@ -3160,6 +3187,10 @@ const ConversationItem = React.memo(function ConversationItem({
                   <Pin size={11} className="flex-shrink-0 text-primary/60" />
                 )}
                 <span className="truncate">{conversation.title}</span>
+                {/* 草稿标记：输入框有未发送内容 */}
+                {hasDraft && (
+                  <Pencil size={11} className="flex-shrink-0 text-foreground/40" aria-label="输入框有未发送内容" />
+                )}
               </div>
             )}
           </div>
@@ -3233,6 +3264,8 @@ interface AgentSessionItemProps {
   active: boolean
   indicatorStatus: SessionIndicatorStatus
   showPinIcon?: boolean
+  /** 输入框是否有未发送内容（草稿标记） */
+  hasDraft?: boolean
   /** 行左侧状态色块；未传则不显示 */
   leftAccent?: SessionLeftAccent
   delegationSummary?: {
@@ -3260,6 +3293,7 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
   active,
   indicatorStatus,
   showPinIcon,
+  hasDraft,
   delegationSummary,
   leftAccent,
   disableMiniMap,
@@ -3418,6 +3452,10 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                   <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
                 )}
                 <span className="truncate">{session.title}</span>
+                {/* 草稿标记：输入框有未发送内容 */}
+                {hasDraft && (
+                  <Pencil size={11} className="flex-shrink-0 text-foreground/40" aria-label="输入框有未发送内容" />
+                )}
                 {workspaceName && (
                   <span className="flex-shrink-0 px-1.5 py-0 rounded-full bg-primary/10 text-[10px] leading-4 workspace-badge font-medium truncate max-w-[80px]">
                     {workspaceName}
@@ -3489,6 +3527,8 @@ interface DelegatedChildSessionItemProps {
   agentIndicatorMap: Map<string, SessionIndicatorStatus>
   relativeTimeNow: number
   workspaceName?: string
+  /** 输入框是否有未发送内容（草稿标记） */
+  hasDraft?: boolean
   onSelect: (id: string, title: string) => void
   onRequestDelete: (id: string) => void
   onRequestMove: (id: string) => void
@@ -3503,6 +3543,7 @@ const DelegatedChildSessionItem = React.memo(function DelegatedChildSessionItem(
   agentIndicatorMap,
   relativeTimeNow,
   workspaceName,
+  hasDraft,
   onSelect,
   onRequestDelete,
   onRequestMove,
@@ -3517,6 +3558,7 @@ const DelegatedChildSessionItem = React.memo(function DelegatedChildSessionItem(
       session={session}
       active={session.id === activeSessionId}
       indicatorStatus={status}
+      hasDraft={hasDraft}
       relativeTimeNow={relativeTimeNow}
       workspaceName={workspaceName}
       onSelect={onSelect}
@@ -3540,6 +3582,8 @@ interface AgentProjectGroupItemProps {
   extraCount: number
   activeSessionId: string | null
   agentIndicatorMap: Map<string, SessionIndicatorStatus>
+  /** 输入框有内容的 Agent 会话 ID 集合（草稿标记） */
+  agentDraftIds: Set<string>
   expandedDelegationParentIds: Set<string>
   relativeTimeNow: number
   dragging: boolean
@@ -3578,6 +3622,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   extraCount,
   activeSessionId,
   agentIndicatorMap,
+  agentDraftIds,
   expandedDelegationParentIds,
   relativeTimeNow,
   dragging,
@@ -3877,6 +3922,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                       active={treeActive}
                       indicatorStatus={rowStatus}
                       showPinIcon={!!item.session.pinned}
+                      hasDraft={agentDraftIds.has(item.session.id)}
                       delegationSummary={childCount > 0
                         ? {
                           total: childCount,
@@ -3903,6 +3949,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                             session={childSession}
                             activeSessionId={activeSessionId}
                             agentIndicatorMap={agentIndicatorMap}
+                            hasDraft={agentDraftIds.has(childSession.id)}
                             relativeTimeNow={relativeTimeNow}
                             onSelect={onSelectSession}
                             onRequestDelete={onRequestDelete}
