@@ -38,7 +38,6 @@ import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extr
 import { buildLiveGroupSet } from './live-group-set'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
-import { StreamingCursor } from '@/components/ai-elements/streaming-text'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import type { AgentEventUsage, RetryAttempt, SDKMessage } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
@@ -719,7 +718,6 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                           />
                         ))}
                       </div>
-                      {streaming && <StreamingCursor />}
                       {streaming && <AgentRunningIndicator startedAt={startedAt} />}
                     </>
                   ) : (
