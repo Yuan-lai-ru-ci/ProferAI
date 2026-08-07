@@ -1,288 +1,150 @@
+<div align="center">
+
+<img src="./docs/assets/profer-banner-en.svg" alt="Profer" width="100%" />
+
 # Profer
 
-Profer is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client. Built on the Claude Agent SDK.
+**General-purpose AI Agent Desktop App built on Claude Agent SDK**
 
-It is not just another chat box. Profer is meant to become a long-lived Agent workbench for your personal workflows: use Chat for simple answers, use Agent when the task needs to act on files, tools, projects, and longer context.
+Multi-model · Collaboration Sub-Agents · Scheduled Automations · Tablet Remote Access · Team Workspaces
 
-[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) | [Official Website](https://profer.cn/)
+[![GitHub Release](https://img.shields.io/github/v/release/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=Release)](https://github.com/Yuan-lai-ru-ci/ProferAI/releases)
+[![License](https://img.shields.io/github/license/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=License)](./LICENSE)
+[![Electron](https://img.shields.io/badge/Electron-43-47848F?style=flat-square&logo=electron)](https://www.electronjs.org/)
+[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.3.201-8B5CF6?style=flat-square)](https://github.com/anthropics/claude-agent-sdk)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
+[![Stars](https://img.shields.io/github/stars/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=Stars)](https://github.com/Yuan-lai-ru-ci/ProferAI)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Yuan-lai-ru-ci/ProferAI/pulls)
 
-## What Profer Can Do
+</div>
 
-- **Chat mode: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.**
-- **Agent mode**: general-purpose Agent powered by `@anthropic-ai/claude-agent-sdk`, with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions.
-- **SubAgents / Tasks**: complex tasks can be delegated through the Claude Agent SDK Agent tool, with sub-agent calls and results shown in the message stream.
-- **Skills & MCP**: each workspace can manage its own Skills, MCP servers, and workspace files.
-- **Agent Skills management**: Skills and MCP are now managed in a dedicated full-screen Agent Skills view, with search, enable toggles, updates, import, uninstall, and workspace switching.
-- **Automation**: Profer has a durable local automation system for interval / daily / weekly / monthly schedules, run history, manual runs, failure protection, and Feishu notifications.
-- **Team file management**: team workspaces support remote file manifests, file / folder upload, drag-and-drop moves, target-directory imports, local-cache-first preview, and dragging team files into Agent.
-- **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
-- **Memory and tools**: Chat and Agent can share memory, with web search, built-in Chat tools, and Agent recommendation helpers.
-- **Local-first data**: conversations, workspaces, attachments, settings, and Skills are stored under `~/.proma/` as JSON / JSONL files, without a local database.
-- **Desktop experience**: auto-update, proxy settings, file preview, global shortcuts, quick task window, voice input, and light / dark / system themes.
+---
 
-## Getting Started
+Profer is a local-first AI desktop app: **use Chat for simple questions, hand complex tasks to Agent**. On top of a powerful local AI agent, it adds a team collaboration layer — personal + team workspaces, a Skills marketplace, cloud file sync, and invite-only member management. Team knowledge lives in workspaces instead of being lost in conversations.
+
+---
+
+## ✨ Key Features
+
+| Feature | Description |
+| --- | --- |
+| 🤖 **General-purpose Agent** | Built on `@anthropic-ai/claude-agent-sdk` — task graphs, dependency-ordered subtasks, streaming output, plan confirmation, with **Claude / Pi dual runtimes** |
+| 🧩 **Collaboration Sub-Agents** | Split complex tasks across real parallel sub-sessions, each advancing independently, then aggregate results — fully visible and trackable |
+| ⏰ **Scheduled Automations** | Durable scheduling (interval / daily / weekly / monthly) with run history, failure protection, and retrospection — ideal for reports, periodic checks, unattended workflows |
+| 📱 **Tablet Remote Access** | Capacitor + Android client connects to the desktop via local HTTP/WS — tablet chat, synced settings, auto-reconnect |
+| 👥 **Team Workspaces** | Invite-only teams (Owner / Admin / Member / Viewer roles), Skills marketplace, cloud file sync, brand customization |
+| 💬 **Multi-model Chat** | Multi-provider conversations, attachments (PDF / Office / images), Markdown / Mermaid / KaTeX / syntax highlighting, side-by-side compare, context management |
+| 🧠 **Skills & MCP** | Per-workspace Skills and MCP servers, fullscreen skill view with search, enable, update, import, uninstall, and team publishing |
+| 🔌 **Remote Bots** | Feishu / Lark / DingTalk / WeChat bridges — trigger local agent workflows from your phone or group chat |
+| 🎨 **Desktop Experience** | Auto-update, global shortcuts, quick task window, streaming voice input (Doubao), light / dark / multiple curated themes |
+
+---
+
+## 🚀 Quick Start
 
 ### Download
 
-Download the open-source version from [GitHub Releases](https://github.com/Yuan-lai-ru-ci/ProferAI/releases). This README is synchronized with the `v0.15.x` state; macOS Apple Silicon, macOS Intel, and Windows builds are provided on the Releases page.
+Get the latest release from [GitHub Releases](https://github.com/Yuan-lai-ru-ci/ProferAI/releases). Builds are provided for **macOS Apple Silicon / Intel** and **Windows**.
 
-If you want fewer API setup steps, you can also use the [Profer commercial version](https://profer.cn/). The commercial and open-source versions run in parallel; the commercial version mainly adds built-in model channels and subscription options.
+### First-run Setup
 
-### First Setup
+1. Launch Profer and complete the environment check (Agent mode depends on Git, Node.js / Bun, and a usable shell)
+2. **Settings → Model Config**: add AI providers (Anthropic, DeepSeek, Kimi, Zhipu, Doubao, Qwen, etc.)
+3. **Settings → Agent Config**: pick your default provider, model, and workspace — you're ready to go
 
-1. Open Profer and finish the environment check. Agent mode depends on local tooling, especially Git, Node.js / Bun, and a usable shell.
-2. Go to **Settings &gt; Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
-3. Chat mode can use OpenAI, Anthropic, Google, or OpenAI-compatible channels.
-4. Agent mode requires an Anthropic or Anthropic-compatible channel, such as Anthropic, DeepSeek, Kimi API, or Kimi Coding Plan.
-5. Go to **Settings &gt; Agent** and choose the default Agent channel, model, and workspace.
-6. Configure memory, web search, or Feishu / DingTalk / WeChat bridges from their corresponding settings tabs if needed.
+### Optional: Team Server
 
-## Choosing A Mode
+Team features need the backend service (lightweight Hono + SQLite, deployable to any Linux server):
 
-### Use Chat For
+```bash
+git clone https://github.com/Yuan-lai-ru-ci/ProferAI.git
+cd ProferAI/server
+npm install
+nohup node index.js > server.log 2>&1 &
+```
 
-- Everyday Q&A, explanation, translation, rewriting, and lightweight code discussion.
-- Reading attachments and summarizing or comparing their content.
-- One-off conversations enhanced by web search or memory tools.
-- Comparing outputs from multiple models or exploring different system prompts.
+Then configure the team server address in **Settings → Branding** to invite members, share Skills, and sync files.
 
-### Use Agent For
+---
 
-- Creating, editing, or organizing local files.
-- Research, report writing, and multi-step tasks.
-- Work that needs MCP, Skills, Shell, Git, project files, or external context.
-- Tasks that benefit from permissions, plan mode, background execution, or remote bot follow-up.
-
-In short: **use Chat when you need an answer; use Agent when you need work to be done.**
-
-## Screenshots
-
-### Chat Analysis
-
-Use Chat for lightweight but practical analysis: compare audience needs, generate a table, and shape first-screen README copy quickly.
-
-![Profer Chat analysis](<./docs/assets/screenshots/proma-chat-demo.png>)\### Agent Workbench
-
-Agent works inside a workspace, reads project files, progresses through tasks, outputs structured findings, and keeps reusable files visible in the right-side workspace panel.
-
-![Profer Agent workbench](<./docs/assets/screenshots/proma-agent-demo.png>)\### Skills
-
-Each workspace can keep its own reusable Skills. The `feedback-synthesis` Skill shown here turns scattered feedback, interviews, and issues into themes, evidence, and priority suggestions.
-
-![Profer workspace Skills](<./docs/assets/screenshots/proma-skills-demo.png>)\### Skills & MCP
-
-The same workspace can manage stdio and HTTP MCP servers, enabling or disabling external context per project.
-
-![Profer MCP settings](<./docs/assets/screenshots/proma-mcp-demo.png>)\### Streaming Voice Input
-
-Profer supports Doubao-powered streaming voice input, both inside Profer and across the desktop:
-
-- Inside Profer: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript into the active Profer input box.
-- Outside Profer: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript at the current cursor position. If there is no active cursor, Profer writes the transcript to the clipboard.
-
-![Profer voice input](<./docs/assets/screenshots/proma-typeless-input.png>)\## Supported Providers
+## 🤖 Supported Providers
 
 | Provider | Chat | Agent | Protocol |
 | --- | --- | --- | --- |
-| Anthropic | Supported | Supported | Anthropic Messages API |
-| DeepSeek | Supported | Supported | Anthropic-compatible protocol |
-| Kimi API | Supported | Supported | Anthropic-compatible protocol |
-| Kimi Coding Plan | Supported | Supported | Anthropic-compatible protocol with dedicated auth headers |
-| OpenAI | Supported | Not yet | Chat Completions |
-| Google | Supported | Not yet | Gemini Generative Language API |
-| Zhipu AI | Supported | Supported | Anthropic-compatible protocol |
-| MiniMax | Supported | Supported | Anthropic-compatible protocol |
-| Doubao | Supported | Supported | Anthropic-compatible protocol |
-| Qwen | Supported | Supported | Anthropic-compatible protocol |
-| Custom endpoint | Supported | Not yet | OpenAI-compatible protocol |
+| Anthropic | ✅ | ✅ | Messages API |
+| DeepSeek | ✅ | ✅ | Anthropic-compatible |
+| Kimi API | ✅ | ✅ | Anthropic-compatible |
+| Kimi Coding Plan | ✅ | ✅ | Anthropic-compatible (officially whitelisted) |
+| OpenAI | ✅ | ❌ | Chat Completions |
+| Google | ✅ | ❌ | Gemini API |
+| Zhipu AI | ✅ | ✅ | Anthropic-compatible |
+| MiniMax | ✅ | ✅ | Anthropic-compatible |
+| Doubao | ✅ | ✅ | Anthropic-compatible |
+| Qwen | ✅ | ✅ | Anthropic-compatible |
+| Custom Endpoint | ✅ | ❌ | OpenAI-compatible |
 
-> **Kimi Coding Plan users**: Profer is officially whitelisted by Kimi. Using Profer with your Kimi Coding Plan subscription will not trigger any third-party client ban policy.
+---
 
-Agent mode is powered by Claude Agent SDK, so it currently requires an Anthropic or Anthropic-compatible channel. Chat mode uses Provider Adapters from `@proma/core` to support different protocols.
-
-## Local Data
-
-Profer stores data in local files so it is easy to back up, migrate, and inspect.
-
-```
-~/.proma/
-├── channels.json
-├── conversations.json
-├── conversations/
-│   └── {conversation-id}.jsonl
-├── agent-sessions.json
-├── agent-sessions/
-│   └── {session-id}.jsonl
-├── automations.json
-├── agent-workspaces/
-│   └── {workspace-slug}/
-│       ├── workspace-files/
-│       ├── mcp.json
-│       └── skills/
-├── attachments/
-├── user-profile.json
-├── settings.json
-└── sdk-config/
-```
-
-API keys are encrypted through Electron `safeStorage` before being written to `channels.json`. Profer does not use a local database; core data is represented as JSON configuration and append-only JSONL logs.
-
-## Development
-
-Profer is a Bun workspace monorepo.
-
-```
-profer/
-├── packages/
-│   ├── shared/     # shared types, IPC constants, config, utilities
-│   ├── core/       # Provider Adapters, SSE, code highlighting
-│   └── ui/         # shared React UI components
-└── apps/
-    └── electron/   # Electron desktop app
-```
-
-Current package versions:
-
-| Package | Version | Responsibility |
-| --- | --- | --- |
-| `@proma/electron` | `0.12.26` | Electron desktop app |
-| `@proma/shared` | `0.1.31` | shared types, IPC constants, config, utilities |
-| `@proma/core` | `0.2.11` | Provider Adapters, SSE, Shiki highlighting |
-| `@proma/ui` | `0.1.9` | shared React UI components |
-
-Common commands:
-
-```bash
-# Install dependencies
-bun install
-
-# Development mode: Vite + Electron + hot reload
-bun run dev
-
-# Build Electron app
-bun run electron:build
-
-# Build and run
-bun run electron:start
-
-# Typecheck
-bun run typecheck
-
-# Test
-bun test
-```
-
-More granular scripts are available inside the Electron app:
-
-```bash
-cd apps/electron
-
-bun run dev:vite
-bun run dev:electron
-bun run build:main
-bun run build:preload
-bun run build:renderer
-bun run dist:fast
-```
-
-## Tech Stack
+## 🛠️ Tech Stack
 
 | Layer | Technology |
 | --- | --- |
 | Runtime | Bun |
 | Desktop | Electron 43 |
-| Frontend | React 18 + TypeScript |
-| State | Jotai |
+| Frontend | React 18 + TypeScript + Jotai |
 | Styling | Tailwind CSS + Radix UI |
-| Rich text input | TipTap |
-| Markdown / diagrams / math | React Markdown + Beautiful Mermaid + KaTeX |
-| Code highlighting | Shiki |
-| Build | Vite + esbuild |
-| Distribution | electron-builder |
+| Rich text / charts | TipTap · Beautiful Mermaid · KaTeX · Shiki |
+| Build | Vite + esbuild + electron-builder |
 | Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201` |
+| Tablet | Capacitor (Android) |
+| Team backend | Hono + better-sqlite3 + JWT |
 
-## Architecture
+---
 
-Profer's core communication path is:
+## 👷 Development
 
+Bun workspace monorepo:
+
+```text
+profer/
+├── packages/
+│   ├── shared/         # shared types, IPC constants, config
+│   ├── core/           # Provider Adapters, SSE, code highlighting
+│   ├── project-core/   # project / workspace domain models
+│   ├── session-core/   # session domain models
+│   └── ui/             # shared React UI components
+├── apps/
+│   ├── electron/       # Electron desktop app
+│   └── cli/            # command-line tools
+├── server/             # team sync backend (Hono + SQLite)
+└── tablet-app/         # tablet remote client (Capacitor Android)
 ```
-shared types and IPC constants
-  -> main/ipc.ts handlers
-  -> preload/index.ts window.electronAPI bridge
-  -> renderer Jotai atoms and React components
+
+```bash
+bun install        # install dependencies
+bun run dev        # dev mode (Vite + Electron + HMR)
+bun run typecheck  # type checking
+bun test           # tests
 ```
 
-Main-process services live in `apps/electron/src/main/lib/`:
+---
 
-- `agent-orchestrator.ts`: Agent orchestration, environment variables, SDK calls, event streams, error handling.
-- `agent-session-manager.ts`: Agent session index and JSONL message persistence.
-- `agent-workspace-manager.ts`: workspaces, MCP, Skills, and workspace files.
-- `team-manager.ts` / `team-file-service.ts`: team workspaces, invitations, team file upload / download / delete / move, and local cache.
-- `automation-manager.ts` / `automation-scheduler.ts`: durable automations, scheduler recovery, run history, failure protection, and notifications.
-- `chat-service.ts`: Chat streaming, Provider Adapters, tool activity.
-- `conversation-manager.ts`: Chat session index and message storage.
-- `channel-manager.ts`: channel CRUD, API key encryption, connection tests, model fetching.
-- `feishu-bridge.ts` / `dingtalk-bridge.ts` / `wechat-bridge.ts`: remote bot bridges.
-- `memory-service.ts`, `chat-tool-*`, `document-parser.ts`, `workspace-watcher.ts`: memory, tools, document parsing, and file watching.
+## 🤝 Contributing
 
-Renderer state is managed with Jotai. Key atoms live in `apps/electron/src/renderer/atoms/`. Agent IPC listeners are mounted globally at the app root so streaming events, permission requests, and background tasks survive view changes.
+PRs welcome! Before submitting:
 
-## Packaging Notes
+- Use Bun — do not mix npm / pnpm lockfiles
+- State management uses Jotai
+- TypeScript: no `any`, prefer `interface` for object shapes
+- When adding IPC, update shared types, main handler, preload bridge, and renderer call sites together
+- Bump the corresponding package patch version when package behavior changes
 
-`@anthropic-ai/claude-agent-sdk` uses platform native binaries since `0.2.113+`. Profer marks the SDK as external in esbuild and includes the SDK main package plus platform subpackages in `electron-builder.yml`.
+---
 
-When changing packaging configuration, make sure:
+## 📄 License
 
-- Main-process esbuild keeps `--external:@anthropic-ai/claude-agent-sdk`.
-- `apps/electron/package.json` includes target SDK platform subpackages in `optionalDependencies`.
-- `apps/electron/electron-builder.yml` includes the SDK main package and platform subpackages in `files`.
-- Ordinary npm dependencies should usually be bundled into `main.cjs` by esbuild instead of being marked external.
+Profer is developed based on [Proma](https://github.com/ErlichLiu/Proma); the community edition is licensed under [AGPL-3.0](./LICENSE).
 
-See [AGENTS.md](./AGENTS.md) for the full engineering conventions.
+## 🙏 Acknowledgements
 
-## Contributing
-
-Bug fixes, documentation improvements, tests, UX polish, Skills, MCP configs, and real-world Agent workflows are all welcome.
-
-Before opening a PR, please check:
-
-- Use Bun scripts and do not mix npm / pnpm lockfiles.
-- Use Jotai for state management.
-- Keep the app local-first and prefer config files plus JSON / JSONL storage.
-- Do not use TypeScript `any`; prefer `interface` for object shapes.
-- When adding IPC, update shared types, main handler, preload bridge, and renderer calls together.
-- Bump the patch version of affected packages when behavior changes.
-- Add focused tests where possible, especially for shared logic, IPC contracts, and persistence formats.
-
-Profer currently has a PR bounty program. You can leave your email in the PR description for follow-up.
-
-
-<a href="https://www.star-history.com/?repos=Yuan-lai-ru-ci%2FProfer&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/ProferAI&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/ProferAI&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/ProferAI&type=date&legend=top-left" />
-
-</picture>
-</a>
-
-## Credits
-
-- [Shiki](https://shiki.style/): code highlighting.
-- [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid): Mermaid diagram rendering.
-- [Cherry Studio](https://github.com/CherryHQ/cherry-studio): inspiration for multi-provider desktop AI products.
-- [Lobe Icons](https://github.com/lobehub/lobe-icons): AI / LLM brand icons.
-- [Craft Agents OSS](https://github.com/lukilabs/craft-agents-oss): Agent SDK integration reference.
-- [MemOS](https://memos.openmem.net): memory reference and integration.
-
-## License
-
-The Profer Community Edition is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The full license text is available in the `LICENSE` file at the repository root.
-
-**Personal / non-commercial use**: free to use, modify, and distribute, subject to the terms of AGPL-3.0.
-
-**Commercial use**: permitted as long as you fully comply with AGPL-3.0, including (but not limited to) releasing the complete corresponding source code of any modified version you distribute or make available over a network, and licensing all derivative works under AGPL-3.0.
-
-**Commercial license (exemption from AGPL-3.0 obligations)**: if you want to integrate Profer into a closed-source product, offer it as a SaaS service without releasing your modifications, or use it in any way that cannot meet AGPL-3.0 requirements, please contact us by email to obtain a commercial license: [erlichliu@gmail.com](mailto:erlichliu@gmail.com).
-
-By submitting a Pull Request to this project, you agree to license your contribution under AGPL-3.0 and to grant the maintainer the right to relicense it under future commercial license terms.
+Thanks to [Proma](https://github.com/ErlichLiu/Proma) by Erlich Liu, and the open-source projects Shiki, Beautiful Mermaid, Cherry Studio, Lobe Icons, Craft Agents OSS, and MemOS.
