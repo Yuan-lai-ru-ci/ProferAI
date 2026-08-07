@@ -1,6 +1,6 @@
 # Profer
 
-**团队 AI 协作平台** — 像 Notion 一样管理工作区，让 AI Agent 成为团队共享的生产力引擎。
+**基于 Claude Agent SDK 的通用 AI Agent 桌面应用** — 多模型接入、协作子 Agent、定时任务自动化、平板远程接入与团队工作区。
 
 Profer 在强大本地 AI Agent 的基础上，叠加了团队协作层：个人工作区 + 团队工作区双模式、Skills 共享市场、文件云端同步、邀请制成员管理。简单问题用 Chat，复杂任务交给 Agent，团队知识沉淀在工作区。
 
@@ -49,6 +49,15 @@ Profer 在强大本地 AI Agent 的基础上，叠加了团队协作层：个人
 
 ## 现在能做什么
 
+### Agent 模式（双运行时）
+
+基于 `@anthropic-ai/claude-agent-sdk` 的通用 Agent，同时支持 **Claude** 与 **Pi** 两套 Agent Runtime 并行切换：
+
+- **任务图与长任务**：多步骤任务拆分子任务、依赖编排、流式输出、计划确认
+- **协作子 Agent**：复杂任务并行拆分给多个真实子会话，独立推进后汇总结果
+- **SubAgent / Skills / MCP**：完整 Agent 生态，工作区隔离、权限模式、文件操作
+- **定时任务 Automation**：持久化调度（interval / daily / weekly / monthly），运行历史、失败保护，适合日报周报、自动检查等无人值守场景
+
 ### 团队协作（Profer 独有）
 
 - **团队工作区**：创建团队工作区，邀请成员加入，按角色（Owner / Admin / Member / Viewer）控制权限
@@ -57,21 +66,17 @@ Profer 在强大本地 AI Agent 的基础上，叠加了团队协作层：个人
 - **品牌定制**：为每个工作区自定义 Logo、名称、品牌色，侧边栏和标题栏即时生效
 - **邀请管理**：生成邀请链接或邀请码，一次性 token，7 天过期
 
+### 平板远程接入
+
+移动端（Capacitor + Android）通过本地 HTTP/WS 服务远程接入电脑端 Profer：平板 Chat、设置系统、UI 缩放、断线重连与状态同步，让桌面 Agent 能力延伸到平板。
+
 ### Chat 模式
 
 多模型对话、附件解析（PDF / Office / 图片）、Markdown / Mermaid / KaTeX / 代码高亮渲染、并排对比、系统提示词、上下文管理。
 
-### Agent 模式
-
-基于 `@anthropic-ai/claude-agent-sdk` 的通用 Agent。工作区隔离、权限模式、文件操作、长任务流式输出、计划确认。SubAgent / Tasks 拆分复杂任务。
-
 ### Skills & MCP
 
 每个工作区独立配置 Skills 和 MCP Server。全屏「Agent 技能」视图支持搜索、启用切换、更新、导入、卸载。Skills 可在工作区之间导入，也可发布到团队市场。
-
-### Automation 定时任务
-
-持久化定时调度（interval / daily / weekly / monthly），运行历史，失败保护，飞书通知。适合日报周报、自动检查、周期性研究等无人值守场景。
 
 ### 远程机器人
 
@@ -87,7 +92,7 @@ Profer 在强大本地 AI Agent 的基础上，叠加了团队协作层：个人
 
 ### 下载安装
 
-从 [GitHub Releases](https://github.com/Yuan-lai-ru-ci/Profer/releases) 下载最新版本。提供 macOS Apple Silicon / Intel 和 Windows 安装包。
+从 [GitHub Releases](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) 下载最新版本。提供 macOS Apple Silicon / Intel 和 Windows 安装包。
 
 ### 配置团队服务器（可选）
 
@@ -95,10 +100,11 @@ Profer 在强大本地 AI Agent 的基础上，叠加了团队协作层：个人
 
 ```bash
 # 在服务器上
-git clone https://github.com/Yuan-lai-ru-ci/Profer.git
-cd Profer/server
+git clone https://github.com/Yuan-lai-ru-ci/ProferAI.git
+cd ProferAI/server
 npm install
 nohup node index.js > server.log 2>&1 &
+```
 
 # nginx 反代（示例）
 # location /proma/ { proxy_pass http://127.0.0.1:3456/; }
@@ -138,7 +144,7 @@ nohup node index.js > server.log 2>&1 &
 | 层级 | 技术 |
 | --- | --- |
 | 运行时 | Bun |
-| 桌面框架 | Electron 39 |
+| 桌面框架 | Electron 43 |
 | 前端 | React 18 + TypeScript |
 | 状态管理 | Jotai |
 | 样式 | Tailwind CSS + Radix UI |
@@ -147,7 +153,8 @@ nohup node index.js > server.log 2>&1 &
 | 代码高亮 | Shiki |
 | 构建 | Vite + esbuild |
 | 分发 | electron-builder |
-| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.153` |
+| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201` |
+| 平板端 | Capacitor（Android） |
 | 团队后端 | Hono + better-sqlite3 + JWT |
 
 ---
@@ -157,14 +164,18 @@ nohup node index.js > server.log 2>&1 &
 Profer 是 Bun workspace monorepo：
 
 ```text
-proma-v2/
+profer/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 常量、配置
-│   ├── core/       # Provider Adapter、SSE、代码高亮
-│   └── ui/         # 共享 React UI 组件
+│   ├── shared/         # 共享类型、IPC 常量、配置
+│   ├── core/           # Provider Adapter、SSE、代码高亮
+│   ├── project-core/   # 项目 / 工作区领域模型
+│   ├── session-core/   # 会话领域模型
+│   └── ui/             # 共享 React UI 组件
 ├── apps/
-│   └── electron/   # Electron 桌面应用
-└── server/         # 团队同步后端（Hono + SQLite）
+│   ├── electron/       # Electron 桌面应用
+│   └── cli/            # 命令行工具
+├── server/             # 团队同步后端（Hono + SQLite）
+└── tablet-app/         # 平板远程客户端（Capacitor Android）
 ```
 
 ```bash

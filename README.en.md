@@ -1,19 +1,19 @@
 # Profer
 
-Proma is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client.
+Profer is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client. Built on the Claude Agent SDK.
 
-It is not just another chat box. Proma is meant to become a long-lived Agent workbench for your personal workflows: use Chat for simple answers, use Agent when the task needs to act on files, tools, projects, and longer context.
+It is not just another chat box. Profer is meant to become a long-lived Agent workbench for your personal workflows: use Chat for simple answers, use Agent when the task needs to act on files, tools, projects, and longer context.
 
-![Proma Poster](<https://img.erlich.fun/personal-blog/uPic/pb.png>)[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/Profer/releases) | [Commercial Version](https://proma.cool/download)
+[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) | [Official Website](https://profer.cn/)
 
-## What Proma Can Do
+## What Profer Can Do
 
 - **Chat mode: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.**
 - **Agent mode**: general-purpose Agent powered by `@anthropic-ai/claude-agent-sdk`, with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions.
 - **SubAgents / Tasks**: complex tasks can be delegated through the Claude Agent SDK Agent tool, with sub-agent calls and results shown in the message stream.
 - **Skills & MCP**: each workspace can manage its own Skills, MCP servers, and workspace files.
 - **Agent Skills management**: Skills and MCP are now managed in a dedicated full-screen Agent Skills view, with search, enable toggles, updates, import, uninstall, and workspace switching.
-- **Automation**: Proma has a durable local automation system for interval / daily / weekly / monthly schedules, run history, manual runs, failure protection, and Feishu notifications.
+- **Automation**: Profer has a durable local automation system for interval / daily / weekly / monthly schedules, run history, manual runs, failure protection, and Feishu notifications.
 - **Team file management**: team workspaces support remote file manifests, file / folder upload, drag-and-drop moves, target-directory imports, local-cache-first preview, and dragging team files into Agent.
 - **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
 - **Memory and tools**: Chat and Agent can share memory, with web search, built-in Chat tools, and Agent recommendation helpers.
@@ -24,13 +24,13 @@ It is not just another chat box. Proma is meant to become a long-lived Agent wor
 
 ### Download
 
-Download the open-source version from [GitHub Releases](https://github.com/Yuan-lai-ru-ci/Profer/releases). This README is synchronized with the `v0.12.26` state; macOS Apple Silicon, macOS Intel, and Windows builds are provided on the Releases page.
+Download the open-source version from [GitHub Releases](https://github.com/Yuan-lai-ru-ci/ProferAI/releases). This README is synchronized with the `v0.15.x` state; macOS Apple Silicon, macOS Intel, and Windows builds are provided on the Releases page.
 
-If you want fewer API setup steps, you can also use the [Proma commercial version](https://proma.cool/download). The commercial and open-source versions run in parallel; the commercial version mainly adds built-in model channels and subscription options.
+If you want fewer API setup steps, you can also use the [Profer commercial version](https://profer.cn/). The commercial and open-source versions run in parallel; the commercial version mainly adds built-in model channels and subscription options.
 
 ### First Setup
 
-1. Open Proma and finish the environment check. Agent mode depends on local tooling, especially Git, Node.js / Bun, and a usable shell.
+1. Open Profer and finish the environment check. Agent mode depends on local tooling, especially Git, Node.js / Bun, and a usable shell.
 2. Go to **Settings &gt; Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
 3. Chat mode can use OpenAI, Anthropic, Google, or OpenAI-compatible channels.
 4. Agent mode requires an Anthropic or Anthropic-compatible channel, such as Anthropic, DeepSeek, Kimi API, or Kimi Coding Plan.
@@ -61,26 +61,26 @@ In short: **use Chat when you need an answer; use Agent when you need work to be
 
 Use Chat for lightweight but practical analysis: compare audience needs, generate a table, and shape first-screen README copy quickly.
 
-![Proma Chat analysis](<./docs/assets/screenshots/proma-chat-demo.png>)\### Agent Workbench
+![Profer Chat analysis](<./docs/assets/screenshots/proma-chat-demo.png>)\### Agent Workbench
 
 Agent works inside a workspace, reads project files, progresses through tasks, outputs structured findings, and keeps reusable files visible in the right-side workspace panel.
 
-![Proma Agent workbench](<./docs/assets/screenshots/proma-agent-demo.png>)\### Skills
+![Profer Agent workbench](<./docs/assets/screenshots/proma-agent-demo.png>)\### Skills
 
 Each workspace can keep its own reusable Skills. The `feedback-synthesis` Skill shown here turns scattered feedback, interviews, and issues into themes, evidence, and priority suggestions.
 
-![Proma workspace Skills](<./docs/assets/screenshots/proma-skills-demo.png>)\### Skills & MCP
+![Profer workspace Skills](<./docs/assets/screenshots/proma-skills-demo.png>)\### Skills & MCP
 
 The same workspace can manage stdio and HTTP MCP servers, enabling or disabling external context per project.
 
-![Proma MCP settings](<./docs/assets/screenshots/proma-mcp-demo.png>)\### Streaming Voice Input
+![Profer MCP settings](<./docs/assets/screenshots/proma-mcp-demo.png>)\### Streaming Voice Input
 
-Proma supports Doubao-powered streaming voice input, both inside Proma and across the desktop:
+Profer supports Doubao-powered streaming voice input, both inside Profer and across the desktop:
 
-- Inside Proma: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript into the active Proma input box.
-- Outside Proma: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript at the current cursor position. If there is no active cursor, Proma writes the transcript to the clipboard.
+- Inside Profer: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript into the active Profer input box.
+- Outside Profer: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript at the current cursor position. If there is no active cursor, Profer writes the transcript to the clipboard.
 
-![Proma voice input](<./docs/assets/screenshots/proma-typeless-input.png>)\## Supported Providers
+![Profer voice input](<./docs/assets/screenshots/proma-typeless-input.png>)\## Supported Providers
 
 | Provider | Chat | Agent | Protocol |
 | --- | --- | --- | --- |
@@ -96,13 +96,13 @@ Proma supports Doubao-powered streaming voice input, both inside Proma and acros
 | Qwen | Supported | Supported | Anthropic-compatible protocol |
 | Custom endpoint | Supported | Not yet | OpenAI-compatible protocol |
 
-> **Kimi Coding Plan users**: Proma is officially whitelisted by Kimi. Using Proma with your Kimi Coding Plan subscription will not trigger any third-party client ban policy.
+> **Kimi Coding Plan users**: Profer is officially whitelisted by Kimi. Using Profer with your Kimi Coding Plan subscription will not trigger any third-party client ban policy.
 
 Agent mode is powered by Claude Agent SDK, so it currently requires an Anthropic or Anthropic-compatible channel. Chat mode uses Provider Adapters from `@proma/core` to support different protocols.
 
 ## Local Data
 
-Proma stores data in local files so it is easy to back up, migrate, and inspect.
+Profer stores data in local files so it is easy to back up, migrate, and inspect.
 
 ```
 ~/.proma/
@@ -125,14 +125,14 @@ Proma stores data in local files so it is easy to back up, migrate, and inspect.
 └── sdk-config/
 ```
 
-API keys are encrypted through Electron `safeStorage` before being written to `channels.json`. Proma does not use a local database; core data is represented as JSON configuration and append-only JSONL logs.
+API keys are encrypted through Electron `safeStorage` before being written to `channels.json`. Profer does not use a local database; core data is represented as JSON configuration and append-only JSONL logs.
 
 ## Development
 
-Proma is a Bun workspace monorepo.
+Profer is a Bun workspace monorepo.
 
 ```
-proma-v2/
+profer/
 ├── packages/
 │   ├── shared/     # shared types, IPC constants, config, utilities
 │   ├── core/       # Provider Adapters, SSE, code highlighting
@@ -190,7 +190,7 @@ bun run dist:fast
 | Layer | Technology |
 | --- | --- |
 | Runtime | Bun |
-| Desktop | Electron 39 |
+| Desktop | Electron 43 |
 | Frontend | React 18 + TypeScript |
 | State | Jotai |
 | Styling | Tailwind CSS + Radix UI |
@@ -199,11 +199,11 @@ bun run dist:fast
 | Code highlighting | Shiki |
 | Build | Vite + esbuild |
 | Distribution | electron-builder |
-| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.153` |
+| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201` |
 
 ## Architecture
 
-Proma's core communication path is:
+Profer's core communication path is:
 
 ```
 shared types and IPC constants
@@ -229,7 +229,7 @@ Renderer state is managed with Jotai. Key atoms live in `apps/electron/src/rende
 
 ## Packaging Notes
 
-`@anthropic-ai/claude-agent-sdk` uses platform native binaries since `0.2.113+`. Proma marks the SDK as external in esbuild and includes the SDK main package plus platform subpackages in `electron-builder.yml`.
+`@anthropic-ai/claude-agent-sdk` uses platform native binaries since `0.2.113+`. Profer marks the SDK as external in esbuild and includes the SDK main package plus platform subpackages in `electron-builder.yml`.
 
 When changing packaging configuration, make sure:
 
@@ -254,15 +254,14 @@ Before opening a PR, please check:
 - Bump the patch version of affected packages when behavior changes.
 - Add focused tests where possible, especially for shared logic, IPC contracts, and persistence formats.
 
-Proma currently has a PR bounty program. You can leave your email in the PR description for follow-up.
+Profer currently has a PR bounty program. You can leave your email in the PR description for follow-up.
 
-![Proma PR Bounty](<https://img.erlich.fun/personal-blog/uPic/PR%20%E8%B5%A0%E9%87%91%201.png>)\## Star History
 
-<a href="https://www.star-history.com/?repos=Yuan-lai-ru-ci%2FProma&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=Yuan-lai-ru-ci%2FProfer&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/Profer&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/ProferAI&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/ProferAI&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Yuan-lai-ru-ci/ProferAI&type=date&legend=top-left" />
 
 </picture>
 </a>
@@ -278,12 +277,12 @@ Proma currently has a PR bounty program. You can leave your email in the PR desc
 
 ## License
 
-The Proma Community Edition is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The full license text is available in the `LICENSE` file at the repository root.
+The Profer Community Edition is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The full license text is available in the `LICENSE` file at the repository root.
 
 **Personal / non-commercial use**: free to use, modify, and distribute, subject to the terms of AGPL-3.0.
 
 **Commercial use**: permitted as long as you fully comply with AGPL-3.0, including (but not limited to) releasing the complete corresponding source code of any modified version you distribute or make available over a network, and licensing all derivative works under AGPL-3.0.
 
-**Commercial license (exemption from AGPL-3.0 obligations)**: if you want to integrate Proma into a closed-source product, offer it as a SaaS service without releasing your modifications, or use it in any way that cannot meet AGPL-3.0 requirements, please contact us by email to obtain a commercial license: [erlichliu@gmail.com](mailto:erlichliu@gmail.com).
+**Commercial license (exemption from AGPL-3.0 obligations)**: if you want to integrate Profer into a closed-source product, offer it as a SaaS service without releasing your modifications, or use it in any way that cannot meet AGPL-3.0 requirements, please contact us by email to obtain a commercial license: [erlichliu@gmail.com](mailto:erlichliu@gmail.com).
 
 By submitting a Pull Request to this project, you agree to license your contribution under AGPL-3.0 and to grant the maintainer the right to relicense it under future commercial license terms.
