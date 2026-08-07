@@ -108,12 +108,23 @@ jobs:
             throw "Missing unpacked resources for Pi probe: $unpackedResources"
           }
           $env:ELECTRON_RUN_AS_NODE = "1"
-          $result = & "out/win-unpacked/Profer.exe" $probePath 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host $result
-            throw "Pi runtime closure probe failed with exit code $LASTEXITCODE"
+          # Profer.exe 是 GUI 子系统程序，pwsh 的 `&` 调用不会等待其退出，
+          # 必须用 Start-Process -Wait -PassThru 同步等待并捕获退出码。
+          $stdout = Join-Path $PWD "probe-out.txt"
+          $stderr = Join-Path $PWD "probe-err.txt"
+          $process = Start-Process -FilePath (Join-Path $PWD "out/win-unpacked/Profer.exe") `
+            -ArgumentList @($probePath, $unpackedResources) `
+            -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          if ($process.ExitCode -ne 0) {
+            Write-Host "--- probe stdout ---"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "--- probe stderr ---"
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Pi runtime closure probe failed with exit code $($process.ExitCode)"
           }
           Write-Host "Pi runtime closure verified"
+          if (Test-Path $stdout) { Get-Content $stdout }
 
       - name: Collect Windows release assets
         shell: pwsh
