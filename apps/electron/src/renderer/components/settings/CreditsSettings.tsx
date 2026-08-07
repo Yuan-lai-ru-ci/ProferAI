@@ -226,7 +226,7 @@ export function CreditsSettings(): React.ReactElement {
         {/* 进度条 + 累计消耗 */}
         {balanceLoaded && (
         <SettingsCard className="mt-3">
-          <div className="px-1 py-2 space-y-2.5">
+          <div className="px-4 py-2 space-y-2.5">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">剩余</span>
               <span className="font-semibold tabular-nums">{remainingPct}%</span>
@@ -332,7 +332,7 @@ export function CreditsSettings(): React.ReactElement {
                 // cost_credits 来自服务端是原始 quota，需转换为积分
                 const costPoints = quotaToPoints(log.cost_credits)
                 return (
-                  <div key={log.id} className="flex items-center justify-between py-2.5">
+                  <div key={log.id} className="flex items-center justify-between px-4 py-2.5">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium truncate">{log.model}</span>
