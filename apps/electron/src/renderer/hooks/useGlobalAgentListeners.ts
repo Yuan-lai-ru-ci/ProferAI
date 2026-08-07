@@ -19,6 +19,7 @@ import {
   agentPendingPromptAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
+  askUserAnswersAtom,
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
@@ -949,6 +950,13 @@ export function useGlobalAgentListeners(): void {
               const next = current.filter((r) => r.requestId !== event.requestId)
               if (next.length > 0) map.set(sessionId, next)
               else map.delete(sessionId)
+              return map
+            })
+            // 同步清理该请求的答案草稿（随请求解决失效，避免残留）
+            store.set(askUserAnswersAtom, (prev) => {
+              if (!prev.has(event.requestId)) return prev
+              const map = new Map(prev)
+              map.delete(event.requestId)
               return map
             })
           } else if (event.type === 'permission_resolved') {

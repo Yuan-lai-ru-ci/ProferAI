@@ -509,6 +509,21 @@ export const pendingAskUserRequestsAtom = atom(
   }
 )
 
+/** AskUser 单个问题的答案草稿（选项选择 + 自定义文本 + 是否展开「其他」） */
+export interface AskUserQuestionAnswer {
+  selected: string[]
+  customText: string
+  showCustom: boolean
+}
+
+/**
+ * AskUser 提问答案草稿 — 按 requestId 索引，跟随请求生命周期。
+ * 切换会话时请求在 allPendingAskUserRequestsAtom 按 session 保留，答案随之保留；
+ * 请求解决/关闭/移除后由清理点（ask_user_resolved 事件、提交、关闭、删除会话）清除。
+ * 不归属会话内容，与 agentSessionDraftsAtom 相互独立，互不污染。
+ */
+export const askUserAnswersAtom = atom<Map<string, Map<number, AskUserQuestionAnswer>>>(new Map())
+
 /** 待处理的 ExitPlanMode 请求 Map — 以 sessionId 为 key */
 export const allPendingExitPlanRequestsAtom = atom<Map<string, readonly ExitPlanModeRequest[]>>(new Map())
 
