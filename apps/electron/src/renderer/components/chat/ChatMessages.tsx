@@ -34,7 +34,6 @@ import {
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
-import { StreamingText, StreamingCursor, isPlainStreamText } from '@/components/ai-elements/streaming-text'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { ContextDivider } from '@/components/ai-elements/context-divider'
@@ -426,12 +425,7 @@ export function ChatMessages({
                   {/* 流式内容（经过平滑处理） */}
                   {smoothContent ? (
                     <>
-                      {streaming && isPlainStreamText(smoothContent) ? (
-                        <StreamingText text={smoothContent} />
-                      ) : (
-                        <MessageResponse>{smoothContent}</MessageResponse>
-                      )}
-                      {streaming && <StreamingCursor />}
+                      <MessageResponse>{smoothContent}</MessageResponse>
                       {streaming && <StreamingIndicator />}
                     </>
                   ) : (
