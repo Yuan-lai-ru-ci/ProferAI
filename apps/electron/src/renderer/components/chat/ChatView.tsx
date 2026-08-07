@@ -61,7 +61,7 @@ import type {
 
 interface ChatViewProps {
   conversationId: string
-  /** 平板模式：隐藏输入框占位提示文字等触屏简化 */
+  /** 移动模式：隐藏输入框占位提示文字等触屏简化 */
   tabletMode?: boolean
   /** 隐藏 ChatHeader（平板竖屏由外部顶栏承担标题，避免双顶栏） */
   hideChatHeader?: boolean

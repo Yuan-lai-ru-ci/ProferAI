@@ -179,7 +179,7 @@ import { selectAndParsePaper, parsePaper, estimatePaperPages } from './lib/paper
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
-import { getRemoteServiceStatus, setRemoteServiceEnabled } from './lib/remote-service'
+import { getRemoteServiceStatus, setRemoteServiceEnabled, restartRemoteService } from './lib/remote-service'
 import { updateWindowFrameAppearance } from './lib/titlebar-overlay'
 import { setDockBadgeCount } from './lib/dock-badge-service'
 
@@ -1789,17 +1789,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 获取平板模式服务状态。Token 只在服务实际监听后随状态返回。
+  // 获取移动模式服务状态。Token 只在服务实际监听后随状态返回。
   ipcMain.handle(
     SETTINGS_IPC_CHANNELS.GET_TABLET_MODE_STATUS,
     async () => getRemoteServiceStatus(),
   )
 
-  // 设置平板模式（试验版）。开启后立即监听局域网，关闭后立即断开。
+  // 设置移动模式（试验版）。开启后立即监听局域网，关闭后立即断开。
   ipcMain.handle(
     SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_ENABLED,
     async (_event, enabled: boolean) => {
-      if (typeof enabled !== 'boolean') throw new Error('平板模式开关参数无效')
+      if (typeof enabled !== 'boolean') throw new Error('移动模式开关参数无效')
       if (!enabled) {
         const status = setRemoteServiceEnabled(false)
         updateSettings({ tabletModeEnabled: false })
@@ -1811,6 +1811,26 @@ export function registerIpcHandlers(): void {
       const status = getRemoteServiceStatus()
       updateSettings({ tabletModeEnabled: true })
       return status
+    },
+  )
+
+  // 设置移动模式服务端口：保存并热应用（服务运行中自动重启）。
+  // port=0 表示恢复默认端口（清除自定义值，回到正式版 7788 / 开发版 7789）。
+  // 端口占用或非法时服务可能启动失败，状态由 UI 轮询刷新呈现。
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_PORT,
+    async (_event, port: unknown) => {
+      const n = typeof port === 'number' ? port : Number(port)
+      if (n === 0) {
+        updateSettings({ tabletModePort: 0 })
+        return restartRemoteService()
+      }
+      if (!Number.isInteger(n) || n < 1024 || n > 65535) {
+        throw new Error('端口必须是 1024-65535 之间的整数')
+      }
+      updateSettings({ tabletModePort: n })
+      // 服务运行中则停掉旧端口并重启；未运行时新端口在下次启动时生效。
+      return restartRemoteService()
     },
   )
 

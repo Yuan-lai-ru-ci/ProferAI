@@ -26,8 +26,9 @@ import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
+import { app } from 'electron'
 
-import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, updateAgentPermissionMode } from './agent-service'
+import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
 import { getUserProfile } from './user-profile-service'
 import {
   listAgentSessions,
@@ -37,10 +38,14 @@ import {
   createAgentSession,
   ensureProjectDraftAgentSession,
   updateAgentSessionMeta,
+  deleteAgentSession,
+  forkAgentSession,
+  moveSessionToWorkspace,
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir } from './config-paths'
 import { getSettings } from './settings-service'
-import { listAgentWorkspaces } from './agent-workspace-manager'
+import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
+import { AgentSessionDeletionCoordinator } from './agent-session-deletion'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -61,8 +66,11 @@ import { sendMessage, stopGeneration, generateTitle } from './chat-service'
 import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './attachment-service'
 import { chatEventBus } from './chat-stream-bus'
 
-/** 默认监听端口 */
+/** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
+
+/** 开发模式默认监听端口：与正式版（7788）区分，避免与打包版实例并存时 EADDRINUSE */
+export const DEV_DEFAULT_REMOTE_PORT = 7789
 
 /** 平板 Web UI 静态资源根目录（指向 dist/renderer，涵盖 tablet 子目录与 assets） */
 let staticRoot: string | null = null
@@ -103,6 +111,9 @@ let isStarted = false
 
 /** 由设置页在当前运行期显式开启；启动参数仍保持兼容。 */
 let runtimeEnabled = false
+
+/** 平板会话删除协调器：合并并发删除 + stop-and-wait 成功前绝不清理持久化数据（对齐桌面 IPC 语义） */
+const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
 
 /** token 持久化文件（统一存配置目录，与 getConfigDir 一致；不再依赖进程 cwd） */
 function getTokenFilePath(): string {
@@ -161,6 +172,8 @@ export interface RemoteServiceStatus {
   enabled: boolean
   running: boolean
   port: number
+  /** 未显式配置时的默认端口（正式版 7788 / 开发版 7789） */
+  defaultPort: number
   localUrl: string | null
   lanUrl: string | null
   token: string | null
@@ -184,6 +197,7 @@ export function getRemoteServiceStatus(): RemoteServiceStatus {
     enabled: isRemoteEnabled(),
     running: isStarted && listenAddress !== null,
     port,
+    defaultPort: getDefaultPort(),
     localUrl: listenAddress,
     lanUrl: listenAddress ? getLanUrl(port) : null,
     token: listenAddress ? accessToken : null,
@@ -198,14 +212,35 @@ export function setRemoteServiceEnabled(enabled: boolean): RemoteServiceStatus {
   return getRemoteServiceStatus()
 }
 
-/** 解析监听端口 */
+/** 解析监听端口：设置页保存的端口优先，其次 PROFER_REMOTE_PORT 环境变量，最后默认 7788。 */
 function getPort(): number {
+  const saved = getSettings().tabletModePort
+  if (saved) {
+    if (Number.isInteger(saved) && saved > 0 && saved < 65536) return saved
+  }
   const p = process.env.PROFER_REMOTE_PORT
   if (p) {
     const n = Number(p)
     if (Number.isInteger(n) && n > 0 && n < 65536) return n
   }
-  return DEFAULT_REMOTE_PORT
+  return getDefaultPort()
+}
+
+/** 未显式配置时的默认端口：开发模式（未打包）用 7789，正式版用 7788，避免同时运行互相抢占端口 */
+export function getDefaultPort(): number {
+  return app.isPackaged ? DEFAULT_REMOTE_PORT : DEV_DEFAULT_REMOTE_PORT
+}
+
+/**
+ * 热应用新端口：服务运行中则先停后启（保留启用状态，不改变启动参数）。
+ * 服务未运行时仅返回当前状态（新端口会在下次启动时生效）。
+ */
+export function restartRemoteService(): RemoteServiceStatus {
+  if (isStarted) {
+    stopRemoteService()
+    startRemoteService()
+  }
+  return getRemoteServiceStatus()
 }
 
 /** 解析静态根目录 */
@@ -301,7 +336,7 @@ function serveStatic(res: {
 }, urlPath: string): void {
   if (!staticRoot) {
     res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('平板 UI 未构建。请先运行 build:tablet，或通过 PROFER_REMOTE_STATIC 指定静态目录。')
+    res.end('移动端 UI 未构建。请先运行 build:tablet，或通过 PROFER_REMOTE_STATIC 指定静态目录。')
     return
   }
   const rel = tabletIndexRel
@@ -331,6 +366,9 @@ function serveStatic(res: {
       'content-type': mimeMap[ext] || 'application/octet-stream',
       // 消除 Electron “Insecure Content-Security-Policy” 警告（仅静态资源，含平板首页与 assets）
       'content-security-policy': TABLET_STATIC_CSP,
+      // html 不缓存（dev 迭代频繁，避免平板 WebView 一直加载旧页面/旧 hash 包）；
+      // hash 命名的 assets 天然不可变，缓存一年
+      'cache-control': ext === 'html' ? 'no-cache' : 'public, max-age=31536000, immutable',
     })
     res.end(data)
   } catch {
@@ -423,9 +461,14 @@ type CommandResult =
   | { ok: true; data: unknown }
   | { ok: false; error: string }
 
-/** 会话列表（脱敏，仅暴露平板端需要的字段） */
-function buildSessionList() {
-  return listAgentSessions().map((s) => ({
+/** 单个会话对象（脱敏，仅暴露平板端需要的字段；与桌面 AgentSessionMeta 平板所需子集兼容）。
+ * 注意：必须包含 id/updatedAt/title/pinned/archived/draft 等完整字段——桌面复用组件
+ * （AgentView/LeftSidebar）按桌面 IPC 返回完整对象的契约处理 .then((updated) => updated.id)
+ * 等；若缺字段（旧实现只回 { channelId, modelId }）会导致切换模型后列表不更新甚至
+ * 在 Promise 回调里读 undefined.updatedAt 报错。
+ */
+function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]) {
+  return {
     id: s.id,
     title: s.title,
     channelId: s.channelId,
@@ -436,11 +479,18 @@ function buildSessionList() {
     sourceDelegationId: s.sourceDelegationId,
     agentRuntime: s.agentRuntime,
     permissionMode: s.permissionMode,
+    createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     pinned: s.pinned,
     archived: s.archived,
+    draft: s.draft,
     active: isAgentSessionActive(s.id),
-  }))
+  }
+}
+
+/** 会话列表（脱敏，仅暴露平板端需要的字段） */
+function buildSessionList() {
+  return listAgentSessions().map(buildSessionItem)
 }
 
 /** 工作区（项目）列表（脱敏，仅暴露平板端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
@@ -486,8 +536,52 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       return { ok: true, data: buildSessionList() }
     }
 
+    case 'delete_session': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      try {
+        await agentSessionDeletionCoordinator.delete(sessionId, {
+          beginDeletion: beginAgentSessionDeletion,
+          endDeletion: endAgentSessionDeletion,
+          stopAndWait: stopAgentAndWait,
+          // 运行已完全结束后再撤销交互状态并删除持久化数据（与桌面 DELETE_SESSION IPC 同语义）
+          clearState: (id) => {
+            permissionService.clearSessionWhitelist(id)
+            permissionService.clearSessionPending(id)
+            askUserService.clearSessionPending(id)
+            exitPlanService.clearSessionPending(id)
+          },
+          deleteSession: deleteAgentSession,
+        })
+        return { ok: true, data: { sessionId } }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '删除会话失败' }
+      }
+    }
+
     case 'list_workspaces': {
       return { ok: true, data: buildWorkspaceList() }
+    }
+
+    case 'create_workspace': {
+      const name = typeof parsed.name === 'string' ? parsed.name.trim() : ''
+      if (!name) return { ok: false, error: '工作区名称必填' }
+      try {
+        const ws = createAgentWorkspace(name)
+        return {
+          ok: true,
+          data: {
+            id: ws.id,
+            name: ws.name,
+            slug: ws.slug,
+            type: ws.type,
+            createdAt: ws.createdAt,
+            updatedAt: ws.updatedAt,
+          },
+        }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '创建工作区失败' }
+      }
     }
 
     case 'get_user_profile': {
@@ -586,7 +680,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       if (!channel) return { ok: false, error: '渠道不可用或不存在' }
       if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
       const updated = updateAgentSessionMeta(sessionId, { channelId, modelId })
-      return { ok: true, data: { channelId: updated.channelId, modelId: updated.modelId } }
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     case 'update_session_runtime': {
@@ -597,7 +691,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const meta = getAgentSessionMeta(sessionId)
       if (!meta) return { ok: false, error: '会话不存在' }
       const updated = updateAgentSessionMeta(sessionId, { agentRuntime: runtime })
-      return { ok: true, data: { agentRuntime: updated.agentRuntime } }
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     case 'update_permission_mode': {
@@ -608,7 +702,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
       if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
       agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode } })
-      return { ok: true, data: { permissionMode: updated.permissionMode } }
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     case 'upload_attachment': {
@@ -632,7 +726,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       if (!sessionId || !title) return { ok: false, error: '缺少 sessionId 或 title' }
       const meta = updateAgentSessionMeta(sessionId, { title })
       if (!meta) return { ok: false, error: '会话不存在' }
-      return { ok: true, data: { id: meta.id, title: meta.title } }
+      return { ok: true, data: buildSessionItem(meta) }
     }
 
     case 'create_session': {
@@ -681,6 +775,118 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
         console.error('[Remote] send_message 执行异常:', e)
       })
       return { ok: true, data: { accepted: true } }
+    }
+
+    // 分叉会话：从指定消息处创建新会话继续（对齐桌面 forkAgentSession IPC）。
+    // 返回桌面同构会话元数据（AgentView fork 后 openSession 新会话 tab）。
+    case 'fork_session': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      const upToMessageUuid = typeof parsed.upToMessageUuid === 'string' ? parsed.upToMessageUuid : undefined
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      try {
+        const meta = await forkAgentSession({ sessionId, upToMessageUuid })
+        return { ok: true, data: buildSessionItem(meta) }
+      } catch (error) {
+        console.error('[Remote] fork_session 失败:', error)
+        return { ok: false, error: error instanceof Error ? error.message : '分叉会话失败' }
+      }
+    }
+
+    // 快照回退：同一会话内回退到指定点（恢复文件 + 截断对话；对齐桌面 REWIND_SESSION IPC）
+    case 'rewind_session': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      const assistantMessageUuid = typeof parsed.assistantMessageUuid === 'string' ? parsed.assistantMessageUuid : ''
+      if (!sessionId || !assistantMessageUuid) return { ok: false, error: '缺少 sessionId 或 assistantMessageUuid' }
+      try {
+        const result = await rewindAgentSession(sessionId, assistantMessageUuid)
+        return { ok: true, data: result }
+      } catch (error) {
+        console.error('[Remote] rewind_session 失败:', error)
+        return { ok: false, error: error instanceof Error ? error.message : '会话回退失败' }
+      }
+    }
+
+    // 置顶/取消置顶（对齐桌面 TOGGLE_PIN：置顶时自动取消归档）
+    case 'toggle_session_pin': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const current = listAgentSessions().find((s) => s.id === sessionId)
+      if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
+      const newPinned = !current.pinned
+      const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
+      if (newPinned && current.archived) updates.archived = false
+      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, updates)) }
+    }
+
+    // 归档/取消归档（对齐桌面 TOGGLE_ARCHIVE：归档时自动取消置顶）
+    case 'toggle_session_archive': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const current = listAgentSessions().find((s) => s.id === sessionId)
+      if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
+      const newArchived = !current.archived
+      const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
+      if (newArchived && current.pinned) updates.pinned = false
+      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, updates)) }
+    }
+
+    // 移动会话到项目（对齐桌面 MOVE_SESSION_TO_WORKSPACE：运行中拒绝）
+    case 'move_session_to_workspace': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      const targetWorkspaceId = typeof parsed.targetWorkspaceId === 'string' ? parsed.targetWorkspaceId : ''
+      if (!sessionId || !targetWorkspaceId) return { ok: false, error: '缺少 sessionId 或 targetWorkspaceId' }
+      if (isAgentSessionActive(sessionId)) {
+        await new Promise((r) => setTimeout(r, 500))
+        if (isAgentSessionActive(sessionId)) return { ok: false, error: '会话正在运行中，请停止后再迁移' }
+      }
+      try {
+        return { ok: true, data: buildSessionItem(moveSessionToWorkspace(sessionId, targetWorkspaceId)) }
+      } catch (error) {
+        console.error('[Remote] move_session_to_workspace 失败:', error)
+        return { ok: false, error: error instanceof Error ? error.message : '移动会话失败' }
+      }
+    }
+
+    // 设置会话推理档位（对齐桌面 UPDATE_SESSION_OPENAI_THINKING：null=恢复全局默认，运行中拒绝）
+    case 'update_session_thinking_level': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      const level = parsed.level as string | null
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const validLevels = [null, 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+      if (level !== null && !validLevels.includes(level)) {
+        return { ok: false, error: `无效的推理档位: ${String(level)}` }
+      }
+      if (!getAgentSessionMeta(sessionId)) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
+      if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换推理档位' }
+      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })) }
+    }
+
+    // 队列消息：向正在运行的 Agent 注入（interrupt=true 时软打断当前 turn 立即插入）。
+    // 桌面端 queueAgentMessage IPC 的等价物；会话未运行时返回 "会话未运行" 错误，
+    // 平板端 stub 据此降级为 send_message 新建 run（与桌面 isQueueTargetNoLongerActiveError 一致）。
+    case 'queue_message': {
+      const sessionId = parsed.sessionId as string
+      const userMessage = typeof parsed.userMessage === 'string' ? parsed.userMessage : ''
+      if (!sessionId || !userMessage) return { ok: false, error: '缺少 sessionId 或 userMessage' }
+      try {
+        const uuid = await queueAgentMessage(
+          {
+            sessionId,
+            userMessage,
+            rawUserMessage: typeof parsed.rawUserMessage === 'string' ? parsed.rawUserMessage : undefined,
+            uuid: typeof parsed.uuid === 'string' ? parsed.uuid : undefined,
+            interrupt: parsed.interrupt === true,
+            mentionedSkills: Array.isArray(parsed.mentionedSkills) ? parsed.mentionedSkills as string[] : undefined,
+            mentionedMcpServers: Array.isArray(parsed.mentionedMcpServers) ? parsed.mentionedMcpServers as string[] : undefined,
+            mentionedSessionIds: Array.isArray(parsed.mentionedSessionIds) ? parsed.mentionedSessionIds as string[] : undefined,
+          } as import('@profer/shared').AgentQueueMessageInput,
+          // 桌面 IPC 的 webContents 仅用于把事件转发到渲染进程；平板走 EventBus → WS，无需指定
+          null as never,
+        )
+        return { ok: true, data: { accepted: true, uuid } }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
     }
 
     case 'stop_agent': {
@@ -902,7 +1108,7 @@ export function startRemoteService(): string | null {
 
   // 初始化静态根
   staticRoot = resolveStaticRoot()
-  console.log(`[Remote] 平板 UI 静态目录: ${staticRoot || '(未构建)'}`)
+  console.log(`[Remote] 移动端 UI 静态目录: ${staticRoot || '(未构建)'}`)
 
   const port = getPort()
   httpServer = createServer((req, res) => {
@@ -1008,9 +1214,9 @@ export function startRemoteService(): string | null {
       }
     } catch { /* ignore */ }
     console.log('\n════════════════════════════════════════════════════')
-    console.log('[Remote] Profer 平板版已启动')
+    console.log('[Remote] Profer 移动版已启动')
     console.log(`[Remote] 本机访问:  ${listenAddress}`)
-    console.log(`[Remote] 平板访问:  http://${lanIp}:${actualPort}`)
+    console.log(`[Remote] 移动端访问:  http://${lanIp}:${actualPort}`)
     console.log(`[Remote] 访问 Token: ${accessToken}（首次在平板输入一次）`)
     console.log('════════════════════════════════════════════════════\n')
   })
@@ -1039,5 +1245,5 @@ export function stopRemoteService(): void {
   httpServer = null
   isStarted = false
   listenAddress = null
-  console.log('[Remote] 平板版服务已停止')
+  console.log('[Remote] 移动版服务已停止')
 }

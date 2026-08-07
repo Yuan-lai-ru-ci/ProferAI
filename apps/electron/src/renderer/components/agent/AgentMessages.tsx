@@ -15,6 +15,7 @@ import {
   MessageContent,
   BasePathsProvider,
 } from '@/components/ai-elements/message'
+import { TabletModeContext } from '@/components/ai-elements/tablet-mode-context'
 import {
   Conversation,
   ConversationContent,
@@ -37,6 +38,7 @@ import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extr
 import { buildLiveGroupSet } from './live-group-set'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
+import { StreamingCursor } from '@/components/ai-elements/streaming-text'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import type { AgentEventUsage, RetryAttempt, SDKMessage } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
@@ -627,6 +629,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     : (liveMessages != null && liveMessages.some((m) => (m as { type: string }).type === 'assistant'))
 
   return (
+    <TabletModeContext.Provider value={tabletMode}>
     <BasePathsProvider basePaths={attachedDirs}>
     <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
     <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
@@ -716,6 +719,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                           />
                         ))}
                       </div>
+                      {streaming && <StreamingCursor />}
                       {streaming && <AgentRunningIndicator startedAt={startedAt} />}
                     </>
                   ) : (
@@ -755,5 +759,6 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       <AgentHistorySelectionLayer sessionId={sessionId} rootRef={historySelectionRootRef} />
     </div>
     </BasePathsProvider>
+    </TabletModeContext.Provider>
   )
 }

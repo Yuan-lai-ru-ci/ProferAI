@@ -6,7 +6,7 @@
  * 数据持久化到 ~/.proma/channels.json。
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { getChannelsPath } from './config-paths'
 import { encryptToken, decryptToken } from './token-crypto'
@@ -112,6 +112,68 @@ function encryptApiKey(plainKey: string): string {
  */
 function decryptKey(encryptedKey: string): string {
   return decryptToken(encryptedKey)
+}
+
+/**
+ * 将当前渠道配置加密备份到磁盘（按账号隔离）
+ *
+ * logout 时调用：把整个 channels.json（含渠道元数据）用 token-crypto 整体加密后
+ * 写入 channels.json.logout-backup-{accountId}。加密密钥由 deviceId 派生
+ * （注册表/Keychain，仅当前用户可读），其他用户/进程拿到备份文件也无法解密。
+ * 备份成功后由调用方继续清空 channels.json，保持「登出后活跃文件不残留」的安全行为。
+ */
+export function backupChannelsForAccount(accountId: string): void {
+  const configPath = getChannelsPath()
+  if (!existsSync(configPath)) return
+
+  try {
+    const raw = readFileSync(configPath, 'utf-8')
+    const parsed = JSON.parse(raw) as ChannelsConfig
+    if (!parsed.channels || parsed.channels.length === 0) return // 无渠道无需备份
+
+    const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
+    const encrypted = encryptToken(raw)
+    writeFileSync(`${configPath}.logout-backup-${safeId}`, encrypted, 'utf-8')
+    console.log(`[渠道管理] 已为账号 ${safeId} 加密备份 ${parsed.channels.length} 个渠道`)
+  } catch (err) {
+    console.warn('[渠道管理] 渠道加密备份失败（非致命）:', err)
+  }
+}
+
+/**
+ * 从加密备份恢复渠道配置（按账号隔离）
+ *
+ * login 成功后调用：仅当 channels.json 为空时才恢复对应账号的备份，
+ * 避免覆盖用户已有配置；恢复成功后删除备份文件。解密失败/备份不存在时静默跳过。
+ *
+ * @returns 恢复的渠道数量（0 = 无备份或未恢复）
+ */
+export function restoreChannelsForAccount(accountId: string): number {
+  const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
+  const backupPath = `${getChannelsPath()}.logout-backup-${safeId}`
+  if (!existsSync(backupPath)) return 0
+
+  try {
+    const encrypted = readFileSync(backupPath, 'utf-8')
+    const raw = decryptToken(encrypted)
+    const parsed = JSON.parse(raw) as ChannelsConfig
+    if (!parsed.channels || parsed.channels.length === 0) return 0
+
+    // 仅当前配置为空时恢复，避免覆盖用户新配置
+    const current = readConfig()
+    if (current.channels.length > 0) {
+      console.log('[渠道管理] 当前已有渠道，跳过备份恢复')
+      return 0
+    }
+
+    writeConfig(parsed)
+    rmSync(backupPath, { force: true })
+    console.log(`[渠道管理] 已从加密备份恢复 ${parsed.channels.length} 个渠道`)
+    return parsed.channels.length
+  } catch (err) {
+    console.warn('[渠道管理] 渠道备份恢复失败（非致命）:', err)
+    return 0
+  }
 }
 
 /**

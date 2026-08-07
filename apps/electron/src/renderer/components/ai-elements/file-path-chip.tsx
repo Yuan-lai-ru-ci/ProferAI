@@ -10,6 +10,7 @@ import * as React from 'react'
 import { useStore } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
@@ -105,6 +106,9 @@ interface FilePathChipProps {
 export function FilePathChip({ filePath, basePath, basePaths, className }: FilePathChipProps): React.ReactElement {
   const trimmedPath = filePath.trim()
   const { path: cleanPath, suffix: lineColSuffix } = stripLineCol(trimmedPath)
+  // 平板远程模式：预览面板/文件管理器均依赖桌面能力（MainArea 渲染 / Electron IPC），
+  // 点击与右键菜单入口应诚实隐藏，仅保留路径展示
+  const tabletMode = useTabletMode()
 
   const filename = getFileName(cleanPath)
 
@@ -201,6 +205,26 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
       .then((opened) => { if (!opened) toast.error(`未找到文件：${filename}`) })
       .catch(() => toast.error(`未找到文件：${filename}`))
   }, [cleanPath, candidateBases, filename])
+
+  // 平板模式：静态展示（不可点击、无右键菜单），保留文件名与文件类型图标
+  if (tabletMode) {
+    return (
+      <span
+        title={displayPath}
+        className={cn(
+          'inline-flex items-center gap-1 rounded px-1.5 py-[2px] text-[12px] font-medium leading-[1.6]',
+          'align-baseline not-prose',
+          fileStatus === 'broken'
+            ? 'opacity-50 border border-dashed border-muted-foreground/30 text-muted-foreground'
+            : 'bg-primary/10 text-primary',
+          className
+        )}
+      >
+        <FileTypeIcon name={filename} isDirectory={false} size={14} />
+        <span className="truncate max-w-[240px]">{filename}{lineColSuffix}</span>
+      </span>
+    )
+  }
 
   return (
     <ContextMenu>

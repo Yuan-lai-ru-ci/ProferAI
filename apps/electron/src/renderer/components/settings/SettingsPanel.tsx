@@ -58,6 +58,8 @@ import { DataManagementSettings } from "./DataManagementSettings";
 import { TeamWorkspaceSettings } from "./TeamWorkspaceSettings";
 import { CreditsSettings } from "./CreditsSettings";
 import { SubscriptionSettings } from "./SubscriptionSettings";
+import { TabletConnectionSettings } from "./TabletConnectionSettings";
+import { TabletNotificationSettings } from "./TabletNotificationSettings";
 import { OpenApiSettings } from "./OpenApiSettings";
 
 /** 设置 Tab 定义 */
@@ -118,7 +120,7 @@ const TAIL_TABS: SettingsTabItem[] = [
 ];
 
 /** 根据标签页 id 渲染对应内容 */
-function renderTabContent(tab: SettingsTab): React.ReactElement {
+function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElement {
   switch (tab) {
     case "general":
       return <GeneralSettings />;
@@ -131,7 +133,12 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
     case "tools":
       return <ToolSettings />;
     case "appearance":
-      return <AppearanceSettings />;
+      // 平板（tabsOverride 非空）：界面大小裁剪到 150%、隐藏 Agent 预览展开方式（功能不可用）
+      return <AppearanceSettings tabletMode={tabletMode} />;
+    case "connection":
+      return <TabletConnectionSettings />;
+    case "notifications":
+      return <TabletNotificationSettings />;
     case "about":
       return <AboutSettings />;
     case "bots":
@@ -283,8 +290,8 @@ export function SettingsPanel({
         )}
       </div>
 
-      {/* 下方主体：左导航 + 右内容 */}
-      <div className="flex flex-1 min-h-0">
+      {/* 下方主体：左导航 + 右内容（竖屏由 globals.css 改为纵向布局：顶部横条 tab + 内容） */}
+      <div className="settings-body flex flex-1 min-h-0">
         {/* 左侧 Tab 导航 */}
         <div className="settings-nav w-[160px] border-r border-border/50 pt-3 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
           <nav className="flex flex-col gap-0.5">
@@ -309,9 +316,9 @@ export function SettingsPanel({
           </nav>
         </div>
 
-        {/* 右侧内容区域 */}
-        <ScrollArea className="flex-1">
-          <div className="px-6 py-4">{renderTabContent(effectiveTab)}</div>
+        {/* 右侧内容区域（竖屏 flex-col 布局下需要 min-h-0 保持滚动约束） */}
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="px-6 py-4">{renderTabContent(effectiveTab, Boolean(tabsOverride))}</div>
         </ScrollArea>
       </div>
 

@@ -43,7 +43,7 @@ export interface WsClientOptions {
   /** 访问令牌 */
   token: string
   /** 连接状态变化回调 */
-  onStatusChange?: (status: 'connecting' | 'open' | 'closed' | 'error', info?: string) => void
+  onStatusChange?: (status: 'connecting' | 'open' | 'closed' | 'error' | 'unauthorized', info?: string) => void
   /** Agent 工作流事件回调 */
   onAgentEvent?: (evt: AgentWorkflowEvent) => void
   /** Chat 流式事件回调 */
@@ -133,9 +133,17 @@ export class WsClient {
       }
     }
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
       this.clearHeartbeat()
       this.rejectAllPending(new Error('连接已关闭'))
+      // 服务端鉴权失败：remote-service 对无效 token 的处理是「先握手成功，再 close(4001)」
+      // （见 main/lib/remote-service.ts 的 wss.on('connection'））。若此时仍走自动重连，
+      // 会形成「连接成功 → 被踢 → 2 秒重连」死循环，表现为登录页/主界面频繁闪动。
+      // 因此收到 4001 时停止重连，由 UI 提示用户重新输入 token 后手动重连。
+      if (event.code === 4001) {
+        this.emitStatus('unauthorized', event.reason || 'unauthorized')
+        return
+      }
       this.emitStatus('closed')
       this.scheduleReconnect()
     }
@@ -199,10 +207,29 @@ export class WsClient {
   private scheduleReconnect(): void {
     if (!this.shouldReconnect) return
     if (this.reconnectTimer) return
+    // 页面在后台时不调度定时器：Android 后台 WebView 的 JS 定时器会被节流/冻结，
+    // 空转重连无意义；恢复前台时由 reconnectNow() 立即触发，避免“切回时还在等定时器”。
+    if (typeof document !== 'undefined' && document.hidden) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (this.shouldReconnect) this.openSocket()
     }, 2000)
+  }
+
+  /**
+   * 立即重连（页面恢复前台时调用）。
+   * - 连接仍 OPEN / 正在 CONNECTING：no-op（无感，不打断现有会话）
+   * - 已断开且允许重连：立即发起，不等 2s 定时器
+   */
+  reconnectNow(): void {
+    if (!this.shouldReconnect) return
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    const rs = this.ws?.readyState
+    if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return
+    this.openSocket()
   }
 
   private clearHeartbeat(): void {
@@ -212,7 +239,7 @@ export class WsClient {
     }
   }
 
-  private emitStatus(status: 'connecting' | 'open' | 'closed' | 'error', info?: string): void {
+  private emitStatus(status: 'connecting' | 'open' | 'closed' | 'error' | 'unauthorized', info?: string): void {
     this.onStatusChange?.(status, info)
   }
 
@@ -257,6 +284,44 @@ export class WsClient {
 
   listWorkspaces(): Promise<unknown> {
     return this.sendCommand({ type: 'list_workspaces' })
+  }
+
+  createWorkspace(name: string): Promise<unknown> {
+    return this.sendCommand({ type: 'create_workspace', name })
+  }
+
+  deleteSession(sessionId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'delete_session', sessionId })
+  }
+
+  /** 分叉会话（从指定消息处创建新会话继续；对齐桌面 forkAgentSession） */
+  forkSession(payload: { sessionId: string; upToMessageUuid?: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'fork_session', ...payload })
+  }
+
+  /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话；对齐桌面 rewindSession） */
+  rewindSession(payload: { sessionId: string; assistantMessageUuid: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'rewind_session', ...payload })
+  }
+
+  /** 置顶/取消置顶（对齐桌面 togglePinAgentSession） */
+  toggleSessionPin(sessionId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'toggle_session_pin', sessionId })
+  }
+
+  /** 归档/取消归档（对齐桌面 toggleArchiveAgentSession） */
+  toggleSessionArchive(sessionId: string): Promise<unknown> {
+    return this.sendCommand({ type: 'toggle_session_archive', sessionId })
+  }
+
+  /** 移动会话到项目（对齐桌面 moveAgentSessionToWorkspace） */
+  moveSessionToWorkspace(payload: { sessionId: string; targetWorkspaceId: string }): Promise<unknown> {
+    return this.sendCommand({ type: 'move_session_to_workspace', ...payload })
+  }
+
+  /** 设置会话推理档位（对齐桌面 updateSessionOpenAIThinkingLevel） */
+  updateSessionThinkingLevel(sessionId: string, level: string | null): Promise<unknown> {
+    return this.sendCommand({ type: 'update_session_thinking_level', sessionId, level })
   }
 
   getUserProfile(): Promise<unknown> {
@@ -322,6 +387,26 @@ export class WsClient {
 
   sendMessage(payload: { sessionId: string; userMessage: string; channelId: string; modelId?: string; workspaceId?: string }): Promise<unknown> {
     return this.sendCommand({ type: 'send_message', ...payload })
+  }
+
+  /**
+   * 向正在运行的 Agent 注入消息（流式追加 / 软打断）
+   *
+   * 对齐桌面 queueAgentMessage IPC：interrupt=true 时先软打断当前 turn 再立即注入，
+   * false/缺省时排队追加（当前 turn 结束后消费）；uuid 用于幂等去重。
+   * 会话未运行时主进程会拒绝（"会话未运行"），调用方应降级为 sendMessage 新建 run。
+   */
+  queueMessage(payload: {
+    sessionId: string
+    userMessage: string
+    rawUserMessage?: string
+    uuid?: string
+    interrupt?: boolean
+    mentionedSkills?: string[]
+    mentionedMcpServers?: string[]
+    mentionedSessionIds?: string[]
+  }): Promise<unknown> {
+    return this.sendCommand({ type: 'queue_message', ...payload })
   }
 
   stopAgent(sessionId: string): Promise<unknown> {
