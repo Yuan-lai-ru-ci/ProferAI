@@ -94,6 +94,8 @@ mac:
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
+  # 产物名带架构：CI 拆分为 arm64 / x64 两个 job 并行构建上传，避免同名覆盖
+  artifactName: Profer-${version}-${arch}.${ext}
   extendInfo:
     NSMicrophoneUsageDescription: "Proma 需要访问麦克风，用于将你的语音实时转写为文本。"
   fileAssociations:

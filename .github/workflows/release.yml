@@ -30,7 +30,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # 统一 node 22（windows runner 镜像自带 22）：避免 npm ci 装 better-sqlite3
+          # prebuilt（node24 ABI 137）与运行时 node（22 ABI 127）不匹配
+          node-version: 22
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
