@@ -55,7 +55,10 @@ jobs:
         run: bun test --timeout 30000
 
       - name: Run Node.js server reliability gate
-        run: bun run server:test:node
+        # 直接调用真实 Node（setup-node 24）运行 node:test，避免 bun run 对 node 命令的
+        # shim（ABI 127）与 better-sqlite3 prebuilt（ABI 137）不匹配。
+        run: node scripts/run-node-tests.mjs
+        working-directory: server
       - name: Build GitHub app
         run: bun run electron:build:github
         working-directory: .
