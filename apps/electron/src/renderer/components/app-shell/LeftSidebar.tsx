@@ -69,6 +69,7 @@ import {
   agentPromptSuggestionsAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
+  askUserAnswersAtom,
   allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -602,13 +603,22 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
   const agentDraftMap = useAtomValue(agentSessionDraftsAtom)
   const agentDraftHtmlMap = useAtomValue(agentSessionDraftHtmlAtom)
   const conversationDraftMap = useAtomValue(conversationDraftsAtom)
-  /** 输入框有内容的 Agent 会话 ID 集合（markdown + html 任一命中） */
+  const allPendingAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
+  const askUserAnswers = useAtomValue(askUserAnswersAtom)
+  /** 输入框有内容的 Agent 会话 ID 集合（markdown + html 任一命中，或 AskUser 提问填写中） */
   const agentDraftIds = React.useMemo(() => {
     const ids = new Set<string>()
     for (const id of agentDraftMap.keys()) ids.add(id)
     for (const id of agentDraftHtmlMap.keys()) ids.add(id)
+    // AskUser 提问填写中：会话的当前请求已有答案草稿（含默认选中），视为有待回答的填写内容
+    for (const [sessionId, requests] of allPendingAskUserRequests) {
+      const current = requests[0]
+      if (!current) continue
+      const answers = askUserAnswers.get(current.requestId)
+      if (answers && answers.size > 0) ids.add(sessionId)
+    }
     return ids
-  }, [agentDraftMap, agentDraftHtmlMap])
+  }, [agentDraftMap, agentDraftHtmlMap, allPendingAskUserRequests, askUserAnswers])
   const setAgentMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
 
   // 键盘与手柄共用左栏的 DOM 顺序；项目标题和会话行采用 roving focus。
@@ -809,6 +819,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
   const setAgentPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
   const setAllPendingPermissionRequests = useSetAtom(allPendingPermissionRequestsAtom)
   const setAllPendingAskUserRequests = useSetAtom(allPendingAskUserRequestsAtom)
+  const setAskUserAnswers = useSetAtom(askUserAnswersAtom)
   const setAllPendingExitPlanRequests = useSetAtom(allPendingExitPlanRequestsAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
@@ -847,6 +858,18 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
     setAgentPromptSuggestions(deleteKey)
     setAllPendingPermissionRequests(deleteKey)
     setAllPendingAskUserRequests(deleteKey)
+    // AskUser 答案草稿按 requestId 存，需按该会话当前请求逐个清理
+    {
+      const askUserRequestIds = store.get(allPendingAskUserRequestsAtom).get(id)?.map((r) => r.requestId) ?? []
+      if (askUserRequestIds.length > 0) {
+        setAskUserAnswers((prev) => {
+          const map = new Map(prev)
+          let changed = false
+          for (const rid of askUserRequestIds) if (map.delete(rid)) changed = true
+          return changed ? map : prev
+        })
+      }
+    }
     setAllPendingExitPlanRequests(deleteKey)
 
     // 待发送附件：先释放 blob URL 和 window 缓存中的 base64，再删 base map entry。
@@ -871,7 +894,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAllPendingExitPlanRequests, setSessionPendingFiles, store])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null

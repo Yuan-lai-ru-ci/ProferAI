@@ -11,17 +11,11 @@ import { Send, X } from 'lucide-react'
 import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
-import { allPendingAskUserRequestsAtom } from '@/atoms/agent-atoms'
+import { allPendingAskUserRequestsAtom, askUserAnswersAtom, type AskUserQuestionAnswer } from '@/atoms/agent-atoms'
 import { isEditableTarget } from '@/lib/navigation-controller'
 import type { AskUserQuestion } from '@profer/shared'
 
-interface QuestionAnswer {
-  selected: string[]
-  customText: string
-  showCustom: boolean
-}
-
-const EMPTY_ANSWER: QuestionAnswer = { selected: [], customText: '', showCustom: false }
+const EMPTY_ANSWER: AskUserQuestionAnswer = { selected: [], customText: '', showCustom: false }
 
 const PREVIEW_REMARK_PLUGINS = [remarkGfm]
 
@@ -38,15 +32,38 @@ interface AskUserBannerProps {
 
 export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingAskUserRequestsAtom)
+  const [answersByRequest, setAnswersByRequest] = useAtom(askUserAnswersAtom)
   const requests = allRequests.get(sessionId) ?? []
-  const [answers, setAnswers] = React.useState<Map<number, QuestionAnswer>>(new Map())
   const [submitting, setSubmitting] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState(0)
   const [focusedOptIdx, setFocusedOptIdx] = React.useState(-1)
 
   const request = requests[0] ?? null
   const questions = request?.questions ?? []
+  const requestId = request?.requestId ?? null
   const isLastTab = activeTab >= questions.length - 1
+
+  // 当前请求的答案草稿：按 requestId 从 atom 读取（请求不存在则空）
+  const answers = React.useMemo<Map<number, AskUserQuestionAnswer>>(
+    () => (requestId ? (answersByRequest.get(requestId) ?? new Map()) : new Map()),
+    [answersByRequest, requestId],
+  )
+
+  // 写入当前请求的答案草稿（支持函数式更新；无请求则不写）
+  const setAnswers = React.useCallback(
+    (update: Map<number, AskUserQuestionAnswer> | ((prev: Map<number, AskUserQuestionAnswer>) => Map<number, AskUserQuestionAnswer>)): void => {
+      if (!requestId) return
+      setAnswersByRequest((prev) => {
+        const map = new Map(prev)
+        const cur = map.get(requestId) ?? new Map<number, AskUserQuestionAnswer>()
+        map.set(requestId, typeof update === 'function'
+          ? (update as (p: Map<number, AskUserQuestionAnswer>) => Map<number, AskUserQuestionAnswer>)(cur)
+          : update)
+        return map
+      })
+    },
+    [requestId, setAnswersByRequest],
+  )
 
   // ===== Refs：确保 keydown handler 始终读取最新值，消除闭包过期问题 =====
   const activeTabRef = React.useRef(activeTab)
@@ -68,15 +85,24 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
   // 组件卸载时清理未触发的跳转定时器
   React.useEffect(() => clearAutoAdvanceTimer, [clearAutoAdvanceTimer])
 
+  // 请求变化时重置焦点并初始化答案草稿：仅当该 requestId 无持久化答案时写入默认值。
+  // 切回同一请求时答案已持久化在 askUserAnswersAtom，保留不覆盖。
   React.useEffect(() => {
     clearAutoAdvanceTimer()
     setActiveTab(0)
     setFocusedOptIdx(-1)
-    const firstOpt = questions[0]?.options[0]
-    setAnswers(firstOpt
-      ? new Map([[0, { ...EMPTY_ANSWER, selected: [firstOpt.label] }]])
-      : new Map())
-  }, [request?.requestId])
+    const rid = request?.requestId ?? null
+    if (!rid) return
+    setAnswersByRequest((prev) => {
+      if (prev.has(rid)) return prev
+      const map = new Map(prev)
+      const firstOpt = questions[0]?.options[0]
+      const initial = new Map<number, AskUserQuestionAnswer>()
+      if (firstOpt) initial.set(0, { ...EMPTY_ANSWER, selected: [firstOpt.label] })
+      map.set(rid, initial)
+      return map
+    })
+  }, [request?.requestId, questions, setAnswersByRequest])
 
   // 切换 Tab 时重置焦点并默认选中第一个选项
   React.useEffect(() => {
@@ -143,6 +169,15 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
 
   /** 关闭问题，并经统一入口请求停止 Agent。 */
   const handleDismiss = (): void => {
+    // 清理当前请求的答案草稿（随请求关闭失效）
+    if (requestId) {
+      setAnswersByRequest((prev) => {
+        if (!prev.has(requestId)) return prev
+        const map = new Map(prev)
+        map.delete(requestId)
+        return map
+      })
+    }
     setAllRequests((prev) => {
       const map = new Map(prev)
       map.delete(sessionId)
@@ -153,7 +188,7 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
 
   if (!request) return null
 
-  const getAnswer = (idx: number): QuestionAnswer => answers.get(idx) ?? EMPTY_ANSWER
+  const getAnswer = (idx: number): AskUserQuestionAnswer => answers.get(idx) ?? EMPTY_ANSWER
 
   function toggleOptionByState(qIdx: number, q: AskUserQuestion, label: string): void {
     setAnswers((prev) => {
@@ -199,6 +234,13 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
         const newValue = current.filter((r) => r.requestId !== request.requestId)
         if (newValue.length === 0) map.delete(sessionId)
         else map.set(sessionId, newValue)
+        return map
+      })
+      // 提交成功：清理该请求的答案草稿
+      setAnswersByRequest((prev) => {
+        if (!prev.has(request.requestId)) return prev
+        const map = new Map(prev)
+        map.delete(request.requestId)
         return map
       })
     } catch (error) {
@@ -338,7 +380,7 @@ function QuestionCard({
 }: {
   question: AskUserQuestion
   questionIndex: number
-  answer: QuestionAnswer
+  answer: AskUserQuestionAnswer
   focusedIndex: number
   showBadge: boolean
   onToggleOption: (label: string) => void
