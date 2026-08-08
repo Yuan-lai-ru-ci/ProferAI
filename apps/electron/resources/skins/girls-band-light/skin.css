@@ -1,0 +1,133 @@
+/* ===== 少女乐队 · 午后练习室（Girls Band Afternoon）皮肤 =====
+ *
+ * 皮肤文件 = :root token 表 + 特例规则。
+ * token 表是完整自描述：所有颜色/表面 token 在此赋值，未定义 token 继承
+ * globals.css 的 :root / .dark 默认值（几何/阴影等通常不必重复）。
+ *
+ * 视觉概念：放学后的练习室 —— 奶白淡粉的墙壁、白色卡片、
+ * 品红琴身与薰衣草紫靠垫，明亮、清爽、少女感。
+ */
+
+:root {
+  /* ===== 基底色板：奶白淡粉 ===== */
+  --background: 340 45% 96%;                /* 奶白淡粉 墙面 */
+  --foreground: 335 22% 18%;                /* 深粉灰 主文字 */
+  /* 对话正文专用 token：独立于全局文字，可单独柔和化 */
+  --girls-band-message-foreground: 335 20% 22%;
+  --muted: 340 32% 92%;
+  --muted-foreground: 335 12% 45%;
+  --border: 340 24% 88%;
+  --input: 340 24% 88%;
+  --ring: 335 78% 55%;                      /* 品红焦点环 */
+  --primary: 335 74% 47%;                   /* 深品红 主色 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 340 36% 92%;
+  --secondary-foreground: 335 25% 25%;
+  --accent: 265 58% 64%;                    /* 薰衣草紫 */
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 60% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --stop-hover-bg: hsl(335 55% 92%);
+
+  /* ===== 浮层：纯白卡片，干净利落 ===== */
+  --card: 0 0% 100%;
+  --card-foreground: 335 22% 20%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 335 22% 20%;
+  --dialog: 0 0% 100%;
+  --dialog-foreground: 335 22% 20%;
+
+  /* ===== 应用表面 ===== */
+  --content-area: 340 40% 94%;              /* 对话主画布：比墙面低一档 */
+  --sidebar-surface: 340 45% 97%;
+  --tabbar-surface: 340 45% 97%;
+  --input-surface: 0 0% 100%;               /* 白色输入框 */
+  --tab-surface: 0 0% 100%;
+  --tooltip: 335 30% 26%;
+  --tooltip-foreground: 0 0% 98%;
+  --tooltip-muted: 335 15% 78%;
+  --code-bg: 335 24% 14%;                   /* 深色代码块，与浅色 UI 对比 */
+  --dashed-border: 335 50% 45% / 0.28;
+  --dashed-border-hover: 335 75% 55% / 0.60;
+
+  /* ===== 外壳渐变：淡粉到薰衣草紫的柔光 ===== */
+  --shell-bg-gradient: linear-gradient(145deg, hsl(340 50% 95%), hsl(300 42% 93%));
+
+  /* ===== 输入区代码块（globals: .tiptap pre = code-bg） ===== */
+  --tiptap-pre-bg: 335 24% 14%;
+}
+
+/* ===== 特例规则区（午后练习室专属，不 token 化） ===== */
+
+/* 高使用频率表面需要专用 token，避免 backdrop 透明度把输入区混回主画布。 */
+.agent-input-surface {
+  background-color: hsl(var(--input-surface) / 0.98);
+  border-color: hsl(var(--border) / 0.92);
+  box-shadow: var(--shadow-md);
+}
+
+.agent-input-surface:focus-within {
+  border-color: hsl(var(--ring) / 0.72);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.16), var(--shadow-md);
+}
+
+/* 经典界面：默认以 background 覆盖输入表面，这里恢复专用输入 token。 */
+.ui-classic .agent-input-surface {
+  background-color: hsl(var(--input-surface)) !important;
+}
+
+/* 对话正文独立于设置与全局文字，避免主题正文过亮。代码块仍保留 Shiki 高亮。 */
+.message-item .prose {
+  --tw-prose-body: hsl(var(--girls-band-message-foreground));
+  --tw-prose-headings: hsl(var(--girls-band-message-foreground));
+  --tw-prose-bold: hsl(var(--girls-band-message-foreground));
+  --tw-prose-bullets: hsl(var(--girls-band-message-foreground) / 0.7);
+  --tw-prose-counters: hsl(var(--girls-band-message-foreground) / 0.7);
+}
+
+.message-item .prose :is(p, li, blockquote, strong, em, h1, h2, h3, h4, h5, h6) {
+  color: hsl(var(--girls-band-message-foreground));
+}
+
+/* ===== 斜向呼吸渐变（shell 背景） =====
+ * 静态斜向渐变打底 + 伪元素光晕层缓慢漂移/缩放/明暗脉动
+ * （transform/opacity 动画走合成层，性能好），营造午后柔光的呼吸感。
+ * 同特异性覆盖 skin-base 的 --shell-bg-gradient 静态背景。
+ */
+html[class*="skin-"] .shell-bg {
+  position: relative;
+  background: linear-gradient(135deg, hsl(340 48% 95%), hsl(300 44% 92%), hsl(330 46% 94%));
+}
+
+html[class*="skin-"] .shell-bg::before {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  background: radial-gradient(ellipse 55% 42% at 50% 50%, hsl(330 45% 90% / 0.85), transparent 70%);
+  animation: gb-breathe 10s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes gb-breathe {
+  0%, 100% {
+    transform: translate(-9%, -7%) scale(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translate(9%, 11%) scale(1.14);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[class*="skin-"] .shell-bg::before {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* 文字选区：品红标记落在文字上 */
+::selection {
+  background-color: hsl(var(--primary) / 0.28);
+  color: hsl(var(--foreground));
+}

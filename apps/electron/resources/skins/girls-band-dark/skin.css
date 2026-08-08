@@ -1,0 +1,141 @@
+/* ===== 少女乐队 · 霓虹夜演（Girls Band Neon Live）皮肤 =====
+ *
+ * 皮肤文件 = :root token 表 + 特例规则。
+ * token 表是完整自描述：所有颜色/表面 token 在此赋值，未定义 token 继承
+ * globals.css 的 :root / .dark 默认值（几何/阴影等通常不必重复）。
+ * 公共组件规则（选中态、滚动条等）在 skin-base.css 中引用这些 token。
+ *
+ * 视觉概念：Live House 深夜舞台 —— 深紫黑暗场 + 霓虹品红主光 +
+ * 紫罗兰副光，灯光打在粉白文字与浮层上。
+ */
+
+:root {
+  /* ===== 基底色板：舞台暗场 ===== */
+  --background: 285 24% 9%;                 /* 深紫黑 舞台暗场 */
+  --foreground: 330 22% 90%;                /* 粉白 主文字 */
+  /* 对话正文专用 token：独立于全局文字，可单独柔和化 */
+  --girls-band-message-foreground: 330 22% 90%;
+  --muted: 285 18% 14%;
+  --muted-foreground: 290 9% 60%;
+  --border: 285 14% 22%;
+  --input: 285 14% 24%;
+  --ring: 330 88% 62%;                      /* 霓虹品红焦点环 */
+  --primary: 330 86% 54%;                   /* 霓虹品红 主光 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 285 18% 15%;
+  --secondary-foreground: 330 18% 88%;
+  --accent: 265 70% 64%;                    /* 紫罗兰 副光 */
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 62% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --stop-hover-bg: hsl(330 45% 26%);
+
+  /* ===== 浮层：略高于暗场的紫调表面 ===== */
+  --card: 285 20% 14%;
+  --card-foreground: 330 18% 90%;
+  --popover: 285 20% 17%;
+  --popover-foreground: 330 18% 90%;
+  --dialog: 285 20% 16%;
+  --dialog-foreground: 330 18% 90%;
+
+  /* ===== 应用表面 ===== */
+  --content-area: 285 26% 7%;               /* 对话主画布：最暗，突出灯光 */
+  --sidebar-surface: 285 24% 10%;
+  --tabbar-surface: 285 24% 10%;
+  --input-surface: 285 20% 13%;             /* 输入区 */
+  --tab-surface: 285 16% 20%;
+  --tooltip: 285 18% 22%;
+  --tooltip-foreground: 0 0% 98%;
+  --tooltip-muted: 290 9% 74%;
+  --code-bg: 285 26% 6%;
+  --dashed-border: 330 85% 80% / 0.28;
+  --dashed-border-hover: 330 90% 65% / 0.65;
+
+  /* ===== 外壳渐变：紫黑到微紫红的光晕 ===== */
+  --shell-bg-gradient: linear-gradient(145deg, hsl(285 30% 6%), hsl(300 32% 10%));
+
+  /* ===== 深色化阴影五档（夜演专属：更重的黑 + 品红高光） ===== */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.36);
+  --shadow-sm: 0 2px 5px 0 rgb(0 0 0 / 0.44), inset 0 1px 0 0 hsl(330 60% 70% / 0.05);
+  --shadow-md: 0 8px 20px -5px rgb(0 0 0 / 0.54), 0 2px 5px 0 rgb(0 0 0 / 0.34), inset 0 1px 0 0 hsl(330 60% 70% / 0.06);
+  --shadow-lg: 0 18px 38px -9px rgb(0 0 0 / 0.62), 0 8px 16px -3px rgb(0 0 0 / 0.42), inset 0 1px 0 0 hsl(330 60% 70% / 0.07);
+  --shadow-xl: 0 36px 72px -18px rgb(0 0 0 / 0.70), 0 18px 32px -8px rgb(0 0 0 / 0.52), inset 0 1px 0 0 hsl(330 60% 70% / 0.08);
+
+  /* ===== 输入区代码块（globals: .dark .tiptap pre = muted） ===== */
+  --tiptap-pre-bg: 285 18% 14%;
+}
+
+/* ===== 特例规则区（夜演专属，不 token 化） ===== */
+
+/* 高使用频率表面需要专用 token，避免 backdrop 透明度把输入区混回主画布。 */
+.agent-input-surface {
+  background-color: hsl(var(--input-surface) / 0.98);
+  border-color: hsl(var(--border) / 0.92);
+  box-shadow: var(--shadow-md);
+}
+
+.agent-input-surface:focus-within {
+  border-color: hsl(var(--ring) / 0.72);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.16), var(--shadow-md);
+}
+
+/* 经典界面：默认以 background 覆盖输入表面，这里恢复专用输入 token。 */
+.ui-classic .agent-input-surface {
+  background-color: hsl(var(--input-surface)) !important;
+}
+
+/* 对话正文独立于设置与全局文字，避免主题正文过亮。代码块仍保留 Shiki 高亮。 */
+.message-item .prose {
+  --tw-prose-body: hsl(var(--girls-band-message-foreground));
+  --tw-prose-headings: hsl(var(--girls-band-message-foreground));
+  --tw-prose-bold: hsl(var(--girls-band-message-foreground));
+  --tw-prose-bullets: hsl(var(--girls-band-message-foreground) / 0.7);
+  --tw-prose-counters: hsl(var(--girls-band-message-foreground) / 0.7);
+}
+
+.message-item .prose :is(p, li, blockquote, strong, em, h1, h2, h3, h4, h5, h6) {
+  color: hsl(var(--girls-band-message-foreground));
+}
+
+/* ===== 斜向呼吸渐变（shell 背景） =====
+ * 静态斜向渐变打底 + 伪元素光晕层缓慢漂移/缩放/明暗脉动
+ * （transform/opacity 动画走合成层，性能好），营造舞台灯光的呼吸感。
+ * 同特异性覆盖 skin-base 的 --shell-bg-gradient 静态背景。
+ */
+html[class*="skin-"] .shell-bg {
+  position: relative;
+  background: linear-gradient(135deg, hsl(285 32% 5%), hsl(300 34% 9%), hsl(290 28% 7%));
+}
+
+html[class*="skin-"] .shell-bg::before {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  background: radial-gradient(ellipse 55% 42% at 50% 50%, hsl(330 60% 20% / 0.55), transparent 70%);
+  animation: gb-breathe 10s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes gb-breathe {
+  0%, 100% {
+    transform: translate(-9%, -7%) scale(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translate(9%, 11%) scale(1.14);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[class*="skin-"] .shell-bg::before {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* 文字选区：品红灯光落在文字上 */
+::selection {
+  background-color: hsl(var(--primary) / 0.4);
+  color: hsl(0 0% 100%);
+}
