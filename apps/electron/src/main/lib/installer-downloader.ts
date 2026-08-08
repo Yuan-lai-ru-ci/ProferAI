@@ -41,7 +41,7 @@ function getInstallerDir(): string {
 export async function downloadInstaller(
   source: InstallerSource,
   key: string,
-  sender: BrowserWindow,
+  sender?: BrowserWindow,
 ): Promise<InstallerDownloadResult> {
   const dir = getInstallerDir()
   await fsp.mkdir(dir, { recursive: true })
@@ -99,7 +99,7 @@ function downloadToFile(
   filePath: string,
   source: InstallerSource,
   key: string,
-  sender: BrowserWindow,
+  sender: BrowserWindow | undefined,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let cancelled = false
@@ -224,8 +224,8 @@ function downloadToFile(
   })
 }
 
-function emitProgress(sender: BrowserWindow, payload: InstallerProgressPayload) {
-  if (sender.isDestroyed()) return
+function emitProgress(sender: BrowserWindow | undefined, payload: InstallerProgressPayload) {
+  if (!sender || sender.isDestroyed()) return
   sender.webContents.send(INSTALLER_IPC_CHANNELS.PROGRESS, payload)
 }
 

@@ -640,6 +640,17 @@ export type AgentStreamPayload =
 // ===== Agent 会话管理 =====
 
 /**
+ * Agent 执行时使用的文件根。
+ *
+ * 未持久化该字段的历史会话必须按 session 解释，避免升级后将历史 SDK 相对路径
+ * 错误应用到新的共享项目根。
+ */
+export type AgentCwdMode = 'session' | 'project'
+
+/** 会话私有工作台的文件布局。缺失字段兼容旧版 `.context/` 子目录。 */
+export type SessionWorkbenchLayout = 'legacy-context' | 'root'
+
+/**
  * Agent 会话轻量索引项
  *
  * 存储在 ~/.proma/agent-sessions.json 中，
@@ -656,8 +667,22 @@ export interface AgentSessionMeta {
   modelId?: string
   /** SDK 内部会话 ID（用于 resume 衔接上下文） */
   sdkSessionId?: string
+  /** Pi session JSONL 的精确路径；避免仅按 session ID 子串定位 artifact。 */
+  piSessionFile?: string
+  /** Profer assistant UI UUID 到 Pi 树状 session entry ID 的持久映射。 */
+  piEntryBindings?: Record<string, string>
   /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
   agentRuntime?: AgentRuntime
+  /**
+   * Agent 执行 cwd 的持久化语义。新会话使用 project；缺失字段兼容升级前的
+   * session workbench cwd。
+   */
+  agentCwdMode?: AgentCwdMode
+  /**
+   * 会话私有工作台的文件布局。新会话在 workbench 根目录直接存放计划、handoff
+   * 等私有资料；缺失字段的历史会话保留 `.context/` 路径以兼容工具历史。
+   */
+  sessionWorkbenchLayout?: SessionWorkbenchLayout
   /** ChatGPT Codex Fast Mode；仅 Pi + Codex 的受支持模型实际生效。 */
   codexFastMode?: boolean
   /** ChatGPT Codex 推理档位；跨会话持久化（off/low/medium/high/xhigh）。null/undefined 表示未设置，使用全局默认值。 */
@@ -1113,6 +1138,8 @@ export interface ForkSessionInput {
   sessionId: string
   /** SDK 消息 uuid（截断点，inclusive）。省略时复制全部历史 */
   upToMessageUuid?: string
+  /** 目标模型 ID。省略时继承源会话模型；传入时必须属于源会话同一渠道且已启用 */
+  modelId?: string
 }
 
 /** 快照回退输入（同一会话内回退到指定点） */

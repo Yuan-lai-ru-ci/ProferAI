@@ -2381,10 +2381,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
+    // 仅当 fork 时用户仍停留在源会话同一渠道时携带目标模型；跨渠道 fork 不指定模型，继承源会话模型。
+    const forkModelId = agentChannelId === sessionMetaChannelId ? agentModelId || undefined : undefined
     try {
       const meta = await window.electronAPI.forkAgentSession({
         sessionId,
         upToMessageUuid,
+        modelId: forkModelId,
       })
       setAgentSessions((prev) => [meta, ...prev])
 
@@ -2406,7 +2409,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         description: friendlyDesc,
       })
     }
-  }, [sessionId, openSession, setAgentSessions])
+  }, [sessionId, openSession, setAgentSessions, agentChannelId, agentModelId, sessionMetaChannelId])
 
   /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
   const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)

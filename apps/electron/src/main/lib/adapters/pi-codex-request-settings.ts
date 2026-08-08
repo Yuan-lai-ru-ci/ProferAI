@@ -33,6 +33,7 @@ const THINKING_LEVEL_TO_EFFORT: Record<AgentThinkingLevel, string> = {
   medium: 'medium',
   high: 'high',
   xhigh: 'xhigh',
+  max: 'max',
 }
 
 function isProviderPayload(payload: unknown): payload is ProviderPayload {

@@ -103,6 +103,7 @@ const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
   google: '/v1beta/models/{model}:generateContent',
   'kimi-api': '/messages',
   'kimi-coding': '/messages',
+  'opencode-go-openai': '/chat/completions',
   zhipu: '/chat/completions',
   'zhipu-coding': '/messages',
   'zhipu-coding-team': '/messages',
@@ -114,6 +115,7 @@ const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
   xiaomi: '/v1/messages',
   'xiaomi-token-plan': '/v1/messages',
   'openai-codex': '',
+  xai: '',
   custom: '/chat/completions',
 }
 

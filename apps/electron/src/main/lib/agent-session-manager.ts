@@ -8,7 +8,7 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
@@ -22,6 +22,8 @@ import {
   getSdkConfigDir,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
+import { assertEnabledModelForChannel } from './agent-model-selection'
+import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）。
@@ -562,7 +564,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -588,6 +590,8 @@ export function updateAgentSessionMeta(
     ...(runtimeChanged
       ? {
           sdkSessionId: undefined,
+          piSessionFile: undefined,
+          piEntryBindings: undefined,
           forkSourceSdkSessionId: undefined,
           forkSourceDir: undefined,
           resumeAtMessageUuid: undefined,
@@ -928,6 +932,181 @@ export function migrateChatToAgentSession(conversationId: string, agentSessionId
 }
 
 /**
+ * 分叉 Pi Agent 会话。
+ *
+ * Pi 的 session 是 append-only tree。分叉必须由 SessionManager 导出目标 branch，
+ * 不能只复制 Profer 的展示 JSONL，否则下一轮 resume 仍会看到被截断的上下文。
+ */
+async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessionInput): Promise<AgentSessionMeta> {
+  const targetUuid = input.upToMessageUuid
+  if (!targetUuid) throw new Error('Pi 分叉需要指定一条已完成的 assistant 消息')
+  const entryId = sourceMeta.piEntryBindings?.[targetUuid]
+  if (!entryId) throw new Error('该 Pi 历史消息尚无 entry ID 映射，无法安全分叉；请在新版 Profer 中继续一次对话后再试')
+  if (!sourceMeta.piSessionFile || !existsSync(sourceMeta.piSessionFile)) {
+    throw new Error('未找到 Pi session artifact，无法安全分叉')
+  }
+
+  const forkModelId = input.modelId !== undefined
+    ? assertEnabledModelForChannel({ channelId: sourceMeta.channelId, modelId: input.modelId, purpose: '分叉 Pi Agent 会话' })
+    : sourceMeta.modelId
+  const workspace = sourceMeta.workspaceId ? getAgentWorkspace(sourceMeta.workspaceId) : undefined
+  const sourceDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, sourceMeta.id) : undefined
+  const newMeta = createAgentSession(
+    `${sourceMeta.title} (fork)`,
+    sourceMeta.channelId,
+    sourceMeta.workspaceId,
+    forkModelId,
+    'pi',
+  )
+  const destDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, newMeta.id) : undefined
+
+  try {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+    const sourceManager = sdk.SessionManager.open(sourceMeta.piSessionFile, sessionDir, sourceDir)
+    const branchFile = sourceManager.createBranchedSession(entryId)
+    if (!branchFile || !existsSync(branchFile)) {
+      throw new Error('Pi 未能生成分叉 session artifact')
+    }
+    const forkedManager = sdk.SessionManager.forkFrom(branchFile, destDir ?? sourceDir ?? process.cwd(), sessionDir)
+    const piSessionFile = forkedManager.getSessionFile()
+    if (!piSessionFile || !existsSync(piSessionFile)) throw new Error('Pi 分叉 artifact 校验失败')
+    // 新 branch 只包含分叉点之前的 entry；不能把源树后续 turn 的映射带入 metadata。
+    const branchBindings = Object.fromEntries(
+      Object.entries(sourceMeta.piEntryBindings ?? {})
+        .filter(([, mappedEntryId]) => Boolean(forkedManager.getEntry(mappedEntryId))),
+    )
+
+    updateAgentSessionMeta(newMeta.id, {
+      sdkSessionId: forkedManager.getSessionId(),
+      piSessionFile,
+      piEntryBindings: branchBindings,
+      forkSourceDir: sourceDir,
+    })
+    newMeta.sdkSessionId = forkedManager.getSessionId()
+    newMeta.piSessionFile = piSessionFile
+    newMeta.piEntryBindings = branchBindings
+
+    if (sourceDir && destDir) copyForkWorkspaceFiles(sourceDir, destDir)
+    await copyForkStoredSDKMessages({
+      sourceSessionId: sourceMeta.id,
+      destSessionId: newMeta.id,
+      upToMessageUuid: targetUuid,
+      sourceDir,
+      destDir,
+    })
+    return newMeta
+  } catch (error) {
+    // 尚未对外返回的新 session 可安全清理，避免留下会被侧栏打开的半成品。
+    try { deleteAgentSession(newMeta.id) } catch { /* 保留原始错误 */ }
+    throw error
+  }
+}
+
+interface CopyForkStoredSDKMessagesInput {
+  sourceSessionId: string
+  destSessionId: string
+  upToMessageUuid?: string
+  sourceDir?: string
+  destDir?: string
+}
+
+/** 流式复制源会话展示 JSONL 到分叉会话，按目标 UUID 截断并改写路径。 */
+async function copyForkStoredSDKMessages({
+  sourceSessionId,
+  destSessionId,
+  upToMessageUuid,
+  sourceDir,
+  destDir,
+}: CopyForkStoredSDKMessagesInput): Promise<number> {
+  const sourcePath = getAgentSessionMessagesPath(sourceSessionId)
+  if (!existsSync(sourcePath)) return 0
+
+  const destPath = getAgentSessionMessagesPath(destSessionId)
+  const out = createWriteStream(destPath, { flags: 'a', encoding: 'utf-8' })
+  let copiedCount = 0
+
+  try {
+    for await (const msg of readStoredSDKMessages(sourcePath)) {
+      await writeJsonlLine(out, serializeSDKMessageForStorage(msg, sourceDir, destDir))
+      copiedCount += 1
+
+      if (upToMessageUuid && getStoredMessageUuid(msg) === upToMessageUuid) {
+        break
+      }
+    }
+    await endWriteStream(out)
+  } catch (err) {
+    out.destroy()
+    throw err
+  }
+
+  return copiedCount
+}
+
+async function* readStoredSDKMessages(filePath: string): AsyncGenerator<SDKMessage> {
+  const rl = createInterface({
+    input: createReadStream(filePath),
+    crlfDelay: Infinity,
+  })
+
+  for await (const line of rl) {
+    if (!line.trim()) continue
+    try {
+      const parsed = JSON.parse(line)
+      if ('role' in parsed && !('type' in parsed)) {
+        yield convertLegacyMessage(parsed as AgentMessage)
+      } else {
+        yield parsed as SDKMessage
+      }
+    } catch (err) {
+      console.warn(`[Agent 会话] 跳过无法解析的 SDKMessage 行 (${filePath}):`, err)
+    }
+  }
+}
+
+function getStoredMessageUuid(msg: SDKMessage): string | undefined {
+  return 'uuid' in msg ? (msg as { uuid?: string }).uuid : undefined
+}
+
+function serializeSDKMessageForStorage(
+  msg: SDKMessage,
+  sourceDir?: string,
+  destDir?: string,
+): string {
+  let serialized = JSON.stringify(msg)
+  if (sourceDir && destDir) {
+    serialized = rewriteSourceToDest(serialized, sourceDir, destDir)
+  }
+  if (serialized.length <= MAX_SDK_MESSAGE_LENGTH) return serialized
+
+  let sanitized = JSON.stringify(sanitizeOversizedMessage(msg, serialized.length))
+  if (sourceDir && destDir) {
+    sanitized = rewriteSourceToDest(sanitized, sourceDir, destDir)
+  }
+  if (sanitized.length > MAX_SDK_MESSAGE_LENGTH) {
+    console.warn(`[Agent 会话] 消息截断后仍超限 (${(sanitized.length / 1024).toFixed(0)}K chars)`)
+  }
+  return sanitized
+}
+
+async function writeJsonlLine(stream: WriteStream, line: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    stream.write(line + '\n', (err) => {
+      if (err) reject(err)
+      else resolve()
+    })
+  })
+}
+
+async function endWriteStream(stream: WriteStream): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    stream.once('error', reject)
+    stream.end(resolve)
+  })
+}
+
+/**
  * 分叉 Agent 会话（SDK 原生 fork）
  *
  * 直接调用 SDK 的 forkSession() 独立函数完成 JSONL 复制和 UUID 重映射，
@@ -949,9 +1128,9 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   if (!sourceMeta) {
     throw new Error(`源 Agent 会话不存在: ${sessionId}`)
   }
-  // 当前 fork 实现调用 Claude SDK；Pi 的持久化格式尚未接入，禁止混用 resume/fork ID。
-  if (normalizeAgentRuntime(sourceMeta.agentRuntime) !== 'claude') {
-    throw new Error('Pi runtime 当前不支持原生会话分叉；请新建 Pi 会话继续工作。')
+  // Pi 会话走 Pi 原生分叉（SessionManager branch + forkFrom）；Claude 会话走下方 Claude SDK fork。
+  if (normalizeAgentRuntime(sourceMeta.agentRuntime) === 'pi') {
+    return forkPiAgentSession(sourceMeta, input)
   }
 
   if (!sourceMeta.sdkSessionId) {
