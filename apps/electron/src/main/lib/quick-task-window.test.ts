@@ -5,52 +5,27 @@
  * destroyQuickTaskWindow 销毁并清空；toggle 在窗口缺失时自愈创建。
  */
 
-import { beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 
-/** 假 BrowserWindow 实例记录 */
-let createdWindows: FakeWin[] = []
-
-class FakeWin {
-  destroyed = false
-  visible = false
-  webContents = { send: () => {}, once: () => {}, on: () => {} }
-  private readyCb: (() => void) | null = null
-
-  constructor(public opts: Record<string, unknown>) {
-    createdWindows.push(this)
+// preload 统一 electron mock 的测试钩子（类型声明与 test/preload-electron-mock.ts 保持一致）
+declare global {
+  var __proferElectronTestHooks: {
+    createdWindows: Array<{ destroyed: boolean; visible: boolean; opts: Record<string, unknown> }>
+    registeredAccelerators: string[]
+    reset: () => void
   }
-
-  isDestroyed(): boolean { return this.destroyed }
-  destroy(): void { this.destroyed = true }
-  isVisible(): boolean { return this.visible }
-  show(): void { this.visible = true }
-  hide(): void { this.visible = false }
-  focus(): void {}
-  setBounds(): void {}
-  restore(): void {}
-  isMinimized(): boolean { return false }
-  loadURL(): Promise<void> { return Promise.resolve() }
-  loadFile(): Promise<void> { return Promise.resolve() }
-  on(_evt: string, cb: () => void): void { void _evt; void cb }
-  once(evt: string, cb: () => void): void {
-    if (evt === 'ready-to-show') this.readyCb = cb
-  }
-  emitReady(): void { this.readyCb?.() }
 }
 
+/** 实例记录来自 preload 统一 electron mock 的测试钩子（--isolate 下无法在测试文件内二次 mock electron） */
+const hooks = () => globalThis.__proferElectronTestHooks
+let createdWindows: Array<{ destroyed: boolean; visible: boolean; opts: Record<string, unknown> }>
+
 beforeAll(() => {
-  mock.module('electron', () => ({
-    app: { isPackaged: true, on: () => {} },
-    BrowserWindow: FakeWin,
-    screen: {
-      getCursorScreenPoint: () => ({ x: 800, y: 450 }),
-      getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
-    },
-  }))
+  createdWindows = hooks().createdWindows
 })
 
 beforeEach(() => {
-  createdWindows = []
+  hooks().reset()
 })
 
 /** 复位模块级单例（bun 模块缓存跨测试保留，需显式销毁） */

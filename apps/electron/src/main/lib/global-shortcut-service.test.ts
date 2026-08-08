@@ -7,28 +7,22 @@
 
 import { beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 
-/** 记录已注册的 accelerator */
-const registeredAccelerators: string[] = []
+// preload 统一 electron mock 的测试钩子（类型声明与 test/preload-electron-mock.ts 保持一致）
+declare global {
+  var __proferElectronTestHooks: {
+    createdWindows: Array<{ destroyed: boolean; visible: boolean; opts: Record<string, unknown> }>
+    registeredAccelerators: string[]
+    reset: () => void
+  }
+}
+
+/** 已注册 accelerator 记录来自 preload 统一 electron mock 的测试钩子 */
+let registeredAccelerators: string[] = []
 /** 当前模拟设置（测试内可变） */
 let mockSettings: Record<string, unknown> = {}
 
 beforeAll(() => {
-  mock.module('electron', () => ({
-    app: { isReady: () => true },
-    globalShortcut: {
-      register: (accelerator: string) => {
-        registeredAccelerators.push(accelerator)
-        return true
-      },
-      unregister: (accelerator: string) => {
-        const idx = registeredAccelerators.indexOf(accelerator)
-        if (idx >= 0) registeredAccelerators.splice(idx, 1)
-      },
-      unregisterAll: () => {
-        registeredAccelerators.length = 0
-      },
-    },
-  }))
+  registeredAccelerators = globalThis.__proferElectronTestHooks.registeredAccelerators
 
   mock.module('./settings-service', () => ({
     getSettings: () => mockSettings,
@@ -36,7 +30,7 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
-  registeredAccelerators.length = 0
+  globalThis.__proferElectronTestHooks.reset()
   mockSettings = {}
 })
 
