@@ -204,6 +204,8 @@ function main(): void {
     runStep('复制资源文件', 'bun', ['run', 'build:resources'], { verbose: opts.verbose })
   )
   printStepResult(results[results.length - 1])
+  // 资源包缺失会导致打包产物缺 skins/icon 等，必须中断而非继续
+  if (!results[results.length - 1].success) return printSummary(results)
 
   // ── 步骤 5: 同步主进程运行时依赖 ──
   step++

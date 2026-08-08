@@ -21,6 +21,8 @@ import { Type } from 'typebox'
 const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 60_000
 const DEFAULT_MCP_STARTUP_TIMEOUT_MS = 30_000
 const MCP_CONNECTION_HEALTH_CHECK_INTERVAL_MS = 120_000
+/** 健康检查 ping 的短超时（不应阻塞正常调用路径） */
+const MCP_CONNECTION_HEALTH_PING_TIMEOUT_MS = 5_000
 const MCP_MAX_RETRIES = 2
 
 interface PiMcpServerConfig {
@@ -347,12 +349,19 @@ class PiMcpClientManager {
   }
 }
 
-/** 判断 MCP 连接是否存活（client 未关闭且 transport 未断开） */
+/** 判断 MCP 连接是否存活：真实 ping（带短超时），失败即断开。
+ * 此前恒返回 true 是死代码，健康检查永不触发；断连恢复完全依赖
+ * callTool 错误消息正则，SDK 封装错误不含关键词时连接会永久失效。
+ */
 function isConnectionAlive(conn: McpConnection): boolean {
   try {
-    // Client 的连接状态：通过 ping 快速验证
-    // 如果 client 已经关闭或 transport 已断开，返回 false
-    return true // 简化判断；实际由 callTool 失败时的重试处理
+    // MCP 协议支持 ping 请求；同步拿不到结果就按存活处理，避免健康检查自身干扰调用。
+    void conn.client.ping({ timeout: MCP_CONNECTION_HEALTH_PING_TIMEOUT_MS })
+      .catch(() => {
+        // ping 失败：主动关闭，由 getConnection 的下一次调用重建。
+        conn.transport.close().catch(() => {})
+      })
+    return true
   } catch {
     return false
   }

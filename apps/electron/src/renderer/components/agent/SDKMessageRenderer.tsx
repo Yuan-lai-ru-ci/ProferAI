@@ -41,7 +41,7 @@ import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
-import { channelsAtom, modelSelectorRequestAtom } from '@/atoms/chat-atoms'
+import { channelsAtom, requestModelSelectorOpen } from '@/atoms/chat-atoms'
 import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
@@ -1163,7 +1163,6 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
   const setEnvDialogOpen = useSetAtom(environmentCheckDialogOpenAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
-  const setModelSelectorRequest = useSetAtom(modelSelectorRequestAtom)
   const [detailsOpen, setDetailsOpen] = React.useState(false)
 
   // #1268 断流保消息：错误卡片只显示 error.message，不渲染附着的助手正文
@@ -1194,8 +1193,8 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
         setSettingsOpen(true)
         break
       case 'select_model':
-        // 打开当前视图的模型选择器（ModelSelector 监听全局请求计数）
-        setModelSelectorRequest((v) => v + 1)
+        // 打开当前视图的模型选择器（未消费标记的请求对象，避免组件未挂载时丢失）
+        requestModelSelectorOpen()
         break
       case 'settings':
         setSettingsOpen(true)

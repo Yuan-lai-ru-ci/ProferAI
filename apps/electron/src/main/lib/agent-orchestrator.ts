@@ -2234,7 +2234,12 @@ export class AgentOrchestrator {
   stop(sessionId: string): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
     this.stoppedBySessions.add(sessionId)
-    this.adapter.abort(sessionId)
+    try {
+      this.adapter.abort(sessionId)
+    } catch (err) {
+      // abort 异常（如 Pi adapter 内部状态异常）不能阻断级联停止与 UI 反馈
+      console.error(`[Agent 编排] 中止会话异常（已继续级联停止）: sessionId=${sessionId}`, err)
+    }
     try {
       stopDelegationsForParent(sessionId)
     } catch (err) {
@@ -2455,9 +2460,12 @@ export class AgentOrchestrator {
       await this.adapter.sendQueuedMessage(sessionId, sdkMessage, {
         interrupt: opts?.interrupt,
       })
-      // adapter await 期间 run 可能已停止或被替换；旧 run 不得再持久化本条消息。
+      // 消息已注入 Agent 会话（Pi interrupt 路径 reservation 已消费）。
+      // 即使 run 在 await 期间已停止/被替换，本条消息仍必须持久化到同一会话文件，
+      // 否则出现“Agent 已收到但 JSONL 无记录”的上下文缺口；持久化失败时保留 uuid，
+      // 防止重试幂等短路导致既不重注入也不落盘（子代理 P1#2 指出的永久丢失路径）。
       if (this.activeSessions.get(sessionId) !== queueRunId || this.stoppedBySessions.has(sessionId)) {
-        throw new Error(`[Agent 编排] 追加消息所属运行已结束或正在停止: ${sessionId}`)
+        console.warn(`[Agent 编排] 追加消息所属运行已结束，仍持久化已注入消息: sessionId=${sessionId}, uuid=${uuid}`)
       }
       console.log(`[Agent 编排] 追加消息已注入: sessionId=${sessionId}, uuid=${uuid}, interrupt=${!!opts?.interrupt}`)
 
@@ -2471,8 +2479,14 @@ export class AgentOrchestrator {
         parent_tool_use_id: null,
         _createdAt: Date.now(),
       } as unknown as SDKMessage
-      appendSDKMessages(sessionId, [persistMsg])
+      try {
+        appendSDKMessages(sessionId, [persistMsg])
+      } catch (persistError) {
+        // 注入已成功，uuid 必须保留（幂等短路），否则重试会重复注入；JSONL 缺口由会话文件后续 append 兜底。
+        console.error(`[Agent 编排] 已注入消息持久化失败 (uuid=${uuid}, sessionId=${sessionId}):`, persistError)
+      }
     } catch (error) {
+      // 仅当注入本身失败（sendQueuedMessage reject，消息未被 Agent 接收）时释放 uuid 允许重试
       uuids.delete(uuid)
       throw error
     }

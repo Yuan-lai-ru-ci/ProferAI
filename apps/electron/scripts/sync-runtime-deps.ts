@@ -43,6 +43,9 @@ export interface SyncRuntimeDepsResult {
 
 export const EXTERNAL_RUNTIME_PACKAGES: readonly string[] = [
   '@anthropic-ai/claude-agent-sdk',
+  // claude-agent-sdk 的强制 peerDependencies；sync 只复制 dependencies/optionalDependencies 不复制 peer，
+  // 显式列出避免 SDK 升级后闭包缺包（MODULE_NOT_FOUND）
+  '@anthropic-ai/sdk',
   '@earendil-works/pi-coding-agent',
   '@earendil-works/pi-agent-core',
   '@earendil-works/pi-ai',

@@ -2272,8 +2272,6 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
 
         {deleteDialog}
         {projectDeleteDialog}
-        {moveDialog}
-        <SearchDialog />
       </div>
   )
 
@@ -2759,7 +2757,6 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
 
       {deleteDialog}
       {projectDeleteDialog}
-      {moveDialog}
       {/* 平板版暂时隐藏团队版功能：加入团队工作区对话框同样不渲染 */}
       {showJoinDialog && !tabletMode && (
         <AlertDialog open={showJoinDialog} onOpenChange={setShowJoinDialog}>
@@ -2787,7 +2784,6 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
           </AlertDialogContent>
         </AlertDialog>
       )}
-      <SearchDialog />
     </div>
   )
 
@@ -2800,7 +2796,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
     <div
       className={cn(
         'relative h-full overflow-hidden sidebar-collapse-ease',
-        !noTransition && 'transition-[width] duration-300',
+        !noTransition && 'transition-[width] duration-300 will-change-[width] contain-layout',
         isClassic
           ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
           : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
@@ -2829,6 +2825,10 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
       >
         {expandedSidebar}
       </div>
+      {/* 迁移/搜索对话框：双视图共享状态，必须只在外层渲染唯一实例，
+          否则 Radix Portal 双实例同时打开会叠出双遮罩+双内容 */}
+      {moveDialog}
+      <SearchDialog />
     </div>
   )
 }

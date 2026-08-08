@@ -446,12 +446,17 @@ function scheduleParentAutoContinuation(parentSessionId: string): void {
       },
       onComplete: () => {
         parentAutoContinuationLocks.delete(parentSessionId)
+        // 锁窗口期间若又有子会话恰好完成（markDelegationFinished 因锁被跳过），
+        // 释放锁后必须复查一次，否则该子会话结果永远不会被父会话接收。
+        scheduleParentAutoContinuation(parentSessionId)
       },
       onTitleUpdated: () => {},
     },
   ).catch((error: unknown) => {
     console.error(`[协作] 启动父会话自动续跑失败: parentSessionId=${parentSessionId}`, error)
     parentAutoContinuationLocks.delete(parentSessionId)
+    // 与 onComplete 同理：启动失败也复查，避免漏收锁窗口内完成的子会话。
+    scheduleParentAutoContinuation(parentSessionId)
   })
 }
 

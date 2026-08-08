@@ -1,6 +1,7 @@
 import { BrowserWindow, nativeTheme } from 'electron'
 import type { ThemeMode, ThemeStyle } from '../../types'
 import { getSettings } from './settings-service'
+import { scanSkins } from './skin-service'
 
 interface OverlayColors {
   color: string
@@ -33,6 +34,16 @@ export function resolveOverlayColors(
 
   if (themeMode === 'special' && themeStyle && themeStyle !== 'default') {
     key = themeStyle
+    // 皮肤包可声明自己的标题栏配色（manifest.titlebar）；优先消费，避免 Windows 视觉接缝。
+    // 静态表只覆盖旧主题；girls-band 等新皮肤与用户导入皮肤必须走这里。
+    try {
+      const skin = scanSkins().find((s) => s.id === themeStyle)
+      if (skin?.titlebar) {
+        return { color: skin.titlebar.color, symbolColor: skin.titlebar.symbolColor, height: OVERLAY_HEIGHT }
+      }
+    } catch (error) {
+      console.warn('[Titlebar] 读取皮肤 titlebar 失败，回退静态表:', error)
+    }
   } else if (themeMode === 'system') {
     key = systemIsDark ? 'default-dark' : 'default-light'
   } else if (themeMode === 'dark') {
