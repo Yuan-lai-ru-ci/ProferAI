@@ -9,6 +9,7 @@
  */
 
 import * as React from 'react'
+import { startTransition } from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
@@ -77,7 +78,12 @@ export function ModeSwitcher(): React.ReactElement {
 
   const handleModeSwitch = React.useCallback((targetMode: AppMode) => {
     if (targetMode === mode) return
-    restoreSession(targetMode)
+    // 紧急更新：滑块/按钮/模式视图框架立即切换，避免模式切换动画被内容重渲染卡住
+    setMode(targetMode)
+    setPreviewMode(targetMode)
+    // 低优先级：会话恢复与内容渲染（Tab/会话列表/主区）在空闲时完成，
+    // 先响应 UI（滑块滑动、按钮变色），再填充内容——模式切换不再“卡一下”
+    startTransition(() => restoreSession(targetMode))
   }, [mode, restoreSession])
 
   const isFocusInModeRegion = (activeElement: Element | null): boolean =>
