@@ -36,13 +36,11 @@
     "verify:build-target:commercial": "node scripts/verify-build-target.cjs commercial dist/main.cjs",
     "pack": "bun run build && bun run sync:runtime-deps && electron-builder --dir",
     "dist": "bun run build && bun run sync:runtime-deps && electron-builder",
-    "dist:mac": "bun run build && bun run sync:runtime-deps && electron-builder --mac",
     "dist:win": "bun run build && bun run sync:runtime-deps && electron-builder --win",
     "dist:win-github": "bun run build:github && bun run sync:runtime-deps && electron-builder --win",
     "dist:win-commercial": "bun run build:commercial && bun run sync:runtime-deps && electron-builder --win",
-    "dist:linux": "bun run build && bun run sync:runtime-deps && electron-builder --linux",
     "dist:visual": "bun run scripts/dist.ts",
-    "dist:fast": "bun run scripts/dist.ts --current-arch --dmg",
+    "dist:fast": "bun run scripts/dist.ts --current-arch",
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
   },
   "dependencies": {
