@@ -846,6 +846,10 @@ export function useGlobalAgentListeners(): void {
               store.set(agentDiffRefreshVersionAtom, (prev) => {
                 const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
               })
+              // 定向失效 git diff 缓存：仅重扫受影响的仓库
+              if (writtenPath) {
+                window.electronAPI.invalidateGitDiffCache(writtenPath).catch(() => {})
+              }
               if (writtenPath) {
                 const autoPreviewEnabled = store.get(autoPreviewEnabledAtom)
                 const previewPromise = autoPreviewEnabled
@@ -889,9 +893,10 @@ export function useGlobalAgentListeners(): void {
                 }).catch(() => { /* auto preview should never break streaming */ })
               }
             }
-            // Bash git 突变命令完成时，仅刷新 diff 列表（不标记 unseen，避免红点）
+            // Bash git 突变命令完成时，全量失效 git diff 缓存 + 刷新 diff 列表（不标记 unseen）
             if (pendingGitMutateTools.has(event.toolUseId)) {
               pendingGitMutateTools.delete(event.toolUseId)
+              window.electronAPI.invalidateGitDiffCache().catch(() => {})
               store.set(agentDiffRefreshVersionAtom, (prev) => {
                 const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
               })
@@ -1340,6 +1345,9 @@ export function useGlobalAgentListeners(): void {
     const onWindowFocus = async () => {
       const activeSessionId = store.get(currentAgentSessionIdAtom)
       if (!activeSessionId) return
+
+      // 窗口聚焦时失效缓存，确保 diff 数据反映最新磁盘状态
+      window.electronAPI.invalidateGitDiffCache().catch(() => {})
 
       const previewFile = store.get(previewFileMapAtom).get(activeSessionId)
       if (!previewFile || previewFile.previewOnly !== true) {

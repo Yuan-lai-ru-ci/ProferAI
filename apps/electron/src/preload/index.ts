@@ -187,6 +187,8 @@ export interface ElectronAPI {
   getUntrackedContent: (input: import('@profer/shared').GetFileDiffInput) => Promise<string>
   /** 还原文件变更 */
   revertFile: (input: import('@profer/shared').RevertFileInput) => Promise<void>
+  /** 使 git diff 缓存失效（Agent 写文件/git 突变后调用，传 changedPath 定向失效，不传全量失效） */
+  invalidateGitDiffCache: (changedPath?: string) => Promise<void>
   /** 获取文件新旧版本内容 */
   getDiffContents: (input: import('@profer/shared').GetFileDiffInput) => Promise<{ oldContent: string; newContent: string } | null>
   /** 列出 Git Worktree */
@@ -1405,6 +1407,10 @@ const electronAPI: ElectronAPI = {
 
   revertFile: (input: import('@profer/shared').RevertFileInput) => {
     return ipcRenderer.invoke(IPC_CHANNELS.REVERT_FILE, input)
+  },
+
+  invalidateGitDiffCache: (changedPath?: string) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.INVALIDATE_GIT_DIFF_CACHE, changedPath)
   },
 
   getDiffContents: (input: import('@profer/shared').GetFileDiffInput) => {
