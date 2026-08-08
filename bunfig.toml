@@ -5,3 +5,6 @@
 # 每个测试文件运行前先执行 preload，统一 mock electron，
 # 避免源码模块真实加载 electron 导致 mock.module 失效（详见 test/preload-electron-mock.ts）
 preload = ["./test/preload-electron-mock.ts"]
+# server 的 node 原生测试（*.node.test.mjs）依赖 better-sqlite3/node:test，必须由 node 直跑
+# （server/scripts/run-node-tests.mjs）。此处精确排除，保留 server 的 bun 回归（*.test.js）。
+pathIgnorePatterns = ["server/**/*.node.test.mjs"]
