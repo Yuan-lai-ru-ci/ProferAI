@@ -33,7 +33,10 @@
 }
 
 /* 可选：使用包内背景图。取消注释前，把图片放入 assets/background.webp。
-body {
+ * ⚠️ 背景不能挂 body——AppShell 的 .shell-bg 是全屏不透明层，会完全盖住 body；
+ * 必须挂在 html[class*="skin-"] .shell-bg 上（且保持与 skin-base.css 相同的特异性）。
+ * assets 引用会被自动替换为 profer-skin:// 协议（主进程按需读盘），无需关心协议细节。
+html[class*="skin-"] .shell-bg {
   background-image: linear-gradient(hsl(222 30% 9% / 0.76), hsl(222 30% 9% / 0.76)), url("assets/background.webp");
   background-size: cover;
   background-position: center;

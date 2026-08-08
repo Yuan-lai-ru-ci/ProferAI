@@ -26,10 +26,19 @@
         var html = document.documentElement
 
         if (mode === 'special' && style && style !== 'default') {
-          // 特殊风格模式：添加主题类名 + 根据后缀决定 dark 类
-          html.classList.add('theme-' + style)
-          if (style.endsWith('-dark')) {
-            html.classList.add('dark')
+          // 皮肤机制（skin-<id> + IPC 注入 CSS）：tone 缓存在皮肤激活时由
+          // atoms/theme.ts 写入，首帧据此推断 dark 类，避免“默认色 → 皮肤色”闪变。
+          var tone = null
+          try { tone = localStorage.getItem('profer-skin-tone') } catch(e) { /* ignore */ }
+          if (tone === 'dark' || tone === 'light') {
+            html.classList.add('skin-' + style)
+            if (tone === 'dark') html.classList.add('dark')
+          } else {
+            // 旧主题回退（theme-* 兼容层）：无 tone 缓存时按后缀推断
+            html.classList.add('theme-' + style)
+            if (style.endsWith('-dark')) {
+              html.classList.add('dark')
+            }
           }
         } else if (mode === 'dark') {
           html.classList.add('dark')

@@ -17,6 +17,7 @@ export type ProviderType =
   | 'google'
   | 'kimi-api'
   | 'kimi-coding'
+  | 'opencode-go-openai'
   | 'zhipu'
   | 'zhipu-coding'
   | 'zhipu-coding-team'
@@ -28,6 +29,7 @@ export type ProviderType =
   | 'xiaomi'
   | 'xiaomi-token-plan'
   | 'openai-codex'
+  | 'xai'
   | 'custom'
 
 /**
@@ -42,6 +44,7 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   google: 'https://generativelanguage.googleapis.com',
   'kimi-api': 'https://api.moonshot.cn/anthropic',
   'kimi-coding': 'https://api.kimi.com/coding/v1',
+  'opencode-go-openai': 'https://opencode.ai/zen/go/v1',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   'zhipu-coding': 'https://open.bigmodel.cn/api/anthropic',
   'zhipu-coding-team': 'https://open.bigmodel.cn/api/anthropic',
@@ -53,6 +56,7 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   xiaomi: 'https://api.xiaomimimo.com/anthropic',
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   'openai-codex': '',
+  xai: '',
   custom: '',
 }
 
@@ -85,6 +89,7 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   google: 'Google',
   'kimi-api': 'Kimi API (Anthropic 协议)',
   'kimi-coding': 'Kimi Coding Plan',
+  'opencode-go-openai': 'OpenCode Go (OpenAI 协议)',
   zhipu: '智谱 AI',
   'zhipu-coding': '智谱 Coding Plan',
   'zhipu-coding-team': '智谱 Coding Plan 团队版',
@@ -96,6 +101,7 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   xiaomi: '小米 MiMo (API)',
   'xiaomi-token-plan': '小米 MiMo Token Plan',
   'openai-codex': 'ChatGPT 订阅 (Codex)',
+  xai: 'xAI 订阅 (Grok)',
   custom: 'OpenAI 兼容格式',
 }
 
@@ -206,6 +212,50 @@ export function parseCodexCredentials(secret: string): CodexOAuthCredentials | n
 
 export function isCodexCredentialExpired(credentials: CodexOAuthCredentials, skewMs = 60_000): boolean {
   return Date.now() >= credentials.expires - skewMs
+}
+
+/**
+ * xAI（Grok/X 订阅）OAuth 凭据。
+ *
+ * 与 Codex 一样序列化后放入 Channel.apiKey，并由 Electron safeStorage 加密。
+ * Pi 的内置 xAI provider 使用 access / refresh / expires 来自动续期。
+ */
+export interface XaiOAuthCredentials {
+  access: string
+  refresh: string
+  expires: number
+}
+
+export function serializeXaiCredentials(credentials: XaiOAuthCredentials): string {
+  return JSON.stringify(credentials)
+}
+
+export function parseXaiCredentials(secret: string): XaiOAuthCredentials | null {
+  const trimmed = secret.trim()
+  if (!trimmed) return null
+  try {
+    const parsed = JSON.parse(trimmed) as Partial<XaiOAuthCredentials>
+    if (typeof parsed.access === 'string' && parsed.access
+      && typeof parsed.refresh === 'string' && parsed.refresh
+      && typeof parsed.expires === 'number') {
+      return { access: parsed.access, refresh: parsed.refresh, expires: parsed.expires }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+export function isXaiCredentialExpired(credentials: XaiOAuthCredentials, skewMs = 60_000): boolean {
+  return Date.now() >= credentials.expires - skewMs
+}
+
+/** xAI device-code 授权信息（用于浏览器未预填时手动填写）。 */
+export interface XaiOAuthDeviceCode {
+  userCode: string
+  verificationUri: string
+  /** 可扫码交给另一台可联网设备完成授权。 */
+  qrCodeData?: string
 }
 
 /**

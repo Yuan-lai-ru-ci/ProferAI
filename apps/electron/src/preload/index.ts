@@ -470,6 +470,9 @@ export interface ElectronAPI {
   /** 订阅用户手动切换主题事件（跨窗口同步，返回清理函数） */
   onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }) => void) => () => void
 
+  /** 订阅皮肤安装/删除/刷新事件（多窗口同步刷新，返回清理函数） */
+  onSkinsChanged: (callback: (payload: { deletedId: string | null }) => void) => () => void
+
   // ===== Scratch Pad =====
 
   /** 从磁盘加载 scratch-pad.md */
@@ -1768,6 +1771,12 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }): void => callback(payload)
     ipcRenderer.on(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener) }
+  },
+
+  onSkinsChanged: (callback: (payload: { deletedId: string | null }) => void) => {
+    const listener = (_: unknown, payload: { deletedId: string | null }): void => callback(payload)
+    ipcRenderer.on(SKIN_IPC_CHANNELS.ON_SKINS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(SKIN_IPC_CHANNELS.ON_SKINS_CHANGED, listener) }
   },
 
   // 自定义通知音效

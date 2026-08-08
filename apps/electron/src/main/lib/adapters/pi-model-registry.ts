@@ -9,7 +9,9 @@ import {
   ONE_MILLION_CONTEXT_WINDOW,
   extractZhipuCodingTeamApiToken,
   isDeepSeekV4Model,
+  type CodexOAuthCredentials,
   type ProviderType,
+  type XaiOAuthCredentials,
 } from '@profer/shared'
 import {
   getProferUserAgent,
@@ -19,6 +21,7 @@ import {
 } from '@profer/core'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
+import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from '../xai-oauth-credentials'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type PiAiCompat = typeof import('@earendil-works/pi-ai/compat')
@@ -320,7 +323,7 @@ export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
  * 注意：这里的 input.apiKey 必须是编排层用 resolveCodexAccessToken 解析并按需
  * 刷新后的 access token，而不是存储的凭据 JSON。
  */
-async function buildCodexModel(sdk: PiSdk, input: PiAgentQueryOptions) {
+async function buildCodexModelWithRuntimeKey(sdk: PiSdk, input: PiAgentQueryOptions) {
   const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
   // 内置 codex 模型的 provider 字段即 'openai-codex'，token 必须设在该名下。
   modelRuntime.setRuntimeApiKey('openai-codex', input.apiKey)
@@ -344,7 +347,23 @@ export async function listCodexModels(): Promise<{ id: string; name: string }[]>
 
 export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   if (input.provider === 'openai-codex') {
-    return buildCodexModel(sdk, input)
+    return input.codexOAuthCredentials
+      ? buildCodexModel(sdk, {
+          model: input.model,
+          codexOAuthCredentials: input.codexOAuthCredentials,
+          onCodexOAuthCredentialsRefreshed: input.onCodexOAuthCredentialsRefreshed,
+        })
+      : buildCodexModelWithRuntimeKey(sdk, input)
+  }
+  if (input.provider === 'xai') {
+    return input.xaiOAuthCredentials
+      ? buildXaiOAuthModel(sdk, {
+          channelId: input.channelId,
+          model: input.model,
+          xaiOAuthCredentials: input.xaiOAuthCredentials,
+          onXaiOAuthCredentialsRefreshed: input.onXaiOAuthCredentialsRefreshed,
+        })
+      : undefined
   }
   const providerName = `profer-${input.provider}-${input.sessionId}`
   const resolvedApiKey = resolvePiApiKey(input.provider, input.apiKey)
@@ -382,5 +401,188 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   })
   const model = modelRuntime.getModel(providerName, resolvedModelId ?? 'default')
   if (!model) throw new Error(`Pi model registration failed: ${resolvedModelId ?? 'default'}`)
+  return { modelRuntime, model }
+}
+
+type CodexRuntimeCredential = CodexOAuthCredentials & {
+  type: 'oauth'
+  [key: string]: unknown
+}
+
+/** Pi 内置 Codex provider 所需的最小模型与 OAuth 输入。 */
+export interface CodexModelInput {
+  model?: string
+  codexOAuthCredentials?: CodexOAuthCredentials
+  onCodexOAuthCredentialsRefreshed?: (credentials: CodexOAuthCredentials) => void | Promise<void>
+}
+
+function createCodexRuntimeCredentialStore(
+  initial: CodexOAuthCredentials,
+  onRefreshed?: CodexModelInput['onCodexOAuthCredentialsRefreshed'],
+) {
+  let credential: CodexRuntimeCredential | undefined = { type: 'oauth', ...initial }
+
+  return {
+    async read(providerId: string): Promise<CodexRuntimeCredential | undefined> {
+      return providerId === 'openai-codex' ? credential : undefined
+    },
+    async list(): Promise<readonly { providerId: string; type: 'oauth' }[]> {
+      return credential ? [{ providerId: 'openai-codex', type: 'oauth' }] : []
+    },
+    async modify(
+      providerId: string,
+      fn: (current: CodexRuntimeCredential | undefined) => Promise<CodexRuntimeCredential | undefined>,
+    ): Promise<CodexRuntimeCredential | undefined> {
+      if (providerId !== 'openai-codex') return undefined
+      const previous = credential
+      credential = await fn(credential)
+
+      if (credential && (
+        previous?.access !== credential.access
+        || previous?.refresh !== credential.refresh
+        || previous?.expires !== credential.expires
+        || previous?.accountId !== credential.accountId
+      )) {
+        try {
+          await onRefreshed?.(credential)
+        } catch (error) {
+          console.warn('[Pi Codex OAuth] 刷新后的凭据回写失败，将在下次执行前重试:', error)
+        }
+      }
+      return credential
+    },
+    async delete(providerId: string): Promise<void> {
+      if (providerId === 'openai-codex') credential = undefined
+    },
+  }
+}
+
+/**
+ * 为 ChatGPT (Codex) OAuth 渠道构建模型（OAuth credential store 版）。
+ *
+ * 与上方 buildModel 的 setRuntimeApiKey 路径不同，此入口接收完整 OAuth 凭据并放入
+ * 一次性内存 credential store，按真实 expires 刷新并回写 Profer，避免读写全局 ~/.pi。
+ * 标题生成等轻量请求使用此入口；前台 Agent query 仍走 buildModel。
+ */
+export async function buildCodexOAuthModel(sdk: PiSdk, input: CodexModelInput) {
+  if (!input.codexOAuthCredentials) {
+    throw new Error('ChatGPT (Codex) OAuth 凭据缺失，请重新登录')
+  }
+
+  const modelRuntime = await sdk.ModelRuntime.create({
+    credentials: createCodexRuntimeCredentialStore(
+      input.codexOAuthCredentials,
+      input.onCodexOAuthCredentialsRefreshed,
+    ),
+    allowModelNetwork: false,
+  })
+
+  const resolvedModelId = stripAgentSdkContextSuffix(input.model)
+  const codexModels = await getCodexCatalogModels()
+  const model = (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined)
+    ?? (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined)
+    // 指定模型缺失时回退到首个内置 codex 模型，避免因模型 ID 漂移直接失败。
+    ?? modelRuntime.getModels('openai-codex')[0]
+  if (!model) {
+    throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
+  }
+  return { modelRuntime, model }
+}
+
+type XaiRuntimeCredential = XaiOAuthCredentials & {
+  type: 'oauth'
+  [key: string]: unknown
+}
+
+/** Pi 内置 xAI provider 所需的最小模型与 OAuth 输入。 */
+export interface XaiModelInput {
+  channelId?: string
+  model?: string
+  xaiOAuthCredentials?: XaiOAuthCredentials
+  onXaiOAuthCredentialsRefreshed?: (credentials: XaiOAuthCredentials) => void | Promise<void>
+}
+
+function createXaiRuntimeCredentialStore(
+  channelId: string,
+  initial: XaiOAuthCredentials,
+  onRefreshed?: XaiModelInput['onXaiOAuthCredentialsRefreshed'],
+) {
+  let credential: XaiRuntimeCredential | undefined = { type: 'oauth', ...rememberXaiOAuthCredentials(channelId, initial) }
+
+  return {
+    async read(providerId: string): Promise<XaiRuntimeCredential | undefined> {
+      return providerId === 'xai' ? credential : undefined
+    },
+    async list(): Promise<readonly { providerId: string; type: 'oauth' }[]> {
+      return credential ? [{ providerId: 'xai', type: 'oauth' }] : []
+    },
+    async modify(
+      providerId: string,
+      fn: (current: XaiRuntimeCredential | undefined) => Promise<XaiRuntimeCredential | undefined>,
+    ): Promise<XaiRuntimeCredential | undefined> {
+      if (providerId !== 'xai' || !credential) return undefined
+      const previous = credential
+      const refreshed = await refreshXaiOAuthCredentialsSerial(
+        channelId,
+        credential,
+        async (latest) => {
+          const next = await fn({ type: 'oauth', ...latest })
+          if (!next) throw new Error('Pi xAI OAuth 刷新未返回凭据')
+          return { access: next.access, refresh: next.refresh, expires: next.expires }
+        },
+      )
+      credential = { type: 'oauth', ...refreshed }
+      if (
+        previous.access !== credential.access
+        || previous.refresh !== credential.refresh
+        || previous.expires !== credential.expires
+      ) {
+        try {
+          await onRefreshed?.(credential)
+        } catch (error) {
+          console.warn('[Pi xAI OAuth] 刷新后的凭据回写失败，将在下次执行前重试:', error)
+        }
+      }
+      return credential
+    },
+    async delete(providerId: string): Promise<void> {
+      if (providerId === 'xai') credential = undefined
+    },
+  }
+}
+
+/** 列出 Pi SDK 内置的 xAI（Grok）模型 ID，供订阅登录后拉取模型使用。 */
+export async function listXaiModels(): Promise<{ id: string; name: string }[]> {
+  const { getModels } = await loadPiAiCompat()
+  return [...getModels('xai')].map((m) => ({ id: m.id, name: m.name }))
+}
+
+/**
+ * 为 xAI（Grok/X 订阅）OAuth 渠道构建 Pi 内置模型。
+ *
+ * xAI 的 device-code token 不等同于 xAI API key，必须注入内存 CredentialStore
+ * 并使用内置 `xai` provider，不能退回 registerProvider() 的 API key 路径。
+ */
+export async function buildXaiOAuthModel(sdk: PiSdk, input: XaiModelInput) {
+  if (!input.xaiOAuthCredentials || !input.channelId) {
+    throw new Error('xAI OAuth 凭据或渠道标识缺失，请重新登录')
+  }
+  const modelRuntime = await sdk.ModelRuntime.create({
+    credentials: createXaiRuntimeCredentialStore(
+      input.channelId,
+      input.xaiOAuthCredentials,
+      input.onXaiOAuthCredentialsRefreshed,
+    ),
+    allowModelNetwork: false,
+  })
+  const resolvedModelId = stripAgentSdkContextSuffix(input.model)
+  const { getModels } = await loadPiAiCompat()
+  const xaiModels = [...getModels('xai')]
+  const model = (resolvedModelId ? modelRuntime.getModel('xai', resolvedModelId) : undefined)
+    ?? (resolvedModelId ? findCatalogModelById(xaiModels, resolvedModelId) : undefined)
+    ?? modelRuntime.getModels('xai')[0]
+  if (!model) {
+    throw new Error('未找到可用的 xAI（Grok）模型，请确认订阅已授权并升级 Pi 运行时')
+  }
   return { modelRuntime, model }
 }

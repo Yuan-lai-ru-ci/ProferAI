@@ -24,6 +24,9 @@ export * from './chat'
 // Agent 相关类型
 export * from './agent'
 
+// 推理 profile 相关类型
+export * from './reasoning-profile'
+
 // Agent Provider 适配器接口
 export * from './agent-provider'
 

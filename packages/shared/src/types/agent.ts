@@ -110,7 +110,7 @@ export type ThinkingConfig =
 export type AgentEffort = 'low' | 'medium' | 'high' | 'max'
 
 /** Pi runtime thinking level. Claude continues to use ThinkingConfig and AgentEffort. */
-export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** Models whose Codex OAuth provider can opt into priority service tier. */
 export const CODEX_FAST_MODE_MODEL_IDS = [

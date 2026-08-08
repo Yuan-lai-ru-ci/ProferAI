@@ -602,6 +602,7 @@ export function installElectronApiStub(): void {
     openUserSkinsFolder: () => unsupported('皮肤管理'),
     openSkinTemplateFolder: () => unsupported('皮肤管理'),
     refreshSkins: () => unsupported('皮肤管理'),
+    onSkinsChanged: () => () => undefined,
     writeClipboardPreview: () => unsupported('剪贴板预览'),
     resolveAndReadFile: () => unsupported('读取本地文件'),
     saveFilesToAgentSession: () => unsupported('保存文件到会话'),

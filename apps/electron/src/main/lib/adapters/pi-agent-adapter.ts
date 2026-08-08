@@ -15,6 +15,7 @@ import type {
   AgentThinkingLevel,
   AgentProviderAdapter,
   AgentQueryInput,
+  CodexOAuthCredentials,
   ErrorCode,
   JsonSchemaOutputFormat,
   ProferPermissionMode,
@@ -24,8 +25,11 @@ import type {
   SDKMessage,
   SDKUserMessageInput,
   TypedError,
+  XaiOAuthCredentials,
 } from '@profer/shared'
 import { isCodexFastModeSupportedModel } from '@profer/shared'
+import type { ProjectInstructionSource } from '../project-instruction-resolver'
+import type { ProferProjectInstructionFile } from '../project-instruction-file'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -50,9 +54,13 @@ import {
   createAgentRuntimeGuard,
   type AgentRuntimeGuard,
 } from '../agent-runtime-guards'
-import { createProferAgentsFilesOverride } from './pi-resource-loader-overrides'
+import { createProferAgentsFilesOverride, createProferProjectInstructionFilesOverride, createProferManagedResourceLoaderOptions } from './pi-resource-loader-overrides'
+import { ProjectInstructionScopeController } from './pi-project-instruction-scope'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
 import { createCodexRequestSettingsExtension, createDeepSeekV4RequestSettingsExtension } from './pi-codex-request-settings'
+import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
+import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
+import { inferReasoningTransport, resolveReasoningProfile } from '@profer/shared'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -94,6 +102,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   apiKey: string
   baseUrl?: string
   provider: ProviderType
+  /** OAuth credential coordination key; equals the selected Profer channel id. */
+  channelId?: string
   channelName?: string
   maxTurns?: number
   permissionMode: ProferPermissionMode
@@ -103,6 +113,13 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
     options: CanUseToolOptions,
   ) => Promise<PermissionResult>
   systemPrompt: string
+  /** Profer 已验证的项目根 instruction files；不触发 Pi 的磁盘自动发现。 */
+  projectInstructionFiles?: ProferProjectInstructionFile[]
+  /** 用于 typed 文件工具的会话级子目录指令激活；不会解析 Bash。 */
+  projectInstructionScope?: {
+    projectRoot: string
+    initialSources: ProjectInstructionSource[]
+  }
   resumeSessionId?: string
   piAgentDir: string
   piSessionDir: string
@@ -133,6 +150,16 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   compactRequest?: boolean
   /** ChatGPT Codex Fast Mode；仅 openai-codex 的受支持模型实际注入 priority service tier。 */
   codexFastMode?: boolean
+  /** Pi 的 OAuth credential store 使用真实 expires 和 refresh，不读取 ~/.pi。 */
+  codexOAuthCredentials?: CodexOAuthCredentials
+  /** Pi 运行中刷新 OAuth 后，将新凭据回写到 Profer 渠道存储。 */
+  onCodexOAuthCredentialsRefreshed?: (credentials: CodexOAuthCredentials) => void | Promise<void>
+  /** xAI OAuth credential store 使用真实 expires 和 refresh，不读取 ~/.pi。 */
+  xaiOAuthCredentials?: XaiOAuthCredentials
+  /** Pi 运行中刷新 xAI OAuth 后，将新凭据回写到 Profer 渠道存储。 */
+  onXaiOAuthCredentialsRefreshed?: (credentials: XaiOAuthCredentials) => void | Promise<void>
+  /** 会话级 OpenAI（Codex OAuth / Responses API）思考深度。 */
+  openAIThinkingLevel?: AgentThinkingLevel
 }
 
 interface ActivePiSession {
@@ -1120,7 +1147,7 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, String.raw`'\''`)}'`
 }
 
-function windowsPathToWslPath(value: string): string {
+export function windowsPathToWslPath(value: string): string {
   const driveMatch = value.match(/^([A-Za-z]):[\\/](.*)$/)
   if (!driveMatch) return value
   const drive = driveMatch[1]!.toLowerCase()
@@ -1140,6 +1167,23 @@ function buildWslCommand(command: string, env: NodeJS.ProcessEnv | undefined): s
   return exportLines.length > 0
     ? `${exportLines.join('\n')}\n${command}`
     : command
+}
+
+export function buildWslBashArgs(
+  runtimeEnv: Pick<AgentRuntimeEnv, 'wslDistro'>,
+  cwd: string,
+  command: string,
+  env: NodeJS.ProcessEnv | undefined,
+): string[] {
+  return [
+    ...(runtimeEnv.wslDistro ? ['--distribution', runtimeEnv.wslDistro] : []),
+    '--cd',
+    windowsPathToWslPath(cwd),
+    '--exec',
+    'bash',
+    '-lc',
+    buildWslCommand(command, env),
+  ]
 }
 
 function createWslBashOperations(runtimeEnv: AgentRuntimeEnv, sessionId: string): BashOperations {
@@ -1504,6 +1548,25 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         retry: { enabled: true, maxRetries: PI_NATIVE_MAX_RETRIES, baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS },
         ...buildPiRemoteConnectionSettings(input),
       })
+      const openAIReasoningProfile = (input.provider === 'openai-codex' || input.provider === 'xai' || input.provider === 'openai-responses')
+        ? resolveReasoningProfile({
+            modelId: input.model,
+            transport: inferReasoningTransport(input.provider),
+          })
+        : undefined
+      const deepSeekReasoningProfile = input.provider === 'deepseek'
+        ? resolveReasoningProfile({
+            modelId: input.model,
+            transport: 'anthropic-messages',
+          })
+        : undefined
+      const projectInstructionScope = input.projectInstructionScope
+        ? new ProjectInstructionScopeController({
+            projectRoot: input.projectInstructionScope.projectRoot,
+            cwd,
+            initialSources: input.projectInstructionScope.initialSources,
+          })
+        : undefined
       const extensionFactories = [
         ...(input.provider === 'openai-codex'
           ? [createCodexRequestSettingsExtension({
@@ -1516,6 +1579,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               thinkingEnabled: input.deepSeekV4ThinkingEnabled ?? true,
             })]
           : []),
+        ...(projectInstructionScope ? [projectInstructionScope.createExtension()] : []),
+        ...(openAIReasoningProfile
+          ? [createOpenAIReasoningRequestExtension({
+              profile: openAIReasoningProfile,
+              thinkingLevel: input.openAIThinkingLevel,
+            })]
+          : []),
+        ...(deepSeekReasoningProfile?.encodings['anthropic-messages']?.kind === 'deepseek-output-effort'
+          ? [createDeepSeekReasoningRequestExtension({
+              profile: deepSeekReasoningProfile,
+              thinkingLevel: input.thinkingLevel,
+            })]
+          : []),
       ]
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
@@ -1524,7 +1600,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         noSkills: true,
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
-        agentsFilesOverride: createProferAgentsFilesOverride(),
+        ...createProferManagedResourceLoaderOptions(),
+        agentsFilesOverride: input.projectInstructionFiles && input.projectInstructionFiles.length > 0
+          ? createProferProjectInstructionFilesOverride(input.projectInstructionFiles)
+          : createProferAgentsFilesOverride(),
         ...(extensionFactories.length > 0 && { extensionFactories }),
         systemPromptOverride: () => input.systemPrompt,
       })
@@ -1550,6 +1629,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         customTools,
       })
       session.agent.toolExecution = 'sequential'
+      if (projectInstructionScope) {
+        const previousPrepareNextTurnWithContext = session.agent.prepareNextTurnWithContext
+        session.agent.prepareNextTurnWithContext = async (context, signal) => {
+          const previousSnapshot = await previousPrepareNextTurnWithContext?.(context, signal)
+          const nextContext = previousSnapshot?.context ?? context.context
+          const systemPrompt = projectInstructionScope.appendPendingInstructions(nextContext.systemPrompt)
+          if (systemPrompt === nextContext.systemPrompt) return previousSnapshot
+          return {
+            ...previousSnapshot,
+            context: { ...nextContext, systemPrompt },
+          }
+        }
+      }
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
         // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
