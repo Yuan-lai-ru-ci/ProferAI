@@ -65,7 +65,7 @@ describe('快速任务窗口实时启停（2026-08-08）', () => {
     const { createQuickTaskWindow } = await import('./quick-task-window')
     createQuickTaskWindow()
     expect(createdWindows.length).toBe(1)
-    expect(createdWindows[0].opts.show).toBe(false)
+    expect(createdWindows[0]!.opts.show).toBe(false)
   })
 
   test('createQuickTaskWindow 幂等：重复调用不重复创建', async () => {
@@ -82,11 +82,11 @@ describe('快速任务窗口实时启停（2026-08-08）', () => {
     const { createQuickTaskWindow, destroyQuickTaskWindow } = await import('./quick-task-window')
     createQuickTaskWindow()
     destroyQuickTaskWindow()
-    expect(createdWindows[0].destroyed).toBe(true)
+    expect(createdWindows[0]!.destroyed).toBe(true)
     // 销毁后可再次创建全新实例
     createQuickTaskWindow()
     expect(createdWindows.length).toBe(2)
-    expect(createdWindows[1].destroyed).toBe(false)
+    expect(createdWindows[1]!.destroyed).toBe(false)
   })
 
   test('destroyQuickTaskWindow 在窗口缺失时安全（不抛错）', async () => {
