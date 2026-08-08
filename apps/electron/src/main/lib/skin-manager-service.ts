@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import type { SkinInfo, SkinManagerResult } from '../../types'
-import { getBuiltinSkinIds, getUserSkinDir, invalidateSkinCache, scanSkins } from './skin-service'
+import { getBuiltinSkinIds, getUserSkinDir, invalidateSkinCache, parseSkinManifestText, scanSkins } from './skin-service'
 
 const MAX_PACKAGE_BYTES = 5 * 1024 * 1024
 const MAX_CSS_BYTES = 512 * 1024
@@ -59,23 +59,45 @@ function validatePackage(root: string): { id: string; info: SkinInfo } | SkinMan
   if (unsafeCss(css, packageRoot)) return fail('skin.css 仅允许引用 assets/ 中的本地图片；不允许 @import、@font-face、data URL、外部或 file URL')
   const assetError = validateAssets(packageRoot)
   if (assetError) return assetError
-  let manifest: Record<string, unknown>
+  // 单一 manifest 解析入口（skin-service.parseSkinManifestText）：与扫描注册表共用，字段扩展不会双写漂移（P2-L6）
+  let manifestText: string
   try {
-    // JSON.parse 不接受 UTF-8 BOM；许多 Windows 编辑器/压缩工具会自动写入 BOM，导入时容忍它。
-    const manifestText = readFileSync(join(packageRoot, 'manifest.json'), 'utf8').replace(/^\uFEFF/, '')
-    manifest = JSON.parse(manifestText)
-  } catch (err) {
-    return fail(`manifest.json 不是有效 JSON${err instanceof Error ? `：${err.message}` : ''}`)
+    manifestText = readFileSync(join(packageRoot, 'manifest.json'), 'utf8')
+  } catch {
+    return fail('皮肤包根目录缺少 manifest.json')
   }
+  const parsed = parseSkinManifestText(manifestText)
+  if (!parsed.ok) return fail(parsed.reason)
+  const manifest = parsed.manifest
   const id = manifest.id
   if (typeof id !== 'string' || !ID_RE.test(id)) return fail('皮肤 id 必须为 kebab-case')
-  if (typeof manifest.tone !== 'string' || !['light', 'dark'].includes(manifest.tone)) return fail('manifest.tone 必须为 light 或 dark')
   if (typeof manifest.name !== 'string' || !manifest.name.trim()) return fail('manifest.name 不能为空')
   for (const entry of readdirSync(packageRoot, { withFileTypes: true })) {
     if (!entry.isFile()) continue
     if (entry.name.startsWith('preview.') && !PREVIEW_RE.test(entry.name)) return fail('预览图仅允许 png/webp/svg/jpg/jpeg')
   }
-  return { id, info: { id, name: manifest.name, tone: manifest.tone as 'light' | 'dark', builtin: false, version: typeof manifest.version === 'string' ? manifest.version : undefined, author: typeof manifest.author === 'string' ? manifest.author : undefined, description: typeof manifest.description === 'string' ? manifest.description : undefined } }
+  return {
+    id,
+    info: {
+      id,
+      name: manifest.name.trim(),
+      tone: manifest.tone as 'light' | 'dark',
+      builtin: false,
+      version: typeof manifest.version === 'string' ? manifest.version : undefined,
+      author: typeof manifest.author === 'string' ? manifest.author : undefined,
+      description: typeof manifest.description === 'string' ? manifest.description : undefined,
+      titlebar:
+        manifest.titlebar && typeof manifest.titlebar === 'object' && typeof manifest.titlebar.color === 'string'
+          ? {
+              color: manifest.titlebar.color,
+              symbolColor: typeof manifest.titlebar.symbolColor === 'string' ? manifest.titlebar.symbolColor : '#ffffff',
+            }
+          : undefined,
+      previewScale: typeof manifest.previewScale === 'number' && manifest.previewScale > 0 ? manifest.previewScale : undefined,
+      previewPosition: typeof manifest.previewPosition === 'string' ? manifest.previewPosition : undefined,
+      tooltip: typeof manifest.tooltip === 'string' ? manifest.tooltip : undefined,
+    },
+  }
 }
 function installDirectory(sourceRoot: string, replace = false): SkinManagerResult {
   const checked = validatePackage(sourceRoot)
