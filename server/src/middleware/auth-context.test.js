@@ -1,9 +1,13 @@
-import { beforeAll, describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test, mock } from 'bun:test'
 import { Hono } from 'hono'
 import jwt from 'jsonwebtoken'
+import { installBunSqliteMock } from '../test-helpers/sqlite-bun-adapter.js'
 
 process.env.JWT_SECRET = 'x'.repeat(64)
 process.env.DB_PATH = ':memory:'
+// 动态 import '../db.js' 会加载 better-sqlite3（bun 下 ERR_DLOPEN_FAILED），
+// 必须先安装 sqlite 适配器；与 api-keys-db/config-store 同款模式。
+installBunSqliteMock(mock)
 
 let dbModule
 let middleware
