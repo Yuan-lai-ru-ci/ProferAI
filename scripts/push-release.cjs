@@ -140,7 +140,7 @@ function tryRun(cmd, cwd = ROOT) {
     console.log('      export GITHUB_TOKEN=ghp_xxxx');
   } else {
     tryRun(`git add "${pkgPath}"`, ROOT);
-    const commit = tryRun(`git commit -m "chore: release ${TAG}"`, ROOT);
+    const commit = tryRun(`git commit -m "chore: release ${TAG} [auto-release]"`, ROOT);
     console.log('  commit: ' + (commit.ok ? 'ok' : '跳过(无版本号变更)'));
 
     // push 前先 pull --rebase 防冲突
