@@ -1,0 +1,10 @@
+{
+  "id": "forest-light",
+  "name": "森息晨光",
+  "tone": "light",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "森息晨光 — 自然绿调",
+  "previewScale": 1.45,
+  "titlebar": { "color": "#ecf1ee", "symbolColor": "#1d3026" }
+}

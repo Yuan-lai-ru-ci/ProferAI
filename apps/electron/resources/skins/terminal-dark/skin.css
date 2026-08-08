@@ -1,0 +1,417 @@
+/* ===== Terminal Dark（CRT 终端）皮肤 =====
+ *
+ * 结构：:root token 表 + 特例规则区（终端专属效果不 token 化：
+ * 等宽字体、扫描线/辉光、灯珠面板动画、机械风滚动条、全局直角化）。
+ * 未定义 token 继承 globals.css 默认值；公共组件规则见 skin-base.css。
+ */
+
+:root {
+  /* ===== 基底色板 — 近纯黑的极暗暖灰底 ===== */
+  --background: 100 6% 5%;              /* #0d0e0c 侧边栏 */
+  --foreground: 90 20% 65%;             /* #acb09f 暖黄绿白 */
+  --content-area: 100 6% 3%;            /* #080907 内容区：最深 */
+  --sidebar-surface: 100 6% 5%;
+  --tabbar-surface: 100 6% 5%;
+  --input-surface: 100 6% 5%;
+  --muted: 100 5% 10%;                  /* #1a1b19 次要背景 */
+  --muted-foreground: 90 12% 38%;       /* #636b5e 次要文字 */
+  --border: 90 10% 18%;                 /* #2d3029 暗暖边框 */
+  --primary: 100 30% 48%;               /* #6b9e52 收敛暖绿 */
+  --primary-foreground: 100 6% 5%;      /* 黑字 */
+  --secondary: 100 5% 10%;              /* 与 muted 一致 */
+  --secondary-foreground: 90 20% 65%;   /* 与 foreground 一致 */
+  --accent: 70 20% 18%;                 /* #2d2e24 暖琥珀暗强调 */
+  --accent-foreground: 70 35% 58%;      /* #a8a45e 暖琥珀高亮 */
+  --ring: 100 35% 42%;                  /* #5b8a3f 聚焦环 */
+  --card: 100 6% 7%;                    /* #111210 卡片略高于背景 */
+  --card-foreground: 90 20% 65%;
+  --input: 100 5% 10%;
+  --popover: 100 6% 8%;                 /* #141412 弹出层 */
+  --popover-foreground: 90 20% 65%;
+  --dialog: 100 6% 10%;                 /* #1a1b18 弹窗 */
+  --dialog-foreground: 90 20% 65%;
+  --destructive: 10 35% 42%;            /* #9e5546 暖红 */
+  --destructive-foreground: 90 20% 65%;
+  --stop-hover-bg: hsl(10, 25%, 15%);
+  --tooltip: 100 8% 14%;
+  --tooltip-foreground: 0 0% 98%;
+  --tooltip-muted: 90 15% 48%;
+  --code-bg: 100 8% 4%;
+  --radius: 2px;                        /* 全局直角：rounded-md = calc(2px - 2px) = 0 */
+  --dashed-border: 100 30% 48% / 0.25;
+  --dashed-border-hover: 100 30% 48% / 0.40;
+
+  /* ===== 文字选区：亮绿选区 + 黑字 ===== */
+  --selection-bg: hsl(var(--primary) / 0.30);
+  --selection-color: hsl(var(--background));
+
+  /* ===== 外层缝隙背景 ===== */
+  --shell-bg-gradient: linear-gradient(135deg, hsl(100 6% 3%) 0%, hsl(100 8% 5%) 100%);
+
+  /* ===== 选中态（会话/工作区/Tab/自动化入口） ===== */
+  --item-selected-bg: hsl(100 10% 16%);
+  --item-selected-fg: hsl(var(--primary));
+
+  /* ===== 工作区 Badge ===== */
+  --workspace-badge-color: hsl(var(--primary));
+
+  /* ===== Dialog 光晕：暖磷光微光弹窗 ===== */
+  --dialog-glow-shadow:
+    0 0 40px 8px hsl(var(--primary) / 0.06),
+    0 0 80px 4px hsl(var(--primary) / 0.03),
+    0 25px 50px -12px rgba(0, 0, 0, 0.5);
+
+  /* ===== 输入区代码块 ===== */
+  --tiptap-pre-bg: 100 8% 4%;           /* = code-bg */
+
+  /* ===== 代码块标题栏 ===== */
+  --code-block-header-bg: rgb(11, 14, 10);
+
+  /* ===== 计划模式虚线 ===== */
+  --plan-mode-stroke-color: hsl(var(--ring) / 0.7);
+
+  /* ===== ui-classic TabBar 下缘阴影（经典界面） ===== */
+  --tabbar-shadow-color: hsl(var(--border) / 0.6);
+}
+
+/* ===== 特例规则区（终端专属，不 token 化） ===== */
+
+/* 全局等宽字体覆写 */
+:root {
+  font-family:
+    'Cascadia Code', 'Cascadia Mono', 'JetBrainsMono Nerd Font',
+    ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, 'Courier New', monospace;
+  font-weight: 400;
+  font-feature-settings: 'cv11', 'ss01', 'ss03', 'tnum', 'calt';
+}
+
+/* ===== CRT 扫描线 / 暗角 ===== */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 1px,
+    rgba(30, 35, 20, 0.18) 1px,
+    rgba(30, 35, 20, 0.18) 2px
+  );
+  animation: crt-flicker 8s infinite steps(10);
+  will-change: opacity;
+  transform: translateZ(0);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 60%,
+    rgba(0, 0, 0, 0.45) 100%
+  );
+  will-change: opacity;
+  transform: translateZ(0);
+}
+
+@keyframes crt-flicker {
+  0%   { opacity: 0.97; }
+  5%   { opacity: 1.0; }
+  10%  { opacity: 0.98; }
+  15%  { opacity: 1.0; }
+  20%  { opacity: 0.96; }
+  30%  { opacity: 1.0; }
+  50%  { opacity: 0.98; }
+  70%  { opacity: 1.0; }
+  80%  { opacity: 0.97; }
+  90%  { opacity: 1.0; }
+  100% { opacity: 0.98; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
+  body::after { background: none; }
+  .text-foreground,
+  [class*="text-foreground"],
+  .crt-sidebar .text-foreground,
+  .crt-sidebar [class*="text-foreground"],
+  .model-selector-trigger,
+  .text-primary,
+  [class*="text-primary"] {
+    text-shadow: none;
+  }
+}
+
+/* ===== 荧光辉光 ===== */
+.text-foreground,
+[class*="text-foreground"] {
+  text-shadow: 0 0 2.5px hsl(90 25% 55% / 0.14), 0 0 1px hsl(90 25% 55% / 0.20);
+}
+
+.crt-sidebar .text-foreground,
+.crt-sidebar [class*="text-foreground"] {
+  color: hsl(90 25% 75%);
+  text-shadow: 0 0 3.3px hsl(90 25% 55% / 0.18), 0 0 1.5px hsl(90 25% 55% / 0.28);
+}
+
+.model-selector-trigger {
+  text-shadow: 0 0 6px hsl(100 40% 45% / 0.25), 0 0 2px hsl(100 40% 45% / 0.40);
+}
+
+.text-primary,
+[class*="text-primary"] {
+  text-shadow: 0 0 8px hsl(100 40% 45% / 0.28), 0 0 3px hsl(100 40% 45% / 0.40);
+}
+
+/* ===== 模式切换器：古早指示灯面板 =====
+ * 轨道是暗底 + 未点亮灯珠网格；滑块是点亮灯珠面板 + 电磁闪烁。
+ * .mode-switcher-track .mode-slider 特异性 (0,3,0) 显式覆盖末尾 [class*="rounded"]
+ * catch-all (0,2,0)，防止 border-radius 被直角化。
+ */
+.mode-switcher-track {
+  background-color: hsl(var(--background)) !important;
+  background-image:
+    radial-gradient(circle, hsl(var(--muted-foreground) / 0.20) 0.5px, transparent 0.5px) !important;
+  background-size: 4px 4px !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+.mode-switcher-track .mode-slider {
+  background-color: hsl(100 40% 52%) !important;
+  background-image:
+    radial-gradient(circle, rgba(0,0,0,0.06) 1px, transparent 1px),
+    radial-gradient(circle at 1px 1px, hsl(var(--primary) / 0.40) 0.5px, transparent 0.5px) !important;
+  background-size: 3px 3px, 3px 3px !important;
+  background-position: 0 0, 1px 1px !important;
+  border: 1px solid hsl(var(--primary) / 0.30) !important;
+  border-radius: 2px !important;
+  box-shadow:
+    0 0 10px hsl(var(--primary) / 0.30),
+    0 0 20px hsl(var(--ring) / 0.20),
+    inset 0 0 6px hsl(var(--primary) / 0.10) !important;
+  animation: indicator-flicker 2.5s infinite steps(15);
+}
+
+@keyframes indicator-flicker {
+  0%   { opacity: 0.94; }
+  12%  { opacity: 0.99; }
+  25%  { opacity: 0.96; }
+  37%  { opacity: 1.0; }
+  50%  { opacity: 0.93; }
+  62%  { opacity: 0.98; }
+  75%  { opacity: 0.95; }
+  87%  { opacity: 0.99; }
+  100% { opacity: 0.94; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-switcher-track .mode-slider {
+    animation: none;
+  }
+}
+
+.mode-btn-selected {
+  color: #000000 !important;
+}
+
+/* ===== 机械风滚动条（覆盖公共三态规则） ===== */
+.scroll-progress-track {
+  background: transparent !important;
+  border-left: none;
+}
+
+.scroll-progress-thumb {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--primary) / 0.25),
+    hsl(var(--primary) / 0.45),
+    hsl(var(--primary) / 0.25)
+  ) !important;
+  border: 1px solid hsl(var(--primary) / 0.35) !important;
+  box-shadow:
+    inset 0 3px 0 hsl(var(--primary) / 0.12),
+    inset 0 -3px 0 hsl(var(--primary) / 0.12),
+    inset 0 6px 0 hsl(var(--primary) / 0.06),
+    inset 0 -6px 0 hsl(var(--primary) / 0.06) !important;
+  border-radius: 0 !important;
+}
+
+.scroll-progress-thumb:hover {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--primary) / 0.35),
+    hsl(var(--primary) / 0.55),
+    hsl(var(--primary) / 0.35)
+  ) !important;
+  border-color: hsl(var(--primary) / 0.50) !important;
+}
+
+.scroll-progress-thumb-active {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--primary) / 0.45),
+    hsl(var(--primary) / 0.65),
+    hsl(var(--primary) / 0.45)
+  ) !important;
+  border-color: hsl(var(--primary) / 0.60) !important;
+  box-shadow:
+    inset 0 3px 0 hsl(var(--primary) / 0.20),
+    inset 0 -3px 0 hsl(var(--primary) / 0.20),
+    inset 0 6px 0 hsl(var(--primary) / 0.10),
+    inset 0 -6px 0 hsl(var(--primary) / 0.10),
+    0 0 8px hsl(var(--primary) / 0.25) !important;
+}
+
+/* ===== Minimap 指示器：工业指示灯短条 ===== */
+.minimap-visible-indicator {
+  background-color: hsl(var(--primary)) !important;
+  box-shadow: 0 0 3px hsl(var(--primary) / 0.5), 0 0 6px hsl(var(--primary) / 0.2);
+}
+
+/* ===== UI 组件终端化 ===== */
+
+/* 输入框容器：直角实色背景 + 实线边框 */
+.agent-input-surface {
+  border-radius: 0 !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-top-width: 1px !important;
+  border-bottom-width: 1px !important;
+  border-left-width: 1px !important;
+  border-right-width: 1px !important;
+  background: hsl(var(--background)) !important;
+  backdrop-filter: none !important;
+}
+
+/* 设置卡片：纯边框 */
+.settings-card {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+/* 按钮：去阴影 */
+button {
+  box-shadow: none !important;
+}
+
+button.bg-primary {
+  background: transparent !important;
+  border: 1px solid hsl(var(--primary)) !important;
+  color: hsl(var(--primary)) !important;
+  text-shadow: 0 0 6px hsl(var(--primary) / 0.25);
+}
+button.bg-primary:hover {
+  background: hsl(var(--primary) / 0.12) !important;
+  color: hsl(var(--primary)) !important;
+}
+
+button.bg-secondary {
+  background: transparent !important;
+  border: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+button.bg-secondary:hover {
+  background: hsl(var(--muted)) !important;
+}
+
+/* 闪烁光标 */
+@keyframes terminal-cursor-blink {
+  0%, 50% { caret-color: hsl(100 40% 50%); }
+  51%, 100% { caret-color: transparent; }
+}
+
+.ProseMirror:focus {
+  caret-color: hsl(100 40% 50%);
+  animation: terminal-cursor-blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ProseMirror:focus {
+    animation: none;
+  }
+}
+
+/* ===== 消息去气泡化：终端 stdout 滚动记录 ===== */
+.message-item {
+  border-radius: 0 !important;
+  padding: 2px 4px !important;
+}
+
+.is-user [class*="bg-primary/10"] {
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+.is-user [class*="bg-gradient-to-t"] {
+  background: transparent !important;
+}
+
+/* 终端格式时间戳 — [MM/DD HH:MM] */
+.message-time::before {
+  content: '[';
+}
+.message-time::after {
+  content: ']';
+}
+
+/* 置顶用户消息 banner — 去毛玻璃实色 */
+.sticky-user-banner {
+  backdrop-filter: none !important;
+  background: hsl(var(--background)) !important;
+  box-shadow: none !important;
+  border-color: hsl(var(--border)) !important;
+}
+.sticky-user-banner:hover {
+  background: hsl(var(--muted)) !important;
+  border-color: hsl(var(--primary) / 0.35) !important;
+}
+
+/* 追问选中项：深绿实底 + 亮绿描边，文案无辉光 */
+.ask-user-banner button.ask-user-option-selected {
+  background: hsl(100 22% 26%) !important;
+  border: 1px solid hsl(100 36% 54%) !important;
+  color: hsl(0 0% 100%) !important;
+  text-shadow: none !important;
+}
+.ask-user-banner button.ask-user-option-selected > span {
+  color: hsl(0 0% 100%) !important;
+  text-shadow: none !important;
+}
+.ask-user-banner .ask-user-option-description {
+  color: hsl(90 18% 72%) !important;
+  text-shadow: none !important;
+}
+.ask-user-banner .ask-user-option-description-selected {
+  color: hsl(0 0% 100%) !important;
+}
+.ask-user-banner button.ask-user-option-focused {
+  background: hsl(100 12% 17%) !important;
+  color: hsl(0 0% 100%) !important;
+}
+.ask-user-banner button.ask-user-option-focused > span,
+.ask-user-banner .ask-user-option-description-focused {
+  color: hsl(0 0% 100%) !important;
+  text-shadow: none !important;
+}
+
+/* 空态欢迎屏：终端 prompt 前缀 */
+.welcome-empty-state h1::before {
+  content: '> ';
+  color: hsl(var(--primary));
+  font-weight: 600;
+}
+
+/* ===== 全局直角化 catch-all =====
+ * 匹配所有 Tailwind rounded- 类；模式切换器指示灯由
+ * .mode-switcher-track .mode-slider (0,3,0) 显式覆盖 (0,2,0)。
+ */
+[class*="rounded"] {
+  border-radius: 0 !important;
+}

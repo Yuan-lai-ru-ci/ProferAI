@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation } from '@profer/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
 import type {
@@ -179,6 +179,8 @@ import { selectAndParsePaper, parsePaper, estimatePaperPages } from './lib/paper
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import { scanSkins, getSkinCss, getSkinPreview, invalidateSkinCache } from './lib/skin-service'
+import { deleteUserSkin, installSkinFromFolder, installSkinFromZip, openSkinTemplateFolder, openUserSkinsFolder, selectSkinFolder, selectSkinZip } from './lib/skin-manager-service'
 import { getRemoteServiceStatus, setRemoteServiceEnabled, restartRemoteService } from './lib/remote-service'
 import { updateWindowFrameAppearance } from './lib/titlebar-overlay'
 import { setDockBadgeCount } from './lib/dock-badge-service'
@@ -1748,6 +1750,19 @@ export function registerIpcHandlers(): void {
       return updateUserProfile(updates)
     }
   )
+
+  // ===== 皮肤相关 =====
+  ipcMain.handle(SKIN_IPC_CHANNELS.GET_SKINS, async () => scanSkins())
+  ipcMain.handle(SKIN_IPC_CHANNELS.GET_SKIN_CSS, async (_event, id: unknown) => typeof id === 'string' ? getSkinCss(id) : null)
+  ipcMain.handle(SKIN_IPC_CHANNELS.GET_SKIN_PREVIEW, async (_event, id: unknown) => typeof id === 'string' ? getSkinPreview(id) : null)
+  ipcMain.handle(SKIN_IPC_CHANNELS.SELECT_ZIP, async () => selectSkinZip())
+  ipcMain.handle(SKIN_IPC_CHANNELS.SELECT_FOLDER, async () => selectSkinFolder())
+  ipcMain.handle(SKIN_IPC_CHANNELS.INSTALL_ZIP, async (_event, path: unknown, replace: unknown) => typeof path === 'string' ? installSkinFromZip(path, replace === true) : { ok: false, status: 'error', message: '无效 ZIP 路径' })
+  ipcMain.handle(SKIN_IPC_CHANNELS.INSTALL_FOLDER, async (_event, path: unknown, replace: unknown) => typeof path === 'string' ? installSkinFromFolder(path, replace === true) : { ok: false, status: 'error', message: '无效文件夹路径' })
+  ipcMain.handle(SKIN_IPC_CHANNELS.DELETE_USER_SKIN, async (_event, id: unknown) => typeof id === 'string' ? deleteUserSkin(id) : { ok: false, status: 'error', message: '无效皮肤 id' })
+  ipcMain.handle(SKIN_IPC_CHANNELS.OPEN_USER_FOLDER, async () => openUserSkinsFolder())
+  ipcMain.handle(SKIN_IPC_CHANNELS.OPEN_TEMPLATE_FOLDER, async () => openSkinTemplateFolder())
+  ipcMain.handle(SKIN_IPC_CHANNELS.REFRESH, async () => { invalidateSkinCache(); return scanSkins() })
 
   // ===== 应用设置相关 =====
 

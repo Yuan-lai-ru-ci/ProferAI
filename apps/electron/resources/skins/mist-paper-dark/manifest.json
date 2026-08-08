@@ -1,0 +1,9 @@
+{
+  "id": "mist-paper-dark",
+  "name": "雾纸暖灰",
+  "tone": "dark",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "雾纸暖灰 — 安静的暖石墨工作台",
+  "titlebar": { "color": "#2a2928", "symbolColor": "#b8b6b3" }
+}
