@@ -54,7 +54,8 @@ jobs:
         run: bun run typecheck
 
       - name: Run unit and regression tests
-        run: bun test --timeout 30000
+        # --isolate: bun 的 mock.module('electron') 是进程级注册表，默认并行下多文件互相覆盖导致误报；隔离模式保证每个测试文件独立
+        run: bun test --isolate --timeout 30000
 
       - name: Run Node.js server reliability gate
         # 直接调用真实 Node（setup-node 24）运行 node:test，避免 bun run 对 node 命令的

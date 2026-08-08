@@ -1790,6 +1790,18 @@ export function registerIpcHandlers(): void {
     async (event, updates: Partial<AppSettings>): Promise<AppSettings> => {
       const result = await updateSettings(updates)
 
+      // 快速任务开关变化：实时创建/销毁预创建窗口，并重新注册全局快捷键
+      if (updates.quickTaskEnabled !== undefined) {
+        const { createQuickTaskWindow, destroyQuickTaskWindow } = await import('./lib/quick-task-window')
+        if (updates.quickTaskEnabled === true) {
+          createQuickTaskWindow()
+        } else {
+          destroyQuickTaskWindow()
+        }
+        const { reregisterAllGlobalShortcuts } = await import('./lib/global-shortcut-service')
+        reregisterAllGlobalShortcuts()
+      }
+
       if (updates.feishuSessionMirror !== undefined) {
         syncFeishuSyncSleepBlocker(result)
       }
