@@ -296,7 +296,7 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
 const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
   {
     pattern: /api key|unauthorized|invalid.*key|authentication/i,
-    message: '请检查是否选择了正确的 Proma 供应渠道和模型',
+    message: '请检查是否选择了正确的 Profer 供应渠道和模型',
   },
   {
     pattern: /validation|schema/i,
@@ -549,7 +549,7 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
 
   const meta = ERROR_CODE_META[code] ?? { title: 'Agent 执行失败', canRetry: false }
   // 认证/渠道配置类错误友好化后文案固定，引导用户直接重新选择模型，而非跳转设置
-  const isInvalidChannelOrModel = /请检查是否选择了正确的 Proma 供应渠道和模型/.test(message)
+  const isInvalidChannelOrModel = /请检查是否选择了正确的 Profer 供应渠道和模型/.test(message)
 
   const actions: RecoveryAction[] = [
     isInvalidChannelOrModel

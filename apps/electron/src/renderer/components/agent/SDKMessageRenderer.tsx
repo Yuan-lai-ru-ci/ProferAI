@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
@@ -41,7 +41,7 @@ import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom, modelSelectorRequestAtom } from '@/atoms/chat-atoms'
 import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
@@ -1163,6 +1163,7 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
   const setEnvDialogOpen = useSetAtom(environmentCheckDialogOpenAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
+  const setModelSelectorRequest = useSetAtom(modelSelectorRequestAtom)
   const [detailsOpen, setDetailsOpen] = React.useState(false)
 
   // #1268 断流保消息：错误卡片只显示 error.message，不渲染附着的助手正文
@@ -1191,6 +1192,10 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
       case 'open_credits':
         setSettingsTab('credits')
         setSettingsOpen(true)
+        break
+      case 'select_model':
+        // 打开当前视图的模型选择器（ModelSelector 监听全局请求计数）
+        setModelSelectorRequest((v) => v + 1)
         break
       case 'settings':
         setSettingsOpen(true)
@@ -1223,6 +1228,8 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact }: Erro
         return <Settings className="size-3.5 mr-1.5" />
       case 'open_credits':
         return <Wallet className="size-3.5 mr-1.5" />
+      case 'select_model':
+        return <Cpu className="size-3.5 mr-1.5" />
       case 'open_external':
         return <ExternalLink className="size-3.5 mr-1.5" />
       case 'retry':

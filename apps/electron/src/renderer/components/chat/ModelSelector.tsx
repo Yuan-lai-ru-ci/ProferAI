@@ -22,7 +22,9 @@ import {
   selectedModelAtom,
   channelsAtom,
   channelsLoadedAtom,
+  modelSelectorRequestAtom,
 } from '@/atoms/chat-atoms'
+import { authStatusAtom } from '@/atoms/identity-atoms'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
@@ -105,10 +107,21 @@ export function ModelSelector({
   const setConversations = useSetAtom(conversationsAtom)
   const setGlobalModel = useSetAtom(selectedModelAtom)
   const channels = useAtomValue(channelsAtom)
+  const authStatus = useAtomValue(authStatusAtom)
   const channelsLoaded = useAtomValue(channelsLoadedAtom)
   const setChannels = useSetAtom(channelsAtom)
+  const modelSelectorRequest = useAtomValue(modelSelectorRequestAtom)
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
+
+  // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：请求计数变化时打开 Dialog
+  const prevModelSelectorRequestRef = React.useRef(modelSelectorRequest)
+  React.useEffect(() => {
+    if (modelSelectorRequest !== prevModelSelectorRequestRef.current) {
+      prevModelSelectorRequestRef.current = modelSelectorRequest
+      setOpen(true)
+    }
+  }, [modelSelectorRequest])
 
   // 外部模型优先 → per-conversation 模型
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : conversationModel
@@ -121,7 +134,13 @@ export function ModelSelector({
     }
   }, [open, setChannels])
 
-  const modelOptions = React.useMemo(() => buildModelOptions(channels, filterChannelId, filterChannelIds), [channels, filterChannelId, filterChannelIds])
+  // 未登录时隐藏服务端托管的官方渠道（newapi-*），避免残留缓存渠道展示给未登录用户
+  const visibleChannels = React.useMemo(() => {
+    if (authStatus.isLoggedIn) return channels
+    return channels.filter((c) => !c.id.startsWith('newapi-'))
+  }, [channels, authStatus.isLoggedIn])
+
+  const modelOptions = React.useMemo(() => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds), [visibleChannels, filterChannelId, filterChannelIds])
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
 
   // 搜索过滤

@@ -22,7 +22,7 @@ function unsafeCss(css: string, packageRoot: string): boolean {
   // 注释中的示例代码不应参与校验，否则模板的注释示例会被误判为资源引用。
   const executableCss = css.replace(/\/\*[\s\S]*?\*\//g, '')
   if (/@import\b|@font-face\b|url\(\s*(['"]?)(?:https?:|file:|data:|\/\/)/i.test(executableCss)) return true
-  const urls = [...executableCss.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi)].map((match) => match[2].trim())
+  const urls = [...executableCss.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi)].map((match) => (match[2] ?? '').trim())
   return urls.some((url) => !ASSET_RE.test(url) || !existsSync(join(packageRoot, ...url.split('/'))))
 }
 function validateAssets(packageRoot: string): SkinManagerResult | null {

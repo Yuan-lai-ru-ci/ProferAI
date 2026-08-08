@@ -1,12 +1,16 @@
 /**
  * 跨平台清理残留的 electronmon / electron 进程
- * 替代 pkill（Windows 不支持）
+ * 替代 pkill（Windows 不支持）。
+ *
+ * Windows 上 electronmon 实际由 node.exe 承载；若只杀 electron.exe，监督进程会立刻
+ * 拉起新的 Electron，导致移动端自定义端口等监听持续残留。清理时必须先结束本仓库的
+ * electronmon node 进程树，且不能按所有 node.exe / Profer.exe 做宽泛匹配。
  *
  * 传入 --vite 时，额外清理占用 Vite 端口（5174）的残留进程。
  * 该清理仅应在 concurrently 拉起 dev:vite 之前跑一次（顶层 dev 脚本），
  * 不要在与 dev:vite 并发的 dev:electron 内部跑，否则会误杀本次刚启动的 vite。
  */
-import { execSync } from 'child_process'
+import { execFileSync, execSync } from 'child_process'
 
 const isWin = process.platform === 'win32'
 const killVite = process.argv.includes('--vite')
@@ -24,6 +28,39 @@ function kill(pattern: string): void {
     }
   } catch {
     // 没有匹配进程，忽略
+  }
+}
+
+/**
+ * electronmon 在 Windows 中是 node.exe，而不是 electronmon.exe。
+ * 仅匹配当前 apps/electron 目录下的 electronmon CLI，再以 /T 终止其受监督子树。
+ * 这避免旧 electronmon 在 electron.exe 被杀后立刻重启，从而持续占住 Remote 服务端口。
+ */
+function killStaleElectronmon(): void {
+  if (!isWin) return
+
+  try {
+    const workspace = process.cwd().replace(/'/g, "''")
+    const command = [
+      `$workspace = '${workspace}'`,
+      'Get-CimInstance Win32_Process |',
+      "  Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -and $_.CommandLine.Contains($workspace) -and $_.CommandLine -match '[\\\\/]electronmon[\\\\/]bin[\\\\/]cli\\.js' } |",
+      '  Select-Object -ExpandProperty ProcessId',
+    ].join(' ')
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    const pids = new Set(output.split(/\s+/).filter((value) => /^\d+$/.test(value)))
+    for (const pid of pids) {
+      try {
+        execSync(`taskkill /F /T /PID ${pid} 2>nul`, { stdio: 'ignore' })
+      } catch {
+        // 已自行退出或权限不足，继续清理其他残留。
+      }
+    }
+  } catch {
+    // PowerShell/CIM 不可用时降级为原有 electron.exe 清理。
   }
 }
 
@@ -74,6 +111,8 @@ function killStaleVite(port: number): void {
   }
 }
 
+// 必须先杀监督者，否则下方的 electron.exe 清理会触发 electronmon 立即重启。
+killStaleElectronmon()
 kill(isWin ? 'electronmon.exe' : 'electronmon \\.')
 kill(isWin ? 'electron.exe' : 'electron.*dist/main')
 if (killVite) killStaleVite(VITE_PORT)
