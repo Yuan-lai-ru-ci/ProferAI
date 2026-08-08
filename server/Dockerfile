@@ -12,11 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# 依赖层（利用 Docker 缓存）
+# 依赖层（利用 Docker 缓存；服务器无法直连 npm 官方源与 nodejs.org，registry 与 node-gyp headers 均走 npmmirror）
 COPY package.json ./
-RUN npm install --omit=dev && npm cache clean --force
+RUN npm install --omit=dev --registry=https://registry.npmmirror.com --disturl=https://registry.npmmirror.com/-/binary/node && npm cache clean --force
 
-# 代码层
+# 代码层（构建时传 --build-arg CACHEBUST=<唯一值> 强制刷新此层及其后，跳过 npm 重装：
+#   服务器 npm registry 网络慢，避免每次发布全量重装依赖）
+ARG CACHEBUST=0
 COPY src/ ./src/
 COPY index.js ./
 
