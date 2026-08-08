@@ -105,6 +105,7 @@ export function GeneralSettings(): React.ReactElement {
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false)
   const [archiveAfterDays, setArchiveAfterDays] = React.useState<number>(7)
   const [autoLaunch, setAutoLaunch] = React.useState(false)
+  const [quickTaskEnabled, setQuickTaskEnabled] = React.useState(false)
   const [shellPreference, setShellPreference] = React.useState<'auto' | 'git-bash' | 'wsl'>('auto')
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
@@ -233,6 +234,7 @@ export function GeneralSettings(): React.ReactElement {
     window.electronAPI.getSettings().then((settings) => {
       setArchiveAfterDays(settings.archiveAfterDays ?? 7)
       setAutoLaunch(settings.autoLaunch ?? false)
+      setQuickTaskEnabled(settings.quickTaskEnabled === true)
       setShellPreference(settings.agentShellPreference ?? 'auto')
     }).catch(console.error)
 
@@ -342,6 +344,22 @@ export function GeneralSettings(): React.ReactElement {
       await window.electronAPI.updateSettings({ archiveAfterDays: days })
     } catch (error) {
       console.error('[通用设置] 更新归档天数失败:', error)
+    }
+  }
+
+  /** 切换快速任务窗口（Alt+Space 全局唤起） */
+  const handleQuickTaskToggle = async (enabled: boolean): Promise<void> => {
+    setQuickTaskEnabled(enabled)
+    try {
+      await window.electronAPI.updateSettings({ quickTaskEnabled: enabled })
+      if (enabled) {
+        toast.success('快速任务已开启，按 Alt+Space 唤起')
+      } else {
+        toast.success('快速任务已关闭')
+      }
+    } catch (error) {
+      console.error('[通用设置] 更新快速任务开关失败:', error)
+      setQuickTaskEnabled(!enabled) // 回滚
     }
   }
 
@@ -565,6 +583,12 @@ export function GeneralSettings(): React.ReactElement {
           >
             <span className="text-[13px] text-foreground/40">简体中文</span>
           </SettingsRow>
+          <SettingsToggle
+            label="快速任务（Alt+Space）"
+            description="启用后预创建全局唤起窗口，在任意应用按 Alt+Space 快速向 Profer 发送任务"
+            checked={quickTaskEnabled}
+            onCheckedChange={handleQuickTaskToggle}
+          />
           <SettingsToggle
             label="桌面通知"
             description="Agent 完成任务或需要操作时发送通知"
