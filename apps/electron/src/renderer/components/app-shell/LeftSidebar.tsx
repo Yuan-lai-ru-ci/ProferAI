@@ -578,6 +578,26 @@ function focusEnterableViewItem(item: string): void {
   })
 }
 
+/**
+ * 列表渐进渲染辅助：按累计条数切分组列表（先渲染可见数量，空闲时补全）。
+ * 避免切换模式/视图时全量渲染大量会话导致主线程卡顿。
+ */
+function sliceGroupsByCount<T extends { items: readonly unknown[] }>(groups: readonly T[], count: number): T[] {
+  let remaining = count
+  const out: T[] = []
+  for (const group of groups) {
+    if (remaining <= 0) break
+    if (group.items.length <= remaining) {
+      out.push(group)
+      remaining -= group.items.length
+    } else {
+      out.push({ ...group, items: group.items.slice(0, remaining) })
+      remaining = 0
+    }
+  }
+  return out
+}
+
 export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   // 持续持有最新 activeView 的稳定引用，供 navigation consumer（useEffect [] 注册一次）
@@ -781,6 +801,25 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
 
   // 归档 & 搜索状态
   const [viewMode, setViewMode] = useAtom(sidebarViewModeAtom)
+
+  // ===== 列表渐进渲染：先渲染可见数量（40 条），空闲时批量补全 =====
+  const INITIAL_LIST_COUNT = 40
+  const LIST_BATCH_SIZE = 40
+  const [progressiveCount, setProgressiveCount] = React.useState(INITIAL_LIST_COUNT)
+  // 模式/视图切换时重置为初始数量，保证首屏只渲染可见部分
+  const progressiveResetKey = `${mode}-${viewMode}`
+  React.useEffect(() => {
+    setProgressiveCount(INITIAL_LIST_COUNT)
+  }, [progressiveResetKey])
+  // 空闲时继续补全，直到全部渲染（硬上限避免空转）
+  React.useEffect(() => {
+    if (progressiveCount >= 1000) return
+    const handle = window.requestIdleCallback(
+      () => setProgressiveCount((c) => c + LIST_BATCH_SIZE),
+      { timeout: 300 },
+    )
+    return () => window.cancelIdleCallback(handle)
+  }, [progressiveCount, progressiveResetKey])
   const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
 
   React.useEffect(() => {
@@ -965,6 +1004,12 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
       return groupByDate(filtered)
     },
     [conversations, viewMode, draftSessionIds]
+  )
+
+  /** 对话列表渐进切片：先渲染可见数量，空闲补全 */
+  const progressiveConversationGroups = React.useMemo(
+    () => sliceGroupsByCount(conversationGroups, progressiveCount),
+    [conversationGroups, progressiveCount]
   )
 
   /** 已归档对话数量 */
@@ -1839,6 +1884,12 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
     [agentSessions, draftSessionIds]
   )
 
+  /** 归档 Agent 会话渐进切片：先渲染可见数量，空闲补全 */
+  const progressiveAgentSessionGroups = React.useMemo(
+    () => sliceGroupsByCount(agentSessionGroups, progressiveCount),
+    [agentSessionGroups, progressiveCount]
+  )
+
   const handleRailModeSwitch = React.useCallback((targetMode: AppMode) => {
     setViewMode('active')
     if (targetMode === mode) return
@@ -2417,7 +2468,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
           </div>
 
           <div className="flex-1 overflow-y-auto px-2 pb-3 scrollbar-thin min-h-0 titlebar-no-drag">
-            {conversationGroups.map((group) => (
+            {progressiveConversationGroups.map((group) => (
               <div key={group.label} className="mb-1">
                 <div className="ml-[4px] px-1.5 pt-2 pb-1 text-[11px] font-medium text-foreground/40 select-none">
                   {group.label}
@@ -2457,7 +2508,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
               >
                 <div className="px-2">
                   <div className="ml-4 flex flex-col gap-0.5">
-                    {pinnedAgentSessionTrees.map((item) => {
+                    {pinnedAgentSessionTrees.slice(0, progressiveCount).map((item) => {
                       const childCount = item.childSessions.length
                       const rowStatus = getSessionTreeStatus(item, agentIndicatorMap)
                       const treeActive = treeContainsSessionId(item, activeSessionId)
@@ -2579,7 +2630,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
             )}
 
             <div className="flex flex-col gap-0.5">
-              {agentProjectGroups.map((group) => (
+              {agentProjectGroups.slice(0, progressiveCount).map((group) => (
                 <AgentProjectGroupItem
                   key={group.workspace.id}
                   group={group}
@@ -2640,7 +2691,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
           <div className="flex-1 overflow-y-auto px-3 pt-2 pb-3 scrollbar-thin titlebar-no-drag">
             {mode === 'chat' ? (
               /* Chat 归档：对话按日期分组 */
-              conversationGroups.map((group) => (
+              progressiveConversationGroups.map((group) => (
                 <div key={group.label} className="mb-1">
                   <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-foreground/40 select-none">
                     {group.label}
@@ -2667,7 +2718,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
               ))
             ) : (
               /* Agent 模式归档：Agent 会话按日期分组 */
-              agentSessionGroups.map((group) => (
+              progressiveAgentSessionGroups.map((group) => (
                 <div key={group.label} className="mb-1">
                   <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-foreground/40 select-none">
                     {group.label}
