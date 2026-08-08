@@ -177,7 +177,13 @@
     --dashed-border-hover: 0 0% 98% / 0.40;
   }
 
-  /* ===== 特殊风格主题 ===== */
+  /* ===== 特殊风格主题 =====
+   *
+   * ⚠ 双写同步义务：以下 .theme-* token 块与 resources/skins/<id>/skin.css 定义
+   * 同一批主题 token（值必须一致）。此处是平板端/无皮肤注册场景的 fallback
+   * （applyThemeToDOM 的 theme-* 分支），skin.css 是正常路径（skin-* 分支）。
+   * 修改任一 token 必须同步另一处；可用 node scripts/check-skin-token-sync.mjs 校验。
+   */
 
   /* 雾纸暖灰 (mist-paper-dark) — 安静的暖石墨工作台
    * 保留原生深色不变；该主题仅在“特殊风格”中启用。
