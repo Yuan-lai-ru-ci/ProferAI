@@ -478,21 +478,25 @@ server/
 
 **早期实现曾用"无条件 cpSync"绕开这个约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`、`agent-workspace-manager.ts:upgradeDefaultSkillsInWorkspaces`）。
 
-### 自动发版流程
+### 发版流程（手动，2026-08-08 起）
 
-push main → `auto-version.yml` bump patch 版本 → 打 tag → `release.yml` 构建发布。
+发版 = 本地打 tag 并 push（tag push 触发 release.yml 构建发布）。auto-version.yml 已停用（
+GITHUB_TOKEN 推 tag 不触发 release.yml 且并发 bump 冲突，见 `workspace-files/.context/release-channel-research-2026-08-08.md`）：
 
 ```bash
-# 国内版（更新源：47.109.108.57）
+# 1) 确认版本号（apps/electron/package.json）后打 tag 推送 → release.yml 自动构建 + GitHub Release
+git tag -a vX.Y.Z -m "Profer vX.Y.Z"
+git push origin vX.Y.Z
+
+# 2) 国内版（更新源：47.109.108.57）
 bun run dist:win
 
-# GitHub 版（更新源：GitHub Releases）
-bun run dist:win-github
-
-# 上传国内更新服务器
+# 3) 上传国内更新服务器
 scp "out/Profer Setup *.exe" out/latest.yml out/*.blockmap ecs-user@47.109.108.57:/home/ecs-user/profer-updates/
 ssh ecs-user@47.109.108.57 "sudo cp /home/ecs-user/profer-updates/* /usr/share/nginx/html/profer-updates/"
 ```
+
+> 注意：push-release.cjs 通道二的 commit 必须带 `[auto-release]` 后缀（防空 bump）；tag 与 package.json 版本必须一致（release.yml 校验）。
 
 两个构建目标编译时注入 `__PROFER_BUILD_TARGET__`（`oss` / `commercial`），互不串扰。
 
