@@ -6,7 +6,7 @@
  *   $env:ELECTRON_RUN_AS_NODE='1'
  *   .\out\win-unpacked\Profer.exe .\scripts\packaged-pi-probe.cjs .\out\win-unpacked\resources
  *
- * 该 probe 只验证 app.asar 的 ESM 导入、当前 Pi 0.80.3 的内存 registry/session
+ * 该 probe 只验证 app.asar 的 ESM 导入、当前 Pi 0.82.1 的内存 model runtime/session
  * 初始化，以及 native/WASM 是否位于 app.asar.unpacked。它不发送真实渠道请求。
  */
 const { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } = require('node:fs')
@@ -82,14 +82,14 @@ async function runProbe(resourcesDir) {
   }
 
   const sdk = imported.get('@earendil-works/pi-coding-agent')
-  assert(typeof sdk.AuthStorage?.inMemory === 'function', 'Pi AuthStorage.inMemory 不可用')
-  assert(typeof sdk.ModelRegistry?.inMemory === 'function', 'Pi ModelRegistry.inMemory 不可用')
+  // Pi 0.82.1：AuthStorage/ModelRegistry.inMemory 已移除，改为 ModelRuntime.create + registerProvider
+  assert(typeof sdk.ModelRuntime?.create === 'function', 'Pi ModelRuntime.create 不可用')
   assert(typeof sdk.SessionManager?.create === 'function', 'Pi SessionManager.create 不可用')
+  assert(typeof sdk.SettingsManager?.inMemory === 'function', 'Pi SettingsManager.inMemory 不可用')
 
-  const authStorage = sdk.AuthStorage.inMemory()
-  const registry = sdk.ModelRegistry.inMemory(authStorage)
+  const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
   const providerId = 'profer-packaged-probe'
-  registry.registerProvider(providerId, {
+  modelRuntime.registerProvider(providerId, {
     name: 'Profer packaged probe',
     apiKey: 'offline-probe-key',
     api: 'openai-completions',
@@ -106,7 +106,7 @@ async function runProbe(resourcesDir) {
       maxTokens: 1024,
     }],
   })
-  assert(registry.find(providerId, 'offline-model'), '临时 Pi provider 注册失败')
+  assert(modelRuntime.getModel(providerId, 'offline-model'), '临时 Pi provider 注册失败')
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'profer-packaged-pi-'))
   try {
