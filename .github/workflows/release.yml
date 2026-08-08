@@ -169,6 +169,7 @@ jobs:
           gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false 2>$null
           if ($LASTEXITCODE -ne 0) {
             Write-Host "No existing release to delete for $env:GITHUB_REF_NAME"
+            exit 0
           }
 
       - name: Upload GitHub release assets
