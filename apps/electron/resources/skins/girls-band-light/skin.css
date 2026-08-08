@@ -125,9 +125,3 @@ html[class*="skin-"] .shell-bg::before {
     opacity: 0.8;
   }
 }
-
-/* 文字选区：品红标记落在文字上 */
-::selection {
-  background-color: hsl(var(--primary) / 0.28);
-  color: hsl(var(--foreground));
-}

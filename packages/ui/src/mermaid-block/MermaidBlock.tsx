@@ -54,7 +54,7 @@ function isUsableSvg(svg: unknown): svg is string {
   return true
 }
 
-/** 官方扩展（ELK 布局 / ZenUML）注册缓存：只注册一次 */
+/** 官方扩展（ELK 布局 / ZenUML）注册缓存：只注册一次；失败后重置允许下次重试 */
 let officialExtensionsReady: Promise<void> | null = null
 
 /**
@@ -74,7 +74,13 @@ async function ensureOfficialExtensions(): Promise<void> {
         ])
       mermaid.registerLayoutLoaders(elkLayouts)
       mermaid.registerExternalDiagrams([zenumlPlugin])
-    })()
+    })().catch((error) => {
+      // 注册失败（版本不兼容/网络受限等）：不能永久 rejected（此后兜底渲染 100% 失败），
+      // 重置缓存允许下一次渲染重试；同时打印错误便于定位。
+      officialExtensionsReady = null
+      console.error('[Mermaid] 官方扩展注册失败，将在下次渲染时重试:', error)
+      throw error
+    })
   }
   return officialExtensionsReady
 }

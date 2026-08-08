@@ -197,6 +197,10 @@ export async function captureOsSnapshotWin(): Promise<{
   portPids: Map<number, number[]>
   processes: Map<number, { name: string; cmd: string; startTime?: number }>
 }> {
+  // 短 TTL 缓存：进程/端口快照 ~1-2s，面板的 3s 定时刷新 + 事件驱动刷新 + 手动刷新
+  // 三路并发时共享同一份快照，避免重复 spawn powershell.exe（子代理 P1#6）。
+  const now = Date.now()
+  if (osSnapshotCache && now - osSnapshotCacheAt < OS_SNAPSHOT_TTL_MS) return osSnapshotCache
   const portPids = new Map<number, number[]>()
   const processes = new Map<number, { name: string; cmd: string; startTime?: number }>()
   // netstat 端口 + Get-CimInstance 进程，一次往返（管道内 ~380ms）
@@ -245,8 +249,16 @@ $procOut = @(Get-CimInstance Win32_Process | Select-Object ProcessId,Name,Comman
       }
     } catch { /* 忽略 */ }
   }
-  return { portPids, processes }
+  const result = { portPids, processes }
+  osSnapshotCache = result
+  osSnapshotCacheAt = Date.now()
+  return result
 }
+
+/** 进程/端口快照 TTL（ms）：低于面板 3s 刷新节奏，保证数据基本新鲜且避免重复 spawn */
+const OS_SNAPSHOT_TTL_MS = 2_000
+let osSnapshotCache: { portPids: Map<number, number[]>; processes: Map<number, { name: string; cmd: string; startTime?: number }> } | null = null
+let osSnapshotCacheAt = 0
 
 /** 枚举全部进程（pid → name/cmd/startTime） */
 export async function listProcessesWin(): Promise<Map<number, { name: string; cmd: string; startTime?: number }>> {
@@ -306,8 +318,9 @@ export async function listSessionDirProcesses(sessionPath: string): Promise<Moni
     if (pid === process.pid) continue
     const cmd = info.cmd
     const lowCmd = cmd.toLowerCase()
-    if (!lowCmd.includes(normPath)) continue
+    // SDK 自身进程（claude-agent-sdk 且不在会话目录内）不属于面板要展示的服务进程
     if (lowCmd.includes('claude-agent-sdk') && !lowCmd.includes(normPath)) continue
+    if (!lowCmd.includes(normPath)) continue
     const ports: number[] = []
     for (const [port, pids] of portPids) {
       if (pids.includes(pid)) ports.push(port)

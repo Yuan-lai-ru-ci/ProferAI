@@ -112,6 +112,9 @@ export const systemIsDarkAtom = atom<boolean>(
     : true
 )
 
+/** 皮肤注册表（loadSkins 后填充；声明须先于 resolvedThemeAtom 以便其读取） */
+export const skinsAtom = atom<SkinInfo[]>([])
+
 /** 派生：最终解析的主题（light | dark） */
 export const resolvedThemeAtom = atom<'light' | 'dark'>((get) => {
   const mode = get(themeModeAtom)
@@ -120,14 +123,17 @@ export const resolvedThemeAtom = atom<'light' | 'dark'>((get) => {
   }
   if (mode === 'special') {
     const style = get(themeStyleAtom)
-    // 根据特殊风格决定是浅色还是深色基调
+    // 优先从皮肤注册表取真实 tone（用户皮肤可能不带 -light/-dark 后缀）；
+    // 未命中（旧主题/注册表未就绪）再回退后缀推断。
+    // 读 skinsAtom 而非模块级 skinsCache，loadSkins 完成后能自动触发重算。
+    const skinTone = get(skinsAtom).find((item) => item.id === style)?.tone
+    if (skinTone) return skinTone
     return style.endsWith('-light') ? 'light' : 'dark'
   }
   return mode
 })
 
 let skinsCache: SkinInfo[] | null = null
-export const skinsAtom = atom<SkinInfo[]>([])
 export async function loadSkins(force = false): Promise<SkinInfo[]> {
   if (skinsCache && !force) return skinsCache
   try {
@@ -142,9 +148,19 @@ export async function loadSkins(force = false): Promise<SkinInfo[]> {
   }
 }
 const SKIN_STYLE_ID = 'skin-css'
+/** CSS 注入代数序号：仅接受最新一次请求的结果，防快速切换皮肤时旧请求覆盖新 CSS */
+let skinCssGeneration = 0
 async function applySkinCss(id: string): Promise<void> {
+  const generation = ++skinCssGeneration
   const css = await window.electronAPI.getSkinCss(id).catch(() => null)
-  if (!css) return
+  // 注入期间又发起了新的切换，丢弃本次结果（class 已切换为更新的皮肤）
+  if (generation !== skinCssGeneration) return
+  const html = document.documentElement
+  if (!css) {
+    // 注入失败（文件损坏/IPC 失败）：摘掉 skin-* class 回退默认主题，避免“有 class 无样式”半状态
+    if (html.classList.contains(`skin-${id}`)) html.classList.remove(`skin-${id}`)
+    return
+  }
   let style = document.getElementById(SKIN_STYLE_ID) as HTMLStyleElement | null
   if (!style) { style = document.createElement('style'); style.id = SKIN_STYLE_ID; document.head.appendChild(style) }
   style.textContent = css
