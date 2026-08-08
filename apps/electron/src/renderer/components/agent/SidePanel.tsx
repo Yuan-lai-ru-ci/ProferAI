@@ -70,6 +70,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
 
   // per-session 侧面板状态（默认打开）
   const [isOpen, setIsOpen] = useAtom(agentSidePanelOpenAtom)
+  // 懒挂载：首次展开时才渲染面板内容（避免启动即渲染右侧面板），收起后保活不重挂载
+  const [everOpened, setEverOpened] = React.useState(isOpen)
+  React.useEffect(() => {
+    if (isOpen) setEverOpened(true)
+  }, [isOpen])
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   // 收起右侧边栏时，若焦点仍停留在面板内的控件上，把焦点移出回输入框，
@@ -432,17 +437,18 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       data-profer-navigation-region="right-panel"
       className={cn(
         'relative z-0 h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area rounded-2xl shadow-xl dark:shadow-md',
-        shouldAnimate && 'transition-[width] duration-300 ease-in-out',
+        shouldAnimate && 'transition-[width] duration-300 sidebar-collapse-ease',
         isOpen ? '' : '!w-0',
       )}
       style={isOpen ? { width } : undefined}
     >
-      {/* 面板内容 */}
+      {/* 面板内容：everOpened 懒挂载，首次展开才渲染（FileBrowser/文件树等重型 DOM 不会随启动加载）；收起后保留在 DOM（保活，不丢滚动/展开状态） */}
+      {everOpened && (
       <div
         className={cn(
           'w-full h-full flex flex-col titlebar-no-drag',
           isWindows ? 'pt-[34px]' : 'pt-0',
-          shouldAnimate && 'transition-opacity duration-300',
+          shouldAnimate && 'transition-opacity duration-300 sidebar-collapse-ease',
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
         )}
         >
@@ -642,6 +648,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             </div>
           )}
         </div>
+      )}
     </div>
   )
 }
