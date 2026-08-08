@@ -7,7 +7,8 @@ import { JWT_SECRET, JWT_EXPIRES, ACCESS_TOKEN_EXPIRES, MAX_LOGIN_ATTEMPTS, ACCO
 import { hashPassword, verifyPassword, validatePassword, validateEmail, clientIP } from '../utils.js'
 import { rateLimit } from '../rate-limiter.js'
 import { logAudit } from '../audit.js'
-import { hashToken, authMiddleware } from '../middleware.js'
+import { authMiddleware } from '../middleware.js'
+import { hashToken } from '../utils.js'
 import { createNewApiUser, generateNewApiToken, provisionNewApiUser } from '../newapi-client.js'
 
 /** 生成加密安全的 refresh token（256 位熵） */
@@ -61,12 +62,14 @@ function registerDeviceToken(userId, refreshToken, meta) {
   const { deviceId, deviceName, platform, appVersion, maxDevices } = meta
   const now = Date.now()
   const expiresAt = now + REFRESH_TOKEN_TTL_MS
+  // 库中只存哈希（防库泄后反推）；明文仅存在于响应与内存。
+  const storedToken = hashToken(refreshToken)
   const isWeb = platform === 'web'
   if (deviceId) {
     const existing = db.prepare('SELECT id FROM refresh_tokens WHERE user_id = ? AND device_id = ?').get(userId, deviceId)
     if (existing) {
       db.prepare('UPDATE refresh_tokens SET token = ?, device_name = ?, platform = ?, app_version = ?, last_used_at = ?, expires_at = ? WHERE id = ?')
-        .run(refreshToken, deviceName || null, platform || null, appVersion || null, now, expiresAt, existing.id)
+        .run(storedToken, deviceName || null, platform || null, appVersion || null, now, expiresAt, existing.id)
       return { ok: true }
     }
     // Web 端登录不占设备槽位，跳过数量检查
@@ -77,7 +80,7 @@ function registerDeviceToken(userId, refreshToken, meta) {
       }
     }
     db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), userId, refreshToken, deviceId, deviceName || null, platform || null, appVersion || null, now, now, expiresAt)
+      .run(uuidv4(), userId, storedToken, deviceId, deviceName || null, platform || null, appVersion || null, now, now, expiresAt)
     return { ok: true }
   }
   // 老客户端无 deviceId：LRU 淘汰最旧
@@ -87,7 +90,7 @@ function registerDeviceToken(userId, refreshToken, meta) {
       .run(userId, count - maxDevices + 1)
   }
   db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_name, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(uuidv4(), userId, refreshToken, deviceName || null, now, now, expiresAt)
+    .run(uuidv4(), userId, storedToken, deviceName || null, now, now, expiresAt)
   return { ok: true }
 }
 
@@ -397,10 +400,11 @@ authRoutes.post('/refresh', async (c) => {
   if (!refreshToken) return c.json({ error: 'refreshToken 必填' }, 400)
 
   // 从多设备 refresh_tokens 表查找（向后兼容旧的 users.refresh_token）
-  const tokenRow = db.prepare('SELECT id, user_id, device_id, expires_at FROM refresh_tokens WHERE token = ?').get(refreshToken)
+  // 2026-08-08 哈希化：库中存 hashToken(明文)，查询用 IN (hash, plain) 兼容存量明文行。
+  const tokenRow = db.prepare('SELECT id, user_id, device_id, expires_at FROM refresh_tokens WHERE token IN (?, ?)').get(hashToken(refreshToken), refreshToken)
   const user = tokenRow
     ? db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE id = ?').get(tokenRow.user_id)
-    : db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE refresh_token = ?').get(refreshToken)
+    : db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE refresh_token IN (?, ?)').get(hashToken(refreshToken), refreshToken)
   if (!user) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
 
   // refresh token 过期：清理槽位并返回 401（存量 NULL 视为永不过期，兼容旧客户端）
@@ -444,13 +448,13 @@ authRoutes.post('/refresh', async (c) => {
            platform = COALESCE(?, platform),
            app_version = COALESCE(?, app_version)
        WHERE id = ?`
-    ).run(newRefreshToken, refreshedAt, newExpiresAt, canBackfill ? deviceId : null, deviceName || null, platform || null, appVersion || null, tokenRow.id)
+    ).run(hashToken(newRefreshToken), refreshedAt, newExpiresAt, canBackfill ? deviceId : null, deviceName || null, platform || null, appVersion || null, tokenRow.id)
     if (updated.changes === 0) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
   } else {
     // 从旧 users.refresh_token 迁移到新表（带上设备信息；device_id 冲突时置空避免撞唯一索引）
     const deviceIdSafe = deviceId && !db.prepare('SELECT 1 FROM refresh_tokens WHERE user_id = ? AND device_id = ?').get(user.id, deviceId) ? deviceId : null
     db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), user.id, newRefreshToken, deviceIdSafe, deviceName || null, platform || null, appVersion || null, refreshedAt, refreshedAt, newExpiresAt)
+      .run(uuidv4(), user.id, hashToken(newRefreshToken), deviceIdSafe, deviceName || null, platform || null, appVersion || null, refreshedAt, refreshedAt, newExpiresAt)
     db.prepare('UPDATE users SET refresh_token = NULL WHERE id = ?').run(user.id)
   }
 
@@ -506,7 +510,7 @@ authRoutes.post('/logout', async (c) => {
   if (deviceId) {
     db.prepare('DELETE FROM refresh_tokens WHERE user_id = ? AND device_id = ?').run(payload.sub, deviceId)
   } else if (refreshToken) {
-    db.prepare('DELETE FROM refresh_tokens WHERE user_id = ? AND token = ?').run(payload.sub, refreshToken)
+    db.prepare('DELETE FROM refresh_tokens WHERE user_id = ? AND token IN (?, ?)').run(payload.sub, hashToken(refreshToken), refreshToken)
   }
   // 清除旧 users.refresh_token（legacy 单 token 字段）
   db.prepare('UPDATE users SET refresh_token = NULL WHERE id = ?').run(payload.sub)

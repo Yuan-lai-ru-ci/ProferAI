@@ -92,6 +92,22 @@ test('注册成功：签发三令牌，refresh 带 30 天过期', async () => {
   assert.ok(row.expires_at <= Date.now() + TTL_30D)
 })
 
+test('令牌哈希化铁律：库中不存 refresh/relay 明文', async () => {
+  const email = 'auth-node-1-hash@example.com'
+  const { body } = await registerUser(email)
+  // refresh token 明文是 64 hex；哈希也是 64 hex——断言库里值既不是明文本身也不含 prelay_ 前缀
+  const storedRefresh = db.prepare('SELECT token FROM refresh_tokens WHERE user_id = ?').get(body.teamAccountId)
+  assert.ok(storedRefresh)
+  assert.notEqual(storedRefresh.token, body.refreshToken)
+  assert.match(storedRefresh.token, /^[a-f0-9]{64}$/)
+  // relay 哈希行无 prelay_ 前缀（明文才有）；且不等于任何明文
+  const storedRelay = db.prepare('SELECT relay_token FROM users WHERE id = ?').get(body.teamAccountId)
+  assert.ok(storedRelay)
+  assert.ok(!storedRelay.relay_token.startsWith('prelay_'))
+  assert.notEqual(storedRelay.relay_token, body.relayToken)
+  assert.match(storedRelay.relay_token, /^[a-f0-9]{64}$/)
+})
+
 test('刷新成功：refreshToken 轮换且过期时间滑动续期', async () => {
   const email = 'auth-node-2@example.com'
   const reg = await registerUser(email)
