@@ -149,7 +149,7 @@ function parseArgs(): DistOptions {
       ? 'win'
       : args.includes('--linux')
         ? 'linux'
-        : 'mac',
+        : 'win', // 默认 Windows（mac 不发布，2026-08-08 起）
   }
 }
 

@@ -97,12 +97,11 @@ cd packages/core && bun run typecheck
 # 测试
 bun test
 
-# 打包分发
+# 打包分发（仅 Windows 发布）
 cd apps/electron
-bun run dist:mac      # macOS
-bun run dist:win      # Windows
-bun run dist:linux    # Linux
+bun run dist:win      # Windows（唯一发布平台）
 bun run dist:fast     # 当前架构快速打包
+# macOS/Linux 不构建、不测试、不发布（无 mac 开发者/测试环境），release.yml 仅含 Windows job
 ```
 
 ### Electron 构建脚本（`apps/electron/` 目录下）
@@ -430,10 +429,8 @@ server/
 - `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `claude-agent-sdk-${platform}-${arch}/{claude|claude.exe}` 得到 binary 路径
 
 **跨平台打包限制：**
-- optionalDependencies 的平台子包由包管理器按 `os`/`cpu` 字段筛选：Apple Silicon runner 只会装 darwin-arm64，不会装 darwin-x64（cpu 不匹配）
-- 因此当前 CI（macos-latest + windows-latest）**不支持在单个 macOS runner 上同时打 arm64 + x64 DMG**
-- 若要发布 darwin-x64 版本，需要在 macos-13（x64 runner）单独跑一次构建
-- Windows runner 默认 x64，打 win32-x64 正常
+- macOS/Linux 不发布（无 mac 开发者与测试环境，2026-08-08 起）：release.yml 已删除 mac job，GitHub Release 只出 Windows 安装包；勿再往 CI 加回 mac 构建，除非有真实 mac 测试环境
+- 若未来恢复 mac：Apple Silicon runner 只会装 darwin-arm64，不会装 darwin-x64（cpu 不匹配），需要在 x64 runner 单独跑一次构建
 
 **不使用 extraResources 放 binary 的原因：**
 - `extraResources` 会将文件复制到 `Contents/Resources/` 目录，路径与 node_modules 解析不一致

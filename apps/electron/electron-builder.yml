@@ -85,47 +85,6 @@ extraResources:
     to: icon.png
 
 # ============================================
-# macOS 配置
-# ============================================
-mac:
-  category: public.app-category.developer-tools
-  icon: resources/icon.icns
-  hardenedRuntime: true
-  gatekeeperAssess: false
-  entitlements: resources/entitlements.mac.plist
-  entitlementsInherit: resources/entitlements.mac.plist
-  # 产物名带架构：CI 拆分为 arm64 / x64 两个 job 并行构建上传，避免同名覆盖
-  artifactName: Profer-${version}-${arch}.${ext}
-  extendInfo:
-    NSMicrophoneUsageDescription: "Proma 需要访问麦克风，用于将你的语音实时转写为文本。"
-  fileAssociations:
-    - ext: profer-backup
-      name: Profer Personal Backup
-      role: Editor
-    - ext: profer-share
-      name: Profer Share Package
-      role: Editor
-  # 架构由 CLI 参数控制（CI 矩阵分别传 --arm64 / --x64），
-  # 每个 runner 只构建其宿主架构对应的产物，与 bun 按 os/cpu 装好的
-  # @anthropic-ai/claude-agent-sdk-darwin-{arch} native binary 对齐。
-  target:
-    - dmg
-    - zip
-
-# DMG 配置
-dmg:
-  contents:
-    - x: 130
-      y: 220
-    - x: 410
-      y: 220
-      type: link
-      path: /Applications
-  window:
-    width: 540
-    height: 380
-
-# ============================================
 # Windows 配置
 # ============================================
 win:
@@ -155,8 +114,8 @@ nsis:
 
 # ============================================
 # 发布配置
-# 每个平台的 build job 通过 --publish always 直接上传到 GitHub Release。
-# electron-builder 会自动创建/复用 Release，并在多架构并行上传时合并 latest-mac.yml。
+# 仅发布 Windows；macOS/Linux 不构建不发布（无 mac 开发者/测试环境，2026-08-08 起）。
+# Windows 由 push-release.cjs 或 CI release.yml 上传到 GitHub Release。
 # ============================================
 publish:
   provider: github
