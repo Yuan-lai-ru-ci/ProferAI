@@ -329,8 +329,8 @@ export const agentMessageQueueAtomFamily = atomFamily((sessionId: string) =>
 
 // ===== 侧面板 Atoms =====
 
-/** 侧面板是否打开（全局共享，所有会话共用一个状态） */
-export const agentSidePanelOpenAtom = atomWithStorage<boolean>('profer-agent-sidepanel-open', true)
+/** 侧面板是否打开（全局共享，所有会话共用一个状态）；默认关闭，避免启动时渲染右侧面板，用户展开后持久化 */
+export const agentSidePanelOpenAtom = atomWithStorage<boolean>('profer-agent-sidepanel-open', false)
 
 /** 侧面板宽度（全局共享，用户拖拽后持久化） */
 export const agentSidePanelWidthAtom = atomWithStorage<number>('profer-agent-sidepanel-width', 280)
