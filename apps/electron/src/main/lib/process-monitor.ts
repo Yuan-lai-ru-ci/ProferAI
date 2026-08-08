@@ -442,18 +442,31 @@ export async function listProcessTree(rootPid: number, maxDepth = 8): Promise<Ma
 /**
  * 批量按 PID 查询存活进程（一次 WQL OR 查询），用于已确认记录的存活校验。
  * 相对全量快照，只触碰登记过的 pid，开销 ~20ms/批。
+ *
+ * 结果按规范化 pids 集合缓存 LIST_ALIVE_TTL_MS：同一批 confirmed 记录在 30s
+ * 巡检周期内多次调用（或未来高频调用方）不重复打 WQL。进程可能随时退出，
+ * TTL 需远小于巡检周期，2s 内进程状态变化不影响巡检语义。
  */
+const LIST_ALIVE_TTL_MS = 2_000
+let listAliveCache: { key: string; at: number; result: Map<number, { name: string; cmd: string; startTime?: number }> } | null = null
+
 export async function listAliveProcesses(pids: number[]): Promise<Map<number, { name: string; cmd: string; startTime?: number }>> {
-  const out = new Map<number, { name: string; cmd: string; startTime?: number }>()
   const unique = [...new Set(pids.filter((p) => Number.isInteger(p) && p > 0))]
-  if (unique.length === 0) return out
+  if (unique.length === 0) return new Map()
+  const key = unique.sort((a, b) => a - b).join(',')
+  const now = Date.now()
+  if (listAliveCache && listAliveCache.key === key && now - listAliveCache.at < LIST_ALIVE_TTL_MS) {
+    return listAliveCache.result
+  }
   const rows = await queryWinProcesses(unique.map((p) => `ProcessId=${p}`).join(' OR '))
+  const out = new Map<number, { name: string; cmd: string; startTime?: number }>()
   for (const row of rows) {
     const pid = Number(row.ProcessId)
     if (!Number.isInteger(pid) || pid <= 0) continue
     const startTime = row.cts ? Math.floor(new Date(row.cts).getTime()) : undefined
     out.set(pid, { name: row.Name ?? '', cmd: row.CommandLine ?? '', startTime })
   }
+  listAliveCache = { key, at: now, result: out }
   return out
 }
 
