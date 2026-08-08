@@ -78,6 +78,16 @@ extraResources:
     to: profer-logos
     filter:
       - "**/*"
+  # 内置皮肤包（设置 → 外观设置 → 特殊风格；skin-service 打包路径 process.resourcesPath/skins）
+  - from: resources/skins
+    to: skins
+    filter:
+      - "**/*"
+  # 皮肤模板（skin-manager 新建/导入皮肤时复制，打包路径 process.resourcesPath/skin-template）
+  - from: resources/skin-template
+    to: skin-template
+    filter:
+      - "**/*"
   # 窗口图标（Windows 任务栏 / Linux 标题栏 / macOS Dock 使用）
   - from: resources/icon.ico
     to: icon.ico
