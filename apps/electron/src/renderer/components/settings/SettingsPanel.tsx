@@ -240,6 +240,8 @@ export function SettingsPanel({
 
   // 统一回落：activeTab 不在当前可见列表（平板白名单 / 未登录过滤）时回落到首项，
   // 避免渲染未暴露的设置页（如登录/订阅/团队管理）。
+  // tabs 为空数组（tabsOverride 传空）时整体不渲染，避免解引用崩溃。
+  if (tabs.length === 0) return <div className="flex flex-col h-full items-center justify-center text-sm text-muted-foreground">没有可用的设置项</div>
   const effectiveTab: SettingsTab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0]!.id
 
   /** 切换标签页时检测是否有未保存内容，tutorial 特殊处理：打开 New Tab 并关闭设置 */

@@ -114,11 +114,12 @@ export function ModelSelector({
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
 
-  // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：请求计数变化时打开 Dialog
-  const prevModelSelectorRequestRef = React.useRef(modelSelectorRequest)
+  // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：seq 变化时打开 Dialog。
+  // 组件挂载时先记录当前 seq（不弹窗），后续新请求（seq+1）才会触发。
+  const lastConsumedModelSelectorSeqRef = React.useRef(modelSelectorRequest.seq)
   React.useEffect(() => {
-    if (modelSelectorRequest !== prevModelSelectorRequestRef.current) {
-      prevModelSelectorRequestRef.current = modelSelectorRequest
+    if (modelSelectorRequest.seq > lastConsumedModelSelectorSeqRef.current) {
+      lastConsumedModelSelectorSeqRef.current = modelSelectorRequest.seq
       setOpen(true)
     }
   }, [modelSelectorRequest])

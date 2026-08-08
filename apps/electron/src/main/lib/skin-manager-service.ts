@@ -16,7 +16,17 @@ const PREVIEW_RE = /^preview\.(webp|png|svg|jpe?g)$/i
 function fail(message: string): SkinManagerResult { return { ok: false, status: 'error', message } }
 function skinInfo(id: string): SkinInfo | undefined { return scanSkins().find((skin) => skin.id === id) }
 function dirSize(dir: string): number {
-  return readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => total + (entry.isDirectory() ? dirSize(join(dir, entry.name)) : statSync(join(dir, entry.name)).size), 0)
+  // 递归深度/循环保护：symlink 目录不递归（junction 环会递归爆炸），
+  // 目录层级超过 12 层视为异常（皮肤包正常远小于该深度）。
+  return dirSizeInner(dir, 0)
+}
+function dirSizeInner(dir: string, depth: number): number {
+  if (depth > 12) return 0
+  return readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
+    if (entry.isSymbolicLink()) return total
+    if (entry.isDirectory()) return total + dirSizeInner(join(dir, entry.name), depth + 1)
+    return total + statSync(join(dir, entry.name)).size
+  }, 0)
 }
 function unsafeCss(css: string, packageRoot: string): boolean {
   // 注释中的示例代码不应参与校验，否则模板的注释示例会被误判为资源引用。

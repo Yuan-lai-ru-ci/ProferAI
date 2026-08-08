@@ -135,14 +135,18 @@ export const AUTOMATION_MAX_HISTORY = 20
 /** 连续失败达到此次数自动暂停任务 */
 export const AUTOMATION_MAX_CONSECUTIVE_FAILURES = 5
 
+/** HH:MM 24 小时制格式校验（与 Agent 工具路径的 TIME_OF_DAY_PATTERN 保持一致） */
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+
 /**
  * 归一化 timeOfDay：接受 string | string[] | undefined，返回排序去重的 string[]
- * 旧数据单值 "09:00" 自动转为 ["09:00"]
+ * 旧数据单值 "09:00" 自动转为 ["09:00"]；非法格式（如 "25:99"）直接丢弃，
+ * 避免 JS Date setHours 静默溢出到次日产生与用户预期不符的触发时间。
  */
 export function normalizeTimeOfDay(input?: string | string[]): string[] {
   if (!input) return []
   const arr = Array.isArray(input) ? input : [input]
-  return [...new Set(arr)].filter(Boolean).sort()
+  return [...new Set(arr)].filter((t) => typeof t === 'string' && TIME_OF_DAY_PATTERN.test(t)).sort()
 }
 
 /**

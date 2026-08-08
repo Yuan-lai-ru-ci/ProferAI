@@ -58,8 +58,8 @@ jobs:
         run: bun test --isolate --timeout 30000
 
       - name: Run Node.js server reliability gate
-        # 直接调用真实 Node（setup-node 24）运行 node:test，避免 bun run 对 node 命令的
-        # shim（ABI 127）与 better-sqlite3 prebuilt（ABI 137）不匹配。
+        # 直接调用真实 Node（node 22，ABI 127）运行 node:test，避免 bun 加载
+        # better-sqlite3 prebuilt（ABI 137）不匹配；收集规则 *.node.test.mjs。
         run: node scripts/run-node-tests.mjs
         working-directory: server
       - name: Build GitHub app
@@ -111,18 +111,28 @@ jobs:
           $env:ELECTRON_RUN_AS_NODE = "1"
           # Profer.exe 是 GUI 子系统程序，pwsh 的 `&` 调用不会等待其退出，
           # 必须用 Start-Process -Wait -PassThru 同步等待并捕获退出码。
+          # 外层 Wait-Process -Timeout 防止 native/WASM 初始化挂死时 job 无限卡到 6h。
           $stdout = Join-Path $PWD "probe-out.txt"
           $stderr = Join-Path $PWD "probe-err.txt"
           $process = Start-Process -FilePath (Join-Path $PWD "out/win-unpacked/Profer.exe") `
             -ArgumentList @($probePath, $unpackedResources) `
-            -Wait -PassThru -NoNewWindow `
+            -PassThru -NoNewWindow `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          if ($process.ExitCode -ne 0) {
+          try {
+            Wait-Process -Id $process.Id -Timeout 120 -ErrorAction Stop
+          } catch {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Write-Host "--- probe stderr (timeout) ---"
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Pi runtime closure probe timed out after 120s"
+          }
+          $exitCode = $process.ExitCode
+          if ($exitCode -ne 0) {
             Write-Host "--- probe stdout ---"
             if (Test-Path $stdout) { Get-Content $stdout }
             Write-Host "--- probe stderr ---"
             if (Test-Path $stderr) { Get-Content $stderr }
-            throw "Pi runtime closure probe failed with exit code $($process.ExitCode)"
+            throw "Pi runtime closure probe failed with exit code $exitCode"
           }
           Write-Host "Pi runtime closure verified"
           if (Test-Path $stdout) { Get-Content $stdout }

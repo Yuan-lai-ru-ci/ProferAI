@@ -307,7 +307,10 @@ function getRepoRevision(gitRoot: string): number {
 }
 
 function isSameOrDescendant(path: string, possibleParent: string): boolean {
-  return path === possibleParent || path.startsWith(possibleParent.endsWith('/') ? possibleParent : `${possibleParent}/`)
+  // 两端均视为已归一化（正斜杠 + Windows 小写），比较前再兜底一次保证一致性
+  const p = path.toLowerCase()
+  const parent = possibleParent.toLowerCase()
+  return p === parent || p.startsWith(parent.endsWith('/') ? parent : `${parent}/`)
 }
 
 /**
@@ -474,9 +477,14 @@ export async function getUnstagedChanges(
  * 两个数据源的分隔符风格不一致：`git rev-parse --show-toplevel` 在 Windows 返回正斜杠
  * （`C:/.../repo`），而 Node `path.join` 返回反斜杠（`C:\...\repo`）。统一用 resolve
  * 规范化并转为正斜杠，确保同一仓库的两种写法被识别为同一个根，避免重复跑 git diff。
+ *
+ * Windows 下盘符/路径段大小写不敏感（`D:/PROJECT` 与 `d:\project` 是同一路径）：
+ * 统一转小写，否则 Agent 写文件事件的 changedPath 与 git 输出的大小写不一致时，
+ * 定向失效会静默 miss，Diff 面板持续显示过期列表直到窗口聚焦的全量失效兜底。
  */
 export function normalizeGitRoot(p: string): string {
-  return resolve(p).replace(/\\/g, '/')
+  const normalized = resolve(p).replace(/\\/g, '/')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
 /** 向下递归搜索所有 .git 目录，返回所有找到的仓库根（不提前停止） */
