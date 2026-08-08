@@ -182,8 +182,14 @@ export function watchAttachedDirectory(dirPath: string): void {
   }
 
   try {
-    const w = watch(dirPath, { recursive: true }, () => {
+    const w = watch(dirPath, { recursive: true }, (_eventType, filename) => {
       if (!mainWin || mainWin.isDestroyed()) return
+
+      // 过滤高频噪声目录（node_modules / .git 等），防止大规模附加目录产生 IPC 事件风暴
+      if (filename) {
+        const normalized = filename.replace(/\\/g, '/')
+        if (isHighNoisePath(normalized)) return
+      }
 
       // 统一防抖：所有附加目录变化合并为一次刷新
       if (attachedFilesTimer) clearTimeout(attachedFilesTimer)
