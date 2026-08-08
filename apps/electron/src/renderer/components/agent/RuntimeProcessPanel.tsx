@@ -190,6 +190,8 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          aria-controls="runtime-process-panel-body"
           className="inline-flex items-center gap-1.5 hover:text-foreground"
         >
           {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -211,7 +213,12 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
       {error && <div className="border-t border-border/40 px-4 py-1.5 text-[11px] text-destructive">{error}</div>}
 
       {open && (
-        <div className="border-t border-border/40">
+        <div
+          id="runtime-process-panel-body"
+          role="region"
+          aria-label="运行服务列表"
+          className="border-t border-border/40"
+        >
           {rows.map((row, index) => {
             const rowId = row.proc?.sdkTaskId ?? String(row.proc?.pid ?? index)
             const isKilling = killing === rowId
