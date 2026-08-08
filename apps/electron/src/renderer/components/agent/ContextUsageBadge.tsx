@@ -454,16 +454,10 @@ export function ContextUsageBadge({
             variant={isWarning ? 'default' : 'outline'}
             size="sm"
             className={cn(
-              'h-7 text-xs gap-1.5 select-none overflow-hidden',
+              'context-compact-button relative isolate h-7 text-xs gap-1.5 select-none overflow-hidden',
               isWarning && 'bg-amber-500 hover:bg-amber-600 text-white',
               isPressing && 'ring-1 ring-ring',
             )}
-            style={isPressing ? {
-              backgroundImage: `linear-gradient(to right, ${isWarning ? 'hsl(45 100% 55% / 0.35)' : 'hsl(var(--primary) / 0.22)'}, ${isWarning ? 'hsl(45 100% 55% / 0.35)' : 'hsl(var(--primary) / 0.22)'})`,
-              backgroundSize: `${pressProgress * 100}% 100%`,
-              backgroundRepeat: 'no-repeat',
-              backgroundPosition: 'left center',
-            } : undefined}
             onMouseDown={startPress}
             onMouseUp={endPress}
             onMouseLeave={endPress}
@@ -472,6 +466,17 @@ export function ContextUsageBadge({
             onTouchCancel={endPress}
             disabled={isProcessing}
           >
+            {/* 独立进度层：避免工具栏/皮肤对 button 背景属性的覆盖影响长按反馈。 */}
+            {isPressing && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 left-0 z-0 bg-primary/25"
+                style={{
+                  width: `${pressProgress * 100}%`,
+                  backgroundColor: isWarning ? 'hsl(45 100% 55% / 0.35)' : undefined,
+                }}
+              />
+            )}
             <Minimize2 className="size-3.5 relative z-10" />
             <span className="relative z-10">
               {isPressing ? '按住中…' : isProcessing ? '对话进行中' : '手动压缩'}
