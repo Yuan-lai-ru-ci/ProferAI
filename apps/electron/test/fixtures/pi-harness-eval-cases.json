@@ -1,0 +1,11 @@
+[
+  {"name":"read-only","tools":[{"name":"read","input":{"path":"src/index.ts"},"outcome":"succeeded"}],"expected":{"action":"none","reason":"read_only","validationAttempted":false}},
+  {"name":"source-unverified","tools":[{"name":"edit","input":{"path":"src/a.ts"},"outcome":"succeeded"}],"expected":{"action":"follow_up","reason":"source_changes_unverified","validationAttempted":false}},
+  {"name":"unrelated-shell","tools":[{"name":"edit","input":{"path":"src/a.ts"},"outcome":"succeeded"},{"name":"bash","input":{"command":"pwd"},"outcome":"succeeded"}],"expected":{"action":"follow_up","reason":"source_changes_unverified","validationAttempted":false}},
+  {"name":"typecheck","tools":[{"name":"edit","input":{"path":"src/a.ts"},"outcome":"succeeded"},{"name":"bash","input":{"command":"tsc --noEmit"},"outcome":"succeeded"}],"expected":{"action":"none","reason":"validated","validationAttempted":true}},
+  {"name":"failed-test","tools":[{"name":"edit","input":{"path":"src/a.ts"},"outcome":"succeeded"},{"name":"bash","input":{"command":"bun test"},"outcome":"failed"}],"expected":{"action":"none","reason":"validated","validationAttempted":true}},
+  {"name":"document-readback","tools":[{"name":"write","input":{"path":"README.md"},"outcome":"succeeded"},{"name":"read","input":{"path":"README.md"},"outcome":"succeeded"}],"expected":{"action":"none","reason":"validated","validationAttempted":false}},
+  {"name":"wrong-readback","tools":[{"name":"write","input":{"path":"README.md"},"outcome":"succeeded"},{"name":"read","input":{"path":"CHANGELOG.md"},"outcome":"succeeded"}],"expected":{"action":"follow_up","reason":"documents_unverified","validationAttempted":false}},
+  {"name":"failed-write","tools":[{"name":"edit","input":{"path":"src/a.ts"},"outcome":"failed"}],"expected":{"action":"none","reason":"read_only","validationAttempted":false}},
+  {"name":"blocked","blocked":true,"tools":[{"name":"edit","input":{"path":"src/a.ts"},"outcome":"succeeded"}],"expected":{"action":"none","reason":"blocked_or_failed","validationAttempted":false}}
+]
