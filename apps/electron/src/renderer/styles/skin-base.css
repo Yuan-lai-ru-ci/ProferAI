@@ -1,0 +1,115 @@
+/* ===== 皮肤机制：公共组件规则（skin-base） =====
+ *
+ * 皮肤 = 目录包（manifest.json + skin.css + preview）。skin.css 注入 <style>
+ * 后提供 :root token 表；本文件提供「引用这些 token 的公共组件规则」，
+ * 通过 html[class*="skin-"] 作用域只在皮肤激活时生效，默认主题零影响。
+ *
+ * 皮肤作者只需在 skin.css 的 :root 中填写 token 值，无需了解内部类名。
+ * 原则：var() 一律不写 fallback —— token 未定义即声明失效 = 不覆写，
+ * 组件回落默认（Tailwind 基础）样式，保证默认主题观感与现行为完全一致。
+ */
+
+/* ===== 文字选区 =====
+ * 全局 ::selection 用 --primary/0.25；皮肤可用 --selection-bg / --selection-color 覆写
+ * （值需带完整 alpha，如 hsl(var(--accent-foreground) / 0.75)）。
+ */
+html[class*="skin-"] ::selection,
+html[class*="skin-"] ::-moz-selection {
+  background-color: var(--selection-bg);
+  color: var(--selection-color);
+}
+
+/* ===== 外层缝隙背景（shell） =====
+ * 默认主题为 bg-background；皮肤用 --shell-bg-gradient（linear-gradient 完整值）。
+ */
+html[class*="skin-"] .shell-bg {
+  background: var(--shell-bg-gradient);
+}
+
+/* ===== 模式切换器选中态 ===== */
+html[class*="skin-"] .mode-slider {
+  background: var(--mode-slider-bg) !important;
+  box-shadow: var(--mode-slider-shadow);
+}
+html[class*="skin-"] .mode-btn-selected {
+  color: var(--mode-btn-selected-color) !important;
+}
+
+/* ===== 会话 / 工作区 / Tab 选中态 ===== */
+html[class*="skin-"] .session-item-selected,
+html[class*="skin-"] .workspace-item-selected,
+html[class*="skin-"] .tab-item-selected {
+  background: var(--item-selected-bg) !important;
+  color: var(--item-selected-fg) !important;
+}
+html[class*="skin-"] .session-item-selected *,
+html[class*="skin-"] .workspace-item-selected *,
+html[class*="skin-"] .tab-item-selected * {
+  color: inherit !important;
+}
+
+/* ===== 自动化入口选中态（dark 皮肤专用） ===== */
+html[class*="skin-"] .automation-entry-selected {
+  background-color: var(--item-selected-bg) !important;
+}
+html[class*="skin-"] .automation-entry-selected .automation-entry-icon {
+  color: var(--item-selected-fg) !important;
+}
+html[class*="skin-"] .automation-entry-selected .automation-entry-badge {
+  background-color: hsl(var(--item-selected-fg) / 0.20) !important;
+  color: var(--item-selected-fg) !important;
+}
+
+/* ===== 工作区 Badge 文字色 ===== */
+html[class*="skin-"] .workspace-badge {
+  color: var(--workspace-badge-color);
+}
+
+/* ===== Dialog 光晕（深色皮肤） ===== */
+html[class*="skin-"] [data-radix-dialog-content] {
+  box-shadow: var(--dialog-glow-shadow);
+}
+
+/* ===== 输入区代码块（tiptap / ProseMirror） =====
+ * 只覆写背景（token 化）；文字色不覆写，回落 globals.css 既有规则：
+ * 浅色主题 `.tiptap pre { color: hsl(0 0% 90%) }`（深底浅字），
+ * 深色主题 `.dark .tiptap pre { color: hsl(var(--foreground)) }`。
+ */
+html[class*="skin-"] .tiptap pre,
+html[class*="skin-"] .ProseMirror pre.markdown-code-block {
+  background-color: hsl(var(--tiptap-pre-bg, var(--code-bg))) !important;
+}
+
+/* ===== 代码块标题栏 ===== */
+html[class*="skin-"] .code-block-wrapper > div:first-child {
+  background: var(--code-block-header-bg) !important;
+}
+
+/* ===== Minimap 可见指示器 ===== */
+html[class*="skin-"] .minimap-visible-indicator {
+  background-color: var(--minimap-indicator-bg) !important;
+}
+
+/* ===== 滚动进度条（普通皮肤三态；terminal 等特殊皮肤用特例覆写） ===== */
+html[class*="skin-"] .scroll-progress-thumb {
+  background-color: var(--scroll-thumb-bg) !important;
+}
+html[class*="skin-"] .scroll-progress-thumb:hover {
+  background-color: var(--scroll-thumb-hover) !important;
+}
+html[class*="skin-"] .scroll-progress-thumb-active {
+  background-color: var(--scroll-thumb-active) !important;
+}
+
+/* ===== 计划模式虚线描边（深色皮肤加亮） ===== */
+html[class*="skin-"] .plan-mode-border .plan-mode-stroke {
+  stroke: var(--plan-mode-stroke-color);
+}
+
+/* ===== ui-classic（经典界面）TabBar 下缘阴影 =====
+ * 旧 globals 中 `.ui-classic.theme-*` 组合规则在皮肤机制下不匹配（html 只有 skin-*），
+ * 迁移为 token：皮肤定义 --tabbar-shadow-color 才生效，未定义回落基础规则。
+ */
+html[class*="skin-"].ui-classic .tabbar-bg {
+  box-shadow: inset 0 -1px 0 0 var(--tabbar-shadow-color);
+}

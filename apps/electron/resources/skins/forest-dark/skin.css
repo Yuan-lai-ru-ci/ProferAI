@@ -1,0 +1,92 @@
+/* ===== Forest Dark（森息夜语）皮肤 =====
+ *
+ * 皮肤文件 = :root token 表 + 特例规则。
+ * token 表是完整自描述：所有颜色/表面 token 在此赋值，未定义 token 继承
+ * globals.css 的 :root / .dark 默认值（几何/阴影等通常不必重复）。
+ * 公共组件规则（选中态、滚动条等）在 skin-base.css 中引用这些 token，
+ * 皮肤作者无需了解内部类名。
+ */
+
+:root {
+  /* ===== 基底色板 ===== */
+  --background: 150 8% 14%;             /* 侧边栏：近中性灰 + 微微森绿余韵 */
+  --foreground: 140 10% 92%;
+  --content-area: 150 10% 9%;           /* 内容区：深林泥土 */
+  --sidebar-surface: 150 8% 14%;
+  --tabbar-surface: 150 8% 14%;
+  --input-surface: 150 8% 14%;
+  --muted: 150 10% 17%;
+  --muted-foreground: 145 8% 60%;
+  --border: 150 12% 25%;
+  --primary: 145 25% 42%;               /* 雾绿灰主色，沉静的森林背影 */
+  --primary-foreground: 0 0% 100%;      /* 白字配中性灰绿 */
+  --secondary: 150 10% 17%;
+  --secondary-foreground: 140 10% 92%;
+  --accent: 150 12% 22%;
+  --accent-foreground: 145 35% 65%;     /* 高亮态：雾绿灰偏亮 */
+  --ring: 145 35% 55%;                  /* focus：略亮于 primary */
+  --card: 150 10% 17%;
+  --card-foreground: 140 10% 92%;
+  --input: 150 10% 17%;
+  --popover: 150 10% 19%;
+  --popover-foreground: 140 10% 92%;
+  --dialog: 150 10% 22%;
+  --dialog-foreground: 140 10% 92%;
+  --destructive: 0 55% 50%;
+  --destructive-foreground: 0 0% 98%;
+  --stop-hover-bg: hsl(0, 35%, 18%);
+  --tooltip: 150 14% 24%;
+  --tooltip-foreground: 0 0% 98%;
+  --tooltip-muted: 140 10% 70%;
+  /* 代码块背景 - 深森绿 */
+  --code-bg: 150 20% 8%;
+  /* 虚线边框色 */
+  --dashed-border: 145 25% 42% / 0.35;
+  --dashed-border-hover: 145 25% 42% / 0.55;
+
+  /* ===== 文字选区 =====
+   * --primary 在暗背景上太暗，改用明亮的 accent-foreground + 高不透明度。
+   */
+  --selection-bg: hsl(var(--accent-foreground) / 0.75);
+  --selection-color: hsl(var(--background));
+
+  /* ===== 外层缝隙背景 ===== */
+  --shell-bg-gradient: linear-gradient(135deg, hsl(150 10% 5%) 0%, hsl(150 10% 7%) 100%);
+
+  /* ===== 模式切换器 ===== */
+  --mode-slider-bg: hsl(150 18% 28%);   /* 雾绿灰，沉静 */
+  --mode-slider-shadow: 0 2px 4px rgba(59, 84, 71, 0.3);
+  --mode-btn-selected-color: #ffffff;
+
+  /* ===== 选中态（会话/工作区/Tab/自动化入口） ===== */
+  --item-selected-bg: hsl(150 12% 22%); /* 低饱和背景，不抢戏 */
+  --item-selected-fg: hsl(145 35% 65%); /* 雾绿灰文字 */
+
+  /* ===== 工作区 Badge ===== */
+  --workspace-badge-color: hsl(145 35% 65%);
+
+  /* ===== Dialog 光晕 ===== */
+  --dialog-glow-shadow:
+    0 0 40px 8px rgba(255, 255, 255, 0.06),
+    0 25px 50px -12px rgba(0, 0, 0, 0.5);
+
+  /* ===== 输入区代码块（globals: .theme-forest-dark .tiptap pre） ===== */
+  --tiptap-pre-bg: 150 20% 9%;
+
+  /* ===== 代码块标题栏 ===== */
+  --code-block-header-bg: rgb(34, 42, 37);
+
+  /* ===== Minimap 可见指示器 ===== */
+  --minimap-indicator-bg: hsl(145 25% 45%);
+
+  /* ===== 滚动进度条三态 ===== */
+  --scroll-thumb-bg: hsl(145 25% 45% / 0.20);
+  --scroll-thumb-hover: hsl(145 25% 45% / 0.32);
+  --scroll-thumb-active: hsl(145 25% 45% / 0.42);
+
+  /* ===== 计划模式虚线 ===== */
+  --plan-mode-stroke-color: hsl(145 25% 45% / 0.7);
+
+  /* ===== ui-classic TabBar 下缘阴影（经典界面） ===== */
+  --tabbar-shadow-color: hsl(150 12% 22% / 0.6);
+}

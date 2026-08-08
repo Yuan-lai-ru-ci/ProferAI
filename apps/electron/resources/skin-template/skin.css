@@ -1,0 +1,41 @@
+/* 我的第一款 Profer 皮肤
+ * 颜色 token 使用 HSL：色相 饱和度% 亮度%。
+ * 图片背景请放进 assets/，例如：url("assets/background.webp")。
+ */
+
+:root {
+  --background: 222 25% 13%;
+  --foreground: 215 28% 92%;
+  --content-area: 222 30% 9%;
+  --sidebar-surface: 222 25% 13%;
+  --tabbar-surface: 222 25% 13%;
+  --input-surface: 222 22% 16%;
+  --muted: 222 20% 18%;
+  --muted-foreground: 215 14% 62%;
+  --border: 220 18% 25%;
+  --primary: 212 85% 61%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 222 20% 18%;
+  --secondary-foreground: 215 28% 92%;
+  --accent: 220 22% 22%;
+  --accent-foreground: 212 90% 75%;
+  --ring: 212 85% 61%;
+  --card: 222 21% 17%;
+  --card-foreground: 215 28% 92%;
+  --input: 222 22% 16%;
+  --popover: 222 22% 18%;
+  --popover-foreground: 215 28% 92%;
+  --dialog: 222 22% 20%;
+  --dialog-foreground: 215 28% 92%;
+  --destructive: 0 65% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --shell-bg-gradient: linear-gradient(145deg, hsl(222 32% 7%), hsl(222 24% 12%));
+}
+
+/* 可选：使用包内背景图。取消注释前，把图片放入 assets/background.webp。
+body {
+  background-image: linear-gradient(hsl(222 30% 9% / 0.76), hsl(222 30% 9% / 0.76)), url("assets/background.webp");
+  background-size: cover;
+  background-position: center;
+}
+*/

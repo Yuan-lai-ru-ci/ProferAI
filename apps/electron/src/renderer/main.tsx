@@ -100,6 +100,7 @@ import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { NavigationInputProvider } from './components/navigation/NavigationInputProvider'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import './styles/globals.css'
+import './styles/skin-base.css'
 import 'katex/dist/katex.min.css'
 
 function hasEnabledModel(
