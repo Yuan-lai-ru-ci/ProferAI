@@ -10,8 +10,8 @@
  * 使用 localStorage 作为缓存，避免页面加载时闪烁。
  */
 
-import { atom } from 'jotai'
-import { DEFAULT_INTERFACE_VARIANT, THEME_STYLES, type InterfaceVariant, type ThemeMode, type ThemeStyle } from '../../types'
+import { atom, getDefaultStore } from 'jotai'
+import { DEFAULT_INTERFACE_VARIANT, type InterfaceVariant, type SkinInfo, type ThemeMode, type ThemeStyle } from '../../types'
 
 /** localStorage 缓存键 */
 const THEME_CACHE_KEY = 'profer-theme-mode'
@@ -39,9 +39,7 @@ function getCachedThemeMode(): ThemeMode {
 function getCachedThemeStyle(): ThemeStyle {
   try {
     const cached = localStorage.getItem(THEME_STYLE_CACHE_KEY)
-    if ((THEME_STYLES as readonly string[]).includes(cached ?? '')) {
-      return cached as ThemeStyle
-    }
+    if (cached && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(cached)) return cached as ThemeStyle
   } catch {
     // localStorage 不可用时忽略
   }
@@ -128,10 +126,34 @@ export const resolvedThemeAtom = atom<'light' | 'dark'>((get) => {
   return mode
 })
 
-/** 所有特殊风格 class（用于清理旧值）— 从 THEME_STYLES 单一源派生，排除 'default' */
-const ALL_THEME_STYLE_CLASSES = THEME_STYLES
-  .filter((style) => style !== 'default')
-  .map((style) => `theme-${style}` as const)
+let skinsCache: SkinInfo[] | null = null
+export const skinsAtom = atom<SkinInfo[]>([])
+export async function loadSkins(force = false): Promise<SkinInfo[]> {
+  if (skinsCache && !force) return skinsCache
+  try {
+    const skins = force ? await window.electronAPI.refreshSkins() : await window.electronAPI.getSkins()
+    skinsCache = skins
+    getDefaultStore().set(skinsAtom, skins)
+    return skins
+  } catch {
+    skinsCache = []
+    getDefaultStore().set(skinsAtom, [])
+    return []
+  }
+}
+const SKIN_STYLE_ID = 'skin-css'
+async function applySkinCss(id: string): Promise<void> {
+  const css = await window.electronAPI.getSkinCss(id).catch(() => null)
+  if (!css) return
+  let style = document.getElementById(SKIN_STYLE_ID) as HTMLStyleElement | null
+  if (!style) { style = document.createElement('style'); style.id = SKIN_STYLE_ID; document.head.appendChild(style) }
+  style.textContent = css
+}
+export async function refreshSkinRegistry(currentStyle?: ThemeStyle): Promise<SkinInfo[]> {
+  const skins = await loadSkins(true)
+  if (currentStyle && skins.some((skin) => skin.id === currentStyle)) await applySkinCss(currentStyle)
+  return skins
+}
 
 /**
  * 应用主题到 DOM
@@ -145,13 +167,21 @@ const ALL_THEME_STYLE_CLASSES = THEME_STYLES
 export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = 'default', systemIsDark: boolean = true): void {
   const html = document.documentElement
 
-  // 计算目标状态
+  // 计算目标状态。注册表就绪后用 skin-* + 动态 CSS；无 IPC 的平板继续走 theme-* 兼容层。
   let targetStyleClass: string | null = null
+  let targetSkinClass: string | null = null
   let targetIsDark: boolean
 
   if (themeMode === 'special' && themeStyle !== 'default') {
-    targetStyleClass = `theme-${themeStyle}`
-    targetIsDark = themeStyle.endsWith('-dark')
+    const skin = skinsCache?.find((item) => item.id === themeStyle)
+    if (skin) {
+      targetSkinClass = `skin-${themeStyle}`
+      targetIsDark = skin.tone === 'dark'
+      void applySkinCss(themeStyle)
+    } else {
+      targetStyleClass = `theme-${themeStyle}`
+      targetIsDark = themeStyle.endsWith('-dark')
+    }
   } else if (themeMode === 'system') {
     targetIsDark = systemIsDark
   } else {
@@ -160,10 +190,11 @@ export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = '
 
   // 读取当前状态
   const currentIsDark = html.classList.contains('dark')
-  const currentStyleClass = ALL_THEME_STYLE_CLASSES.find((c) => html.classList.contains(c)) ?? null
+  const currentStyleClass = Array.from(html.classList).find((c) => c.startsWith('theme-')) ?? null
+  const currentSkinClass = Array.from(html.classList).find((c) => c.startsWith('skin-')) ?? null
 
   // 与目标一致 → 直接跳过，避免触发 CSS 重新级联
-  if (currentIsDark === targetIsDark && currentStyleClass === targetStyleClass) {
+  if (currentIsDark === targetIsDark && currentStyleClass === targetStyleClass && currentSkinClass === targetSkinClass) {
     return
   }
 
@@ -176,9 +207,12 @@ export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = '
       html.classList.add(targetStyleClass)
     }
   }
-  if (currentIsDark !== targetIsDark) {
-    html.classList.toggle('dark', targetIsDark)
+  if (currentSkinClass !== targetSkinClass) {
+    if (currentSkinClass) html.classList.remove(currentSkinClass)
+    if (targetSkinClass) html.classList.add(targetSkinClass)
+    else document.getElementById(SKIN_STYLE_ID)?.remove()
   }
+  if (currentIsDark !== targetIsDark) html.classList.toggle('dark', targetIsDark)
 }
 
 /**
@@ -215,8 +249,8 @@ export async function initializeTheme(
   setThemeStyle?: (style: ThemeStyle) => void,
   setInterfaceVariant?: (variant: InterfaceVariant) => void,
 ): Promise<() => void> {
-  // 从主进程加载持久化设置
-  const settings = await window.electronAPI.getSettings()
+  // 从主进程加载持久化设置与皮肤注册表
+  const [settings] = await Promise.all([window.electronAPI.getSettings(), loadSkins()])
   setThemeMode(settings.themeMode)
   cacheThemeMode(settings.themeMode)
 
@@ -232,9 +266,10 @@ export async function initializeTheme(
   }
   cacheInterfaceVariant(interfaceVariant)
 
-  // 获取系统主题
+  // 获取系统主题并在注册表就绪后应用皮肤
   const isDark = await window.electronAPI.getSystemTheme()
   setSystemIsDark(isDark)
+  applyThemeToDOM(settings.themeMode, settings.themeStyle || 'default', isDark)
 
   // 监听系统主题变化
   const cleanupSystem = window.electronAPI.onSystemThemeChanged((newIsDark) => {

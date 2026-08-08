@@ -1,7 +1,7 @@
 /**
  * AppearanceSettings - 外观设置页
  *
- * 特殊风格选择 + 主题模式切换（浅色/深色/跟随系统/特殊风格）。
+ * 主题模式切换与本地皮肤管理（浅色/深色/跟随系统）。
  * 通过 Jotai atom 管理状态，持久化到 ~/.proma/settings.json。
  *
  * tabletMode（平板远程模式）：
@@ -12,6 +12,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
 import { Check } from 'lucide-react'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { toast } from 'sonner'
 import {
   SettingsSection,
@@ -26,6 +27,8 @@ import {
   updateThemeMode,
   updateThemeStyle,
   applyThemeToDOM,
+  skinsAtom,
+  refreshSkinRegistry,
 } from '@/atoms/theme'
 import {
   markdownFontSizeAtom,
@@ -38,8 +41,9 @@ import {
 } from '@/atoms/ui-scale'
 import { previewModePreferenceAtom, type PreviewModePreference } from '@/atoms/preview-atoms'
 import { cn } from '@/lib/utils'
+import { SkinManager } from './SkinManager'
 import { detectIsWindows } from '@/lib/platform'
-import type { ThemeMode, ThemeStyle, MarkdownFontSize, UiScale } from '../../../types'
+import type { ThemeMode, ThemeStyle, MarkdownFontSize, UiScale, SkinInfo } from '../../../types'
 
 // ===== Logo 资源导入（用于图标选择器） =====
 import proferBlackLogo from '@/assets/bots/profer-logos/profer-black.png'
@@ -57,21 +61,11 @@ import proferCyberpunkLogo from '@/assets/bots/profer-logos/profer-cyberpunk.png
 import proferFuturisticLogo from '@/assets/bots/profer-logos/profer-futuristic.png'
 
 // ===== 主题预览图片导入 =====
-import themeCloudDancer from '@/assets/theme-previews/theme-cloud-dancer.webp'
-import themeOceanLight from '@/assets/theme-previews/theme-ocean-light.webp'
-import themeForestMorning from '@/assets/theme-previews/theme-forest-morning.webp'
-import themeOceanDark from '@/assets/theme-previews/theme-ocean-dark.webp'
-import themeForestNight from '@/assets/theme-previews/theme-forest-night.webp'
-import themeMorandiNight from '@/assets/theme-previews/theme-morandi-night.webp'
-import themeMistPaperDark from '@/assets/theme-previews/theme-mist-paper-dark.svg'
-import themeTerminalDark from '@/assets/theme-previews/theme-terminal-dark.png'
-
 /** 主题选项 */
 const THEME_OPTIONS = [
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
   { value: 'system', label: '跟随系统' },
-  { value: 'special', label: '特殊风格' },
 ]
 
 /** Markdown 字号选项 */
@@ -87,79 +81,6 @@ const PREVIEW_MODE_OPTIONS: { value: PreviewModePreference; label: string }[] = 
   { value: 'split', label: '侧边分屏' },
 ]
 
-/** 特殊风格 ID（排除 default） */
-type SpecialStyleId = Exclude<ThemeStyle, 'default'>
-
-/** 特殊风格定义 */
-interface SpecialStyle {
-  id: SpecialStyleId
-  name: string
-  variant: 'light' | 'dark'
-  /** 主题预览图 */
-  image: string
-  /** 图片裁剪位置（默认居中） */
-  objectPosition?: string
-  /** 图片缩放比例（默认 1） */
-  imageScale?: number
-  /** Tooltip 提示 */
-  tooltip?: string
-}
-
-const SPECIAL_STYLES: readonly SpecialStyle[] = [
-  {
-    id: 'slate-light',
-    name: '云朵舞者',
-    variant: 'light',
-    image: themeCloudDancer,
-    imageScale: 1.3,
-  },
-  {
-    id: 'ocean-light',
-    name: '晴空碧海',
-    variant: 'light',
-    image: themeOceanLight,
-  },
-  {
-    id: 'forest-light',
-    name: '森息晨光',
-    variant: 'light',
-    image: themeForestMorning,
-    imageScale: 1.45,
-  },
-  {
-    id: 'ocean-dark',
-    name: '远山暮霭',
-    variant: 'dark',
-    image: themeOceanDark,
-  },
-  {
-    id: 'forest-dark',
-    name: '森息夜语',
-    variant: 'dark',
-    image: themeForestNight,
-  },
-  {
-    id: 'slate-dark',
-    name: '莫兰迪夜',
-    variant: 'dark',
-    image: themeMorandiNight,
-    imageScale: 1.15,
-    objectPosition: '44% 58%',
-  },
-  {
-    id: 'mist-paper-dark',
-    name: '雾纸暖灰',
-    variant: 'dark',
-    image: themeMistPaperDark,
-  },
-  {
-    id: 'terminal-dark',
-    name: '旧屏微光',
-    variant: 'dark',
-    image: themeTerminalDark,
-    tooltip: '该主题包含轻微闪烁动画',
-  },
-]
 
 /** 图标变体定义 */
 interface IconVariant {
@@ -199,6 +120,10 @@ export function AppearanceSettings({ tabletMode = false }: { tabletMode?: boolea
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
+  const skins = useAtomValue(skinsAtom)
+  const [deleteTarget, setDeleteTarget] = React.useState<SkinInfo | null>(null)
+  const [conflict, setConflict] = React.useState<{ path: string; kind: 'zip' | 'folder' } | null>(null)
+  const [busy, setBusy] = React.useState(false)
   const [markdownFontSize, setMarkdownFontSize] = useAtom(markdownFontSizeAtom)
   // 界面大小控件仅面向平板/浏览器端（UiScaleContainer 等比缩放）；
   // Electron 桌面保持原版行为（Ctrl+± 浏览器级缩放），不渲染控件避免“调了无效果”。
@@ -216,23 +141,42 @@ export function AppearanceSettings({ tabletMode = false }: { tabletMode?: boolea
     const mode = value as ThemeMode
     setThemeMode(mode)
     updateThemeMode(mode)
-    // 切换回普通模式时，重置特殊风格
-    if (mode !== 'special') {
-      setThemeStyle('default')
-      updateThemeStyle('default')
-      applyThemeToDOM(mode, 'default', systemIsDark)
-    }
+    setThemeStyle('default')
+    updateThemeStyle('default')
+    applyThemeToDOM(mode, 'default', systemIsDark)
   }, [setThemeMode, setThemeStyle, systemIsDark])
 
-  /** 选择特殊风格 */
+  /** 从皮肤管理器选择皮肤 */
   const handleStyleSelect = React.useCallback((style: ThemeStyle) => {
-    // 同时切换到特殊风格模式
     setThemeMode('special')
     setThemeStyle(style)
     updateThemeMode('special')
     updateThemeStyle(style)
     applyThemeToDOM('special', style, systemIsDark)
   }, [setThemeMode, setThemeStyle, systemIsDark])
+
+  const refreshSkins = React.useCallback(async () => {
+    setBusy(true)
+    try { await refreshSkinRegistry(themeStyle); toast.success('皮肤库已刷新') } catch { toast.error('刷新皮肤库失败') } finally { setBusy(false) }
+  }, [themeStyle])
+  const importSkin = React.useCallback(async (kind: 'zip' | 'folder', replace = false, existingPath?: string) => {
+    setBusy(true)
+    try {
+      const path = existingPath ?? (kind === 'zip' ? await window.electronAPI.selectSkinZip() : await window.electronAPI.selectSkinFolder())
+      if (!path) return
+      const result = kind === 'zip' ? await window.electronAPI.installSkinZip(path, replace) : await window.electronAPI.installSkinFolder(path, replace)
+      if (result.status === 'conflict') { setConflict({ path, kind }); return }
+      if (!result.ok) { toast.error(result.message ?? '导入失败'); return }
+      await refreshSkinRegistry(themeStyle)
+      toast.success(result.message ?? '皮肤已导入')
+    } catch { toast.error('导入皮肤失败') } finally { setBusy(false) }
+  }, [themeStyle])
+  const confirmDelete = React.useCallback(async () => {
+    if (!deleteTarget) return
+    if (themeMode === 'special' && themeStyle === deleteTarget.id) { toast.error('请先恢复默认主题，再删除当前皮肤'); setDeleteTarget(null); return }
+    setBusy(true)
+    try { const result = await window.electronAPI.deleteUserSkin(deleteTarget.id); if (!result.ok) toast.error(result.message ?? '删除失败'); else { await refreshSkinRegistry(); toast.success('皮肤已删除') } } finally { setBusy(false); setDeleteTarget(null) }
+  }, [deleteTarget, themeMode, themeStyle])
 
   /** 切换 Markdown 字号 */
   const handleMarkdownFontSizeChange = React.useCallback((value: string) => {
@@ -263,21 +207,6 @@ export function AppearanceSettings({ tabletMode = false }: { tabletMode?: boolea
             onValueChange={handleThemeChange}
             options={THEME_OPTIONS}
           />
-
-          {/* 特殊风格 - 标签在上，卡片在下 */}
-          <div className="px-4 py-3 space-y-2">
-            <div className="text-sm font-medium text-foreground">特殊风格</div>
-            <div className="tablet-special-grid grid grid-cols-4 xl:grid-cols-8 gap-3">
-              {SPECIAL_STYLES.map((style) => (
-                <StyleCard
-                  key={style.id}
-                  style={style}
-                  isSelected={themeMode === 'special' && themeStyle === style.id}
-                  onSelect={() => handleStyleSelect(style.id)}
-                />
-              ))}
-            </div>
-          </div>
 
           {isElectron ? (
             <SettingsRow
@@ -314,6 +243,14 @@ export function AppearanceSettings({ tabletMode = false }: { tabletMode?: boolea
         </SettingsCard>
       </SettingsSection>
 
+      {!tabletMode && <SkinManager skins={skins} themeMode={themeMode} themeStyle={themeStyle} busy={busy} onSelect={handleStyleSelect} onImport={importSkin} onRefresh={refreshSkins} onOpenFolder={() => window.electronAPI.openUserSkinsFolder()} onDelete={setDeleteTarget} />}
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>删除皮肤？</AlertDialogTitle><AlertDialogDescription>将永久删除「{deleteTarget?.name}」，此操作不可恢复。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={confirmDelete}>删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={conflict !== null} onOpenChange={(open) => { if (!open) setConflict(null) }}>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>皮肤已存在</AlertDialogTitle><AlertDialogDescription>是否以新导入的皮肤替换同名用户皮肤？</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => { const item = conflict; setConflict(null); if (item) void importSkin(item.kind, true, item.path) }}>替换</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      </AlertDialog>
       {SHOW_MACOS_SETTINGS && <AppIconPicker />}
     </div>
   )
@@ -437,65 +374,6 @@ function IconCard({
           <Check className="size-2.5 text-primary-foreground" />
         </div>
       )}
-    </button>
-  )
-}
-
-/** 特殊风格卡片 - 竖长条图片预览 + 名字放在卡片下方 */
-function StyleCard({
-  style,
-  isSelected,
-  onSelect,
-}: {
-  style: SpecialStyle
-  isSelected: boolean
-  onSelect: () => void
-}): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      title={style.tooltip}
-      className="group flex flex-col items-center gap-2 focus-visible:outline-none"
-    >
-      {/* 图片卡片本体 */}
-      <div
-        className={cn(
-          'relative rounded-lg overflow-hidden w-[99px] h-[183px] transition-all duration-150',
-          isSelected
-            ? 'ring-2 ring-primary shadow-lg shadow-primary/20'
-            : 'ring-1 ring-border/50 group-hover:ring-border group-focus-visible:ring-2 group-focus-visible:ring-primary group-focus-visible:ring-offset-1'
-        )}
-      >
-        <div
-          className="w-full h-full"
-          style={style.imageScale ? { transform: `scale(${style.imageScale})` } : undefined}
-        >
-          <img
-            src={style.image}
-            alt={style.name}
-            loading="lazy"
-            decoding="async"
-            className="w-full h-full object-cover"
-            style={style.objectPosition ? { objectPosition: style.objectPosition } : undefined}
-            draggable={false}
-          />
-        </div>
-        {isSelected && (
-          <div className="absolute top-1 right-1 size-4 rounded-full bg-primary flex items-center justify-center z-10">
-            <Check className="size-2.5 text-primary-foreground" />
-          </div>
-        )}
-      </div>
-      {/* 名字放在卡片下方，吃 token，自动跟主题切色 */}
-      <span
-        className={cn(
-          'text-xs font-medium transition-colors',
-          isSelected ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
-        )}
-      >
-        {style.name}
-      </span>
     </button>
   )
 }

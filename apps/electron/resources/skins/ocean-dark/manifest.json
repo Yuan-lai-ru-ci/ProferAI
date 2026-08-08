@@ -1,0 +1,9 @@
+{
+  "id": "ocean-dark",
+  "name": "Ocean Dark",
+  "tone": "dark",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "远山暮霭 — 深海玻璃",
+  "titlebar": { "color": "#131c26", "symbolColor": "#e7ebef" }
+}

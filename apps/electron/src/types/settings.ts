@@ -167,21 +167,35 @@ export interface ShortcutOverrides {
 /** 主题模式 */
 export type ThemeMode = 'light' | 'dark' | 'system' | 'special'
 
-/** 所有合法的特殊风格值（白名单，新增主题时只需追加这里） */
-export const THEME_STYLES = [
-  'default',
-  'ocean-light',
-  'ocean-dark',
-  'forest-light',
-  'forest-dark',
-  'slate-light',
-  'slate-dark',
-  'mist-paper-dark',
-  'terminal-dark',
-] as const
+/**
+ * 特殊风格值即皮肤包 id。权威来源是主进程扫描得到的皮肤注册表，
+ * 不使用编译期白名单，以支持用户导入的皮肤。
+ */
+export type ThemeStyle = string
+export type ThemeStyleId = ThemeStyle
 
-/** 特殊风格主题 */
-export type ThemeStyle = (typeof THEME_STYLES)[number]
+/** 皮肤包 manifest 的安全解析结果，供主/渲染进程共享。 */
+export interface SkinInfo {
+  id: string
+  name: string
+  tone: 'light' | 'dark'
+  version?: string
+  author?: string
+  description?: string
+  titlebar?: { color: string; symbolColor: string }
+  builtin: boolean
+  previewScale?: number
+  previewPosition?: string
+  tooltip?: string
+}
+
+/** 皮肤安装/删除的结构化结果；冲突由前端确认后以 replace 重试。 */
+export interface SkinManagerResult {
+  ok: boolean
+  status: 'installed' | 'replaced' | 'deleted' | 'conflict' | 'cancelled' | 'error'
+  skin?: SkinInfo
+  message?: string
+}
 
 /** 默认主题模式 */
 export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
@@ -324,6 +338,20 @@ export interface TabletModeStatus {
   lanUrl: string | null
   token: string | null
 }
+
+export const SKIN_IPC_CHANNELS = {
+  GET_SKINS: 'skins:get-list',
+  GET_SKIN_CSS: 'skins:get-css',
+  GET_SKIN_PREVIEW: 'skins:get-preview',
+  SELECT_ZIP: 'skins:select-zip',
+  SELECT_FOLDER: 'skins:select-folder',
+  INSTALL_ZIP: 'skins:install-zip',
+  INSTALL_FOLDER: 'skins:install-folder',
+  DELETE_USER_SKIN: 'skins:delete-user',
+  OPEN_USER_FOLDER: 'skins:open-user-folder',
+  OPEN_TEMPLATE_FOLDER: 'skins:open-template-folder',
+  REFRESH: 'skins:refresh',
+} as const
 
 export const SETTINGS_IPC_CHANNELS = {
   GET: 'settings:get',

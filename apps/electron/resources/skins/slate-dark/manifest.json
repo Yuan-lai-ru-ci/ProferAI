@@ -1,0 +1,11 @@
+{
+  "id": "slate-dark",
+  "name": "莫兰迪夜",
+  "tone": "dark",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "莫兰迪夜 — 莫兰迪灰紫",
+  "previewScale": 1.15,
+  "previewPosition": "44% 58%",
+  "titlebar": { "color": "#1f1c21", "symbolColor": "#e9e6e3" }
+}

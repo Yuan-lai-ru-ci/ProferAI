@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision } from '@profer/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
   RuntimeStatus,
@@ -407,6 +407,19 @@ export interface ElectronAPI {
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<UserProfile>
 
   // ===== 应用设置相关 =====
+
+  // ===== 皮肤管理 =====
+  getSkins: () => Promise<import('../types').SkinInfo[]>
+  getSkinCss: (id: string) => Promise<string | null>
+  getSkinPreview: (id: string) => Promise<string | null>
+  selectSkinZip: () => Promise<string | null>
+  selectSkinFolder: () => Promise<string | null>
+  installSkinZip: (path: string, replace?: boolean) => Promise<import('../types').SkinManagerResult>
+  installSkinFolder: (path: string, replace?: boolean) => Promise<import('../types').SkinManagerResult>
+  deleteUserSkin: (id: string) => Promise<import('../types').SkinManagerResult>
+  openUserSkinsFolder: () => Promise<void>
+  openSkinTemplateFolder: () => Promise<void>
+  refreshSkins: () => Promise<import('../types').SkinInfo[]>
 
   /** 获取应用设置 */
   getSettings: () => Promise<AppSettings>
@@ -1682,6 +1695,19 @@ const electronAPI: ElectronAPI = {
   updateUserProfile: (updates: Partial<UserProfile>) => {
     return ipcRenderer.invoke(USER_PROFILE_IPC_CHANNELS.UPDATE, updates)
   },
+
+  // 皮肤管理
+  getSkins: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.GET_SKINS),
+  getSkinCss: (id: string) => ipcRenderer.invoke(SKIN_IPC_CHANNELS.GET_SKIN_CSS, id),
+  getSkinPreview: (id: string) => ipcRenderer.invoke(SKIN_IPC_CHANNELS.GET_SKIN_PREVIEW, id),
+  selectSkinZip: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.SELECT_ZIP),
+  selectSkinFolder: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.SELECT_FOLDER),
+  installSkinZip: (path: string, replace = false) => ipcRenderer.invoke(SKIN_IPC_CHANNELS.INSTALL_ZIP, path, replace),
+  installSkinFolder: (path: string, replace = false) => ipcRenderer.invoke(SKIN_IPC_CHANNELS.INSTALL_FOLDER, path, replace),
+  deleteUserSkin: (id: string) => ipcRenderer.invoke(SKIN_IPC_CHANNELS.DELETE_USER_SKIN, id),
+  openUserSkinsFolder: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.OPEN_USER_FOLDER),
+  openSkinTemplateFolder: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.OPEN_TEMPLATE_FOLDER),
+  refreshSkins: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.REFRESH),
 
   // 应用设置
   getSettings: () => {
