@@ -4,7 +4,7 @@
 
 # Profer
 
-**基于 Claude Agent SDK 的通用 AI Agent 桌面应用**
+**基于 Claude Agent SDK + Pi Agent 双运行时的通用 AI Agent 桌面应用**
 
 多模型接入 · 协作子 Agent · 定时任务自动化 · 平板远程接入 · 团队工作区
 
@@ -12,6 +12,7 @@
 [![License](https://img.shields.io/github/license/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=License)](./LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?style=flat-square&logo=electron)](https://www.electronjs.org/)
 [![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.3.201-8B5CF6?style=flat-square)](https://github.com/anthropics/claude-agent-sdk)
+[![Pi Agent SDK](https://img.shields.io/badge/Pi%20Agent%20SDK-0.82.1-6D28D9?style=flat-square)](https://www.npmjs.com/package/@earendil-works/pi-agent-core)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![Stars](https://img.shields.io/github/stars/Yuan-lai-ru-ci/ProferAI?style=flat-square&label=Stars)](https://github.com/Yuan-lai-ru-ci/ProferAI)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Yuan-lai-ru-ci/ProferAI/pulls)
@@ -101,7 +102,7 @@ nohup node index.js > server.log 2>&1 &
 | 样式 | Tailwind CSS + Radix UI |
 | 富文本 / 图表 | TipTap · Beautiful Mermaid · KaTeX · Shiki |
 | 构建 | Vite + esbuild + electron-builder |
-| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201` |
+| Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201`（Claude）+ `@earendil-works/pi-agent@0.82.1`（Pi）双运行时 |
 | 平板端 | Capacitor（Android） |
 | 团队后端 | Hono + better-sqlite3 + JWT |
 
