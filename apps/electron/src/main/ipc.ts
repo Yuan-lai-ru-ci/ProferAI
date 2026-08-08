@@ -135,7 +135,7 @@ import type {
 } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
-import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
+import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, invalidateGitDiffCache } from './lib/git-diff-service'
 import { registerProferFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
@@ -1100,6 +1100,16 @@ export function registerIpcHandlers(): void {
       const access = normalizeFileAccessOptions({ sessionId })
       if (!(await ensurePathAllowedWithWorktree(dirPath, access)) || (gitRoot && !(await ensurePathAllowedWithWorktree(gitRoot, access)))) return
       await revertFile(dirPath, filePath, gitRoot)
+      // revert 是 git 突变，失效受影响仓库的缓存
+      invalidateGitDiffCache(filePath)
+    }
+  )
+
+  // 使 git diff 缓存失效（Agent 写文件/git 突变/窗口聚焦后调用）
+  ipcMain.handle(
+    IPC_CHANNELS.INVALIDATE_GIT_DIFF_CACHE,
+    (_, changedPath?: string) => {
+      invalidateGitDiffCache(changedPath)
     }
   )
 
