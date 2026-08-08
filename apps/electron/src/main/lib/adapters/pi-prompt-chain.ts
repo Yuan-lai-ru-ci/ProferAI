@@ -47,7 +47,10 @@ export async function runPiPromptChain(
     try {
       prompt = await deps.prepareInitialPrompt(nextPrompt)
     } catch (error) {
+      // 失败即中断整链：当前 interrupt 与队内未消费的 reservation 全部 reject，
+      // 否则其 accepted promise 悬挂到 cleanup 才 settle，渲染层“发送”状态会卡住数秒。
       currentInterrupt?.rejectAccepted(error)
+      deps.rejectPendingInterruptPrompts(error)
       throw error
     }
     nextPrompt = undefined

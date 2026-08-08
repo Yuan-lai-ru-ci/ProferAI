@@ -8,6 +8,11 @@
  *
  * 方案：通过 bunfig.toml 的 [test].preload 在本文件里统一注册 electron mock，
  * 保证 electron 在任何一个测试文件加载源码模块之前就被拦截，永不真实加载。
+ *
+ * 契约：源码新增 electron API 使用（new BrowserWindow()、dialog.showOpenDialog、
+ * app.requestSingleInstanceLock 等）必须同步更新本 mock，否则测试报错（显性）或
+ * mock 空实现让测试假通过（隐性，如 dialog: {}）。mock 的 app.getVersion 等值
+ * 需与 apps/electron/package.json 的 electronVersion 保持一致。
  */
 import { mock } from 'bun:test'
 

@@ -7,6 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
+import { getDefaultStore } from 'jotai'
 import type { ConversationMeta, ChatMessage, FileAttachment, ChatToolActivity, Channel, KnowledgeReference } from '@profer/shared'
 
 /** 全局渠道列表缓存（启动时加载一次，设置变更时刷新） */
@@ -15,8 +16,16 @@ export const channelsAtom = atom<Channel[]>([])
 /** 渠道列表是否已完成首次加载 */
 export const channelsLoadedAtom = atom(false)
 
-/** 模型选择器打开请求计数（ErrorMessage 的 select_model 恢复操作等全局触发入口；每次请求 +1，ModelSelector 监听到变化后打开 Dialog） */
-export const modelSelectorRequestAtom = atom(0)
+/** 模型选择器打开请求（ErrorMessage 的 select_model 恢复操作等全局触发入口）。
+ * 用对象而非纯计数：请求携带自增 seq，消费方记录已消费的 seq，
+ * 避免组件未挂载时计数变化被吞掉（切回视图后请求静默丢失）。 */
+export const modelSelectorRequestAtom = atom<{ seq: number }>({ seq: 0 })
+
+/** 发起一次模型选择器打开请求 */
+export function requestModelSelectorOpen(): void {
+  const current = getDefaultStore().get(modelSelectorRequestAtom)
+  getDefaultStore().set(modelSelectorRequestAtom, { seq: current.seq + 1 })
+}
 
 /** 选中的模型信息 */
 export interface SelectedModel {

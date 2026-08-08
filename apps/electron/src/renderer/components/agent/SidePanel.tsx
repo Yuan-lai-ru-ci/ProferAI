@@ -448,8 +448,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
         className={cn(
           'w-full h-full flex flex-col titlebar-no-drag',
           isWindows ? 'pt-[34px]' : 'pt-0',
-          shouldAnimate && 'transition-opacity duration-300 sidebar-collapse-ease',
-          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
+          // visibility 走 transition 离散语义：淡出结束后才 hidden（Tab 不再聚焦），展开时立即 visible
+          shouldAnimate && 'transition-[opacity,visibility] duration-300 sidebar-collapse-ease',
+          isOpen ? 'opacity-100 visible' : 'opacity-0 pointer-events-none invisible',
         )}
         >
           <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} onClose={() => setIsOpen(false)} />
