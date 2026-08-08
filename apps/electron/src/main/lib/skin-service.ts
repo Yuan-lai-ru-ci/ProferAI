@@ -92,50 +92,82 @@ export function invalidateSkinCache(skinId?: string): void {
   }
 }
 
-/** 解析单个皮肤的 manifest.json，字段缺失/无效时返回 null */
-function readManifest(dir: string, builtin: boolean): SkinInfo | null {
+/** manifest.json 原始形状（宽松：字段可能缺失/类型错误，由解析函数归一） */
+export interface SkinManifestRaw {
+  id?: unknown
+  name?: unknown
+  tone?: unknown
+  version?: unknown
+  author?: unknown
+  description?: unknown
+  titlebar?: { color?: unknown; symbolColor?: unknown }
+  previewScale?: unknown
+  previewPosition?: unknown
+  tooltip?: unknown
+}
+
+/**
+ * 单一 manifest 文本解析入口（JSON + BOM + 基础字段校验）。
+ * skin-service 的 readManifest（扫描注册表）与 skin-manager-service 的 validatePackage
+ * （安装校验）共用，字段扩展只需改这一处，避免双写漂移（P2-L6）。
+ * 失败返回具体 reason（安装场景直接透传给用户）。
+ */
+export function parseSkinManifestText(text: string): { ok: true; manifest: SkinManifestRaw } | { ok: false; reason: string } {
+  let parsed: unknown
   try {
     // JSON.parse 不接受 UTF-8 BOM；Windows 编辑器及部分压缩工具常会写入 BOM。
-    const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf-8').replace(/^\uFEFF/, '')) as {
-      id?: unknown
-      name?: unknown
-      tone?: unknown
-      version?: unknown
-      author?: unknown
-      description?: unknown
-      titlebar?: { color?: unknown; symbolColor?: unknown }
-      previewScale?: unknown
-      previewPosition?: unknown
-      tooltip?: unknown
-    }
-    if (typeof manifest.id !== 'string' || !manifest.id || (manifest.tone !== 'light' && manifest.tone !== 'dark')) {
-      console.warn('[皮肤] 跳过无效 manifest（缺 id 或 tone 非法）:', dir)
-      return null
-    }
-    const titlebar =
-      manifest.titlebar && typeof manifest.titlebar === 'object' && typeof manifest.titlebar.color === 'string'
-        ? {
-            color: manifest.titlebar.color,
-            symbolColor:
-              typeof manifest.titlebar.symbolColor === 'string' ? manifest.titlebar.symbolColor : '#ffffff',
-          }
-        : undefined
-    return {
-      id: manifest.id,
-      name: typeof manifest.name === 'string' && manifest.name ? manifest.name : manifest.id,
-      tone: manifest.tone,
-      version: typeof manifest.version === 'string' ? manifest.version : undefined,
-      author: typeof manifest.author === 'string' ? manifest.author : undefined,
-      description: typeof manifest.description === 'string' ? manifest.description : undefined,
-      titlebar,
-      builtin,
-      previewScale: typeof manifest.previewScale === 'number' && manifest.previewScale > 0 ? manifest.previewScale : undefined,
-      previewPosition: typeof manifest.previewPosition === 'string' ? manifest.previewPosition : undefined,
-      tooltip: typeof manifest.tooltip === 'string' ? manifest.tooltip : undefined,
-    }
+    parsed = JSON.parse(text.replace(/^\uFEFF/, ''))
+  } catch (err) {
+    return { ok: false, reason: `manifest.json 不是有效 JSON${err instanceof Error ? `：${err.message}` : ''}` }
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { ok: false, reason: 'manifest.json 必须是 JSON 对象' }
+  }
+  const manifest = parsed as SkinManifestRaw
+  if (typeof manifest.id !== 'string' || !manifest.id) {
+    return { ok: false, reason: 'manifest.id 缺失或不是字符串' }
+  }
+  if (manifest.tone !== 'light' && manifest.tone !== 'dark') {
+    return { ok: false, reason: 'manifest.tone 必须为 light 或 dark' }
+  }
+  return { ok: true, manifest }
+}
+
+/** 解析单个皮肤的 manifest.json，字段缺失/无效时返回 null */
+export function readManifest(dir: string, builtin: boolean): SkinInfo | null {
+  let text: string
+  try {
+    text = readFileSync(join(dir, 'manifest.json'), 'utf-8')
   } catch (err) {
     console.warn('[皮肤] 读取 manifest 失败:', dir, err)
     return null
+  }
+  const parsed = parseSkinManifestText(text)
+  if (!parsed.ok) {
+    console.warn('[皮肤] 跳过无效 manifest（' + parsed.reason + '）:', dir)
+    return null
+  }
+  const manifest = parsed.manifest
+  const titlebar =
+    manifest.titlebar && typeof manifest.titlebar === 'object' && typeof manifest.titlebar.color === 'string'
+      ? {
+          color: manifest.titlebar.color,
+          symbolColor:
+            typeof manifest.titlebar.symbolColor === 'string' ? manifest.titlebar.symbolColor : '#ffffff',
+        }
+      : undefined
+  return {
+    id: manifest.id as string,
+    name: typeof manifest.name === 'string' && manifest.name ? manifest.name : (manifest.id as string),
+    tone: manifest.tone as 'light' | 'dark',
+    version: typeof manifest.version === 'string' ? manifest.version : undefined,
+    author: typeof manifest.author === 'string' ? manifest.author : undefined,
+    description: typeof manifest.description === 'string' ? manifest.description : undefined,
+    titlebar,
+    builtin,
+    previewScale: typeof manifest.previewScale === 'number' && manifest.previewScale > 0 ? manifest.previewScale : undefined,
+    previewPosition: typeof manifest.previewPosition === 'string' ? manifest.previewPosition : undefined,
+    tooltip: typeof manifest.tooltip === 'string' ? manifest.tooltip : undefined,
   }
 }
 
