@@ -77,6 +77,7 @@ import {
   runWithPiRequestProxy,
 } from './pi-request-proxy'
 import { createPiHarness, type PiHarnessToolCall } from '../pi-harness'
+import { appendPiHarnessDiagnostic } from '../pi-harness-diagnostics'
 import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
@@ -1869,6 +1870,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             if (pendingTerminalResult) {
               queue.push(pendingTerminalResult)
               pendingTerminalResult = undefined
+            }
+            // 本轮决策写入诊断事件（尽力而为，不阻塞主流程；compact 场景无 harness）。
+            if (harness) {
+              appendPiHarnessDiagnostic(input.sessionId, harness.createDecision())
             }
             queue.close()
           })
