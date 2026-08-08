@@ -2038,19 +2038,9 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
     />
   )
 
-  // ===== 折叠状态：精简图标视图 =====
-  if (sidebarCollapsed) {
-    return (
-      <div
-        className={cn(
-          'relative h-full flex flex-col items-center px-2',
-          !noTransition && 'transition-[width] duration-300',
-          isClassic
-            ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
-            : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
-        )}
-        style={{ width: 60, flexShrink: 0 }}
-      >
+  // ===== 折叠状态：精简图标视图（渲染在常驻 wrapper 内，由 wrapper 驱动宽度过渡） =====
+  const collapsedRail = (
+    <div className="relative h-full flex flex-col items-center px-2">
         <SidebarWindowDragStrip
           height={isMac ? SIDEBAR_DRAG_STRIP_HEIGHT.collapsedMac : SIDEBAR_DRAG_STRIP_HEIGHT.collapsed}
         />
@@ -2285,21 +2275,11 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
         {moveDialog}
         <SearchDialog />
       </div>
-    )
-  }
+  )
 
-  // ===== 展开状态：完整侧边栏 =====
-  return (
-    <div
-      className={cn(
-        'relative h-full flex flex-col',
-        !noTransition && 'transition-[width] duration-300',
-        isClassic
-          ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
-          : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
-      )}
-      style={{ width: width ?? 300, minWidth: 200, flexShrink: 1 }}
-    >
+  // ===== 展开状态：完整侧边栏（渲染在常驻 wrapper 内） =====
+  const expandedSidebar = (
+    <div className="relative h-full flex flex-col overflow-hidden">
       <SidebarWindowDragStrip
         height={isMac ? SIDEBAR_DRAG_STRIP_HEIGHT.expandedMac : SIDEBAR_DRAG_STRIP_HEIGHT.expanded}
       />
@@ -2808,6 +2788,47 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
         </AlertDialog>
       )}
       <SearchDialog />
+    </div>
+  )
+
+  // ===== 常驻 wrapper：同一节点驱动折叠/展开宽度过渡 =====
+  // 背景/圆角/阴影统一在 wrapper 上，两个内容视图 absolute 叠放（rail 在上、full 在下），
+  // 用 sidebar-view 的 opacity + 交错延迟淡入淡出，隐藏视图延迟 visibility 避免 Tab 聚焦隐形控件。
+  // 展开视图固定目标宽度，过渡期间不重排，仅被 wrapper 裁剪。
+  // noTransition（拖拽调宽）时跳过宽度过渡，保证即时响应。
+  return (
+    <div
+      className={cn(
+        'relative h-full overflow-hidden sidebar-collapse-ease',
+        !noTransition && 'transition-[width] duration-300',
+        isClassic
+          ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
+          : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
+      )}
+      style={{
+        width: sidebarCollapsed ? 60 : width ?? 300,
+        minWidth: sidebarCollapsed ? 60 : 200,
+        flexShrink: sidebarCollapsed ? 0 : 1,
+      }}
+    >
+      {/* 折叠 rail：展开时隐藏，收起时延迟淡入 */}
+      <div
+        aria-hidden={!sidebarCollapsed}
+        className="sidebar-view absolute top-0 bottom-0 left-0 z-10"
+        data-collapsed={sidebarCollapsed ? 'false' : 'true'}
+        style={{ width: 60 }}
+      >
+        {collapsedRail}
+      </div>
+      {/* 展开内容：折叠时立即淡出 */}
+      <div
+        aria-hidden={sidebarCollapsed}
+        className="sidebar-view absolute top-0 bottom-0 left-0"
+        data-collapsed={sidebarCollapsed ? 'true' : 'false'}
+        style={{ width: width ?? 300 }}
+      >
+        {expandedSidebar}
+      </div>
     </div>
   )
 }
