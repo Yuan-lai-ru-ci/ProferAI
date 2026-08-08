@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { join as pathJoin, sep as pathSep } from 'node:path'
+import { TRUST_PROXY } from './config.js'
 
 // ===== 输入校验 =====
 export function validatePassword(password) {
@@ -57,9 +58,23 @@ export function safePath(root, ...parts) {
 
 // ===== 网络工具 =====
 
-/** 从请求中提取客户端真实 IP */
+/** 从请求中提取客户端真实 IP。
+ *
+ * 安全策略：
+ *  - 直连部署（TRUST_PROXY=false）：优先取 socket 真实对端地址（@hono/node-server 通过
+ *    c.env.incoming 暴露原生 IncomingMessage），XFF/X-Real-IP 完全不可信（可伪造），
+ *    否则 register/login 限流退化为全局共享桶（5 个请求锁死所有用户）。
+ *  - 反代部署（TRUST_PROXY=true，nginx 已设置 X-Forwarded-For）：信任 XFF 首项，
+ *    此时反代负责剥离客户端伪造的头。
+ */
 export function clientIP(c) {
-  const forwarded = c.req.header('x-forwarded-for')
-  if (forwarded) return forwarded.split(',')[0].trim()
-  return c.env?.remoteAddr || c.req.header('x-real-ip') || 'unknown'
+  if (TRUST_PROXY) {
+    const forwarded = c.req.header('x-forwarded-for')
+    if (forwarded) return forwarded.split(',')[0].trim()
+    const real = c.req.header('x-real-ip')
+    if (real) return real.trim()
+  }
+  const remote = c.env?.incoming?.socket?.remoteAddress || c.env?.incoming?.connection?.remoteAddress
+  if (remote) return remote
+  return 'unknown'
 }

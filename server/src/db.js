@@ -150,6 +150,9 @@ export function deleteUser(userId) {
 }
 
 // ===== Relay 令牌 =====
+// 设计取舍（与 P1 修复配套声明）：relay 是 per-user 单值、无 TTL、无设备绑定；
+// 任何设备撤销（DELETE /devices/:id、login revokeSlotId、logout）都会轮换，
+// 使所有旧 prelay_ 令牌立即失效。客户端应把 relay 当作短期代理凭证对待。
 
 function generateRelayToken() {
   return `prelay_${crypto.randomBytes(32).toString('hex')}`

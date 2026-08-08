@@ -57,7 +57,7 @@
  */
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, MAX_BODY_SIZE, PAPERPIPE_MAX_BODY_SIZE } from './src/config.js'
+import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, MAX_BODY_SIZE, DEFAULT_BODY_SIZE, PAPERPIPE_MAX_BODY_SIZE } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
 import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
@@ -113,12 +113,22 @@ app.use('*', async (c, next) => {
 
 // 非上传请求按实际流量限制 body；Content-Length 仅作为快速拒绝，不能作为安全边界。
 // 文件上传由 files.js 按 MAX_FILE_SIZE 分块读取，保持独立限制。
+// 大 body 上限（50MB）只对需要多模态转发的认证路由放开；其余端点保持 1MB 默认，
+// 防止未认证端点（auth/feedback）的内存攻击面被同步放大。
+function resolveBodyLimit(path) {
+  if (path === '/v1/services/paperpipe/upload') return PAPERPIPE_MAX_BODY_SIZE
+  if (path.startsWith('/v1/proxy/')) return MAX_BODY_SIZE
+  if (path === '/v1/services/mineru/parse') return MAX_BODY_SIZE
+  return DEFAULT_BODY_SIZE
+}
+
 app.use('*', async (c, next) => {
-  if (c.req.path.includes('/files/upload')) return await next()
-  const isPaperpipeUpload = c.req.path === '/v1/services/paperpipe/upload'
-  const limit = isPaperpipeUpload ? PAPERPIPE_MAX_BODY_SIZE : MAX_BODY_SIZE
+  // 文件上传由 files.js 按 MAX_FILE_SIZE 分块读取，保持独立限制；
+  // 精确匹配上传路径（而非子串 includes），避免伪造路径绕过 JSON 限制。
+  if (/^\/v1\/workspaces\/[^/]+\/files\/upload$/.test(c.req.path)) return await next()
+  const limit = resolveBodyLimit(c.req.path)
   if (contentLengthExceedsLimit(c.req.header('content-length'), limit)) {
-    return c.json({ error: `请求体过大，上限 ${Math.round(limit / 1048576)}MB`, code: isPaperpipeUpload ? 'PAPERPIPE_BODY_TOO_LARGE' : 'REQUEST_BODY_TOO_LARGE' }, 413)
+    return c.json({ error: `请求体过大，上限 ${Math.round(limit / 1048576)}MB`, code: 'REQUEST_BODY_TOO_LARGE' }, 413)
   }
 
   try {
@@ -127,7 +137,7 @@ app.use('*', async (c, next) => {
     await next()
   } catch (error) {
     if (isBodyTooLargeError(error)) {
-      return c.json({ error: `请求体过大，上限 ${Math.round(limit / 1048576)}MB`, code: isPaperpipeUpload ? 'PAPERPIPE_BODY_TOO_LARGE' : 'REQUEST_BODY_TOO_LARGE' }, 413)
+      return c.json({ error: `请求体过大，上限 ${Math.round(limit / 1048576)}MB`, code: 'REQUEST_BODY_TOO_LARGE' }, 413)
     }
     throw error
   }
@@ -212,7 +222,11 @@ servicesApp.route('/mineru', mineruRoutes)
 servicesApp.route('/kb', kbRoutes)
 servicesApp.route('/paperpipe', paperpipeRoutes)
 // 扣费循环触发端点（供外部 cron / automation 调用）
-servicesApp.get('/billing/sweep', adminMiddleware, async (c) => {
+// 扣费循环触发端点（供外部 cron / automation 调用）。
+// 语义上这是非幂等写操作：POST 为主入口（带限流防滥用），GET 仅作旧部署兼容。
+async function handleBillingSweep(c) {
+  const rl = rateLimit('billing:sweep', 60 * 1000, 10)
+  if (!rl.allowed) return c.json({ error: '请求过于频繁，请稍后重试' }, 429)
   const { sweepUnbilledRequests } = await import('./src/db.js')
   try {
     const result = await sweepUnbilledRequests()
@@ -220,7 +234,9 @@ servicesApp.get('/billing/sweep', adminMiddleware, async (c) => {
   } catch (e) {
     return c.json({ error: e.message }, 500)
   }
-})
+}
+servicesApp.post('/billing/sweep', adminMiddleware, handleBillingSweep)
+servicesApp.get('/billing/sweep', adminMiddleware, handleBillingSweep)
 app.route('/v1/services', servicesApp)
 
 // 意见箱（无需登录态）

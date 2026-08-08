@@ -15,6 +15,9 @@ function generateRefreshToken() {
   return crypto.randomBytes(32).toString('hex')
 }
 
+/** refresh token 有效期（30 天，滑动续期） */
+const REFRESH_TOKEN_TTL_MS = 30 * 86400 * 1000
+
 /** 解析 JWT expiresIn 字符串为秒数 */
 function expiresInSeconds(expiresIn) {
   if (typeof expiresIn === 'number') return expiresIn
@@ -57,12 +60,13 @@ function listUserDevices(userId) {
 function registerDeviceToken(userId, refreshToken, meta) {
   const { deviceId, deviceName, platform, appVersion, maxDevices } = meta
   const now = Date.now()
+  const expiresAt = now + REFRESH_TOKEN_TTL_MS
   const isWeb = platform === 'web'
   if (deviceId) {
     const existing = db.prepare('SELECT id FROM refresh_tokens WHERE user_id = ? AND device_id = ?').get(userId, deviceId)
     if (existing) {
-      db.prepare('UPDATE refresh_tokens SET token = ?, device_name = ?, platform = ?, app_version = ?, last_used_at = ? WHERE id = ?')
-        .run(refreshToken, deviceName || null, platform || null, appVersion || null, now, existing.id)
+      db.prepare('UPDATE refresh_tokens SET token = ?, device_name = ?, platform = ?, app_version = ?, last_used_at = ?, expires_at = ? WHERE id = ?')
+        .run(refreshToken, deviceName || null, platform || null, appVersion || null, now, expiresAt, existing.id)
       return { ok: true }
     }
     // Web 端登录不占设备槽位，跳过数量检查
@@ -72,8 +76,8 @@ function registerDeviceToken(userId, refreshToken, meta) {
         return { ok: false, maxDevices, devices: listUserDevices(userId) }
       }
     }
-    db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), userId, refreshToken, deviceId, deviceName || null, platform || null, appVersion || null, now, now)
+    db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), userId, refreshToken, deviceId, deviceName || null, platform || null, appVersion || null, now, now, expiresAt)
     return { ok: true }
   }
   // 老客户端无 deviceId：LRU 淘汰最旧
@@ -82,8 +86,8 @@ function registerDeviceToken(userId, refreshToken, meta) {
     db.prepare('DELETE FROM refresh_tokens WHERE id IN (SELECT id FROM refresh_tokens WHERE user_id = ? ORDER BY last_used_at ASC LIMIT ?)')
       .run(userId, count - maxDevices + 1)
   }
-  db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_name, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(uuidv4(), userId, refreshToken, deviceName || null, now, now)
+  db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_name, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(uuidv4(), userId, refreshToken, deviceName || null, now, now, expiresAt)
   return { ok: true }
 }
 
@@ -121,8 +125,10 @@ authRoutes.post('/register', async (c) => {
     const ac = validateActivationCode(activationCode)
     if (!ac.valid) return c.json({ error: ac.error }, 400)
     membershipTier = ac.membershipTier || 'free'
-    db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ?")
+    // 原子消费：带 status='pending' 条件 + 检查 changes，防并发双花
+    const consumed = db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ? AND status = 'pending'")
       .run(email, Date.now(), activationCode)
+    if (consumed.changes === 0) return c.json({ error: '激活码已被使用' }, 400)
   }
   // ---- 分支 B：邀请码注册（主入口）----
   // 先查邀请码，查不到则 fallback 尝试激活码（管理员后台生成的码也能走注册 UI）
@@ -135,8 +141,9 @@ authRoutes.post('/register', async (c) => {
       const ac = validateActivationCode(inviteCode)
       if (!ac.valid) return c.json({ error: ac.error || '邀请码无效' }, 400)
       membershipTier = ac.membershipTier || 'free'
-      db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ?")
+      const consumed = db.prepare("UPDATE activation_codes SET status = 'used', used_by = ?, used_at = ? WHERE code = ? AND status = 'pending'")
         .run(email, Date.now(), inviteCode)
+      if (consumed.changes === 0) return c.json({ error: ac.error || '激活码已被使用' }, 400)
     }
   }
   // ---- 必须提供 inviteCode 或 activationCode ----
@@ -204,6 +211,20 @@ authRoutes.post('/register', async (c) => {
       const r = await provisionNewApiUser(email, displayName || email.split('@')[0], NEWAPI_USER_INITIAL_QUOTA)
       if (!r.ok) {
         console.error(`[register] New API 账号创建失败 (user=${email}): ${r.error}`)
+        // 补偿删除本事务已写入的数据，避免半注册僵尸账号堆积（用户看到 503，但账号实际已建）。
+        // 必须按外键依赖顺序删除：credit_transactions/credits 先于 users（ensureCreditRow 已写入）。
+        try {
+          db.prepare('DELETE FROM credit_transactions WHERE user_id = ?').run(id)
+          db.prepare('DELETE FROM credits WHERE user_id = ?').run(id)
+          db.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').run(id)
+          db.prepare('DELETE FROM invite_codes WHERE user_id = ?').run(id)
+          db.prepare('DELETE FROM invite_records WHERE invitee_id = ?').run(id)
+          db.prepare('DELETE FROM workspace_members WHERE user_id = ?').run(id)
+          db.prepare('DELETE FROM users WHERE id = ?').run(id)
+        } catch (cleanupError) {
+          console.error(`[register] 补偿删除半注册用户失败 (user=${email}): ${cleanupError.message}`)
+        }
+        logAudit({ action: 'register_failed', userEmail: email, detail: `newapi provision failed: ${r.error}` })
         return c.json({ error: '服务暂时不可用，请稍后重试' }, 503)
       }
       db.prepare('UPDATE users SET new_api_user_id = ?, new_api_key_encrypted = ? WHERE id = ?')
@@ -311,9 +332,17 @@ authRoutes.post('/login', async (c) => {
   const membershipTier = user.membership_tier || 'free'
   const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, membership_tier: membershipTier }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
 
-  // 可选：先撤销一台设备（用户在上限 409 的设备列表里选的），必须属于本人
+  // 可选：先撤销一台设备（用户在上限 409 的设备列表里选的），必须属于本人。
+  // 撤销设备即视为安全事件：同步轮换 relay 令牌，防止旧令牌继续打 proxy 扣费。
   if (revokeSlotId) {
-    db.prepare('DELETE FROM refresh_tokens WHERE id = ? AND user_id = ?').run(revokeSlotId, user.id)
+    const slot = db.prepare('SELECT id FROM refresh_tokens WHERE id = ? AND user_id = ?').get(revokeSlotId, user.id)
+    if (slot) {
+      db.prepare('DELETE FROM refresh_tokens WHERE id = ?').run(revokeSlotId)
+      if (COMMERCIAL_MODE) {
+        try { rotateRelayToken(user.id) } catch (e) { console.warn('[login revokeSlotId] 吊销 relay 令牌失败:', e.message) }
+      }
+      logAudit({ action: 'device_revoke', userId: user.id, userEmail: user.email, detail: `revoked device slot ${revokeSlotId} via login` })
+    }
   }
 
   // 登记设备（注册设备数模型）：同设备复用槽位不 churn；新设备满额则 409 让用户显式撤销
@@ -360,15 +389,26 @@ authRoutes.post('/login', async (c) => {
 
 // ===== 刷新 accessToken =====
 authRoutes.post('/refresh', async (c) => {
+  // 无效 token 也可无限打 DB；按 IP 限流，防爆破/放大（配合原子轮换后无效 token 直接 401）
+  const rl = rateLimit(`refresh:${clientIP(c)}`, 60 * 1000, 30)
+  if (!rl.allowed) return c.json({ error: '请求过于频繁，请稍后重试' }, 429)
+
   const { refreshToken, deviceId, deviceName, platform, appVersion } = await c.req.json()
   if (!refreshToken) return c.json({ error: 'refreshToken 必填' }, 400)
 
   // 从多设备 refresh_tokens 表查找（向后兼容旧的 users.refresh_token）
-  const tokenRow = db.prepare('SELECT id, user_id, device_id FROM refresh_tokens WHERE token = ?').get(refreshToken)
+  const tokenRow = db.prepare('SELECT id, user_id, device_id, expires_at FROM refresh_tokens WHERE token = ?').get(refreshToken)
   const user = tokenRow
     ? db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE id = ?').get(tokenRow.user_id)
     : db.prepare('SELECT id, email, display_name, membership_tier, is_admin, is_suspended FROM users WHERE refresh_token = ?').get(refreshToken)
   if (!user) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
+
+  // refresh token 过期：清理槽位并返回 401（存量 NULL 视为永不过期，兼容旧客户端）
+  if (tokenRow?.expires_at && tokenRow.expires_at < Date.now()) {
+    db.prepare('DELETE FROM refresh_tokens WHERE id = ?').run(tokenRow.id)
+    logAudit({ action: 'refresh_token_expired', userId: user.id, userEmail: user.email })
+    return c.json({ error: 'refreshToken 已过期，请重新登录', code: 'refresh_token_expired' }, 401)
+  }
 
   if (user.is_suspended) {
     return c.json({ error: '账号已被停用，请重新登录或联系管理员' }, 403)
@@ -388,26 +428,29 @@ authRoutes.post('/refresh', async (c) => {
   const membershipTier = user.membership_tier || 'free'
   const accessToken = jwt.sign({ sub: user.id, email: user.email, is_admin: !!user.is_admin, commercial_mode: COMMERCIAL_MODE, membership_tier: membershipTier }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES })
 
-  // 轮换 refreshToken：更新 refresh_tokens 表中的记录
+  // 轮换 refreshToken：原子更新（带过期校验 + 滑动续期），并发刷新时后到者覆盖先到者
   const newRefreshToken = generateRefreshToken()
+  const refreshedAt = Date.now()
+  const newExpiresAt = refreshedAt + REFRESH_TOKEN_TTL_MS
   if (tokenRow) {
     // 存量迁移 + 元数据回填：老行 device_id 为空则补上（同账号无冲突时），同时轮换 token
     const canBackfill = deviceId && !tokenRow.device_id &&
       !db.prepare('SELECT 1 FROM refresh_tokens WHERE user_id = ? AND device_id = ? AND id != ?').get(user.id, deviceId, tokenRow.id)
-    db.prepare(
+    const updated = db.prepare(
       `UPDATE refresh_tokens
-       SET token = ?, last_used_at = ?,
+       SET token = ?, last_used_at = ?, expires_at = ?,
            device_id = COALESCE(device_id, ?),
            device_name = COALESCE(?, device_name),
            platform = COALESCE(?, platform),
            app_version = COALESCE(?, app_version)
        WHERE id = ?`
-    ).run(newRefreshToken, Date.now(), canBackfill ? deviceId : null, deviceName || null, platform || null, appVersion || null, tokenRow.id)
+    ).run(newRefreshToken, refreshedAt, newExpiresAt, canBackfill ? deviceId : null, deviceName || null, platform || null, appVersion || null, tokenRow.id)
+    if (updated.changes === 0) return c.json({ error: 'refreshToken 无效或已被替换' }, 401)
   } else {
     // 从旧 users.refresh_token 迁移到新表（带上设备信息；device_id 冲突时置空避免撞唯一索引）
     const deviceIdSafe = deviceId && !db.prepare('SELECT 1 FROM refresh_tokens WHERE user_id = ? AND device_id = ?').get(user.id, deviceId) ? deviceId : null
-    db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), user.id, newRefreshToken, deviceIdSafe, deviceName || null, platform || null, appVersion || null, Date.now(), Date.now())
+    db.prepare('INSERT INTO refresh_tokens (id, user_id, token, device_id, device_name, platform, app_version, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), user.id, newRefreshToken, deviceIdSafe, deviceName || null, platform || null, appVersion || null, refreshedAt, refreshedAt, newExpiresAt)
     db.prepare('UPDATE users SET refresh_token = NULL WHERE id = ?').run(user.id)
   }
 
@@ -489,6 +532,7 @@ authRoutes.get('/devices', (c) => {
 
 // 撤销（登出）指定设备槽位。需 JWT 鉴权，且该槽位必须属于当前账号。
 // 登录被设备上限挡住（尚无 accessToken）时，改用 POST /login 带 revokeSlotId 撤销。
+// 撤销设备即视为安全事件：同步轮换 relay 令牌（per-user 单值，踢掉所有旧代理凭证）。
 authRoutes.delete('/devices/:id', (c) => {
   const mw = authMiddleware(c)
   if (mw) return mw
@@ -497,6 +541,9 @@ authRoutes.delete('/devices/:id', (c) => {
   const row = db.prepare('SELECT id FROM refresh_tokens WHERE id = ? AND user_id = ?').get(rowId, userId)
   if (!row) return c.json({ error: '设备不存在或无权操作' }, 404)
   db.prepare('DELETE FROM refresh_tokens WHERE id = ?').run(rowId)
+  if (COMMERCIAL_MODE) {
+    try { rotateRelayToken(userId) } catch (e) { console.warn('[devices revoke] 吊销 relay 令牌失败:', e.message) }
+  }
   logAudit({ action: 'device_revoke', userId, userEmail: c.get('userEmail'), detail: `revoked device slot ${rowId}` })
   return c.json({ ok: true })
 })
