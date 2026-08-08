@@ -27,10 +27,16 @@ const GLOBAL_SHORTCUT_DEFAULTS: Record<string, { mac: string; win: string }> = {
 
 const isMac = process.platform === 'darwin'
 const VOICE_DICTATION_SHORTCUT_ID = 'voice-dictation'
+const QUICK_TASK_SHORTCUT_ID = 'quick-task'
 
 function shouldRegisterGlobalShortcut(id: string): boolean {
-  if (id !== VOICE_DICTATION_SHORTCUT_ID) return true
-  return getSettings().voiceDictation?.enabled === true
+  if (id === VOICE_DICTATION_SHORTCUT_ID) {
+    return getSettings().voiceDictation?.enabled === true
+  }
+  if (id === QUICK_TASK_SHORTCUT_ID) {
+    return getSettings().quickTaskEnabled === true
+  }
+  return true
 }
 
 /**

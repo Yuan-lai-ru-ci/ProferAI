@@ -672,8 +672,10 @@ async function bootstrap(): Promise<void> {
   // 启动 Chat 工具配置文件监听
   safeRun('startChatToolsWatcher', startChatToolsWatcher)
 
-  // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
-  safeRun('createQuickTaskWindow', createQuickTaskWindow)
+  // 预创建快速任务窗口（隐藏状态，首次唤起秒开）——默认关闭，仅在设置开启时预创建
+  if (getSettings().quickTaskEnabled === true) {
+    safeRun('createQuickTaskWindow', createQuickTaskWindow)
+  }
   if (getSettings().voiceDictation?.enabled === true) {
     safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
   }
@@ -681,9 +683,12 @@ async function bootstrap(): Promise<void> {
   // 飞书实时同步开启时，默认阻止系统自动休眠
   safeRun('syncFeishuSyncSleepBlocker', () => syncFeishuSyncSleepBlocker(getSettings()))
 
-  // 注册全局快捷键
+  // 注册全局快捷键（快速任务仅在设置开启时注册）
   safeRun('registerGlobalShortcut:quick-task', () =>
-    registerGlobalShortcut('quick-task', toggleQuickTaskWindow),
+    registerGlobalShortcut('quick-task', () => {
+      if (getSettings().quickTaskEnabled !== true) return
+      toggleQuickTaskWindow()
+    }),
   )
   safeRun('registerGlobalShortcut:show-main-window', () =>
     registerGlobalShortcut('show-main-window', showAndFocusMainWindow),
