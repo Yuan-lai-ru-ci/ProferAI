@@ -38,8 +38,17 @@ export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 // 文件上传上限 (默认 500MB)
 export const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '524288000', 10)
 
+// 是否信任反向代理设置的 X-Forwarded-For / X-Real-IP（nginx 部署时置 1）。
+// 直连部署时保持 false，限流/审计以 socket 真实对端地址为准，防止伪造 XFF 绕过限流。
+export const TRUST_PROXY = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true'
+
 // JSON 请求体上限 (默认 50MB；含图片识别等转发请求体/base64 膨胀，文件上传不受此限). 默认调大以兼容多模态识别, 防止默认值过小. 可用环境变量覆盖.
 export const MAX_BODY_SIZE = parseInt(process.env.MAX_BODY_SIZE || '52428800', 10)
+
+// 普通端点（登录/注册/反馈等未认证或轻量接口）的 JSON 请求体上限（默认 1MB）。
+// 50MB 仅对需要多模态转发的认证路由（/v1/proxy/*、/v1/services/mineru/parse）放开，
+// 避免未认证端点的内存攻击面被同步放大（feedback 无任何限流）。
+export const DEFAULT_BODY_SIZE = parseInt(process.env.DEFAULT_BODY_SIZE || '1048576', 10)
 
 // Paperpipe multipart 上传独立于普通 JSON 限制；仍由实际流读取累计约束。
 export const PAPERPIPE_MAX_FILE_SIZE = parseInt(process.env.PAPERPIPE_MAX_FILE_SIZE || String(200 * 1024 * 1024), 10)

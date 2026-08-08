@@ -131,6 +131,8 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_to
 try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN device_id TEXT DEFAULT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN platform TEXT DEFAULT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN app_version TEXT DEFAULT NULL") } catch (_) {}
+// refresh token 过期时间（30 天 TTL + 滑动续期）；存量行为 NULL（不强制过期，兼容旧客户端）
+try { db.exec("ALTER TABLE refresh_tokens ADD COLUMN expires_at INTEGER DEFAULT NULL") } catch (_) {}
 // 同一账号同一设备只保留一行（device_id 为空的存量行不受唯一约束影响，兼容旧客户端）
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_user_device ON refresh_tokens(user_id, device_id) WHERE device_id IS NOT NULL") } catch (_) {}
 try { db.exec("ALTER TABLE workspaces ADD COLUMN deleted_at INTEGER DEFAULT NULL") } catch (_) {}
