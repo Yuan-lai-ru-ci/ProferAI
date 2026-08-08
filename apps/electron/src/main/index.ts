@@ -77,10 +77,13 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function registerProtocolsAndHandlers(): void {
-  // 注册自定义协议方案为"特权"（必须在 app ready 之前）
+  // 注册自定义协议方案为“特权”（必须在 app ready 之前）
   // 用于内联预览本地文件（renderer 用 iframe 加载 profer-file:// 资源）
   protocol.registerSchemesAsPrivileged([
     { scheme: 'profer-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+    // 皮肤 assets 稳定协议：skin.css 中 url(assets/...) 被替换为 profer-skin://<skinId>/assets/...，
+    // 由主进程按需读取（P2：替代 base64 内联，移除大图 IPC 传输与编码开销）
+    { scheme: 'profer-skin', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
   ])
 
   // Windows: 禁用 LCD 次像素抗锯齿（ClearType），改用灰度 AA。
@@ -109,6 +112,7 @@ function registerProtocolsAndHandlers(): void {
 
 import { getSettings, updateSettings } from './lib/settings-service'
 import { handleProferFileRequest } from './lib/local-file-protocol'
+import { handleProferSkinRequest } from './lib/skin-service'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
 // 这在开发环境热重载时经常发生，不影响应用功能
@@ -592,6 +596,10 @@ async function bootstrap(): Promise<void> {
   // 注册自定义协议 profer-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。
   protocol.handle('profer-file', handleProferFileRequest)
+
+  // 注册皮肤 assets 协议 profer-skin://<skinId>/assets/<file>。
+  // 仅允许皮肤目录内 assets/ 图片，skinId 走 kebab-case 白名单，防目录穿越。
+  protocol.handle('profer-skin', handleProferSkinRequest)
 
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
   // 热启动时从磁盘缓存恢复，耗时 < 10ms

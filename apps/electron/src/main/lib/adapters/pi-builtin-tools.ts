@@ -32,6 +32,9 @@ import {
 import { getAgentSessionMeta } from '../agent-session-manager'
 import { getTodo } from '../planning-manager'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
+import { downloadInstaller, launchInstaller } from '../installer-downloader'
+import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
+import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
 import { teamMemoryOperations } from '../team-memory-agent-tools'
 import {
@@ -57,6 +60,8 @@ export interface PiBuiltinToolsContext {
   workspaceSlug?: string
   permissionMode?: ProferPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation'
+  /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
+  windowsShellAvailable?: boolean
 }
 
 function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
@@ -697,6 +702,41 @@ export interface PiBuiltinToolsResult {
   collaborationAvailable: boolean
 }
 
+// ===== Windows Shell 安装 =====
+
+function buildWindowsShellInstallerTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  if (!shouldOfferWindowsShellInstaller(process.platform, ctx.windowsShellAvailable, ctx.triggeredBy)) {
+    return []
+  }
+
+  return [
+    sdk.defineTool({
+      name: 'InstallWindowsShell',
+      label: '安装 Git Bash',
+      description: 'Use this when the user task truly requires command execution but this Windows device has no Git Bash or WSL. It downloads the official Git for Windows installer, verifies it when a checksum is available, and opens the installer. The user must approve this external installation action and complete the Windows installer before retrying Bash work. Do not use merely to inspect files or answer questions.',
+      promptSnippet: 'InstallWindowsShell: install Git for Windows to provide Git Bash when a task truly needs Bash commands.',
+      parameters: Type.Object({}),
+      async execute() {
+        const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+        const manifest = await fetchInstallerManifest()
+        const source = findInstallerSource(manifest, 'git-for-windows', arch)
+        if (!source) {
+          throw new Error(`未找到当前设备（${arch}）对应的 Git for Windows 安装包`)
+        }
+
+        const result = await downloadInstaller(source, `agent-git-for-windows-${ctx.sessionId}`)
+        await launchInstaller(result.filePath)
+        return jsonToolResult({
+          installer: 'git-for-windows',
+          version: source.version,
+          filePath: result.filePath,
+          message: '已下载并打开 Git for Windows 安装程序。请完成安装后重试原任务；Profer 会在下次运行时自动检测 Git Bash。',
+        })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
 export async function buildPiBuiltinTools(
   sdk: PiSdk,
   ctx: PiBuiltinToolsContext,
@@ -749,6 +789,13 @@ export async function buildPiBuiltinTools(
   }
 
   // nano-banana 当前走外部 MCP stdio，不需要 in-process 桥接
+
+  // 未配置 Windows Shell 时，按需提供 Git Bash 安装工具；实际下载与拉起安装器仍经过 Agent 权限确认。
+  try {
+    tools.push(...buildWindowsShellInstallerTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 Windows Shell 安装工具失败:', error)
+  }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)
   tools.push(...cloudTools)

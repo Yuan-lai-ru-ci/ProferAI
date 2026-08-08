@@ -26,6 +26,7 @@ import {
   applyThemeToDOM,
   applyInterfaceVariantToDOM,
   initializeTheme,
+  handleSkinsChanged,
 } from './atoms/theme'
 import {
   agentChannelIdAtom,
@@ -153,6 +154,11 @@ function ThemeInitializer(): null {
       cleanup?.()
     }
   }, [setThemeMode, setSystemIsDark, setThemeStyle, setInterfaceVariant])
+
+  // 皮肤安装/删除/刷新广播：多窗口同步刷新（其他窗口导入/删除皮肤时本窗口立即生效）
+  useEffect(() => {
+    return window.electronAPI.onSkinsChanged((payload) => { void handleSkinsChanged(payload) })
+  }, [])
 
   // 响应式应用主题到 DOM
   // 用 useMemo 计算"实际会影响 DOM 的状态签名"作为唯一依赖：

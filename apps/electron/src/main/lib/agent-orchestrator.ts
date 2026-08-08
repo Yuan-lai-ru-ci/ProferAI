@@ -30,7 +30,7 @@ import {
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@profer/shared'
 import { AgentEventBus } from './agent-event-bus'
-import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig } from './channel-manager'
+import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig, persistCodexOAuthCredentials, resolveCodexOAuthCredentials } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
@@ -358,6 +358,38 @@ export class AgentOrchestrator {
       if (!channel) {
         console.warn('[Agent 标题生成] 渠道不存在:', channelId)
         return null
+      }
+
+      if (channel.provider === 'xai') {
+        // xAI subscription uses Pi's provider-specific OAuth transport; title generation's
+        // generic channel adapter only understands API keys, so retain a local deterministic title.
+        return createFallbackTitle(userMessage)
+      }
+
+      if (channel.provider === 'openai-codex') {
+        const fallbackTitle = createFallbackTitle(userMessage)
+        try {
+          const [credentials, proxyUrl] = await Promise.all([
+            resolveCodexOAuthCredentials(channelId),
+            getEffectiveProxyUrl(),
+          ])
+          const generatedTitle = await generateCodexTitle({
+            modelId,
+            prompt: TITLE_PROMPT + userMessage,
+            credentials,
+            proxyUrl,
+            onCredentialsRefreshed: (refreshed) => persistCodexOAuthCredentials(channelId, refreshed),
+          })
+          const title = generatedTitle ? sanitizeGeneratedTitle(generatedTitle) : null
+          if (title) {
+            console.log(`[Agent 标题生成] ChatGPT OAuth 语义标题生成成功: "${title}"`)
+            return title
+          }
+          console.warn('[Agent 标题生成] ChatGPT OAuth 返回空标题，使用本地兜底')
+        } catch (error) {
+          console.warn('[Agent 标题生成] ChatGPT OAuth 语义标题生成失败，使用本地兜底:', error)
+        }
+        return fallbackTitle
       }
 
       let apiKey: string

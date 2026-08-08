@@ -353,6 +353,8 @@ export const SKIN_IPC_CHANNELS = {
   OPEN_USER_FOLDER: 'skins:open-user-folder',
   OPEN_TEMPLATE_FOLDER: 'skins:open-template-folder',
   REFRESH: 'skins:refresh',
+  /** 皮肤安装/删除/刷新后广播给所有窗口（多窗口同步刷新） */
+  ON_SKINS_CHANGED: 'skins:changed',
 } as const
 
 export const SETTINGS_IPC_CHANNELS = {

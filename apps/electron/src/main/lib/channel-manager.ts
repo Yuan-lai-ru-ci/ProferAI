@@ -17,16 +17,21 @@ import type {
   ChannelsConfig,
   ChannelTestResult,
   ChannelModel,
+  CodexOAuthCredentials,
   FetchModelsInput,
   FetchModelsResult,
   ProviderType,
+  XaiOAuthCredentials,
 } from '@profer/shared'
-import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, supportsProviderPlanQuota } from '@profer/shared'
+import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, isCodexCredentialExpired, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getProferUserAgent } from '@profer/core'
 import { parseMiniMaxGeneralQuotaWindows } from './channel-plan-quota-parsers'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
+import { refreshCodexOAuth } from './codex-oauth-service'
+import { refreshXaiOAuth } from './xai-oauth-service'
+import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
 import { isCommercialBuild } from './build-target'
 import {
   inferAgentBaseUrl,
@@ -492,6 +497,129 @@ export function decryptApiKey(channelId: string): string {
   }
 
   return decryptKey(channel.apiKey)
+}
+
+/**
+ * 进行中的 codex token 刷新（按 channelId 去重）。
+ *
+ * 多个 Agent 会话可能并发触发同一渠道的 token 刷新；若不去重会造成对
+ * OpenAI token 端点的重复请求，且后写覆盖先写。此 Map 保证同一渠道同一时刻
+ * 只有一次刷新在飞行，其余调用复用同一 Promise。
+ */
+const inflightCodexRefresh = new Map<string, Promise<CodexOAuthCredentials>>()
+
+/** 保存 Pi 或 Profer 刷新后的完整 Codex OAuth 凭据。 */
+export function persistCodexOAuthCredentials(channelId: string, credentials: CodexOAuthCredentials): void {
+  const channel = getChannelById(channelId)
+  if (!channel || channel.provider !== 'openai-codex') {
+    throw new Error(`Codex 渠道不存在或类型不匹配: ${channelId}`)
+  }
+
+  const existing = parseCodexCredentials(decryptKey(channel.apiKey))
+  const merged = {
+    ...credentials,
+    accountId: credentials.accountId ?? existing?.accountId,
+  }
+  updateChannel(channelId, { apiKey: serializeCodexCredentials(merged) })
+}
+
+/**
+ * 解析渠道存储的 ChatGPT (Codex) OAuth 凭据，按需刷新并回写。
+ * Pi runtime 必须接收完整 credential，才能在长时间运行时按真实 expires 刷新 token。
+ */
+export async function resolveCodexOAuthCredentials(channelId: string): Promise<CodexOAuthCredentials> {
+  const config = readConfig()
+  const channel = config.channels.find((c) => c.id === channelId)
+  if (!channel) {
+    throw new Error(`渠道不存在: ${channelId}`)
+  }
+
+  const credentials = parseCodexCredentials(decryptKey(channel.apiKey))
+  if (!credentials) {
+    throw new Error('ChatGPT 登录凭据无效或缺失，请重新登录')
+  }
+
+  if (!isCodexCredentialExpired(credentials)) {
+    return credentials
+  }
+
+  const existing = inflightCodexRefresh.get(channelId)
+  if (existing) return existing
+
+  const refreshPromise = (async (): Promise<CodexOAuthCredentials> => {
+    try {
+      const refreshed = await refreshCodexOAuth(credentials.refresh)
+      const merged = {
+        ...refreshed,
+        accountId: refreshed.accountId ?? credentials.accountId,
+      }
+      persistCodexOAuthCredentials(channelId, merged)
+      return merged
+    } finally {
+      inflightCodexRefresh.delete(channelId)
+    }
+  })()
+
+  inflightCodexRefresh.set(channelId, refreshPromise)
+  return refreshPromise
+}
+
+/** 返回当前有效的 Codex access token，兼容只需要 bearer token 的调用方。 */
+export async function resolveCodexAccessToken(channelId: string): Promise<string> {
+  return (await resolveCodexOAuthCredentials(channelId)).access
+}
+
+/** 保存 Pi 或 Profer 刷新后的完整 xAI OAuth 凭据。 */
+export function persistXaiOAuthCredentials(channelId: string, credentials: XaiOAuthCredentials): void {
+  const channel = getChannelById(channelId)
+  if (!channel || channel.provider !== 'xai') {
+    throw new Error(`xAI 渠道不存在或类型不匹配: ${channelId}`)
+  }
+  updateChannel(channelId, { apiKey: serializeXaiCredentials(credentials) })
+  rememberXaiOAuthCredentials(channelId, credentials, true)
+}
+
+/** 解析 xAI（Grok/X 订阅）凭据，按 expiry 刷新并回写加密渠道存储。 */
+export async function resolveXaiOAuthCredentials(channelId: string): Promise<XaiOAuthCredentials> {
+  const config = readConfig()
+  const channel = config.channels.find((c) => c.id === channelId)
+  if (!channel || channel.provider !== 'xai') {
+    throw new Error('xAI 订阅渠道不存在或类型不匹配')
+  }
+  const credentials = parseXaiCredentials(decryptKey(channel.apiKey))
+  if (!credentials) throw new Error('xAI 登录凭据无效或缺失，请重新登录')
+  if (!isXaiCredentialExpired(credentials)) {
+    return rememberXaiOAuthCredentials(channelId, credentials)
+  }
+
+  const refreshed = await refreshXaiOAuthCredentialsSerial(
+    channelId,
+    credentials,
+    (current) => refreshXaiOAuth(current.refresh),
+  )
+  persistXaiOAuthCredentials(channelId, refreshed)
+  return refreshed
+}
+
+export async function resolveXaiAccessToken(channelId: string): Promise<string> {
+  return (await resolveXaiOAuthCredentials(channelId)).access
+}
+
+/**
+ * 解析渠道运行时实际使用的认证 token。
+ *
+ * 普通渠道直接解密 API Key；ChatGPT (Codex) OAuth 渠道的 apiKey 字段存储的是
+ * OAuth 凭据 JSON，运行时必须取出 access token 并按需刷新。
+ */
+export async function resolveChannelRuntimeApiKey(channelId: string): Promise<string> {
+  const channel = getChannelById(channelId)
+  if (!channel) {
+    throw new Error(`渠道不存在: ${channelId}`)
+  }
+
+  if (channel.provider === 'openai-codex') return resolveCodexAccessToken(channelId)
+  if (channel.provider === 'xai') return resolveXaiAccessToken(channelId)
+  return decryptApiKey(channelId)
 }
 
 /**

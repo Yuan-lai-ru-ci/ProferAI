@@ -17,6 +17,28 @@ import { DEFAULT_INTERFACE_VARIANT, type InterfaceVariant, type SkinInfo, type T
 const THEME_CACHE_KEY = 'profer-theme-mode'
 const THEME_STYLE_CACHE_KEY = 'profer-theme-style'
 const INTERFACE_VARIANT_CACHE_KEY = 'profer-interface-variant'
+/** 当前皮肤 tone 缓存：供 index.html 首帧防闪烁脚本推断 dark 类（皮肤注册表需 IPC 才能读取） */
+const SKIN_TONE_CACHE_KEY = 'profer-skin-tone'
+
+/** 读取缓存的皮肤 tone（'dark' | 'light' | null） */
+function getCachedSkinTone(): 'dark' | 'light' | null {
+  try {
+    const cached = localStorage.getItem(SKIN_TONE_CACHE_KEY)
+    if (cached === 'dark' || cached === 'light') return cached
+  } catch {
+    // localStorage 不可用时忽略
+  }
+  return null
+}
+
+/** 缓存皮肤 tone 到 localStorage */
+function cacheSkinTone(tone: 'dark' | 'light'): void {
+  try {
+    localStorage.setItem(SKIN_TONE_CACHE_KEY, tone)
+  } catch {
+    // localStorage 不可用时忽略
+  }
+}
 
 /**
  * 从 localStorage 读取缓存的主题模式
@@ -150,7 +172,20 @@ export async function loadSkins(force = false): Promise<SkinInfo[]> {
 const SKIN_STYLE_ID = 'skin-css'
 /** CSS 注入代数序号：仅接受最新一次请求的结果，防快速切换皮肤时旧请求覆盖新 CSS */
 let skinCssGeneration = 0
-async function applySkinCss(id: string): Promise<void> {
+/**
+ * 注入皮肤 CSS 到 <style id="skin-css">。
+ * 幂等（默认）：皮肤 class 已就位且 style 元素已有内容时直接短路，
+ * 避免重复 IPC + style.textContent 赋值触发的全文档样式重算（P0）。
+ * force=true 用于手动刷新皮肤库后强制重注入。
+ */
+async function applySkinCss(id: string, force = false): Promise<void> {
+  if (!force) {
+    const html = document.documentElement
+    if (html.classList.contains(`skin-${id}`)) {
+      const existing = document.getElementById(SKIN_STYLE_ID) as HTMLStyleElement | null
+      if (existing && existing.textContent) return
+    }
+  }
   const generation = ++skinCssGeneration
   const css = await window.electronAPI.getSkinCss(id).catch(() => null)
   // 注入期间又发起了新的切换，丢弃本次结果（class 已切换为更新的皮肤）
@@ -167,8 +202,28 @@ async function applySkinCss(id: string): Promise<void> {
 }
 export async function refreshSkinRegistry(currentStyle?: ThemeStyle): Promise<SkinInfo[]> {
   const skins = await loadSkins(true)
-  if (currentStyle && skins.some((skin) => skin.id === currentStyle)) await applySkinCss(currentStyle)
+  if (currentStyle && skins.some((skin) => skin.id === currentStyle)) await applySkinCss(currentStyle, true)
   return skins
+}
+
+/**
+ * 处理主进程皮肤变更广播（安装/删除/刷新）：刷新注册表并同步当前窗口。
+ * - 当前激活皮肤被删除 → 回退默认深色主题
+ * - 当前激活皮肤仍存在 → 强制重注入 CSS（文件可能已变更）
+ */
+export async function handleSkinsChanged(payload: { deletedId: string | null }): Promise<void> {
+  const store = getDefaultStore()
+  const skins = await loadSkins(true)
+  const mode = store.get(themeModeAtom)
+  const style = store.get(themeStyleAtom)
+  if (mode !== 'special' || style === 'default') return
+  if (payload.deletedId && payload.deletedId === style) {
+    // 当前皮肤被删除：回退默认深色（themeMode/themeStyle 变化会自动触发 applyThemeToDOM）
+    await Promise.all([updateThemeMode('dark'), updateThemeStyle('default')])
+    applyThemeToDOM('dark', 'default')
+  } else if (skins.some((skin) => skin.id === style)) {
+    await applySkinCss(style, true)
+  }
 }
 
 /**
@@ -193,6 +248,8 @@ export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = '
     if (skin) {
       targetSkinClass = `skin-${themeStyle}`
       targetIsDark = skin.tone === 'dark'
+      // 持久化 tone，供下次启动时 index.html 首帧防闪烁脚本推断 dark 类
+      cacheSkinTone(skin.tone)
       void applySkinCss(themeStyle)
     } else {
       targetStyleClass = `theme-${themeStyle}`
