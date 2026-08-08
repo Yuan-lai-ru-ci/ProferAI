@@ -1,0 +1,12 @@
+{
+  "id": "girls-band-light",
+  "name": "少女乐队·午后练习室",
+  "tone": "light",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "少女乐队·午后练习室 — 奶白淡粉与午后阳光里的品红少女心",
+  "titlebar": {
+    "color": "#fbf1f5",
+    "symbolColor": "#d02068"
+  }
+}

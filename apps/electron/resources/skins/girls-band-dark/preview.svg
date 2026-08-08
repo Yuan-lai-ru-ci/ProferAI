@@ -1,0 +1,35 @@
+<svg width="198" height="366" viewBox="0 0 198 366" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 深紫黑舞台底色 -->
+  <rect width="198" height="366" rx="16" fill="#17111D"/>
+  <!-- 侧栏 -->
+  <rect x="12" y="14" width="42" height="338" rx="9" fill="#1D1520"/>
+  <rect x="19" y="25" width="18" height="5" rx="2.5" fill="#EAE2E7" fill-opacity=".9"/>
+  <rect x="19" y="52" width="28" height="7" rx="3.5" fill="#2E2433"/>
+  <rect x="19" y="68" width="24" height="5" rx="2.5" fill="#918B95" fill-opacity=".62"/>
+  <rect x="16" y="87" width="34" height="23" rx="6" fill="#332A38"/>
+  <rect x="16" y="87" width="2" height="23" rx="1" fill="#F02F8E"/>
+  <rect x="22" y="96" width="20" height="5" rx="2.5" fill="#EAE2E7" fill-opacity=".88"/>
+  <rect x="19" y="126" width="27" height="5" rx="2.5" fill="#918B95" fill-opacity=".5"/>
+  <rect x="19" y="142" width="20" height="5" rx="2.5" fill="#918B95" fill-opacity=".4"/>
+  <!-- 主画布 -->
+  <rect x="65" y="14" width="121" height="338" rx="10" fill="#120D16"/>
+  <rect x="77" y="29" width="42" height="6" rx="3" fill="#EAE2E7" fill-opacity=".9"/>
+  <rect x="77" y="45" width="71" height="4" rx="2" fill="#918B95" fill-opacity=".62"/>
+  <!-- 用户气泡（紫罗兰） -->
+  <rect x="117" y="70" width="57" height="26" rx="9" fill="#8D6DF0" fill-opacity=".28"/>
+  <rect x="126" y="79" width="38" height="4" rx="2" fill="#EAE2E7" fill-opacity=".75"/>
+  <!-- 助手气泡 -->
+  <rect x="77" y="106" width="75" height="42" rx="9" fill="#271E2C"/>
+  <rect x="87" y="118" width="45" height="4" rx="2" fill="#EAE2E7" fill-opacity=".72"/>
+  <rect x="87" y="131" width="55" height="4" rx="2" fill="#918B95" fill-opacity=".5"/>
+  <rect x="96" y="158" width="70" height="49" rx="9" fill="#2E2433" stroke="#8D6DF0" stroke-opacity=".5"/>
+  <rect x="106" y="170" width="47" height="4" rx="2" fill="#EAE2E7" fill-opacity=".68"/>
+  <rect x="106" y="184" width="35" height="4" rx="2" fill="#918B95" fill-opacity=".48"/>
+  <circle cx="152" cy="183" r="7" fill="#8D6DF0"/>
+  <rect x="77" y="217" width="16" height="4" rx="2" fill="#F02F8E"/>
+  <!-- 输入框 -->
+  <rect x="77" y="286" width="97" height="48" rx="11" fill="#221A26" stroke="#F02F8E" stroke-opacity=".55"/>
+  <rect x="88" y="304" width="50" height="4" rx="2" fill="#918B95" fill-opacity=".55"/>
+  <circle cx="159" cy="310" r="9" fill="#F02F8E"/>
+  <path d="M155 310h8M159 306v8" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

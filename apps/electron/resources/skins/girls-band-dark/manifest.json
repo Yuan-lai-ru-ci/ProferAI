@@ -1,0 +1,12 @@
+{
+  "id": "girls-band-dark",
+  "name": "少女乐队·霓虹夜演",
+  "tone": "dark",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "少女乐队·霓虹夜演 — Live House 舞台灯光下的品红霓虹",
+  "titlebar": {
+    "color": "#1a1420",
+    "symbolColor": "#f02f8e"
+  }
+}
