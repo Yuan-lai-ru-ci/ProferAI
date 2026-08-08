@@ -16,6 +16,7 @@ describe('Pi Harness diagnostics', () => {
   test('事件脱敏且保留结构化决策字段', () => {
     const event = toPiHarnessDiagnosticEvent('session-1', decision, new Date('2026-08-07T05:00:00.000Z'))
     expect(event).toEqual({
+      schemaVersion: 1,
       timestamp: '2026-08-07T05:00:00.000Z',
       sessionId: 'session-1',
       runtime: 'pi',
@@ -28,6 +29,12 @@ describe('Pi Harness diagnostics', () => {
     expect(JSON.stringify(event)).not.toContain('不应写入')
   })
 
+  test('turnId 可选透传，sessionId 超长截断', () => {
+    const event = toPiHarnessDiagnosticEvent('x'.repeat(500), decision, new Date('2026-08-07T05:00:00.000Z'), 'turn-42')
+    expect(event.turnId).toBe('turn-42')
+    expect(event.sessionId.length).toBeLessThanOrEqual(128)
+  })
+
   test('诊断 sink 追加合法 JSONL，写入失败不抛出', () => {
     const dir = mkdtempSync(join(tmpdir(), 'profer-harness-'))
     const file = join(dir, 'nested', 'events.jsonl')
@@ -35,6 +42,7 @@ describe('Pi Harness diagnostics', () => {
     appendPiHarnessDiagnostic('session-2', { ...decision, action: 'none', reason: 'validated' }, file)
     const lines = readFileSync(file, 'utf-8').trim().split('\n').map((line) => JSON.parse(line))
     expect(lines).toHaveLength(2)
+    expect(lines[0].schemaVersion).toBe(1)
     const directoryTarget = join(dir, 'directory-target')
     mkdirSync(directoryTarget)
     expect(() => appendPiHarnessDiagnostic('session-3', decision, directoryTarget)).not.toThrow()
