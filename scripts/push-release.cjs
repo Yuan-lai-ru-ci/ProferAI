@@ -154,8 +154,10 @@ function tryRun(cmd, cwd = ROOT) {
       ? `--notes-file "${notesFile}"`
       : `--notes "Profer ${TAG}"`;
 
+    // 先注入环境变量（Windows cmd 不认 export 前缀，直接 set process.env）
+    process.env.GITHUB_TOKEN = GITHUB_TOKEN
     // 先创建 draft（不带资产）
-    let rel = tryRun(`export GITHUB_TOKEN='${GITHUB_TOKEN}' && ${ghExe} release create ${TAG} --repo ${GH_REPO} --title "${TAG}" ${notesArg} --draft`, ROOT);
+    let rel = tryRun(`${ghExe} release create ${TAG} --repo ${GH_REPO} --title "${TAG}" ${notesArg} --draft`, ROOT);
     if (!rel.ok && /already exists|already_exists|HTTP 422/i.test(rel.out)) {
       rel = { ok: true, out: '' };
     }
@@ -163,11 +165,11 @@ function tryRun(cmd, cwd = ROOT) {
       // 逐个上传资产
       for (const a of assets) {
         const name = path.basename(a);
-        const up = tryRun(`export GITHUB_TOKEN='${GITHUB_TOKEN}' && ${ghExe} release upload ${TAG} "${a}" --repo ${GH_REPO}`, ROOT);
+        const up = tryRun(`${ghExe} release upload ${TAG} "${a}" --repo ${GH_REPO}`, ROOT);
         console.log(`    ${name}: ${up.ok ? 'ok' : up.out.slice(-80)}`);
       }
       // 发布 draft
-      const pub = tryRun(`export GITHUB_TOKEN='${GITHUB_TOKEN}' && ${ghExe} release edit ${TAG} --repo ${GH_REPO} --draft=false`, ROOT);
+      const pub = tryRun(`${ghExe} release edit ${TAG} --repo ${GH_REPO} --draft=false`, ROOT);
       console.log('  publish: ' + (pub.ok ? 'ok' : pub.out.slice(-80)));
     } else {
       console.log('  release: ' + rel.out.slice(-200));
