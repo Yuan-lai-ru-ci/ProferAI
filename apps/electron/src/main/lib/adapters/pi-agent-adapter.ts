@@ -29,7 +29,7 @@ import type {
 } from '@profer/shared'
 import { isCodexFastModeSupportedModel } from '@profer/shared'
 import type { ProjectInstructionSource } from '../project-instruction-resolver'
-import type { ProferProjectInstructionFile } from '../project-instruction-file'
+import type { ProferProjectInstructionFile } from './pi-resource-loader-overrides'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -124,7 +124,9 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   piAgentDir: string
   piSessionDir: string
   customTools?: ToolDefinition[]
-  onSessionId?: (sdkSessionId: string) => void
+  onSessionId?: (sdkSessionId: string, sessionFile?: string) => void
+  /** Profer assistant UI UUID → Pi 树状 session entry ID 的持久映射；分叉/回退依赖它定位 branch 点。 */
+  onPiEntryBindings?: (bindings: Record<string, string>) => void
   onModelResolved?: (model: string) => void
   onContextWindow?: (contextWindow: number) => void
   onRetry?: (update: import('./pi-retry-control').PiRetryUpdate) => void
@@ -239,13 +241,16 @@ function isNonNegativeFiniteNumber(value: number | undefined): value is number {
 export function buildPiRemoteConnectionSettings(
   input: Pick<
     PiAgentQueryOptions,
-    'proxyUrl' | 'runtimeEnv' | 'transport' | 'httpIdleTimeoutMs' | 'websocketConnectTimeoutMs'
+    'provider' | 'proxyUrl' | 'runtimeEnv' | 'transport' | 'httpIdleTimeoutMs' | 'websocketConnectTimeoutMs'
   >,
 ): PiRemoteConnectionSettings {
   const httpProxy = resolvePiHttpProxy(input)
+  // Node/Electron 的 WebSocket 不支持请求级 HTTP 代理注入；有代理的 Codex
+  // 默认改走可由 undici dispatcher 承载的 SSE。用户显式选择 transport 时保留其意图。
+  const transport = input.transport ?? (httpProxy && input.provider === 'openai-codex' ? 'sse' : undefined)
   return {
     ...(httpProxy ? { httpProxy } : {}),
-    ...(input.transport ? { transport: input.transport } : {}),
+    ...(transport ? { transport } : {}),
     ...(isNonNegativeFiniteNumber(input.httpIdleTimeoutMs) ? { httpIdleTimeoutMs: input.httpIdleTimeoutMs } : {}),
     ...(isNonNegativeFiniteNumber(input.websocketConnectTimeoutMs)
       ? { websocketConnectTimeoutMs: input.websocketConnectTimeoutMs }
@@ -1597,7 +1602,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         cwd,
         agentDir: input.piAgentDir,
         settingsManager,
-        noSkills: true,
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
         ...createProferManagedResourceLoaderOptions(),
@@ -1685,7 +1689,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         throw createAbortError()
       }
 
-      input.onSessionId?.(session.sessionId)
+      input.onSessionId?.(session.sessionId, session.sessionFile)
       input.onModelResolved?.(session.model?.id ?? input.model ?? 'default')
       input.onContextWindow?.(model.contextWindow ?? DEFAULT_CONTEXT_WINDOW)
 
@@ -1707,6 +1711,20 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // 等 compaction 生命周期到终态（compaction_end / agent_settled）再 settle。
       let pendingNativeOverflowRecovery = false
       let pendingTerminalResult: SDKMessage | undefined
+
+      // message_end 发生在 Pi 落盘前；保留对象身份，待 prompt 完成后从
+      // SessionManager entries 精确取得 Pi entry ID，绝不按文本猜测。
+      const finalAssistantUuids = new Map<AssistantMessage, string>()
+
+      const persistPiEntryBindings = (): void => {
+        const bindings: Record<string, string> = {}
+        for (const entry of sessionManager.getEntries()) {
+          if (entry.type !== 'message' || entry.message.role !== 'assistant') continue
+          const uuid = finalAssistantUuids.get(entry.message as AssistantMessage)
+          if (uuid) bindings[uuid] = entry.id
+        }
+        if (Object.keys(bindings).length > 0) input.onPiEntryBindings?.(bindings)
+      }
 
       const assistantUuidFor = (): string => {
         if (!activeAssistant.uuid) {
@@ -1751,12 +1769,16 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 break
               }
               const isAssistant = isAssistantPiMessage(event.message)
+              const assistantUuid = isAssistant ? assistantUuidFor() : undefined
               const converted = convertPiMessage(event.message, session.sessionId, input.model, {
                 final: true,
-                ...(isAssistant && { uuid: assistantUuidFor() }),
+                ...(assistantUuid && { uuid: assistantUuid }),
               })
               const isRetryableAssistantError = isAssistant && (event.message as AssistantMessage).stopReason === 'error'
-              if (isRetryableAssistantError && converted?.type === 'assistant') {
+              if (isRetryableAssistantError && converted?.type === 'assistant' && assistantUuid) {
+                // Native retry 会丢弃该失败 assistant；不应消耗 Proma 的 turn/budget 配额。
+                // 关键：此处不能重置 UUID。retry 后的新 partial/final 必须原地替换此前
+                // 已经展示的 partial，避免用户同时看到断流残片和恢复后的完整回答。
                 retryTerminalGate.defer({
                   assistantMessage: event.message as AssistantMessage,
                   sdkMessage: converted,
@@ -1764,6 +1786,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               } else {
                 runtimeGuard.recordMessage(event.message)
                 if (converted && (converted.type !== 'user' || hasToolResult(converted))) queue.push(converted)
+                if (isAssistant && assistantUuid) {
+                  finalAssistantUuids.set(event.message as AssistantMessage, assistantUuid)
+                }
               }
               if (isAssistant) {
                 activeAssistant = {}
@@ -1963,6 +1988,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               queue.push(pendingTerminalResult)
               pendingTerminalResult = undefined
             }
+            // prompt 链结束后 Pi 已落盘；此时从 SessionManager entries 精确取得 entry ID 映射，
+            // 供分叉/回退定位 branch 点使用。
+            persistPiEntryBindings()
             // 本轮决策写入诊断事件（尽力而为，不阻塞主流程；compact 场景无 harness）。
             if (harness) {
               appendPiHarnessDiagnostic(input.sessionId, harness.createDecision())

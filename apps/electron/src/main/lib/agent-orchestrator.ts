@@ -58,6 +58,8 @@ import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner
 import { getAdapter, fetchTitle } from '@profer/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
+import { generateCodexTitle } from './adapters/pi-codex-title-generator'
+import { createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
 import { isCommercialBuild } from './build-target'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, ensurePluginManifest } from './agent-workspace-manager'
@@ -1327,7 +1329,7 @@ export class AgentOrchestrator {
           stderrChunks.push(data)
           console.error(`[Agent SDK stderr] ${data}`)
         },
-        onSessionId: (sdkSessionId: string) => {
+        onSessionId: (sdkSessionId: string, piSessionFile?: string) => {
           // 仅在 session_id 真正变化时才持久化。SDK v2 几乎每条消息都会回调 onSessionId，
           // 旧逻辑误用「初始快照后永不更新」的 existingSdkSessionId 作比较（回调里更新的是
           // capturedSdkSessionId），导致新会话每条消息都全量读写会话索引（readIndex + 原子写 +
@@ -1335,10 +1337,18 @@ export class AgentOrchestrator {
           // 卡死主进程事件循环。capturedSdkSessionId 已初始化为 existingSdkSessionId，并在
           // session-not-found 重试时与其同步重置，比较它即可正确判定「真正变化」。
           const isNewSessionId = sdkSessionId !== capturedSdkSessionId
+          const latestSessionMeta = getAgentSessionMeta(sessionId)
+          // Pi 同一 artifact 的每条消息都可能回调；仅在 artifact 真正更换（recovery 新建）时
+          // 视为替换，此时旧 entry bindings 属于另一棵 Pi tree，必须原子替换而非合并。
+          const artifactReplaced = !!piSessionFile && latestSessionMeta?.piSessionFile !== piSessionFile
           capturedSdkSessionId = sdkSessionId
-          if (isNewSessionId) {
+          if (isNewSessionId || artifactReplaced) {
             try {
-              updateAgentSessionMeta(sessionId, { sdkSessionId })
+              updateAgentSessionMeta(sessionId, {
+                sdkSessionId,
+                ...(piSessionFile ? { piSessionFile } : {}),
+                ...(artifactReplaced ? { piEntryBindings: {} } : {}),
+              })
               console.log(`[Agent 编排] 已保存 SDK session_id: ${sdkSessionId}`)
             } catch (err) {
               console.error(`[Agent 编排] 保存 SDK session_id 失败:`, err)
@@ -1365,6 +1375,13 @@ export class AgentOrchestrator {
           this.eventBus.emit(sessionId, {
             kind: 'profer_event',
             event: { type: 'context_window', contextWindow: cw },
+          })
+        },
+        // Pi 会话分叉/回退依赖 assistant UUID → Pi entry ID 映射；每轮落盘后合并增量映射。
+        onPiEntryBindings: (bindings: Record<string, string>) => {
+          const latest = getAgentSessionMeta(sessionId)
+          updateAgentSessionMeta(sessionId, {
+            piEntryBindings: { ...(latest?.piEntryBindings ?? {}), ...bindings },
           })
         },
         onRetry: (retry: PiRetryUpdate) => {

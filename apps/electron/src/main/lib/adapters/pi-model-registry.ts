@@ -345,7 +345,7 @@ export async function listCodexModels(): Promise<{ id: string; name: string }[]>
   return (await getCodexCatalogModels()).map((m) => ({ id: m.id, name: m.name }))
 }
 
-export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
+export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions): Promise<{ modelRuntime: Awaited<ReturnType<PiSdk['ModelRuntime']['create']>>; model: PiCatalogModel }> {
   if (input.provider === 'openai-codex') {
     return input.codexOAuthCredentials
       ? buildCodexModel(sdk, {
@@ -356,14 +356,15 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
       : buildCodexModelWithRuntimeKey(sdk, input)
   }
   if (input.provider === 'xai') {
-    return input.xaiOAuthCredentials
-      ? buildXaiOAuthModel(sdk, {
-          channelId: input.channelId,
-          model: input.model,
-          xaiOAuthCredentials: input.xaiOAuthCredentials,
-          onXaiOAuthCredentialsRefreshed: input.onXaiOAuthCredentialsRefreshed,
-        })
-      : undefined
+    if (!input.xaiOAuthCredentials) {
+      throw new Error('xAI OAuth 凭据缺失，请重新登录')
+    }
+    return buildXaiOAuthModel(sdk, {
+      channelId: input.channelId,
+      model: input.model,
+      xaiOAuthCredentials: input.xaiOAuthCredentials,
+      onXaiOAuthCredentialsRefreshed: input.onXaiOAuthCredentialsRefreshed,
+    })
   }
   const providerName = `profer-${input.provider}-${input.sessionId}`
   const resolvedApiKey = resolvePiApiKey(input.provider, input.apiKey)
@@ -464,7 +465,7 @@ function createCodexRuntimeCredentialStore(
  * 一次性内存 credential store，按真实 expires 刷新并回写 Profer，避免读写全局 ~/.pi。
  * 标题生成等轻量请求使用此入口；前台 Agent query 仍走 buildModel。
  */
-export async function buildCodexOAuthModel(sdk: PiSdk, input: CodexModelInput) {
+export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
   if (!input.codexOAuthCredentials) {
     throw new Error('ChatGPT (Codex) OAuth 凭据缺失，请重新登录')
   }
