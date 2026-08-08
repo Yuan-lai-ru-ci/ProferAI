@@ -15,6 +15,9 @@ export const channelsAtom = atom<Channel[]>([])
 /** 渠道列表是否已完成首次加载 */
 export const channelsLoadedAtom = atom(false)
 
+/** 模型选择器打开请求计数（ErrorMessage 的 select_model 恢复操作等全局触发入口；每次请求 +1，ModelSelector 监听到变化后打开 Dialog） */
+export const modelSelectorRequestAtom = atom(0)
+
 /** 选中的模型信息 */
 export interface SelectedModel {
   channelId: string

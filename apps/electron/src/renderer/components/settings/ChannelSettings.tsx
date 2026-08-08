@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, Server, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -15,6 +15,7 @@ import type { Channel, ProviderType } from '@profer/shared'
 import { getChannelLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
+import { authStatusAtom } from '@/atoms/identity-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
 import {
   AlertDialog,
@@ -42,6 +43,7 @@ export function ChannelSettings(): React.ReactElement {
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
   const setGlobalChannels = useSetAtom(channelsAtom)
+  const authStatus = useAtomValue(authStatusAtom)
   const [deleteTarget, setDeleteTarget] = React.useState<Channel | null>(null)
   const agentChannelIdsRef = React.useRef(agentChannelIds)
   const agentChannelIdRef = React.useRef(agentChannelId)
@@ -85,20 +87,21 @@ export function ChannelSettings(): React.ReactElement {
     }
   }, [loadCaps])
 
-  /** 加载渠道列表 */
+  /** 加载渠道列表（未登录时隐藏服务端托管的官方渠道，避免残留缓存展示给未登录用户） */
   const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
     try {
       const list = await window.electronAPI.listChannels()
-      setChannels(list)
-      setGlobalChannels(list)
-      return list
+      const visible = authStatus.isLoggedIn ? list : list.filter((c) => !c.id.startsWith('newapi-'))
+      setChannels(visible)
+      setGlobalChannels(visible)
+      return visible
     } catch (error) {
       console.error('[渠道设置] 加载渠道列表失败:', error)
       return []
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [authStatus.isLoggedIn])
 
   React.useEffect(() => {
     loadChannels()

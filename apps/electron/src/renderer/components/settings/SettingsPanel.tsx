@@ -31,6 +31,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
 import type { SettingsTab } from "@/atoms/settings-tab";
 import { appModeAtom } from "@/atoms/app-mode";
+import { authStatusAtom } from "@/atoms/identity-atoms";
 import { hasUpdateAtom } from "@/atoms/updater";
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from "@/atoms/tab-atoms";
 import { hasEnvironmentIssuesAtom } from "@/atoms/environment";
@@ -119,6 +120,9 @@ const TAIL_TABS: SettingsTabItem[] = [
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
+/** 依赖团队账号登录的 Tab（未登录时不展示） */
+const ACCOUNT_TABS: ReadonlySet<SettingsTab> = new Set(["team", "credits", "subscription", "openapi"]);
+
 /** 根据标签页 id 渲染对应内容 */
 function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElement {
   switch (tab) {
@@ -182,6 +186,7 @@ export function SettingsPanel({
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom);
   const [mainTabs, setMainTabs] = useAtom(tabsAtom);
   const setMainActiveTabId = useSetAtom(activeTabIdAtom);
+  const authStatus = useAtomValue(authStatusAtom);
 
   /** 统一的退出拦截对话框状态 */
   type PendingAction = { type: 'tab'; tabId: SettingsTab } | { type: 'close' } | null
@@ -204,11 +209,38 @@ export function SettingsPanel({
     setPendingAction(null)
   }
 
-  // 白名单回退：受限环境（平板）的 activeTab 可能来自外部入口（默认 general / 余额条 credits），
-  // 不在白名单时回落到白名单首项，避免渲染未暴露的桌面设置页（如登录/订阅/代理）。
-  const effectiveTab: SettingsTab = tabsOverride
-    ? (tabsOverride.some((t) => t.id === activeTab) ? activeTab : tabsOverride[0]!.id)
-    : activeTab
+  // 受限环境（平板）传入白名单时直接使用；否则 Agent 模式在渠道后插入 Agent Tab，工具 tab 两种模式都显示。
+  // 未登录时过滤掉依赖团队账号的 Tab（团队管理 / 额度与用量 / 立即订阅 / 开放 API）。
+  const tabs = React.useMemo(() => {
+    const base = tabsOverride
+      ? tabsOverride
+      : appMode === "agent"
+        ? [
+            ...BASE_TABS,
+            AGENT_TAB,
+            TOOLS_TAB,
+            VOICE_INPUT_TAB,
+            BOTS_TAB,
+            TUTORIAL_TAB,
+            SHORTCUTS_TAB,
+            ...TAIL_TABS,
+          ]
+        : [
+            ...BASE_TABS,
+            TOOLS_TAB,
+            VOICE_INPUT_TAB,
+            BOTS_TAB,
+            TUTORIAL_TAB,
+            SHORTCUTS_TAB,
+            ...TAIL_TABS,
+          ];
+    if (authStatus.isLoggedIn) return base
+    return base.filter((t) => !ACCOUNT_TABS.has(t.id))
+  }, [appMode, tabsOverride, authStatus.isLoggedIn]);
+
+  // 统一回落：activeTab 不在当前可见列表（平板白名单 / 未登录过滤）时回落到首项，
+  // 避免渲染未暴露的设置页（如登录/订阅/团队管理）。
+  const effectiveTab: SettingsTab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0]!.id
 
   /** 切换标签页时检测是否有未保存内容，tutorial 特殊处理：打开 New Tab 并关闭设置 */
   const handleTabChange = (tabId: SettingsTab): void => {
@@ -243,32 +275,6 @@ export function SettingsPanel({
       setCloseRequested(false)
     }
   }, [closeRequested, effectiveTab, setCloseRequested])
-
-  // 受限环境（平板）传入白名单时直接使用；否则 Agent 模式在渠道后插入 Agent Tab，工具 tab 两种模式都显示
-  const tabs = React.useMemo(() => {
-    if (tabsOverride) return tabsOverride
-    if (appMode === "agent") {
-      return [
-        ...BASE_TABS,
-        AGENT_TAB,
-        TOOLS_TAB,
-        VOICE_INPUT_TAB,
-        BOTS_TAB,
-        TUTORIAL_TAB,
-        SHORTCUTS_TAB,
-        ...TAIL_TABS,
-      ];
-    }
-    return [
-      ...BASE_TABS,
-      TOOLS_TAB,
-      VOICE_INPUT_TAB,
-      BOTS_TAB,
-      TUTORIAL_TAB,
-      SHORTCUTS_TAB,
-      ...TAIL_TABS,
-    ];
-  }, [appMode, tabsOverride]);
 
   // 当前 tab 标题
   const activeTabLabel = tabs.find((t) => t.id === effectiveTab)?.label ?? "设置";
