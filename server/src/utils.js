@@ -42,6 +42,13 @@ export function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(stored))
 }
 
+// ===== 无状态令牌哈希 =====
+// 令牌（API Key / refresh / relay）随机熵高，无需加盐：sha256 摘要即防库泄后反推。
+// 所有令牌类凭证只存 hash、按 hash 反查；明文仅出现在响应与内存中。
+export function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex')
+}
+
 // ===== 文件系统 =====
 export function ensureDir(dir) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })

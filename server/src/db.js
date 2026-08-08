@@ -10,6 +10,7 @@
  * 本文件保留：用户管理、渠道管理、relay 令牌、请求日志、API Keys、仪表盘
  */
 import { buildRequestLogInsertSql, buildRequestLogValues } from './request-log-utils.js'
+import { hashToken } from './utils.js'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 
@@ -153,28 +154,67 @@ export function deleteUser(userId) {
 // 设计取舍（与 P1 修复配套声明）：relay 是 per-user 单值、无 TTL、无设备绑定；
 // 任何设备撤销（DELETE /devices/:id、login revokeSlotId、logout）都会轮换，
 // 使所有旧 prelay_ 令牌立即失效。客户端应把 relay 当作短期代理凭证对待。
+//
+// 存储安全：库中只存 hashToken(token)（sha256 hex，64 字符），不存明文。
+// 幂等语义与哈希化的调和（2026-08-08）：
+//  - 库中只存哈希，明文不可逆，因此本进程维护 relayPlainCache 记录最近签发的明文
+//    （单进程 better-sqlite3 部署；进程重启后缓存丢失，首次 ensureRelayToken 轮换一次，
+//     relay 为短期凭证，客户端拿新值即可，不影响功能）；
+//  - 存量明文行带 `prelay_` 前缀（哈希行是无前缀的 64 hex），可精确识别并顺手迁移；
+//  - getUserByRelayToken 查询用 IN (hash, plain) 双匹配，兼容存量明文行；
+//  - rotateRelayToken 更新缓存，保证撤销后缓存不返回已失效明文。
+
+/** 进程内最近签发的 relay 明文（上限 1000 条，超出淘汰最旧） */
+const relayPlainCache = new Map()
+
+function cacheRelayPlain(userId, plain) {
+  relayPlainCache.set(userId, plain)
+  if (relayPlainCache.size > 1000) {
+    const oldest = relayPlainCache.keys().next().value
+    if (oldest !== undefined) relayPlainCache.delete(oldest)
+  }
+}
 
 function generateRelayToken() {
   return `prelay_${crypto.randomBytes(32).toString('hex')}`
 }
 
 export function ensureRelayToken(userId) {
+  // 本进程已签发过 → 幂等复用（多设备登录不打断现有客户端）
+  const cached = relayPlainCache.get(userId)
+  if (cached) return cached
   const row = db.prepare('SELECT relay_token FROM users WHERE id = ?').get(userId)
-  if (row?.relay_token) return row.relay_token
+  if (!row?.relay_token) {
+    const token = generateRelayToken()
+    db.prepare('UPDATE users SET relay_token = ? WHERE id = ?').run(hashToken(token), userId)
+    cacheRelayPlain(userId, token)
+    return token
+  }
+  // 存量明文（prelay_ 前缀）→ 顺手迁移为哈希，返回原明文（客户端仍在用）
+  if (row.relay_token.startsWith('prelay_')) {
+    db.prepare('UPDATE users SET relay_token = ? WHERE id = ?').run(hashToken(row.relay_token), userId)
+    cacheRelayPlain(userId, row.relay_token)
+    return row.relay_token
+  }
+  // 行已是哈希且本进程无缓存明文（如服务端重启后首次）→ 轮换发新 token
   const token = generateRelayToken()
-  db.prepare('UPDATE users SET relay_token = ? WHERE id = ?').run(token, userId)
+  db.prepare('UPDATE users SET relay_token = ? WHERE id = ?').run(hashToken(token), userId)
+  cacheRelayPlain(userId, token)
   return token
 }
 
 export function rotateRelayToken(userId) {
   const token = generateRelayToken()
-  db.prepare('UPDATE users SET relay_token = ? WHERE id = ?').run(token, userId)
+  db.prepare('UPDATE users SET relay_token = ? WHERE id = ?').run(hashToken(token), userId)
+  cacheRelayPlain(userId, token)
   return token
 }
 
 export function getUserByRelayToken(token) {
   if (!token) return undefined
-  return db.prepare('SELECT id, email, is_admin, is_suspended, membership_tier, is_vip FROM users WHERE relay_token = ?').get(token)
+  // IN (hash, plain)：哈希行按 hash 命中；存量明文行按明文命中（平滑兼容）
+  return db.prepare('SELECT id, email, is_admin, is_suspended, membership_tier, is_vip FROM users WHERE relay_token IN (?, ?)')
+    .get(hashToken(token), token)
 }
 
 // ===== 渠道管理 =====

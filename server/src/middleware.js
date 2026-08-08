@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 import { JWT_SECRET, ALLOWED_ORIGIN } from './config.js'
 import { db, getCurrentUserAuthorization, getUserByRelayToken, getApiKeyByHash } from './db.js'
+import { hashToken } from './utils.js'
 import { applyCurrentAuthorization } from './middleware/auth-context.js'
 import { applyCorsHeaders as applyConfiguredCorsHeaders, applySecurityHeaders } from './middleware/cors.js'
 
@@ -21,11 +22,6 @@ export function corsMiddleware(c) {
     // 直接返回 Response 时显式带上前面写入的 CORS/安全头。
     return new Response(null, { status: 204, headers: c.res.headers })
   }
-}
-
-/** token 哈希，用于黑名单查重 */
-export function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex')
 }
 
 // ===== JWT 认证中间件 =====
