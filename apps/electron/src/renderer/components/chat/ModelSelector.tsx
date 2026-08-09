@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { ChevronDown, Cpu, Search } from 'lucide-react'
+import { ChevronDown, Cpu, Search, Layers2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -32,13 +32,21 @@ import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import type { Channel, ModelOption } from '@profer/shared'
+import { getChannelProtocol, getChannelSource, type ChannelProtocol } from '@/lib/channel-model-groups'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
 export const CompactModelSelectorCtx = React.createContext(false)
 
-/** 从渠道列表构建扁平化的模型选项 */
-function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[]): ModelOption[] {
-  const options: ModelOption[] = []
+/**
+ * 从渠道列表构建扁平化的模型选项。
+ *
+ * 多个渠道可能都是同一个平台网关（例如多个 New API 渠道），
+ * 它们提供的同名模型在用户界面上只应出现一次。底层仍保留一个
+ * 代表性 channelId，现有 Chat/Agent 会话协议无需改变；真正的上游
+ * 主备选择由网关完成。
+ */
+function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[], preferredProtocol: ChannelProtocol = 'openai'): ModelOption[] {
+  const optionsByModel = new Map<string, ModelOption>()
 
   for (const channel of channels) {
     if (!channel.enabled) continue
@@ -47,19 +55,27 @@ function buildModelOptions(channels: Channel[], filterChannelId?: string, filter
 
     for (const model of channel.models) {
       if (!model.enabled) continue
+      const protocol = getChannelProtocol(channel.provider)
+      const source = getChannelSource(channel)
+      const key = `${source}:${model.id}`
+      const existing = optionsByModel.get(key)
+      // 同名模型优先选当前运行时需要的协议；同协议重复保留第一个作为代表渠道。
+      if (existing && existing.protocol === preferredProtocol) continue
 
-      options.push({
+      optionsByModel.set(key, {
         channelId: channel.id,
         channelName: channel.name,
         modelId: model.id,
         modelName: model.name,
         provider: channel.provider,
         multiplier: model.multiplier,
+        protocol,
+        channelCount: (existing?.channelCount ?? 0) + 1,
       })
     }
   }
 
-  return options
+  return Array.from(optionsByModel.values())
 }
 
 /** 按渠道分组模型选项 */
@@ -90,6 +106,8 @@ interface ModelSelectorProps {
   showChannelInTrigger?: boolean
   /** 紧凑模式：只显示圆形 logo，不显示文字（窄面板用） */
   compact?: boolean
+  /** 当前调用运行时需要的协议；Pi/Chat 为 OpenAI，Claude Agent 为 Anthropic。 */
+  preferredProtocol?: 'openai' | 'anthropic'
 }
 
 export function ModelSelector({
@@ -99,6 +117,7 @@ export function ModelSelector({
   onModelSelect,
   showChannelInTrigger = false,
   compact: compactProp,
+  preferredProtocol = 'openai',
 }: ModelSelectorProps = {}): React.ReactElement {
   const compactCtx = React.useContext(CompactModelSelectorCtx)
   const compact = compactProp ?? compactCtx
@@ -141,7 +160,7 @@ export function ModelSelector({
     return channels.filter((c) => !c.id.startsWith('newapi-'))
   }, [channels, authStatus.isLoggedIn])
 
-  const modelOptions = React.useMemo(() => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds), [visibleChannels, filterChannelId, filterChannelIds])
+  const modelOptions = React.useMemo(() => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol), [visibleChannels, filterChannelId, filterChannelIds, preferredProtocol])
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
 
   // 搜索过滤
@@ -405,8 +424,16 @@ export function ModelSelector({
                             'flex-1 text-sm truncate',
                             isSelected ? 'font-medium text-foreground' : 'text-foreground/80'
                           )}>
-                            {option.modelName}
+                              {option.modelName}
                           </span>
+                          <span className="shrink-0 text-[10px] text-muted-foreground/70 uppercase">
+                            {option.protocol}
+                          </span>
+                          {(option.channelCount ?? 0) > 1 && (
+                            <span className="shrink-0 inline-flex items-center gap-1 text-[10px] text-muted-foreground" title={`已合并 ${option.channelCount} 个渠道`}>
+                              <Layers2 size={12} />{option.channelCount}
+                            </span>
+                          )}
                           {Number.isFinite(option.multiplier) && (
                             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                               {option.multiplier!.toFixed(2)}x

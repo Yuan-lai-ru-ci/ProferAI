@@ -2537,6 +2537,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       node: (
         <ModelSelector
           filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
+          preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
         />

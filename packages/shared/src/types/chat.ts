@@ -360,6 +360,10 @@ export interface ModelOption {
   provider: ProviderType
   /** 当前用户有效模型倍率（代管渠道由服务端注入）。 */
   multiplier?: number
+  /** 该逻辑模型当前选择的协议候选。 */
+  protocol?: 'openai' | 'anthropic'
+  /** 同名模型被合并的渠道数量，供模型选择器观察路由池。 */
+  channelCount?: number
 }
 
 // ===== 分页加载相关 =====
