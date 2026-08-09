@@ -10,7 +10,7 @@
  * 跑到一半时过期导致 401。
  */
 import { Hono } from 'hono'
-import { listActiveChannels, ensureRelayToken, db } from '../../db.js'
+import { listActiveChannels, ensureRelayToken, getOfficialModelAvailability, db } from '../../db.js'
 import { COMMERCIAL_MODE } from '../../config.js'
 import { DEFAULT_MODELS, normalizeChannelForClient } from '../../shared/channel-utils.js'
 import { syncChannelsFromNewApi } from '../../shared/newapi-channel-sync.js'
@@ -62,4 +62,22 @@ accountChannels.get('/', async (c) => {
   })
 
   return c.json({ commercialMode: true, channels: result })
+})
+
+// GET /v1/account/channels/health — 官方模型最近请求可用性
+accountChannels.get('/health', async (c) => {
+  if (!COMMERCIAL_MODE) return c.json({ commercialMode: false, channels: [] })
+  const channels = listActiveChannels().filter((channel) => channel.id.startsWith('newapi-'))
+  const health = channels.map((channel) => {
+    let models = []
+    try { models = JSON.parse(channel.models_json || '[]') } catch { models = [] }
+    const modelIds = models.map((model) => model.id).filter(Boolean)
+    const modelHealth = getOfficialModelAvailability(modelIds)
+    return {
+      channelId: channel.id,
+      models: modelHealth,
+      updatedAt: modelHealth.reduce((latest, item) => Math.max(latest, item.updatedAt || 0), 0) || null,
+    }
+  })
+  return c.json({ commercialMode: true, channels: health })
 })

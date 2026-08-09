@@ -1305,6 +1305,22 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 获取官方模型最近可用性
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.GET_OFFICIAL_HEALTH,
+    async (): Promise<import('@profer/shared').OfficialChannelHealth[]> => {
+      const auth = await require('./lib/auth-service').getTeamAuthWithRefresh()
+      if (!auth) return []
+      const response = await fetch(`${auth.baseUrl}/v1/account/channels/health`, {
+        headers: { Authorization: `Bearer ${auth.token}` },
+        signal: AbortSignal.timeout(10000),
+      })
+      if (!response.ok) return []
+      const data = await response.json() as { channels?: import('@profer/shared').OfficialChannelHealth[] }
+      return data.channels || []
+    }
+  )
+
   // 创建渠道
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.CREATE,

@@ -374,6 +374,46 @@ function usageLogsCte() {
   `
 }
 
+/**
+ * 按模型获取官方渠道最近请求可用性。
+ * 官方请求均经过 Profer relay，当前 request_logs 不保存渠道 id，
+ * 因此由 account 层按当前官方模型清单筛选，避免把自配渠道统计混入官方状态。
+ */
+export function getOfficialModelAvailability(modelIds, { limit = 50, slowThresholdMs = 8000 } = {}) {
+  const ids = [...new Set(modelIds.filter((id) => typeof id === 'string' && id.trim()))]
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT model, duration_ms, success, created_at
+    FROM request_logs
+    WHERE model IN (${placeholders})
+    ORDER BY created_at DESC
+  `).all(...ids)
+  const grouped = new Map(ids.map((id) => [id, []]))
+  for (const row of rows) {
+    const samples = grouped.get(row.model)
+    if (samples && samples.length < limit) samples.push({
+      status: row.success ? (row.duration_ms >= slowThresholdMs ? 'degraded' : 'success') : 'failure',
+      durationMs: row.duration_ms,
+      createdAt: row.created_at,
+    })
+  }
+  return ids.map((modelId) => {
+    const samples = grouped.get(modelId) || []
+    const valid = samples.filter((sample) => sample.status !== 'degraded' || sample.durationMs >= 0)
+    const successful = valid.filter((sample) => sample.status !== 'failure').length
+    const totalLatency = valid.reduce((sum, sample) => sum + sample.durationMs, 0)
+    return {
+      modelId,
+      availability: valid.length ? Math.round((successful / valid.length) * 100) : null,
+      sampleCount: valid.length,
+      avgLatencyMs: valid.length ? Math.round(totalLatency / valid.length) : null,
+      updatedAt: samples[0]?.createdAt ?? null,
+      samples: samples.reverse(),
+    }
+  })
+}
+
 /** 获取用户请求日志 */
 export function getRequestLogs({ userId, page = 1, limit = 20 } = {}) {
   const offset = (page - 1) * limit
