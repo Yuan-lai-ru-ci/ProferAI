@@ -7,11 +7,11 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Plus, Pencil, Trash2, Server, RefreshCw } from 'lucide-react'
+import { Plus, Pencil, Trash2, Server, RefreshCw, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@profer/shared'
-import type { Channel, ProviderType } from '@profer/shared'
+import type { Channel, OfficialChannelHealth, ProviderType } from '@profer/shared'
 import { getChannelLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
@@ -28,12 +28,16 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ChannelForm } from './ChannelForm'
+import { ModelAvailabilityBar } from './ModelAvailabilityBar'
+import { isOfficialChannel } from '@/lib/channel-model-groups'
+import { aggregateModelHealth } from '@/lib/channel-health-aggregation'
 
 /** 组件视图模式 */
 type ViewMode = 'list' | 'create' | 'edit'
 
 export function ChannelSettings(): React.ReactElement {
   const [channels, setChannels] = React.useState<Channel[]>([])
+  const [officialHealth, setOfficialHealth] = React.useState<OfficialChannelHealth[]>([])
   const [viewMode, setViewMode] = React.useState<ViewMode>('list')
   const [editingChannel, setEditingChannel] = React.useState<Channel | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -105,7 +109,12 @@ export function ChannelSettings(): React.ReactElement {
 
   React.useEffect(() => {
     loadChannels()
-  }, [loadChannels])
+    if (authStatus.isLoggedIn) {
+      window.electronAPI.getOfficialModelHealth().then(setOfficialHealth).catch(() => setOfficialHealth([]))
+    } else {
+      setOfficialHealth([])
+    }
+  }, [loadChannels, authStatus.isLoggedIn])
 
   // 渠道启用/兼容性变化 → 自动同步 Agent 渠道列表
   // 当渠道启用且 provider 兼容 Agent 时，自动纳入 agentChannelIds；
@@ -281,22 +290,29 @@ export function ChannelSettings(): React.ReactElement {
             </div>
           </SettingsCard>
         ) : (
-          <SettingsCard>
-            {channels.map((channel) => (
-              <ChannelRow
-                key={channel.id}
-                channel={channel}
-                commercialMode={commercialMode}
-                canSelfConfig={canSelfConfig}
-                onEdit={() => {
-                  setEditingChannel(channel)
-                  setViewMode('edit')
-                }}
-                onDelete={() => handleDeleteRequest(channel)}
-                onToggle={() => handleToggle(channel)}
-              />
-            ))}
-          </SettingsCard>
+          <>
+            <SettingsCard>
+              {(() => {
+                const officialChannels = channels.filter(isOfficialChannel)
+                const selfConfiguredChannels = channels.filter((channel) => !isOfficialChannel(channel))
+                return <>
+                  {groupOfficialChannels(officialChannels).map((group) => <OfficialChannelGroupRow key={`${group.name}:${group.provider}`} channels={group.channels} health={officialHealth} />)}
+                  {selfConfiguredChannels.map((channel) => (
+                    <ChannelRow
+                      key={channel.id}
+                      channel={channel}
+                      commercialMode={commercialMode}
+                      canSelfConfig={canSelfConfig}
+                      onEdit={() => { setEditingChannel(channel); setViewMode('edit') }}
+                      onDelete={() => handleDeleteRequest(channel)}
+                      onToggle={() => handleToggle(channel)}
+                      health={officialHealth.find((item) => item.channelId === channel.id)}
+                    />
+                  ))}
+                </>
+              })()}
+            </SettingsCard>
+          </>
         )}
       </SettingsSection>
 
@@ -319,6 +335,62 @@ export function ChannelSettings(): React.ReactElement {
   )
 }
 
+interface OfficialChannelGroup { name: string; provider: ProviderType; channels: Channel[] }
+
+function groupOfficialChannels(channels: Channel[]): OfficialChannelGroup[] {
+  const groups = new Map<string, OfficialChannelGroup>()
+  for (const channel of channels) {
+    const name = channel.name.trim()
+    const key = `${channel.provider}:${name}`
+    const existing = groups.get(key)
+    if (existing) existing.channels.push(channel)
+    else groups.set(key, { name, provider: channel.provider, channels: [channel] })
+  }
+  return [...groups.values()]
+}
+
+function OfficialChannelGroupRow({ channels, health }: { channels: Channel[]; health: OfficialChannelHealth[] }): React.ReactElement {
+  const [expanded, setExpanded] = React.useState(false)
+  const representative = channels[0]!
+  const enabledModels = new Map<string, string>()
+  for (const channel of channels) for (const model of channel.models) if (model.enabled) enabledModels.set(model.id, model.name)
+  const modelsById = new Map<string, OfficialChannelHealth['models']>()
+  for (const channel of channels) {
+    const channelHealth = health.find((item) => item.channelId === channel.id)
+    for (const model of channelHealth?.models ?? []) {
+      const current = modelsById.get(model.modelId) ?? []
+      current.push(model)
+      modelsById.set(model.modelId, current)
+    }
+  }
+  const groupedHealth = new Map([...modelsById].map(([modelId, models]) => [modelId, aggregateModelHealth(models)]))
+  const supportsClaude = isAgentCompatibleProvider(representative.provider)
+  const multiple = channels.length > 1
+  return (
+    <div className="group border-b border-border/50 last:border-b-0">
+      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30" aria-expanded={expanded}>
+        <img src={getChannelLogo(representative)} alt="" className="h-8 w-8 shrink-0 rounded" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{representative.name} · 官方{multiple ? ` · ${channels.length} 个渠道` : ''}</span>
+          <span className="block truncate text-xs text-muted-foreground">{PROVIDER_LABELS[representative.provider]} · {enabledModels.size} 个模型已启用</span>
+        </span>
+        <span className="flex items-center gap-1 shrink-0">
+          {supportsClaude && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-600">Claude</span>}
+          <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-600">Pi</span>
+          <ChevronDown size={16} className={`ml-1 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
+      {expanded && <div className="border-t border-border/50 bg-muted/20 px-5 py-3 pl-[68px] space-y-2">
+        {multiple && <p className="text-xs text-muted-foreground">已合并 {channels.length} 个同名官方渠道；上游主备与重试由 New API 自动处理。</p>}
+        {[...enabledModels.entries()].map(([id, name]) => {
+          const summary = groupedHealth.get(id)
+          return <div key={id} className="space-y-1"><div className="flex items-center gap-2 text-xs"><span className="min-w-0 flex-1 truncate text-foreground">{name}</span></div>{summary && <ModelAvailabilityBar model={summary.model} samples={summary.slots} compact />}</div>
+        })}
+      </div>}
+    </div>
+  )
+}
+
 // ===== 渠道行子组件 =====
 
 interface ChannelRowProps {
@@ -328,11 +400,17 @@ interface ChannelRowProps {
   onToggle: () => void
   commercialMode?: boolean
   canSelfConfig?: boolean
+  health?: OfficialChannelHealth
 }
 
-function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSelfConfig }: ChannelRowProps): React.ReactElement {
+function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSelfConfig, health }: ChannelRowProps): React.ReactElement {
   const isOfficial = channel.id.startsWith('newapi-')
+  const [expanded, setExpanded] = React.useState(false)
   const enabledCount = channel.models.filter((m) => m.enabled).length
+  const canExpand = isOfficial && !!health?.models.length
+  const toggleExpanded = () => {
+    if (canExpand) setExpanded((value) => !value)
+  }
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
@@ -340,18 +418,12 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
     .filter(Boolean)
     .join(' · ')
 
-  return (
-    <SettingsRow
-      label={channel.name + (isOfficial ? ' · 官方' : '')}
-      icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
-      description={description}
-      className="group"
-    >
-      <div className="flex items-center gap-2.5">
-        {/* Agent Core 兼容性标签 */}
-        <AgentCoreChips provider={channel.provider} />
+  const controls = (
+    <div className="flex items-center gap-2.5" onClick={(event) => event.stopPropagation()}>
+      {/* Agent Core 兼容性标签 */}
+      <AgentCoreChips provider={channel.provider} />
 
-        {/* 操作按钮 */}
+      {/* 操作按钮 */}
         {!isOfficial && (!commercialMode || canSelfConfig) && (
           <>
             <button
@@ -372,12 +444,58 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
         )}
 
         {/* 启用/关闭开关 */}
-        <Switch
-          checked={channel.enabled}
-          onCheckedChange={onToggle}
-        />
-      </div>
-    </SettingsRow>
+      <Switch
+        checked={channel.enabled}
+        onCheckedChange={onToggle}
+      />
+      {canExpand && (
+        <button
+          type="button"
+          onClick={toggleExpanded}
+          className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label={expanded ? `收起 ${channel.name} 模型可用性` : `展开 ${channel.name} 模型可用性`}
+          aria-expanded={expanded}
+        >
+          <ChevronDown size={16} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </button>
+      )}
+    </div>
+  )
+
+  if (!canExpand) {
+    return (
+      <SettingsRow
+        label={channel.name + (isOfficial ? ' · 官方' : '')}
+        icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
+        description={description}
+        className="group"
+      >
+        {controls}
+      </SettingsRow>
+    )
+  }
+
+  return (
+    <div className="group border-b border-border/50 last:border-b-0">
+      <button
+        type="button"
+        onClick={toggleExpanded}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30"
+        aria-expanded={expanded}
+      >
+        <img src={getChannelLogo(channel)} alt="" className="h-8 w-8 shrink-0 rounded" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{channel.name} · 官方</span>
+          <span className="block truncate text-xs text-muted-foreground">{description}</span>
+        </span>
+        {controls}
+      </button>
+      {expanded && health && (
+        <div className="border-t border-border/50 bg-muted/20 px-5 py-2 pl-[68px]">
+          {health.models.map((model) => <ModelAvailabilityBar key={model.modelId} model={model} />)}
+        </div>
+      )}
+    </div>
   )
 }
 
