@@ -120,65 +120,125 @@ function decryptKey(encryptedKey: string): string {
 }
 
 /**
+ * 登出渠道备份文件的路径（按账号隔离）。
+ * 备份/恢复/校验共用此函数，避免文件名拼写漂移。
+ */
+export function getChannelsLogoutBackupPath(accountId: string): string {
+  const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
+  return `${getChannelsPath()}.logout-backup-${safeId}`
+}
+
+/**
  * 将当前渠道配置加密备份到磁盘（按账号隔离）
  *
  * logout 时调用：把整个 channels.json（含渠道元数据）用 token-crypto 整体加密后
  * 写入 channels.json.logout-backup-{accountId}。加密密钥由 deviceId 派生
  * （注册表/Keychain，仅当前用户可读），其他用户/进程拿到备份文件也无法解密。
- * 备份成功后由调用方继续清空 channels.json，保持「登出后活跃文件不残留」的安全行为。
+ *
+ * 安全语义：**备份必须成功，失败一律抛错**，由调用方决定是否继续清空活跃文件。
+ * 绝不静默吞掉失败——否则「重登恢复」会因无备份而丢渠道。
+ *
+ * @returns 写出的备份文件绝对路径；无渠道/无文件时返回 null
+ * @throws 加密失败/写盘失败/写回校验失败时抛错，调用方应据此中止清空活跃渠道
  */
-export function backupChannelsForAccount(accountId: string): void {
+export function backupChannelsForAccount(accountId: string | undefined | null): string | null {
   const configPath = getChannelsPath()
-  if (!existsSync(configPath)) return
+  if (!existsSync(configPath)) return null
 
-  try {
-    const raw = readFileSync(configPath, 'utf-8')
-    const parsed = JSON.parse(raw) as ChannelsConfig
-    if (!parsed.channels || parsed.channels.length === 0) return // 无渠道无需备份
-
-    const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
-    const encrypted = encryptToken(raw)
-    writeFileSync(`${configPath}.logout-backup-${safeId}`, encrypted, 'utf-8')
-    console.log(`[渠道管理] 已为账号 ${safeId} 加密备份 ${parsed.channels.length} 个渠道`)
-  } catch (err) {
-    console.warn('[渠道管理] 渠道加密备份失败（非致命）:', err)
+  const raw = readFileSync(configPath, 'utf-8')
+  const parsed = JSON.parse(raw) as ChannelsConfig
+  if (!parsed.channels || parsed.channels.length === 0) {
+    // 无渠道时无需备份，也不应视为失败（清空活跃文件无损失）
+    return null
   }
+  if (!accountId) {
+    throw new Error('无法获取账号标识，无法为渠道创建隔离备份')
+  }
+
+  const backupPath = getChannelsLogoutBackupPath(accountId)
+  const encrypted = encryptToken(raw)
+  if (!encrypted || encrypted.length === 0) {
+    throw new Error('渠道加密备份生成为空，已中止（避免覆盖丢失）')
+  }
+
+  writeFileSync(backupPath, encrypted, 'utf-8')
+
+  // 写回校验：确认备份确实落盘且非空，杜绝「以为备份了其实没写进去」
+  const verified = readFileSync(backupPath, 'utf-8')
+  if (!verified || verified.length === 0) {
+    throw new Error('渠道备份写回校验失败（文件为空），已中止清空')
+  }
+
+  console.log(`[渠道管理] 已为账号 ${accountId.replace(/[^A-Za-z0-9._-]/g, '_')} 加密备份 ${parsed.channels.length} 个渠道 → ${backupPath}`)
+  return backupPath
+}
+
+/**
+ * 渠道恢复结果
+ */
+export interface RestoreChannelsResult {
+  /** 恢复的渠道数量（0 = 无备份、已跳过或恢复失败） */
+  restored: number
+  /** 非 0 时表示发生了需要用户知晓的问题 */
+  error?: string
+  /** 备份文件是否保留在磁盘（失败时为 true，便于二次抢救） */
+  backupRetained: boolean
 }
 
 /**
  * 从加密备份恢复渠道配置（按账号隔离）
  *
  * login 成功后调用：仅当 channels.json 为空时才恢复对应账号的备份，
- * 避免覆盖用户已有配置；恢复成功后删除备份文件。解密失败/备份不存在时静默跳过。
- *
- * @returns 恢复的渠道数量（0 = 无备份或未恢复）
+ * 避免覆盖用户已有配置；恢复成功且落盘后才删除备份文件。
+ * 任何失败（解密/解析/落盘）都**保留备份文件**，不静默丢弃，便于用户二次抢救。
  */
-export function restoreChannelsForAccount(accountId: string): number {
-  const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
-  const backupPath = `${getChannelsPath()}.logout-backup-${safeId}`
-  if (!existsSync(backupPath)) return 0
-
-  try {
-    const encrypted = readFileSync(backupPath, 'utf-8')
-    const raw = decryptToken(encrypted)
-    const parsed = JSON.parse(raw) as ChannelsConfig
-    if (!parsed.channels || parsed.channels.length === 0) return 0
-
-    // 仅当前配置为空时恢复，避免覆盖用户新配置
-    const current = readConfig()
-    if (current.channels.length > 0) {
-      console.log('[渠道管理] 当前已有渠道，跳过备份恢复')
-      return 0
-    }
-
-    writeConfig(parsed)
-    rmSync(backupPath, { force: true })
-    console.log(`[渠道管理] 已从加密备份恢复 ${parsed.channels.length} 个渠道`)
-    return parsed.channels.length
-  } catch (err) {
-    console.warn('[渠道管理] 渠道备份恢复失败（非致命）:', err)
-    return 0
+export function restoreChannelsForAccount(accountId: string): RestoreChannelsResult {
+  const backupPath = getChannelsLogoutBackupPath(accountId)
+  if (!existsSync(backupPath)) {
+    return { restored: 0, backupRetained: false }
   }
+
+  let encrypted: string
+  try {
+    encrypted = readFileSync(backupPath, 'utf-8')
+  } catch (err) {
+    return { restored: 0, error: `读取渠道备份失败: ${(err as Error).message}`, backupRetained: true }
+  }
+
+  let raw: string
+  try {
+    raw = decryptToken(encrypted)
+  } catch (err) {
+    return { restored: 0, error: `渠道备份解密失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
+  }
+
+  let parsed: ChannelsConfig
+  try {
+    parsed = JSON.parse(raw) as ChannelsConfig
+  } catch (err) {
+    return { restored: 0, error: `渠道备份解析失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
+  }
+
+  if (!parsed.channels || parsed.channels.length === 0) {
+    return { restored: 0, backupRetained: false }
+  }
+
+  // 仅当前配置为空时恢复，避免覆盖用户新配置
+  const current = readConfig()
+  if (current.channels.length > 0) {
+    console.log('[渠道管理] 当前已有渠道，跳过备份恢复')
+    return { restored: 0, backupRetained: true }
+  }
+
+  // 落盘成功后才删备份：写入失败时备份仍留在磁盘
+  try {
+    writeConfig(parsed)
+  } catch (err) {
+    return { restored: 0, error: `渠道备份写入本地失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
+  }
+  rmSync(backupPath, { force: true })
+  console.log(`[渠道管理] 已从加密备份恢复 ${parsed.channels.length} 个渠道 → ${backupPath}`)
+  return { restored: parsed.channels.length, backupRetained: false }
 }
 
 /**
