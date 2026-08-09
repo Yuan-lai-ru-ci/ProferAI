@@ -75,6 +75,8 @@ import type {
   WorkspaceMemorySummary,
   SkillFileContent,
   SkillFileNode,
+  MemoryWikilinkTarget,
+  MemoryBacklink,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -769,6 +771,12 @@ export interface ElectronAPI {
   readWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string) => Promise<SkillFileContent>
   /** 写入工作区 memory-archive 主题记忆文件 */
   writeWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string, content: string) => Promise<void>
+  /** 搜索工作区 memory-archive 正文 */
+  searchMemoryArchive: (workspaceSlug: string, query: string, topK?: number) => Promise<Array<{ relativePath: string; content: string; startIndex: number; endIndex: number; score: number; matchedTokens: string[] }>>
+  /** 解析双链名称 → 命中记忆文件 */
+  resolveMemoryWikilink: (workspaceSlug: string, name: string) => Promise<MemoryWikilinkTarget | null>
+  /** 查询记忆反链：列出引用过当前文件的其它记忆文件 */
+  getMemoryBacklinks: (workspaceSlug: string, currentAbsolutePath: string, currentLinkName: string) => Promise<MemoryBacklink[]>
 
   // ===== Chat 工具管理 =====
 
@@ -1274,7 +1282,7 @@ export interface ElectronAPI {
     updateProfile: (updates: Record<string, unknown>) => Promise<import('../types/identity').UserIdentity>
     login: (credentials: Record<string, unknown>) => Promise<unknown>
     register: (credentials: Record<string, unknown>) => Promise<unknown>
-    logout: () => Promise<void>
+    logout: () => Promise<{ channelsCleared?: boolean; channelsBackedUp?: boolean; warning?: string }>
     listDevices: () => Promise<{ ok: boolean; devices?: Array<{ id: string; deviceId: string | null; deviceName: string; platform: string | null; appVersion?: string | null; createdAt: number; lastUsedAt: number }>; currentDeviceId?: string; error?: string }>
     revokeDevice: (slotId: string) => Promise<{ ok: boolean; error?: string }>
     getAuthStatus: () => Promise<{ isLoggedIn: boolean; teamAccountId?: string; teamEmail?: string }>
@@ -2239,6 +2247,18 @@ const electronAPI: ElectronAPI = {
 
   writeWorkspaceMemoryArchiveFile: (workspaceSlug: string, relativePath: string, content: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_MEMORY_ARCHIVE_FILE, workspaceSlug, relativePath, content)
+  },
+
+  searchMemoryArchive: (workspaceSlug: string, query: string, topK?: number) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_MEMORY_ARCHIVE, workspaceSlug, query, topK)
+  },
+
+  resolveMemoryWikilink: (workspaceSlug: string, name: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESOLVE_MEMORY_WIKILINK, workspaceSlug, name)
+  },
+
+  getMemoryBacklinks: (workspaceSlug: string, currentAbsolutePath: string, currentLinkName: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MEMORY_BACKLINKS, workspaceSlug, currentAbsolutePath, currentLinkName)
   },
 
   // Chat 工具管理

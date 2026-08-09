@@ -1,5 +1,12 @@
 import { describe, expect, mock, test } from 'bun:test'
 
+// memory-archive 使用 node:sqlite，Pi bridge 测试只验证注册契约，避免 Bun 测试运行器加载原生 Node 模块。
+mock.module('../memory-archive-search', () => ({
+  createMemoryArchiveSearcher: () => ({
+    search: (query: string, topK: number) => [{ relativePath: 'memory.md', content: `hit:${query}`, startIndex: 0, endIndex: query.length, score: 0, matchedTokens: [query] }].slice(0, topK),
+  }),
+}))
+
 // automation-scheduler 由 Pi builtin tools 间接导入；Bun 测试环境没有 Electron runtime。
 mock.module('electron', () => ({
   BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },
@@ -19,6 +26,7 @@ mock.module('electron', () => ({
 
 const {
   buildPiKnowledgeBaseTools,
+  buildPiMemoryArchiveTools,
   buildPiPlanningTools,
   buildPiTaskGraphTools,
 } = await import('./pi-builtin-tools')
@@ -53,6 +61,23 @@ describe('Pi Profer in-process tool bridges', () => {
       'mcp__knowledge-base__list_imported_knowledge',
       'mcp__knowledge-base__read_imported_knowledge',
     ])
+  })
+
+  test('Given Pi runtime When building memory tools without a workspace Then it does not expose personal memory search', () => {
+    const { sdk, tools } = createPiSdkStub()
+
+    buildPiMemoryArchiveTools(sdk, {})
+
+    expect(tools).toEqual([])
+  })
+
+  test('Given Pi runtime When building memory tools with a workspace Then it exposes read-only archive search', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiMemoryArchiveTools(sdk, { workspaceSlug: 'profer' })
+    expect(tools.map((tool) => tool.name)).toContain('mcp__memory-archive__search_memory')
+    const search = tools.find((tool) => tool.name === 'mcp__memory-archive__search_memory')
+    const result = await search?.execute?.('call-1', { query: 'Pi', topK: 1 }) as { details?: { hits?: Array<{ file: string; content: string }> } }
+    expect(result.details?.hits?.[0]).toMatchObject({ file: 'memory.md', content: 'hit:Pi' })
   })
 
   test('Given Pi runtime When building planning tools Then it exposes the Todo reader required by Todo Agent handoff', () => {

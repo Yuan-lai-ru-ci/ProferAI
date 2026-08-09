@@ -1,14 +1,14 @@
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { BookOpen, Brain, ChevronDown, ChevronRight, Code2, Eye, FileText, FolderOpen, Loader2, RefreshCw, Save, Sparkles } from 'lucide-react'
-import type { SkillFileNode, WorkspaceMemorySummary } from '@profer/shared'
+import { BookOpen, Brain, ChevronDown, ChevronRight, Code2, Eye, FileText, FolderOpen, Loader2, RefreshCw, Save, Search, Sparkles } from 'lucide-react'
+import type { SkillFileNode, WorkspaceMemorySummary, MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsCard } from '@/components/settings/primitives'
 import { DefaultAppOpenButton } from '@/components/diff/DefaultAppOpenButton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { MessageResponse } from '@/components/ai-elements/message'
+import { MessageResponse, remarkWikilinks, WikilinkClickProvider } from '@/components/ai-elements/message'
 import { agentPendingPromptAtom } from '@/atoms/agent-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { cn } from '@/lib/utils'
@@ -161,6 +161,9 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   const [viewMode, setViewMode] = React.useState<'preview' | 'edit'>('preview')
   const [initializing, setInitializing] = React.useState(false)
   const [historyRange, setHistoryRange] = React.useState<MemoryHistoryRange>('1m')
+  const [backlinks, setBacklinks] = React.useState<MemoryBacklink[]>([])
+  const [archiveSearchResults, setArchiveSearchResults] = React.useState<Array<{ relativePath: string; content: string }>>([])
+  const [archiveSearching, setArchiveSearching] = React.useState(false)
 
   // 自动保存：用 ref 持有最新的编辑状态，供防抖定时器与"切换文件前 flush"复用，
   // 避免把 selected/editText 塞进一堆回调的依赖数组里。
@@ -174,6 +177,26 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   }, [selected, editText, isDirty])
   const autoSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const persistInFlightRef = React.useRef<Promise<void> | null>(null)
+  React.useEffect(() => {
+    const query = search.trim()
+    if (!query) {
+      setArchiveSearchResults([])
+      return
+    }
+    let cancelled = false
+    setArchiveSearching(true)
+    const timer = setTimeout(() => {
+      void window.electronAPI.searchMemoryArchive(workspaceSlug, query, 20).then((results) => {
+        if (!cancelled) setArchiveSearchResults(results.map((result) => ({ relativePath: result.relativePath, content: result.content })))
+      }).catch((err) => {
+        if (!cancelled) toast.error(err instanceof Error ? err.message : '搜索记忆失败')
+      }).finally(() => {
+        if (!cancelled) setArchiveSearching(false)
+      })
+    }, 180)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [search, workspaceSlug])
+
   const historyRangeLabel = React.useMemo(
     () => MEMORY_HISTORY_RANGE_OPTIONS.find((option) => option.value === historyRange)?.label ?? '近 1 个月',
     [historyRange],
@@ -342,6 +365,48 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     }
   }, [openAutoFile, openClaude, refreshSummaryAndTree, selected, flushPendingSave])
 
+  /** 双链 [[...]] 点击：解析名称 → 打开命中的记忆文件 */
+  const handleWikilinkClick = React.useCallback((name: string): void => {
+    void (async () => {
+      try {
+        const target = await window.electronAPI.resolveMemoryWikilink(workspaceSlug, name)
+        if (!target) {
+          toast.error(`未找到记忆：${name}`)
+          return
+        }
+        if (target.kind === 'archive') {
+          await openArchiveFile(target.relativePath, summary ?? undefined)
+        } else if (target.kind === 'auto') {
+          await openAutoFile(target.relativePath, summary ?? undefined)
+        } else {
+          await openClaude(summary ?? undefined)
+        }
+      } catch (err) {
+        console.error('[工作区记忆] 双链跳转失败:', err)
+        toast.error(err instanceof Error ? err.message : '双链跳转失败')
+      }
+    })()
+  }, [workspaceSlug, summary, openAutoFile, openArchiveFile, openClaude])
+
+  /** 加载当前选中文件的反链 */
+  React.useEffect(() => {
+    let cancelled = false
+    setBacklinks([])
+    if (!selected || selected.kind === 'claude') return
+    // 反链匹配名 = 当前文件 stem（文件名不含扩展）
+    const currentStem = (selected.relativePath.split('/').pop() ?? '').replace(/\.md$/i, '')
+    if (!currentStem) return
+    void (async () => {
+      try {
+        const links = await window.electronAPI.getMemoryBacklinks(workspaceSlug, selected.absolutePath, currentStem)
+        if (!cancelled) setBacklinks(links)
+      } catch (err) {
+        console.error('[工作区记忆] 加载反链失败:', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [selected?.kind, selected?.relativePath, selected?.absolutePath, workspaceSlug])
+
   React.useEffect(() => {
     let cancelled = false
     setSelected(null)
@@ -443,14 +508,15 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     }
   }
 
+  // 顶部搜索框统一搜索 archive 正文；文件树始终完整展示，避免文件名筛选与正文检索产生双重语义。
   const visibleAutoFiles = React.useMemo(
-    () => filterNodes(withVirtualMemoryIndex(autoFiles), search),
-    [autoFiles, search],
+    () => withVirtualMemoryIndex(autoFiles),
+    [autoFiles],
   )
 
   const visibleArchiveFiles = React.useMemo(
-    () => filterNodes(archiveFiles, search),
-    [archiveFiles, search],
+    () => archiveFiles,
+    [archiveFiles],
   )
 
   if (loading || !summary) {
@@ -459,55 +525,30 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid gap-3 min-[760px]:grid-cols-2">
-        <MemoryStatCard
-          icon={<BookOpen size={18} />}
-          title="项目指令"
-          subtitle="工作区根目录 CLAUDE.md"
-          value={summary.claudeMd.exists ? formatBytes(summary.claudeMd.size) : '尚未创建'}
-          detail={`更新于 ${formatTime(summary.claudeMd.updatedAt)}`}
-          active={selected?.kind === 'claude'}
-          onClick={() => void openClaude(summary)}
-        />
-        <MemoryStatCard
-          icon={<Brain size={18} />}
-          title="自动记忆"
-          subtitle=".claude/memory/MEMORY.md 与主题文件"
-          value={`${summary.autoMemory.fileCount} 个文件`}
-          detail={`${formatBytes(summary.autoMemory.totalSize)} · 更新于 ${formatTime(summary.autoMemory.updatedAt)}`}
-          active={selected?.kind === 'auto'}
-          onClick={() => void openAutoFile(AUTO_MEMORY_INDEX, summary)}
-        />
-      </div>
-
-      <SettingsCard divided={false}>
-        <div className="flex flex-col gap-3 p-4 min-[760px]:flex-row min-[760px]:items-center min-[760px]:justify-between">
+      <SettingsCard divided={false} className="overflow-hidden">
+        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <div className="text-sm font-medium text-foreground">从历史会话生成工作区记忆</div>
-            <div className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              新建一个 Agent 会话，读取当前工作区{historyRangeLabel}的工作会话，沉淀并更新 CLAUDE.md 与 auto memory 文件。
-            </div>
+            <div className="text-base font-semibold text-foreground">工作区记忆</div>
+            <div className="mt-1 text-xs text-muted-foreground">规则负责约束，主题负责积累；搜索框可直接查找记忆正文。</div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Select
-              value={historyRange}
-              onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)}
-              disabled={initializing}
-            >
-              <SelectTrigger className="h-9 w-[116px] text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MEMORY_HISTORY_RANGE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <MemorySummaryButton label="项目指令" value={summary.claudeMd.exists ? formatBytes(summary.claudeMd.size) : '未创建'} active={selected?.kind === 'claude'} onClick={() => void openClaude(summary)} />
+            <MemorySummaryButton label="自动记忆" value={`${summary.autoMemory.fileCount} 文件`} active={selected?.kind === 'auto'} onClick={() => void openAutoFile(AUTO_MEMORY_INDEX, summary)} />
+            <MemorySummaryButton label="长期经验" value={`${archiveFiles.filter((node) => node.type === 'file').length} 主题`} active={selected?.kind === 'archive'} onClick={() => {
+              const first = archiveFiles.find((node) => node.type === 'file')
+              if (first) void openArchiveFile(first.relativePath, summary)
+            }} />
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 border-t border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-muted-foreground">从历史会话生成并更新工作区记忆（{historyRangeLabel}）</div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Select value={historyRange} onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)} disabled={initializing}>
+              <SelectTrigger className="h-8 w-[108px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>{MEMORY_HISTORY_RANGE_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
             </Select>
-            <Button onClick={handleInitializeMemory} disabled={initializing}>
-              <Sparkles size={14} className="mr-1.5" />
-              {initializing ? '创建中...' : '生成工作区记忆'}
+            <Button size="sm" onClick={handleInitializeMemory} disabled={initializing}>
+              <Sparkles size={14} className="mr-1.5" />{initializing ? '生成中...' : '生成记忆'}
             </Button>
           </div>
         </div>
@@ -664,7 +705,29 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 )}
               </div>
             </div>
-            {loadingFile ? (
+            {search.trim() ? (
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+                  <Search size={15} className="text-muted-foreground" />
+                  正文搜索结果
+                  <span className="text-xs font-normal text-muted-foreground">{archiveSearching ? '搜索中...' : `${archiveSearchResults.length} 条`}</span>
+                </div>
+                {archiveSearching ? (
+                  <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">搜索记忆中...</div>
+                ) : archiveSearchResults.length === 0 ? (
+                  <div className="flex h-36 items-center justify-center rounded-lg border border-dashed border-border/70 text-sm text-muted-foreground">没有命中的主题正文</div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {archiveSearchResults.map((result) => (
+                      <button key={result.relativePath} type="button" onClick={() => void openArchiveFile(result.relativePath, summary)} className="block w-full rounded-lg border border-border/50 px-3 py-2.5 text-left transition-colors hover:border-primary/30 hover:bg-accent/50">
+                        <div className="truncate text-[13px] font-medium text-foreground">{result.relativePath}</div>
+                        <div className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted-foreground">{result.content}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : loadingFile ? (
               <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">读取文件中...</div>
             ) : selected && viewMode === 'edit' ? (
               <textarea
@@ -681,16 +744,45 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
               />
             ) : selected ? (
               <div className="min-h-0 flex-1 overflow-y-auto p-5">
-                {editText.trim() ? (
-                  <MessageResponse
-                    className="text-[14px] prose-headings:scroll-mt-4"
-                    basePath={dirnameOf(selected.absolutePath)}
-                  >
-                    {editText}
-                  </MessageResponse>
-                ) : (
-                  <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-border/70 text-sm text-muted-foreground">
-                    当前文件为空，切换到编辑后可以写入 Markdown 内容。
+                <WikilinkClickProvider onClick={handleWikilinkClick}>
+                  {editText.trim() ? (
+                    <MessageResponse
+                      className="text-[14px] prose-headings:scroll-mt-4"
+                      basePath={dirnameOf(selected.absolutePath)}
+                      remarkPlugins={[remarkWikilinks]}
+                    >
+                      {editText}
+                    </MessageResponse>
+                  ) : (
+                    <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-border/70 text-sm text-muted-foreground">
+                      当前文件为空，切换到编辑后可以写入 Markdown 内容。
+                    </div>
+                  )}
+                </WikilinkClickProvider>
+                {backlinks.length > 0 && (
+                  <div className="mt-5 border-t border-border/60 pt-4">
+                    <div className="mb-2 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      被引用自
+                    </div>
+                    <div className="space-y-1">
+                      {backlinks.map((link) => (
+                        <button
+                          key={link.absolutePath}
+                          type="button"
+                          onClick={() => {
+                            if (link.kind === 'archive') void openArchiveFile(link.relativePath, summary ?? undefined)
+                            else void openAutoFile(link.relativePath, summary ?? undefined)
+                          }}
+                          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] text-foreground/80 transition-colors hover:bg-accent/60"
+                        >
+                          <FileText size={13} className="shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 truncate">{link.name}</span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {link.kind === 'archive' ? 'Memory Archive' : 'Auto Memory'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -701,6 +793,15 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
         </SettingsCard>
       </div>
     </div>
+  )
+}
+
+function MemorySummaryButton({ label, value, active, onClick }: { label: string; value: string; active: boolean; onClick: () => void }): React.ReactElement {
+  return (
+    <button type="button" onClick={onClick} className={cn('rounded-md border px-3 py-2 text-left transition-colors', active ? 'border-primary/50 bg-primary/[0.06]' : 'border-border/60 hover:bg-foreground/[0.03]')}>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-xs font-medium text-foreground">{value}</div>
+    </button>
   )
 }
 

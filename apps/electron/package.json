@@ -32,6 +32,7 @@
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "check:skin-token-sync": "node scripts/check-skin-token-sync.mjs",
+    "test:memory-search": "node scripts/memory-search-verify.mjs",
     "generate:icons": "cd resources && ./generate-icons.sh",
     "verify:build-target:oss": "node scripts/verify-build-target.cjs oss dist/main.cjs",
     "verify:build-target:commercial": "node scripts/verify-build-target.cjs commercial dist/main.cjs",

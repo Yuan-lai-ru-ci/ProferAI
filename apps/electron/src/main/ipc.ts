@@ -304,7 +304,12 @@ import {
   listWorkspaceMemoryArchiveFiles,
   readWorkspaceMemoryArchiveFile,
   writeWorkspaceMemoryArchiveFile,
+  getWorkspaceMemoryArchivePath,
+  getWorkspaceAutoMemoryDir,
 } from './lib/agent-workspace-manager'
+import { resolveMemoryWikilink, findMemoryBacklinks } from './lib/memory-wikilink-service'
+import { createMemoryArchiveSearcher } from './lib/memory-archive-search'
+import type { MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
 import { getAllToolInfos } from './lib/chat-tool-registry'
 import { updateToolState, updateToolCredentials, getToolCredentials, addCustomTool, deleteCustomTool } from './lib/chat-tool-config'
 import {
@@ -3091,6 +3096,36 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SEARCH_MEMORY_ARCHIVE,
+    async (_event, workspaceSlug: string, query: string, topK?: number) => {
+      const searcher = createMemoryArchiveSearcher(getWorkspaceMemoryArchivePath(workspaceSlug))
+      try {
+        return searcher.search(query, topK ?? 20)
+      } finally {
+        searcher.close()
+      }
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RESOLVE_MEMORY_WIKILINK,
+    async (_event, workspaceSlug: string, name: string): Promise<MemoryWikilinkTarget | null> => {
+      const archiveDir = getWorkspaceMemoryArchivePath(workspaceSlug)
+      const autoDir = getWorkspaceAutoMemoryDir(workspaceSlug)
+      return resolveMemoryWikilink(archiveDir, autoDir, name)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_MEMORY_BACKLINKS,
+    async (_event, workspaceSlug: string, currentAbsolutePath: string, currentLinkName: string): Promise<MemoryBacklink[]> => {
+      const archiveDir = getWorkspaceMemoryArchivePath(workspaceSlug)
+      const autoDir = getWorkspaceAutoMemoryDir(workspaceSlug)
+      return findMemoryBacklinks(archiveDir, autoDir, currentAbsolutePath, currentLinkName)
+    }
+  )
+
   // ===== Chat 工具管理 =====
 
   // 获取所有工具信息
@@ -5745,7 +5780,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.LOGOUT,
-    async () => { await logout() }
+    async () => { return await logout() }
   )
 
   ipcMain.handle(
