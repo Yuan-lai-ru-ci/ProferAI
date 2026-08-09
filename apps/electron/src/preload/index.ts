@@ -224,6 +224,8 @@ export interface ElectronAPI {
 
   /** 获取所有渠道列表（apiKey 保持加密态） */
   listChannels: () => Promise<Channel[]>
+  /** 获取官方模型最近可用性 */
+  getOfficialModelHealth: () => Promise<import('@profer/shared').OfficialChannelHealth[]>
 
   /** 创建渠道（apiKey 为明文，主进程加密） */
   createChannel: (input: ChannelCreateInput) => Promise<Channel>
@@ -1475,6 +1477,9 @@ const electronAPI: ElectronAPI = {
   // 渠道管理
   listChannels: () => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.LIST)
+  },
+  getOfficialModelHealth: () => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_OFFICIAL_HEALTH)
   },
 
   createChannel: (input: ChannelCreateInput) => {

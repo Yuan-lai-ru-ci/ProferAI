@@ -352,6 +352,30 @@ export interface ChannelTestResult {
   message: string
 }
 
+/** 官方模型最近请求的单次可用性采样。 */
+export interface ModelAvailabilitySample {
+  status: 'success' | 'degraded' | 'failure'
+  durationMs: number
+  createdAt: number
+}
+
+/** 官方模型最近请求的可用性摘要。 */
+export interface ModelAvailability {
+  modelId: string
+  availability: number | null
+  sampleCount: number
+  avgLatencyMs: number | null
+  updatedAt: number | null
+  samples: ModelAvailabilitySample[]
+}
+
+/** 官方渠道下的模型可用性数据。 */
+export interface OfficialChannelHealth {
+  channelId: string
+  models: ModelAvailability[]
+  updatedAt: number | null
+}
+
 /**
  * 拉取模型的输入参数（无需已保存的渠道，直接传入凭证）
  */
@@ -380,6 +404,8 @@ export interface FetchModelsResult {
 export const CHANNEL_IPC_CHANNELS = {
   /** 获取所有渠道列表 */
   LIST: 'channel:list',
+  /** 获取官方模型最近可用性 */
+  GET_OFFICIAL_HEALTH: 'channel:get-official-health',
   /** 创建渠道 */
   CREATE: 'channel:create',
   /** 更新渠道 */
