@@ -544,8 +544,15 @@ export function GeneralSettings(): React.ReactElement {
                 {refreshing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
               </button>
               <button
-                onClick={() => {
-                  window.electronAPI.auth.logout().catch(() => {})
+                onClick={async () => {
+                  try {
+                    const result = await window.electronAPI.auth.logout() as unknown as ({ channelsCleared?: boolean; channelsBackedUp?: boolean; warning?: string } | void)
+                    if (result && result.warning) {
+                      toast.warning(result.warning)
+                    }
+                  } catch {
+                    /* 非致命 */
+                  }
                   setAuthStatus({ isLoggedIn: false })
                 }}
                 className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-destructive transition-colors"

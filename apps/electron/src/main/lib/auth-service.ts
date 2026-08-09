@@ -170,6 +170,8 @@ interface LoginResult {
   isAdmin?: boolean
   joinedWorkspace?: string
   error?: string
+  /** 重登后渠道恢复结果状态（供 UI 提示，非阻塞） */
+  channelRestore?: { restored: number; warning?: string }
   /** 达到设备上限时返回：需用户撤销一台设备后重试（携带 revokeSlotId） */
   deviceLimit?: {
     maxDevices: number
@@ -289,11 +291,21 @@ export async function login(
     scheduleAutoRefresh()
 
     // 恢复该账号上次登出时的加密渠道备份（仅当本地无渠道时生效）
+    // teamAccountId 存的就是 data.userId，与备份/恢复的文件名 key 恒等，保证能对上。
+    let channelRestore: LoginResult['channelRestore']
     try {
       const { restoreChannelsForAccount } = require('./channel-manager')
-      restoreChannelsForAccount(data.userId)
+      const result = restoreChannelsForAccount(data.userId)
+      if (result.error) {
+        console.warn('[认证] 渠道备份恢复失败（保留备份）:', result.error)
+        channelRestore = { restored: 0, warning: result.error }
+      } else {
+        channelRestore = { restored: result.restored }
+        if (result.restored > 0) console.log(`[认证] 重登后已恢复 ${result.restored} 个自配渠道`)
+      }
     } catch (err) {
-      console.warn('[认证] 渠道备份恢复失败（非致命）:', err)
+      console.warn('[认证] 渠道备份恢复异常（非致命）:', err)
+      channelRestore = { restored: 0, warning: '渠道备份恢复异常，备份文件可能仍然保留。' }
     }
 
     // 商业模式下自动同步渠道
@@ -314,6 +326,7 @@ export async function login(
       membershipTier: data.membershipTier,
       commercialMode,
       isAdmin: !!data.isAdmin,
+      channelRestore,
     }
   } catch (err) {
     console.error('[认证] 登录请求失败:', err)
@@ -506,8 +519,20 @@ export function getAuthStatus(): {
   return { isLoggedIn: false }
 }
 
+/**
+ * 注销返回信息（用于渲染进程提示，向后兼容——渲染端只需读取新增的可选字段）
+ */
+export interface LogoutResult {
+  /** 自配/活跃渠道在登出时是否被清空 */
+  channelsCleared: boolean
+  /** 渠道留下但被保留（备份失败或本地无账号）时给用户的提示 */
+  warning?: string
+  /** 渠道是否已成功加密备份 */
+  channelsBackedUp: boolean
+}
+
 /** 注销（清除本地令牌和渠道，并通知服务端吊销） */
-export async function logout(): Promise<void> {
+export async function logout(): Promise<LogoutResult> {
   // 通知服务端吊销 accessToken
   const tokens = readTokens()
   const servers = listTeamServers()
@@ -526,28 +551,51 @@ export async function logout(): Promise<void> {
 
   writeTokens({})
 
-  // 将当前渠道配置加密备份（按账号隔离），再清空活跃配置文件：
-  // 备份让同一账号下次登录时能自动恢复自配渠道；清空保持「登出后旧渠道不残留磁盘」的安全行为。
-  try {
-    const { backupChannelsForAccount } = require('./channel-manager')
-    const tokensBefore = tokens
-    const accountId = Object.keys(tokensBefore)
-      .map((id) => tokensBefore[id]?.teamAccountId)
-      .find((id) => !!id)
-    if (accountId) backupChannelsForAccount(accountId)
-  } catch { /* 非致命 */ }
+  // 渠道处理策略：
+  //  1) 有账号标识 → 先加密备份当前 channels.json，**备份成功才清空活跃文件**；备份失败则保留活跃文件并提示。
+  //  2) 无账号标识（本地/未登录团队账号）→ 不备份也不清空，自配渠道本就不应随账号登出被销毁。
+  //
+  // 历史 bug 背景：旧实现把「备份」和「清空」拆成两个独立 try/catch 且都静默吞错，
+  // 备份一旦失败仍会继续清空 channels.json，用户重登后无备份可恢复 → 自配渠道永久丢失。
+  const { backupChannelsForAccount } = require('./channel-manager')
+  const accountId = Object.keys(tokens)
+    .map((id) => tokens[id]?.teamAccountId)
+    .find((id) => !!id)
 
-  // 清除渠道配置：防止登出后旧渠道残留磁盘，下个用户可见
+  if (!accountId) {
+    // 本地无账号：保留渠道文件不清空
+    _servers = null
+    console.log('[认证] 已注销（本地模式，未清空渠道）')
+    return { channelsCleared: false, channelsBackedUp: false, warning: '当前为本地模式，登出未清空自配渠道。' }
+  }
+
+  try {
+    backupChannelsForAccount(accountId)
+  } catch (err) {
+    // 备份失败（加密/写盘/校验）→ 不清空活跃渠道，避免丢失
+    _servers = null
+    console.warn('[认证] 渠道备份失败，已保留活跃渠道不清空:', (err as Error).message)
+    return {
+      channelsCleared: false,
+      channelsBackedUp: false,
+      warning: '登出时渠道备份失败，已保留你的渠道配置（未清空）。请检查后重试。',
+    }
+  }
+
+  // 备份成功 → 才清空活跃配置文件，防止旧渠道残留磁盘
   try {
     const { writeFileSync } = require('node:fs')
     const { getChannelsPath } = require('./config-paths')
     writeFileSync(getChannelsPath(), JSON.stringify({ version: 1, channels: [] }), 'utf-8')
-  } catch { /* 非致命 */ }
+  } catch (err) {
+    console.warn('[认证] 清空渠道配置失败（非致命，渠道备份已保留）:', err)
+  }
 
   // 清除服务端内存缓存：防止登出后 _servers 残留
   _servers = null
 
-  console.log('[认证] 已注销')
+  console.log('[认证] 已注销（渠道已加密备份并清空活跃文件）')
+  return { channelsCleared: true, channelsBackedUp: true }
 }
 
 // 自动续期定时器引用

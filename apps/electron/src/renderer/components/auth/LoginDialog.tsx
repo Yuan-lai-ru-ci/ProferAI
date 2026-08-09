@@ -24,6 +24,7 @@ interface LoginResult {
   joinedWorkspace?: string
   membershipTier?: string
   error?: string
+  channelRestore?: { restored: number; warning?: string }
   deviceLimit?: {
     maxDevices: number
     devices: Array<{ id: string; deviceName: string; platform?: string | null; lastUsedAt: number }>
@@ -70,6 +71,10 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
           ? `注册成功，已加入「${result.joinedWorkspace}」`
           : mode === 'login' ? `已登录: ${result.teamEmail}` : `注册成功: ${result.teamEmail}`
         toast.success(msg)
+        const restoreWarn = result.channelRestore?.warning
+        if (mode === 'login' && restoreWarn) {
+          toast.warning(`渠道恢复提示: ${restoreWarn}`)
+        }
         onOpenChange(false)
       } else if (result.deviceLimit) {
         setDeviceLimit(result.deviceLimit)
