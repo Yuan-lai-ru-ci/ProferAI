@@ -1696,6 +1696,12 @@ export const AGENT_IPC_CHANNELS = {
   READ_WORKSPACE_MEMORY_ARCHIVE_FILE: 'agent:read-workspace-memory-archive-file',
   /** 写入工作区 memory-archive 主题记忆文件 */
   WRITE_WORKSPACE_MEMORY_ARCHIVE_FILE: 'agent:write-workspace-memory-archive-file',
+  /** 搜索工作区 memory-archive 正文 */
+  SEARCH_MEMORY_ARCHIVE: 'agent:search-memory-archive',
+  /** 解析双链名称 → 命中记忆文件（预览 [[...]] 点击跳转） */
+  RESOLVE_MEMORY_WIKILINK: 'agent:resolve-memory-wikilink',
+  /** 查询记忆反链：列出引用过当前文件的其它记忆文件 */
+  GET_MEMORY_BACKLINKS: 'agent:get-memory-backlinks',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */
@@ -2033,4 +2039,21 @@ export interface WorkspaceInvitation {
   createdAt: number
   expiresAt: number
   acceptedAt?: number
+}
+
+/** 记忆双链 [[...]] 解析结果 */
+export interface MemoryWikilinkTarget {
+  relativePath: string
+  kind: 'archive' | 'auto'
+  name: string
+  absolutePath: string
+  matchedBy: 'name' | 'filename' | 'contains'
+}
+
+/** 记忆反链：某条记忆被谁引用 */
+export interface MemoryBacklink {
+  relativePath: string
+  kind: 'archive' | 'auto'
+  name: string
+  absolutePath: string
 }

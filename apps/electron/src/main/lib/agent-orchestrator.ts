@@ -35,6 +35,7 @@ import { getTeamAuthWithRefresh } from './auth-service'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectKbMcpServer } from './kb-agent-tools'
+import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
 import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
@@ -62,7 +63,7 @@ import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
 import { isCommercialBuild } from './build-target'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
-import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, ensurePluginManifest } from './agent-workspace-manager'
+import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, getWorkspaceMemoryArchivePath, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
@@ -917,6 +918,10 @@ export class AgentOrchestrator {
       await injectKbMcpServer(sdk, mcpServers, {
         sessionId,
         workspaceId,
+      })
+      await injectMemoryArchiveMcpServer(sdk, mcpServers, {
+        memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
+        workspaceSlug,
       })
       if (workspace?.type === 'team') {
         await injectTeamMemoryMcpServer(sdk, mcpServers, { workspaceId })

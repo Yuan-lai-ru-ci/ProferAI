@@ -37,6 +37,7 @@ import { fetchInstallerManifest, findInstallerSource } from '../installer-manife
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
 import { teamMemoryOperations } from '../team-memory-agent-tools'
+import { getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
 import {
   fetchWebPage,
   formatFetchResults,
@@ -165,6 +166,46 @@ export function buildPiKnowledgeBaseTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCo
             : { itemId: id, title: currentItem.title, unavailable: true }
         }))
         return jsonToolResult({ items })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+// ===== 个人记忆工具 =====
+
+/**
+ * Pi 不能消费 Claude SDK 的 in-process MCP server；在此复用同一套 FTS5
+ * memory-archive 搜索服务，保持 Claude/Pi 的个人长期记忆检索能力对等。
+ */
+export function buildPiMemoryArchiveTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'workspaceSlug'>): ToolDefinition[] {
+  if (!ctx.workspaceSlug) return []
+  let searcher: ReturnType<typeof import('../memory-archive-search')['createMemoryArchiveSearcher']>
+  try {
+    const { createMemoryArchiveSearcher } = require('../memory-archive-search') as typeof import('../memory-archive-search')
+    searcher = createMemoryArchiveSearcher(getWorkspaceMemoryArchivePath(ctx.workspaceSlug))
+  } catch (error) {
+    console.error('[Pi 桥接] 初始化个人记忆搜索失败:', error)
+    return []
+  }
+
+  return [
+    sdk.defineTool({
+      name: 'mcp__memory-archive__search_memory',
+      label: '搜索个人记忆',
+      description: '全文搜索当前工作区的长期个人记忆。用户询问之前研究、踩坑、做过什么或有没有记录时，先按关键词检索，再引用命中片段回答。只读，不修改记忆文件。',
+      parameters: Type.Object({
+        query: Type.String({ minLength: 1, maxLength: 200, description: '中文短语、英文/代码词、路径片段或版本号' }),
+        topK: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { query: string; topK?: number }
+        // 复用已初始化 searcher，惰性索引会在每次查询前刷新变化文件。
+        const hits = searcher.search(args.query, args.topK ?? 5)
+        console.log(`[Pi 记忆工具] Agent 检索 memory-archive: workspace=${ctx.workspaceSlug}, query="${args.query}", hits=${hits.length}`)
+        return jsonToolResult({
+          hits: hits.map((hit) => ({ file: hit.relativePath, content: hit.content, startIndex: hit.startIndex, endIndex: hit.endIndex, matched: hit.matchedTokens })),
+          message: hits.length ? undefined : 'memory-archive 中没有匹配的长期记忆。若属新话题，可咨询用户是否需要沉淀。',
+        })
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -753,6 +794,7 @@ export async function buildPiBuiltinTools(
 
   // 知识库与任务图原本是 Claude SDK 的 in-process MCP server；Pi 需要显式桥接。
   try {
+    tools.push(...buildPiMemoryArchiveTools(sdk, ctx))
     tools.push(...buildPiKnowledgeBaseTools(sdk, ctx))
     tools.push(...buildPiTaskGraphTools(sdk, ctx))
     tools.push(...buildPiPlanningTools(sdk))

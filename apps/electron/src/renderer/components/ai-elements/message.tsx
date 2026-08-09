@@ -22,7 +22,7 @@ import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText } from 'lucide-react'
+import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText, Link2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@/lib/mermaid-detection'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
@@ -365,11 +365,56 @@ export function remarkPreserveBreaks() {
 /** remark 插件函数签名 */
 export type RemarkPluginFn = () => (tree: MdastParent) => void
 
+// ----- remarkWikilinks：将 [[名称]] 双链转为 wikilink:// 链接节点 -----
+// 用于记忆面板等支持 Obsidian 式双链的富文本预览：Article 正文里写 [[security-encryption]]
+// 会被渲染为可点击的双链，点击后在面板内跳转到对应记忆文件。
+const WIKILINK_PATTERN = /\[\[([^\[\]|]+?)(?:\|([^\[\]]*?))?\]\]/g
+
 /**
- * 附加 basePaths 上下文 — 用于把"附加目录候选"穿透到 MarkdownInlineCode 而不必逐层透传 props。
- * AgentMessages 在顶层用 BasePathsProvider 包裹，FilePathChip 渲染时会自动取到。
+ * 把 [[名称]]（可选 [[名称|显示文本]]）转成 wikilink://<encodedName> 链接节点。
+ * 调用方（记忆面板）通过 MessageResponse 的 remarkPlugins 按需启用，避免影响全局消息渲染。
  */
+export function remarkWikilinks() {
+  return (tree: MdastParent) => {
+    walkMdastText(tree, (node, index, parent) => {
+      const text = node.value
+      if (!WIKILINK_PATTERN.test(text)) return
+      WIKILINK_PATTERN.lastIndex = 0
+
+      const parts: MdastNode[] = []
+      let lastIdx = 0
+      let m: RegExpExecArray | null
+
+      while ((m = WIKILINK_PATTERN.exec(text)) !== null) {
+        if (m.index > lastIdx) parts.push({ type: 'text', value: text.slice(lastIdx, m.index) })
+        const target = m[1]!.trim()
+        const label = (m[2] || m[1]!).trim()
+        const safeValue = encodeURIComponent(target)
+        parts.push({
+          type: 'link',
+          url: `wikilink://${safeValue}`,
+          children: [{ type: 'text', value: label }],
+        })
+        lastIdx = m.index + m[0].length
+      }
+      if (lastIdx < text.length) parts.push({ type: 'text', value: text.slice(lastIdx) })
+
+      parent.children.splice(index, 1, ...parts)
+      return index + parts.length
+    })
+  }
+}
+
 const BasePathsContext = React.createContext<string[] | undefined>(undefined)
+
+/** 双链（[[...]]）点击处理：由记忆面板等启用双链的宿主提供，跳到对应记忆文件 */
+type WikilinkClickHandler = (name: string) => void
+const WikilinkClickContext = React.createContext<WikilinkClickHandler | undefined>(undefined)
+
+/** 提供双链点击处理器（记忆面板用；不提供则 wikilink 渲染为不可点击文本） */
+export function WikilinkClickProvider({ onClick, children }: { onClick: WikilinkClickHandler; children: React.ReactNode }): React.ReactElement {
+  return <WikilinkClickContext.Provider value={onClick}>{children}</WikilinkClickContext.Provider>
+}
 
 /** 提供附加目录候选给所有内嵌的 MessageResponse */
 export function BasePathsProvider({ basePaths, children }: { basePaths?: string[]; children: React.ReactNode }): React.ReactElement {
@@ -425,11 +470,14 @@ export function localFileUrlToPath(url: string): string | null {
   }
 }
 
-/** 允许 mention:// 和安全的本机 file:// 协议通过 URL 清洗。 */
+/** 允许 mention:// 与 wikilink:// 以及安全的本机 file:// 协议通过 URL 清洗。 */
 function mentionUrlTransform(url: string): string {
-  if (url.startsWith('mention://') || localFileUrlToPath(url)) return url
+  if (url.startsWith('mention://') || url.startsWith('wikilink://') || localFileUrlToPath(url)) return url
   return defaultUrlTransform(url)
 }
+
+/** wikilink:// URL 匹配 */
+const WIKILINK_URL_RE = /^wikilink:\/\/(.+)$/
 
 // ===== Memo'd Markdown 子组件（稳定引用，避免 react-markdown 每帧重建组件映射） =====
 
@@ -446,12 +494,36 @@ const MarkdownLink = React.memo(function MarkdownLink({
   const store = useStore()
   const openPreview = useOpenPreview()
   const tabletMode = useTabletMode()
+  const onWikilinkClick = React.useContext(WikilinkClickContext)
 
   // mention:// 协议 → 渲染为 MentionChip
   if (href) {
     const mentionMatch = MENTION_URL_RE.exec(href)
     if (mentionMatch) {
       return <MentionChip type={mentionMatch[1] as MentionType} value={mentionMatch[2] ?? ''} />
+    }
+    const wikilinkMatch = WIKILINK_URL_RE.exec(href)
+    if (wikilinkMatch) {
+      const name = safeDecode(wikilinkMatch[1] ?? '')
+      return (
+        <span
+          role="link"
+          tabIndex={onWikilinkClick ? 0 : -1}
+          onClick={(e) => {
+            e.preventDefault(); e.stopPropagation()
+            if (tabletMode || !onWikilinkClick) return
+            onWikilinkClick(name)
+          }}
+          onKeyDown={(e) => {
+            if (onWikilinkClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onWikilinkClick(name) }
+          }}
+          className="inline-flex cursor-pointer items-center gap-0.5 rounded px-1 py-[1px] align-baseline text-[13px] font-medium text-primary underline decoration-primary/40 underline-offset-2 transition-colors hover:bg-primary/10"
+          title={`跳转到记忆：${name}`}
+        >
+          <Link2 className="size-3 inline shrink-0" />
+          {name}
+        </span>
+      )
     }
   }
 
