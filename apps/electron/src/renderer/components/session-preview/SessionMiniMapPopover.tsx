@@ -19,13 +19,14 @@ import { channelsAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
 import type {
   ChatMessage,
-  SDKAssistantMessage,
-  SDKContentBlock,
   SDKMessage,
-  SDKSystemMessage,
-  SDKUserContentBlock,
-  SDKUserMessage,
 } from '@profer/shared'
+import {
+  getGroupId,
+  getGroupPreview,
+  groupIntoTurns,
+  type MessageGroup,
+} from '@/components/agent/SDKMessageRenderer'
 
 export type SessionMiniMapType = 'chat' | 'agent'
 
@@ -277,22 +278,6 @@ function normalizePreviewText(text: string): string {
     .trim()
 }
 
-function sdkBlockText(block: SDKContentBlock | SDKUserContentBlock): string {
-  if (block.type === 'text' && 'text' in block && typeof block.text === 'string') {
-    return block.text
-  }
-  if (block.type === 'thinking' && 'thinking' in block && typeof block.thinking === 'string') {
-    return block.thinking
-  }
-  if (block.type === 'tool_use' && 'name' in block && typeof block.name === 'string') {
-    return `调用工具 ${block.name || 'tool'}`
-  }
-  if (block.type === 'tool_result') {
-    return block.is_error ? '工具结果出错' : '工具返回结果'
-  }
-  return ''
-}
-
 function buildChatMinimapItems(messages: ChatMessage[], userAvatar?: string): TabMinimapItem[] {
   return messages
     .map((message) => ({
@@ -306,57 +291,21 @@ function buildChatMinimapItems(messages: ChatMessage[], userAvatar?: string): Ta
 }
 
 function buildAgentMinimapItems(messages: SDKMessage[], userAvatar?: string): TabMinimapItem[] {
-  const items: TabMinimapItem[] = []
-
-  for (const message of messages) {
-    if (message.type === 'assistant') {
-      const assistant = message as SDKAssistantMessage
-      const blocks = Array.isArray(assistant.message?.content) ? assistant.message.content : []
-      const preview = normalizePreviewText(blocks.map(sdkBlockText).filter(Boolean).join(' ')).slice(0, 220)
-      if (!preview) continue
-      items.push({
-        id: assistant.uuid ?? `assistant-${items.length}`,
-        role: 'assistant',
+  // 必须与 AgentMessages 使用同一套 turn 分组逻辑：tool_result 是工具链内部消息，
+  // 不能在预览中作为“工具返回结果”单独占一行。
+  const groups = groupIntoTurns(messages)
+  return groups
+    .map((group: MessageGroup): TabMinimapItem => {
+      const preview = normalizePreviewText(getGroupPreview(group)).slice(0, 220)
+      return {
+        id: getGroupId(group),
+        role: group.type === 'user' ? 'user' : group.type === 'system' ? 'status' : 'assistant',
         preview,
-        model: assistant._channelModelId ?? assistant.message?.model,
-      })
-      continue
-    }
-
-    if (message.type === 'user') {
-      const user = message as SDKUserMessage
-      const blocks = Array.isArray(user.message?.content) ? user.message.content : []
-      const preview = normalizePreviewText(blocks.map(sdkBlockText).filter(Boolean).join(' ')).slice(0, 220)
-      if (!preview) continue
-      items.push({
-        id: user.uuid ?? `user-${items.length}`,
-        role: 'user',
-        preview,
-        avatar: userAvatar,
-      })
-      continue
-    }
-
-    if (message.type === 'system') {
-      const system = message as SDKSystemMessage
-      const preview = system.subtype === 'compact_boundary'
-        ? '上下文已压缩'
-        : system.subtype === 'compacting'
-          ? '正在压缩上下文...'
-          : system.subtype === 'permission_denied'
-            ? '自动审批已拒绝操作'
-            : ''
-      if (preview) {
-        items.push({
-          id: `${system.subtype ?? 'system'}-${items.length}`,
-          role: 'status',
-          preview,
-        })
+        avatar: group.type === 'user' ? userAvatar : undefined,
+        model: group.type === 'assistant-turn' ? group.model : undefined,
       }
-    }
-  }
-
-  return items
+    })
+    .filter((item) => item.preview.length > 0)
 }
 
 function usePopoverPosition(
