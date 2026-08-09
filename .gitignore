@@ -86,6 +86,7 @@ package.json.bak-*
 patches/*.patch.bak-*
 dev-run.log
 dev-start*.log
+*.dev-start*.log
 *.upgrade-backup
 
 # Tablet remote 开发模式目录与本地产物（不入库/不打包）
