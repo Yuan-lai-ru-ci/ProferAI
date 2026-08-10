@@ -1,5 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import { markdownToHtml, markdownToSafeDisplayHtml } from './markdown-rich-text'
+import { unescapeMarkdownTextForClipboard } from '@/components/chat/CopyButton'
+
+describe('message copy plain-text normalization', () => {
+  test('restores Windows path separators escaped by the rich text editor', () => {
+    const escapedPath = String.raw`C:\\Users\\yuan\\.profer\\agent-workspaces\\profer\\session\\.context\\handoff.md`
+
+    expect(unescapeMarkdownTextForClipboard(escapedPath)).toBe(
+      String.raw`C:\Users\yuan\.profer\agent-workspaces\profer\session\.context\handoff.md`
+    )
+  })
+
+  test('does not change an already plain Windows path', () => {
+    const path = String.raw`C:\Users\yuan\.profer\agent-workspaces\profer\session\.context\handoff.md`
+
+    expect(unescapeMarkdownTextForClipboard(path)).toBe(path)
+  })
+})
 
 describe('markdownToHtml rich preview blocks', () => {
   test('renders markdown tables as standard HTML tables', () => {
