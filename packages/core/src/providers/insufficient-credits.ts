@@ -78,9 +78,14 @@ export function detectInsufficientCredits(
   //  - Profer 自有 402：'额度不足' / 'insufficient_credits'
   //  - New API 上游 403：'预扣费额度失败' / 含 '＄'/'$' 金额 / 'insufficient ... quota'
   //  - server 翻译后：'平台额度' + code='insufficient_credits'
+  // “Insufficient account balance” 是供应商渠道自身的账户余额不足，不能误导为
+  // 当前 Profer 用户额度不足；服务端会转换为 upstream_channel_insufficient。
+  const isUpstreamChannelBalance = /insufficient\s+account\s+balance/i.test(text)
   const quotaTextHit =
-    /额度不足|预扣费|平台额度|insufficient[\s_]*(credits|quota|balance)?/i.test(text) ||
-    /[＄$]\s*[0-9]/.test(text)
+    !isUpstreamChannelBalance && (
+      /额度不足|预扣费|平台额度|insufficient[\s_]*(credits|quota|balance)?/i.test(text) ||
+      /[＄$]\s*[0-9]/.test(text)
+    )
 
   // 判定为额度不足的条件：
   //  - 状态码是 402（Profer 自有），或

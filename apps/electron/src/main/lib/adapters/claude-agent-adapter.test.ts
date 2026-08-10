@@ -31,4 +31,13 @@ describe('Claude 适配器上游额度错误', () => {
     expect(error.title).toBe('额度不足')
     expect(error.canRetry).toBe(false)
   })
+
+  test('Given 上游供应通道账户余额不足 When 映射错误 Then 不引导用户充值且可重试', () => {
+    const message = 'API Error: 403 {"error":"当前模型供应通道额度不足","code":"upstream_channel_insufficient"}'
+    const error = mapSDKErrorToTypedError('unknown', message, message)
+    expect(error.code).toBe('provider_error')
+    expect(error.title).toBe('模型供应通道暂不可用')
+    expect(error.canRetry).toBe(true)
+    expect(error.actions.some((action) => action.action === 'open_credits')).toBe(false)
+  })
 })

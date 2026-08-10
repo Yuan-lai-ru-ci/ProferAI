@@ -11,6 +11,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { PanelRight } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -19,6 +20,7 @@ import {
 import type { TabItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
+import { replayIntroOpenAtom } from '@/atoms/intro-atoms'
 import {
   agentSessionsAtom,
   agentSidePanelOpenAtom,
@@ -418,6 +420,52 @@ function TabBarInner({
       {showOpenPanelButton && (
         <AgentPanelOpenButton isWindows={isWindows} onToggle={togglePanel} />
       )}
+
+      {/* 开屏动画重播按钮：点按重播黑白水波纹开场动画（用于测试/重看） */}
+      <IntroReplayButton isWindows={isWindows} offsetByPanel={showOpenPanelButton} />
+    </div>
+  )
+}
+
+/** 开屏动画重播按钮：立即在面板按钮左侧（避免与窗口控件/文件面板按钮重叠）。
+ *  点击直接把 replayIntroOpenAtom 置 true，由 App 层渲染全屏 IntroWaterRipple。 */
+function IntroReplayButton({
+  isWindows,
+  offsetByPanel,
+}: {
+  isWindows: boolean
+  offsetByPanel: boolean
+}): React.ReactElement {
+  const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
+  // Windows：右上角是 WindowControls（~118px），按钮必须在其左侧（≥132px）；
+  // 面板按钮在 Windows 下位于 right-[132px]，重播按钮再往左让 34px 并排。
+  // 非 Windows：无窗口控件，面板按钮在 right-[9px]，重播按钮并排在其左侧。
+  const right = isWindows
+    ? (offsetByPanel ? 166 : 132)
+    : (offsetByPanel ? 43 : 9)
+
+  return (
+    <div
+      className="absolute inset-y-0 z-10 flex items-end pb-[3px] titlebar-no-drag"
+      style={{ right }}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="relative h-7 w-7"
+            aria-label="重播开屏动画"
+            onClick={() => setReplayIntroOpen(true)}
+          >
+            <Sparkles className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <p>重播开屏动画</p>
+        </TooltipContent>
+      </Tooltip>
     </div>
   )
 }

@@ -8,7 +8,7 @@
 #
 # 关键点：两库都是 WAL 模式，裸 cp 只拷 .db 会丢掉未 checkpoint 的 WAL 数据。
 #   - proma-team 容器无 sqlite3 CLI → 用 better-sqlite3 的 `VACUUM INTO` 出一致性快照
-#   - new-api    容器自带 sqlite3   → 用 `.backup` 在线热备
+#   - new-api    当前镜像不保证 sqlite3/Python CLI → 宿主机 Python 访问其 bind mount，用 Connection.backup() 在线热备
 #   两种方式都是 SQLite 官方一致性快照，无需停容器。
 #
 # 存储：~/proma-team-server/backups/auto/，gzip 压缩，保留最近 $KEEP 份轮转。
@@ -58,18 +58,26 @@ docker exec proma-team rm -f /tmp/pt-backup.db 2>/dev/null || true
 gzip -f "${PT_OUT}"
 log "[proma-team] 完成 → ${PT_OUT}.gz ($(du -h "${PT_OUT}.gz" | cut -f1))"
 
-# ---------- 2. one-api.db (sqlite3 .backup) ----------
+# ---------- 2. one-api.db (Python sqlite3 backup) ----------
 NA_OUT="${BACKUP_ROOT}/one-api-${TS}.db"
-log "[new-api] sqlite3 .backup 在线热备..."
-docker exec new-api rm -f /tmp/na-backup.db 2>/dev/null || true
-docker exec new-api sqlite3 /data/one-api.db ".backup '/tmp/na-backup.db'" || fail "[new-api] .backup 失败"
-ic="$(docker exec new-api sqlite3 /tmp/na-backup.db 'PRAGMA integrity_check;' | head -1 || true)"
-[ "${ic}" = "ok" ] || fail "[new-api] integrity_check 失败: ${ic}"
-log "[new-api] integrity_check ok"
-docker cp new-api:/tmp/na-backup.db "${NA_OUT}" || fail "[new-api] docker cp 失败"
-docker exec new-api rm -f /tmp/na-backup.db 2>/dev/null || true
+log "[new-api] 宿主机 Python sqlite3 在线热备..."
+NEWAPI_DB="${NEWAPI_DB:-${HOME}/new-api-data/one-api.db}"
+python3 - "${NEWAPI_DB}" "${NA_OUT}" <<'PYEOF' || fail "[new-api] sqlite backup 失败"
+import sqlite3
+import sys
+source = sqlite3.connect(sys.argv[1])
+target = sqlite3.connect(sys.argv[2])
+try:
+    source.backup(target)
+    result = target.execute('PRAGMA integrity_check').fetchone()
+    if result != ('ok',):
+        raise RuntimeError(f'integrity_check failed: {result!r}')
+    print('integrity_check ok')
+finally:
+    target.close()
+    source.close()
+PYEOF
 gzip -f "${NA_OUT}"
-log "[new-api] 完成 → ${NA_OUT}.gz ($(du -h "${NA_OUT}.gz" | cut -f1))"
 
 # ---------- 3. 轮转：每个库保留最近 $KEEP 份 ----------
 rotate() {
