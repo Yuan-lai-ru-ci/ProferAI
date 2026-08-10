@@ -585,7 +585,7 @@ function createMathView(initialNode: ProseMirrorNode, displayMode: boolean) {
 
 function createShikiCodeBlockView(initialNode: ProseMirrorNode, view: EditorView) {
   const dom = document.createElement('div')
-  setClass(dom, 'not-prose my-3 overflow-hidden rounded-md border border-border/40 bg-muted/30')
+  setClass(dom, 'not-prose my-3 overflow-hidden rounded-md border border-border/40 bg-[hsl(var(--code-bg))]')
   dom.dataset.proferCodeBlock = 'true'
 
   // 头部栏：语言标签 + 复制按钮
