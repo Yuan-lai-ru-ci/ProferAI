@@ -1126,7 +1126,7 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
       </MessageContent>
       {text && (
         <MessageActions className="pl-[46px] mt-0.5">
-          <CopyButton content={text} />
+          <CopyButton content={text} copyAsPlainText />
         </MessageActions>
       )}
     </Message>
