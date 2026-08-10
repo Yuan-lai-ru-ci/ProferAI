@@ -60,7 +60,6 @@ interface IndexCache {
   signatures: Map<string, string>
 }
 
-const cacheByDir = new Map<string, IndexCache>()
 
 /** 中文字符区间 */
 const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/
@@ -146,8 +145,10 @@ export function createMemoryArchiveSearcher(memoryArchivePath: string) {
   const fileRowIds = new Map<string, number>()
   /** absFile -> 最新 mtime/size，用于跳过未变更文件 */
   const fileMeta = new Map<string, { mtime: number; size: number }>()
-  let cache = cacheByDir.get(memoryDir)
-  if (!cache) { cache = { signatures: new Map() }; cacheByDir.set(memoryDir, cache) }
+  // SQLite 索引和 rowFiles 映射均属于当前 searcher 实例。签名缓存也必须随实例
+  // 生命周期创建，不能跨实例复用；否则新 searcher 的内存数据库为空，却会因旧实例
+  // 的签名而跳过首次建索引，造成所有检索返回空结果。
+  const cache: IndexCache = { signatures: new Map() }
 
   /** 是否已扫描过目录结构（避免每次重复 readdir） */
   let scannedDir = false
@@ -311,7 +312,6 @@ export function createMemoryArchiveSearcher(memoryArchivePath: string) {
     fileRowIds.clear()
     fileMeta.clear()
     scannedDir = false
-    cacheByDir.delete(memoryDir)
   }
 
   return { search, rebuildAll, close }

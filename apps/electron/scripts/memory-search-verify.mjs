@@ -90,6 +90,14 @@ rmSync(join(memoryDir, 'pr-wflow.md'))
 const afterDelete = searcher.search('worktree')
 check('删除文件不再命中', afterDelete.length === 0)
 
+console.log('=== 跨搜索器生命周期 ===')
+// 搜索器使用独立内存 SQLite 索引。第二个实例必须自行完成首次索引，不能复用
+// 第一个实例的文件签名缓存，否则会出现“工具可调用但始终返回空结果”。
+const secondSearcher = svc.createMemoryArchiveSearcher(memoryDir)
+const secondInstanceHits = secondSearcher.search('撤销')
+check('新搜索器可检索既有文件', secondInstanceHits.length === 1 && secondInstanceHits[0].relativePath === 'new-topic.md')
+secondSearcher.close()
+
 console.log(`\n结果：${pass} 通过, ${fail} 失败`)
 searcher.close()
 rmSync(wsRoot, { recursive: true, force: true })
