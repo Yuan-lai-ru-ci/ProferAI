@@ -255,6 +255,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const refreshVersion = refreshVersionMap.get(sessionId) ?? 0
   const previewContentVersion = previewOnly ? refreshVersion : 0
   const theme = useAtomValue(resolvedThemeAtom)
+  // md 文档预览代码块背景统一为深色 --code-bg（与聊天消息代码块一致），
+  // 因此 Shiki 恒用深色主题，避免浅色主题下代码块文字变黑。
+  const MD_SHIKI_THEME = 'github-dark' as const
   const [tocOpen, setTocOpen] = useAtom(markdownTocOpenAtom)
 
   const ext = getExtension(filePath)
@@ -1144,7 +1147,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   onRequestEdit={startMarkdownEdit}
                   disabled={markdownSaving}
                   fileAccess={markdownFileAccess}
-                  shikiTheme={theme === 'dark' ? 'github-dark' : 'github-light'}
+                  shikiTheme={MD_SHIKI_THEME}
                 />
               )
             ) : isPlainTextEditable && markdownEditing ? (

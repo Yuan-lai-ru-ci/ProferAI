@@ -1967,7 +1967,10 @@
 
 .ProseMirror .markdown-code-edit-layer code {
   background: transparent !important;
-  color: hsl(var(--foreground)) !important;
+  /* md 代码块背景恒为深色 --code-bg，故前景用浅色兜底（--code-fg）。
+     注意此规则不带 !important：Shiki 的 token 内联色（span 层）才能覆盖兜底色，
+     否则整块会固定成 --foreground（浅色主题下=黑字）且语法高亮失效。 */
+  color: hsl(var(--code-fg, 0 0% 90%));
   font: inherit !important;
   letter-spacing: 0 !important;
   line-height: inherit !important;
@@ -1975,7 +1978,7 @@
   tab-size: inherit;
   white-space: pre !important;
   -webkit-text-fill-color: currentColor;
-  caret-color: hsl(var(--foreground));
+  caret-color: hsl(var(--code-fg, 0 0% 90%));
 }
 
 .ProseMirror .markdown-code-edit-layer ::selection {
