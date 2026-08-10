@@ -68,6 +68,10 @@ describe('detectInsufficientCredits', () => {
     expect(detectInsufficientCredits('API Error: 403 invalid api key', 403)).toBeNull()
   })
 
+  test('上游供应通道的 Insufficient account balance 不误判为当前用户额度不足', () => {
+    expect(detectInsufficientCredits('API Error: 403 Insufficient account balance', 403)).toBeNull()
+  })
+
   test('server 翻译后的 平台额度暂时不足 也能识别', () => {
     const info = detectInsufficientCredits('{"error":"平台额度暂时不足，请联系管理员充值","code":"insufficient_credits"}', 403)
     expect(info).not.toBeNull()
