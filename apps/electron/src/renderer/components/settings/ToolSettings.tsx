@@ -2,7 +2,7 @@
  * ToolSettings - 工具设置页
  *
  * Chat 模式工具统一管理 tab。
- * 内嵌 MemorySettings（记忆工具）+ 联网搜索工具配置。
+ * 管理联网搜索、生图与自定义工具配置。
  */
 
 import * as React from 'react'
@@ -12,7 +12,6 @@ import { ExternalLink, Eye, EyeOff, Loader2, CheckCircle2, XCircle, Trash2 } fro
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
-import { MemorySettings } from './MemorySettings'
 import { SettingsSection, SettingsCard } from './primitives'
 import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
 
@@ -467,9 +466,6 @@ function CustomToolsSection(): React.ReactElement | null {
 export function ToolSettings(): React.ReactElement {
   return (
     <div className="space-y-8">
-      {/* 记忆工具（复用现有 MemorySettings 组件） */}
-      <MemorySettings />
-
       {/* 联网搜索工具 */}
       <WebSearchSettings />
 
