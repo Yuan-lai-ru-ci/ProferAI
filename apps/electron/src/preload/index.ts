@@ -427,6 +427,9 @@ export interface ElectronAPI {
   openSkinTemplateFolder: () => Promise<void>
   refreshSkins: () => Promise<import('../types').SkinInfo[]>
 
+  /** 通知主进程 renderer 已完成首屏初始化 */
+  notifyRendererReady: () => void
+
   /** 获取应用设置 */
   getSettings: () => Promise<AppSettings>
 
@@ -1732,6 +1735,7 @@ const electronAPI: ElectronAPI = {
   refreshSkins: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.REFRESH),
 
   // 应用设置
+  notifyRendererReady: () => { ipcRenderer.send(SETTINGS_IPC_CHANNELS.RENDERER_READY) },
   getSettings: () => {
     // 启动时去重：多个初始化组件同时调用 getSettings()，共享同一个 Promise
     if (!_settingsPromise) {

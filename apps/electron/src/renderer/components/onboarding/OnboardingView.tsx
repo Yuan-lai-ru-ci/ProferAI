@@ -5,8 +5,9 @@
  *
  * 流程：
  *  Step 0：开屏水波纹动画（Profer 从水面具现，自动进入下一步）
- *  Step 1：欢迎 + 教程入口
- *  Step 2：Windows 环境检测（仅 Windows，其他平台自动跳过）
+ *  Step 1：欢迎 + 迁移入口
+ *  Step 2：核心功能导览
+ *  Step 3：Windows 环境检测（仅 Windows，其他平台自动跳过）
  */
 
 import { useMemo, useState } from 'react'
@@ -19,11 +20,12 @@ import { isShellEnvironmentOkAtom } from '@/atoms/environment'
 import { detectIsWindows } from '@/lib/platform'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
 import { IntroWaterRipple } from './IntroWaterRipple'
+import { FeatureTour } from './FeatureTour'
 
 interface OnboardingViewProps {
   onComplete: (openTutorial?: boolean) => void
   /** 供主界面测试入口复用首次引导页；默认仍从开屏开始。 */
-  initialStep?: 'intro' | 'welcome' | 'environment'
+  initialStep?: 'intro' | 'welcome' | 'featureTour' | 'environment'
   /** 测试重放完成时不写入用户的首次 onboarding 状态。 */
   persistCompletion?: boolean
 }
@@ -33,7 +35,7 @@ export function OnboardingView({
   initialStep = 'intro',
   persistCompletion = true,
 }: OnboardingViewProps) {
-  const [step, setStep] = useState<'intro' | 'welcome' | 'environment'>(initialStep)
+  const [step, setStep] = useState<'intro' | 'welcome' | 'featureTour' | 'environment'>(initialStep)
   const isWindows = useMemo(() => detectIsWindows(), [])
   const shellOk = useAtomValue(isShellEnvironmentOkAtom)
   const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
@@ -46,6 +48,10 @@ export function OnboardingView({
   }
 
   const handleNextFromWelcome = () => {
+    setStep('featureTour')
+  }
+
+  const handleNextFromFeatureTour = () => {
     if (isWindows) {
       setStep('environment')
     } else {
@@ -132,20 +138,24 @@ export function OnboardingView({
 
           <div className="w-full max-w-2xl mt-8 flex flex-col items-center gap-2">
             <Button className="w-full h-12 text-base" onClick={handleNextFromWelcome}>
-              {isWindows ? (
-                <>
-                  下一步：环境检测
-                  <ChevronRight className="ml-1 h-4 w-4" />
-                </>
-              ) : (
-                '开始使用'
-              )}
+              <>
+                了解 Profer 能做什么
+                <ChevronRight className="ml-1 h-4 w-4" />
+              </>
             </Button>
             <p className="text-xs text-muted-foreground/60">
               这些内容之后也能在设置中找到，不用担心错过
             </p>
           </div>
         </>
+      )}
+
+      {step === 'featureTour' && (
+        <FeatureTour
+          finishLabel={isWindows ? '下一步：环境检测' : '开始使用'}
+          onNext={handleNextFromFeatureTour}
+          onSkip={handleNextFromFeatureTour}
+        />
       )}
 
       {step === 'environment' && isWindows && (
@@ -165,7 +175,7 @@ export function OnboardingView({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setStep('welcome')}
+              onClick={() => setStep('featureTour')}
               className="text-muted-foreground"
             >
               <ChevronLeft className="mr-1 h-4 w-4" />
