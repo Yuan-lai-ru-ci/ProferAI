@@ -41,6 +41,7 @@ import {
   deleteAgentSession,
   forkAgentSession,
   moveSessionToWorkspace,
+  paginateSDKMessages,
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir } from './config-paths'
 import { getSettings } from './settings-service'
@@ -647,8 +648,20 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'get_sdk_messages': {
       const id = parsed.sessionId as string
       if (!id) return { ok: false, error: '缺少 sessionId' }
-      // 返回原始 SDKMessage 数组，供桌面式 AgentMessages 渲染（与持久化格式一致）
-      return { ok: true, data: getAgentSessionSDKMessages(id) }
+      const messages = getAgentSessionSDKMessages(id)
+      // 分页参数存在时返回分页结构（移动端传输层懒加载）；否则返回原始数组（兼容旧端/全文加载）。
+      const wantsPaged =
+        parsed.before !== undefined ||
+        parsed.targetMessages !== undefined
+      if (!wantsPaged) {
+        // 返回原始 SDKMessage 数组，供桌面式 AgentMessages 渲染（与持久化格式一致）
+        return { ok: true, data: messages }
+      }
+      const page = paginateSDKMessages(messages, {
+        before: typeof parsed.before === 'number' ? parsed.before : undefined,
+        targetMessages: typeof parsed.targetMessages === 'number' ? parsed.targetMessages : undefined,
+      })
+      return { ok: true, data: page }
     }
 
     case 'session_detail': {

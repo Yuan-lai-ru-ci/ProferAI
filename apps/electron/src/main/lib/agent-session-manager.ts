@@ -50,6 +50,7 @@ import {
   type AgentSessionMeta,
   type AgentMessage,
   type SDKMessage,
+  type SDKUserMessage,
   type ForkSessionInput,
   type AgentMessageSearchResult,
   type AgentSessionReferenceSearchInput,
@@ -58,6 +59,7 @@ import {
   type AgentRuntime,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
+import { isUserInputMessage } from '@profer/session-core'
 import {
   getGraphJsonlPath,
   parseEventsFromJsonl,
@@ -2208,4 +2210,72 @@ export function searchAgentSessionReferences(input: AgentSessionReferenceSearchI
   }
 
   return results
+}
+
+/**
+ * 按完整 turn 边界对会话消息做惰性分页（供移动端传输层懒加载）。
+ *
+ * 为什么按 turn 而非严格条数：渲染层 groupIntoTurns 依赖完整消息序列判定组边界
+ * （assistant + user(tool_result) 会跨多条合成一个 turn）。若在中途硬切，客户端分组
+ * 会断层/重复。因此：先按目标条数切出近似窗口，再把窗口起点快进到最近的用户输入
+ * 边界，保证每页都是若干完整的用户输入起始的 turn。
+ *
+ * 首帧与续页统一算法：
+ *   tailExclusive = before ?? total
+ *   startRaw       = max(0, tailExclusive - targetMessages)
+ *   start          = startRaw 向后（向尾部）快进到最近 user-input 边界
+ *   page           = messages[start, tailExclusive)
+ *   hasMore        = start > 0
+ *
+ * @param messages 完整有序 SDKMessage 数组（getAgentSessionSDKMessages 结果）
+ * @param opts.before 游标：只取索引 < before 的更早消息。缺省 = 取最新窗口（会话尾部）。
+ *                    移动端拿到某页 startIndex 后，补更早时传 before = 该 startIndex。
+ * @param opts.targetMessages 近似条数（缺省 10）。切出约这么多条后再补到完整 turn 边界。
+ */
+export interface SDKMessagePage {
+  messages: SDKMessage[]
+  total: number
+  startIndex: number
+  endIndex: number
+  hasMore: boolean
+}
+
+export interface PaginateSDKMessagesOptions {
+  before?: number
+  targetMessages?: number
+}
+
+export function paginateSDKMessages(
+  messages: SDKMessage[],
+  opts: PaginateSDKMessagesOptions = {},
+): SDKMessagePage {
+  const { before, targetMessages = 10 } = opts
+  const total = messages.length
+  if (total === 0) {
+    return { messages: [], total: 0, startIndex: 0, endIndex: -1, hasMore: false }
+  }
+
+  // 尾部上界（exclusive）
+  const tailExclusive =
+    before !== undefined && before >= 0 && before <= total ? before : total
+
+  // 统一切窗口起点的原始位置（首帧取最新 N 条；续页取 before 前 N 条）
+  let startIndex = Math.max(0, tailExclusive - targetMessages)
+  // 向后（向尾部方向）快进到第一个 user-input 边界，保证窗口起点是完整 turn 的 start。
+  // 若窗口本就从头开始，则保持 0。
+  for (let i = startIndex; i < tailExclusive; i++) {
+    const msg = messages[i]
+    if (msg && msg.type === 'user' && isUserInputMessage(msg as SDKUserMessage)) {
+      startIndex = i
+      break
+    }
+  }
+
+  return {
+    messages: messages.slice(startIndex, tailExclusive),
+    total,
+    startIndex,
+    endIndex: tailExclusive - 1,
+    hasMore: startIndex > 0,
+  }
 }
