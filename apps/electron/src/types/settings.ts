@@ -360,6 +360,7 @@ export const SKIN_IPC_CHANNELS = {
 } as const
 
 export const SETTINGS_IPC_CHANNELS = {
+  RENDERER_READY: 'settings:renderer-ready',
   GET: 'settings:get',
   UPDATE: 'settings:update',
   UPDATE_SYNC: 'settings:update-sync',

@@ -83,7 +83,7 @@ export function IntroWaterRipple({ onDone, durationMs = 5000 }: {
       <div className="pointer-events-none absolute inset-0 z-[1] bg-[radial-gradient(ellipse_at_50%_56%,transparent_48%,rgba(0,0,0,.16)_100%)]" />
       <h1
         ref={nameRef}
-        className="absolute left-1/2 top-1/2 z-10 font-sans font-semibold italic"
+        className="absolute left-1/2 top-1/2 z-10 w-max whitespace-nowrap overflow-visible px-[0.12em] font-sans font-semibold italic"
         style={{
           fontSize: 'clamp(52px, 10vw, 112px)',
           letterSpacing: '-0.045em',

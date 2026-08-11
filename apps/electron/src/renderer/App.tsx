@@ -50,6 +50,11 @@ export default function App(): React.ReactElement {
     initialize()
   }, [])
 
+  // 等 React 真正提交掉“正在初始化...”后，再允许主进程撤掉原生启动页。
+  React.useEffect(() => {
+    if (!isLoading) window.electronAPI.notifyRendererReady()
+  }, [isLoading])
+
   // 完成 onboarding 回调：创建欢迎对话，可选打开教程 Tab
   const handleOnboardingComplete = async (openTutorial?: boolean) => {
     setShowOnboarding(false)

@@ -995,6 +995,12 @@ function assertSensitiveAgentIpcSender(event: { sender: { isDestroyed(): boolean
   assertMainWindowSender(event, mainWindowGetter)
 }
 
+let rendererReadyHandler: (() => void) | null = null
+
+export function setRendererReadyHandler(handler: (() => void) | null): void {
+  rendererReadyHandler = handler
+}
+
 export function registerIpcHandlers(): void {
   // 幂等守卫：正常启动与启动失败降级路径（index.ts:520 / index.ts:748）都会调用本函数。
   // ipcMain.handle 会按 channel 去重覆盖，但 ipcMain.on / nativeTheme.on / setInterval 等副作用
@@ -1016,6 +1022,11 @@ export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
 
   // ===== 运行时相关 =====
+
+  // renderer 完成首屏初始化后通知主进程，允许原生启动页退场。
+  ipcMain.on(SETTINGS_IPC_CHANNELS.RENDERER_READY, () => {
+    rendererReadyHandler?.()
+  })
 
   // 获取运行时状态
   ipcMain.handle(
