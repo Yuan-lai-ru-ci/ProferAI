@@ -158,6 +158,11 @@ export function TabletModeSettings(): React.ReactElement {
             onCheckedChange={(enabled) => void toggle(enabled)}
             disabled={saving}
           />
+          {status.error && (
+            <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs leading-5 text-destructive">
+              {status.error}
+            </div>
+          )}
           <div className="flex flex-col gap-2.5 px-4 py-3.5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">

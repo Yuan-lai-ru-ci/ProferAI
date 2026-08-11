@@ -177,7 +177,11 @@ export interface RemoteServiceStatus {
   localUrl: string | null
   lanUrl: string | null
   token: string | null
+  /** 最近一次启动失败原因；服务恢复后清空。 */
+  error: string | null
 }
+
+let remoteError: string | null = null
 
 function getLanUrl(port: number): string | null {
   try {
@@ -201,6 +205,7 @@ export function getRemoteServiceStatus(): RemoteServiceStatus {
     localUrl: listenAddress,
     lanUrl: listenAddress ? getLanUrl(port) : null,
     token: listenAddress ? accessToken : null,
+    error: remoteError,
   }
 }
 
@@ -1102,6 +1107,7 @@ export function startRemoteService(): string | null {
     return null
   }
   isStarted = true
+  remoteError = null
 
   // 初始化 token
   accessToken = loadOrCreateToken()
@@ -1190,13 +1196,23 @@ export function startRemoteService(): string | null {
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
   const HOST = process.env.PROFER_REMOTE_HOST || '0.0.0.0'
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    // listen() 是异步的；端口冲突不能冒泡成 Electron 主进程未捕获异常。
     isStarted = false
     listenAddress = null
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[Remote] 端口 ${port} 被占用，请通过 PROFER_REMOTE_PORT 更换端口`)
-    } else {
-      console.error('[Remote] 服务错误:', err)
-    }
+    remoteError = err.code === 'EADDRINUSE'
+      ? `端口 ${port} 已被占用，请关闭占用它的 Profer 实例，或在设置中改用其他端口。`
+      : `移动模式服务启动失败：${err.message || '未知错误'}`
+    console.error('[Remote]', remoteError, err)
+
+    eventBusUnsubscribe?.()
+    eventBusUnsubscribe = null
+    chatBusUnsubscribe?.()
+    chatBusUnsubscribe = null
+    try { wss?.close() } catch { /* ignore */ }
+    wss = null
+    const failedServer = httpServer
+    httpServer = null
+    try { failedServer?.close() } catch { /* ignore */ }
   })
 
   httpServer.listen(port, HOST, () => {
@@ -1223,6 +1239,7 @@ export function startRemoteService(): string | null {
 
   // Electron 主进程可能因 GUI/生命周期时序影响异步 bind，做一次就绪校验告警
   httpServer.on('listening', () => {
+    remoteError = null
     console.log(`[Remote] 服务已在 ${HOST}:${port} 就绪`)
   })
 
@@ -1245,5 +1262,6 @@ export function stopRemoteService(): void {
   httpServer = null
   isStarted = false
   listenAddress = null
+  remoteError = null
   console.log('[Remote] 移动版服务已停止')
 }

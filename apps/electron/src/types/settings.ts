@@ -339,6 +339,8 @@ export interface TabletModeStatus {
   localUrl: string | null
   lanUrl: string | null
   token: string | null
+  /** 最近一次启动失败原因；服务恢复后清空。 */
+  error: string | null
 }
 
 export const SKIN_IPC_CHANNELS = {
