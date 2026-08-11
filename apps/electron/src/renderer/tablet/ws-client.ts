@@ -336,8 +336,15 @@ export class WsClient {
     return this.sendCommand({ type: 'session_detail', sessionId })
   }
 
-  getSdkMessages(sessionId: string): Promise<unknown> {
-    return this.sendCommand({ type: 'get_sdk_messages', sessionId })
+  getSdkMessages(
+    sessionId: string,
+    opts?: { before?: number; targetMessages?: number },
+  ): Promise<unknown> {
+    return this.sendCommand({
+      type: 'get_sdk_messages',
+      sessionId,
+      ...(opts ?? {}),
+    })
   }
 
   getPendingInteractions(sessionId?: string): Promise<unknown> {

@@ -12,6 +12,7 @@
  */
 
 import * as React from 'react'
+import { extractUserText, isUserInputMessage } from '@profer/session-core'
 import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
@@ -198,20 +199,8 @@ export function extractTurnUsage(
 }
 
 // ===== 辅助：从 user 消息中提取纯文本内容 =====
-
-export function extractUserText(message: SDKUserMessage): string | null {
-  const content = message.message?.content
-  if (!Array.isArray(content)) return null
-
-  const texts: string[] = []
-  for (const block of content) {
-    if (block.type === 'text' && 'text' in block) {
-      texts.push((block as { text: string }).text)
-    }
-  }
-
-  return texts.length > 0 ? texts.join('\n') : null
-}
+// extractUserText / isUserInputMessage 统一由 @profer/session-core 提供，
+// 保证服务端分页 turn 边界与渲染层 groupIntoTurns 判定一致。
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -233,16 +222,7 @@ function extractToolResultForTask(message: SDKUserMessage, resultBlock: SDKToolR
 }
 
 // ===== 辅助：判断 user 消息是否为真正的人类用户输入（非工具结果/子代理提示） =====
-
-function isUserInputMessage(message: SDKUserMessage): boolean {
-  if (message.parent_tool_use_id) return false
-  // SDK 合成消息（如 Skill 展开 prompt）不是用户输入
-  if (message.isSynthetic) return false
-  // 包含 tool_result 块的消息是工具结果，不是用户输入
-  const content = message.message?.content
-  if (Array.isArray(content) && content.some((b) => b.type === 'tool_result')) return false
-  return extractUserText(message) !== null
-}
+// 见文件头 import：isUserInputMessage 引自 @profer/session-core（与服务端分页共用同一判据）
 
 // ===== 助手头像 =====
 
