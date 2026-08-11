@@ -940,8 +940,8 @@ export function migrateChatToAgentSession(conversationId: string, agentSessionId
 async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessionInput): Promise<AgentSessionMeta> {
   const targetUuid = input.upToMessageUuid
   if (!targetUuid) throw new Error('Pi 分叉需要指定一条已完成的 assistant 消息')
-  const entryId = sourceMeta.piEntryBindings?.[targetUuid]
-  if (!entryId) throw new Error('该 Pi 历史消息尚无 entry ID 映射，无法安全分叉；请在新版 Profer 中继续一次对话后再试')
+  const forkPoint = resolvePiForkPoint(sourceMeta, targetUuid)
+  if (!forkPoint) throw new Error('该 Pi 历史消息尚无可用的 entry ID 映射，无法安全分叉；请在新版 Profer 中继续一次对话后再试')
   if (!sourceMeta.piSessionFile || !existsSync(sourceMeta.piSessionFile)) {
     throw new Error('未找到 Pi session artifact，无法安全分叉')
   }
@@ -964,13 +964,23 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     const sdk = await import('@earendil-works/pi-coding-agent')
     const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
     const sourceManager = sdk.SessionManager.open(sourceMeta.piSessionFile, sessionDir, sourceDir)
-    const branchFile = sourceManager.createBranchedSession(entryId)
+    const branchFile = sourceManager.createBranchedSession(forkPoint.entryId)
     if (!branchFile || !existsSync(branchFile)) {
       throw new Error('Pi 未能生成分叉 session artifact')
     }
     const forkedManager = sdk.SessionManager.forkFrom(branchFile, destDir ?? sourceDir ?? process.cwd(), sessionDir)
     const piSessionFile = forkedManager.getSessionFile()
     if (!piSessionFile || !existsSync(piSessionFile)) throw new Error('Pi 分叉 artifact 校验失败')
+    if (forkPoint.interruptedText) {
+      // 被中断的 assistant 消息没有可恢复的 Pi message entry，不能将其伪装为分叉点。
+      // 以最近的完整 entry 建 branch，并把已展示文字作为隐藏上下文追加到新 session。
+      forkedManager.appendCustomMessageEntry(
+        'profer-interrupted-assistant-context',
+        `上一轮助手回复被用户手动暂停。以下是暂停前已展示的内容；请将其视为已有上下文，不要重复输出，除非用户要求：\n\n${forkPoint.interruptedText}`,
+        false,
+        { sourceAssistantUuid: targetUuid },
+      )
+    }
     // 新 branch 只包含分叉点之前的 entry；不能把源树后续 turn 的映射带入 metadata。
     const branchBindings = Object.fromEntries(
       Object.entries(sourceMeta.piEntryBindings ?? {})
@@ -1001,6 +1011,49 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     try { deleteAgentSession(newMeta.id) } catch { /* 保留原始错误 */ }
     throw error
   }
+}
+
+interface PiForkPoint {
+  entryId: string
+  interruptedText?: string
+}
+
+/**
+ * 已完成 assistant 消息可直接作为 Pi tree branch leaf。手动暂停的 partial 消息
+ * 没有 entry binding 时，退回到它之前最近的完整 assistant entry，并在新分支写入
+ * 可供模型读取的隐藏文本上下文，避免把 aborted Pi message 当成可 resume 的节点。
+ */
+function resolvePiForkPoint(sourceMeta: AgentSessionMeta, targetUuid: string): PiForkPoint | undefined {
+  const bindings = sourceMeta.piEntryBindings ?? {}
+  const directEntryId = bindings[targetUuid]
+  if (directEntryId) return { entryId: directEntryId }
+
+  const messages = getAgentSessionSDKMessages(sourceMeta.id)
+  const targetIndex = messages.findIndex((message) => getStoredMessageUuid(message) === targetUuid)
+  if (targetIndex < 0) return undefined
+
+  const target = messages[targetIndex]
+  if (target?.type !== 'assistant') return undefined
+  const interruptedText = extractTextFromSDKMessage(target)
+  if (!interruptedText) return undefined
+
+  for (let index = targetIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message) continue
+    const entryId = bindings[getStoredMessageUuid(message) ?? '']
+    if (entryId) return { entryId, interruptedText }
+  }
+  return undefined
+}
+
+function extractTextFromSDKMessage(message: SDKMessage): string {
+  const content = (message as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text!)
+    .join('\n')
+    .trim()
 }
 
 interface CopyForkStoredSDKMessagesInput {

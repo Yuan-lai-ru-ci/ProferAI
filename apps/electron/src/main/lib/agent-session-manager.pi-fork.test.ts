@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
@@ -9,6 +9,8 @@ let manager: AgentSessionManager
 let tempHome: string
 const originalHome = process.env.HOME
 const originalPromaDev = process.env.PROMA_DEV
+const originalProferConfigDir = process.env.PROFER_CONFIG_DIR
+const appendedCustomMessages: Array<{ customType: string; content: string; display: boolean; details?: unknown }> = []
 
 // agent-session-manager loads Pi lazily for fork, so this focused fake isolates
 // entry-tree semantics without requiring a real Pi session JSONL fixture.
@@ -31,6 +33,10 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
         getSessionFile: () => forkFile,
         getSessionId: () => 'pi-fork-session',
         getEntry: (entryId: string) => entryId === 'entry-keep' ? { id: entryId } : undefined,
+        appendCustomMessageEntry: (customType: string, content: string, display: boolean, details?: unknown) => {
+          appendedCustomMessages.push({ customType, content, display, details })
+          return 'interrupted-context'
+        },
       }
     },
   },
@@ -73,7 +79,7 @@ function writeAgentSessionsIndex(sessions: Array<{
   piSessionFile?: string
   piEntryBindings?: Record<string, string>
 }>): void {
-  const dir = join(tempHome, '.profer')
+  const dir = join(tempHome, 'config')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'agent-sessions.json'), JSON.stringify({ version: 1, sessions }), 'utf-8')
 }
@@ -85,7 +91,7 @@ function writeAgentWorkspacesIndex(workspaces: Array<{
   createdAt: number
   updatedAt: number
 }>): void {
-  const dir = join(tempHome, '.profer')
+  const dir = join(tempHome, 'config')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'agent-workspaces.json'), JSON.stringify({ version: 3, workspaces: workspaces.map((w) => ({ ...w, type: 'personal' })) }), 'utf-8')
 }
@@ -94,6 +100,7 @@ beforeAll(async () => {
   tempHome = mkdtempSync(join(os.tmpdir(), 'profer-pi-fork-test-'))
   process.env.HOME = tempHome
   process.env.PROMA_DEV = '0'
+  process.env.PROFER_CONFIG_DIR = join(tempHome, 'config')
   manager = await import('./agent-session-manager')
 })
 
@@ -108,7 +115,16 @@ afterAll(() => {
   } else {
     process.env.PROMA_DEV = originalPromaDev
   }
+  if (originalProferConfigDir === undefined) {
+    delete process.env.PROFER_CONFIG_DIR
+  } else {
+    process.env.PROFER_CONFIG_DIR = originalProferConfigDir
+  }
   rmSync(tempHome, { recursive: true, force: true })
+})
+
+beforeEach(() => {
+  appendedCustomMessages.length = 0
 })
 
 describe('Pi 会话分叉', () => {
@@ -151,7 +167,7 @@ describe('Pi 会话分叉', () => {
     expect(persisted).toMatchObject({
       sdkSessionId: 'pi-fork-session',
       piEntryBindings: { 'assistant-1': 'entry-keep' },
-      forkSourceDir: join(tempHome, '.profer', 'agent-workspaces', 'workspace-a', 'pi-source-session'),
+      forkSourceDir: join(tempHome, 'config', 'agent-workspaces', 'workspace-a', 'pi-source-session'),
     })
   })
 
@@ -170,7 +186,7 @@ describe('Pi 会话分叉', () => {
     await expect(manager.forkAgentSession({
       sessionId: 'pi-no-bindings',
       upToMessageUuid: 'assistant-1',
-    })).rejects.toThrow('尚无 entry ID 映射')
+    })).rejects.toThrow('尚无可用的 entry ID 映射')
   })
 
   test('Given Pi 会话缺 piSessionFile When 分叉 Then 拒绝', async () => {
@@ -207,5 +223,39 @@ describe('Pi 会话分叉', () => {
     await expect(manager.forkAgentSession({
       sessionId: 'pi-no-target',
     })).rejects.toThrow('需要指定一条已完成的 assistant 消息')
+  })
+
+  test('Given Pi 中断消息没有 entry binding When 分叉 Then 从上一个完整 entry 建分支并保留中断文本上下文', async () => {
+    writeAgentSessionsIndex([{
+      id: 'pi-interrupted-session',
+      title: 'Pi 中断会话',
+      workspaceId: 'workspace-a',
+      createdAt: 1,
+      updatedAt: 1,
+      agentRuntime: 'pi',
+      sdkSessionId: 'pi-session-id',
+      piSessionFile: join(tempHome, 'pi-interrupted-session.jsonl'),
+      piEntryBindings: { 'assistant-complete': 'entry-keep' },
+    }])
+    mkdirSync(join(tempHome, 'config', 'agent-workspaces', 'workspace-a', 'pi-interrupted-session'), { recursive: true })
+    writeFileSync(join(tempHome, 'pi-interrupted-session.jsonl'), '', 'utf-8')
+    mkdirSync(join(tempHome, 'config', 'agent-sessions'), { recursive: true })
+    writeFileSync(join(tempHome, 'config', 'agent-sessions', 'pi-interrupted-session.jsonl'), [
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-complete', message: { content: [{ type: 'text', text: '完整回复' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-interrupted', message: { content: [{ type: 'text', text: '暂停前的部分回复' }] } }),
+    ].join('\n') + '\n', 'utf-8')
+
+    const forked = await manager.forkAgentSession({
+      sessionId: 'pi-interrupted-session',
+      upToMessageUuid: 'assistant-interrupted',
+    })
+
+    expect(forked.agentRuntime).toBe('pi')
+    expect(appendedCustomMessages).toEqual([{
+      customType: 'profer-interrupted-assistant-context',
+      content: expect.stringContaining('暂停前的部分回复'),
+      display: false,
+      details: { sourceAssistantUuid: 'assistant-interrupted' },
+    }])
   })
 })
