@@ -246,7 +246,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-background">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
-        <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
+        <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] flex-none crt-sidebar')}>
           <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
           {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
           {!sidebarCollapsed && (

@@ -31,6 +31,7 @@ import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/l
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
+import { allPendingAskUserRequestsAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
@@ -169,6 +170,51 @@ function TopHistoryLoader({
     el.addEventListener('scroll', handleScroll, { passive: true })
     return () => el.removeEventListener('scroll', handleScroll)
   }, [onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, scrollRef])
+
+  return null
+}
+
+/**
+ * 新一轮对话自动跟随滚动控制器（必须渲染在 <Conversation>(=StickToBottom) 内部）。
+ *
+ * use-stick-to-bottom 的默认行为：一旦用户向上滚动离开底部（escapedFromLock=true），
+ * isAtBottom 会保持 false 且不再自动恢复；此后即便内容高度增加，scrollToBottom 首帧
+ * 也会因 `!state.isAtBottom` 直接中止，导致"翻看历史后再输入新指令，界面不跟着往下走"。
+ *
+ * 两个触发信号，只要满足其一就主动调用 scrollToBottom()（scrollToBottom() 默认不带
+ * preserveScrollPosition，会先把 isAtBottom 置回 true 并解锁锁定，再平滑滚回底部）：
+ * 1. streaming 由 false→true：普通新一轮对话开始（用户发新消息）。
+ * 2. 本 session 的 pending AskUser 请求由有→无：AskUserQuestion 追问已解决，
+ *    agent 继续输出新内容时也要回到底部跟随（追问期间 streaming 一直保持 true，
+ *    不会经历 false→true，必须用这个独立信号补）。
+ */
+function StreamScrollFollow({ sessionId, streaming }: { sessionId: string; streaming: boolean }): React.ReactElement | null {
+  const { scrollToBottom } = useStickToBottomContext()
+  const pendingAskUsers = useAtomValue(allPendingAskUserRequestsAtom)
+  const prevStreamingRef = React.useRef(streaming)
+  const prevPendingCountRef = React.useRef(pendingAskUsers.get(sessionId)?.length ?? 0)
+
+  React.useEffect(() => {
+    // 信号1：streaming false → true（新一轮对话开始）
+    const wasStreaming = prevStreamingRef.current
+    prevStreamingRef.current = streaming
+    let shouldScroll = false
+
+    if (streaming && !wasStreaming) {
+      shouldScroll = true
+    }
+
+    // 信号2：本 session 的 AskUser 追问已解决（请求数由 >0 变 0）
+    const currentPendingCount = pendingAskUsers.get(sessionId)?.length ?? 0
+    if (prevPendingCountRef.current > 0 && currentPendingCount === 0) {
+      shouldScroll = true
+    }
+    prevPendingCountRef.current = currentPendingCount
+
+    if (shouldScroll) {
+      scrollToBottom({ animation: 'smooth', wait: true })
+    }
+  }, [streaming, pendingAskUsers, sessionId, scrollToBottom])
 
   return null
 }
@@ -691,6 +737,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
         historyMoreAvailable={tabletMode ? historyMoreAvailable : undefined}
         historyLoadingEarlier={tabletMode ? historyLoadingEarlier : undefined}
       />
+      <StreamScrollFollow sessionId={sessionId} streaming={streaming} />
       <ConversationContent>
         {tabletMode && hasContent && (historyLoadingEarlier || historyMoreAvailable === false) && (
           <div className="flex items-center justify-center py-2 text-xs text-muted-foreground/50">
