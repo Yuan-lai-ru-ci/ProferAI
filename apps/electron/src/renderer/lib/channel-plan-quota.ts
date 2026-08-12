@@ -29,7 +29,10 @@ export function getCachedPlanQuota(channelId: string, channelUpdatedAt?: number)
   const cached = quotaCache.get(channelId)
   // result 必须有效：历史缺陷曾把 undefined 写入缓存（IPC 实现缺失/平板 stub 兜底），
   // 二次查询读 cached.result.updatedAt 会抛 TypeError。
-  if (!cached || !cached.result || cached.channelUpdatedAt !== channelUpdatedAt) return null
+  if (!cached || !cached.result) return null
+  // 仅在调用方显式传入渠道版本时才做严格一致性校验；否则信任结果内部自带的 channelUpdatedAt，
+  // 避免「主进程回传版本后，未传参的二次查询因 undefined !== 实际版本而误判缓存失效」。
+  if (channelUpdatedAt != null && cached.channelUpdatedAt !== channelUpdatedAt) return null
   if (Date.now() - cached.result.updatedAt >= getCacheTtl(cached.result)) return null
   return cached.result
 }
@@ -58,7 +61,8 @@ export async function fetchChannelPlanQuota(
           message: '订阅额度查询失败',
         }
       }
-      quotaCache.set(channelId, { result, channelUpdatedAt })
+      // 回写时带上主进程回传的渠道版本，下次调用即使没显式传 channelUpdatedAt 也能命中缓存。
+      quotaCache.set(channelId, { result, channelUpdatedAt: result.channelUpdatedAt ?? channelUpdatedAt })
       return result
     })
     .catch((error: unknown) => {

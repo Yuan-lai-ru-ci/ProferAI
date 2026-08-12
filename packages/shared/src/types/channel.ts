@@ -468,6 +468,8 @@ export interface ChannelPlanQuotaResult {
   windows: ChannelPlanQuotaWindow[]
   /** 查询时间戳（毫秒） */
   updatedAt: number
+  /** 渠道更新时间戳（毫秒），用于 renderer 侧缓存 key 校验渠道是否变更 */
+  channelUpdatedAt?: number
   /** 不支持或查询失败时的用户可读原因 */
   message?: string
 }

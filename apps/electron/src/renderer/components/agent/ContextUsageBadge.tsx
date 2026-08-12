@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
-import { fetchChannelPlanQuota } from '@/lib/channel-plan-quota'
+import { fetchChannelPlanQuota, getCachedPlanQuota } from '@/lib/channel-plan-quota'
 
 /** 不支持 Plan 额度时主进程返回的统一消息，renderer 端用于判断应不展示额度区 */
 const UNSUPPORTED_PLAN_QUOTA_MESSAGE = '当前渠道不支持订阅 Plan 额度查询'
@@ -232,12 +232,19 @@ export function ContextUsageBadge({
 
   React.useEffect(() => cancelClose, [cancelClose])
 
-  // hover 打开时拉取订阅 Plan 额度
+  // hover 打开时拉取订阅 Plan 额度（挂载时已预取，缓存未命中才补一发，命中则直接同步展示）
   React.useEffect(() => {
     if (!open || !planQuotaChannelId) return
     // 同渠道不重复拉取
     if (quotaChannelRef.current === planQuotaChannelId && (quota || quotaLoading)) return
     quotaChannelRef.current = planQuotaChannelId
+
+    // 优先读缓存：预取已写入时同步展示，不再闪 loading。
+    const cached = getCachedPlanQuota(planQuotaChannelId)
+    if (cached) {
+      setQuota(cached)
+      return
+    }
 
     let cancelled = false
     setQuotaLoading(true)
@@ -251,6 +258,14 @@ export function ContextUsageBadge({
 
     return () => { cancelled = true }
   }, [open, planQuotaChannelId, quota, quotaLoading])
+
+  // 挂载即预取：把额度拉进模块级缓存（60s TTL），hover 时直接读缓存，避免每次 hover 都打一遍真实网络请求。
+  React.useEffect(() => {
+    if (!planQuotaChannelId) return
+    // 已有有效缓存/正在拉取则跳过；静默预取不触发 loading，也不因失败改写 UI。
+    if (getCachedPlanQuota(planQuotaChannelId)) return
+    fetchChannelPlanQuota(planQuotaChannelId).catch(() => {})
+  }, [planQuotaChannelId])
 
   // 长按压缩相关状态
   const [isPressing, setIsPressing] = React.useState(false)
