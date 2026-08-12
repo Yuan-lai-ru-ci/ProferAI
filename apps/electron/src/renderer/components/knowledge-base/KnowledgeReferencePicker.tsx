@@ -1,8 +1,8 @@
 import * as React from 'react'
 import { Check, FileText, Loader2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { KnowledgeItem, PaperMeta } from '@profer/shared'
-import { getItemKind, toDisplayItems, type LibraryItem } from './knowledge-base-workbench-utils'
+import type { KnowledgeItem } from '@profer/shared'
+import { getItemKind } from './knowledge-base-workbench-utils'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -15,7 +15,7 @@ const KIND_LABEL: Record<string, string> = { pdf: 'PDF', word: 'Word', wps: 'WPS
 
 /** 可复用于 Chat 与 Agent 的轻量资料选择器；不包含删除等管理副作用。 */
 export function KnowledgeReferencePicker({ open, onOpenChange, onConfirm }: Props): React.ReactElement {
-  const [items, setItems] = React.useState<LibraryItem[]>([])
+  const [items, setItems] = React.useState<KnowledgeItem[]>([])
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
   const [loading, setLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
@@ -23,14 +23,10 @@ export function KnowledgeReferencePicker({ open, onOpenChange, onConfirm }: Prop
   React.useEffect(() => {
     if (!open) return
     setSelected(new Set()); setLoading(true)
-    Promise.all([
-      window.electronAPI.knowledge.getLibrarySnapshot(),
-      window.electronAPI.kb.getLibrarySnapshot().catch(() => ({ papers: [] as PaperMeta[] })),
-      window.electronAPI.kb.getWorkbenchState(),
-    ]).then(([knowledge, legacy, workbench]) => {
-      const known = new Set(knowledge.items.map((item) => item.id))
-      setItems(toDisplayItems([...knowledge.items, ...legacy.papers.filter((paper) => !known.has(paper.id))], workbench.records))
-    }).catch(() => setItems([])).finally(() => setLoading(false))
+    void window.electronAPI.knowledge.getLibrarySnapshot()
+      .then((snapshot) => setItems(snapshot.items))
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false))
   }, [open])
 
   const toggle = (id: string) => setSelected((current) => {

@@ -242,7 +242,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
       {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭）。
           团队工作区会把按钮嵌入文件管理顶栏，避免右侧 Agent 收起条被覆盖。 */}
-      {!showTeamWorkspaceView && activeView !== 'knowledge-base' && <WindowControls />}
+      {!showTeamWorkspaceView && <WindowControls />}
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-background">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}

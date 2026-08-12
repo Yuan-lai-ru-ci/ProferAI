@@ -50,13 +50,6 @@ export const MAX_BODY_SIZE = parseInt(process.env.MAX_BODY_SIZE || '52428800', 1
 // 避免未认证端点的内存攻击面被同步放大（feedback 无任何限流）。
 export const DEFAULT_BODY_SIZE = parseInt(process.env.DEFAULT_BODY_SIZE || '1048576', 10)
 
-// Paperpipe multipart 上传独立于普通 JSON 限制；仍由实际流读取累计约束。
-export const PAPERPIPE_MAX_FILE_SIZE = parseInt(process.env.PAPERPIPE_MAX_FILE_SIZE || String(200 * 1024 * 1024), 10)
-export const PAPERPIPE_MAX_BODY_SIZE = parseInt(
-  process.env.PAPERPIPE_MAX_BODY_SIZE || String(PAPERPIPE_MAX_FILE_SIZE + 1024 * 1024),
-  10,
-)
-
 // CORS 允许的 Origin；未配置时不授权浏览器跨域。
 // 支持逗号分隔的多个域名；开发环境如需跨域必须显式设置为 *。
 export const ALLOWED_ORIGIN = resolveAllowedOrigin(process.env.ALLOWED_ORIGIN)
@@ -181,14 +174,6 @@ export function getSubscriptionCap(tier) {
   if (tier === 'vip') return SUBSCRIPTION_CAPS.pro
   return SUBSCRIPTION_CAPS[tier] || SUBSCRIPTION_CAPS.free
 }
-
-// ===== MinerU 论文解析 API =====
-// MinerU (mineru.net) 将 PDF 转为结构化 Markdown（含 LaTeX 公式、HTML 表格）。
-// 使用 v4 精准解析 API（批量上传模式），API key 服务端代管，绝不暴露给客户端。
-// 获取 API key: https://mineru.net → API 管理页面
-export const MINERU_API_KEY = process.env.MINERU_API_KEY || ''
-// 论文精读定价：每 10 页 2 积分，最少 1 积分
-export const MINERU_CREDITS_PER_10_PAGES = 2
 
 // ===== Admin 安全限制 =====
 // 批量重置：单次最多重置用户数

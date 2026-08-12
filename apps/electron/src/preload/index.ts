@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -31,18 +31,6 @@ import type {
   AttachmentSaveInput,
   AttachmentSaveResult,
   FileDialogResult,
-  PaperParseResult,
-  PageEstimate,
-  KBImportInput,
-  KBImportResult,
-  KBSearchResult,
-  PaperMeta,
-  DeletePaperResult,
-  KBStats,
-  ArxivPaper,
-  KnowledgeBaseWorkbenchState,
-  KnowledgeBaseWorkbenchPatch,
-  PaperWorkbenchRecord,
   KnowledgeImportBatchResult,
   KnowledgeItem,
   KnowledgeLibrarySnapshot,
@@ -350,15 +338,6 @@ export interface ElectronAPI {
   /** 打开文件选择对话框 */
   openFileDialog: () => Promise<FileDialogResult>
 
-  /** 论文精读 — 打开文件对话框选 PDF → MinerU API 解析 → 返回 Markdown */
-  parsePaper: () => Promise<PaperParseResult | null>
-
-  /** 论文精读 — 给定文件路径，直接调用 MinerU 解析 */
-  parsePaperByPath: (filePath: string) => Promise<PaperParseResult>
-
-  /** 论文精读 — 估算 PDF 页数和积分（本地计算，不调用服务端） */
-  estimatePaperPages: (filePath: string) => Promise<PageEstimate>
-
   // ===== 通用个人资料库相关 =====
 
   knowledge: {
@@ -370,35 +349,6 @@ export interface ElectronAPI {
     getLibrarySnapshot: () => Promise<KnowledgeLibrarySnapshot>
     /** 在文件管理器中显示本地资料的受控副本。 */
     showItemInFolder: (itemId: string) => Promise<void>
-  }
-
-  // ===== 论文知识库兼容 API =====
-
-  kb: {
-    /** 导入论文到论文知识库 */
-    import: (input: KBImportInput) => Promise<KBImportResult>
-    /** 语义搜索论文 */
-    search: (query: string, topK?: number) => Promise<KBSearchResult[]>
-    /** 列出所有论文 */
-    listPapers: (tag?: string) => Promise<PaperMeta[]>
-    /** 获取单篇论文完整内容 */
-    getPaper: (paperId: string) => Promise<{ meta: PaperMeta; markdown: string } | null>
-    /** 删除论文 */
-    deletePaper: (paperId: string) => Promise<DeletePaperResult>
-    /** 使用受控本地 PDF 重试失败的远端同步 */
-    retryPaperSync: (paperId: string) => Promise<PaperMeta>
-    /** 获取列表与统计一致的论文库快照 */
-    getLibrarySnapshot: () => Promise<import('@profer/shared').KBLibrarySnapshot>
-    /** 获取论文知识库统计 */
-    getStats: () => Promise<KBStats>
-    /** 搜索 arXiv */
-    searchArxiv: (query: string, maxResults?: number) => Promise<ArxivPaper[]>
-    /** 获取设备本地的收藏、标签、笔记和阅读位置 */
-    getWorkbenchState: () => Promise<KnowledgeBaseWorkbenchState>
-    /** 更新单篇论文的设备本地个人状态 */
-    updateWorkbenchRecord: (paperId: string, patch: KnowledgeBaseWorkbenchPatch) => Promise<PaperWorkbenchRecord>
-    /** 删除多篇论文的设备本地个人状态 */
-    deleteWorkbenchRecords: (paperIds: string[]) => Promise<void>
   }
 
   /** 提取附件文档的文本内容 */
@@ -1646,19 +1596,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG)
   },
 
-  parsePaper: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.PARSE_PAPER)
-  },
-
-  parsePaperByPath: (filePath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.PARSE_PAPER_BY_PATH, filePath)
-  },
-
-  estimatePaperPages: (filePath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.ESTIMATE_PAPER_PAGES, filePath)
-  },
-
-  // 论文知识库
+  // 通用个人资料库
   knowledge: {
     importItems: (filePaths: string[]) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.IMPORT_ITEMS, filePaths),
     listItems: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.LIST_ITEMS),
@@ -1667,45 +1605,6 @@ const electronAPI: ElectronAPI = {
     searchItems: (query: string, itemIds?: string[], topK?: number) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SEARCH_ITEMS, query, itemIds, topK),
     getLibrarySnapshot: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT),
     showItemInFolder: (itemId: string) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER, itemId),
-  },
-
-  kb: {
-    import: (input: KBImportInput) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.IMPORT, input)
-    },
-    search: (query: string, topK?: number) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH, query, topK)
-    },
-    listPapers: (tag?: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.LIST_PAPERS, tag)
-    },
-    getPaper: (paperId: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_PAPER, paperId)
-    },
-    deletePaper: (paperId: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_PAPER, paperId)
-    },
-    retryPaperSync: (paperId: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.RETRY_PAPER_SYNC, paperId)
-    },
-    getLibrarySnapshot: () => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT)
-    },
-    getStats: () => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_STATS)
-    },
-    searchArxiv: (query: string, maxResults?: number) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH_ARXIV, query, maxResults)
-    },
-    getWorkbenchState: () => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_WORKBENCH_STATE)
-    },
-    updateWorkbenchRecord: (paperId: string, patch: KnowledgeBaseWorkbenchPatch) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.UPDATE_WORKBENCH_RECORD, paperId, patch)
-    },
-    deleteWorkbenchRecords: (paperIds: string[]) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_WORKBENCH_RECORDS, paperIds)
-    },
   },
 
   extractAttachmentText: (localPath: string) => {

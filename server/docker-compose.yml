@@ -30,11 +30,6 @@ services:
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-524288000}
       # JSON/非文件请求体上限（图片识别等转发的请求体，如 base64 图片会膨胀，默认 1MB 过小）
       - MAX_BODY_SIZE=${MAX_BODY_SIZE:-52428800}
-      # === Paperpipe Bridge（生产必须配置密钥；默认 50MB 以控制当前缓冲上传链路的内存峰值） ===
-      - PAPERPIPE_BRIDGE_URL=${PAPERPIPE_BRIDGE_URL:-http://host.docker.internal:9876}
-      - PAPERPIPE_BRIDGE_SECRET=${PAPERPIPE_BRIDGE_SECRET:-}
-      - PAPERPIPE_MAX_FILE_SIZE=${PAPERPIPE_MAX_FILE_SIZE:-52428800}
-      - PAPERPIPE_MAX_BODY_SIZE=${PAPERPIPE_MAX_BODY_SIZE:-53477376}
       - COMMERCIAL_MODE=${COMMERCIAL_MODE:-false}
       - CHANNEL_ENCRYPTION_KEY=${CHANNEL_ENCRYPTION_KEY:-}
       - RELAY_BASE_URL=${RELAY_BASE_URL:-http://127.0.0.1:3080}
@@ -42,8 +37,12 @@ services:
       - NEWAPI_ADMIN_TOKEN=${NEWAPI_ADMIN_TOKEN:-}
       - NEWAPI_ADMIN_USER_ID=${NEWAPI_ADMIN_USER_ID:-2}
       - DEFAULT_CREDIT_GRANT=${DEFAULT_CREDIT_GRANT:-1000}
-      # === MinerU 论文解析 ===
-      - MINERU_API_KEY=${MINERU_API_KEY:-}
+      # === 在线充值（易支付 EPay）===
+      - PAY_ON_RECHARGE=${PAY_ON_RECHARGE:-0}
+      - PAY_NOTIFY_BASE=${PAY_NOTIFY_BASE:-}
+      - EPAY_API=${EPAY_API:-}
+      - EPAY_PID=${EPAY_PID:-}
+      - EPAY_KEY=${EPAY_KEY:-}
       # === 飞书意见箱 ===
       - LARK_APP_ID=${LARK_APP_ID:-}
       - LARK_APP_SECRET=${LARK_APP_SECRET:-}

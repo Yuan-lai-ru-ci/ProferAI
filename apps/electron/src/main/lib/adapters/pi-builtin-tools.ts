@@ -148,21 +148,14 @@ export function buildPiKnowledgeBaseTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCo
         }
 
         const currentItems = new Map(listKnowledgeItems().map((item) => [item.id, item]))
-        const { getPaper } = await import('../kb-paperpipe')
         const items = await Promise.all(permitted.map(async (id) => {
           const reference = references.find((candidate) => candidate.itemId === id)!
           const currentItem = currentItems.get(id)
-          // 已撤销或删除的资料绝不能仅因旧 session metadata 仍存在就触发远端读取。
+          // 已撤销或删除的资料绝不能仅因旧 session metadata 仍存在就触发读取。
           if (!currentItem) return { itemId: id, title: reference.title, unavailable: true, revoked: true }
           const loaded = getKnowledgeItem(id)
-          if (loaded) {
-            return { itemId: id, title: currentItem.title, kind: currentItem.kind, origin: currentItem.origin, content: loaded.text.slice(0, 6_000), truncated: loaded.text.length > 6_000 }
-          }
-          // 只允许当前索引事实中的 remoteId；禁止把 metadata itemId 当成任意远端 paper ID。
-          const remoteId = currentItem.remoteId ?? (currentItem.origin === 'arxiv' ? currentItem.id : undefined)
-          const remote = remoteId ? await getPaper(remoteId).catch(() => null) : null
-          return remote
-            ? { itemId: id, title: currentItem.title, kind: currentItem.kind, origin: currentItem.origin, content: remote.markdown.slice(0, 6_000), truncated: remote.markdown.length > 6_000 }
+          return loaded
+            ? { itemId: id, title: currentItem.title, kind: currentItem.kind, origin: currentItem.origin, content: loaded.text.slice(0, 6_000), truncated: loaded.text.length > 6_000 }
             : { itemId: id, title: currentItem.title, unavailable: true }
         }))
         return jsonToolResult({ items })

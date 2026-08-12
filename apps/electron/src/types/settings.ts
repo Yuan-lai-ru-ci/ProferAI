@@ -304,8 +304,6 @@ export interface AppSettings {
   planningWindowState?: MainWindowState
   /** 是否开机自启动（默认 false） */
   autoLaunch?: boolean
-  /** 是否在侧边栏显示论文知识库入口（默认 true） */
-  paperKnowledgeBaseEnabled?: boolean
   /** 是否启用局域网移动模式（试验版）；启动后自动恢复。 */
   tabletModeEnabled?: boolean
   /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */

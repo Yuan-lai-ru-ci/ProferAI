@@ -122,17 +122,7 @@ import type {
   CreateAutomationInput,
   UpdateAutomationInput,
 } from '@profer/shared'
-import { KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import type {
-  KBImportInput,
-  KBImportResult,
-  KBSearchResult,
-  PaperMeta,
-  KBStats,
-  KBLibrarySnapshot,
-  ArxivPaper,
-  KnowledgeBaseWorkbenchPatch,
-} from '@profer/shared'
+import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, invalidateGitDiffCache } from './lib/git-diff-service'
@@ -175,7 +165,6 @@ import {
   openFileDialog,
 } from './lib/attachment-service'
 import { extractTextFromAttachment } from './lib/document-parser'
-import { selectAndParsePaper, parsePaper, estimatePaperPages } from './lib/paper-service'
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
@@ -1734,44 +1723,6 @@ export function registerIpcHandlers(): void {
     CHAT_IPC_CHANNELS.EXTRACT_ATTACHMENT_TEXT,
     async (_, localPath: string): Promise<string> => {
       return extractTextFromAttachment(localPath)
-    }
-  )
-
-  // 论文精读 — 打开文件对话框选 PDF → MinerU API 解析 → 返回 Markdown
-  ipcMain.handle(
-    CHAT_IPC_CHANNELS.PARSE_PAPER,
-    async () => {
-      try {
-        return await selectAndParsePaper()
-      } catch (err: unknown) {
-        const e = err as Error
-        console.error('[parse-paper] 解析失败 — 完整堆栈:')
-        console.error(e.stack || e.message || String(e))
-        throw err
-      }
-    }
-  )
-
-  // 论文精读 — 给定文件路径直接调用 MinerU 解析（拖拽 PDF 场景）
-  ipcMain.handle(
-    CHAT_IPC_CHANNELS.PARSE_PAPER_BY_PATH,
-    async (_, filePath: string) => {
-      try {
-        return await parsePaper(filePath)
-      } catch (err: unknown) {
-        const e = err as Error
-        console.error('[parse-paper-by-path] 解析失败 — 完整堆栈:')
-        console.error(e.stack || e.message || String(e))
-        throw err
-      }
-    }
-  )
-
-  // 论文精读 — 估算 PDF 页数和积分（不调用服务端）
-  ipcMain.handle(
-    CHAT_IPC_CHANNELS.ESTIMATE_PAPER_PAGES,
-    async (_, filePath: string) => {
-      return estimatePaperPages(filePath)
     }
   )
 
@@ -6479,111 +6430,6 @@ export function registerIpcHandlers(): void {
     const storedPath = getKnowledgeItemStoredFilePath(itemId)
     if (!storedPath) throw new Error('该资料没有可显示的本地文件副本')
     shell.showItemInFolder(storedPath)
-  })
-
-  // ===== 论文知识库（Paper Knowledge Base）兼容 API =====
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.IMPORT,
-    async (_, input: KBImportInput): Promise<KBImportResult> => {
-      try {
-        const { importPaper } = require('./lib/kb-paperpipe')
-        return await importPaper(input)
-      } catch (err: unknown) {
-        const e = err as Error
-        console.error('[KB:import] 导入失败 — 完整堆栈:')
-        console.error(e.stack || e.message || String(e))
-        throw err
-      }
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.SEARCH,
-    async (_, query: string, topK?: number): Promise<KBSearchResult[]> => {
-      if (typeof query !== 'string' || !query.trim() || query.length > 500) throw new Error('搜索关键词无效')
-      if (topK != null && (!Number.isInteger(topK) || topK < 1 || topK > 50)) throw new Error('搜索数量无效')
-      const { searchPapers } = require('./lib/kb-paperpipe')
-      return searchPapers(query, topK)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.LIST_PAPERS,
-    async (_, tag?: string): Promise<PaperMeta[]> => {
-      const { listPapers } = require('./lib/kb-paperpipe')
-      return listPapers(tag)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.GET_PAPER,
-    async (_, paperId: string) => {
-      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
-      const { getPaper } = require('./lib/kb-paperpipe')
-      return getPaper(paperId)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.DELETE_PAPER,
-    async (_, paperId: string): Promise<import('@profer/shared').DeletePaperResult> => {
-      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
-      const { deletePaper } = require('./lib/kb-paperpipe')
-      return deletePaper(paperId)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.RETRY_PAPER_SYNC,
-    async (_, paperId: string): Promise<PaperMeta> => {
-      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
-      const { retryPaperpipeSync } = require('./lib/kb-paperpipe')
-      return retryPaperpipeSync(paperId)
-    },
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT,
-    async (): Promise<KBLibrarySnapshot> => {
-      const { loadLibrarySnapshot } = require('./lib/kb-paperpipe')
-      return loadLibrarySnapshot()
-    },
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.GET_STATS,
-    async (): Promise<KBStats> => {
-      const { getKBStats } = require('./lib/kb-paperpipe')
-      return await getKBStats()
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.SEARCH_ARXIV,
-    async (_, query: string, maxResults?: number): Promise<ArxivPaper[]> => {
-      // arXiv 搜索保留本地（kb-arxiv.ts），不依赖 paperpipe
-      const { searchArxiv } = require('./lib/kb-arxiv')
-      return searchArxiv(query, maxResults)
-    }
-  )
-
-  ipcMain.handle(KB_IPC_CHANNELS.GET_WORKBENCH_STATE, async () => {
-    const { getKnowledgeBaseWorkbenchState } = require('./lib/kb-workbench-service')
-    return getKnowledgeBaseWorkbenchState()
-  })
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.UPDATE_WORKBENCH_RECORD,
-    async (_, paperId: string, patch: KnowledgeBaseWorkbenchPatch) => {
-      const { updateKnowledgeBaseWorkbenchRecord } = require('./lib/kb-workbench-service')
-      return updateKnowledgeBaseWorkbenchRecord(paperId, patch)
-    },
-  )
-
-  ipcMain.handle(KB_IPC_CHANNELS.DELETE_WORKBENCH_RECORDS, async (_, paperIds: string[]) => {
-    const { deleteKnowledgeBaseWorkbenchRecords } = require('./lib/kb-workbench-service')
-    deleteKnowledgeBaseWorkbenchRecords(paperIds)
   })
 
   // ===== 桌面通知（主进程弹出原生 Notification，点击可靠） =====
