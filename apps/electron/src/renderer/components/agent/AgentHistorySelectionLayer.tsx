@@ -45,18 +45,13 @@ export interface SelectionRect {
   width: number
 }
 
-/** 从选区片段矩形中自后向前选一个与当前视口相交的矩形（贴近鼠标最后落点）；
- *  跨屏选区时 getBoundingClientRect() 的整块包围盒顶部可能滚出视口，直接取整块会导致按钮定位到屏幕外。 */
-export function pickAnchorRect(
-  rects: { readonly length: number; readonly [index: number]: SelectionRect | undefined },
-  viewportWidth: number,
-  viewportHeight: number,
-): SelectionRect | null {
-  for (let i = rects.length - 1; i >= 0; i--) {
-    const rect = rects[i]
-    if (rect && rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth) return rect
+/** 锚点：水平居中于选区包围盒、垂直取鼠标抬手点（松手时必在视口内，从任意方向选择都贴近可视区）。
+ *  键盘选择无抬手点（pointerY 为 null）时退回选区底部兜底。 */
+export function pickSelectionAnchor(anchorRect: SelectionRect, pointerY: number | null): { x: number; y: number } {
+  return {
+    x: anchorRect.left + anchorRect.width / 2,
+    y: pointerY ?? anchorRect.bottom,
   }
-  return rects.length > 0 ? (rects[0] ?? null) : null
 }
 
 function getRoleLabel(role?: string): string {
@@ -73,6 +68,7 @@ export function AgentHistorySelectionLayer({
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
   const [selection, setSelection] = React.useState<AgentHistorySelection | null>(null)
   const pointerSelectingRef = React.useRef(false)
+  const pointerUpYRef = React.useRef<number | null>(null)
   const captureTimerRef = React.useRef<number | null>(null)
 
   const clearSelection = React.useCallback((): void => {
@@ -114,10 +110,13 @@ export function AgentHistorySelectionLayer({
 
     const truncated = rawText.length > MAX_AGENT_HISTORY_QUOTED_CHARS
     const text = truncated ? rawText.slice(0, MAX_AGENT_HISTORY_QUOTED_CHARS) : rawText
-    // 锚点矩形：跨屏选区时 getBoundingClientRect() 返回整块包围盒，顶部滚出视口后 top 为负，
-    // 按钮会被定位到屏幕顶端之外。改为自后向前找与当前视口相交的矩形（贴近鼠标最后落点），确保锚点在可视区内。
-    const anchorRect = pickAnchorRect(range.getClientRects(), window.innerWidth, window.innerHeight)
+    // 锚点取选区包围盒：水平居中于选区、垂直取鼠标抬手点（松手必在视口内）。
+    // 跨屏选区时包围盒 top/bottom 总有一端会滚出视口，固定取哪一端都会在某个选择方向下越界，故垂直跟随抬手点。
+    const rect = range.getBoundingClientRect()
+    const firstRect = range.getClientRects()[0]
+    const anchorRect = rect.width > 0 || rect.height > 0 ? rect : firstRect
     if (!anchorRect) return
+    const { x, y } = pickSelectionAnchor(anchorRect, pointerUpYRef.current)
 
     const sameMessage = startMessageEl === endMessageEl
     const role = sameMessage
@@ -127,9 +126,9 @@ export function AgentHistorySelectionLayer({
 
     setSelection({
       text,
-      x: anchorRect.left + anchorRect.width / 2,
-      // 顶部越界由 SelectionActionPopover 内部实测钳制处理，这里不再强钳 y 下限（原 Math.max(12,...) 会把按钮主体推到视口外）。
-      y: anchorRect.top - 12,
+      x,
+      // 按钮向上展开（-translate-y-full），越界由 SelectionActionPopover 内部实测钳制兜底。
+      y,
       sourceLabel: sameMessage ? getRoleLabel(role ?? undefined) : 'Agent 历史 · 多条消息',
       messageId,
       messageRole: role ?? undefined,
@@ -164,21 +163,26 @@ export function AgentHistorySelectionLayer({
       if (target instanceof Element && target.closest(SELECTION_ACTION_POPOVER_SELECTOR)) return
       if (target instanceof Element && rootRef.current?.contains(target)) {
         pointerSelectingRef.current = true
+        pointerUpYRef.current = null
         clearSelection()
         return
       }
       clearSelection()
     }
-    const onPointerUp = (): void => {
+    const onPointerUp = (event: PointerEvent): void => {
       if (!pointerSelectingRef.current) return
       pointerSelectingRef.current = false
+      pointerUpYRef.current = event.clientY
       scheduleCaptureSelection()
     }
     const onPointerCancel = (): void => {
       pointerSelectingRef.current = false
+      pointerUpYRef.current = null
     }
     const onKeyUp = (event: KeyboardEvent): void => {
       if (!event.shiftKey && !['Shift', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return
+      // 键盘选择没有抬手点，清空后用选区底部兜底定位。
+      pointerUpYRef.current = null
       scheduleCaptureSelection()
     }
 
