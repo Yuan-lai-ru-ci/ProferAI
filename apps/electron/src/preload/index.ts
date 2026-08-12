@@ -927,8 +927,11 @@ export interface ElectronAPI {
   /** 写入文本文件（供 Markdown 内联编辑使用） */
   writeTextFile: (filePath: string, content: string, access?: import('@profer/shared').FileAccessOptions) => Promise<boolean>
 
-  /** 仅解析文件路径（供 PDF/图片等用 file:// 加载） */
+  /** 仅解析文件路径（供 PDF/图片等用 profer-file:// 加载） */
   resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').ResolvedFileUrl | null>
+
+  /** 解析 HTML 预览路径，并授权加载同目录的相对资源 */
+  resolveHtmlPreviewPath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').ResolvedFileUrl | null>
 
   /** 注册文件路径到 profer-file:// 协议（不做路径校验，供团队文件预览） */
   registerPreviewPath: (filePath: string) => Promise<string | null>
@@ -2477,6 +2480,10 @@ const electronAPI: ElectronAPI = {
 
   resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@profer/shared').ResolvedFileUrl | null>
+  },
+
+  resolveHtmlPreviewPath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke('file:resolve-html-preview-path', filePath, access) as Promise<import('@profer/shared').ResolvedFileUrl | null>
   },
 
   registerPreviewPath: (filePath: string) => {
