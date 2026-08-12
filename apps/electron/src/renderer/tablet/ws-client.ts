@@ -33,6 +33,7 @@ type CommandResultMessage = {
 
 type InboundMessage =
   | { kind: 'hello'; serverTime: number }
+  | { kind: 'pong'; serverTime: number }
   | { kind: 'agent_event'; sessionId: string; payload: unknown }
   | { kind: 'chat_event'; conversationId: string; channel: string; payload: unknown }
   | CommandResultMessage
@@ -60,6 +61,19 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private pendingCommands = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error) => void }>()
+
+  /** 待发消息队列：连接断开时暂存 send_message，重连后按序重放（幂等去重依靠 clientMessageId）。
+   *  只暂存「用户核心输入」类操作；stop/权限/读操作时效性强，断线后应重新发起而非重放。 */
+  private outgoingQueue: Array<{
+    payload: Record<string, unknown>
+    clientMessageId: string
+    resolve: (r: unknown) => void
+    reject: (e: Error) => void
+  }> = []
+  /** 重连后是否正在 flush 队列（防止 open 事件与显式 flush 并发重复）。 */
+  private flushingQueue = false
+  /** 最近一次收到服务端 pong（或任何入站帧）的时间戳，用于假死检测。 */
+  private lastPongAt = 0
 
   onStatusChange?: WsClientOptions['onStatusChange']
   onAgentEvent?: WsClientOptions['onAgentEvent']
@@ -110,7 +124,8 @@ export class WsClient {
 
     this.ws.onopen = () => {
       this.clearHeartbeat()
-      // 心跳保持连接
+      this.lastPongAt = Date.now()
+      // 心跳保持连接：既定期发 ping，也检测假死（发送 ping 但长时间无 pong/任何入站帧）。
       this.heartbeatTimer = setInterval(() => {
         try {
           if (this.ws?.readyState === WebSocket.OPEN) {
@@ -119,14 +134,22 @@ export class WsClient {
         } catch {
           /* ignore */
         }
+        // 假死检测：超过阈值仍未收到任何入站帧（含 pong），判定半开/假死连接，主动断开触发重连。
+        if (Date.now() - this.lastPongAt > HEARTBEAT_DEAD_THRESHOLD_MS) {
+          try { this.ws?.close() } catch { /* ignore */ }
+        }
       }, 25000)
       this.emitStatus('open')
+      // 重连成功后重放断线期间积压的待发消息（send_message），保证弱网下用户输入不丢。
+      this.flushOutgoingQueue()
     }
 
     this.ws.onmessage = (event) => {
       try {
         const raw = typeof event.data === 'string' ? event.data : String(event.data)
         const msg = JSON.parse(raw) as InboundMessage
+        // 任何入站帧都视为存活信号，刷新假死检测计时（服务端闲置踢人同样用入站活跃度）。
+        this.lastPongAt = Date.now()
         this.handleMessage(msg)
       } catch (e) {
         console.error('[Tablet WS] 消息解析失败', e)
@@ -157,6 +180,9 @@ export class WsClient {
     switch (msg.kind) {
       case 'hello':
         // 连接就绪
+        break
+      case 'pong':
+        // 存活信号已在 onmessage 统一刷新 lastPongAt，这里无需额外处理。
         break
       case 'agent_event':
         this.onAgentEvent?.({
@@ -393,7 +419,79 @@ export class WsClient {
   }
 
   sendMessage(payload: { sessionId: string; userMessage: string; channelId: string; modelId?: string; workspaceId?: string }): Promise<unknown> {
-    return this.sendCommand({ type: 'send_message', ...payload })
+    // 幂等去重键：每次发送同一逻辑消息共享同一 clientMessageId，重连重放时服务端据此去重。
+    const clientMessageId = WsClient.newClientMessageId()
+    const frame = { type: 'send_message', ...payload, clientMessageId }
+    return this.queueMessageOrSend(frame)
+  }
+
+  /**
+   * 生成客户端消息幂等键。浏览器环境用 Web Crypto 的 randomUUID，
+   * 不可用（极老 WebView）时回退 Date.now + 随机串；碰撞概率对本场景足够低。
+   */
+  private static newClientMessageId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+    return `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
+  }
+
+  /**
+   * 发送 send_message：连接就绪则直接发；断线则入队等待重连后重放。
+   * 返回的 Promise 会一直 pending 到「服务端确认 accepted」或「确认不可达（如业务拒绝）」才 settle。
+   */
+  private queueMessageOrSend(frame: Record<string, unknown>): Promise<unknown> {
+    return new Promise<unknown>((resolve, reject) => {
+      if (this.isOpen()) {
+        this.transmitOutgoing(frame, resolve, reject)
+        return
+      }
+      // 断线：入队，重连后 flush 时按序重放（保持 clientMessageId 不变，服务端幂等）。
+      this.outgoingQueue.push({ payload: frame, clientMessageId: String(frame.clientMessageId), resolve, reject })
+    })
+  }
+
+  /** 实际把一条 send_message 帧发上 WS，并绑定完成回调和失败处理。 */
+  private transmitOutgoing(
+    frame: Record<string, unknown>,
+    resolve: (r: unknown) => void,
+    reject: (e: Error) => void,
+  ): void {
+    const clientMessageId = String(frame.clientMessageId ?? '')
+    // 走 sendCommand 的内部追踪；服务端收到即回 command_result（send_message 是 fire-and-forget，
+    // 立即返回 accepted，不等待 run 结束）。成功即从「待确认」中移除。
+    this.sendCommand(frame).then(
+      (r) => {
+        resolve(r)
+      },
+      (err: Error) => {
+        // 连接类失败（未就绪/已关闭/超时）意味着消息可能未送达，重新入队等待重放；
+        // 业务类拒绝（如「会话正在处理中」）则直接 reject，不重试（重复尝试也无效）。
+        if (isTransientConnectionError(err)) {
+          this.outgoingQueue.push({ payload: frame, clientMessageId, resolve, reject })
+        } else {
+          reject(err)
+        }
+      },
+    )
+  }
+
+  /** 重连成功后按序重放积压消息。WS 的 send 是同步入队、顺序保证的，
+   *  同一同步循环内逐个 transmitOutgoing 即保持到达顺序，无需 async 串行等待。 */
+  private flushOutgoingQueue(): void {
+    if (this.flushingQueue) return
+    const items = this.outgoingQueue.splice(0, this.outgoingQueue.length)
+    if (items.length === 0) return
+    this.flushingQueue = true
+    for (const item of items) {
+      if (!this.isOpen()) {
+        // flush 过程中又断开：未发出的放回队列（保持顺序），等待下次重连。
+        this.outgoingQueue.unshift(item)
+        continue
+      }
+      this.transmitOutgoing(item.payload, item.resolve, item.reject)
+    }
+    this.flushingQueue = false
   }
 
   /**
@@ -516,3 +614,23 @@ export function defaultWsUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws`
 }
+
+/**
+ * 判断 send_message 失败是否为「连接类（瞬时）」错误 —— 此类错误下消息可能未送达，
+ * 应当重新入队等待重连后重放；而不是像业务拒绝那样直接丢弃。
+ * 连接未就绪 / 连接已关闭 / 指令超时 都视为瞬时；其余（主进程返回的业务错误）不可重试。
+ */
+function isTransientConnectionError(err: Error): boolean {
+  const msg = err?.message ?? ''
+  return (
+    msg === '连接未就绪，请稍候重试' ||
+    msg === '连接已关闭' ||
+    msg === '指令超时'
+  )
+}
+
+/**
+ * 假死检测阈值：超过此毫秒数未收到任何入站帧（含 pong）判定为半开/假死连接，主动断开重连。
+ * 心跳周期 25s，阈值取 3 个周期（75s），容忍偶发丢包与单次 ping 丢失。
+ */
+const HEARTBEAT_DEAD_THRESHOLD_MS = 3 * 25000
