@@ -14,6 +14,10 @@
  *
  * 缩放交互：仅头部按钮（缩小 / 重置 / 放大）。不响应滚轮和拖拽，
  * 让滚轮事件正常冒泡到页面滚动；放大后用容器原生 overflow scrollbar 浏览。
+ *
+ * 缩放锚定：缩放以当前视口中心为锚点（缩放后重新对齐滚动位置）。
+ * 内容项用 margin auto 居中，溢出时自动左对齐；transform-origin 为左上角，
+ * 因此缩放只向右/下扩展，左端（图头）/顶端永不落入不可滚动的负坐标区。
  */
 
 import * as React from 'react'
@@ -243,6 +247,12 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   /** generation 计数器：每次 code 变化递增，防止异步竞态 */
   const generationRef = React.useRef(0)
 
+  /** 滚动容器与缩放内容 DOM（用于视口中心锚定的滚动计算） */
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const contentRef = React.useRef<HTMLDivElement | null>(null)
+  /** 缩放后待应用的滚动位置：useLayoutEffect 里在 transform 提交生效后应用 */
+  const pendingScrollRef = React.useRef<{ x: number; y: number } | null>(null)
+
   codeRef.current = code
 
   const renderCurrentCode = React.useCallback(async (generation: number) => {
@@ -283,13 +293,61 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     return () => observer.disconnect()
   }, [renderCurrentCode])
 
+  /**
+   * 按「视口中心锚定」缩放：先读取当前视口中心对应的内容点（未缩放坐标系），
+   * 改变 scale 后由下方 useLayoutEffect 把该点重新对齐到视口中心。
+   * transform-origin 为 top left，内容可视区左上角 == 布局位置，缩放只向右/下扩展，
+   * 左端/顶端永不落入负坐标区（滚动不可达），故始终可滚动到图头。
+   */
+  const applyZoom = React.useCallback((newScale: number) => {
+    const scrollEl = scrollRef.current
+    const contentEl = contentRef.current
+    // 图表未渲染完成时直接改缩放即可
+    if (!scrollEl || !contentEl) {
+      setScale(newScale)
+      return
+    }
+    const oldScale = scale
+    const scrollRect = scrollEl.getBoundingClientRect()
+    const contentRect = contentEl.getBoundingClientRect()
+    // 内容可视区左上角在滚动内容坐标系中的位置（含当前滚动偏移）
+    const left = contentRect.left - scrollRect.left + scrollEl.scrollLeft
+    const top = contentRect.top - scrollRect.top + scrollEl.scrollTop
+    // 当前视口中心对应的内容点（未缩放坐标系）
+    const vpCx = scrollEl.clientWidth / 2
+    const vpCy = scrollEl.clientHeight / 2
+    const itemX = (scrollEl.scrollLeft + vpCx - left) / oldScale
+    const itemY = (scrollEl.scrollTop + vpCy - top) / oldScale
+    // 新缩放下使该点仍落在视口中心所需的滚动位置
+    pendingScrollRef.current = {
+      x: itemX * newScale + left - vpCx,
+      y: itemY * newScale + top - vpCy,
+    }
+    setScale(newScale)
+  }, [scale])
+
+  // ---- 缩放后应用滚动锚定（本次提交里 transform 已生效，scrollWidth 为缩放后尺寸）----
+  React.useLayoutEffect(() => {
+    const scrollEl = scrollRef.current
+    const pending = pendingScrollRef.current
+    if (!scrollEl || !pending) return
+    pendingScrollRef.current = null
+    scrollEl.scrollLeft = clamp(pending.x, 0, Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth))
+    scrollEl.scrollTop = clamp(pending.y, 0, Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight))
+  })
+
   const handleZoomIn = React.useCallback(() => {
-    setScale((prev) => clamp(prev + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
-  }, [])
+    applyZoom(clamp(scale + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
+  }, [applyZoom])
   const handleZoomOut = React.useCallback(() => {
-    setScale((prev) => clamp(prev - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
-  }, [])
-  const handleZoomReset = React.useCallback(() => setScale(INITIAL_SCALE), [])
+    applyZoom(clamp(scale - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
+  }, [applyZoom])
+  const handleZoomReset = React.useCallback(() => {
+    // 已是 100% 无需处理；否则回滚到 100% 并回到左上角（露出图头）
+    if (scale === INITIAL_SCALE) return
+    pendingScrollRef.current = { x: 0, y: 0 }
+    setScale(INITIAL_SCALE)
+  }, [scale])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -344,13 +402,12 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
             <code>{code}</code>
           </pre>
         ) : (
-          <div className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]">
-            <div
-              className="flex justify-center items-center p-4 min-h-[180px] origin-center"
-              style={{ transform: `scale(${scale})` }}
-            >
+          <div ref={scrollRef} className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]">
+            <div className="flex min-h-[180px] p-4">
               <div
-                className="mermaid-svg [&>svg]:max-w-full [&>svg]:h-auto"
+                ref={contentRef}
+                className="mermaid-svg [&>svg]:max-w-full [&>svg]:h-auto m-auto"
+                style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }}
                 dangerouslySetInnerHTML={{ __html: renderedSvg }}
               />
             </div>
