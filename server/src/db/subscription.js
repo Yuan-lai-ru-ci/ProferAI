@@ -147,13 +147,23 @@ export function getExpectedSubscriptionAmountRmb(userId, planId, cycle = 'monthl
 }
 
 /** 创建订单。amountRmb 人民币分，credits 内部换算为 quota 单位存储 */
-export function createOrder({ userId, type, plan = null, cycle = 'monthly', amountRmb, credits, remark = '', createdBy = '' }) {
+export function createOrder({ userId, type, plan = null, cycle = 'monthly', amountRmb, credits, remark = '', createdBy = '', paymentMethod = 'manual' }) {
   const id = uuidv4()
   const quotaCredits = (credits || Math.round(amountRmb / 10)) * 50000
-  db.prepare(`INSERT INTO orders (id, user_id, type, plan, amount_rmb, credits, status, remark, cycle, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`)
-    .run(id, userId, type, plan, amountRmb, quotaCredits, remark, cycle, createdBy, Date.now())
+  db.prepare(`INSERT INTO orders (id, user_id, type, plan, amount_rmb, credits, status, remark, cycle, created_by, payment_method, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`)
+    .run(id, userId, type, plan, amountRmb, quotaCredits, remark, cycle, createdBy, paymentMethod, Date.now())
   return { id, quotaCredits }
+}
+
+/** 取消尚未付款的订单；仅允许 pending → cancelled，避免覆盖已支付的账务状态。 */
+export function cancelPendingOrder(orderId, reason = '') {
+  const note = reason ? `\n[已取消] ${reason}` : ''
+  const result = db.prepare(`UPDATE orders
+    SET status = 'cancelled', remark = remark || ?
+    WHERE id = ? AND status = 'pending'`)
+    .run(note, orderId)
+  return result.changes === 1
 }
 
 /** 返利积分单位换算 */

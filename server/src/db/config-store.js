@@ -42,6 +42,19 @@ const CONFIG_SCHEMA = {
   'billing.overdraftLimit': { defaultValue: '', type: 'int', label: '透支上限(quota)', group: '计费', envKey: 'BILLING_OVERDRAFT_LIMIT', min: 0, max: Number.MAX_SAFE_INTEGER },
   'misc.adminWechat': { defaultValue: 'CYBER_YLRC', type: 'string', label: '管理员微信号', group: '杂项' },
 
+  // ===== 在线充值（易支付） =====
+  // 用户自助充值积分。1 元 = 10 积分。启用在线支付需同时配置 epayApi/epayPid/epayKey/notifyBase。
+  'pay.onRecharge': { defaultValue: '0', type: 'int', label: '启用在线充值', group: '在线充值', min: 0, max: 1 },
+  'pay.currency': { defaultValue: 'rmb', type: 'string', label: '计价货币(rmb)', group: '在线充值' },
+  'pay.rate': { defaultValue: '10', type: 'int', label: '积分/元换算(1元=所得积分)', group: '在线充值', min: 1, max: 100000 },
+  'pay.presetsRmb': { defaultValue: '[10,30,50,100,300]', type: 'string', label: '充值档位(元,JSON数组)', group: '在线充值' },
+  'pay.customMinRmb': { defaultValue: '1', type: 'int', label: '自定义充值下限(元)', group: '在线充值', min: 0 },
+  'pay.customMaxRmb': { defaultValue: '1000', type: 'int', label: '自定义充值上限(元)', group: '在线充值', min: 1 },
+  'pay.epayApi': { defaultValue: '', type: 'string', label: '易支付网关地址', group: '在线充值', envKey: 'EPAY_API' },
+  'pay.epayPid': { defaultValue: '', type: 'string', label: '易支付商户ID(PID)', group: '在线充值', envKey: 'EPAY_PID' },
+  'pay.epayKey': { defaultValue: '', type: 'string', label: '易支付商户密钥(KEY)', group: '在线充值', envKey: 'EPAY_KEY', secret: true },
+  'pay.notifyBase': { defaultValue: '', type: 'string', label: '回调公网域名(如 https://x.com)', group: '在线充值', envKey: 'PAY_NOTIFY_BASE' },
+
   'admin.maxOrderAmount': { defaultValue: '', type: 'int', label: '单笔订单上限(分)', group: '安全限额', envKey: 'MAX_ORDER_AMOUNT_RMB', min: 1, max: Number.MAX_SAFE_INTEGER, allowZero: false },
   'admin.orderDualConfirmThreshold': { defaultValue: '', type: 'int', label: '双人确认阈值(分)', group: '安全限额', envKey: 'ORDER_DUAL_CONFIRM_THRESHOLD', min: 1, max: Number.MAX_SAFE_INTEGER, allowZero: false },
   'admin.orderDailyConfirmCap': { defaultValue: '', type: 'int', label: '每日确认总额上限(分)', group: '安全限额', envKey: 'ORDER_DAILY_CONFIRM_CAP', min: 1, max: Number.MAX_SAFE_INTEGER, allowZero: false },
@@ -53,6 +66,8 @@ const ENV_FALLBACKS = {
   'billing.markup': '1.0', 'billing.defaultCreditGrant': '500000', 'billing.overdraftLimit': '2500000',
   'admin.maxOrderAmount': '100000', 'admin.orderDualConfirmThreshold': '50000', 'admin.orderDailyConfirmCap': '100000',
   'admin.dailyGrantCap': '50000000', 'admin.maxGrantAmount': '500000000',
+  // 在线支付：环境变量未设置时应回退为空串而非字符串 "undefined"
+  'pay.epayApi': '', 'pay.epayPid': '', 'pay.epayKey': '', 'pay.notifyBase': '',
 }
 for (const [key, schema] of Object.entries(CONFIG_SCHEMA)) {
   if (schema.envKey) schema.defaultValue = envDefault(schema.envKey, ENV_FALLBACKS[key], schema)
@@ -109,7 +124,7 @@ export function getConfigSource(key) { const schema = CONFIG_SCHEMA[key]; return
 export function getConfigs(prefix = '') {
   return Object.entries(CONFIG_SCHEMA).filter(([key]) => !prefix || key.startsWith(prefix)).map(([key, schema]) => {
     const effective = effectiveValue(key, schema)
-    return { key, value: effective.value, rawValue: String(effective.value), type: schema.type, label: schema.label, group: schema.group, defaultValue: parseValue(schema.defaultValue, schema, key), isCustomized: effective.source === 'db', defaultSource: effective.source, min: schema.min, max: schema.max }
+    return { key, value: effective.value, rawValue: String(effective.value), type: schema.type, label: schema.label, group: schema.group, defaultValue: parseValue(schema.defaultValue, schema, key), isCustomized: effective.source === 'db', defaultSource: effective.source, min: schema.min, max: schema.max, secret: !!schema.secret }
   })
 }
 export function getConfigsGrouped() { return getConfigs().reduce((groups, item) => { (groups[item.group || '其他'] ||= []).push(item); return groups }, {}) }
@@ -154,6 +169,29 @@ export function getBillingConfig() { return Object.freeze({ markup: getConfig('b
 export function getPlanDefs() { return { standard: { monthlyRmb: getConfig('plan.standard.monthlyRmb'), yearlyRmb: getConfig('plan.standard.yearlyRmb'), welcomeBonus: getConfig('plan.standard.welcomeBonus'), dailyDrip: getConfig('plan.standard.dailyDrip') }, plus: { monthlyRmb: getConfig('plan.plus.monthlyRmb'), yearlyRmb: getConfig('plan.plus.yearlyRmb'), welcomeBonus: getConfig('plan.plus.welcomeBonus'), dailyDrip: getConfig('plan.plus.dailyDrip') }, pro: { monthlyRmb: getConfig('plan.pro.monthlyRmb'), yearlyRmb: getConfig('plan.pro.yearlyRmb'), welcomeBonus: getConfig('plan.pro.welcomeBonus'), dailyDrip: getConfig('plan.pro.dailyDrip') } } }
 export function getPlanDefsRedeem() { return getPlanDefs() }
 export function getVipConfig() { return { price: getConfig('vip.price'), discount: getConfig('vip.discount'), extraDrip: getConfig('vip.extraDrip'), modelDiscount: getConfig('vip.modelDiscount'), newApiGroup: getConfig('vip.newApiGroup') } }
+
+/** 在线充值配置快照（不可变）。 */
+export function getPayConfig() {
+  return Object.freeze({
+    onRecharge: !!getConfig('pay.onRecharge'),
+    currency: getConfig('pay.currency'),
+    rate: getConfig('pay.rate'),
+    // 解析充值档位 JSON，非法时回退安全默认 [10,30,50,100,300]
+    presetsRmb: (() => { try { const a = JSON.parse(getConfig('pay.presetsRmb')); return Array.isArray(a) ? a.map(Number).filter(n => Number.isFinite(n) && n > 0) : [10, 30, 50, 100, 300] } catch { return [10, 30, 50, 100, 300] } })(),
+    customMinRmb: getConfig('pay.customMinRmb'),
+    customMaxRmb: getConfig('pay.customMaxRmb'),
+    epayApi: getConfig('pay.epayApi'),
+    epayPid: getConfig('pay.epayPid'),
+    epayKey: getConfig('pay.epayKey'),
+    notifyBase: getConfig('pay.notifyBase'),
+  })
+}
+
+/** 在线支付是否可用：需同时启用在线充值且已配置网关/商户/密钥/回调域名。 */
+export function isOnlinePayReady() {
+  const pay = getPayConfig()
+  return pay.onRecharge && !!pay.epayApi && !!pay.epayPid && !!pay.epayKey && !!pay.notifyBase
+}
 
 /** 模型倍率目录由管理员维护，格式：{"claude-sonnet":0.6,"gpt-5":0.5}。 */
 export function getModelMultipliers() {

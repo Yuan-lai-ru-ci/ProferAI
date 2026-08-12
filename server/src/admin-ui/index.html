@@ -383,7 +383,7 @@ function renderPricing(c){
   c.innerHTML='<h1 class="page-title">定价配置</h1><div class="card"><span style="color:var(--muted)">加载中...</span></div>';
   api('/admin/config').then(function(d){
     var groups=d.groups||{};
-    var groupOrder=['套餐定价','VIP','计费','安全限额','杂项'];
+    var groupOrder=['套餐定价','VIP','计费','在线充值','安全限额','杂项'];
     var html='<h1 class="page-title">定价配置</h1>';
 
     html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">'+
@@ -403,13 +403,13 @@ function renderPricing(c){
             displayVal='¥'+(item.value/100).toFixed(0);displayDefault='¥'+(item.defaultValue/100).toFixed(0);unit='人民币分';
           }else if(item.key.indexOf('Rmb')<0){unit=item.key.indexOf('quota')>=0?'quota':''}
         }else if(item.type==='float'){displayVal=item.value.toFixed(2);displayDefault=item.defaultValue.toFixed(2)}
+        var isSecret=!!item.secret; if(isSecret){displayVal=item.value?'••••••••(已设置)':'—(未设置)';displayDefault=item.defaultValue?'(默认值)':'—';unit='敏感'}
         var customized=item.isCustomized?'<span class="badge badge-warn" style="margin-left:4px;font-size:10px">自定义</span>':'';
         html+='<tr><td><strong>'+esc(item.label)+'</strong><div style="font-size:10px;color:var(--muted)">'+esc(item.key)+'</div></td>'+
           '<td style="font-weight:600;font-family:monospace">'+displayVal+customized+'</td>'+
           '<td style="font-size:11px;color:var(--muted)">'+esc(unit)+'</td>'+
           '<td style="font-family:monospace;font-size:12px;color:var(--muted)">'+displayDefault+'</td>'+
-          '<td><button class="btn btn-ghost edit-cfg-btn" data-key="'+esc(item.key)+'" data-val="'+esc(String(item.rawValue))+
-            '" data-type="'+esc(item.type)+'" data-label="'+esc(item.label)+'">编辑</button></td></tr>';
+          '<td><button class="btn btn-ghost edit-cfg-btn" data-key="'+esc(item.key)+'" data-val="'+esc(String(item.rawValue))+ '" data-secret="'+(isSecret?'1':'0')+'" data-type="'+esc(item.type)+'" data-label="'+esc(item.label)+'">编辑</button></td></tr>';
       });
 
       html+='</tbody></table></div>';
@@ -419,10 +419,13 @@ function renderPricing(c){
 
     c.querySelectorAll('.edit-cfg-btn').forEach(function(b){
       b.addEventListener('click',function(){
-        var key=b.dataset.key,curVal=b.dataset.val,type=b.dataset.type,label=b.dataset.label;
-                var newVal=prompt('修改 '+label+' ('+key+'):\n当前值: '+curVal+'\n类型: '+type,curVal);
-        if(newVal===null||newVal===curVal)return;
-        if(newVal.trim()===''){
+        var key=b.dataset.key,curVal=b.dataset.val,type=b.dataset.type,label=b.dataset.label,isSecret=b.dataset.secret==='1';
+        // 敏感项不回显明文：编辑时留空 = 保持原值不变（不提交）；输入新值才会覆盖。
+        var hint=isSecret?'\n⚠ 敏感项：留空并确认=保持不变，输入新值=覆盖原值':'';
+        var newVal=prompt('修改 '+label+' ('+key+'):\n'+hint+(isSecret?'':'\n当前值: '+curVal)+'\n类型: '+type,isSecret?'':curVal);
+        if(newVal===null)return;
+        if(isSecret&&newVal.trim()===''){toast('未变更，保持原值');return}
+        if(newVal.trim()===''&&!isSecret){
           if(!confirm('确定重置「'+label+'」为默认值？'))return;
           api('/admin/config/reset',{method:'POST',body:JSON.stringify({key:key})}).then(function(){toast('已重置');renderPricing(c)}).catch(function(e){toast(e.message,false)});
           return;
