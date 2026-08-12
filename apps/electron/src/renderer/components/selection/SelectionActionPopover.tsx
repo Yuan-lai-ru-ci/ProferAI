@@ -7,15 +7,51 @@ interface SelectionActionPopoverProps {
   onAddToAgent: () => void
 }
 
-/** 计算把已渲染的按钮（含 translate 变换后的实际区域）整体平移回视口内所需的偏移量。 */
+export interface AvoidRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+function rectIntersects(
+  a: { left: number; top: number; width: number; height: number },
+  b: AvoidRect,
+): boolean {
+  return a.left < b.left + b.width && a.left + a.width > b.left && a.top < b.top + b.height && a.top + a.height > b.top
+}
+
+/** 避开禁区时在禁区边缘额外留出的空隙（防止按钮与「回到底端」按钮紧挨着）。 */
+const AVOID_GAP = 12
+
+/** 计算把按钮（含 translate 变换后的实际区域）钳制回视口内所需的平移量；
+ *  若给定禁区（avoid）且按钮与它重叠，优先上移避开（顶部空间不足则下移）。 */
 export function computeViewportShift(
   rect: { left: number; top: number; width: number; height: number },
   viewportWidth: number,
   viewportHeight: number,
+  avoid: AvoidRect | null = null,
 ): { dx: number; dy: number } {
   const clampLeft = Math.min(Math.max(rect.left, 0), Math.max(viewportWidth - rect.width, 0))
   const clampTop = Math.min(Math.max(rect.top, 0), Math.max(viewportHeight - rect.height, 0))
-  return { dx: clampLeft - rect.left, dy: clampTop - rect.top }
+  let dx = clampLeft - rect.left
+  let dy = clampTop - rect.top
+  if (avoid && rectIntersects({ left: rect.left + dx, top: rect.top + dy, width: rect.width, height: rect.height }, avoid)) {
+    const above = avoid.top - rect.height - AVOID_GAP
+    dy = above >= 0 ? above - rect.top : avoid.top + avoid.height + AVOID_GAP - rect.top
+    dy = Math.min(Math.max(dy, -rect.top), viewportHeight - rect.top - rect.height)
+  }
+  return { dx, dy }
+}
+
+/** 会话区底部中央的「回到底端」浮动按钮（conversation.tsx 的 ConversationScrollButton）。 */
+const SCROLL_TO_BOTTOM_SELECTOR = '[data-scroll-to-bottom]'
+
+function findScrollToBottomRect(): AvoidRect | null {
+  const el = document.querySelector<HTMLElement>(SCROLL_TO_BOTTOM_SELECTOR)
+  if (!el) return null
+  const rect = el.getBoundingClientRect()
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
 }
 
 export function SelectionActionPopover({
@@ -26,11 +62,16 @@ export function SelectionActionPopover({
   const rootRef = React.useRef<HTMLDivElement>(null)
 
   // 自我钳制：实测按钮渲染区域（含 translate 变换后的实际位置），越界时整体平移回视口内，
-  // 保证按钮完整可见、可点击。比在调用方按估算尺寸钳制更精确，且对任意调用方通用。
+  // 并避开「回到底端」浮动按钮，保证两个按钮不重叠、都可点击。
   React.useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
-    const { dx, dy } = computeViewportShift(el.getBoundingClientRect(), window.innerWidth, window.innerHeight)
+    const { dx, dy } = computeViewportShift(
+      el.getBoundingClientRect(),
+      window.innerWidth,
+      window.innerHeight,
+      findScrollToBottomRect(),
+    )
     if (dx !== 0 || dy !== 0) {
       el.style.left = `${x + dx}px`
       el.style.top = `${y + dy}px`
