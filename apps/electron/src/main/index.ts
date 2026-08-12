@@ -500,15 +500,21 @@ function createWindow(): void {
     showWhenReady()
   })
 
-  const createSplashWindow = (): void => {
+  const createSplashWindow = (splashBounds?: { width: number; height: number; x: number; y: number }): void => {
     if (startupSplashWindow && !startupSplashWindow.isDestroyed()) startupSplashWindow.close()
+    // 刷新（Ctrl/Cmd+R）场景会传入主窗口当前真实 bounds，让启动画面保持
+    // 与主窗口一致的尺寸/位置（原本多大就多大），而不是退化成固定小方块。
+    const bounds = splashBounds ?? initialBounds
     startupSplashWindow = new BrowserWindow({
-      ...initialBounds,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       minWidth: 800,
       minHeight: 600,
       frame: false,
-      resizable: false,
-      movable: false,
+      resizable: true,
+      movable: true,
       show: false,
       backgroundColor: resolveStartupSplashDark() ? '#101010' : '#f4f4f2',
       webPreferences: { contextIsolation: true, nodeIntegration: false },
@@ -533,8 +539,13 @@ function createWindow(): void {
     splashStartedAt = Date.now()
     splashShown = false
     rendererReady = false
+    // 刷新时用主窗口当前实际大小/位置重建启动画面，避免退化成固定尺寸的小方块
+    const currentBounds = mainWindow.isDestroyed() ? undefined : mainWindow.getBounds()
+    const splashBounds = currentBounds
+      ? { x: currentBounds.x, y: currentBounds.y, width: currentBounds.width, height: currentBounds.height }
+      : undefined
     mainWindow?.hide()
-    createSplashWindow()
+    createSplashWindow(splashBounds)
     loadRenderer()
   }
 
