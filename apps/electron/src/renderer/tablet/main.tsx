@@ -31,14 +31,14 @@ import { useGlobalAgentListeners } from '@/hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from '@/hooks/useGlobalChatListeners'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom, channelsLoadedAtom, conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
-import { agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentStreamingStatesAtom } from '@/atoms/agent-atoms'
+import { agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentStreamingStatesAtom, agentMessageRefreshAtom } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { initTabletUiScale } from '@/atoms/ui-scale'
 import { UiScaleContainer } from '@/components/UiScaleContainer'
 import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from '@/components/ui/alert-dialog'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { Menu, Plus, Palette, Link, Loader2, Bell } from 'lucide-react'
+import { Menu, Plus, Palette, Link, Loader2, Bell, RefreshCw } from 'lucide-react'
 import { isAgentCompatibleProvider, type ProviderType, type AgentStreamPayload } from '@profer/shared'
 import { tabletConnectionStatusAtom, tabletNotifyCompleteAtom, tabletUnbindRequestAtom } from '@/atoms/tablet-settings'
 
@@ -154,6 +154,14 @@ function playTabletCompleteChime(): void {
 // 点击停止后若 10s 内没有 run_idle 确认（SDK abort 延迟 / 事件丢失 / 会话本就不 active 被 stop 守卫跳过），
 // 强制清理本地 streaming，避免“一直跑、停止按钮永久亮”的卡死态；下一次 run 事件或刷新会重新同步真实状态。
 const pendingStopTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+// ===== run_completed / run_idle 去重 =====
+// remote-service 会在 orchestrator onComplete 时广播 run_completed，orchestrator finally 又会发 run_idle；
+// 两者都表示"本轮结束"，若都完整处理会重复播提醒音、重复 emit STREAM_COMPLETE。
+// 用短窗口（3s）记录已由 run_completed 处理过的 sessionId，run_idle 到达时若命中则跳过完整处理，
+// 只保留 loadSessions（列表刷新无副作用）。旧服务端（无 run_completed）时 run_idle 仍正常成为唯一信号。
+const runCompletedProcessed = new Map<string, number>()
+const RUN_COMPLETED_DEDUP_WINDOW_MS = 3000
 
 {
   const origStopAgent = window.electronAPI.stopAgent.bind(window.electronAPI)
@@ -463,23 +471,47 @@ function App(): React.ReactElement {
 
   const handleAgentEvent = useCallback((client: WsClient, evt: AgentWorkflowEvent) => {
     emitTabletAgentStreamEvent({ sessionId: evt.sessionId, payload: evt.payload as AgentStreamPayload })
-    const p = evt.payload as { kind?: string; event?: { type?: string } } | null
+    const p = evt.payload as { kind?: string; event?: { type?: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean } } | null
+    // run_completed（remote-service 在 orchestrator onComplete 时广播，携带真实完成元数据）
+    // 与 run_idle（orchestrator finally 释放 active 时广播）都可能到达；两者都表示"本轮结束"。
+    // 优先用 run_completed 携带的真实 startedAt/stoppedByUser，避免用 Date.now() 伪造 startedAt
+    // 导致 onAgentStreamComplete 的 startedAt 竞态保护误判。
     if (p && p.kind === 'profer_event' && p.event && (p.event.type === 'run_completed' || p.event.type === 'run_idle')) {
+      const isRunCompleted = p.event.type === 'run_completed'
+      // 去重：run_completed 先处理并打标记；紧随其后的 run_idle 若命中短窗口标记，
+      // 跳过完整处理（提醒音/STREAM_COMPLETE），只刷新列表。旧服务端无 run_completed 时不命中。
+      const now = Date.now()
+      const lastCompleted = runCompletedProcessed.get(evt.sessionId)
+      const deduped = !isRunCompleted && lastCompleted !== undefined && (now - lastCompleted) < RUN_COMPLETED_DEDUP_WINDOW_MS
+      if (isRunCompleted) runCompletedProcessed.set(evt.sessionId, now)
+
       // 桥接桌面 STREAM_COMPLETE：useGlobalAgentListeners 只有它会把 running 置 false
-      // （桌面由 IPC 送达；平板 WS 无此消息，必须由 run_idle 事件代理触发），
+      // （桌面由 IPC 送达；平板 WS 无此消息，必须由 run_completed / run_idle 代理触发），
       // 否则 streaming 状态永不结束 → 停止按钮永不消失。
-      const stoppedByUser = consumeTabletStoppedByUser(evt.sessionId)
-      emitTabletAgentStreamComplete({
-        sessionId: evt.sessionId,
-        messages: [],
-        stoppedByUser,
-        startedAt: Date.now(),
-      })
-      // Agent 完成提醒音：开关开启、非用户主动停止、且完成会话不是当前正在查看的会话
-      // （自己盯着屏幕看时不需要提醒；正在看其他会话 / Chat 模式时值得提示）
-      if (!stoppedByUser && tabletStore.get(tabletNotifyCompleteAtom)) {
-        const viewingId = tabletStore.get(currentAgentSessionIdAtom)
-        if (viewingId !== evt.sessionId) playTabletCompleteChime()
+      // stoppedByUser：run_completed 用服务端真实值（opts.stoppedByUser）为准；
+      // run_idle 无此字段，用本地 stopAgent 记录的标记。无论哪个分支都消费本地标记，
+      // 避免两者都到达时（run_completed→run_idle）或顺序颠倒时残留。
+      const localStopped = consumeTabletStoppedByUser(evt.sessionId)
+      const stoppedByUser = isRunCompleted ? (p.event.stoppedByUser ?? false) : localStopped
+
+      if (!deduped) {
+        // startedAt 用真实值：run_completed 带 opts.startedAt，run_idle 无此字段则回退 Date.now()
+        const startedAt = p.event.startedAt ?? Date.now()
+        emitTabletAgentStreamComplete({
+          sessionId: evt.sessionId,
+          messages: [],
+          stoppedByUser,
+          startedAt,
+          resultSubtype: p.event.resultSubtype,
+          resultErrors: p.event.resultErrors,
+          backgroundTasksPending: p.event.backgroundTasksPending,
+        })
+        // Agent 完成提醒音：开关开启、非用户主动停止、且完成会话不是当前正在查看的会话
+        // （自己盯着屏幕看时不需要提醒；正在看其他会话 / Chat 模式时值得提示）
+        if (!stoppedByUser && tabletStore.get(tabletNotifyCompleteAtom)) {
+          const viewingId = tabletStore.get(currentAgentSessionIdAtom)
+          if (viewingId !== evt.sessionId) playTabletCompleteChime()
+        }
       }
       // 会话已空闲：撤销该会话的停止超时兜底定时器
       const timer = pendingStopTimers.get(evt.sessionId)
@@ -538,6 +570,26 @@ function App(): React.ReactElement {
     setSidebarOpen(false)
     toast.success('已解绑此设备，可重新输入服务器地址与访问令牌')
   }, [])
+
+  /** 手动刷新当前视图内容：除事件桥接自动刷新外，提供一键重拉兜底，
+   *  解决“显示结束但最后一条结果未出现”的残余情况（分页/事件竞态）。
+   *  - Agent：递增 agentMessageRefreshAtom 版本 → AgentView 重拉持久化消息（含分页刷新）。
+   *  - Chat：重拉对话列表 + 已打开对话的消息（ChatView 监听 conversationId 变化时自行加载）。 */
+  const handleRefresh = useCallback(() => {
+    const client = clientRef.current
+    if (appMode === 'agent' && currentSessionId) {
+      tabletStore.set(agentMessageRefreshAtom, (prev) => {
+        const map = new Map(prev)
+        map.set(currentSessionId, (prev.get(currentSessionId) ?? 0) + 1)
+        return map
+      })
+      if (client?.isOpen()) void loadSessions(client)
+      toast.success('已刷新会话', { duration: 1500 })
+    } else if (appMode === 'chat') {
+      if (client?.isOpen()) { void loadConversations(client); void loadSessions(client) }
+      toast.success('已刷新对话', { duration: 1500 })
+    }
+  }, [appMode, currentSessionId, loadSessions, loadConversations])
 
   // 连接状态同步到设置页 atom（「连接」tab 的状态徽标）
   useEffect(() => {
@@ -709,6 +761,15 @@ function App(): React.ReactElement {
             <div className="flex-1 min-w-0 px-1">
               <span className="block truncate text-sm font-medium text-foreground">{activeTitle}</span>
             </div>
+            {/* 手动刷新入口：兼做“完成但结果未出现”的兑底——一键重拉当前会话消息 */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button type="button" variant="ghost" size="icon" onClick={handleRefresh} className="size-10 shrink-0 rounded-[12px] text-foreground/65 hover:bg-foreground/[0.06]" aria-label="刷新当前内容">
+                  <RefreshCw className="size-[18px]" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">刷新当前内容</TooltipContent>
+            </Tooltip>
             {/* 顶栏解绑入口：Link 图标 + 绿色状态点表示“已绑定”，避免 Unlink（断链图标）被误读为未连接 */}
             <Tooltip>
               <TooltipTrigger asChild>

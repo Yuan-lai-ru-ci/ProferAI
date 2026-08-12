@@ -780,13 +780,29 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const modelId = parsed.modelId as string | undefined
       const workspaceId = parsed.workspaceId as string | undefined
 
-      // 异步执行，不阻塞 WS 响应；结果通过事件流返回
+      // 异步执行，不阻塞 WS 响应；结果通过事件流返回。
+      // onComplete 不再空置：orchestrator 会在 run 真正结束时回调「已持久化的完整消息列表」，
+      // 这里把 completion 标记（携带最终消息 + 完成元数据）通过 agentEventBus 广播给平板，
+      // 让平板端能确定性地拿到"结果已落盘"的完成信号，而不是只依赖 run_idle 的间接触发。
       void runAgentHeadless(
         { sessionId, userMessage, channelId, modelId, workspaceId, startedAt: Date.now() },
         {
           source: 'bridge',
           onError: () => {},
-          onComplete: () => {},
+          onComplete: (_messages, opts) => {
+            agentEventBus.emit(sessionId, {
+              kind: 'profer_event',
+              event: {
+                type: 'run_completed',
+                sessionId,
+                stoppedByUser: opts?.stoppedByUser ?? false,
+                startedAt: opts?.startedAt ?? Date.now(),
+                resultSubtype: opts?.resultSubtype,
+                resultErrors: opts?.resultErrors,
+                backgroundTasksPending: opts?.backgroundTasksPending ?? false,
+              },
+            })
+          },
           onTitleUpdated: () => {},
         },
       ).catch((e) => {
