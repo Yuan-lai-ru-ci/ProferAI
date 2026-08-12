@@ -350,6 +350,7 @@ export function MainArea(): React.ReactElement {
             <BrowserPanel
             sessionId={browserSessionId}
             state={browserState}
+            sessionTitle={activeTab?.title ?? ''}
             // 右侧文件栏打开时它占据窗口右缘，浏览器无需为 WindowControls 预留空白。
             avoidWindowControls={!sidePanelOpen}
             // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
