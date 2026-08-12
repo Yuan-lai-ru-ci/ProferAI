@@ -560,6 +560,10 @@ export class WsClient {
     return this.sendCommand({ type: 'search_chat_messages', query })
   }
 
+  searchAgentSessionMessages(query: string): Promise<unknown> {
+    return this.sendCommand({ type: 'search_agent_session_messages', query })
+  }
+
   chatSendMessage(payload: {
     conversationId: string
     userMessage: string

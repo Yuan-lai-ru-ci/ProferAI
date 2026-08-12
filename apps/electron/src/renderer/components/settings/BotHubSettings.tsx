@@ -42,6 +42,13 @@ interface BotPlatformDef {
 
 const PLATFORMS: readonly BotPlatformDef[] = [
   {
+    id: 'tablet',
+    name: '移动模式（试验版）',
+    iconChar: '▣',
+    iconBgClass: 'bg-violet-500/15',
+    iconTextClass: 'text-violet-600',
+  },
+  {
     id: 'feishu',
     name: '飞书',
     iconSrc: feishuLogo,
@@ -58,13 +65,6 @@ const PLATFORMS: readonly BotPlatformDef[] = [
     name: '钉钉',
     iconSrc: dingtalkLogo,
     iconBgClass: 'bg-orange-500/15',
-  },
-  {
-    id: 'tablet',
-    name: '移动模式（试验版）',
-    iconChar: '▣',
-    iconBgClass: 'bg-violet-500/15',
-    iconTextClass: 'text-violet-600',
   },
   {
     id: 'defaults',
@@ -188,7 +188,7 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
 // ===== 主组件 =====
 
 export function BotHubSettings(): React.ReactElement {
-  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('feishu')
+  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('tablet')
 
   return (
     <div className="flex -mx-6 -my-4 h-full">

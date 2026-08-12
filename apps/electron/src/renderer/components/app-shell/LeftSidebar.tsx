@@ -231,6 +231,10 @@ export interface LeftSidebarProps {
   noTransition?: boolean
   /** 平板等受限环境：隐藏 Chat/Agent 模式切换与侧栏折叠按钮（无 Chat 数据源、宽度固定） */
   tabletMode?: boolean
+  /** 是否渲染全局搜索对话框（SearchDialog）。移动版存在横屏固定侧栏 + 竖屏抽屉两个
+   *  LeftSidebar 实例，SearchDialog 绑定全局 atom 且 Portal 到 body，必须只渲染一份，
+   *  否则双实例同时打开会叠出双遮罩、互相触发 interactOutside 导致搜索框“一闪即逝”。 */
+  renderSearchDialog?: boolean
 }
 
 /** 日期分组标签 */
@@ -598,7 +602,7 @@ function sliceGroupsByCount<T extends { items: readonly unknown[] }>(groups: rea
   return out
 }
 
-export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProps): React.ReactElement {
+export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialog = true }: LeftSidebarProps): React.ReactElement {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   // 持续持有最新 activeView 的稳定引用，供 navigation consumer（useEffect [] 注册一次）
   // 读取最新视图状态，避免陈旧闭包（不能在 [] 闭包里直接读 activeView 变量）。
@@ -2810,7 +2814,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
       {/* 迁移/搜索对话框：双视图共享状态，必须只在外层渲染唯一实例，
           否则 Radix Portal 双实例同时打开会叠出双遮罩+双内容 */}
       {moveDialog}
-      <SearchDialog />
+      {renderSearchDialog && <SearchDialog />}
     </div>
   )
 }

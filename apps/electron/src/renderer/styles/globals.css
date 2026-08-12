@@ -2514,9 +2514,17 @@
 /* ===== 平板竖屏：消息内容区向左拓宽 40px 并对齐 =====
  * 保留头像/模型标识，但把 assistant 与 user 消息内容区左缩进从 46px 收窄到 6px
  * （相当于向左扩 40px），竖屏下获得更多文字观看空间，且两边气泡对齐。
+ * 同 turn 底部附属区（文件改动汇总的虚线分隔 + 操作按钮栏）也一并对齐到 6px，
+ * 避免出现“正文已左移、底下虚线与分叉按钮仍停在 46px”的错位。
  */
 @media (orientation: portrait) {
   body.tablet-mode .message-item .message-content {
+    padding-left: 6px;
+  }
+  body.tablet-mode .message-item .file-changes-summary {
+    padding-left: 6px;
+  }
+  body.tablet-mode .message-item .agent-turn-actions {
     padding-left: 6px;
   }
 }
@@ -2543,14 +2551,10 @@ body.tablet-mode * {
   -ms-overflow-style: none;
 }
 
-/* ===== 平板竖屏：模型名只留图标 =====
- * 消息头部（MessageHeader）的模型完整名称在竖屏窄屏下占空间，隐藏文本只留模型 logo。
+/* ===== 平板竖屏：模型名保留显示 =====
+ * 消息头部（MessageHeader）的模型名称在竖屏下保留显示，帮助用户识别当前模型。
+ * 输入工具栏的模型选择器（model-selector-trigger）仍只显示 logo 图标。
  */
-@media (orientation: portrait) {
-  body.tablet-mode .message-header-model {
-    display: none;
-  }
-}
 
 /* ===== 平板竖屏：工具栏模型选择器只显示图标 =====
  * ModelSelector 触发按钮（agent/chat 输入工具栏共用 model-selector-trigger class）
