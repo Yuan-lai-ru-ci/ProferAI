@@ -534,13 +534,18 @@ function createWindow(): void {
   }
 
   const replayStartupSplash = (): void => {
-    if (mainWindow?.isDestroyed()) return
+    if (!mainWindow || mainWindow.isDestroyed()) return
     if (showTimer) clearTimeout(showTimer)
     splashStartedAt = Date.now()
     splashShown = false
     rendererReady = false
+    // Ctrl/Cmd+R 刷新 renderer：内存态 browserOpenMap/browserState（非持久化）将随重建清空，
+    // 不再有 BrowserSlot 去 setLayout 定位/隐藏原生 view。必须在此隐藏所有浏览器原生视图，
+    // 否则主窗口重新显示后旧会话网页会裸奔脱出容器、不受控制（刷新场景需回到未打开浏览器态）。
+    browserController.hideAll()
     // 刷新时用主窗口当前实际大小/位置重建启动画面，避免退化成固定尺寸的小方块
-    const currentBounds = mainWindow.isDestroyed() ? undefined : mainWindow.getBounds()
+    // 上方守卫已确保 mainWindow 非空且未销毁，直接取 bounds。
+    const currentBounds = mainWindow.getBounds()
     const splashBounds = currentBounds
       ? { x: currentBounds.x, y: currentBounds.y, width: currentBounds.width, height: currentBounds.height }
       : undefined

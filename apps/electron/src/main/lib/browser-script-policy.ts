@@ -25,6 +25,55 @@ export function assertBrowserDomAction(input: BrowserDomActionInput): void {
 }
 
 /**
+ * 固定函数体（配合 Runtime.callFunctionOn 对已 resolve 的节点求值）：读取元素当前值。
+ * 用于 fill 后的回读校验。仅读取 input/textarea 的 value 或 contenteditable 的 textContent，
+ * 不传入任何页面文本作为代码，符合“固定操作”安全边界。
+ */
+export const BUILD_READ_ELEMENT_VALUE_FUNCTION = `function () {
+  if (!this || typeof this.tagName !== 'string') return '';
+  const tag = this.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return typeof this.value === 'string' ? this.value : '';
+  if (this.isContentEditable) return this.textContent || '';
+  return '';
+}`
+
+/**
+ * 固定函数体（配合 Runtime.callFunctionOn 对已 resolve 的节点求值）：用原型 setter 写入值并派发 input/change，
+ * 供 fill 回读失败时作为降级重填。text 作为 arg 序列化传入（非代码），其余操作固定。
+ * 仅适用于 input/textarea/contenteditable。
+ */
+export const BUILD_WRITE_ELEMENT_VALUE_FUNCTION = `function (text) {
+  if (!this) return { ok: false, error: '目标元素已失效' };
+  const element = this;
+  const tag = element.tagName.toLowerCase();
+  const isInput = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+  const editable = isInput || element.isContentEditable;
+  if (!editable) return { ok: false, error: '目标不是可编辑字段' };
+  if (isInput) {
+    const prototype = element instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    if (setter) setter.call(element, text); else element.value = text;
+  } else {
+    element.textContent = text;
+  }
+  try {
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  } catch {
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true };
+}`
+
+/**
+ * 在主进程内判断子串是否完全一致（供回读比较）。
+ * 忽略内容可编辑元素里可能被自动追加的换行/空格差异，仅做归一化后的等价判断。
+ */
+export function normalizeFilledText(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim()
+}
+
+/**
  * 在页面上下文内执行的固定 DOM 操作。参数经过 JSON 序列化，避免 selector/text 被解释成代码。
  * rich-text 编辑器常常没有稳定 AX 节点；这里同时派发 input/change，便于受控前端同步状态。
  */

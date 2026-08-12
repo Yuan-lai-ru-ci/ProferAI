@@ -109,3 +109,43 @@ export interface BrowserTranslateResult {
   /** 失败原因（仅在无法翻译时给出）。 */
   error?: string
 }
+
+/** 新标签页起始页：用户收藏的站点书签。 */
+export interface BrowserBookmark {
+  id: string
+  title: string
+  url: string
+  /** 站点 favicon 的 data URL（base64 内联），抓取失败时为空串。 */
+  favicon: string
+  createdAt: number
+}
+
+/** 新标签页起始页：最近访问记录（只用于列表展示，非完整历史页）。 */
+export interface BrowserHistoryEntry {
+  url: string
+  title: string
+  lastVisitedAt: number
+}
+
+/** 新标签页起始页聚合状态，渲染层一次性拉取。 */
+export interface BrowserStartPageState {
+  bookmarks: BrowserBookmark[]
+  recentHistory: BrowserHistoryEntry[]
+  /** 可配置默认首页 URL；空 = 显示自定义起始页。 */
+  defaultHomeUrl: string | null
+}
+
+/** 新增书签入参。 */
+export interface BrowserAddBookmarkInput {
+  title: string
+  url: string
+}
+
+/** 受管网页的下载被安全拦截后推送给渲染进程的脱敏事件。绝不含下载内容或本地路径。 */
+export interface BrowserDownloadBlockedEvent {
+  sessionId: string
+  /** 文件建议名（来自下载项），仅用于提示展示。 */
+  fileName: string
+  /** 触发下载的页面 URL，仅用于“在系统浏览器打开”动作。 */
+  url: string
+}

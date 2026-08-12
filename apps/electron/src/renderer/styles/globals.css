@@ -564,29 +564,9 @@
   app-region: drag;
 }
 
-/* ===== 侧边栏折叠动画 =====
-   收起/展开：wrapper 宽度过渡（Apple 风格缓动）+ 内容视图淡入淡出交错。
-   data-collapsed="true" 的视图：立即淡出，150ms 后 visibility hidden（避免 Tab 聚焦隐形控件）；
-   可见视图：visibility 立即生效，opacity 延迟 120ms 淡入（宽度先走，内容后出）。 */
+/* ===== 侧边栏折叠动画 ===== */
 .sidebar-collapse-ease {
   transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
-}
-
-.sidebar-view {
-  opacity: 1;
-  visibility: visible;
-  transition:
-    opacity 150ms ease 120ms,
-    visibility 0s 0s;
-}
-
-.sidebar-view[data-collapsed='true'] {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition:
-    opacity 150ms ease 0s,
-    visibility 0s linear 150ms;
 }
 
 /* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */

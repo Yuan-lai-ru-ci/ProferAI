@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, CalendarDays, ChevronRight, Blocks, GitBranch, LogIn } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, CalendarDays, ChevronRight, Blocks, GitBranch, LogIn, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -73,6 +73,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { browserStateMapAtom } from '@/atoms/browser-atoms'
 import { clearPreviewCacheForSession } from '@/components/diff/DiffTabContent'
 import {
   tabsAtom,
@@ -2786,9 +2787,9 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
   )
 
   // ===== 常驻 wrapper：同一节点驱动折叠/展开宽度过渡 =====
-  // 背景/圆角/阴影统一在 wrapper 上，两个内容视图 absolute 叠放（rail 在上、full 在下），
-  // 用 sidebar-view 的 opacity + 交错延迟淡入淡出，隐藏视图延迟 visibility 避免 Tab 聚焦隐形控件。
-  // 展开视图固定目标宽度，过渡期间不重排，仅被 wrapper 裁剪。
+  // 内容视图按状态单独挂载。此前将 rail 和完整侧栏绝对叠放，再依赖全局
+  // visibility 规则隐藏其中一个视图；该规则失效时，完整侧栏会泄露到 60px rail 内。
+  // 外层保留，因此宽度过渡不受影响。
   // noTransition（拖拽调宽）时跳过宽度过渡，保证即时响应。
   return (
     <div
@@ -2805,24 +2806,7 @@ export function LeftSidebar({ width, noTransition, tabletMode }: LeftSidebarProp
         flexShrink: sidebarCollapsed ? 0 : 1,
       }}
     >
-      {/* 折叠 rail：展开时隐藏，收起时延迟淡入 */}
-      <div
-        aria-hidden={!sidebarCollapsed}
-        className="sidebar-view absolute top-0 bottom-0 left-0 z-10"
-        data-collapsed={sidebarCollapsed ? 'false' : 'true'}
-        style={{ width: 60 }}
-      >
-        {collapsedRail}
-      </div>
-      {/* 展开内容：折叠时立即淡出 */}
-      <div
-        aria-hidden={sidebarCollapsed}
-        className="sidebar-view absolute top-0 bottom-0 left-0"
-        data-collapsed={sidebarCollapsed ? 'true' : 'false'}
-        style={{ width: width ?? 300 }}
-      >
-        {expandedSidebar}
-      </div>
+      {sidebarCollapsed ? collapsedRail : expandedSidebar}
       {/* 迁移/搜索对话框：双视图共享状态，必须只在外层渲染唯一实例，
           否则 Radix Portal 双实例同时打开会叠出双遮罩+双内容 */}
       {moveDialog}
@@ -3350,6 +3334,9 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
 }: AgentSessionItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
+  // 该会话是否有活动浏览器会话/标签（即使面板被用户收起也保留显示，便于从侧边栏识别哪个会话正在用浏览器）
+  const browserStateMap = useAtomValue(browserStateMapAtom)
+  const hasBrowser = browserStateMap.has(session.id)
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
   const [menuOpen, setMenuOpen] = React.useState(false)
@@ -3492,6 +3479,10 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                 )}
                 {session.sourceDelegationId && (
                   <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
+                )}
+                {/* 该会话有活动浏览器会话/标签：在会话行上标识，便于从侧边栏识别哪个会话在用浏览器 */}
+                {hasBrowser && (
+                  <Globe size={11} className="flex-shrink-0 text-foreground/40" aria-label="该会话正在使用浏览器" />
                 )}
                 <span className="truncate">{session.title}</span>
                 {/* 草稿标记：输入框有未发送内容 */}

@@ -1,6 +1,7 @@
 import * as React from 'react'
-import type { BrowserViewState } from '@profer/shared'
-import { ArrowLeft, ArrowRight, Globe2, Info, Languages, LoaderCircle, Minus, PanelRightClose, Plus, RefreshCw, ShieldAlert, Square, X } from 'lucide-react'
+import type { BrowserStartPageState, BrowserViewState } from '@profer/shared'
+import { ArrowLeft, ArrowRight, ClipboardPaste, Globe2, Info, Languages, LoaderCircle, Minus, PanelRightClose, Plus, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -15,6 +16,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
 import { BrowserSlot } from './BrowserSlot'
+import { BrowserStartPage } from './BrowserStartPage'
 
 interface BrowserPanelProps {
   sessionId: string
@@ -28,11 +30,69 @@ interface BrowserPanelProps {
 
 export function BrowserPanel({ sessionId, state, avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
   const [url, setUrl] = React.useState(state?.url ?? '')
+  // 用户正在地址栏输入/聚焦时，禁止用主进程回推的 state.url 覆盖，避免被 Agent 导航顶掉输入。
+  const urlDirtyRef = React.useRef(false)
+  const urlInputRef = React.useRef<HTMLInputElement>(null)
   const [riskAcknowledged, setRiskAcknowledged] = React.useState<boolean | null>(null)
   const [translating, setTranslating] = React.useState(false)
   const [translated, setTranslated] = React.useState(state?.translated ?? false)
+  const [pasting, setPasting] = React.useState(false)
+  const [startPage, setStartPage] = React.useState<BrowserStartPageState | null>(null)
+  const [bookmarking, setBookmarking] = React.useState(false)
+  // 阻止默认首页重复跳转：同一空标签只自动导航一次。
+  const autoNavigatedTabRef = React.useRef<string | null>(null)
 
   React.useEffect(() => setTranslated(state?.translated ?? false), [state?.translated])
+
+  const refreshStartPage = React.useCallback(async () => {
+    try {
+      const api = (window.electronAPI as Partial<typeof window.electronAPI>)
+      if (typeof api.getBrowserStartPage !== 'function') return
+      setStartPage(await api.getBrowserStartPage())
+    } catch (error) {
+      console.error('[受管浏览器] 读取起始页失败:', error)
+    }
+  }, [])
+
+  // 首次加载起始页数据；activeTabId 变化时刷新（书签/历史更新后回显）。
+  React.useEffect(() => { void refreshStartPage() }, [refreshStartPage])
+
+  // 仅在用户未在编辑地址栏时同步主进程回推的 URL。
+  React.useEffect(() => {
+    if (urlDirtyRef.current) return
+    setUrl(state?.url ?? '')
+  }, [state?.url])
+
+  // 订阅“下载被拦截”事件：受管浏览器不放行下载，但给用户可见反馈。
+  React.useEffect(() => {
+    const unsubscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentBrowserDownloadBlocked
+      ?.((payload) => {
+        if (payload.sessionId !== sessionId) return
+        toast.warning('已拦截下载，受管浏览器不向本地保存文件', {
+          description: payload.fileName,
+          action: payload.url ? {
+            label: '在系统浏览器打开',
+            onClick: () => void window.electronAPI.openExternal(payload.url),
+          } : undefined,
+        })
+      })
+    return unsubscribe
+  }, [sessionId])
+
+  const togglePaste = React.useCallback(async () => {
+    const doPaste = (window.electronAPI as Partial<typeof window.electronAPI>).pasteAgentBrowserClipboard
+    if (typeof doPaste !== 'function') return
+    setPasting(true)
+    try {
+      const result = await doPaste({ sessionId, tabId: undefined })
+      if (result.error) toast.error('粘贴失败', { description: result.error })
+    } catch (error) {
+      console.error('[受管浏览器] 粘贴失败:', error)
+      toast.error('粘贴失败', { description: error instanceof Error ? error.message : '未知错误' })
+    } finally {
+      setPasting(false)
+    }
+  }, [sessionId])
 
   const toggleTranslate = React.useCallback(async () => {
     const doTranslate = (window.electronAPI as Partial<typeof window.electronAPI>).translateAgentBrowser
@@ -49,7 +109,6 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   }, [sessionId])
   const [savingRiskAcknowledgement, setSavingRiskAcknowledgement] = React.useState(false)
 
-  React.useEffect(() => setUrl(state?.url ?? ''), [state?.url])
   React.useEffect(() => {
     let cancelled = false
     void window.electronAPI.getSettings()
@@ -67,7 +126,15 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
     const value = url.trim()
     const navigateBrowser = (window.electronAPI as Partial<typeof window.electronAPI>).navigateAgentBrowser
     if (!value || typeof navigateBrowser !== 'function') return
-    try { await navigateBrowser({ sessionId, url: value }) } catch (error) { console.error('[受管浏览器] 导航失败:', error) }
+    try {
+      await navigateBrowser({ sessionId, url: value })
+      // 导航已提交并生效，解除脏标记并同步为提交地址；后续主进程回推状态会再次校正。
+      urlDirtyRef.current = false
+      setUrl(value)
+    } catch (error) {
+      console.error('[受管浏览器] 导航失败:', error)
+      toast.error('导航失败', { description: error instanceof Error ? error.message : '无法打开该地址' })
+    }
   }, [sessionId, url])
 
   /** 收起浏览器面板（不销毁主进程浏览器会话），与标签页的关闭按钮语义区分，避免误触销毁整个浏览器。 */
@@ -134,6 +201,71 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
     } catch (error) { console.error('[受管浏览器] 关闭标签失败:', error) }
   }, [onClose, sessionId])
 
+  const toggleBookmark = React.useCallback(async () => {
+    if (!startPage || !state?.url) return
+    const api = (window.electronAPI as Partial<typeof window.electronAPI>)
+    const isBookmarked = startPage.bookmarks.some((b) => b.url === state.url)
+    if (isBookmarked) {
+      const target = startPage.bookmarks.find((b) => b.url === state.url)
+      if (target && typeof api.removeBrowserBookmark === 'function') {
+        setStartPage(await api.removeBrowserBookmark(target.id))
+      }
+      return
+    }
+    if (typeof api.addBrowserBookmark !== 'function') return
+    setBookmarking(true)
+    try {
+      setStartPage(await api.addBrowserBookmark({ title: state.title || state.url, url: state.url }))
+    } catch (error) {
+      console.error('[受管浏览器] 收藏失败:', error)
+      toast.error('收藏失败', { description: error instanceof Error ? error.message : '未知错误' })
+    } finally {
+      setBookmarking(false)
+    }
+  }, [startPage, state?.url, state?.title])
+
+  const removeBookmark = React.useCallback(async (id: string) => {
+    const api = (window.electronAPI as Partial<typeof window.electronAPI>)
+    if (typeof api.removeBrowserBookmark !== 'function') return
+    try {
+      setStartPage(await api.removeBrowserBookmark(id))
+    } catch (error) { console.error('[受管浏览器] 删除书签失败:', error) }
+  }, [])
+
+  const clearHistory = React.useCallback(async () => {
+    const api = (window.electronAPI as Partial<typeof window.electronAPI>)
+    if (typeof api.clearBrowserHistory !== 'function') return
+    try {
+      setStartPage(await api.clearBrowserHistory())
+    } catch (error) { console.error('[受管浏览器] 清空历史失败:', error) }
+  }, [])
+
+  const navigateStartPage = React.useCallback(async (targetUrl: string) => {
+    const navigateBrowser = (window.electronAPI as Partial<typeof window.electronAPI>).navigateAgentBrowser
+    if (!targetUrl || typeof navigateBrowser !== 'function') return
+    try {
+      await navigateBrowser({ sessionId, url: targetUrl })
+      urlDirtyRef.current = false
+      setUrl(targetUrl)
+    } catch (error) {
+      console.error('[受管浏览器] 导航失败:', error)
+      toast.error('导航失败', { description: error instanceof Error ? error.message : '无法打开该地址' })
+    }
+  }, [sessionId])
+
+  // 默认首页：空标签且配置了默认首页时自动导航（同一标签只触发一次）。
+  const isEmptyTab = !state?.url
+  const activeTabIdForNav = state?.activeTabId ?? ''
+  const defaultHomeUrl = startPage?.defaultHomeUrl ?? null
+  React.useEffect(() => {
+    if (!isEmptyTab || !defaultHomeUrl) return
+    if (autoNavigatedTabRef.current === activeTabIdForNav) return
+    autoNavigatedTabRef.current = activeTabIdForNav
+    void navigateStartPage(defaultHomeUrl)
+  }, [isEmptyTab, defaultHomeUrl, activeTabIdForNav, navigateStartPage])
+
+  const isBookmarked = !!state?.url && (startPage?.bookmarks.some((b) => b.url === state.url) ?? false)
+
   const title = state?.title || '受管浏览器'
   return (
     <div className="@container flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl bg-content-area shadow-xl dark:shadow-sm titlebar-no-drag">
@@ -143,8 +275,21 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || !state?.canGoForward} onClick={() => void window.electronAPI.goForwardAgentBrowser?.(sessionId)}><ArrowRight className="size-3.5" /></Button></TooltipTrigger><TooltipContent>前进</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked} onClick={() => void window.electronAPI.reloadAgentBrowser?.(sessionId)}><RefreshCw className="size-3.5" /></Button></TooltipTrigger><TooltipContent>刷新</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${translated ? 'text-primary' : ''}`} disabled={riskBlocked || translating} onClick={() => void toggleTranslate()}>{translating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{translated ? '恢复原文' : '整页翻译'}</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || pasting} onClick={() => void togglePaste()} aria-label="粘贴剪贴板文本到当前字段">{pasting ? <LoaderCircle className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>粘贴剪贴板文本</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${isBookmarked ? 'text-amber-500' : ''}`} disabled={riskBlocked || !state?.url || bookmarking} onClick={() => void toggleBookmark()} aria-label="收藏当前页">{bookmarking ? <LoaderCircle className="size-3.5 animate-spin" /> : <Star className={`size-3.5 ${isBookmarked ? 'fill-current' : ''}`} />}</Button></TooltipTrigger><TooltipContent>{isBookmarked ? '取消收藏' : '收藏当前页'}</TooltipContent></Tooltip>
         <form className="flex-1 min-w-0" onSubmit={(event) => { event.preventDefault(); if (!riskBlocked) void navigate() }}>
-          <Input disabled={riskBlocked} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="输入域名或 URL（默认 HTTPS，仅公共网站）" className="h-6 text-xs bg-background/70" aria-label="浏览器地址" />
+          <Input
+            ref={urlInputRef}
+            disabled={riskBlocked}
+            value={url}
+            onChange={(event) => { const v = event.target.value; setUrl(v); urlDirtyRef.current = true }}
+            onFocus={() => { urlDirtyRef.current = true }}
+            onBlur={() => { urlDirtyRef.current = false }}
+            onKeyDown={(event) => { if (event.key === 'Enter') urlDirtyRef.current = false }}
+            placeholder="输入域名或 URL（默认 HTTPS，仅公共网站）"
+            className="h-6 text-xs bg-background/70"
+            aria-label="浏览器地址"
+          />
         </form>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || zoomPercent <= 50} onClick={() => changeZoom(-0.1)} aria-label="缩小网页"><Minus className="size-3.5" /></Button></TooltipTrigger><TooltipContent>缩小网页</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><button type="button" className="min-w-9 px-1 text-[10px] text-muted-foreground hover:text-foreground" disabled={riskBlocked} onClick={() => { const setZoom = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserZoom; if (setZoom && state?.activeTabId) void setZoom({ sessionId, tabId: state.activeTabId, zoomFactor: 1 }) }} aria-label="重置网页缩放">{zoomPercent}%</button></TooltipTrigger><TooltipContent>重置网页缩放</TooltipContent></Tooltip>
@@ -192,7 +337,16 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
         </div>
       )}
       {riskAcknowledged === true ? (
-        <BrowserSlot key={`${activeTabId}:${layoutKey}`} sessionId={sessionId} tabId={activeTabId} />
+        isEmptyTab && !defaultHomeUrl ? (
+          <BrowserStartPage
+            state={startPage ?? { bookmarks: [], recentHistory: [], defaultHomeUrl: null }}
+            onNavigate={(url) => void navigateStartPage(url)}
+            onRemoveBookmark={removeBookmark}
+            onClearHistory={clearHistory}
+          />
+        ) : (
+          <BrowserSlot key={`${activeTabId}:${layoutKey}`} sessionId={sessionId} tabId={activeTabId} />
+        )
       ) : (
         <div className="flex flex-1 min-h-0 items-center justify-center bg-muted/15 px-8 text-center">
           <div className="max-w-sm space-y-2 text-muted-foreground">
@@ -213,6 +367,7 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
               <div className="space-y-3 text-left leading-6">
                 <p>Profer 可让 Agent 在浏览器中读取、搜索、点击和输入。部分平台可能将这些行为或高频操作识别为自动化活动。</p>
                 <p>这可能导致验证码、限流、功能限制、账号风控，严重时可能造成账号处罚或封禁。请自行了解并遵守目标平台规则，并自行承担相应风险。</p>
+                <p>受管浏览器已启用剪贴板读写权限：页面可通过系统剪贴板复制与粘贴文本，请留意剪贴板中可能存在的敏感信息。</p>
                 <p className="text-xs">Profer 不会保证第三方平台接受这些操作；请避免不必要的高频互动，并在重要操作前核对页面状态。</p>
               </div>
             </AlertDialogDescription>
