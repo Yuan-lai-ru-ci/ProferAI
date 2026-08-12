@@ -17,6 +17,7 @@ import type { WebContents } from 'electron'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@profer/shared'
 import type {
   AgentSendInput,
+  AgentMessage,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSaveWorkspaceFilesInput,
@@ -260,7 +261,10 @@ export async function runAgentHeadless(
   input: AgentSendInput,
   callbacks: {
     onError: (error: string) => void
-    onComplete: () => void
+    /** 流式完成回调。messages/opts 为 orchestrator 传出的完整已持久化消息与完成元数据；
+     *  无渲染进程的外部调用方（如平板 remote-service）可用它们拿到最终结果，
+     *  后向兼容：不接收参数的旧调用方（飞书/bridge/automation）会自然忽略多余实参。 */
+    onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void
     onTitleUpdated: (title: string) => void
     source?: AgentExternalRunSource
   },
@@ -288,7 +292,7 @@ export async function runAgentHeadless(
         }
       },
       onComplete: (messages, opts) => {
-        callbacks.onComplete()
+        callbacks.onComplete(messages, opts)
         // 同步到渲染进程
         if (wc && !wc.isDestroyed()) {
           wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {

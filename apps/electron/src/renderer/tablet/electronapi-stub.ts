@@ -124,6 +124,76 @@ function getCachedSdkMessages(sessionId: string): unknown[] {
   return sdkMessagesPageCache.get(sessionId)?.messages ?? []
 }
 
+// ===== 分页合并辅助 =====
+
+/** 生成单条 SDKMessage 的去重键。优先 uuid；无 uuid 时回退到 type + 内容哈希。
+ *  result / system(无 uuid) 等消息靠内容指纹去重，保证跨分页合并时不重不漏。 */
+function sdkMessageKey(msg: unknown): string {
+  const m = msg as { uuid?: string; type?: string; message?: unknown; _createdAt?: number; error?: unknown }
+  if (typeof m?.uuid === 'string' && m.uuid.length > 0) return `u:${m.uuid}`
+  // 无 uuid：用 type + message 内容 + _createdAt 组合指纹；同一消息跨分页返回时 fingerprint 不变，
+  // 不同消息即使 type 相同、内容长度相近也能靠内容差异区分（降低哈希碰撞风险）。
+  try {
+    const content = JSON.stringify(m?.message ?? m?.error ?? {})
+    // 简单可复现的滚动哈希（djb2），避免全量内容字符串占用内存/日志。
+    let h = 5381
+    for (let i = 0; i < content.length; i++) {
+      h = ((h << 5) + h + content.charCodeAt(i)) | 0
+    }
+    return `h:${m?.type ?? '?'}:${h}:${typeof m?._createdAt === 'number' ? m._createdAt : ''}`
+  } catch {
+    return `h:${m?.type ?? '?'}:${String(msg).slice(0, 64)}`
+  }
+}
+
+/**
+ * 稳健合并"旧缓存 + 最新分页窗口"，返回新的 SdkMessagesPageState。
+ *
+ * 背景：服务端 paginateSDKMessages 会把窗口起点快进到 user-turn 边界，且两次分页之间
+ * 若新增消息数超过 targetMessages，新窗口起点与旧缓存尾部之间可能存在整段消息。
+ * 用 page.startIndex - prev.startIndex 切旧缓存前缀会丢消息。这里改为基于去重键：
+ *  1. 在旧缓存 messages 中定位 latest 首条消息（去重键逐条比对），找到重叠点。
+ *  2. 找不到重叠点（两窗口完全不重叠）→ 丢弃旧缓存，以最新窗口为准（宁可重拉更早，也不丢最新）。
+ *  3. 找到重叠点 → 旧缓存前缀（重叠点之前）+ latest（自重叠点起的最新连续窗口）。
+ * 这样无论 startIndex 如何快进、新增多少条，都保证尾部消息完整、前缀不重复。
+ */
+function mergePageWithCache(
+  prevMessages: unknown[],
+  latest: unknown[],
+  prevStartIndex: number,
+  pageStartIndex: number,
+  pageHasMore: boolean,
+): SdkMessagesPageState {
+  if (latest.length === 0) {
+    return { messages: prevMessages, startIndex: prevStartIndex, hasMore: pageHasMore }
+  }
+
+  const firstKey = sdkMessageKey(latest[0])
+  // 从旧缓存末尾向前找 latest 首条消息的匹配位置（重叠点通常在旧缓存尾部附近）。
+  let overlap = -1
+  for (let i = prevMessages.length - 1; i >= 0; i--) {
+    if (sdkMessageKey(prevMessages[i]) === firstKey) {
+      overlap = i
+      break
+    }
+  }
+
+  if (overlap < 0) {
+    // 完全不重叠：新窗口已经越过旧缓存尾部（新增消息过多）。以后面连续的最新窗口为准，
+    // 避免用失效的索引差值拼接出中间缺口的坏序列。更早历史由触顶加载按 before 补齐。
+    return { messages: latest, startIndex: pageStartIndex, hasMore: pageHasMore }
+  }
+
+  // 有重叠：旧缓存 [0, overlap) 前缀 + latest 全部（latest 从重叠点开始是连续更新的尾部）。
+  const prefix = prevMessages.slice(0, overlap)
+  return {
+    messages: [...prefix, ...latest],
+    // startIndex 仍是前缀首条消息的绝对索引（= 旧起点），与 overlap 无关。
+    startIndex: prevStartIndex,
+    hasMore: pageHasMore,
+  }
+}
+
 // ===== 事件桥：注册器（供桌面组件注册）+ emit（供平板 WS 层喂事件） =====
 
 type Listener<T> = (payload: T) => void
@@ -356,24 +426,13 @@ export function installElectronApiStub(): void {
         const page = res as { messages?: unknown[]; startIndex?: number; total?: number; hasMore?: boolean }
         if (Array.isArray(page?.messages) && typeof page?.startIndex === 'number') {
           const latest = page.messages as unknown[]
-          if (page.startIndex <= prev.startIndex) {
-            // 最新窗口起点不晚于缓存起点：以最新窗口为准（覆盖尾部 + 可能回退的一部分）。
-            sdkMessagesPageCache.set(sessionId, {
-              messages: latest,
-              startIndex: page.startIndex,
-              hasMore: page.hasMore !== false,
-            })
-          } else {
-            // 最新窗口 startIndex 在缓存之后：保留缓存更早前缀 + 追加上最新尾部。
-            const prefixLen = page.startIndex - prev.startIndex
-            const prefix = prev.messages.slice(0, prefixLen)
-            sdkMessagesPageCache.set(sessionId, {
-              messages: [...prefix, ...latest],
-              startIndex: prev.startIndex,
-              hasMore: prev.hasMore,
-            })
-          }
-          return sdkMessagesPageCache.get(sessionId)!.messages
+          // 稳健合并：不依赖 page.startIndex - prev.startIndex 的绝对索引差。
+          // startIndex 会被 user-turn 边界快进，两次分页之间若新增消息数 > targetMessages，
+          // 新窗口起点会跳过旧缓存尾部之间的整段消息，用索引差值切 prefix 会丢消息。
+          // 这里改成"按去重键求前缀"：从 prev 里找到 latest 首条消息的位置，截断重叠，避免丢/重。
+          const merged = mergePageWithCache(prev.messages, latest, prev.startIndex, page.startIndex, page.hasMore !== false)
+          sdkMessagesPageCache.set(sessionId, merged)
+          return merged.messages
         }
         // 旧端返回原始数组：直接用新数据覆盖。
         const raw = Array.isArray(res) ? (res as unknown[]) : prev.messages
