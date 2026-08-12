@@ -1131,7 +1131,6 @@ export function startRemoteService(): string | null {
 
   const port = getPort()
   httpServer = createServer((req, res) => {
-    // 健康检查
     // 健康检查（容忍 query，如 /health?token=xxx）
     if ((req.url || '').split('?')[0] === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })

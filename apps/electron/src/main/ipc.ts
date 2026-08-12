@@ -1887,6 +1887,24 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // 获取安卓版 APK 扫码下载信息（地址 + 二维码 + 文件名）。
+  // 直接指向官网稳定域名 https://profer.cn/profer-mobile/，不依赖移动模式服务是否运行。
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.GET_APK_QR,
+    async (): Promise<{ url: string; dataUrl: string; fileName: string }> => {
+      const url = 'https://profer.cn/profer-mobile/Profer-移动版-android.apk'
+      const fileName = 'Profer-移动版-android.apk'
+      try {
+        const QRCode = (await import('qrcode')).default
+        const dataUrl = await QRCode.toDataURL(url, { width: 320, margin: 2, errorCorrectionLevel: 'M' })
+        return { url, dataUrl, fileName }
+      } catch (err) {
+        console.error('[移动模式] APK 二维码生成失败:', err)
+        return { url, dataUrl: '', fileName }
+      }
+    },
+  )
+
   // 同步更新应用设置（用于 beforeunload 场景）
   ipcMain.on(
     SETTINGS_IPC_CHANNELS.UPDATE_SYNC,

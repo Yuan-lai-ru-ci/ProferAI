@@ -379,6 +379,8 @@ export const SETTINGS_IPC_CHANNELS = {
   SET_TABLET_MODE_ENABLED: 'settings:set-tablet-mode-enabled',
   /** 设置移动模式服务端口（保存并热应用；服务运行时自动重启） */
   SET_TABLET_MODE_PORT: 'settings:set-tablet-mode-port',
+  /** 获取安卓版 APK 扫码下载二维码（指向官网 profer.cn 域名；始终返回） */
+  GET_APK_QR: 'settings:get-apk-qr',
 } as const
 
 /** 自定义通知音 IPC 通道 */

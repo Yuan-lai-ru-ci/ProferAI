@@ -413,6 +413,8 @@ export interface ElectronAPI {
   setTabletModeEnabled: (enabled: boolean) => Promise<TabletModeStatus>
   /** 设置移动模式服务端口（保存并热应用，服务运行中自动重启） */
   setTabletModePort: (port: number) => Promise<TabletModeStatus>
+  /** 获取安卓版 APK 扫码下载信息（官网地址/二维码/文件名） */
+  getProferApkQr: () => Promise<{ url: string; dataUrl: string; fileName: string }>
 
   /** 获取系统主题（是否深色模式） */
   getSystemTheme: () => Promise<boolean>
@@ -1710,6 +1712,9 @@ const electronAPI: ElectronAPI = {
   },
   setTabletModePort: (port: number) => {
     return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_PORT, port) as Promise<TabletModeStatus>
+  },
+  getProferApkQr: () => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_APK_QR) as Promise<{ url: string; dataUrl: string; fileName: string }>
   },
 
   getSystemTheme: () => {
