@@ -241,8 +241,9 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState(false)
   const [scale, setScale] = React.useState<number>(INITIAL_SCALE)
-  /** 缩放内容与其容器（frame）的实际布局尺寸，用于「未溢出时居中、溢出时顶格」的平移量计算 */
-  const [contentSize, setContentSize] = React.useState({ w: 0, h: 0 })
+  /** SVG 原始尺寸（取 width/height 属性，不受 max-w-full/滚动条影响，稳定），用于「未溢出时居中、溢出时顶格」的平移量计算 */
+  const [svgSize, setSvgSize] = React.useState({ w: 0, h: 0 })
+  /** 缩放容器（frame）内容盒尺寸 */
   const [frameSize, setFrameSize] = React.useState({ w: 0, h: 0 })
 
   const codeRef = React.useRef(code)
@@ -298,10 +299,13 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   }, [renderCurrentCode])
 
   // ---- 缩放平移量：内容未溢出视口时居中，溢出时顶格（左上角），保证头部/顶端始终可滚动 ----
-  const scaledW = contentSize.w * scale
-  const scaledH = contentSize.h * scale
-  const tx = scaledW <= frameSize.w && frameSize.w > 0 ? (frameSize.w - scaledW) / 2 : 0
-  const ty = scaledH <= frameSize.h && frameSize.h > 0 ? (frameSize.h - scaledH) / 2 : 0
+  // 展示尺寸 = min(SVG 原始尺寸, 容器内容盒)；高度按原始宽高比等比换算（对应 svg 的 h-auto）
+  const displayW = svgSize.w > 0 && frameSize.w > 0 ? Math.min(svgSize.w, frameSize.w) : svgSize.w
+  const displayH = displayW > 0 && svgSize.w > 0 ? (svgSize.h * displayW) / svgSize.w : svgSize.h
+  const scaledW = displayW * scale
+  const scaledH = displayH * scale
+  const tx = svgSize.w > 0 && scaledW <= frameSize.w && frameSize.w > 0 ? (frameSize.w - scaledW) / 2 : 0
+  const ty = svgSize.h > 0 && scaledH <= frameSize.h && frameSize.h > 0 ? (frameSize.h - scaledH) / 2 : 0
 
   /**
    * 按「视口中心锚定」缩放：先读取当前视口中心对应的内容点（未缩放坐标系），
@@ -313,7 +317,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     const scrollEl = scrollRef.current
     const contentEl = contentRef.current
     // 图表未渲染或尚未测得尺寸时直接改缩放即可
-    if (!scrollEl || !contentEl || !contentSize.w || !frameSize.w) {
+    if (!scrollEl || !contentEl || !svgSize.w || !frameSize.w) {
       setScale(newScale)
       return
     }
@@ -332,8 +336,8 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     const itemX = (scrollEl.scrollLeft + vpCx - left) / oldScale
     const itemY = (scrollEl.scrollTop + vpCy - top) / oldScale
     // 新缩放下的平移量与可视左上角
-    const newScaledW = contentSize.w * newScale
-    const newScaledH = contentSize.h * newScale
+    const newScaledW = displayW * newScale
+    const newScaledH = displayH * newScale
     const newTx = newScaledW <= frameSize.w ? (frameSize.w - newScaledW) / 2 : 0
     const newTy = newScaledH <= frameSize.h ? (frameSize.h - newScaledH) / 2 : 0
     const newLeft = baseLeft + newTx
@@ -344,7 +348,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
       y: newTop + itemY * newScale - vpCy,
     }
     setScale(newScale)
-  }, [scale, tx, ty, contentSize, frameSize])
+  }, [scale, tx, ty, displayW, displayH, svgSize, frameSize])
 
   // ---- 缩放后应用滚动锚定（本次提交里 transform 已生效，scrollWidth 为缩放后尺寸）----
   React.useLayoutEffect(() => {
@@ -356,29 +360,37 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     scrollEl.scrollTop = clamp(pending.y, 0, Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight))
   })
 
-  // ---- 测量内容/容器尺寸：居中平移量依赖它们；每次提交后测量，并用 ResizeObserver 跟随容器变化 ----
+  // ---- 测量 SVG 原始尺寸 / 容器尺寸：只在图表渲染时执行一次，缩放不触发，避免 setState 反馈循环 ----
+  // 注意：不在这里监听内容元素的布局尺寸变化——放大溢出时滚动条出现会让容器变窄，
+  // 若反复读 offsetWidth 并回写 state 会形成无限重渲染（Maximum update depth exceeded）。
+  // SVG 原始尺寸取 width/height 属性（稳定），容器尺寸仅跟随窗口 resize（滚动条出现不触发）。
   React.useLayoutEffect(() => {
     const frame = frameRef.current
     const content = contentRef.current
     if (!frame || !content) return
-    const measure = () => {
+    const svg = content.querySelector('svg')
+    let iw = 0
+    let ih = 0
+    if (svg) {
+      iw = parseFloat(svg.getAttribute('width') ?? '')
+      ih = parseFloat(svg.getAttribute('height') ?? '')
+    }
+    if (!Number.isFinite(iw) || !Number.isFinite(ih) || iw <= 0 || ih <= 0) {
+      // 属性缺失时退回布局尺寸（此时仅测一次，足够稳定）
+      iw = content.offsetWidth
+      ih = content.offsetHeight
+    }
+    setSvgSize({ w: iw, h: ih })
+    const measureFrame = () =>
       setFrameSize((prev) => {
         const w = frame.clientWidth
         const h = frame.clientHeight
         return prev.w === w && prev.h === h ? prev : { w, h }
       })
-      setContentSize((prev) => {
-        const w = content.offsetWidth
-        const h = content.offsetHeight
-        return prev.w === w && prev.h === h ? prev : { w, h }
-      })
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(frame)
-    ro.observe(content)
-    return () => ro.disconnect()
-  })
+    measureFrame()
+    window.addEventListener('resize', measureFrame)
+    return () => window.removeEventListener('resize', measureFrame)
+  }, [renderedSvg])
 
   const handleZoomIn = React.useCallback(() => {
     applyZoom(clamp(scale + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
