@@ -17,9 +17,6 @@ export const longTextPasteAsAttachmentEnabledAtom = atom<boolean>(false)
 /** 输入框是否渲染 Markdown 富文本格式（默认关闭，纯文本模式；开启后渲染富文本，仍保留 Mention 引用） */
 export const richTextRenderingEnabledAtom = atom<boolean>(false)
 
-/** 是否在侧边栏显示知识库入口（保留旧设置 key 以兼容已有用户偏好） */
-export const paperKnowledgeBaseEnabledAtom = atom<boolean>(false)
-
 // ===== 初始化 =====
 
 /**
@@ -28,16 +25,13 @@ export const paperKnowledgeBaseEnabledAtom = atom<boolean>(false)
 export async function initializeUiPreferences(
   setStickyUserMessageEnabled: (enabled: boolean) => void,
   setLongTextPasteAsAttachmentEnabled?: (enabled: boolean) => void,
-  setRichTextRenderingEnabled?: (enabled: boolean) => void,
-  setPaperKnowledgeBaseEnabled?: (enabled: boolean) => void
+  setRichTextRenderingEnabled?: (enabled: boolean) => void
 ): Promise<void> {
   try {
     const settings = await window.electronAPI.getSettings()
     setStickyUserMessageEnabled(settings.stickyUserMessageEnabled ?? true)
     setLongTextPasteAsAttachmentEnabled?.(settings.longTextPasteAsAttachmentEnabled ?? false)
     setRichTextRenderingEnabled?.(settings.richTextRenderingEnabled ?? false)
-    // 知识库已暂时关闭，强制为 false，不读持久化值
-    setPaperKnowledgeBaseEnabled?.(false)
   } catch (error) {
     console.error('[UI偏好] 初始化失败:', error)
   }
@@ -75,16 +69,5 @@ export async function updateRichTextRenderingEnabled(enabled: boolean): Promise<
     await window.electronAPI.updateSettings({ richTextRenderingEnabled: enabled })
   } catch (error) {
     console.error('[UI偏好] 更新输入框 Markdown 渲染设置失败:', error)
-  }
-}
-
-/**
- * 更新知识库开关并持久化（保留旧设置 key 以兼容已有用户偏好）
- */
-export async function updatePaperKnowledgeBaseEnabled(enabled: boolean): Promise<void> {
-  try {
-    await window.electronAPI.updateSettings({ paperKnowledgeBaseEnabled: enabled })
-  } catch (error) {
-    console.error('[UI偏好] 更新知识库设置失败:', error)
   }
 }

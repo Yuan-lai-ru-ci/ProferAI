@@ -34,7 +34,6 @@ import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfC
 import { getTeamAuthWithRefresh } from './auth-service'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
-import { injectKbMcpServer } from './kb-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
 import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
@@ -914,10 +913,6 @@ export class AgentOrchestrator {
         modelId,
         workspaceId,
         triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
-      })
-      await injectKbMcpServer(sdk, mcpServers, {
-        sessionId,
-        workspaceId,
       })
       await injectMemoryArchiveMcpServer(sdk, mcpServers, {
         memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
