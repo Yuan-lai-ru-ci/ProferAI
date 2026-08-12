@@ -67,9 +67,9 @@ const DOC_EXTS = new Set(['pdf', 'docx'])
 /** 所有可预览的扩展名集合（用于相对路径检测） */
 const ALL_PREVIEWABLE_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS, ...CODE_EXTS, ...DOC_EXTS])
 
-/** 从路径提取文件名 */
+/** 从路径提取文件名（兼容 Windows 反斜杠与 Unix 正斜杠，否则 Windows 路径会整段返回） */
 function getFileName(filePath: string): string {
-  const parts = filePath.split('/')
+  const parts = filePath.split(/[\\/]/)
   return parts[parts.length - 1] || filePath
 }
 
