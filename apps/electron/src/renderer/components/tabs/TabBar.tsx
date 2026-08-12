@@ -10,8 +10,9 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
-import { PanelRight } from 'lucide-react'
+import { Globe2, PanelRight } from 'lucide-react'
 import { Sparkles } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -30,6 +31,12 @@ import {
   unviewedCompletedSessionIdsAtom,
   workspaceFilesVersionAtom,
 } from '@/atoms/agent-atoms'
+import {
+  browserFilePanelManualRestoreSessionIdsAtom,
+  browserPanelDismissedSessionIdsAtom,
+  browserPanelOpenMapAtom,
+  browserStateMapAtom,
+} from '@/atoms/browser-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
@@ -229,13 +236,102 @@ function TabBarInner({
   // 该按钮的 absolute 定位与 DiffPanelTabBar.PanelRightClose 的 mr-1 mb-[3px] 坐标耦合，
   // 若右侧关闭按钮样式变化，这里需同步调整。
   const [isPanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
+  const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
+  const filesVersion = useAtomValue(workspaceFilesVersionAtom)
+  const hasFileChanges = filesVersion > 0
   const activeTab = React.useMemo(() => tabs.find((t) => t.id === activeTabId), [tabs, activeTabId])
+  const activeAgentSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
   const showOpenPanelButton = !isPanelOpen && activeTab?.type === 'agent'
-
+  // 受管浏览器入口：仅当当前标签是 Agent 会话时展示。主进程按会话隔离浏览器。
+  const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
+  const setBrowserStateMap = useSetAtom(browserStateMapAtom)
+  const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
+  const [browserFilePanelManualRestoreSessionIds, setBrowserFilePanelManualRestoreSessionIds] = useAtom(browserFilePanelManualRestoreSessionIdsAtom)
+  const activeBrowserIsOpen = activeAgentSessionId ? browserOpenMap.get(activeAgentSessionId) === true : false
+  const showBrowserButton = Boolean(activeAgentSessionId)
+  // MainArea 的右边界会随着右侧文件面板或浏览器分栏提前结束；
+  // 这两种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
+  const browserSidePanelVisible = Boolean(
+    activeAgentSessionId && browserOpenMap.get(activeAgentSessionId) === true,
+  )
+  const hasRightSideContent = isPanelOpen || browserSidePanelVisible
+  const topBarRightOffset = isWindows && !hasRightSideContent ? 132 : 9
   const togglePanel = React.useCallback(() => {
-    if (activeTab?.type !== 'agent') return
+    if (!activeAgentSessionId) return
+    // 用户手动恢复文件面板时，记录该会话不再自动收起，避免与浏览器抢占空间时反复收起。
+    if (!isPanelOpen && browserOpenMap.get(activeAgentSessionId)) {
+      setBrowserFilePanelManualRestoreSessionIds((previous) => (
+        previous.includes(activeAgentSessionId) ? previous : [...previous, activeAgentSessionId]
+      ))
+    }
     setSidePanelOpen((v) => !v)
-  }, [setSidePanelOpen, activeTab])
+  }, [activeAgentSessionId, browserOpenMap, isPanelOpen, setBrowserFilePanelManualRestoreSessionIds, setSidePanelOpen])
+
+  const openBrowser = React.useCallback(async () => {
+    if (!activeAgentSessionId) return
+    const open = (window.electronAPI as Partial<typeof window.electronAPI>).openAgentBrowser
+    if (typeof open !== 'function') return
+    const state = await open(activeAgentSessionId)
+    setBrowserStateMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, state); return next })
+    setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, true); return next })
+    // 用户主动重新打开浏览器，清除“已手动关闭”标记，恢复后续状态推送自动打开能力。
+    setBrowserDismissed((previous) => { if (!previous.has(activeAgentSessionId)) return previous; const next = new Set(previous); next.delete(activeAgentSessionId); return next })
+  }, [activeAgentSessionId, setBrowserDismissed, setBrowserOpenMap, setBrowserStateMap])
+
+  const topBarTools: TopBarTool[] = [
+    {
+      id: 'managed-browser',
+      visible: showBrowserButton,
+      label: '打开受管浏览器',
+      tooltip: '打开受管浏览器',
+      icon: <Globe2 className="size-3.5" />,
+      onClick: () => void openBrowser(),
+    },
+    {
+      id: 'replay-intro',
+      visible: true,
+      label: '重播开屏动画',
+      tooltip: '重播开屏动画',
+      icon: <Sparkles className="size-3.5" />,
+      onClick: () => setReplayIntroOpen(true),
+    },
+    {
+      id: 'file-panel',
+      visible: showOpenPanelButton,
+      label: '打开文件面板',
+      tooltip: `打开文件面板 (${navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'})`,
+      icon: <PanelRight className="size-3.5" />,
+      onClick: togglePanel,
+      badge: hasFileChanges ? <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" /> : undefined,
+    },
+  ]
+  // 每个工具按钮为 28px，工具组 gap 为 4px。滚动标签区直接从同一配置计算避让，
+  // 所以新增/删除按钮不会造成布局与可见入口脱节。
+  const visibleTopBarToolCount = topBarTools.filter((tool) => tool.visible).length
+  const tabScrollRightPadding = topBarRightOffset + visibleTopBarToolCount * 28 + (visibleTopBarToolCount - 1) * 4
+
+  // 某些会话打开浏览器（agent 驱动的 BrowserObserve 等会先于用户点击触发），
+  // 此时若文件面板仍展开会挤压浏览器宽度：自动收起一次，除非用户手动恢复过。
+  const priorBrowserStateRef = React.useRef<{ sessionId: string | null; open: boolean }>({ sessionId: null, open: false })
+  React.useEffect(() => {
+    const sessionId = activeAgentSessionId
+    const previous = priorBrowserStateRef.current
+    const shouldAutoCollapse = Boolean(
+      sessionId &&
+      previous.sessionId === sessionId &&
+      !previous.open &&
+      activeBrowserIsOpen &&
+      isPanelOpen &&
+      !browserFilePanelManualRestoreSessionIds.includes(sessionId),
+    )
+    priorBrowserStateRef.current = { sessionId, open: activeBrowserIsOpen }
+
+    if (!shouldAutoCollapse) return
+    setSidePanelOpen(false)
+    toast.message('已收起右侧文件面板，便于浏览网页', {
+      description: '按 ⌘⇧B（Windows / Linux：Ctrl+Shift+B）可重新打开；手动打开后，本会话不再自动收起。',
+    })
+  }, [activeAgentSessionId, activeBrowserIsOpen, browserFilePanelManualRestoreSessionIds, isPanelOpen, setSidePanelOpen])
 
   React.useEffect(() => {
     return registerShortcut('toggle-right-panel', togglePanel)
@@ -381,14 +477,10 @@ function TabBarInner({
 
       <div
         ref={scrollRef}
-        className={cn(
-          "relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none",
-          // 右上角同时存在窗口控件（Windows ~126px）和文件面板按钮（~40px）时，给 scroll 预留对应宽度，
-          // 避免最右一个 Tab 被遮挡。
-          isWindows && !showOpenPanelButton && "pr-[126px]",
-          isWindows && showOpenPanelButton && "pr-[166px]",
-          !isWindows && showOpenPanelButton && "pr-10",
-        )}
+        className="relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none"
+        // 右侧工具组和 Windows 窗口控制区占用空间由同一份工具定义计算，
+        // 新增或移除按钮时不必再手工维护多组 absolute right 偏移。
+        style={{ paddingRight: tabScrollRightPadding }}
       >
         {tabs.map((tab) => (
           <TabBarItem
@@ -415,98 +507,70 @@ function TabBarInner({
         ))}
       </div>
 
-      {/* 打开文件面板按钮：与文件面板打开时的 PanelRightClose 同坐标，避免开/关之间按钮位置跳变。
-          Windows 上需让出右上角 WindowControls 区域（126px）。 */}
-      {showOpenPanelButton && (
-        <AgentPanelOpenButton isWindows={isWindows} onToggle={togglePanel} />
-      )}
-
-      {/* 开屏动画重播按钮：点按重播黑白水波纹开场动画（用于测试/重看） */}
-      <IntroReplayButton isWindows={isWindows} offsetByPanel={showOpenPanelButton} />
+      {/* 顶栏功能入口集中为有序工具组：浏览器 → 开屏重播 → 文件面板。
+          每个条目只描述自己的可见性、行为与呈现；工具组统一负责排列和留白。 */}
+      <TopBarToolGroup
+        isWindows={isWindows}
+        rightOffset={topBarRightOffset}
+        tools={topBarTools}
+      />
     </div>
   )
 }
 
-/** 开屏动画重播按钮：立即在面板按钮左侧（避免与窗口控件/文件面板按钮重叠）。
- *  点击直接把 replayIntroOpenAtom 置 true，由 App 层渲染全屏 IntroWaterRipple。 */
-function IntroReplayButton({
-  isWindows,
-  offsetByPanel,
-}: {
-  isWindows: boolean
-  offsetByPanel: boolean
-}): React.ReactElement {
-  const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
-  // Windows：右上角是 WindowControls（~118px），按钮必须在其左侧（≥132px）；
-  // 面板按钮在 Windows 下位于 right-[132px]，重播按钮再往左让 34px 并排。
-  // 非 Windows：无窗口控件，面板按钮在 right-[9px]，重播按钮并排在其左侧。
-  const right = isWindows
-    ? (offsetByPanel ? 166 : 132)
-    : (offsetByPanel ? 43 : 9)
-
-  return (
-    <div
-      className="absolute inset-y-0 z-10 flex items-end pb-[3px] titlebar-no-drag"
-      style={{ right }}
-    >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="relative h-7 w-7"
-            aria-label="重播开屏动画"
-            onClick={() => setReplayIntroOpen(true)}
-          >
-            <Sparkles className="size-3.5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <p>重播开屏动画</p>
-        </TooltipContent>
-      </Tooltip>
-    </div>
-  )
+interface TopBarTool {
+  id: string
+  visible: boolean
+  label: string
+  tooltip: string
+  icon: React.ReactNode
+  onClick: () => void
+  badge?: React.ReactNode
 }
 
-/** 打开 Agent 文件面板按钮：独立订阅 workspaceFilesVersionAtom，避免文件变更时重渲染整个 TabBar。 */
-function AgentPanelOpenButton({
+/**
+ * 顶栏功能工具组。新入口只需向 tools 增加一项，不需要复制定位容器或手工推导 right 偏移。
+ * Windows 的 132px 是 WindowControls（约 118px）与两组之间的安全间隔。
+ */
+function TopBarToolGroup({
   isWindows,
-  onToggle,
+  rightOffset,
+  tools,
 }: {
   isWindows: boolean
-  onToggle: () => void
-}): React.ReactElement {
-  const filesVersion = useAtomValue(workspaceFilesVersionAtom)
-  const hasFileChanges = filesVersion > 0
+  rightOffset: number
+  tools: TopBarTool[]
+}): React.ReactElement | null {
+  const visibleTools = tools.filter((tool) => tool.visible)
+  if (visibleTools.length === 0) return null
 
   return (
     <div
-      className={cn(
-        "absolute inset-y-0 z-10 flex items-end pb-[3px] titlebar-no-drag",
-        isWindows ? "right-[132px]" : "right-[9px]",
-      )}
+      className="absolute inset-y-0 z-10 flex items-end gap-1 pb-[3px] titlebar-no-drag"
+      style={{ right: rightOffset }}
+      role="toolbar"
+      aria-label="顶栏工具"
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="relative h-7 w-7"
-            onClick={onToggle}
-          >
-            <PanelRight className="size-3.5" />
-            {hasFileChanges && (
-              <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <p>打开文件面板 ({navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'})</p>
-        </TooltipContent>
-      </Tooltip>
+      {visibleTools.map((tool) => (
+        <Tooltip key={tool.id}>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="relative h-7 w-7"
+              aria-label={tool.label}
+              onClick={tool.onClick}
+            >
+              {tool.icon}
+              {tool.badge}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p>{tool.tooltip}</p>
+          </TooltipContent>
+        </Tooltip>
+      ))}
     </div>
   )
 }

@@ -121,10 +121,18 @@ import type {
   Automation,
   CreateAutomationInput,
   UpdateAutomationInput,
+  BrowserViewState,
+  BrowserViewLayout,
+  BrowserNavigateInput,
+  BrowserTabInput,
+  BrowserCreateTabInput,
+  BrowserTranslateResult,
 } from '@profer/shared'
 import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
+import { browserController } from './lib/browser-controller'
+import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, invalidateGitDiffCache } from './lib/git-diff-service'
 import { registerProferFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
@@ -2278,6 +2286,102 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // 受管浏览器：renderer 只能投影状态和更新 slot 布局，不能取得 WebContents/CDP。
+  const assertMainRenderer = async (senderId: number): Promise<void> => {
+    const { getMainWindow } = await import('./index')
+    const mainWindow = getMainWindow()
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.id !== senderId) {
+      throw new Error('仅主窗口可以操作受管浏览器。')
+    }
+  }
+  const assertBrowserSessionAccess = async (senderId: number, sessionId: string): Promise<void> => {
+    await assertMainRenderer(senderId)
+    const session = getAgentSessionMeta(sessionId)
+    if (!session) throw new Error('Agent 会话不存在。')
+    // 自动任务与协作子会话同样可以使用受管浏览器；仅校验会话仍存在。
+    browserController.configureSession(sessionId, {
+      profileKey: resolveBrowserProfileKey(session.workspaceId, sessionId),
+      executionSource: session.sourceDelegationId ? 'delegation' : session.sourceAutomationId ? 'automation' : 'user',
+    })
+  }
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.OPEN_BROWSER,
+    async (event, sessionId: string): Promise<BrowserViewState> => {
+      await assertBrowserSessionAccess(event.sender.id, sessionId)
+      return browserController.open(sessionId)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_BROWSER_STATE,
+    async (event, sessionId: string): Promise<BrowserViewState | null> => {
+      await assertBrowserSessionAccess(event.sender.id, sessionId)
+      return browserController.getState(sessionId)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT,
+    async (event, layout: BrowserViewLayout): Promise<void> => {
+      if (!layout || typeof layout.sessionId !== 'string' || !layout.bounds || !Number.isSafeInteger(layout.revision)) throw new Error('无效的浏览器布局。')
+      await assertBrowserSessionAccess(event.sender.id, layout.sessionId)
+      browserController.setLayout(layout)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.NAVIGATE_BROWSER,
+    async (event, input: BrowserNavigateInput): Promise<BrowserViewState> => {
+      await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+      return browserController.navigateDisplay(input.sessionId, input.url, input.tabId)
+    },
+  )
+  ipcMain.handle(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, async (event, sessionId: string) => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.goBackDisplay(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, async (event, sessionId: string) => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.goForwardDisplay(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.RELOAD_BROWSER, async (event, sessionId: string) => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.reloadDisplay(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, async (event, input: BrowserTabInput): Promise<BrowserTranslateResult> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    return browserController.translatePage(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, async (event, input: BrowserTabInput & { zoomFactor: number }): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId || typeof input.zoomFactor !== 'number') throw new Error('tabId 和 zoomFactor 必填。')
+    return browserController.setZoom(input.sessionId, input.tabId, input.zoomFactor)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.HIDE_BROWSER, async (event, sessionId: string): Promise<void> => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    browserController.hide(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLOSE_BROWSER, async (event, sessionId: string): Promise<void> => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    await browserController.close(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.LIST_BROWSER_TABS, async (event, sessionId: string): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.listTabs(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CREATE_BROWSER_TAB, async (event, input: BrowserCreateTabInput): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    return browserController.createDisplayTab(input.sessionId, input.url)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.SELECT_BROWSER_TAB, async (event, input: BrowserTabInput): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId) throw new Error('tabId 必填。')
+    return browserController.selectTab(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLOSE_BROWSER_TAB, async (event, input: BrowserTabInput): Promise<BrowserViewState | null> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId) throw new Error('tabId 必填。')
+    return browserController.closeTab(input.sessionId, input.tabId)
+  })
+
   // 获取 Agent 会话 SDKMessage（Phase 4 新格式）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
@@ -2334,6 +2438,7 @@ export function registerIpcHandlers(): void {
           permissionService.clearSessionPending(sessionId)
           askUserService.clearSessionPending(sessionId)
           exitPlanService.clearSessionPending(sessionId)
+          void browserController.close(sessionId)
         },
         deleteSession: deleteAgentSession,
       })
@@ -2611,6 +2716,7 @@ export function registerIpcHandlers(): void {
             permissionService.clearSessionPending(id)
             askUserService.clearSessionPending(id)
             exitPlanService.clearSessionPending(id)
+            void browserController.close(id)
           },
           deleteSession: deleteAgentSession,
         })

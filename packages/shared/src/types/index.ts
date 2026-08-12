@@ -23,6 +23,7 @@ export * from './chat'
 
 // Agent 相关类型
 export * from './agent'
+export * from './browser'
 
 // 推理 profile 相关类型
 export * from './reasoning-profile'

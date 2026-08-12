@@ -145,6 +145,7 @@ import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
+import { browserController } from './lib/browser-controller'
 import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
@@ -470,6 +471,7 @@ function createWindow(): void {
   }
   installWindowsZoomInFallback(mainWindow)
   updateWindowFrameAppearance(mainWindow)
+  browserController.setOwnerWindow(mainWindow)
 
   // 主窗口隐藏加载 renderer；独立 splash 窗口覆盖整个初始化阶段，避免导航替换掉启动画面。
   const isDev = !app.isPackaged
@@ -643,6 +645,7 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
     setMainWindow(null)
+    browserController.dispose()
   })
 
   setMainWindow(mainWindow)
@@ -973,6 +976,7 @@ app.on('before-quit', () => {
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   void disposePiMcpConnections()
+  browserController.dispose()
   stopAllGenerations()
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
   // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程
