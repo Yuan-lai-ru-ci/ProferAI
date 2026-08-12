@@ -15,9 +15,13 @@
  * 缩放交互：仅头部按钮（缩小 / 重置 / 放大）。不响应滚轮和拖拽，
  * 让滚轮事件正常冒泡到页面滚动；放大后用容器原生 overflow scrollbar 浏览。
  *
- * 缩放锚定：缩放以当前视口中心为锚点（缩放后重新对齐滚动位置）。
- * 内容用 translate 平移量实现「未溢出时居中、溢出时顶格」，transform-origin 为左上角，
- * 因此缩放只向右/下扩展，左端（图头）/顶端永不落入不可滚动的负坐标区。
+ * 缩放模型：图以自然尺寸渲染，scale 直接作用其上。
+ *  - 最小缩放 = min(框宽/图宽, 框高/图高)：图完整可见（一端贴满、另一端不溢出），
+ *    也是初始缩放与「重置」目标；
+ *  - 最大缩放 = ZOOM_MAX（双维溢出时横/纵滚动条并存）；
+ *  - 缩放以当前视口中心为锚点（缩放后重新对齐滚动位置）；
+ *  - 对齐：溢出维度顶格（0 间隙，滚动到头即图边缘贴齐框边缘），不溢出维度居中；
+ *  - transform-origin 为左上角，缩放只向右/下扩展，负坐标区不可达。
  */
 
 import * as React from 'react'
@@ -30,11 +34,9 @@ interface MermaidBlockProps {
 
 /** 防抖间隔（ms） */
 const DEBOUNCE_MS = 350
-/** 缩放范围 */
-const ZOOM_MIN = 0.25
+/** 缩放范围：最小由「图适配框」动态决定（见 minZoom），最大固定 */
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.15
-const INITIAL_SCALE = 1
 let mermaidRenderId = 0
 
 function isDarkMode(): boolean {
@@ -240,10 +242,10 @@ const zoomOutPath = (
 export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState(false)
-  const [scale, setScale] = React.useState<number>(INITIAL_SCALE)
-  /** SVG 原始尺寸（取 width/height 属性，不受 max-w-full/滚动条影响，稳定），用于「未溢出时居中、溢出时顶格」的平移量计算 */
+  const [scale, setScale] = React.useState<number>(1)
+  /** SVG 自然尺寸（取 width/height 属性，稳定，不受滚动条影响） */
   const [svgSize, setSvgSize] = React.useState({ w: 0, h: 0 })
-  /** 缩放容器（frame）内容盒尺寸 */
+  /** 滚动容器（框）可视区尺寸（clientWidth/clientHeight，已扣滚动条） */
   const [frameSize, setFrameSize] = React.useState({ w: 0, h: 0 })
 
   const codeRef = React.useRef(code)
@@ -253,7 +255,6 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
 
   /** 滚动容器与缩放内容 DOM（用于视口中心锚定的滚动计算） */
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
-  const frameRef = React.useRef<HTMLDivElement | null>(null)
   const contentRef = React.useRef<HTMLDivElement | null>(null)
   /** 缩放后待应用的滚动位置：useLayoutEffect 里在 transform 提交生效后应用 */
   const pendingScrollRef = React.useRef<{ x: number; y: number } | null>(null)
@@ -278,7 +279,6 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
 
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setRenderedSvg(null)
-    setScale(INITIAL_SCALE)
     debounceRef.current = setTimeout(() => {
       void renderCurrentCode(currentGen)
     }, DEBOUNCE_MS)
@@ -298,14 +298,17 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     return () => observer.disconnect()
   }, [renderCurrentCode])
 
-  // ---- 缩放平移量：内容未溢出视口时居中，溢出时顶格（左上角），保证头部/顶端始终可滚动 ----
-  // 展示尺寸 = min(SVG 原始尺寸, 容器内容盒)；高度按原始宽高比等比换算（对应 svg 的 h-auto）
-  const displayW = svgSize.w > 0 && frameSize.w > 0 ? Math.min(svgSize.w, frameSize.w) : svgSize.w
-  const displayH = displayW > 0 && svgSize.w > 0 ? (svgSize.h * displayW) / svgSize.w : svgSize.h
-  const scaledW = displayW * scale
-  const scaledH = displayH * scale
-  const tx = svgSize.w > 0 && scaledW <= frameSize.w && frameSize.w > 0 ? (frameSize.w - scaledW) / 2 : 0
-  const ty = svgSize.h > 0 && scaledH <= frameSize.h && frameSize.h > 0 ? (frameSize.h - scaledH) / 2 : 0
+  // ---- 缩放平移量：不溢出维度居中，溢出维度顶格（0 间隙，图边缘即滚动边界） ----
+  const scaledW = svgSize.w * scale
+  const scaledH = svgSize.h * scale
+  const tx = svgSize.w > 0 && scaledW < frameSize.w && frameSize.w > 0 ? (frameSize.w - scaledW) / 2 : 0
+  const ty = svgSize.h > 0 && scaledH < frameSize.h && frameSize.h > 0 ? (frameSize.h - scaledH) / 2 : 0
+
+  // 最小缩放 = 图完整适配框（一端贴满、另一端不溢出）；极小图贴不满时封顶到 ZOOM_MAX
+  const minScale = svgSize.w > 0 && svgSize.h > 0 && frameSize.w > 0 && frameSize.h > 0
+    ? Math.min(frameSize.w / svgSize.w, frameSize.h / svgSize.h)
+    : 0
+  const minZoom = Math.min(minScale, ZOOM_MAX)
 
   /**
    * 按「视口中心锚定」缩放：先读取当前视口中心对应的内容点（未缩放坐标系），
@@ -336,10 +339,10 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     const itemX = (scrollEl.scrollLeft + vpCx - left) / oldScale
     const itemY = (scrollEl.scrollTop + vpCy - top) / oldScale
     // 新缩放下的平移量与可视左上角
-    const newScaledW = displayW * newScale
-    const newScaledH = displayH * newScale
-    const newTx = newScaledW <= frameSize.w ? (frameSize.w - newScaledW) / 2 : 0
-    const newTy = newScaledH <= frameSize.h ? (frameSize.h - newScaledH) / 2 : 0
+    const newScaledW = svgSize.w * newScale
+    const newScaledH = svgSize.h * newScale
+    const newTx = newScaledW < frameSize.w ? (frameSize.w - newScaledW) / 2 : 0
+    const newTy = newScaledH < frameSize.h ? (frameSize.h - newScaledH) / 2 : 0
     const newLeft = baseLeft + newTx
     const newTop = baseTop + newTy
     // 新缩放下使该点仍落在视口中心所需的滚动位置
@@ -348,7 +351,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
       y: newTop + itemY * newScale - vpCy,
     }
     setScale(newScale)
-  }, [scale, tx, ty, displayW, displayH, svgSize, frameSize])
+  }, [scale, tx, ty, svgSize, frameSize])
 
   // ---- 缩放后应用滚动锚定（本次提交里 transform 已生效，scrollWidth 为缩放后尺寸）----
   React.useLayoutEffect(() => {
@@ -360,14 +363,14 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     scrollEl.scrollTop = clamp(pending.y, 0, Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight))
   })
 
-  // ---- 测量 SVG 原始尺寸 / 容器尺寸：只在图表渲染时执行一次，缩放不触发，避免 setState 反馈循环 ----
-  // 注意：不在这里监听内容元素的布局尺寸变化——放大溢出时滚动条出现会让容器变窄，
+  // ---- 测量 SVG 自然尺寸 / 框尺寸，并设置初始缩放（= 适配框），只在图表渲染时执行一次 ----
+  // 注意：不监听内容元素的布局尺寸变化——放大溢出时滚动条出现会让容器变窄，
   // 若反复读 offsetWidth 并回写 state 会形成无限重渲染（Maximum update depth exceeded）。
-  // SVG 原始尺寸取 width/height 属性（稳定），容器尺寸仅跟随窗口 resize（滚动条出现不触发）。
+  // SVG 自然尺寸取 width/height 属性（稳定），框尺寸仅跟随窗口 resize（滚动条出现不触发）。
   React.useLayoutEffect(() => {
-    const frame = frameRef.current
+    const scrollEl = scrollRef.current
     const content = contentRef.current
-    if (!frame || !content) return
+    if (!scrollEl || !content) return
     const svg = content.querySelector('svg')
     let iw = 0
     let ih = 0
@@ -381,29 +384,39 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
       ih = content.offsetHeight
     }
     setSvgSize({ w: iw, h: ih })
-    const measureFrame = () =>
-      setFrameSize((prev) => {
-        const w = frame.clientWidth
-        const h = frame.clientHeight
-        return prev.w === w && prev.h === h ? prev : { w, h }
-      })
-    measureFrame()
-    window.addEventListener('resize', measureFrame)
-    return () => window.removeEventListener('resize', measureFrame)
+
+    // 首帧：测框尺寸并设置初始缩放（适配），滚动归零
+    const fw = scrollEl.clientWidth
+    const fh = scrollEl.clientHeight
+    setFrameSize({ w: fw, h: fh })
+    if (iw > 0 && ih > 0 && fw > 0 && fh > 0) {
+      setScale(Math.min(Math.min(fw / iw, fh / ih), ZOOM_MAX))
+      scrollEl.scrollLeft = 0
+      scrollEl.scrollTop = 0
+    }
+
+    // resize 只更新框尺寸（不重置用户缩放）
+    const onResize = () => {
+      const nfw = scrollEl.clientWidth
+      const nfh = scrollEl.clientHeight
+      setFrameSize((prev) => prev.w === nfw && prev.h === nfh ? prev : { w: nfw, h: nfh })
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [renderedSvg])
 
   const handleZoomIn = React.useCallback(() => {
-    applyZoom(clamp(scale + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
-  }, [applyZoom])
+    applyZoom(clamp(scale + ZOOM_STEP, minZoom, ZOOM_MAX))
+  }, [applyZoom, scale, minZoom])
   const handleZoomOut = React.useCallback(() => {
-    applyZoom(clamp(scale - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
-  }, [applyZoom])
+    applyZoom(clamp(scale - ZOOM_STEP, minZoom, ZOOM_MAX))
+  }, [applyZoom, scale, minZoom])
   const handleZoomReset = React.useCallback(() => {
-    // 已是 100% 无需处理；否则回滚到 100% 并回到左上角（露出图头）
-    if (scale === INITIAL_SCALE) return
+    // 已是适配缩放则无需处理；否则回到适配（图完整可见）并回左上角
+    if (scale === minZoom) return
     pendingScrollRef.current = { x: 0, y: 0 }
-    setScale(INITIAL_SCALE)
-  }, [scale])
+    setScale(minZoom)
+  }, [scale, minZoom])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -459,10 +472,10 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
           </pre>
         ) : (
           <div ref={scrollRef} className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]">
-            <div ref={frameRef} className="flex items-start min-h-[180px] p-4">
+            <div className="flex items-start min-h-[180px]">
               <div
                 ref={contentRef}
-                className="mermaid-svg [&>svg]:max-w-full [&>svg]:h-auto"
+                className="mermaid-svg shrink-0"
                 style={{
                   transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
                   transformOrigin: 'top left',
