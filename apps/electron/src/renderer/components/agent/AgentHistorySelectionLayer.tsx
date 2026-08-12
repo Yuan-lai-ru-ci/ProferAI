@@ -37,6 +37,28 @@ function normalizeSelectedText(text: string): string {
   return text.replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n').trim()
 }
 
+export interface SelectionRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+}
+
+/** 从选区片段矩形中自后向前选一个与当前视口相交的矩形（贴近鼠标最后落点）；
+ *  跨屏选区时 getBoundingClientRect() 的整块包围盒顶部可能滚出视口，直接取整块会导致按钮定位到屏幕外。 */
+export function pickAnchorRect(
+  rects: { readonly length: number; readonly [index: number]: SelectionRect | undefined },
+  viewportWidth: number,
+  viewportHeight: number,
+): SelectionRect | null {
+  for (let i = rects.length - 1; i >= 0; i--) {
+    const rect = rects[i]
+    if (rect && rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth) return rect
+  }
+  return rects.length > 0 ? (rects[0] ?? null) : null
+}
+
 function getRoleLabel(role?: string): string {
   if (role === 'user') return 'Agent 历史 · 用户消息'
   if (role === 'assistant') return 'Agent 历史 · Agent 回复'
@@ -92,9 +114,9 @@ export function AgentHistorySelectionLayer({
 
     const truncated = rawText.length > MAX_AGENT_HISTORY_QUOTED_CHARS
     const text = truncated ? rawText.slice(0, MAX_AGENT_HISTORY_QUOTED_CHARS) : rawText
-    const rect = range.getBoundingClientRect()
-    const firstRect = range.getClientRects()[0]
-    const anchorRect = rect.width > 0 || rect.height > 0 ? rect : firstRect
+    // 锚点矩形：跨屏选区时 getBoundingClientRect() 返回整块包围盒，顶部滚出视口后 top 为负，
+    // 按钮会被定位到屏幕顶端之外。改为自后向前找与当前视口相交的矩形（贴近鼠标最后落点），确保锚点在可视区内。
+    const anchorRect = pickAnchorRect(range.getClientRects(), window.innerWidth, window.innerHeight)
     if (!anchorRect) return
 
     const sameMessage = startMessageEl === endMessageEl
@@ -106,7 +128,8 @@ export function AgentHistorySelectionLayer({
     setSelection({
       text,
       x: anchorRect.left + anchorRect.width / 2,
-      y: Math.max(12, anchorRect.top - 12),
+      // 顶部越界由 SelectionActionPopover 内部实测钳制处理，这里不再强钳 y 下限（原 Math.max(12,...) 会把按钮主体推到视口外）。
+      y: anchorRect.top - 12,
       sourceLabel: sameMessage ? getRoleLabel(role ?? undefined) : 'Agent 历史 · 多条消息',
       messageId,
       messageRole: role ?? undefined,
