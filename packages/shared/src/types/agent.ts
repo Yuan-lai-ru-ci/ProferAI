@@ -1638,6 +1638,7 @@ export const AGENT_IPC_CHANNELS = {
   SELECT_BROWSER_TAB: 'agent:select-browser-tab',
   CLOSE_BROWSER_TAB: 'agent:close-browser-tab',
   GET_BROWSER_STATE: 'agent:get-browser-state',
+  /** 高频布局同步使用单向 IPC，不等待主进程 Promise。 */
   SET_BROWSER_LAYOUT: 'agent:set-browser-layout',
   NAVIGATE_BROWSER: 'agent:navigate-browser',
   GO_BACK_BROWSER: 'agent:go-back-browser',

@@ -470,6 +470,7 @@ export class BrowserController {
       zoomFactor: 1,
     }
     browserSession.hostView.addChildView(view)
+    // 网页内容区域保持直角；圆角只属于外层浏览器卡片。
     view.setVisible(false)
     // WebContentsView 不应放任 target=_blank 创建脱离主窗口的 BrowserWindow；此前直接 deny
     // 也导致用户和 Agent 点击站外链接没有任何反应。将安全的 HTTP(S) 目标转为当前受管浏览器的新标签。
@@ -634,20 +635,39 @@ export class BrowserController {
     const hasValidBounds = bounds.width > 4 && bounds.height > 4
     const visible = layout.visible && hasValidBounds && !!this.owner && !this.owner.isDestroyed() && this.owner.isVisible()
     const zoomFactor = this.owner?.webContents.getZoomFactor() ?? 1
-    const adjustedBounds = {
+    const rawBounds = {
       x: Math.round(bounds.x * zoomFactor),
       y: Math.round(bounds.y * zoomFactor),
       width: Math.max(0, Math.round(bounds.width * zoomFactor)),
       height: Math.max(0, Math.round(bounds.height * zoomFactor)),
+    }
+    // 原生 View 的 bounds 是窗口 contentView 坐标，不能允许异常/过渡布局把网页画出窗口。
+    const contentBounds = this.owner?.contentView.getBounds()
+    const maxWidth = Math.max(0, (contentBounds?.width ?? rawBounds.width) - Math.max(0, rawBounds.x))
+    const maxHeight = Math.max(0, (contentBounds?.height ?? rawBounds.height) - Math.max(0, rawBounds.y))
+    const adjustedBounds = {
+      x: Math.max(0, rawBounds.x),
+      y: Math.max(0, rawBounds.y),
+      width: Math.min(rawBounds.width, maxWidth),
+      height: Math.min(rawBounds.height, maxHeight),
     }
     if (visible && (!browserSession.lastHostBounds || Object.entries(adjustedBounds).some(([key, value]) => browserSession.lastHostBounds?.[key as keyof typeof adjustedBounds] !== value))) {
       browserSession.hostView.setBounds(adjustedBounds)
       browserSession.lastHostBounds = { ...adjustedBounds }
     }
     // 标签页只使用宿主的局部坐标，永远不会携带会话区的窗口绝对坐标。
-    for (const other of browserSession.tabs.values()) other.view.setVisible(visible && other.tabId === tab.tabId)
-    tab.view.setBounds({ x: 0, y: 0, width: adjustedBounds.width, height: adjustedBounds.height })
-    browserSession.hostView.setVisible(visible)
+    // 拖拽时通常只改变宿主 x/width；避免每一帧重复写入未变化的子视图 bounds/visible，
+    // 否则 Chromium 会反复触发原生视图重排，造成网页跟手但不丝滑。
+    for (const other of browserSession.tabs.values()) {
+      const shouldBeVisible = visible && other.tabId === tab.tabId
+      if (other.view.getVisible() !== shouldBeVisible) other.view.setVisible(shouldBeVisible)
+    }
+    const tabBounds = tab.view.getBounds()
+    if (tabBounds.x !== 0 || tabBounds.y !== 0
+      || tabBounds.width !== adjustedBounds.width || tabBounds.height !== adjustedBounds.height) {
+      tab.view.setBounds({ x: 0, y: 0, width: adjustedBounds.width, height: adjustedBounds.height })
+    }
+    if (browserSession.hostView.getVisible() !== visible) browserSession.hostView.setVisible(visible)
     if (tab.state.visible !== visible) { tab.state.visible = visible; this.emit(browserSession) }
   }
 

@@ -2319,12 +2319,14 @@ export function registerIpcHandlers(): void {
       return browserController.getState(sessionId)
     },
   )
-  ipcMain.handle(
+  ipcMain.on(
     AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT,
-    async (event, layout: BrowserViewLayout): Promise<void> => {
-      if (!layout || typeof layout.sessionId !== 'string' || !layout.bounds || !Number.isSafeInteger(layout.revision)) throw new Error('无效的浏览器布局。')
-      await assertBrowserSessionAccess(event.sender.id, layout.sessionId)
-      browserController.setLayout(layout)
+    (event, layout: BrowserViewLayout): void => {
+      if (!layout || typeof layout.sessionId !== 'string' || !layout.bounds || !Number.isSafeInteger(layout.revision)) return
+      // 保留原有主窗口/session 校验；布局通道单向发送，但不牺牲 IPC 鉴权。
+      void assertBrowserSessionAccess(event.sender.id, layout.sessionId)
+        .then(() => browserController.setLayout(layout))
+        .catch(() => undefined)
     },
   )
   ipcMain.handle(
