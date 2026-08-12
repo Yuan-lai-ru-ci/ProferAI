@@ -715,6 +715,15 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     }
   }, [isOfficePreview, markdownDraft, markdownEditing, newContent, officeText])
 
+  const handleCopyPath = React.useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(filePath)
+      toast.success('路径复制成功')
+    } catch {
+      toast.error('复制路径失败')
+    }
+  }, [filePath])
+
   const startMarkdownEdit = React.useCallback(() => {
     if (!isEditableText) return
     setMarkdownDraft(newContent)
@@ -875,9 +884,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0">
-        <span className="text-[12px] text-foreground/60 truncate" title={filePath}>
+        <button
+          type="button"
+          onClick={handleCopyPath}
+          className="text-[12px] text-foreground/60 truncate text-left cursor-pointer hover:text-foreground hover:underline underline-offset-2"
+          title={`${filePath}（点击复制）`}
+        >
           {filePath}
-        </span>
+        </button>
 
         {!previewOnly && (
           <div
