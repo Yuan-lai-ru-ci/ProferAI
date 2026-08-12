@@ -127,12 +127,15 @@ import type {
   BrowserTabInput,
   BrowserCreateTabInput,
   BrowserTranslateResult,
+  BrowserStartPageState,
+  BrowserAddBookmarkInput,
 } from '@profer/shared'
 import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
 import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
+import { listBookmarks, addBookmark, removeBookmark, listHistory, clearHistory } from './lib/browser-start-page-store'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, invalidateGitDiffCache } from './lib/git-diff-service'
 import { registerProferFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
@@ -2370,6 +2373,10 @@ export function registerIpcHandlers(): void {
     await assertBrowserSessionAccess(event.sender.id, input.sessionId)
     return browserController.translatePage(input.sessionId, input.tabId)
   })
+  ipcMain.handle(AGENT_IPC_CHANNELS.PASTE_BROWSER_CLIPBOARD, async (event, input: BrowserTabInput): Promise<BrowserTranslateResult> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    return browserController.pasteClipboard(input.sessionId, input.tabId)
+  })
   ipcMain.handle(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, async (event, input: BrowserTabInput & { zoomFactor: number }): Promise<BrowserViewState> => {
     await assertBrowserSessionAccess(event.sender.id, input.sessionId)
     if (!input.tabId || typeof input.zoomFactor !== 'number') throw new Error('tabId 和 zoomFactor 必填。')
@@ -2400,6 +2407,33 @@ export function registerIpcHandlers(): void {
     await assertBrowserSessionAccess(event.sender.id, input.sessionId)
     if (!input.tabId) throw new Error('tabId 必填。')
     return browserController.closeTab(input.sessionId, input.tabId)
+  })
+
+  // 新标签页起始页：书签 + 最近访问 + 可配置默认首页（用户级全局，不分工作区）。
+  ipcMain.handle(AGENT_IPC_CHANNELS.GET_BROWSER_START_PAGE, async (): Promise<BrowserStartPageState> => {
+    return {
+      bookmarks: listBookmarks(),
+      recentHistory: listHistory(),
+      defaultHomeUrl: getSettings().browserHomeUrl ?? null,
+    }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.ADD_BROWSER_BOOKMARK, async (_, input: BrowserAddBookmarkInput): Promise<BrowserStartPageState> => {
+    if (!input?.url?.trim()) throw new Error('书签 URL 必填。')
+    addBookmark(input.title ?? '', input.url.trim(), '')
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REMOVE_BROWSER_BOOKMARK, async (_, id: string): Promise<BrowserStartPageState> => {
+    if (!id) throw new Error('书签 id 必填。')
+    removeBookmark(id)
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.UPDATE_BROWSER_HOME_URL, async (_, url: string): Promise<BrowserStartPageState> => {
+    updateSettings({ browserHomeUrl: (url ?? '').trim() })
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLEAR_BROWSER_HISTORY, async (): Promise<BrowserStartPageState> => {
+    clearHistory()
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
   })
 
   // 获取 Agent 会话 SDKMessage（Phase 4 新格式）

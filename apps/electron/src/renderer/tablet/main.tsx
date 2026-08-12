@@ -394,14 +394,17 @@ function App(): React.ReactElement {
       const workspaceIds = [...new Set(personalSessions.map((session) => session.workspaceId).filter((id): id is string => Boolean(id)))]
       // 无会话时也展示服务端真实项目，避免只能看到“默认工作区”
       const ids = workspaceIds.length > 0 ? workspaceIds : (realWorkspaces.size > 0 ? [...realWorkspaces.keys()] : ['default'])
-      const workspaces = ids.map((id) => realWorkspaces.get(id) ?? {
-        id,
-        name: id === 'default' ? '默认工作区' : `项目 · ${id.slice(0, 8)}`,
-        slug: id,
-        type: 'personal',
-        createdAt: 0,
-        updatedAt: 0,
-      })
+      // 查不到真实名字的 workspaceId（如因 list_workspaces 失败而漏过滤的团队工作区、或历史孤儿）
+      // 不再硬编「项目 · UUID」这种无意义编号——直接跳过，避免侧栏出现纯编号项目误导用户。
+      // 「default」特殊保留（默认工作区）以保证始终有一个可回退项目。
+      const workspaces = ids
+        .map((id) => {
+          const real = realWorkspaces.get(id)
+          if (real) return real
+          if (id === 'default') return { id, name: '默认工作区', slug: 'default', type: 'personal', createdAt: 0, updatedAt: 0 }
+          return null
+        })
+        .filter((w): w is NonNullable<typeof w> => w != null)
       const fallback = workspaces[0] ?? { id: 'default', name: '默认工作区', slug: 'default', type: 'personal', createdAt: 0, updatedAt: 0 }
       setNativeWorkspaces(workspaces.length > 0 ? workspaces as never : [fallback] as never)
       setNativeWorkspaceId(fallback.id)

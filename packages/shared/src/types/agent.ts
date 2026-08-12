@@ -1651,10 +1651,24 @@ export const AGENT_IPC_CHANNELS = {
   /** 用户阅读用途：整页翻译当前 tab（toggle），返回翻译态。 */
   TRANSLATE_BROWSER: 'agent:translate-browser',
   SET_BROWSER_ZOOM: 'agent:set-browser-zoom',
+  /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
+  PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
+  /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
+  BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
   /** 仅隐藏原生 WebContentsView，保留浏览器会话与标签。 */
   HIDE_BROWSER: 'agent:hide-browser',
   CLOSE_BROWSER: 'agent:close-browser',
   BROWSER_STATE_CHANGED: 'agent:browser-state-changed',
+  /** 新标签页起始页数据（书签 + 最近访问 + 默认首页）。 */
+  GET_BROWSER_START_PAGE: 'agent:get-browser-start-page',
+  /** 新增书签，返回更新后的起始页状态。 */
+  ADD_BROWSER_BOOKMARK: 'agent:add-browser-bookmark',
+  /** 删除书签，返回更新后的起始页状态。 */
+  REMOVE_BROWSER_BOOKMARK: 'agent:remove-browser-bookmark',
+  /** 更新新标签页默认首页 URL（空串清除）。 */
+  UPDATE_BROWSER_HOME_URL: 'agent:update-browser-home-url',
+  /** 清空最近访问历史。 */
+  CLEAR_BROWSER_HISTORY: 'agent:clear-browser-history',
 
   // 后台任务管理
   /** 获取任务输出 */

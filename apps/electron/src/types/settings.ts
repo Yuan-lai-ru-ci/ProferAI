@@ -271,6 +271,8 @@ export interface AppSettings {
   agentMaxTurns?: number
   /** 已确认的受管浏览器风险告知版本；低于当前版本时首次使用会再次要求确认。 */
   browserRiskDisclaimerVersion?: number
+  /** 新标签页默认首页 URL；空串/未设置 = 显示自定义起始页。 */
+  browserHomeUrl?: string
   /** 教程推荐横幅是否已关闭 */
   tutorialBannerDismissed?: boolean
   /** 自动归档天数（0 = 禁用，默认 7） */

@@ -102,6 +102,7 @@ export function GeneralSettings(): React.ReactElement {
   const [autoLaunch, setAutoLaunch] = React.useState(false)
   const [quickTaskEnabled, setQuickTaskEnabled] = React.useState(false)
   const [shellPreference, setShellPreference] = React.useState<'auto' | 'git-bash' | 'wsl'>('auto')
+  const [browserHomeUrl, setBrowserHomeUrl] = React.useState('')
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   // ── Proxy 状态 ──
@@ -231,6 +232,7 @@ export function GeneralSettings(): React.ReactElement {
       setAutoLaunch(settings.autoLaunch ?? false)
       setQuickTaskEnabled(settings.quickTaskEnabled === true)
       setShellPreference(settings.agentShellPreference ?? 'auto')
+      setBrowserHomeUrl(settings.browserHomeUrl ?? '')
     }).catch(console.error)
 
     window.electronAPI.getRuntimeStatus().then((status) => {
@@ -339,6 +341,20 @@ export function GeneralSettings(): React.ReactElement {
       await window.electronAPI.updateSettings({ archiveAfterDays: days })
     } catch (error) {
       console.error('[通用设置] 更新归档天数失败:', error)
+    }
+  }
+
+  /** 保存新标签页默认首页（失焦时落盘）。 */
+  const handleBrowserHomeUrlBlur = async (): Promise<void> => {
+    try {
+      const api = (window.electronAPI as Partial<typeof window.electronAPI>)
+      if (typeof api.updateBrowserHomeUrl === 'function') {
+        await api.updateBrowserHomeUrl(browserHomeUrl)
+      } else {
+        await window.electronAPI.updateSettings({ browserHomeUrl: browserHomeUrl.trim() })
+      }
+    } catch (error) {
+      console.error('[通用设置] 更新默认首页失败:', error)
     }
   }
 
@@ -733,6 +749,15 @@ export function GeneralSettings(): React.ReactElement {
               { value: 'git-bash', label: `Git Bash${!shellRuntimeStatus?.shell?.gitBash?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.gitBash?.version ? ` (v${shellRuntimeStatus.shell.gitBash.version})` : ''}` },
               { value: 'wsl', label: `WSL${!shellRuntimeStatus?.shell?.wsl?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.wsl?.defaultDistro ? ` (${shellRuntimeStatus.shell.wsl.defaultDistro})` : ''}` },
             ]}
+          />
+
+          <SettingsInput
+            label="新标签页默认首页"
+            description="留空时新建标签页显示起始页（书签与最近访问）；填入 URL 后新建标签页直接打开该地址"
+            value={browserHomeUrl}
+            onChange={setBrowserHomeUrl}
+            onBlur={handleBrowserHomeUrlBlur}
+            placeholder="例如 https://example.com"
           />
         </SettingsCard>
       </SettingsSection>

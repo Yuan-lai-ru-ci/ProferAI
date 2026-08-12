@@ -1,5 +1,5 @@
-import { app, BrowserWindow, View, WebContentsView, session as electronSession, type Session } from 'electron'
-import type { BrowserExecutionSource, BrowserOperationStatus, BrowserTraceAction, BrowserTraceItem, BrowserTranslateResult, BrowserViewLayout, BrowserViewState, BrowserTabState } from '@profer/shared'
+import { app, BrowserWindow, View, WebContentsView, session as electronSession, clipboard as electronClipboard, type Session } from 'electron'
+import type { BrowserDownloadBlockedEvent, BrowserExecutionSource, BrowserOperationStatus, BrowserTraceAction, BrowserTraceItem, BrowserTranslateResult, BrowserViewLayout, BrowserViewState, BrowserTabState } from '@profer/shared'
 import { AGENT_IPC_CHANNELS } from '@profer/shared'
 import { assertSafeBrowserDestination, assertSafeBrowserUrl } from './browser-policy'
 import { createAuthorizedPreviewUrl, isAuthorizedPreviewProtocol } from './browser-preview-service'
@@ -10,8 +10,9 @@ import { browserObservationNameLimit, prioritizeBrowserObservationCandidates, re
 import { buildPersistentBrowserPartition, resolveBrowserProfileKey } from './browser-profile-policy'
 import { hasAcknowledgedBrowserRiskDisclaimer } from './browser-risk-disclaimer'
 import { buildPromaBrowserUserAgent } from './browser-identity'
-import { assertBrowserScript, buildBrowserDomActionExpression, type BrowserDomActionInput } from './browser-script-policy'
+import { assertBrowserScript, buildBrowserDomActionExpression, type BrowserDomActionInput, BUILD_READ_ELEMENT_VALUE_FUNCTION, BUILD_WRITE_ELEMENT_VALUE_FUNCTION, normalizeFilledText } from './browser-script-policy'
 import { getSettings } from './settings-service'
+import { recordHistory } from './browser-start-page-store'
 import {
   BUILD_COLLECT_SCRIPT,
   BUILD_RESTORE_SCRIPT,
@@ -310,6 +311,17 @@ export class BrowserController {
       tab.state.canGoBack = false
       tab.state.canGoForward = false
     }
+    // 记录“最近访问”历史：仅合法的 HTTP(S) 页面，且跳过本地预览标签。
+    // updateNavigationState 在导航完成、标题更新、加载结束等节点都被调用，
+    // recordHistory 内部按 host+path 去重，避免重复写入。
+    if (!tab.isLocalPreview && tab.state.url) {
+      try {
+        const protocol = new URL(tab.state.url).protocol
+        if (protocol === 'http:' || protocol === 'https:') {
+          recordHistory(tab.state.url, tab.state.title)
+        }
+      } catch { /* 非完整 URL，跳过 */ }
+    }
     this.emit(browserSession)
   }
 
@@ -392,7 +404,16 @@ export class BrowserController {
   private installSessionGuards(browserSession: Session): void {
     if (this.guardedSessions.has(browserSession)) return
     this.guardedSessions.add(browserSession)
-    browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    browserSession.setPermissionRequestHandler((_contents, permission, callback) => {
+      // 放开剪贴板读写（用户已确认）：页面可通过 navigator.clipboard 复制/粘贴。
+      // Chromium 中 clipboard-read 同时覆盖读取与净化写入；clipboard-sanitized-write 另加兜底。
+      // 其余权限（摄像头、地理位置、通知、midi 等）一律拒绝。
+      if (permission === 'clipboard-read' || permission === 'clipboard-sanitized-write') {
+        callback(true)
+        return
+      }
+      callback(false)
+    })
     browserSession.webRequest.onBeforeRequest((details, callback) => {
       let protocol = ''
       try { protocol = new URL(details.url).protocol } catch { callback({ cancel: true }); return }
@@ -404,7 +425,21 @@ export class BrowserController {
         .then(() => callback({ cancel: false }))
         .catch(() => callback({ cancel: true }))
     })
-    browserSession.on('will-download', (_event, item) => item.cancel())
+    browserSession.on('will-download', (event, item) => {
+      // 安全边界：受管浏览器不向本地任意路径落盘。但用户点了下载链接不能无声无息，
+      // 推送脱敏事件给面板，让用户知道被拦截，并可选择在系统浏览器打开。
+      event.preventDefault()
+      item.cancel()
+      const sessionId = [...this.sessions.entries()].find(([, record]) => record.browserSession === browserSession)?.[0]
+      const url = (typeof item.getURL?.() === 'string' && item.getURL()) || (Array.isArray(item.getURLChain?.()) && item.getURLChain().find(Boolean)) || ''
+      if (!sessionId || !this.owner || this.owner.isDestroyed()) return
+      const payload: BrowserDownloadBlockedEvent = {
+        sessionId,
+        fileName: item.getFilename() || '未知文件',
+        url,
+      }
+      this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, payload)
+    })
   }
 
   private installPreviewProtocol(browserSession: Session): void {
@@ -601,7 +636,29 @@ export class BrowserController {
 
   getState(sessionId: string): BrowserViewState | null {
     const browserSession = this.sessions.get(sessionId)
-    return browserSession ? structuredClone(this.buildState(browserSession)) : null
+    // renderer 每次激活并读取某会话状态时，都明确“当前关注的会话”就是它：即使用户切到的
+    // 会话尚未开过浏览器（browserSession 为 null），也不应再有其它会话的预览网页残留覆盖界面。
+    // 因此即使目标会话不存在，也要先把其它所有已存在会话的原生视图隐藏掉。
+    this.hideOtherBrowserSessions(sessionId)
+    if (!browserSession) return null
+    return structuredClone(this.buildState(browserSession))
+  }
+
+  /**
+   * 跨会话互斥：隐藏除 activeSessionId 外所有会话的原生浏览器视图。
+   * 所有会话的 hostView/tab.view 都被 addChildView 在同一个 owner 主窗口上且盖在
+   * renderer DOM 之上，只有随时保持“最多一个浏览器会话可见”，才能避免别的会话
+   * 切到前台后旧会话网页“杵在界面上”的残留。
+   */
+  private hideOtherBrowserSessions(activeSessionId: string): void {
+    for (const [otherSessionId, otherSession] of this.sessions) {
+      if (otherSessionId === activeSessionId) continue
+      if (otherSession.hostView.getVisible()) otherSession.hostView.setVisible(false)
+      for (const otherTab of otherSession.tabs.values()) {
+        if (otherTab.view.getVisible()) otherTab.view.setVisible(false)
+        if (otherTab.state.visible) otherTab.state.visible = false
+      }
+    }
   }
 
   listTabs(sessionId: string): BrowserViewState {
@@ -667,6 +724,11 @@ export class BrowserController {
       || tabBounds.width !== adjustedBounds.width || tabBounds.height !== adjustedBounds.height) {
       tab.view.setBounds({ x: 0, y: 0, width: adjustedBounds.width, height: adjustedBounds.height })
     }
+    if (visible) {
+      // 跨会话互斥：本会话浏览器被激活显示时，立即隐藏其他所有会话的原生视图。
+      // 原生 View 全部 addChildView 在同一个主窗口 contentView 上且盖在 renderer DOM 之上。
+      this.hideOtherBrowserSessions(layout.sessionId)
+    }
     if (browserSession.hostView.getVisible() !== visible) browserSession.hostView.setVisible(visible)
     if (tab.state.visible !== visible) { tab.state.visible = visible; this.emit(browserSession) }
   }
@@ -682,6 +744,7 @@ export class BrowserController {
     if (hostBounds) tab.view.setBounds({ x: 0, y: 0, width: hostBounds.width, height: hostBounds.height })
     tab.view.webContents.setZoomFactor(tab.zoomFactor)
     const visible = !!hostBounds && !!this.owner && !this.owner.isDestroyed() && this.owner.isVisible()
+    if (visible) this.hideOtherBrowserSessions(browserSession.sessionId)
     browserSession.hostView.setVisible(visible)
     tab.view.setVisible(visible)
     if (tab.state.visible !== visible) tab.state.visible = visible
@@ -1057,6 +1120,49 @@ export class BrowserController {
     return entry
   }
 
+  /**
+   * 主进程内回读某个已 resolve 的 DOM 节点当前值（input/textarea => value，contenteditable => textContent）。
+   * 使用固定函数体经 Runtime.callFunctionOn 求值，不拼接页面文本为代码。
+   */
+  private async readElementValue(tab: BrowserTabRecord, backendNodeId: number, generation: number, signal?: AbortSignal): Promise<string> {
+    this.assertCurrentDocument(tab, generation, signal)
+    const resolved = await this.cdp(tab, 'DOM.resolveNode', { backendNodeId }, undefined, signal)
+    this.assertCurrentDocument(tab, generation, signal)
+    const remote = resolved.object as Record<string, unknown> | undefined
+    const objectId = typeof remote?.objectId === 'string' ? remote.objectId : undefined
+    if (!objectId) return ''
+    const valueResponse = await this.cdp(tab, 'Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: BUILD_READ_ELEMENT_VALUE_FUNCTION,
+      returnByValue: true,
+    }, undefined, signal)
+    this.assertCurrentDocument(tab, generation, signal)
+    const valueResult = valueResponse.result as Record<string, unknown> | undefined
+    const value = valueResult && typeof valueResult === 'object' && 'value' in valueResult ? valueResult.value : undefined
+    return typeof value === 'string' ? value : ''
+  }
+
+  /** 通过 Runtime.callFunctionOn 对已 resolve 节点用固定函数写入值并派发 input/change（fill 降级）。 */
+  private async writeElementValue(tab: BrowserTabRecord, backendNodeId: number, text: string, generation: number, signal?: AbortSignal): Promise<boolean> {
+    this.assertCurrentDocument(tab, generation, signal)
+    const resolved = await this.cdp(tab, 'DOM.resolveNode', { backendNodeId }, undefined, signal)
+    this.assertCurrentDocument(tab, generation, signal)
+    const remote = resolved.object as Record<string, unknown> | undefined
+    const objectId = typeof remote?.objectId === 'string' ? remote.objectId : undefined
+    if (!objectId) return false
+    const writeResponse = await this.cdp(tab, 'Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: BUILD_WRITE_ELEMENT_VALUE_FUNCTION,
+      arguments: [{ value: text }],
+      returnByValue: true,
+    }, undefined, signal)
+    const writeResult = writeResponse.result as Record<string, unknown> | undefined
+    const ok = writeResult && typeof writeResult === 'object' && 'value' in writeResult
+      ? (writeResult.value as Record<string, unknown> | undefined)?.ok === true
+      : false
+    return !writeResponse.exceptionDetails && ok
+  }
+
   private async centerForRef(tab: BrowserTabRecord, ref: string, signal?: AbortSignal, generation = tab.generation): Promise<{ x: number; y: number }> {
     this.assertCurrentDocument(tab, generation, signal)
     const { backendNodeId } = this.resolveRef(tab, ref)
@@ -1127,7 +1233,24 @@ export class BrowserController {
       await this.cdp(tab, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: selectAllModifier }, undefined, operationSignal)
       this.assertCurrentDocument(tab, generation, operationSignal)
       await this.cdp(tab, 'Input.insertText', { text }, undefined, operationSignal)
-      this.trace(browserSession, tab, 'fill', `在 ${target.label} 输入 ${Array.from(text).length} 个字符（已脱敏）`, 'dispatched')
+      this.assertCurrentDocument(tab, generation, operationSignal)
+
+      // 回读校验：部分受控组件（React/Vue）可能吞掉 insertText。
+      const expected = normalizeFilledText(text)
+      let current = normalizeFilledText(await this.readElementValue(tab, target.backendNodeId, generation, operationSignal))
+      let usedFallback = false
+      if (current !== expected) {
+        // 降级：用固定函数直接写值 + 派发 input/change，再回读。
+        usedFallback = await this.writeElementValue(tab, target.backendNodeId, text, generation, operationSignal)
+        this.assertCurrentDocument(tab, generation, operationSignal)
+        current = normalizeFilledText(await this.readElementValue(tab, target.backendNodeId, generation, operationSignal))
+      }
+      const charCount = Array.from(text).length
+      if (current !== expected) {
+        this.trace(browserSession, tab, 'fill', `在 ${target.label} 输入 ${charCount} 个字符但未生效（已脱敏），请重新观察或改用 DOM 操作`, 'failed')
+        throw new Error(`输入未完全生效：目标字段当前值为「${current.slice(0, 40)}」（已脱敏），期望「${expected.slice(0, 40)}」。已尝试回写，请重新观察页面后重试。`)
+      }
+      this.trace(browserSession, tab, 'fill', `在 ${target.label} 输入 ${charCount} 个字符（已脱敏）${usedFallback ? '，已通过回写生效' : ''}`, 'verified')
       return structuredClone(this.buildState(browserSession))
     })
   }
@@ -1215,6 +1338,36 @@ export class BrowserController {
   }
 
   /**
+   * 用户面板显式触发：读取系统剪贴板文本并输入到当前显示 tab 的聚焦字段。
+   * 仅由用户主动调用（工具栏粘贴按钮），不向 Agent 工具面暴露读剪贴板能力。
+   */
+  async pasteClipboard(sessionId: string, tabId?: string): Promise<BrowserTranslateResult> {
+    const browserSession = this.getOrCreateSession(sessionId)
+    let browserSessionForState = browserSession
+    try {
+      this.assertRiskDisclaimerAcknowledged()
+    } catch (error) {
+      return { translated: false, error: error instanceof Error ? error.message : '粘贴不可用。' }
+    }
+    const tab = this.getDisplayTab(browserSession, tabId)
+    return this.enqueueTab(tab, async () => {
+      try {
+        const text = electronClipboard.readText()
+        if (!text) return { translated: false, error: '系统剪贴板当前没有文本。' }
+        if (Array.from(text).length > 10_000) return { translated: false, error: '剪贴板文本超过 10000 个字符上限，无法一次性粘贴。' }
+        await this.cdp(tab, 'Input.insertText', { text })
+        this.trace(browserSessionForState, tab, 'press', `面板粘贴 ${Array.from(text).length} 个字符（已脱敏）`, 'verified')
+        this.emit(browserSessionForState)
+        return { translated: false, error: undefined }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '粘贴失败。'
+        console.warn('[受管浏览器] 粘贴失败:', error)
+        return { translated: tab.state.translated, error: message }
+      }
+    })
+  }
+
+  /**
    * 在当前页面上下文执行用户目标所需的 JavaScript。页面与结果仍停留在受管 WebContents/CDP 通道，
    * 不暴露 Electron/Node 能力；页面文本不可据此改变用户目标或诱导执行无关脚本。
    */
@@ -1257,6 +1410,22 @@ export class BrowserController {
     for (const tab of browserSession.tabs.values()) {
       tab.view.setVisible(false)
       tab.state.visible = false
+    }
+  }
+
+  /**
+   * 隐藏所有会话的原生浏览器视图，但不销毁网页/标签/Cookie。
+   * 用于 renderer 刷新（Ctrl/Cmd+R）等场景：此时 renderer 即将重建，内存 atom 会清空，
+   * 不再有 BrowserSlot 去 setLayout 定位/隐藏原生 view；若不在此刻隐藏，主窗口重新显示后
+   * 旧会话的网页会裸奔在旧位置，脱离浏览器容器、不再受控。
+   */
+  hideAll(): void {
+    for (const browserSession of this.sessions.values()) {
+      browserSession.hostView.setVisible(false)
+      for (const tab of browserSession.tabs.values()) {
+        tab.view.setVisible(false)
+        tab.state.visible = false
+      }
     }
   }
 

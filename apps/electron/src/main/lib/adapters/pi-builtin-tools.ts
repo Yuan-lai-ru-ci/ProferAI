@@ -47,6 +47,7 @@ import {
 } from '../web-search-service'
 import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
+import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -723,6 +724,46 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
 // wait_for_delegations、list_delegations、get_delegation_results、
 // stop_delegation、stop_delegations、answer_delegation_question、continue_delegation。
 
+// ===== 系统剪贴板工具 =====
+
+/**
+ * Agent 读/写系统剪贴板的正规工具；走主进程 Electron clipboard（UTF-8），
+ * 避免 Agent 退化为 PowerShell Get-Clipboard 时踩 Windows 代码页中文乱码。
+ */
+function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
+  return [
+    sdk.defineTool({
+      name: 'clipboard_read_text',
+      label: '读取系统剪贴板文本',
+      description: '读取系统剪贴板文本。获取剪贴板内容请优先使用本工具，不要使用 PowerShell Get-Clipboard（Windows 控制台代码页会导致中文乱码）。',
+      parameters: Type.Object({}),
+      async execute() {
+        const { text, truncated, totalChars } = readClipboardText()
+        return jsonToolResult({
+          text,
+          truncated,
+          totalChars,
+          message: truncated ? `剪贴板文本超过上限，已截断到 ${text.length} 字符（原文 ${totalChars} 字符）。` : `已读取 ${totalChars} 个字符。`,
+        })
+      },
+    }),
+    sdk.defineTool({
+      name: 'clipboard_write_text',
+      label: '写入系统剪贴板文本',
+      description: '写入文本到系统剪贴板。需要把文本放到剪贴板供之后手动粘贴时使用本工具；写入前请确认文本不包含不应泄露到剪贴板的敏感信息。',
+      parameters: Type.Object({
+        text: Type.String({ description: '要写入系统剪贴板的完整文本。' }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { text?: string }
+        const text = typeof args.text === 'string' ? args.text : ''
+        const { writtenChars } = writeClipboardText(text)
+        return jsonToolResult({ writtenChars, message: `已写入 ${writtenChars} 个字符到系统剪贴板。` })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
 // ===== 受管浏览器工具 =====
 
 function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
@@ -1044,6 +1085,14 @@ export async function buildPiBuiltinTools(
     tools.push(...buildBrowserTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入受管浏览器工具失败:', error)
+  }
+
+  // 系统剪贴板工具：Agent 读取/写入系统剪贴板走主进程 Electron clipboard（UTF-8），
+  // 避免退化为 PowerShell Get-Clipboard（Windows 代码页导致中文乱码）。
+  try {
+    tools.push(...buildPiClipboardTools(sdk))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入系统剪贴板工具失败:', error)
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

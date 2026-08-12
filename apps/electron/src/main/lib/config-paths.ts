@@ -710,6 +710,15 @@ export function getAutomationsPath(): string {
   return join(getConfigDir(), 'automations.json')
 }
 
+/**
+ * 获取新标签页起始页数据文件路径（书签 + 最近访问历史）
+ *
+ * @returns ~/.profer/browser-start-page.json
+ */
+export function getBrowserStartPagePath(): string {
+  return join(getConfigDir(), 'browser-start-page.json')
+}
+
 /** 获取本地任务/日程（Planning）SQLite 数据库路径。 */
 export function getPlanningDatabasePath(): string {
   return join(getConfigDir(), 'planning.db')

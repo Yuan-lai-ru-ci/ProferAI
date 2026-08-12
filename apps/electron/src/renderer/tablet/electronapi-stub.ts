@@ -119,6 +119,21 @@ interface SdkMessagesPageState {
 
 const sdkMessagesPageCache = new Map<string, SdkMessagesPageState>()
 
+/** 缓存会话数上限：触顶加载/多会话切换会在 stub 侧堆积整份消息数组，无界会随会话数无限增长。
+ *  超出上限时淘汰最久未写入的会话（Map 迭代序即插入序）。 */
+const SDK_MESSAGES_CACHE_MAX_SESSIONS = 20
+
+/** 写入并执行 LRU 淘汰：delete+set 把该 key 移到末尾（视为最近使用），超出上限删头部最久未用。 */
+function setCachedPage(sessionId: string, state: SdkMessagesPageState): void {
+  sdkMessagesPageCache.delete(sessionId)
+  sdkMessagesPageCache.set(sessionId, state)
+  while (sdkMessagesPageCache.size > SDK_MESSAGES_CACHE_MAX_SESSIONS) {
+    const oldest = sdkMessagesPageCache.keys().next().value
+    if (oldest === undefined) break
+    sdkMessagesPageCache.delete(oldest)
+  }
+}
+
 /** 返回当前会话已累计的消息数组（无则返回空数组，由调用方触发迁移）。 */
 function getCachedSdkMessages(sessionId: string): unknown[] {
   return sdkMessagesPageCache.get(sessionId)?.messages ?? []
@@ -368,7 +383,7 @@ export function installElectronApiStub(): void {
           const page = res as { messages?: unknown[]; startIndex?: number; hasMore?: boolean; total?: number }
           if (Array.isArray(page?.messages) && typeof page?.startIndex === 'number') {
             const merged = [...(page.messages as unknown[]), ...prev.messages]
-            sdkMessagesPageCache.set(sessionId, {
+            setCachedPage(sessionId, {
               messages: merged,
               startIndex: page.startIndex,
               hasMore: page.hasMore !== false,
@@ -387,7 +402,7 @@ export function installElectronApiStub(): void {
         const incoming = Array.isArray(page?.messages) ? page.messages as unknown[] : []
         // 旧端不支持分页（返回原始数组而非 {messages,startIndex,...}）→退回：直接返回全量。
         if (!Array.isArray(page?.messages) || typeof page?.startIndex !== 'number') {
-          sdkMessagesPageCache.set(sessionId, {
+          setCachedPage(sessionId, {
             messages: Array.isArray(res) ? (res as unknown[]) : [],
             startIndex: 0,
             hasMore: false,
@@ -403,7 +418,7 @@ export function installElectronApiStub(): void {
         }
         // 新页覆盖 [page.startIndex, before)；合并为：新页 + 已累计（有序）。
         const merged = [...incoming, ...(prev?.messages ?? [])]
-        sdkMessagesPageCache.set(sessionId, {
+        setCachedPage(sessionId, {
           messages: merged,
           startIndex: page.startIndex,
           hasMore: page.hasMore !== false,
@@ -431,12 +446,12 @@ export function installElectronApiStub(): void {
           // 新窗口起点会跳过旧缓存尾部之间的整段消息，用索引差值切 prefix 会丢消息。
           // 这里改成"按去重键求前缀"：从 prev 里找到 latest 首条消息的位置，截断重叠，避免丢/重。
           const merged = mergePageWithCache(prev.messages, latest, prev.startIndex, page.startIndex, page.hasMore !== false)
-          sdkMessagesPageCache.set(sessionId, merged)
+          setCachedPage(sessionId, merged)
           return merged.messages
         }
         // 旧端返回原始数组：直接用新数据覆盖。
         const raw = Array.isArray(res) ? (res as unknown[]) : prev.messages
-        sdkMessagesPageCache.set(sessionId, { messages: raw, startIndex: 0, hasMore: false })
+        setCachedPage(sessionId, { messages: raw, startIndex: 0, hasMore: false })
         return raw
       }
       // 首帧（无缓存）：拉最新 targetMessages 条，奠基缓存。
@@ -445,12 +460,12 @@ export function installElectronApiStub(): void {
       })
       if (Array.isArray(res)) {
         // 旧端/未分页：直接返回原始数组。
-        sdkMessagesPageCache.set(sessionId, { messages: res as unknown[], startIndex: 0, hasMore: false })
+        setCachedPage(sessionId, { messages: res as unknown[], startIndex: 0, hasMore: false })
         return res
       }
       const page = res as { messages?: unknown[]; startIndex?: number; total?: number; hasMore?: boolean }
       const msgs = Array.isArray(page?.messages) ? page.messages as unknown[] : []
-      sdkMessagesPageCache.set(sessionId, {
+      setCachedPage(sessionId, {
         messages: msgs,
         startIndex: typeof page?.startIndex === 'number' ? page.startIndex : 0,
         hasMore: page?.hasMore !== false,
@@ -521,14 +536,18 @@ export function installElectronApiStub(): void {
         try {
           const workspaces = await remoteClient.listWorkspaces() as Array<{ id: string; name: string; slug: string; type?: string; createdAt?: number; updatedAt?: number }> | undefined
           if (Array.isArray(workspaces) && workspaces.length > 0) {
-            return workspaces.map((w) => ({
-              id: w.id,
-              name: w.name,
-              slug: w.slug,
-              type: w.type ?? 'personal',
-              createdAt: w.createdAt ?? 0,
-              updatedAt: w.updatedAt ?? 0,
-            }))
+            // 与 main.tsx loadSessions 的团队过滤一致：LeftSidebar 会主动调本方法刷新侧栏，
+            // 若不过滤会把团队工作区重新塞回 agentWorkspacesAtom，覆盖 loadSessions 的过滤结果。
+            return workspaces
+              .filter((w) => w.type !== 'team')
+              .map((w) => ({
+                id: w.id,
+                name: w.name,
+                slug: w.slug,
+                type: w.type ?? 'personal',
+                createdAt: w.createdAt ?? 0,
+                updatedAt: w.updatedAt ?? 0,
+              }))
           }
         } catch {
           /* 服务端不支持时走下面的兜底 */

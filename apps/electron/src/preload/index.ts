@@ -203,10 +203,21 @@ export interface ElectronAPI {
   goForwardAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
   reloadAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
   translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
+  pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  /** 订阅受管网页下载被拦截的脱敏事件。 */
+  onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => () => void
   hideAgentBrowser: (sessionId: string) => Promise<void>
   closeAgentBrowser: (sessionId: string) => Promise<void>
   setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => Promise<import('@profer/shared').BrowserViewState>
   onAgentBrowserStateChanged: (callback: (state: import('@profer/shared').BrowserViewState) => void) => () => void
+
+  // ===== 新标签页起始页 =====
+  getBrowserStartPage: () => Promise<import('@profer/shared').BrowserStartPageState>
+  addBrowserBookmark: (input: import('@profer/shared').BrowserAddBookmarkInput) => Promise<import('@profer/shared').BrowserStartPageState>
+  removeBrowserBookmark: (id: string) => Promise<import('@profer/shared').BrowserStartPageState>
+  updateBrowserHomeUrl: (url: string) => Promise<import('@profer/shared').BrowserStartPageState>
+  clearBrowserHistory: () => Promise<import('@profer/shared').BrowserStartPageState>
 
   // ===== 通用工具 =====
 
@@ -1439,6 +1450,12 @@ const electronAPI: ElectronAPI = {
   goForwardAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, sessionId),
   reloadAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOAD_BROWSER, sessionId),
   translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, input),
+  pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PASTE_BROWSER_CLIPBOARD, input),
+  onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserDownloadBlockedEvent) => callback(payload)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
+  },
   hideAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.HIDE_BROWSER, sessionId),
   closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),
   setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, input),
@@ -1447,6 +1464,11 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
     return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
   },
+  getBrowserStartPage: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_START_PAGE),
+  addBrowserBookmark: (input: import('@profer/shared').BrowserAddBookmarkInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_BROWSER_BOOKMARK, input),
+  removeBrowserBookmark: (id: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_BROWSER_BOOKMARK, id),
+  updateBrowserHomeUrl: (url: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_BROWSER_HOME_URL, url),
+  clearBrowserHistory: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_BROWSER_HISTORY),
 
   // 通用工具
   openExternal: (url: string) => {
