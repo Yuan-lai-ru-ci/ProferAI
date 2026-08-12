@@ -30,6 +30,7 @@ import { SettingsDialog, type SettingsTabItem } from '@/components/settings'
 import { useGlobalAgentListeners } from '@/hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from '@/hooks/useGlobalChatListeners'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { authStatusAtom } from '@/atoms/identity-atoms'
 import { channelsAtom, channelsLoadedAtom, conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
 import { agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentStreamingStatesAtom, agentMessageRefreshAtom } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -39,7 +40,7 @@ import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from '@/components/ui/alert-dialog'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Menu, Plus, Palette, Link, Loader2, Bell, RefreshCw } from 'lucide-react'
-import { isAgentCompatibleProvider, type ProviderType, type AgentStreamPayload } from '@profer/shared'
+import { type AgentStreamPayload } from '@profer/shared'
 import { tabletConnectionStatusAtom, tabletNotifyCompleteAtom, tabletUnbindRequestAtom } from '@/atoms/tablet-settings'
 
 // ===== 先安装 electronAPI stub（必须在任何复用组件求值前）=====
@@ -222,6 +223,8 @@ function App(): React.ReactElement {
   const setNativeWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setNativeConversationId = useSetAtom(currentConversationIdAtom)
   const setNativeAppMode = useSetAtom(appModeAtom)
+  const setUserProfile = useSetAtom(userProfileAtom)
+  const setAuthStatus = useSetAtom(authStatusAtom)
   const appMode = useAtomValue(appModeAtom)
   const nativeActiveSessionId = useAtomValue(currentAgentSessionIdAtom)
   const nativeConversationId = useAtomValue(currentConversationIdAtom)
@@ -277,9 +280,15 @@ function App(): React.ReactElement {
       onStatusChange: (status) => {
         if (status === 'open') {
           setConnection('open'); setErrMsg(undefined)
+          // 平板通过 WS 连接的是已授权（可能已登录）的电脑端，官方渠道（newapi-*）由电脑端
+          // 登录后从服务端同步而来。ModelSelector 的「未登录隐藏官方渠道」过滤依赖此标志；
+          // 平板无登录流程，authStatusAtom 恒为 isLoggedIn:false，会误杀全部官方渠道，
+          // 导致远程端看不到 GPT/Claude 官方模型。这里在连接成功后置为已登录态以放行官方渠道。
+          setAuthStatus((prev) => ({ ...prev, isLoggedIn: true }))
           void loadChannels(client)
           void loadSessions(client)
           void loadConversations(client)
+          void loadUserProfile(client)
         } else if (status === 'unauthorized') {
           // token 无效：服务端已拒绝对话且客户端已停止自动重连，停留登录页提示用户重新输入
           setConnection('unauthorized')
@@ -313,8 +322,11 @@ function App(): React.ReactElement {
       }))
       setChannels(ch as never)
       setChannelsLoaded(true)
-      // agentChannelIdsAtom：桌面从 enabled + Agent 兼容 provider 派生（见 ChannelSettings）
-      setAgentChannelIds(ch.filter((c) => isAgentCompatibleProvider(c.provider as ProviderType)).map((c) => c.id))
+      // agentChannelIds：桌面从「设置页勾选的 Agent 渠道」派生（仅 Claude runtime 用于过滤模型选择器）。
+      // 移动版无设置页勾选，不能用 isAgentCompatibleProvider 白名单硬过滤——那会漏掉 openai 等
+      // Pi 支持的 provider 渠道，导致 Claude/Pi 模式下都看不到这些渠道的模型（“少了某些渠道”）。
+      // 对齐最初自立 UI 版本的语义：全量纳入所有已启用渠道，runtime/protocol 兼容性由 AgentView 现有机制处理。
+      setAgentChannelIds(ch.map((c) => c.id))
       // AgentView 从 sessionMeta / agentChannelIdAtom / agentModelIdAtom 解析渠道与模型；
       // 默认渠道取第一个可用，避免“请先设置 Agent 供应商”的桌面提示出现在平板上。
       if (ch.length > 0) {
@@ -417,6 +429,22 @@ function App(): React.ReactElement {
       setConversations((Array.isArray(data) ? data : []) as never)
     } catch (e) { console.error('拉取对话列表失败', e) }
   }, [setConversations])
+
+  /** 连接建立后主动拉取用户档案填充 userProfileAtom。
+   *  移动版空态问候语（“…，早上好”）依赖 userName；桌面靠 LeftSidebar 副作用填充，
+   *  移动版 LeftSidebar 副作用的触发时机/依赖（authStatus）不保证，必须在此显式拉取，
+   *  否则始终显示默认“用户”。 */
+  const loadUserProfile = useCallback(async (client: WsClient) => {
+    try {
+      const profile = await client.getUserProfile() as { userName?: string; avatar?: string } | undefined
+      if (profile && typeof profile === 'object') {
+        setUserProfile({
+          userName: profile.userName || '用户',
+          avatar: profile.avatar || '',
+        })
+      }
+    } catch (e) { console.error('拉取用户档案失败', e) }
+  }, [setUserProfile])
 
   // ===== 打开会话：AgentView 自行加载持久化消息与流式状态，平板只切换 sessionId =====
   const openSession = useCallback(async (sessionId: string, title?: string) => {
