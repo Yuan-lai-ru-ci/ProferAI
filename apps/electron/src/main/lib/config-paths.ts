@@ -710,13 +710,22 @@ export function getAutomationsPath(): string {
   return join(getConfigDir(), 'automations.json')
 }
 
+/**
+ * 获取新标签页起始页数据文件路径（书签 + 最近访问历史）
+ *
+ * @returns ~/.profer/browser-start-page.json
+ */
+export function getBrowserStartPagePath(): string {
+  return join(getConfigDir(), 'browser-start-page.json')
+}
+
 /** 获取本地任务/日程（Planning）SQLite 数据库路径。 */
 export function getPlanningDatabasePath(): string {
   return join(getConfigDir(), 'planning.db')
 }
 
 /**
- * 获取论文知识库根目录路径
+ * 获取个人资料库（含历史论文）根目录路径
  *
  * 如果目录不存在则自动创建。
  *
@@ -727,42 +736,15 @@ export function getKnowledgeBaseDir(): string {
 
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
-    console.log(`[配置] 已创建论文知识库目录: ${dir}`)
+    console.log(`[配置] 已创建个人资料库目录: ${dir}`)
   }
 
   return dir
 }
 
-/**
- * 获取论文知识库索引文件路径
- *
- * @returns ~/.profer/knowledge-base/index.json
- */
-export function getKnowledgeBaseIndexPath(): string {
-  return join(getKnowledgeBaseDir(), 'index.json')
-}
-
-/** 通用个人资料索引；与历史 Paperpipe 论文 index.json 分开，避免迁移期间互相覆盖。 */
+/** 通用个人资料索引；与历史论文 index.json 分开，避免迁移期间互相覆盖。 */
 export function getKnowledgeItemsIndexPath(): string {
   return join(getKnowledgeBaseDir(), 'items-index.json')
-}
-
-/**
- * 获取论文知识库个人工作台状态文件路径。
- *
- * 收藏、个人标签、笔记和阅读位置只保存在当前设备，不同步到 paperpipe。
- */
-export function getKnowledgeBaseWorkbenchPath(): string {
-  return join(getConfigDir(), 'knowledge-base-workbench.json')
-}
-
-/**
- * 获取论文知识库向量数据库路径
- *
- * @returns ~/.profer/knowledge-base/vectors.db
- */
-export function getKnowledgeBaseVectorDbPath(): string {
-  return join(getKnowledgeBaseDir(), 'vectors.db')
 }
 
 /** 通用资料目录；普通资料与历史论文目录分离，避免路径和生命周期混用。 */
@@ -789,24 +771,6 @@ export function resolveKnowledgeItemDir(itemId: string): string {
 /** 仅在导入通用资料的写入流程创建资料目录。 */
 export function getKnowledgeItemDir(itemId: string): string {
   const dir = resolveKnowledgeItemDir(itemId)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
-}
-
-/** 仅解析受控本地论文目录；读取和删除场景不得隐式创建路径。 */
-export function resolvePaperDir(paperId: string): string {
-  if (typeof paperId !== 'string' || !LOCAL_PAPER_ID_RE.test(paperId)) {
-    throw new Error('论文标识无效')
-  }
-  const root = resolve(getKnowledgeBaseDir(), 'papers')
-  const dir = resolve(root, paperId)
-  if (!dir.startsWith(`${root}${sep}`)) throw new Error('论文标识无效')
-  return dir
-}
-
-/** 仅在导入本地 PDF 的写入流程创建论文目录。 */
-export function getPaperDir(paperId: string): string {
-  const dir = resolvePaperDir(paperId)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   return dir
 }

@@ -13,16 +13,18 @@ import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
 import { previewPanelOpenMapAtom, previewSplitRatioAtom } from '@/atoms/preview-atoms'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
+import { browserPanelDismissedSessionIdsAtom, browserPanelOpenMapAtom, browserSplitRatioAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { BrowserPanel } from '@/components/browser/BrowserPanel'
+import type { BrowserViewState } from '@profer/shared'
 import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
-import { KnowledgeBasePanel } from '@/components/knowledge-base/KnowledgeBasePanel'
 import { automationFormAtom } from '@/atoms/automation-atoms'
+import { agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
-import { paperKnowledgeBaseEnabledAtom } from '@/atoms/ui-preferences'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 
@@ -36,7 +38,7 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
-  const paperKnowledgeBaseEnabled = useAtomValue(paperKnowledgeBaseEnabledAtom)
+  const sidePanelOpen = useAtomValue(agentSidePanelOpenAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
 
@@ -59,8 +61,81 @@ export function MainArea(): React.ReactElement {
   const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
   const previewDragging = React.useRef(false)
 
+  // ===== 受管浏览器 =====
+  const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
+  const [browserStateMap, setBrowserStateMap] = useAtom(browserStateMapAtom)
+  const [browserSplitRatio, setBrowserSplitRatio] = useAtom(browserSplitRatioAtom)
+  const browserLayoutRef = React.useRef<HTMLDivElement>(null)
+  const [browserLayoutWidth, setBrowserLayoutWidth] = React.useState(0)
+  const browserDragging = React.useRef(false)
+  const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
+  const browserSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
+
+  const publishBrowserState = React.useCallback((state: BrowserViewState) => {
+    // 同步浏览器内容状态（tabs/url/标题/trace 等）。
+    setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
+    // 仅当用户没有显式关闭过该会话的面板时才自动打开；用户在浏览器面板右上角手动收起后，
+    // 主进程后续的 BROWSER_STATE_CHANGED 推送不能把它强制重新弹出来。
+    setBrowserOpenMap((previous) => {
+      const shouldOpen = previous.get(state.sessionId) !== false && !browserDismissed.has(state.sessionId)
+      if (!shouldOpen) return previous
+      const next = new Map(previous); next.set(state.sessionId, true); return next
+    })
+  }, [browserDismissed, setBrowserOpenMap, setBrowserStateMap])
+
+  React.useEffect(() => {
+    // Vite renderer 可在 preload 热重载前先更新；旧 bridge 时浏览器功能不可用，
+    // 但绝不能让整个主界面崩溃。完整 Electron preload 就绪后会正常订阅。
+    const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentBrowserStateChanged
+    if (typeof subscribe !== 'function') return
+    return subscribe(publishBrowserState)
+  }, [publishBrowserState])
+
+  React.useEffect(() => {
+    if (!browserSessionId) return
+    const getState = (window.electronAPI as Partial<typeof window.electronAPI>).getAgentBrowserState
+    if (typeof getState !== 'function') return
+    let cancelled = false
+    void getState(browserSessionId)
+      .then((state) => {
+        if (!cancelled && state) publishBrowserState(state)
+      })
+      // 后台会话及已删除会话会被主进程拒绝或返回空状态；无需打断当前界面。
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [browserSessionId, publishBrowserState])
+
+  const showBrowserPanel = !!browserSessionId && (browserOpenMap.get(browserSessionId) ?? false)
+  const browserState = browserSessionId ? browserStateMap.get(browserSessionId) ?? null : null
+  const BROWSER_MIN_WIDTH = 360
+  const CONVERSATION_MIN_WIDTH = 420
+  // 与 AppShell 的 p-2 面板缝隙保持一致，避免侧边栏收起时出现额外空白。
+  const BROWSER_SPLIT_GAP = 8
+  const browserAutoHidden = showBrowserPanel
+    && browserLayoutWidth > 0
+    && browserLayoutWidth < CONVERSATION_MIN_WIDTH + BROWSER_MIN_WIDTH + BROWSER_SPLIT_GAP
+  const browserVisible = showBrowserPanel && !browserAutoHidden
+
+  // 以 MainArea 实际可用宽度决定是否可并排，避免右侧文件栏改变布局后仍错误挤压双栏。
+  React.useLayoutEffect(() => {
+    const element = browserLayoutRef.current
+    if (!element) return
+    const update = () => setBrowserLayoutWidth(element.clientWidth)
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    update()
+    return () => observer.disconnect()
+  }, [])
+
+  // 窄屏自动隐藏只是临时视觉降级，不写入用户手动关闭标记；原生 WebContentsView 必须同步隐藏。
+  React.useEffect(() => {
+    if (browserAutoHidden && browserSessionId) {
+      void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
+    }
+  }, [browserAutoHidden, browserSessionId])
+
   const previewOpen =
-    activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false)
+    activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false) && !showBrowserPanel
   const previewSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
 
   // 关闭动画状态：当 previewOpen 从 true → false 时，播放退出动画再移除 DOM
@@ -155,11 +230,51 @@ export function MainArea(): React.ReactElement {
     ? { flex: `0 0 calc(${splitRatio * 100}% - 4px)` }
     : { flex: '1 1 auto' }
 
+  const browserAvailableWidth = Math.max(1, browserLayoutWidth - BROWSER_SPLIT_GAP)
+  const minConversationRatio = CONVERSATION_MIN_WIDTH / browserAvailableWidth
+  const maxConversationRatio = 1 - BROWSER_MIN_WIDTH / browserAvailableWidth
+  const clampedBrowserSplitRatio = Math.max(minConversationRatio, Math.min(maxConversationRatio, browserSplitRatio))
+  const mainPanelStyle: React.CSSProperties | undefined = browserVisible
+    ? { flex: `0 0 calc(${clampedBrowserSplitRatio * 100}% - ${BROWSER_SPLIT_GAP / 2}px)` }
+    : undefined
+  const browserDividerStyle: React.CSSProperties | undefined = browserVisible
+    ? { left: `${clampedBrowserSplitRatio * 100}%` }
+    : undefined
+
+  const handleBrowserDragStart = React.useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    const container = browserLayoutRef.current
+    if (!container) return
+    browserDragging.current = true
+    const rect = container.getBoundingClientRect()
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = 'none' })
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const available = Math.max(1, rect.width - BROWSER_SPLIT_GAP)
+      const rawRatio = (moveEvent.clientX - rect.left) / available
+      const minRatio = CONVERSATION_MIN_WIDTH / available
+      const maxRatio = 1 - BROWSER_MIN_WIDTH / available
+      setBrowserSplitRatio(Math.max(minRatio, Math.min(maxRatio, rawRatio)))
+    }
+    const onMouseUp = () => {
+      browserDragging.current = false
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = '' })
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [setBrowserSplitRatio])
+
   return (
-    <>
+    <div ref={browserLayoutRef} className="relative flex h-full min-w-0 gap-2">
       <Panel
         variant="grow"
         className="bg-content-area rounded-2xl shadow-xl dark:shadow-sm"
+        style={mainPanelStyle}
       >
         <div className="flex flex-1 min-h-0 relative overflow-hidden" data-split-container>
           {/* 左侧：TabBar + TabContent（始终保持在同一 DOM 位置，避免 Tab 切换时 unmount）
@@ -181,9 +296,6 @@ export function MainArea(): React.ReactElement {
             ) : activeView === 'agent-skills' ? (
               // Agent 技能视图：全屏取代 TabBar + TabContent
               <AgentSkillsView />
-            ) : activeView === 'knowledge-base' && paperKnowledgeBaseEnabled ? (
-              // 知识库视图：全屏取代 TabBar + TabContent
-              <KnowledgeBasePanel />
             ) : (
               <>
                 <TabBar />
@@ -223,6 +335,38 @@ export function MainArea(): React.ReactElement {
           )}
         </div>
       </Panel>
-    </>
+
+      {browserVisible && browserSessionId && (
+        <>
+          <div
+            className="absolute z-10 top-0 bottom-0 w-3 -translate-x-1/2 cursor-col-resize rounded transition-colors hover:bg-primary/10 active:bg-primary/20"
+            style={browserDividerStyle}
+            onMouseDown={handleBrowserDragStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整会话与浏览器宽度"
+          />
+          <div className="flex flex-1 min-w-0">
+            <BrowserPanel
+            sessionId={browserSessionId}
+            state={browserState}
+            // 右侧文件栏打开时它占据窗口右缘，浏览器无需为 WindowControls 预留空白。
+            avoidWindowControls={!sidePanelOpen}
+            // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
+            // 让原生 hostView 立即拿到新 rect，但不销毁网页 WebContents。
+            layoutKey={sidePanelOpen ? 'side-panel-open' : 'side-panel-closed'}
+            onClose={() => {
+              // WebContentsView 不在 React DOM 层级内；先让主进程同步隐藏，
+              // 再卸载 BrowserSlot，避免 effect cleanup IPC 晚到时网页仍覆盖界面。
+              void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
+              setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(browserSessionId, false); return next })
+              setBrowserStateMap((previous) => { const next = new Map(previous); next.delete(browserSessionId); return next })
+              setBrowserDismissed((previous) => { const next = new Set(previous); next.add(browserSessionId); return next })
+            }}
+            />
+          </div>
+        </>
+      )}
+    </div>
   )
 }

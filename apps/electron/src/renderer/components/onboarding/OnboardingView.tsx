@@ -4,35 +4,54 @@
  * 首次启动时显示的全屏欢迎界面。
  *
  * 流程：
- *  Step 1：欢迎 + 教程入口
- *  Step 2：Windows 环境检测（仅 Windows，其他平台自动跳过）
+ *  Step 0：开屏水波纹动画（Profer 从水面具现，自动进入下一步）
+ *  Step 1：欢迎 + 迁移入口
+ *  Step 2：核心功能导览
+ *  Step 3：Windows 环境检测（仅 Windows，其他平台自动跳过）
  */
 
 import { useMemo, useState } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { GraduationCap, ChevronRight, ChevronLeft, HardDriveDownload, Users } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { ChevronRight, ChevronLeft, HardDriveDownload, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EnvironmentCheckPanel } from '@/components/environment/EnvironmentCheckPanel'
 import { isShellEnvironmentOkAtom } from '@/atoms/environment'
 import { detectIsWindows } from '@/lib/platform'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
+import { IntroWaterRipple } from './IntroWaterRipple'
+import { FeatureTour } from './FeatureTour'
 
 interface OnboardingViewProps {
   onComplete: (openTutorial?: boolean) => void
+  /** 供主界面测试入口复用首次引导页；默认仍从开屏开始。 */
+  initialStep?: 'intro' | 'welcome' | 'featureTour' | 'environment'
+  /** 测试重放完成时不写入用户的首次 onboarding 状态。 */
+  persistCompletion?: boolean
 }
 
-export function OnboardingView({ onComplete }: OnboardingViewProps) {
-  const [step, setStep] = useState<'welcome' | 'environment'>('welcome')
+export function OnboardingView({
+  onComplete,
+  initialStep = 'intro',
+  persistCompletion = true,
+}: OnboardingViewProps) {
+  const [step, setStep] = useState<'intro' | 'welcome' | 'featureTour' | 'environment'>(initialStep)
   const isWindows = useMemo(() => detectIsWindows(), [])
   const shellOk = useAtomValue(isShellEnvironmentOkAtom)
   const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
 
   const handleFinish = async (openTutorial?: boolean) => {
-    await window.electronAPI.updateSettings({ onboardingCompleted: true })
+    if (persistCompletion) {
+      await window.electronAPI.updateSettings({ onboardingCompleted: true })
+    }
     onComplete(openTutorial)
   }
 
   const handleNextFromWelcome = () => {
+    setStep('featureTour')
+  }
+
+  const handleNextFromFeatureTour = () => {
     if (isWindows) {
       setStep('environment')
     } else {
@@ -45,7 +64,21 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
   }
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-8">
+    <div className={cn(
+      'flex h-screen w-screen overflow-hidden flex-col items-center justify-center',
+      step === 'intro'
+        ? 'bg-black'
+        : 'bg-gradient-to-br from-background via-background to-muted/20 p-8',
+    )}>
+      {step === 'intro' && (
+        <IntroWaterRipple
+          onDone={() => {
+            // 开屏结束后先进入欢迎页；用户再按需进入环境配置或导入配置。
+            setStep('welcome')
+          }}
+        />
+      )}
+
       {step === 'welcome' && (
         <>
           <div className="mb-12 text-center">
@@ -54,27 +87,12 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
               下一代桌面 AI 软件，让通用 Agent 触手可及
             </p>
             <p className="text-sm text-muted-foreground/60 mt-2">
-              基于开源项目 <a href="https://github.com/ErlichLiu/Proma" className="underline hover:text-foreground" target="_blank">Proma</a> 深度改造
+              基于开源项目 Proma 深度改造
             </p>
           </div>
 
           <div className="w-full max-w-2xl">
             <div className="space-y-3">
-              <button
-                onClick={() => handleFinish(true)}
-                className="w-full rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-4 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
-              >
-                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <GraduationCap size={20} className="text-primary" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">查看使用教程</h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    了解 Profer 的全部功能和使用技巧
-                  </p>
-                </div>
-              </button>
-
               <p className="text-sm text-muted-foreground pt-2">
                 自己或身边的人已经在用 Profer？直接导入现有配置
               </p>
@@ -120,20 +138,24 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
 
           <div className="w-full max-w-2xl mt-8 flex flex-col items-center gap-2">
             <Button className="w-full h-12 text-base" onClick={handleNextFromWelcome}>
-              {isWindows ? (
-                <>
-                  下一步：环境检测
-                  <ChevronRight className="ml-1 h-4 w-4" />
-                </>
-              ) : (
-                '开始使用'
-              )}
+              <>
+                了解 Profer 能做什么
+                <ChevronRight className="ml-1 h-4 w-4" />
+              </>
             </Button>
             <p className="text-xs text-muted-foreground/60">
               这些内容之后也能在设置中找到，不用担心错过
             </p>
           </div>
         </>
+      )}
+
+      {step === 'featureTour' && (
+        <FeatureTour
+          finishLabel={isWindows ? '下一步：环境检测' : '开始使用'}
+          onNext={handleNextFromFeatureTour}
+          onSkip={handleNextFromFeatureTour}
+        />
       )}
 
       {step === 'environment' && isWindows && (
@@ -153,7 +175,7 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setStep('welcome')}
+              onClick={() => setStep('featureTour')}
               className="text-muted-foreground"
             >
               <ChevronLeft className="mr-1 h-4 w-4" />

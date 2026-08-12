@@ -121,20 +121,21 @@ import type {
   Automation,
   CreateAutomationInput,
   UpdateAutomationInput,
+  BrowserViewState,
+  BrowserViewLayout,
+  BrowserNavigateInput,
+  BrowserTabInput,
+  BrowserCreateTabInput,
+  BrowserTranslateResult,
+  BrowserStartPageState,
+  BrowserAddBookmarkInput,
 } from '@profer/shared'
-import { KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import type {
-  KBImportInput,
-  KBImportResult,
-  KBSearchResult,
-  PaperMeta,
-  KBStats,
-  KBLibrarySnapshot,
-  ArxivPaper,
-  KnowledgeBaseWorkbenchPatch,
-} from '@profer/shared'
+import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
+import { browserController } from './lib/browser-controller'
+import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
+import { listBookmarks, addBookmark, removeBookmark, listHistory, clearHistory } from './lib/browser-start-page-store'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, invalidateGitDiffCache } from './lib/git-diff-service'
 import { registerProferFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
@@ -175,7 +176,6 @@ import {
   openFileDialog,
 } from './lib/attachment-service'
 import { extractTextFromAttachment } from './lib/document-parser'
-import { selectAndParsePaper, parsePaper, estimatePaperPages } from './lib/paper-service'
 import { getTutorialContent, createWelcomeConversation } from './lib/tutorial-service'
 import { getUserProfile, updateUserProfile } from './lib/user-profile-service'
 import { getSettings, updateSettings } from './lib/settings-service'
@@ -995,6 +995,12 @@ function assertSensitiveAgentIpcSender(event: { sender: { isDestroyed(): boolean
   assertMainWindowSender(event, mainWindowGetter)
 }
 
+let rendererReadyHandler: (() => void) | null = null
+
+export function setRendererReadyHandler(handler: (() => void) | null): void {
+  rendererReadyHandler = handler
+}
+
 export function registerIpcHandlers(): void {
   // 幂等守卫：正常启动与启动失败降级路径（index.ts:520 / index.ts:748）都会调用本函数。
   // ipcMain.handle 会按 channel 去重覆盖，但 ipcMain.on / nativeTheme.on / setInterval 等副作用
@@ -1016,6 +1022,11 @@ export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
 
   // ===== 运行时相关 =====
+
+  // renderer 完成首屏初始化后通知主进程，允许原生启动页退场。
+  ipcMain.on(SETTINGS_IPC_CHANNELS.RENDERER_READY, () => {
+    rendererReadyHandler?.()
+  })
 
   // 获取运行时状态
   ipcMain.handle(
@@ -1726,44 +1737,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 论文精读 — 打开文件对话框选 PDF → MinerU API 解析 → 返回 Markdown
-  ipcMain.handle(
-    CHAT_IPC_CHANNELS.PARSE_PAPER,
-    async () => {
-      try {
-        return await selectAndParsePaper()
-      } catch (err: unknown) {
-        const e = err as Error
-        console.error('[parse-paper] 解析失败 — 完整堆栈:')
-        console.error(e.stack || e.message || String(e))
-        throw err
-      }
-    }
-  )
-
-  // 论文精读 — 给定文件路径直接调用 MinerU 解析（拖拽 PDF 场景）
-  ipcMain.handle(
-    CHAT_IPC_CHANNELS.PARSE_PAPER_BY_PATH,
-    async (_, filePath: string) => {
-      try {
-        return await parsePaper(filePath)
-      } catch (err: unknown) {
-        const e = err as Error
-        console.error('[parse-paper-by-path] 解析失败 — 完整堆栈:')
-        console.error(e.stack || e.message || String(e))
-        throw err
-      }
-    }
-  )
-
-  // 论文精读 — 估算 PDF 页数和积分（不调用服务端）
-  ipcMain.handle(
-    CHAT_IPC_CHANNELS.ESTIMATE_PAPER_PAGES,
-    async (_, filePath: string) => {
-      return estimatePaperPages(filePath)
-    }
-  )
-
   // ===== 用户档案相关 =====
 
   // 获取用户档案
@@ -1914,6 +1887,24 @@ export function registerIpcHandlers(): void {
       updateSettings({ tabletModePort: n })
       // 服务运行中则停掉旧端口并重启；未运行时新端口在下次启动时生效。
       return restartRemoteService()
+    },
+  )
+
+  // 获取安卓版 APK 扫码下载信息（地址 + 二维码 + 文件名）。
+  // 直接指向官网稳定域名 https://profer.cn/profer-mobile/，不依赖移动模式服务是否运行。
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.GET_APK_QR,
+    async (): Promise<{ url: string; dataUrl: string; fileName: string }> => {
+      const url = 'https://profer.cn/profer-mobile/Profer-移动版-android.apk'
+      const fileName = 'Profer-移动版-android.apk'
+      try {
+        const QRCode = (await import('qrcode')).default
+        const dataUrl = await QRCode.toDataURL(url, { width: 320, margin: 2, errorCorrectionLevel: 'M' })
+        return { url, dataUrl, fileName }
+      } catch (err) {
+        console.error('[移动模式] APK 二维码生成失败:', err)
+        return { url, dataUrl: '', fileName }
+      }
     },
   )
 
@@ -2316,6 +2307,135 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // 受管浏览器：renderer 只能投影状态和更新 slot 布局，不能取得 WebContents/CDP。
+  const assertMainRenderer = async (senderId: number): Promise<void> => {
+    const { getMainWindow } = await import('./index')
+    const mainWindow = getMainWindow()
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.id !== senderId) {
+      throw new Error('仅主窗口可以操作受管浏览器。')
+    }
+  }
+  const assertBrowserSessionAccess = async (senderId: number, sessionId: string): Promise<void> => {
+    await assertMainRenderer(senderId)
+    const session = getAgentSessionMeta(sessionId)
+    if (!session) throw new Error('Agent 会话不存在。')
+    // 自动任务与协作子会话同样可以使用受管浏览器；仅校验会话仍存在。
+    browserController.configureSession(sessionId, {
+      profileKey: resolveBrowserProfileKey(session.workspaceId, sessionId),
+      executionSource: session.sourceDelegationId ? 'delegation' : session.sourceAutomationId ? 'automation' : 'user',
+    })
+  }
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.OPEN_BROWSER,
+    async (event, sessionId: string): Promise<BrowserViewState> => {
+      await assertBrowserSessionAccess(event.sender.id, sessionId)
+      return browserController.open(sessionId)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_BROWSER_STATE,
+    async (event, sessionId: string): Promise<BrowserViewState | null> => {
+      await assertBrowserSessionAccess(event.sender.id, sessionId)
+      return browserController.getState(sessionId)
+    },
+  )
+  ipcMain.on(
+    AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT,
+    (event, layout: BrowserViewLayout): void => {
+      if (!layout || typeof layout.sessionId !== 'string' || !layout.bounds || !Number.isSafeInteger(layout.revision)) return
+      // 保留原有主窗口/session 校验；布局通道单向发送，但不牺牲 IPC 鉴权。
+      void assertBrowserSessionAccess(event.sender.id, layout.sessionId)
+        .then(() => browserController.setLayout(layout))
+        .catch(() => undefined)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.NAVIGATE_BROWSER,
+    async (event, input: BrowserNavigateInput): Promise<BrowserViewState> => {
+      await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+      return browserController.navigateDisplay(input.sessionId, input.url, input.tabId)
+    },
+  )
+  ipcMain.handle(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, async (event, sessionId: string) => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.goBackDisplay(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, async (event, sessionId: string) => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.goForwardDisplay(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.RELOAD_BROWSER, async (event, sessionId: string) => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.reloadDisplay(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, async (event, input: BrowserTabInput): Promise<BrowserTranslateResult> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    return browserController.translatePage(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.PASTE_BROWSER_CLIPBOARD, async (event, input: BrowserTabInput): Promise<BrowserTranslateResult> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    return browserController.pasteClipboard(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, async (event, input: BrowserTabInput & { zoomFactor: number }): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId || typeof input.zoomFactor !== 'number') throw new Error('tabId 和 zoomFactor 必填。')
+    return browserController.setZoom(input.sessionId, input.tabId, input.zoomFactor)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.HIDE_BROWSER, async (event, sessionId: string): Promise<void> => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    browserController.hide(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLOSE_BROWSER, async (event, sessionId: string): Promise<void> => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    await browserController.close(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.LIST_BROWSER_TABS, async (event, sessionId: string): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, sessionId)
+    return browserController.listTabs(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CREATE_BROWSER_TAB, async (event, input: BrowserCreateTabInput): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    return browserController.createDisplayTab(input.sessionId, input.url)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.SELECT_BROWSER_TAB, async (event, input: BrowserTabInput): Promise<BrowserViewState> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId) throw new Error('tabId 必填。')
+    return browserController.selectTab(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLOSE_BROWSER_TAB, async (event, input: BrowserTabInput): Promise<BrowserViewState | null> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId) throw new Error('tabId 必填。')
+    return browserController.closeTab(input.sessionId, input.tabId)
+  })
+
+  // 新标签页起始页：书签 + 最近访问 + 可配置默认首页（用户级全局，不分工作区）。
+  ipcMain.handle(AGENT_IPC_CHANNELS.GET_BROWSER_START_PAGE, async (): Promise<BrowserStartPageState> => {
+    return {
+      bookmarks: listBookmarks(),
+      recentHistory: listHistory(),
+      defaultHomeUrl: getSettings().browserHomeUrl ?? null,
+    }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.ADD_BROWSER_BOOKMARK, async (_, input: BrowserAddBookmarkInput): Promise<BrowserStartPageState> => {
+    if (!input?.url?.trim()) throw new Error('书签 URL 必填。')
+    addBookmark(input.title ?? '', input.url.trim(), '')
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REMOVE_BROWSER_BOOKMARK, async (_, id: string): Promise<BrowserStartPageState> => {
+    if (!id) throw new Error('书签 id 必填。')
+    removeBookmark(id)
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.UPDATE_BROWSER_HOME_URL, async (_, url: string): Promise<BrowserStartPageState> => {
+    updateSettings({ browserHomeUrl: (url ?? '').trim() })
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLEAR_BROWSER_HISTORY, async (): Promise<BrowserStartPageState> => {
+    clearHistory()
+    return { bookmarks: listBookmarks(), recentHistory: listHistory(), defaultHomeUrl: getSettings().browserHomeUrl ?? null }
+  })
+
   // 获取 Agent 会话 SDKMessage（Phase 4 新格式）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
@@ -2372,6 +2492,7 @@ export function registerIpcHandlers(): void {
           permissionService.clearSessionPending(sessionId)
           askUserService.clearSessionPending(sessionId)
           exitPlanService.clearSessionPending(sessionId)
+          void browserController.close(sessionId)
         },
         deleteSession: deleteAgentSession,
       })
@@ -2649,6 +2770,7 @@ export function registerIpcHandlers(): void {
             permissionService.clearSessionPending(id)
             askUserService.clearSessionPending(id)
             exitPlanService.clearSessionPending(id)
+            void browserController.close(id)
           },
           deleteSession: deleteAgentSession,
         })
@@ -6468,111 +6590,6 @@ export function registerIpcHandlers(): void {
     const storedPath = getKnowledgeItemStoredFilePath(itemId)
     if (!storedPath) throw new Error('该资料没有可显示的本地文件副本')
     shell.showItemInFolder(storedPath)
-  })
-
-  // ===== 论文知识库（Paper Knowledge Base）兼容 API =====
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.IMPORT,
-    async (_, input: KBImportInput): Promise<KBImportResult> => {
-      try {
-        const { importPaper } = require('./lib/kb-paperpipe')
-        return await importPaper(input)
-      } catch (err: unknown) {
-        const e = err as Error
-        console.error('[KB:import] 导入失败 — 完整堆栈:')
-        console.error(e.stack || e.message || String(e))
-        throw err
-      }
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.SEARCH,
-    async (_, query: string, topK?: number): Promise<KBSearchResult[]> => {
-      if (typeof query !== 'string' || !query.trim() || query.length > 500) throw new Error('搜索关键词无效')
-      if (topK != null && (!Number.isInteger(topK) || topK < 1 || topK > 50)) throw new Error('搜索数量无效')
-      const { searchPapers } = require('./lib/kb-paperpipe')
-      return searchPapers(query, topK)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.LIST_PAPERS,
-    async (_, tag?: string): Promise<PaperMeta[]> => {
-      const { listPapers } = require('./lib/kb-paperpipe')
-      return listPapers(tag)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.GET_PAPER,
-    async (_, paperId: string) => {
-      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
-      const { getPaper } = require('./lib/kb-paperpipe')
-      return getPaper(paperId)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.DELETE_PAPER,
-    async (_, paperId: string): Promise<import('@profer/shared').DeletePaperResult> => {
-      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
-      const { deletePaper } = require('./lib/kb-paperpipe')
-      return deletePaper(paperId)
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.RETRY_PAPER_SYNC,
-    async (_, paperId: string): Promise<PaperMeta> => {
-      if (typeof paperId !== 'string' || !paperId.trim() || paperId.length > 160) throw new Error('论文标识无效')
-      const { retryPaperpipeSync } = require('./lib/kb-paperpipe')
-      return retryPaperpipeSync(paperId)
-    },
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT,
-    async (): Promise<KBLibrarySnapshot> => {
-      const { loadLibrarySnapshot } = require('./lib/kb-paperpipe')
-      return loadLibrarySnapshot()
-    },
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.GET_STATS,
-    async (): Promise<KBStats> => {
-      const { getKBStats } = require('./lib/kb-paperpipe')
-      return await getKBStats()
-    }
-  )
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.SEARCH_ARXIV,
-    async (_, query: string, maxResults?: number): Promise<ArxivPaper[]> => {
-      // arXiv 搜索保留本地（kb-arxiv.ts），不依赖 paperpipe
-      const { searchArxiv } = require('./lib/kb-arxiv')
-      return searchArxiv(query, maxResults)
-    }
-  )
-
-  ipcMain.handle(KB_IPC_CHANNELS.GET_WORKBENCH_STATE, async () => {
-    const { getKnowledgeBaseWorkbenchState } = require('./lib/kb-workbench-service')
-    return getKnowledgeBaseWorkbenchState()
-  })
-
-  ipcMain.handle(
-    KB_IPC_CHANNELS.UPDATE_WORKBENCH_RECORD,
-    async (_, paperId: string, patch: KnowledgeBaseWorkbenchPatch) => {
-      const { updateKnowledgeBaseWorkbenchRecord } = require('./lib/kb-workbench-service')
-      return updateKnowledgeBaseWorkbenchRecord(paperId, patch)
-    },
-  )
-
-  ipcMain.handle(KB_IPC_CHANNELS.DELETE_WORKBENCH_RECORDS, async (_, paperIds: string[]) => {
-    const { deleteKnowledgeBaseWorkbenchRecords } = require('./lib/kb-workbench-service')
-    deleteKnowledgeBaseWorkbenchRecords(paperIds)
   })
 
   // ===== 桌面通知（主进程弹出原生 Notification，点击可靠） =====

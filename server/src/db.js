@@ -23,7 +23,7 @@ export {
 } from './db/credits.js'
 export {
   createInviteCode, getInviterByCode, getUserInviteCode, getUserInvitees, recordInviteEvent,
-  createOrder, confirmOrder, expireOrder, listOrders, getOrder, getExpectedSubscriptionAmountRmb,
+  createOrder, cancelPendingOrder, confirmOrder, expireOrder, listOrders, getOrder, getExpectedSubscriptionAmountRmb,
   getActiveSubscription, getSubscriptionStatus,
   destroySubscription, freezeSubscription, unfreezeSubscription, upgradeSubscription, expireSubscription,
   accrueDailyDrip, accrueDailyDripForUser, claimDrip, clearWeeklyDrip, getChinaDate, getChinaWeekStart,
@@ -33,6 +33,7 @@ export {
 export {
   getConfig, getConfigs, getConfigsGrouped, setConfig, setConfigs, resetConfig,
   getPlanDefs, getPlanDefsRedeem, getVipConfig, getBillingConfig, getModelMultipliers, CONFIG_SCHEMA,
+  getPayConfig, isOnlinePayReady,
 } from './db/config-store.js'
 
 // 从子模块导入内部使用的函数

@@ -51,13 +51,11 @@
  *   │       ├── proxy/
  *   │       │   └── chat.js          ←   AI API 代理转发
  *   │       └── services/
- *   │           ├── kb.js            ←   论文知识库
- *   │           └── mineru.js        ←   论文解析
  *   └── scripts/                 ← 运维脚本（drip/备份/部署/迁移）
  */
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, MAX_BODY_SIZE, DEFAULT_BODY_SIZE, PAPERPIPE_MAX_BODY_SIZE } from './src/config.js'
+import { PORT, ADMIN_EMAIL, MAX_FILE_SIZE, MAX_BODY_SIZE, DEFAULT_BODY_SIZE } from './src/config.js'
 import { initAdmin, db } from './src/db.js'
 import { corsMiddleware, authMiddleware, honoAuthMiddleware, proxyAuthMiddleware } from './src/middleware.js'
 import { adminMiddleware } from './src/middleware/admin.js'
@@ -89,10 +87,8 @@ import { inviteRoutes } from './src/routes/invite.js'
 import { accountSubscription } from './src/routes/account/subscription.js'
 import { accountRedeem } from './src/routes/account/redeem.js'
 import { accountConfig } from './src/routes/account/config.js'
+import { paymentRoutes } from './src/routes/payment.js'
 import { proxyRoutes } from './src/routes/proxy/chat.js'
-import { mineruRoutes } from './src/routes/services/mineru.js'
-import { kbRoutes } from './src/routes/services/kb.js'
-import { paperpipeRoutes } from './src/routes/services/paperpipe.js'
 import { publicRoutes } from './src/routes/public/plans.js'
 import { creditGateMiddleware } from './src/middleware/credit-gate.js'
 import { tierGateMiddleware } from './src/middleware/tier-gate.js'
@@ -116,9 +112,7 @@ app.use('*', async (c, next) => {
 // 大 body 上限（50MB）只对需要多模态转发的认证路由放开；其余端点保持 1MB 默认，
 // 防止未认证端点（auth/feedback）的内存攻击面被同步放大。
 function resolveBodyLimit(path) {
-  if (path === '/v1/services/paperpipe/upload') return PAPERPIPE_MAX_BODY_SIZE
   if (path.startsWith('/v1/proxy/')) return MAX_BODY_SIZE
-  if (path === '/v1/services/mineru/parse') return MAX_BODY_SIZE
   return DEFAULT_BODY_SIZE
 }
 
@@ -183,6 +177,9 @@ accountApp.route('/config', accountConfig)
 accountApp.route('/', inviteRoutes)
 app.route('/v1/account', accountApp)
 
+// 在线支付回调（易支付 notify）：无需 JWT，靠 MD5 验签 + 订单状态/金额核对保证安全
+app.route('/v1/payment', paymentRoutes)
+
 // 公开模型列表（无需认证，放在最前面避免被 use(*) 中间件拦截）
 const RELAY_BASE_URL = process.env.RELAY_BASE_URL || 'http://localhost:3080'
 const RELAY_API_KEY = process.env.RELAY_API_KEY || ''
@@ -218,9 +215,6 @@ app.route('/v1/proxy', proxyApp)
 // 用 proxyAuthMiddleware 兼容 relay token / JWT / pk_ 三种凭证
 const servicesApp = new Hono()
 servicesApp.use('*', proxyAuthMiddleware)
-servicesApp.route('/mineru', mineruRoutes)
-servicesApp.route('/kb', kbRoutes)
-servicesApp.route('/paperpipe', paperpipeRoutes)
 // 扣费循环触发端点（供外部 cron / automation 调用）
 // 扣费循环触发端点（供外部 cron / automation 调用）。
 // 语义上这是非幂等写操作：POST 为主入口（带限流防滥用），GET 仅作旧部署兼容。

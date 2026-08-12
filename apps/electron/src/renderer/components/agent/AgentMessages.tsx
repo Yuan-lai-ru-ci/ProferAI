@@ -21,6 +21,7 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
+import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
@@ -30,11 +31,13 @@ import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/l
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
+import { allPendingAskUserRequestsAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, CompactingIndicator, buildHistoricalTaskSubjects, type MessageGroup } from './SDKMessageRenderer'
+import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, CompactingIndicator, buildHistoricalTaskSubjects, type MessageGroup } from './SDKMessageRenderer'
+import { extractUserText } from '@profer/session-core'
 import { buildLiveGroupSet } from './live-group-set'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
@@ -114,11 +117,106 @@ interface AgentMessagesProps {
   onCompact?: () => void
   /** 平板远程模式不显示桌面端的用户消息悬浮置顶导航条。 */
   tabletMode?: boolean
+  /** 移动端触顶自动加载：还有更早消息时可触发。 */
+  onLoadEarlierHistory?: () => void
+  /** 移动端：更早是否还有内容（服务端 hasMore）。 */
+  historyMoreAvailable?: boolean
+  /** 移动端：正在补拉更早消息（防抖 + 顶部状态）。 */
+  historyLoadingEarlier?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
 function EmptyState(): React.ReactElement {
   return <WelcomeEmptyState />
+}
+
+/**
+ * 移动端触顶自动加载控制器（必须渲染在 <Conversation>(=StickToBottom) 内部，
+ * 才能获取 scrollRef）。在滚动到接近顶部时触发拉取更早消息，并渲染顶部状态条。
+ */
+function TopHistoryLoader({
+  onLoadEarlierHistory,
+  historyMoreAvailable,
+  historyLoadingEarlier,
+}: {
+  onLoadEarlierHistory?: () => void
+  historyMoreAvailable?: boolean
+  historyLoadingEarlier?: boolean
+}): React.ReactElement | null {
+  const { scrollRef } = useStickToBottomContext()
+  const armedRef = React.useRef(true)
+
+  React.useEffect(() => {
+    if (!onLoadEarlierHistory) return
+    const el = scrollRef.current
+    if (!el) return
+    const handleScroll = (): void => {
+      const top = el.scrollTop
+      if (top > 40) {
+        // 用户滚离顶部 → 重新武装，允许下次触顶再触发（避免拉取中反复触发）。
+        armedRef.current = true
+        return
+      }
+      if (
+        top <= 40 &&
+        historyMoreAvailable !== false &&
+        !historyLoadingEarlier &&
+        armedRef.current
+      ) {
+        armedRef.current = false
+        onLoadEarlierHistory()
+      }
+    }
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, scrollRef])
+
+  return null
+}
+
+/**
+ * 新一轮对话自动跟随滚动控制器（必须渲染在 <Conversation>(=StickToBottom) 内部）。
+ *
+ * use-stick-to-bottom 的默认行为：一旦用户向上滚动离开底部（escapedFromLock=true），
+ * isAtBottom 会保持 false 且不再自动恢复；此后即便内容高度增加，scrollToBottom 首帧
+ * 也会因 `!state.isAtBottom` 直接中止，导致"翻看历史后再输入新指令，界面不跟着往下走"。
+ *
+ * 两个触发信号，只要满足其一就主动调用 scrollToBottom()（scrollToBottom() 默认不带
+ * preserveScrollPosition，会先把 isAtBottom 置回 true 并解锁锁定，再平滑滚回底部）：
+ * 1. streaming 由 false→true：普通新一轮对话开始（用户发新消息）。
+ * 2. 本 session 的 pending AskUser 请求由有→无：AskUserQuestion 追问已解决，
+ *    agent 继续输出新内容时也要回到底部跟随（追问期间 streaming 一直保持 true，
+ *    不会经历 false→true，必须用这个独立信号补）。
+ */
+function StreamScrollFollow({ sessionId, streaming }: { sessionId: string; streaming: boolean }): React.ReactElement | null {
+  const { scrollToBottom } = useStickToBottomContext()
+  const pendingAskUsers = useAtomValue(allPendingAskUserRequestsAtom)
+  const prevStreamingRef = React.useRef(streaming)
+  const prevPendingCountRef = React.useRef(pendingAskUsers.get(sessionId)?.length ?? 0)
+
+  React.useEffect(() => {
+    // 信号1：streaming false → true（新一轮对话开始）
+    const wasStreaming = prevStreamingRef.current
+    prevStreamingRef.current = streaming
+    let shouldScroll = false
+
+    if (streaming && !wasStreaming) {
+      shouldScroll = true
+    }
+
+    // 信号2：本 session 的 AskUser 追问已解决（请求数由 >0 变 0）
+    const currentPendingCount = pendingAskUsers.get(sessionId)?.length ?? 0
+    if (prevPendingCountRef.current > 0 && currentPendingCount === 0) {
+      shouldScroll = true
+    }
+    prevPendingCountRef.current = currentPendingCount
+
+    if (shouldScroll) {
+      scrollToBottom({ animation: 'smooth', wait: true })
+    }
+  }, [streaming, pendingAskUsers, sessionId, scrollToBottom])
+
+  return null
 }
 
 function AssistantLogo({ model }: { model?: string }): React.ReactElement {
@@ -398,7 +496,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -560,6 +658,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
   const visibleGroups = allGroups.slice(resolvedVisibleGroupStart)
   const hasEarlierGroups = resolvedVisibleGroupStart > 0
   const loadEarlierGroups = React.useCallback(() => {
+    // 桌面端按钮路径：本地 slice 前移一页（移动端由触顶自动加载接管，不走这里）。
     setVisibleGroupStart((start) => Math.max(0, (start ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)) - HISTORY_GROUP_PAGE_SIZE))
   }, [allGroups.length])
 
@@ -633,8 +732,26 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
     <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
+      <TopHistoryLoader
+        onLoadEarlierHistory={tabletMode ? onLoadEarlierHistory : undefined}
+        historyMoreAvailable={tabletMode ? historyMoreAvailable : undefined}
+        historyLoadingEarlier={tabletMode ? historyLoadingEarlier : undefined}
+      />
+      <StreamScrollFollow sessionId={sessionId} streaming={streaming} />
       <ConversationContent>
-        {hasEarlierGroups && (
+        {tabletMode && hasContent && (historyLoadingEarlier || historyMoreAvailable === false) && (
+          <div className="flex items-center justify-center py-2 text-xs text-muted-foreground/50">
+            {historyLoadingEarlier ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Spinner size="sm" className="text-muted-foreground/40" />
+                正在加载更早消息…
+              </span>
+            ) : (
+              <span>— 已到最早消息 —</span>
+            )}
+          </div>
+        )}
+        {!tabletMode && hasEarlierGroups && (
           <div className="flex justify-center py-3">
             <button
               type="button"

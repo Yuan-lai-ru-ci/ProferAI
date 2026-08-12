@@ -64,10 +64,7 @@ import {
   updateLongTextPasteAsAttachmentEnabled,
   richTextRenderingEnabledAtom,
   updateRichTextRenderingEnabled,
-  paperKnowledgeBaseEnabledAtom,
-  updatePaperKnowledgeBaseEnabled,
 } from '@/atoms/ui-preferences'
-import { activeViewAtom } from '@/atoms/active-view'
 import { cn } from '@/lib/utils'
 import { Button } from '../ui/button'
 import { Alert, AlertDescription } from '../ui/alert'
@@ -97,8 +94,6 @@ export function GeneralSettings(): React.ReactElement {
   const [stickyUserMessageEnabled, setStickyUserMessageEnabled] = useAtom(stickyUserMessageEnabledAtom)
   const [longTextPasteAsAttachmentEnabled, setLongTextPasteAsAttachmentEnabled] = useAtom(longTextPasteAsAttachmentEnabledAtom)
   const [richTextRenderingEnabled, setRichTextRenderingEnabled] = useAtom(richTextRenderingEnabledAtom)
-  const [paperKnowledgeBaseEnabled, setPaperKnowledgeBaseEnabled] = useAtom(paperKnowledgeBaseEnabledAtom)
-  const setActiveView = useSetAtom(activeViewAtom)
   const [shellRuntimeStatus, setShellRuntimeStatus] = React.useState<RuntimeStatus | null>(null)
   const [isEditingName, setIsEditingName] = React.useState(false)
   const [nameInput, setNameInput] = React.useState(userProfile.userName)
@@ -107,6 +102,7 @@ export function GeneralSettings(): React.ReactElement {
   const [autoLaunch, setAutoLaunch] = React.useState(false)
   const [quickTaskEnabled, setQuickTaskEnabled] = React.useState(false)
   const [shellPreference, setShellPreference] = React.useState<'auto' | 'git-bash' | 'wsl'>('auto')
+  const [browserHomeUrl, setBrowserHomeUrl] = React.useState('')
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   // ── Proxy 状态 ──
@@ -236,6 +232,7 @@ export function GeneralSettings(): React.ReactElement {
       setAutoLaunch(settings.autoLaunch ?? false)
       setQuickTaskEnabled(settings.quickTaskEnabled === true)
       setShellPreference(settings.agentShellPreference ?? 'auto')
+      setBrowserHomeUrl(settings.browserHomeUrl ?? '')
     }).catch(console.error)
 
     window.electronAPI.getRuntimeStatus().then((status) => {
@@ -344,6 +341,20 @@ export function GeneralSettings(): React.ReactElement {
       await window.electronAPI.updateSettings({ archiveAfterDays: days })
     } catch (error) {
       console.error('[通用设置] 更新归档天数失败:', error)
+    }
+  }
+
+  /** 保存新标签页默认首页（失焦时落盘）。 */
+  const handleBrowserHomeUrlBlur = async (): Promise<void> => {
+    try {
+      const api = (window.electronAPI as Partial<typeof window.electronAPI>)
+      if (typeof api.updateBrowserHomeUrl === 'function') {
+        await api.updateBrowserHomeUrl(browserHomeUrl)
+      } else {
+        await window.electronAPI.updateSettings({ browserHomeUrl: browserHomeUrl.trim() })
+      }
+    } catch (error) {
+      console.error('[通用设置] 更新默认首页失败:', error)
     }
   }
 
@@ -739,21 +750,15 @@ export function GeneralSettings(): React.ReactElement {
               { value: 'wsl', label: `WSL${!shellRuntimeStatus?.shell?.wsl?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.wsl?.defaultDistro ? ` (${shellRuntimeStatus.shell.wsl.defaultDistro})` : ''}` },
             ]}
           />
-          {/* 知识库设置已暂时关闭 */}
-          {false && (
-          <SettingsToggle
-            label="知识库"
-            description="在侧边栏显示知识库入口，支持文档、PDF、表格、演示文稿及 arXiv 资料导入"
-            checked={paperKnowledgeBaseEnabled}
-            onCheckedChange={(checked) => {
-              setPaperKnowledgeBaseEnabled(checked)
-              updatePaperKnowledgeBaseEnabled(checked)
-              if (!checked) {
-                setActiveView('conversations')
-              }
-            }}
+
+          <SettingsInput
+            label="新标签页默认首页"
+            description="留空时新建标签页显示起始页（书签与最近访问）；填入 URL 后新建标签页直接打开该地址"
+            value={browserHomeUrl}
+            onChange={setBrowserHomeUrl}
+            onBlur={handleBrowserHomeUrlBlur}
+            placeholder="例如 https://example.com"
           />
-          )}
         </SettingsCard>
       </SettingsSection>
 

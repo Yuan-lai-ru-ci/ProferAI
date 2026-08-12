@@ -7,6 +7,8 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from './atoms/tab-atoms'
+import { replayIntroEnvironmentTestAtom, replayIntroOpenAtom } from './atoms/intro-atoms'
+import { IntroWaterRipple } from './components/onboarding/IntroWaterRipple'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 /** 懒加载非首屏组件——减少首次渲染的 JS 解析量 */
@@ -26,6 +28,7 @@ export default function App(): React.ReactElement {
   const store = useStore()
   const [isLoading, setIsLoading] = React.useState(true)
   const [showOnboarding, setShowOnboarding] = React.useState(false)
+  const [showOnboardingEnvironmentTest, setShowOnboardingEnvironmentTest] = useAtom(replayIntroEnvironmentTestAtom)
 
   // 初始化：检查是否需要显示 Onboarding
   // macOS/Linux 上 SDK 自带 claude native binary 不依赖宿主 Node/Git；
@@ -46,6 +49,11 @@ export default function App(): React.ReactElement {
 
     initialize()
   }, [])
+
+  // 等 React 真正提交掉“正在初始化...”后，再允许主进程撤掉原生启动页。
+  React.useEffect(() => {
+    if (!isLoading) window.electronAPI.notifyRendererReady()
+  }, [isLoading])
 
   // 完成 onboarding 回调：创建欢迎对话，可选打开教程 Tab
   const handleOnboardingComplete = async (openTutorial?: boolean) => {
@@ -91,7 +99,22 @@ export default function App(): React.ReactElement {
     )
   }
 
-  // 显示 onboarding 界面
+  // 主界面开屏测试结束后，复用首次 onboarding 的完整环境配置页；不写持久化状态。
+  if (showOnboardingEnvironmentTest) {
+    return (
+      <TooltipProvider delayDuration={200}>
+        <React.Suspense fallback={null}>
+          <OnboardingView
+            initialStep="welcome"
+            persistCompletion={false}
+            onComplete={() => setShowOnboardingEnvironmentTest(false)}
+          />
+        </React.Suspense>
+      </TooltipProvider>
+    )
+  }
+
+  // 显示首次 onboarding 界面
   if (showOnboarding) {
     return (
       <TooltipProvider delayDuration={200}>
@@ -121,7 +144,37 @@ export default function App(): React.ReactElement {
       <React.Suspense fallback={null}>
         <MigrationImportDialog />
       </React.Suspense>
+      <IntroReplayOverlay />
     </TooltipProvider>
+  )
+}
+
+/**
+ * 全屏开屏动画重播遮罩：
+ * 主界面顶栏点按钮 → replayIntroOpenAtom=true → 渲染 IntroWaterRipple
+ * 动画结束（或点按跳过）后重置 atom，回到主界面。
+ * 不改动 onboardingCompleted，纯重播/测试用途。
+ */
+function IntroReplayOverlay(): React.ReactElement | null {
+  const [open, setOpen] = useAtom(replayIntroOpenAtom)
+  const [, setShowOnboardingEnvironmentTest] = useAtom(replayIntroEnvironmentTestAtom)
+  if (!open) return null
+  return (
+    <div
+      className="fixed inset-0 z-[9999]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Profer 开屏动画"
+      data-profer-intro-overlay
+    >
+      <IntroWaterRipple
+        onDone={() => {
+          setOpen(false)
+          // 复用首次安装时的完整环境配置页，不触碰 onboardingCompleted。
+          setShowOnboardingEnvironmentTest(true)
+        }}
+      />
+    </div>
   )
 }
 

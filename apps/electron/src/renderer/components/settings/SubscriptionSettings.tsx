@@ -4,13 +4,14 @@
  * 定价从服务端 /v1/account/config/plans 动态获取，Admin 操控面板可实时调整。
  * 加载失败时回退到硬编码默认值。
  *
- * 手动收款期：订阅按钮 = 复制微信号联系管理员开通。在线支付后续接入。
+ * 手动收款期：订阅按钮 = 复制微信号联系管理员开通。在线支付后续接入（充值积分见 RechargeSection）。
  */
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { toast } from 'sonner'
 import { Check, Copy, Users, Zap, Gift, Crown } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { RechargeSection } from './RechargeSection'
 import {
   inviteCodeAtom,
 } from '@/atoms/credits-atoms'
@@ -245,6 +246,9 @@ export function SubscriptionSettings(): React.ReactElement {
 
   return (
     <div className="space-y-5">
+      {/* ---- 充值积分块（用户自助充值） ---- */}
+      <RechargeSection />
+
       {/* ---- 四档定价卡 ---- */}
       <div>
         <div className="flex items-center gap-2 mb-3">

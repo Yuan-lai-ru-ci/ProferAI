@@ -50,6 +50,7 @@ import {
   type AgentSessionMeta,
   type AgentMessage,
   type SDKMessage,
+  type SDKUserMessage,
   type ForkSessionInput,
   type AgentMessageSearchResult,
   type AgentSessionReferenceSearchInput,
@@ -58,6 +59,7 @@ import {
   type AgentRuntime,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
+import { isUserInputMessage } from '@profer/session-core'
 import {
   getGraphJsonlPath,
   parseEventsFromJsonl,
@@ -940,8 +942,8 @@ export function migrateChatToAgentSession(conversationId: string, agentSessionId
 async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessionInput): Promise<AgentSessionMeta> {
   const targetUuid = input.upToMessageUuid
   if (!targetUuid) throw new Error('Pi 分叉需要指定一条已完成的 assistant 消息')
-  const entryId = sourceMeta.piEntryBindings?.[targetUuid]
-  if (!entryId) throw new Error('该 Pi 历史消息尚无 entry ID 映射，无法安全分叉；请在新版 Profer 中继续一次对话后再试')
+  const forkPoint = resolvePiForkPoint(sourceMeta, targetUuid)
+  if (!forkPoint) throw new Error('该 Pi 历史消息尚无可用的 entry ID 映射，无法安全分叉；请在新版 Profer 中继续一次对话后再试')
   if (!sourceMeta.piSessionFile || !existsSync(sourceMeta.piSessionFile)) {
     throw new Error('未找到 Pi session artifact，无法安全分叉')
   }
@@ -964,13 +966,23 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     const sdk = await import('@earendil-works/pi-coding-agent')
     const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
     const sourceManager = sdk.SessionManager.open(sourceMeta.piSessionFile, sessionDir, sourceDir)
-    const branchFile = sourceManager.createBranchedSession(entryId)
+    const branchFile = sourceManager.createBranchedSession(forkPoint.entryId)
     if (!branchFile || !existsSync(branchFile)) {
       throw new Error('Pi 未能生成分叉 session artifact')
     }
     const forkedManager = sdk.SessionManager.forkFrom(branchFile, destDir ?? sourceDir ?? process.cwd(), sessionDir)
     const piSessionFile = forkedManager.getSessionFile()
     if (!piSessionFile || !existsSync(piSessionFile)) throw new Error('Pi 分叉 artifact 校验失败')
+    if (forkPoint.interruptedText) {
+      // 被中断的 assistant 消息没有可恢复的 Pi message entry，不能将其伪装为分叉点。
+      // 以最近的完整 entry 建 branch，并把已展示文字作为隐藏上下文追加到新 session。
+      forkedManager.appendCustomMessageEntry(
+        'profer-interrupted-assistant-context',
+        `上一轮助手回复被用户手动暂停。以下是暂停前已展示的内容；请将其视为已有上下文，不要重复输出，除非用户要求：\n\n${forkPoint.interruptedText}`,
+        false,
+        { sourceAssistantUuid: targetUuid },
+      )
+    }
     // 新 branch 只包含分叉点之前的 entry；不能把源树后续 turn 的映射带入 metadata。
     const branchBindings = Object.fromEntries(
       Object.entries(sourceMeta.piEntryBindings ?? {})
@@ -1001,6 +1013,49 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     try { deleteAgentSession(newMeta.id) } catch { /* 保留原始错误 */ }
     throw error
   }
+}
+
+interface PiForkPoint {
+  entryId: string
+  interruptedText?: string
+}
+
+/**
+ * 已完成 assistant 消息可直接作为 Pi tree branch leaf。手动暂停的 partial 消息
+ * 没有 entry binding 时，退回到它之前最近的完整 assistant entry，并在新分支写入
+ * 可供模型读取的隐藏文本上下文，避免把 aborted Pi message 当成可 resume 的节点。
+ */
+function resolvePiForkPoint(sourceMeta: AgentSessionMeta, targetUuid: string): PiForkPoint | undefined {
+  const bindings = sourceMeta.piEntryBindings ?? {}
+  const directEntryId = bindings[targetUuid]
+  if (directEntryId) return { entryId: directEntryId }
+
+  const messages = getAgentSessionSDKMessages(sourceMeta.id)
+  const targetIndex = messages.findIndex((message) => getStoredMessageUuid(message) === targetUuid)
+  if (targetIndex < 0) return undefined
+
+  const target = messages[targetIndex]
+  if (target?.type !== 'assistant') return undefined
+  const interruptedText = extractTextFromSDKMessage(target)
+  if (!interruptedText) return undefined
+
+  for (let index = targetIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message) continue
+    const entryId = bindings[getStoredMessageUuid(message) ?? '']
+    if (entryId) return { entryId, interruptedText }
+  }
+  return undefined
+}
+
+function extractTextFromSDKMessage(message: SDKMessage): string {
+  const content = (message as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text!)
+    .join('\n')
+    .trim()
 }
 
 interface CopyForkStoredSDKMessagesInput {
@@ -2155,4 +2210,72 @@ export function searchAgentSessionReferences(input: AgentSessionReferenceSearchI
   }
 
   return results
+}
+
+/**
+ * 按完整 turn 边界对会话消息做惰性分页（供移动端传输层懒加载）。
+ *
+ * 为什么按 turn 而非严格条数：渲染层 groupIntoTurns 依赖完整消息序列判定组边界
+ * （assistant + user(tool_result) 会跨多条合成一个 turn）。若在中途硬切，客户端分组
+ * 会断层/重复。因此：先按目标条数切出近似窗口，再把窗口起点快进到最近的用户输入
+ * 边界，保证每页都是若干完整的用户输入起始的 turn。
+ *
+ * 首帧与续页统一算法：
+ *   tailExclusive = before ?? total
+ *   startRaw       = max(0, tailExclusive - targetMessages)
+ *   start          = startRaw 向后（向尾部）快进到最近 user-input 边界
+ *   page           = messages[start, tailExclusive)
+ *   hasMore        = start > 0
+ *
+ * @param messages 完整有序 SDKMessage 数组（getAgentSessionSDKMessages 结果）
+ * @param opts.before 游标：只取索引 < before 的更早消息。缺省 = 取最新窗口（会话尾部）。
+ *                    移动端拿到某页 startIndex 后，补更早时传 before = 该 startIndex。
+ * @param opts.targetMessages 近似条数（缺省 10）。切出约这么多条后再补到完整 turn 边界。
+ */
+export interface SDKMessagePage {
+  messages: SDKMessage[]
+  total: number
+  startIndex: number
+  endIndex: number
+  hasMore: boolean
+}
+
+export interface PaginateSDKMessagesOptions {
+  before?: number
+  targetMessages?: number
+}
+
+export function paginateSDKMessages(
+  messages: SDKMessage[],
+  opts: PaginateSDKMessagesOptions = {},
+): SDKMessagePage {
+  const { before, targetMessages = 10 } = opts
+  const total = messages.length
+  if (total === 0) {
+    return { messages: [], total: 0, startIndex: 0, endIndex: -1, hasMore: false }
+  }
+
+  // 尾部上界（exclusive）
+  const tailExclusive =
+    before !== undefined && before >= 0 && before <= total ? before : total
+
+  // 统一切窗口起点的原始位置（首帧取最新 N 条；续页取 before 前 N 条）
+  let startIndex = Math.max(0, tailExclusive - targetMessages)
+  // 向后（向尾部方向）快进到第一个 user-input 边界，保证窗口起点是完整 turn 的 start。
+  // 若窗口本就从头开始，则保持 0。
+  for (let i = startIndex; i < tailExclusive; i++) {
+    const msg = messages[i]
+    if (msg && msg.type === 'user' && isUserInputMessage(msg as SDKUserMessage)) {
+      startIndex = i
+      break
+    }
+  }
+
+  return {
+    messages: messages.slice(startIndex, tailExclusive),
+    total,
+    startIndex,
+    endIndex: tailExclusive - 1,
+    hasMore: startIndex > 0,
+  }
 }

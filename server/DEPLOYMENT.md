@@ -13,7 +13,7 @@
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `DEFAULT_BODY_SIZE` | 1048576 (1MB) | 普通端点（登录/注册/反馈等未认证或轻量接口）JSON 请求体上限。50MB（`MAX_BODY_SIZE`）仅对 `/v1/proxy/*`、`/v1/services/mineru/parse` 放开 |
+| `DEFAULT_BODY_SIZE` | 1048576 (1MB) | 普通端点（登录/注册/反馈等未认证或轻量接口）JSON 请求体上限。50MB（`MAX_BODY_SIZE`）仅对 `/v1/proxy/*` 放开 |
 | `MAX_BODY_SIZE` | 52428800 (50MB) | 多模态转发路由的请求体上限 |
 | `COMMERCIAL_MODE` | `false` | `true` 时必须同时设置 `CHANNEL_ENCRYPTION_KEY`（64 hex），否则启动即退出 |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 内置默认 | 生产请显式覆盖 |

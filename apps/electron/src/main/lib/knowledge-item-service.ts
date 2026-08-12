@@ -9,7 +9,6 @@ import type {
   KnowledgeLibrarySnapshot,
   KnowledgeSearchResult,
   KnowledgeReference,
-  PaperMeta,
 } from '@profer/shared'
 import {
   getKnowledgeBaseDir,
@@ -25,6 +24,29 @@ const MAX_IMPORT_ITEMS = 10
 const MAX_ITEM_FILE_SIZE = 100 * 1024 * 1024
 const MAX_RESULT_CHARS = 12_000
 const MAX_CHUNK_CHARS = 1_500
+
+/**
+ * 旧论文索引（曾由 Paperpipe 维护）的本地只读形状。
+ * 论文知识库已移除，此类型仅用于兼容读取迁移前已存在的 index.json。
+ */
+interface LegacyPaper {
+  id: string
+  title?: string
+  source?: 'local' | 'arxiv'
+  arxivId?: string
+  doi?: string
+  authors?: string[]
+  abstract?: string
+  year?: number
+  originalFileName?: string
+  importedAt?: number
+  tags?: string[]
+  remoteId?: string
+  syncState?: 'synced' | 'failed' | 'local-only'
+  syncError?: string
+  lastSyncAttemptAt?: number
+}
+
 
 function kindForExtension(ext: string): KnowledgeItemKind | null {
   if (ext === '.pdf') return 'pdf'
@@ -88,7 +110,7 @@ function writeIndex(index: KnowledgeLibraryIndex): void {
 function readLegacyPaperItems(): KnowledgeItem[] {
   const legacy = readJsonFileSafe<unknown>(join(getKnowledgeBaseDir(), 'index.json'))
   if (!Array.isArray(legacy)) return []
-  return legacy.filter((value): value is PaperMeta => !!value && typeof value === 'object' && typeof (value as PaperMeta).id === 'string').map((paper) => ({
+  return legacy.filter((value): value is LegacyPaper => !!value && typeof value === 'object' && typeof (value as LegacyPaper).id === 'string').map((paper) => ({
     id: paper.id,
     title: paper.title || '未命名研究资料',
     kind: 'pdf' as const,
@@ -219,26 +241,35 @@ export function getKnowledgeItem(itemId: string): { meta: KnowledgeItem; text: s
     if (readIndex().items.some((candidate) => candidate.id === itemId)) {
       return { meta: item, text: readFileSync(itemTextPath(itemId), 'utf-8') }
     }
-    // 历史论文正文继续由既有 Paperpipe 路径负责；本地有缓存时可参与 Chat 片段检索。
+    // 历史论文正文：本地有缓存时可参与 Chat 片段检索；论文知识库(paperpipe)已移除，不再拉取远端。
     return { meta: item, text: readFileSync(join(getKnowledgeBaseDir(), 'papers', itemId, 'full.md'), 'utf-8') }
   } catch {
     return null
   }
 }
 
-export async function deleteKnowledgeItem(itemId: string): Promise<{ itemId: string; deleted: boolean }> {
+function removeLegacyPaperFromIndex(itemId: string): boolean {
+  const indexPath = join(getKnowledgeBaseDir(), 'index.json')
+  const legacy = readJsonFileSafe<unknown>(indexPath)
+  if (!Array.isArray(legacy)) return false
+  const next = legacy.filter((value): value is LegacyPaper => !!value && typeof value === 'object' && (value as LegacyPaper).id !== itemId)
+  if (next.length === legacy.length) return false
+  writeJsonFileAtomic(indexPath, next)
+  return true
+}
+
+export function deleteKnowledgeItem(itemId: string): { itemId: string; deleted: boolean } {
   const index = readIndex()
   if (index.items.some((item) => item.id === itemId)) {
     rmSync(resolveKnowledgeItemDir(itemId), { recursive: true, force: true })
     writeIndex({ version: INDEX_VERSION, items: index.items.filter((item) => item.id !== itemId) })
     return { itemId, deleted: true }
   }
-  // 回退到旧 Paperpipe 索引：资料可能仅存在于 index.json 而尚未迁移到 items-index.json
-  const legacyPapers = readLegacyPaperItems()
-  if (legacyPapers.some((item) => item.id === itemId)) {
-    const { deletePaper } = require('./kb-paperpipe')
-    const result = await deletePaper(itemId)
-    return { itemId, deleted: result.localDeleted }
+  // 回退到旧论文索引：资料可能仅存在于 index.json 而尚未迁移到 items-index.json。
+  // 论文知识库（paperpipe）已移除，仅做本地索引条目删除，不再同步远端。
+  if (readLegacyPaperItems().some((item) => item.id === itemId)) {
+    const removed = removeLegacyPaperFromIndex(itemId)
+    if (removed) return { itemId, deleted: true }
   }
   throw new Error('资料不存在')
 }
@@ -287,7 +318,7 @@ export function searchKnowledgeItems(query: string, allowedItemIds?: string[], t
 }
 
 /**
- * Chat 专用异步检索：只对会话 allowlist 中的历史 Paperpipe 项按需拉取正文。
+ * Chat 专用检索：只对会话 allowlist 中的资料项按需返回正文片段。
  * 绝不接受任意目录或任意 remoteId，所有候选项先由本地索引约束。
  */
 export async function searchKnowledgeItemsForChat(query: string, allowedItemIds: string[], topK = 5): Promise<KnowledgeSearchResult[]> {
@@ -297,15 +328,8 @@ export async function searchKnowledgeItemsForChat(query: string, allowedItemIds:
   const results: KnowledgeSearchResult[] = []
   let totalChars = 0
   for (const item of listKnowledgeItems().filter((candidate) => allowed.has(candidate.id))) {
-    let text = getKnowledgeItem(item.id)?.text
-    if (!text && !readIndex().items.some((candidate) => candidate.id === item.id)) {
-      try {
-        const { getPaper } = await import('./kb-paperpipe')
-        text = (await getPaper(item.id))?.markdown
-      } catch {
-        // 单篇研究资料暂不可读时跳过，不能中断用户原问题。
-      }
-    }
+    const loaded = getKnowledgeItem(item.id)
+    const text = loaded?.text
     if (!text) continue
     const result = scoreKnowledgeText(item, text, terms)
     if (!result || totalChars + result.content.length > MAX_RESULT_CHARS) continue

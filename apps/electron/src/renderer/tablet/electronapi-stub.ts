@@ -37,7 +37,10 @@ interface TabletRemoteClient {
   createSession(payload: { title?: string; channelId?: string; workspaceId?: string; modelId?: string }): Promise<unknown>
   ensureProjectDraftSession(payload: { workspaceId: string; channelId?: string; modelId?: string }): Promise<unknown>
   renameSession(sessionId: string, title: string): Promise<unknown>
-  getSdkMessages(sessionId: string): Promise<unknown>
+  getSdkMessages(
+    sessionId: string,
+    opts?: { before?: number; targetMessages?: number },
+  ): Promise<unknown>
   sendMessage(payload: { sessionId: string; userMessage: string; channelId: string; modelId?: string; workspaceId?: string }): Promise<unknown>
   /** 向正在运行的 Agent 注入消息（对齐桌面 queueAgentMessage：interrupt 软打断 / uuid 幂等） */
   queueMessage(payload: {
@@ -97,6 +100,113 @@ let remoteClient: TabletRemoteClient | null = null
 /** 在 WebSocket 建连后注入，使原生桌面组件沿用 electronAPI 形状调用远程服务。 */
 export function setTabletRemoteClient(client: TabletRemoteClient | null): void {
   remoteClient = client
+}
+
+// ===== 会话消息传输层懒加载分页状态 =====
+//
+// 移动端打开会话时不一次性拉全量，而是按完整 turn 惰性分页（见服务端
+// paginateSDKMessages）。stub 为每个 sessionId 维护已累计的消息、起点游标与还有更早的标记；
+// AgentView 每次 getAgentSessionSDKMessages(sessionId) 都拿到当前已累计的有序数组。
+
+interface SdkMessagesPageState {
+  /** 已累计的完整有序 SDKMessage（按 startIndex 顺序，从最早累积到当前尾部） */
+  messages: unknown[]
+  /** 已累计部分在服务端完整消息数组中的起点索引（补更早时作为 before 游标） */
+  startIndex: number
+  /** 更早是否还有消息 */
+  hasMore: boolean
+}
+
+const sdkMessagesPageCache = new Map<string, SdkMessagesPageState>()
+
+/** 缓存会话数上限：触顶加载/多会话切换会在 stub 侧堆积整份消息数组，无界会随会话数无限增长。
+ *  超出上限时淘汰最久未写入的会话（Map 迭代序即插入序）。 */
+const SDK_MESSAGES_CACHE_MAX_SESSIONS = 20
+
+/** 写入并执行 LRU 淘汰：delete+set 把该 key 移到末尾（视为最近使用），超出上限删头部最久未用。 */
+function setCachedPage(sessionId: string, state: SdkMessagesPageState): void {
+  sdkMessagesPageCache.delete(sessionId)
+  sdkMessagesPageCache.set(sessionId, state)
+  while (sdkMessagesPageCache.size > SDK_MESSAGES_CACHE_MAX_SESSIONS) {
+    const oldest = sdkMessagesPageCache.keys().next().value
+    if (oldest === undefined) break
+    sdkMessagesPageCache.delete(oldest)
+  }
+}
+
+/** 返回当前会话已累计的消息数组（无则返回空数组，由调用方触发迁移）。 */
+function getCachedSdkMessages(sessionId: string): unknown[] {
+  return sdkMessagesPageCache.get(sessionId)?.messages ?? []
+}
+
+// ===== 分页合并辅助 =====
+
+/** 生成单条 SDKMessage 的去重键。优先 uuid；无 uuid 时回退到 type + 内容哈希。
+ *  result / system(无 uuid) 等消息靠内容指纹去重，保证跨分页合并时不重不漏。 */
+function sdkMessageKey(msg: unknown): string {
+  const m = msg as { uuid?: string; type?: string; message?: unknown; _createdAt?: number; error?: unknown }
+  if (typeof m?.uuid === 'string' && m.uuid.length > 0) return `u:${m.uuid}`
+  // 无 uuid：用 type + message 内容 + _createdAt 组合指纹；同一消息跨分页返回时 fingerprint 不变，
+  // 不同消息即使 type 相同、内容长度相近也能靠内容差异区分（降低哈希碰撞风险）。
+  try {
+    const content = JSON.stringify(m?.message ?? m?.error ?? {})
+    // 简单可复现的滚动哈希（djb2），避免全量内容字符串占用内存/日志。
+    let h = 5381
+    for (let i = 0; i < content.length; i++) {
+      h = ((h << 5) + h + content.charCodeAt(i)) | 0
+    }
+    return `h:${m?.type ?? '?'}:${h}:${typeof m?._createdAt === 'number' ? m._createdAt : ''}`
+  } catch {
+    return `h:${m?.type ?? '?'}:${String(msg).slice(0, 64)}`
+  }
+}
+
+/**
+ * 稳健合并"旧缓存 + 最新分页窗口"，返回新的 SdkMessagesPageState。
+ *
+ * 背景：服务端 paginateSDKMessages 会把窗口起点快进到 user-turn 边界，且两次分页之间
+ * 若新增消息数超过 targetMessages，新窗口起点与旧缓存尾部之间可能存在整段消息。
+ * 用 page.startIndex - prev.startIndex 切旧缓存前缀会丢消息。这里改为基于去重键：
+ *  1. 在旧缓存 messages 中定位 latest 首条消息（去重键逐条比对），找到重叠点。
+ *  2. 找不到重叠点（两窗口完全不重叠）→ 丢弃旧缓存，以最新窗口为准（宁可重拉更早，也不丢最新）。
+ *  3. 找到重叠点 → 旧缓存前缀（重叠点之前）+ latest（自重叠点起的最新连续窗口）。
+ * 这样无论 startIndex 如何快进、新增多少条，都保证尾部消息完整、前缀不重复。
+ */
+function mergePageWithCache(
+  prevMessages: unknown[],
+  latest: unknown[],
+  prevStartIndex: number,
+  pageStartIndex: number,
+  pageHasMore: boolean,
+): SdkMessagesPageState {
+  if (latest.length === 0) {
+    return { messages: prevMessages, startIndex: prevStartIndex, hasMore: pageHasMore }
+  }
+
+  const firstKey = sdkMessageKey(latest[0])
+  // 从旧缓存末尾向前找 latest 首条消息的匹配位置（重叠点通常在旧缓存尾部附近）。
+  let overlap = -1
+  for (let i = prevMessages.length - 1; i >= 0; i--) {
+    if (sdkMessageKey(prevMessages[i]) === firstKey) {
+      overlap = i
+      break
+    }
+  }
+
+  if (overlap < 0) {
+    // 完全不重叠：新窗口已经越过旧缓存尾部（新增消息过多）。以后面连续的最新窗口为准，
+    // 避免用失效的索引差值拼接出中间缺口的坏序列。更早历史由触顶加载按 before 补齐。
+    return { messages: latest, startIndex: pageStartIndex, hasMore: pageHasMore }
+  }
+
+  // 有重叠：旧缓存 [0, overlap) 前缀 + latest 全部（latest 从重叠点开始是连续更新的尾部）。
+  const prefix = prevMessages.slice(0, overlap)
+  return {
+    messages: [...prefix, ...latest],
+    // startIndex 仍是前缀首条消息的绝对索引（= 旧起点），与 overlap 无关。
+    startIndex: prevStartIndex,
+    hasMore: pageHasMore,
+  }
 }
 
 // ===== 事件桥：注册器（供桌面组件注册）+ emit（供平板 WS 层喂事件） =====
@@ -257,8 +367,114 @@ export function installElectronApiStub(): void {
         throw error
       }
     },
-    getAgentSessionSDKMessages: (sessionId: string) =>
-      remoteClient?.getSdkMessages(sessionId) ?? Promise.resolve([]),
+    getAgentSessionSDKMessages: async (
+      sessionId: string,
+      opts?: { before?: number; targetMessages?: number; pullEarlier?: boolean; paginateFirst?: boolean },
+    ) => {
+      if (!remoteClient) return Promise.resolve([])
+      // pullEarlier：由 AgentView 在移动端“触顶加载更早”时触发，用缓存已追踪的 startIndex 补前页。
+      if (opts && opts.pullEarlier === true) {
+        const prev = sdkMessagesPageCache.get(sessionId)
+        if (prev && prev.hasMore && prev.startIndex > 0) {
+          const res = await remoteClient.getSdkMessages(sessionId, {
+            before: prev.startIndex,
+            targetMessages: opts.targetMessages ?? 20,
+          })
+          const page = res as { messages?: unknown[]; startIndex?: number; hasMore?: boolean; total?: number }
+          if (Array.isArray(page?.messages) && typeof page?.startIndex === 'number') {
+            const merged = [...(page.messages as unknown[]), ...prev.messages]
+            setCachedPage(sessionId, {
+              messages: merged,
+              startIndex: page.startIndex,
+              hasMore: page.hasMore !== false,
+            })
+          }
+        }
+        return sdkMessagesPageCache.get(sessionId)?.messages ?? []
+      }
+      // 明确请求“更早一页”用 before（兼容外部调用者）。
+      if (opts && opts.before !== undefined) {
+        const res = await remoteClient.getSdkMessages(sessionId, {
+          before: opts.before,
+          targetMessages: opts.targetMessages,
+        })
+        const page = res as { messages?: unknown[]; startIndex?: number; total?: number; hasMore?: boolean }
+        const incoming = Array.isArray(page?.messages) ? page.messages as unknown[] : []
+        // 旧端不支持分页（返回原始数组而非 {messages,startIndex,...}）→退回：直接返回全量。
+        if (!Array.isArray(page?.messages) || typeof page?.startIndex !== 'number') {
+          setCachedPage(sessionId, {
+            messages: Array.isArray(res) ? (res as unknown[]) : [],
+            startIndex: 0,
+            hasMore: false,
+          })
+          return sdkMessagesPageCache.get(sessionId)!.messages
+        }
+        const prev = sdkMessagesPageCache.get(sessionId)
+        if (prev && typeof prev.startIndex === 'number' && prev.startIndex >= page.startIndex) {
+          // 新页起点 == 上一页起点，说明服务端该档没更早内容了（已到顶），保持现状。
+          if (incoming.length === prev.messages.length) {
+            return prev.messages
+          }
+        }
+        // 新页覆盖 [page.startIndex, before)；合并为：新页 + 已累计（有序）。
+        const merged = [...incoming, ...(prev?.messages ?? [])]
+        setCachedPage(sessionId, {
+          messages: merged,
+          startIndex: page.startIndex,
+          hasMore: page.hasMore !== false,
+        })
+        return merged
+      }
+      // 无任何分页标记（opts 为空）：返回全量（与桌面无参语义一致）。
+      // 移动端侧栏悬浮预览（SessionMiniMapPopover）等走全量，计数/预览恢复真实内容。
+      if (!opts || opts.paginateFirst !== true) {
+        const raw = await remoteClient.getSdkMessages(sessionId)
+        return Array.isArray(raw) ? (raw as unknown[]) : []
+      }
+      // 显式 paginateFirst：打开会话首帧取最新 targetMessages 条；已有缓存则刷新尾部并保留更早。
+      const prev = sdkMessagesPageCache.get(sessionId)
+      if (prev && prev.messages.length > 0) {
+        // 刷新尾部（流式/新 turn 处理后）：拉最新窗口并向前合并，保留已加载的更早历史。
+        const res = await remoteClient.getSdkMessages(sessionId, {
+          targetMessages: opts.targetMessages ?? 4,
+        })
+        const page = res as { messages?: unknown[]; startIndex?: number; total?: number; hasMore?: boolean }
+        if (Array.isArray(page?.messages) && typeof page?.startIndex === 'number') {
+          const latest = page.messages as unknown[]
+          // 稳健合并：不依赖 page.startIndex - prev.startIndex 的绝对索引差。
+          // startIndex 会被 user-turn 边界快进，两次分页之间若新增消息数 > targetMessages，
+          // 新窗口起点会跳过旧缓存尾部之间的整段消息，用索引差值切 prefix 会丢消息。
+          // 这里改成"按去重键求前缀"：从 prev 里找到 latest 首条消息的位置，截断重叠，避免丢/重。
+          const merged = mergePageWithCache(prev.messages, latest, prev.startIndex, page.startIndex, page.hasMore !== false)
+          setCachedPage(sessionId, merged)
+          return merged.messages
+        }
+        // 旧端返回原始数组：直接用新数据覆盖。
+        const raw = Array.isArray(res) ? (res as unknown[]) : prev.messages
+        setCachedPage(sessionId, { messages: raw, startIndex: 0, hasMore: false })
+        return raw
+      }
+      // 首帧（无缓存）：拉最新 targetMessages 条，奠基缓存。
+      const res = await remoteClient.getSdkMessages(sessionId, {
+        targetMessages: opts.targetMessages ?? 4,
+      })
+      if (Array.isArray(res)) {
+        // 旧端/未分页：直接返回原始数组。
+        setCachedPage(sessionId, { messages: res as unknown[], startIndex: 0, hasMore: false })
+        return res
+      }
+      const page = res as { messages?: unknown[]; startIndex?: number; total?: number; hasMore?: boolean }
+      const msgs = Array.isArray(page?.messages) ? page.messages as unknown[] : []
+      setCachedPage(sessionId, {
+        messages: msgs,
+        startIndex: typeof page?.startIndex === 'number' ? page.startIndex : 0,
+        hasMore: page?.hasMore !== false,
+      })
+      return msgs
+    },
+    getSdkMessagesHasMore: (sessionId: string) => {
+      return sdkMessagesPageCache.get(sessionId)?.hasMore ?? false
+    },
     updateAgentSessionModel: (sessionId: string, channelId: string, modelId?: string) => {
       if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.updateSessionModel(sessionId, channelId, modelId).then((r) => {
@@ -320,14 +536,18 @@ export function installElectronApiStub(): void {
         try {
           const workspaces = await remoteClient.listWorkspaces() as Array<{ id: string; name: string; slug: string; type?: string; createdAt?: number; updatedAt?: number }> | undefined
           if (Array.isArray(workspaces) && workspaces.length > 0) {
-            return workspaces.map((w) => ({
-              id: w.id,
-              name: w.name,
-              slug: w.slug,
-              type: w.type ?? 'personal',
-              createdAt: w.createdAt ?? 0,
-              updatedAt: w.updatedAt ?? 0,
-            }))
+            // 与 main.tsx loadSessions 的团队过滤一致：LeftSidebar 会主动调本方法刷新侧栏，
+            // 若不过滤会把团队工作区重新塞回 agentWorkspacesAtom，覆盖 loadSessions 的过滤结果。
+            return workspaces
+              .filter((w) => w.type !== 'team')
+              .map((w) => ({
+                id: w.id,
+                name: w.name,
+                slug: w.slug,
+                type: w.type ?? 'personal',
+                createdAt: w.createdAt ?? 0,
+                updatedAt: w.updatedAt ?? 0,
+              }))
           }
         } catch {
           /* 服务端不支持时走下面的兜底 */

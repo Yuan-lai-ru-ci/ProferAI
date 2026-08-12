@@ -564,29 +564,9 @@
   app-region: drag;
 }
 
-/* ===== 侧边栏折叠动画 =====
-   收起/展开：wrapper 宽度过渡（Apple 风格缓动）+ 内容视图淡入淡出交错。
-   data-collapsed="true" 的视图：立即淡出，150ms 后 visibility hidden（避免 Tab 聚焦隐形控件）；
-   可见视图：visibility 立即生效，opacity 延迟 120ms 淡入（宽度先走，内容后出）。 */
+/* ===== 侧边栏折叠动画 ===== */
 .sidebar-collapse-ease {
   transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
-}
-
-.sidebar-view {
-  opacity: 1;
-  visibility: visible;
-  transition:
-    opacity 150ms ease 120ms,
-    visibility 0s 0s;
-}
-
-.sidebar-view[data-collapsed='true'] {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition:
-    opacity 150ms ease 0s,
-    visibility 0s linear 150ms;
 }
 
 /* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */
@@ -845,6 +825,89 @@
     inset 0 0 6px hsl(var(--primary) / 0.10) !important;
   /* 电磁闪烁：不规则微亮度波动 */
   animation: indicator-flicker 2.5s infinite steps(15);
+}
+
+@keyframes feature-tour-enter-forward {
+  from { opacity: 0; transform: translate3d(42px, 10px, 0) scale(.99); filter: blur(8px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes feature-tour-exit-forward {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+  to { opacity: 0; transform: translate3d(-42px, -8px, 0) scale(.99); filter: blur(8px); }
+}
+
+@keyframes feature-tour-enter-backward {
+  from { opacity: 0; transform: translate3d(-42px, 10px, 0) scale(.99); filter: blur(8px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes feature-tour-exit-backward {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+  to { opacity: 0; transform: translate3d(42px, -8px, 0) scale(.99); filter: blur(8px); }
+}
+
+@keyframes feature-tour-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes feature-tour-veil-in {
+  from { opacity: .96; }
+  55% { opacity: .7; }
+  to { opacity: 1; }
+}
+
+.feature-tour-slide {
+  will-change: opacity, transform, filter;
+}
+
+.feature-tour-slide-incoming.feature-tour-forward {
+  animation: feature-tour-enter-forward 600ms cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.feature-tour-slide-outgoing.feature-tour-forward {
+  animation: feature-tour-exit-forward 600ms cubic-bezier(.7, 0, .84, 0) both;
+}
+
+.feature-tour-slide-incoming.feature-tour-backward {
+  animation: feature-tour-enter-backward 600ms cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.feature-tour-slide-outgoing.feature-tour-backward {
+  animation: feature-tour-exit-backward 600ms cubic-bezier(.7, 0, .84, 0) both;
+}
+
+.feature-tour-slide-incoming .feature-tour-kicker,
+.feature-tour-slide-incoming .feature-tour-title,
+.feature-tour-slide-incoming .feature-tour-summary,
+.feature-tour-slide-incoming .feature-tour-example {
+  animation: feature-tour-item-in 540ms cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.feature-tour-kicker { animation-delay: 70ms; }
+.feature-tour-title { animation-delay: 140ms; }
+.feature-tour-summary { animation-delay: 220ms; }
+.feature-tour-example { animation-delay: 300ms; }
+.feature-tour-veil { animation: feature-tour-veil-in 720ms cubic-bezier(.16, 1, .3, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .feature-tour-slide,
+  .feature-tour-kicker,
+  .feature-tour-title,
+  .feature-tour-summary,
+  .feature-tour-example,
+  .feature-tour-veil {
+    animation: none;
+  }
 }
 
 @keyframes indicator-flicker {

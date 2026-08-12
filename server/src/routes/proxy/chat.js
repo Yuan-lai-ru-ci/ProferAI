@@ -12,40 +12,10 @@ import { RELAY_BASE_URL, RELAY_API_KEY, PER_USER_NEWAPI_KEY } from '../../config
 import { db, getBillingConfig, getModelMultipliers, getVipConfig } from '../../db.js'
 import { createStreamUsageTracker, extractModel, extractUsage, withOpenAIStreamUsage } from '../../proxy-usage-utils.js'
 import { extractNewApiRequestId, reconcileRequestCost, setNewApiTokenGroup } from '../../newapi-client.js'
+import { translateUpstreamError } from './upstream-error.js'
 import { createPricingContext, assertVipPricingReady } from '../../billing/pricing-context.js'
 
 export const proxyRoutes = new Hono()
-
-/**
- * 翻译 New API 上游报错。
- * 额度/计费类（含美元文案）统一转中文，避免用户误以为是自己 credits 不够，
- * 并记运维告警（共享额度池耗尽是运维级问题）。
- * 返回 { payload, isQuota }。
- */
-function translateUpstreamError(parsed, status) {
-  const rawMsg = (parsed?.error?.message || parsed?.message || (typeof parsed?.error === 'string' ? parsed.error : '') || '').toString()
-  const lower = rawMsg.toLowerCase()
-
-  // 额度/预扣类（New API 美元计费报错）
-  const isQuota =
-    rawMsg.includes('预扣费') || rawMsg.includes('额度') || rawMsg.includes('余额') ||
-    lower.includes('insufficient') || lower.includes('quota') || lower.includes('balance') ||
-    rawMsg.includes('＄') || rawMsg.includes('$') || status === 402
-  if (isQuota) {
-    return { payload: { error: '平台额度暂时不足，请联系管理员充值', code: 'insufficient_credits' }, isQuota: true }
-  }
-
-  // 定价/模型未配置 → 不暴露运维细节
-  if (lower.includes('price not configured') || rawMsg.includes('价格未配置') || lower.includes('model not found') || rawMsg.includes('模型不存在')) {
-    return { payload: { error: '所选模型暂不可用，请联系管理员' }, isQuota: false }
-  }
-
-  // 其他上游错误：透传精简消息
-  if (parsed?.error?.message || parsed?.error || parsed?.message) {
-    return { payload: { error: rawMsg || JSON.stringify(parsed).slice(0, 200) }, isQuota: false }
-  }
-  return { payload: parsed, isQuota: false }
-}
 
 /** 记录一次请求日志（含计费 quota cost 和 New API request_id）。 */
 async function logUsage({ requestId, userId, model, usage, durationMs, stream, success, errorMessage = '', costCredits = 0, newApiRequestId = '', actualQuota = null, billingMarkup = null, pricing = null }) {
@@ -235,11 +205,13 @@ async function forwardToRelay(c, relayPath) {
     if (!resp.ok) {
       let parsed = null
       try { parsed = JSON.parse(await resp.text()) } catch { /* 非 JSON */ }
-      const { payload, isQuota } = parsed
+      const { payload, isQuota, isUpstreamChannelBalance } = parsed
         ? translateUpstreamError(parsed, resp.status)
-        : { payload: { error: `服务暂时不可用 (${resp.status})` }, isQuota: false }
+        : { payload: { error: `服务暂时不可用 (${resp.status})` }, isQuota: false, isUpstreamChannelBalance: false }
 
-      if (isQuota) {
+      if (isUpstreamChannelBalance) {
+        console.error(`[proxy] 🚨 上游供应通道账户余额不足 (status=${resp.status}, user=${userId}, model=${requestModel}): ${JSON.stringify(parsed).slice(0, 200)}`)
+      } else if (isQuota) {
         console.warn(`[proxy] ⚠️ New API 额度不足/预扣失败 (status=${resp.status}, user=${userId}): ${JSON.stringify(parsed).slice(0, 200)}`)
       }
       await logUsage({ requestId, userId, model: requestModel, usage: null, durationMs, stream: false, success: false, errorMessage: JSON.stringify(payload), newApiRequestId, pricing })
