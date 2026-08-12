@@ -165,6 +165,7 @@ function IntroReplayOverlay(): React.ReactElement | null {
       role="dialog"
       aria-modal="true"
       aria-label="Profer 开屏动画"
+      data-profer-intro-overlay
     >
       <IntroWaterRipple
         onDone={() => {

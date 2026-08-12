@@ -190,6 +190,24 @@ export interface ElectronAPI {
   /** 获取独立预览窗口数据 */
   getDetachedPreviewData: (previewId: string) => Promise<DetachedPreviewWindowData | null>
 
+  // ===== Pi 受管浏览器（主进程 WebContentsView） =====
+  openAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  listAgentBrowserTabs: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  createAgentBrowserTab: (input: import('@profer/shared').BrowserCreateTabInput) => Promise<import('@profer/shared').BrowserViewState>
+  selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState>
+  closeAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState | null>
+  getAgentBrowserState: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState | null>
+  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => Promise<void>
+  navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => Promise<import('@profer/shared').BrowserViewState>
+  goBackAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  goForwardAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  reloadAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  hideAgentBrowser: (sessionId: string) => Promise<void>
+  closeAgentBrowser: (sessionId: string) => Promise<void>
+  setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => Promise<import('@profer/shared').BrowserViewState>
+  onAgentBrowserStateChanged: (callback: (state: import('@profer/shared').BrowserViewState) => void) => () => void
+
   // ===== 通用工具 =====
 
   /** 在系统默认浏览器中打开外部链接 */
@@ -1397,6 +1415,35 @@ const electronAPI: ElectronAPI = {
 
   getDetachedPreviewData: (previewId: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DETACHED_PREVIEW_DATA, previewId) as Promise<DetachedPreviewWindowData | null>
+  },
+
+  openAgentBrowser: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER, sessionId)
+  },
+  listAgentBrowserTabs: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_BROWSER_TABS, sessionId),
+  createAgentBrowserTab: (input: import('@profer/shared').BrowserCreateTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_BROWSER_TAB, input),
+  selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SELECT_BROWSER_TAB, input),
+  closeAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER_TAB, input),
+  getAgentBrowserState: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_STATE, sessionId)
+  },
+  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
+  },
+  navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.NAVIGATE_BROWSER, input)
+  },
+  goBackAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, sessionId),
+  goForwardAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, sessionId),
+  reloadAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOAD_BROWSER, sessionId),
+  translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, input),
+  hideAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.HIDE_BROWSER, sessionId),
+  closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),
+  setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, input),
+  onAgentBrowserStateChanged: (callback: (state: import('@profer/shared').BrowserViewState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: import('@profer/shared').BrowserViewState) => callback(state)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
   },
 
   // 通用工具

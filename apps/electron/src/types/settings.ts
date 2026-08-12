@@ -224,6 +224,9 @@ export const DEFAULT_UI_SCALE: UiScale = 'standard'
 /** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
 
+/** 提升此版本可要求用户重新确认更新后的受管浏览器风险告知。 */
+export const BROWSER_RISK_DISCLAIMER_VERSION = 1
+
 /** 应用设置 */
 export interface AppSettings {
   /** 主题模式 */
@@ -266,6 +269,8 @@ export interface AppSettings {
   agentMaxBudgetUsd?: number
   /** Agent 最大轮次（0 或 undefined = SDK 默认） */
   agentMaxTurns?: number
+  /** 已确认的受管浏览器风险告知版本；低于当前版本时首次使用会再次要求确认。 */
+  browserRiskDisclaimerVersion?: number
   /** 教程推荐横幅是否已关闭 */
   tutorialBannerDismissed?: boolean
   /** 自动归档天数（0 = 禁用，默认 7） */
