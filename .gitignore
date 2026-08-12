@@ -44,6 +44,9 @@ vendor
 
 # git worktrees (managed by proma-worktree skill)
 .worktrees
+
+# 本地工作区辅助目录（含嵌套 worktree，不入库）
+.claude/
 # server 临时/部署产物(不入库)
 server/server-rel.tar.gz
 server/predeploy-tmp/
