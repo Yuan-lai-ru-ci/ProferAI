@@ -25,4 +25,26 @@ describe('computeViewportShift', () => {
   test('按钮宽于视口时钳制到视口左缘', () => {
     expect(computeViewportShift({ left: -50, top: 100, width: 1400, height: 44 }, 1280, 800)).toEqual({ dx: 50, dy: 0 })
   })
+
+  test('与底部禁区重叠时上移到禁区上方并留空隙避开', () => {
+    // 禁区：视口底部中央的「回到底端」按钮
+    const avoid = { left: 622, top: 738, width: 36, height: 36 }
+    // 按钮底部与禁区重叠（vertical 720-764 与 738-774 相交）
+    const rect = { left: 600, top: 720, width: 120, height: 44 }
+    // 上移到禁区上方 12px：740 - 44 - 12 - 720 = -38
+    expect(computeViewportShift(rect, 1280, 800, avoid)).toEqual({ dx: 0, dy: -38 })
+  })
+
+  test('不与禁区重叠时保持原钳制不动', () => {
+    const avoid = { left: 622, top: 738, width: 36, height: 36 }
+    const rect = { left: 100, top: 100, width: 120, height: 44 }
+    expect(computeViewportShift(rect, 1280, 800, avoid)).toEqual({ dx: 0, dy: 0 })
+  })
+
+  test('顶部空间不足时下移到禁区下方并留空隙', () => {
+    const avoid = { left: 0, top: 0, width: 36, height: 36 }
+    const rect = { left: 10, top: 0, width: 120, height: 44 }
+    // 下移到禁区下方 12px：0 + 36 + 12 - 0 = 48
+    expect(computeViewportShift(rect, 1280, 800, avoid)).toEqual({ dx: 0, dy: 48 })
+  })
 })
