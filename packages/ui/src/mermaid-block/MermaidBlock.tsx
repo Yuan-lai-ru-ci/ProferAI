@@ -20,7 +20,7 @@
  *    也是初始缩放与「重置」目标；
  *  - 最大缩放 = ZOOM_MAX（双维溢出时横/纵滚动条并存）；
  *  - 缩放以当前视口中心为锚点（缩放后重新对齐滚动位置）；
- *  - 对齐：溢出维度顶格（0 间隙，滚动到头即图边缘贴齐框边缘），不溢出维度居中；
+ *  - 对齐：溢出维度顶格（滚动到头保留 PANEL_PADDING 留白），不溢出维度居中；
  *  - transform-origin 为左上角，缩放只向右/下扩展，负坐标区不可达。
  */
 
@@ -37,6 +37,8 @@ const DEBOUNCE_MS = 350
 /** 缩放范围：最小由「图适配框」动态决定（见 minZoom），最大固定 */
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.15
+/** 图边缘与框边缘的间隙（px）：滚动到头时保留的留白 */
+const PANEL_PADDING = 16
 let mermaidRenderId = 0
 
 function isDarkMode(): boolean {
@@ -258,6 +260,10 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   const contentRef = React.useRef<HTMLDivElement | null>(null)
   /** 缩放后待应用的滚动位置：useLayoutEffect 里在 transform 提交生效后应用 */
   const pendingScrollRef = React.useRef<{ x: number; y: number } | null>(null)
+  /** 右键拖动平移：是否正在拖动（控制光标样式） */
+  const [isPanning, setIsPanning] = React.useState(false)
+  /** 右键拖动起始信息（起始指针坐标 + 起始滚动位置） */
+  const panRef = React.useRef<{ x: number; y: number; left: number; top: number } | null>(null)
 
   codeRef.current = code
 
@@ -385,9 +391,9 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     }
     setSvgSize({ w: iw, h: ih })
 
-    // 首帧：测框尺寸并设置初始缩放（适配），滚动归零
-    const fw = scrollEl.clientWidth
-    const fh = scrollEl.clientHeight
+    // 首帧：测框内容盒尺寸（可视区减去留白）并设置初始缩放（适配），滚动归零
+    const fw = scrollEl.clientWidth - 2 * PANEL_PADDING
+    const fh = scrollEl.clientHeight - 2 * PANEL_PADDING
     setFrameSize({ w: fw, h: fh })
     if (iw > 0 && ih > 0 && fw > 0 && fh > 0) {
       setScale(Math.min(Math.min(fw / iw, fh / ih), ZOOM_MAX))
@@ -397,8 +403,8 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
 
     // resize 只更新框尺寸（不重置用户缩放）
     const onResize = () => {
-      const nfw = scrollEl.clientWidth
-      const nfh = scrollEl.clientHeight
+      const nfw = scrollEl.clientWidth - 2 * PANEL_PADDING
+      const nfh = scrollEl.clientHeight - 2 * PANEL_PADDING
       setFrameSize((prev) => prev.w === nfw && prev.h === nfh ? prev : { w: nfw, h: nfh })
     }
     window.addEventListener('resize', onResize)
@@ -417,6 +423,41 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     pendingScrollRef.current = { x: 0, y: 0 }
     setScale(minZoom)
   }, [scale, minZoom])
+
+  // ---- 右键拖动平移：按住右键拖动，图片跟随鼠标（仅图片溢出时启用） ----
+  const handlePanMouseDown = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 2) return // 仅右键
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    // 仅在有溢出（可滚动）时启用
+    if (scrollEl.scrollWidth <= scrollEl.clientWidth && scrollEl.scrollHeight <= scrollEl.clientHeight) return
+    e.preventDefault()
+    panRef.current = { x: e.clientX, y: e.clientY, left: scrollEl.scrollLeft, top: scrollEl.scrollTop }
+    setIsPanning(true)
+  }, [])
+
+  // 拖动过程中监听 window 级 mousemove/mouseup（鼠标移出容器也能继续拖、正常释放）
+  React.useEffect(() => {
+    if (!isPanning) return
+    const onMove = (e: MouseEvent) => {
+      const scrollEl = scrollRef.current
+      const start = panRef.current
+      if (!scrollEl || !start) return
+      // 图片跟随鼠标：鼠标往右拖，图片往右移 → scrollLeft 减小（浏览器自动 clamp 到有效范围）
+      scrollEl.scrollLeft = start.left - (e.clientX - start.x)
+      scrollEl.scrollTop = start.top - (e.clientY - start.y)
+    }
+    const onUp = () => {
+      panRef.current = null
+      setIsPanning(false)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [isPanning])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -471,8 +512,14 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
             <code>{code}</code>
           </pre>
         ) : (
-          <div ref={scrollRef} className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]">
-            <div className="flex items-start min-h-[180px]">
+          <div
+            ref={scrollRef}
+            className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]"
+            style={{ cursor: isPanning ? 'grabbing' : undefined }}
+            onMouseDown={handlePanMouseDown}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <div className="flex items-start min-h-[180px]" style={{ padding: PANEL_PADDING }}>
               <div
                 ref={contentRef}
                 className="mermaid-svg shrink-0"
