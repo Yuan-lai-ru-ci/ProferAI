@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KB_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -31,18 +31,6 @@ import type {
   AttachmentSaveInput,
   AttachmentSaveResult,
   FileDialogResult,
-  PaperParseResult,
-  PageEstimate,
-  KBImportInput,
-  KBImportResult,
-  KBSearchResult,
-  PaperMeta,
-  DeletePaperResult,
-  KBStats,
-  ArxivPaper,
-  KnowledgeBaseWorkbenchState,
-  KnowledgeBaseWorkbenchPatch,
-  PaperWorkbenchRecord,
   KnowledgeImportBatchResult,
   KnowledgeItem,
   KnowledgeLibrarySnapshot,
@@ -202,6 +190,35 @@ export interface ElectronAPI {
   /** 获取独立预览窗口数据 */
   getDetachedPreviewData: (previewId: string) => Promise<DetachedPreviewWindowData | null>
 
+  // ===== Pi 受管浏览器（主进程 WebContentsView） =====
+  openAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  listAgentBrowserTabs: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  createAgentBrowserTab: (input: import('@profer/shared').BrowserCreateTabInput) => Promise<import('@profer/shared').BrowserViewState>
+  selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState>
+  closeAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState | null>
+  getAgentBrowserState: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState | null>
+  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => void
+  navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => Promise<import('@profer/shared').BrowserViewState>
+  goBackAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  goForwardAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  reloadAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
+  pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  /** 订阅受管网页下载被拦截的脱敏事件。 */
+  onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => () => void
+  hideAgentBrowser: (sessionId: string) => Promise<void>
+  closeAgentBrowser: (sessionId: string) => Promise<void>
+  setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => Promise<import('@profer/shared').BrowserViewState>
+  onAgentBrowserStateChanged: (callback: (state: import('@profer/shared').BrowserViewState) => void) => () => void
+
+  // ===== 新标签页起始页 =====
+  getBrowserStartPage: () => Promise<import('@profer/shared').BrowserStartPageState>
+  addBrowserBookmark: (input: import('@profer/shared').BrowserAddBookmarkInput) => Promise<import('@profer/shared').BrowserStartPageState>
+  removeBrowserBookmark: (id: string) => Promise<import('@profer/shared').BrowserStartPageState>
+  updateBrowserHomeUrl: (url: string) => Promise<import('@profer/shared').BrowserStartPageState>
+  clearBrowserHistory: () => Promise<import('@profer/shared').BrowserStartPageState>
+
   // ===== 通用工具 =====
 
   /** 在系统默认浏览器中打开外部链接 */
@@ -350,15 +367,6 @@ export interface ElectronAPI {
   /** 打开文件选择对话框 */
   openFileDialog: () => Promise<FileDialogResult>
 
-  /** 论文精读 — 打开文件对话框选 PDF → MinerU API 解析 → 返回 Markdown */
-  parsePaper: () => Promise<PaperParseResult | null>
-
-  /** 论文精读 — 给定文件路径，直接调用 MinerU 解析 */
-  parsePaperByPath: (filePath: string) => Promise<PaperParseResult>
-
-  /** 论文精读 — 估算 PDF 页数和积分（本地计算，不调用服务端） */
-  estimatePaperPages: (filePath: string) => Promise<PageEstimate>
-
   // ===== 通用个人资料库相关 =====
 
   knowledge: {
@@ -370,35 +378,6 @@ export interface ElectronAPI {
     getLibrarySnapshot: () => Promise<KnowledgeLibrarySnapshot>
     /** 在文件管理器中显示本地资料的受控副本。 */
     showItemInFolder: (itemId: string) => Promise<void>
-  }
-
-  // ===== 论文知识库兼容 API =====
-
-  kb: {
-    /** 导入论文到论文知识库 */
-    import: (input: KBImportInput) => Promise<KBImportResult>
-    /** 语义搜索论文 */
-    search: (query: string, topK?: number) => Promise<KBSearchResult[]>
-    /** 列出所有论文 */
-    listPapers: (tag?: string) => Promise<PaperMeta[]>
-    /** 获取单篇论文完整内容 */
-    getPaper: (paperId: string) => Promise<{ meta: PaperMeta; markdown: string } | null>
-    /** 删除论文 */
-    deletePaper: (paperId: string) => Promise<DeletePaperResult>
-    /** 使用受控本地 PDF 重试失败的远端同步 */
-    retryPaperSync: (paperId: string) => Promise<PaperMeta>
-    /** 获取列表与统计一致的论文库快照 */
-    getLibrarySnapshot: () => Promise<import('@profer/shared').KBLibrarySnapshot>
-    /** 获取论文知识库统计 */
-    getStats: () => Promise<KBStats>
-    /** 搜索 arXiv */
-    searchArxiv: (query: string, maxResults?: number) => Promise<ArxivPaper[]>
-    /** 获取设备本地的收藏、标签、笔记和阅读位置 */
-    getWorkbenchState: () => Promise<KnowledgeBaseWorkbenchState>
-    /** 更新单篇论文的设备本地个人状态 */
-    updateWorkbenchRecord: (paperId: string, patch: KnowledgeBaseWorkbenchPatch) => Promise<PaperWorkbenchRecord>
-    /** 删除多篇论文的设备本地个人状态 */
-    deleteWorkbenchRecords: (paperIds: string[]) => Promise<void>
   }
 
   /** 提取附件文档的文本内容 */
@@ -427,6 +406,9 @@ export interface ElectronAPI {
   openSkinTemplateFolder: () => Promise<void>
   refreshSkins: () => Promise<import('../types').SkinInfo[]>
 
+  /** 通知主进程 renderer 已完成首屏初始化 */
+  notifyRendererReady: () => void
+
   /** 获取应用设置 */
   getSettings: () => Promise<AppSettings>
 
@@ -442,6 +424,8 @@ export interface ElectronAPI {
   setTabletModeEnabled: (enabled: boolean) => Promise<TabletModeStatus>
   /** 设置移动模式服务端口（保存并热应用，服务运行中自动重启） */
   setTabletModePort: (port: number) => Promise<TabletModeStatus>
+  /** 获取安卓版 APK 扫码下载信息（官网地址/二维码/文件名） */
+  getProferApkQr: () => Promise<{ url: string; dataUrl: string; fileName: string }>
 
   /** 获取系统主题（是否深色模式） */
   getSystemTheme: () => Promise<boolean>
@@ -1446,6 +1430,46 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DETACHED_PREVIEW_DATA, previewId) as Promise<DetachedPreviewWindowData | null>
   },
 
+  openAgentBrowser: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER, sessionId)
+  },
+  listAgentBrowserTabs: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_BROWSER_TABS, sessionId),
+  createAgentBrowserTab: (input: import('@profer/shared').BrowserCreateTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_BROWSER_TAB, input),
+  selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SELECT_BROWSER_TAB, input),
+  closeAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER_TAB, input),
+  getAgentBrowserState: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_STATE, sessionId)
+  },
+  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => {
+    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
+  },
+  navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.NAVIGATE_BROWSER, input)
+  },
+  goBackAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, sessionId),
+  goForwardAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, sessionId),
+  reloadAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOAD_BROWSER, sessionId),
+  translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, input),
+  pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PASTE_BROWSER_CLIPBOARD, input),
+  onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserDownloadBlockedEvent) => callback(payload)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
+  },
+  hideAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.HIDE_BROWSER, sessionId),
+  closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),
+  setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, input),
+  onAgentBrowserStateChanged: (callback: (state: import('@profer/shared').BrowserViewState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: import('@profer/shared').BrowserViewState) => callback(state)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
+  },
+  getBrowserStartPage: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_START_PAGE),
+  addBrowserBookmark: (input: import('@profer/shared').BrowserAddBookmarkInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_BROWSER_BOOKMARK, input),
+  removeBrowserBookmark: (id: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_BROWSER_BOOKMARK, id),
+  updateBrowserHomeUrl: (url: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_BROWSER_HOME_URL, url),
+  clearBrowserHistory: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_BROWSER_HISTORY),
+
   // 通用工具
   openExternal: (url: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL, url)
@@ -1643,19 +1667,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG)
   },
 
-  parsePaper: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.PARSE_PAPER)
-  },
-
-  parsePaperByPath: (filePath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.PARSE_PAPER_BY_PATH, filePath)
-  },
-
-  estimatePaperPages: (filePath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.ESTIMATE_PAPER_PAGES, filePath)
-  },
-
-  // 论文知识库
+  // 通用个人资料库
   knowledge: {
     importItems: (filePaths: string[]) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.IMPORT_ITEMS, filePaths),
     listItems: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.LIST_ITEMS),
@@ -1664,45 +1676,6 @@ const electronAPI: ElectronAPI = {
     searchItems: (query: string, itemIds?: string[], topK?: number) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SEARCH_ITEMS, query, itemIds, topK),
     getLibrarySnapshot: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT),
     showItemInFolder: (itemId: string) => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER, itemId),
-  },
-
-  kb: {
-    import: (input: KBImportInput) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.IMPORT, input)
-    },
-    search: (query: string, topK?: number) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH, query, topK)
-    },
-    listPapers: (tag?: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.LIST_PAPERS, tag)
-    },
-    getPaper: (paperId: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_PAPER, paperId)
-    },
-    deletePaper: (paperId: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_PAPER, paperId)
-    },
-    retryPaperSync: (paperId: string) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.RETRY_PAPER_SYNC, paperId)
-    },
-    getLibrarySnapshot: () => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_LIBRARY_SNAPSHOT)
-    },
-    getStats: () => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_STATS)
-    },
-    searchArxiv: (query: string, maxResults?: number) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.SEARCH_ARXIV, query, maxResults)
-    },
-    getWorkbenchState: () => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.GET_WORKBENCH_STATE)
-    },
-    updateWorkbenchRecord: (paperId: string, patch: KnowledgeBaseWorkbenchPatch) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.UPDATE_WORKBENCH_RECORD, paperId, patch)
-    },
-    deleteWorkbenchRecords: (paperIds: string[]) => {
-      return ipcRenderer.invoke(KB_IPC_CHANNELS.DELETE_WORKBENCH_RECORDS, paperIds)
-    },
   },
 
   extractAttachmentText: (localPath: string) => {
@@ -1732,6 +1705,7 @@ const electronAPI: ElectronAPI = {
   refreshSkins: () => ipcRenderer.invoke(SKIN_IPC_CHANNELS.REFRESH),
 
   // 应用设置
+  notifyRendererReady: () => { ipcRenderer.send(SETTINGS_IPC_CHANNELS.RENDERER_READY) },
   getSettings: () => {
     // 启动时去重：多个初始化组件同时调用 getSettings()，共享同一个 Promise
     if (!_settingsPromise) {
@@ -1760,6 +1734,9 @@ const electronAPI: ElectronAPI = {
   },
   setTabletModePort: (port: number) => {
     return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_PORT, port) as Promise<TabletModeStatus>
+  },
+  getProferApkQr: () => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_APK_QR) as Promise<{ url: string; dataUrl: string; fileName: string }>
   },
 
   getSystemTheme: () => {

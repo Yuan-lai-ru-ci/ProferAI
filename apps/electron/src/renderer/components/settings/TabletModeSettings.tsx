@@ -1,10 +1,17 @@
 import * as React from 'react'
-import { Copy, Loader2, RotateCcw, Save, Tablet, Wifi } from 'lucide-react'
+import { Copy, Download, Loader2, QrCode, RotateCcw, Save, Tablet, Wifi } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SettingsCard, SettingsSection, SettingsToggle } from './primitives'
 import type { TabletModeStatus } from '../../../types'
+
+/** 安卓版 APK 扫码下载信息 */
+interface ApkQrInfo {
+  url: string
+  dataUrl: string
+  fileName: string
+}
 
 function ConnectionValue({ label, value, secret = false }: { label: string; value: string; secret?: boolean }): React.ReactElement {
   const copy = async (): Promise<void> => {
@@ -37,6 +44,9 @@ export function TabletModeSettings(): React.ReactElement {
   const [savingPort, setSavingPort] = React.useState(false)
   /** 用户手动编辑过端口输入后，不再被状态刷新覆盖 */
   const portDirtyRef = React.useRef(false)
+  /** 安卓版 APK 扫码下载信息（含二维码 dataURL），服务运行且找到 APK 时存在 */
+  const [apkQr, setApkQr] = React.useState<ApkQrInfo | null>(null)
+  const [apkLoading, setApkLoading] = React.useState(false)
 
   const refresh = React.useCallback(async (): Promise<TabletModeStatus | null> => {
     try {
@@ -69,6 +79,22 @@ export function TabletModeSettings(): React.ReactElement {
       window.clearTimeout(timeout)
     }
   }, [refresh, status?.enabled, status?.running])
+
+  // 拉取安卓版 APK 扫码下载信息（地址 + 二维码，指向官网 profer.cn 域名）。
+  // 官网直链随时可用，不依赖移动模式服务是否运行。
+  React.useEffect(() => {
+    let cancelled = false
+    setApkLoading(true)
+    void window.electronAPI.getProferApkQr().then((info) => {
+      if (cancelled) return
+      setApkQr(info)
+      setApkLoading(false)
+    }).catch(() => {
+      if (!cancelled) { setApkQr(null); setApkLoading(false) }
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const toggle = async (enabled: boolean): Promise<void> => {
     setSaving(true)
@@ -158,6 +184,11 @@ export function TabletModeSettings(): React.ReactElement {
             onCheckedChange={(enabled) => void toggle(enabled)}
             disabled={saving}
           />
+          {status.error && (
+            <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs leading-5 text-destructive">
+              {status.error}
+            </div>
+          )}
           <div className="flex flex-col gap-2.5 px-4 py-3.5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -246,6 +277,65 @@ export function TabletModeSettings(): React.ReactElement {
           </div>
         </SettingsSection>
       )}
+
+      {/* 安卓版 App 扫码下载：指向官网 profer.cn 域名直链，任何场景都可用，不依赖移动模式是否开启。 */}
+      <SettingsSection
+        title="下载安卓版 App"
+        description="用手机扫码，或点按钮/复制链接到手机浏览器打开，即可下载安装 Profer 移动版（安卓）。"
+      >
+        <SettingsCard divided={false}>
+          <div className="flex items-center gap-5 px-4 py-4">
+            <div className="flex shrink-0 flex-col items-center gap-1.5">
+              {apkLoading || !apkQr ? (
+                <div className="flex size-[104px] items-center justify-center rounded-xl border border-border bg-muted/40">
+                  <Loader2 className="size-7 animate-spin text-muted-foreground" />
+                </div>
+              ) : apkQr.dataUrl ? (
+                <img src={apkQr.dataUrl} alt="安卓版 App 下载二维码" className="size-[104px] shrink-0 rounded-xl border border-border" />
+              ) : (
+                <QrCode className="size-[104px] text-muted-foreground/40" />
+              )}
+              {apkQr && <span className="px-0.5 text-center text-[11px] leading-4 text-muted-foreground">{apkQr.fileName}</span>}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-foreground">Profer 移动版（安卓）</p>
+              <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                在手机上安装后，即可通过远程连接接入电脑上的 Agent。
+              </p>
+              {apkQr && (
+                <a
+                  href={apkQr.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                >
+                  <Download className="size-4" />
+                  立即下载
+                </a>
+              )}
+              <div className="mt-2.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 px-0 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={async () => {
+                    if (!apkQr) return
+                    try {
+                      await navigator.clipboard.writeText(apkQr.url)
+                      toast.success('官网下载地址已复制，发到手机浏览器打开即可')
+                    } catch {
+                      toast.error('复制失败，请重试')
+                    }
+                  }}
+                >
+                  <Copy className="size-3.5" />
+                  复制官网下载地址
+                </Button>
+              </div>
+            </div>
+          </div>
+        </SettingsCard>
+      </SettingsSection>
 
       <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
         <Tablet className="mt-0.5 size-4 shrink-0" />

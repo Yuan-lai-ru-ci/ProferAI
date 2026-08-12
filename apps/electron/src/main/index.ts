@@ -111,6 +111,7 @@ function registerProtocolsAndHandlers(): void {
 
 
 import { getSettings, updateSettings } from './lib/settings-service'
+import { INTRO_FLUID_FRAGMENT_SHADER, INTRO_FLUID_VERTEX_SHADER } from '../shared/intro-fluid-shader'
 import { handleProferFileRequest } from './lib/local-file-protocol'
 import { handleProferSkinRequest } from './lib/skin-service'
 
@@ -135,7 +136,7 @@ for (const key of Object.keys(process.env)) {
 }
 
 import { createApplicationMenu } from './menu'
-import { registerIpcHandlers } from './ipc'
+import { registerIpcHandlers, setRendererReadyHandler } from './ipc'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
@@ -144,6 +145,7 @@ import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
+import { browserController } from './lib/browser-controller'
 import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
@@ -278,6 +280,35 @@ async function recoverEnabledDingTalkBots(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null
+let startupSplashWindow: BrowserWindow | null = null
+
+const STARTUP_SPLASH_MIN_MS = 1200
+
+function resolveStartupSplashDark(): boolean {
+  const settings = getSettings()
+  if (settings.themeMode === 'light') return false
+  if (settings.themeMode === 'system') return nativeTheme.shouldUseDarkColors
+  if (settings.themeMode === 'special') return !settings.themeStyle?.endsWith('-light')
+  return true
+}
+
+function createStartupSplashHtml(isDark: boolean): string {
+  const background = isDark ? '#0b0b0c' : '#f7f7f5'
+  const foreground = isDark ? '#f3f3f3' : '#101114'
+  const highlight = isDark ? '#aeb4bd' : '#3c414a'
+  const muted = isDark ? 'rgba(243,243,243,.28)' : 'rgba(16,17,20,.46)'
+  const vertex = JSON.stringify(INTRO_FLUID_VERTEX_SHADER)
+  const fragment = JSON.stringify(INTRO_FLUID_FRAGMENT_SHADER)
+  return `<!doctype html><html><head><meta charset="UTF-8"><style>
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${background};color:${foreground};font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+    body{display:grid;place-items:center}.stage{position:relative;width:100vw;height:100vh;display:grid;place-items:center;background:${background}}
+    #fluid{position:absolute;inset:0;width:100%;height:100%}.glow{position:absolute;width:min(58vw,720px);height:min(58vw,720px);border-radius:50%;background:radial-gradient(circle,${highlight}18 0%,transparent 66%);filter:blur(28px);animation:breathe 2.8s ease-in-out infinite;pointer-events:none}
+    .logo{position:relative;z-index:2;font-size:clamp(52px,10vw,112px);font-weight:600;font-style:italic;letter-spacing:-.045em;transform:skewX(-7deg);text-shadow:0 0 28px ${highlight}28;animation:rise 1.1s cubic-bezier(.22,1,.36,1) both}.status{position:absolute;z-index:2;bottom:8%;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.32em;text-transform:uppercase;color:${muted};animation:pulse 1.8s ease-in-out infinite}
+    @keyframes rise{from{opacity:0;transform:translateY(18px) skewX(-7deg) scale(.96)}to{opacity:1;transform:translateY(0) skewX(-7deg) scale(1)}}@keyframes breathe{0%,100%{opacity:.35;transform:scale(.86)}50%{opacity:.8;transform:scale(1.08)}}@keyframes pulse{0%,100%{opacity:.35}50%{opacity:.8}}
+  </style></head><body><main class="stage"><canvas id="fluid"></canvas><div class="glow"></div><div class="logo">Profer</div><div class="status">Loading</div></main><script>
+  (function(){var c=document.getElementById('fluid'),gl=c.getContext('webgl',{alpha:false,antialias:false}),dark=${isDark ? 'true' : 'false'};if(!gl)return;function shader(type,src){var x=gl.createShader(type);gl.shaderSource(x,src);gl.compileShader(x);return gl.getShaderParameter(x,gl.COMPILE_STATUS)?x:null}var v=shader(gl.VERTEX_SHADER,${vertex}),f=shader(gl.FRAGMENT_SHADER,${fragment});if(!v||!f)return;var p=gl.createProgram();gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))return;var b=gl.createBuffer(),a=gl.getAttribLocation(p,'aPosition'),time=gl.getUniformLocation(p,'uTime'),res=gl.getUniformLocation(p,'uResolution'),op=gl.getUniformLocation(p,'uOpacity'),seed=gl.getUniformLocation(p,'uSeed'),theme=gl.getUniformLocation(p,'uThemeLight');gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);var w=1,h=1,started=performance.now(),seedValue=Math.random()*1000;function resize(){var d=Math.min(devicePixelRatio||1,1.5);w=Math.max(1,Math.round(innerWidth*d));h=Math.max(1,Math.round(innerHeight*d));c.width=w;c.height=h}function draw(now){var elapsed=now-started;gl.viewport(0,0,w,h);gl.clearColor(dark?.043:.969,dark?.043:.969,dark?.047:.961,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(p);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);gl.uniform1f(time,elapsed/625);gl.uniform2f(res,w,h);gl.uniform1f(op,1);gl.uniform1f(seed,seedValue);gl.uniform1f(theme,dark?0:1);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);requestAnimationFrame(draw)}addEventListener('resize',resize);resize();requestAnimationFrame(draw)})();
+  </script></body></html>`
+}
 
 /** 获取主窗口实例（供其他模块使用）。 */
 export { getMainWindow }
@@ -440,25 +471,98 @@ function createWindow(): void {
   }
   installWindowsZoomInFallback(mainWindow)
   updateWindowFrameAppearance(mainWindow)
+  browserController.setOwnerWindow(mainWindow)
 
-  // Load the renderer
+  // 主窗口隐藏加载 renderer；独立 splash 窗口覆盖整个初始化阶段，避免导航替换掉启动画面。
   const isDev = !app.isPackaged
-  if (isDev) {
-    mainWindow.loadURL(VITE_DEV_SERVER_URL)
-  } else {
-    mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
+  const rendererUrl = isDev ? VITE_DEV_SERVER_URL : null
+  const rendererFile = join(__dirname, 'renderer', 'index.html')
+  let splashStartedAt = Date.now()
+  let splashShown = false
+  let rendererReady = false
+  let showTimer: ReturnType<typeof setTimeout> | null = null
+
+  const showWhenReady = (): void => {
+    if (!rendererReady || !splashShown || mainWindow?.isDestroyed()) return
+    if (showTimer) clearTimeout(showTimer)
+    const remaining = Math.max(0, STARTUP_SPLASH_MIN_MS - (Date.now() - splashStartedAt))
+    showTimer = setTimeout(() => {
+      if (savedState?.isMaximized ?? true) mainWindow?.maximize()
+      if (process.platform === 'darwin' && app.dock) app.dock.show()
+      if (!startupSplashWindow?.isDestroyed()) startupSplashWindow?.close()
+      startupSplashWindow = null
+      mainWindow?.show()
+    }, remaining)
   }
 
-  // 窗口就绪后，按保存的状态决定是否最大化
-  mainWindow.once('ready-to-show', () => {
-    if (savedState?.isMaximized ?? true) {
-      mainWindow?.maximize()
-    }
-    if (process.platform === 'darwin' && app.dock) {
-      app.dock.show()
-    }
-    mainWindow?.show()
+  setRendererReadyHandler(() => {
+    rendererReady = true
+    showWhenReady()
   })
+
+  const createSplashWindow = (splashBounds?: { width: number; height: number; x: number; y: number }): void => {
+    if (startupSplashWindow && !startupSplashWindow.isDestroyed()) startupSplashWindow.close()
+    // 刷新（Ctrl/Cmd+R）场景会传入主窗口当前真实 bounds，让启动画面保持
+    // 与主窗口一致的尺寸/位置（原本多大就多大），而不是退化成固定小方块。
+    const bounds = splashBounds ?? initialBounds
+    startupSplashWindow = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      minWidth: 800,
+      minHeight: 600,
+      frame: false,
+      resizable: true,
+      movable: true,
+      show: false,
+      backgroundColor: resolveStartupSplashDark() ? '#101010' : '#f4f4f2',
+      webPreferences: { contextIsolation: true, nodeIntegration: false },
+    })
+    startupSplashWindow.setMenuBarVisibility(false)
+    startupSplashWindow.webContents.once('did-finish-load', () => {
+      splashShown = true
+      startupSplashWindow?.show()
+      showWhenReady()
+    })
+    void startupSplashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(createStartupSplashHtml(resolveStartupSplashDark()))}`)
+  }
+
+  const loadRenderer = (): void => {
+    if (rendererUrl) void mainWindow?.loadURL(rendererUrl)
+    else void mainWindow?.loadFile(rendererFile)
+  }
+
+  const replayStartupSplash = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (showTimer) clearTimeout(showTimer)
+    splashStartedAt = Date.now()
+    splashShown = false
+    rendererReady = false
+    // Ctrl/Cmd+R 刷新 renderer：内存态 browserOpenMap/browserState（非持久化）将随重建清空，
+    // 不再有 BrowserSlot 去 setLayout 定位/隐藏原生 view。必须在此隐藏所有浏览器原生视图，
+    // 否则主窗口重新显示后旧会话网页会裸奔脱出容器、不受控制（刷新场景需回到未打开浏览器态）。
+    browserController.hideAll()
+    // 刷新时用主窗口当前实际大小/位置重建启动画面，避免退化成固定尺寸的小方块
+    // 上方守卫已确保 mainWindow 非空且未销毁，直接取 bounds。
+    const currentBounds = mainWindow.getBounds()
+    const splashBounds = currentBounds
+      ? { x: currentBounds.x, y: currentBounds.y, width: currentBounds.width, height: currentBounds.height }
+      : undefined
+    mainWindow?.hide()
+    createSplashWindow(splashBounds)
+    loadRenderer()
+  }
+
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const isRefresh = input.type === 'keyDown' && input.key.toLowerCase() === 'r' && (input.control || input.meta) && !input.alt
+    if (!isRefresh) return
+    event.preventDefault()
+    replayStartupSplash()
+  })
+
+  createSplashWindow()
+  loadRenderer()
 
   // 持久化窗口大小和位置（防抖 500ms，避免频繁写入）
   let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -557,6 +661,7 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
     setMainWindow(null)
+    browserController.dispose()
   })
 
   setMainWindow(mainWindow)
@@ -887,6 +992,7 @@ app.on('before-quit', () => {
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   void disposePiMcpConnections()
+  browserController.dispose()
   stopAllGenerations()
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
   // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程

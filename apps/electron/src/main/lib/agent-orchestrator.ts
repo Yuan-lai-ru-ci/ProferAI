@@ -34,7 +34,6 @@ import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfC
 import { getTeamAuthWithRefresh } from './auth-service'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
-import { injectKbMcpServer } from './kb-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
 import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
@@ -87,6 +86,9 @@ import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
+import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
+import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
+import { browserController } from './browser-controller'
 import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, shouldPreInterruptQueuedMessage, tryAcquireActiveSession, tryReserveQueuedMessage } from './agent-orchestrator-p0-guards'
 import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
@@ -915,10 +917,6 @@ export class AgentOrchestrator {
         workspaceId,
         triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
       })
-      await injectKbMcpServer(sdk, mcpServers, {
-        sessionId,
-        workspaceId,
-      })
       await injectMemoryArchiveMcpServer(sdk, mcpServers, {
         memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
         workspaceSlug,
@@ -936,6 +934,21 @@ export class AgentOrchestrator {
       })
       await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId })
 
+      // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
+      if (agentRuntime === 'claude') {
+        await injectClaudeClipboardMcpServer(sdk, mcpServers)
+        await injectClaudeBrowserMcpServer(sdk, mcpServers, {
+          sessionId,
+          workspaceId,
+          agentCwd,
+          allowedRoots: [...new Set([
+            workspaceId ? agentCwd : undefined,
+            ...collectAttachedDirectories({ extraDirs: additionalDirectories, sessionMeta, workspaceSlug }),
+          ].filter((root): root is string => typeof root === 'string' && root.length > 0))],
+          executionSource: input.triggeredBy ?? 'user',
+        })
+      }
+
       // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
       if (customMcpServers) {
         Object.assign(mcpServers, customMcpServers)
@@ -947,6 +960,7 @@ export class AgentOrchestrator {
         workspaceName: workspace?.name,
         workspaceSlug,
         agentCwd,
+        userBrowserContext: browserController.getUserContext(sessionId),
       })
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅影响 prompt，不影响持久化
@@ -993,6 +1007,11 @@ export class AgentOrchestrator {
       const appSettings = getSettings()
       const initialPermissionMode: ProferPermissionMode = permissionModeOverride
         ?? PROFER_DEFAULT_PERMISSION_MODE
+      // 受管浏览器允许读取的根目录 = 会话工作目录 + 会话/工作区已授权目录（后者含工作区根与 workspace-files）。
+      const browserAllowedRoots = [...new Set([
+        workspaceId ? agentCwd : undefined,
+        ...collectAttachedDirectories({ extraDirs: additionalDirectories, sessionMeta, workspaceSlug }),
+      ].filter((root): root is string => typeof root === 'string' && root.length > 0))]
       // Claude SDK 原生接收 mcpServers；Pi 必须将同一配置连接后转换为 customTools。
       // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。
       const piCustomTools = agentRuntime === 'pi'
@@ -1006,6 +1025,8 @@ export class AgentOrchestrator {
               workspaceId,
               isTeamWorkspace: workspace?.type === 'team',
               workspaceSlug,
+              agentCwd,
+              allowedRoots: browserAllowedRoots,
               permissionMode: initialPermissionMode,
               triggeredBy: input.triggeredBy,
             })
@@ -1095,6 +1116,8 @@ export class AgentOrchestrator {
         'REPL', 'Workflow', 'ScheduleWakeup', 'Monitor', 'PushNotification',
         'CronCreate', 'CronDelete', 'RemoteTrigger',
       ])
+      // Pi-native 浏览器工具不是 MCP：必须显式分类，避免被通用 mcp__ 调研放行规则遗漏。
+      const PLAN_MODE_READ_ONLY_BROWSER_TOOLS = new Set(['BrowserObserve', 'BrowserScreenshot', 'BrowserListTabs', 'BrowserPreviewOpen'])
 
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
       let planModeEntered = initialPermissionMode === 'plan'
@@ -1228,6 +1251,17 @@ export class AgentOrchestrator {
 
           default:
             return { behavior: 'allow' as const, updatedInput: input }
+        }
+
+        // 所有 Pi 会话均可使用受管浏览器。主进程仍隔离网页，并拒绝私网、下载、弹窗和网页权限；
+        // 页面内容始终视为不可信输入。计划模式仅允许只读浏览器操作。
+        if (toolName.startsWith('Browser')) {
+          if (currentMode === 'plan') {
+            return PLAN_MODE_READ_ONLY_BROWSER_TOOLS.has(toolName)
+              ? { behavior: 'allow' as const, updatedInput: input }
+              : { behavior: 'deny' as const, message: '计划模式下只能观察受管浏览器，请在计划获批后再进行网页交互。' }
+          }
+          return { behavior: 'allow' as const, updatedInput: input }
         }
       }
 
@@ -2288,6 +2322,7 @@ export class AgentOrchestrator {
   stop(sessionId: string): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
     this.stoppedBySessions.add(sessionId)
+    browserController.cancelSession(sessionId)
     try {
       this.adapter.abort(sessionId)
     } catch (err) {
@@ -2467,10 +2502,15 @@ export class AgentOrchestrator {
 
     // 注入 mention 引用指令（Skill/MCP/会话）— 仅影响发往 SDK 的 prompt，不影响持久化。
     // 与 sendMessage 路径保持一致的拼装逻辑。
-    let enrichedText = text
     const sessionMeta = getAgentSessionMeta(sessionId)
     const workspaceId = sessionMeta?.workspaceId
     const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
+    // 运行中的 Agent 收到队列消息时也必须看到用户刚刚主动打开的页面。
+    // 未打开浏览器时保持既有消息形态，避免给每条插队消息重复注入无关环境块。
+    const userBrowserContext = browserController.getUserContext(sessionId)
+    let enrichedText = userBrowserContext
+      ? `${buildDynamicContext({ userBrowserContext })}\n\n${text}`
+      : text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`

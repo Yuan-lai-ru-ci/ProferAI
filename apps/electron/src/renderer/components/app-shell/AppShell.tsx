@@ -242,11 +242,18 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
       {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭）。
           团队工作区会把按钮嵌入文件管理顶栏，避免右侧 Agent 收起条被覆盖。 */}
-      {!showTeamWorkspaceView && activeView !== 'knowledge-base' && <WindowControls />}
+      {!showTeamWorkspaceView && <WindowControls />}
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-background">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
-        <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
+        <div
+          className={cn(
+            isClassic ? 'p-2 pr-0' : '',
+            // 收起 rail 必须压过其右侧的分隔线；冷启动直接恢复收起状态时，
+            // 分隔线处于更高层会裁掉 rail 最右侧，造成整列图标视觉上向左偏移。
+            sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[60] flex-none crt-sidebar',
+          )}
+        >
           <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
           {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
           {!sidebarCollapsed && (

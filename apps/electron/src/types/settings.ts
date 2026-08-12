@@ -224,6 +224,9 @@ export const DEFAULT_UI_SCALE: UiScale = 'standard'
 /** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
 
+/** 提升此版本可要求用户重新确认更新后的受管浏览器风险告知。 */
+export const BROWSER_RISK_DISCLAIMER_VERSION = 1
+
 /** 应用设置 */
 export interface AppSettings {
   /** 主题模式 */
@@ -266,6 +269,10 @@ export interface AppSettings {
   agentMaxBudgetUsd?: number
   /** Agent 最大轮次（0 或 undefined = SDK 默认） */
   agentMaxTurns?: number
+  /** 已确认的受管浏览器风险告知版本；低于当前版本时首次使用会再次要求确认。 */
+  browserRiskDisclaimerVersion?: number
+  /** 新标签页默认首页 URL；空串/未设置 = 显示自定义起始页。 */
+  browserHomeUrl?: string
   /** 教程推荐横幅是否已关闭 */
   tutorialBannerDismissed?: boolean
   /** 自动归档天数（0 = 禁用，默认 7） */
@@ -304,8 +311,6 @@ export interface AppSettings {
   planningWindowState?: MainWindowState
   /** 是否开机自启动（默认 false） */
   autoLaunch?: boolean
-  /** 是否在侧边栏显示论文知识库入口（默认 true） */
-  paperKnowledgeBaseEnabled?: boolean
   /** 是否启用局域网移动模式（试验版）；启动后自动恢复。 */
   tabletModeEnabled?: boolean
   /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */
@@ -339,6 +344,8 @@ export interface TabletModeStatus {
   localUrl: string | null
   lanUrl: string | null
   token: string | null
+  /** 最近一次启动失败原因；服务恢复后清空。 */
+  error: string | null
 }
 
 export const SKIN_IPC_CHANNELS = {
@@ -358,6 +365,7 @@ export const SKIN_IPC_CHANNELS = {
 } as const
 
 export const SETTINGS_IPC_CHANNELS = {
+  RENDERER_READY: 'settings:renderer-ready',
   GET: 'settings:get',
   UPDATE: 'settings:update',
   UPDATE_SYNC: 'settings:update-sync',
@@ -373,6 +381,8 @@ export const SETTINGS_IPC_CHANNELS = {
   SET_TABLET_MODE_ENABLED: 'settings:set-tablet-mode-enabled',
   /** 设置移动模式服务端口（保存并热应用；服务运行时自动重启） */
   SET_TABLET_MODE_PORT: 'settings:set-tablet-mode-port',
+  /** 获取安卓版 APK 扫码下载二维码（指向官网 profer.cn 域名；始终返回） */
+  GET_APK_QR: 'settings:get-apk-qr',
 } as const
 
 /** 自定义通知音 IPC 通道 */

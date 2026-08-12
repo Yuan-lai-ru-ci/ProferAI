@@ -563,6 +563,40 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
+  // 移动端触顶自动加载：hasMore（服务端还有更早）+ loading（防抖），供触顶加载与顶部状态使用。
+  const [tabletHistoryHasMore, setTabletHistoryHasMore] = React.useState(true)
+  const tabletHistoryHasMoreRef = React.useRef(true)
+  const [tabletHistoryLoading, setTabletHistoryLoading] = React.useState(false)
+  const tabletPullInFlightRef = React.useRef(false)
+  const handleLoadEarlierHistory = React.useCallback(() => {
+    if (!tabletMode) return
+    if (tabletPullInFlightRef.current) return
+    if (!tabletHistoryHasMoreRef.current) return
+    tabletPullInFlightRef.current = true
+    setTabletHistoryLoading(true)
+    const api = window.electronAPI as unknown as {
+      getAgentSessionSDKMessages?: (id: string, opts?: unknown) => Promise<unknown>
+      getSdkMessagesHasMore?: (id: string) => boolean
+    }
+    ;(api.getAgentSessionSDKMessages?.(sessionId, { pullEarlier: true }) ?? Promise.resolve([]))
+      .then((sdkMsgs) => {
+        const arr = Array.isArray(sdkMsgs) ? (sdkMsgs as SDKMessage[]) : []
+        if (arr.length > 0) {
+          setPersistedSDKMessages(arr)
+        }
+        const more = api.getSdkMessagesHasMore?.(sessionId)
+        const nextHasMore = typeof more === 'boolean' ? more : tabletHistoryHasMoreRef.current
+        tabletHistoryHasMoreRef.current = nextHasMore
+        setTabletHistoryHasMore(nextHasMore)
+      })
+      .catch(() => {
+        // 拉取失败：不阻断，暂不再次自动触发
+      })
+      .finally(() => {
+        tabletPullInFlightRef.current = false
+        setTabletHistoryLoading(false)
+      })
+  }, [tabletMode, sessionId])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
   // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
@@ -957,6 +991,10 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const isSessionSwitch = loadingSessionIdRef.current !== sessionId
     if (isSessionSwitch) {
       loadingSessionIdRef.current = sessionId
+      // 移动端：切会话时重置触顶加载状态（首次默认假设还有更多，待首帧返回后校正）。
+      tabletHistoryHasMoreRef.current = true
+      setTabletHistoryHasMore(true)
+      setTabletHistoryLoading(false)
       // 命中缓存则立即填充，消除「先清空 → 等 IPC 全量读盘」的可见空窗；
       // IPC 返回后仍会以最新数据覆盖。未命中才回退到清空 + loading 态。
       // 注意：refreshVersion bump（流结束/出错/rewind）不是会话切换，
@@ -971,14 +1009,29 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       }
     }
     let cancelled = false
-    window.electronAPI.getAgentSessionSDKMessages(sessionId)
+    // 移动端打开会话：显式 paginateFirst 走首帧分页（无参=全量，留给侧栏预览）。桌面无参全量。
+    const loadPromise = tabletMode
+      ? (window.electronAPI as unknown as { getAgentSessionSDKMessages?: (id: string, opts?: unknown) => Promise<unknown> }).getAgentSessionSDKMessages?.(sessionId, { paginateFirst: 4 }) ?? Promise.resolve([])
+      : window.electronAPI.getAgentSessionSDKMessages(sessionId)
+    loadPromise
       .then((sdkMsgs) => {
         if (cancelled) return
+        const normalized: SDKMessage[] = Array.isArray(sdkMsgs) ? (sdkMsgs as SDKMessage[]) : []
         // 写入缓存（含 LRU 淘汰，防止会话数增长导致内存无限膨胀）
-        setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, sdkMsgs))
+        setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, normalized))
         unstable_batchedUpdates(() => {
-          setPersistedSDKMessages(sdkMsgs)
+          setPersistedSDKMessages(normalized)
           setMessagesLoaded(true)
+
+          // 移动端：首帧加载后同步服务端 hasMore，驱动触顶加载可用性。
+          if (isSessionSwitch) {
+            const api = window.electronAPI as unknown as { getSdkMessagesHasMore?: (id: string) => boolean }
+            const more = api.getSdkMessagesHasMore?.(sessionId)
+            if (typeof more === 'boolean') {
+              tabletHistoryHasMoreRef.current = more
+              setTabletHistoryHasMore(more)
+            }
+          }
 
           // 消息加载完成后，同步清除流式展示状态和实时消息，
           // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
@@ -1045,7 +1098,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         setMessagesLoaded(true)
       })
     return () => { cancelled = true }
-  }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, setMessagesCache, store])
+  }, [sessionId, refreshVersion, tabletMode, setStreamingStates, setLiveMessagesMap, setMessagesCache, store])
 
   // 从会话元数据初始化附加目录（仅冷启动水合，后续由 handleAttachFolder/handleDetachDirectory 实时写入）
   React.useEffect(() => {
@@ -2764,6 +2817,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
           tabletMode={tabletMode}
+          onLoadEarlierHistory={tabletMode ? handleLoadEarlierHistory : undefined}
+          historyMoreAvailable={tabletMode ? tabletHistoryHasMore : undefined}
+          historyLoadingEarlier={tabletMode && tabletHistoryLoading ? true : undefined}
         />
 
         {/* 权限请求横幅 */}

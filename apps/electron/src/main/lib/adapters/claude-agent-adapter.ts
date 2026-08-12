@@ -439,11 +439,29 @@ export function mapSDKErrorToTypedError(
   }
 
   const httpStatus = extractHttpStatusFromErrorText(detailedMessage, originalError)
+  const errorText = `${detailedMessage}\n${originalError}`
+
+  // 供应商渠道自身余额耗尽不等于用户积分不足。服务端会标记为
+  // upstream_channel_insufficient；保留原始上游错误时也在客户端兜底区分。
+  if (/upstream_channel_insufficient|insufficient\s+account\s+balance/i.test(errorText)) {
+    return {
+      code: 'provider_error',
+      title: '模型供应通道暂不可用',
+      message: '当前模型供应通道额度不足，已通知维护方处理；请稍后重试或切换模型',
+      actions: [
+        { key: 's', label: '设置', action: 'settings' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: true,
+      retryDelayMs: 3000,
+      originalError,
+    }
+  }
 
   // 额度不足：Profer 自有 402 或 New API 上游 403「预扣费额度失败」（含美元文案）。
   // 必须在 errorMap['authentication_failed'] 之前拦截——New API 的额度 403 文本含
   // "Failed to authenticate" 会被误判成 invalid_api_key 认证失败。
-  const creditInfo = detectInsufficientCredits(`${detailedMessage}\n${originalError}`, httpStatus ?? undefined)
+  const creditInfo = detectInsufficientCredits(errorText, httpStatus ?? undefined)
   if (creditInfo) {
     return {
       code: 'insufficient_credits',

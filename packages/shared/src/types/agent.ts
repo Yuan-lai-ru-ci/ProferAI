@@ -628,6 +628,10 @@ export type ProferEvent =
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
   | { type: 'run_idle'; sessionId: string }
+  // 会话 run 真正完成（平板 remote-service 在 orchestrator onComplete 时广播，携带完成元数据）。
+  // 与 run_idle 的区别：run_idle 表示 active 所有权释放（可能无结果），run_completed 表示本轮有确定结束。
+  // 平板靠它拿到真实 startedAt/stoppedByUser，替代用 Date.now() 伪造 startedAt 的旧路。
+  | { type: 'run_completed'; sessionId: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }
 
 /** 外部入口触发 Agent 运行的来源 */
 export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation' | 'automation'
@@ -1630,6 +1634,41 @@ export const AGENT_IPC_CHANNELS = {
   REMOVE_KNOWLEDGE_REFERENCE: 'agent:remove-knowledge-reference',
   /** 中止 Agent 执行 */
   STOP_AGENT: 'agent:stop',
+
+  // Pi 受管浏览器（网页内容与 CDP 仅驻留主进程）
+  OPEN_BROWSER: 'agent:open-browser',
+  LIST_BROWSER_TABS: 'agent:list-browser-tabs',
+  CREATE_BROWSER_TAB: 'agent:create-browser-tab',
+  SELECT_BROWSER_TAB: 'agent:select-browser-tab',
+  CLOSE_BROWSER_TAB: 'agent:close-browser-tab',
+  GET_BROWSER_STATE: 'agent:get-browser-state',
+  /** 高频布局同步使用单向 IPC，不等待主进程 Promise。 */
+  SET_BROWSER_LAYOUT: 'agent:set-browser-layout',
+  NAVIGATE_BROWSER: 'agent:navigate-browser',
+  GO_BACK_BROWSER: 'agent:go-back-browser',
+  GO_FORWARD_BROWSER: 'agent:go-forward-browser',
+  RELOAD_BROWSER: 'agent:reload-browser',
+  /** 用户阅读用途：整页翻译当前 tab（toggle），返回翻译态。 */
+  TRANSLATE_BROWSER: 'agent:translate-browser',
+  SET_BROWSER_ZOOM: 'agent:set-browser-zoom',
+  /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
+  PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
+  /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
+  BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
+  /** 仅隐藏原生 WebContentsView，保留浏览器会话与标签。 */
+  HIDE_BROWSER: 'agent:hide-browser',
+  CLOSE_BROWSER: 'agent:close-browser',
+  BROWSER_STATE_CHANGED: 'agent:browser-state-changed',
+  /** 新标签页起始页数据（书签 + 最近访问 + 默认首页）。 */
+  GET_BROWSER_START_PAGE: 'agent:get-browser-start-page',
+  /** 新增书签，返回更新后的起始页状态。 */
+  ADD_BROWSER_BOOKMARK: 'agent:add-browser-bookmark',
+  /** 删除书签，返回更新后的起始页状态。 */
+  REMOVE_BROWSER_BOOKMARK: 'agent:remove-browser-bookmark',
+  /** 更新新标签页默认首页 URL（空串清除）。 */
+  UPDATE_BROWSER_HOME_URL: 'agent:update-browser-home-url',
+  /** 清空最近访问历史。 */
+  CLEAR_BROWSER_HISTORY: 'agent:clear-browser-history',
 
   // 后台任务管理
   /** 获取任务输出 */

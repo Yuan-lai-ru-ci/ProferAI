@@ -41,6 +41,7 @@ import {
   deleteAgentSession,
   forkAgentSession,
   moveSessionToWorkspace,
+  paginateSDKMessages,
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir } from './config-paths'
 import { getSettings } from './settings-service'
@@ -97,6 +98,9 @@ const TABLET_STATIC_CSP =
 let httpServer: HttpServer | null = null
 let wss: WebSocketServer | null = null
 
+/** 闲置踢人定时器：定期扫描连接，清理长时间无任何入站消息（含 ping）的假死/僵尸连接。 */
+let idleSweepTimer: ReturnType<typeof setInterval> | null = null
+
 /** agentEventBus 订阅句柄 */
 let eventBusUnsubscribe: (() => void) | null = null
 
@@ -114,6 +118,92 @@ let runtimeEnabled = false
 
 /** 平板会话删除协调器：合并并发删除 + stop-and-wait 成功前绝不清理持久化数据（对齐桌面 IPC 语义） */
 const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
+
+/**
+ * send_message 幂等去重表：key = 客户端生成的 clientMessageId，value = 首次接收时间戳。
+ * 平移板弱网下重连重放同一逻辑消息时，若该消息已处理过则直接返回 accepted，避免重复启动 run。
+ * 有界：保留固定时间窗口（DEDUP_TTL_MS）内的记录，超时后清理，防止长跑内存无限增长。
+ */
+const SEND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000 // 10 分钟
+const SEND_MESSAGE_DEDUP_MAX = 512 // 最大保留条数，超出时清理最早条目
+const sendMessageDedup = new Map<string, number>()
+
+/** 服务端闲置踢人阈值：超过此毫秒数无任何入站消息（含 ping）判定假死，terminate 连接。 */
+const WS_IDLE_TIMEOUT_MS = 90 * 1000
+/** 闲置扫描间隔。 */
+const IDLE_SWEEP_INTERVAL_MS = 30 * 1000
+
+/**
+ * partial assistant 消息（Pi 的累计全文预览）合并窗口：
+ * 连续到达的 partial 只广播窗口内最后一个，减少平板弱网/移动端的传输与渲染抖动。
+ * Pi 的 partial 是同 UUID 覆盖式累计全文，final 完整消息总会在 result 前送达，
+ * 中间 partial 丢弃不影响最终正确性。
+ */
+const PARTIAL_MERGE_WINDOW_MS = 60
+
+/** 按 sessionId 的 partial 合并定时器；final/非 partial 到达时取消 pending，保证顺序与正确性。 */
+const partialMergeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** 判断一个 agentEventBus payload 是否为 partial sdk_message（Pi 流式累计预览）。 */
+function isPartialSdkPayload(payload: unknown): boolean {
+  const p = payload as { kind?: string; message?: Record<string, unknown> } | null
+  return p?.kind === 'sdk_message' && p.message?._partial === true
+}
+
+/** 真正把一条 agent_event 帧广播给所有已连接平板客户端。 */
+function broadcastAgentFrame(sessionId: string, payload: unknown): void {
+  const frame = JSON.stringify({ kind: 'agent_event', sessionId, payload })
+  for (const client of wss?.clients ?? []) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(frame)
+    }
+  }
+}
+
+/**
+ * agentEventBus → 平板 WS 的广播入口，带 partial 合并：
+ * - partial sdk_message：合并到时间窗，只发最后一个（减少传输/渲染抖动）。
+ * - 非 partial（含 final 完整消息）：先取消 pending 的 partial 再立即广播，
+ *   确保 final 不被延迟到达的旧 partial 覆盖（renderer 按同 UUID 覆盖，顺序必须保证）。
+ */
+function broadcastAgentEvent(sessionId: string, payload: unknown): void {
+  if (isPartialSdkPayload(payload)) {
+    const existing = partialMergeTimers.get(sessionId)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      partialMergeTimers.delete(sessionId)
+      broadcastAgentFrame(sessionId, payload)
+    }, PARTIAL_MERGE_WINDOW_MS)
+    partialMergeTimers.set(sessionId, timer)
+    return
+  }
+  const pending = partialMergeTimers.get(sessionId)
+  if (pending) {
+    clearTimeout(pending)
+    partialMergeTimers.delete(sessionId)
+  }
+  broadcastAgentFrame(sessionId, payload)
+}
+
+/**
+ * send_message 幂等去重：返回 true 表示该 clientMessageId 已处理过（应静默接受，不重复 run）。
+ * 首次见到则登记时间戳并顺带清理过期/超量条目（摊销式，避免每次全表扫描）。
+ */
+function isSendMessageDuplicate(clientMessageId: string): boolean {
+  if (!clientMessageId) return false
+  const now = Date.now()
+  const seen = sendMessageDedup.get(clientMessageId)
+  if (seen !== undefined && now - seen < SEND_MESSAGE_DEDUP_TTL_MS) {
+    return true
+  }
+  // 登记 + 摊销清理：过期条目直接删；超量时删最早的一条（Map 迭代序即插入序）。
+  if (sendMessageDedup.size >= SEND_MESSAGE_DEDUP_MAX) {
+    const oldest = sendMessageDedup.keys().next().value
+    if (oldest !== undefined) sendMessageDedup.delete(oldest)
+  }
+  sendMessageDedup.set(clientMessageId, now)
+  return false
+}
 
 /** token 持久化文件（统一存配置目录，与 getConfigDir 一致；不再依赖进程 cwd） */
 function getTokenFilePath(): string {
@@ -177,7 +267,11 @@ export interface RemoteServiceStatus {
   localUrl: string | null
   lanUrl: string | null
   token: string | null
+  /** 最近一次启动失败原因；服务恢复后清空。 */
+  error: string | null
 }
+
+let remoteError: string | null = null
 
 function getLanUrl(port: number): string | null {
   try {
@@ -201,6 +295,7 @@ export function getRemoteServiceStatus(): RemoteServiceStatus {
     localUrl: listenAddress,
     lanUrl: listenAddress ? getLanUrl(port) : null,
     token: listenAddress ? accessToken : null,
+    error: remoteError,
   }
 }
 
@@ -642,8 +737,20 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'get_sdk_messages': {
       const id = parsed.sessionId as string
       if (!id) return { ok: false, error: '缺少 sessionId' }
-      // 返回原始 SDKMessage 数组，供桌面式 AgentMessages 渲染（与持久化格式一致）
-      return { ok: true, data: getAgentSessionSDKMessages(id) }
+      const messages = getAgentSessionSDKMessages(id)
+      // 分页参数存在时返回分页结构（移动端传输层懒加载）；否则返回原始数组（兼容旧端/全文加载）。
+      const wantsPaged =
+        parsed.before !== undefined ||
+        parsed.targetMessages !== undefined
+      if (!wantsPaged) {
+        // 返回原始 SDKMessage 数组，供桌面式 AgentMessages 渲染（与持久化格式一致）
+        return { ok: true, data: messages }
+      }
+      const page = paginateSDKMessages(messages, {
+        before: typeof parsed.before === 'number' ? parsed.before : undefined,
+        targetMessages: typeof parsed.targetMessages === 'number' ? parsed.targetMessages : undefined,
+      })
+      return { ok: true, data: page }
     }
 
     case 'session_detail': {
@@ -761,14 +868,36 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       if (!channelId) return { ok: false, error: '缺少 channelId（无法确定 API Key）' }
       const modelId = parsed.modelId as string | undefined
       const workspaceId = parsed.workspaceId as string | undefined
+      const clientMessageId = typeof parsed.clientMessageId === 'string' ? parsed.clientMessageId : ''
 
-      // 异步执行，不阻塞 WS 响应；结果通过事件流返回
+      // 弱网重连重放幂等：平板断线后按原 clientMessageId 重发同一逻辑消息，这里去重，避免重复启动 run。
+      if (isSendMessageDuplicate(clientMessageId)) {
+        return { ok: true, data: { accepted: true, deduped: true } }
+      }
+
+      // 异步执行，不阻塞 WS 响应；结果通过事件流返回。
+      // onComplete 不再空置：orchestrator 会在 run 真正结束时回调「已持久化的完整消息列表」，
+      // 这里把 completion 标记（携带最终消息 + 完成元数据）通过 agentEventBus 广播给平板，
+      // 让平板端能确定性地拿到"结果已落盘"的完成信号，而不是只依赖 run_idle 的间接触发。
       void runAgentHeadless(
         { sessionId, userMessage, channelId, modelId, workspaceId, startedAt: Date.now() },
         {
           source: 'bridge',
           onError: () => {},
-          onComplete: () => {},
+          onComplete: (_messages, opts) => {
+            agentEventBus.emit(sessionId, {
+              kind: 'profer_event',
+              event: {
+                type: 'run_completed',
+                sessionId,
+                stoppedByUser: opts?.stoppedByUser ?? false,
+                startedAt: opts?.startedAt ?? Date.now(),
+                resultSubtype: opts?.resultSubtype,
+                resultErrors: opts?.resultErrors,
+                backgroundTasksPending: opts?.backgroundTasksPending ?? false,
+              },
+            })
+          },
           onTitleUpdated: () => {},
         },
       ).catch((e) => {
@@ -1102,6 +1231,7 @@ export function startRemoteService(): string | null {
     return null
   }
   isStarted = true
+  remoteError = null
 
   // 初始化 token
   accessToken = loadOrCreateToken()
@@ -1112,7 +1242,6 @@ export function startRemoteService(): string | null {
 
   const port = getPort()
   httpServer = createServer((req, res) => {
-    // 健康检查
     // 健康检查（容忍 query，如 /health?token=xxx）
     if ((req.url || '').split('?')[0] === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -1126,6 +1255,21 @@ export function startRemoteService(): string | null {
 
   wss = new WebSocketServer({ server: httpServer, path: '/ws' })
 
+  // 闲置踢人：定期扫描，清除长时间（含心跳 ping）无任何活跃的假死连接。
+  // 平板 WebView 可能因网络切换/后台冻结形成半开连接，TCP 不报错但不再通信；
+  // 不清理会让这些连接永久占用，且客户端也因无 pong 而无法自愈。
+  if (idleSweepTimer) clearInterval(idleSweepTimer)
+  idleSweepTimer = setInterval(() => {
+    const now = Date.now()
+    for (const client of wss?.clients ?? []) {
+      const c = client as WebSocket & { __lastAlive?: number }
+      if (c.__lastAlive !== undefined && now - c.__lastAlive > WS_IDLE_TIMEOUT_MS) {
+        try { c.terminate() } catch { /* ignore */ }
+      }
+    }
+  }, IDLE_SWEEP_INTERVAL_MS)
+  if (typeof idleSweepTimer?.unref === 'function') idleSweepTimer.unref()
+
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     // 鉴权：WS 连接同样校验 token（query 或 header）
     if (!checkToken(req)) {
@@ -1133,19 +1277,34 @@ export function startRemoteService(): string | null {
       return
     }
     console.log('[Remote] 平板客户端已连接')
+    ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
 
     // 收到指令
     ws.on('message', (raw: RawData) => {
       let reqId: unknown = null
       let body: string
+      let parsedRaw: { type?: unknown } | null = null
       try {
         const parsed = JSON.parse(raw.toString())
+        parsedRaw = parsed
         // 命令追踪 ID：优先 _cmdId（平板 ws-client 新协议），兼容旧的 requestId
         reqId = parsed?._cmdId ?? parsed?.requestId ?? null
         body = raw.toString()
       } catch {
         body = raw.toString()
       }
+      // 更新存活时间（任何入站消息都算活跃，用于服务端闲置踢人）。
+      ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
+
+      // 心跳 ping：不回 command_result（避免 command_result 走 FIFO 兑底污染 pendingCommands），
+      // 直接回一个明确的 pong 帧，客户端据此做假死检测。
+      if (parsedRaw?.type === 'ping') {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ kind: 'pong', serverTime: Date.now() }))
+        }
+        return
+      }
+
       void handleCommand(body, reqId).then((result) => {
         // 将指令响应作为 "command_result" 事件回给客户端
         if (ws.readyState === WebSocket.OPEN) {
@@ -1166,12 +1325,7 @@ export function startRemoteService(): string | null {
 
   // 订阅 agentEventBus，把工作流事件广播给所有平板客户端
   eventBusUnsubscribe = agentEventBus.on((sessionId, payload) => {
-    const frame = JSON.stringify({ kind: 'agent_event', sessionId, payload })
-    for (const client of wss?.clients ?? []) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(frame)
-      }
-    }
+    broadcastAgentEvent(sessionId, payload)
   })
 
   // 订阅 chatEventBus，把 Chat 流式事件（chunk/reasoning/complete/error/tool-activity）
@@ -1190,13 +1344,23 @@ export function startRemoteService(): string | null {
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
   const HOST = process.env.PROFER_REMOTE_HOST || '0.0.0.0'
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    // listen() 是异步的；端口冲突不能冒泡成 Electron 主进程未捕获异常。
     isStarted = false
     listenAddress = null
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[Remote] 端口 ${port} 被占用，请通过 PROFER_REMOTE_PORT 更换端口`)
-    } else {
-      console.error('[Remote] 服务错误:', err)
-    }
+    remoteError = err.code === 'EADDRINUSE'
+      ? `端口 ${port} 已被占用，请关闭占用它的 Profer 实例，或在设置中改用其他端口。`
+      : `移动模式服务启动失败：${err.message || '未知错误'}`
+    console.error('[Remote]', remoteError, err)
+
+    eventBusUnsubscribe?.()
+    eventBusUnsubscribe = null
+    chatBusUnsubscribe?.()
+    chatBusUnsubscribe = null
+    try { wss?.close() } catch { /* ignore */ }
+    wss = null
+    const failedServer = httpServer
+    httpServer = null
+    try { failedServer?.close() } catch { /* ignore */ }
   })
 
   httpServer.listen(port, HOST, () => {
@@ -1223,6 +1387,7 @@ export function startRemoteService(): string | null {
 
   // Electron 主进程可能因 GUI/生命周期时序影响异步 bind，做一次就绪校验告警
   httpServer.on('listening', () => {
+    remoteError = null
     console.log(`[Remote] 服务已在 ${HOST}:${port} 就绪`)
   })
 
@@ -1235,6 +1400,14 @@ export function stopRemoteService(): void {
   eventBusUnsubscribe = null
   chatBusUnsubscribe?.()
   chatBusUnsubscribe = null
+  if (idleSweepTimer) {
+    clearInterval(idleSweepTimer)
+    idleSweepTimer = null
+  }
+  for (const t of partialMergeTimers.values()) {
+    clearTimeout(t)
+  }
+  partialMergeTimers.clear()
   try {
     wss?.close()
   } catch { /* ignore */ }
@@ -1245,5 +1418,6 @@ export function stopRemoteService(): void {
   httpServer = null
   isStarted = false
   listenAddress = null
+  remoteError = null
   console.log('[Remote] 移动版服务已停止')
 }
