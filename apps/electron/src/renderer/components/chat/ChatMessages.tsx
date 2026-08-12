@@ -114,6 +114,33 @@ function ScrollTopLoader({ hasMore, loading, onLoadMore }: ScrollTopLoaderProps)
   return null
 }
 
+/**
+ * 新一轮对话自动跟随滚动控制器（必须渲染在 <Conversation>(=StickToBottom) 内部）。
+ *
+ * use-stick-to-bottom 的默认行为：一旦用户向上滚动离开底部（escapedFromLock=true），
+ * isAtBottom 会保持 false 且不再自动恢复；此后即便内容高度增加，scrollToBottom 首帧
+ * 也会因 `!state.isAtBottom` 直接中止，导致"翻看历史后再发新消息，界面不跟着往下走"。
+ *
+ * 这里在 streaming 由 false→true（新一轮对话开始）时主动调用 scrollToBottom()：
+ * - scrollToBottom() 默认不带 preserveScrollPosition，会先把 isAtBottom 置回 true 并解锁锁定；
+ * - 再平滑滚动回底部，让新消息与 assistant 输出持续自动跟随，符合"发新消息=回到最新内容"的用户预期。
+ */
+function StreamScrollFollow({ streaming }: { streaming: boolean }): React.ReactElement | null {
+  const { scrollToBottom } = useStickToBottomContext()
+  const prevStreamingRef = React.useRef(streaming)
+
+  React.useEffect(() => {
+    const wasStreaming = prevStreamingRef.current
+    prevStreamingRef.current = streaming
+    // 仅在 streaming false → true（新一轮对话开始）时把视口拉回底部并恢复跟随。
+    if (streaming && !wasStreaming) {
+      scrollToBottom({ animation: 'smooth', wait: true })
+    }
+  }, [streaming, scrollToBottom])
+
+  return null
+}
+
 // ===== 主组件 =====
 
 interface ChatMessagesProps {
@@ -366,6 +393,7 @@ export function ChatMessages({
         loading={loadingMore}
         onLoadMore={handleLoadMore}
       />
+      <StreamScrollFollow streaming={streaming} />
       <ConversationContent>
         {messages.length === 0 && !streaming ? (
           <EmptyState />

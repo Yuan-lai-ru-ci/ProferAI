@@ -97,10 +97,16 @@ export const tabMruAtom = atom<string[]>([])
  */
 export const sessionViewStateMapAtom = atom<Map<string, SessionViewState>>(new Map())
 
-/** 侧边栏是否收起（持久化） */
+/**
+ * 侧边栏是否收起（持久化）。
+ * 启动时同步读取 localStorage，避免先按默认展开态渲染、随后才收起，
+ * 造成刷新首帧将完整侧栏内容裁进 60px 窄轨道的闪烁。
+ */
 export const sidebarCollapsedAtom = atomWithStorage<boolean>(
   'profer-sidebar-collapsed',
   false,
+  undefined,
+  { getOnInit: true },
 )
 
 /** Tab 迷你地图缓存（每个 Tab 的消息预览列表，在消息组件中填充） */
