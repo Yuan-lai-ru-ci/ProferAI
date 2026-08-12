@@ -46,8 +46,17 @@ const CONFIG_VERSION = 1
 /** 渠道测试请求超时（毫秒） */
 const CHANNEL_TEST_TIMEOUT_MS = 15_000
 
-function withTimeout(init: RequestInit): RequestInit {
-  return { ...init, signal: AbortSignal.timeout(CHANNEL_TEST_TIMEOUT_MS) }
+/** 订阅 Plan / 余额查询超时（毫秒）。余额是 hover 触发的轻量查询，
+ * 不应复用连通性测试的 15s 超时，否则网络抖动时用户会卡很久转圈 */
+const PLAN_QUOTA_TIMEOUT_MS = 5_000
+
+function withTimeout(init: RequestInit, timeoutMs: number = CHANNEL_TEST_TIMEOUT_MS): RequestInit {
+  return { ...init, signal: AbortSignal.timeout(timeoutMs) }
+}
+
+/** 余额/额度查询专用：短超时，快速失败 */
+function withPlanQuotaTimeout(init: RequestInit): RequestInit {
+  return withTimeout(init, PLAN_QUOTA_TIMEOUT_MS)
 }
 
 export function resolveChannelAgentBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | 'agentBaseUrl'>): string | undefined {
@@ -893,7 +902,7 @@ function createUnsupportedPlanQuota(provider: ProviderType, message: string): im
 
 async function queryKimiPlanQuota(apiKey: string, proxyUrl?: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
   const fetchFn = getFetchFn(proxyUrl)
-  const response = await fetchFn('https://api.kimi.com/coding/v1/usages', withTimeout({
+  const response = await fetchFn('https://api.kimi.com/coding/v1/usages', withPlanQuotaTimeout({
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -982,7 +991,7 @@ async function queryMiniMaxPlanQuota(apiKey: string, baseUrl: string, proxyUrl?:
     // 保持默认查询地址
   }
 
-  const response = await fetchFn(requestUrl, withTimeout({
+  const response = await fetchFn(requestUrl, withPlanQuotaTimeout({
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -1058,7 +1067,7 @@ async function queryDeepSeekBalance(apiKey: string, baseUrl: string, proxyUrl?: 
     // 保持官方默认查询地址
   }
 
-  const response = await fetchFn(requestUrl, withTimeout({
+  const response = await fetchFn(requestUrl, withPlanQuotaTimeout({
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -1188,7 +1197,7 @@ async function fetchZhipuQuota(
   proxyUrl?: string,
 ): Promise<ZhipuQuotaResponse | { error: string }> {
   const fetchFn = getFetchFn(proxyUrl)
-  const response = await fetchFn(requestUrl, withTimeout({
+  const response = await fetchFn(requestUrl, withPlanQuotaTimeout({
     method: 'GET',
     headers: {
       Authorization: apiKey,
@@ -1293,22 +1302,25 @@ async function queryZhipuPlanQuota(
     createZhipuInternationalQuotaUrl({ type: '1' }),
   ]))
 
-  let lastUnsupported: import('@profer/shared').ChannelPlanQuotaResult | undefined
-  for (const requestUrl of requestUrls) {
-    const response = await fetchZhipuQuota(apiKey, requestUrl, proxyUrl)
-    if ('error' in response) {
-      lastUnsupported = createUnsupportedPlanQuota(provider, response.error)
-      continue
-    }
+  // 并行发起多个候选 URL，任一成功即短路返回；避免之前串行逐个 await、网络慢时逐个卡 5s 超时。
+  const results = await Promise.all(
+    requestUrls.map((requestUrl) => fetchZhipuQuota(apiKey, requestUrl, proxyUrl)),
+  )
 
-    const result = parseZhipuQuotaData(response, 'GLM Coding Plan', provider)
-    if (result.supported && result.windows.length > 0) {
-      return result
-    }
-    lastUnsupported = result
+  const supportedResult = results
+    .map((response) => ('error' in response ? null : parseZhipuQuotaData(response, 'GLM Coding Plan', provider)))
+    .find((result) => result?.supported && result.windows.length > 0)
+  if (supportedResult) return supportedResult
+
+  // 无成功结果时，回退到最后一条可用的错误信息（优先带 error 的，其次第一个解析结果）
+  const firstError = results.find((r) => 'error' in r)
+  if (firstError && 'error' in firstError) {
+    return createUnsupportedPlanQuota(provider, firstError.error)
   }
-
-  return lastUnsupported ?? createUnsupportedPlanQuota(provider, '智谱 Coding Plan 未返回窗口额度数据')
+  const firstParsed = results
+    .map((response) => ('error' in response ? null : parseZhipuQuotaData(response, 'GLM Coding Plan', provider)))
+    .find((result) => result != null)
+  return firstParsed ?? createUnsupportedPlanQuota(provider, '智谱 Coding Plan 未返回窗口额度数据')
 }
 
 export async function getChannelPlanQuota(channelId: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
@@ -1334,10 +1346,15 @@ export async function getChannelPlanQuota(channelId: string): Promise<import('@p
     return createUnsupportedPlanQuota(provider, '无法读取渠道 API Key')
   }
 
+  // 统一注入渠道 updatedAt，renderer 侧据此区分「渠道是否为当前版本」并命中缓存。
+  const withChannelVersion = (
+    result: import('@profer/shared').ChannelPlanQuotaResult,
+  ): import('@profer/shared').ChannelPlanQuotaResult => ({ ...result, channelUpdatedAt: channel.updatedAt })
+
   try {
     const proxyUrl = await getEffectiveProxyUrl()
     if (provider === 'openai-codex') {
-      const response = await getFetchFn(proxyUrl)('https://chatgpt.com/backend-api/wham/usage', withTimeout({
+      const response = await getFetchFn(proxyUrl)('https://chatgpt.com/backend-api/wham/usage', withPlanQuotaTimeout({
         method: 'GET',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -1348,24 +1365,25 @@ export async function getChannelPlanQuota(channelId: string): Promise<import('@p
       if (!response.ok) {
         return createUnsupportedPlanQuota(provider, `ChatGPT Codex 额度查询失败: HTTP ${response.status}`)
       }
-      return parseCodexPlanQuotaResponse(await response.json())
+      return withChannelVersion(parseCodexPlanQuotaResponse(await response.json()))
     }
     if (provider === 'deepseek') {
-      return await queryDeepSeekBalance(apiKey, channel.baseUrl, proxyUrl)
+      return withChannelVersion(await queryDeepSeekBalance(apiKey, channel.baseUrl, proxyUrl))
     }
     if (provider === 'kimi-coding' || channel.baseUrl.includes('api.kimi.com/coding')) {
-      return await queryKimiPlanQuota(apiKey, proxyUrl)
+      return withChannelVersion(await queryKimiPlanQuota(apiKey, proxyUrl))
     }
     if (provider === 'minimax') {
-      return await queryMiniMaxPlanQuota(apiKey, channel.baseUrl, proxyUrl)
+      return withChannelVersion(await queryMiniMaxPlanQuota(apiKey, channel.baseUrl, proxyUrl))
     }
     if (provider === 'zhipu-coding') {
-      return await queryZhipuPlanQuota(apiKey, channel.baseUrl, proxyUrl, provider)
+      return withChannelVersion(await queryZhipuPlanQuota(apiKey, channel.baseUrl, proxyUrl, provider))
     }
-    return createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询')
+
+    return withChannelVersion(createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询'))
   } catch (error) {
     const message = error instanceof Error ? error.message : '订阅额度查询失败'
-    return createUnsupportedPlanQuota(provider, message)
+    return withChannelVersion(createUnsupportedPlanQuota(provider, message))
   }
 }
 
