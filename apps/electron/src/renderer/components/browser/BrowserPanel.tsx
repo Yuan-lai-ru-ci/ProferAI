@@ -21,6 +21,8 @@ import { BrowserStartPage } from './BrowserStartPage'
 interface BrowserPanelProps {
   sessionId: string
   state: BrowserViewState | null
+  /** 归属会话的标题，用于在悬浮面板上标识浏览器属于哪个会话。 */
+  sessionTitle?: string
   /** 浏览器卡片实际位于窗口右缘时，为悬浮 WindowControls 保留空间。 */
   avoidWindowControls?: boolean
   /** 外层布局发生结构性变化时重建定位锚点，但不销毁网页标签。 */
@@ -28,7 +30,7 @@ interface BrowserPanelProps {
   onClose: () => void
 }
 
-export function BrowserPanel({ sessionId, state, avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
+export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
   const [url, setUrl] = React.useState(state?.url ?? '')
   // 用户正在地址栏输入/聚焦时，禁止用主进程回推的 state.url 覆盖，避免被 Agent 导航顶掉输入。
   const urlDirtyRef = React.useRef(false)
@@ -267,10 +269,25 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   const isBookmarked = !!state?.url && (startPage?.bookmarks.some((b) => b.url === state.url) ?? false)
 
   const title = state?.title || '受管浏览器'
+  // 会话来源标识：区分用户手动、自动任务、委派子会话，让用户一眼看出是谁在驱动这个浏览器。
+  const sourceLabel = state?.executionSource === 'automation' ? '自动任务' : state?.executionSource === 'delegation' ? '委派' : null
   return (
     <div className="@container flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl bg-content-area shadow-xl dark:shadow-sm titlebar-no-drag">
       <div className={`flex items-center h-[34px] gap-1 px-2 border-b border-border/40 bg-muted/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
         <Globe2 className="size-3.5 shrink-0 text-primary ml-1" />
+        {sessionTitle && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex min-w-0 max-w-[180px] shrink items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                <span className="truncate">{sessionTitle}</span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>该浏览器属于会话「{sessionTitle}」{sourceLabel ? `（${sourceLabel}运行）` : ''}</TooltipContent>
+          </Tooltip>
+        )}
+        {sourceLabel && (
+          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">{sourceLabel}</span>
+        )}
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || !state?.canGoBack} onClick={() => void window.electronAPI.goBackAgentBrowser?.(sessionId)}><ArrowLeft className="size-3.5" /></Button></TooltipTrigger><TooltipContent>后退</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || !state?.canGoForward} onClick={() => void window.electronAPI.goForwardAgentBrowser?.(sessionId)}><ArrowRight className="size-3.5" /></Button></TooltipTrigger><TooltipContent>前进</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked} onClick={() => void window.electronAPI.reloadAgentBrowser?.(sessionId)}><RefreshCw className="size-3.5" /></Button></TooltipTrigger><TooltipContent>刷新</TooltipContent></Tooltip>
