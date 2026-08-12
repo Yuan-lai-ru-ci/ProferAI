@@ -68,7 +68,7 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
       frame = requestAnimationFrame(() => {
         frame = 0
         const rect = element.getBoundingClientRect()
-        void setLayout({
+        setLayout({
           sessionId,
           tabId,
           revision: nextLayoutRevision(),
@@ -85,6 +85,9 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
     const overlayObserver = new MutationObserver((mutations) => {
       if (mutationsAffectAppOverlay(mutations)) publishCurrentVisibility()
     })
+    // 主题/皮肤在 <html> 切换 dark、theme-*、skin-* class，并可能触发容器重排；
+    // body 的浮层观察无法看到此 mutation，必须立即重新测量原生宿主 bounds。
+    const themeObserver = new MutationObserver(() => publishCurrentVisibility())
     const publishBounded = () => publishCurrentVisibility()
     observer.observe(element)
     overlayObserver.observe(document.body, {
@@ -93,6 +96,7 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
       attributes: true,
       attributeFilter: ['class', 'data-mounted', 'data-state', 'data-visible', 'style'],
     })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
     window.addEventListener('resize', publishBounded)
     publishCurrentVisibility()
 
@@ -123,10 +127,11 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
     return () => {
       observer.disconnect()
       overlayObserver.disconnect()
+      themeObserver.disconnect()
       window.removeEventListener('resize', publishBounded)
       if (frame) cancelAnimationFrame(frame)
       if (layoutFrame) cancelAnimationFrame(layoutFrame)
-      void setLayout({ sessionId, tabId, revision: nextLayoutRevision(), visible: false, bounds: { x: 0, y: 0, width: 0, height: 0 } })
+      setLayout({ sessionId, tabId, revision: nextLayoutRevision(), visible: false, bounds: { x: 0, y: 0, width: 0, height: 0 } })
     }
   }, [sessionId, tabId])
 

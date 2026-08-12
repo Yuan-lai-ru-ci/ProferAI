@@ -197,7 +197,7 @@ export interface ElectronAPI {
   selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState>
   closeAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState | null>
   getAgentBrowserState: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState | null>
-  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => Promise<void>
+  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => void
   navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => Promise<import('@profer/shared').BrowserViewState>
   goBackAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
   goForwardAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
@@ -1428,7 +1428,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_STATE, sessionId)
   },
   setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
+    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
   },
   navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.NAVIGATE_BROWSER, input)
