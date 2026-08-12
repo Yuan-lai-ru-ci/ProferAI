@@ -42,6 +42,7 @@ import {
   forkAgentSession,
   moveSessionToWorkspace,
   paginateSDKMessages,
+  searchAgentSessionMessages,
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir } from './config-paths'
 import { getSettings } from './settings-service'
@@ -1116,6 +1117,16 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const query = typeof parsed.query === 'string' ? parsed.query.trim() : ''
       if (!query) return { ok: false, error: '缺少查询词' }
       return { ok: true, data: searchConversationMessages(query) }
+    }
+
+    case 'search_agent_session_messages': {
+      const query = typeof parsed.query === 'string' ? parsed.query.trim() : ''
+      if (!query) return { ok: false, error: '缺少查询词' }
+      try {
+        return { ok: true, data: await searchAgentSessionMessages(query) }
+      } catch (e) {
+        return { ok: false, error: String(e) }
+      }
     }
 
     case 'chat_send_message': {

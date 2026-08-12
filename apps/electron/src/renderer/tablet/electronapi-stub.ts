@@ -72,6 +72,7 @@ interface TabletRemoteClient {
   toggleConversationPin(conversationId: string): Promise<unknown>
   toggleConversationArchive(conversationId: string): Promise<unknown>
   searchChatMessages(query: string): Promise<unknown>
+  searchAgentSessionMessages(query: string): Promise<unknown>
   chatSendMessage(payload: {
     conversationId: string
     userMessage: string
@@ -661,9 +662,10 @@ export function installElectronApiStub(): void {
       if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       return remoteClient.searchChatMessages(query)
     },
-    // remote-service 暂无 Agent 会话消息搜索指令：显式返回空数组（不能靠 Proxy 兜底 undefined，
-    // SearchDialog 的 runSearch 会对两个结果统一 .filter，undefined 会让整个内容搜索崩溃）。
-    searchAgentSessionMessages: () => Promise.resolve([]),
+    searchAgentSessionMessages: (query: string) => {
+      if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
+      return remoteClient.searchAgentSessionMessages(query)
+    },
     sendMessage: (input: Record<string, unknown>) => {
       if (!remoteClient) return Promise.reject(new Error('移动端连接未就绪'))
       const conv = input as {
