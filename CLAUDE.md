@@ -335,50 +335,11 @@ bun run generate:icons    # 生成应用图标
 - MCP 配置和 Skills 按工作区管理
 - 团队文件以服务器清单为唯一数据源，本地 `workspace-files/` 仅作为预览、打开和 Agent 解读的按需缓存
 
-## 团队服务器架构（`server/`）
+## 团队服务器（`server/`）
 
-Hono + better-sqlite3 + JWT，Docker 部署。
-
-```
-server/
-├── index.js                     # 入口
-├── src/
-│   ├── config.js                # 环境变量配置
-│   ├── db.js                    # SQLite 数据库初始化 + 表结构（33KB）
-│   ├── utils.js                 # 工具函数（密码哈希、safePath 等）
-│   ├── audit.js                 # 审计日志
-│   ├── billing-utils.js         # 积分计费工具
-│   ├── newapi-client.js         # NewAPI 代理客户端
-│   ├── rate-limiter.js          # 限流器
-│   ├── request-log-utils.js     # 请求日志
-│   ├── middleware/               # admin、credits 中间件
-│   ├── routes/
-│   │   ├── auth.js              # 注册/登录/刷新/登出
-│   │   ├── workspaces.js        # 工作区 CRUD + 成员 + 邀请
-│   │   ├── invitations.js       # 邀请验证/接受/拒绝
-│   │   ├── files.js             # 文件上传/下载/移动/删除
-│   │   ├── sync.js              # 双向同步 (push/pull)
-│   │   ├── heartbeat.js         # 心跳上报
-│   │   ├── proxy/chat.js        # NewAPI Chat 代理
-│   │   ├── account/channels.js  # 账户渠道管理
-│   │   ├── account/credits.js   # 账户积分查询
-│   │   ├── admin/               # 管理后台路由（激活码/渠道/积分/定价/用户）
-│   │   └── admin-ui/index.html  # 管理后台 SPA（44KB）
-│   ├── shared/
-│   │   ├── channel-utils.js     # 渠道工具
-│   │   ├── newapi-channel-sync.js # NewAPI 渠道同步
-│   │   └── pricing-cache.js     # 定价缓存
-│   └── test-helpers/            # 测试辅助
-├── scripts/                     # 运维脚本
-│   ├── grant-monthly.js         # 月度积分发放
-│   ├── migrate-billing-units.js # 计费单位迁移
-│   ├── mock-relay.js            # Mock 中继
-│   └── newapi-probe.js          # NewAPI 探测
-├── docker-compose.yml
-└── Dockerfile
-```
-
-**安全特性**：JWT_SECRET 强制环境变量、Admin 密码环境变量（未设置则随机生成）、PBKDF2 随机盐、限流、账户锁定、防路径遍历、`MAX_FILE_SIZE` 文件大小上限
+> 🔴 **server 服务端已迁移至本地私有 git 仓库**（`D:\profer\server-private.git`），不再随本公开仓库发布，`server/` 仅以未跟踪工作树目录形式保留在本地供开发。
+>
+> 在公开仓库中：不要提交、讨论 server 源码结构、服务器 IP、部署路径、凭据等敏感信息。server 开发/发布请到私有仓库 `server-private.git` 中操作，完整架构文档见私有仓库。
 
 ## 默认 Skills（`apps/electron/default-skills/`）
 
@@ -488,12 +449,10 @@ GITHUB_TOKEN 推 tag 不触发 release.yml 且并发 bump 冲突，见 `workspac
 git tag -a vX.Y.Z -m "Profer vX.Y.Z"
 git push origin vX.Y.Z
 
-# 2) 国内版（更新源：47.109.108.57）
+# 2) 国内版（更新源：私有部署）
 bun run dist:win
 
-# 3) 上传国内更新服务器
-scp "out/Profer Setup *.exe" out/latest.yml out/*.blockmap ecs-user@47.109.108.57:/home/ecs-user/profer-updates/
-ssh ecs-user@47.109.108.57 "sudo cp /home/ecs-user/profer-updates/* /usr/share/nginx/html/profer-updates/"
+# 3) 上传国内更新服务器（scp/ssh 目标路径见本地发布脚本 scripts/push-release.cjs，勿在公开处改写）
 ```
 
 > 注意：push-release.cjs 通道二的 commit 必须带 `[auto-release]` 后缀（防空 bump）；tag 与 package.json 版本必须一致（release.yml 校验）。
@@ -657,7 +616,7 @@ React UI 更新
 - 新增 `agent-retry-utils.test.ts`、`agent-directory-utils.test.ts`、`server/src/utils.test.js`（37 用例）
 
 ### 部署
-- 服务器：`ecs-user@47.109.108.57:~/proma-team-server/`，端口 3456，nginx 反代 `/proma/` → `:3456`
+- 团队服务器部署详情已随 server 迁移至本地私有仓库 `server-private.git`，公开仓库不再记录服务器地址与路径。
 
 ## 后续计划
 
