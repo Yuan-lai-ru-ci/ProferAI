@@ -68,7 +68,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           type="button"
           onClick={() => onTabChange('session')}
           className={cn(
-            'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer',
+            'flex-1 min-w-0 px-3 h-[34px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
             'border-t border-l border-r',
             isClassic ? 'rounded-t-lg' : 'rounded-none',
             activeTab === 'session'
@@ -82,7 +82,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           type="button"
           onClick={() => onTabChange('workspace')}
           className={cn(
-            'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer',
+            'flex-1 min-w-0 px-3 h-[34px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
             'border-t border-l border-r',
             isClassic ? 'rounded-t-lg' : 'rounded-none',
             activeTab === 'workspace'
@@ -96,7 +96,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           type="button"
           onClick={handleChangesClick}
           className={cn(
-            'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer relative',
+            'flex-1 min-w-0 px-3 h-[34px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer relative',
             'border-t border-l border-r',
             isClassic ? 'rounded-t-lg' : 'rounded-none',
             activeTab === 'changes'
