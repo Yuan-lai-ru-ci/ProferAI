@@ -334,9 +334,63 @@ export async function login(
   }
 }
 
-/**
- * 注册账户（邀请码制）
- */
+export interface RegistrationOptions {
+  openRegistration: boolean
+}
+
+export interface RegistrationOtpResult {
+  success: boolean
+  otpToken?: string
+  resendAfterSec?: number
+  error?: string
+}
+
+async function requestPublicAuth<T>(path: string, body?: unknown): Promise<{ ok: boolean; status: number; data: T & { error?: string } }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await (undiciFetch as unknown as typeof fetch)(`${DEFAULT_TEAM_SERVER_URL}${API_PREFIX}/auth${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    } as RequestInit)
+    const data = await response.json() as T & { error?: string }
+    return { ok: response.ok, status: response.status, data }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export async function getRegistrationOptions(): Promise<RegistrationOptions> {
+  try {
+    const result = await requestPublicAuth<RegistrationOptions>('/registration-options')
+    return result.ok ? { openRegistration: !!result.data.openRegistration } : { openRegistration: false }
+  } catch {
+    return { openRegistration: false }
+  }
+}
+
+export async function sendRegistrationOtp(email: string): Promise<RegistrationOtpResult> {
+  try {
+    const result = await requestPublicAuth<{ otpToken?: string; resendAfterSec?: number }>('/register-otp/send', { email })
+    if (!result.ok) return { success: false, error: result.data.error || `服务器错误 (${result.status})`, resendAfterSec: result.data.resendAfterSec }
+    return { success: true, otpToken: result.data.otpToken, resendAfterSec: result.data.resendAfterSec }
+  } catch {
+    return { success: false, error: '无法连接到团队服务器' }
+  }
+}
+
+export async function verifyRegistrationOtp(email: string, otpToken: string, code: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const result = await requestPublicAuth<{ verified?: boolean }>('/register-otp/verify', { email, otpToken, code })
+    return result.ok && result.data.verified ? { success: true } : { success: false, error: result.data.error || '验证码校验失败' }
+  } catch {
+    return { success: false, error: '无法连接到团队服务器' }
+  }
+}
+
+/** 注册账户（邀请码、激活码或开放注册 OTP） */
 export async function register(
   email: string,
   password: string,
@@ -344,6 +398,8 @@ export async function register(
   inviteCode?: string,
   activationCode?: string,
   invitationToken?: string,
+  otpToken?: string,
+  emailOtp?: string,
 ): Promise<LoginResult> {
   const serverUrl = DEFAULT_TEAM_SERVER_URL
   const url = `${serverUrl}${API_PREFIX}/auth/register`
@@ -355,7 +411,7 @@ export async function register(
     const response = await (undiciFetch as unknown as typeof fetch)(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, displayName, inviteCode, activationCode, invitationToken, ...getDeviceAuthInfo() }),
+      body: JSON.stringify({ email, password, displayName, inviteCode, activationCode, invitationToken, otpToken, emailOtp, ...getDeviceAuthInfo() }),
       signal: controller.signal,
     } as RequestInit)
     clearTimeout(timeout)

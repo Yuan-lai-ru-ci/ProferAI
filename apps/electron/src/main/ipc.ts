@@ -5950,8 +5950,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.REGISTER,
-    async (_, credentials: { email: string; password: string; displayName: string; inviteCode?: string }) => {
-      const result = await register(credentials.email, credentials.password, credentials.displayName, credentials.inviteCode)
+    async (_, credentials: { email: string; password: string; displayName: string; inviteCode?: string; otpToken?: string; emailOtp?: string }) => {
+      const result = await register(credentials.email, credentials.password, credentials.displayName, credentials.inviteCode, undefined, undefined, credentials.otpToken, credentials.emailOtp)
       if (result.success) {
         const { startSyncEngine } = require('./lib/sync-manager')
         startSyncEngine()
@@ -5961,6 +5961,21 @@ export function registerIpcHandlers(): void {
       return result
     }
   )
+
+  ipcMain.handle(AUTH_IPC_CHANNELS.GET_REGISTRATION_OPTIONS, async () => {
+    const { getRegistrationOptions } = require('./lib/auth-service')
+    return await getRegistrationOptions()
+  })
+
+  ipcMain.handle(AUTH_IPC_CHANNELS.SEND_REGISTRATION_OTP, async (_, email: string) => {
+    const { sendRegistrationOtp } = require('./lib/auth-service')
+    return await sendRegistrationOtp(email)
+  })
+
+  ipcMain.handle(AUTH_IPC_CHANNELS.VERIFY_REGISTRATION_OTP, async (_, email: string, otpToken: string, code: string) => {
+    const { verifyRegistrationOtp } = require('./lib/auth-service')
+    return await verifyRegistrationOtp(email, otpToken, code)
+  })
 
   ipcMain.handle(
     AUTH_IPC_CHANNELS.GET_AUTH_STATUS,

@@ -1908,6 +1908,9 @@ export const AUTH_IPC_CHANNELS = {
   GET_TEAM_AUTH: 'auth:get-team-auth',
   LIST_DEVICES: 'auth:list-devices',
   REVOKE_DEVICE: 'auth:revoke-device',
+  GET_REGISTRATION_OPTIONS: 'auth:get-registration-options',
+  SEND_REGISTRATION_OTP: 'auth:send-registration-otp',
+  VERIFY_REGISTRATION_OTP: 'auth:verify-registration-otp',
 } as const
 
 /** 同步 IPC 通道 */

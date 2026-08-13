@@ -1270,7 +1270,10 @@ export interface ElectronAPI {
     getUserIdentity: () => Promise<import('../types/identity').UserIdentity>
     updateProfile: (updates: Record<string, unknown>) => Promise<import('../types/identity').UserIdentity>
     login: (credentials: Record<string, unknown>) => Promise<unknown>
-    register: (credentials: Record<string, unknown>) => Promise<unknown>
+    register: (credentials: { email: string; password: string; displayName: string; inviteCode?: string; otpToken?: string; emailOtp?: string }) => Promise<unknown>
+    getRegistrationOptions: () => Promise<{ openRegistration: boolean }>
+    sendRegistrationOtp: (email: string) => Promise<{ success: boolean; otpToken?: string; resendAfterSec?: number; error?: string }>
+    verifyRegistrationOtp: (email: string, otpToken: string, code: string) => Promise<{ success: boolean; error?: string }>
     logout: () => Promise<{ channelsCleared?: boolean; channelsBackedUp?: boolean; warning?: string }>
     listDevices: () => Promise<{ ok: boolean; devices?: Array<{ id: string; deviceId: string | null; deviceName: string; platform: string | null; appVersion?: string | null; createdAt: number; lastUsedAt: number }>; currentDeviceId?: string; error?: string }>
     revokeDevice: (slotId: string) => Promise<{ ok: boolean; error?: string }>
@@ -3032,8 +3035,12 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(AUTH_IPC_CHANNELS.UPDATE_PROFILE, updates),
     login: (credentials: Record<string, unknown>) =>
       ipcRenderer.invoke(AUTH_IPC_CHANNELS.LOGIN, credentials),
-    register: (credentials: Record<string, unknown>) =>
+    register: (credentials: { email: string; password: string; displayName: string; inviteCode?: string; otpToken?: string; emailOtp?: string }) =>
       ipcRenderer.invoke(AUTH_IPC_CHANNELS.REGISTER, credentials),
+    getRegistrationOptions: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.GET_REGISTRATION_OPTIONS),
+    sendRegistrationOtp: (email: string) => ipcRenderer.invoke(AUTH_IPC_CHANNELS.SEND_REGISTRATION_OTP, email),
+    verifyRegistrationOtp: (email: string, otpToken: string, code: string) =>
+      ipcRenderer.invoke(AUTH_IPC_CHANNELS.VERIFY_REGISTRATION_OTP, email, otpToken, code),
     logout: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.LOGOUT),
     listDevices: () => ipcRenderer.invoke(AUTH_IPC_CHANNELS.LIST_DEVICES),
     revokeDevice: (slotId: string) => ipcRenderer.invoke(AUTH_IPC_CHANNELS.REVOKE_DEVICE, slotId),
