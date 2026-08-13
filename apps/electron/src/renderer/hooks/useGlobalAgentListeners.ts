@@ -72,7 +72,7 @@ import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
-import { isAbsoluteFilePath } from '@/lib/file-utils'
+import { isAbsoluteFilePath, resolveRelativeToAbsolute } from '@/lib/file-utils'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
@@ -560,10 +560,12 @@ export function useGlobalAgentListeners(): void {
         ...sessionAttachedDirs,
         ...workspaceAttachedDirs,
       ]).map(toForwardSlash)
+      // 相对路径统一走 renderer/lib 公共拼接（R4）：优先首段匹配候选 base 目录名，
+      // 修复「相对路径首段 == 会话目录名」时多套一层目录导致 diff scope 误判的问题
       const absTarget = toForwardSlash(
         isAbsoluteFilePath(targetPath)
           ? targetPath
-          : (sessionPath ? `${sessionPath.replace(/[/\\]+$/, '')}/${targetPath}` : targetPath)
+          : resolveRelativeToAbsolute(targetPath, sessionPath ? [sessionPath] : [])
       )
       const inDiffScope = sessionScopePaths.some((root) => {
         const r = root.replace(/\/+$/, '') + '/'

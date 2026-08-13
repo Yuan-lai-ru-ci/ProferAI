@@ -10,7 +10,7 @@ import * as React from 'react'
 import { useStore } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore } from '@/lib/file-utils'
+import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore, resolveRelativeToAbsolute } from '@/lib/file-utils'
 import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -85,29 +85,6 @@ function stripLineCol(filePath: string): { path: string; suffix: string } {
     return { path: m[1]!, suffix: m[2]! }
   }
   return { path: filePath, suffix: '' }
-}
-
-/**
- * 相对路径基于候选 base 目录解析为绝对路径（供预览/复制使用）。
- * 与主进程 resolveTargetPath 的候选 base 语义一致：优先匹配「首段与 base 目录名相同」的候选，
- * 再退化到第一个候选；无候选或无法匹配时返回原路径（保持相对，由主进程继续兜底解析）。
- */
-function resolveRelativeToAbsolute(cleanPath: string, candidateBases: string[]): string {
-  if (candidateBases.length === 0) return cleanPath
-  const firstSegment = cleanPath.split('/')[0]
-  if (firstSegment) {
-    for (const base of candidateBases) {
-      const baseName = getFileBaseName(base)
-      if (baseName === firstSegment) {
-        const parentDir = base.endsWith('/')
-          ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
-          : base.slice(0, base.lastIndexOf('/'))
-        return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
-      }
-    }
-  }
-  const base = candidateBases[0]!
-  return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
 }
 
 interface FilePathChipProps {

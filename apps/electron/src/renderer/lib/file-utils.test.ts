@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath } from './file-utils'
+import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath, resolveRelativeToAbsolute } from './file-utils'
 
 describe('getFileBaseName（R1 统一实现）', () => {
   test('正斜杠路径', () => {
@@ -61,6 +61,34 @@ describe('getLastPathSegments（R5 面包屑公共实现）', () => {
   test('过滤空段（连续斜杠/尾部斜杠）', () => {
     expect(getLastPathSegments('C:/a//b/')).toBe('.../a/b')
     expect(getLastPathSegments('C:/a/b', 5)).toBe('C:/a/b')
+  })
+})
+
+describe('resolveRelativeToAbsolute（R4 统一拼接实现）', () => {
+  test('无候选 base 时返回原路径', () => {
+    expect(resolveRelativeToAbsolute('src/a.md', [])).toBe('src/a.md')
+  })
+
+  test('首段未命中时退化拼接第一个 base', () => {
+    expect(resolveRelativeToAbsolute('src/a.md', ['C:/ws/profer'])).toBe('C:/ws/profer/src/a.md')
+  })
+
+  test('首段命中 base 目录名时不重复嵌套', () => {
+    expect(resolveRelativeToAbsolute('profer/src/a.md', ['C:/ws/profer'])).toBe('C:/ws/profer/src/a.md')
+  })
+
+  test('多候选 base 匹配第二个', () => {
+    expect(resolveRelativeToAbsolute('workspace-files/x.md', ['C:/ws/profer', 'C:/ws/profer/workspace-files']))
+      .toBe('C:/ws/profer/workspace-files/x.md')
+  })
+
+  test('Windows 反斜杠 base 与中文路径', () => {
+    expect(resolveRelativeToAbsolute('docs/方案.md', ['C:\\ws\\项目\\workspace-files']))
+      .toBe('C:\\ws\\项目\\workspace-files/docs/方案.md')
+  })
+
+  test('尾部斜杠 base', () => {
+    expect(resolveRelativeToAbsolute('src/a.md', ['C:/ws/profer/'])).toBe('C:/ws/profer/src/a.md')
   })
 })
 

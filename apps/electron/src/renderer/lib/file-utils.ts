@@ -42,6 +42,32 @@ export function getLastPathSegments(path: string | null | undefined, n = 2): str
   return parts.length > n ? `.../${parts.slice(-n).join('/')}` : path
 }
 
+/**
+ * 相对路径基于候选 base 目录解析为绝对路径（全 renderer 层唯一实现，R4 统一收敛）。
+ *
+ * 与主进程 resolveTargetPath 的候选 base 语义一致：
+ * 优先匹配「首段与 base 目录名相同」的候选（如 base `C:/ws/profer` + 相对路径 `profer/src/a.md`
+ * → `C:/ws/profer/src/a.md`，避免多套一层目录），再退化到第一个候选；无候选或无法匹配时返回原路径
+ * （保持相对，由主进程继续兜底解析）。
+ */
+export function resolveRelativeToAbsolute(cleanPath: string, candidateBases: string[]): string {
+  if (candidateBases.length === 0) return cleanPath
+  const firstSegment = cleanPath.split('/')[0]
+  if (firstSegment) {
+    for (const base of candidateBases) {
+      const baseName = getFileBaseName(base)
+      if (baseName === firstSegment) {
+        const parentDir = base.endsWith('/')
+          ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
+          : base.slice(0, base.lastIndexOf('/'))
+        return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
+      }
+    }
+  }
+  const base = candidateBases[0]!
+  return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
+}
+
 export function getFileParentPath(filePath: string): string | null {
   const slashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
   if (slashIndex < 0) return null
