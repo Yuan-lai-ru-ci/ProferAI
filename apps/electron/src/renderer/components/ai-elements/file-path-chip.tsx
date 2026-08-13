@@ -92,6 +92,29 @@ function stripLineCol(filePath: string): { path: string; suffix: string } {
   return { path: filePath, suffix: '' }
 }
 
+/**
+ * 相对路径基于候选 base 目录解析为绝对路径（供预览/复制使用）。
+ * 与主进程 resolveTargetPath 的候选 base 语义一致：优先匹配「首段与 base 目录名相同」的候选，
+ * 再退化到第一个候选；无候选或无法匹配时返回原路径（保持相对，由主进程继续兜底解析）。
+ */
+function resolveRelativeToAbsolute(cleanPath: string, candidateBases: string[]): string {
+  if (candidateBases.length === 0) return cleanPath
+  const firstSegment = cleanPath.split('/')[0]
+  if (firstSegment) {
+    for (const base of candidateBases) {
+      const baseName = base.endsWith('/') ? base.slice(0, -1).split('/').pop() : base.split('/').pop()
+      if (baseName === firstSegment) {
+        const parentDir = base.endsWith('/')
+          ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
+          : base.slice(0, base.lastIndexOf('/'))
+        return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
+      }
+    }
+  }
+  const base = candidateBases[0]!
+  return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
+}
+
 interface FilePathChipProps {
   /** 文件路径（绝对或相对，可能带行号后缀） */
   filePath: string
@@ -126,27 +149,18 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     return []
   }, [basePath, basePaths])
 
-  // 用于 title 提示：绝对路径直接展示；相对路径优先匹配首段对应的 base 目录
+  // 用于 title 提示：绝对路径直接展示（含行号后缀）；相对路径优先匹配首段对应的 base 目录
   const displayPath = React.useMemo(() => {
     if (isAbsolute) return trimmedPath
-    if (candidateBases.length > 0) {
-      const firstSegment = cleanPath.split('/')[0]
-      if (firstSegment) {
-        for (const base of candidateBases) {
-          const baseName = base.endsWith('/') ? base.slice(0, -1).split('/').pop() : base.split('/').pop()
-          if (baseName === firstSegment) {
-            const parentDir = base.endsWith('/')
-              ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
-              : base.slice(0, base.lastIndexOf('/'))
-            return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
-          }
-        }
-      }
-      const base = candidateBases[0]!
-      return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
-    }
-    return trimmedPath
+    return resolveRelativeToAbsolute(cleanPath, candidateBases)
   }, [trimmedPath, cleanPath, isAbsolute, candidateBases])
+
+  // 预览/复制用的完整路径：绝对路径剥离行号后缀后直接使用；相对路径基于候选 base 目录解析。
+  // 修复：打开预览传原始相对路径时，预览顶部与复制只会得到文件名（Windows 反斜杠下 split('/') 失效）。
+  const previewFilePath = React.useMemo(() => {
+    if (isAbsolute) return cleanPath
+    return resolveRelativeToAbsolute(cleanPath, candidateBases)
+  }, [cleanPath, isAbsolute, candidateBases])
 
   // IntersectionObserver 懒检查文件是否存在
   React.useEffect(() => {
@@ -189,15 +203,15 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     const sessionId = store.get(currentAgentSessionIdAtom)
     if (sessionId) {
       openPreview(sessionId, {
-        filePath: cleanPath,
+        filePath: previewFilePath,
         previewOnly: true,
         basePaths: candidateBases.length > 0 ? candidateBases : undefined,
       })
     } else {
       // 无 session 时直接调用系统默认程序打开
-      window.electronAPI.systemOpenFile(cleanPath).catch(() => {})
+      window.electronAPI.systemOpenFile(previewFilePath).catch(() => {})
     }
-  }, [store, openPreview, cleanPath, candidateBases])
+  }, [store, openPreview, previewFilePath, candidateBases])
 
   const handleShowInFolder = React.useCallback(() => {
     const bases = candidateBases.length > 0 ? candidateBases : undefined
