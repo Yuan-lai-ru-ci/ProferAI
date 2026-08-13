@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { FileText, StickyNote, X, Clock } from 'lucide-react'
+import { FileText, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -36,6 +36,8 @@ export interface TabBarItemProps {
   onDragStart: (e: React.PointerEvent) => void
   /** 该 Tab 对应的会话是否由定时任务创建 */
   isAutomation?: boolean
+  /** 在顶部标签栏中重命名 Agent 会话 */
+  onRename?: (title: string) => Promise<void>
   /** hover 进入 Tab */
   onHoverEnter: () => void
   /** hover 离开 Tab */
@@ -61,6 +63,7 @@ export function TabBarItem({
   onMiddleClick,
   onDragStart,
   isAutomation,
+  onRename,
   onHoverEnter,
   onHoverLeave,
   onPanelHoverEnter,
@@ -68,6 +71,10 @@ export function TabBarItem({
 }: TabBarItemProps): React.ReactElement {
   const buttonRef = React.useRef<HTMLButtonElement>(null)
   const [isNarrow, setIsNarrow] = React.useState(false)
+  const [editingTitle, setEditingTitle] = React.useState(false)
+  const [draftTitle, setDraftTitle] = React.useState(title)
+  const [savingTitle, setSavingTitle] = React.useState(false)
+  const titleInputRef = React.useRef<HTMLInputElement>(null)
   const minimapCache = useAtomValue(tabMinimapCacheAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -95,6 +102,35 @@ export function TabBarItem({
   const handleCloseClick = (e: React.MouseEvent): void => {
     e.stopPropagation()
     onClose()
+  }
+
+  const startRename = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (!onRename) return
+    setDraftTitle(title)
+    setEditingTitle(true)
+    requestAnimationFrame(() => {
+      const input = titleInputRef.current
+      if (!input) return
+      input.focus()
+      // 不全选文本，方便直接续写；鼠标拖选与 Shift+方向键可局部编辑。
+      input.setSelectionRange(input.value.length, input.value.length)
+    })
+  }
+
+  const finishRename = async (): Promise<void> => {
+    const nextTitle = draftTitle.trim()
+    if (!nextTitle || nextTitle === title || !onRename) {
+      setEditingTitle(false)
+      return
+    }
+    setSavingTitle(true)
+    try {
+      await onRename(nextTitle)
+      setEditingTitle(false)
+    } finally {
+      setSavingTitle(false)
+    }
   }
 
   const isScratch = type === 'scratch'
@@ -175,9 +211,55 @@ export function TabBarItem({
         {isNarrow ? (
           <span className="flex-1" />
         ) : (
-          <span className="flex-1 min-w-0 truncate text-left flex items-center gap-1">
+          <span className="flex flex-1 min-w-0 items-center gap-1 text-left">
             {isAutomation && <Clock className="size-3 shrink-0 text-foreground/40" />}
-            {title}
+            {editingTitle ? (
+              <input
+                ref={titleInputRef}
+                value={draftTitle}
+                maxLength={100}
+                disabled={savingTitle}
+                aria-label="会话标题"
+                className="h-5 min-w-0 flex-1 border-b border-primary/60 bg-transparent px-0 text-xs outline-none"
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                onBlur={() => void finishRename()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void finishRename()
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault()
+                    setEditingTitle(false)
+                  }
+                }}
+              />
+            ) : (
+              <span className="min-w-0 flex-1 truncate">{title}</span>
+            )}
+            {onRename && !editingTitle && (
+              <span
+                role="button"
+                tabIndex={-1}
+                aria-label="重命名会话"
+                className="flex size-4 shrink-0 items-center justify-center rounded-sm opacity-60 transition-opacity hover:bg-muted-foreground/20 hover:opacity-100"
+                onClick={startRename}
+              >
+                <Pencil className="size-2.5" />
+              </span>
+            )}
+            {editingTitle && (
+              <span
+                role="button"
+                tabIndex={-1}
+                aria-label="保存会话标题"
+                className="flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/20"
+                onClick={(event) => { event.stopPropagation(); void finishRename() }}
+              >
+                <Check className="size-2.5" />
+              </span>
+            )}
           </span>
         )}
 

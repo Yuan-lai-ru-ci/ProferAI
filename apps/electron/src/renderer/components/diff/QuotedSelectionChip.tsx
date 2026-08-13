@@ -53,7 +53,7 @@ export function QuotedSelectionChip({
         className,
       )}
     >
-      <Quote className="size-4 shrink-0 mt-0.5 text-primary/60" />
+      <Quote className="size-4 shrink-0 mt-0.5 text-primary/60 rotate-180 -translate-y-[3px]" />
       <div className="flex flex-col min-w-0">
         <span className="text-foreground/80 line-clamp-2 leading-snug">
           {truncateText(text)}

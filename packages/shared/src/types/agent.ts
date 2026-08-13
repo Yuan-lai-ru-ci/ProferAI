@@ -1793,6 +1793,8 @@ export const AGENT_IPC_CHANNELS = {
   LIST_DIRECTORY: 'agent:list-directory',
   /** 删除文件/空目录 */
   DELETE_FILE: 'agent:delete-file',
+  /** 移动文件/目录到系统回收站（可恢复） */
+  MOVE_TO_TRASH: 'agent:move-to-trash',
   /** 递归读取目录中所有文件（含相对路径和内容） */
   READ_DIRECTORY_RECURSIVE: 'agent:read-directory-recursive',
   /** 用系统默认应用打开文件 */

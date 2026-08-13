@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
@@ -432,6 +433,142 @@ function assertInsideAgentWorkspaces(targetPath: string): void {
   if (!isResolvedPathInsideRoot(targetPath, getAgentWorkspacesDir())) {
     throw new Error('访问路径超出 Agent 工作区范围')
   }
+}
+
+/**
+ * 通过 Windows Restart Manager (Rstrtmgr.dll) 查询占用指定文件/目录的进程名（友好名，如 "Microsoft Word"）。
+ * 经 PowerShell P/Invoke 调用（零额外依赖），路径通过环境变量传入避免命令行引号转义。
+ * 仅在删除/重命名失败（被占用）时触发，属低频操作。
+ */
+const RM_QUERY_SCRIPT = `$ErrorActionPreference = 'SilentlyContinue'
+$src = @'
+using System;
+using System.Runtime.InteropServices;
+public static class RM {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RM_UNIQUE_PROCESS {
+    public int dwProcessId;
+    public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime;
+  }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct RM_PROCESS_INFO {
+    public RM_UNIQUE_PROCESS Process;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string strAppName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string strServiceShortName;
+    public int ApplicationType;
+    public uint AppStatus;
+    public uint TSSessionId;
+    [MarshalAs(UnmanagedType.Bool)] public bool bRestartable;
+  }
+  [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+  public static extern int RmStartSession(out uint pSessionHandle, int dwSessionFlags, string strSessionKey);
+  [DllImport("rstrtmgr.dll")]
+  public static extern int RmEndSession(uint pSessionHandle);
+  [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+  public static extern int RmRegisterResources(uint pSessionHandle, uint nFiles, string[] rgsFilenames, uint nApplications, RM_UNIQUE_PROCESS[] rgApplications, uint nServices, string[] rgsServiceNames);
+  [DllImport("rstrtmgr.dll")]
+  public static extern int RmGetList(uint dwSessionHandle, out uint pnProcInfoNeeded, ref uint pnProcInfo, [In, Out] RM_PROCESS_INFO[] rgAffectedApps, ref uint lpdwRebootReasons);
+}
+'@
+Add-Type -TypeDefinition $src
+$handle = [uint32]0
+[void][RM]::RmStartSession([ref]$handle, 0, [Guid]::NewGuid().ToString('N'))
+try {
+  [void][RM]::RmRegisterResources($handle, 1, @($env:PROFER_QUERY_PATH), 0, $null, 0, $null)
+  $needed = [uint32]0
+  $count = [uint32]0
+  $reboot = [uint32]0
+  [void][RM]::RmGetList($handle, [ref]$needed, [ref]$count, $null, [ref]$reboot)
+  if ($needed -gt 0) {
+    $procs = New-Object 'RM+RM_PROCESS_INFO[]' $needed
+    $count = $needed
+    [void][RM]::RmGetList($handle, [ref]$needed, [ref]$count, $procs, [ref]$reboot)
+    for ($i = 0; $i -lt $count; $i++) {
+      $p = $procs[$i]
+      Write-Output ("{0}|{1}" -f $p.Process.dwProcessId, $p.strAppName)
+    }
+  }
+} finally {
+  [void][RM]::RmEndSession($handle)
+}
+`
+
+/** 查询占用指定文件/目录的进程名列表 */
+function findLockingProcesses(filePath: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (names: string[]) => { if (!settled) { settled = true; resolve(names) } }
+    const timer = setTimeout(() => finish([]), 3000)
+
+    // -EncodedCommand 用 UTF-16LE Base64 传脚本，避免 here-string 换行/引号在命令行传参时被破坏
+    const encoded = Buffer.from(RM_QUERY_SCRIPT, 'utf16le').toString('base64')
+
+    let ps: ChildProcessWithoutNullStreams
+    try {
+      ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+        env: { ...process.env, PROFER_QUERY_PATH: filePath },
+        windowsHide: true,
+      })
+    } catch {
+      clearTimeout(timer)
+      return finish([])
+    }
+
+    let out = ''
+    ps.stdout.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+    ps.stderr.on('data', () => {})
+    ps.on('error', () => { clearTimeout(timer); finish([]) })
+    ps.on('close', () => {
+      clearTimeout(timer)
+      const names: string[] = []
+      for (const line of out.split(/\r?\n/)) {
+        const name = line.trim().split('|')[1]
+        if (name) names.push(name)
+      }
+      finish(names)
+    })
+  })
+}
+
+/**
+ * 把删除/回收站/重命名的底层错误规整成人类可读、无路径乱码的文案。
+ * 底层错误（如 rmSync 抛出的 EPERM）的 message 里带完整路径，经 Electron IPC 序列化后
+ * 中文路径会乱码，code 字段也会丢失——所以必须在主进程端就转换成干净文案再抛给渲染层。
+ */
+async function toFsErrorMessage(
+  err: unknown,
+  action: '删除' | '移入回收站' | '重命名',
+  filePath?: string,
+): Promise<string> {
+  const code = (err as { code?: string })?.code ?? ''
+  if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES' || code === 'ENOTEMPTY') {
+    // 递归删除目录时 EPERM 通常指向具体被占用的子文件，用 err.path 更精确
+    const failedPath = (err as { path?: string })?.path ?? filePath
+    if (failedPath) {
+      const names = await findLockingProcesses(failedPath)
+      if (names.length > 0) {
+        const unique = [...new Set(names)]
+        return `文件或文件夹正被 ${unique.join('、')} 占用，请先关闭后再${action}`
+      }
+    }
+    return '文件或文件夹正被其他程序占用，请先关闭占用它的程序后重试'
+  }
+  if (code === 'ENOENT') {
+    return '文件或文件夹已不存在'
+  }
+  const raw = err instanceof Error ? err.message : String(err ?? '')
+  // shell.trashItem 在文件被占用/操作被取消时抛 "Operation was aborted"
+  if (/aborted|cancel/i.test(raw)) {
+    if (filePath) {
+      const names = await findLockingProcesses(filePath)
+      if (names.length > 0) {
+        const unique = [...new Set(names)]
+        return `文件或文件夹正被 ${unique.join('、')} 占用，请先关闭后再${action}`
+      }
+    }
+    return '操作被中止'
+  }
+  return `无法${action}`
 }
 
 function parseHttpUrl(rawUrl: string): string | null {
@@ -3764,8 +3901,32 @@ export function registerIpcHandlers(): void {
       const safePath = resolve(filePath)
       assertInsideAgentWorkspaces(safePath)
 
-      rmSync(safePath, { recursive: true, force: true })
-      console.log(`[Agent 文件] 已删除: ${safePath}`)
+      try {
+        // maxRetries/retryDelay 处理 Windows 下目录被占用/未清空的瞬态错误（EBUSY/ENOTEMPTY 等）
+        rmSync(safePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+        console.log(`[Agent 文件] 已删除: ${safePath}`)
+      } catch (err) {
+        throw new Error(await toFsErrorMessage(err, '删除', safePath))
+      }
+    }
+  )
+
+  // 移动文件或目录到系统回收站（可恢复）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.MOVE_TO_TRASH,
+    async (_, filePath: string): Promise<void> => {
+      const { resolve } = await import('node:path')
+
+      // 安全校验：路径必须在 agent-workspaces 目录下
+      const safePath = resolve(filePath)
+      assertInsideAgentWorkspaces(safePath)
+
+      try {
+        await shell.trashItem(safePath)
+        console.log(`[Agent 文件] 已移入回收站: ${safePath}`)
+      } catch (err) {
+        throw new Error(await toFsErrorMessage(err, '移入回收站', safePath))
+      }
     }
   )
 
@@ -4119,8 +4280,12 @@ export function registerIpcHandlers(): void {
       assertInsideAgentWorkspaces(safePath)
 
       const newPath = join(dirname(safePath), newName)
-      renameSync(safePath, newPath)
-      console.log(`[Agent 文件] 已重命名: ${safePath} → ${newPath}`)
+      try {
+        renameSync(safePath, newPath)
+        console.log(`[Agent 文件] 已重命名: ${safePath} → ${newPath}`)
+      } catch (err) {
+        throw new Error(await toFsErrorMessage(err, '重命名', safePath))
+      }
     }
   )
 

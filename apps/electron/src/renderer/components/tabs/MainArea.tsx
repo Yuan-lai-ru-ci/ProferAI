@@ -144,7 +144,6 @@ export function MainArea(): React.ReactElement {
       return next
     })
   }, [browserAutoHidden, browserSessionId, setBrowserOpenMap])
-
   // 布局恢复（MainArea 足以并排）后，重置当前会话的「手动打开」标记，恢复后续自动收起能力，
   // 与文件面板在窗口 ≥ 阈值时重置 userOverride 的行为对齐。
   React.useEffect(() => {

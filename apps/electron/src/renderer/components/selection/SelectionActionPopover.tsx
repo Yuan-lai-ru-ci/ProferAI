@@ -1,9 +1,10 @@
 import * as React from 'react'
-import { Bot } from 'lucide-react'
+import { Quote } from 'lucide-react'
 
 interface SelectionActionPopoverProps {
   x: number
   y: number
+  direction?: 'up' | 'down'
   onAddToAgent: () => void
 }
 
@@ -25,7 +26,7 @@ function rectIntersects(
 const AVOID_GAP = 12
 
 /** 计算把按钮（含 translate 变换后的实际区域）钳制回视口内所需的平移量；
- *  若给定禁区（avoid）且按钮与它重叠，优先上移避开（顶部空间不足则下移）。 */
+ *  若给定禁区（avoid）且按钮与它重叠，向右平移绕过禁区（保持垂直位置不变）。 */
 export function computeViewportShift(
   rect: { left: number; top: number; width: number; height: number },
   viewportWidth: number,
@@ -37,9 +38,10 @@ export function computeViewportShift(
   let dx = clampLeft - rect.left
   let dy = clampTop - rect.top
   if (avoid && rectIntersects({ left: rect.left + dx, top: rect.top + dy, width: rect.width, height: rect.height }, avoid)) {
-    const above = avoid.top - rect.height - AVOID_GAP
-    dy = above >= 0 ? above - rect.top : avoid.top + avoid.height + AVOID_GAP - rect.top
-    dy = Math.min(Math.max(dy, -rect.top), viewportHeight - rect.top - rect.height)
+    // 右移绕过：按钮左缘移到禁区右侧（留 AVOID_GAP），保持垂直位置不变
+    dx = avoid.left + avoid.width + AVOID_GAP - rect.left
+    // 确保不超出视口右缘
+    dx = Math.min(dx, viewportWidth - rect.width - rect.left)
   }
   return { dx, dy }
 }
@@ -57,12 +59,15 @@ function findScrollToBottomRect(): AvoidRect | null {
 export function SelectionActionPopover({
   x,
   y,
+  direction = 'up',
   onAddToAgent,
 }: SelectionActionPopoverProps): React.ReactElement {
   const rootRef = React.useRef<HTMLDivElement>(null)
+  // direction 'up' 向上展开（按钮底部贴锚点）；'down' 向下展开（按钮顶部贴锚点）。
+  const translateClass = direction === 'down' ? '-translate-x-1/2' : '-translate-x-1/2 -translate-y-full'
 
   // 自我钳制：实测按钮渲染区域（含 translate 变换后的实际位置），越界时整体平移回视口内，
-  // 并避开「回到底端」浮动按钮，保证两个按钮不重叠、都可点击。
+  // 并右移绕过「回到底端」浮动按钮，保证两个按钮不重叠、都可点击。
   React.useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
@@ -76,13 +81,13 @@ export function SelectionActionPopover({
       el.style.left = `${x + dx}px`
       el.style.top = `${y + dy}px`
     }
-  }, [x, y])
+  }, [x, y, direction])
 
   return (
     <div
       ref={rootRef}
       data-selection-action-popover
-      className="fixed z-[90] -translate-x-1/2 -translate-y-full rounded-xl bg-popover/95 px-2 py-1.5 text-popover-foreground shadow-xl ring-1 ring-border/40 backdrop-blur"
+      className={`fixed z-[90] ${translateClass} rounded-xl bg-popover/95 px-2 py-1.5 text-popover-foreground shadow-xl ring-1 ring-border/40 backdrop-blur`}
       style={{ left: x, top: y }}
       onMouseDown={(event) => event.preventDefault()}
     >
@@ -92,7 +97,7 @@ export function SelectionActionPopover({
           className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors hover:bg-muted"
           onClick={onAddToAgent}
         >
-          <Bot className="size-4" />
+          <Quote className="size-4 rotate-180 -translate-y-[3px]" />
           为 Agent 引用
         </button>
       </div>
