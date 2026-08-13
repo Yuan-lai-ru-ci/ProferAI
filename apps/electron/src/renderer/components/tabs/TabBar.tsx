@@ -44,6 +44,7 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { TabBarItem } from './TabBarItem'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import { detectIsWindows } from '@/lib/platform'
@@ -261,6 +262,8 @@ function TabBarInner({
     activeAgentSessionId && browserOpenMap.get(activeAgentSessionId) === true,
   )
   const hasRightSideContent = isPanelOpen || browserSidePanelVisible
+  // 窗口按钮本身已嵌入当前 TabBar。只有本区域真正延伸到窗口右缘时，
+  // 工具组和标签才需为按钮留出 118px；有右侧分栏时无需预留。
   const topBarRightOffset = isWindows && !hasRightSideContent ? 132 : 9
   const togglePanel = React.useCallback(() => {
     if (!activeAgentSessionId) return
@@ -534,6 +537,16 @@ function TabBarInner({
         isWindows={isWindows}
         rightOffset={topBarRightOffset}
         tools={topBarTools}
+      />
+
+      {/* Windows 按钮属于 TabBar，而不是悬浮在 AppShell 上层。工具组与标签滚动区
+          已为这 118px 控制区预留空间；titlebar-drag-region 也在相同边界前结束。 */}
+      {/* 右侧文件栏或受管浏览器占据窗口最右缘时，控制按钮由该面板自身渲染。 */}
+      <WindowControlsHost
+        id="tab-bar"
+        active={!isPanelOpen && !activeBrowserIsOpen}
+        priority={10}
+        className="absolute right-2 bottom-[3px]"
       />
     </div>
   )

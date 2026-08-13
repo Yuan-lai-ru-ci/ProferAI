@@ -10,6 +10,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -442,6 +443,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       )}
       style={isOpen ? { width } : undefined}
     >
+      {/* 右侧栏占据窗口最右缘时，窗口控制按钮嵌入其顶部，避免留在左侧 TabBar。 */}
+      <WindowControlsHost id="right-side-panel" active={isOpen} priority={30} className="absolute right-2 top-[3px] z-10" />
       {/* 面板内容：everOpened 懒挂载，首次展开才渲染（FileBrowser/文件树等重型 DOM 不会随启动加载）；收起后保留在 DOM（保活，不丢滚动/展开状态） */}
       {everOpened && (
       <div

@@ -41,7 +41,7 @@ import { TeamFileTrashSheet } from '@/components/team-workspace/TeamFileTrashShe
 import { TeamMemoryPanel } from '@/components/team-workspace/TeamMemoryPanel'
 import { TeamMemoryEditor } from '@/components/team-workspace/TeamMemoryEditor'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { WindowControls } from '@/components/WindowControls'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { cn } from '@/lib/utils'
 import { detectIsWindows } from '@/lib/platform'
 import type { AgentPendingFile, FileEntry } from '@profer/shared'
@@ -1539,7 +1539,7 @@ export function TeamWorkspaceView(): React.ReactElement {
             <input ref={fileInputRef} type="file" multiple className="hidden"
               onChange={(e) => { if (e.target.files) handleUpload(e.target.files); e.target.value = '' }} />
             </div>
-            <WindowControls variant="inline" className="titlebar-no-drag -mr-1 ml-1" />
+            <WindowControlsHost id="team-files" active={layoutMode === 'files'} priority={40} className="titlebar-no-drag -mr-1 ml-1" />
           </div>
 
           {/* 拖拽提示 */}
@@ -2106,7 +2106,7 @@ export function TeamWorkspaceView(): React.ReactElement {
                 <PanelRightClose size={14} />
               </button>
             )}
-            {layoutMode === 'chat' && <WindowControls variant="inline" className="titlebar-no-drag -mr-1" />}
+            {layoutMode === 'chat' && <WindowControlsHost id="team-chat" active={layoutMode === 'chat'} priority={40} className="titlebar-no-drag -mr-1" />}
           </div>
           <div className="flex-1 min-h-0 flex flex-col titlebar-no-drag">
             {editingMemoryId !== undefined ? (
