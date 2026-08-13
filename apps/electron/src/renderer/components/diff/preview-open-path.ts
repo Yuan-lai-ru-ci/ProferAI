@@ -1,9 +1,9 @@
 import type { FileAccessOptions } from '@profer/shared'
 import type { PreviewFile } from '@/atoms/preview-atoms'
+import { isAbsoluteFilePath } from '@/lib/file-utils'
 
-export function isAbsoluteFilePath(filePath: string): boolean {
-  return filePath.startsWith('/') || filePath.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(filePath)
-}
+// 绝对路径判定统一走 renderer/lib 公共实现（R2），此处仅转发以保持既有导入路径兼容
+export { isAbsoluteFilePath }
 
 function joinFilePath(basePath: string, filePath: string): string {
   const base = basePath.replace(/[\\/]+$/, '')

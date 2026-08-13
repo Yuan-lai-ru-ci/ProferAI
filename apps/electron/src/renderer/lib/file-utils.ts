@@ -9,6 +9,31 @@ export function formatFileNames(names: string[], max = 3): string {
   return `${names.slice(0, max).join('、')} 等 ${names.length} 个文件`
 }
 
+/**
+ * 判断路径是否为绝对路径（全 renderer 层唯一实现，R2 统一收敛）
+ *
+ * 匹配规则：
+ * - Windows 盘符：C:\ 或 C:/
+ * - Windows UNC 网络路径：\\server\share
+ * - macOS/Linux：以 / 开头
+ *
+ * 仅做前缀归类，适用于「已知文件路径字符串」的判定；若用于消息文本检测（可能含行号后缀、
+ * 正则等非路径内容），由调用方在需要时叠加保守校验（见 file-path-chip 薄封装）。
+ */
+export function isAbsoluteFilePath(filePath: string): boolean {
+  return filePath.startsWith('/') || filePath.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(filePath)
+}
+
+/**
+ * 面包屑显示：取路径末尾 n 段（默认 2 段）。
+ * 段数不足 n 时按原样返回；空串返回空串。分隔符处理与既有实现保持一致（按正斜杠切分）。
+ */
+export function getLastPathSegments(path: string | null | undefined, n = 2): string {
+  if (!path) return ''
+  const parts = path.split('/').filter(Boolean)
+  return parts.length > n ? `.../${parts.slice(-n).join('/')}` : path
+}
+
 export function getFileParentPath(filePath: string): string | null {
   const slashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
   if (slashIndex < 0) return null

@@ -48,6 +48,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { getLastPathSegments } from '@/lib/file-utils'
 import { toast } from 'sonner'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { FileEntry } from '@profer/shared'
@@ -540,11 +541,8 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     }
   }, [isTeamMode, selectedPaths, loadRoot])
 
-  // 显示根路径最后两段作为面包屑
-  const breadcrumb = React.useMemo(() => {
-    const parts = rootPath.split('/').filter(Boolean)
-    return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : rootPath
-  }, [rootPath])
+  // 显示根路径最后两段作为面包屑（公共实现 R5）
+  const breadcrumb = React.useMemo(() => getLastPathSegments(rootPath), [rootPath])
 
   const fileTree = (
     <div className="py-1" onClick={handleBackgroundClick}>

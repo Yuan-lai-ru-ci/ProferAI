@@ -10,6 +10,7 @@ import * as React from 'react'
 import { useStore } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { isAbsoluteFilePath as isAbsoluteFilePathCore } from '@/lib/file-utils'
 import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -135,7 +136,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const filename = getFileName(cleanPath)
 
-  const isAbsolute = cleanPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cleanPath)
+  const isAbsolute = isAbsoluteFilePathCore(cleanPath)
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
@@ -289,17 +290,17 @@ export function isAbsoluteFilePath(text: string): boolean {
   // 剥离末尾行号后缀再检测
   const { path: clean } = stripLineCol(trimmed)
 
-  // macOS/Linux 绝对路径：以 / 开头，包含可预览扩展名或多级路径
-  if (clean.startsWith('/') && /^\/[^\n]+(?:\/[^\n]+)*$/.test(clean)) {
-    // 排除常见的非路径模式（如 /regex/ 模式）
+  // 公共前缀判定（盘符 / UNC / 根斜杠）统一走 renderer/lib 唯一实现（R2 收敛）
+  if (!isAbsoluteFilePathCore(clean)) return false
+
+  // 保守校验（消息文本检测专用）：根斜杠路径需至少两级，
+  // 且排除「尾部斜杠且无扩展名」的目录/正则模式（如 /regex/）
+  if (clean.startsWith('/')) {
+    if (!/^\/[^\n]+(?:\/[^\n]+)*$/.test(clean)) return false
     if (clean.endsWith('/') && !clean.includes('.')) return false
-    return true
   }
 
-  // Windows 绝对路径
-  if (/^[A-Za-z]:[\\/]/.test(clean)) return true
-
-  return false
+  return true
 }
 
 /**

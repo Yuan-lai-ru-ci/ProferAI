@@ -41,6 +41,7 @@ import {
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@/lib/platform'
+import { getLastPathSegments } from '@/lib/file-utils'
 import type { FileEntry, AgentPendingFile } from '@profer/shared'
 
 function getPathBasename(filePath: string): string {
@@ -380,12 +381,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     setPendingFiles((prev) => [...prev, pending])
   }, [pendingFiles, setPendingFiles])
 
-  // 面包屑：显示根路径最后两段
-  const breadcrumb = React.useMemo(() => {
-    if (!sessionPath) return ''
-    const parts = sessionPath.split('/').filter(Boolean)
-    return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : sessionPath
-  }, [sessionPath])
+  // 面包屑：显示根路径最后两段（公共实现 R5）
+  const breadcrumb = React.useMemo(() => getLastPathSegments(sessionPath), [sessionPath])
 
   // 工作区文件目录路径
   const [workspaceFilesPath, setWorkspaceFilesPath] = React.useState<string | null>(null)
