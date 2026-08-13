@@ -353,7 +353,7 @@ async function sendHeartbeat(): Promise<void> {
     .filter((w) => w.type === 'team')
     .map((w) => w.id)
 
-  if (workspaceIds.length === 0) return
+  // 无团队工作区的纯个人用户也需发心跳，否则服务端无法记录其账号级「最近上线」（今日在线/日活口径）
 
   try {
     await (undiciFetch as unknown as typeof fetch)(`${auth.baseUrl}/v1/heartbeat`, {
