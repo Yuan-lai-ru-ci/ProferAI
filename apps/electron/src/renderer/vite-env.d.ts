@@ -32,6 +32,7 @@ interface UpdaterAPI {
   getStatus: () => Promise<UpdateStatus>
   onStatusChanged: (callback: (status: UpdateStatus) => void) => () => void
   quitAndInstall: () => Promise<void>
+  getChangelog: () => Promise<import('@profer/shared').ChangelogEntry[]>
 }
 
 // 附件临时 base64 缓存（用于发送前暂存数据）

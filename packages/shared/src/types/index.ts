@@ -40,6 +40,9 @@ export * from './installer'
 // GitHub Release 相关类型
 export * from './github'
 
+// 版本更新日志（CHANGELOG）相关类型
+export * from './changelog'
+
 // 系统提示词相关类型
 export * from './system-prompt'
 

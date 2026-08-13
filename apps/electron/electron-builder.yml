@@ -93,6 +93,9 @@ extraResources:
     to: icon.ico
   - from: resources/icon.png
     to: icon.png
+  # 版本更新日志（设置 → 软件更新 → 版本历史；changelog-service 读取 process.resourcesPath/CHANGELOG.json）
+  - from: resources/CHANGELOG.json
+    to: CHANGELOG.json
 
 # ============================================
 # Windows 配置

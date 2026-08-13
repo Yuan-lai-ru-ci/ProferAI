@@ -10,7 +10,8 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { RotateCw } from 'lucide-react'
-import type { GitHubRelease } from '@profer/shared'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   AlertDialog,
   AlertDialogContent,
@@ -22,24 +23,26 @@ import {
   AlertDialogAction,
 } from '@/components/ui/alert-dialog'
 import { updateStatusAtom } from '@/atoms/updater'
-import { ReleaseNotesViewer } from './ReleaseNotesViewer'
 
 export function UpdateDialog(): React.ReactElement | null {
   const updateStatus = useAtomValue(updateStatusAtom)
   const [open, setOpen] = React.useState(false)
-  const [release, setRelease] = React.useState<GitHubRelease | null>(null)
+  const [notes, setNotes] = React.useState<string | null>(null)
   const [dialogVersion, setDialogVersion] = React.useState<string | null>(null)
   const shownVersionRef = React.useRef<string | null>(null)
   const postponedDownloadedVersionRef = React.useRef<string | null>(null)
 
-  const fetchRelease = React.useCallback((version: string) => {
-    window.electronAPI
-      .getReleaseByTag(`v${version}`)
-      .then((r) => {
-        if (r) setRelease(r)
+  // 从本地内置 CHANGELOG 获取指定版本的更新内容
+  const fetchNotes = React.useCallback((version: string) => {
+    window.electronAPI.updater
+      ?.getChangelog()
+      .then((entries) => {
+        const match = entries.find((e) => e.version === version)
+        setNotes(match?.notes || null)
       })
       .catch((err) => {
-        console.error('[更新弹窗] 获取 Release 信息失败:', err)
+        console.error('[更新弹窗] 获取本地更新日志失败:', err)
+        setNotes(null)
       })
   }, [])
 
@@ -53,9 +56,9 @@ export function UpdateDialog(): React.ReactElement | null {
       shownVersionRef.current = version
       postponedDownloadedVersionRef.current = null
       setDialogVersion(version)
-      setRelease(null)
+      setNotes(null)
 
-      fetchRelease(version)
+      fetchNotes(version)
 
       setOpen(true)
     }
@@ -69,12 +72,12 @@ export function UpdateDialog(): React.ReactElement | null {
     ) {
       if (dialogVersion !== updateStatus.version) {
         setDialogVersion(updateStatus.version)
-        setRelease(null)
-        fetchRelease(updateStatus.version)
+        setNotes(null)
+        fetchNotes(updateStatus.version)
       }
       setOpen(true)
     }
-  }, [updateStatus.status, updateStatus.version, open, dialogVersion, fetchRelease])
+  }, [updateStatus.status, updateStatus.version, open, dialogVersion, fetchNotes])
 
   const handleOpenChange = (nextOpen: boolean): void => {
     if (!nextOpen && updateStatus.status === 'downloaded' && dialogVersion) {
@@ -129,10 +132,12 @@ export function UpdateDialog(): React.ReactElement | null {
           </div>
         )}
 
-        {/* Release Notes（仅在非下载阶段显示） */}
-        {!isDownloading && release && (
-          <div className="max-h-64 overflow-y-auto rounded-md border p-3">
-            <ReleaseNotesViewer release={release} showHeader={false} compact />
+        {/* 更新内容（仅在非下载阶段显示） */}
+        {!isDownloading && (notes || updateStatus.releaseNotes) && (
+          <div className="max-h-64 overflow-y-auto rounded-md border p-3 prose dark:prose-invert max-w-none text-xs prose-sm prose-p:my-1.5 prose-p:leading-[1.6] prose-li:leading-[1.6] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+            <Markdown remarkPlugins={[remarkGfm]}>
+              {notes || updateStatus.releaseNotes || ''}
+            </Markdown>
           </div>
         )}
 
