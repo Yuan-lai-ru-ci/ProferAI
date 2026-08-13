@@ -48,6 +48,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { FileEntry } from '@profer/shared'
 import { FileTypeIcon } from './FileTypeIcon'
@@ -58,6 +59,21 @@ import {
   STICKY_ROW_BASE_CLASS,
   canBeSticky,
 } from './tree-row-layout'
+
+/** 剥离 Electron IPC 错误包装前缀，得到主进程规整后的干净文案 */
+function stripIpcErrorPrefix(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '')
+  return raw
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .trim()
+}
+
+/** 把删除/回收站失败的错误规整成用户可读的提示（主进程已剥离底层乱码，这里仅剥掉 Electron IPC 包装前缀） */
+function friendlyDeleteError(err: unknown, name: string): string {
+  const msg = stripIpcErrorPrefix(err)
+  return msg ? `删除「${name}」失败：${msg}` : `删除「${name}」失败`
+}
 
 /** 计算目标路径相对 rootPath 的祖先目录集合（不含 rootPath 自身、含目标的所有上级） */
 export function computeRevealAncestors(rootPath: string, targetPath: string): Set<string> {
@@ -417,16 +433,22 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     setRenamingPath(null)
   }, [])
 
-  /** 执行重命名 */
-  const handleRename = React.useCallback(async (filePath: string, newName: string): Promise<string | null> => {
+  /** 执行重命名（失败统一走 toast 通知，与删除/回收站一致） */
+  const handleRename = React.useCallback(async (filePath: string, newName: string): Promise<void> => {
     // 同名检查
     const parentDir = filePath.substring(0, filePath.lastIndexOf('/'))
     try {
-      if (isTeamMode) return '团队文件暂不支持在侧栏重命名'
+      if (isTeamMode) {
+        toast.error('团队文件暂不支持在侧栏重命名')
+        setRenamingPath(null)
+        return
+      }
       const siblings = await window.electronAPI.listDirectory(parentDir)
       const conflict = siblings.some((s) => s.name === newName && s.path !== filePath)
       if (conflict) {
-        return '同名文件已存在'
+        toast.error('同名文件已存在')
+        setRenamingPath(null)
+        return
       }
     } catch {
       // 无法列出目录，跳过检查
@@ -437,9 +459,10 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       await loadRoot()
       setRenamingPath(null)
       setSelectedPaths(new Set())
-      return null
     } catch (err) {
-      return err instanceof Error ? err.message : '重命名失败'
+      console.error('[FileBrowser] 重命名失败:', err)
+      toast.error(stripIpcErrorPrefix(err) || '重命名失败')
+      setRenamingPath(null)
     }
   }, [isTeamMode, loadRoot])
 
@@ -457,9 +480,11 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       for (const filePath of paths) {
         if (isTeamMode && workspaceId && workspaceSlug) {
           const ok = await window.electronAPI.teamFile.delete({ workspaceId, workspaceSlug, filePath }).catch(() => false)
-          if (ok) {
-            // 主进程已按来源映射失效缓存；这里不能二次删除用户原始文件。
+          if (!ok) {
+            toast.error(`删除「${deleteTarget.name}」失败，请重试`)
+            return
           }
+          // 主进程已按来源映射失效缓存；这里不能二次删除用户原始文件。
         } else {
           await window.electronAPI.deleteFile(filePath)
         }
@@ -468,9 +493,28 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       await loadRoot()
     } catch (err) {
       console.error('[FileBrowser] 删除失败:', err)
+      toast.error(friendlyDeleteError(err, deleteTarget?.name ?? '项目'))
     }
     setDeleteTarget(null)
   }, [deleteTarget, selectedPaths, loadRoot, isTeamMode, workspaceId, workspaceSlug])
+
+  /** 移动到回收站（可恢复） */
+  const handleMoveToTrash = React.useCallback(async () => {
+    if (!deleteTarget) return
+    try {
+      const paths = selectedPaths.size > 1 ? [...selectedPaths] : [deleteTarget.path]
+      for (const filePath of paths) {
+        await window.electronAPI.moveToTrash(filePath)
+      }
+      setSelectedPaths(new Set())
+      await loadRoot()
+      toast.success('已移动到回收站')
+    } catch (err) {
+      console.error('[FileBrowser] 移动到回收站失败:', err)
+      toast.error(friendlyDeleteError(err, deleteTarget?.name ?? '项目'))
+    }
+    setDeleteTarget(null)
+  }, [deleteTarget, selectedPaths, loadRoot])
 
   /** 移动文件 */
   const handleMove = React.useCallback(async (entry: FileEntry) => {
@@ -645,6 +689,11 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
+            {!isTeamMode && (
+              <AlertDialogAction onClick={handleMoveToTrash} className="bg-secondary text-secondary-foreground hover:bg-secondary/80">
+                移动到回收站
+              </AlertDialogAction>
+            )}
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               删除
             </AlertDialogAction>
@@ -785,7 +834,7 @@ interface FileTreeItemProps {
   onShowInFolder: (entry: FileEntry) => void
   onStartRename: (entry: FileEntry) => void
   onCancelRename: () => void
-  onRename: (filePath: string, newName: string) => Promise<string | null>
+  onRename: (filePath: string, newName: string) => Promise<void>
   onDelete: (entry: FileEntry) => void
   onMove: (entry: FileEntry) => void
   onRefresh: () => Promise<void>
@@ -901,7 +950,6 @@ function FileTreeItem({
 
   // 重命名编辑状态
   const [editName, setEditName] = React.useState('')
-  const [renameError, setRenameError] = React.useState<string | null>(null)
   const renameInputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
 
@@ -970,7 +1018,6 @@ function FileTreeItem({
   React.useEffect(() => {
     if (isRenaming) {
       setEditName(entry.name)
-      setRenameError(null)
       justStartedEditing.current = true
       const timer = setTimeout(() => {
         justStartedEditing.current = false
@@ -999,10 +1046,7 @@ function FileTreeItem({
       onCancelRename()
       return
     }
-    const error = await onRename(entry.path, trimmed)
-    if (error) {
-      setRenameError(error)
-    }
+    await onRename(entry.path, trimmed)
   }
 
   /** 重命名键盘事件 */
@@ -1018,12 +1062,7 @@ function FileTreeItem({
 
   /** 重命名失焦 */
   const handleBlur = (): void => {
-    if (renameError) {
-      onCancelRename()
-      setRenameError(null)
-    } else {
-      void saveRename()
-    }
+    void saveRename()
   }
 
   // 行使用 mx-2 形成左右各 8px 留白，留白处的点击 target 是本 wrapper 而非父级
@@ -1093,21 +1132,13 @@ function FileTreeItem({
             <input
               ref={renameInputRef}
               value={editName}
-              onChange={(e) => { setEditName(e.target.value); setRenameError(null) }}
+              onChange={(e) => { setEditName(e.target.value) }}
               onKeyDown={handleRenameKeyDown}
               onBlur={handleBlur}
               onClick={(e) => e.stopPropagation()}
-              className={cn(
-                'w-full bg-transparent text-xs border-b outline-none py-0.5',
-                renameError ? 'border-destructive' : 'border-primary/50',
-              )}
+              className="w-full bg-transparent text-xs border-b border-primary/50 outline-none py-0.5"
               maxLength={255}
             />
-            {renameError && (
-              <div className="absolute left-0 top-full mt-0.5 text-[10px] leading-4 text-destructive whitespace-nowrap pointer-events-none">
-                {renameError}
-              </div>
-            )}
           </div>
         ) : (
           <span className="truncate text-xs flex-1">{entry.name}</span>

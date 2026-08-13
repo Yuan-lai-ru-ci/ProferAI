@@ -878,6 +878,9 @@ export interface ElectronAPI {
   /** 删除文件/目录 */
   deleteFile: (filePath: string) => Promise<void>
 
+  /** 移动文件/目录到系统回收站 */
+  moveToTrash: (filePath: string) => Promise<void>
+
   /** 递归读取目录中所有文件 */
   readDirectoryRecursive: (dirPath: string) => Promise<Array<{ relativePath: string; data: Uint8Array }>>
 
@@ -2406,6 +2409,10 @@ const electronAPI: ElectronAPI = {
 
   deleteFile: (filePath: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_FILE, filePath)
+  },
+
+  moveToTrash: (filePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_TO_TRASH, filePath)
   },
 
   /** 打开文件夹选择对话框，递归读取所有文件 */
