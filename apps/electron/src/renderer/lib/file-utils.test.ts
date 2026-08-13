@@ -1,5 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import { getFileParentPath, getLastPathSegments, isAbsoluteFilePath } from './file-utils'
+import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath } from './file-utils'
+
+describe('getFileBaseName（R1 统一实现）', () => {
+  test('正斜杠路径', () => {
+    expect(getFileBaseName('/a/b/report.md')).toBe('report.md')
+    expect(getFileBaseName('a/b/c.txt')).toBe('c.txt')
+  })
+
+  test('Windows 反斜杠路径', () => {
+    expect(getFileBaseName('C:\\workspace\\报告.md')).toBe('报告.md')
+  })
+
+  test('混合分隔符与尾部斜杠', () => {
+    expect(getFileBaseName('C:/a//b/')).toBe('b')
+  })
+
+  test('无分隔符返回原串', () => {
+    expect(getFileBaseName('report.md')).toBe('report.md')
+  })
+})
 
 describe('isAbsoluteFilePath（R2 统一实现）', () => {
   test('Windows 盘符路径', () => {

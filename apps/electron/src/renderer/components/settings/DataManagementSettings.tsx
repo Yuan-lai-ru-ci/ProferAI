@@ -33,6 +33,7 @@ import {
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 
 // ==================== 导出（Migration）类型 ====================
 
@@ -501,7 +502,7 @@ function MigrationSection(): React.ReactElement {
               <div className={cn('flex items-center gap-1.5 text-sm', exportResult.success ? 'text-green-600' : 'text-red-500')}>
                 {exportResult.success ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
                 {exportResult.success
-                  ? `已导出至 ${exportResult.filePath?.split('/').pop() ?? ''}`
+                  ? `已导出至 ${exportResult.filePath ? getFileBaseName(exportResult.filePath) : ''}`
                   : exportResult.error}
               </div>
             )}

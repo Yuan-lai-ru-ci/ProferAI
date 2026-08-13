@@ -119,7 +119,7 @@ import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
 import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
-import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
+import { fileToBase64, formatFileNames, getFileBaseName, getFileParentPath } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
@@ -1530,7 +1530,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               map.set(sessionId, updated)
               return map
             })
-            const dirName = dirPath.split('/').pop() || dirPath
+            const dirName = getFileBaseName(dirPath)
             toast.success(`已附加目录: ${dirName}`)
           } catch (error) {
             console.error('[AgentView] 拖拽附加文件夹失败:', error)

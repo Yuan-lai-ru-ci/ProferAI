@@ -41,12 +41,8 @@ import {
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@/lib/platform'
-import { getLastPathSegments } from '@/lib/file-utils'
+import { getFileBaseName, getLastPathSegments } from '@/lib/file-utils'
 import type { FileEntry, AgentPendingFile } from '@profer/shared'
-
-function getPathBasename(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath
-}
 
 function getMediaTypeFromFilename(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -670,7 +666,7 @@ function AttachedFilesSection({ attachedFiles, onDetach, onAddToChat, onFilePrev
     <div className="pt-2.5 pb-1 flex-shrink-0">
       <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3">附加文件（Agent 可以按原路径读取）</div>
       {attachedFiles.map((filePath) => {
-        const name = getPathBasename(filePath)
+        const name = getFileBaseName(filePath)
         const entry: FileEntry = { name, path: filePath, isDirectory: false }
         return (
           <div
@@ -850,7 +846,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
 
-  const dirName = dirPath.split('/').filter(Boolean).pop() || dirPath
+  const dirName = getFileBaseName(dirPath)
 
   // 计算从 dirPath 到 revealTarget 之间的祖先目录集合（用于子项决定是否自动展开）
   const revealAncestors = React.useMemo(

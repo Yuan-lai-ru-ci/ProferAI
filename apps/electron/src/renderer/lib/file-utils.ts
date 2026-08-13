@@ -10,6 +10,14 @@ export function formatFileNames(names: string[], max = 3): string {
 }
 
 /**
+ * 从路径提取文件名（全 renderer 层唯一实现，R1 统一收敛）
+ * 兼容 Windows 反斜杠与 Unix 正斜杠；无分隔符时返回原串。
+ */
+export function getFileBaseName(filePath: string): string {
+  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath
+}
+
+/**
  * 判断路径是否为绝对路径（全 renderer 层唯一实现，R2 统一收敛）
  *
  * 匹配规则：

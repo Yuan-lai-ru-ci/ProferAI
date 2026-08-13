@@ -10,7 +10,7 @@ import * as React from 'react'
 import { useStore } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { isAbsoluteFilePath as isAbsoluteFilePathCore } from '@/lib/file-utils'
+import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore } from '@/lib/file-utils'
 import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -68,12 +68,6 @@ const DOC_EXTS = new Set(['pdf', 'docx'])
 /** 所有可预览的扩展名集合（用于相对路径检测） */
 const ALL_PREVIEWABLE_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS, ...CODE_EXTS, ...DOC_EXTS])
 
-/** 从路径提取文件名（兼容 Windows 反斜杠与 Unix 正斜杠，否则 Windows 路径会整段返回） */
-function getFileName(filePath: string): string {
-  const parts = filePath.split(/[\\/]/)
-  return parts[parts.length - 1] || filePath
-}
-
 /** 从文件名提取扩展名（小写，不含点） */
 function getExtension(filename: string): string {
   const dot = filename.lastIndexOf('.')
@@ -103,7 +97,7 @@ function resolveRelativeToAbsolute(cleanPath: string, candidateBases: string[]):
   const firstSegment = cleanPath.split('/')[0]
   if (firstSegment) {
     for (const base of candidateBases) {
-      const baseName = base.endsWith('/') ? base.slice(0, -1).split('/').pop() : base.split('/').pop()
+      const baseName = getFileBaseName(base)
       if (baseName === firstSegment) {
         const parentDir = base.endsWith('/')
           ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
@@ -134,7 +128,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   // 点击与右键菜单入口应诚实隐藏，仅保留路径展示
   const tabletMode = useTabletMode()
 
-  const filename = getFileName(cleanPath)
+  const filename = getFileBaseName(cleanPath)
 
   const isAbsolute = isAbsoluteFilePathCore(cleanPath)
 

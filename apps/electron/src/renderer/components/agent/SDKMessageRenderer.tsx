@@ -16,6 +16,7 @@ import { extractUserText, isUserInputMessage } from '@profer/session-core'
 import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
@@ -894,7 +895,7 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
         .replace(/&gt;/g, '>')
         .replace(/&lt;/g, '<')
         .replace(/&amp;/g, '&')
-      quotes.push({ path: filePath, filename: filePath.split('/').pop() ?? filePath })
+      quotes.push({ path: filePath, filename: getFileBaseName(filePath) })
     }
   }
 

@@ -18,6 +18,7 @@ import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { useShortcut } from '@/hooks/useShortcut'
 import { usePreviewQuotedSelection } from '@/hooks/usePreviewQuotedSelection'
 import { initShortcutRegistry } from '@/lib/shortcut-registry'
+import { getFileBaseName } from '@/lib/file-utils'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
 import { getPreviewCandidateBasePaths, isAbsoluteFilePath } from './preview-open-path'
@@ -339,7 +340,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   // PierreFile props 缓存，避免每次渲染创建新对象导致内部重新高亮
   const pierreFile = React.useMemo(() => ({
-    name: filePath.split('/').pop() ?? filePath,
+    name: getFileBaseName(filePath),
     contents: newContent,
     cacheKey: `${filePath}:${newContent.length}:${previewContentVersion}`,
   }), [filePath, newContent, previewContentVersion])
@@ -1088,7 +1089,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   ref={pdfIframeRef}
                   src={pdfSrc}
                   className="w-full h-full border-0"
-                  title={filePath.split('/').pop() || 'PDF'}
+                  title={getFileBaseName(filePath) || 'PDF'}
                 />
               </div>
               ) : null
@@ -1136,7 +1137,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: '100%', minHeight: '100%', width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : undefined, height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : undefined }}>
                     <img
                       src={imageDataUrl}
-                      alt={filePath.split('/').pop() || 'Image'}
+                      alt={getFileBaseName(filePath) || 'Image'}
                       draggable={false}
                       onLoad={(e) => {
                         const img = e.currentTarget
@@ -1167,7 +1168,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 <iframe
                   src={htmlPreviewUrl}
                   className="h-full w-full border-0 bg-white"
-                  title={`${filePath.split('/').pop() || 'HTML'} 渲染预览`}
+                  title={`${getFileBaseName(filePath) || 'HTML'} 渲染预览`}
                   sandbox="allow-scripts allow-forms"
                   referrerPolicy="no-referrer"
                 />

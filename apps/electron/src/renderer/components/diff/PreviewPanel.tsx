@@ -27,6 +27,7 @@ import {
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { detectIsWindows } from '@/lib/platform'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { DiffTabContent } from './DiffTabContent'
 import { DefaultAppOpenButton } from './DefaultAppOpenButton'
 import { getDefaultAppTargetPath, getPreviewFileAccess } from './preview-open-path'
@@ -59,7 +60,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   // 资料预览的元信息已在正文顶部显示，Windows 下不再把标题和关闭操作拆成两行。
   const useStackedWindowsHeader = isWindows && !isSidePanelOpen && !knowledgeReference
 
-  const fileName = knowledgeReference?.title ?? (currentFile ? currentFile.filePath.split(/[\\/]/).pop() || currentFile.filePath : '文件预览')
+  const fileName = knowledgeReference?.title ?? (currentFile ? getFileBaseName(currentFile.filePath) : '文件预览')
   const defaultAppTargetPath = currentFile ? getDefaultAppTargetPath(currentFile, sessionPath) : ''
   const defaultAppAccess = currentFile ? getPreviewFileAccess(sessionId, currentFile, sessionPath) : undefined
 
