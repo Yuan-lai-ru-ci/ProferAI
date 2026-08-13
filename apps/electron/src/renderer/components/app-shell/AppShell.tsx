@@ -12,6 +12,7 @@ import { LeftSidebar } from './LeftSidebar'
 import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
 import { TeamWorkspaceView } from '@/components/agent/TeamWorkspaceView'
+import { WindowControlsTemplateProvider } from '@/components/WindowControlsTemplate'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
 import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
@@ -19,7 +20,6 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
-import { WindowControls } from '@/components/WindowControls'
 import { detectIsWindows } from '@/lib/platform'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
@@ -228,6 +228,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   }, [clampedLeftSidebarWidth, setLeftSidebarWidth])
 
   return (
+    <WindowControlsTemplateProvider>
     <AppShellProvider value={contextValue}>
       {/* 可拖动标题栏区域，用于窗口拖动。
           Windows 上必须避开右上角的 WindowControls 区域（buttons ~118px + 8px buffer = 126px），
@@ -239,10 +240,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           isWindows ? 'right-[126px]' : 'right-0'
         )}
       />
-
-      {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭）。
-          团队工作区会把按钮嵌入文件管理顶栏，避免右侧 Agent 收起条被覆盖。 */}
-      {!showTeamWorkspaceView && <WindowControls />}
 
       <div className="shell-bg h-screen w-screen flex overflow-hidden bg-background">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
@@ -306,5 +303,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         )}
       </div>
     </AppShellProvider>
+    </WindowControlsTemplateProvider>
   )
 }

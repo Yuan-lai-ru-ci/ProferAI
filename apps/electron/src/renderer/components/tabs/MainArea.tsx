@@ -27,6 +27,7 @@ import { agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 
 export function MainArea(): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
@@ -309,6 +310,13 @@ export function MainArea(): React.ReactElement {
             className="flex flex-col min-w-0 h-full relative"
             style={leftFlexStyle}
           >
+            {/* 无 TabBar 的全屏/空状态视图使用通用主内容宿主；右侧分栏打开时由其更高优先级接管。 */}
+            <WindowControlsHost
+              id="main-content"
+              active={activeView === 'planning' || activeView === 'agent-skills' || automationFormOpen || tabs.length === 0}
+              priority={10}
+              className="absolute right-2 top-[3px] z-20"
+            />
             {activeView === 'planning' ? (
               automationFormOpen ? (
                 // 规划中心内的定时任务设置页：与列表同层级替换中间区，不经过 TabBar。
