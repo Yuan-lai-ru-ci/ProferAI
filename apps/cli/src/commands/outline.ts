@@ -1,5 +1,5 @@
 /**
- * proma session outline — turn 级地图。每 turn 一行的结构概览，
+ * profer session outline — turn 级地图。每 turn 一行的结构概览，
  * 让 Agent 先看地图再决定读哪段，避免全量读正文。
  */
 import { register } from '../registry'

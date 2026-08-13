@@ -1,5 +1,5 @@
 /**
- * proma session search — 在会话内子串搜索，返回命中 turn 的下标与片段。
+ * profer session search — 在会话内子串搜索，返回命中 turn 的下标与片段。
  * Agent 据此再用 export --turns 取命中邻域，避免全量读。
  */
 import { register } from '../registry'

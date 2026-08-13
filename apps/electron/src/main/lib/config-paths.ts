@@ -448,7 +448,7 @@ export function getDefaultSkillsDir(): string {
 }
 
 /**
- * 获取打包进 App 的 proma CLI 二进制路径。
+ * 获取打包进 App 的 profer CLI 二进制路径。
  *
  * 打包模式下从 process.resourcesPath/bin 取（electron-builder extraResources 注入）。
  * 开发模式下没有编译二进制——返回 undefined，由调用方回退到源码运行
@@ -459,7 +459,7 @@ export function getDefaultSkillsDir(): string {
 export function getBundledCliPath(): string | undefined {
   const { app } = require('electron')
   if (!app.isPackaged) return undefined
-  const binName = process.platform === 'win32' ? 'proma.exe' : 'proma'
+  const binName = process.platform === 'win32' ? 'profer.exe' : 'profer'
   const cliPath = join(process.resourcesPath, 'bin', binName)
   return existsSync(cliPath) ? cliPath : undefined
 }

@@ -1,5 +1,5 @@
 /**
- * proma session export — 把会话(或其 turn 子集)渲染为干净 Markdown。
+ * profer session export — 把会话(或其 turn 子集)渲染为干净 Markdown。
  *
  * 面向有限上下文的护栏：当**未指定任何窗口**且输出超过 --max-bytes（默认 51200 = 50KB）时，
  * 拒绝直接灌 stdout，改为落盘并回执路径，提示用 --turns/--head/--tail 取片段。
@@ -71,7 +71,7 @@ register({
         maxBytes,
         turns: allTurns.length,
         written: fallback,
-        hint: '输出过大已落盘。用 --turns A-B / --head N / --tail N 取片段，或 --stdout 强制全量，或 --out 指定路径。先跑 `proma session outline <id>` 看结构。',
+        hint: '输出过大已落盘。用 --turns A-B / --head N / --tail N 取片段，或 --stdout 强制全量，或 --out 指定路径。先跑 `profer session outline <id>` 看结构。',
       }
       if (ctx.json) {
         emitJson(result)

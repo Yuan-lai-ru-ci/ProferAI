@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 编译 proma CLI 为自包含二进制，打进桌面构建。
+ * 编译 profer CLI 为自包含二进制，打进桌面构建。
  *
  * 设计：
  * - 用 `bun build --compile` 把 apps/cli 连同其 workspace 依赖
@@ -39,7 +39,7 @@ const repoRoot = resolve(electronDir, '../..')
 const cliEntry = join(repoRoot, 'apps/cli/src/index.ts')
 
 const isWindows = process.platform === 'win32'
-const binName = isWindows ? 'proma.exe' : 'proma'
+const binName = isWindows ? 'profer.exe' : 'profer'
 const outDir = join(electronDir, 'resources/bin')
 const outFile = join(outDir, binName)
 
@@ -54,7 +54,7 @@ if (!existsSync(cliEntry)) {
 
 mkdirSync(outDir, { recursive: true })
 
-console.log(`${color.cyan}[build:cli]${color.reset} 编译 proma CLI → ${color.dim}${outFile}${color.reset}`)
+console.log(`${color.cyan}[build:cli]${color.reset} 编译 profer CLI → ${color.dim}${outFile}${color.reset}`)
 
 // bun build --compile 在 Windows 上会复制自身。若 bun.exe 位于过长路径，
 // 该步骤可能 ENOENT；将当前 Bun 复制到临时短路径后显式指定即可规避。

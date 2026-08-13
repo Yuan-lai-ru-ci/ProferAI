@@ -1,5 +1,5 @@
 /**
- * proma session info — 会话体量与结构概览（决定怎么读之前先看大小）。
+ * profer session info — 会话体量与结构概览（决定怎么读之前先看大小）。
  *
  * 读 JSONL 解析为 turns，但只输出统计量（turn 数 / 角色分布 / 估算 tokens / 字节数 / 时间区间），
  * 不输出正文——让 Agent 据此判断该全量读还是分段/搜索读。

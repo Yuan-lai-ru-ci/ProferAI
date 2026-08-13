@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /**
- * proma — Proma 命令行工具入口。
+ * profer — Profer 命令行工具入口。
  *
  * 用法：
- *   proma <command> [subcommand] [args] [--flags]
- *   proma session list|info|outline|search|export ...
+ *   profer <command> [subcommand] [args] [--flags]
+ *   profer session list|info|outline|search|export ...
  *
  * 全局 flag：
  *   --json            输出机器可读 JSON
@@ -27,8 +27,8 @@ import './commands/search'
 import './commands/export'
 
 function printHelp(): void {
-  info('proma — Proma 会话渐进式读取 CLI\n')
-  info('用法: proma session <command> [args] [--flags]\n')
+  info('profer — Profer 会话渐进式读取 CLI\n')
+  info('用法: profer session <command> [args] [--flags]\n')
   info('命令:')
   for (const c of allCommands()) {
     info(`  ${c.usage.padEnd(64)} ${c.summary}`)
@@ -44,7 +44,7 @@ async function main(): Promise<number> {
     return EXIT_OK
   }
 
-  // 命名空间：当前只有 session，支持 `proma session <cmd>` 与直接 `proma <cmd>`
+  // 命名空间：当前只有 session，支持 `profer session <cmd>` 与直接 `profer <cmd>`
   let rest = argv
   if (argv[0] === 'session') rest = argv.slice(1)
 
@@ -73,7 +73,7 @@ async function main(): Promise<number> {
   } catch (err) {
     if (err instanceof UsageError) {
       errorLine(err.message)
-      info(`用法: proma ${command.usage}`)
+      info(`用法: profer ${command.usage}`)
       return EXIT_USAGE
     }
     errorLine(err instanceof Error ? err.message : String(err))
