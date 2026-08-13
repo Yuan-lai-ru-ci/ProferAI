@@ -14,20 +14,21 @@ function rect(overrides: Partial<SelectionRect> = {}): SelectionRect {
 
 describe('pickSelectionAnchor', () => {
   test('水平始终居中于选区包围盒中心', () => {
-    expect(pickSelectionAnchor(rect(), 160)).toEqual({ x: 200, y: 160 })
+    expect(pickSelectionAnchor(rect(), 130).x).toBe(200)
   })
 
-  test('垂直优先取鼠标抬手点（松手必在视口内）', () => {
-    // 抬手点在上方（从下往上选择），垂直对齐抬手点而不是选区底部
-    expect(pickSelectionAnchor(rect(), 40)).toEqual({ x: 200, y: 40 })
+  test('抬手点在选区下半部（从上往下选）时按钮向下展开、留出间距', () => {
+    // centerY = 130，pointerY = 150 >= 130 → direction down，y = 150 + 24 = 174
+    expect(pickSelectionAnchor(rect(), 150)).toEqual({ x: 200, y: 174, direction: 'down' })
   })
 
-  test('键盘选择无抬手点（pointerY 为 null）时退回选区底部', () => {
-    expect(pickSelectionAnchor(rect(), null)).toEqual({ x: 200, y: 160 })
+  test('抬手点在选区上半部（从下往上选）时按钮向上展开、留出间距', () => {
+    // centerY = 130，pointerY = 110 < 130 → direction up，y = 110 - 24 = 86
+    expect(pickSelectionAnchor(rect(), 110)).toEqual({ x: 200, y: 86, direction: 'up' })
   })
 
-  test('跨屏选区（top 滚出视口）时水平中心仍取选区中点', () => {
-    const r = rect({ top: -500, bottom: 120, left: -100, right: 300, width: 400 })
-    expect(pickSelectionAnchor(r, 120)).toEqual({ x: 100, y: 120 })
+  test('键盘选择无抬手点（pointerY 为 null）时退回选区底部、向上展开', () => {
+    // y = 160 - 24 = 136
+    expect(pickSelectionAnchor(rect(), null)).toEqual({ x: 200, y: 136, direction: 'up' })
   })
 })

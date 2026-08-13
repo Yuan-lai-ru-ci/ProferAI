@@ -14,6 +14,14 @@
  *
  * 缩放交互：仅头部按钮（缩小 / 重置 / 放大）。不响应滚轮和拖拽，
  * 让滚轮事件正常冒泡到页面滚动；放大后用容器原生 overflow scrollbar 浏览。
+ *
+ * 缩放模型：图以自然尺寸渲染，scale 直接作用其上。
+ *  - 最小缩放 = min(框宽/图宽, 框高/图高)：图完整可见（一端贴满、另一端不溢出），
+ *    也是初始缩放与「重置」目标；
+ *  - 最大缩放 = ZOOM_MAX（双维溢出时横/纵滚动条并存）；
+ *  - 缩放以当前视口中心为锚点（缩放后重新对齐滚动位置）；
+ *  - 对齐：溢出维度顶格（滚动到头保留 PANEL_PADDING 留白），不溢出维度居中；
+ *  - transform-origin 为左上角，缩放只向右/下扩展，负坐标区不可达。
  */
 
 import * as React from 'react'
@@ -26,11 +34,11 @@ interface MermaidBlockProps {
 
 /** 防抖间隔（ms） */
 const DEBOUNCE_MS = 350
-/** 缩放范围 */
-const ZOOM_MIN = 0.25
+/** 缩放范围：最小由「图适配框」动态决定（见 minZoom），最大固定 */
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.15
-const INITIAL_SCALE = 1
+/** 图边缘与框边缘的间隙（px）：滚动到头时保留的留白 */
+const PANEL_PADDING = 16
 let mermaidRenderId = 0
 
 function isDarkMode(): boolean {
@@ -236,12 +244,26 @@ const zoomOutPath = (
 export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
   const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState(false)
-  const [scale, setScale] = React.useState<number>(INITIAL_SCALE)
+  const [scale, setScale] = React.useState<number>(1)
+  /** SVG 自然尺寸（取 width/height 属性，稳定，不受滚动条影响） */
+  const [svgSize, setSvgSize] = React.useState({ w: 0, h: 0 })
+  /** 滚动容器（框）可视区尺寸（clientWidth/clientHeight，已扣滚动条） */
+  const [frameSize, setFrameSize] = React.useState({ w: 0, h: 0 })
 
   const codeRef = React.useRef(code)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** generation 计数器：每次 code 变化递增，防止异步竞态 */
   const generationRef = React.useRef(0)
+
+  /** 滚动容器与缩放内容 DOM（用于视口中心锚定的滚动计算） */
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const contentRef = React.useRef<HTMLDivElement | null>(null)
+  /** 缩放后待应用的滚动位置：useLayoutEffect 里在 transform 提交生效后应用 */
+  const pendingScrollRef = React.useRef<{ x: number; y: number } | null>(null)
+  /** 右键拖动平移：是否正在拖动（控制光标样式） */
+  const [isPanning, setIsPanning] = React.useState(false)
+  /** 右键拖动起始信息（起始指针坐标 + 起始滚动位置） */
+  const panRef = React.useRef<{ x: number; y: number; left: number; top: number } | null>(null)
 
   codeRef.current = code
 
@@ -263,7 +285,6 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
 
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setRenderedSvg(null)
-    setScale(INITIAL_SCALE)
     debounceRef.current = setTimeout(() => {
       void renderCurrentCode(currentGen)
     }, DEBOUNCE_MS)
@@ -283,13 +304,160 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
     return () => observer.disconnect()
   }, [renderCurrentCode])
 
+  // ---- 缩放平移量：不溢出维度居中，溢出维度顶格（0 间隙，图边缘即滚动边界） ----
+  const scaledW = svgSize.w * scale
+  const scaledH = svgSize.h * scale
+  const tx = svgSize.w > 0 && scaledW < frameSize.w && frameSize.w > 0 ? (frameSize.w - scaledW) / 2 : 0
+  const ty = svgSize.h > 0 && scaledH < frameSize.h && frameSize.h > 0 ? (frameSize.h - scaledH) / 2 : 0
+
+  // 最小缩放 = 图完整适配框（一端贴满、另一端不溢出）；极小图贴不满时封顶到 ZOOM_MAX
+  const minScale = svgSize.w > 0 && svgSize.h > 0 && frameSize.w > 0 && frameSize.h > 0
+    ? Math.min(frameSize.w / svgSize.w, frameSize.h / svgSize.h)
+    : 0
+  const minZoom = Math.min(minScale, ZOOM_MAX)
+
+  /**
+   * 按「视口中心锚定」缩放：先读取当前视口中心对应的内容点（未缩放坐标系），
+   * 改变 scale 后由下方 useLayoutEffect 把该点重新对齐到视口中心。
+   * transform-origin 为 top left，缩放只向右/下扩展；配合 translate 平移量
+   * 使未溢出时居中、溢出时顶格，左端（图头）/顶端永不落入不可滚动的负坐标区。
+   */
+  const applyZoom = React.useCallback((newScale: number) => {
+    const scrollEl = scrollRef.current
+    const contentEl = contentRef.current
+    // 图表未渲染或尚未测得尺寸时直接改缩放即可
+    if (!scrollEl || !contentEl || !svgSize.w || !frameSize.w) {
+      setScale(newScale)
+      return
+    }
+    const oldScale = scale
+    const scrollRect = scrollEl.getBoundingClientRect()
+    const contentRect = contentEl.getBoundingClientRect()
+    // 内容可视区左上角在滚动内容坐标系中的位置（含当前滚动偏移与平移量）
+    const left = contentRect.left - scrollRect.left + scrollEl.scrollLeft
+    const top = contentRect.top - scrollRect.top + scrollEl.scrollTop
+    // 布局位置（不含平移量）：可视左上角 - 当前平移量
+    const baseLeft = left - tx
+    const baseTop = top - ty
+    // 当前视口中心对应的内容点（未缩放坐标系）
+    const vpCx = scrollEl.clientWidth / 2
+    const vpCy = scrollEl.clientHeight / 2
+    const itemX = (scrollEl.scrollLeft + vpCx - left) / oldScale
+    const itemY = (scrollEl.scrollTop + vpCy - top) / oldScale
+    // 新缩放下的平移量与可视左上角
+    const newScaledW = svgSize.w * newScale
+    const newScaledH = svgSize.h * newScale
+    const newTx = newScaledW < frameSize.w ? (frameSize.w - newScaledW) / 2 : 0
+    const newTy = newScaledH < frameSize.h ? (frameSize.h - newScaledH) / 2 : 0
+    const newLeft = baseLeft + newTx
+    const newTop = baseTop + newTy
+    // 新缩放下使该点仍落在视口中心所需的滚动位置
+    pendingScrollRef.current = {
+      x: newLeft + itemX * newScale - vpCx,
+      y: newTop + itemY * newScale - vpCy,
+    }
+    setScale(newScale)
+  }, [scale, tx, ty, svgSize, frameSize])
+
+  // ---- 缩放后应用滚动锚定（本次提交里 transform 已生效，scrollWidth 为缩放后尺寸）----
+  React.useLayoutEffect(() => {
+    const scrollEl = scrollRef.current
+    const pending = pendingScrollRef.current
+    if (!scrollEl || !pending) return
+    pendingScrollRef.current = null
+    scrollEl.scrollLeft = clamp(pending.x, 0, Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth))
+    scrollEl.scrollTop = clamp(pending.y, 0, Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight))
+  })
+
+  // ---- 测量 SVG 自然尺寸 / 框尺寸，并设置初始缩放（= 适配框），只在图表渲染时执行一次 ----
+  // 注意：不监听内容元素的布局尺寸变化——放大溢出时滚动条出现会让容器变窄，
+  // 若反复读 offsetWidth 并回写 state 会形成无限重渲染（Maximum update depth exceeded）。
+  // SVG 自然尺寸取 width/height 属性（稳定），框尺寸仅跟随窗口 resize（滚动条出现不触发）。
+  React.useLayoutEffect(() => {
+    const scrollEl = scrollRef.current
+    const content = contentRef.current
+    if (!scrollEl || !content) return
+    const svg = content.querySelector('svg')
+    let iw = 0
+    let ih = 0
+    if (svg) {
+      iw = parseFloat(svg.getAttribute('width') ?? '')
+      ih = parseFloat(svg.getAttribute('height') ?? '')
+    }
+    if (!Number.isFinite(iw) || !Number.isFinite(ih) || iw <= 0 || ih <= 0) {
+      // 属性缺失时退回布局尺寸（此时仅测一次，足够稳定）
+      iw = content.offsetWidth
+      ih = content.offsetHeight
+    }
+    setSvgSize({ w: iw, h: ih })
+
+    // 首帧：测框内容盒尺寸（可视区减去留白）并设置初始缩放（适配），滚动归零
+    const fw = scrollEl.clientWidth - 2 * PANEL_PADDING
+    const fh = scrollEl.clientHeight - 2 * PANEL_PADDING
+    setFrameSize({ w: fw, h: fh })
+    if (iw > 0 && ih > 0 && fw > 0 && fh > 0) {
+      setScale(Math.min(Math.min(fw / iw, fh / ih), ZOOM_MAX))
+      scrollEl.scrollLeft = 0
+      scrollEl.scrollTop = 0
+    }
+
+    // resize 只更新框尺寸（不重置用户缩放）
+    const onResize = () => {
+      const nfw = scrollEl.clientWidth - 2 * PANEL_PADDING
+      const nfh = scrollEl.clientHeight - 2 * PANEL_PADDING
+      setFrameSize((prev) => prev.w === nfw && prev.h === nfh ? prev : { w: nfw, h: nfh })
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [renderedSvg])
+
   const handleZoomIn = React.useCallback(() => {
-    setScale((prev) => clamp(prev + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
-  }, [])
+    applyZoom(clamp(scale + ZOOM_STEP, minZoom, ZOOM_MAX))
+  }, [applyZoom, scale, minZoom])
   const handleZoomOut = React.useCallback(() => {
-    setScale((prev) => clamp(prev - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))
+    applyZoom(clamp(scale - ZOOM_STEP, minZoom, ZOOM_MAX))
+  }, [applyZoom, scale, minZoom])
+  const handleZoomReset = React.useCallback(() => {
+    // 已是适配缩放则无需处理；否则回到适配（图完整可见）并回左上角
+    if (scale === minZoom) return
+    pendingScrollRef.current = { x: 0, y: 0 }
+    setScale(minZoom)
+  }, [scale, minZoom])
+
+  // ---- 右键拖动平移：按住右键拖动，图片跟随鼠标（仅图片溢出时启用） ----
+  const handlePanMouseDown = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 2) return // 仅右键
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    // 仅在有溢出（可滚动）时启用
+    if (scrollEl.scrollWidth <= scrollEl.clientWidth && scrollEl.scrollHeight <= scrollEl.clientHeight) return
+    e.preventDefault()
+    panRef.current = { x: e.clientX, y: e.clientY, left: scrollEl.scrollLeft, top: scrollEl.scrollTop }
+    setIsPanning(true)
   }, [])
-  const handleZoomReset = React.useCallback(() => setScale(INITIAL_SCALE), [])
+
+  // 拖动过程中监听 window 级 mousemove/mouseup（鼠标移出容器也能继续拖、正常释放）
+  React.useEffect(() => {
+    if (!isPanning) return
+    const onMove = (e: MouseEvent) => {
+      const scrollEl = scrollRef.current
+      const start = panRef.current
+      if (!scrollEl || !start) return
+      // 图片跟随鼠标：鼠标往右拖，图片往右移 → scrollLeft 减小（浏览器自动 clamp 到有效范围）
+      scrollEl.scrollLeft = start.left - (e.clientX - start.x)
+      scrollEl.scrollTop = start.top - (e.clientY - start.y)
+    }
+    const onUp = () => {
+      panRef.current = null
+      setIsPanning(false)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [isPanning])
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -344,13 +512,21 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.ReactElement {
             <code>{code}</code>
           </pre>
         ) : (
-          <div className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]">
-            <div
-              className="flex justify-center items-center p-4 min-h-[180px] origin-center"
-              style={{ transform: `scale(${scale})` }}
-            >
+          <div
+            ref={scrollRef}
+            className="mermaid-block-scroll bg-background overflow-auto min-h-[180px]"
+            style={{ cursor: isPanning ? 'grabbing' : undefined }}
+            onMouseDown={handlePanMouseDown}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <div className="flex items-start min-h-[180px]" style={{ padding: PANEL_PADDING }}>
               <div
-                className="mermaid-svg [&>svg]:max-w-full [&>svg]:h-auto"
+                ref={contentRef}
+                className="mermaid-svg shrink-0"
+                style={{
+                  transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+                  transformOrigin: 'top left',
+                }}
                 dangerouslySetInnerHTML={{ __html: renderedSvg }}
               />
             </div>

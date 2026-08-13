@@ -18,6 +18,7 @@ interface AgentHistorySelection {
   text: string
   x: number
   y: number
+  direction: 'up' | 'down'
   sourceLabel: string
   messageId?: string
   messageRole?: 'user' | 'assistant' | 'system'
@@ -45,13 +46,30 @@ export interface SelectionRect {
   width: number
 }
 
-/** 锚点：水平居中于选区包围盒、垂直取鼠标抬手点（松手时必在视口内，从任意方向选择都贴近可视区）。
- *  键盘选择无抬手点（pointerY 为 null）时退回选区底部兜底。 */
-export function pickSelectionAnchor(anchorRect: SelectionRect, pointerY: number | null): { x: number; y: number } {
-  return {
-    x: anchorRect.left + anchorRect.width / 2,
-    y: pointerY ?? anchorRect.bottom,
+export interface SelectionAnchor {
+  x: number
+  y: number
+  direction: 'up' | 'down'
+}
+
+/** 按钮与抬手点（或键盘选择时的选区底部兜底锚点）之间的间距，避免按钮紧贴抬手点。 */
+const ANCHOR_GAP = 24
+
+/** 锚点：水平居中于选区包围盒、垂直取鼠标抬手点（并留出间距），根据选择方向决定按钮展开方向——
+ *  按钮始终落在抬手点的「选区外侧」，避免压住选中文字：
+ *  - 抬手点在选区下半部（从上往下选）：按钮放抬手点下方（向下展开）
+ *  - 抬手点在选区上半部（从下往上选）：按钮放抬手点上方（向上展开）
+ *  键盘选择无抬手点（pointerY 为 null）时退回选区底部、向上展开兜底。 */
+export function pickSelectionAnchor(anchorRect: SelectionRect, pointerY: number | null): SelectionAnchor {
+  const x = anchorRect.left + anchorRect.width / 2
+  if (pointerY == null) {
+    return { x, y: anchorRect.bottom - ANCHOR_GAP, direction: 'up' }
   }
+  const centerY = (anchorRect.top + anchorRect.bottom) / 2
+  if (pointerY >= centerY) {
+    return { x, y: pointerY + ANCHOR_GAP, direction: 'down' }
+  }
+  return { x, y: pointerY - ANCHOR_GAP, direction: 'up' }
 }
 
 function getRoleLabel(role?: string): string {
@@ -116,7 +134,7 @@ export function AgentHistorySelectionLayer({
     const firstRect = range.getClientRects()[0]
     const anchorRect = rect.width > 0 || rect.height > 0 ? rect : firstRect
     if (!anchorRect) return
-    const { x, y } = pickSelectionAnchor(anchorRect, pointerUpYRef.current)
+    const { x, y, direction } = pickSelectionAnchor(anchorRect, pointerUpYRef.current)
 
     const sameMessage = startMessageEl === endMessageEl
     const role = sameMessage
@@ -127,8 +145,8 @@ export function AgentHistorySelectionLayer({
     setSelection({
       text,
       x,
-      // 按钮向上展开（-translate-y-full），越界由 SelectionActionPopover 内部实测钳制兜底。
       y,
+      direction,
       sourceLabel: sameMessage ? getRoleLabel(role ?? undefined) : 'Agent 历史 · 多条消息',
       messageId,
       messageRole: role ?? undefined,
@@ -230,6 +248,7 @@ export function AgentHistorySelectionLayer({
         <SelectionActionPopover
           x={selection.x}
           y={selection.y}
+          direction={selection.direction}
           onAddToAgent={handleAddToAgent}
         />
       )}

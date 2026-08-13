@@ -325,6 +325,13 @@ export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowC
             type="button"
             disabled={riskBlocked}
             onClick={() => void selectTab(tab.tabId)}
+            onMouseDown={(event) => {
+              // 中键关闭标签，与顶部会话标签行为一致
+              if (event.button === 1) {
+                event.preventDefault()
+                void closeTab(tab.tabId)
+              }
+            }}
             className={`group flex items-center gap-1.5 h-6 min-w-[120px] max-w-[220px] px-2 rounded text-[11px] disabled:cursor-not-allowed disabled:opacity-50 ${tab.tabId === activeTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`}
             aria-label={`切换到 ${tab.title || '新建标签页'}${tab.openedByAgent ? '（由 Agent 创建）' : ''}`}
           >
