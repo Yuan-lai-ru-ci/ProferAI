@@ -17,6 +17,7 @@ import {
   tabsAtom,
   activeTabIdAtom,
   tabIndicatorMapAtom,
+  updateTabTitle,
 } from '@/atoms/tab-atoms'
 import type { TabItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -48,6 +49,7 @@ import { detectIsWindows } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
+import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
 
 export function TabBar(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -226,6 +228,8 @@ function TabBarInner({
   onTearOff: (tabId: string) => void
 }): React.ReactElement {
   const [hoveredTabId, setHoveredTabId] = React.useState<string | null>(null)
+  const setTabs = useSetAtom(tabsAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const [isLeaving, setIsLeaving] = React.useState(false)
   const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
@@ -429,6 +433,18 @@ function TabBarInner({
     }
   }, [])
 
+  const handleRenameAgentSession = React.useCallback(async (sessionId: string, title: string) => {
+    try {
+      const updated = await window.electronAPI.updateAgentSessionTitle(sessionId, title)
+      setTabs((previous) => updateTabTitle(previous, updated.id, updated.title))
+      setAgentSessions((previous) => replaceAgentSessionInFreshnessOrder(previous, updated))
+    } catch (error) {
+      console.error('[TabBar] 更新 Agent 会话标题失败:', error)
+      toast.error('会话重命名失败，请重试')
+      throw error
+    }
+  }, [setAgentSessions, setTabs])
+
   const handleTabHoverEnter = React.useCallback((tabId: string) => {
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
@@ -490,6 +506,7 @@ function TabBarInner({
             title={tab.title}
             workspaceName={tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined}
             isAutomation={tab.type === 'agent' && automationSessionIds.has(tab.sessionId)}
+            onRename={tab.type === 'agent' ? (title) => handleRenameAgentSession(tab.sessionId, title) : undefined}
             isActive={tab.id === activeTabId}
             isStreaming={streamingMap.get(tab.id) ?? 'idle'}
             isHovered={hoveredTabId === tab.id}
