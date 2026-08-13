@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, CalendarDays, ChevronRight, Blocks, GitBranch, LogIn, Globe } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, Cloud, GripVertical, Clock, CalendarDays, ChevronRight, Blocks, GitBranch, LogIn, Globe, History, ArrowDownAZ } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -86,7 +86,7 @@ import {
 } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { authStatusAtom } from '@/atoms/identity-atoms'
-import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
+import { sidebarViewModeAtom, workspaceSortModeAtom, type WorkspaceSortMode } from '@/atoms/sidebar-atoms'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
@@ -138,6 +138,40 @@ import type { ConversationMeta, AgentSessionMeta, AgentWorkspace, WorkspaceCapab
 
 function formatAutomationCount(count: number): string {
   return count > 99 ? '99+' : String(count)
+}
+
+/** 项目排序方式循环顺序（default → recent → name → default） */
+const WORKSPACE_SORT_ORDER: readonly WorkspaceSortMode[] = ['default', 'recent', 'name']
+
+/** 项目排序方式对应的中文标签 */
+const WORKSPACE_SORT_LABEL: Record<WorkspaceSortMode, string> = {
+  default: '默认',
+  recent: '最近',
+  name: '名称',
+}
+
+/** 项目名称排序用 collator：中文按拼音、数字按数值、忽略大小写 */
+const workspaceNameCollator = new Intl.Collator('zh-Hans-CN', {
+  numeric: true,
+  sensitivity: 'base',
+})
+
+/** 获取下一次点击后的排序方式 */
+function getNextWorkspaceSortMode(current: WorkspaceSortMode): WorkspaceSortMode {
+  const index = WORKSPACE_SORT_ORDER.indexOf(current)
+  return WORKSPACE_SORT_ORDER[(index + 1) % WORKSPACE_SORT_ORDER.length] ?? 'default'
+}
+
+/** 渲染项目排序按钮的图标（三种排序方式三种图标） */
+function renderWorkspaceSortIcon(mode: WorkspaceSortMode): React.ReactElement {
+  switch (mode) {
+    case 'recent':
+      return <History size={14} />
+    case 'name':
+      return <ArrowDownAZ size={14} />
+    default:
+      return <CalendarDays size={14} />
+  }
 }
 
 interface AutomationSidebarEntryProps {
@@ -804,6 +838,8 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
 
   // 归档 & 搜索状态
   const [viewMode, setViewMode] = useAtom(sidebarViewModeAtom)
+  // 项目列表排序方式（持久化）
+  const [workspaceSortMode, setWorkspaceSortMode] = useAtom(workspaceSortModeAtom)
 
   // ===== 列表渐进渲染：先渲染可见数量（40 条），空闲时批量补全 =====
   const INITIAL_LIST_COUNT = 40
@@ -1834,11 +1870,41 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
     })
   }
 
+  /** 切换项目排序方式（default → recent → name 循环） */
+  const handleCycleWorkspaceSort = React.useCallback((): void => {
+    setWorkspaceSortMode((prev) => getNextWorkspaceSortMode(prev))
+  }, [setWorkspaceSortMode])
+
+  /** 按当前排序方式重排工作区（仅影响显示顺序，不改动 workspaces 原始顺序） */
+  const sortedWorkspaces = React.useMemo(() => {
+    if (workspaceSortMode === 'recent') {
+      // 「最近」按项目最近活跃时间排序：取其最新会话的 updatedAt，无会话时退回项目自身 updatedAt。
+      // 草稿会话是点击项目时生成的隐藏占位、归档会话已不活跃，均不参与判定，
+      // 否则点击项目就会刷新草稿时间、让项目凭空跳到最上面。
+      const recencyByWorkspace = new Map<string, number>()
+      for (const session of agentSessions) {
+        const workspaceId = session.workspaceId
+        if (!workspaceId || session.draft || session.archived) continue
+        const previous = recencyByWorkspace.get(workspaceId) ?? 0
+        if (session.updatedAt > previous) recencyByWorkspace.set(workspaceId, session.updatedAt)
+      }
+      return [...workspaces].sort((a, b) => {
+        const recencyA = recencyByWorkspace.get(a.id) ?? a.updatedAt
+        const recencyB = recencyByWorkspace.get(b.id) ?? b.updatedAt
+        return recencyB - recencyA
+      })
+    }
+    if (workspaceSortMode === 'name') {
+      return [...workspaces].sort((a, b) => workspaceNameCollator.compare(a.name, b.name))
+    }
+    return workspaces
+  }, [workspaces, workspaceSortMode, agentSessions])
+
   /** Agent 普通历史按项目分组（排除置顶 / 归档 / draft） */
   const agentProjectGroups = React.useMemo<AgentProjectGroup[]>(
     () => {
       const sessionsByWorkspaceId = new Map<string, AgentSessionMeta[]>()
-      for (const workspace of workspaces) {
+      for (const workspace of sortedWorkspaces) {
         sessionsByWorkspaceId.set(workspace.id, [])
       }
 
@@ -1853,7 +1919,7 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
         )
       )
 
-      const defaultWsId = workspaces.find((ws) => ws.slug === 'default')?.id ?? workspaces[0]?.id
+      const defaultWsId = sortedWorkspaces.find((ws) => ws.slug === 'default')?.id ?? sortedWorkspaces[0]?.id
       for (const session of visibleHistory) {
         const targetId = session.workspaceId && sessionsByWorkspaceId.has(session.workspaceId)
           ? session.workspaceId
@@ -1862,12 +1928,12 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
         sessionsByWorkspaceId.get(targetId)!.push(session)
       }
 
-      return workspaces.map((workspace) => ({
+      return sortedWorkspaces.map((workspace) => ({
         workspace,
         sessions: sessionsByWorkspaceId.get(workspace.id) ?? [],
       }))
     },
-    [agentSessions, draftSessionIds, workspaces],
+    [agentSessions, draftSessionIds, sortedWorkspaces],
   )
 
   /** Agent 归档会话按日期分组（跨项目） */
@@ -2528,6 +2594,22 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
           <div className="px-2 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
             <span className="ml-[4px] px-1.5 text-[13px] font-medium leading-[18px] text-foreground/40 select-none">项目</span>
             <div className="flex items-center gap-0.5">
+              {/* 项目排序切换：默认（创建时间）/ 最近 / 名称 三种方式循环 */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleCycleWorkspaceSort}
+                    className="size-6 flex items-center justify-center rounded-md text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/60 transition-colors titlebar-no-drag"
+                    aria-label={`项目排序：当前${WORKSPACE_SORT_LABEL[workspaceSortMode]}排序，点击切换`}
+                  >
+                    {renderWorkspaceSortIcon(workspaceSortMode)}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  当前{WORKSPACE_SORT_LABEL[workspaceSortMode]}排序，点击切换排序方式
+                </TooltipContent>
+              </Tooltip>
               {/* 平板版暂时隐藏团队版功能：不展示“加入团队工作区”入口 */}
               {authStatus.isLoggedIn && accountCaps.membershipTier !== 'free' && !tabletMode && (
                 <Tooltip>
