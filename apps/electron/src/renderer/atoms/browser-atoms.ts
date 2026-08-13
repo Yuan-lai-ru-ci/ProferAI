@@ -23,6 +23,14 @@ export const browserFilePanelManualRestoreSessionIdsAtom = atomWithStorage<strin
   [],
 )
 
+/**
+ * 用户在当前会话手动打开浏览器的标记集合。
+ * 与文件面板的 userOverrodeAutoHide 对齐：窄屏自动收起后，用户手动点开浏览器，
+ * 本次不再被 MainArea 的 788 阈值自动收起；窗口/布局恢复到阈值以上时重置。
+ * 仅存于内存，不持久化——会话/窗口变化即失效，避免残留旧会话脏标记。
+ */
+export const browserManualOpenSessionIdsAtom = atom<Set<string>>(new Set<string>())
+
 export const currentSessionBrowserStateAtom = atom<BrowserViewState | null>((get) => {
   const sessionId = get(currentAgentSessionIdAtom)
   return sessionId ? get(browserStateMapAtom).get(sessionId) ?? null : null

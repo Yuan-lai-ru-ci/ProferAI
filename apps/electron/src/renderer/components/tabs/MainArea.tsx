@@ -13,7 +13,7 @@ import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
 import { previewPanelOpenMapAtom, previewSplitRatioAtom } from '@/atoms/preview-atoms'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
-import { browserPanelDismissedSessionIdsAtom, browserPanelOpenMapAtom, browserSplitRatioAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { browserManualOpenSessionIdsAtom, browserPanelDismissedSessionIdsAtom, browserPanelOpenMapAtom, browserSplitRatioAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
 import { BrowserPanel } from '@/components/browser/BrowserPanel'
 import type { BrowserViewState } from '@profer/shared'
 import { useTrackSessionView } from '@/hooks/useTrackSessionView'
@@ -69,6 +69,7 @@ export function MainArea(): React.ReactElement {
   const [browserLayoutWidth, setBrowserLayoutWidth] = React.useState(0)
   const browserDragging = React.useRef(false)
   const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
+  const [browserManualOpen, setBrowserManualOpen] = useAtom(browserManualOpenSessionIdsAtom)
   const browserSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
 
   const publishBrowserState = React.useCallback((state: BrowserViewState) => {
@@ -111,7 +112,10 @@ export function MainArea(): React.ReactElement {
   const CONVERSATION_MIN_WIDTH = 420
   // 与 AppShell 的 p-2 面板缝隙保持一致，避免侧边栏收起时出现额外空白。
   const BROWSER_SPLIT_GAP = 8
+  // 用户手动打开浏览器后，窄屏不再自动收起（补齐与文件面板 userOverrode 对等的保护）。
+  const browserManuallyOpened = browserSessionId ? browserManualOpen.has(browserSessionId) : false
   const browserAutoHidden = showBrowserPanel
+    && !browserManuallyOpened
     && browserLayoutWidth > 0
     && browserLayoutWidth < CONVERSATION_MIN_WIDTH + BROWSER_MIN_WIDTH + BROWSER_SPLIT_GAP
   const browserVisible = showBrowserPanel && !browserAutoHidden
@@ -127,12 +131,33 @@ export function MainArea(): React.ReactElement {
     return () => observer.disconnect()
   }, [])
 
-  // 窄屏自动隐藏只是临时视觉降级，不写入用户手动关闭标记；原生 WebContentsView 必须同步隐藏。
+  // 窄屏时必须同时收起 renderer 面板和原生 WebContentsView。
+  // 只调用 hideAgentBrowser 会留下 browserOpenMap=true；在布局重排或状态推送时，
+  // BrowserPanel 工具栏可能重新挂到对话内容上。这里仅收起显示，不销毁浏览器会话、标签页或登录状态。
   React.useEffect(() => {
-    if (browserAutoHidden && browserSessionId) {
-      void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
-    }
-  }, [browserAutoHidden, browserSessionId])
+    if (!browserAutoHidden || !browserSessionId) return
+    void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
+    setBrowserOpenMap((previous) => {
+      if (previous.get(browserSessionId) !== true) return previous
+      const next = new Map(previous)
+      next.set(browserSessionId, false)
+      return next
+    })
+  }, [browserAutoHidden, browserSessionId, setBrowserOpenMap])
+
+  // 布局恢复（MainArea 足以并排）后，重置当前会话的「手动打开」标记，恢复后续自动收起能力，
+  // 与文件面板在窗口 ≥ 阈值时重置 userOverride 的行为对齐。
+  React.useEffect(() => {
+    if (!browserSessionId) return
+    const wideEnough = browserLayoutWidth >= CONVERSATION_MIN_WIDTH + BROWSER_MIN_WIDTH + BROWSER_SPLIT_GAP
+    if (!wideEnough) return
+    setBrowserManualOpen((previous) => {
+      if (!previous.has(browserSessionId)) return previous
+      const next = new Set(previous)
+      next.delete(browserSessionId)
+      return next
+    })
+  }, [browserLayoutWidth, browserSessionId, setBrowserManualOpen])
 
   const previewOpen =
     activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false) && !showBrowserPanel
@@ -351,8 +376,9 @@ export function MainArea(): React.ReactElement {
             sessionId={browserSessionId}
             state={browserState}
             sessionTitle={activeTab?.title ?? ''}
-            // 右侧文件栏打开时它占据窗口右缘，浏览器无需为 WindowControls 预留空白。
-            avoidWindowControls={!sidePanelOpen}
+            // WindowControls 是全局原生标题栏浮层，浏览器面板在窄窗口或布局切换期间
+            // 仍可能贴到窗口右缘。始终预留避让区，避免功能按钮与窗口控件重合。
+            avoidWindowControls
             // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
             // 让原生 hostView 立即拿到新 rect，但不销毁网页 WebContents。
             layoutKey={sidePanelOpen ? 'side-panel-open' : 'side-panel-closed'}

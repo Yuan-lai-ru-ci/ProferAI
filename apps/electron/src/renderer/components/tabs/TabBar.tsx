@@ -33,6 +33,7 @@ import {
 } from '@/atoms/agent-atoms'
 import {
   browserFilePanelManualRestoreSessionIdsAtom,
+  browserManualOpenSessionIdsAtom,
   browserPanelDismissedSessionIdsAtom,
   browserPanelOpenMapAtom,
   browserStateMapAtom,
@@ -246,6 +247,7 @@ function TabBarInner({
   const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
   const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
+  const [browserManualOpen, setBrowserManualOpen] = useAtom(browserManualOpenSessionIdsAtom)
   const [browserFilePanelManualRestoreSessionIds, setBrowserFilePanelManualRestoreSessionIds] = useAtom(browserFilePanelManualRestoreSessionIdsAtom)
   const activeBrowserIsOpen = activeAgentSessionId ? browserOpenMap.get(activeAgentSessionId) === true : false
   const showBrowserButton = Boolean(activeAgentSessionId)
@@ -276,7 +278,9 @@ function TabBarInner({
     setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, true); return next })
     // 用户主动重新打开浏览器，清除“已手动关闭”标记，恢复后续状态推送自动打开能力。
     setBrowserDismissed((previous) => { if (!previous.has(activeAgentSessionId)) return previous; const next = new Set(previous); next.delete(activeAgentSessionId); return next })
-  }, [activeAgentSessionId, setBrowserDismissed, setBrowserOpenMap, setBrowserStateMap])
+    // 记录用户手动打开，窄屏不再被 MainArea 的 788 阈值自动收起（布局恢复宽后重置）。
+    setBrowserManualOpen((previous) => { if (previous.has(activeAgentSessionId)) return previous; const next = new Set(previous); next.add(activeAgentSessionId); return next })
+  }, [activeAgentSessionId, setBrowserDismissed, setBrowserManualOpen, setBrowserOpenMap, setBrowserStateMap])
 
   const topBarTools: TopBarTool[] = [
     {
