@@ -7,6 +7,9 @@
 import { ipcMain } from 'electron'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 import type { UpdateStatus } from './updater-types'
+import { CHANGELOG_IPC_CHANNELS } from '@profer/shared'
+import type { ChangelogEntry } from '@profer/shared'
+import { getChangelog } from '../changelog-service'
 import {
   checkForUpdates,
   getUpdateStatus,
@@ -37,6 +40,11 @@ export function registerUpdaterIpc(): void {
       quitAndInstall()
     }
   )
+
+  // 版本更新日志（内置本地 CHANGELOG）
+  ipcMain.handle(CHANGELOG_IPC_CHANNELS.GET, (): ChangelogEntry[] => {
+    return getChangelog()
+  })
 
   console.log('[更新 IPC] 更新 IPC 处理器注册完成')
 }

@@ -34,7 +34,9 @@ import {
 } from '@/atoms/environment'
 import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
 import { Badge } from '@/components/ui/badge'
-import { ReleaseNotesViewer } from './ReleaseNotesViewer'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { VersionHistory } from './VersionHistory'
 
 /** 从 package.json 构建时由 Vite define 注入 */
 declare const __APP_VERSION__: string
@@ -48,7 +50,7 @@ function UpdateCard(): React.ReactElement | null {
   const status = useAtomValue(updateStatusAtom)
   const [checking, setChecking] = React.useState(false)
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
-  const [release, setRelease] = React.useState<import('@profer/shared').GitHubRelease | null>(null)
+  const [latestNotes, setLatestNotes] = React.useState<string | null>(null)
 
   // updater 不可用时不渲染
   if (!available) return null
@@ -67,25 +69,26 @@ function UpdateCard(): React.ReactElement | null {
     window.electronAPI.updater?.quitAndInstall()
   }
 
-  // 当检测到新版本时，获取完整的 release 信息
+  // 当检测到新版本时，从本地内置 CHANGELOG 获取最新版本的更新内容
   React.useEffect(() => {
-    if (status.status === 'available' && status.version && !release) {
-      window.electronAPI
-        .getReleaseByTag(`v${status.version}`)
-        .then((r) => {
-          if (r) {
-            setRelease(r)
+    if (status.status === 'available' && status.version && latestNotes === null) {
+      window.electronAPI.updater
+        ?.getChangelog()
+        .then((entries) => {
+          const match = entries.find((e) => e.version === status.version)
+          if (match?.notes) {
+            setLatestNotes(match.notes)
             setShowReleaseNotes(true)
           }
         })
         .catch((err) => {
-          console.error('[更新] 获取 Release 信息失败:', err)
+          console.error('[更新] 获取本地更新日志失败:', err)
         })
     }
-  }, [status.status, status.version, release])
+  }, [status.status, status.version, latestNotes])
 
   const isChecking = checking || status.status === 'checking' || status.status === 'downloading'
-  const hasReleaseNotes = status.releaseNotes || release?.body
+  const hasReleaseNotes = status.releaseNotes || latestNotes
 
   return (
     <SettingsCard>
@@ -135,13 +138,19 @@ function UpdateCard(): React.ReactElement | null {
             )}
           </button>
 
-          {showReleaseNotes && release && (
+          {showReleaseNotes && (
             <div className="mt-2">
-              <ReleaseNotesViewer
-                release={release}
-                showHeader={false}
-                compact
-              />
+              <div className="prose dark:prose-invert max-w-none text-xs prose-sm prose-p:my-1.5 prose-p:leading-[1.6] prose-li:leading-[1.6] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                {latestNotes ? (
+                  <Markdown remarkPlugins={[remarkGfm]}>
+                    {latestNotes}
+                  </Markdown>
+                ) : status.releaseNotes ? (
+                  <Markdown remarkPlugins={[remarkGfm]}>
+                    {status.releaseNotes}
+                  </Markdown>
+                ) : null}
+              </div>
             </div>
           )}
         </div>
@@ -475,8 +484,9 @@ export function AboutSettings(): React.ReactElement {
           </SettingsRow>
         </SettingsCard>
 
-        {/* 自动更新卡片（updater 不可用时不渲染） */}
+        {/* 自动更新与更新历史：保留在同一语义分组，避免打断关于页其余设置 */}
         <UpdateCard />
+        <VersionHistory />
 
         {/* 环境检测卡片 */}
         <EnvironmentCard />
