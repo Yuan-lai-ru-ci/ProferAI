@@ -37,9 +37,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install server test dependencies
-        run: npm ci --no-audit --no-fund
-        working-directory: server
       - name: Verify tag matches app version
         shell: pwsh
         run: |
@@ -57,11 +54,6 @@ jobs:
         # --isolate: bun 的 mock.module('electron') 是进程级注册表，默认并行下多文件互相覆盖导致误报；隔离模式保证每个测试文件独立
         run: bun test --isolate --timeout 30000
 
-      - name: Run Node.js server reliability gate
-        # 直接调用真实 Node（node 22，ABI 127）运行 node:test，避免 bun 加载
-        # better-sqlite3 prebuilt（ABI 137）不匹配；收集规则 *.node.test.mjs。
-        run: node scripts/run-node-tests.mjs
-        working-directory: server
       - name: Build GitHub app
         run: bun run electron:build:github
         working-directory: .

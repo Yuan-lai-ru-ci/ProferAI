@@ -22,7 +22,6 @@ if (!VERSION) { console.error('用法: node scripts/push-release.js <版本号>'
 
 const ROOT = path.resolve(__dirname, '..');
 const ELECTRON = path.join(ROOT, 'apps/electron');
-const SERVER = path.join(ROOT, 'server');
 const HOST = '47.109.108.57';
 const USER = 'ecs-user';
 const UPDATE_DIR = '/usr/share/nginx/html/profer-updates';
