@@ -540,12 +540,13 @@ export class BrowserController {
     view.webContents.on('did-navigate-in-page', () => { this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
     view.webContents.on('destroyed', () => {
       if (!browserSession.tabs.has(tab.tabId)) return
+      const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
       browserSession.tabs.delete(tab.tabId)
       if (browserSession.tabs.size === 0) {
         this.sessions.delete(browserSession.sessionId)
         return
       }
-      if (browserSession.activeTabId === tab.tabId) browserSession.activeTabId = browserSession.tabs.keys().next().value as string
+      if (browserSession.activeTabId === tab.tabId) this.selectAdjacentActiveTab(browserSession, closingIndex)
       if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
       this.emit(browserSession)
     })
@@ -760,6 +761,17 @@ export class BrowserController {
   }
 
   /**
+   * 关闭激活标签后选取新的激活标签：优先右侧相邻标签，关闭最后一个时回退到左侧相邻。
+   * 与 Chrome 的标签关闭行为一致，避免跳到最早创建的标签。
+   * closingIndex 为被关闭标签在关闭前 tabs 插入顺序中的下标。
+   */
+  private selectAdjacentActiveTab(browserSession: BrowserSessionRecord, closingIndex: number): void {
+    const remainingIds = [...browserSession.tabs.keys()]
+    const nextActive = remainingIds[closingIndex] ?? remainingIds[closingIndex - 1]
+    if (nextActive) browserSession.activeTabId = nextActive
+  }
+
+  /**
    * 达到上限时回收最久未使用的 Agent 标签。用户创建的标签、当前前台标签和 Agent 当前工作标签
    * 一律保留；若没有安全候选，宁可暂时超过限制也不擅自关闭用户内容。
    */
@@ -829,12 +841,13 @@ export class BrowserController {
   async closeTab(sessionId: string, tabId: string): Promise<BrowserViewState | null> {
     const browserSession = this.getSession(sessionId)
     const tab = this.getDisplayTab(browserSession, tabId)
+    const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
     this.disposeTab(browserSession, tab)
     if (browserSession.tabs.size === 0) {
       this.sessions.delete(sessionId)
       return null
     }
-    if (browserSession.activeTabId === tab.tabId) browserSession.activeTabId = browserSession.tabs.keys().next().value as string
+    if (browserSession.activeTabId === tab.tabId) this.selectAdjacentActiveTab(browserSession, closingIndex)
     if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
     this.emit(browserSession)
     return structuredClone(this.buildState(browserSession))
