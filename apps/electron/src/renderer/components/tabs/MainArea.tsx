@@ -127,12 +127,19 @@ export function MainArea(): React.ReactElement {
     return () => observer.disconnect()
   }, [])
 
-  // 窄屏自动隐藏只是临时视觉降级，不写入用户手动关闭标记；原生 WebContentsView 必须同步隐藏。
+  // 窄屏时必须同时收起 renderer 面板和原生 WebContentsView。
+  // 只调用 hideAgentBrowser 会留下 browserOpenMap=true；在布局重排或状态推送时，
+  // BrowserPanel 工具栏可能重新挂到对话内容上。这里仅收起显示，不销毁浏览器会话、标签页或登录状态。
   React.useEffect(() => {
-    if (browserAutoHidden && browserSessionId) {
-      void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
-    }
-  }, [browserAutoHidden, browserSessionId])
+    if (!browserAutoHidden || !browserSessionId) return
+    void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
+    setBrowserOpenMap((previous) => {
+      if (previous.get(browserSessionId) !== true) return previous
+      const next = new Map(previous)
+      next.set(browserSessionId, false)
+      return next
+    })
+  }, [browserAutoHidden, browserSessionId, setBrowserOpenMap])
 
   const previewOpen =
     activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false) && !showBrowserPanel
@@ -351,8 +358,9 @@ export function MainArea(): React.ReactElement {
             sessionId={browserSessionId}
             state={browserState}
             sessionTitle={activeTab?.title ?? ''}
-            // 右侧文件栏打开时它占据窗口右缘，浏览器无需为 WindowControls 预留空白。
-            avoidWindowControls={!sidePanelOpen}
+            // WindowControls 是全局原生标题栏浮层，浏览器面板在窄窗口或布局切换期间
+            // 仍可能贴到窗口右缘。始终预留避让区，避免功能按钮与窗口控件重合。
+            avoidWindowControls
             // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
             // 让原生 hostView 立即拿到新 rect，但不销毁网页 WebContents。
             layoutKey={sidePanelOpen ? 'side-panel-open' : 'side-panel-closed'}
