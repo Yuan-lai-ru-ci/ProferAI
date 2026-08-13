@@ -86,6 +86,18 @@ mock.module('electron', () => ({
     setAppUserModelId: () => undefined,
   },
   BrowserWindow: MockBrowserWindow,
+  // 受管浏览器链路（browser-controller → local-file-protocol）新增的 electron API
+  // （2026-08-13，随 16cc481d 受管浏览器合入 11542cde）。契约：新增 API 必须在此补齐，
+  // 否则 ESM 具名导入在 --isolate 下无法二次 mock，会报 "Export named '...' not found"。
+  net: {
+    fetch: () => Promise.reject(new Error('net.fetch 未在测试中实现')),
+  },
+  View: class {},
+  WebContentsView: class {},
+  session: {
+    getDefaultSession: () => ({ setSpellCheckerEnabled: () => undefined }),
+    fromPartition: () => undefined,
+  },
   globalShortcut: {
     register: (accelerator: string) => {
       globalThis.__proferElectronTestHooks.registeredAccelerators.push(accelerator)

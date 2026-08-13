@@ -7,23 +7,6 @@ mock.module('../memory-archive-search', () => ({
   }),
 }))
 
-// automation-scheduler 由 Pi builtin tools 间接导入；Bun 测试环境没有 Electron runtime。
-mock.module('electron', () => ({
-  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },
-  app: { getPath: () => '', isPackaged: false },
-  clipboard: { readText: () => '', writeText: () => undefined },
-  dialog: {},
-  nativeImage: {},
-  nativeTheme: {},
-  Notification: class {},
-  powerMonitor: {},
-  powerSaveBlocker: {},
-  safeStorage: {},
-  screen: {},
-  shell: {},
-  systemPreferences: {},
-}))
-
 const {
   buildPiKnowledgeBaseTools,
   buildPiMemoryArchiveTools,

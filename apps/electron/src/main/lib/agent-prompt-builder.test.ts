@@ -50,7 +50,7 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('可以读取和写入')
     expect(piPrompt).toContain('`.claude/memory/MEMORY.md`')
     expect(piPrompt).toContain('收尾回写')
-    expect(piPrompt).toContain('宁缺毋滥')
+    expect(piPrompt).toContain('单次弱信号、临时过程和未经验证的推断不要写入')
     expect(piPrompt).not.toContain('不要写入长期记忆文件')
     expect(claudePrompt).not.toContain('### Pi Runtime 自主执行准则')
   })
