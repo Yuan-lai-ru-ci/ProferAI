@@ -537,7 +537,7 @@ function FeedbackSection(): React.ReactElement {
           content: content.trim(),
           contact: contact.trim() || undefined,
           category,
-          pageUrl: 'proma://settings/about',
+          pageUrl: 'profer://settings/about',
         }),
       })
       if (!resp.ok) {

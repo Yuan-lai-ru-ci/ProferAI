@@ -170,7 +170,7 @@ export function GlobalShortcuts(): null {
   useShortcut(
     'clear-context',
     useCallback(() => {
-      window.dispatchEvent(new CustomEvent('proma:clear-context'))
+      window.dispatchEvent(new CustomEvent('profer:clear-context'))
     }, []),
   )
 
@@ -178,7 +178,7 @@ export function GlobalShortcuts(): null {
   useShortcut(
     'focus-input',
     useCallback(() => {
-      window.dispatchEvent(new CustomEvent('proma:focus-input'))
+      window.dispatchEvent(new CustomEvent('profer:focus-input'))
     }, []),
   )
 
@@ -186,7 +186,7 @@ export function GlobalShortcuts(): null {
   useShortcut(
     'stop-generation',
     useCallback(() => {
-      window.dispatchEvent(new CustomEvent('proma:stop-generation'))
+      window.dispatchEvent(new CustomEvent('profer:stop-generation'))
     }, []),
   )
 
@@ -343,12 +343,12 @@ export function GlobalShortcuts(): null {
       const trimmed = text.trim()
       if (!trimmed) return
 
-      const insertedAtCursor = !window.dispatchEvent(new CustomEvent('proma:insert-voice-dictation-text', {
+      const insertedAtCursor = !window.dispatchEvent(new CustomEvent('profer:insert-voice-dictation-text', {
         cancelable: true,
         detail: { text: trimmed },
       }))
       if (insertedAtCursor) {
-        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        window.dispatchEvent(new CustomEvent('profer:focus-input'))
         return
       }
 
@@ -381,7 +381,7 @@ export function GlobalShortcuts(): null {
           map.delete(sessionId)
           return map
         })
-        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        window.dispatchEvent(new CustomEvent('profer:focus-input'))
         return
       }
 
@@ -395,7 +395,7 @@ export function GlobalShortcuts(): null {
           map.set(conversationId, current ? `${current}\n${trimmed}` : trimmed)
           return map
         })
-        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        window.dispatchEvent(new CustomEvent('profer:focus-input'))
       }
     })
     return cleanup

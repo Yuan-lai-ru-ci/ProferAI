@@ -25,6 +25,8 @@ const KEY_MAP: Record<string, string> = {
   'proma-agent-sidepanel-open': 'profer-agent-sidepanel-open',
   'proma-agent-sidepanel-width': 'profer-agent-sidepanel-width',
   'proma-user-profile': 'profer-user-profile',
+  'proma-browser-split-ratio': 'profer-browser-split-ratio',
+  'proma-browser-file-panel-manual-restore-session-ids': 'profer-browser-file-panel-manual-restore-session-ids',
 }
 
 let migrated = false

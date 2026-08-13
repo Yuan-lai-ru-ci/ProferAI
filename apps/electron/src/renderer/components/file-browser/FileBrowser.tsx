@@ -321,7 +321,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       if (local) {
         onFilePreview?.(local)
       } else {
-        window.dispatchEvent(new CustomEvent('proma:file-preview', {
+        window.dispatchEvent(new CustomEvent('profer:file-preview', {
           detail: { path: entry.path, name: entry.name, download: () => ensureTeamFileLocal(entry) },
         }))
       }
@@ -333,7 +333,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
   const dispatchInlinePreview = React.useCallback((entry: FileEntry): void => {
     if (entry.isDirectory) return
-    window.dispatchEvent(new CustomEvent('proma:file-preview', {
+    window.dispatchEvent(new CustomEvent('profer:file-preview', {
       detail: {
         path: isTeamMode ? entry.path : entry.path,
         name: entry.name,

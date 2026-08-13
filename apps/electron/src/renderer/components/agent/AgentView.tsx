@@ -2521,8 +2521,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const handler = (): void => {
       if (streaming || backgroundWaiting) handleStop()
     }
-    window.addEventListener('proma:stop-generation', handler)
-    return () => window.removeEventListener('proma:stop-generation', handler)
+    window.addEventListener('profer:stop-generation', handler)
+    return () => window.removeEventListener('profer:stop-generation', handler)
   }, [streaming, backgroundWaiting, handleStop])
 
   // 监听快捷键系统分发的 focus-input 事件（Cmd+L）
@@ -2531,8 +2531,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       const proseMirror = document.querySelector('[data-input-mode="agent"] .ProseMirror') as HTMLElement | null
       proseMirror?.focus()
     }
-    window.addEventListener('proma:focus-input', handler)
-    return () => window.removeEventListener('proma:focus-input', handler)
+    window.addEventListener('profer:focus-input', handler)
+    return () => window.removeEventListener('profer:focus-input', handler)
   }, [])
 
   // 待发送附件按 sessionId 保存在 atom 中，切换标签会卸载 AgentView，但不能释放

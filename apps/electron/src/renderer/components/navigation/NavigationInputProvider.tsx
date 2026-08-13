@@ -81,7 +81,7 @@ function focusProject(): boolean {
 function focusRightPanel(): boolean {
   const panel = document.querySelector<HTMLElement>('[data-profer-navigation-region="right-panel"]')
   if (panel && panel.offsetParent !== null) {
-    window.dispatchEvent(new CustomEvent('proma:focus-right-panel'))
+    window.dispatchEvent(new CustomEvent('profer:focus-right-panel'))
     return true
   }
   return focusInput()
@@ -196,7 +196,7 @@ export function NavigationInputProvider(): null {
         return true
       }
       if (action === 'stopGeneration') {
-        window.dispatchEvent(new CustomEvent('proma:stop-generation'))
+        window.dispatchEvent(new CustomEvent('profer:stop-generation'))
         return true
       }
       // 左栏 roving 纵向向下到达主链末尾后，把焦点穿出回主内容/编辑框，形成循环。

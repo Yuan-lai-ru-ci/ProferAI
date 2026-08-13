@@ -68,7 +68,7 @@ export function FeedbackSettings(): React.ReactElement {
           content: content.trim(),
           contact: contact.trim() || undefined,
           category,
-          pageUrl: 'proma://settings/feedback',
+          pageUrl: 'profer://settings/feedback',
         }),
       })
 

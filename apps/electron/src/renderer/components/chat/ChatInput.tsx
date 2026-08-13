@@ -261,8 +261,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     const handler = (): void => {
       onClearContext?.()
     }
-    window.addEventListener('proma:clear-context', handler)
-    return () => window.removeEventListener('proma:clear-context', handler)
+    window.addEventListener('profer:clear-context', handler)
+    return () => window.removeEventListener('profer:clear-context', handler)
   }, [onClearContext])
 
   // 监听快捷键系统分发的 focus-input 事件（Cmd+L）
@@ -272,8 +272,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
       const proseMirror = document.querySelector('[data-input-mode="chat"] .ProseMirror') as HTMLElement | null
       proseMirror?.focus()
     }
-    window.addEventListener('proma:focus-input', handler)
-    return () => window.removeEventListener('proma:focus-input', handler)
+    window.addEventListener('profer:focus-input', handler)
+    return () => window.removeEventListener('profer:focus-input', handler)
   }, [])
 
   const toolbarItems = React.useMemo<ToolbarItem[]>(() => [

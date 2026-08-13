@@ -71,8 +71,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         })
       })
     }
-    window.addEventListener('proma:focus-right-panel', focusRightPanel)
-    return () => window.removeEventListener('proma:focus-right-panel', focusRightPanel)
+    window.addEventListener('profer:focus-right-panel', focusRightPanel)
+    return () => window.removeEventListener('profer:focus-right-panel', focusRightPanel)
   }, [setSidePanelOpen])
 
   React.useEffect(() => {

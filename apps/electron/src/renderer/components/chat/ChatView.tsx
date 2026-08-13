@@ -505,8 +505,8 @@ function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = fa
     const handler = (): void => {
       if (isStreaming) handleStop()
     }
-    window.addEventListener('proma:stop-generation', handler)
-    return () => window.removeEventListener('proma:stop-generation', handler)
+    window.addEventListener('profer:stop-generation', handler)
+    return () => window.removeEventListener('profer:stop-generation', handler)
   }, [isStreaming, handleStop])
 
   /** 删除消息 */

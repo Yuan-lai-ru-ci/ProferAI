@@ -8,7 +8,7 @@ export const browserPanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 export const browserStateMapAtom = atom<Map<string, BrowserViewState>>(new Map())
 
 /** 浏览器作为独立同级卡片时的会话区宽度比例。与文件预览分栏独立保存。 */
-export const browserSplitRatioAtom = atomWithStorage<number>('proma-browser-split-ratio', 0.58)
+export const browserSplitRatioAtom = atomWithStorage<number>('profer-browser-split-ratio', 0.58)
 
 /**
  * 用户已手动关闭浏览器面板的会话 ID 集合。
@@ -19,7 +19,7 @@ export const browserPanelDismissedSessionIdsAtom = atom<Set<string>>(new Set<str
 
 /** 用户手动恢复文件面板后，该会话再次打开浏览器时不再自动收起。 */
 export const browserFilePanelManualRestoreSessionIdsAtom = atomWithStorage<string[]>(
-  'proma-browser-file-panel-manual-restore-session-ids',
+  'profer-browser-file-panel-manual-restore-session-ids',
   [],
 )
 
