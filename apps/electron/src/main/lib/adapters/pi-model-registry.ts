@@ -12,6 +12,10 @@ import {
   type CodexOAuthCredentials,
   type ProviderType,
   type XaiOAuthCredentials,
+  inferReasoningTransport,
+  resolveReasoningCapability,
+  resolveReasoningProfile,
+  type ReasoningCapability,
 } from '@profer/shared'
 import {
   getProferUserAgent,
@@ -186,6 +190,32 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
     if (model) return model
   }
   return undefined
+}
+
+/**
+ * 解析某 Pi 模型可用的推理档位能力（供 renderer 思考档位菜单展示）。
+ *
+ * 级联优先级：
+ *   1. reasoning profile（deepseek-v4 / k3 / glm-5.2 / openai 推理模型）→ 精确档位
+ *   2. Pi catalog 元数据（reasoning + thinkingLevelMap）→ 依模型标记
+ *
+ * 由 IPC 桥接给 renderer，无能力返回 undefined（renderer 回退完整七档或隐藏菜单）。
+ */
+export async function resolvePiReasoningCapability(
+  provider: ProviderType,
+  modelId: string | undefined,
+): Promise<ReasoningCapability | undefined> {
+  if (!modelId) return undefined
+
+  const transport = inferReasoningTransport(provider)
+  if (transport === 'other') return undefined
+
+  const profile = resolveReasoningProfile({ modelId, transport })
+  const catalogModel = await findPiCatalogModel(provider, modelId)
+  return resolveReasoningCapability({
+    profile,
+    catalog: catalogModel ? { reasoning: catalogModel.reasoning, thinkingLevelMap: catalogModel.thinkingLevelMap } : undefined,
+  })
 }
 
 async function resolvePiModelDefaults(

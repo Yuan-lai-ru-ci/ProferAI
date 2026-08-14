@@ -28,7 +28,6 @@ import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
-import { isCodexFastModeSupportedModel } from '@profer/shared'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { PermissionModeSelector } from './PermissionModeSelector'
@@ -190,6 +189,8 @@ interface OpenAIThinkingConfig {
   sessionId: string
   currentLevel: string | null
   disabled: boolean
+  /** 该模型可用的推理档位列表（缺省则展示完整七档）。 */
+  levels?: readonly import('@profer/shared').AgentThinkingLevel[]
 }
 
 interface AgentThinkingPopoverProps {
@@ -208,7 +209,11 @@ const OPENAI_THINKING_LABELS: Record<string, string> = {
   medium: '中',
   high: '高',
   xhigh: '最高',
+  max: '最大',
 }
+
+/** 完整推理档位顺序（缺省 capability 时菜单回退用）。 */
+const ALL_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIThinkingUpdated }: AgentThinkingPopoverProps): React.ReactElement {
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
@@ -294,12 +299,10 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
             <div className="px-2 py-1 text-xs text-muted-foreground">推理档位</div>
             {[
               { level: null, label: '全局默认' },
-              { level: 'off', label: '关闭推理' },
-              { level: 'minimal', label: '最小' },
-              { level: 'low', label: '低' },
-              { level: 'medium', label: '中' },
-              { level: 'high', label: '高' },
-              { level: 'xhigh', label: '最高' },
+              ...(openAIConfig?.levels ?? ALL_THINKING_LEVELS).map((level) => ({
+                level,
+                label: OPENAI_THINKING_LABELS[level] ?? level,
+              })),
             ].map(({ level, label }) => (
               <button
                 key={level ?? '__default__'}
@@ -694,6 +697,24 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const sessionAgentRuntime: AgentRuntime = sessionMeta
     ? sessionMeta.agentRuntime ?? 'claude'
     : agentRuntime
+  // 当前 Pi 模型的推理档位能力（异步桥接，供思考档位菜单动态展示）。
+  const [piReasoningCapability, setPiReasoningCapability] = React.useState<import('@profer/shared').ReasoningCapability | undefined>(undefined)
+  React.useEffect(() => {
+    if (sessionAgentRuntime !== 'pi' || !agentModelId) {
+      setPiReasoningCapability(undefined)
+      return
+    }
+    const channel = globalChannels.find((c) => c.id === agentChannelId)
+    if (!channel) {
+      setPiReasoningCapability(undefined)
+      return
+    }
+    let cancelled = false
+    window.electronAPI.getPiReasoningCapability(channel.provider, agentModelId)
+      .then((capability) => { if (!cancelled) setPiReasoningCapability(capability) })
+      .catch(() => { if (!cancelled) setPiReasoningCapability(undefined) })
+    return () => { cancelled = true }
+  }, [sessionAgentRuntime, agentModelId, agentChannelId, globalChannels])
   React.useEffect(() => {
     if (!sessionId) return
     const initialChannelId = sessionMetaChannelId ?? (!hasSessionMeta ? defaultChannelId : undefined)
@@ -2631,11 +2652,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               session.id === updatedSession.id ? updatedSession : session
             )))
           }}
-          openAIConfig={sessionMeta && sessionAgentRuntime === 'pi' && isCodexFastModeSupportedModel(agentModelId ?? undefined)
+          openAIConfig={sessionMeta && sessionAgentRuntime === 'pi' && piReasoningCapability
             ? {
                 sessionId,
                 currentLevel: sessionMeta.openAIThinkingLevel ?? null,
                 disabled: streaming || backgroundWaiting,
+                levels: piReasoningCapability.levels,
               }
             : undefined}
         />

@@ -57,7 +57,7 @@ import {
 import { createProferAgentsFilesOverride, createProferProjectInstructionFilesOverride, createProferManagedResourceLoaderOptions } from './pi-resource-loader-overrides'
 import { ProjectInstructionScopeController } from './pi-project-instruction-scope'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-fast-mode'
-import { createCodexRequestSettingsExtension, createDeepSeekV4RequestSettingsExtension } from './pi-codex-request-settings'
+import { createCodexRequestSettingsExtension } from './pi-codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { inferReasoningTransport, resolveReasoningProfile } from '@profer/shared'
@@ -131,7 +131,11 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onContextWindow?: (contextWindow: number) => void
   onRetry?: (update: import('./pi-retry-control').PiRetryUpdate) => void
   thinkingLevel?: AgentThinkingLevel
-  /** DeepSeek V4 思考总开关；强度由 V4 协议固定为 max。 */
+  /**
+   * DeepSeek V4 思考总开关（已废弃：思考强度与开关统一由 thinkingLevel 驱动，
+   * 通过 createDeepSeekReasoningRequestExtension 注入 output_config.effort）。
+   * 保留字段仅为兼容 orchestrator 旧传参，adapter 不再消费。
+   */
   deepSeekV4ThinkingEnabled?: boolean
   maxBudgetUsd?: number
   outputFormat?: JsonSchemaOutputFormat
@@ -1579,16 +1583,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               fastMode: input.codexFastMode,
             })]
           : []),
-        ...(input.provider === 'deepseek'
-          ? [createDeepSeekV4RequestSettingsExtension({
-              thinkingEnabled: input.deepSeekV4ThinkingEnabled ?? true,
-            })]
-          : []),
         ...(projectInstructionScope ? [projectInstructionScope.createExtension()] : []),
         ...(openAIReasoningProfile
           ? [createOpenAIReasoningRequestExtension({
               profile: openAIReasoningProfile,
-              thinkingLevel: input.openAIThinkingLevel,
+              thinkingLevel: input.openAIThinkingLevel ?? input.thinkingLevel,
             })]
           : []),
         ...(deepSeekReasoningProfile?.encodings['anthropic-messages']?.kind === 'deepseek-output-effort'

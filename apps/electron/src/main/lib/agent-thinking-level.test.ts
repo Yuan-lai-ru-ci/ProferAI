@@ -30,10 +30,29 @@ describe('resolveGlobalThinkingLevel', () => {
 })
 
 describe('resolvePiThinkingLevel', () => {
-  test('Given 非 Codex provider Then 返回 off', () => {
-    expect(resolvePiThinkingLevel('high', defaults, 'anthropic')).toBe('off')
-    expect(resolvePiThinkingLevel('medium', defaults, 'openai')).toBe('off')
-    expect(resolvePiThinkingLevel(undefined, defaults, 'deepseek')).toBe('off')
+  test('Given 无 reasoning 协议的 provider(google) Then 返回 off', () => {
+    expect(resolvePiThinkingLevel('high', defaults, 'google')).toBe('off')
+  })
+
+  test('Given anthropic provider 且开启 Then 返回档位（原生 extended thinking）', () => {
+    expect(resolvePiThinkingLevel('high', defaults, 'anthropic')).toBe('high')
+  })
+
+  test('Given deepseek 且开启 Then 返回档位', () => {
+    expect(resolvePiThinkingLevel('high', defaults, 'deepseek')).toBe('high')
+  })
+
+  test('Given deepseek 未设会话级且全局默认 Then 返回全局默认', () => {
+    expect(resolvePiThinkingLevel(undefined, defaults, 'deepseek')).toBe('high')
+  })
+
+  test('Given openai provider 且档位 medium Then 返回 medium', () => {
+    expect(resolvePiThinkingLevel('medium', { agentThinking: true, agentEffort: 'high' }, 'openai')).toBe('medium')
+  })
+
+  test('Given 关闭推理 Then 任意 provider 均返回 off', () => {
+    expect(resolvePiThinkingLevel('off', { agentThinking: true, agentEffort: 'high' }, 'deepseek')).toBe('off')
+    expect(resolvePiThinkingLevel('off', { agentThinking: true, agentEffort: 'high' }, 'openai-codex')).toBe('off')
   })
 
   test('Given Codex + 会话级 xhigh Then 返回 xhigh（覆盖全局）', () => {

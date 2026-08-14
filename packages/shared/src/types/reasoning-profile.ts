@@ -368,3 +368,19 @@ export function normalizeReasoningLevel(
 ): AgentThinkingLevel | undefined {
   return profile ? profile.normalize(level) : level
 }
+
+/**
+ * 判断某 provider 是否可能支持推理档位（即可产出可渲染的思考块）。
+ *
+ * 主进程 resolvePiThinkingLevel 与 renderer 的思考档位菜单共用此判断，
+ * 保证「能否选档位」与「能否真正发思考」保持一致。
+ *
+ * 这里不做模型级精确匹配：Pi SDK 会在建会话时用模型 catalog 的 thinking-level
+ * 元数据 clamp 不支持的档位（对 reasoning:false 的模型安全忽略 thinkingLevel），
+ * 而对 Anthropic 原生 extended thinking（anthropic/kimi/minimax/xiaomi 等）由 Pi
+ * 原生 thinkingLevel 参数直接控制，不经过 reasoning profile 的 effort 重写。
+ * 因此只需排除无 reasoning 协议的 transport（如 google）即可。
+ */
+export function supportsReasoningLevel(provider: ProviderType | undefined): boolean {
+  return inferReasoningTransport(provider) !== 'other'
+}

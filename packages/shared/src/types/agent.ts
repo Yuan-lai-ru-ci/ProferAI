@@ -1843,6 +1843,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
   /** 切换指定会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
   UPDATE_SESSION_OPENAI_THINKING: 'agent:update-session-openai-thinking',
+  /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单展示）。 */
+  GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
   /** 切换指定空闲会话的 Agent runtime；跨 runtime 时清除 SDK 会话恢复 ID。 */
   UPDATE_SESSION_AGENT_RUNTIME: 'agent:update-session-agent-runtime',
 
