@@ -26,7 +26,9 @@ import {
   CreditCard,
   KeyRound,
   Database,
-} from "lucide-react";
+  Network,
+  MonitorSmartphone,
+  } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
 import type { SettingsTab } from "@/atoms/settings-tab";
@@ -62,6 +64,8 @@ import { SubscriptionSettings } from "./SubscriptionSettings";
 import { TabletConnectionSettings } from "./TabletConnectionSettings";
 import { TabletNotificationSettings } from "./TabletNotificationSettings";
 import { OpenApiSettings } from "./OpenApiSettings";
+import { ProxySettings } from "./ProxySettings";
+import { DevicesSettings } from "./DevicesSettings";
 
 /** 设置 Tab 定义 */
 export interface SettingsTabItem {
@@ -70,14 +74,25 @@ export interface SettingsTabItem {
   icon: React.ReactNode;
 }
 
-/** 基础 Tabs（所有模式都有） */
-const BASE_TABS: SettingsTabItem[] = [
-  { id: "general", label: "通用设置", icon: <Settings size={16} /> },
-  { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
-  { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
+/** 导航分组：标题 + 该分组内的 tab */
+export interface SettingsTabGroup {
+  /** 分组标题；为空则不渲染分组标题（用于不带标题的起始组） */
+  title?: string;
+  items: SettingsTabItem[];
+}
+
+/** 账户相关：额度 / 订阅 / 开放 API（位于导航顶部「账户」分组） */
+const ACCOUNT_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
   { id: "subscription", label: "立即订阅", icon: <CreditCard size={16} /> },
   { id: "openapi", label: "开放 API", icon: <KeyRound size={16} /> },
+];
+
+/** 模型与能力：渠道 / Agent / 提示词 / Chat 工具 */
+const MODEL_GROUP_ITEMS: SettingsTabItem[] = [
+  { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
+  { id: "tools", label: "Chat 工具", icon: <Wrench size={16} /> },
+  { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
 ];
 
 /** Agent 模式专属 Tab */
@@ -86,42 +101,37 @@ const AGENT_TAB: SettingsTabItem = {
   label: "Agent 配置",
   icon: <Plug size={16} />,
 };
-const TOOLS_TAB: SettingsTabItem = {
-  id: "tools",
-  label: "Chat 工具",
-  icon: <Wrench size={16} />,
-};
-const BOTS_TAB: SettingsTabItem = {
-  id: "bots",
-  label: "远程连接",
-  icon: <Bot size={16} />,
-};
-const TUTORIAL_TAB: SettingsTabItem = {
-  id: "tutorial",
-  label: "Profer 教程",
-  icon: <GraduationCap size={16} />,
-};
-const SHORTCUTS_TAB: SettingsTabItem = {
-  id: "shortcuts",
-  label: "快捷键管理",
-  icon: <Keyboard size={16} />,
-};
-const VOICE_INPUT_TAB: SettingsTabItem = {
-  id: "voice-input",
-  label: "语音输入",
-  icon: <Mic size={16} />,
-};
 
-/** 尾部 Tabs */
-const TAIL_TABS: SettingsTabItem[] = [
+/** 体验：外观 / 语音 / 快捷键 / 教程 */
+const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
+  { id: "voice-input", label: "语音输入", icon: <Mic size={16} /> },
+  { id: "shortcuts", label: "快捷键管理", icon: <Keyboard size={16} /> },
+  { id: "tutorial", label: "Profer 教程", icon: <GraduationCap size={16} /> },
+];
+
+/** 连接：远程连接 / 代理 / 登录设备 */
+const CONNECTION_GROUP_ITEMS: SettingsTabItem[] = [
+  { id: "bots", label: "远程连接", icon: <Bot size={16} /> },
+  { id: "proxy", label: "代理设置", icon: <Network size={16} /> },
+  { id: "devices", label: "登录设备", icon: <MonitorSmartphone size={16} /> },
+];
+
+/** 系统：数据管理 / 团队 / 关于 */
+const SYSTEM_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "data-management", label: "数据管理", icon: <Database size={16} /> },
   { id: "team", label: "团队管理", icon: <Users size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
 /** 依赖团队账号登录的 Tab（未登录时不展示） */
-const ACCOUNT_TABS: ReadonlySet<SettingsTab> = new Set(["team", "credits", "subscription", "openapi"]);
+const ACCOUNT_TABS: ReadonlySet<SettingsTab> = new Set([
+  "team",
+  "credits",
+  "subscription",
+  "openapi",
+  "devices",
+]);
 
 /** 根据标签页 id 渲染对应内容 */
 function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElement {
@@ -161,6 +171,10 @@ function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElem
       return <SubscriptionSettings />;
     case "openapi":
       return <OpenApiSettings />;
+    case "proxy":
+      return <ProxySettings />;
+    case "devices":
+      return <DevicesSettings />;
     default:
       // tutorial 等特殊 tab 由 handleTabChange 拦截打开主区 Tab，不会在此渲染
       return <GeneralSettings />;
@@ -209,34 +223,40 @@ export function SettingsPanel({
     setPendingAction(null)
   }
 
-  // 受限环境（平板）传入白名单时直接使用；否则 Agent 模式在渠道后插入 Agent Tab，工具 tab 两种模式都显示。
-  // 未登录时过滤掉依赖团队账号的 Tab（团队管理 / 额度与用量 / 立即订阅 / 开放 API）。
-  const tabs = React.useMemo(() => {
-    const base = tabsOverride
-      ? tabsOverride
-      : appMode === "agent"
-        ? [
-            ...BASE_TABS,
-            AGENT_TAB,
-            TOOLS_TAB,
-            VOICE_INPUT_TAB,
-            BOTS_TAB,
-            TUTORIAL_TAB,
-            SHORTCUTS_TAB,
-            ...TAIL_TABS,
-          ]
-        : [
-            ...BASE_TABS,
-            TOOLS_TAB,
-            VOICE_INPUT_TAB,
-            BOTS_TAB,
-            TUTORIAL_TAB,
-            SHORTCUTS_TAB,
-            ...TAIL_TABS,
-          ];
-    if (authStatus.isLoggedIn) return base
-    return base.filter((t) => !ACCOUNT_TABS.has(t.id))
+  // 受限环境（平板）传入白名单时直接使用（无分组标题）；否则按语义分组组装导航。
+  // 未登录时过滤掉依赖团队账号的 Tab（额度 / 订阅 / 开放 API / 团队管理 / 登录设备）。
+  const groups = React.useMemo<SettingsTabGroup[]>(() => {
+    if (tabsOverride) {
+      return [{ items: tabsOverride }]
+    }
+
+    const modelItems = appMode === "agent"
+      ? [...MODEL_GROUP_ITEMS, AGENT_TAB]
+      : MODEL_GROUP_ITEMS
+
+    const allGroups: SettingsTabGroup[] = [
+      // 首个无标题组：「通用设置」入口（用户档案 + 账户登录 + 通用偏好），不属于任何分组
+      { items: [{ id: "general", label: "通用设置", icon: <Settings size={16} /> }] },
+      { title: "账户", items: ACCOUNT_GROUP_ITEMS },
+      { title: "模型", items: modelItems },
+      { title: "体验", items: EXPERIENCE_GROUP_ITEMS },
+      { title: "连接", items: CONNECTION_GROUP_ITEMS },
+      { title: "系统", items: SYSTEM_GROUP_ITEMS },
+    ]
+
+    if (authStatus.isLoggedIn) return allGroups
+
+    // 未登录：过滤 ACCOUNT_TABS，并清理空分组
+    return allGroups
+      .map((g) => ({ ...g, items: g.items.filter((t) => !ACCOUNT_TABS.has(t.id)) }))
+      .filter((g) => g.items.length > 0)
   }, [appMode, tabsOverride, authStatus.isLoggedIn]);
+
+  // 将所有可见 tab 拍平成列表，用于 activeTab 回落与标题查找
+  const tabs: SettingsTabItem[] = React.useMemo(
+    () => groups.flatMap((g) => g.items),
+    [groups]
+  );
 
   // 统一回落：activeTab 不在当前可见列表（平板白名单 / 未登录过滤）时回落到首项，
   // 避免渲染未暴露的设置页（如登录/订阅/团队管理）。
@@ -303,23 +323,32 @@ export function SettingsPanel({
         {/* 左侧 Tab 导航 */}
         <div className="settings-nav w-[160px] border-r border-border/50 pt-3 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
           <nav className="flex flex-col gap-0.5">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => handleTabChange(tab.id)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
-                  effectiveTab === tab.id
-                    ? "bg-muted text-foreground font-medium"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+            {groups.map((group) => (
+              <React.Fragment key={group.title ?? "__root__"}>
+                {group.title && (
+                  <div className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/50">
+                    {group.title}
+                  </div>
                 )}
-              >
-                {tab.icon}
-                <span>{tab.label}</span>
-                {tab.id === "about" && (hasUpdate || hasEnvironmentIssues) && (
-                  <span className="w-2 h-2 rounded-full bg-red-500" />
-                )}
-              </button>
+                {group.items.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => handleTabChange(tab.id)}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
+                      effectiveTab === tab.id
+                        ? "bg-muted text-foreground font-medium"
+                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                    )}
+                  >
+                    {tab.icon}
+                    <span>{tab.label}</span>
+                    {tab.id === "about" && (hasUpdate || hasEnvironmentIssues) && (
+                      <span className="w-2 h-2 rounded-full bg-red-500" />
+                    )}
+                  </button>
+                ))}
+              </React.Fragment>
             ))}
           </nav>
         </div>

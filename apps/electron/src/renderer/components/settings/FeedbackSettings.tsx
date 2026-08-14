@@ -1,6 +1,9 @@
 /**
  * FeedbackSettings — 意见箱页面
  *
+ * @deprecated 已废弃：意见反馈已内联到 AboutSettings.tsx 的 FeedbackSection，
+ * 本文件未被任何入口引用。保留仅作历史参考，新代码请勿在此接线。
+ *
  * 向 Profer 服务端提交意见反馈，无需登录态。
  * 也展示提交历史（如果有团队登录态）。
  */

@@ -1,6 +1,9 @@
 /**
  * MigrationSettings - 数据迁移设置页
  *
+ * @deprecated 已废弃：数据迁移已内联到 DataManagementSettings.tsx 的 MigrationSection，
+ * 本文件未被任何入口引用。保留仅作历史参考，新代码请勿在此接线。
+ *
  * 支持两种模式：
  * - Personal 备份（.profer-backup）：全量导出，含解密 API Key
  * - Share 分发（.profer-share）：自由选择组件，凭据自动剥离

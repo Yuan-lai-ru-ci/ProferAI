@@ -1,6 +1,9 @@
 /**
  * StorageSettings — 磁盘管理设置面板
  *
+ * @deprecated 已废弃：磁盘管理已内联到 DataManagementSettings.tsx 的 StorageSection，
+ * 本文件未被任何入口引用。保留仅作历史参考，新代码请勿在此接线。
+ *
  * 展示各数据类别的磁盘占用、孤儿数据检测、手动/自动清理。
  */
 
