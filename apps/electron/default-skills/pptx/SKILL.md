@@ -14,6 +14,8 @@ version: "1.0.1"
 | Read/analyze content | `python -m markitdown presentation.pptx` |
 | Edit or create from template | Read [editing.md](editing.md) |
 | Create from scratch | Read [pptxgenjs.md](pptxgenjs.md) |
+| 高级图表（组合图/双轴/84种） | Read [scripts/chartlib.md](scripts/chartlib.md) |
+| 渐变背景/色块 | 用 `scripts/gradient.js`，见 [pptxgenjs.md](pptxgenjs.md) |
 
 ---
 
@@ -46,6 +48,8 @@ python scripts/office/unpack.py presentation.pptx unpacked/
 **Read [pptxgenjs.md](pptxgenjs.md) for full details.**
 
 Use when no template or reference presentation is available.
+
+**补充能力**：pptxgenjs 做不了的组合图/双 Y 轴/精细图表，用 `scripts/chartlib.py`（python-pptx 封装 84 种图表），见 [scripts/chartlib.md](scripts/chartlib.md)；渐变背景用 `scripts/gradient.js`。
 
 ---
 
@@ -207,7 +211,17 @@ Report ALL issues found, including minor ones.
 
 ## Converting to Images
 
-Convert presentations to individual slide images for visual inspection:
+Convert presentations to individual slide images for visual inspection.
+
+**Profer 本机（Windows + Office）优先用 PowerPoint COM 转图**（已装本机 PowerPoint，未装 LibreOffice/Poppler）：
+
+```bash
+powershell -File scripts/office/pptx2png.ps1 -InputPath output.pptx
+```
+
+生成 `render/slide-01.png`、`render/slide-02.png` 等，分辨率 1280×720。
+
+无 Office 的环境用 LibreOffice + Poppler：
 
 ```bash
 python scripts/office/soffice.py --headless --convert-to pdf output.pptx

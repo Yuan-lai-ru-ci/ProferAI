@@ -130,7 +130,18 @@ Shadow options:
 
 To cast a shadow upward (e.g. on a footer bar), use `angle: 270` with a positive offset — do **not** use a negative offset.
 
-**Note**: Gradient fills are not natively supported. Use a gradient image as a background instead.
+**Note**: Gradient fills are not natively supported by PptxGenJS. Use Profer 自带的渐变生成器 `scripts/gradient.js` 生成渐变 PNG，再作为背景/色块图片插入：
+
+```javascript
+const { linearGradient, gradientToBase64 } = require('./scripts/gradient');
+// 生成斜向渐变背景（135° 左上→右下）
+const buf = await linearGradient({ from: '1E2761', to: '065A82', angle: 135, width: 1280, height: 720 });
+slide.background = { data: gradientToBase64(buf) };
+// 或作为色块
+slide.addImage({ data: gradientToBase64(buf), x: 0, y: 0, w: 10, h: 5.625 });
+```
+
+也支持多停止点：`linearGradient({ stops: [{pos:0,color:'1E2761'},{pos:0.6,color:'065A82'},{pos:1,color:'21295C'}] })`，以及径向渐变 `radialGradient({ from:'FFFFFF', to:'000000' })`。
 
 ---
 
