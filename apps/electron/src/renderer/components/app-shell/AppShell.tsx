@@ -241,7 +241,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         )}
       />
 
-      <div className="shell-bg h-screen w-screen flex overflow-hidden bg-background">
+      <div className="shell-bg h-screen w-screen flex overflow-clip bg-background">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
         <div
           className={cn(
