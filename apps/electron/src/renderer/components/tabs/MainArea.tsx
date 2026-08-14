@@ -25,6 +25,7 @@ import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { appModeAtom } from '@/atoms/app-mode'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
@@ -39,6 +40,7 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
+  const appMode = useAtomValue(appModeAtom)
   const sidePanelOpen = useAtomValue(agentSidePanelOpenAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -71,7 +73,10 @@ export function MainArea(): React.ReactElement {
   const browserDragging = React.useRef(false)
   const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
   const [browserManualOpen, setBrowserManualOpen] = useAtom(browserManualOpenSessionIdsAtom)
-  const browserSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
+  // 浏览器面板仅属于 Agent 会话；必须同时满足「激活 tab 是 agent」和「当前处于 agent 模式」。
+  // 否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成 appMode 与 activeTab.type 撕裂，
+  // 让浏览器面板在已切到 Chat 的界面上错误残留。
+  const browserSessionId = appMode === 'agent' && activeTab?.type === 'agent' ? activeTab.sessionId : null
 
   const publishBrowserState = React.useCallback((state: BrowserViewState) => {
     // 同步浏览器内容状态（tabs/url/标题/trace 等）。
@@ -383,9 +388,9 @@ export function MainArea(): React.ReactElement {
             sessionId={browserSessionId}
             state={browserState}
             sessionTitle={activeTab?.title ?? ''}
-            // WindowControls 是全局原生标题栏浮层，浏览器面板在窄窗口或布局切换期间
-            // 仍可能贴到窗口右缘。始终预留避让区，避免功能按钮与窗口控件重合。
-            avoidWindowControls
+            // WindowControls 只会覆盖窗口最右缘。右侧文件栏展开时，浏览器卡片的右缘
+            // 已被侧栏隔开；继续预留 126px 会无端压扁地址栏，并在顶栏末端留下空白。
+            avoidWindowControls={!sidePanelOpen}
             // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
             // 让原生 hostView 立即拿到新 rect，但不销毁网页 WebContents。
             layoutKey={sidePanelOpen ? 'side-panel-open' : 'side-panel-closed'}

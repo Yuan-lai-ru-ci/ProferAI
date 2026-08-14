@@ -292,6 +292,7 @@ function TabBarInner({
   const topBarTools: TopBarTool[] = [
     {
       id: 'managed-browser',
+      // 工具优先于标签：浏览器分栏压窄会话区时仍保留完整入口，标签区自行滚动压缩。
       visible: showBrowserButton,
       label: '打开受管浏览器',
       tooltip: '打开受管浏览器',
@@ -500,6 +501,8 @@ function TabBarInner({
 
       <div
         ref={scrollRef}
+        // 工具组位于同一行的右端并优先保留空间；标签区仅消费剩余宽度，
+        // 宽度不足时横向滚动而非挤压/覆盖右端工具。
         className="relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none"
         // 右侧工具组和 Windows 窗口控制区占用空间由同一份工具定义计算，
         // 新增或移除按钮时不必再手工维护多组 absolute right 偏移。

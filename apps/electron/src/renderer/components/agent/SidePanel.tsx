@@ -443,14 +443,18 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       )}
       style={isOpen ? { width } : undefined}
     >
-      {/* 右侧栏占据窗口最右缘时，窗口控制按钮嵌入其顶部，避免留在左侧 TabBar。 */}
-      <WindowControlsHost id="right-side-panel" active={isOpen} priority={30} className="absolute right-2 top-[3px] z-10" />
+      {/* 侧栏顶部是独立的可拖标题带。它必须是实际承载的布局节点（而非盖在
+          no-drag 内容上的空 overlay），否则 Electron 在 Windows 的命中区计算会丢弃它。 */}
+      {isOpen && <div className="absolute z-20 top-0 left-0 right-[126px] h-[34px] select-none titlebar-drag-region" />}
+      <WindowControlsHost id="right-side-panel" active={isOpen} priority={30} className="absolute right-2 top-[3px] z-30" />
       {/* 面板内容：everOpened 懒挂载，首次展开才渲染（FileBrowser/文件树等重型 DOM 不会随启动加载）；收起后保留在 DOM（保活，不丢滚动/展开状态） */}
       {everOpened && (
       <div
         className={cn(
-          'w-full h-full flex flex-col titlebar-no-drag',
-          isWindows ? 'pt-[34px]' : 'pt-0',
+          // Windows 上 no-drag 内容从标题带下方才开始布局，不能再用 pt-[34px]：
+          // padding 盒本身仍覆盖顶部，Electron 会把该区域判成 no-drag。
+          isWindows ? 'absolute inset-x-0 bottom-0 top-[34px]' : 'w-full h-full',
+          'flex flex-col titlebar-no-drag',
           // visibility 走 transition 离散语义：淡出结束后才 hidden（Tab 不再聚焦），展开时立即 visible
           shouldAnimate && 'transition-[opacity,visibility] duration-300 sidebar-collapse-ease',
           isOpen ? 'opacity-100 visible' : 'opacity-0 pointer-events-none invisible',

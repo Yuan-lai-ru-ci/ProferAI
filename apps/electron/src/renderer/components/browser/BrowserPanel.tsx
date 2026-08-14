@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { BrowserStartPageState, BrowserViewState } from '@profer/shared'
-import { ArrowLeft, ArrowRight, ClipboardPaste, Globe2, Info, Languages, LoaderCircle, Minus, PanelRightClose, Plus, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Globe2, Languages, LoaderCircle, Minus, PanelRightClose, Plus, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,7 +31,7 @@ interface BrowserPanelProps {
   onClose: () => void
 }
 
-export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
+export function BrowserPanel({ sessionId, state, avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
   const [url, setUrl] = React.useState(state?.url ?? '')
   // 用户正在地址栏输入/聚焦时，禁止用主进程回推的 state.url 覆盖，避免被 Agent 导航顶掉输入。
   const urlDirtyRef = React.useRef(false)
@@ -39,7 +39,6 @@ export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowC
   const [riskAcknowledged, setRiskAcknowledged] = React.useState<boolean | null>(null)
   const [translating, setTranslating] = React.useState(false)
   const [translated, setTranslated] = React.useState(state?.translated ?? false)
-  const [pasting, setPasting] = React.useState(false)
   const [startPage, setStartPage] = React.useState<BrowserStartPageState | null>(null)
   const [bookmarking, setBookmarking] = React.useState(false)
   // 阻止默认首页重复跳转：同一空标签只自动导航一次。
@@ -80,21 +79,6 @@ export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowC
         })
       })
     return unsubscribe
-  }, [sessionId])
-
-  const togglePaste = React.useCallback(async () => {
-    const doPaste = (window.electronAPI as Partial<typeof window.electronAPI>).pasteAgentBrowserClipboard
-    if (typeof doPaste !== 'function') return
-    setPasting(true)
-    try {
-      const result = await doPaste({ sessionId, tabId: undefined })
-      if (result.error) toast.error('粘贴失败', { description: result.error })
-    } catch (error) {
-      console.error('[受管浏览器] 粘贴失败:', error)
-      toast.error('粘贴失败', { description: error instanceof Error ? error.message : '未知错误' })
-    } finally {
-      setPasting(false)
-    }
   }, [sessionId])
 
   const toggleTranslate = React.useCallback(async () => {
@@ -278,16 +262,6 @@ export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowC
       <WindowControlsHost id="browser-panel" active={avoidWindowControls} priority={20} className="absolute right-2 top-[3px] z-10" />
       <div className={`flex items-center h-[34px] gap-1 px-2 border-b border-border/40 bg-muted/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
         <Globe2 className="size-3.5 shrink-0 text-primary ml-1" />
-        {sessionTitle && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="flex min-w-0 max-w-[180px] shrink items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium text-muted-foreground hover:text-foreground">
-                <span className="truncate">{sessionTitle}</span>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>该浏览器属于会话「{sessionTitle}」{sourceLabel ? `（${sourceLabel}运行）` : ''}</TooltipContent>
-          </Tooltip>
-        )}
         {sourceLabel && (
           <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">{sourceLabel}</span>
         )}
@@ -295,7 +269,6 @@ export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowC
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || !state?.canGoForward} onClick={() => void window.electronAPI.goForwardAgentBrowser?.(sessionId)}><ArrowRight className="size-3.5" /></Button></TooltipTrigger><TooltipContent>前进</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked} onClick={() => void window.electronAPI.reloadAgentBrowser?.(sessionId)}><RefreshCw className="size-3.5" /></Button></TooltipTrigger><TooltipContent>刷新</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${translated ? 'text-primary' : ''}`} disabled={riskBlocked || translating} onClick={() => void toggleTranslate()}>{translating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{translated ? '恢复原文' : '整页翻译'}</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || pasting} onClick={() => void togglePaste()} aria-label="粘贴剪贴板文本到当前字段">{pasting ? <LoaderCircle className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>粘贴剪贴板文本</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${isBookmarked ? 'text-amber-500' : ''}`} disabled={riskBlocked || !state?.url || bookmarking} onClick={() => void toggleBookmark()} aria-label="收藏当前页">{bookmarking ? <LoaderCircle className="size-3.5 animate-spin" /> : <Star className={`size-3.5 ${isBookmarked ? 'fill-current' : ''}`} />}</Button></TooltipTrigger><TooltipContent>{isBookmarked ? '取消收藏' : '收藏当前页'}</TooltipContent></Tooltip>
         <form className="flex-1 min-w-0" onSubmit={(event) => { event.preventDefault(); if (!riskBlocked) void navigate() }}>
           <Input
@@ -314,7 +287,6 @@ export function BrowserPanel({ sessionId, state, sessionTitle = '', avoidWindowC
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || zoomPercent <= 50} onClick={() => changeZoom(-0.1)} aria-label="缩小网页"><Minus className="size-3.5" /></Button></TooltipTrigger><TooltipContent>缩小网页</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><button type="button" className="min-w-9 px-1 text-[10px] text-muted-foreground hover:text-foreground" disabled={riskBlocked} onClick={() => { const setZoom = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserZoom; if (setZoom && state?.activeTabId) void setZoom({ sessionId, tabId: state.activeTabId, zoomFactor: 1 }) }} aria-label="重置网页缩放">{zoomPercent}%</button></TooltipTrigger><TooltipContent>重置网页缩放</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || zoomPercent >= 300} onClick={() => changeZoom(0.1)} aria-label="放大网页"><Plus className="size-3.5" /></Button></TooltipTrigger><TooltipContent>放大网页</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Info className="size-3.5 shrink-0 text-muted-foreground" /></TooltipTrigger><TooltipContent>Profer 仅在本机保存受管网页的登录状态</TooltipContent></Tooltip>
         {state?.loading && <LoaderCircle className="size-3.5 text-muted-foreground animate-spin" />}
         {isBackgroundRun && (
           <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-7 text-amber-600 hover:text-amber-700" onClick={() => void stopBackgroundRun()} aria-label="停止当前后台 Agent"><Square className="size-3.5 fill-current" /></Button></TooltipTrigger><TooltipContent>停止当前{state?.executionSource === 'automation' ? '自动任务' : '委派'}运行</TooltipContent></Tooltip>
