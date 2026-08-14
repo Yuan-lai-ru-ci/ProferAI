@@ -30,6 +30,8 @@ export interface MinimapItem {
 
 interface ScrollMinimapProps {
   items: MinimapItem[]
+  /** 平板触屏模式：hover 自动展开改为点击触发，避免触屏 tap 模拟 mouseenter 误弹 */
+  tabletMode?: boolean
 }
 
 /** 最少消息数才显示迷你地图 */
@@ -70,7 +72,7 @@ function escapeRegExp(str: string): string {
 
 // ── 主组件 ──
 
-export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement | null {
+export function ScrollMinimap({ items, tabletMode = false }: ScrollMinimapProps): React.ReactElement | null {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
   const [hovered, setHovered] = React.useState(false)
   const [isLeaving, setIsLeaving] = React.useState(false)
@@ -87,6 +89,7 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const trackRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
+  const triggerRef = React.useRef<HTMLDivElement>(null)
 
   // ── 组件卸载时清理计时器 ──
 
@@ -193,6 +196,8 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
   const OPEN_DELAY = 180
 
   const handleMouseEnter = (): void => {
+    // 触屏无 hover 语义（tap 会模拟 mouseenter），平板模式不在此展开，改由点击触发
+    if (tabletMode) return
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
     setIsLeaving(false)
@@ -210,6 +215,8 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
   }
 
   const handleMouseLeave = (): void => {
+    // 触屏模式下收起改由「点击面板外」控制，不走 mouseleave
+    if (tabletMode) return
     // 尚未打开就离开了 → 取消打开定时器
     if (openTimerRef.current) {
       clearTimeout(openTimerRef.current)
@@ -226,6 +233,31 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
       }, 80)
     }, 40)
   }
+
+  // ── 触屏点击触发（tabletMode：无 hover，点击触发条展开/收起） ──
+
+  const handleTriggerClick = React.useCallback((e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = undefined }
+    setIsLeaving(false)
+    setHovered((prev) => !prev)
+  }, [])
+
+  // ── 触屏点击面板外关闭 ──
+
+  React.useEffect(() => {
+    if (!tabletMode || !hovered) return
+    const onDocClick = (e: MouseEvent): void => {
+      const target = e.target as Node
+      const inPanel = listRef.current?.closest('[data-minimap-panel]')?.contains(target) ?? false
+      const inTrigger = triggerRef.current?.contains(target) ?? false
+      if (!inPanel && !inTrigger) setHovered(false)
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [tabletMode, hovered])
 
   // ── 跳转到指定消息（直接操作 scrollTop，绕过 scrollIntoView） ──
 
@@ -358,6 +390,7 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
         {/* 展开面板 */}
         {hovered && (
           <div
+            data-minimap-panel
             className={cn(
               'mr-1 w-[280px] rounded-lg border bg-popover shadow-xl origin-top-right flex flex-col overflow-hidden pointer-events-auto',
               isLeaving
@@ -426,10 +459,12 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
 
         {/* ── 迷你地图横杠（紧凑排列）—— 只有这里触发面板展开 ── */}
         <div
+          ref={triggerRef}
           className="relative mt-3 flex-shrink-0 pointer-events-auto"
           style={{ width: 24, height: barCount * 6 }}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
+          onClick={tabletMode ? handleTriggerClick : undefined}
         >
           {Array.from({ length: barCount }, (_, i) => {
             const start = Math.floor((i * items.length) / barCount)

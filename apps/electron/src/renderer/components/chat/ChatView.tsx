@@ -645,6 +645,7 @@ function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = fa
           {/* 中间：消息区域 */}
           <ChatMessages
             conversationId={conversationId}
+            tabletMode={tabletMode}
             messages={messages}
             messagesLoaded={messagesLoaded}
             streaming={isStreaming}

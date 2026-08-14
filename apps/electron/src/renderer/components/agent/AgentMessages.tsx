@@ -865,7 +865,9 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           </>
         )}
       </ConversationContent>
-      <ScrollMinimap items={minimapItems} />
+      {tabletMode
+        ? <ScrollMinimap key={sessionId} items={minimapItems} tabletMode />
+        : <ScrollMinimap items={minimapItems} />}
       <ConversationScrollButton />
       {!tabletMode && allUserMessagesData.length > 0 && (
         <StickyUserMessage userMessages={allUserMessagesData} />

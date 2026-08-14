@@ -182,6 +182,8 @@ interface ChatMessagesProps {
   onDeleteDivider?: (messageId: string) => void
   /** 加载更多历史消息回调 */
   onLoadMore?: () => Promise<void>
+  /** 平板触屏模式（ScrollMinimap 点击触发、切会话重挂载） */
+  tabletMode?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
@@ -209,6 +211,7 @@ export function ChatMessages({
   inlineEditingMessageId,
   onDeleteDivider,
   onLoadMore,
+  tabletMode = false,
 }: ChatMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
@@ -468,7 +471,9 @@ export function ChatMessages({
           </>
         )}
       </ConversationContent>
-      <ScrollMinimap items={minimapItems} />
+      {tabletMode
+        ? <ScrollMinimap key={conversationId} items={minimapItems} tabletMode />
+        : <ScrollMinimap items={minimapItems} />}
       <ConversationScrollButton />
     </Conversation>
   )
