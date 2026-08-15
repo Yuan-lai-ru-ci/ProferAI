@@ -652,13 +652,17 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     return groupIntoTurns(allSDKMessages, sessionModelId)
   }, [allSDKMessages, sessionModelId])
 
-  // `null` derives the initial slice during the very first render after message
-  // hydration, avoiding a full-history mount before the reset effect can run.
-  const resolvedVisibleGroupStart = visibleGroupStart ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)
+  // 分页模式（服务端懒加载，onLoadEarlierHistory 存在时）：显示全部已加载消息，
+  // 触顶/按钮加载更早后 prepend 到头部，用户从上方看到新历史；
+  // 全量老路径：只渲染尾部 30 组，防止大会话一次渲染过多。
+  const pagedMode = onLoadEarlierHistory !== undefined
+  const resolvedVisibleGroupStart = pagedMode
+    ? 0
+    : (visibleGroupStart ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE))
   const visibleGroups = allGroups.slice(resolvedVisibleGroupStart)
-  const hasEarlierGroups = resolvedVisibleGroupStart > 0
+  const hasEarlierGroups = !pagedMode && resolvedVisibleGroupStart > 0
   const loadEarlierGroups = React.useCallback(() => {
-    // 桌面端按钮路径：本地 slice 前移一页（移动端由触顶自动加载接管，不走这里）。
+    // 全量老路径的本地 slice 前移一页；分页模式由 onLoadEarlierHistory 服务端拉取接管。
     setVisibleGroupStart((start) => Math.max(0, (start ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)) - HISTORY_GROUP_PAGE_SIZE))
   }, [allGroups.length])
 
@@ -733,9 +737,9 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
       <TopHistoryLoader
-        onLoadEarlierHistory={tabletMode ? onLoadEarlierHistory : undefined}
-        historyMoreAvailable={tabletMode ? historyMoreAvailable : undefined}
-        historyLoadingEarlier={tabletMode ? historyLoadingEarlier : undefined}
+        onLoadEarlierHistory={onLoadEarlierHistory}
+        historyMoreAvailable={historyMoreAvailable}
+        historyLoadingEarlier={historyLoadingEarlier}
       />
       <StreamScrollFollow sessionId={sessionId} streaming={streaming} />
       <ConversationContent>
@@ -751,7 +755,28 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
             )}
           </div>
         )}
-        {!tabletMode && hasEarlierGroups && (
+        {!tabletMode && onLoadEarlierHistory && hasContent && (
+          <div className="flex justify-center py-3">
+            <button
+              type="button"
+              disabled={!historyMoreAvailable || historyLoadingEarlier}
+              className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-60"
+              onClick={() => onLoadEarlierHistory()}
+            >
+              {historyLoadingEarlier ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Spinner size="sm" className="text-muted-foreground/40" />
+                  正在加载更早消息…
+                </span>
+              ) : historyMoreAvailable === false ? (
+                '已到最早消息'
+              ) : (
+                '加载更早消息'
+              )}
+            </button>
+          </div>
+        )}
+        {!tabletMode && !onLoadEarlierHistory && hasEarlierGroups && (
           <div className="flex justify-center py-3">
             <button
               type="button"

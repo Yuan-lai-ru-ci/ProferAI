@@ -2607,10 +2607,11 @@ export function registerIpcHandlers(): void {
   })
 
   // 获取 Agent 会话 SDKMessage（Phase 4 新格式）
+  // opts.tail/before 传参时返回分页结果（桌面懒加载：首次只取尾部一页，触顶/按钮补更早）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
-    async (_, id: string): Promise<SDKMessage[]> => {
-      return getAgentSessionSDKMessages(id)
+    async (_, id: string, opts?: { tail?: number; before?: number }): Promise<SDKMessage[] | import('./lib/agent-session-manager').SDKMessagePage> => {
+      return opts ? getAgentSessionSDKMessages(id, opts) : getAgentSessionSDKMessages(id)
     }
   )
 

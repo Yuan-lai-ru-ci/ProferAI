@@ -463,41 +463,82 @@ function sanitizeOversizedMessage(msg: SDKMessage, originalLength: number): SDKM
   return clone as SDKMessage
 }
 
+/** 桌面端 Agent 会话懒加载单页消息数（首次只取尾部，触顶/按钮加载更早） */
+export const DESKTOP_AGENT_PAGE_SIZE = 60
+
+/** 解析单行 SDKMessage（兼容旧 AgentMessage 格式）；损坏行返回 null 不中断 */
+function parseSDKMessageLine(line: string, id: string): SDKMessage | null {
+  try {
+    const parsed = JSON.parse(line)
+    // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
+    if ('role' in parsed && !('type' in parsed)) {
+      return convertLegacyMessage(parsed as AgentMessage)
+    }
+    return parsed as SDKMessage
+  } catch {
+    // 单行损坏不丢整文件：跳过坏行继续解析后续
+    console.warn(`[Agent 会话] 跳过损坏的 SDKMessage 行 (${id})`)
+    return null
+  }
+}
+
 /**
- * 读取会话的所有 SDKMessage（兼容旧 AgentMessage 格式）
+ * 读取会话的 SDKMessage（兼容旧 AgentMessage 格式）
  *
  * 旧格式（有 `role` 字段）会被转换为近似的 SDKMessage。
  * 新格式（有 `type` 字段）直接返回。
+ *
+ * 分页模式（传 opts.tail）：只解析尾部窗口内的行，避免全量 JSON.parse 的内存分配
+ * 风暴（切大会话时主进程 GC 卡顿的根因之一），返回 SDKMessagePage；
+ * 无 opts 时保持旧行为返回全量数组（重试/分叉/回退等需要完整历史的调用方）。
  */
-export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
+export function getAgentSessionSDKMessages(id: string): SDKMessage[]
+export function getAgentSessionSDKMessages(id: string, opts: { tail?: number; before?: number }): SDKMessagePage
+export function getAgentSessionSDKMessages(
+  id: string,
+  opts?: { tail?: number; before?: number },
+): SDKMessage[] | SDKMessagePage {
   const filePath = getAgentSessionMessagesPath(id)
+  const emptyPage: SDKMessagePage = { messages: [], total: 0, startIndex: 0, endIndex: -1, hasMore: false }
 
   if (!existsSync(filePath)) {
-    return []
+    return opts ? emptyPage : []
   }
 
   try {
     const raw = readFileSync(filePath, 'utf-8')
     const lines = raw.split('\n').filter((line) => line.trim())
+
+    // 分页模式：只解析窗口内的行
+    if (opts && (opts.tail !== undefined || opts.before !== undefined)) {
+      const total = lines.length
+      const pageSize = opts.tail ?? DESKTOP_AGENT_PAGE_SIZE
+      const before = opts.before !== undefined ? Math.max(0, Math.min(opts.before, total)) : total
+      const startLine = Math.max(0, before - pageSize)
+      const messages: SDKMessage[] = []
+      for (let i = startLine; i < before; i++) {
+        const parsed = parseSDKMessageLine(lines[i]!, id)
+        if (parsed) messages.push(parsed)
+      }
+      return {
+        messages,
+        total,
+        startIndex: startLine,
+        endIndex: before - 1,
+        hasMore: startLine > 0,
+      }
+    }
+
+    // 全量模式（旧行为）
     const messages: SDKMessage[] = []
     for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line)
-        // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
-        if ('role' in parsed && !('type' in parsed)) {
-          messages.push(convertLegacyMessage(parsed as AgentMessage))
-        } else {
-          messages.push(parsed as SDKMessage)
-        }
-      } catch {
-        // 单行损坏不丢整文件：跳过坏行继续解析后续
-        console.warn(`[Agent 会话] 跳过损坏的 SDKMessage 行 (${id})`)
-      }
+      const parsed = parseSDKMessageLine(line, id)
+      if (parsed) messages.push(parsed)
     }
     return messages
   } catch (error) {
     console.error(`[Agent 会话] 读取 SDKMessage 文件失败 (${id}):`, error)
-    return []
+    return opts ? emptyPage : []
   }
 }
 

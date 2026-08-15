@@ -557,8 +557,11 @@ export interface ElectronAPI {
   /** 为项目创建或复用隐藏的 Agent 草稿会话 */
   ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
 
-  /** 获取 Agent 会话 SDKMessage（Phase 4 新格式） */
-  getAgentSessionSDKMessages: (id: string) => Promise<SDKMessage[]>
+  /** 获取 Agent 会话 SDKMessage（Phase 4 新格式）。传 opts.tail/before 时返回分页结果 */
+  getAgentSessionSDKMessages: {
+    (id: string): Promise<SDKMessage[]>
+    (id: string, opts: { tail?: number; before?: number }): Promise<{ messages: SDKMessage[]; total: number; startIndex: number; endIndex: number; hasMore: boolean }>
+  }
 
   /** 更新 Agent 会话标题 */
   updateAgentSessionTitle: (id: string, title: string) => Promise<AgentSessionMeta>
@@ -1940,8 +1943,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ENSURE_PROJECT_DRAFT_SESSION, workspaceId, channelId, modelId)
   },
 
-  getAgentSessionSDKMessages: (id: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id)
+  getAgentSessionSDKMessages: (id: string, opts?: { tail?: number; before?: number }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id, opts)
   },
 
   restoreActiveAgentStreams: () => {
