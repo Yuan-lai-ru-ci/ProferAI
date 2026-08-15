@@ -293,9 +293,10 @@ export function isRelativeFilePath(text: string): boolean {
   const ext = getExtension(clean)
   if (!ext || !ALL_PREVIEWABLE_EXTS.has(ext)) return false
 
-  // 必须看起来像文件路径：允许 字母数字、点、横线、下划线、斜杠
-  // 排除含空格或特殊字符的（太可能是其他内容）
-  if (!/^[\w./@-]+$/.test(clean)) return false
+  // 必须看起来像文件路径：允许 字母数字（含中文等 Unicode 字母）、点、横线、下划线、斜杠
+  // \w 只匹配 ASCII，需补 \p{L}（任意语言字母）+ \p{M}（组合标记）才不误排中文文件名
+  // 排除含空格或特殊字符（含中文标点）的（太可能是其他内容）
+  if (!/^[\w./@\p{L}\p{M}-]+$/u.test(clean)) return false
 
   // 排除以点开头的隐藏文件（如 .gitignore），但保留含子路径的目录相对路径（如 .context/file.md）
   if (clean.startsWith('.') && !clean.startsWith('./') && !clean.includes('/')) return false
