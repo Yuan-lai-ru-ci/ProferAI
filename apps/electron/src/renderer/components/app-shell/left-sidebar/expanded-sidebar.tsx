@@ -294,7 +294,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                             onToggleArchive={handleToggleArchiveAgent}
                           />
 
-                          {childCount > 0 && (
+                          {childCount > 0 && expandedChildren && (
                             <div className="ml-3 border-l border-foreground/10 pl-2 flex flex-col gap-0.5">
                               {item.childSessions.map((childSession) => (
                                 <DelegatedChildSessionItem
