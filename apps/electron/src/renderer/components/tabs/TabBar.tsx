@@ -49,7 +49,6 @@ import { TabBarItem } from './TabBarItem'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import { detectIsWindows } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
 
@@ -146,19 +145,6 @@ export function TabBar(): React.ReactElement {
       }
     }
   }, [setActiveTabId, setAutomationForm, tabs, agentSessions, appMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
-
-  React.useEffect(() => {
-    return navigationController.register((action) => {
-      const delta = action === 'previousTab' ? -1 : action === 'nextTab' ? 1 : 0
-      if (delta === 0 || tabs.length === 0) return false
-      const currentIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTabId))
-      const nextIndex = (currentIndex + delta + tabs.length) % tabs.length
-      const nextTab = tabs[nextIndex]
-      if (!nextTab) return false
-      handleActivate(nextTab.id)
-      return true
-    }, 10)
-  }, [activeTabId, handleActivate, tabs])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键

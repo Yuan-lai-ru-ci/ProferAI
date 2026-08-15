@@ -2,7 +2,6 @@ import * as React from 'react'
 import type { NavigationAction } from '@/lib/navigation-actions'
 import { isEditableTarget, navigationController } from '@/lib/navigation-controller'
 import { findSpatialNavigationTarget } from '@/lib/spatial-navigation'
-import { useGamepadNavigation } from '@/hooks/useGamepadNavigation'
 
 function keyboardAction(event: KeyboardEvent): NavigationAction | null {
   if (event.key === 'ArrowUp') return 'previous'
@@ -105,9 +104,8 @@ function focusConversation(): boolean {
 }
 
 /**
- * Shared spatial fallback used by both the keyboard path and the gamepad
- * consumer so ordinary controls (titlebar, toolbar, panels, main area) respond
- * to directional navigation exactly the same way on both inputs.
+ * Shared spatial fallback used by the keyboard path so ordinary controls
+ * (titlebar, toolbar, panels, main area) respond to directional navigation.
  *
  * Order mirrors the keyboard handler: editor guard → conversation scroll →
  * region spatial nav → global spatial nav → confirm/back activation.
@@ -185,22 +183,12 @@ function runGlobalSpatialFallback(action: NavigationAction): boolean {
   return false
 }
 
-/** Main-window bridge for keyboard and Gamepad API navigation actions. */
+/** Main-window bridge for keyboard navigation actions. */
 export function NavigationInputProvider(): null {
-  useGamepadNavigation()
-
   React.useEffect(() => {
     const unregister = navigationController.register((action) => {
-      if (action === 'voiceDictation') {
-        window.electronAPI.toggleVoiceDictation().catch(console.error)
-        return true
-      }
-      if (action === 'stopGeneration') {
-        window.dispatchEvent(new CustomEvent('profer:stop-generation'))
-        return true
-      }
       // 左栏 roving 纵向向下到达主链末尾后，把焦点穿出回主内容/编辑框，形成循环。
-      // 键盘与手柄共用此最低优先级兜底出口；向上到顶不做无意义动作。
+      // 键盘共用此最低优先级兜底出口；向上到顶不做无意义动作。
       if (action === 'next') {
         const focused = document.activeElement
         if (focused instanceof HTMLElement && focused.closest('[data-profer-navigation-item]')) {
@@ -214,8 +202,8 @@ export function NavigationInputProvider(): null {
         }
       }
       // 普通控件（标题栏/工具栏/面板/主区）的方向浏览、确认与返回：
-      // 键盘在 onKeyDown Section 6 直接处理，手柄唯一入口就是走 controller，
-      // 因此在这里补齐同一套全局空间导航兜底，让两者行为一致。
+      // 键盘在 onKeyDown Section 6 直接处理，走 controller 时在这里补齐
+      // 同一套全局空间导航兜底，让两条路径行为一致。
       // 左栏项与已打开的弹层由更高优先级 consumer 先行消费，到不了这里。
       if (action === 'previous' || action === 'next' || action === 'left' || action === 'right'
         || action === 'confirm' || action === 'back') {
