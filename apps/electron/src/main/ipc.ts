@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
@@ -68,6 +68,10 @@ import type {
   WorkspaceMemorySummary,
   SkillFileContent,
   SkillFileNode,
+  MasterSkillMeta,
+  MasterSkillVersion,
+  SyncSkillResult,
+  SkillConflict,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -309,6 +313,16 @@ import {
   getWorkspaceMemoryArchivePath,
   getWorkspaceAutoMemoryDir,
 } from './lib/agent-workspace-manager'
+import {
+  listMasterSkills,
+  readMasterSkillContent,
+  saveMasterSkill,
+  renameMasterSkillMeta,
+  listMasterSkillHistory,
+  rollbackMasterSkill,
+  batchSyncMasterSkill,
+  detectSkillConflict,
+} from './lib/skill-master-manager'
 import { resolveMemoryWikilink, findMemoryBacklinks } from './lib/memory-wikilink-service'
 import { createMemoryArchiveSearcher } from './lib/memory-archive-search'
 import type { MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
@@ -3091,6 +3105,53 @@ export function registerIpcHandlers(): void {
       renameSkillEntry(workspaceSlug, skillSlug, fromRelative, toRelative)
     }
   )
+
+  // ===== 全局元 Skill（master 库） =====
+  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.LIST, async (): Promise<MasterSkillMeta[]> => {
+    return listMasterSkills()
+  })
+  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.READ, async (_, slug: string): Promise<string> => {
+    return readMasterSkillContent(slug)
+  })
+  ipcMain.handle(
+    SKILL_MASTER_IPC_CHANNELS.SAVE,
+    async (_, slug: string, content: string, note?: string): Promise<MasterSkillVersion> => {
+      return saveMasterSkill(slug, content, note)
+    }
+  )
+  ipcMain.handle(
+    SKILL_MASTER_IPC_CHANNELS.RENAME_META,
+    async (_, slug: string, patches: { name?: string; description?: string }): Promise<void> => {
+      renameMasterSkillMeta(slug, patches)
+    }
+  )
+  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.LIST_HISTORY, async (_, slug: string): Promise<MasterSkillVersion[]> => {
+    return listMasterSkillHistory(slug)
+  })
+  ipcMain.handle(
+    SKILL_MASTER_IPC_CHANNELS.ROLLBACK,
+    async (_, slug: string, snapshotId: string, note?: string): Promise<MasterSkillVersion> => {
+      return rollbackMasterSkill(slug, snapshotId, note)
+    }
+  )
+  ipcMain.handle(
+    SKILL_MASTER_IPC_CHANNELS.SYNC_TO_WORKSPACES,
+    async (
+      _,
+      slug: string,
+      targetWorkspaceSlugs: string[],
+      options?: { force?: boolean; forceSlugs?: string[] },
+    ): Promise<SyncSkillResult[]> => {
+      return batchSyncMasterSkill(slug, targetWorkspaceSlugs, options)
+    }
+  )
+  ipcMain.handle(
+    SKILL_MASTER_IPC_CHANNELS.DETECT_CONFLICT,
+    async (_, workspaceSlug: string, skillSlug: string): Promise<SkillConflict> => {
+      return detectSkillConflict(workspaceSlug, skillSlug)
+    }
+  )
+
 
   // 发送 Agent 消息（触发 Agent SDK 流式响应）
   ipcMain.handle(

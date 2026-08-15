@@ -435,9 +435,21 @@ bun run generate:icons    # 生成应用图标
 
 修改任何 `default-skills/<skill>/` 内容时，**必须同步递增该 Skill `SKILL.md` frontmatter 的 `version` 字段**（patch +1）。
 
-**为什么**：`seedDefaultSkills()` 与 `upgradeDefaultSkillsInWorkspaces()` 通过 semver 比较决定是否将 bundle 中的 Skill 同步到老用户的 `~/.proma/default-skills/` 与各工作区。**version 不变 = 老用户拿不到新内容**。
+**为什么**：`seedDefaultSkills()` 通过 semver 比较决定是否将 bundle 中的 Skill 同步到老用户的 `~/.profer/default-skills/`（全局元 skill 库）。**version 不变 = `seedDefaultSkills` 不会用新版覆盖全局库**。
 
-**早期实现曾用"无条件 cpSync"绕开这个约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`、`agent-workspace-manager.ts:upgradeDefaultSkillsInWorkspaces`）。
+> 2026-08-14 起，`upgradeDefaultSkillsInWorkspaces()` 语义已收窄：**只做「缺失即注入」**，不再对已存在的工作区 skill 做基于 version 的全量覆盖。工作区已装 skill 的更新改由「全局元 Skill → 手动同步」机制掌控（见下）。
+
+### 全局元 Skill（master）与工作区同步
+
+- **全局元 Skill 库** = `~/.profer/default-skills/{slug}/`，是唯一编辑源，用户可编辑、有版本历史、可回退。
+- 历史快照：`~/.profer/default-skills-history/{slug}/v{n}/`（v1 为出厂基线/首次保存），版本索引 `index.json`。
+- 保存即 bump：`skill-master-manager.ts:saveMasterSkill` 自动把 frontmatter `version` patch+1 并落盘一条快照；`rollbackMasterSkill` 回退并保留一条新回退记录。
+- **工作区同步**：`syncMasterSkillToWorkspace` 手动把元 skill 覆盖到选定个人工作区 `skills/{slug}`，写 `.source.json`（`sourceKind:'master'` + baseline 内容哈希）。
+- **冲突检测**：基于内容哈希（`detectSkillConflict`），工作区副本相对上次同步基线被改过即视为冲突；非强制同步会拒绝覆盖，由 UI 让用户选择「覆盖/跳过」。
+- UI 入口：Agent 技能视图「元 Skill」tab（编辑/版本回退/同步到工作区），`MasterSkillsTab.tsx` / `MasterSkillDetailSheet.tsx` / `SyncMasterSkillDialog.tsx`。
+- 团队市场与跨工作区导入逻辑不受影响；master 同步只作用于个人工作区本地 skills。
+
+**早期实现曾用"无条件 cpSync"绕开 seed 约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`）。
 
 ### 发版流程（手动，2026-08-08 起）
 
