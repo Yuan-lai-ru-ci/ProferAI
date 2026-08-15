@@ -8,6 +8,7 @@ import * as React from 'react'
 import { Box, ChevronRight, FolderSearch, Search, Undo2, X } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { agentDiffUnseenFilesAtom, agentDiffDataAtom, agentSelectedWorktreeAtom } from '@/atoms/agent-atoms'
@@ -207,7 +208,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
     }
     const result: FileGroup[] = [...groups.entries()].map(([gitRoot, groupFiles]) => ({
       gitRoot,
-      dirName: gitRoot ? gitRoot.split('/').pop() || gitRoot : '/',
+      dirName: gitRoot ? getFileBaseName(gitRoot) : '/',
       files: groupFiles,
       totalAdditions: groupFiles.reduce((sum, f) => sum + f.additions, 0),
       totalDeletions: groupFiles.reduce((sum, f) => sum + f.deletions, 0),
@@ -416,9 +417,9 @@ function FileRow({
   isUnseen?: boolean
   dirPath: string
 }): React.ReactElement {
-  const parts = file.filePath.split('/')
-  const fileName = parts.pop()!
-  const dir = parts.join('/')
+  const fileName = getFileBaseName(file.filePath)
+  const slashIdx = file.filePath.lastIndexOf('/')
+  const dir = slashIdx >= 0 ? file.filePath.slice(0, slashIdx) : ''
   const fullPath = `${file.gitRoot || dirPath}/${file.filePath}`.replace(/\/+/g, '/')
 
   return (
@@ -491,9 +492,9 @@ function UntrackedFileRow({
   onClick: () => void
 }): React.ReactElement {
   const filePath = file.filePath
-  const parts = filePath.split('/')
-  const fileName = parts.pop()!
-  const dir = parts.join('/')
+  const fileName = getFileBaseName(filePath)
+  const slashIdx = filePath.lastIndexOf('/')
+  const dir = slashIdx >= 0 ? filePath.slice(0, slashIdx) : ''
   const fullPath = `${file.gitRoot}/${file.filePath}`.replace(/\/+/g, '/')
 
   return (
@@ -530,9 +531,8 @@ function NonGitFileRow({
   change: SessionFileChange
   onClick?: () => void
 }): React.ReactElement {
-  const parts = change.path.split('/')
-  const fileName = parts.pop()!
-  const dir = parts.join('/')
+  // 文件名统一用公共 basename（change.path 可能是 Windows 反斜杠绝对路径，split('/') 切不开）
+  const fileName = getFileBaseName(change.path)
   const isCreated = change.kind === 'created'
 
   return (
@@ -547,9 +547,6 @@ function NonGitFileRow({
         <TooltipTrigger asChild>
           <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
             <span className="shrink-0">{fileName}</span>
-            {dir && (
-              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
-            )}
           </span>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-[400px] break-all">{change.path}</TooltipContent>
