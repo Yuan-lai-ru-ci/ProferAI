@@ -23,7 +23,9 @@ import {
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
-import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
+import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
+import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
+import type { AgentPreset } from '@profer/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -730,6 +732,62 @@ export function getOtherWorkspaceSkills(currentSlug: string): OtherWorkspaceSkil
   }
 
   return result
+}
+
+// ===== 预设跨工作区导入（与 Skill 导入同构） =====
+
+/**
+ * 获取其他工作区的自定义预设列表，按工作区分组返回。
+ * 内置预设不参与导入（每工作区恒有）。
+ */
+export function getOtherWorkspacePresets(currentSlug: string): OtherWorkspacePresetsGroup[] {
+  const workspaces = listAgentWorkspaces()
+  const result: OtherWorkspacePresetsGroup[] = []
+
+  for (const workspace of workspaces) {
+    if (workspace.slug === currentSlug) continue
+
+    const presets = listAgentPresets(workspace.slug).filter((p) => !p.isBuiltin)
+    if (presets.length === 0) continue
+
+    result.push({
+      workspaceName: workspace.name,
+      workspaceSlug: workspace.slug,
+      presets,
+    })
+  }
+
+  return result
+}
+
+/**
+ * 从其他工作区导入自定义预设到当前工作区（深拷贝 + 新 UUID）。
+ */
+export function importPresetFromWorkspace(
+  targetSlug: string,
+  sourceSlug: string,
+  presetId: string,
+): AgentPreset {
+  const source = listAgentPresets(sourceSlug).find((p) => p.id === presetId && !p.isBuiltin)
+  if (!source) {
+    throw new Error(`源工作区中不存在自定义预设: ${presetId}`)
+  }
+
+  const imported = createAgentPreset(targetSlug, {
+    name: source.name,
+    description: source.description,
+    promptSections: source.promptSections,
+    suppressPromptSections: source.suppressPromptSections,
+    disabledToolGroups: source.disabledToolGroups,
+    effort: source.effort,
+    permissionMode: source.permissionMode,
+    skillSlugs: source.skillSlugs,
+    mcpServerNames: source.mcpServerNames,
+    allowSubagents: source.allowSubagents,
+  })
+
+  console.log(`[Agent 预设] 已从 ${sourceSlug} 导入预设: ${source.name} → ${targetSlug}/${imported.id}`)
+  return imported
 }
 
 /**

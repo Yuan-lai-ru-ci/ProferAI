@@ -677,6 +677,8 @@ export interface AgentSessionMeta {
   piEntryBindings?: Record<string, string>
   /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
   agentRuntime?: AgentRuntime
+  /** 本会话绑定的 Agent 预设 ID；历史会话/缺省视为 standard。 */
+  presetId?: string
   /**
    * Agent 执行 cwd 的持久化语义。新会话使用 project；缺失字段兼容升级前的
    * session workbench cwd。

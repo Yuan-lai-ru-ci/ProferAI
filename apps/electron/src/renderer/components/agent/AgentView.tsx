@@ -31,6 +31,8 @@ import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selecti
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { PermissionModeSelector } from './PermissionModeSelector'
+import { PresetSelector } from './PresetSelector'
+import { agentPresetsAtom } from '@/atoms/agent-preset-atoms'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
@@ -104,6 +106,7 @@ import {
   finalizeStreamingActivities,
   agentProcessGroupsKeepExpandedAtom,
   currentAgentSessionIdAtom,
+  workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
@@ -691,6 +694,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const sessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
+  const setAgentPresets = useSetAtom(agentPresetsAtom)
   const revealRendererDraft = React.useCallback(() => {
     setDraftSessionIds((previous: Set<string>) => {
       if (!previous.has(sessionId)) return previous
@@ -714,6 +718,21 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const globalChannels = useAtomValue(channelsAtom)
+  const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
+
+  // 加载当前工作区的 Agent 预设列表（预设为工作区级；失败静默留空由 UI 兑底）。
+  // 订阅能力版本号：技能页增删改/导入预设后立即重拉，对齐 Skills 刷新机制。
+  React.useEffect(() => {
+    const slug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug
+    void window.electronAPI.listAgentPresets(slug)
+      .then((list) => setAgentPresets((prev) => {
+        if (!slug) return prev
+        const next = new Map(prev)
+        next.set(slug, list)
+        return next
+      }))
+      .catch((error) => console.error('[Agent] 加载预设列表失败:', error))
+  }, [setAgentPresets, workspaces, currentWorkspaceId, capabilitiesVersion])
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
@@ -2692,6 +2711,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     },
     */
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
+    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} /> },
     {
       key: 'thinking',
       node: (
@@ -3070,7 +3090,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <AlertDialogHeader>
           <AlertDialogTitle>确认回退</AlertDialogTitle>
           <AlertDialogDescription>
-            回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？
+            {sessionAgentRuntime === 'pi'
+              ? '回退将截断该消息之后的所有对话（Pi 会话不支持文件恢复，工作区文件不会被改动）。此操作不可撤销，确定要回退吗？'
+              : '回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

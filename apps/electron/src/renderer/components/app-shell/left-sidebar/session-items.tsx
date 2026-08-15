@@ -31,6 +31,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   SessionMiniMapPopover,
   useSessionMiniMapHover,
@@ -961,7 +962,7 @@ interface AgentProjectGroupItemProps {
   onCollapseExtra: (workspaceId: string) => void
   onSelectProject: (workspaceId: string) => void | Promise<void>
   onToggleProjectCollapse: (workspaceId: string) => void
-  onNewSession: (workspaceId: string) => Promise<void>
+  onNewSession: (workspaceId: string, presetId?: string) => Promise<void>
   onDragStart: (e: React.DragEvent, workspaceId: string) => void
   onDragOver: (e: React.DragEvent, workspaceId: string) => void
   onDragLeave: (e: React.DragEvent) => void
@@ -1208,22 +1209,14 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
           </button>
         )}
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`在「${group.workspace.name}」中新建会话`}
-              onClick={(e) => {
-                e.stopPropagation()
-                void onNewSession(group.workspace.id)
-              }}
-              className="absolute right-5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/65 group-hover/project:opacity-100 titlebar-no-drag"
-            >
-              <Plus size={13} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">在此项目中新建会话</TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          aria-label={`在「${group.workspace.id}」中新建会话`}
+          onClick={() => { void onNewSession(group.workspace.id) }}
+          className="absolute right-5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/65 group-hover/project:opacity-100 data-[state=open]:opacity-100 titlebar-no-drag"
+        >
+          <Plus size={13} />
+        </button>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

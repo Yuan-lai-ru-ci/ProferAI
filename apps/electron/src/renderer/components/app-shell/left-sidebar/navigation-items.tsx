@@ -135,7 +135,7 @@ export function enterableViewSelector(item: string): string | null {
 
 /** 进入全屏视图后把焦点移交进其内容区，让用户能在视图内继续用方向键/手柄操作。
  *  React 渲染是异步的，点击触发视图切换后需等下一帧再聚焦，否则找不到刚渲染的 region。
- *  对 agent-skills 优先聚焦当前激活的顶部 tab（Skills/市场/MCP/记忆，默认进入即 Skills），
+ *  对 agent-skills 优先聚焦当前激活的顶部 tab（Skills/市场/MCP/记忆/预设，默认进入即 Skills），
  *  因为 region 内首个可聚焦控件是工作区切换下拉，不是 tab。 */
 export function focusEnterableViewItem(item: string): void {
   const selector = enterableViewSelector(item)

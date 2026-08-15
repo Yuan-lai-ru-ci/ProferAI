@@ -48,6 +48,7 @@ export * from './changelog'
 
 // 系统提示词相关类型
 export * from './system-prompt'
+export * from './agent-preset'
 
 // Chat 工具（function calling）相关类型
 export * from './chat-tool'

@@ -38,6 +38,7 @@ import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
 import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
+import { injectAgentPresetMcpServer } from './agent-preset-tools'
 import {
   delegationLinkFromResult,
   delegationToGraphEvents,
@@ -61,12 +62,13 @@ import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
 import { isCommercialBuild } from './build-target'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot, rewindPiSession } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, getWorkspaceMemoryArchivePath, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import { getAgentPreset } from './agent-preset-manager'
 import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -307,8 +309,12 @@ export class AgentOrchestrator {
 
   /**
    * 构建工作区 MCP 服务器配置
+   *
+   * @param workspaceSlug 工作区 slug
+   * @param mcpNameFilter 预设声明的 MCP 白名单；undefined 表示不裁剪。
+   *   只作用于工作区用户配置的 MCP；产品内置 MCP（automation/task-graph 等）由注入器追加，不受影响。
    */
-  private buildMcpServers(workspaceSlug: string | undefined): Record<string, Record<string, unknown>> {
+  private buildMcpServers(workspaceSlug: string | undefined, mcpNameFilter?: string[]): Record<string, Record<string, unknown>> {
     const mcpServers: Record<string, Record<string, unknown>> = {}
     if (!workspaceSlug) return mcpServers
 
@@ -316,6 +322,11 @@ export class AgentOrchestrator {
     for (const [name, entry] of Object.entries(mcpConfig.servers ?? {})) {
       if (!entry.enabled) continue
       if (name === 'memos-cloud') continue
+      // 预设 MCP 白名单：未列出的工作区 MCP 不加载
+      if (mcpNameFilter && !mcpNameFilter.includes(name)) {
+        console.log(`[Agent 编排] MCP 服务器 "${name}" 被预设白名单裁剪`)
+        continue
+      }
 
       if (entry.type === 'stdio' && entry.command) {
         const mergedEnv: Record<string, string> = {
@@ -910,30 +921,44 @@ export class AgentOrchestrator {
       }
 
       // 10. 构建 MCP 服务器配置 + 自定义工具（生图工具仅 Chat 模式可用）
-      const mcpServers = this.buildMcpServers(workspaceSlug)
-      await injectAutomationMcpServer(sdk, mcpServers, {
-        sessionId,
-        channelId,
-        modelId,
-        workspaceId,
-        triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
-      })
-      await injectMemoryArchiveMcpServer(sdk, mcpServers, {
-        memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
-        workspaceSlug,
-      })
-      if (workspace?.type === 'team') {
-        await injectTeamMemoryMcpServer(sdk, mcpServers, { workspaceId })
+      // Agent 预设提前解析：MCP 白名单裁剪在构建时生效；提示词/权限/effort 注入在后面复用同一对象。
+      const sessionPreset = getAgentPreset(workspaceSlug, getAgentSessionMeta(sessionId)?.presetId)
+      // 方案 3：预设禁用的产品内置工具组（注入时直接不注册）；allowSubagents=false 等价禁用协作工具
+      const disabledToolGroups = new Set<string>(sessionPreset.disabledToolGroups ?? [])
+      if (sessionPreset.allowSubagents === false) disabledToolGroups.add('collaboration')
+      const mcpServers = this.buildMcpServers(workspaceSlug, sessionPreset.mcpServerNames)
+      if (!disabledToolGroups.has('automation')) {
+        await injectAutomationMcpServer(sdk, mcpServers, {
+          sessionId,
+          channelId,
+          modelId,
+          workspaceId,
+          triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
+        })
       }
-      await injectAgentCollaborationMcpServer(sdk, mcpServers, {
-        sessionId,
-        channelId,
-        modelId,
-        workspaceId,
-        permissionMode: input.permissionModeOverride,
-        triggeredBy: input.triggeredBy,
-      })
-      await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId })
+      if (!disabledToolGroups.has('memory')) {
+        await injectMemoryArchiveMcpServer(sdk, mcpServers, {
+          memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
+          workspaceSlug,
+        })
+        if (workspace?.type === 'team') {
+          await injectTeamMemoryMcpServer(sdk, mcpServers, { workspaceId })
+        }
+      }
+      if (!disabledToolGroups.has('collaboration')) {
+        await injectAgentCollaborationMcpServer(sdk, mcpServers, {
+          sessionId,
+          channelId,
+          modelId,
+          workspaceId,
+          permissionMode: input.permissionModeOverride,
+          triggeredBy: input.triggeredBy,
+        })
+      }
+      if (!disabledToolGroups.has('task-graph')) {
+        await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId })
+      }
+      await injectAgentPresetMcpServer(sdk, mcpServers, { sessionId })
       await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
@@ -1007,7 +1032,9 @@ export class AgentOrchestrator {
       // 12. 读取应用设置并确定权限模式
       // 权限模式只属于当前 session；新会话默认完全自动模式。
       const appSettings = getSettings()
+      // Agent 预设：会话绑定的预设可覆盖权限模式与推理档位，并在系统提示词后追加预设专属段（sessionPreset 已在步骤 10 解析）。
       const initialPermissionMode: ProferPermissionMode = permissionModeOverride
+        ?? sessionPreset.permissionMode
         ?? PROFER_DEFAULT_PERMISSION_MODE
       // 受管浏览器允许读取的根目录 = 会话工作目录 + 会话/工作区已授权目录（后者含工作区根与 workspace-files）。
       const browserAllowedRoots = [...new Set([
@@ -1031,6 +1058,7 @@ export class AgentOrchestrator {
               allowedRoots: browserAllowedRoots,
               permissionMode: initialPermissionMode,
               triggeredBy: input.triggeredBy,
+              disabledToolGroups: [...disabledToolGroups],
             })
             const mcpTools = await buildPiMcpTools(mcpServers)
             return [...builtin.tools, ...mcpTools]
@@ -1286,11 +1314,19 @@ export class AgentOrchestrator {
         workspaceSlug,
         sessionId,
         permissionMode: initialPermissionMode,
+        presetName: sessionPreset.name,
+        // 方案 3：工具组禁用同步隐藏提示词段落（task-graph→task-graph、memory→memory、collaboration→subagents）
+        suppressSections: [
+          ...(sessionPreset.suppressPromptSections ?? []),
+          ...(disabledToolGroups.has('task-graph') && !sessionPreset.suppressPromptSections?.includes('task-graph') ? ['task-graph'] : []),
+          ...(disabledToolGroups.has('memory') && !sessionPreset.suppressPromptSections?.includes('memory') ? ['memory'] : []),
+          ...(disabledToolGroups.has('collaboration') && !sessionPreset.suppressPromptSections?.includes('subagents') ? ['subagents'] : []),
+        ],
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,
         isPiRuntime: agentRuntime === 'pi',
         isTeamWorkspace: workspace?.type === 'team',
-      }) + attachedDirectoriesPrompt + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+      }) + attachedDirectoriesPrompt + (sessionPreset.promptSections?.length ? `\n\n${sessionPreset.promptSections.join('\n\n')}` : '') + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const piSystemPrompt = systemPromptAppend
       const piRuntimeEnv = buildAgentRuntimeEnv({
         proxyUrl: await getEffectiveProxyUrl(),
@@ -1318,11 +1354,13 @@ export class AgentOrchestrator {
           runtimeEnv: piRuntimeEnv,
           thinkingLevel: resolvePiThinkingLevel(
             sessionMeta?.openAIThinkingLevel,
-            { agentThinking: !(appSettings.agentThinking?.type === 'disabled'), agentEffort: appSettings.agentEffort },
+            // 预设 effort 覆盖全局档位（与 Claude 侧 effort 级联一致）；undefined 跟随全局
+            { agentThinking: !(appSettings.agentThinking?.type === 'disabled'), agentEffort: sessionPreset.effort ?? appSettings.agentEffort },
             channel.provider,
           ),
           deepSeekV4ThinkingEnabled: appSettings.agentThinking?.type !== 'disabled',
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
+          ...(sessionPreset.skillSlugs && { skillSlugs: sessionPreset.skillSlugs }),
           ...(piCustomTools && { customTools: piCustomTools }),
           ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
           ...(userMessage.trim() === '/compact' && { compactRequest: true }),
@@ -1352,13 +1390,15 @@ export class AgentOrchestrator {
         ...(rewindResumeAt && { resumeSessionAt: rewindResumeAt }),
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
+        // 预设 Skill 白名单（Claude SDK 原生 skills 过滤：未列出的 skill 对模型隐藏且 Skill 工具拒绝）
+        ...(sessionPreset.skillSlugs && { skills: sessionPreset.skillSlugs }),
         // 合并附加目录：用户当次输入 + 会话级 + 工作区级（详见 collectAttachedDirectories）
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         // 启用文件检查点，支持 rewindFiles 回退
         enableFileCheckpointing: true,
         // SDK 0.2.52+ 新增选项（从 settings 读取）
         ...(appSettings.agentThinking && { thinking: appSettings.agentThinking }),
-        effort: appSettings.agentEffort ?? 'high',
+        effort: sessionPreset.effort ?? appSettings.agentEffort ?? 'high',
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
         }),
@@ -2389,7 +2429,11 @@ export class AgentOrchestrator {
     if (!sessionMeta?.sdkSessionId) {
       throw new Error('会话没有 SDK session ID，无法回退')
     }
-    // 当前 rewind 依赖 Claude SDK JSONL/file-history snapshot；Pi session 格式不兼容，
+    // Pi runtime：物理截断 Pi session + Profer JSONL（无文件快照恢复）
+    if (normalizeAgentRuntime(sessionMeta.agentRuntime) === 'pi') {
+      return rewindPiSession(sessionId, assistantMessageUuid, sessionMeta)
+    }
+    // 当前 Claude rewind 依赖 Claude SDK JSONL/file-history snapshot；Pi session 格式不兼容，
     // 禁止出现“UI 已回退而 Pi 原生上下文仍保留”的假成功。
     if (normalizeAgentRuntime(sessionMeta.agentRuntime) !== 'claude') {
       throw new Error('Pi runtime 当前不支持会话回退；请新建 Pi 会话继续工作。')

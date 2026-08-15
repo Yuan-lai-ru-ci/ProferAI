@@ -54,4 +54,39 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).not.toContain('不要写入长期记忆文件')
     expect(claudePrompt).not.toContain('### Pi Runtime 自主执行准则')
   })
+
+  test('极简预设 suppressPromptSections 隐藏任务图指南、委派策略与记忆体系段落', () => {
+    const minimalPrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      presetName: '极简',
+      suppressSections: ['subagents', 'memory', 'task-graph'],
+      isPiRuntime: true,
+    })
+    // 隐藏：任务图指南条目、委派策略、知识维护架构、Pi 文件记忆小节
+    expect(minimalPrompt).not.toContain('proma_task_create')
+    expect(minimalPrompt).not.toContain('## SubAgent 委派策略')
+    expect(minimalPrompt).not.toContain('## Profer 知识维护架构')
+    expect(minimalPrompt).not.toContain('### Pi Runtime 与文件记忆')
+    // 保留：工具指南标题与其余条目、预设岗位段落、角色定义
+    expect(minimalPrompt).toContain('## 工具使用指南')
+    expect(minimalPrompt).toContain('回复中的代码块必须标语言')
+    expect(minimalPrompt).toContain('## Agent 预设（岗位）体系')
+    expect(minimalPrompt).toContain('当前会话预设：**极简**')
+
+    const standardPrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: true,
+    })
+    // 标准预设无 suppress：全部段落在场
+    expect(standardPrompt).toContain('proma_task_create')
+    expect(standardPrompt).toContain('## SubAgent 委派策略')
+    expect(standardPrompt).toContain('## Profer 知识维护架构')
+    expect(standardPrompt).toContain('### Pi Runtime 与文件记忆')
+  })
 })

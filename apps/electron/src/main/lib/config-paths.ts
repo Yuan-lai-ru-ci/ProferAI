@@ -241,6 +241,15 @@ export function getMemoryConfigPath(): string {
 }
 
 /**
+ * 获取 Agent 预设配置文件路径
+ *
+ * @returns ~/.profer/agent-presets.json
+ */
+export function getAgentPresetsPath(): string {
+  return join(getConfigDir(), 'agent-presets.json')
+}
+
+/**
  * 获取 Chat 工具配置文件路径
  *
  * @returns ~/.profer/chat-tools.json
@@ -345,6 +354,19 @@ export function getAgentWorkspacePath(slug: string): string {
  */
 export function getWorkspaceMcpPath(slug: string): string {
   return join(getAgentWorkspacePath(slug), 'mcp.json')
+}
+
+/**
+ * 获取指定工作区的 Agent 预设配置文件路径
+ *
+ * 预设为工作区级配置（与 mcp.json 同构）：内置三预设恒定可见，
+ * 自定义预设与默认预设按工作区存储。
+ *
+ * @param slug 工作区 slug
+ * @returns ~/.profer/agent-workspaces/{slug}/agent-presets.json
+ */
+export function getWorkspaceAgentPresetsPath(slug: string): string {
+  return join(getAgentWorkspacePath(slug), 'agent-presets.json')
 }
 
 /**

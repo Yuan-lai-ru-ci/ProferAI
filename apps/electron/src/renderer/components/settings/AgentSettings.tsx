@@ -2,8 +2,9 @@
  * AgentSettings - Agent 配置页
  *
  * Skills 与 MCP 的管理已迁移到独立的「Agent 技能」全屏视图
- * （左侧栏入口，components/agent-skills/AgentSkillsView）。
- * 此页仅保留内置工具的只读概览。
+ * （左侧栏入口，components/agent-skills/AgentSkillsView），
+ * Agent 预设管理也已迁移到该视图的「预设」tab。
+ * 此页仅保留推理档位与内置工具的只读概览。
  */
 
 import * as React from 'react'

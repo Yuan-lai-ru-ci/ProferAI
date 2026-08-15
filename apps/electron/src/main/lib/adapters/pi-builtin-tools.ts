@@ -29,7 +29,17 @@ import {
   broadcastChanged as broadcastAutomationsChanged,
   runAutomationNow,
 } from '../automation-scheduler'
-import { getAgentSessionMeta } from '../agent-session-manager'
+import { getAgentSessionMeta, updateAgentSessionMeta } from '../agent-session-manager'
+import {
+  listAgentPresets,
+  getDefaultPresetId,
+  setDefaultPresetId,
+  createAgentPreset,
+  copyAgentPreset,
+  updateAgentPreset,
+  deleteAgentPreset,
+  getAgentPreset,
+} from '../agent-preset-manager'
 import { getTodo } from '../planning-manager'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { downloadInstaller, launchInstaller } from '../installer-downloader'
@@ -72,6 +82,8 @@ export interface PiBuiltinToolsContext {
   allowedRoots?: string[]
   /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
   windowsShellAvailable?: boolean
+  /** 预设禁用的产品内置工具组（task-graph/memory/collaboration/automation），对应工具不注册 */
+  disabledToolGroups?: string[]
 }
 
 function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
@@ -320,6 +332,198 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
           })
         }
         return jsonToolResult({ taskId: args.taskId, updated: true })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+// ===== Agent 预设工具 =====
+
+/**
+ * Pi 侧显式桥接 agent-presets 能力（Claude 走 in-process MCP server，Pi 无法消费，
+ * 与 task-graph 同一原因）。handler 直接调 agent-preset-manager，与 MCP 侧共用逻辑。
+ */
+export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId' | 'workspaceSlug'>): ToolDefinition[] {
+  return [
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_list',
+      label: '列出 Agent 预设',
+      description: '列出全部 Agent 预设（内置 + 自定义），标注哪个是默认预设。',
+      parameters: Type.Object({}),
+      async execute() {
+        const presets = listAgentPresets(ctx.workspaceSlug)
+        const defaultId = getDefaultPresetId(ctx.workspaceSlug)
+        return jsonToolResult({
+          defaultPresetId: defaultId,
+          presets: presets.map((p) => ({
+            id: p.id,
+            name: p.name,
+            description: p.description,
+            isBuiltin: p.isBuiltin,
+            isDefault: p.id === defaultId,
+            effort: p.effort ?? null,
+            permissionMode: p.permissionMode ?? null,
+            skillSlugs: p.skillSlugs ?? null,
+            mcpServerNames: p.mcpServerNames ?? null,
+            allowSubagents: p.allowSubagents ?? null,
+            promptSections: p.promptSections ?? null,
+            suppressPromptSections: p.suppressPromptSections ?? null,
+            disabledToolGroups: p.disabledToolGroups ?? null,
+          })),
+        })
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_create',
+      label: '创建 Agent 预设',
+      description: '创建一个新的自定义预设。预设 = 岗位 + 工作环境：把提示词段、推理强度、权限模式、Skill/MCP 白名单、子 Agent 策略组合成命名配置。用户说「帮我建个 XX 预设」或「把这类任务固化」时使用。',
+      parameters: Type.Object({
+        name: Type.String({ minLength: 1 }),
+        description: Type.Optional(Type.String()),
+        promptSections: Type.Optional(Type.Array(Type.String())),
+        suppressPromptSections: Type.Optional(Type.Array(Type.String())),
+        disabledToolGroups: Type.Optional(Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')]))),
+        effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max')])),
+        permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan')])),
+        skillSlugs: Type.Optional(Type.Array(Type.String())),
+        mcpServerNames: Type.Optional(Type.Array(Type.String())),
+        allowSubagents: Type.Optional(Type.Boolean()),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as {
+          name: string; description?: string; promptSections?: string[]
+          suppressPromptSections?: string[]
+          disabledToolGroups?: Array<'task-graph' | 'memory' | 'collaboration' | 'automation'>
+          effort?: 'low' | 'medium' | 'high' | 'max'
+          permissionMode?: 'auto' | 'bypassPermissions' | 'plan'
+          skillSlugs?: string[]; mcpServerNames?: string[]; allowSubagents?: boolean
+        }
+        try {
+          const preset = createAgentPreset(ctx.workspaceSlug, {
+            name: args.name,
+            description: args.description ?? '',
+            ...(args.promptSections && { promptSections: args.promptSections }),
+            ...(args.suppressPromptSections && { suppressPromptSections: args.suppressPromptSections }),
+            ...(args.disabledToolGroups && { disabledToolGroups: args.disabledToolGroups }),
+            ...(args.effort && { effort: args.effort }),
+            ...(args.permissionMode && { permissionMode: args.permissionMode }),
+            ...(args.skillSlugs && { skillSlugs: args.skillSlugs }),
+            ...(args.mcpServerNames && { mcpServerNames: args.mcpServerNames }),
+            ...(args.allowSubagents !== undefined && { allowSubagents: args.allowSubagents }),
+          })
+          return jsonToolResult({
+            preset,
+            hint: '新预设已创建。会话内可用 preset_switch_session 随时切换；新建会话将使用默认预设（preset_set_default 可改）。',
+          })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_copy',
+      label: '复制 Agent 预设',
+      description: '复制一个预设（内置或自定义）为新的自定义预设，完整保留源配置（含能力裁剪字段）。',
+      parameters: Type.Object({
+        fromId: Type.String({ minLength: 1 }),
+        name: Type.Optional(Type.String()),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { fromId: string; name?: string }
+        try {
+          const preset = copyAgentPreset(ctx.workspaceSlug, args.fromId, args.name)
+          return jsonToolResult({
+            preset,
+            hint: '副本已创建。新建会话时可以在会话创建入口选择该预设；如需设为默认（preset_set_default）请向用户确认。',
+          })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_update',
+      label: '更新 Agent 预设',
+      description: '更新自定义预设（内置预设不可更新；字段省略表示不修改，传 null 清除该字段回退跟随默认）。',
+      parameters: Type.Object({
+        presetId: Type.String({ minLength: 1 }),
+        name: Type.Optional(Type.String()),
+        description: Type.Optional(Type.String()),
+        promptSections: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+        suppressPromptSections: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+        disabledToolGroups: Type.Optional(Type.Union([Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')])), Type.Null()])),
+        effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max'), Type.Null()])),
+        permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan'), Type.Null()])),
+        skillSlugs: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+        mcpServerNames: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+        allowSubagents: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { presetId: string } & Record<string, unknown>
+        try {
+          const { presetId, ...rest } = args
+          const preset = updateAgentPreset(ctx.workspaceSlug, presetId, rest)
+          return jsonToolResult({ preset })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_delete',
+      label: '删除 Agent 预设',
+      description: '删除自定义预设（内置不可删除；被删预设若是默认则自动回退 standard）。',
+      parameters: Type.Object({
+        presetId: Type.String({ minLength: 1 }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { presetId: string }
+        try {
+          deleteAgentPreset(ctx.workspaceSlug, args.presetId)
+          return jsonToolResult({ deleted: args.presetId, defaultPresetId: getDefaultPresetId(ctx.workspaceSlug) })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_set_default',
+      label: '设置默认 Agent 预设',
+      description: '设置默认预设（新建会话自动使用）。',
+      parameters: Type.Object({
+        presetId: Type.String({ minLength: 1 }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { presetId: string }
+        try {
+          const id = setDefaultPresetId(ctx.workspaceSlug, args.presetId)
+          return jsonToolResult({ defaultPresetId: id })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__agent-presets__preset_switch_session',
+      label: '切换当前会话预设',
+      description: '切换当前会话绑定的预设（下一轮消息完整生效，含工具裁剪）。用户说「这个会话换成 XX 模式」时使用。',
+      parameters: Type.Object({
+        presetId: Type.String({ minLength: 1 }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { presetId: string }
+        try {
+          const resolved = getAgentPreset(ctx.workspaceSlug, args.presetId)
+          if (resolved.id !== args.presetId) {
+            return jsonToolResult({ error: `预设不存在: ${args.presetId}` })
+          }
+          const session = getAgentSessionMeta(ctx.sessionId)
+          if (!session) return jsonToolResult({ error: '会话不存在' })
+          const updated = updateAgentSessionMeta(ctx.sessionId, { presetId: args.presetId })
+          return jsonToolResult({ sessionId: ctx.sessionId, presetId: updated.presetId })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -1079,6 +1283,7 @@ export async function buildPiBuiltinTools(
   sdk: PiSdk,
   ctx: PiBuiltinToolsContext,
 ): Promise<PiBuiltinToolsResult> {
+  const disabled = new Set(ctx.disabledToolGroups ?? [])
   browserController.configureSession(ctx.sessionId, {
     profileKey: resolveBrowserProfileKey(ctx.workspaceId, ctx.sessionId),
     allowedRoots: ctx.allowedRoots,
@@ -1103,24 +1308,31 @@ export async function buildPiBuiltinTools(
 
   // 知识库与任务图原本是 Claude SDK 的 in-process MCP server；Pi 需要显式桥接。
   try {
-    tools.push(...buildPiMemoryArchiveTools(sdk, ctx))
+    if (!disabled.has('memory')) {
+      tools.push(...buildPiMemoryArchiveTools(sdk, ctx))
+      tools.push(...buildTeamMemoryTools(sdk, ctx))
+    }
     tools.push(...buildPiKnowledgeBaseTools(sdk, ctx))
-    tools.push(...buildPiTaskGraphTools(sdk, ctx))
+    if (!disabled.has('task-graph')) {
+      tools.push(...buildPiTaskGraphTools(sdk, ctx))
+    }
     tools.push(...buildPiPlanningTools(sdk))
-    tools.push(...buildTeamMemoryTools(sdk, ctx))
+    tools.push(...buildPiAgentPresetTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入知识库、任务图或规划中心工具失败:', error)
   }
 
   // Automation 是 Profer 已有的本地能力，不依赖上游 builtin-MCP catalog。
-  try {
-    tools.push(...buildAutomationTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入 automation 工具失败:', error)
+  if (!disabled.has('automation')) {
+    try {
+      tools.push(...buildAutomationTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入 automation 工具失败:', error)
+    }
   }
 
   // collaboration 桥接
-  const collaborationAvailable = !!ctx.workspaceId && ctx.triggeredBy !== 'delegation'
+  const collaborationAvailable = !!ctx.workspaceId && ctx.triggeredBy !== 'delegation' && !disabled.has('collaboration')
 
   if (collaborationAvailable) {
     try {

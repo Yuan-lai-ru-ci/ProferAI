@@ -8,10 +8,12 @@ mock.module('../memory-archive-search', () => ({
 }))
 
 const {
+  buildPiBuiltinTools,
   buildPiKnowledgeBaseTools,
   buildPiMemoryArchiveTools,
   buildPiPlanningTools,
   buildPiTaskGraphTools,
+  buildPiAgentPresetTools,
 } = await import('./pi-builtin-tools')
 
 interface CapturedTool {
@@ -35,6 +37,49 @@ function createPiSdkStub(): {
 }
 
 describe('Pi Profer in-process tool bridges', () => {
+  test('Given Pi runtime When building preset tools Then it exposes 7 preset_* tools with mcp__agent-presets prefix', () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiAgentPresetTools(sdk, { sessionId: 'pi-preset-test', workspaceSlug: 'pi-test-ws' })
+    expect(tools.length).toBe(7)
+    const names = tools.map((t) => t.name)
+    expect(names).toEqual([
+      'mcp__agent-presets__preset_list',
+      'mcp__agent-presets__preset_create',
+      'mcp__agent-presets__preset_copy',
+      'mcp__agent-presets__preset_update',
+      'mcp__agent-presets__preset_delete',
+      'mcp__agent-presets__preset_set_default',
+      'mcp__agent-presets__preset_switch_session',
+    ])
+  })
+
+  test('Given preset_create tool When executed with a valid name Then it creates and returns a custom preset', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    const presetManager = await import('../agent-preset-manager')
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const tmpDir = mkdtempSync(join(tmpdir(), 'pi-preset-tool-test-'))
+    presetManager.__setAgentPresetsConfigPathForTest(tmpDir)
+    try {
+      buildPiAgentPresetTools(sdk, { sessionId: 'pi-preset-test', workspaceSlug: 'pi-test-ws' })
+      const createTool = tools.find((t) => t.name === 'mcp__agent-presets__preset_create')!
+      const result = await createTool.execute!('call-1', { name: '研究模式', description: '只读调研' }) as { content: Array<{ text: string }> }
+      const payload = JSON.parse(result.content[0]!.text)
+      expect(payload.preset.name).toBe('研究模式')
+      expect(payload.preset.isBuiltin).toBe(false)
+      // list 工具能读回该预设
+      const listTool = tools.find((t) => t.name === 'mcp__agent-presets__preset_list')!
+      const listResult = await listTool.execute!('call-2', {}) as { content: Array<{ text: string }> }
+      const listPayload = JSON.parse(listResult.content[0]!.text)
+      expect(listPayload.presets.length).toBe(4)
+      expect(listPayload.presets.some((p: { name: string }) => p.name === '研究模式')).toBe(true)
+    } finally {
+      presetManager.__resetAgentPresetsConfigPathForTest()
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   test('Given Pi runtime When building knowledge tools Then it exposes the session-scoped allowlist tools', () => {
     const { sdk, tools } = createPiSdkStub()
 
@@ -90,5 +135,56 @@ describe('Pi Profer in-process tool bridges', () => {
     const result = await update?.execute?.('call-1', { taskId: 'not-created', status: 'completed' }) as { details?: { error?: string } }
 
     expect(result.details?.error).toBe('TASK_NOT_FOUND')
+  })
+})
+
+describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning)', () => {
+  /** 工具组 → 工具名前缀映射（与 buildPiBuiltinTools 中的注册前缀一致） */
+  const GROUP_PREFIXES = {
+    memory: 'mcp__memory-archive__',
+    'task-graph': 'mcp__task-graph__',
+    automation: 'mcp__automation__',
+    collaboration: 'mcp__collaboration__',
+  } as const
+  type Group = keyof typeof GROUP_PREFIXES
+
+  const baseCtx = {
+    sessionId: 'prune-test',
+    channelId: 'ch-1',
+    workspaceId: 'ws-1',
+    workspaceSlug: 'prune-ws',
+    triggeredBy: 'user' as const,
+  }
+
+  test('Given no disabled groups Then all four groups are registered', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, baseCtx)
+    for (const [group, prefix] of Object.entries(GROUP_PREFIXES)) {
+      expect(tools.some((t) => t.name.startsWith(prefix)), `group ${group} (${prefix}) should be registered`).toBe(true)
+    }
+  })
+
+  test('Given each group disabled individually Then only that group is pruned', async () => {
+    for (const group of Object.keys(GROUP_PREFIXES) as Group[]) {
+      const { sdk, tools } = createPiSdkStub()
+      await buildPiBuiltinTools(sdk, { ...baseCtx, disabledToolGroups: [group] })
+      for (const [other, prefix] of Object.entries(GROUP_PREFIXES)) {
+        const expected = other !== group
+        expect(
+          tools.some((t) => t.name.startsWith(prefix)),
+          `group ${other} registered=${expected} when disabling ${group}`,
+        ).toBe(expected)
+      }
+    }
+  })
+
+  test('Given all four groups disabled Then only preset tools survive (minimal preset can still switch back)', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, { ...baseCtx, disabledToolGroups: ['task-graph', 'memory', 'collaboration', 'automation'] })
+    for (const [group, prefix] of Object.entries(GROUP_PREFIXES)) {
+      expect(tools.some((t) => t.name.startsWith(prefix)), `group ${group} should be pruned`).toBe(false)
+    }
+    // 预设工具永不裁剪：极简会话必须能切回其他预设
+    expect(tools.some((t) => t.name.startsWith('mcp__agent-presets__'))).toBe(true)
   })
 })

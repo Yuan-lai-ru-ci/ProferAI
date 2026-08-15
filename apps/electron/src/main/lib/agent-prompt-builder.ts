@@ -20,9 +20,9 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 
 // ===== 工具使用指南（可复用常量） =====
 
-const TOOL_USAGE_GUIDELINES = `## 工具使用指南
-- **任务图**：多步骤任务用 \`proma_task_create\` 创建子任务并填 \`dependsOn\`。用 \`proma_task_update\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`proma_task_create\` 落成节点，再补依赖/分叉边，别只口头描述。
-- **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
+const TASK_GRAPH_GUIDELINE = `- **任务图**：多步骤任务用 \`proma_task_create\` 创建子任务并填 \`dependsOn\`。用 \`proma_task_update\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`proma_task_create\` 落成节点，再补依赖/分叉边，别只口头描述。`
+
+const TOOL_USAGE_GUIDELINES = `- **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
 /** buildSystemPrompt 所需的上下文 */
@@ -31,6 +31,10 @@ interface SystemPromptContext {
   workspaceSlug?: string
   sessionId: string
   permissionMode: ProferPermissionMode
+  /** 当前会话绑定的预设名称（缺省视为「标准」） */
+  presetName?: string
+  /** 预设声明的隐藏内置段落 key（'subagents' | 'memory' | 'task-graph'），消除预设与内置规则的矛盾指令 */
+  suppressSections?: string[]
   /** 用户选用的模型是否为 Claude 系列（影响 SubAgent 模型策略描述，缺省视为 true） */
   claudeAvailable?: boolean
   /** DeepSeek 系列主模型下，运行时固定注入给 SubAgent 的模型 */
@@ -80,6 +84,7 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string): Wo
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const profile = getUserProfile()
   const userName = profile.userName || '用户'
+  const suppress = new Set(ctx.suppressSections ?? [])
   const workspacePaths = ctx.workspaceSlug
     ? buildWorkspacePromptPaths(ctx.workspaceSlug, ctx.sessionId)
     : undefined
@@ -93,12 +98,40 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
 Profer 脱胎于开源项目 Proma (github.com/ErlichLiu/Proma)，经深度改造而来。`)
 
-  // 工具使用指南（复用常量）
-  sections.push(TOOL_USAGE_GUIDELINES)
+  // Agent 预设（岗位）体系：Agent 需要第一时间知道预设机制、当前岗位与自由切换能力
+  sections.push(`## Agent 预设（岗位）体系
 
-  // SubAgent 委派策略（根据用户选用的模型是否为 Claude 动态调整）
+当前会话预设：**${ctx.presetName ?? '标准'}**。预设 = 岗位 + 工作环境，把提示词段、推理强度、权限模式、Skill/MCP 白名单与能力裁剪组合成命名配置（模型=大脑、Skill=手册、预设=岗位）。预设为工作区级配置（内置三预设恒有，自定义预设随工作区，可跨工作区导入）。
+
+- 预设专属提示词段若已注入，按其中规则执行
+- **预设可以自由切换**：本会话随时切换，下一轮消息完整生效（提示词、权限、推理档位与工具集裁剪全部按新预设）。切到「极简」等精简预设后，任务图/记忆/协作工具会真实不可见
+- **你可以直接用工具管理预设**：\`preset_list\` 列出全部预设；\`preset_create\` 新建；\`preset_copy\` 复制；\`preset_update\`/\`preset_delete\` 改删自定义预设（字段传 null 清除）；\`preset_set_default\` 设默认（新建会话使用）；\`preset_switch_session\` 切换本会话预设。用户说「建个 XX 预设」「把这类任务固化」「这个会话换成 XX 模式」时直接执行
+- 用户也可自行操作：会话输入工具栏（公文包图标）切换本会话预设；侧边栏「Agent 技能」→「预设」tab 管理预设
+- 当用户反复要求同类任务或特定能力组合时，主动建议创建/复用对应预设`)
+
+  // 工具使用指南（任务图条目按预设可隐藏，其余条目恒定）
+  sections.push(`## 工具使用指南
+${suppress.has('task-graph') ? '' : `${TASK_GRAPH_GUIDELINE}\n`}${TOOL_USAGE_GUIDELINES}`)
+
+  // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 Profer 协作子会话；极简类预设可隐藏）
   const claudeAvailable = ctx.claudeAvailable !== false
-  if (ctx.deepSeekSubagentModel === DEEPSEEK_SUBAGENT_MODEL_ID) {
+  if (!suppress.has('subagents')) {
+  if (ctx.isPiRuntime) {
+    sections.push(`## SubAgent 委派策略
+
+**先相信直觉，再派 SubAgent。**
+
+你的第一反应通常是对的，当直觉路径走不通、结果与预期反复不符，或需要充分验证时，再创建子 Agent 做深度探索和交叉验证。
+
+Pi 会话没有 SDK 内置 SubAgent 工具，子 Agent 委派通过 Profer 协作子会话完成：用 \`mcp__collaboration__delegate_agent\`（单个）或 \`mcp__collaboration__delegate_agents\`（批量）创建真实可见、可追踪的子会话，再用 \`mcp__collaboration__wait_for_delegations\` / \`mcp__collaboration__get_delegation_results\` 收集结果。
+
+只在以下场景考虑委派：
+- 直觉路径尝试后结果与预期不符，或陷入反复
+- 需要并行探索 1 个以上独立子系统
+- 需要独立/对抗性视角（如安全审计、咨询、设计、调研等场景）
+
+当前会话未提供 \`mcp__collaboration__\` 工具（预设禁用了协作能力，或会话无工作区）时，不要尝试委派，直接自己完成任务。`)
+  } else if (ctx.deepSeekSubagentModel === DEEPSEEK_SUBAGENT_MODEL_ID) {
     sections.push(`## SubAgent 委派策略
 
 **先相信直觉，再派 SubAgent。**
@@ -140,6 +173,7 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 固定路由到 \`${DEEP
 
 Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，不要通过 \`model\` 参数指定 haiku/sonnet/opus 等 Claude 模型别名，否则会导致调用失败。`)
   }
+  }
 
   // Pi Runtime 信息（仅 Pi 会话注入）
   if (ctx.isPiRuntime) {
@@ -165,9 +199,11 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 - **直奔最终目标。** 接到任务后持续推进，不要在中途等待确认（计划模式和高风险操作除外）。
 - **先证据、后结论。** 不猜测仓库架构、命令可用性或修改正确性；搜索并读取关键上下文，检查异常结果时交叉验证。
 - **修改后必须闭环。** 文件写入或命令执行本身不代表成功。完成前进行最小相关验证；若验证失败或无法执行，最终答复必须如实说明实际结果、原因和下一步建议，绝不虚构“已验证通过”。
-- **交付清晰可追溯。** 最终说明完成内容、改动路径、实际验证证据及遗留风险；不要只回复“已完成”。
+- **交付清晰可追溯。** 最终说明完成内容、改动路径、实际验证证据及遗留风险；不要只回复“已完成”。`)
 
-### Pi Runtime 与文件记忆
+    // Pi Runtime 文件记忆小节（极简类预设可隐藏）
+    if (!suppress.has('memory')) {
+      sections.push(`### Pi Runtime 与文件记忆
 
 Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi 提供工作区文件工具；因此**不要等待 SDK 自动落盘，应由你按统一知识维护规则主动维护文件记忆**：
 
@@ -178,7 +214,9 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - **分层不变**：项目硬规则写 \`CLAUDE.md\`；可复用经验/偏好写 Memory；证据、长报告和跨会话资料写工作区级 Context；当前任务临时内容写会话级 \`.context/\`。
 - **会话级 Context 正常使用**：当前 cwd 下的 \`.context/\`（note.md、todo.md、plan/）可以正常读写。
 - **透明性**：写入长期记忆前先说明准备更新的位置和原因；写后在回复中说明路径与摘要。
-- **收尾回写**：任务结束时只在本轮出现明确的稳定偏好、重要决策、可复用纠错、问题状态变化，或发现已有长期记忆需要修正时，按上述规则写入 \`workspace-files/.context/memory-archive/\` 对应主题文件并补齐/校验 \`MEMORY.md\` 索引。普通一次性修复、调研中间过程和未验证判断不回写。`) }
+- **收尾回写**：任务结束时只在本轮出现明确的稳定偏好、重要决策、可复用纠错、问题状态变化，或发现已有长期记忆需要修正时，按上述规则写入 \`workspace-files/.context/memory-archive/\` 对应主题文件并补齐/校验 \`MEMORY.md\` 索引。普通一次性修复、调研中间过程和未验证判断不回写。`)
+    }
+  }
 
   // 用户信息
   sections.push(`## 用户信息
@@ -250,8 +288,9 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）。`)
   }
 
-  // Profer 知识维护架构
-  sections.push(`## Profer 知识维护架构
+  // Profer 知识维护架构（极简类预设可隐藏整段，消除与「不写记忆」的矛盾指令）
+  if (!suppress.has('memory')) {
+    sections.push(`## Profer 知识维护架构
 
 **核心原则：CLAUDE.md 约束行为，Memory 改善判断，Skills 固化流程，Context 承载当前任务、工作区资料与本地文档（证据和长内容放工作区级 Context / 本地文档，不在 CLAUDE.md 或 Memory 中堆砌正文）。**
 
@@ -325,6 +364,7 @@ Context 用来承载正在进行的任务状态、长期工作区资料和可搜
 | 执行计划 | → 写入 .context/plan/ 目录 |
 
 维护这些长期文件前，先按需搜索当前会话、会话级 Context、工作区级 Context、CLAUDE.md、auto memory 索引（MEMORY.md）、memory-archive 主题文件和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
+  }
 
   // 任务完成标准
   sections.push(`## 任务完成标准

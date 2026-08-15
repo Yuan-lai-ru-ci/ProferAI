@@ -24,6 +24,7 @@ import {
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
+import { normalizeSessionPresetId } from './agent-preset-manager'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）。
@@ -57,6 +58,7 @@ import {
   type AgentSessionReferenceSearchResult,
   type SessionHealth,
   type AgentRuntime,
+  type RewindSessionResult,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
 import { isUserInputMessage } from '@profer/session-core'
@@ -247,9 +249,13 @@ export function createAgentSession(
   modelId?: string,
   agentRuntime: AgentRuntime = 'claude',
   draft = false,
+  presetId?: string,
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
+
+  // 预设工作区化：按会话工作区解析（未指定/不存在时仅内置预设可用）
+  const presetWorkspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
 
   const meta: AgentSessionMeta = {
     id: randomUUID(),
@@ -258,6 +264,7 @@ export function createAgentSession(
     modelId,
     workspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
+    presetId: normalizeSessionPresetId(presetWorkspaceSlug, presetId),
     ...(draft ? { draft: true } : {}),
     createdAt: now,
     updatedAt: now,
@@ -607,7 +614,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn' | 'presetId'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -1097,6 +1104,93 @@ function extractTextFromSDKMessage(message: SDKMessage): string {
     .map((block) => block.text!)
     .join('\n')
     .trim()
+}
+
+/**
+ * 回退 Pi Agent 会话（同一会话内截断到指定 assistant 消息）。
+ *
+ * Pi 的 session 是 append-only tree，但 Profer 每次 sendMessage 都会重新
+ * `SessionManager.open()` 会话文件，leaf 指针 = 文件中最后一个 entry。因此
+ * 不能只改内存 leaf，必须**物理截断 JSONL**：保留 header + root→目标 entry
+ * 的主路径（getBranch），丢弃其余 entry（含未激活分支与目标之后的 turn）。
+ * 截断后下一次 resume 用同一个 piSessionFile/sdkSessionId，SDK 从目标处继续。
+ *
+ * Pi 没有 Claude SDK 的 file-history-snapshot，无法恢复文件，返回 canRewind=false。
+ */
+export async function rewindPiSession(
+  sessionId: string,
+  assistantMessageUuid: string,
+  sessionMeta: AgentSessionMeta,
+): Promise<RewindSessionResult> {
+  const piSessionFile = sessionMeta.piSessionFile
+  if (!piSessionFile || !existsSync(piSessionFile)) {
+    throw new Error('未找到 Pi session artifact，无法回退')
+  }
+
+  const bindings = sessionMeta.piEntryBindings ?? {}
+
+  // 1. 定位目标 entry：优先直接命中；未命中（子代理执行过程/已被清理/未完成消息）时
+  //    向前找最近一条有 Pi entry 映射的 assistant 消息作为截断点，与分叉逻辑保持一致。
+  let cutMessageUuid = assistantMessageUuid
+  let entryId = bindings[assistantMessageUuid]
+  if (!entryId) {
+    const messages = getAgentSessionSDKMessages(sessionId)
+    const targetIndex = messages.findIndex((message) => getStoredMessageUuid(message) === assistantMessageUuid)
+    if (targetIndex < 0) {
+      throw new Error('回退失败：未找到目标消息')
+    }
+    for (let index = targetIndex; index >= 0; index -= 1) {
+      const message = messages[index]
+      const uuid = message ? getStoredMessageUuid(message) : undefined
+      const mappedEntryId = uuid ? bindings[uuid] : undefined
+      if (mappedEntryId) {
+        entryId = mappedEntryId
+        cutMessageUuid = uuid!
+        break
+      }
+    }
+  }
+  if (!entryId) {
+    throw new Error('该消息无法作为回退点（可能属于子代理执行过程或已被清理）。请选择主对话中的其他消息再试')
+  }
+
+  // 2. 物理截断 Pi session 文件：header + root→目标 entry 的主路径
+  const sdk = await import('@earendil-works/pi-coding-agent')
+  const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+  const workspace = sessionMeta.workspaceId ? getAgentWorkspace(sessionMeta.workspaceId) : undefined
+  const sourceDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, sessionMeta.id) : undefined
+  const manager = sdk.SessionManager.open(piSessionFile, sessionDir, sourceDir)
+  if (!manager.getEntry(entryId)) {
+    throw new Error('Pi session 中找不到该 entry，无法回退')
+  }
+  const header = manager.getHeader()
+  const keptEntries = manager.getBranch(entryId)
+  const newContent =
+    [header, ...keptEntries]
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+      .map((entry) => JSON.stringify(entry))
+      .join('\n') + '\n'
+  writeFileSync(piSessionFile, newContent, 'utf-8')
+  console.log(`[Agent 会话] Pi session 已截断: sessionId=${sessionId}, 保留 ${keptEntries.length} 条 entry (entry=${entryId})`)
+
+  // 3. 截断 Profer 展示 JSONL（与 Pi 文件保持一致）
+  const kept = truncateSDKMessages(sessionId, cutMessageUuid)
+
+  // 4. 清理 piEntryBindings：删除已截断 entry 的映射，避免残留脏映射；
+  //    Pi 不消费 resumeAtMessageUuid，清掉历史遗留以防切回 Claude 时误分支。
+  const keptEntryIds = new Set(keptEntries.map((entry) => entry.id))
+  const keptBindings = Object.fromEntries(
+    Object.entries(bindings).filter(([, mappedEntryId]) => keptEntryIds.has(mappedEntryId)),
+  )
+  updateAgentSessionMeta(sessionId, {
+    piEntryBindings: keptBindings,
+    resumeAtMessageUuid: undefined,
+  })
+
+  return {
+    remainingMessages: kept.length,
+    fileRewind: { canRewind: false, error: 'Pi 会话不支持文件快照恢复，仅截断对话' },
+  }
 }
 
 interface CopyForkStoredSDKMessagesInput {

@@ -144,6 +144,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   additionalSkillPaths?: string[]
   /** 当前用户输入显式引用的 Skill name（兼容历史 slug 已在编排层归一化） */
   skillMentions?: string[]
+  /** 预设声明的 Skill 白名单（skillSlugs）；undefined 表示不裁剪 */
+  skillSlugs?: string[]
   proxyUrl?: string
   /** Pi 模型请求传输策略：auto / sse / websocket / websocket-cached */
   transport?: PiAgentTransport
@@ -684,11 +686,22 @@ function isPromaSkillPath(path: string | undefined, allowedRoots: string[]): boo
   return allowedRoots.some((root) => isPathWithinRoot(guardedPath, root))
 }
 
-function createPromaSkillsOverride(additionalSkillPaths: string[] | undefined): (base: SkillLoadResult) => SkillLoadResult {
+/**
+ * 按预设 skillSlugs 白名单过滤 skill。
+ * 名字匹配规则与 skillCommandAliases 一致：SKILL.md name / 目录名 / 父目录名。
+ */
+function matchesSkillSlug(skill: Skill, slugs: Set<string>): boolean {
+  if (slugs.size === 0) return true
+  return skillCommandAliases(skill).some((alias) => slugs.has(alias))
+}
+
+function createPromaSkillsOverride(additionalSkillPaths: string[] | undefined, skillSlugs?: string[]): (base: SkillLoadResult) => SkillLoadResult {
   const allowedRoots = buildAllowedSkillRoots(additionalSkillPaths)
+  const slugSet = new Set(skillSlugs ?? [])
   return (base) => ({
     skills: base.skills.filter((skill) =>
-      isPromaSkillPath(skill.filePath, allowedRoots) || isPromaSkillPath(skill.baseDir, allowedRoots)),
+      (isPromaSkillPath(skill.filePath, allowedRoots) || isPromaSkillPath(skill.baseDir, allowedRoots))
+      && matchesSkillSlug(skill, slugSet)),
     diagnostics: base.diagnostics.filter((diagnostic) => isPromaSkillPath(diagnostic.path, allowedRoots)),
   })
 }
@@ -1602,7 +1615,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         agentDir: input.piAgentDir,
         settingsManager,
         additionalSkillPaths: input.additionalSkillPaths ?? [],
-        skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths),
+        skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths, input.skillSlugs),
         ...createProferManagedResourceLoaderOptions(),
         agentsFilesOverride: input.projectInstructionFiles && input.projectInstructionFiles.length > 0
           ? createProferProjectInstructionFilesOverride(input.projectInstructionFiles)

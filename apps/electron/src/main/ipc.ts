@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type OtherWorkspacePresetsGroup } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import {
@@ -257,6 +257,7 @@ import {
   snapshotAgentRuntimeMeta,
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
+import { listAgentPresets, getDefaultPresetId, setDefaultPresetId, createAgentPreset, copyAgentPreset, updateAgentPreset, deleteAgentPreset, getAgentPreset } from './lib/agent-preset-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams } from './lib/agent-service'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
@@ -283,6 +284,8 @@ import {
   saveWorkspaceMcpConfig,
   getAllWorkspaceSkills,
   getOtherWorkspaceSkills,
+  getOtherWorkspacePresets,
+  importPresetFromWorkspace,
   getDefaultSkillSlugs,
   getWorkspaceCapabilities,
   getWorkspaceMemorySummary,
@@ -2459,13 +2462,94 @@ export function registerIpcHandlers(): void {
   // 创建 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
-    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string): Promise<AgentSessionMeta> => {
-      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'claude')
+    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string): Promise<AgentSessionMeta> => {
+      // 未显式指定预设时继承该工作区默认预设，保证快捷新建/协作子会话/机器人桥等入口统一行为
+      const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
+      const effectivePresetId = presetId ?? getDefaultPresetId(workspaceSlug)
+      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'claude', false, effectivePresetId)
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
       return session
     }
+  )
+
+  // Agent 预设
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS,
+    async (_, workspaceSlug?: string): Promise<AgentPreset[]> => {
+      return listAgentPresets(workspaceSlug)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.GET_DEFAULT_PRESET,
+    async (_, workspaceSlug?: string): Promise<string> => {
+      return getDefaultPresetId(workspaceSlug)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.UPDATE_SESSION_PRESET,
+    async (_, sessionId: string, presetId: string): Promise<AgentSessionMeta> => {
+      const session = getAgentSessionMeta(sessionId)
+      if (!session) throw new Error('会话不存在')
+      // 按会话所属工作区解析；存在性校验：未知 ID 报错而非静默回退 standard
+      const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
+      const resolved = getAgentPreset(workspaceSlug, presetId)
+      if (resolved.id !== presetId) throw new Error(`预设不存在: ${presetId}`)
+      return updateAgentSessionMeta(sessionId, { presetId })
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_PRESET,
+    async (_, workspaceSlug: string, presetId: string): Promise<string> => {
+      return setDefaultPresetId(workspaceSlug, presetId)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.CREATE_PRESET,
+    async (_, workspaceSlug: string, input: AgentPresetCreateInput): Promise<AgentPreset> => {
+      return createAgentPreset(workspaceSlug, input)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.COPY_PRESET,
+    async (_, workspaceSlug: string, fromId: string, name?: string): Promise<AgentPreset> => {
+      return copyAgentPreset(workspaceSlug, fromId, name)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.UPDATE_PRESET,
+    async (_, workspaceSlug: string, presetId: string, updates: AgentPresetUpdateInput): Promise<AgentPreset> => {
+      return updateAgentPreset(workspaceSlug, presetId, updates)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.DELETE_PRESET,
+    async (_, workspaceSlug: string, presetId: string): Promise<void> => {
+      return deleteAgentPreset(workspaceSlug, presetId)
+    },
+  )
+
+  // 跨工作区预设导入（与 Skill 导入同构）
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.GET_OTHER_WORKSPACE_PRESETS,
+    async (_, currentSlug: string): Promise<OtherWorkspacePresetsGroup[]> => {
+      return getOtherWorkspacePresets(currentSlug)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESET_FROM_WORKSPACE,
+    async (_, targetSlug: string, sourceSlug: string, presetId: string): Promise<AgentPreset> => {
+      return importPresetFromWorkspace(targetSlug, sourceSlug, presetId)
+    },
   )
 
   // 为项目创建或复用隐藏草稿会话。草稿禁止创建飞书镜像，直到首条消息落盘晋升。

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, PPT_MATERIAL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, PPT_MATERIAL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -61,6 +61,7 @@ import type {
   WorkspaceMcpConfig,
   SkillMeta,
   OtherWorkspaceSkillsGroup,
+  OtherWorkspacePresetsGroup,
   WorkspaceCapabilities,
   WorkspaceMemorySummary,
   SkillFileContent,
@@ -552,7 +553,39 @@ export interface ElectronAPI {
   listAgentSessions: () => Promise<AgentSessionMeta[]>
 
   /** 创建 Agent 会话 */
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => Promise<AgentSessionMeta>
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => Promise<AgentSessionMeta>
+
+  // ===== Agent 预设（工作区级） =====
+
+  /** 获取指定工作区的全部可用 Agent 预设（内置 + 自定义）；无工作区仅内置 */
+  listAgentPresets: (workspaceSlug?: string) => Promise<AgentPreset[]>
+
+  /** 获取指定工作区的默认预设 ID（新建会话使用） */
+  getDefaultAgentPreset: (workspaceSlug?: string) => Promise<string>
+
+  /** 更新会话绑定的预设 */
+  updateAgentSessionPreset: (sessionId: string, presetId: string) => Promise<AgentSessionMeta>
+
+  /** 设置指定工作区默认预设 */
+  setDefaultAgentPreset: (workspaceSlug: string, presetId: string) => Promise<string>
+
+  /** 在指定工作区新建自定义预设 */
+  createAgentPreset: (workspaceSlug: string, input: AgentPresetCreateInput) => Promise<AgentPreset>
+
+  /** 在指定工作区复制预设为新的自定义预设 */
+  copyAgentPreset: (workspaceSlug: string, fromId: string, name?: string) => Promise<AgentPreset>
+
+  /** 更新指定工作区的自定义预设 */
+  updateAgentPreset: (workspaceSlug: string, presetId: string, updates: AgentPresetUpdateInput) => Promise<AgentPreset>
+
+  /** 删除指定工作区的自定义预设 */
+  deleteAgentPreset: (workspaceSlug: string, presetId: string) => Promise<void>
+
+  /** 获取其他工作区的自定义预设列表（按工作区分组，导入用） */
+  getOtherWorkspacePresets: (currentSlug: string) => Promise<OtherWorkspacePresetsGroup[]>
+
+  /** 从其他工作区导入预设到当前工作区 */
+  importPresetFromWorkspace: (targetSlug: string, sourceSlug: string, presetId: string) => Promise<AgentPreset>
 
   /** 为项目创建或复用隐藏的 Agent 草稿会话 */
   ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
@@ -1935,8 +1968,49 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
   },
 
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId)
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, presetId)
+  },
+
+  // Agent 预设
+  listAgentPresets: (workspaceSlug?: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug)
+  },
+
+  getDefaultAgentPreset: (workspaceSlug?: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_DEFAULT_PRESET, workspaceSlug)
+  },
+
+  updateAgentSessionPreset: (sessionId: string, presetId: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.UPDATE_SESSION_PRESET, sessionId, presetId)
+  },
+
+  setDefaultAgentPreset: (workspaceSlug: string, presetId: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_PRESET, workspaceSlug, presetId)
+  },
+
+  createAgentPreset: (workspaceSlug: string, input: AgentPresetCreateInput) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.CREATE_PRESET, workspaceSlug, input)
+  },
+
+  copyAgentPreset: (workspaceSlug: string, fromId: string, name?: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.COPY_PRESET, workspaceSlug, fromId, name)
+  },
+
+  updateAgentPreset: (workspaceSlug: string, presetId: string, updates: AgentPresetUpdateInput) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.UPDATE_PRESET, workspaceSlug, presetId, updates)
+  },
+
+  deleteAgentPreset: (workspaceSlug: string, presetId: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DELETE_PRESET, workspaceSlug, presetId)
+  },
+
+  getOtherWorkspacePresets: (currentSlug: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_OTHER_WORKSPACE_PRESETS, currentSlug)
+  },
+
+  importPresetFromWorkspace: (targetSlug: string, sourceSlug: string, presetId: string) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESET_FROM_WORKSPACE, targetSlug, sourceSlug, presetId)
   },
 
   ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => {

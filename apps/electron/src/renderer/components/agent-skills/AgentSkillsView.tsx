@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useSetAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check, Store, Download, RefreshCw, Layers } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check, Store, Download, RefreshCw, Layers, BriefcaseBusiness } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/popover'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
+import { workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
 import { useProjectActions } from '@/hooks/useProjectActions'
 import type { McpServerEntry, SkillMeta } from '@profer/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
@@ -32,12 +33,15 @@ import { McpDetailSheet } from './McpDetailSheet'
 import { ImportSkillDialog } from './ImportSkillDialog'
 import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
 import { MasterSkillsTab } from './MasterSkillsTab'
+import { AgentPresetSettings } from './AgentPresetSettings'
+import { ImportPresetDialog } from './ImportPresetDialog'
 
-type CapabilityTab = 'skills' | 'marketplace' | 'mcp' | 'memory'
+type CapabilityTab = 'skills' | 'marketplace' | 'mcp' | 'memory' | 'presets'
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData()
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
+  const presetList = useAtomValue(workspacePresetsAtom(data.workspaceSlug))
   const { workspaces, currentWorkspaceId, selectProject } = useProjectActions()
 
   const [tab, setTab] = React.useState<CapabilityTab>('skills')
@@ -52,6 +56,7 @@ export function AgentSkillsView(): React.ReactElement {
   const [pendingDeleteMcpName, setPendingDeleteMcpName] = React.useState<string | null>(null)
   const [isDeletingSkill, setIsDeletingSkill] = React.useState(false)
   const [isDeletingMcp, setIsDeletingMcp] = React.useState(false)
+  const [showImportPreset, setShowImportPreset] = React.useState(false)
 
   const q = search.trim().toLowerCase()
 
@@ -114,6 +119,7 @@ export function AgentSkillsView(): React.ReactElement {
     ...(isTeamWorkspace ? [{ value: 'marketplace' as const, label: '团队市场', count: marketSkills.length }] : []),
     { value: 'mcp', label: 'MCP', count: mcpCount },
     { value: 'memory', label: '记忆', count: memoryCount },
+    { value: 'presets', label: '预设', count: presetList.length },
   ]
   const handleTabKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number): void => {
     let nextIndex: number | undefined
@@ -275,6 +281,7 @@ export function AgentSkillsView(): React.ReactElement {
               )}
             >
               {value === 'marketplace' && <Store size={13} />}
+              {value === 'presets' && <BriefcaseBusiness size={13} />}
               {label}
               <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
             </button>
@@ -287,10 +294,22 @@ export function AgentSkillsView(): React.ReactElement {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={tab === 'skills' ? '搜索 Skills...' : tab === 'mcp' ? '搜索 MCP 服务器...' : '搜索记忆正文...'}
+            placeholder={tab === 'skills' ? '搜索 Skills...' : tab === 'mcp' ? '搜索 MCP 服务器...' : tab === 'memory' ? '搜索记忆正文...' : '搜索预设...'}
             className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
           />
         </div>
+
+        {/* 预设：从其他工作区导入 */}
+        {tab === 'presets' && (
+          <button
+            type="button"
+            onClick={() => setShowImportPreset(true)}
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
+          >
+            <Plus size={14} />
+            <span>导入</span>
+          </button>
+        )}
 
         {/* Skills：从其他工作区导入 */}
         {tab === 'skills' && (
@@ -393,6 +412,8 @@ export function AgentSkillsView(): React.ReactElement {
                 ))}
               </div>
             )
+          ) : tab === 'presets' ? (
+            <AgentPresetSettings workspaceSlug={data.workspaceSlug} search={search} />
           ) : data.loading ? (
             <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
           ) : tab === 'skills' && showMaster ? (
@@ -498,6 +519,15 @@ export function AgentSkillsView(): React.ReactElement {
         workspaceSlug={data.workspaceSlug}
         installedSkills={data.skills}
         onImported={() => bumpCapabilities((v) => v + 1)}
+      />
+
+      <ImportPresetDialog
+        open={showImportPreset}
+        onOpenChange={setShowImportPreset}
+        workspaceSlug={data.workspaceSlug}
+        onImported={() => {
+          // 导入成功后 bump 已在对话框内完成；这里留空回调以保持签名一致
+        }}
       />
     </div>
   )

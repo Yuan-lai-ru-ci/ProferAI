@@ -787,8 +787,8 @@ export function useLeftSidebar(tabletMode?: boolean) {
     }
   }
 
-  /** 在指定项目中创建 Agent 会话；未指定时使用当前项目 */
-  const createAgentSessionInWorkspace = React.useCallback(async (workspaceId?: string): Promise<void> => {
+  /** 在指定项目中创建 Agent 会话；未指定时使用当前项目；新建会话跟随默认预设（不再创建时选岗位，会话内自由切换） */
+  const createAgentSessionInWorkspace = React.useCallback(async (workspaceId?: string, presetId?: string): Promise<void> => {
     try {
       const targetWorkspaceId = workspaceId ?? currentWorkspaceId ?? undefined
       if (targetWorkspaceId && targetWorkspaceId !== currentWorkspaceId) {
@@ -801,6 +801,7 @@ export function useLeftSidebar(tabletMode?: boolean) {
         agentChannelId || undefined,
         targetWorkspaceId,
         agentModelId || undefined,
+        presetId,
       )
       setAgentSessions((prev) => [meta, ...prev])
       // 从全局默认值初始化 per-session 渠道/模型配置
