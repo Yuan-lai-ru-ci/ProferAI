@@ -30,6 +30,12 @@ export {
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
 export { supportsProviderPlanQuota } from './channel-plan-quota'
+// Pi 自动压缩阈值（80% 占用触发）
+export {
+  PI_AUTO_COMPACTION_THRESHOLD_RATIO,
+  calculatePiAutoCompactionReserveTokens,
+  calculatePiAutoCompactionThresholdTokens,
+} from './pi-compaction'
 // 定时任务触发时间展开（日历视图展示用，多值调度适配）
 export {
   getAutomationOccurrencesByDay,

@@ -60,7 +60,7 @@ import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi
 import { createCodexRequestSettingsExtension } from './pi-codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
-import { inferReasoningTransport, resolveReasoningProfile } from '@profer/shared'
+import { inferReasoningTransport, resolveReasoningProfile, calculatePiAutoCompactionReserveTokens } from '@profer/shared'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -915,6 +915,130 @@ export function shouldDeferPiOverflowTerminalError(
   return !willRetry && !abortRequested && !!message && shouldDeferPiOverflowTerminalMessage(message, contextWindow)
 }
 
+/** 模型主动请求压缩（CompactContext）后自动续跑的最大次数。 */
+const MAX_AUTOMATIC_COMPACTION_CONTINUATIONS = 20
+
+export const PI_COMPACTION_CONTINUATION_PROMPT = `<profer_compaction_continuation>
+当前会话上下文已经安全压缩。请依据压缩摘要、保留的最近上下文和已持久化的交接状态，继续完成原始用户任务。
+
+- 不要重复已经完成或已提交的操作；先核验当前状态。
+- 若仍有工作，立即执行下一项具体行动。
+- 只有原始需求全部完成时才给出最终答复；若确实受阻，明确说明阻塞原因。
+</profer_compaction_continuation>`
+
+export function planPiCompactionContinuation(options: {
+  continuationCount: number
+  abortRequested: boolean
+  runtimeLimitReached: boolean
+}):
+  | { shouldContinue: true; prompt: string }
+  | { shouldContinue: false; reason: 'aborted' | 'runtime_limit' | 'continuation_limit' } {
+  if (options.abortRequested) return { shouldContinue: false, reason: 'aborted' }
+  if (options.runtimeLimitReached) return { shouldContinue: false, reason: 'runtime_limit' }
+  if (options.continuationCount >= MAX_AUTOMATIC_COMPACTION_CONTINUATIONS) {
+    return { shouldContinue: false, reason: 'continuation_limit' }
+  }
+  return { shouldContinue: true, prompt: PI_COMPACTION_CONTINUATION_PROMPT }
+}
+
+export function canRunCurrentSessionCompaction(toolNames: string[]): boolean {
+  return toolNames.length === 1 && toolNames[0] === 'CompactContext'
+}
+
+function createCompactionNoopMessage(sessionId: string, error: unknown): SDKMessage {
+  const message = error instanceof Error ? error.message : String(error)
+  return {
+    type: 'system',
+    subtype: 'compact_noop',
+    session_id: sessionId,
+    message: /already compacted/i.test(message)
+      ? '当前上下文已经压缩过，无需重复压缩。'
+      : '当前上下文较小，暂时无需压缩。',
+  } as unknown as SDKMessage
+}
+
+function createCompactionContinuationLimitResult(sessionId: string): SDKMessage {
+  return {
+    type: 'result',
+    subtype: 'error_during_execution',
+    terminal_reason: 'compaction_continuation_limit',
+    errors: [`自动压缩续跑已达上限（${MAX_AUTOMATIC_COMPACTION_CONTINUATIONS} 次），任务未确认完成。请检查当前状态后继续。`],
+    session_id: sessionId,
+  } as unknown as SDKMessage
+}
+
+function createTerminatingJsonToolResult(payload: unknown): AgentToolResult<unknown> {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(payload) }],
+    details: payload,
+    terminate: true,
+  } as AgentToolResult<unknown>
+}
+
+function installCurrentSessionCompactionHooks(session: AgentSession): void {
+  const previousBeforeToolCall = session.agent.beforeToolCall
+  session.agent.beforeToolCall = async (context, signal) => {
+    const previousResult = await previousBeforeToolCall?.(context, signal)
+    if (previousResult?.block || context.toolCall.name !== 'CompactContext') return previousResult
+
+    const toolNames = context.assistantMessage.content
+      .filter((block) => block.type === 'toolCall')
+      .map((block) => block.name)
+    if (canRunCurrentSessionCompaction(toolNames)) return previousResult
+
+    // Pi 只在整批工具都是终止型时才 honor terminate。拒绝混合批次可防止在压缩前
+    // 继续更多工具工作或再来一轮模型 turn。
+    return {
+      block: true,
+      reason: 'CompactContext 必须单独调用。请先完成当前工具批次，在下一回合仅调用 CompactContext。',
+    }
+  }
+}
+
+/**
+ * Creates a session-scoped compaction control. The callback is closed over by one
+ * query invocation, so a model cannot select or compact any other user session.
+ */
+export function buildCurrentSessionCompactionTool(
+  sdk: PiSdk,
+  requestCompaction: () => void,
+  canUseTool: PiAgentQueryOptions['canUseTool'],
+): ToolDefinition {
+  const definition = sdk.defineTool({
+    name: 'CompactContext',
+    label: '压缩当前会话上下文',
+    description: 'Compact only the current Pi Agent session after this turn finishes. Before calling, persist a durable handoff or checkpoint to the session workbench or project files as appropriate. Profer will compact the current session, then automatically continue the original task from the compacted context.',
+    promptSnippet: 'CompactContext: after persisting a durable handoff/checkpoint, compact the current session context. Profer will automatically continue the original task after compaction.',
+    parameters: Type.Object({}),
+    async execute() {
+      requestCompaction()
+      return createTerminatingJsonToolResult({
+        status: 'scheduled',
+        message: '将在当前 Agent 回合安全结束后压缩当前会话上下文，并自动从已持久化的交接状态继续原始任务。',
+      })
+    },
+  })
+
+  return wrapToolWithPermission(
+    definition as unknown as ToolDefinition<TSchema, unknown, unknown>,
+    { canUseTool },
+  ) as ToolDefinition
+}
+
+export async function compactCurrentSessionAfterTurn(
+  session: Pick<AgentSession, 'compact' | 'sessionId'>,
+  onNoop: (message: SDKMessage) => void,
+): Promise<'compacted' | 'noop'> {
+  try {
+    await session.compact()
+    return 'compacted'
+  } catch (error) {
+    if (!isCompactionNoopError(error)) throw error
+    onNoop(createCompactionNoopMessage(session.sessionId, error))
+    return 'noop'
+  }
+}
+
 function stringFromInput(input: Record<string, unknown>, keys: string[], fallback = ''): string {
   for (const key of keys) {
     const value = input[key]
@@ -1548,7 +1672,17 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const { modelRuntime, model } = await buildModel(sdk, input)
       const harness = input.compactRequest ? undefined : createPiHarness({ userPrompt: input.prompt })
       const onToolCall: ToolWrapOptions['onToolCall'] = (call) => harness?.recordToolCall(call)
+      const autoCompactionReserveTokens = calculatePiAutoCompactionReserveTokens(
+        model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      )
+      let compactContextRequested = false
+      let automaticCompactionContinuations = 0
       const customTools = [
+        buildCurrentSessionCompactionTool(
+          sdk,
+          () => { compactContextRequested = true },
+          input.canUseTool,
+        ),
         ...buildBuiltinToolDefinitions(
           sdk,
           input.sessionId,
@@ -1564,8 +1698,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const settingsManager = sdk.SettingsManager.inMemory({
         // 使用 Pi SDK 原生压缩策略：
         // - 手动压缩由 session.compact() 触发；
-        // - 自动压缩由 Pi 在上下文接近窗口上限或溢出恢复时触发。
-        compaction: { enabled: true },
+        // - 自动压缩在上下文达到模型窗口的约 80% 时触发；Pi 以 reserveTokens 表示预留空间。
+        compaction: { enabled: true, reserveTokens: autoCompactionReserveTokens },
         // Continue the same transcript after transient failures so completed tools are not replayed.
         retry: { enabled: true, maxRetries: PI_NATIVE_MAX_RETRIES, baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS },
         ...buildPiRemoteConnectionSettings(input),
@@ -1685,6 +1819,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         }
       }
       installRuntimeGuardHooks(session, runtimeGuard)
+      installCurrentSessionCompactionHooks(session)
       active.session = session
       resolveActiveReady(active, session)
 
@@ -1977,22 +2112,55 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           })
           .finally(cleanupActiveSession)
       } else {
-        runPiPromptChain(
-          appendOutputFormatInstruction(input.prompt, input.outputFormat),
-          active,
-          {
-            prompt: (prompt) => session.prompt(prompt, { source: 'rpc' }),
-            prepareInitialPrompt: (prompt) => preparePromptWithPromaSkills(resourceLoader, prompt, input.skillMentions),
-            shouldStopBeforeNextTurn: () => runtimeGuard.shouldStopBeforeNextTurn(),
-            rejectPendingInterruptPrompts: (error) => rejectPendingInterruptPrompts(active, error),
-            createAbortError,
-            dropTrailingAbortedAssistant: () => {
-              session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
-            },
-            createFollowUpPrompt: () => harness?.createFollowUpPrompt(),
-            markBlocked: () => harness?.markBlocked(),
-          },
-        )
+        const runCompactionAwareChain = async (): Promise<void> => {
+          let continuationPrompt: string | undefined
+          do {
+            await runPiPromptChain(
+              continuationPrompt ?? appendOutputFormatInstruction(input.prompt, input.outputFormat),
+              active,
+              {
+                prompt: (prompt) => session.prompt(prompt, { source: 'rpc' }),
+                prepareInitialPrompt: (prompt) => preparePromptWithPromaSkills(resourceLoader, prompt, input.skillMentions),
+                shouldStopBeforeNextTurn: () => runtimeGuard.shouldStopBeforeNextTurn(),
+                rejectPendingInterruptPrompts: (error) => rejectPendingInterruptPrompts(active, error),
+                createAbortError,
+                dropTrailingAbortedAssistant: () => {
+                  session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
+                },
+                createFollowUpPrompt: () => harness?.createFollowUpPrompt(),
+                markBlocked: () => harness?.markBlocked(),
+              },
+            )
+            if (!compactContextRequested) break
+            try {
+              // 模型主动请求压缩：本 turn 落定后执行 session.compact()，再按需续跑原任务。
+              await compactCurrentSessionAfterTurn(session, (message) => queue.push(message))
+            } catch (error) {
+              // 用户在压缩期间停止时，Pi 会取消 summarization；这是正常中止而不是运行错误。
+              if (active.abortRequested) return
+              throw error
+            }
+            compactContextRequested = false
+            const continuation = planPiCompactionContinuation({
+              continuationCount: automaticCompactionContinuations,
+              abortRequested: active.abortRequested,
+              runtimeLimitReached: runtimeGuard.shouldStopBeforeNextTurn(),
+            })
+            if (continuation.shouldContinue) {
+              automaticCompactionContinuations += 1
+              continuationPrompt = appendOutputFormatInstruction(continuation.prompt, input.outputFormat)
+              // 当前终态仅表示为执行压缩而结束的内部 loop，不应让上层把原任务视为完成。
+              pendingTerminalResult = undefined
+            } else {
+              continuationPrompt = undefined
+              if (continuation.reason === 'continuation_limit') {
+                pendingTerminalResult = createCompactionContinuationLimitResult(session.sessionId)
+              }
+            }
+          } while (continuationPrompt !== undefined && !active.abortRequested)
+        }
+
+        runCompactionAwareChain()
           .then(() => {
             // 若 agent_end 已把终态 result 存入 pendingTerminalResult（等待 overflow 压缩），
             // 在 prompt 链最终落定后必须 flush 出来，否则上层会因本轮无 result 而误判。
