@@ -300,6 +300,10 @@ export class BrowserController {
   }
 
   private updateNavigationState(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
+    // WebContents.close() 不会同步取消已排队的导航事件。关闭标签后，迟到的
+    // did-stop-loading / page-title-updated 仍可能触发；此时标签已从 Map 移除，
+    // 再 emit 会因 activeTabId 指向已关闭标签而让主进程抛出未捕获异常。
+    if (browserSession.tabs.get(tab.tabId) !== tab || tab.view.webContents.isDestroyed()) return
     const contents = tab.view.webContents
     tab.state.url = contents.getURL()
     tab.state.title = contents.getTitle() || '未命名页面'
