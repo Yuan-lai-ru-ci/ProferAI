@@ -257,7 +257,7 @@ export function ScratchPadView(): React.ReactElement {
   return (
     <div ref={containerRef} className="relative flex flex-col h-full">
       <div className="flex-1 overflow-auto scrollbar-thin px-8 pt-6 pb-20">
-        <div className="max-w-3xl mx-auto h-full">
+        <div className="max-w-3xl mx-auto">
           <div className="mb-5 flex flex-col gap-2">
             <div>
               <h1 className="text-xl font-semibold tracking-normal text-foreground">草稿页</h1>
@@ -274,7 +274,7 @@ export function ScratchPadView(): React.ReactElement {
           {loaded ? (
             <EditorContent
               editor={editor}
-              className="prose prose-sm dark:prose-invert max-w-none h-full [&_.ProseMirror]:min-h-full [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-sm [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground/50 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
+              className="prose prose-sm dark:prose-invert max-w-none [&_.ProseMirror]:min-h-[40vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-sm [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground/50 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
             />
           ) : (
             <div className="min-h-[200px] flex items-center justify-center">
