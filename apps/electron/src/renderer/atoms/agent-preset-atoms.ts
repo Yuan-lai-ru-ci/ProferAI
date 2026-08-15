@@ -8,6 +8,7 @@
  */
 
 import { atom } from 'jotai'
+import { atomFamily } from 'jotai/utils'
 import type { AgentPreset } from '@profer/shared'
 import { DEFAULT_PRESET_ID } from '@profer/shared'
 
@@ -18,8 +19,8 @@ export const agentPresetsAtom = atom<Map<string, AgentPreset[]>>(new Map())
 export const agentSessionPresetMapAtom = atom<Map<string, string>>(new Map())
 
 /** 某工作区的预设缓存读写原子；无工作区时返回内置兜底空列表（由 UI 兑底） */
-export const workspacePresetsAtom = (workspaceSlug: string | undefined) =>
-  atom(
+export const workspacePresetsAtom = atomFamily((workspaceSlug: string | undefined) =>
+  atom<AgentPreset[], [AgentPreset[]], void>(
     (get) => (workspaceSlug ? get(agentPresetsAtom).get(workspaceSlug) ?? [] : []),
     (get, set, presets: AgentPreset[]) => {
       if (!workspaceSlug) return
@@ -27,7 +28,8 @@ export const workspacePresetsAtom = (workspaceSlug: string | undefined) =>
       next.set(workspaceSlug, presets)
       set(agentPresetsAtom, next)
     },
-  )
+  ),
+)
 
 /**
  * 在预设列表中解析预设。
@@ -39,8 +41,8 @@ export function presetOf(presets: AgentPreset[], presetId: string | undefined): 
   return presets.find((p) => p.id === presetId) ?? presets.find((p) => p.id === DEFAULT_PRESET_ID)
 }
 
-export const sessionPresetIdAtom = (sessionId: string) =>
-  atom(
+export const sessionPresetIdAtom = atomFamily((sessionId: string) =>
+  atom<string | undefined, [string], void>(
     (get) => get(agentSessionPresetMapAtom).get(sessionId),
     (get, set, presetId: string) => {
       const map = get(agentSessionPresetMapAtom)
@@ -48,4 +50,5 @@ export const sessionPresetIdAtom = (sessionId: string) =>
       next.set(sessionId, presetId)
       set(agentSessionPresetMapAtom, next)
     },
-  )
+  ),
+)

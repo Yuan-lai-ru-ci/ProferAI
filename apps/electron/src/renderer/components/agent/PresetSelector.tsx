@@ -24,6 +24,23 @@ import { cn } from '@/lib/utils'
 const EFFORT_LABEL: Record<AgentEffort, string> = { low: '低', medium: '中', high: '高', max: '最大' }
 const PERMISSION_LABEL: Record<ProferPermissionMode, string> = { auto: '自动审批', bypassPermissions: '完全自动', plan: '计划' }
 
+/** 「极简」开关（紧凑模式）持久化 key：记住用户上次的显示偏好，跨会话/重启生效 */
+const COMPACT_MODE_STORAGE_KEY = 'profer-preset-selector-compact'
+
+function readStoredCompactMode(): boolean {
+  try {
+    return localStorage.getItem(COMPACT_MODE_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function persistCompactMode(on: boolean): void {
+  try {
+    localStorage.setItem(COMPACT_MODE_STORAGE_KEY, on ? '1' : '0')
+  } catch { /* localStorage 不可用时静默降级为不持久化 */ }
+}
+
 interface PresetSelectorProps {
   sessionId: string
   /** 会话 meta 上持久化的预设 ID（跨重启真源） */
@@ -36,7 +53,12 @@ export function PresetSelector({ sessionId, persistedPresetId, workspaceSlug }: 
   const [presets, setPresets] = useAtom(workspacePresetsAtom(workspaceSlug))
   const [presetMap, setPresetMap] = useAtom(agentSessionPresetMapAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const [compactMode, setCompactMode] = React.useState(false)
+  // 记住上次选择的「极简」紧凑显示偏好（localStorage 惰性初始化）
+  const [compactMode, setCompactMode] = React.useState<boolean>(readStoredCompactMode)
+  const toggleCompactMode = React.useCallback((on: boolean) => {
+    setCompactMode(on)
+    persistCompactMode(on)
+  }, [])
   // 与 Skills 相同的刷新信号：技能页增删改/导入预设后，这里立即重拉最新列表
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
@@ -100,8 +122,6 @@ export function PresetSelector({ sessionId, persistedPresetId, workspaceSlug }: 
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-[220px]">
             <p className="font-medium">预设 · {current?.name ?? '标准'}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{current?.description ?? ''}</p>
-            <p className="text-xs text-muted-foreground mt-1">点击自由切换本会话的岗位与工作环境，下一轮消息完整生效</p>
           </TooltipContent>
         </Tooltip>
         <PopoverContent align="start" side="top" className="w-72 p-1.5">
@@ -110,7 +130,7 @@ export function PresetSelector({ sessionId, persistedPresetId, workspaceSlug }: 
               <span className="text-xs font-medium text-foreground/60">Agent 预设（岗位）</span>
               <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-foreground/55 select-none">
                 <span>极简</span>
-                <Switch checked={compactMode} onCheckedChange={setCompactMode} className="scale-90" />
+                <Switch checked={compactMode} onCheckedChange={toggleCompactMode} className="scale-90" />
               </label>
             </div>
             {presets.map((preset) => (

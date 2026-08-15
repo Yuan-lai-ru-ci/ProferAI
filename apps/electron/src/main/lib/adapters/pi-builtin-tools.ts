@@ -63,6 +63,18 @@ import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
+// ===== Agent 预设 suppress key schema（与 shared AGENT_PRESET_SUPPRESS_KEYS 对齐） =====
+
+const AGENT_PRESET_SUPPRESS_LITERALS = [
+  Type.Literal('subagents'),
+  Type.Literal('memory'),
+  Type.Literal('task-graph'),
+  Type.Literal('automation'),
+]
+
+/** suppressPromptSections 数组 schema（TypeBox 模式不可变，可安全复用） */
+const AGENT_PRESET_SUPPRESS_ARRAY = Type.Array(Type.Union(AGENT_PRESET_SUPPRESS_LITERALS))
+
 // ===== 通用 =====
 
 export interface PiBuiltinToolsContext {
@@ -381,7 +393,7 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
         name: Type.String({ minLength: 1 }),
         description: Type.Optional(Type.String()),
         promptSections: Type.Optional(Type.Array(Type.String())),
-        suppressPromptSections: Type.Optional(Type.Array(Type.String())),
+        suppressPromptSections: Type.Optional(AGENT_PRESET_SUPPRESS_ARRAY),
         disabledToolGroups: Type.Optional(Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')]))),
         effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max')])),
         permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan')])),
@@ -392,7 +404,7 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
       async execute(_toolCallId, params) {
         const args = params as {
           name: string; description?: string; promptSections?: string[]
-          suppressPromptSections?: string[]
+          suppressPromptSections?: Array<'subagents' | 'memory' | 'task-graph' | 'automation'>
           disabledToolGroups?: Array<'task-graph' | 'memory' | 'collaboration' | 'automation'>
           effort?: 'low' | 'medium' | 'high' | 'max'
           permissionMode?: 'auto' | 'bypassPermissions' | 'plan'
@@ -450,7 +462,7 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
         name: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
         promptSections: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        suppressPromptSections: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+        suppressPromptSections: Type.Optional(Type.Union([AGENT_PRESET_SUPPRESS_ARRAY, Type.Null()])),
         disabledToolGroups: Type.Optional(Type.Union([Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')])), Type.Null()])),
         effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max'), Type.Null()])),
         permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan'), Type.Null()])),

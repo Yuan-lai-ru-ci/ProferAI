@@ -19,6 +19,21 @@ import type { AgentEffort, ProferPermissionMode } from './agent'
 export const AGENT_PRESET_TOOL_GROUPS = ['task-graph', 'memory', 'collaboration', 'automation'] as const
 export type AgentPresetToolGroup = (typeof AGENT_PRESET_TOOL_GROUPS)[number]
 
+/** 可被 suppressPromptSections 隐藏的内置提示词段 key（运行时校验与 Zod/TypeBox schema 的唯一事实来源） */
+export const AGENT_PRESET_SUPPRESS_KEYS = ['subagents', 'memory', 'task-graph', 'automation'] as const
+export type AgentPresetSuppressKey = (typeof AGENT_PRESET_SUPPRESS_KEYS)[number]
+
+/**
+ * 工具组禁用 → 提示词段隐藏 key 的自动映射（三层一致）。
+ * orchestrator 与设置页共用此表，避免硬编码漂移；禁止新工具组不在本表登记。
+ */
+export const AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP: Record<AgentPresetToolGroup, AgentPresetSuppressKey> = {
+  'task-graph': 'task-graph',
+  memory: 'memory',
+  collaboration: 'subagents',
+  automation: 'automation',
+}
+
 /** Agent 预设 */
 export interface AgentPreset {
   /** 唯一标识：内置使用 'standard' | 'code' | 'minimal'，自定义使用 UUID */
@@ -31,8 +46,8 @@ export interface AgentPreset {
   isBuiltin: boolean
   /** 追加到标准系统提示词之后的预设专属提示词段 */
   promptSections?: string[]
-  /** [方案 1] 隐藏与预设矛盾的内置提示词段落 key：'subagents' | 'memory' | 'task-graph'；用于极简类预设消除矛盾指令 */
-  suppressPromptSections?: string[]
+  /** [方案 1] 隐藏与预设矛盾的内置提示词段落 key（见 AGENT_PRESET_SUPPRESS_KEYS）：'subagents' | 'memory' | 'task-graph' | 'automation'；用于极简类预设消除矛盾指令 */
+  suppressPromptSections?: AgentPresetSuppressKey[]
   /** [方案 3] 禁用的产品内置工具组（注入时直接不注册）：task-graph / memory / collaboration / automation；与 suppressPromptSections 配合使提示词与工具一致 */
   disabledToolGroups?: AgentPresetToolGroup[]
   /** 覆盖全局设置的推理档位；undefined 表示跟随全局设置 */
@@ -147,8 +162,8 @@ export interface AgentPresetCreateInput {
   name: string
   description: string
   promptSections?: string[]
-  /** 隐藏与预设矛盾的内置提示词段落 key（'subagents' | 'memory' | 'task-graph'） */
-  suppressPromptSections?: string[]
+  /** 隐藏与预设矛盾的内置提示词段落 key（'subagents' | 'memory' | 'task-graph' | 'automation'） */
+  suppressPromptSections?: AgentPresetSuppressKey[]
   /** 禁用的产品内置工具组（task-graph / memory / collaboration / automation） */
   disabledToolGroups?: AgentPresetToolGroup[]
   effort?: AgentEffort
@@ -167,7 +182,7 @@ export interface AgentPresetUpdateInput {
   name?: string
   description?: string
   promptSections?: string[] | null
-  suppressPromptSections?: string[] | null
+  suppressPromptSections?: AgentPresetSuppressKey[] | null
   disabledToolGroups?: AgentPresetToolGroup[] | null
   effort?: AgentEffort | null
   permissionMode?: ProferPermissionMode | null

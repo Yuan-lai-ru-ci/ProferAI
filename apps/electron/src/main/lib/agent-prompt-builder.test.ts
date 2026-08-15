@@ -89,4 +89,31 @@ describe('buildSystemPrompt', () => {
     expect(standardPrompt).toContain('## Profer 知识维护架构')
     expect(standardPrompt).toContain('### Pi Runtime 与文件记忆')
   })
+
+  test('automation suppress 隐藏交互规范定时任务条目（三层一致）', () => {
+    const withAutomation = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: true,
+    })
+    expect(withAutomation).toContain('7. **定时任务**')
+    expect(withAutomation).toContain('Bash cron')
+
+    const withoutAutomation = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      suppressSections: ['automation'],
+      isPiRuntime: true,
+    })
+    expect(withoutAutomation).not.toContain('7. **定时任务**')
+    expect(withoutAutomation).not.toContain('Bash cron')
+    // 其余交互规范条目不受影响
+    expect(withoutAutomation).toContain('8. **AI 生图**')
+    expect(withoutAutomation).toContain('9. **PPT 视觉交付门禁**')
+    expect(withoutAutomation).toContain('6. **自检习惯**')
+  })
 })

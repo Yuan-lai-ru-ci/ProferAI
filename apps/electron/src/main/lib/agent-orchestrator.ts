@@ -27,8 +27,9 @@ import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   resolveAgentSdkModelId,
+  AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP,
 } from '@profer/shared'
-import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@profer/shared'
+import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest, AgentPresetSuppressKey } from '@profer/shared'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, isCommercialMode, listChannels, canSelfConfig, persistCodexOAuthCredentials, resolveCodexOAuthCredentials } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
@@ -1315,12 +1316,13 @@ export class AgentOrchestrator {
         sessionId,
         permissionMode: initialPermissionMode,
         presetName: sessionPreset.name,
-        // 方案 3：工具组禁用同步隐藏提示词段落（task-graph→task-graph、memory→memory、collaboration→subagents）
+        // 方案 3：工具组禁用同步隐藏提示词段落，自动映射来自 shared 唯一事实表
+        // （task-graph→task-graph、memory→memory、collaboration→subagents、automation→automation）
         suppressSections: [
           ...(sessionPreset.suppressPromptSections ?? []),
-          ...(disabledToolGroups.has('task-graph') && !sessionPreset.suppressPromptSections?.includes('task-graph') ? ['task-graph'] : []),
-          ...(disabledToolGroups.has('memory') && !sessionPreset.suppressPromptSections?.includes('memory') ? ['memory'] : []),
-          ...(disabledToolGroups.has('collaboration') && !sessionPreset.suppressPromptSections?.includes('subagents') ? ['subagents'] : []),
+          ...([...disabledToolGroups]
+            .map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g as keyof typeof AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP])
+            .filter((v): v is AgentPresetSuppressKey => typeof v === 'string')),
         ],
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,

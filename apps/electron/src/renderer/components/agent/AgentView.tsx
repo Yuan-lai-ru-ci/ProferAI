@@ -238,7 +238,6 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
   const [effort, setEffort] = useAtom(agentEffortAtom)
   const [open, setOpen] = React.useState(false)
-  const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpenAIReasoning = Boolean(openAIConfig)
   const isEnabled = isOpenAIReasoning
@@ -250,21 +249,6 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
     setEffort(value)
     window.electronAPI.updateSettings({ agentEffort: value }).catch(console.error)
   }, [setEffort])
-
-  const handleMouseEnter = React.useCallback(() => {
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
-    setOpen(true)
-  }, [])
-
-  const handleMouseLeave = React.useCallback(() => {
-    hoverTimeout.current = setTimeout(() => setOpen(false), 150)
-  }, [])
-
-  React.useEffect(() => {
-    return () => {
-      if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
-    }
-  }, [])
 
   const handleOpenAILevelChange = (level: string | null): void => {
     if (!openAIConfig) return
@@ -285,7 +269,7 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
-        <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+        <div>
           <Button
             type="button"
             variant="ghost"
@@ -296,7 +280,7 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
               isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground',
             )}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => isOpenAIReasoning ? setOpen((value) => !value) : onToggle()}
+            onClick={() => setOpen((value) => !value)}
             aria-label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
             aria-expanded={open}
           >
@@ -309,8 +293,6 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
         align="center"
         sideOffset={8}
         className={cn('p-2 px-2.5', isOpenAIReasoning ? 'w-36' : 'w-auto min-w-[180px]')}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
         {isOpenAIReasoning ? (

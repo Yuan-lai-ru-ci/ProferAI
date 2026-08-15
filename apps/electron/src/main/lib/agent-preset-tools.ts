@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { AGENT_PRESET_SUPPRESS_KEYS } from '@profer/shared'
 import {
   listAgentPresets,
   getDefaultPresetId,
@@ -59,7 +60,7 @@ function buildPresetSchemas(z: ZodModule['z']) {
       name: z.string().min(1).describe('预设名称'),
       description: z.string().default('').describe('一句话描述'),
       promptSections: z.array(z.string()).optional().describe('追加到系统提示词的专属段落（空行分段）'),
-      suppressPromptSections: z.array(z.string()).optional().describe('隐藏的内置提示词段 key：subagents / memory / task-graph'),
+      suppressPromptSections: z.array(z.enum(AGENT_PRESET_SUPPRESS_KEYS)).optional().describe('隐藏的内置提示词段 key：subagents / memory / task-graph / automation'),
       disabledToolGroups: z.array(z.enum(['task-graph', 'memory', 'collaboration', 'automation'])).optional().describe('禁用的产品内置工具组（不注入对应工具）'),
       effort: z.enum(['low', 'medium', 'high', 'max']).optional().describe('覆盖全局推理强度；省略跟随全局'),
       permissionMode: z.enum(['auto', 'bypassPermissions', 'plan']).optional().describe('覆盖会话默认权限模式；省略跟随默认'),
@@ -77,7 +78,7 @@ function buildPresetSchemas(z: ZodModule['z']) {
       description: z.string().optional(),
       // 可选能力字段：省略=不修改；null=清除（回退跟随默认）
       promptSections: z.array(z.string()).nullable().optional(),
-      suppressPromptSections: z.array(z.string()).nullable().optional(),
+      suppressPromptSections: z.array(z.enum(AGENT_PRESET_SUPPRESS_KEYS)).nullable().optional(),
       disabledToolGroups: z.array(z.enum(['task-graph', 'memory', 'collaboration', 'automation'])).nullable().optional(),
       effort: z.enum(['low', 'medium', 'high', 'max']).nullable().optional(),
       permissionMode: z.enum(['auto', 'bypassPermissions', 'plan']).nullable().optional(),

@@ -6,9 +6,10 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { AgentPreset } from '@profer/shared'
 import {
   listAgentPresets,
   getAgentPreset,
@@ -191,6 +192,54 @@ describe('自定义预设 CRUD', () => {
     })
     expect(created.suppressPromptSections).toEqual(['subagents', 'memory', 'task-graph'])
     expect(created.disabledToolGroups).toEqual(['task-graph', 'memory', 'collaboration'])
+  })
+
+  test('创建预设拒绝非法 suppress key 与工具组（含具体非法项）', () => {
+    expect(() => createAgentPreset(WS_A, {
+      name: '脏数据',
+      description: '',
+      suppressPromptSections: ['memory', 'bad-key'] as unknown as AgentPreset['suppressPromptSections'],
+    })).toThrow(/非法的提示词段 key: bad-key/)
+    expect(() => createAgentPreset(WS_A, {
+      name: '脏数据2',
+      description: '',
+      disabledToolGroups: ['memory', 'bad-group'] as unknown as AgentPreset['disabledToolGroups'],
+    })).toThrow(/非法的工具组: bad-group/)
+    // 拒绝后不残留任何记录
+    expect(listAgentPresets(WS_A).some((p) => p.name === '脏数据' || p.name === '脏数据2')).toBe(false)
+  })
+
+  test('更新预设拒绝非法 suppress key（传 null 清除不受影响）', () => {
+    const created = createAgentPreset(WS_A, { name: '校验目标', description: '' })
+    expect(() => updateAgentPreset(WS_A, created.id, {
+      suppressPromptSections: ['automation', 'ghost'] as unknown as AgentPreset['suppressPromptSections'],
+    })).toThrow(/非法的提示词段 key: ghost/)
+    // null 清除路径不受校验影响
+    const cleared = updateAgentPreset(WS_A, created.id, { suppressPromptSections: null })
+    expect(cleared.suppressPromptSections).toBeUndefined()
+  })
+
+  test('读取配置时过滤历史脏数据中的非法 suppress key 与工具组', () => {
+    const dir = join(tmpDir, WS_A)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'agent-presets.json'), JSON.stringify({
+      defaultPresetId: 'standard',
+      presets: [{
+        id: 'dirty-preset',
+        name: '历史脏数据',
+        description: '',
+        isBuiltin: false,
+        createdAt: 0,
+        updatedAt: 0,
+        suppressPromptSections: ['memory', 'bogus-key'],
+        disabledToolGroups: ['task-graph', 'bogus-group'],
+      }],
+    }))
+    const presets = listAgentPresets(WS_A)
+    const dirty = presets.find((p) => p.id === 'dirty-preset')
+    expect(dirty).toBeDefined()
+    expect(dirty?.suppressPromptSections).toEqual(['memory'])
+    expect(dirty?.disabledToolGroups).toEqual(['task-graph'])
   })
 
   test('updateAgentPreset 更新字段；空数组清空可选字段', () => {

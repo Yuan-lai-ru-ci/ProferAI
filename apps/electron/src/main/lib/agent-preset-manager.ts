@@ -13,10 +13,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import {
+  AGENT_PRESET_SUPPRESS_KEYS,
+  AGENT_PRESET_TOOL_GROUPS,
   BUILTIN_AGENT_PRESETS,
   DEFAULT_PRESET_ID,
 } from '@profer/shared'
-import type { AgentPreset, AgentPresetConfig, AgentPresetCreateInput, AgentPresetUpdateInput } from '@profer/shared'
+import type { AgentPreset, AgentPresetConfig, AgentPresetCreateInput, AgentPresetSuppressKey, AgentPresetToolGroup, AgentPresetUpdateInput } from '@profer/shared'
 import { getWorkspaceAgentPresetsPath } from './config-paths'
 
 // ============================================================
@@ -72,6 +74,19 @@ function readConfig(workspaceSlug: string | undefined): AgentPresetConfig {
     const data = JSON.parse(raw) as Partial<AgentPresetConfig>
 
     const presets = Array.isArray(data.presets) ? data.presets : []
+    // 规范化：过滤历史脏数据中的非法 suppress key / 工具组（防御手工编辑 JSON 遗留值）
+    for (const preset of presets) {
+      if (Array.isArray(preset.suppressPromptSections)) {
+        preset.suppressPromptSections = preset.suppressPromptSections.filter((k) =>
+          AGENT_PRESET_SUPPRESS_KEYS.includes(k as AgentPresetSuppressKey))
+        if (preset.suppressPromptSections.length === 0) delete preset.suppressPromptSections
+      }
+      if (Array.isArray(preset.disabledToolGroups)) {
+        preset.disabledToolGroups = preset.disabledToolGroups.filter((g) =>
+          AGENT_PRESET_TOOL_GROUPS.includes(g as AgentPresetToolGroup))
+        if (preset.disabledToolGroups.length === 0) delete preset.disabledToolGroups
+      }
+    }
     // 规范化：默认预设必须存在于内置或该工作区自定义表中，否则回退 standard
     const rawDefault = data.defaultPresetId
     const defaultPresetId = (
@@ -145,6 +160,27 @@ function assertNotBuiltin(presetId: string): void {
   }
 }
 
+/**
+ * suppressPromptSections 运行时校验：非合法 key 直接拒绝（含具体非法项），
+ * 避免 Agent/用户传任意字符串后静默无效。
+ */
+function assertSuppressKeys(keys: string[] | undefined): void {
+  if (!keys?.length) return
+  const invalid = keys.filter((k) => !AGENT_PRESET_SUPPRESS_KEYS.includes(k as AgentPresetSuppressKey))
+  if (invalid.length > 0) {
+    throw new Error(`非法的提示词段 key: ${invalid.join(', ')}（合法值: ${AGENT_PRESET_SUPPRESS_KEYS.join(' / ')}）`)
+  }
+}
+
+/** disabledToolGroups 运行时校验：非合法工具组直接拒绝。 */
+function assertToolGroups(groups: string[] | undefined): void {
+  if (!groups?.length) return
+  const invalid = groups.filter((g) => !AGENT_PRESET_TOOL_GROUPS.includes(g as AgentPresetToolGroup))
+  if (invalid.length > 0) {
+    throw new Error(`非法的工具组: ${invalid.join(', ')}（合法值: ${AGENT_PRESET_TOOL_GROUPS.join(' / ')}）`)
+  }
+}
+
 /** 解析预设 ID：内置 → 工作区自定义 → standard 回退。 */
 export function resolvePresetId(workspaceSlug: string | undefined, presetId: string): string {
   if (BUILTIN_AGENT_PRESETS.some((b) => b.id === presetId)) return presetId
@@ -157,6 +193,8 @@ export function resolvePresetId(workspaceSlug: string | undefined, presetId: str
 export function createAgentPreset(workspaceSlug: string | undefined, input: AgentPresetCreateInput): AgentPreset {
   const name = input.name?.trim()
   if (!name) throw new Error('预设名称不能为空')
+  assertSuppressKeys(input.suppressPromptSections)
+  assertToolGroups(input.disabledToolGroups)
 
   const now = Date.now()
   const preset: AgentPreset = {
@@ -207,6 +245,9 @@ export function copyAgentPreset(workspaceSlug: string | undefined, fromId: strin
 /** 更新工作区自定义预设；内置预设拒绝。字段省略=不修改，null=清除，空数组=清除。 */
 export function updateAgentPreset(workspaceSlug: string | undefined, presetId: string, updates: AgentPresetUpdateInput): AgentPreset {
   assertNotBuiltin(presetId)
+  // 可选能力字段：null 表示清除（跳过校验）；数组校验后取非空再落盘
+  assertSuppressKeys(updates.suppressPromptSections ?? undefined)
+  assertToolGroups(updates.disabledToolGroups ?? undefined)
   const config = readConfig(workspaceSlug)
   const index = config.presets.findIndex((p) => p.id === presetId)
   if (index === -1) throw new Error(`预设不存在: ${presetId}`)

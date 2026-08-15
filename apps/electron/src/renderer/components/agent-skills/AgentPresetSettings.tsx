@@ -32,6 +32,7 @@ import { workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
 import type { AgentPreset, AgentPresetCreateInput, AgentPresetUpdateInput, AgentPresetToolGroup, AgentEffort, ProferPermissionMode, SkillMeta } from '@profer/shared'
+import { AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP } from '@profer/shared'
 
 // ===== 表单状态 =====
 
@@ -55,12 +56,7 @@ const TOOL_GROUP_OPTIONS: Array<{ value: AgentPresetToolGroup; label: string; hi
   { value: 'automation', label: '定时任务', hint: 'Profer Automation 工具' },
 ]
 
-/** 与运行时一致的自动映射：工具组禁用 → 隐藏对应提示词段 key */
-const TOOL_GROUP_SUPPRESS_MAP: Partial<Record<AgentPresetToolGroup, string>> = {
-  'task-graph': 'task-graph',
-  memory: 'memory',
-  collaboration: 'subagents',
-}
+/** 与运行时一致的自动映射（shared 唯一事实表）：工具组禁用 → 隐藏对应提示词段 key（含 automation） */
 
 function presetToForm(preset: AgentPreset): PresetFormState {
   return {
@@ -264,9 +260,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     const promptSections = form.promptText.trim()
       ? form.promptText.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)
       : null
-    const suppressPromptSections = form.disabledToolGroups
-      .map((g) => TOOL_GROUP_SUPPRESS_MAP[g])
-      .filter((v): v is string => typeof v === 'string')
+    const suppressPromptSections = form.disabledToolGroups.map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g])
     return {
       name: form.name,
       description: form.description,
@@ -547,7 +541,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                   </label>
                 ))}
               </div>
-              <p className="text-[10px] text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏（任务图/记忆/协作）。全部关 = 完整能力。</p>
+              <p className="text-[10px] text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏（任务图/记忆/协作/定时任务）。全部关 = 完整能力。</p>
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
