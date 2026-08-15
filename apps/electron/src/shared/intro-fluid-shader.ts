@@ -14,6 +14,7 @@ uniform float uTime;
 uniform float uOpacity;
 uniform float uSeed;
 uniform float uThemeLight;
+uniform float uContinuous;
 
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -61,11 +62,20 @@ float splash(vec2 p, vec2 center, float start, float size, float phase) {
   float age = max(0., uTime - start);
   if (age <= 0.) return 0.;
   float delta = .05;
+  float useAge = age;
+  float window = 1.;
+  // 持续模式：每个 splash 周期性重生（像水面不断泛起新的涟漪），用于循环背景；
+  // 一次性模式（intro 开屏）保持原行为。重生相位由 start 错开，视觉上波纹连绵不断。
+  if (uContinuous > .5) {
+    float loop = 3.8;
+    useAge = mod(age, loop);
+    window = smoothstep(0., .5, useAge) * (1. - smoothstep(loop - 1.0, loop, useAge));
+  }
   float w0 = .25, w1 = .5, w2 = .25;
-  float s0 = splashValue(p, center, start, size, phase, age - delta);
-  float s1 = splashValue(p, center, start, size, phase, age);
-  float s2 = splashValue(p, center, start, size, phase, age + delta);
-  return s0 * w0 + s1 * w1 + s2 * w2;
+  float s0 = splashValue(p, center, start, size, phase, useAge - delta);
+  float s1 = splashValue(p, center, start, size, phase, useAge);
+  float s2 = splashValue(p, center, start, size, phase, useAge + delta);
+  return (s0 * w0 + s1 * w1 + s2 * w2) * window;
 }
 
 void main() {

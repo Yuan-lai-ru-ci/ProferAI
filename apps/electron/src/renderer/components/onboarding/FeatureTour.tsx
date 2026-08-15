@@ -22,7 +22,7 @@ interface FeatureSlide {
   example: string
 }
 
-const TOUR_INTERVAL_MS = 7000
+const TOUR_INTERVAL_MS = 4000
 const TOUR_TRANSITION_MS = 600
 
 const FEATURE_TOUR_SLIDES: FeatureSlide[] = [
@@ -45,7 +45,6 @@ export function FeatureTour({ onNext, onSkip, finishLabel }: FeatureTourProps): 
   const [pendingIndex, setPendingIndex] = React.useState<number | null>(null)
   const [phase, setPhase] = React.useState<'idle' | 'exiting' | 'entering'>('idle')
   const [direction, setDirection] = React.useState<1 | -1>(1)
-  const [backgroundEpoch, setBackgroundEpoch] = React.useState(0)
   const isTransitioning = phase !== 'idle'
   const isLast = activeIndex === FEATURE_TOUR_SLIDES.length - 1
 
@@ -80,17 +79,17 @@ export function FeatureTour({ onNext, onSkip, finishLabel }: FeatureTourProps): 
       const timer = window.setTimeout(() => {
         setPendingIndex(null)
         setPhase('idle')
-        setBackgroundEpoch(epoch => epoch + 1)
       }, TOUR_TRANSITION_MS)
       return () => window.clearTimeout(timer)
     }
   }, [pendingIndex, phase])
 
   React.useEffect(() => {
-    if (phase !== 'idle') return
+    // 自动播放只到最后一页为止；最后一页停留，等用户主动点击完成，避免来不及看完就被跳走。
+    if (phase !== 'idle' || isLast) return
     const timer = window.setTimeout(next, TOUR_INTERVAL_MS)
     return () => window.clearTimeout(timer)
-  }, [activeIndex, next, phase])
+  }, [activeIndex, isLast, next, phase])
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -111,8 +110,9 @@ export function FeatureTour({ onNext, onSkip, finishLabel }: FeatureTourProps): 
 
   return (
     <section className="relative -m-8 flex h-screen w-screen overflow-hidden bg-black text-white" aria-label="Profer 功能导览">
-      <IntroFluidBackground key={backgroundEpoch} durationMs={TOUR_INTERVAL_MS} />
-      <div key={`veil-${backgroundEpoch}`} className="feature-tour-veil pointer-events-none absolute inset-0 z-[1] bg-[linear-gradient(90deg,rgba(0,0,0,.82)_0%,rgba(0,0,0,.52)_42%,rgba(0,0,0,.12)_100%)]" />
+      {/* 背景一次挂载、18 秒一轮循环流动；翻页不再重建/重播，全程保持波纹明显。 */}
+      <IntroFluidBackground durationMs={18000} repeat />
+      <div className="feature-tour-veil pointer-events-none absolute inset-0 z-[1] bg-[linear-gradient(90deg,rgba(0,0,0,.82)_0%,rgba(0,0,0,.52)_42%,rgba(0,0,0,.12)_100%)]" />
       <div className="pointer-events-none absolute inset-0 z-[1] bg-[radial-gradient(ellipse_at_64%_50%,transparent_4%,rgba(0,0,0,.26)_76%,rgba(0,0,0,.55)_100%)]" />
 
       <div className="relative z-10 flex w-full flex-col px-8 py-7 sm:px-14 sm:py-10">

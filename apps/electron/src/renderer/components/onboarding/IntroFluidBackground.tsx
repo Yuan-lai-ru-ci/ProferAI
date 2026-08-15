@@ -16,7 +16,7 @@ import { INTRO_FLUID_FRAGMENT_SHADER, INTRO_FLUID_VERTEX_SHADER } from '../../..
 // 仅用于排障；正常启动必须保持关闭。
 const DEBUG_SOLID_OUTPUT = false
 
-export function IntroFluidBackground({ durationMs, repeat = false }: { durationMs: number; repeat?: boolean }): React.ReactElement {
+export function IntroFluidBackground({ durationMs, repeat = false, fadeOut = true }: { durationMs: number; repeat?: boolean; fadeOut?: boolean }): React.ReactElement {
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
 
   React.useEffect(() => {
@@ -62,10 +62,11 @@ export function IntroFluidBackground({ durationMs, repeat = false }: { durationM
     const opacity = gl.getUniformLocation(program, 'uOpacity')
     const seed = gl.getUniformLocation(program, 'uSeed')
     const themeLight = gl.getUniformLocation(program, 'uThemeLight')
+    const continuous = gl.getUniformLocation(program, 'uContinuous')
     const buffer = gl.createBuffer()
-    if (!buffer || position < 0 || !time || !resolution || !opacity || !seed || !themeLight) {
+    if (!buffer || position < 0 || !time || !resolution || !opacity || !seed || !themeLight || !continuous) {
       console.error('[IntroFluidBackground] program locations unavailable', {
-        buffer: Boolean(buffer), position, time, resolution, opacity, seed, themeLight, contextLost: gl.isContextLost(), error: gl.getError(),
+        buffer: Boolean(buffer), position, time, resolution, opacity, seed, themeLight, continuous, contextLost: gl.isContextLost(), error: gl.getError(),
       })
       return
     }
@@ -116,7 +117,9 @@ export function IntroFluidBackground({ durationMs, repeat = false }: { durationM
         lastRenderedAt = now
         const envelope = repeat
           ? Math.min(1, progress * 3.2)
-          : Math.min(1, progress * 3.2) * Math.max(0, 1 - Math.max(0, progress - .84) / .16)
+          : fadeOut === false
+            ? Math.min(1, animationElapsed / 2200)
+            : Math.min(1, progress * 3.2) * Math.max(0, 1 - Math.max(0, progress - .84) / .16)
         gl.viewport(0, 0, width, height)
         gl.clearColor(0, 0, 0, 1)
         gl.clear(gl.COLOR_BUFFER_BIT)
@@ -129,6 +132,8 @@ export function IntroFluidBackground({ durationMs, repeat = false }: { durationM
         gl.uniform1f(opacity, envelope)
         gl.uniform1f(seed, seedValue)
         gl.uniform1f(themeLight, 0)
+        // 持续模式：repeat 时 splash 周期性重生，波纹连绵不断；一次性模式（intro 开屏）保持原样。
+        gl.uniform1f(continuous, repeat ? 1 : 0)
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
       }
       if (repeat || progress < 1) raf = requestAnimationFrame(render)
@@ -145,7 +150,7 @@ export function IntroFluidBackground({ durationMs, repeat = false }: { durationM
       // 不要在此主动 loseContext：React Strict Mode 会立即执行一次 cleanup 后重挂载，
       // 同一 canvas 的 context 被主动丢失会导致第二次 shader 编译失败。
     }
-  }, [durationMs, repeat])
+  }, [durationMs, repeat, fadeOut])
 
   return <canvas ref={canvasRef} className="absolute inset-0 z-0 h-full w-full bg-black" style={{ imageRendering: 'pixelated' }} aria-hidden="true" />
 }
