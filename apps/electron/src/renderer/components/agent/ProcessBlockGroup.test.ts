@@ -131,6 +131,40 @@ describe('Agent 过程块折叠分组', () => {
     }
   })
 
+  test('given streaming multi-tool turn with only the last tool result pending when grouping then keeps final text outside process group', () => {
+    // 修复「最终回复被折叠」：多工具长序列中最后一个工具结果晚到时，
+    // 末尾 text 几乎可确定是最终回复，应外置而非整组折叠。
+    const items = buildAssistantTurnRenderItems([
+      tool('tool-1'),
+      tool('tool-2'),
+      tool('tool-3'),
+      text('最终回复'),
+    ], { isStreaming: true, completedToolResultIds: new Set(['tool-1', 'tool-2']) })
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.index)).toEqual([0, 1, 2])
+    }
+    if (items[1]?.type === 'block') {
+      expect(items[1].item.index).toBe(3)
+    }
+  })
+
+  test('given streaming multi-tool turn with a non-last tool result pending when grouping then keeps the whole turn inside process group', () => {
+    // 中间工具未完成：末尾 text 仍可能是给后续工具看的中间说明，保持折叠。
+    const items = buildAssistantTurnRenderItems([
+      tool('tool-1'),
+      tool('tool-2'),
+      text('可能的中间说明'),
+    ], { isStreaming: true, completedToolResultIds: new Set(['tool-2']) })
+
+    expect(items).toHaveLength(1)
+    expect(items[0]?.type).toBe('process-group')
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.index)).toEqual([0, 1, 2])
+    }
+  })
+
   test('given repeated tools when building capability icons then returns unique tool names in order', () => {
     const toolNames = buildProcessGroupToolNames([
       tool('tool-1', 'Grep'),

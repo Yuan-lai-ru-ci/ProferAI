@@ -73,18 +73,31 @@ function areToolsBeforeIndexCompleted(
 ): boolean {
   if (!completedToolResultIds) return false
 
-  let hasToolUse = false
+  // 末尾 text 前的所有 tool_use 索引（用于区分「单工具」与「多工具收尾」场景）
+  const toolIndices: number[] = []
   for (let index = 0; index < endIndex; index++) {
     const block = blocks[index]
     if (block?.type !== 'tool_use') continue
-    hasToolUse = true
-    const toolBlock = block as SDKToolUseBlock
+    toolIndices.push(index)
+  }
+  if (toolIndices.length === 0) {
+    // 没有 tool_use 时不认为"工具已完成"——避免流式中只有 thinking + 尾部 text
+    // 时把还可能变成中间过程的 text 提前外置。
+    return false
+  }
+
+  // 多工具长序列：允许「最后一个工具的 result 还在路上」时也把尾部 text 外置——
+  // 此时 text 几乎可以确定是最终回复（Agent 已开始收尾输出），
+  // 不应因最后一个工具结果晚到而把整段回复折叠进执行过程。
+  // 单工具场景保持保守：仅一个 tool_use 且结果未到，text 仍可能是给工具看的中间说明。
+  for (let i = 0; i < toolIndices.length; i++) {
+    const isLastTool = i === toolIndices.length - 1
+    if (toolIndices.length > 1 && isLastTool) continue
+    const toolBlock = blocks[toolIndices[i]!] as SDKToolUseBlock
     if (!completedToolResultIds.has(toolBlock.id)) return false
   }
 
-  // 没有 tool_use 时不认为"工具已完成"——避免流式中只有 thinking + 尾部 text
-  // 时把还可能变成中间过程的 text 提前外置。
-  return hasToolUse
+  return true
 }
 
 export function buildAssistantTurnRenderItems(
