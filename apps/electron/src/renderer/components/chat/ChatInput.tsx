@@ -14,8 +14,8 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { CornerDownLeft, Square, Brain, Paperclip, Library, X } from 'lucide-react'
-import type { KnowledgeReference } from '@profer/shared'
+import { CornerDownLeft, Square, Brain, Paperclip, Library, X, ImagePlus } from 'lucide-react'
+import type { KnowledgeReference, PptMaterialItem } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { openKnowledgePreview } from '@/components/knowledge-base/KnowledgePreviewPanel'
 import { ModelSelector } from './ModelSelector'
@@ -23,6 +23,7 @@ import { ClearContextButton } from './ClearContextButton'
 import { ContextSettingsPopover } from './ContextSettingsPopover'
 import { ToolSelectorPopover } from './ToolSelectorPopover'
 import { AttachmentPreviewItem } from './AttachmentPreviewItem'
+import { PptMaterialPicker } from './PptMaterialPicker'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
@@ -95,10 +96,10 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   const setPendingAttachments = onSetPendingAttachments
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [knowledgePickerOpen, setKnowledgePickerOpen] = React.useState(false)
+  const [materialPickerOpen, setMaterialPickerOpen] = React.useState(false)
 
-
-  // 资料是本轮问题的结构化附件，不能脱离问题单独“发送”。
-  const canSend = content.trim().length > 0 && selectedModel !== null && !streaming
+  // 图片附件可以单独作为一轮消息发送，便于先让模型基于已选素材制作 PPT。
+  const canSend = (content.trim().length > 0 || pendingAttachments.length > 0) && selectedModel !== null && !streaming
 
   /**
    * 将文件列表添加为附件
@@ -204,6 +205,30 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     }
   }, [setPendingAttachments])
 
+  /** 将一张下载的开放许可素材加入当前对话附件。 */
+  const handleSelectMaterial = React.useCallback(async (material: PptMaterialItem): Promise<void> => {
+    const downloaded = await window.electronAPI.pptMaterials.download({ material })
+    const pendingAttachment: PendingAttachment = {
+      id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      filename: downloaded.filename,
+      mediaType: downloaded.mediaType,
+      localPath: '',
+      size: downloaded.size,
+      previewUrl: `data:${downloaded.mediaType};base64,${downloaded.data}`,
+    }
+    if (!window.__pendingAttachmentData) window.__pendingAttachmentData = new Map<string, string>()
+    window.__pendingAttachmentData.set(pendingAttachment.id, downloaded.data)
+    setPendingAttachments((current) => [...current, pendingAttachment])
+    const attribution = [
+      `素材来源：${material.title}`,
+      `许可：${downloaded.licenseCode}`,
+      downloaded.creator ? `作者：${downloaded.creator}` : undefined,
+      `作品页：${downloaded.landingPageUrl}`,
+    ].filter(Boolean).join(' | ')
+    setContent(content.trim() ? `${content.trim()}\n\n${attribution}` : attribution)
+    toast.success(`已添加开放许可素材：${downloaded.filename}`)
+  }, [content, setPendingAttachments, setContent])
+
   /** 移除待发送附件 */
   const handleRemoveAttachment = React.useCallback((id: string): void => {
     setPendingAttachments((prev) => {
@@ -304,6 +329,19 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           <TooltipContent side="top">
             <p>添加附件</p>
           </TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      key: 'ppt-materials',
+      node: (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground" onClick={() => setMaterialPickerOpen(true)}>
+              <ImagePlus className="size-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top"><p>添加开放许可素材</p></TooltipContent>
         </Tooltip>
       ),
     },
@@ -416,6 +454,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}
           <InputToolbarOverflow items={toolbarItems} trailing={trailingNode} />
         </div>
+
+        <PptMaterialPicker open={materialPickerOpen} onOpenChange={setMaterialPickerOpen} onSelect={handleSelectMaterial} />
 
         <KnowledgeReferencePicker open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen} onConfirm={async (itemIds) => {
           const snapshot = await window.electronAPI.knowledge.listItems()

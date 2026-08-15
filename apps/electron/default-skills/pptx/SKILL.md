@@ -2,7 +2,7 @@
 name: pptx
 description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.0.1"
+version: "1.0.2"
 ---
 
 # PPTX Skill
@@ -50,6 +50,19 @@ python scripts/office/unpack.py presentation.pptx unpacked/
 Use when no template or reference presentation is available.
 
 **补充能力**：pptxgenjs 做不了的组合图/双 Y 轴/精细图表，用 `scripts/chartlib.py`（python-pptx 封装 84 种图表），见 [scripts/chartlib.md](scripts/chartlib.md)；渐变背景用 `scripts/gradient.js`。
+
+## Visual Delivery Gate (Required)
+
+A deck is not complete because a `.pptx` file exists. For multi-slide generation, run this sequence before final delivery:
+
+1. Call `plan_ppt_visuals` with the deck intent and page outline. Every slide must receive one primary visual: `real_image`, `chart`, `diagram`, or `data_typography`.
+2. For `real_image` pages, call `search_open_materials`, choose a result that directly supports the page narrative, then call `download_open_material`. Embed the downloaded asset into the PPT, not merely the source link. Keep title, source page, license, and attribution beside the generated deck in `materials.json`.
+3. If a relevant real image does not exist, change that page to a data, chart, or diagram visual and state the reason in the plan. Do not fill it with unrelated stock imagery or a card wall.
+4. Generate the PPT.
+5. Call `audit_ppt_delivery` with the output path and the visual plan. `needsRevision: true` means the deck is not deliverable. Fix the reported pages and audit again.
+6. Render the PPT with real PowerPoint when available and inspect the resulting slide images. Check crop, contrast, overlap, hierarchy, and whether the planned hero visual actually dominates the page.
+
+A deck-wide `mediaCount=0` and `chartCount=0` is a template-output failure, not a valid minimalist design. Do not ship it.
 
 ---
 

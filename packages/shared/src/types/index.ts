@@ -21,6 +21,9 @@ export * from './proxy'
 // Chat 相关类型
 export * from './chat'
 
+// 开放许可 PPT 素材相关类型
+export * from './ppt-material'
+
 // Agent 相关类型
 export * from './agent'
 export * from './browser'

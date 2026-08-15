@@ -369,6 +369,12 @@ export interface ElectronAPI {
   /** 打开文件选择对话框 */
   openFileDialog: () => Promise<FileDialogResult>
 
+  // ===== 开放许可 PPT 素材 =====
+  pptMaterials: {
+    search: (input: import('@profer/shared').PptMaterialSearchInput) => Promise<import('@profer/shared').PptMaterialSearchResult>
+    download: (input: import('@profer/shared').PptMaterialDownloadInput) => Promise<import('@profer/shared').PptMaterialDownloadResult>
+  }
+
   // ===== 通用个人资料库相关 =====
 
   knowledge: {
@@ -1692,6 +1698,11 @@ const electronAPI: ElectronAPI = {
 
   openFileDialog: () => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG)
+  },
+
+  pptMaterials: {
+    search: (input) => ipcRenderer.invoke(PPT_MATERIAL_IPC_CHANNELS.SEARCH, input),
+    download: (input) => ipcRenderer.invoke(PPT_MATERIAL_IPC_CHANNELS.DOWNLOAD, input),
   },
 
   // 通用个人资料库

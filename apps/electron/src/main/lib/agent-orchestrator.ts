@@ -88,6 +88,7 @@ import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
+import { injectPptMaterialMcpServer } from './ppt-material-agent-tools'
 import { browserController } from './browser-controller'
 import { applySdkCredentials, isPartialSDKMessage, isPlanModeMarkdownPath, isPlanModeMcpTool, releaseActiveSession, shouldPreInterruptQueuedMessage, tryAcquireActiveSession, tryReserveQueuedMessage } from './agent-orchestrator-p0-guards'
 import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
@@ -933,6 +934,7 @@ export class AgentOrchestrator {
         triggeredBy: input.triggeredBy,
       })
       await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId })
+      await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
       if (agentRuntime === 'claude') {
