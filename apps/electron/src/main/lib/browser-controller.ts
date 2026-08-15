@@ -85,6 +85,8 @@ type BrowserSessionRecord = {
   hostView: View
   /** 宿主在原生窗口坐标系中的最后边界。 */
   lastHostBounds?: BrowserViewLayout['bounds']
+  /** 上次布局应用后的实际可见状态；隐藏→显示过渡时强制重绘，避免 WebContentsView 白屏。 */
+  lastVisible: boolean
 }
 
 type BrowserSessionConfiguration = {
@@ -474,6 +476,7 @@ export class BrowserController {
       userOpenedAt: null,
       lastLayoutRevision: 0,
       hostView: new View(),
+      lastVisible: false,
     }
     record.hostView.setBorderRadius(16)
     record.hostView.setVisible(false)
@@ -713,7 +716,12 @@ export class BrowserController {
       width: Math.min(rawBounds.width, maxWidth),
       height: Math.min(rawBounds.height, maxHeight),
     }
-    if (visible && (!browserSession.lastHostBounds || Object.entries(adjustedBounds).some(([key, value]) => browserSession.lastHostBounds?.[key as keyof typeof adjustedBounds] !== value))) {
+    // 隐藏→显示过渡：即使边界未变也必须重写 bounds 并请求重绘。
+    // 仅 setVisible(true) 时 Chromium 不会重新合成 WebContentsView 表面，网页会停留在空白。
+    const wasVisible = browserSession.lastVisible
+    const boundsChanged = !browserSession.lastHostBounds
+      || Object.entries(adjustedBounds).some(([key, value]) => browserSession.lastHostBounds?.[key as keyof typeof adjustedBounds] !== value)
+    if (visible && (boundsChanged || !wasVisible)) {
       browserSession.hostView.setBounds(adjustedBounds)
       browserSession.lastHostBounds = { ...adjustedBounds }
     }
@@ -735,6 +743,11 @@ export class BrowserController {
       this.hideOtherBrowserSessions(layout.sessionId)
     }
     if (browserSession.hostView.getVisible() !== visible) browserSession.hostView.setVisible(visible)
+    if (visible && !wasVisible) {
+      // 重新合成被隐藏过的原生视图表面，避免恢复显示后网页空白。
+      try { tab.view.webContents.invalidate() } catch { /* 页面可能已销毁 */ }
+    }
+    browserSession.lastVisible = visible
     if (tab.state.visible !== visible) { tab.state.visible = visible; this.emit(browserSession) }
   }
 

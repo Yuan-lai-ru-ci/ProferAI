@@ -22,16 +22,31 @@ const APP_OVERLAY_LIFECYCLE_SELECTOR = [
   '[data-radix-popper-content-wrapper]',
 ].join(', ')
 
-function hasBlockingAppOverlay(): boolean {
-  if (document.querySelector('[data-profer-intro-overlay], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return true
-  if (document.querySelector('[data-sonner-toast][data-mounted="true"], [data-sonner-toast][data-visible="true"]')) return true
-
-  return Array.from(document.querySelectorAll<HTMLElement>('[data-radix-popper-content-wrapper]'))
-    .some((wrapper) => {
-      const openContent = wrapper.querySelector<HTMLElement>('[data-state="open"]')
-      // 浏览器自身的 Tooltip 不需要遮住网页；菜单、选择器与 Popover 则必须优先显示。
-      return !!openContent && openContent.getAttribute('role') !== 'tooltip'
-    })
+/**
+ * 找出当前真正需要避让的浮层。
+ * - 全屏/模态浮层（intro 遮罩、Dialog/AlertDialog）：无条件遮挡。
+ * - Toast 与 Popover/Dropdown：只有实际与网页区域相交时才遮挡——
+ *   左侧会话区弹开的工具栏菜单不覆盖右侧浏览器，不再无谓隐藏网页。
+ */
+function findBlockingOverlay(slot: HTMLElement): string | null {
+  if (document.querySelector('[data-profer-intro-overlay], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return 'dialog'
+  const slotRect = slot.getBoundingClientRect()
+  if (slotRect.width <= 4 || slotRect.height <= 4) return null
+  const intersects = (r: DOMRect): boolean => (
+    r.width > 0 && r.height > 0
+    && r.right > slotRect.left + 1 && r.left < slotRect.right - 1
+    && r.bottom > slotRect.top + 1 && r.top < slotRect.bottom - 1
+  )
+  for (const toast of document.querySelectorAll<HTMLElement>('[data-sonner-toast][data-mounted="true"], [data-sonner-toast][data-visible="true"]')) {
+    if (intersects(toast.getBoundingClientRect())) return 'toast'
+  }
+  for (const wrapper of document.querySelectorAll<HTMLElement>('[data-radix-popper-content-wrapper]')) {
+    const openContent = wrapper.querySelector<HTMLElement>('[data-state="open"]')
+    // 浏览器自身的 Tooltip 不需要遮住网页；菜单、选择器与 Popover 按几何判断。
+    if (!openContent || openContent.getAttribute('role') === 'tooltip') continue
+    if (intersects(openContent.getBoundingClientRect())) return 'popover'
+  }
+  return null
 }
 
 /** 只跟踪 portal/toast 生命周期，避免 Agent 流式渲染触发无意义的 layout IPC。 */
@@ -80,8 +95,8 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
         })
       })
     }
-    const publishCurrentVisibility = () => publish(!hasBlockingAppOverlay())
-    const observer = new ResizeObserver(publishCurrentVisibility)
+    const publishCurrentVisibility = () => publish(!findBlockingOverlay(element))
+    const observer = new ResizeObserver(() => publishCurrentVisibility())
     const overlayObserver = new MutationObserver((mutations) => {
       if (mutationsAffectAppOverlay(mutations)) publishCurrentVisibility()
     })
@@ -107,7 +122,7 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
     let prevRect: DOMRect | null = null
     const layoutLoop = (): void => {
       layoutFrame = 0
-      if (hasBlockingAppOverlay()) { prevRect = null; scheduleLayoutLoop(); return }
+      if (findBlockingOverlay(element)) { prevRect = null; scheduleLayoutLoop(); return }
       const rect = element.getBoundingClientRect()
       if (rect.width <= 4 || rect.height <= 4) { prevRect = null; scheduleLayoutLoop(); return }
       const changed = !prevRect
