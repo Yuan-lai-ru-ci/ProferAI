@@ -255,7 +255,8 @@ function TabBarInner({
   const [browserManualOpen, setBrowserManualOpen] = useAtom(browserManualOpenSessionIdsAtom)
   const [browserFilePanelManualRestoreSessionIds, setBrowserFilePanelManualRestoreSessionIds] = useAtom(browserFilePanelManualRestoreSessionIdsAtom)
   const activeBrowserIsOpen = activeAgentSessionId ? browserOpenMap.get(activeAgentSessionId) === true : false
-  const showBrowserButton = Boolean(activeAgentSessionId)
+  // 与文件面板按钮一致：受管浏览器入口只在关闭态显示；打开后由面板内部「关闭浏览器」收起（方案 A）。
+  const showBrowserButton = Boolean(activeAgentSessionId && !activeBrowserIsOpen)
   // MainArea 的右边界会随着右侧文件面板或浏览器分栏提前结束；
   // 这两种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
   const browserSidePanelVisible = Boolean(
