@@ -11,7 +11,14 @@ import * as React from 'react'
 import { useAtom } from 'jotai'
 import type { ChannelPlanQuotaResult } from '@profer/shared'
 import { planQuotaStateAtomFamily, type PlanQuotaUiState } from '@/atoms/plan-quota-atoms'
-import { fetchChannelPlanQuota, getCachedPlanQuota, requestPlanQuotaRefresh } from '@/lib/channel-plan-quota'
+import {
+  fetchChannelPlanQuota,
+  getCachedPlanQuota,
+  requestPlanQuotaRefresh,
+  ensurePeriodicRefresh,
+  releasePeriodicRefresh,
+  subscribeChannelQuotaRefresh,
+} from '@/lib/channel-plan-quota'
 
 export interface UsePlanQuotaResult {
   /** 最近一次成功结果；刷新期间保持旧值（null = 从未成功获取）。 */
@@ -61,6 +68,24 @@ export function usePlanQuota(channelId?: string): UsePlanQuotaResult {
       setState(updater)
     }, channelId, false)
     return () => { cancelled = true }
+  }, [channelId, setState])
+
+  // 定时后台刷新：渠道存在活跃入口时每 5 分钟静默刷新一次（旧值优先，缓存随之保鲜）。
+  // 订阅刷新事件：定时刷新开始/完成时同步 refreshing 与 quota，保证「打开 UI 时若在刷新则图标转圈」。
+  React.useEffect(() => {
+    if (!channelId) return
+    ensurePeriodicRefresh(channelId)
+    const unsubscribe = subscribeChannelQuotaRefresh(channelId, (event) => {
+      if (event.type === 'start') {
+        setState((prev) => ({ ...prev, refreshing: true }))
+      } else {
+        setState((prev) => ({ ...prev, quota: event.result, refreshing: false }))
+      }
+    })
+    return () => {
+      unsubscribe()
+      releasePeriodicRefresh(channelId)
+    }
   }, [channelId, setState])
 
   const refresh = React.useCallback(() => {

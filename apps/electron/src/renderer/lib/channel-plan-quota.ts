@@ -10,8 +10,9 @@ export function supportsChannelPlanQuota(channel: Pick<Channel, 'provider' | 'ba
   return PLAN_QUOTA_PROVIDERS.has(channel.provider) || channel.baseUrl.includes('api.kimi.com/coding')
 }
 
-const PLAN_QUOTA_CACHE_MS = 60 * 1000
-const PLAN_QUOTA_ERROR_CACHE_MS = 15 * 1000
+// PR2：引入每渠道定时后台刷新后，被动缓存可放长——成功 5 分钟、失败 60 秒（保留「失败可尽快重试」的意图）。
+const PLAN_QUOTA_CACHE_MS = 5 * 60 * 1000
+const PLAN_QUOTA_ERROR_CACHE_MS = 60 * 1000
 
 interface CachedPlanQuota {
   result: ChannelPlanQuotaResult
@@ -110,4 +111,78 @@ export async function requestPlanQuotaRefresh(channelId: string): Promise<Channe
 
   inflightRequests.set(channelId, request)
   return request
+}
+
+/** 定期后台刷新间隔：每渠道每 5 分钟静默拉取一次最新额度。 */
+const PLAN_QUOTA_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+
+/** 渠道定时刷新事件：start 表示请求开始（UI 刷新图标转圈），done 携带最新结果并复位。 */
+export type PlanQuotaRefreshEvent =
+  | { type: 'start' }
+  | { type: 'done'; result: ChannelPlanQuotaResult }
+
+type RefreshListener = (event: PlanQuotaRefreshEvent) => void
+
+/** 每渠道的刷新事件订阅者集合。 */
+const refreshListeners = new Map<string, Set<RefreshListener>>()
+
+function notifyRefreshListeners(channelId: string, event: PlanQuotaRefreshEvent): void {
+  refreshListeners.get(channelId)?.forEach((listener) => {
+    try {
+      listener(event)
+    } catch {
+      // 单个监听器异常不影响其他监听器
+    }
+  })
+}
+
+/** 订阅某渠道的定时刷新事件，返回退订函数。 */
+export function subscribeChannelQuotaRefresh(channelId: string, listener: RefreshListener): () => void {
+  let listeners = refreshListeners.get(channelId)
+  if (!listeners) {
+    listeners = new Set()
+    refreshListeners.set(channelId, listeners)
+  }
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+/** 每渠道后台刷新定时器。 */
+const periodicTimers = new Map<string, ReturnType<typeof setInterval>>()
+/** 每渠道活跃订阅者计数，归零时回收定时器（无入口可见则停止后台刷新，避免空转）。 */
+const periodicSubscriberCount = new Map<string, number>()
+
+/** 定时刷新回调：通知 start（UI 转圈）→ 强制拉取（共享 in-flight 锁）→ 通知 done（旧值更新并复位）。 */
+async function runPeriodicRefresh(channelId: string): Promise<void> {
+  notifyRefreshListeners(channelId, { type: 'start' })
+  const result = await requestPlanQuotaRefresh(channelId)
+  notifyRefreshListeners(channelId, { type: 'done', result })
+}
+
+/** 登记一个活跃入口（引用计数 +1）；首次登记时启动该渠道的后台刷新定时器。 */
+export function ensurePeriodicRefresh(channelId: string): void {
+  const count = (periodicSubscriberCount.get(channelId) ?? 0) + 1
+  periodicSubscriberCount.set(channelId, count)
+  if (!periodicTimers.has(channelId)) {
+    periodicTimers.set(channelId, setInterval(() => {
+      void runPeriodicRefresh(channelId)
+    }, PLAN_QUOTA_REFRESH_INTERVAL_MS))
+  }
+}
+
+/** 注销一个活跃入口（引用计数 -1）；归零时清除该渠道的定时器，避免泄漏。 */
+export function releasePeriodicRefresh(channelId: string): void {
+  const count = (periodicSubscriberCount.get(channelId) ?? 1) - 1
+  if (count <= 0) {
+    periodicSubscriberCount.delete(channelId)
+    const timer = periodicTimers.get(channelId)
+    if (timer) {
+      clearInterval(timer)
+      periodicTimers.delete(channelId)
+    }
+  } else {
+    periodicSubscriberCount.set(channelId, count)
+  }
 }
