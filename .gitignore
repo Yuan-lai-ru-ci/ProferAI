@@ -99,3 +99,6 @@ tablet-app/android/
 tablet-app/web/
 tablet-app/node_modules/
 tablet-app/dist/
+
+# local Profer Team Server deployment (keep separate repo)
+server/
