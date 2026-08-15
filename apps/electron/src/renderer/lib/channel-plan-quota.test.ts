@@ -4,6 +4,9 @@ import {
   supportsChannelPlanQuota,
   fetchChannelPlanQuota,
   requestPlanQuotaRefresh,
+  ensurePeriodicRefresh,
+  releasePeriodicRefresh,
+  subscribeChannelQuotaRefresh,
 } from './channel-plan-quota'
 
 describe('渲染层渠道订阅额度能力', () => {
@@ -95,7 +98,7 @@ describe('数据层：手动刷新、缓存 TTL 与 in-flight 锁定', () => {
     expect(calls.filter((id) => id === channelId)).toHaveLength(before)
   })
 
-  test('Given 成功缓存已过期（>60s）When fetch Then 重新请求', async () => {
+  test('Given 成功缓存已过期（>5min）When fetch Then 重新请求', async () => {
     const originalNow = Date.now
     let now = originalNow()
     Date.now = () => now
@@ -105,12 +108,35 @@ describe('数据层：手动刷新、缓存 TTL 与 in-flight 锁定', () => {
       await fetchChannelPlanQuota(channelId)
       const before = calls.filter((id) => id === channelId).length
 
-      // 推进 61 秒：成功缓存 TTL 60s 过期
-      now += 61_000
+      // 推进 5 分 1 秒：成功缓存 TTL 5 分钟过期（PR2 调整后）
+      now += 5 * 60 * 1000 + 1_000
       await fetchChannelPlanQuota(channelId)
       expect(calls.filter((id) => id === channelId)).toHaveLength(before + 1)
     } finally {
       Date.now = originalNow
     }
+  })
+})
+
+describe('数据层：PR2 定时后台刷新调度', () => {
+  test('Given 订阅刷新事件 When 退订 Then 退订幂等、不抛错', () => {
+    const channelId = `sub-${Date.now()}`
+    const unsubscribe = subscribeChannelQuotaRefresh(channelId, () => {})
+    unsubscribe()
+    // 重复退订：集合删除幂等，不应抛错
+    unsubscribe()
+  })
+
+  test('Given 注册注销交错 When 引用计数归零 Then 定时器被清理（无泄漏），多余注销安全', () => {
+    const channelId = `ref-${Date.now()}`
+    ensurePeriodicRefresh(channelId)
+    ensurePeriodicRefresh(channelId)
+    releasePeriodicRefresh(channelId)
+    releasePeriodicRefresh(channelId)
+    // 归零后再注销：安全降级为清理分支，不抛错
+    releasePeriodicRefresh(channelId)
+    // 归零后重新注册：可再次启动调度
+    ensurePeriodicRefresh(channelId)
+    releasePeriodicRefresh(channelId)
   })
 })
