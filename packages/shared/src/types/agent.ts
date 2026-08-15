@@ -897,6 +897,10 @@ export interface SkillImportSource {
   sourceWorkspaceName: string
   importedAt: string        // ISO 8601
   sourceVersion: string     // 导入时源 Skill 的 version，无则 '0.0.0'
+  /** 来源类别：master=全局元 skill 库；缺省或 'workspace' = 普通工作区导入 */
+  sourceKind?: 'workspace' | 'master'
+  /** 同步时记录的元 skill 基线版本（sourceKind='master' 时有效） */
+  baselineVersion?: string
 }
 
 /** 工作区 Skill 元数据 */
@@ -929,6 +933,49 @@ export interface SkillMeta {
   installCount?: number
   /** 来源团队工作区 ID */
   sourceWorkspaceId?: string
+}
+
+/** 全局元 skill 库中的 Skill 元数据 */
+export interface MasterSkillMeta {
+  slug: string
+  name: string
+  description?: string
+  group?: string
+  icon?: string
+  version?: string
+  /** 是否相对出厂基线（bundle 内置）被用户改过 */
+  userModified: boolean
+  /** 当前分布到多少个工作区（有 .source.json 指向 master 的副本数） */
+  syncedWorkspaceCount: number
+  /** 当前版本号 */
+  versionCount: number
+}
+
+/** 元 skill 版本记录（快照） */
+export interface MasterSkillVersion {
+  version: string
+  /** 快照序号 v{n}，n≥1 */
+  snapshotId: string
+  /** ISO 8601 快照时间 */
+  createdAt: string
+  /** 用户备注，无则空 */
+  note?: string
+}
+
+/** 同步单个元 skill 到一个工作区的结果 */
+export interface SyncSkillResult {
+  workspaceSlug: string
+  success: boolean
+  /** 成功时返回同步后的版本 */
+  version?: string
+  error?: string
+}
+
+/** 冲突检测结果：工作区副本相对同步基线是否被用户改动 */
+export interface SkillConflict {
+  hasConflict: boolean
+  /** 变化文件相对 skill 目录的相对路径列表（absPath + '=' + rel 简单描述或直接路径） */
+  changedFiles: string[]
 }
 
 /** 技能存储域 */
@@ -1957,6 +2004,18 @@ export const SKILL_MARKETPLACE_IPC_CHANNELS = {
   LIST_TEAM_SKILLS: 'skill:list-team-skills',
   INSTALL_TEAM_SKILL: 'skill:install-team-skill',
   CHECK_FOR_UPDATES: 'skill:check-for-updates',
+} as const
+
+/** 全局元 Skill（master 库）IPC 通道 */
+export const SKILL_MASTER_IPC_CHANNELS = {
+  LIST: 'skill-master:list',
+  READ: 'skill-master:read',
+  SAVE: 'skill-master:save',
+  RENAME_META: 'skill-master:rename-meta',
+  LIST_HISTORY: 'skill-master:list-history',
+  ROLLBACK: 'skill-master:rollback',
+  SYNC_TO_WORKSPACES: 'skill-master:sync-to-workspaces',
+  DETECT_CONFLICT: 'skill-master:detect-conflict',
 } as const
 
 /** 文件同步 IPC 通道（废弃，保留向后兼容） */

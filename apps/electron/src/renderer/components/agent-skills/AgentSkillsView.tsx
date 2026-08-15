@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useSetAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check, Store, Download, RefreshCw } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check, Store, Download, RefreshCw, Layers } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -31,6 +31,7 @@ import { SkillDetailSheet } from './SkillDetailSheet'
 import { McpDetailSheet } from './McpDetailSheet'
 import { ImportSkillDialog } from './ImportSkillDialog'
 import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
+import { MasterSkillsTab } from './MasterSkillsTab'
 
 type CapabilityTab = 'skills' | 'marketplace' | 'mcp' | 'memory'
 
@@ -45,6 +46,7 @@ export function AgentSkillsView(): React.ReactElement {
   const [mcpSheetOpen, setMcpSheetOpen] = React.useState(false)
   const [editingMcp, setEditingMcp] = React.useState<{ name: string; entry: McpServerEntry } | null>(null)
   const [showImport, setShowImport] = React.useState(false)
+  const [showMaster, setShowMaster] = React.useState(false)
   const [wsPopoverOpen, setWsPopoverOpen] = React.useState(false)
   const [pendingDeleteSkill, setPendingDeleteSkill] = React.useState<SkillMeta | null>(null)
   const [pendingDeleteMcpName, setPendingDeleteMcpName] = React.useState<string | null>(null)
@@ -85,6 +87,13 @@ export function AgentSkillsView(): React.ReactElement {
       setMemoryCount((mem.claudeMd.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0))
     }).catch(() => {})
   }, [data.workspaceSlug, data.loading])
+
+  const [masterCount, setMasterCount] = React.useState(0)
+  React.useEffect(() => {
+    window.electronAPI.skillMaster.list()
+      .then((list) => setMasterCount(list.length))
+      .catch(() => setMasterCount(0))
+  }, [data.loading])
 
   // 团队市场状态
   const [marketSkills, setMarketSkills] = React.useState<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>([])
@@ -238,17 +247,19 @@ export function AgentSkillsView(): React.ReactElement {
       <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-2 px-4 pb-4 sm:px-6 lg:px-8">
         {/* Skills / 市场 / MCP / 记忆 切换 */}
         <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
-          <div
-            className={cn(
-              'absolute bottom-0.5 top-0.5 rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-              isTeamWorkspace ? 'w-[calc(25%-2px)]' : 'w-[calc(33.33%-3px)]',
-              tab === 'skills' ? 'translate-x-0'
-              : tab === 'marketplace' ? 'translate-x-[100%]'
-              : tab === 'mcp' ? (isTeamWorkspace ? 'translate-x-[200%]' : 'translate-x-[100%]')
-              : tab === 'memory' ? (isTeamWorkspace ? 'translate-x-[300%]' : 'translate-x-[200%]')
-              : 'translate-x-0',
-            )}
-          />
+          {(() => {
+            const activeIndex = Math.max(0, tabList.findIndex((t) => t.value === tab))
+            const tabCount = tabList.length
+            return (
+              <div
+                className="absolute bottom-0.5 top-0.5 rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out"
+                style={{
+                  width: `calc(${100 / tabCount}% - 2px)`,
+                  transform: `translateX(${activeIndex * 100}%)`,
+                }}
+              />
+            )
+          })()}
           {tabList.map(({ value, label, count }, index) => (
             <button
               key={value}
@@ -256,7 +267,7 @@ export function AgentSkillsView(): React.ReactElement {
               type="button"
               data-agent-skill-tab={value}
               aria-selected={tab === value}
-              onClick={() => setTab(value)}
+              onClick={() => { setTab(value); if (value !== 'skills') setShowMaster(false) }}
               onKeyDown={(event) => handleTabKeyDown(event, index)}
               className={cn(
                 'relative z-[1] flex min-w-[72px] items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors duration-200 sm:min-w-[90px] sm:px-3',
@@ -290,6 +301,25 @@ export function AgentSkillsView(): React.ReactElement {
           >
             <Plus size={14} />
             <span>导入</span>
+          </button>
+        )}
+
+        {/* 元 Skill 管理（切换当前区域显示） */}
+        {tab === 'skills' && (
+          <button
+            type="button"
+            onClick={() => setShowMaster((v) => !v)}
+            className={`flex h-8 items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium shadow-sm transition-colors ${
+              showMaster
+                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                : 'border border-border/60 bg-content-area text-foreground/80 hover:bg-foreground/[0.04]'
+            }`}
+          >
+            <Layers size={14} />
+            <span>元 Skill</span>
+            {masterCount > 0 && (
+              <span className="rounded bg-foreground/10 px-1 text-[11px] tabular-nums">{masterCount}</span>
+            )}
           </button>
         )}
 
@@ -365,6 +395,14 @@ export function AgentSkillsView(): React.ReactElement {
             )
           ) : data.loading ? (
             <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
+          ) : tab === 'skills' && showMaster ? (
+            <MasterSkillsTab
+              workspaces={workspaces as Array<{ id: string; slug: string; name: string; type?: string }>}
+              onChanged={() => {
+                bumpCapabilities((v) => v + 1)
+                window.electronAPI.skillMaster.list().then((l) => setMasterCount(l.length)).catch(() => {})
+              }}
+            />
           ) : tab === 'skills' ? (
             <SkillsTab
               customSkills={customSkills}
