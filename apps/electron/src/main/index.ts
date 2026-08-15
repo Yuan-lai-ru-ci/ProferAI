@@ -481,17 +481,33 @@ function createWindow(): void {
   let splashShown = false
   let rendererReady = false
   let showTimer: ReturnType<typeof setTimeout> | null = null
+  // Ctrl/Cmd+R 热刷新时置 true：刷新只重载 renderer，不应改变窗口几何状态（修复刷新后被强制最大化）
+  let isRefreshReload = false
+  // 刷新前是否处于全屏：Windows 上全屏窗口 hide/show 会退出全屏导致位置/尺寸偏移，show 前需恢复
+  let refreshWasFullScreen = false
+  // 刷新前是否处于最大化（无边框最大化视觉上等同全屏，splash 也应按整个显示器处理）
+  let refreshWasMaximized = false
 
   const showWhenReady = (): void => {
     if (!rendererReady || !splashShown || mainWindow?.isDestroyed()) return
     if (showTimer) clearTimeout(showTimer)
     const remaining = Math.max(0, STARTUP_SPLASH_MIN_MS - (Date.now() - splashStartedAt))
     showTimer = setTimeout(() => {
-      if (savedState?.isMaximized ?? true) mainWindow?.maximize()
+      // 冷启动时按上次保存的状态恢复最大化；热刷新（Ctrl/Cmd+R）保持窗口原状，不重新 maximize。
+      // ?? false：从未保存过窗口状态时不默认最大化（原 ?? true 导致首次运行即铺满全屏）。
+      if (!isRefreshReload && (savedState?.isMaximized ?? false)) mainWindow?.maximize()
       if (process.platform === 'darwin' && app.dock) app.dock.show()
+      // 全屏刷新：窗口可见前先恢复全屏。若先以普通尺寸 show 再 setFullScreen，窗口从左上角
+      // 扩展到全屏，页面内组件（初始化动画等）容器会随之在底边/右侧偏移（顶边/左侧不动）。
+      // 隐藏窗口上 setFullScreen 在 Windows 有效，主窗口 show 时直接就是全屏，无扩展过程。
+      if (isRefreshReload && refreshWasFullScreen) mainWindow?.setFullScreen(true)
       if (!startupSplashWindow?.isDestroyed()) startupSplashWindow?.close()
       startupSplashWindow = null
       mainWindow?.show()
+      // 兜底：隐藏窗口阶段 setFullScreen 未生效时（个别平台），show 后立即再恢复一次全屏
+      if (isRefreshReload && refreshWasFullScreen && mainWindow && !mainWindow.isFullScreen()) {
+        mainWindow.setFullScreen(true)
+      }
     }, remaining)
   }
 
@@ -536,6 +552,11 @@ function createWindow(): void {
   const replayStartupSplash = (): void => {
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (showTimer) clearTimeout(showTimer)
+    // 标记为热刷新，showWhenReady 据此跳过恢复最大化，保持刷新前窗口状态
+    isRefreshReload = true
+    // 在 hide 之前记录窗口状态，show 前恢复（全屏 hide/show 会丢失全屏状态）
+    refreshWasFullScreen = mainWindow.isFullScreen()
+    refreshWasMaximized = mainWindow.isMaximized()
     splashStartedAt = Date.now()
     splashShown = false
     rendererReady = false
@@ -543,12 +564,40 @@ function createWindow(): void {
     // 不再有 BrowserSlot 去 setLayout 定位/隐藏原生 view。必须在此隐藏所有浏览器原生视图，
     // 否则主窗口重新显示后旧会话网页会裸奔脱出容器、不受控制（刷新场景需回到未打开浏览器态）。
     browserController.hideAll()
-    // 刷新时用主窗口当前实际大小/位置重建启动画面，避免退化成固定尺寸的小方块
-    // 上方守卫已确保 mainWindow 非空且未销毁，直接取 bounds。
+    // 刷新时重建启动画面，避免退化成固定尺寸的小方块。
+    // 仅当刷新前处于全屏时用显示器完整边界（getBounds() 在全屏下可能返回 workArea 或
+    // 带 DWM 隐形边界的尺寸，导致 logo 动画底边/右侧出现边距级偏移）；
+    // 非全屏（普通/最大化）时 splash 必须跟随主窗口当前 bounds，否则会扩展成整个显示器。
     const currentBounds = mainWindow.getBounds()
-    const splashBounds = currentBounds
-      ? { x: currentBounds.x, y: currentBounds.y, width: currentBounds.width, height: currentBounds.height }
-      : undefined
+    let splashBounds: { x: number; y: number; width: number; height: number } | undefined
+    if (currentBounds) {
+      // 全屏/最大化时用显示器完整边界：getBounds() 在这两种状态下返回 workArea（不含任务栏）
+      // 或带 DWM 隐形边界的尺寸，导致 logo 动画底边/右侧出现边距级偏移；
+      // 普通窗口 splash 跟随主窗口 bounds，否则会扩展成整个显示器。
+      if (refreshWasFullScreen || refreshWasMaximized) {
+        const display = screen.getDisplayMatching(currentBounds)
+        splashBounds = display
+          ? {
+              x: display.bounds.x,
+              y: display.bounds.y,
+              width: display.bounds.width,
+              height: display.bounds.height,
+            }
+          : {
+              x: currentBounds.x,
+              y: currentBounds.y,
+              width: currentBounds.width,
+              height: currentBounds.height,
+            }
+      } else {
+        splashBounds = {
+          x: currentBounds.x,
+          y: currentBounds.y,
+          width: currentBounds.width,
+          height: currentBounds.height,
+        }
+      }
+    }
     mainWindow?.hide()
     createSplashWindow(splashBounds)
     loadRenderer()
