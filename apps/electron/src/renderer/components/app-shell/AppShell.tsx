@@ -281,7 +281,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           <div
             data-profer-navigation-region="right-panel"
             className={cn(
-              'relative z-[60] flex items-stretch crt-sidebar transition-[padding] duration-300 ease-in-out',
+              // 只让 SidePanel 自身展开。若同时动画化外层 padding，面板会在横向展开时
+              // 从 top: 0 平移到 p-2 的最终基线，视觉上像从右上方斜着滑入。
+              'relative z-[60] flex items-stretch crt-sidebar',
               isPanelOpen ? 'p-2 pl-0' : 'p-0'
             )}
           >
