@@ -1,5 +1,6 @@
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import type { QuotedSelectionSourceType } from '@/atoms/preview-atoms'
+import { getFileBaseName } from '@/lib/file-utils'
 
 export interface ParsedQuotedSelectionRef {
   path: string
@@ -67,7 +68,7 @@ export function parseQuotedSelectionRefs(content: string): { quotes: ParsedQuote
     const filePath = decodeXmlAttribute(pathMatch[1]!)
     quotes.push({
       path: filePath,
-      filename: filePath.split('/').pop() ?? filePath,
+      filename: getFileBaseName(filePath),
       sourceType: 'file',
     })
   }

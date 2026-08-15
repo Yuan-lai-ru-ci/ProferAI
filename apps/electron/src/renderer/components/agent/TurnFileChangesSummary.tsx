@@ -19,6 +19,7 @@ import type {
   SDKToolResultBlock,
 } from '@profer/shared'
 import { FilePathChip } from '@/components/ai-elements/file-path-chip'
+import { getFileBaseName } from '@/lib/file-utils'
 
 const MUTATING_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
@@ -81,7 +82,7 @@ export function buildTurnFileNameMap(turnMessages: SDKMessage[]): Map<string, st
   const conflicted = new Set<string>()
 
   for (const filePath of paths) {
-    const filename = filePath.split(/[\\/]/).pop() || filePath
+    const filename = getFileBaseName(filePath)
     if (conflicted.has(filename)) continue
 
     const existing = map.get(filename)

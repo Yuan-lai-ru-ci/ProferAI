@@ -8,6 +8,7 @@
 import * as React from 'react'
 import { X, Quote } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 
 interface QuotedSelectionChipProps {
   /** 选中的文本（截断显示） */
@@ -28,7 +29,7 @@ function truncateText(text: string, maxLen: number = 80): string {
 
 function truncatePath(filePath: string, maxLen: number = 40): string {
   if (filePath.length <= maxLen) return filePath
-  const name = filePath.split('/').pop() ?? filePath
+  const name = getFileBaseName(filePath)
   return '.../' + name
 }
 

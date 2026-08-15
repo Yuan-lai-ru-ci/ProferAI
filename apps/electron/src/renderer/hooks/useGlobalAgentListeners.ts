@@ -72,16 +72,13 @@ import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
+import { isAbsoluteFilePath, resolveRelativeToAbsolute } from '@/lib/file-utils'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
 
 /** 会改变 git 工作树状态的子命令（用于识别 Bash 中触发 diff 刷新的 git 操作） */
 const GIT_MUTATING_SUBCOMMANDS = /\bgit\s+(commit|checkout|reset|restore|stash|clean|add|rm|mv|pull|merge|rebase|cherry-pick|revert|switch|am|apply)\b/
-
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
-}
 
 function getParentDir(path: string): string {
   const normalized = path.replace(/\\/g, '/')
@@ -522,7 +519,7 @@ export function useGlobalAgentListeners(): void {
     const buildAutoPreviewFile = async (sid: string, targetPath: string) => {
       const sessionPath = store.get(agentSessionPathMapAtom).get(sid) ?? ''
       const parentDir = getParentDir(targetPath)
-      const dirPath = isAbsolutePath(targetPath) ? parentDir : (sessionPath || parentDir)
+      const dirPath = isAbsoluteFilePath(targetPath) ? parentDir : (sessionPath || parentDir)
       const workspaceId = getWorkspaceIdForSession(sid)
       const workspaceFilesPath = await getWorkspaceFilesPathForSession(sid)
       const sessionAttachedDirs = store.get(agentAttachedDirectoriesMapAtom).get(sid) ?? []
@@ -563,10 +560,12 @@ export function useGlobalAgentListeners(): void {
         ...sessionAttachedDirs,
         ...workspaceAttachedDirs,
       ]).map(toForwardSlash)
+      // 相对路径统一走 renderer/lib 公共拼接（R4）：优先首段匹配候选 base 目录名，
+      // 修复「相对路径首段 == 会话目录名」时多套一层目录导致 diff scope 误判的问题
       const absTarget = toForwardSlash(
-        isAbsolutePath(targetPath)
+        isAbsoluteFilePath(targetPath)
           ? targetPath
-          : (sessionPath ? `${sessionPath.replace(/[/\\]+$/, '')}/${targetPath}` : targetPath)
+          : resolveRelativeToAbsolute(targetPath, sessionPath ? [sessionPath] : [])
       )
       const inDiffScope = sessionScopePaths.some((root) => {
         const r = root.replace(/\/+$/, '') + '/'

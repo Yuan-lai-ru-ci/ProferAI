@@ -10,16 +10,13 @@ import { useSetAtom } from 'jotai'
 import type { DetachedPreviewWindowData } from '@profer/shared'
 import { agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { DiffTabContent } from './DiffTabContent'
 import { DefaultAppOpenButton } from './DefaultAppOpenButton'
 import { getDefaultAppTargetPath, getPreviewFileAccess } from './preview-open-path'
 
 function getPreviewId(): string | null {
   return new URLSearchParams(window.location.search).get('previewId')
-}
-
-function getFileName(filePath: string): string {
-  return filePath.split('/').filter(Boolean).pop() || filePath
 }
 
 export function DetachedPreviewApp(): React.ReactElement {
@@ -43,7 +40,7 @@ export function DetachedPreviewApp(): React.ReactElement {
           return
         }
         setData(payload)
-        document.title = payload.title || getFileName(payload.filePath)
+        document.title = payload.title || getFileBaseName(payload.filePath)
       })
       .catch((err) => {
         console.error('[DetachedPreviewApp] 加载预览数据失败:', err)
@@ -96,7 +93,7 @@ export function DetachedPreviewApp(): React.ReactElement {
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-content-area text-foreground">
       <div className="h-11 flex items-center gap-2 px-3 border-b border-border/40 shrink-0">
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium truncate">{getFileName(data.filePath)}</div>
+          <div className="text-xs font-medium truncate">{getFileBaseName(data.filePath)}</div>
           <div className="text-[11px] text-muted-foreground truncate" title={data.filePath}>
             {data.filePath}
           </div>

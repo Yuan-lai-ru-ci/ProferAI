@@ -26,6 +26,7 @@ import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download
 import { cn } from '@/lib/utils'
 import { shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@/lib/mermaid-detection'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
+import { getFileBaseName } from '@/lib/file-utils'
 import { Button } from '@/components/ui/button'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import {
@@ -280,7 +281,7 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
   const Icon = style.icon
   const decoded = safeDecode(value)
   const display = type === 'file'
-    ? (decoded.split('/').pop() || decoded)
+    ? getFileBaseName(decoded)
     : type === 'session'
       ? `会话 ${decoded.slice(0, 8)}`
       : decoded
@@ -670,7 +671,7 @@ const MarkdownInlineCode = React.memo(function MarkdownInlineCode({
         const hasLineCol = !!lineColMatch && !lineColMatch[1]!.endsWith(':')
         const pathPart = hasLineCol ? lineColMatch![1]! : trimmed
         const suffix = hasLineCol ? lineColMatch![2]! : ''
-        const baseName = pathPart.split(/[\\/]/).pop() || pathPart
+        const baseName = getFileBaseName(pathPart)
         const absolutePath = turnFileMap.get(baseName)
         if (absolutePath) {
           return <FilePathChip filePath={absolutePath + suffix} basePaths={merged} />

@@ -7,11 +7,12 @@
 
 import * as React from 'react'
 import type { DefaultAppInfo, FileAccessOptions } from '@profer/shared'
+import { getFileBaseName } from '@/lib/file-utils'
 
 const rendererCache = new Map<string, DefaultAppInfo | null>()
 
 function extKeyOf(filePath: string): string {
-  const base = filePath.split(/[\\/]/).pop() ?? ''
+  const base = getFileBaseName(filePath)
   const dot = base.lastIndexOf('.')
   return dot > 0 ? base.slice(dot).toLowerCase() : filePath
 }

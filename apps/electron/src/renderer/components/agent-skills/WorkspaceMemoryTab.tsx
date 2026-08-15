@@ -12,6 +12,7 @@ import { MessageResponse, remarkWikilinks, WikilinkClickProvider } from '@/compo
 import { agentPendingPromptAtom } from '@/atoms/agent-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 
 type SelectedMemoryFile =
   | { kind: 'claude'; relativePath: 'CLAUDE.md'; title: string; absolutePath: string }
@@ -396,7 +397,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     setBacklinks([])
     if (!selected || selected.kind === 'claude') return
     // 反链匹配名 = 当前文件 stem（文件名不含扩展）
-    const currentStem = (selected.relativePath.split('/').pop() ?? '').replace(/\.md$/i, '')
+    const currentStem = getFileBaseName(selected.relativePath).replace(/\.md$/i, '')
     if (!currentStem) return
     void (async () => {
       try {

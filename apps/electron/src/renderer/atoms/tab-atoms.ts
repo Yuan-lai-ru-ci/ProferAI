@@ -18,6 +18,10 @@ import {
 } from './agent-atoms'
 import type { SessionIndicatorStatus } from './agent-atoms'
 import type { PreviewFile } from './preview-atoms'
+import { getFileBaseName } from '@/lib/file-utils'
+
+// basename 提取统一走 renderer/lib 公共实现（R1），此处转发以保持既有导入路径兼容
+export { getFileBaseName }
 
 // ===== 类型定义 =====
 
@@ -193,10 +197,6 @@ function createScratchPadTab(): TabItem {
 
 export function createPreviewTabId(sessionId: string): string {
   return `${PREVIEW_TAB_PREFIX}${sessionId}`
-}
-
-export function getFileBaseName(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath
 }
 
 export function getPreviewTabTitle(filePath: string): string {

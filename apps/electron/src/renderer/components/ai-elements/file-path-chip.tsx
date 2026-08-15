@@ -10,6 +10,7 @@ import * as React from 'react'
 import { useStore } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore, resolveRelativeToAbsolute } from '@/lib/file-utils'
 import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -67,12 +68,6 @@ const DOC_EXTS = new Set(['pdf', 'docx'])
 /** 所有可预览的扩展名集合（用于相对路径检测） */
 const ALL_PREVIEWABLE_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS, ...CODE_EXTS, ...DOC_EXTS])
 
-/** 从路径提取文件名（兼容 Windows 反斜杠与 Unix 正斜杠，否则 Windows 路径会整段返回） */
-function getFileName(filePath: string): string {
-  const parts = filePath.split(/[\\/]/)
-  return parts[parts.length - 1] || filePath
-}
-
 /** 从文件名提取扩展名（小写，不含点） */
 function getExtension(filename: string): string {
   const dot = filename.lastIndexOf('.')
@@ -110,9 +105,9 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   // 点击与右键菜单入口应诚实隐藏，仅保留路径展示
   const tabletMode = useTabletMode()
 
-  const filename = getFileName(cleanPath)
+  const filename = getFileBaseName(cleanPath)
 
-  const isAbsolute = cleanPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cleanPath)
+  const isAbsolute = isAbsoluteFilePathCore(cleanPath)
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
@@ -126,27 +121,18 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     return []
   }, [basePath, basePaths])
 
-  // 用于 title 提示：绝对路径直接展示；相对路径优先匹配首段对应的 base 目录
+  // 用于 title 提示：绝对路径直接展示（含行号后缀）；相对路径优先匹配首段对应的 base 目录
   const displayPath = React.useMemo(() => {
     if (isAbsolute) return trimmedPath
-    if (candidateBases.length > 0) {
-      const firstSegment = cleanPath.split('/')[0]
-      if (firstSegment) {
-        for (const base of candidateBases) {
-          const baseName = base.endsWith('/') ? base.slice(0, -1).split('/').pop() : base.split('/').pop()
-          if (baseName === firstSegment) {
-            const parentDir = base.endsWith('/')
-              ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
-              : base.slice(0, base.lastIndexOf('/'))
-            return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
-          }
-        }
-      }
-      const base = candidateBases[0]!
-      return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
-    }
-    return trimmedPath
+    return resolveRelativeToAbsolute(cleanPath, candidateBases)
   }, [trimmedPath, cleanPath, isAbsolute, candidateBases])
+
+  // 预览/复制用的完整路径：绝对路径剥离行号后缀后直接使用；相对路径基于候选 base 目录解析。
+  // 修复：打开预览传原始相对路径时，预览顶部与复制只会得到文件名（Windows 反斜杠下 split('/') 失效）。
+  const previewFilePath = React.useMemo(() => {
+    if (isAbsolute) return cleanPath
+    return resolveRelativeToAbsolute(cleanPath, candidateBases)
+  }, [cleanPath, isAbsolute, candidateBases])
 
   // IntersectionObserver 懒检查文件是否存在
   React.useEffect(() => {
@@ -189,15 +175,15 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     const sessionId = store.get(currentAgentSessionIdAtom)
     if (sessionId) {
       openPreview(sessionId, {
-        filePath: cleanPath,
+        filePath: previewFilePath,
         previewOnly: true,
         basePaths: candidateBases.length > 0 ? candidateBases : undefined,
       })
     } else {
       // 无 session 时直接调用系统默认程序打开
-      window.electronAPI.systemOpenFile(cleanPath).catch(() => {})
+      window.electronAPI.systemOpenFile(previewFilePath).catch(() => {})
     }
-  }, [store, openPreview, cleanPath, candidateBases])
+  }, [store, openPreview, previewFilePath, candidateBases])
 
   const handleShowInFolder = React.useCallback(() => {
     const bases = candidateBases.length > 0 ? candidateBases : undefined
@@ -275,17 +261,17 @@ export function isAbsoluteFilePath(text: string): boolean {
   // 剥离末尾行号后缀再检测
   const { path: clean } = stripLineCol(trimmed)
 
-  // macOS/Linux 绝对路径：以 / 开头，包含可预览扩展名或多级路径
-  if (clean.startsWith('/') && /^\/[^\n]+(?:\/[^\n]+)*$/.test(clean)) {
-    // 排除常见的非路径模式（如 /regex/ 模式）
+  // 公共前缀判定（盘符 / UNC / 根斜杠）统一走 renderer/lib 唯一实现（R2 收敛）
+  if (!isAbsoluteFilePathCore(clean)) return false
+
+  // 保守校验（消息文本检测专用）：根斜杠路径需至少两级，
+  // 且排除「尾部斜杠且无扩展名」的目录/正则模式（如 /regex/）
+  if (clean.startsWith('/')) {
+    if (!/^\/[^\n]+(?:\/[^\n]+)*$/.test(clean)) return false
     if (clean.endsWith('/') && !clean.includes('.')) return false
-    return true
   }
 
-  // Windows 绝对路径
-  if (/^[A-Za-z]:[\\/]/.test(clean)) return true
-
-  return false
+  return true
 }
 
 /**

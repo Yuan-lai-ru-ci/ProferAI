@@ -5,8 +5,9 @@ import type { TeamTrashEntry } from '@profer/shared'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { getFileBaseName } from '@/lib/file-utils'
 
-function resourceName(path: string) { return path.split('/').filter(Boolean).at(-1) || path }
+function resourceName(path: string) { return getFileBaseName(path) }
 function formatRemaining(expiresAt: number) {
   const ms = expiresAt - Date.now()
   if (ms <= 0) return '等待自动清理'
