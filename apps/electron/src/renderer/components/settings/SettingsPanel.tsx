@@ -321,7 +321,7 @@ export function SettingsPanel({
       {/* 下方主体：左导航 + 右内容（竖屏由 globals.css 改为纵向布局：顶部横条 tab + 内容） */}
       <div className="settings-body flex flex-1 min-h-0">
         {/* 左侧 Tab 导航 */}
-        <div className="settings-nav w-[160px] border-r border-border/50 pt-3 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
+        <div className="settings-nav w-[160px] border-r border-border/50 pt-3 pb-2 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
           <nav className="flex flex-col gap-0.5">
             {groups.map((group) => (
               <React.Fragment key={group.title ?? "__root__"}>
