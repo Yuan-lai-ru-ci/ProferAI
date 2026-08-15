@@ -37,18 +37,12 @@ export function getCachedPlanQuota(channelId: string, channelUpdatedAt?: number)
   return cached.result
 }
 
-export async function fetchChannelPlanQuota(
+/** 实际执行一次 IPC 额度查询：拉取结果、写缓存（含 IPC 异常兜底）。 */
+function performPlanQuotaRequest(
   channelId: string,
   channelUpdatedAt?: number,
 ): Promise<ChannelPlanQuotaResult> {
-  const cached = getCachedPlanQuota(channelId, channelUpdatedAt)
-  if (cached) return cached
-
-  const requestKey = `${channelId}:${channelUpdatedAt ?? ''}`
-  const inflight = inflightRequests.get(requestKey)
-  if (inflight) return inflight
-
-  const request = window.electronAPI.getChannelPlanQuota(channelId)
+  return window.electronAPI.getChannelPlanQuota(channelId)
     .then((result) => {
       // 兜底：IPC 实现异常或平板 stub 返回 undefined 时，写入明确的“不支持”结果，
       // 避免缓存中出现 result: undefined（二次查询会读 result.updatedAt 崩溃）。
@@ -76,10 +70,44 @@ export async function fetchChannelPlanQuota(
       quotaCache.set(channelId, { result, channelUpdatedAt })
       return result
     })
+}
+
+export async function fetchChannelPlanQuota(
+  channelId: string,
+  channelUpdatedAt?: number,
+): Promise<ChannelPlanQuotaResult> {
+  const cached = getCachedPlanQuota(channelId, channelUpdatedAt)
+  if (cached) return cached
+
+  // 以渠道 ID 作为统一 in-flight 键：被动查询与手动刷新共享同一锁，
+  // 同一渠道并发触发时复用同一 Promise，杜绝重复请求。
+  const inflight = inflightRequests.get(channelId)
+  if (inflight) return inflight
+
+  const request = performPlanQuotaRequest(channelId, channelUpdatedAt)
     .finally(() => {
-      inflightRequests.delete(requestKey)
+      inflightRequests.delete(channelId)
     })
 
-  inflightRequests.set(requestKey, request)
+  inflightRequests.set(channelId, request)
+  return request
+}
+
+/**
+ * 手动/定时刷新入口：跳过缓存，强制拉取一次最新额度。
+ *
+ * 与 `fetchChannelPlanQuota` 共享统一 in-flight 锁（key = channelId）：
+ * 刷新进行中重复调用（含被动查询并发）返回同一 Promise，物理上杜绝多次触发。
+ */
+export async function requestPlanQuotaRefresh(channelId: string): Promise<ChannelPlanQuotaResult> {
+  const inflight = inflightRequests.get(channelId)
+  if (inflight) return inflight
+
+  const request = performPlanQuotaRequest(channelId)
+    .finally(() => {
+      inflightRequests.delete(channelId)
+    })
+
+  inflightRequests.set(channelId, request)
   return request
 }

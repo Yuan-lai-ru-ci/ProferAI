@@ -3,19 +3,20 @@
  *
  * 输入框工具栏上的一个 36×36 圆形按钮：
  * - 内部为 16px 圆环，按 displayTokens / displayWindow 比例渲染
- * - hover 弹出 Popover，内含 token 明细 + 手动压缩按钮（长按 650ms 触发，带进度动画）
+ * - hover 弹出 Popover，内含 token 明细 + 订阅额度（可手动刷新）+ 手动压缩按钮（长按 650ms 触发，带进度动画）
+ * - 订阅额度与模型选择器徽章共享数据与刷新状态；刷新中刷新图标转圈并锁定，旧额度保持可见
  * - 压缩中时按钮位置显示 Loader2 旋转图标
  * - 占用接近压缩阈值（窗口 × 0.775 × 80%）时圆环变琥珀色
  * - 无数据时不显示
  */
 
 import * as React from 'react'
-import { Loader2, Minimize2 } from 'lucide-react'
+import { Loader2, Minimize2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
-import { fetchChannelPlanQuota, getCachedPlanQuota } from '@/lib/channel-plan-quota'
+import { usePlanQuota } from '@/hooks/use-plan-quota'
 
 /** 不支持 Plan 额度时主进程返回的统一消息，renderer 端用于判断应不展示额度区 */
 const UNSUPPORTED_PLAN_QUOTA_MESSAGE = '当前渠道不支持订阅 Plan 额度查询'
@@ -190,10 +191,9 @@ export function ContextUsageBadge({
   planQuotaChannelId,
   sessionId,
 }: ContextUsageBadgeProps): React.ReactElement | null {
-  // 订阅 Plan 额度状态
-  const [quota, setQuota] = React.useState<ChannelPlanQuotaResult | null>(null)
-  const [quotaLoading, setQuotaLoading] = React.useState(false)
-  const quotaChannelRef = React.useRef<string | undefined>(planQuotaChannelId)
+  // 订阅 Plan 额度状态：数据与刷新状态跨入口共享（usePlanQuota + planQuotaStateAtomFamily），
+  // 挂载预取、hover 补查、手动刷新统一由 hook 处理，refreshing 反映任何来源的请求在飞。
+  const { quota, refreshing, refresh } = usePlanQuota(planQuotaChannelId)
 
   // 保留最近一次有效的 token 值，避免切换会话时闪烁消失
   const stableRef = React.useRef<{
@@ -232,40 +232,8 @@ export function ContextUsageBadge({
 
   React.useEffect(() => cancelClose, [cancelClose])
 
-  // hover 打开时拉取订阅 Plan 额度（挂载时已预取，缓存未命中才补一发，命中则直接同步展示）
-  React.useEffect(() => {
-    if (!open || !planQuotaChannelId) return
-    // 同渠道不重复拉取
-    if (quotaChannelRef.current === planQuotaChannelId && (quota || quotaLoading)) return
-    quotaChannelRef.current = planQuotaChannelId
-
-    // 优先读缓存：预取已写入时同步展示，不再闪 loading。
-    const cached = getCachedPlanQuota(planQuotaChannelId)
-    if (cached) {
-      setQuota(cached)
-      return
-    }
-
-    let cancelled = false
-    setQuotaLoading(true)
-    fetchChannelPlanQuota(planQuotaChannelId)
-      .then((result) => {
-        if (!cancelled) setQuota(result)
-      })
-      .finally(() => {
-        if (!cancelled) setQuotaLoading(false)
-      })
-
-    return () => { cancelled = true }
-  }, [open, planQuotaChannelId, quota, quotaLoading])
-
-  // 挂载即预取：把额度拉进模块级缓存（60s TTL），hover 时直接读缓存，避免每次 hover 都打一遍真实网络请求。
-  React.useEffect(() => {
-    if (!planQuotaChannelId) return
-    // 已有有效缓存/正在拉取则跳过；静默预取不触发 loading，也不因失败改写 UI。
-    if (getCachedPlanQuota(planQuotaChannelId)) return
-    fetchChannelPlanQuota(planQuotaChannelId).catch(() => {})
-  }, [planQuotaChannelId])
+  // 额度拉取（挂载预取 / hover 缓存补查 / 手动刷新）统一由 usePlanQuota 处理，
+  // 旧值优先：刷新期间 quota 保持旧值，refreshing 置位驱动刷新图标转圈。
 
   // 长按压缩相关状态
   const [isPressing, setIsPressing] = React.useState(false)
@@ -439,27 +407,36 @@ export function ContextUsageBadge({
             </div>
           ) : null}
 
-          {quotaLoading || (quota != null && (
-            quota.supported || quota.windows.length > 0 || quota.message !== UNSUPPORTED_PLAN_QUOTA_MESSAGE
-          )) ? (
+          {planQuotaChannelId ? (
             <>
               <div className="h-px bg-border my-0.5" />
-              <div className="text-[11px] font-medium text-foreground/80">
-                订阅额度{quota?.planName ? ` · ${quota.planName}` : ''}
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] font-medium text-foreground/80">
+                  订阅额度{quota?.planName ? ` · ${quota.planName}` : ''}
+                </div>
+                {/* 手动刷新：刷新中转圈并锁定（数据层 in-flight 锁兜底，杜绝重复请求）；旧额度在刷新期间保持可见 */}
+                <button
+                  type="button"
+                  title="刷新额度"
+                  aria-label="刷新额度"
+                  disabled={refreshing}
+                  onClick={refresh}
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default"
+                >
+                  <RefreshCw className={cn('size-3', refreshing && 'animate-spin')} />
+                </button>
               </div>
-              {quotaLoading ? (
-                <div className="text-[11px] text-muted-foreground py-1">正在读取订阅额度...</div>
-              ) : quota?.supported && quota.windows.length > 0 ? (
+              {quota?.supported && quota.windows.length > 0 ? (
                 <div className="flex flex-col gap-2">
                   {quota.windows.map((quotaWindow) => (
                     <PlanQuotaRow key={`${quotaWindow.type}-${quotaWindow.label}`} quotaWindow={quotaWindow} />
                   ))}
                 </div>
-              ) : (
+              ) : quota != null && quota.message !== UNSUPPORTED_PLAN_QUOTA_MESSAGE ? (
                 <div className="text-[11px] text-muted-foreground py-1">
-                  {quota?.message ?? '订阅额度查询失败'}
+                  {quota.message ?? '订阅额度查询失败'}
                 </div>
-              )}
+              ) : null}
             </>
           ) : null}
 
