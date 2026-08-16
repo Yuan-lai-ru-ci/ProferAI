@@ -2941,27 +2941,34 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       </TooltipContent>
     </Tooltip>
   ) : (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className={cn(
-        toolBtnSize,
-        'rounded-full',
-        canSend
-          ? 'text-primary hover:bg-primary/10'
-          : 'text-foreground/30 cursor-not-allowed'
-      )}
-      onClick={handleSend}
-      // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
-      onContextMenu={(event) => {
-        event.preventDefault()
-        enqueueCurrentInput()
-      }}
-      disabled={!canSend}
-    >
-      <CornerDownLeft className="size-[22px]" />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            toolBtnSize,
+            'rounded-full',
+            canSend
+              ? 'text-primary hover:bg-primary/10'
+              : 'text-foreground/30 cursor-not-allowed'
+          )}
+          onClick={handleSend}
+          // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
+          onContextMenu={(event) => {
+            event.preventDefault()
+            enqueueCurrentInput()
+          }}
+          disabled={!canSend}
+        >
+          <CornerDownLeft className="size-[22px]" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <p>{queuedMessages.length > 0 ? '点击添加到队列（Enter）' : '左键发送（Enter）· 右键添加到队列'}</p>
+      </TooltipContent>
+    </Tooltip>
   )
 
   return (
