@@ -45,7 +45,6 @@ import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -429,37 +428,40 @@ function AttachMenuButton({ onAttachFile, onAttachFolder, toolBtnSize }: {
   onAttachFolder: () => void
   toolBtnSize: string
 }): React.ReactElement {
+  const [open, setOpen] = React.useState(false)
   return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
-              aria-label="添加文件或文件夹"
-            >
-              <Paperclip className="size-5" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <p>添加附件</p>
-        </TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent side="top" align="center" sideOffset={8} className="w-44">
-        <DropdownMenuItem onSelect={onAttachFile}>
-          <Paperclip />
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
+          aria-label="添加文件或文件夹"
+          title="添加附件"
+        >
+          <Paperclip className="size-5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="center" sideOffset={8} className="w-44 p-1.5">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none transition-colors duration-100 hover:bg-accent/70"
+          onClick={() => { setOpen(false); onAttachFile() }}
+        >
+          <Paperclip className="size-4 shrink-0" />
           添加文件
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onAttachFolder}>
-          <FolderPlus />
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none transition-colors duration-100 hover:bg-accent/70"
+          onClick={() => { setOpen(false); onAttachFolder() }}
+        >
+          <FolderPlus className="size-4 shrink-0" />
           附加文件夹
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </button>
+      </PopoverContent>
+    </Popover>
   )
 }
 
