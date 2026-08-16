@@ -20,7 +20,18 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 
 // ===== 工具使用指南（可复用常量） =====
 
-const TASK_GRAPH_GUIDELINE = `- **任务图**：多步骤任务用 \`proma_task_create\` 创建子任务并填 \`dependsOn\`。用 \`proma_task_update\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`proma_task_create\` 落成节点，再补依赖/分叉边，别只口头描述。`
+/** 任务图指南：Pi 运行时工具名带 mcp__task-graph__ 前缀，与 Claude 侧 in-process MCP 裸名不同 */
+function buildTaskGraphGuideline(isPiRuntime: boolean | undefined): string {
+  const create = isPiRuntime ? 'mcp__task-graph__proma_task_create' : 'proma_task_create'
+  const update = isPiRuntime ? 'mcp__task-graph__proma_task_update' : 'proma_task_update'
+  return `- **任务图**：多步骤任务用 \`${create}\` 创建子任务并填 \`dependsOn\`。用 \`${update}\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`${create}\` 落成节点，再补依赖/分叉边，别只口头描述。`
+}
+
+/** 预设管理工具清单：Pi 运行时带 mcp__agent-presets__ 前缀 */
+function buildPresetToolList(isPiRuntime: boolean | undefined): string {
+  const prefix = isPiRuntime ? 'mcp__agent-presets__' : ''
+  return `\`${prefix}preset_list\` 列出全部预设；\`${prefix}preset_create\` 新建；\`${prefix}preset_copy\` 复制；\`${prefix}preset_update\`/\`${prefix}preset_delete\` 改删自定义预设（字段传 null 清除）；\`${prefix}preset_set_default\` 设默认（新建会话使用）；\`${prefix}preset_switch_session\` 切换本会话预设`
+}
 
 const TOOL_USAGE_GUIDELINES = `- **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
@@ -105,13 +116,13 @@ Profer 脱胎于开源项目 Proma (github.com/ErlichLiu/Proma)，经深度改�
 
 - 预设专属提示词段若已注入，按其中规则执行
 - **预设可以自由切换**：本会话随时切换，下一轮消息完整生效（提示词、权限、推理档位与工具集裁剪全部按新预设）。切到「极简」等精简预设后，任务图/记忆/协作工具会真实不可见
-- **你可以直接用工具管理预设**：\`preset_list\` 列出全部预设；\`preset_create\` 新建；\`preset_copy\` 复制；\`preset_update\`/\`preset_delete\` 改删自定义预设（字段传 null 清除）；\`preset_set_default\` 设默认（新建会话使用）；\`preset_switch_session\` 切换本会话预设。用户说「建个 XX 预设」「把这类任务固化」「这个会话换成 XX 模式」时直接执行
+- **你可以直接用工具管理预设**：${buildPresetToolList(ctx.isPiRuntime)}。用户说「建个 XX 预设」「把这类任务固化」「这个会话换成 XX 模式」时直接执行
 - 用户也可自行操作：会话输入工具栏（公文包图标）切换本会话预设；侧边栏「Agent 技能」→「预设」tab 管理预设
 - 当用户反复要求同类任务或特定能力组合时，主动建议创建/复用对应预设`)
 
-  // 工具使用指南（任务图条目按预设可隐藏，其余条目恒定）
+  // 工具使用指南（任务图条目按预设可隐藏，其余条目恒定；工具名按 runtime 适配）
   sections.push(`## 工具使用指南
-${suppress.has('task-graph') ? '' : `${TASK_GRAPH_GUIDELINE}\n`}${TOOL_USAGE_GUIDELINES}`)
+${suppress.has('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${TOOL_USAGE_GUIDELINES}`)
 
   // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 Profer 协作子会话；极简类预设可隐藏）
   const claudeAvailable = ctx.claudeAvailable !== false
@@ -198,7 +209,8 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 
 - **直奔最终目标。** 接到任务后持续推进，不要在中途等待确认（计划模式和高风险操作除外）。
 - **先证据、后结论。** 不猜测仓库架构、命令可用性或修改正确性；搜索并读取关键上下文，检查异常结果时交叉验证。
-- **修改后必须闭环。** 文件写入或命令执行本身不代表成功。完成前进行最小相关验证；若验证失败或无法执行，最终答复必须如实说明实际结果、原因和下一步建议，绝不虚构“已验证通过”。
+- **修改后必须闭环。** 文件写入或命令执行本身不代表成功。完成前进行最小相关验证——重新读取改动片段确认写入结果，或运行与改动相称的最小检查/测试，两者其一即闭环；若验证失败或无法执行，最终答复必须如实说明实际结果、原因和下一步建议，绝不虚构“已验证通过”。
+- **验证 Harness 会自动兜底。** 如果你在本轮修改了本地文件（Write/Edit）却未执行上述任一验证，Profer 会在本轮结束后自动追加一次只做最小验证的续轮，并列出未验证文件清单。为避免这次多余往返，请在收尾前主动完成验证。
 - **交付清晰可追溯。** 最终说明完成内容、改动路径、实际验证证据及遗留风险；不要只回复“已完成”。`)
 
     // Pi Runtime 文件记忆小节（极简类预设可隐藏）
@@ -216,6 +228,14 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - **透明性**：写入长期记忆前先说明准备更新的位置和原因；写后在回复中说明路径与摘要。
 - **收尾回写**：任务结束时只在本轮出现明确的稳定偏好、重要决策、可复用纠错、问题状态变化，或发现已有长期记忆需要修正时，按上述规则写入 \`workspace-files/.context/memory-archive/\` 对应主题文件并补齐/校验 \`MEMORY.md\` 索引。普通一次性修复、调研中间过程和未验证判断不回写。`)
     }
+  } else {
+    sections.push(`## Claude Agent Runtime
+
+当前会话运行在 Claude Agent SDK 运行时上，由 Profer 编排层桥接：
+
+- 你拥有 Claude 原生的 Read、Write、Edit、Bash、Grep、Glob、Skill 与 Profer 产品工具，可直接使用
+- 遵循本提示词中的工作区、权限、计划模式、Context 和知识维护规则
+- **验证 Harness 会自动兜底。** 如果你在本轮修改了本地文件（Write/Edit）却未执行最小验证（重新读取改动片段，或运行与改动相称的最小检查/测试），Profer 会在本轮结束后自动追加一次只做验证的续轮，并列出未验证文件清单。为避免这次多余往返，请在收尾前主动完成验证。`)
   }
 
   // 用户信息
@@ -250,10 +270,12 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
   }
 
   if (ctx.isTeamWorkspace) {
+    // 团队记忆工具名按 runtime 适配：Claude 走 in-process MCP 裸名，Pi 带 mcp__team-memory__ 前缀
+    const teamMemoryPrefix = ctx.isPiRuntime ? 'mcp__team-memory__' : ''
     sections.push(`## 团队共享知识记忆
 
 当前会话属于团队工作区。团队共享知识记忆独立于本地 CLAUDE.md 与个人 Auto Memory，所有团队成员和团队 Agent 共同可见。
-- 先用 \`list_team_memories\` 或 \`search_team_memories\` 按需查找，再用 \`read_team_memory\` 读取相关项目背景、决策、规范和经验；不要假定每轮都会自动注入全部记忆。
+- 先用 \`${teamMemoryPrefix}list_team_memories\` 或 \`${teamMemoryPrefix}search_team_memories\` 按需查找，再用 \`${teamMemoryPrefix}read_team_memory\` 读取相关项目背景、决策、规范和经验；不要假定每轮都会自动注入全部记忆。
 - 只有用户明确确认、且结论能跨成员复用时，才创建或更新团队记忆；写入前说明目标文档、原因与影响。
 - 团队记忆绝不写入个人偏好、私人路径、凭据、未经确认的猜测或完整聊天记录。
 - 更新前必须先读取当前版本并传 expectedVersion。若工具返回版本冲突，保留双方内容并向用户说明，绝不自动重试覆盖。

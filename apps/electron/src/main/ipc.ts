@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type OtherWorkspacePresetsGroup } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, type AgentThinkingLevel, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult, type OtherWorkspacePresetsGroup } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import {
@@ -257,7 +257,7 @@ import {
   snapshotAgentRuntimeMeta,
   restoreAgentRuntimeMeta,
 } from './lib/agent-session-manager'
-import { listAgentPresets, getDefaultPresetId, setDefaultPresetId, createAgentPreset, copyAgentPreset, updateAgentPreset, deleteAgentPreset, getAgentPreset } from './lib/agent-preset-manager'
+import { listAgentPresets, getDefaultPresetId, setDefaultPresetId, createAgentPreset, copyAgentPreset, updateAgentPreset, deleteAgentPreset, getAgentPreset, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams } from './lib/agent-service'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
@@ -2549,6 +2549,47 @@ export function registerIpcHandlers(): void {
     AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESET_FROM_WORKSPACE,
     async (_, targetSlug: string, sourceSlug: string, presetId: string): Promise<AgentPreset> => {
       return importPresetFromWorkspace(targetSlug, sourceSlug, presetId)
+    },
+  )
+
+  // 预设导出为 JSON 文件（跨机器分享）；返回 null 表示用户取消保存对话框
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.EXPORT_PRESETS,
+    async (_, workspaceSlug: string, presetIds?: string[]): Promise<{ filePath: string; count: number } | null> => {
+      // 未指定则导出全部可用预设（内置 + 自定义）；指定时忽略未知 ID
+      const available = listAgentPresets(workspaceSlug)
+      const selected = presetIds?.length
+        ? available.filter((p) => presetIds.includes(p.id))
+        : available
+      if (selected.length === 0) throw new Error('没有可导出的预设')
+
+      const defaultFileName = `profer-agent-presets-${new Date().toISOString().slice(0, 10)}.json`
+      const result = await dialog.showSaveDialog({
+        title: '导出 Agent 预设',
+        defaultPath: defaultFileName,
+        filters: [{ name: 'Profer 预设文件', extensions: ['json'] }],
+      })
+      if (result.canceled || !result.filePath) return null
+
+      writeFileSync(result.filePath, serializeAgentPresetsForExport(selected), 'utf-8')
+      console.log(`[Agent 预设] 已导出 ${selected.length} 个预设到 ${result.filePath}`)
+      return { filePath: result.filePath, count: selected.length }
+    },
+  )
+
+  // 从 JSON 文件导入预设；返回 null 表示用户取消打开对话框；格式非法抛错（渲染层展示）
+  ipcMain.handle(
+    AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESETS,
+    async (_, workspaceSlug: string): Promise<AgentPresetImportResult | null> => {
+      const result = await dialog.showOpenDialog({
+        title: '导入 Agent 预设',
+        properties: ['openFile'],
+        filters: [{ name: 'Profer 预设文件', extensions: ['json'] }],
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+
+      const text = readFileSync(result.filePaths[0]!, 'utf-8')
+      return importAgentPresets(workspaceSlug, text)
     },
   )
 
@@ -6131,6 +6172,9 @@ export function registerIpcHandlers(): void {
   }
 
   const validateAutomationFields = (i: Partial<CreateAutomationInput | UpdateAutomationInput>): void => {
+    if (i.presetId !== undefined && (typeof i.presetId !== 'string' || i.presetId.length > 200)) {
+      throw new Error(`非法的 presetId: ${String(i.presetId)}（应为预设 ID 字符串；空字符串恢复默认）`)
+    }
     if (i.scheduleType !== undefined && !validScheduleType(i.scheduleType)) {
       throw new Error(`非法的 scheduleType: ${String(i.scheduleType)}`)
     }

@@ -24,6 +24,42 @@ export const AGENT_PRESET_SUPPRESS_KEYS = ['subagents', 'memory', 'task-graph', 
 export type AgentPresetSuppressKey = (typeof AGENT_PRESET_SUPPRESS_KEYS)[number]
 
 /**
+ * 每个产品内置工具组的工具短名清单（B2-3 单工具裁剪的唯一事实来源）。
+ * 短名不带 runtime 前缀（Claude 为裸名，Pi 为 mcp__server__tool 的末段），
+ * 两侧注册点按短名匹配过滤，UI 与工具 schema 均从本表渲染/校验。
+ */
+export const AGENT_PRESET_GROUP_TOOL_NAMES: Record<AgentPresetToolGroup, readonly string[]> = {
+  'task-graph': ['proma_task_create', 'proma_task_update'],
+  memory: ['search_memory', 'list_team_memories', 'read_team_memory', 'search_team_memories', 'create_team_memory', 'update_team_memory'],
+  collaboration: [
+    'list_available_agent_models',
+    'delegate_agent',
+    'delegate_agents',
+    'wait_for_delegations',
+    'list_delegations',
+    'get_delegation_results',
+    'stop_delegation',
+    'stop_delegations',
+    'answer_delegation_question',
+    'continue_delegation',
+  ],
+  automation: ['list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now'],
+}
+
+/** 全部可裁剪单工具短名（disabledTools 校验用） */
+export const AGENT_PRESET_TOOL_NAMES: readonly string[] = Object.values(AGENT_PRESET_GROUP_TOOL_NAMES).flat()
+
+/**
+ * 按 disabledTools 短名过滤工具定义（Claude/Pi 注册点共用）。
+ * 短名口径：Claude 工具名为裸短名，Pi 为 mcp__server__tool，取 name 按 '__' 分割的末段。
+ */
+export function filterDisabledTools<T extends { name: string }>(tools: T[], disabledTools: readonly string[] | undefined): T[] {
+  if (!disabledTools?.length) return tools
+  const disabled = new Set(disabledTools)
+  return tools.filter((tool) => !disabled.has(tool.name.split('__').at(-1) ?? tool.name))
+}
+
+/**
  * 工具组禁用 → 提示词段隐藏 key 的自动映射（三层一致）。
  * orchestrator 与设置页共用此表，避免硬编码漂移；禁止新工具组不在本表登记。
  */
@@ -50,16 +86,24 @@ export interface AgentPreset {
   suppressPromptSections?: AgentPresetSuppressKey[]
   /** [方案 3] 禁用的产品内置工具组（注入时直接不注册）：task-graph / memory / collaboration / automation；与 suppressPromptSections 配合使提示词与工具一致 */
   disabledToolGroups?: AgentPresetToolGroup[]
+  /** [B2-3] 禁用的单个产品内置工具（短名，见 AGENT_PRESET_GROUP_TOOL_NAMES）；与 disabledToolGroups 叠加生效，组已禁用时无需重复列 */
+  disabledTools?: string[]
   /** 覆盖全局设置的推理档位；undefined 表示跟随全局设置 */
   effort?: AgentEffort
   /** 覆盖会话默认权限模式；undefined 表示跟随全局/会话默认 */
   permissionMode?: ProferPermissionMode
-  /** [Phase 1 扩展位] 限定启用的 Skill slugs；undefined 表示不裁剪 */
+  /** [Phase 1] 限定启用的 Skill slugs；undefined=不裁剪（全量注入），[]=0 个 skill（全部隐藏），非空=白名单 */
   skillSlugs?: string[]
-  /** [Phase 1 扩展位] 限定启用的 MCP 服务器名；undefined 表示不裁剪 */
+  /** [Phase 1] 限定启用的 MCP 服务器名；undefined=不裁剪，[]=不加载任何用户 MCP，非空=白名单（产品内置 MCP 不受影响） */
   mcpServerNames?: string[]
   /** [Phase 1 扩展位] 是否允许委派子 Agent；undefined 表示跟随默认策略 */
   allowSubagents?: boolean
+  /**
+   * [Phase B] 派生基座（仅限内置预设 ID：standard / code / minimal）。
+   * 设置后本预设只存储与基座的差异，读取时按 resolveAgentPresetMerge 合并；
+   * 内置预设升级会自动传导到派生预设，无需手动同步。
+   */
+  basePresetId?: string
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -166,17 +210,22 @@ export interface AgentPresetCreateInput {
   suppressPromptSections?: AgentPresetSuppressKey[]
   /** 禁用的产品内置工具组（task-graph / memory / collaboration / automation） */
   disabledToolGroups?: AgentPresetToolGroup[]
+  /** 禁用的单个产品内置工具（短名，见 AGENT_PRESET_GROUP_TOOL_NAMES） */
+  disabledTools?: string[]
   effort?: AgentEffort
   permissionMode?: ProferPermissionMode
   skillSlugs?: string[]
   mcpServerNames?: string[]
   allowSubagents?: boolean
+  /** 派生基座（仅限内置预设 ID）；省略=独立预设 */
+  basePresetId?: string
 }
 
 /**
  * 更新预设输入（全部可选；内置预设不可更新）。
  *
  * 语义：字段省略 = 不修改；字段传 null = 清除（回退为跟随默认/不裁剪）；传值 = 设置。
+ * basePresetId 传 null = 脱离基座（把当前生效配置冻结为独立预设，不再跟随内置升级）。
  */
 export interface AgentPresetUpdateInput {
   name?: string
@@ -184,11 +233,97 @@ export interface AgentPresetUpdateInput {
   promptSections?: string[] | null
   suppressPromptSections?: AgentPresetSuppressKey[] | null
   disabledToolGroups?: AgentPresetToolGroup[] | null
+  disabledTools?: string[] | null
   effort?: AgentEffort | null
   permissionMode?: ProferPermissionMode | null
   skillSlugs?: string[] | null
   mcpServerNames?: string[] | null
   allowSubagents?: boolean | null
+  basePresetId?: string | null
+}
+
+// ===== 预设导出 / 导入（跨机器分享文件） =====
+
+/**
+ * 预设导出文件条目：只携带能力字段，不携带 id/时间戳等本地元数据。
+ * 内置预设导出后按普通条目导入（导入侧统一生成新 UUID，转为自定义预设）。
+ */
+export interface AgentPresetExportEntry {
+  name: string
+  description: string
+  promptSections?: string[]
+  suppressPromptSections?: AgentPresetSuppressKey[]
+  disabledToolGroups?: AgentPresetToolGroup[]
+  disabledTools?: string[]
+  effort?: AgentEffort
+  permissionMode?: ProferPermissionMode
+  skillSlugs?: string[]
+  mcpServerNames?: string[]
+  allowSubagents?: boolean
+  /** 派生基座（内置预设 ID，跨机器通用）；导入侧校验必须为内置 ID */
+  basePresetId?: string
+}
+
+/** 预设导出文件信封（JSON，供跨机器分享；格式不合规时导入整体拒绝） */
+export interface AgentPresetExportFile {
+  format: 'profer-agent-presets'
+  version: 1
+  /** ISO 时间戳（仅展示用） */
+  exportedAt: string
+  presets: AgentPresetExportEntry[]
+}
+
+/** 导入结果：imported 为新建成功的预设；renamed 为因重名自动追加后缀的条目 */
+export interface AgentPresetImportResult {
+  imported: AgentPreset[]
+  /** 导入时因与工作区已有预设重名而自动追加「（导入）」后缀的条目名 */
+  renamedNames: string[]
+}
+
+/** 从预设提取可导出条目（内置与自定义通用，剥离本地元数据） */
+export function toAgentPresetExportEntry(preset: AgentPreset): AgentPresetExportEntry {
+  return {
+    name: preset.name,
+    description: preset.description,
+    ...(preset.promptSections?.length && { promptSections: preset.promptSections }),
+    ...(preset.suppressPromptSections?.length && { suppressPromptSections: preset.suppressPromptSections }),
+    ...(preset.disabledToolGroups?.length && { disabledToolGroups: preset.disabledToolGroups }),
+    ...(preset.disabledTools?.length && { disabledTools: preset.disabledTools }),
+    ...(preset.effort && { effort: preset.effort }),
+    ...(preset.permissionMode && { permissionMode: preset.permissionMode }),
+    ...(preset.skillSlugs !== undefined && { skillSlugs: preset.skillSlugs }),
+    ...(preset.mcpServerNames?.length && { mcpServerNames: preset.mcpServerNames }),
+    ...(preset.allowSubagents !== undefined && { allowSubagents: preset.allowSubagents }),
+    ...(preset.basePresetId !== undefined && { basePresetId: preset.basePresetId }),
+  }
+}
+
+/**
+ * 派生预设合并（纯函数）：把基座能力字段与子预设差异合并为生效配置。
+ *
+ * 合并语义：
+ * - id/name/description/isBuiltin/时间戳等实体字段：始终取子预设（派生预设是独立实体）
+ * - promptSections：基座在前 + 子预设追加（子预设只能增加提示词段）
+ * - suppressPromptSections / disabledToolGroups / disabledTools：并集（子预设只能增加隐藏/禁用）
+ * - effort/permissionMode/skillSlugs/mcpServerNames/allowSubagents：子预设定义则覆盖，未定义继承基座
+ */
+export function mergeAgentPreset(base: AgentPreset, child: AgentPreset): AgentPreset {
+  const promptSections = [...(base.promptSections ?? []), ...(child.promptSections ?? [])]
+  const suppressPromptSections = [...new Set([...(base.suppressPromptSections ?? []), ...(child.suppressPromptSections ?? [])])]
+  const disabledToolGroups = [...new Set([...(base.disabledToolGroups ?? []), ...(child.disabledToolGroups ?? [])])]
+  const disabledTools = [...new Set([...(base.disabledTools ?? []), ...(child.disabledTools ?? [])])]
+  return {
+    ...child,
+    ...(promptSections.length > 0 && { promptSections }),
+    ...(suppressPromptSections.length > 0 && { suppressPromptSections }),
+    ...(disabledToolGroups.length > 0 && { disabledToolGroups }),
+    ...(disabledTools.length > 0 && { disabledTools }),
+    effort: child.effort ?? base.effort,
+    permissionMode: child.permissionMode ?? base.permissionMode,
+    skillSlugs: child.skillSlugs !== undefined ? child.skillSlugs : base.skillSlugs,
+    mcpServerNames: child.mcpServerNames !== undefined ? child.mcpServerNames : base.mcpServerNames,
+    allowSubagents: child.allowSubagents !== undefined ? child.allowSubagents : base.allowSubagents,
+  }
 }
 
 /** Agent 预设 IPC 通道常量 */
@@ -213,4 +348,8 @@ export const AGENT_PRESET_IPC_CHANNELS = {
   GET_OTHER_WORKSPACE_PRESETS: 'agent:get-other-workspace-presets',
   /** 从其他工作区导入预设到当前工作区 */
   IMPORT_PRESET_FROM_WORKSPACE: 'agent:import-preset-from-workspace',
+  /** 导出预设为 JSON 文件（主进程弹出保存对话框并写盘；返回 null 表示用户取消） */
+  EXPORT_PRESETS: 'agent:export-presets',
+  /** 从 JSON 文件导入预设（主进程弹出打开对话框并解析；返回 null 表示用户取消） */
+  IMPORT_PRESETS: 'agent:import-presets',
 } as const

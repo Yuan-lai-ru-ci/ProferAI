@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Plus, Copy, Pencil, Trash2, Star, Check } from 'lucide-react'
+import { Plus, Copy, Pencil, Trash2, Star, Check, Download, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -32,7 +32,7 @@ import { workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
 import type { AgentPreset, AgentPresetCreateInput, AgentPresetUpdateInput, AgentPresetToolGroup, AgentEffort, ProferPermissionMode, SkillMeta } from '@profer/shared'
-import { AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP } from '@profer/shared'
+import { AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP, AGENT_PRESET_GROUP_TOOL_NAMES } from '@profer/shared'
 
 // ===== 表单状态 =====
 
@@ -46,6 +46,8 @@ interface PresetFormState {
   mcpServerNames: string // 逗号分隔
   allowSubagents: string // '' = 跟随 / 'yes' / 'no'
   disabledToolGroups: AgentPresetToolGroup[] // 空数组 = 全部可用
+  disabledTools: string[] // 禁用的单工具短名
+  basePresetId: string // '' = 独立预设 / 内置预设 ID = 派生
 }
 
 /** 产品内置工具组选项（预设可禁用） */
@@ -69,6 +71,8 @@ function presetToForm(preset: AgentPreset): PresetFormState {
     mcpServerNames: preset.mcpServerNames?.join(', ') ?? '',
     allowSubagents: preset.allowSubagents === undefined ? '' : preset.allowSubagents ? 'yes' : 'no',
     disabledToolGroups: preset.disabledToolGroups ?? [],
+    disabledTools: preset.disabledTools ?? [],
+    basePresetId: preset.basePresetId ?? '',
   }
 }
 
@@ -165,6 +169,9 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
   const [form, setForm] = React.useState<PresetFormState>(presetToForm({ name: '', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0 } as AgentPreset))
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState('')
+  // 导出/导入文件操作的结果提示（头部按钮下方展示，几秒后自动消失）
+  const [fileNotice, setFileNotice] = React.useState('')
+  const [fileBusy, setFileBusy] = React.useState(false)
   // 勾选面板数据源：当前工作区的 Skills 与 MCP 列表（打开对话框时拉取）
   const [availableSkills, setAvailableSkills] = React.useState<SkillMeta[]>([])
   const [availableMcpServers, setAvailableMcpServers] = React.useState<Array<{ name: string; enabled: boolean }>>([])
@@ -209,6 +216,16 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     })
   }, [])
 
+  /** 单工具裁剪勾选：已选 = 禁用该工具（短名，与 shared 事实表一致） */
+  const toggleDisabledTool = React.useCallback((toolName: string) => {
+    setForm((f) => ({
+      ...f,
+      disabledTools: f.disabledTools.includes(toolName)
+        ? f.disabledTools.filter((t) => t !== toolName)
+        : [...f.disabledTools, toolName],
+    }))
+  }, [])
+
   const reload = React.useCallback(async () => {
     try {
       const [list, defaultId] = await Promise.all([
@@ -242,7 +259,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
 
   const openCreate = React.useCallback(() => {
     setError('')
-    setForm({ name: '', description: '', promptText: '', effort: '', permissionMode: '', skillSlugs: '', mcpServerNames: '', allowSubagents: '', disabledToolGroups: [] })
+    setForm({ name: '', description: '', promptText: '', effort: '', permissionMode: '', skillSlugs: '', mcpServerNames: '', allowSubagents: '', disabledToolGroups: [], disabledTools: [], basePresetId: '' })
     setCreating(true)
   }, [])
 
@@ -267,11 +284,14 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
       promptSections,
       suppressPromptSections: suppressPromptSections.length > 0 ? suppressPromptSections : null,
       disabledToolGroups: form.disabledToolGroups.length > 0 ? form.disabledToolGroups : null,
+      disabledTools: form.disabledTools.length > 0 ? form.disabledTools : null,
       effort: (form.effort || null) as AgentEffort | null,
       permissionMode: (form.permissionMode || null) as ProferPermissionMode | null,
       skillSlugs: form.skillSlugs.trim() ? parseSlugList(form.skillSlugs) : null,
       mcpServerNames: form.mcpServerNames.trim() ? parseSlugList(form.mcpServerNames) : null,
       allowSubagents: form.allowSubagents ? form.allowSubagents === 'yes' : null,
+      // 派生基座：选内置=设置（切换）；留空=null（脱离基座，manager 冻结当前生效配置）
+      basePresetId: form.basePresetId || null,
     }
   }, [form])
 
@@ -284,13 +304,15 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
       ...(u.promptSections && { promptSections: u.promptSections }),
       ...(u.suppressPromptSections && { suppressPromptSections: u.suppressPromptSections }),
       ...(u.disabledToolGroups && { disabledToolGroups: u.disabledToolGroups }),
+      ...(u.disabledTools && { disabledTools: u.disabledTools }),
       ...(u.effort && { effort: u.effort }),
       ...(u.permissionMode && { permissionMode: u.permissionMode }),
       ...(u.skillSlugs && { skillSlugs: u.skillSlugs }),
       ...(u.mcpServerNames && { mcpServerNames: u.mcpServerNames }),
       ...(u.allowSubagents !== null && u.allowSubagents !== undefined && { allowSubagents: u.allowSubagents }),
+      ...(form.basePresetId && { basePresetId: form.basePresetId }),
     }
-  }, [buildUpdateInput])
+  }, [buildUpdateInput, form.basePresetId])
 
   const handleSave = React.useCallback(async () => {
     if (!form.name.trim()) {
@@ -354,6 +376,47 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     }
   }, [workspaceSlug, bumpCapabilities])
 
+  /** 导出全部预设为 JSON 文件（保存对话框由主进程弹出；取消则静默） */
+  const handleExport = React.useCallback(async () => {
+    if (!workspaceSlug) return
+    setFileBusy(true)
+    setFileNotice('')
+    try {
+      const result = await window.electronAPI.exportAgentPresets(workspaceSlug)
+      if (result) {
+        setFileNotice(`已导出 ${result.count} 个预设：${result.filePath}`)
+      }
+    } catch (err) {
+      console.error('[预设设置] 导出失败:', err)
+      setFileNotice(err instanceof Error ? `导出失败：${err.message}` : '导出失败')
+    } finally {
+      setFileBusy(false)
+    }
+  }, [workspaceSlug])
+
+  /** 从 JSON 文件导入预设（打开对话框由主进程弹出；取消则静默） */
+  const handleImport = React.useCallback(async () => {
+    if (!workspaceSlug) return
+    setFileBusy(true)
+    setFileNotice('')
+    try {
+      const result = await window.electronAPI.importAgentPresets(workspaceSlug)
+      if (result) {
+        const renamed = result.renamedNames.length > 0
+          ? `（重名自动改名的预设：${result.renamedNames.join(' / ')}）`
+          : ''
+        setFileNotice(`已导入 ${result.imported.length} 个预设${renamed}`)
+        await reload()
+        bumpCapabilities((v) => v + 1)
+      }
+    } catch (err) {
+      console.error('[预设设置] 导入失败:', err)
+      setFileNotice(err instanceof Error ? `导入失败：${err.message}` : '导入失败')
+    } finally {
+      setFileBusy(false)
+    }
+  }, [workspaceSlug, reload, bumpCapabilities])
+
   const formTitle = editing ? `编辑预设 · ${editing.name}` : '新建预设'
 
   const skillItems = React.useMemo<PickItem[]>(() =>
@@ -364,12 +427,23 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
 
   return (
     <SettingsSection title="Agent 预设" description="预设 = 岗位 + 工作环境：把提示词、推理档位、权限模式、Skill/MCP 白名单与能力裁剪组合成可复用配置。预设为工作区级配置，可跨工作区导入；会话内可随时切换（下一轮消息完整生效），星标为新建会话的默认预设。">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="outline" onClick={handleExport} disabled={fileBusy} title="把预设导出为 JSON 文件，便于跨机器分享">
+          <Download size={14} />
+          <span>导出</span>
+        </Button>
+        <Button size="sm" variant="outline" onClick={handleImport} disabled={fileBusy} title="从 Profer 预设 JSON 文件导入">
+          <Upload size={14} />
+          <span>导入</span>
+        </Button>
         <Button size="sm" variant="outline" onClick={openCreate}>
           <Plus size={14} />
           <span>新建预设</span>
         </Button>
       </div>
+      {fileNotice && (
+        <p className="text-right text-xs text-muted-foreground break-all">{fileNotice}</p>
+      )}
       <SettingsCard divided>
         {presets.length === 0 && (
           <div className="p-4 text-sm text-muted-foreground">加载中…</div>
@@ -379,6 +453,9 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
         )}
         {filteredPresets.map((preset) => {
           const isDefault = preset.id === defaultPresetId
+          const baseName = preset.basePresetId
+            ? presets.find((p) => p.id === preset.basePresetId)?.name
+            : undefined
           return (
             <div key={preset.id} className="flex items-center justify-between gap-3 p-4">
               <div className="min-w-0 flex-1">
@@ -387,12 +464,17 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                   {preset.isBuiltin && (
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0">内置</span>
                   )}
+                  {!preset.isBuiltin && preset.basePresetId && (
+                    <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-600 dark:text-sky-400 shrink-0" title="派生预设只存差异，基座内置升级自动跟随">
+                      基于「{baseName ?? preset.basePresetId}」
+                    </span>
+                  )}
                   {isDefault && (
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary shrink-0">默认</span>
                   )}
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{preset.description}</p>
-                {(preset.skillSlugs || preset.mcpServerNames || preset.effort || preset.permissionMode) && (
+                {(preset.skillSlugs || preset.mcpServerNames || preset.effort || preset.permissionMode || preset.disabledToolGroups || preset.disabledTools || preset.allowSubagents !== undefined) && (
                   <p className="mt-1 flex flex-wrap gap-1">
                     {preset.effort && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">强度 {preset.effort}</span>}
                     {preset.permissionMode && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">权限 {preset.permissionMode}</span>}
@@ -401,6 +483,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                     {preset.promptSections && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">提示词段×{preset.promptSections.length}</span>}
                     {preset.allowSubagents === false && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">无委派</span>}
                     {preset.disabledToolGroups && <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">精简×{preset.disabledToolGroups.length}</span>}
+                    {preset.disabledTools && <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">禁工具×{preset.disabledTools.length}</span>}
                   </p>
                 )}
               </div>
@@ -445,6 +528,21 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                 <label className="text-xs font-medium text-foreground/70">描述</label>
                 <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="一句话说明这个岗位" />
               </div>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-foreground/70">派生基座（可选）</label>
+              <Select value={form.basePresetId} onValueChange={(v) => setForm((f) => ({ ...f, basePresetId: v }))}>
+                <SelectTrigger><SelectValue placeholder="独立预设（不基于内置预设）" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">独立预设（不基于内置预设）</SelectItem>
+                  <SelectItem value="standard">基于「标准」</SelectItem>
+                  <SelectItem value="code">基于「代码」</SelectItem>
+                  <SelectItem value="minimal">基于「极简」</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">
+                派生预设只存储与基座的差异：内置预设升级（提示词段/能力裁剪调整）会自动跟随；表格中的字段仍可覆盖或追加。
+              </p>
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-foreground/70">提示词段（追加到系统提示词）</label>
@@ -520,28 +618,63 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-foreground/70">精简能力（禁用产品内置工具组）</label>
+              <label className="text-xs font-medium text-foreground/70">精简能力（禁用产品内置工具组 / 单个工具）</label>
               <div className="flex flex-col gap-2 rounded-md border p-3">
-                {TOOL_GROUP_OPTIONS.map((group) => (
-                  <label key={group.value} className="flex cursor-pointer items-center justify-between gap-2 select-none">
-                    <span className="flex min-w-0 flex-col">
-                      <span className="text-xs">{group.label}</span>
-                      <span className="truncate text-[10px] text-muted-foreground">{group.hint}</span>
-                    </span>
-                    <Switch
-                      checked={form.disabledToolGroups.includes(group.value)}
-                      onCheckedChange={(on) => setForm((f) => ({
-                        ...f,
-                        disabledToolGroups: on
-                          ? [...f.disabledToolGroups, group.value]
-                          : f.disabledToolGroups.filter((g) => g !== group.value),
-                      }))}
-                      className="scale-90 shrink-0"
-                    />
-                  </label>
-                ))}
+                {TOOL_GROUP_OPTIONS.map((group) => {
+                  const groupDisabled = form.disabledToolGroups.includes(group.value)
+                  const groupTools = AGENT_PRESET_GROUP_TOOL_NAMES[group.value]
+                  return (
+                    <div key={group.value} className="flex flex-col gap-1.5">
+                      <label className="flex cursor-pointer items-center justify-between gap-2 select-none">
+                        <span className="flex min-w-0 flex-col">
+                          <span className="text-xs">{group.label}</span>
+                          <span className="truncate text-[10px] text-muted-foreground">{group.hint}</span>
+                        </span>
+                        <Switch
+                          checked={groupDisabled}
+                          onCheckedChange={(on) => setForm((f) => ({
+                            ...f,
+                            disabledToolGroups: on
+                              ? [...f.disabledToolGroups, group.value]
+                              : f.disabledToolGroups.filter((g) => g !== group.value),
+                          }))}
+                          className="scale-90 shrink-0"
+                        />
+                      </label>
+                      {!groupDisabled && (
+                        <details className="ml-1 border-l-2 border-border/60 pl-3">
+                          <summary className="cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground/80">
+                            单工具裁剪（已禁 {form.disabledTools.filter((t) => (groupTools as readonly string[]).includes(t)).length} / {groupTools.length}）
+                          </summary>
+                          <div className="flex flex-wrap gap-1.5 pt-1.5">
+                            {groupTools.map((toolName) => {
+                              const checked = form.disabledTools.includes(toolName)
+                              return (
+                                <button
+                                  key={toolName}
+                                  type="button"
+                                  onClick={() => toggleDisabledTool(toolName)}
+                                  title={checked ? `已禁用 ${toolName}` : `禁用 ${toolName}`}
+                                  className={cn(
+                                    'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] transition-colors',
+                                    checked
+                                      ? 'border-destructive/60 bg-destructive/10 text-destructive'
+                                      : 'border-border/80 text-foreground/70 hover:bg-foreground/[0.04]',
+                                  )}
+                                >
+                                  {checked && <Check size={10} strokeWidth={3} />}
+                                  <span>{toolName}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
-              <p className="text-[10px] text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏（任务图/记忆/协作/定时任务）。全部关 = 完整能力。</p>
+              <p className="text-[10px] text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏（任务图/记忆/协作/定时任务）。组已整体禁用时无需再逐个勾选单工具；全部关 = 完整能力。</p>
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
           </div>

@@ -1,8 +1,31 @@
-import { describe, expect, test } from 'bun:test'
-import { buildSystemPrompt } from './agent-prompt-builder'
+import { describe, expect, mock, test } from 'bun:test'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { getConfigDirName } from './config-paths'
+
+// prompt builder 经 config-paths 间接导入 Electron；Bun 单测需提供最小主进程 mock。
+mock.module('electron', () => ({
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },
+  app: { getPath: () => '', getName: () => 'profer-dev', isPackaged: false },
+  clipboard: { readText: () => '', writeText: () => undefined },
+  dialog: {},
+  nativeImage: {},
+  nativeTheme: {},
+  Notification: class {},
+  powerMonitor: {},
+  powerSaveBlocker: {},
+  safeStorage: {},
+  screen: {},
+  shell: {},
+  net: {},
+  protocol: {},
+  session: {},
+  systemPreferences: {},
+  View: class {},
+  WebContentsView: class {},
+}))
+
+const { buildSystemPrompt } = await import('./agent-prompt-builder')
+const { getConfigDirName } = await import('./config-paths')
 
 describe('buildSystemPrompt', () => {
   test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
@@ -46,6 +69,16 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('高风险、不可逆或外部副作用')
     expect(piPrompt).toContain('最小相关验证')
     expect(piPrompt).toContain('两次独立证据')
+    // 验证 Harness 兜底规则对 Pi 明示，避免多余续轮
+    expect(piPrompt).toContain('验证 Harness 会自动兜底')
+    expect(piPrompt).toContain('自动追加一次只做最小验证的续轮')
+    // 工具名按 runtime 适配：Pi 带 mcp__ 前缀，Claude 用 in-process MCP 裸名
+    expect(piPrompt).toContain('mcp__task-graph__proma_task_create')
+    expect(piPrompt).toContain('mcp__agent-presets__preset_create')
+    expect(piPrompt).not.toContain('用 `proma_task_create` 创建子任务')
+    expect(claudePrompt).toContain('用 `proma_task_create` 创建子任务')
+    expect(claudePrompt).toContain('`preset_create` 新建')
+    expect(claudePrompt).not.toContain('mcp__agent-presets__preset_create')
     expect(piPrompt).toContain('不要等待 SDK 自动落盘')
     expect(piPrompt).toContain('可以读取和写入')
     expect(piPrompt).toContain('`.claude/memory/MEMORY.md`')
@@ -53,6 +86,10 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('单次弱信号、临时过程和未经验证的推断不要写入')
     expect(piPrompt).not.toContain('不要写入长期记忆文件')
     expect(claudePrompt).not.toContain('### Pi Runtime 自主执行准则')
+    // B1-5：Claude runtime 也有专属段落，且 harness 兜底文案对 Claude 明示
+    expect(claudePrompt).toContain('## Claude Agent Runtime')
+    expect(claudePrompt).toContain('验证 Harness 会自动兜底')
+    expect(piPrompt).not.toContain('## Claude Agent Runtime')
   })
 
   test('极简预设 suppressPromptSections 隐藏任务图指南、委派策略与记忆体系段落', () => {
@@ -115,5 +152,30 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('8. **AI 生图**')
     expect(withoutAutomation).toContain('9. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('6. **自检习惯**')
+  })
+
+  test('团队记忆工具名按 runtime 适配（Pi 前缀 / Claude 裸名）', () => {
+    const piPrompt = buildSystemPrompt({
+      workspaceName: 'Team',
+      workspaceSlug: 'team-ws',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: true,
+      isTeamWorkspace: true,
+    })
+    expect(piPrompt).toContain('mcp__team-memory__list_team_memories')
+    expect(piPrompt).toContain('mcp__team-memory__read_team_memory')
+    expect(piPrompt).not.toContain('`list_team_memories`')
+
+    const claudePrompt = buildSystemPrompt({
+      workspaceName: 'Team',
+      workspaceSlug: 'team-ws',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: false,
+      isTeamWorkspace: true,
+    })
+    expect(claudePrompt).toContain('`list_team_memories`')
+    expect(claudePrompt).not.toContain('mcp__team-memory__list_team_memories')
   })
 })

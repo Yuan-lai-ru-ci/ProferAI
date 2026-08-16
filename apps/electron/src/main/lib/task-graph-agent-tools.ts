@@ -22,6 +22,7 @@ import {
   parseAbandon,
 } from '@profer/project-core'
 import { appendGraphEvent } from './project-graph-service'
+import { filterDisabledTools } from '@profer/shared'
 
 // ===== 类型 =====
 
@@ -95,6 +96,7 @@ export async function injectTaskGraphMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   ctx: TaskGraphToolContext,
+  disabledTools?: string[],
 ): Promise<void> {
   // Electron ASAR 环境下动态 ESM import 可能间歇性失败，回退到 CommonJS require 兜底
   let z: ZodModule['z']
@@ -106,10 +108,7 @@ export async function injectTaskGraphMcpServer(
   const schemas = buildTaskGraphSchemas(z)
   const now = () => Date.now()
 
-  const server = sdk.createSdkMcpServer({
-    name: 'task-graph',
-    version: '1.0.0',
-    tools: [
+  const tools = [
       // ===== proma_task_create =====
       sdk.tool(
         'proma_task_create',
@@ -220,7 +219,12 @@ export async function injectTaskGraphMcpServer(
           return jsonResult({ taskId, updated: true })
         },
       ),
-    ],
+  ]
+
+  const server = sdk.createSdkMcpServer({
+    name: 'task-graph',
+    version: '1.0.0',
+    tools: filterDisabledTools(tools, disabledTools),
   })
 
   // 注册到 mcpServers（SDK 统一 MCP 通道）

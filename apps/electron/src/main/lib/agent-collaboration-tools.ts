@@ -16,7 +16,7 @@ import type {
   ProferPermissionMode,
   SDKMessage,
 } from '@profer/shared'
-import { AGENT_IPC_CHANNELS } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, filterDisabledTools } from '@profer/shared'
 import {
   createAgentSession,
   getAgentSessionMeta,
@@ -946,6 +946,7 @@ export async function injectAgentCollaborationMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   ctx: CollaborationToolContext,
+  disabledTools?: string[],
 ): Promise<void> {
   // Electron ASAR 环境下动态 ESM import 可能间歇性失败（Issue #1108），
   // 回退到 CommonJS require 兜底，避免 MCP 工具族在会话中途消失。
@@ -957,10 +958,7 @@ export async function injectAgentCollaborationMcpServer(
   }
   const schemas = buildCollaborationSchemas(z)
 
-  const server = sdk.createSdkMcpServer({
-    name: 'collaboration',
-    version: '1.0.0',
-    tools: [
+  const tools = [
       sdk.tool(
         'list_available_agent_models',
         '列出当前父会话渠道下已启用、可用于协作子 Agent 的模型。需要给 delegate_agent/delegate_agents 指定 modelId 前应先调用此工具。',
@@ -1241,7 +1239,12 @@ export async function injectAgentCollaborationMcpServer(
           })
         },
       ),
-    ],
+  ]
+
+  const server = sdk.createSdkMcpServer({
+    name: 'collaboration',
+    version: '1.0.0',
+    tools: filterDisabledTools(tools, disabledTools),
   })
 
   mcpServers.collaboration = server as unknown as Record<string, unknown>
