@@ -84,7 +84,7 @@ import {
   installPiRequestProxyFetch,
   runWithPiRequestProxy,
 } from './pi-request-proxy'
-import { createPiHarness, type PiHarnessToolCall } from '../pi-harness'
+import { createPiHarness, createPiHarnessFollowUpSystemMessage, type PiHarnessToolCall } from '../pi-harness'
 import { appendPiHarnessDiagnostic } from '../pi-harness-diagnostics'
 import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
 
@@ -689,15 +689,18 @@ function isPromaSkillPath(path: string | undefined, allowedRoots: string[]): boo
 /**
  * 按预设 skillSlugs 白名单过滤 skill。
  * 名字匹配规则与 skillCommandAliases 一致：SKILL.md name / 目录名 / 父目录名。
+ * undefined = 不裁剪；空 Set（skillSlugs: []）= 0 个 skill，全部隐藏。
  */
-function matchesSkillSlug(skill: Skill, slugs: Set<string>): boolean {
-  if (slugs.size === 0) return true
+function matchesSkillSlug(skill: Skill, slugs: Set<string> | undefined): boolean {
+  if (slugs === undefined) return true
   return skillCommandAliases(skill).some((alias) => slugs.has(alias))
 }
 
-function createPromaSkillsOverride(additionalSkillPaths: string[] | undefined, skillSlugs?: string[]): (base: SkillLoadResult) => SkillLoadResult {
+export function createPromaSkillsOverride(additionalSkillPaths: string[] | undefined, skillSlugs?: string[]): (base: SkillLoadResult) => SkillLoadResult {
   const allowedRoots = buildAllowedSkillRoots(additionalSkillPaths)
-  const slugSet = new Set(skillSlugs ?? [])
+  // 语义：undefined = 不裁剪（全量注入）；[] = 明确 0 个 skill（全部隐藏）；非空 = 白名单。
+  // 不能用 `skillSlugs ?? []` 再转 Set，否则丢失 undefined 与空数组的区分（空数组是合法的"全禁"表达）。
+  const slugSet = skillSlugs === undefined ? undefined : new Set(skillSlugs)
   return (base) => ({
     skills: base.skills.filter((skill) =>
       (isPromaSkillPath(skill.filePath, allowedRoots) || isPromaSkillPath(skill.baseDir, allowedRoots))
@@ -1069,7 +1072,7 @@ function normalizeStringArray(value: unknown): string[] | undefined {
   return items.length > 0 ? items : undefined
 }
 
-function buildPromaProductToolDefinitions(
+export function buildPromaProductToolDefinitions(
   sdk: PiSdk,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   onToolCall?: ToolWrapOptions['onToolCall'],
@@ -1670,7 +1673,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ? sdk.SessionManager.open(sessionFile, input.piSessionDir, cwd)
         : sdk.SessionManager.create(cwd, input.piSessionDir)
       const { modelRuntime, model } = await buildModel(sdk, input)
-      const harness = input.compactRequest ? undefined : createPiHarness({ userPrompt: input.prompt })
+      // cwd 供 harness 把工具参数里的相对路径解析为绝对路径，与读回验证匹配一致
+      const harness = input.compactRequest ? undefined : createPiHarness({ userPrompt: input.prompt, cwd })
       const onToolCall: ToolWrapOptions['onToolCall'] = (call) => harness?.recordToolCall(call)
       const autoCompactionReserveTokens = calculatePiAutoCompactionReserveTokens(
         model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
@@ -2127,7 +2131,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 dropTrailingAbortedAssistant: () => {
                   session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
                 },
-                createFollowUpPrompt: () => harness?.createFollowUpPrompt(),
+                createFollowUpPrompt: () => {
+                  const followUpPrompt = harness?.createFollowUpPrompt()
+                  if (followUpPrompt && harness) {
+                    // 续轮身份标注：自动注入的验证请求以系统消息推给 UI（渲染为「系统验证兜底」），
+                    // 避免 Pi transcript 里这条 user 消息在回看/持久化时被误认为用户自己发的。
+                    queue.push(createPiHarnessFollowUpSystemMessage(session.sessionId, harness.createDecision()))
+                  }
+                  return followUpPrompt
+                },
                 markBlocked: () => harness?.markBlocked(),
               },
             )

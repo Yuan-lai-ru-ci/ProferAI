@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AgentOrchestrator — Agent 编排层
  *
  * 从 agent-service.ts 提取的核心业务逻辑，负责：
@@ -567,7 +567,7 @@ export class AgentOrchestrator {
 
     const toPersist = accumulatedMessages.filter(
       (m) => m.type === 'assistant' || m.type === 'user' || m.type === 'result'
-        || (m.type === 'system' && ['compact_boundary', 'permission_denied'].includes((m as import('@profer/shared').SDKSystemMessage).subtype ?? ''))
+        || (m.type === 'system' && ['compact_boundary', 'permission_denied', 'harness_follow_up'].includes((m as import('@profer/shared').SDKSystemMessage).subtype ?? ''))
     ).filter((m) => {
       // Pi partial 仅用于实时预览；即使未来调用方误传，也不能污染 JSONL 历史。
       if (isPartialSDKMessage(m)) return false
@@ -927,6 +927,8 @@ export class AgentOrchestrator {
       // 方案 3：预设禁用的产品内置工具组（注入时直接不注册）；allowSubagents=false 等价禁用协作工具
       const disabledToolGroups = new Set<string>(sessionPreset.disabledToolGroups ?? [])
       if (sessionPreset.allowSubagents === false) disabledToolGroups.add('collaboration')
+      // B2-3：预设禁用的单工具短名（与工具组叠加生效，两侧注入点按 shared 事实表口径过滤）
+      const disabledTools = sessionPreset.disabledTools
       const mcpServers = this.buildMcpServers(workspaceSlug, sessionPreset.mcpServerNames)
       if (!disabledToolGroups.has('automation')) {
         await injectAutomationMcpServer(sdk, mcpServers, {
@@ -935,15 +937,15 @@ export class AgentOrchestrator {
           modelId,
           workspaceId,
           triggeredBy: input.triggeredBy as 'user' | 'automation' | undefined,
-        })
+        }, disabledTools)
       }
       if (!disabledToolGroups.has('memory')) {
         await injectMemoryArchiveMcpServer(sdk, mcpServers, {
           memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
           workspaceSlug,
-        })
+        }, disabledTools)
         if (workspace?.type === 'team') {
-          await injectTeamMemoryMcpServer(sdk, mcpServers, { workspaceId })
+          await injectTeamMemoryMcpServer(sdk, mcpServers, { workspaceId }, disabledTools)
         }
       }
       if (!disabledToolGroups.has('collaboration')) {
@@ -954,10 +956,10 @@ export class AgentOrchestrator {
           workspaceId,
           permissionMode: input.permissionModeOverride,
           triggeredBy: input.triggeredBy,
-        })
+        }, disabledTools)
       }
       if (!disabledToolGroups.has('task-graph')) {
-        await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId })
+        await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId }, disabledTools)
       }
       await injectAgentPresetMcpServer(sdk, mcpServers, { sessionId })
       await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
@@ -1060,6 +1062,7 @@ export class AgentOrchestrator {
               permissionMode: initialPermissionMode,
               triggeredBy: input.triggeredBy,
               disabledToolGroups: [...disabledToolGroups],
+              disabledTools,
             })
             const mcpTools = await buildPiMcpTools(mcpServers)
             return [...builtin.tools, ...mcpTools]
@@ -1362,7 +1365,7 @@ export class AgentOrchestrator {
           ),
           deepSeekV4ThinkingEnabled: appSettings.agentThinking?.type !== 'disabled',
           ...(workspaceSlug && { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] }),
-          ...(sessionPreset.skillSlugs && { skillSlugs: sessionPreset.skillSlugs }),
+          ...(sessionPreset.skillSlugs !== undefined && { skillSlugs: sessionPreset.skillSlugs }),
           ...(piCustomTools && { customTools: piCustomTools }),
           ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
           ...(userMessage.trim() === '/compact' && { compactRequest: true }),
@@ -1392,8 +1395,8 @@ export class AgentOrchestrator {
         ...(rewindResumeAt && { resumeSessionAt: rewindResumeAt }),
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(workspaceSlug && { plugins: [{ type: 'local' as const, path: getAgentWorkspacePath(workspaceSlug) }] }),
-        // 预设 Skill 白名单（Claude SDK 原生 skills 过滤：未列出的 skill 对模型隐藏且 Skill 工具拒绝）
-        ...(sessionPreset.skillSlugs && { skills: sessionPreset.skillSlugs }),
+        // 预设 Skill 白名单（Claude SDK 原生 skills 过滤：未列出的 skill 对模型隐藏且 Skill 工具拒绝；[] = 0 skill）
+        ...(sessionPreset.skillSlugs !== undefined && { skills: sessionPreset.skillSlugs }),
         // 合并附加目录：用户当次输入 + 会话级 + 工作区级（详见 collectAttachedDirectories）
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         // 启用文件检查点，支持 rewindFiles 回退
@@ -1947,7 +1950,7 @@ export class AgentOrchestrator {
             // 累积 assistant 和 user 消息用于持久化
             // - 跳过 replay 消息，避免 resume 时重复写入
             // - 对 user 消息，仅累积含 tool_result 的（初始用户消息已在步骤 5 手动持久化）
-            // - 对 system 消息，仅累积 compact_boundary（上下文压缩分界线需要持久化显示）
+            // - 对 system 消息，仅累积需要持久化显示的（compact_boundary / permission_denied / harness_follow_up）
             if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'result') {
               const msgRecord = msg as Record<string, unknown>
               if (!msgRecord.isReplay && !isPartialMessage) {
@@ -1968,7 +1971,7 @@ export class AgentOrchestrator {
               }
             } else if (msg.type === 'system') {
               const sysMsg = msg as import('@profer/shared').SDKSystemMessage
-              if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'permission_denied') {
+              if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'harness_follow_up') {
                 accumulatedMessages.push(msg)
               }
             }
@@ -1991,13 +1994,17 @@ export class AgentOrchestrator {
               // adapter 在"本轮结束但仍有后台任务/定时任务在飞行"时打的注解：
               // 走轻量完成（UI 空闲可输入、host 保留会话），等待 task_notification 自动续轮。
               const keptOpenForTasks = (msg as Record<string, unknown>)._keepChannelOpenForTasks === true
-              const keepChannelOpen = errorHelpers.shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
+              // B1-5：adapter 在 harness 验证兜底续轮时打的注解：本轮未真正结束，
+              // 保持事件循环继续消费续轮消息，但不进入轻量空闲态（UI 保持运行中）。
+              const keptOpenForHarnessFollowUp = (msg as Record<string, unknown>)._keepChannelOpenForHarnessFollowUp === true
+              const keepChannelOpen = errorHelpers.shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks || keptOpenForHarnessFollowUp
               // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
               const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
               console.log(
                 `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}, ` +
                 `terminal_reason=${resultTerminalReason ?? 'undefined'}, keepChannelOpen=${keepChannelOpen}` +
                 (keptOpenForTasks ? ', keptOpenForTasks=true' : '') +
+                (keptOpenForHarnessFollowUp ? ', keptOpenForHarnessFollowUp=true' : '') +
                 (hasDeferredTool ? ', hasDeferredTool=true' : ''),
               )
               if (keptOpenForTasks) {

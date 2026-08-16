@@ -18,6 +18,7 @@ import type {
   CreateAutomationInput,
   UpdateAutomationInput,
 } from '@profer/shared'
+import { filterDisabledTools } from '@profer/shared'
 import {
   createAutomation,
   deleteAutomation,
@@ -96,6 +97,8 @@ export interface PiBuiltinToolsContext {
   windowsShellAvailable?: boolean
   /** 预设禁用的产品内置工具组（task-graph/memory/collaboration/automation），对应工具不注册 */
   disabledToolGroups?: string[]
+  /** 预设禁用的单个产品内置工具（短名，见 shared AGENT_PRESET_GROUP_TOOL_NAMES），与工具组叠加生效 */
+  disabledTools?: string[]
 }
 
 function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
@@ -378,9 +381,11 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
             skillSlugs: p.skillSlugs ?? null,
             mcpServerNames: p.mcpServerNames ?? null,
             allowSubagents: p.allowSubagents ?? null,
+            basePresetId: p.basePresetId ?? null,
             promptSections: p.promptSections ?? null,
             suppressPromptSections: p.suppressPromptSections ?? null,
             disabledToolGroups: p.disabledToolGroups ?? null,
+            disabledTools: p.disabledTools ?? null,
           })),
         })
       },
@@ -395,20 +400,24 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
         promptSections: Type.Optional(Type.Array(Type.String())),
         suppressPromptSections: Type.Optional(AGENT_PRESET_SUPPRESS_ARRAY),
         disabledToolGroups: Type.Optional(Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')]))),
+        disabledTools: Type.Optional(Type.Array(Type.String({ description: '禁用的单个产品内置工具短名（如 proma_task_create / delegate_agent）' }))),
         effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max')])),
         permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan')])),
         skillSlugs: Type.Optional(Type.Array(Type.String())),
         mcpServerNames: Type.Optional(Type.Array(Type.String())),
         allowSubagents: Type.Optional(Type.Boolean()),
+        basePresetId: Type.Optional(Type.String({ description: '派生基座（内置预设 ID：standard / code / minimal）；省略=独立预设' })),
       }),
       async execute(_toolCallId, params) {
         const args = params as {
           name: string; description?: string; promptSections?: string[]
           suppressPromptSections?: Array<'subagents' | 'memory' | 'task-graph' | 'automation'>
           disabledToolGroups?: Array<'task-graph' | 'memory' | 'collaboration' | 'automation'>
+          disabledTools?: string[]
           effort?: 'low' | 'medium' | 'high' | 'max'
           permissionMode?: 'auto' | 'bypassPermissions' | 'plan'
           skillSlugs?: string[]; mcpServerNames?: string[]; allowSubagents?: boolean
+          basePresetId?: string
         }
         try {
           const preset = createAgentPreset(ctx.workspaceSlug, {
@@ -417,15 +426,17 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
             ...(args.promptSections && { promptSections: args.promptSections }),
             ...(args.suppressPromptSections && { suppressPromptSections: args.suppressPromptSections }),
             ...(args.disabledToolGroups && { disabledToolGroups: args.disabledToolGroups }),
+            ...(args.disabledTools && { disabledTools: args.disabledTools }),
             ...(args.effort && { effort: args.effort }),
             ...(args.permissionMode && { permissionMode: args.permissionMode }),
-            ...(args.skillSlugs && { skillSlugs: args.skillSlugs }),
+            ...(args.skillSlugs !== undefined && { skillSlugs: args.skillSlugs }),
             ...(args.mcpServerNames && { mcpServerNames: args.mcpServerNames }),
             ...(args.allowSubagents !== undefined && { allowSubagents: args.allowSubagents }),
+            ...(args.basePresetId !== undefined && { basePresetId: args.basePresetId }),
           })
           return jsonToolResult({
             preset,
-            hint: '新预设已创建。会话内可用 preset_switch_session 随时切换；新建会话将使用默认预设（preset_set_default 可改）。',
+            hint: '新预设已创建。会话内可用 mcp__agent-presets__preset_switch_session 随时切换；新建会话将使用默认预设（mcp__agent-presets__preset_set_default 可改）。',
           })
         } catch (error) {
           return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
@@ -446,7 +457,7 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
           const preset = copyAgentPreset(ctx.workspaceSlug, args.fromId, args.name)
           return jsonToolResult({
             preset,
-            hint: '副本已创建。新建会话时可以在会话创建入口选择该预设；如需设为默认（preset_set_default）请向用户确认。',
+            hint: '副本已创建。新建会话时可以在会话创建入口选择该预设；如需设为默认（mcp__agent-presets__preset_set_default）请向用户确认。',
           })
         } catch (error) {
           return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
@@ -464,11 +475,13 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
         promptSections: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
         suppressPromptSections: Type.Optional(Type.Union([AGENT_PRESET_SUPPRESS_ARRAY, Type.Null()])),
         disabledToolGroups: Type.Optional(Type.Union([Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')])), Type.Null()])),
+        disabledTools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
         effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max'), Type.Null()])),
         permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan'), Type.Null()])),
         skillSlugs: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
         mcpServerNames: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
         allowSubagents: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+        basePresetId: Type.Optional(Type.Union([Type.String({ description: '切换派生基座（内置预设 ID）' }), Type.Null({ description: '脱离基座，冻结当前生效配置为独立预设' })])),
       }),
       async execute(_toolCallId, params) {
         const args = params as { presetId: string } & Record<string, unknown>
@@ -708,6 +721,7 @@ function summarizeAutomation(a: import('@profer/shared').Automation, includeHist
     agentRuntime: a.agentRuntime ?? 'claude',
     completedAt: a.completedAt,
     sessionMode: a.sessionMode,
+    presetId: a.presetId,
     workspaceId: a.workspaceId,
     sourceSessionId: a.sourceSessionId,
     lastSessionId: a.lastSessionId,
@@ -759,6 +773,9 @@ function validDayOfMonthArr(v: unknown): boolean {
 }
 
 function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAutomationInput>): void {
+  if (input.presetId !== undefined && typeof input.presetId !== 'string') {
+    throw new Error(`非法的 presetId: ${String(input.presetId)}（应为预设 ID 字符串；空字符串恢复默认）`)
+  }
   if (input.scheduleType !== undefined && !validScheduleType(input.scheduleType)) {
     throw new Error(`非法的 scheduleType: ${String(input.scheduleType)}`)
   }
@@ -857,6 +874,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
         active: Type.Optional(Type.Boolean({ description: '创建后是否启用，默认 true' })),
         agentRuntime: Type.Optional(Type.Union([Type.Literal('claude'), Type.Literal('pi')], { description: '运行该任务的 Agent runtime；不传则继承当前会话 runtime' })),
         sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')], { description: '会话模式' })),
+        presetId: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: '运行该任务的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。不传则继承当前会话预设；未知 ID 回退 standard' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -878,6 +896,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           modelId: ctx.modelId,
           workspaceId: ctx.workspaceId,
           sessionMode: args.sessionMode as 'daily' | 'reuse' | undefined,
+          presetId: (args.presetId as string | undefined) ?? getAgentSessionMeta(ctx.sessionId)?.presetId,
           sourceSessionId: ctx.sessionId,
           active: (args.active as boolean) ?? true,
         }
@@ -926,6 +945,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
         active: Type.Optional(Type.Boolean({ description: '启用或暂停任务' })),
         agentRuntime: Type.Optional(Type.Union([Type.Literal('claude'), Type.Literal('pi')], { description: '新的 Agent runtime' })),
         sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')])),
+        presetId: Type.Optional(Type.String({ maxLength: 200, description: '新的 Agent 预设 ID（内置或任务工作区的自定义预设）；下次触发生效。传空字符串恢复跟随工作区默认' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -945,6 +965,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           active: args.active as boolean | undefined,
           agentRuntime: args.agentRuntime as AgentRuntime | undefined,
           sessionMode: args.sessionMode as 'daily' | 'reuse' | undefined,
+          presetId: args.presetId as string | undefined,
         }
         if (input.name !== undefined) assertNonBlank(input.name, 'name')
         if (input.prompt !== undefined) assertNonBlank(input.prompt, 'prompt')
@@ -1391,5 +1412,11 @@ export async function buildPiBuiltinTools(
   const cloudTools = buildProferCloudTools(sdk, ctx)
   tools.push(...cloudTools)
 
-  return { tools, collaborationAvailable }
+  // 单工具裁剪：shared 唯一事实表口径（短名 = name 末段），与 disabledToolGroups 叠加生效。
+  const filtered = filterDisabledTools(tools, ctx.disabledTools)
+  if (filtered.length !== tools.length) {
+    console.log(`[Pi 桥接] 单工具裁剪: ${tools.length - filtered.length} 个工具被预设禁用（${(ctx.disabledTools ?? []).join(', ')}）`)
+  }
+
+  return { tools: filtered, collaborationAvailable }
 }

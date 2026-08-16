@@ -308,7 +308,7 @@ export interface SDKResultMessage {
   _channelModelId?: string
 }
 
-/** SDK system 消息（init / compact_boundary / permission_denied / task_started / task_progress / task_notification） */
+/** SDK system 消息（init / compact_boundary / permission_denied / harness_follow_up / task_started / task_progress / task_notification） */
 export interface SDKSystemMessage {
   type: 'system'
   subtype?: string
@@ -329,6 +329,8 @@ export interface SDKSystemMessage {
   message?: string
   decision_reason_type?: string
   decision_reason?: string
+  /** harness_follow_up 相关字段：未验证写入文件清单（UI 展示用） */
+  pending_paths?: string[]
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
   [key: string]: unknown
 }

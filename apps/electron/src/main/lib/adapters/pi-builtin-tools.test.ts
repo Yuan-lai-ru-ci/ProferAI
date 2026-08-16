@@ -7,6 +7,28 @@ mock.module('../memory-archive-search', () => ({
   }),
 }))
 
+// 内置工具桥接经会话/工作区服务间接导入 Electron；Bun 单测需提供最小主进程 mock。
+mock.module('electron', () => ({
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },
+  app: { getPath: () => '', isPackaged: false },
+  clipboard: { readText: () => '', writeText: () => undefined },
+  dialog: {},
+  nativeImage: {},
+  nativeTheme: {},
+  Notification: class {},
+  powerMonitor: {},
+  powerSaveBlocker: {},
+  safeStorage: {},
+  screen: {},
+  shell: {},
+  net: {},
+  protocol: {},
+  session: {},
+  systemPreferences: {},
+  View: class {},
+  WebContentsView: class {},
+}))
+
 const {
   buildPiBuiltinTools,
   buildPiKnowledgeBaseTools,
@@ -74,6 +96,35 @@ describe('Pi Profer in-process tool bridges', () => {
       const listPayload = JSON.parse(listResult.content[0]!.text)
       expect(listPayload.presets.length).toBe(4)
       expect(listPayload.presets.some((p: { name: string }) => p.name === '研究模式')).toBe(true)
+    } finally {
+      presetManager.__resetAgentPresetsConfigPathForTest()
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given preset_create 带 basePresetId When Pi 创建 Then 落盘为派生预设（内置基座校验由 manager 把关）', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    const presetManager = await import('../agent-preset-manager')
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const tmpDir = mkdtempSync(join(tmpdir(), 'pi-preset-derive-test-'))
+    presetManager.__setAgentPresetsConfigPathForTest(tmpDir)
+    try {
+      buildPiAgentPresetTools(sdk, { sessionId: 'pi-derive-test', workspaceSlug: 'pi-derive-ws' })
+      const createTool = tools.find((t) => t.name === 'mcp__agent-presets__preset_create')!
+      const result = await createTool.execute!('call-1', {
+        name: '极简·研究',
+        description: '基于极简派生',
+        basePresetId: 'minimal',
+        disabledToolGroups: ['automation'],
+      }) as { content: Array<{ text: string }> }
+      const payload = JSON.parse(result.content[0]!.text)
+      expect(payload.preset.basePresetId).toBe('minimal')
+      // 生效配置合并基座 + 映射兜底：minimal 的 3 项 suppress ∪ automation（禁用工具组自动补全）
+      const resolved = presetManager.getAgentPreset('pi-derive-ws', payload.preset.id)
+      expect(resolved.suppressPromptSections).toEqual(['subagents', 'memory', 'task-graph', 'automation'])
+      expect(resolved.disabledToolGroups).toEqual(['task-graph', 'memory', 'collaboration', 'automation'])
     } finally {
       presetManager.__resetAgentPresetsConfigPathForTest()
       rmSync(tmpDir, { recursive: true, force: true })
@@ -186,5 +237,30 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     }
     // 预设工具永不裁剪：极简会话必须能切回其他预设
     expect(tools.some((t) => t.name.startsWith('mcp__agent-presets__'))).toBe(true)
+  })
+
+  test('Given disabledTools 单工具短名 When building Pi builtin tools Then 只过滤列出的工具且同组其余工具保留', async () => {
+    const { sdk } = createPiSdkStub()
+    const result = await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      disabledTools: ['proma_task_create', 'delegate_agent'],
+    })
+    const names = result.tools.map((t) => t.name)
+    expect(names).not.toContain('mcp__task-graph__proma_task_create')
+    expect(names).toContain('mcp__task-graph__proma_task_update')
+    expect(names).not.toContain('mcp__collaboration__delegate_agent')
+    expect(names).toContain('mcp__collaboration__delegate_agents')
+  })
+
+  test('Given disabledTools 与 disabledToolGroups 叠加 When building Pi builtin tools Then 组裁剪优先于单工具清单', async () => {
+    const { sdk } = createPiSdkStub()
+    const result = await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      disabledToolGroups: ['task-graph'],
+      disabledTools: ['proma_task_create', 'delegate_agent'],
+    })
+    const names = result.tools.map((t) => t.name)
+    expect(names.some((n) => n.startsWith('mcp__task-graph__'))).toBe(false)
+    expect(names).not.toContain('mcp__collaboration__delegate_agent')
   })
 })

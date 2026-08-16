@@ -12,16 +12,16 @@ describe('Pi Harness replay eval', () => {
       return decision!
     })
     expect(summarizePiHarnessDecisions(decisions)).toEqual({
-      total: 9,
+      total: 18,
       skipped: 0,
-      followUpRate: 3 / 9,
-      validatedRate: 3 / 9,
-      blockedRate: 1 / 9,
+      followUpRate: 9 / 18,
+      validatedRate: 6 / 18,
+      blockedRate: 1 / 18,
       reasons: {
         read_only: 2,
-        source_changes_unverified: 2,
-        validated: 3,
-        documents_unverified: 1,
+        source_changes_unverified: 7,
+        validated: 6,
+        documents_unverified: 2,
         blocked_or_failed: 1,
       },
     })

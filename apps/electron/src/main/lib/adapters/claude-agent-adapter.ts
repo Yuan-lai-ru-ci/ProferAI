@@ -29,6 +29,9 @@ import {
 import { detectInsufficientCredits } from '@profer/core'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
+import { createClaudeHarnessTracker } from '../claude-harness'
+import { createPiHarnessFollowUpSystemMessage } from '../pi-harness'
+import { appendPiHarnessDiagnostic } from '../pi-harness-diagnostics'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -826,6 +829,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     let backgroundTasksPending = false
     let idleTimer: NodeJS.Timeout | null = null
     let terminateAfterTerminalResult = false
+    // B1-5：Claude 侧验证兜底追踪器（复用运行时中立 harness 引擎）。
+    // resume 回放消息（isReplay）会被追踪器忽略，只跟踪当前 turn 的工具事实。
+    const claudeHarness = createClaudeHarnessTracker({ userPrompt: options.prompt, cwd: options.cwd })
     const clearIdleTimer = (): void => {
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
     }
@@ -1003,6 +1009,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
 
         const msg = sdkMessage as Record<string, unknown>
 
+        // B1-5：harness 追踪器观察每一条消息（工具事实 / 中断标记 / replay 忽略）
+        claudeHarness.observeMessage(sdkMessage)
+
         // 捕获 SDK session_id
         if ('session_id' in msg && typeof msg.session_id === 'string' && msg.session_id) {
           options.onSessionId?.(msg.session_id)
@@ -1059,16 +1068,35 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
             // 任务活动会持续重置计时器，仅在长时间彻底静默时兜底释放子进程，避免叠加场景下子进程泄漏。
             if (keepForTasks) armIdleTimer()
           } else {
-            // result 表示本轮真正结束。先关闭消息通道（让 SDK 不再读取新输入），
-            // 再标记 terminateAfterTerminalResult，在 yield 本条 result 后主动 break 出循环。
-            // break 会对 SDK iterator 调 .return() → 触发 SDK cleanup（关闭 in-process MCP 传输 +
-            // 有界等待子进程退出），输出流随即结束。SDK 0.3.185 已不再走「stdin EOF → 自然 done」
-            // 链路（见 Transport.close 注释），必须由 .return() 驱动终止，否则会挂在 next() 上、
-            // 只能靠 orchestrator 的 2s drain timeout 兜底。promptSuggestions 已关闭，result 即
-            // 本轮最后一条消息，break 不会丢失尾部消息。
-            clearIdleTimer()
-            channel.close()
-            terminateAfterTerminalResult = true
+            // B1-5：正常终态先过 harness 判定——本轮存在未验证写入时自动追加一次只做验证的续轮
+            // （与 Pi harness 同引擎同文案）。续轮提示经 channel 注入，SDK 会驱动新一轮 turn；
+            // 结果消息打注解让编排层保持事件循环不启动 drain 超时。无需续轮时走原路径收束。
+            const followUpPrompt = claudeHarness.evaluateTerminalResult(sdkMessage)
+            if (followUpPrompt) {
+              // 先推 harness 系统消息（subtype: harness_follow_up），UI 渲染为「系统验证兜底」，
+              // 避免注入的 user 消息在回看/持久化时被误认为用户自己发的消息。
+              yield createPiHarnessFollowUpSystemMessage(options.sessionId, claudeHarness.createDecision())
+              channel.enqueue({
+                type: 'user',
+                session_id: options.sessionId,
+                message: { role: 'user', content: followUpPrompt },
+                parent_tool_use_id: null,
+              } as SDKUserMessage)
+              ;(msg as Record<string, unknown>)._keepChannelOpenForHarnessFollowUp = true
+              console.log(`[Claude 适配器] harness 验证兜底：已注入续轮验证提示 sessionId=${options.sessionId}`)
+            } else {
+              // result 表示本轮真正结束。先关闭消息通道（让 SDK 不再读取新输入），
+              // 再标记 terminateAfterTerminalResult，在 yield 本条 result 后主动 break 出循环。
+              // break 会对 SDK iterator 调 .return() → 触发 SDK cleanup（关闭 in-process MCP 传输 +
+              // 有界等待子进程退出），输出流随即结束。SDK 0.3.185 已不再走「stdin EOF → 自然 done」
+              // 链路（见 Transport.close 注释），必须由 .return() 驱动终止，否则会挂在 next() 上、
+              // 只能靠 orchestrator 的 2s drain timeout 兜底。promptSuggestions 已关闭，result 即
+              // 本轮最后一条消息，break 不会丢失尾部消息。
+              appendPiHarnessDiagnostic(options.sessionId, claudeHarness.createDecision(), undefined, undefined, 'claude')
+              clearIdleTimer()
+              channel.close()
+              terminateAfterTerminalResult = true
+            }
           }
         }
 

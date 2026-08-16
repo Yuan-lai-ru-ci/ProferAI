@@ -144,9 +144,9 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       }
     } else if (msg.type === 'system') {
       const sysMsg = msg as SDKSystemMessage
-      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied）
+      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / harness_follow_up）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied') {
+      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'harness_follow_up') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -221,7 +221,7 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
     for (let i = result.length - 1; i >= 0; i--) {
       const prev = result[i]!
       if (prev.type === 'user') break // 真正的用户输入阻断合并
-      if (prev.type === 'system' && ['compact_boundary', 'permission_denied'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
+      if (prev.type === 'system' && ['compact_boundary', 'permission_denied', 'harness_follow_up'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
       if (prev.type === 'assistant-turn') {
         if (prev.model === group.model) {
           mergeTargetIdx = i
@@ -265,6 +265,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
+    if (group.message.subtype === 'harness_follow_up') return '系统验证兜底：已自动复查未验证改动'
     return ''
   }
   // assistant-turn：收集所有 text 块

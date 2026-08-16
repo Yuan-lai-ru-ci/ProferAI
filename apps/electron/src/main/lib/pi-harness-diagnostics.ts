@@ -4,7 +4,7 @@ import { getConfigDir } from './config-paths'
 import type { PiHarnessDecision } from './pi-harness'
 
 /** 事件 schema 版本：字段变更时递增，回放/审计工具据此兼容旧行 */
-export const PI_HARNESS_DIAGNOSTIC_SCHEMA_VERSION = 1
+export const PI_HARNESS_DIAGNOSTIC_SCHEMA_VERSION = 2
 
 export interface PiHarnessDiagnosticEvent {
   schemaVersion: number
@@ -12,7 +12,8 @@ export interface PiHarnessDiagnosticEvent {
   sessionId: string
   /** 可选：关联到 Agent 会话的某轮 turn；无则仅能按 sessionId 聚合 */
   turnId?: string
-  runtime: 'pi'
+  /** 来源 runtime：B1-5 起 harness 同时服务 Pi 与 Claude，两侧事件写入同一审计流 */
+  runtime: 'pi' | 'claude'
   action: PiHarnessDecision['action']
   reason: PiHarnessDecision['reason']
   pendingPathCount: number
@@ -39,6 +40,7 @@ export function toPiHarnessDiagnosticEvent(
   decision: PiHarnessDecision,
   now = new Date(),
   turnId?: string,
+  runtime: 'pi' | 'claude' = 'pi',
 ): PiHarnessDiagnosticEvent {
   // 截断后的 pendingPaths 用于展示；pendingPathCount 必须与之一致（用截断后长度），
   // 否则 >20 路径时计数与列表对不上。
@@ -48,7 +50,7 @@ export function toPiHarnessDiagnosticEvent(
     timestamp: now.toISOString(),
     sessionId: sessionId.slice(0, MAX_SESSION_ID_LENGTH),
     ...(turnId ? { turnId: turnId.slice(0, MAX_SESSION_ID_LENGTH) } : {}),
-    runtime: 'pi',
+    runtime,
     action: decision.action,
     reason: decision.reason,
     pendingPathCount: pendingPaths.length,
@@ -78,11 +80,12 @@ export function appendPiHarnessDiagnostic(
   decision: PiHarnessDecision,
   filePath = getPiHarnessDiagnosticsPath(),
   turnId?: string,
+  runtime: 'pi' | 'claude' = 'pi',
 ): void {
   try {
     mkdirSync(dirname(filePath), { recursive: true })
     rotateEventFileIfNeeded(filePath)
-    appendFileSync(filePath, `${JSON.stringify(toPiHarnessDiagnosticEvent(sessionId, decision, new Date(), turnId))}\n`, 'utf-8')
+    appendFileSync(filePath, `${JSON.stringify(toPiHarnessDiagnosticEvent(sessionId, decision, new Date(), turnId, runtime))}\n`, 'utf-8')
     // 失败计数在下次成功时清零（表示已恢复）
     diagnosticWriteFailures = 0
   } catch (error) {
