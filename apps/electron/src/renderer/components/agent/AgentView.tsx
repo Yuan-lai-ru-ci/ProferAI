@@ -655,8 +655,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
-  // 1.6 每会话「队列自动发送」开关：缺省 true（轮结束自动发队首）；手动停止自动置 false
-  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? true
   const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
@@ -693,6 +691,21 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     [sessions, sessionId],
   )
   const hasSessionMeta = Boolean(sessionMeta)
+  // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省关/重启保留）；map 仅为运行时缓存，
+  // 首次/切会话且 meta 有值时由下方 effect 填充。
+  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false
+  // 切会话/首次：map 无值且 meta 有值 → 从 meta 填充运行时缓存（每个会话独立记忆，不串）
+  React.useEffect(() => {
+    const metaValue = sessionMeta?.autoQueueSendEnabled
+    if (metaValue === undefined) return
+    if (store.get(agentQueueAutoSendMapAtom).has(sessionId)) return
+    setAutoSendMap((prev) => {
+      if (prev.has(sessionId)) return prev
+      const map = new Map(prev)
+      map.set(sessionId, metaValue)
+      return map
+    })
+  }, [sessionId, sessionMeta?.autoQueueSendEnabled, setAutoSendMap])
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
   const agentChannelId = sessionMetaChannelId ?? sessionChannelMap.get(sessionId) ?? defaultChannelId
@@ -1784,6 +1797,38 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     return qs
   }, [sessionId, store])
 
+  /**
+   * 1.6.1 把当前输入加入队列：消费引用选区 + 追加队列消息 + 清空输入框/建议。
+   * 供发送按钮左键（streaming/队列非空分支）、发送按钮右键（无条件入队）复用。
+   * 仅支持纯文本；输入为空且无附件时静默返回。
+   */
+  const enqueueCurrentInput = React.useCallback((): void => {
+    const text = inputContent.trim()
+    const effectiveText = text || suggestion || ''
+    const pendingFilesSnapshot = pendingFilesRef.current
+    if (!effectiveText && pendingFilesSnapshot.length === 0) return
+    // 运行中追加仅支持纯文本，不处理附件（与 streaming 分支旧语义一致）
+    if (pendingFilesSnapshot.length > 0) {
+      toast.info('队列暂不支持追加发送附件', {
+        description: '请先清空队列或撤除附件仅发送文本',
+      })
+      return
+    }
+    const quotedSelection = consumeQuotedSelection()
+    setQueuedMessages((prev) => [
+      ...prev,
+      createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
+    ])
+    setInputContent('')
+    setInputHtmlContent('')
+    setPromptSuggestions((prev) => {
+      if (!prev.has(sessionId)) return prev
+      const map = new Map(prev)
+      map.delete(sessionId)
+      return map
+    })
+  }, [consumeQuotedSelection, inputContent, pendingFilesRef, sessionId, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
+
   /** 向 liveMessages 追加一条乐观用户消息 */
   const appendLiveUserMessage = React.useCallback((message: SDKMessage) => {
     setLiveMessagesMap((prev) => {
@@ -1939,6 +1984,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       toast.info('Agent 正在停止', { description: '停止完成前不会发送或清除你的草稿。' })
       return
     }
+
+    // 1.6.1 队列非空时所有入口强制入队：用户需先清空队列（发完/撤回/删除）才能直接发送。
+    if (queuedMessages.length > 0) {
+      enqueueCurrentInput()
+      return
+    }
+
     const additionalDirectoriesForRun = new Set(attachedDirs)
     for (const dir of attachedFileDirectories) {
       additionalDirectoriesForRun.add(dir)
@@ -1946,26 +1998,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
     // streaming：进入前端托管队列，turn 结束后 auto-drain 逐条发送（不打断当前 turn）。
     if (streaming) {
-      // 运行中追加仅支持纯文本，不处理附件
-      if (pendingFilesSnapshot.length > 0) {
-        toast.info('Agent 运行中暂不支持追加发送附件', {
-          description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
-        })
-        return
-      }
-      const quotedSelection = consumeQuotedSelection()
-      setQueuedMessages((prev) => [
-        ...prev,
-        createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
-      ])
-      setInputContent('')
-      setInputHtmlContent('')
-      setPromptSuggestions((prev) => {
-        if (!prev.has(sessionId)) return prev
-        const map = new Map(prev)
-        map.delete(sessionId)
-        return map
-      })
+      // 附件限制/消费引用/入队/清空输入统一收敛到 enqueueCurrentInput
+      enqueueCurrentInput()
       return
     }
 
@@ -2225,7 +2259,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, queuedMessages, enqueueCurrentInput])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2345,6 +2379,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       map.set(sessionId, false)
       return map
     })
+    // 1.6.2 开关状态 per-session 持久化：手动停止 → 写 meta false（重启保留）
+    window.electronAPI.updateAgentQueueAutoSend(sessionId, false).catch(console.error)
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
       if (!current || (!current.running && !current.backgroundWaiting)) return prev
@@ -2364,14 +2400,16 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       })
   }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
 
-  /** 1.6 翻转「队列自动发送」开关（per-session 运行时状态，重启不保留） */
+  /** 1.6.2 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
   const handleToggleAutoSend = React.useCallback((): void => {
+    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false)
     setAutoSendMap((prev) => {
       const map = new Map(prev)
-      map.set(sessionId, !(map.get(sessionId) ?? true))
+      map.set(sessionId, next)
       return map
     })
-  }, [sessionId, setAutoSendMap])
+    window.electronAPI.updateAgentQueueAutoSend(sessionId, next).catch(console.error)
+  }, [sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2915,6 +2953,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           : 'text-foreground/30 cursor-not-allowed'
       )}
       onClick={handleSend}
+      // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
+      onContextMenu={(event) => {
+        event.preventDefault()
+        enqueueCurrentInput()
+      }}
       disabled={!canSend}
     >
       <CornerDownLeft className="size-[22px]" />

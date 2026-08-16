@@ -777,6 +777,8 @@ export interface ElectronAPI {
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
   updateSessionOpenAIThinkingLevel: (sessionId: string, level: AgentThinkingLevel | null) => Promise<AgentSessionMeta>
+  /** 更新会话「队列自动发送」开关（per-session 持久化到 meta，重启保留）。 */
+  updateAgentQueueAutoSend: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
   /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单动态展示）。 */
   getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined) => Promise<ReasoningCapability | undefined>
 
@@ -2299,6 +2301,10 @@ const electronAPI: ElectronAPI = {
 
   updateSessionOpenAIThinkingLevel: (sessionId: string, level: AgentThinkingLevel | null) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_OPENAI_THINKING, sessionId, level)
+  },
+
+  updateAgentQueueAutoSend: (sessionId: string, enabled: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_QUEUE_AUTO_SEND, { sessionId, enabled })
   },
 
   getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined) => {
