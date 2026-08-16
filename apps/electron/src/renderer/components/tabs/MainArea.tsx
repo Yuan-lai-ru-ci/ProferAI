@@ -71,6 +71,8 @@ export function MainArea(): React.ReactElement {
   const browserLayoutRef = React.useRef<HTMLDivElement>(null)
   const [browserLayoutWidth, setBrowserLayoutWidth] = React.useState(0)
   const browserDragging = React.useRef(false)
+  // 拖拽期间禁用浏览器分栏的 width 过渡：过渡动画用于展开/收起，拖拽时若保留会让面板宽度滞后于拖拽条，视觉不跟手。
+  const [isDraggingBrowser, setIsDraggingBrowser] = React.useState(false)
   const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
   // 浏览器面板仅属于 Agent 会话；必须同时满足「激活 tab 是 agent」和「当前处于 agent 模式」。
   // 否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成 appMode 与 activeTab.type 撕裂，
@@ -247,6 +249,7 @@ export function MainArea(): React.ReactElement {
     const container = browserLayoutRef.current
     if (!container) return
     browserDragging.current = true
+    setIsDraggingBrowser(true)
     const rect = container.getBoundingClientRect()
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
@@ -260,6 +263,7 @@ export function MainArea(): React.ReactElement {
     }
     const onMouseUp = () => {
       browserDragging.current = false
+      setIsDraggingBrowser(false)
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
       document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = '' })
@@ -268,7 +272,7 @@ export function MainArea(): React.ReactElement {
     }
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [setBrowserSplitRatio])
+  }, [setBrowserSplitRatio, setIsDraggingBrowser])
 
   return (
     <div ref={browserLayoutRef} className="relative flex h-full min-w-0 gap-2">
@@ -358,7 +362,7 @@ export function MainArea(): React.ReactElement {
           {/* 浏览器分栏常驻渲染：width 过渡形成展开/收起动画；隐藏时内容 opacity 淡出且不可交互，
               原生 WebContentsView 由 BrowserSlot 依据容器尺寸（width 0 → visible:false）自动隐藏，不销毁会话。 */}
           <div
-            className="flex-shrink-0 min-w-0 overflow-hidden transition-[width] duration-300"
+            className={cn('flex-shrink-0 min-w-0 overflow-hidden', isDraggingBrowser ? '' : 'transition-[width] duration-300', !browserVisible && '-ml-2')}
             style={{ width: browserWidthPx }}
           >
             <div className={cn('h-full transition-[opacity,visibility] duration-300', browserVisible ? 'opacity-100 visible' : 'opacity-0 pointer-events-none invisible')}>

@@ -376,6 +376,9 @@ export function ContextUsageBadge({
         onMouseEnter={cancelClose}
         onMouseLeave={scheduleClose}
         onOpenAutoFocus={(e) => e.preventDefault()}
+        // 关闭时不要聚焦回 trigger（圈圈按钮）：Radix 默认会在关闭后把焦点还给 trigger，
+        // 导致 Agent 输入框失焦、焦点锁在按钮上。preventDefault 保持焦点在输入框原位。
+        onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col gap-1.5">
           {pureInput > 0 && <DetailRow label="输入" value={pureInput.toLocaleString()} />}
