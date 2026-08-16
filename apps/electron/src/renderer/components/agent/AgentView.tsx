@@ -103,6 +103,7 @@ import {
   allPendingExitPlanRequestsAtom,
   allPendingPermissionRequestsAtom,
   agentMessageQueueAtomFamily,
+  agentQueueAutoSendMapAtom,
   finalizeStreamingActivities,
   agentProcessGroupsKeepExpandedAtom,
   currentAgentSessionIdAtom,
@@ -144,7 +145,6 @@ import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
 import {
   buildQueuedMessageSendPayload,
   createAgentQueuedMessage,
-  discardQueuedMessagesOnStop,
   moveQueuedMessage,
   isQueueTargetNoLongerActiveError,
   parseQueuedMessageMentions,
@@ -655,6 +655,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
+  // 1.6 每会话「队列自动发送」开关：缺省 true（轮结束自动发队首）；手动停止自动置 false
+  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? true
+  const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
   // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
@@ -1029,6 +1032,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   // 持久化消息缓存 setter — 仅写入，读取时用 store.get 同步取值避免订阅触发重渲染
   const setMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
+  // 1.7.1：登记尚未被持久化重载确认的乐观消息（按 uuid），消息重载时合并保留，
+  // 避免队列自动发送的用户气泡被「主进程尚未持久化该用户消息」的整体重载覆盖。
+  const pendingOptimisticMessagesRef = React.useRef<Map<string, SDKMessage>>(new Map())
   const appendOptimisticPersistedMessage = React.useCallback((message: SDKMessage) => {
     // 切会话时优先命中内存缓存，因此乐观插入的用户消息也要同步写入缓存，
     // 否则“发送后立刻切走再切回”会短暂回退到旧消息数组。
@@ -1036,6 +1042,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     persistedSDKMessagesRef.current = next
     setPersistedSDKMessages(next)
     setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, next))
+    // 1.7.1：有 uuid 的乐观消息登记到待合并表（重载返回且持久化确认后会让位）
+    const optimisticUuid = (message as Record<string, unknown>).uuid
+    if (typeof optimisticUuid === 'string') {
+      pendingOptimisticMessagesRef.current.set(optimisticUuid, message)
+    }
   }, [sessionId, setMessagesCache])
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
@@ -1049,6 +1060,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const isSessionSwitch = loadingSessionIdRef.current !== sessionId
     if (isSessionSwitch) {
       loadingSessionIdRef.current = sessionId
+      // 1.7.1：乐观消息只属于当前会话，切会话时清空待合并登记，避免拼进新会话消息流
+      pendingOptimisticMessagesRef.current.clear()
       // 移动端：切会话时重置触顶加载状态（首次默认假设还有更多，待首帧返回后校正）。
       historyHasMoreRef.current = true
       setHistoryHasMore(true)
@@ -1090,11 +1103,25 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         const isPage = !Array.isArray(sdkMsgs) && sdkMsgs !== null && typeof sdkMsgs === 'object' && 'messages' in (sdkMsgs as Record<string, unknown>)
         const page = isPage ? (sdkMsgs as SDKMessagePageLike) : null
         const normalized: SDKMessage[] = isPage && page ? page.messages : (Array.isArray(sdkMsgs) ? (sdkMsgs as SDKMessage[]) : [])
+        // 1.7.1：合并尚未持久化的乐观消息（按 uuid），避免队列自动发送的用户气泡被重载覆盖
+        const persistedUuids = new Set(
+          normalized.filter((m) => typeof (m as Record<string, unknown>).uuid === 'string')
+            .map((m) => (m as Record<string, unknown>).uuid as string),
+        )
+        const preserved: SDKMessage[] = []
+        for (const [uuid, optimistic] of pendingOptimisticMessagesRef.current) {
+          if (persistedUuids.has(uuid)) {
+            pendingOptimisticMessagesRef.current.delete(uuid)   // 已持久化，乐观副本让位
+          } else {
+            preserved.push(optimistic)
+          }
+        }
+        const merged = preserved.length > 0 ? [...normalized, ...preserved] : normalized
         // 写入缓存（仅保留尾部窗口，防随加载历史无限膨胀；LRU 淘汰会话）
-        const cacheValue = normalized.slice(-AGENT_CACHE_WINDOW)
+        const cacheValue = merged.slice(-AGENT_CACHE_WINDOW)
         setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, cacheValue))
         unstable_batchedUpdates(() => {
-          setPersistedSDKMessages(normalized)
+          setPersistedSDKMessages(merged)
           setMessagesLoaded(true)
 
           // 桌面：从分页结果同步 hasMore；平板：从服务端读累计状态
@@ -1860,6 +1887,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           workspaceId: currentWorkspaceId || undefined,
           agentRuntime: sessionAgentRuntime,
           startedAt: streamStartedAt,
+          // 1.7.1：透传与乐观消息一致的 uuid，使主进程持久化后可按 uuid 与乐观气泡匹配去重
+          uuid: message.id,
           permissionModeOverride: permissionMode,
           ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
           ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
@@ -2270,6 +2299,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   // turn 结束后自动发送队首消息（FIFO，三把 ref 防重入）
   React.useEffect(() => {
+    // 1.6 开关关：不自动 drain，队列保留，用户可手动逐条「立即发送」
+    if (!autoSendEnabled) return
     if (autoSendingQueuedRef.current) return
     if (queuedSendInFlightRef.current) return
     if (queuedMessages.length === 0) return
@@ -2295,17 +2326,21 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         queuedSendInFlightRef.current = false
         autoSendingQueuedRef.current = false
       })
-  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping])
+  }, [autoSendEnabled, canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping])
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
     if (stopInFlightRef.current || streamState?.stopping) return
     stopInFlightRef.current = true
 
-    // 用户明确停止时，丢弃此前已经进入“运行中追加”队列的消息；停止之后的草稿不入队，见 handleSend。
-    // 先失效在飞消息的 restore 资格，再清空当前队列。
+    // 1.6：手动停止时不再清空队列（保留排队消息）；只关闭「自动发送」开关，
+    // 防止停止后立刻自动发送下一条排队消息。停止之后的草稿不入队，见 handleSend。
     queueStopEpochRef.current += 1
-    setQueuedMessages(discardQueuedMessagesOnStop)
+    setAutoSendMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, false)
+      return map
+    })
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
       if (!current || (!current.running && !current.backgroundWaiting)) return prev
@@ -2323,7 +2358,16 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       .finally(() => {
         stopInFlightRef.current = false
       })
-  }, [sessionId, streamState?.stopping, setStreamingStates, setQueuedMessages])
+  }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
+
+  /** 1.6 翻转「队列自动发送」开关（per-session 运行时状态，重启不保留） */
+  const handleToggleAutoSend = React.useCallback((): void => {
+    setAutoSendMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, !(map.get(sessionId) ?? true))
+      return map
+    })
+  }, [sessionId, setAutoSendMap])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2975,6 +3019,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
             <AgentMessageQueue
               items={queuedMessages}
               canSendNow={canSendQueuedNow}
+              autoSend={autoSendEnabled}
+              onToggleAutoSend={handleToggleAutoSend}
               onSendNow={handleSendQueuedNow}
               onRecall={handleRecallQueuedMessage}
               onRemove={handleRemoveQueuedMessage}

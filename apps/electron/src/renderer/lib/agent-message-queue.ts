@@ -31,11 +31,6 @@ export function removeQueuedMessage(
   return queue.filter((item) => item.id !== messageId)
 }
 
-/** Stop 明确放弃已经进入运行中队列的消息；返回新数组避免遗留引用可被后续 drain 消费。 */
-export function discardQueuedMessagesOnStop(_queue: AgentQueuedMessage[]): AgentQueuedMessage[] {
-  return []
-}
-
 /** in-flight 队列发送失败时，只有仍属于同一未停止 epoch 的消息才允许回队。 */
 export function shouldRestoreQueuedMessageAfterFailure(
   sendEpoch: number,

@@ -754,6 +754,8 @@ export class AgentOrchestrator {
         content: [{ type: 'text', text: userMessage }],
       },
       parent_tool_use_id: null,
+      // 1.7.1：透传前端预生成的 uuid，使乐观气泡与持久化消息可按 uuid 匹配去重
+      ...(input.uuid ? { uuid: input.uuid } : {}),
       _createdAt: Date.now(),
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])

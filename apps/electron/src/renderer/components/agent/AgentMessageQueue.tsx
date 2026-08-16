@@ -8,6 +8,10 @@ import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message
 interface AgentMessageQueueProps {
   items: AgentQueuedMessage[]
   canSendNow: boolean
+  /** 队列「自动发送」开关：true=轮结束自动发队首；用户手动停止会自动置 false */
+  autoSend: boolean
+  /** 翻转「自动发送」开关 */
+  onToggleAutoSend: () => void
   onSendNow: (messageId: string) => void
   onRecall: (messageId: string) => void
   onRemove: (messageId: string) => void
@@ -17,6 +21,8 @@ interface AgentMessageQueueProps {
 export function AgentMessageQueue({
   items,
   canSendNow,
+  autoSend,
+  onToggleAutoSend,
   onSendNow,
   onRecall,
   onRemove,
@@ -69,6 +75,27 @@ export function AgentMessageQueue({
         <span className="inline-flex items-center gap-1.5">
           <Clock3 className="size-3.5" />
           <span>队列</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoSend}
+            onClick={onToggleAutoSend}
+            title={autoSend ? '自动发送已开启：本轮结束自动发送队首' : '自动发送已关闭：需手动逐条「立即发送」'}
+            className={cn(
+              'ml-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] leading-none transition-colors',
+              autoSend
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-600'
+                : 'border-border bg-muted/40 text-muted-foreground/60 hover:text-foreground/80',
+            )}
+          >
+            <span
+              className={cn(
+                'size-1.5 rounded-full transition-colors',
+                autoSend ? 'bg-amber-500' : 'bg-muted-foreground/40',
+              )}
+            />
+            <span className="tabular-nums">自动发送</span>
+          </button>
         </span>
         <span className="tabular-nums">{items.length}</span>
       </div>
