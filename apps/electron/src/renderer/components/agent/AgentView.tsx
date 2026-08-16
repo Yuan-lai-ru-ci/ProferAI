@@ -173,10 +173,10 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
   } as unknown as SDKMessage
 }
 
-/** 构造中断说明注入文本：告知 Agent 上次任务为何中断、建议衔接继续 */
+/** 构造中断说明注入文本：告知 Agent 上次任务被中断，并引导从对话历史找回任务继续完成 */
 function buildAgentInterruptionText(state: AgentInterruptionState): string {
-  const time = new Date(state.at).toLocaleString('zh-CN', { hour12: false })
-  return `上次任务未完成，中断原因：${state.label}（${time}）。\n如本次请求与上次任务相关，请先继续完成上次任务。`
+  const time = new Date(state.at).toLocaleString('zh-CN', { hour12: false, second: undefined })
+  return `上次任务被中断（${state.label}，${time}），可能未完成。\n请先查看对话历史中你上一条收到的用户消息，继续完成该任务。`
 }
 
 interface SDKMessageRecord {
