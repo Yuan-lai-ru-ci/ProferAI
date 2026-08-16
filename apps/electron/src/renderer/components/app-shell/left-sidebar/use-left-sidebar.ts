@@ -529,46 +529,53 @@ export function useLeftSidebar(tabletMode?: boolean) {
     [conversationGroups, progressiveCount]
   )
 
-  /** 已归档对话数量 */
-  const archivedConversationCount = React.useMemo(
-    () => conversations.filter((c) => c.archived).length,
-    [conversations]
-  )
+  /** 已归档对话数量（轻量计数，不随当前视图列表变化） */
+  const [archivedConversationCount, setArchivedConversationCount] = React.useState(0)
 
-  /** 已归档 Agent 会话数量（跨项目） */
-  const archivedAgentSessionCount = React.useMemo(
-    () => agentSessions.filter((s) => s.archived && !s.draft && !draftSessionIds.has(s.id)).length,
-    [agentSessions, draftSessionIds]
-  )
+  /** 已归档 Agent 会话数量（跨项目，轻量计数） */
+  const [archivedAgentSessionCount, setArchivedAgentSessionCount] = React.useState(0)
 
-  // 初始加载对话列表 + 用户档案 + Agent 会话
+  /** 刷新归档计数（轻量，不拉列表） */
+  const refreshArchivedCounts = React.useCallback(() => {
+    window.electronAPI.getArchivedCounts().then(({ conversations, agentSessions }) => {
+      setArchivedConversationCount(conversations)
+      setArchivedAgentSessionCount(agentSessions)
+    }).catch(console.error)
+  }, [])
+
+  /**
+   * 按当前视图拉取会话列表 + 归档计数。
+   * 活跃视图只拉活跃会话；归档视图才拉归档会话；计数走轻量 getArchivedCounts。
+   */
+  const refreshSidebarLists = React.useCallback(() => {
+    const includeArchived = viewMode === 'archived'
+    window.electronAPI.listConversations(includeArchived).then(setConversations).catch(console.error)
+    window.electronAPI.listAgentSessions(includeArchived).then(setAgentSessions).catch(console.error)
+    refreshArchivedCounts()
+  }, [viewMode, setConversations, setAgentSessions, refreshArchivedCounts])
+
+  // 初始加载：用户档案 + 按当前视图拉取列表/计数（viewMode effect 挂载时也会拉，重复无害）
   React.useEffect(() => {
-    window.electronAPI
-      .listConversations()
-      .then((list) => {
-        setConversations(list)
-      })
-      .catch(console.error)
     window.electronAPI
       .getUserProfile()
       .then(setUserProfile)
       .catch(console.error)
-    window.electronAPI
-      .listAgentSessions()
-      .then(setAgentSessions)
-      .catch(console.error)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setConversations, setUserProfile, setAgentSessions])
+  }, [setUserProfile])
 
-  // 窗口聚焦时重新同步列表，修复长时间后前后端不一致
+  // 挂载 + 视图切换（活跃/归档）时按需重拉列表与计数
+  React.useEffect(() => {
+    refreshSidebarLists()
+  }, [refreshSidebarLists])
+
+  // 窗口聚焦时重新同步列表，修复长时间后前后端不一致（按当前视图，不捎带归档）
   React.useEffect(() => {
     const handleFocus = (): void => {
-      window.electronAPI.listConversations().then(setConversations).catch(console.error)
-      window.electronAPI.listAgentSessions().then(setAgentSessions).catch(console.error)
+      refreshSidebarLists()
     }
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
-  }, [setConversations, setAgentSessions])
+  }, [refreshSidebarLists])
 
   // 监听团队工作区同步事件，登录/注册成功后自动刷新侧边栏
   React.useEffect(() => {
@@ -705,10 +712,11 @@ export function useLeftSidebar(tabletMode?: boolean) {
         }
       }
       toast.success(updated.archived ? '已归档' : '已取消归档')
+      refreshArchivedCounts()
     } catch (error) {
       console.error('[侧边栏] 切换归档失败:', error)
     }
-  }, [store, setConversations, setTabs, setActiveTabId, cleanupMapAtoms, syncActiveTabSideEffects])
+  }, [store, setConversations, setTabs, setActiveTabId, cleanupMapAtoms, syncActiveTabSideEffects, refreshArchivedCounts])
 
   /** 确认删除对话 */
   const handleConfirmDelete = async (): Promise<void> => {
@@ -753,9 +761,10 @@ export function useLeftSidebar(tabletMode?: boolean) {
       // 导致 RightSidePanel 消失（依赖 currentAgentSessionIdAtom）。
       try {
         await window.electronAPI.deleteAgentSession(pendingDeleteId)
-        // 全量刷新确保与后端同步
-        const sessions = await window.electronAPI.listAgentSessions()
+        // 按当前视图刷新确保与后端同步（不捎带归档数据）
+        const sessions = await window.electronAPI.listAgentSessions(viewMode === 'archived')
         setAgentSessions(sessions)
+        refreshArchivedCounts()
       } catch (error) {
         console.error('[侧边栏] 删除 Agent 会话失败:', error)
         // 即使后端报错，也从本地列表移除（可能是会话已不存在）
@@ -775,9 +784,10 @@ export function useLeftSidebar(tabletMode?: boolean) {
 
     try {
       await window.electronAPI.deleteConversation(pendingDeleteId)
-      // 全量刷新确保与后端同步
-      const conversations = await window.electronAPI.listConversations()
+      // 按当前视图刷新确保与后端同步（不捎带归档数据）
+      const conversations = await window.electronAPI.listConversations(viewMode === 'archived')
       setConversations(conversations)
+      refreshArchivedCounts()
     } catch (error) {
       console.error('[侧边栏] 删除对话失败:', error)
       // 即使后端报错，也从本地列表移除（可能是对话已不存在）
@@ -945,11 +955,12 @@ export function useLeftSidebar(tabletMode?: boolean) {
 
       const [remainingWorkspaces, sessions] = await Promise.all([
         window.electronAPI.listAgentWorkspaces(),
-        window.electronAPI.listAgentSessions(),
+        window.electronAPI.listAgentSessions(viewMode === 'archived'),
       ])
 
       setWorkspaces(remainingWorkspaces)
       setAgentSessions(sessions)
+      refreshArchivedCounts()
 
       setExpandedExtraCountMap((prev) => {
         if (!prev.has(workspaceId)) return prev
@@ -1004,6 +1015,8 @@ export function useLeftSidebar(tabletMode?: boolean) {
     setAgentSessions,
     currentWorkspaceId,
     setCurrentWorkspaceId,
+    viewMode,
+    refreshArchivedCounts,
   ])
 
   /** 展开某个项目时每次额外显示的会话数量 */
@@ -1239,7 +1252,7 @@ export function useLeftSidebar(tabletMode?: boolean) {
         }
       }
       const refreshedSessions = delegatedChildren.length > 0
-        ? await window.electronAPI.listAgentSessions()
+        ? await window.electronAPI.listAgentSessions(viewMode === 'archived')
         : null
       if (refreshedSessions) {
         setAgentSessions(refreshedSessions)
@@ -1249,6 +1262,7 @@ export function useLeftSidebar(tabletMode?: boolean) {
       if (updated.pinned) {
         if (original?.archived && !updated.archived) {
           toast.success('已置顶', { description: '已自动取消归档' })
+          refreshArchivedCounts()
         } else if (delegatedChildren.length > 0) {
           toast.success('已置顶', { description: `已同步 ${delegatedChildren.length} 个子会话` })
         } else {
@@ -1266,13 +1280,13 @@ export function useLeftSidebar(tabletMode?: boolean) {
       console.error('[侧边栏] 切换 Agent 会话置顶失败:', error)
       if (delegatedChildren.length > 0) {
         try {
-          setAgentSessions(await window.electronAPI.listAgentSessions())
+          setAgentSessions(await window.electronAPI.listAgentSessions(viewMode === 'archived'))
         } catch (refreshError) {
           console.error('[侧边栏] 置顶失败后刷新会话列表失败:', refreshError)
         }
       }
     }
-  }, [draftSessionIds, store, setAgentSessions])
+  }, [draftSessionIds, store, setAgentSessions, viewMode, refreshArchivedCounts])
 
   /** 切换 Agent 会话归档状态 */
   const handleToggleArchiveAgent = React.useCallback(async (id: string): Promise<void> => {
@@ -1293,7 +1307,7 @@ export function useLeftSidebar(tabletMode?: boolean) {
         }
       }
       const refreshedSessions = delegatedChildren.length > 0
-        ? await window.electronAPI.listAgentSessions()
+        ? await window.electronAPI.listAgentSessions(viewMode === 'archived')
         : null
       if (refreshedSessions) {
         setAgentSessions(refreshedSessions)
@@ -1309,6 +1323,7 @@ export function useLeftSidebar(tabletMode?: boolean) {
           ? { description: `已同步 ${delegatedChildren.length} 个子会话` }
           : undefined,
       )
+      refreshArchivedCounts()
     } catch (error) {
       console.error('[侧边栏] 切换 Agent 会话归档失败:', error)
       if (cascaded) {
@@ -1316,13 +1331,13 @@ export function useLeftSidebar(tabletMode?: boolean) {
           closeArchivedAgentTabs(changedChildIds)
         }
         try {
-          setAgentSessions(await window.electronAPI.listAgentSessions())
+          setAgentSessions(await window.electronAPI.listAgentSessions(viewMode === 'archived'))
         } catch (refreshError) {
           console.error('[侧边栏] 归档失败后刷新会话列表失败:', refreshError)
         }
       }
     }
-  }, [closeArchivedAgentTabs, draftSessionIds, store, setAgentSessions])
+  }, [closeArchivedAgentTabs, draftSessionIds, store, setAgentSessions, viewMode, refreshArchivedCounts])
 
   /** 请求迁移会话到其他项目（弹出迁移对话框） */
   const handleRequestMove = React.useCallback((id: string): void => {

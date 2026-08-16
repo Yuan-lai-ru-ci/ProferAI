@@ -523,7 +523,8 @@ export function AutomationFormView(): React.ReactElement | null {
 
     let session = agentSessions.find((s) => s.id === run.sessionId)
     if (!session) {
-      const sessions = await window.electronAPI.listAgentSessions()
+      // 运行历史会话可能已归档：拉全量（含归档）查找
+      const sessions = await window.electronAPI.listAgentSessions(true)
       setAgentSessions(sessions)
       session = sessions.find((s) => s.id === run.sessionId)
     }

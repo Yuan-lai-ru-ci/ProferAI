@@ -212,7 +212,7 @@ function isDelegationParent(parentSessionId: string): boolean {
   for (const record of delegations.values()) {
     if (record.parentSessionId === parentSessionId) return true
   }
-  return listAgentSessions().some((s) => s.parentSessionId === parentSessionId)
+  return listAgentSessions(true).some((s) => s.parentSessionId === parentSessionId)
 }
 
 function getPendingBlockedEvents(delegationId: string): BlockedEvent[] {
@@ -486,7 +486,7 @@ function listKnownDelegations(parentSessionId: string): Array<Record<string, unk
     .map(getDelegationSummary)
 
   const liveIds = new Set(live.map((item) => item.delegationId))
-  const persisted = listAgentSessions()
+  const persisted = listAgentSessions(true)
     .filter((session) => session.parentSessionId === parentSessionId && session.sourceDelegationId && !liveIds.has(session.sourceDelegationId))
     .map((session) => ({
       delegationId: session.sourceDelegationId,
@@ -542,7 +542,7 @@ function getDelegationResult(parentSessionId: string, delegationId: string): Rec
 }
 
 function findPersistedDelegationSessions(delegationId: string): AgentSessionMeta[] {
-  return listAgentSessions()
+  return listAgentSessions(true)
     .filter((item) => item.sourceDelegationId === delegationId)
 }
 

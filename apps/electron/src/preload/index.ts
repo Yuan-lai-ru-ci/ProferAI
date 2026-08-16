@@ -286,8 +286,8 @@ export interface ElectronAPI {
 
   // ===== 对话管理相关 =====
 
-  /** 获取对话列表 */
-  listConversations: () => Promise<ConversationMeta[]>
+  /** 获取对话列表（includeArchived=true 时包含已归档对话） */
+  listConversations: (includeArchived?: boolean) => Promise<ConversationMeta[]>
 
   /** 创建对话 */
   createConversation: (title?: string, modelId?: string, channelId?: string) => Promise<ConversationMeta>
@@ -550,8 +550,14 @@ export interface ElectronAPI {
 
   // ===== Agent 会话管理相关 =====
 
-  /** 获取 Agent 会话列表 */
-  listAgentSessions: () => Promise<AgentSessionMeta[]>
+  /** 获取 Agent 会话列表（includeArchived=true 时包含已归档会话） */
+  listAgentSessions: (includeArchived?: boolean) => Promise<AgentSessionMeta[]>
+
+  /** 获取单个 Agent 会话 meta（归档会话兜底读取；不存在返回 null） */
+  getAgentSessionMeta: (id: string) => Promise<AgentSessionMeta | null>
+
+  /** 轻量：对话 + Agent 会话的归档计数（不传输 meta 列表） */
+  getArchivedCounts: () => Promise<{ conversations: number; agentSessions: number }>
 
   /** 创建 Agent 会话 */
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => Promise<AgentSessionMeta>
@@ -1636,8 +1642,13 @@ const electronAPI: ElectronAPI = {
   },
 
   // 对话管理
-  listConversations: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.LIST_CONVERSATIONS)
+  listConversations: (includeArchived?: boolean) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.LIST_CONVERSATIONS, includeArchived)
+  },
+
+  /** 轻量归档计数（对话 + Agent 会话） */
+  getArchivedCounts: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_ARCHIVED_COUNTS)
   },
 
   createConversation: (title?: string, modelId?: string, channelId?: string) => {
@@ -1976,8 +1987,12 @@ const electronAPI: ElectronAPI = {
   },
 
   // Agent 会话管理
-  listAgentSessions: () => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
+  listAgentSessions: (includeArchived?: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS, includeArchived)
+  },
+
+  getAgentSessionMeta: (id: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_META, id)
   },
 
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => {

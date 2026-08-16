@@ -56,11 +56,27 @@ function writeIndex(index: ConversationsIndex): void {
 }
 
 /**
- * 获取所有对话（按 updatedAt 降序）
+ * 获取对话列表（按 updatedAt 降序）
+ *
+ * @param includeArchived 是否包含已归档对话；默认 false（高频侧边栏刷新只拉活跃）
  */
-export function listConversations(): ConversationMeta[] {
+export function listConversations(includeArchived = false): ConversationMeta[] {
   const index = readIndex()
-  return index.conversations.sort((a, b) => b.updatedAt - a.updatedAt)
+  return index.conversations
+    .filter((c) => includeArchived || !c.archived)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/**
+ * 已归档对话数量（轻量计数，不排序、不返回 meta）
+ */
+export function countArchivedConversations(): number {
+  const index = readIndex()
+  let count = 0
+  for (const c of index.conversations) {
+    if (c.archived) count += 1
+  }
+  return count
 }
 
 /**

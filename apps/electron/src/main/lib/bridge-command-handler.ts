@@ -307,7 +307,7 @@ export class BridgeCommandHandler {
   }
 
   private async handleListCommand(chatId: string, contextData?: unknown): Promise<void> {
-    const sessions = listAgentSessions().filter(isVisibleAgentSession)
+    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
     const workspaces = listAgentWorkspacesByUpdatedAt()
     const binding = this.chatBindings.get(chatId)
 
@@ -368,7 +368,7 @@ export class BridgeCommandHandler {
   }
 
   private async handleSwitchCommand(chatId: string, arg: string, contextData?: unknown): Promise<void> {
-    const sessions = listAgentSessions().filter(isVisibleAgentSession)
+    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
     const settings = getSettings()
 
     // 支持序号和 ID 前缀两种匹配
@@ -447,7 +447,7 @@ export class BridgeCommandHandler {
     this.config.onWorkspaceSwitched?.(match.id)
 
     // 列出该工作区下最近会话
-    const sessions = listAgentSessions().filter(isVisibleAgentSession)
+    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
     const recentSessions = sessions
       .filter((s) => s.workspaceId === match.id)
       .slice(0, 5)
