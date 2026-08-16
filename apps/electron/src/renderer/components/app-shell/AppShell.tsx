@@ -15,13 +15,15 @@ import { TeamWorkspaceView } from '@/components/agent/TeamWorkspaceView'
 import { WindowControlsTemplateProvider } from '@/components/WindowControlsTemplate'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, currentAgentSessionIdAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { detectIsWindows } from '@/lib/platform'
 import { interfaceVariantAtom } from '@/atoms/theme'
+import { usePanelAutoLayout } from '@/hooks/usePanelAutoLayout'
 import { cn } from '@/lib/utils'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
@@ -48,16 +50,10 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
-  const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
+  const filePanelVisible = useAtomValue(panelVisibilityAtom).filePanel
   const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
 
-  // ===== 小窗口自动折叠右侧面板 =====
-  const AUTO_HIDE_PANEL_WIDTH = 1200
-  const [windowWidth, setWindowWidth] = React.useState(() => window.innerWidth)
-  const userOverrodeAutoHideRef = React.useRef(false)
-  const prevWidthRef = React.useRef<number | null>(null)
-  const prevIsPanelOpenRef = React.useRef(isPanelOpen)
-
+  // 聚焦右侧面板（profer:focus-right-panel 事件，来自快捷键/全局提示）
   React.useEffect(() => {
     const focusRightPanel = (): void => {
       setSidePanelOpen(true)
@@ -75,39 +71,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     return () => window.removeEventListener('profer:focus-right-panel', focusRightPanel)
   }, [setSidePanelOpen])
 
-  React.useEffect(() => {
-    const handleResize = () => setWindowWidth(window.innerWidth)
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
-
-  // 窗口恢复到阈值以上时，重置用户手动覆盖标记
-  React.useEffect(() => {
-    if (windowWidth >= AUTO_HIDE_PANEL_WIDTH) {
-      userOverrodeAutoHideRef.current = false
-    }
-  }, [windowWidth])
-
-  // 小窗口自动折叠 / 用户手动展开后不再自动折叠
-  React.useEffect(() => {
-    const prevWidth = prevWidthRef.current
-    const isFirstRender = prevWidth === null
-    // 仅在窗口从大→小过渡（或首次渲染窗口就小）时自动折叠
-    const shouldAutoClose = isFirstRender || prevWidth >= AUTO_HIDE_PANEL_WIDTH
-
-    if (shouldAutoClose && windowWidth < AUTO_HIDE_PANEL_WIDTH && isPanelOpen && !userOverrodeAutoHideRef.current) {
-      setSidePanelOpen(false)
-    }
-
-    // 检测用户在小窗口下手动展开了面板（从关 → 开），设置覆盖标记
-    if (windowWidth < AUTO_HIDE_PANEL_WIDTH && isPanelOpen && !prevIsPanelOpenRef.current) {
-      userOverrodeAutoHideRef.current = true
-    }
-
-    prevWidthRef.current = windowWidth
-    prevIsPanelOpenRef.current = isPanelOpen
-  }, [windowWidth, isPanelOpen, setSidePanelOpen])
-
   const automationForm = useAtomValue(automationFormAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -116,6 +79,10 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
+  // 文件面板/浏览器仅在 agent 个人视图参与布局判定（团队/规划/自动化表单时右侧面板不渲染）
+  const filePanelActive = !isTeamWorkspace && showRightPanel
+  // 统一自适应可见性：窗口 resize 监听 + 浏览器/文件面板可见性计算（挂载于此布局容器）
+  usePanelAutoLayout({ filePanelActive })
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   // 团队工作区的默认 Agent 页仍展示文件主区；规划中心必须进入 MainArea，
   // 否则 TeamWorkspaceView 会覆盖其中的 PlanningView。
@@ -276,7 +243,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           )}
         </div>
 
-        {/* 右侧边栏：个人模式显示文件面板；团队模式文件已在主区域 */}
+        {/* 右侧边栏：个人模式显示文件面板；团队模式文件已在主区域。
+            实际可见由 filePanelVisible（意图 A + 窗口足够）驱动；SidePanel 内部按此做宽度过渡动画。 */}
         {!isTeamWorkspace && showRightPanel && (
           <div
             data-profer-navigation-region="right-panel"
@@ -284,14 +252,14 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
               // 只让 SidePanel 自身展开。若同时动画化外层 padding，面板会在横向展开时
               // 从 top: 0 平移到 p-2 的最终基线，视觉上像从右上方斜着滑入。
               'relative z-[60] flex items-stretch crt-sidebar',
-              isPanelOpen ? 'p-2 pl-0' : 'p-0'
+              filePanelVisible ? 'p-2 pl-0' : 'p-0'
             )}
           >
             {!isClassic && (
               <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-border/80 dark:bg-border/70" />
             )}
             {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
-            {isPanelOpen && (
+            {filePanelVisible && (
               <div
                 className={cn(
                   'absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors',

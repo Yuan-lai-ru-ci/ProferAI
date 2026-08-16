@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
+import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
@@ -66,8 +67,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
 
-  // per-session 侧面板状态（默认打开）
-  const [isOpen, setIsOpen] = useAtom(agentSidePanelOpenAtom)
+  // 显示状态（B）= 展开意图 A（agentSidePanelOpenAtom）且窗口宽度足够。
+  // 宽度过渡动画基于 isOpen（B）：手动开/关与窗口 resize 导致的可见性变化都会平滑过渡；
+  // 关闭动作（onClose）只改 A（意图），窗口不足时 B 自动为 false、A 保持不变。
+  const isOpen = useAtomValue(panelVisibilityAtom).filePanel
+  const setAgentPanelOpen = useSetAtom(agentSidePanelOpenAtom)
   // 懒挂载：首次展开时才渲染面板内容（避免启动即渲染右侧面板），收起后保活不重挂载
   const [everOpened, setEverOpened] = React.useState(isOpen)
   React.useEffect(() => {
@@ -453,7 +457,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           isOpen ? 'opacity-100 visible' : 'opacity-0 pointer-events-none invisible',
         )}
         >
-          <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} onClose={() => setIsOpen(false)} />
+          <DiffPanelTabBar activeTab={activeTab} onTabChange={onTabChange} onClose={() => setAgentPanelOpen(false)} />
 
           {activeTab === 'changes' ? (
             sessionPath ? (

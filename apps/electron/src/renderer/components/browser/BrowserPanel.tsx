@@ -1,9 +1,11 @@
 import * as React from 'react'
 import type { BrowserStartPageState, BrowserViewState } from '@profer/shared'
-import { ArrowLeft, ArrowRight, Globe2, Languages, LoaderCircle, Minus, PanelRightClose, Plus, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Copy, Globe2, Languages, LoaderCircle, PanelRightClose, Plus, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { useAtomValue } from 'jotai'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -15,6 +17,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
+import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
 import { BrowserSlot } from './BrowserSlot'
 import { BrowserStartPage } from './BrowserStartPage'
@@ -32,6 +35,9 @@ interface BrowserPanelProps {
 }
 
 export function BrowserPanel({ sessionId, state, avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
+  // 浏览器实际可见性（统一面板系统计算）。隐藏时（width 0 常驻 DOM）不能把窗口控制按钮
+  // 锚定在本面板——会渲染进不可见容器导致按钮消失；应让按钮回落到 TabBar 宿主。
+  const browserVisible = useAtomValue(panelVisibilityAtom).browser
   const [url, setUrl] = React.useState(state?.url ?? '')
   // 用户正在地址栏输入/聚焦时，禁止用主进程回推的 state.url 覆盖，避免被 Agent 导航顶掉输入。
   const urlDirtyRef = React.useRef(false)
@@ -41,6 +47,10 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   const [translated, setTranslated] = React.useState(state?.translated ?? false)
   const [startPage, setStartPage] = React.useState<BrowserStartPageState | null>(null)
   const [bookmarking, setBookmarking] = React.useState(false)
+  // 复制 URL 成功反馈
+  const [copiedUrl, setCopiedUrl] = React.useState(false)
+  // hover 展开覆盖：null=正常工具栏；'url'=地址栏向两端展开占满覆盖其他按钮；'zoom'=缩放展开占满
+  const [expanded, setExpanded] = React.useState<'url' | 'zoom' | null>(null)
   // 阻止默认首页重复跳转：同一空标签只自动导航一次。
   const autoNavigatedTabRef = React.useRef<string | null>(null)
 
@@ -124,6 +134,19 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
     }
   }, [sessionId, url])
 
+  const copyUrl = React.useCallback(async () => {
+    // 复制地址栏输入框当前显示的内容（用户填写的未提交内容也复制），无输入时回退当前页 URL
+    const target = url.trim() || (state?.url ?? '')
+    if (!target) return
+    try {
+      await navigator.clipboard.writeText(target)
+      setCopiedUrl(true)
+      window.setTimeout(() => setCopiedUrl(false), 1500)
+    } catch (error) {
+      console.error('[受管浏览器] 复制网址失败:', error)
+    }
+  }, [url, state?.url])
+
   /** 收起浏览器面板（不销毁主进程浏览器会话），与标签页的关闭按钮语义区分，避免误触销毁整个浏览器。 */
   const closeBrowserPanel = React.useCallback(() => {
     // 仅收起面板：浏览器会话仍由主进程管理，会话删除/窗口关闭时才真正销毁。
@@ -166,6 +189,21 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
     if (!setZoom || !state?.activeTabId) return
     void setZoom({ sessionId, tabId: state.activeTabId, zoomFactor: (state.zoomFactor ?? 1) + delta })
   }
+  const resetZoom = React.useCallback(() => {
+    const setZoom = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserZoom
+    if (!setZoom || !state?.activeTabId) return
+    void setZoom({ sessionId, tabId: state.activeTabId, zoomFactor: 1 })
+  }, [sessionId, state?.activeTabId])
+
+  // 关闭展开（鼠标移开）后，若焦点停留在展开区（地址输入框/缩放控制），主动失焦，
+  // 避免关闭动画后焦点悬空在已隐藏元素上（表现为“焦点锁到菜单按钮/输入框失焦”）
+  const handleExpandLeave = React.useCallback((type: 'url' | 'zoom') => {
+    setExpanded((p) => (p === type ? null : p))
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active.closest('[data-browser-expand]')) {
+      ;(document.activeElement as HTMLElement | null)?.blur()
+    }
+  }, [])
 
   const selectTab = React.useCallback(async (tabId: string) => {
     const select = (window.electronAPI as Partial<typeof window.electronAPI>).selectAgentBrowserTab
@@ -259,9 +297,8 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   return (
     <div className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl bg-content-area shadow-xl dark:shadow-sm titlebar-no-drag">
       {/* 浏览器是最右侧分栏时，窗口按钮成为浏览器顶栏的一部分。 */}
-      <WindowControlsHost id="browser-panel" active={avoidWindowControls} priority={20} className="absolute right-2 top-[3px] z-10" />
+      <WindowControlsHost id="browser-panel" active={avoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-[3px] z-10" />
       <div className={`flex items-center h-[34px] gap-1 px-2 border-b border-border/40 bg-muted/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
-        <Globe2 className="size-3.5 shrink-0 text-primary ml-1" />
         {sourceLabel && (
           <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">{sourceLabel}</span>
         )}
@@ -270,23 +307,71 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked} onClick={() => void window.electronAPI.reloadAgentBrowser?.(sessionId)}><RefreshCw className="size-3.5" /></Button></TooltipTrigger><TooltipContent>刷新</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${translated ? 'text-primary' : ''}`} disabled={riskBlocked || translating} onClick={() => void toggleTranslate()}>{translating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{translated ? '恢复原文' : '整页翻译'}</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${isBookmarked ? 'text-amber-500' : ''}`} disabled={riskBlocked || !state?.url || bookmarking} onClick={() => void toggleBookmark()} aria-label="收藏当前页">{bookmarking ? <LoaderCircle className="size-3.5 animate-spin" /> : <Star className={`size-3.5 ${isBookmarked ? 'fill-current' : ''}`} />}</Button></TooltipTrigger><TooltipContent>{isBookmarked ? '取消收藏' : '收藏当前页'}</TooltipContent></Tooltip>
-        <form className="flex-1 min-w-0" onSubmit={(event) => { event.preventDefault(); if (!riskBlocked) void navigate() }}>
-          <Input
-            ref={urlInputRef}
+        {/* 地址栏：平时显示 URL 胶囊；hover 时胶囊淡出、输入框淡入原位替换（文字位置/字号一致），末尾复制；动画对齐 ContextMenu（fade + zoom 的轻量版） */}
+        <div
+          className="relative flex-1 min-w-0"
+          onMouseEnter={() => setExpanded('url')}
+          onMouseLeave={() => handleExpandLeave('url')}
+        >
+          {/* 输入框层（展开态，absolute 覆盖胶囊层，交叉淡入淡出） */}
+          <div className={cn('absolute inset-0 flex items-center transition-opacity duration-150', expanded === 'url' ? 'opacity-100' : 'pointer-events-none opacity-0')}>
+            <form className="flex h-6 w-full items-center gap-1" data-browser-expand onSubmit={(event) => { event.preventDefault(); void navigate() }}>
+              <Input
+                ref={urlInputRef}
+                disabled={riskBlocked}
+                value={url}
+                onChange={(event) => { const v = event.target.value; setUrl(v); urlDirtyRef.current = true }}
+                placeholder="输入域名或 URL（默认 HTTPS，仅公共网站）"
+                className="h-6 min-w-0 flex-1 px-2 py-0 text-xs md:text-xs"
+                aria-label="浏览器地址"
+              />
+              <button
+                type="button"
+                onClick={() => void copyUrl()}
+                disabled={riskBlocked || !url}
+                className="flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-primary hover:bg-accent disabled:opacity-50"
+                aria-label="复制网址"
+              >
+                {copiedUrl ? <Check className="size-3" /> : <Copy className="size-3" />}
+                {copiedUrl ? '已复制' : '复制'}
+              </button>
+            </form>
+          </div>
+          {/* 胶囊层（常态） */}
+          <div
+            className={cn('flex h-6 w-full min-w-[100px] cursor-default items-center rounded-md bg-background/70 px-2 text-xs text-muted-foreground transition-opacity duration-150', expanded === 'url' && 'pointer-events-none opacity-0')}
+            aria-label="地址栏"
+          >
+            <span className="truncate text-left">{url || '输入网址'}</span>
+          </div>
+        </div>
+
+        {/* 缩放：平时显示百分比；hover 时以按钮为锚悬浮展开控制条（− + 百分比），fade + zoom 动画对齐 ContextMenu */}
+        <div
+          className="relative"
+          onMouseEnter={() => setExpanded('zoom')}
+          onMouseLeave={() => handleExpandLeave('zoom')}
+        >
+          <button
+            type="button"
+            className={cn('flex h-6 min-w-9 items-center justify-center rounded px-1 text-[10px] leading-none text-muted-foreground hover:text-foreground', expanded === 'zoom' && 'invisible')}
             disabled={riskBlocked}
-            value={url}
-            onChange={(event) => { const v = event.target.value; setUrl(v); urlDirtyRef.current = true }}
-            onFocus={() => { urlDirtyRef.current = true }}
-            onBlur={() => { urlDirtyRef.current = false }}
-            onKeyDown={(event) => { if (event.key === 'Enter') urlDirtyRef.current = false }}
-            placeholder="输入域名或 URL（默认 HTTPS，仅公共网站）"
-            className="h-6 text-xs bg-background/70"
-            aria-label="浏览器地址"
-          />
-        </form>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || zoomPercent <= 50} onClick={() => changeZoom(-0.1)} aria-label="缩小网页"><Minus className="size-3.5" /></Button></TooltipTrigger><TooltipContent>缩小网页</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><button type="button" className="min-w-9 px-1 text-[10px] text-muted-foreground hover:text-foreground" disabled={riskBlocked} onClick={() => { const setZoom = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserZoom; if (setZoom && state?.activeTabId) void setZoom({ sessionId, tabId: state.activeTabId, zoomFactor: 1 }) }} aria-label="重置网页缩放">{zoomPercent}%</button></TooltipTrigger><TooltipContent>重置网页缩放</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || zoomPercent >= 300} onClick={() => changeZoom(0.1)} aria-label="放大网页"><Plus className="size-3.5" /></Button></TooltipTrigger><TooltipContent>放大网页</TooltipContent></Tooltip>
+            aria-label="网页缩放，悬停展开控制"
+          >
+            {zoomPercent}%
+          </button>
+          <div
+            data-browser-expand
+            className={cn(
+              'absolute right-0 top-1/2 z-30 flex h-6 -translate-y-1/2 items-center gap-0.5 whitespace-nowrap rounded-lg border bg-popover p-1 shadow-md transition-[opacity,transform] duration-150',
+              expanded === 'zoom' ? 'scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0',
+            )}
+          >
+            <button type="button" onClick={() => changeZoom(-0.1)} disabled={riskBlocked || zoomPercent <= 50} className="flex h-5 w-6 shrink-0 items-center justify-center rounded-md leading-none text-muted-foreground hover:bg-accent disabled:opacity-50" aria-label="缩小网页">−</button>
+            <button type="button" onClick={() => changeZoom(0.1)} disabled={riskBlocked || zoomPercent >= 300} className="flex h-5 w-6 shrink-0 items-center justify-center rounded-md leading-none text-muted-foreground hover:bg-accent disabled:opacity-50" aria-label="放大网页">+</button>
+            <button type="button" onClick={() => resetZoom()} disabled={riskBlocked} className="flex h-5 shrink-0 items-center justify-center rounded-md px-2 text-[10px] leading-none text-muted-foreground hover:bg-accent disabled:opacity-50" aria-label="重置网页缩放（点击百分比复原）">{zoomPercent}%</button>
+          </div>
+        </div>
         {state?.loading && <LoaderCircle className="size-3.5 text-muted-foreground animate-spin" />}
         {isBackgroundRun && (
           <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-7 text-amber-600 hover:text-amber-700" onClick={() => void stopBackgroundRun()} aria-label="停止当前后台 Agent"><Square className="size-3.5 fill-current" /></Button></TooltipTrigger><TooltipContent>停止当前{state?.executionSource === 'automation' ? '自动任务' : '委派'}运行</TooltipContent></Tooltip>
