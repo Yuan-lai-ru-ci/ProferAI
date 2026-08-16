@@ -127,11 +127,12 @@ export function InputToolbarOverflow({
    */
   const visibleCount = React.useMemo(() => {
     if (containerWidth === 0) return items.length
-    if (!items.every((it) => itemWidths[it.key] !== undefined)) return items.length
-
+    // 缺失宽度的按钮按 0 参与计算：空态按钮（如无 token 时的上下文用量 badge）
+    // 渲染为空、宽度确为 0；若因它缺失 itemWidths 就让折叠逻辑永远失效，
+    // 会导致窄窗口下按钮被容器吞掉却不折叠。缺失按 0 计算，ResizeObserver 补测后自会收敛。
     let total = 0
     for (let i = 0; i < items.length; i++) {
-      const w = itemWidths[items[i]!.key]!
+      const w = itemWidths[items[i]!.key] ?? 0
       const next = total + w + (i > 0 ? gapPx : 0)
       if (next > containerWidth) {
         const reserved = moreButtonPx + gapPx
@@ -139,7 +140,7 @@ export function InputToolbarOverflow({
         let acc = total
         while (fit > 0 && acc + reserved > containerWidth) {
           fit -= 1
-          const fitW = itemWidths[items[fit]!.key]!
+          const fitW = itemWidths[items[fit]!.key] ?? 0
           acc -= fitW + (fit > 0 ? gapPx : 0)
         }
         return Math.max(0, fit)

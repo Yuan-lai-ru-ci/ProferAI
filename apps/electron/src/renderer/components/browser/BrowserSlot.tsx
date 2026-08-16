@@ -16,8 +16,7 @@ function nextLayoutRevision(): number {
  */
 const APP_OVERLAY_LIFECYCLE_SELECTOR = [
   '[data-profer-intro-overlay]',
-  '[role="dialog"]',
-  '[role="alertdialog"]',
+  '[data-browser-blocking]',
   '[data-sonner-toast]',
   '[data-radix-popper-content-wrapper]',
 ].join(', ')
@@ -29,7 +28,14 @@ const APP_OVERLAY_LIFECYCLE_SELECTOR = [
  *   左侧会话区弹开的工具栏菜单不覆盖右侧浏览器，不再无谓隐藏网页。
  */
 function findBlockingOverlay(slot: HTMLElement): string | null {
-  if (document.querySelector('[data-profer-intro-overlay], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return 'dialog'
+  // 引导遮罩 + 显式标记的全屏模态浮层 → 无条件遮挡浏览器。
+  // data-browser-blocking 由 Dialog/AlertDialog 组件库统一携带，TabSwitcher 手动补标。
+  // 注意：Radix Popover 的 Content 也带 role="dialog"，但它不是模态（位于 popper wrapper 内），
+  // 不在此列，交给下方几何判断——这正是修复"眼睛按钮悬停白屏"的关键。
+  if (document.querySelector('[data-profer-intro-overlay]')) return 'dialog'
+  const blocking = document.querySelector<HTMLElement>('[data-browser-blocking][data-state="open"]')
+    ?? [...document.querySelectorAll<HTMLElement>('[data-browser-blocking]')].find((el) => !el.getAttribute('data-state'))
+  if (blocking) return 'dialog'
   const slotRect = slot.getBoundingClientRect()
   if (slotRect.width <= 4 || slotRect.height <= 4) return null
   const intersects = (r: DOMRect): boolean => (
