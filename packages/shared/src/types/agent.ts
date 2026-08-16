@@ -330,10 +330,6 @@ export interface SDKSystemMessage {
   decision_reason_type?: string
   decision_reason?: string
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
-  /** 中断记录消息专用（subtype='interruption_record'）：中断原因 */
-  interruptReason?: AgentEndReason
-  /** 中断记录消息专用（subtype='interruption_record'）：中断发生时间戳 */
-  interruptAt?: number
   [key: string]: unknown
 }
 

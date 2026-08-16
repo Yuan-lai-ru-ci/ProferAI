@@ -111,49 +111,17 @@ function formatSystemToolName(toolName: string): string {
   return toolName
 }
 
-/** 任务中断记录行：居中、低饱和的记录（复用 CompactBoundaryDivider 的分隔线思路），不打断消息流。
- *  可点击按钮：点击后向 Agent 说明中断原因（输入框出现琥珀色中断说明 chip，与自动出现效果一致——置位同一个 agentInterruptionMapAtom）。 */
+/** 任务中断记录行：居中、低饱和的记录（复用 CompactBoundaryDivider 的分隔线思路），不打断消息流 */
 function InterruptionRecordNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
-  const sessionId = useAtomValue(currentAgentSessionIdAtom)
-  const setAgentInterruptionMap = useSetAtom(agentInterruptionMapAtom)
-  const reason = message.interruptReason
   const label = typeof message.message === 'string' && message.message.length > 0
     ? message.message
     : '任务中断'
-  const at = message.interruptAt ?? Date.now()
-
-  const handleClick = React.useCallback(() => {
-    // 仅当记录携带中断原因时生效（历史数据可能缺失）
-    if (!reason || !sessionId) return
-    setAgentInterruptionMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, { reason, label, at })
-      return map
-    })
-    // 同步写 meta，保证与自动出现一致、重启可恢复
-    window.electronAPI.updateAgentInterruptionState({ sessionId, state: { reason, label, at } }).catch(console.error)
-  }, [reason, label, at, sessionId, setAgentInterruptionMap])
-
   return (
     <div className="flex items-center gap-3 my-4 px-1">
       <div className="flex-1 h-px bg-border/40" />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={handleClick}
-            className={cn(
-              'shrink-0 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20',
-              'cursor-pointer transition-colors hover:text-foreground/80 hover:bg-muted/40 hover:border-border/50',
-            )}
-          >
-            — {label} —
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <p>点击向 Agent 说明中断原因</p>
-        </TooltipContent>
-      </Tooltip>
+      <span className="shrink-0 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20">
+        — {label} —
+      </span>
       <div className="flex-1 h-px bg-border/40" />
     </div>
   )
@@ -591,6 +559,8 @@ export interface AssistantTurnRendererProps {
 export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubjects, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   const processGroupsKeepExpanded = useAtomValue(agentProcessGroupsKeepExpandedAtom)
+  const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const setAgentInterruptionMap = useSetAtom(agentInterruptionMapAtom)
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -623,6 +593,19 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   // 只在用户点击停止时显示中断徽章。
   // aborted_streaming / aborted_tools 是流式追加消息时的软中断，语义是继续补充信息。
   const showStoppedBadge = !!stoppedByUser
+
+  // 点击操作栏「已被用户中断」徽章：置位中断说明状态（输入框出现琥珀色 chip，与自动出现效果一致），并同步写 meta
+  const handleInterruptBadgeClick = React.useCallback(() => {
+    if (!sessionId) return
+    const state = { reason: 'stopped_by_user' as const, label: '已被用户中断', at: Date.now() }
+    setAgentInterruptionMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, state)
+      return map
+    })
+    // 同步写 meta，保证与自动出现一致、重启可恢复
+    window.electronAPI.updateAgentInterruptionState({ sessionId, state }).catch(console.error)
+  }, [sessionId, setAgentInterruptionMap])
 
   // 构建 Agent/Task tool_use → 子代理内容块映射
   const agentToolIds = new Set<string>()
@@ -806,9 +789,20 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
               </MessageAction>
             )}
             {showStoppedBadge && (
-              <Badge variant="outline" className="text-xs text-muted-foreground/70 border-muted-foreground/30 shrink-0">
-                已被用户中断
-              </Badge>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleInterruptBadgeClick}
+                    className="shrink-0 rounded-full border border-muted-foreground/30 bg-muted/20 px-2 py-0.5 text-xs text-muted-foreground/70 transition-colors cursor-pointer hover:bg-muted/40 hover:text-foreground/80 hover:border-muted-foreground/50"
+                  >
+                    已被用户中断
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>点击向 Agent 说明中断原因</p>
+                </TooltipContent>
+              </Tooltip>
             )}
           </MessageActions>
         )

@@ -2361,15 +2361,13 @@ export class AgentOrchestrator {
               type: 'system',
               subtype: 'interruption_record',
               message: label,
-              interruptReason: reason,
-              interruptAt: now,
               _createdAt: now,
             } as unknown as SDKMessage
             try {
               appendSDKMessages(sessionId, [record])
               if (completion.messages) completion.messages.push(record as unknown as AgentMessage)
             } catch { /* 忽略 */ }
-            // 1.2 持久化最近中断到 meta（同一时间戳，与 record 的 interruptAt/_createdAt 一致）
+            // 1.2 持久化最近中断到 meta（同一时间戳，与 record 的 _createdAt 一致）
             try {
               updateAgentSessionMeta(sessionId, {
                 lastInterruptReason: reason,
