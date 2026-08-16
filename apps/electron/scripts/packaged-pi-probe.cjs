@@ -6,7 +6,7 @@
  *   $env:ELECTRON_RUN_AS_NODE='1'
  *   .\out\win-unpacked\Profer.exe .\scripts\packaged-pi-probe.cjs .\out\win-unpacked\resources
  *
- * 该 probe 只验证 app.asar 的 ESM 导入、当前 Pi 0.82.1 的内存 model runtime/session
+ * 该 probe 只验证 app.asar 的 ESM 导入、当前 Pi 0.84.2 的内存 model runtime/session
  * 初始化，以及 native/WASM 是否位于 app.asar.unpacked。它不发送真实渠道请求。
  */
 const { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } = require('node:fs')
@@ -82,7 +82,7 @@ async function runProbe(resourcesDir) {
   }
 
   const sdk = imported.get('@earendil-works/pi-coding-agent')
-  // Pi 0.82.1：AuthStorage/ModelRegistry.inMemory 已移除，改为 ModelRuntime.create + registerProvider
+  // Pi 0.84.2：AuthStorage/ModelRegistry.inMemory 已移除，改为 ModelRuntime.create + registerProvider
   assert(typeof sdk.ModelRuntime?.create === 'function', 'Pi ModelRuntime.create 不可用')
   assert(typeof sdk.SessionManager?.create === 'function', 'Pi SessionManager.create 不可用')
   assert(typeof sdk.SettingsManager?.inMemory === 'function', 'Pi SettingsManager.inMemory 不可用')
