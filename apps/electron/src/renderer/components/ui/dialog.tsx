@@ -52,6 +52,7 @@ const DialogContent = React.forwardRef<
         className
       )}
       {...props}
+      data-browser-blocking
     >
       {children}
       {!hideClose && (

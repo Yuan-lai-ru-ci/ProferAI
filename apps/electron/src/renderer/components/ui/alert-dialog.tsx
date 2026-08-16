@@ -47,6 +47,7 @@ const AlertDialogContent = React.forwardRef<
         className
       )}
       {...props}
+      data-browser-blocking
     />
   </AlertDialogPortal>
 ))

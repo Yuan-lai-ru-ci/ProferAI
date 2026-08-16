@@ -49,6 +49,7 @@ export function ImageLightbox({
         />
         {/* 内容层 */}
         <DialogPrimitive.Content
+          data-browser-blocking
           className={cn(
             'fixed inset-0 z-[200] flex items-center justify-center titlebar-no-drag',
             'data-[state=open]:animate-in data-[state=closed]:animate-out',
