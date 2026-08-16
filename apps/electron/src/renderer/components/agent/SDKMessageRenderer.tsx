@@ -40,12 +40,13 @@ import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom, requestModelSelectorOpen } from '@/atoms/chat-atoms'
-import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
-import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import { agentProcessGroupsKeepExpandedAtom, agentSessionsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
 import { planningTabAtom } from '@/atoms/planning-atoms'
@@ -108,6 +109,22 @@ function formatSystemToolName(toolName: string): string {
     return `${parts[1]} / ${parts.slice(2).join('__')}`
   }
   return toolName
+}
+
+/** 任务中断记录行：居中、低饱和的记录（复用 CompactBoundaryDivider 的分隔线思路），不打断消息流 */
+function InterruptionRecordNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
+  const label = typeof message.message === 'string' && message.message.length > 0
+    ? message.message
+    : '任务中断'
+  return (
+    <div className="flex items-center gap-3 my-4 px-1">
+      <div className="flex-1 h-px bg-border/40" />
+      <span className="shrink-0 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20">
+        — {label} —
+      </span>
+      <div className="flex-1 h-px bg-border/40" />
+    </div>
+  )
 }
 
 function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
@@ -366,7 +383,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       const sysMsg = msg as SDKSystemMessage
       // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / harness_follow_up）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'harness_follow_up') {
+      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'harness_follow_up' || sysMsg.subtype === 'interruption_record') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -573,6 +590,8 @@ export interface AssistantTurnRendererProps {
 export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubjects, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   const processGroupsKeepExpanded = useAtomValue(agentProcessGroupsKeepExpandedAtom)
+  const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const setAgentInterruptionMap = useSetAtom(agentInterruptionMapAtom)
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -605,6 +624,19 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   // 只在用户点击停止时显示中断徽章。
   // aborted_streaming / aborted_tools 是流式追加消息时的软中断，语义是继续补充信息。
   const showStoppedBadge = !!stoppedByUser
+
+  // 点击操作栏「已被用户中断」徽章：置位中断说明状态（输入框出现琥珀色 chip，与自动出现效果一致），并同步写 meta
+  const handleInterruptBadgeClick = React.useCallback(() => {
+    if (!sessionId) return
+    const state = { reason: 'stopped_by_user' as const, label: '已被用户中断', at: Date.now() }
+    setAgentInterruptionMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, state)
+      return map
+    })
+    // 同步写 meta，保证与自动出现一致、重启可恢复
+    window.electronAPI.updateAgentInterruptionState({ sessionId, state }).catch(console.error)
+  }, [sessionId, setAgentInterruptionMap])
 
   // 构建 Agent/Task tool_use → 子代理内容块映射
   const agentToolIds = new Set<string>()
@@ -788,9 +820,20 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
               </MessageAction>
             )}
             {showStoppedBadge && (
-              <Badge variant="outline" className="text-xs text-muted-foreground/70 border-muted-foreground/30 shrink-0">
-                已被用户中断
-              </Badge>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleInterruptBadgeClick}
+                    className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400 transition-colors cursor-pointer hover:bg-amber-500/20 hover:text-amber-600 dark:hover:text-amber-300 hover:border-amber-500/50"
+                  >
+                    已被用户中断
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>向 Agent 说明中断原因</p>
+                </TooltipContent>
+              </Tooltip>
             )}
           </MessageActions>
         )
@@ -882,6 +925,9 @@ export function SDKMessageRenderer({
     }
     if (subtype === 'permission_denied') {
       return <PermissionDeniedNotice message={sysMsg} />
+    }
+    if (subtype === 'interruption_record') {
+      return <InterruptionRecordNotice message={sysMsg} />
     }
 
     // compacting 事件已由 isCompacting flag 驱动的尾部指示器接管（见 AgentMessages），此处不再渲染持久条目
@@ -1434,6 +1480,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
     if (group.message.subtype === 'harness_follow_up') return '系统验证兜底：已自动复查未验证改动'
+    if (group.message.subtype === 'interruption_record') return group.message.message ?? '任务中断'
     return ''
   }
   // assistant-turn：收集所有 text 块
@@ -1469,6 +1516,7 @@ export function MessageGroupRenderer({ group, allMessages, historicalTaskSubject
     if (subtype === 'compacting') return null
     if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
     if (subtype === 'harness_follow_up') return <div data-message-id={groupId}><HarnessFollowUpNotice message={group.message} /></div>
+    if (subtype === 'interruption_record') return <div data-message-id={groupId}><InterruptionRecordNotice message={group.message} /></div>
     return null
   }
 

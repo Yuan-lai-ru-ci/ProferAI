@@ -57,6 +57,7 @@ import type {
   AgentSessionMeta,
   AgentRuntime,
   AgentSendInput,
+  UpdateAgentInterruptStateInput,
   AgentWorkspace,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
@@ -2832,6 +2833,17 @@ export function registerIpcHandlers(): void {
       if (current.completedButUnconfirmed) updates.completedButUnconfirmed = false
       if (Object.keys(updates).length === 0) return current
       return updateAgentSessionMeta(id, updates)
+    }
+  )
+
+  // 更新 Agent 会话中断说明状态（state 非 null 置位：点击中断记录行向 Agent 说明原因；null 清除：消费/移除输入框中断 chip 时调用，保证重启不复活已消费的中断）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_INTERRUPTION_STATE,
+    (_e, input: UpdateAgentInterruptStateInput): AgentSessionMeta => {
+      const { sessionId, state } = input
+      return updateAgentSessionMeta(sessionId, state
+        ? { lastInterruptReason: state.reason, lastInterruptLabel: state.label, lastInterruptAt: state.at }
+        : { lastInterruptReason: undefined, lastInterruptLabel: undefined, lastInterruptAt: undefined })
     }
   )
 

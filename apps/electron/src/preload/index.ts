@@ -46,6 +46,7 @@ import type {
   AgentSendInput,
   AgentStreamEvent,
   AgentStreamCompletePayload,
+  UpdateAgentInterruptStateInput,
   AgentWorkspace,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
@@ -619,6 +620,9 @@ export interface ElectronAPI {
 
   /** 清除 Agent 会话完成状态（兼容清除旧版 manualWorking） */
   clearAgentCompletionState: (id: string) => Promise<AgentSessionMeta>
+
+  /** 更新 Agent 会话中断说明状态（state 非 null 置位：点击中断记录行；null 清除：消费/移除中断 chip 时调用） */
+  updateAgentInterruptionState: (input: UpdateAgentInterruptStateInput) => Promise<AgentSessionMeta>
 
   /** 切换 Agent 会话归档状态 */
   toggleArchiveAgentSession: (id: string) => Promise<AgentSessionMeta>
@@ -2061,6 +2065,10 @@ const electronAPI: ElectronAPI = {
 
   clearAgentCompletionState: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_COMPLETION_STATE, id)
+  },
+
+  updateAgentInterruptionState: (input: UpdateAgentInterruptStateInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_INTERRUPTION_STATE, input)
   },
 
   toggleArchiveAgentSession: (id: string) => {

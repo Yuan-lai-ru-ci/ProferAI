@@ -59,7 +59,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
-import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, SDKBackgroundTaskSummary, ProferEvent, AgentSessionMeta, TodoAgentSessionActivation } from '@profer/shared'
@@ -1147,12 +1147,38 @@ export function useGlobalAgentListeners(): void {
           })
         }
 
+        // 中断说明 chip：非正常结束置位、正常完成清除；后台任务续轮（backgroundTasksPending）不置位。
+        // 主进程 owner finally 统一归一化后透传 endReason，此处仅同步到会话级 atom。
+        const endReason = data.endReason
+        const endReasonLabel = data.endReasonLabel
+        if (endReason && !backgroundTasksPending) {
+          store.set(agentInterruptionMapAtom, (prev) => {
+            const map = new Map(prev)
+            if (endReason === 'completed') {
+              map.delete(data.sessionId)
+            } else {
+              map.set(data.sessionId, {
+                reason: endReason,
+                label: endReasonLabel ?? '任务中断',
+                at: Date.now(),
+              })
+            }
+            return map
+          })
+        }
+
         // 非正常结束时显示截断提示
-        if (data.resultSubtype && data.resultSubtype !== 'success' && !data.stoppedByUser) {
+        // 主路径（orchestrator）已透传 endReason/endReasonLabel，优先用 label 拼 toast（与 chip 文案一致）；
+        // 其他 STREAM_COMPLETE 发起点不传 endReason 时回退原 resultSubtype 逻辑，向后兼容。
+        if (data.endReason && data.endReason !== 'completed' && !data.stoppedByUser) {
+          const detail = data.resultErrors?.find((e) => typeof e === 'string' && e.trim().length > 0)?.trim()
+          toast.warning(detail ? `任务执行出错：${detail}` : (data.endReasonLabel ?? '任务中断'), { duration: 8000 })
+        } else if (data.resultSubtype && data.resultSubtype !== 'success' && !data.stoppedByUser) {
           const messages: Record<string, string> = {
             error_max_turns: '任务被中断：已达到轮次上限。继续对话可让 Agent 接着完成。',
             error_max_budget_usd: '任务被中断：已达到预算上限。',
             error_during_execution: '任务执行过程中发生错误。',
+            max_tokens: '任务被中断：已达到长度上限，可继续对话让 Agent 接着完成。',
           }
           const msg = messages[data.resultSubtype] ?? `任务异常结束（${data.resultSubtype}）`
           // error_during_execution 等执行期错误：优先展示 SDK result.errors[] 携带的真实原因，

@@ -6,6 +6,7 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
+import type { AgentEndReason } from '@profer/shared'
 import { currentAgentSessionIdAtom } from './agent-atoms'
 
 // ===== 类型定义 =====
@@ -64,7 +65,7 @@ export const currentSessionPreviewOpenAtom = atom<boolean>((get) => {
 // ===== 引用选中文本（Quoted Selection）=====
 
 /** 选中文本引用的来源 */
-export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad' | 'knowledge-preview'
+export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad' | 'knowledge-preview' | 'agent-interruption'
 
 /** 从预览面板或 Agent 历史中选中的文本引用 */
 export interface QuotedSelection {
@@ -97,3 +98,40 @@ export const currentQuotedSelectionAtom = atom<QuotedSelection | null>((get) => 
   if (!sessionId) return null
   return get(quotedSelectionMapAtom).get(sessionId) ?? null
 })
+
+// ===== 中断说明 chip（Agent 任务非正常结束时显示）=====
+
+/**
+ * 中断说明 chip 状态：会话级「待注入前缀」
+ *
+ * 独立于用户主动引用（quotedSelectionMapAtom），两者在同一 chip 行并排显示、
+ * 各自独立移除/注入，互不覆盖。
+ */
+export interface AgentInterruptionState {
+  /** 中断原因（completed 不会进入此状态） */
+  reason: AgentEndReason
+  /** 可读短文案（AGENT_END_REASON_LABELS 之一） */
+  label: string
+  /** 中断时间戳 */
+  at: number
+}
+
+/** 每会话的中断说明 Map（仅置位未消费的中断；消费/移除时删除） */
+export const agentInterruptionMapAtom = atom<Map<string, AgentInterruptionState>>(new Map())
+
+/** 当前会话的中断说明（派生） */
+export const currentAgentInterruptionAtom = atom<AgentInterruptionState | null>((get) => {
+  const sessionId = get(currentAgentSessionIdAtom)
+  if (!sessionId) return null
+  return get(agentInterruptionMapAtom).get(sessionId) ?? null
+})
+
+/** 中断类型 → 视觉基调：error 用红，其余非错误中断用琥珀，unknown 用灰 */
+export type AgentInterruptionTone = 'amber' | 'red' | 'muted'
+
+/** 中断类型 → 视觉基调：error 用红，其余非错误中断用琥珀，unknown 用灰 */
+export function getAgentInterruptionTone(reason: AgentEndReason): AgentInterruptionTone {
+  if (reason === 'error') return 'red'
+  if (reason === 'unknown') return 'muted'
+  return 'amber'
+}
