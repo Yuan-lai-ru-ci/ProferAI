@@ -330,6 +330,10 @@ export interface SDKSystemMessage {
   decision_reason_type?: string
   decision_reason?: string
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
+  /** 中断记录消息专用（subtype='interruption_record'）：中断原因 */
+  interruptReason?: AgentEndReason
+  /** 中断记录消息专用（subtype='interruption_record'）：中断发生时间戳 */
+  interruptAt?: number
   [key: string]: unknown
 }
 
@@ -1332,6 +1336,12 @@ export interface AgentStreamCompletePayload {
   endReasonLabel?: string
 }
 
+/** 更新会话中断说明状态输入：state 非 null 置位（点击记录行），null 清除（消费/移除 chip） */
+export interface UpdateAgentInterruptStateInput {
+  sessionId: string
+  state: { reason: AgentEndReason; label: string; at: number } | null
+}
+
 // ===== 文件浏览器 =====
 
 /** 文件/目录条目（用于文件浏览器树形视图） */
@@ -1662,8 +1672,8 @@ export const AGENT_IPC_CHANNELS = {
   TOGGLE_PIN: 'agent:toggle-pin',
   /** 清除会话完成状态（兼容清除旧版 manualWorking）。channel 值保留旧名以兼容已缓存的 preload */
   CLEAR_COMPLETION_STATE: 'agent:confirm-working-done',
-  /** 清除中断说明状态（消费/移除 chip 时清 meta，保证重启不复活已消费的中断） */
-  CLEAR_INTERRUPTION_STATE: 'agent:clear-interruption-state',
+  /** 更新中断说明状态（state 非 null 置位：点击中断记录行；null 清除：消费/移除 chip 时清 meta，保证重启不复活已消费的中断）。一个通道双向。 */
+  UPDATE_INTERRUPTION_STATE: 'agent:update-interruption-state',
   /** 切换会话归档状态 */
   TOGGLE_ARCHIVE: 'agent:toggle-archive',
   /** 搜索会话消息内容 */

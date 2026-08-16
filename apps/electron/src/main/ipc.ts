@@ -57,6 +57,7 @@ import type {
   AgentSessionMeta,
   AgentRuntime,
   AgentSendInput,
+  UpdateAgentInterruptStateInput,
   AgentWorkspace,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
@@ -2794,15 +2795,15 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 清除 Agent 会话中断说明状态（消费/移除输入框中断 chip 时调用，保证重启不复活已消费的中断）
+  // 更新 Agent 会话中断说明状态（state 非 null 置位：点击中断记录行向 Agent 说明原因；null 清除：消费/移除输入框中断 chip 时调用，保证重启不复活已消费的中断）
   ipcMain.handle(
-    AGENT_IPC_CHANNELS.CLEAR_INTERRUPTION_STATE,
-    (_e, sessionId: string): AgentSessionMeta =>
-      updateAgentSessionMeta(sessionId, {
-        lastInterruptReason: undefined,
-        lastInterruptLabel: undefined,
-        lastInterruptAt: undefined,
-      })
+    AGENT_IPC_CHANNELS.UPDATE_INTERRUPTION_STATE,
+    (_e, input: UpdateAgentInterruptStateInput): AgentSessionMeta => {
+      const { sessionId, state } = input
+      return updateAgentSessionMeta(sessionId, state
+        ? { lastInterruptReason: state.reason, lastInterruptLabel: state.label, lastInterruptAt: state.at }
+        : { lastInterruptReason: undefined, lastInterruptLabel: undefined, lastInterruptAt: undefined })
+    }
   )
 
   // 切换 Agent 会话归档状态

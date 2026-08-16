@@ -2356,22 +2356,25 @@ export class AgentOrchestrator {
             } catch { /* 会话可能已删除 */ }
           } else {
             // 1.3 追加对话记录条目（在 onComplete 前落盘，保证 STREAM_COMPLETE 触发的消息重载能看到）
+            const now = Date.now()
             const record: SDKMessage = {
               type: 'system',
               subtype: 'interruption_record',
               message: label,
-              _createdAt: Date.now(),
+              interruptReason: reason,
+              interruptAt: now,
+              _createdAt: now,
             } as unknown as SDKMessage
             try {
               appendSDKMessages(sessionId, [record])
               if (completion.messages) completion.messages.push(record as unknown as AgentMessage)
             } catch { /* 忽略 */ }
-            // 1.2 持久化最近中断到 meta
+            // 1.2 持久化最近中断到 meta（同一时间戳，与 record 的 interruptAt/_createdAt 一致）
             try {
               updateAgentSessionMeta(sessionId, {
                 lastInterruptReason: reason,
                 lastInterruptLabel: label,
-                lastInterruptAt: Date.now(),
+                lastInterruptAt: now,
               })
             } catch { /* 忽略 */ }
           }

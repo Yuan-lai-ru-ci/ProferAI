@@ -819,7 +819,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       map.delete(sessionId)
       return map
     })
-    window.electronAPI.clearAgentInterruptionState(sessionId).catch(console.error)
+    window.electronAPI.updateAgentInterruptionState({ sessionId, state: null }).catch(console.error)
   }, [sessionId, store])
 
   // 会话加载/重启恢复：meta 中仍有未消费的中断（lastInterruptReason 非 completed）且 atom 无值时，从 meta 填充。
@@ -1807,7 +1807,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       return map
     })
     // 同步清 meta，保证重启不复活已消费的 chip
-    window.electronAPI.clearAgentInterruptionState(sessionId).catch(console.error)
+    window.electronAPI.updateAgentInterruptionState({ sessionId, state: null }).catch(console.error)
     return buildQuotedSelectionBlock({
       text: buildAgentInterruptionText(state),
       filePath: state.label,

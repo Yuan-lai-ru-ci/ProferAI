@@ -40,12 +40,13 @@ import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom, requestModelSelectorOpen } from '@/atoms/chat-atoms'
-import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
-import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import { agentProcessGroupsKeepExpandedAtom, agentSessionsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
 import { planningTabAtom } from '@/atoms/planning-atoms'
@@ -110,17 +111,49 @@ function formatSystemToolName(toolName: string): string {
   return toolName
 }
 
-/** 任务中断记录行：居中、低饱和的记录（复用 CompactBoundaryDivider 的分隔线思路），不打断消息流 */
+/** 任务中断记录行：居中、低饱和的记录（复用 CompactBoundaryDivider 的分隔线思路），不打断消息流。
+ *  可点击按钮：点击后向 Agent 说明中断原因（输入框出现琥珀色中断说明 chip，与自动出现效果一致——置位同一个 agentInterruptionMapAtom）。 */
 function InterruptionRecordNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
+  const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const setAgentInterruptionMap = useSetAtom(agentInterruptionMapAtom)
+  const reason = message.interruptReason
   const label = typeof message.message === 'string' && message.message.length > 0
     ? message.message
     : '任务中断'
+  const at = message.interruptAt ?? Date.now()
+
+  const handleClick = React.useCallback(() => {
+    // 仅当记录携带中断原因时生效（历史数据可能缺失）
+    if (!reason || !sessionId) return
+    setAgentInterruptionMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, { reason, label, at })
+      return map
+    })
+    // 同步写 meta，保证与自动出现一致、重启可恢复
+    window.electronAPI.updateAgentInterruptionState({ sessionId, state: { reason, label, at } }).catch(console.error)
+  }, [reason, label, at, sessionId, setAgentInterruptionMap])
+
   return (
     <div className="flex items-center gap-3 my-4 px-1">
       <div className="flex-1 h-px bg-border/40" />
-      <span className="shrink-0 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20">
-        — {label} —
-      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handleClick}
+            className={cn(
+              'shrink-0 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20',
+              'cursor-pointer transition-colors hover:text-foreground/80 hover:bg-muted/40 hover:border-border/50',
+            )}
+          >
+            — {label} —
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p>点击向 Agent 说明中断原因</p>
+        </TooltipContent>
+      </Tooltip>
       <div className="flex-1 h-px bg-border/40" />
     </div>
   )
