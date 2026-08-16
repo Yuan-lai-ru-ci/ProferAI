@@ -2301,6 +2301,10 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   React.useEffect(() => {
     // 1.6 开关关：不自动 drain，队列保留，用户可手动逐条「立即发送」
     if (!autoSendEnabled) return
+    // 渲染连贯性（1.7）：上一轮执行过程可能仍在 liveMessages（重载清理前）。
+    // 若此刻乐观用户气泡 append 到 persisted 末尾，会排在 live 的上轮执行之前，
+    // 导致 turn 分组把上轮执行并入本轮。等待 live 清空（上轮执行进入 persisted）后再自动发送。
+    if (liveMessages.length > 0) return
     if (autoSendingQueuedRef.current) return
     if (queuedSendInFlightRef.current) return
     if (queuedMessages.length === 0) return
@@ -2326,7 +2330,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         queuedSendInFlightRef.current = false
         autoSendingQueuedRef.current = false
       })
-  }, [autoSendEnabled, canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping])
+  }, [autoSendEnabled, canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping, liveMessages.length])
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {

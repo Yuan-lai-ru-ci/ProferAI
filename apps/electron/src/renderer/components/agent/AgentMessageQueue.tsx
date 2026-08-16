@@ -84,14 +84,14 @@ export function AgentMessageQueue({
             className={cn(
               'ml-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] leading-none transition-colors',
               autoSend
-                ? 'border-amber-500/40 bg-amber-500/10 text-amber-600'
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'
                 : 'border-border bg-muted/40 text-muted-foreground/60 hover:text-foreground/80',
             )}
           >
             <span
               className={cn(
                 'size-1.5 rounded-full transition-colors',
-                autoSend ? 'bg-amber-500' : 'bg-muted-foreground/40',
+                autoSend ? 'bg-emerald-500' : 'bg-muted-foreground/40',
               )}
             />
             <span className="tabular-nums">自动发送</span>
