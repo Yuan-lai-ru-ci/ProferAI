@@ -614,6 +614,9 @@ export interface ElectronAPI {
   /** 清除 Agent 会话完成状态（兼容清除旧版 manualWorking） */
   clearAgentCompletionState: (id: string) => Promise<AgentSessionMeta>
 
+  /** 清除 Agent 会话中断说明状态（消费/移除中断 chip 时调用） */
+  clearAgentInterruptionState: (sessionId: string) => Promise<AgentSessionMeta>
+
   /** 切换 Agent 会话归档状态 */
   toggleArchiveAgentSession: (id: string) => Promise<AgentSessionMeta>
 
@@ -2047,6 +2050,10 @@ const electronAPI: ElectronAPI = {
 
   clearAgentCompletionState: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_COMPLETION_STATE, id)
+  },
+
+  clearAgentInterruptionState: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_INTERRUPTION_STATE, sessionId)
   },
 
   toggleArchiveAgentSession: (id: string) => {

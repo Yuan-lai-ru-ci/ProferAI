@@ -193,6 +193,8 @@ export async function runAgent(
             resultSubtype: opts?.resultSubtype,
             resultErrors: opts?.resultErrors,
             backgroundTasksPending: opts?.backgroundTasksPending,
+            endReason: opts?.endReason,
+            endReasonLabel: opts?.endReasonLabel,
           })
         }
       },
@@ -264,7 +266,7 @@ export async function runAgentHeadless(
     /** 流式完成回调。messages/opts 为 orchestrator 传出的完整已持久化消息与完成元数据；
      *  无渲染进程的外部调用方（如平板 remote-service）可用它们拿到最终结果，
      *  后向兼容：不接收参数的旧调用方（飞书/bridge/automation）会自然忽略多余实参。 */
-    onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void
+    onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: import('@profer/shared').AgentEndReason; endReasonLabel?: string }) => void
     onTitleUpdated: (title: string) => void
     source?: AgentExternalRunSource
   },
@@ -303,6 +305,8 @@ export async function runAgentHeadless(
             resultSubtype: opts?.resultSubtype,
             resultErrors: opts?.resultErrors,
             backgroundTasksPending: opts?.backgroundTasksPending,
+            endReason: opts?.endReason,
+            endReasonLabel: opts?.endReasonLabel,
           })
         }
       },

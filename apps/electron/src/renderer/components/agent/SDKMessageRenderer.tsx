@@ -110,6 +110,22 @@ function formatSystemToolName(toolName: string): string {
   return toolName
 }
 
+/** 任务中断记录行：居中、低饱和的记录（复用 CompactBoundaryDivider 的分隔线思路），不打断消息流 */
+function InterruptionRecordNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
+  const label = typeof message.message === 'string' && message.message.length > 0
+    ? message.message
+    : '任务中断'
+  return (
+    <div className="flex items-center gap-3 my-4 px-1">
+      <div className="flex-1 h-px bg-border/40" />
+      <span className="shrink-0 text-[11px] text-muted-foreground/70 px-2 py-0.5 rounded-full border border-border/30 bg-muted/20">
+        — {label} —
+      </span>
+      <div className="flex-1 h-px bg-border/40" />
+    </div>
+  )
+}
+
 function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
   const toolName = typeof message.tool_name === 'string' ? formatSystemToolName(message.tool_name) : undefined
   const denialMessage = typeof message.message === 'string' ? message.message : undefined
@@ -335,7 +351,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       const sysMsg = msg as SDKSystemMessage
       // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied') {
+      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'interruption_record') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -851,6 +867,9 @@ export function SDKMessageRenderer({
     }
     if (subtype === 'permission_denied') {
       return <PermissionDeniedNotice message={sysMsg} />
+    }
+    if (subtype === 'interruption_record') {
+      return <InterruptionRecordNotice message={sysMsg} />
     }
 
     // compacting 事件已由 isCompacting flag 驱动的尾部指示器接管（见 AgentMessages），此处不再渲染持久条目
@@ -1402,6 +1421,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
+    if (group.message.subtype === 'interruption_record') return group.message.message ?? '任务中断'
     return ''
   }
   // assistant-turn：收集所有 text 块
@@ -1436,6 +1456,7 @@ export function MessageGroupRenderer({ group, allMessages, historicalTaskSubject
     // visible indicator is rendered at the list tail by AgentMessages from isCompacting.
     if (subtype === 'compacting') return null
     if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
+    if (subtype === 'interruption_record') return <div data-message-id={groupId}><InterruptionRecordNotice message={group.message} /></div>
     return null
   }
 

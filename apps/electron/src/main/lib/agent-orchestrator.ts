@@ -64,6 +64,7 @@ import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
 import { isCommercialBuild } from './build-target'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot, rewindPiSession } from './agent-session-manager'
+import { normalizeAgentEndReason } from './agent-end-reason'
 import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceAutoMemoryDir, getWorkspaceMemoryArchivePath, ensurePluginManifest } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
@@ -111,7 +112,7 @@ export interface SessionCallbacks {
   /** 发送流式错误 */
   onError: (error: string) => void
   /** 发送流式完成（携带已持久化的消息列表） */
-  onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void
+  onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: import('@profer/shared').AgentEndReason; endReasonLabel?: string }) => void
   /** 发送标题更新 */
   onTitleUpdated: (title: string) => void
   /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
@@ -637,9 +638,12 @@ export class AgentOrchestrator {
     const completion = new Promise<void>((resolve) => { resolveCompletion = resolve })
     this.runCompletions.set(sessionId, { token: runGeneration, promise: completion, resolve: resolveCompletion })
     const releaseActiveRun = (): boolean => releaseActiveSession(this.activeSessions, sessionId, runGeneration)
-    type CompleteOptions = { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] }
+    type CompleteOptions = { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; endReason?: import('@profer/shared').AgentEndReason; endReasonLabel?: string }
     // completeRun 必须延后到 owner finally 才通知 renderer；因此状态必须与 finally 同作用域。
     let pendingTerminalCompletion: { messages?: AgentMessage[]; opts?: CompleteOptions } | null = null
+    // 运行级错误标志：preflight / 异常 catch / TypedError 无 subtype 等无 resultSubtype 的错误路径
+    // 据此归一化为 error。必须放在 try 之外，owner finally 需要读取它。
+    let runEndedWithError = false
 
     try {
     // 0.5 清除上一轮中断标记
@@ -669,6 +673,7 @@ export class AgentOrchestrator {
       }
       callbacks.onError(errorContent)
       // owner finally 释放 activeSessions 后才发 complete，避免 renderer 先进入 idle。
+      runEndedWithError = true
       pendingTerminalCompletion = { messages: [], opts: { startedAt: input.startedAt } }
     }
 
@@ -782,6 +787,7 @@ export class AgentOrchestrator {
       opts?: CompleteOptions,
     ): void => {
       callbacks.onError(error)
+      runEndedWithError = true
       completeRun(messages, opts)
     }
 
@@ -1817,6 +1823,7 @@ export class AgentOrchestrator {
                     }
                     // 不可重试 → 终止
                     try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+                    runEndedWithError = true
                     completeRun(getAgentSessionMessages(sessionId), {
                       startedAt: streamStartedAt,
                       resultSubtype: 'error_during_execution',
@@ -1939,6 +1946,7 @@ export class AgentOrchestrator {
                 // 透传归一化后的错误消息到前端，避免 SDK 原始 API Error 直接暴露给用户。
                 this.eventBus.emit(sessionId, { kind: 'sdk_message', message: errorSDKMsg })
                 try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+                runEndedWithError = true
                 completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
                 return
               }
@@ -2321,7 +2329,56 @@ export class AgentOrchestrator {
         }
         // ownership 已释放，renderer 此时收到 STREAM_COMPLETE 后可安全开始下一轮。
         if (pendingTerminalCompletion) {
-          callbacks.onComplete(pendingTerminalCompletion.messages, pendingTerminalCompletion.opts)
+          const completion = pendingTerminalCompletion
+          // 1.1 统一结束原因判定：在任何终端路径的 complete 处归一化。
+          // 后台任务续轮（backgroundTasksPending 的 idleComplete）走 onComplete 直达、不经此路径，
+          // 因此不写 meta、不追加记录、不透传 endReason ——「假结束」不误判。
+          const opts: CompleteOptions = completion.opts ?? {}
+          const stopped = opts.stoppedByUser === true
+          const hasError = runEndedWithError
+          const rawSubtype = opts.resultSubtype
+          // D3 防御：干净结束（无 subtype、无错误、未停止）视为 success，避免被误判为 unknown/中断
+          const effectiveSubtype = (!stopped && !hasError && rawSubtype == null) ? 'success' : rawSubtype
+          const { reason, label } = normalizeAgentEndReason({
+            resultSubtype: effectiveSubtype,
+            stoppedByUser: stopped,
+            hasError,
+          })
+
+          if (reason === 'completed') {
+            // 1.2 新一次正常完成：清除旧中断记录
+            try {
+              updateAgentSessionMeta(sessionId, {
+                lastInterruptReason: undefined,
+                lastInterruptLabel: undefined,
+                lastInterruptAt: undefined,
+              })
+            } catch { /* 会话可能已删除 */ }
+          } else {
+            // 1.3 追加对话记录条目（在 onComplete 前落盘，保证 STREAM_COMPLETE 触发的消息重载能看到）
+            const record: SDKMessage = {
+              type: 'system',
+              subtype: 'interruption_record',
+              message: label,
+              _createdAt: Date.now(),
+            } as unknown as SDKMessage
+            try {
+              appendSDKMessages(sessionId, [record])
+              if (completion.messages) completion.messages.push(record as unknown as AgentMessage)
+            } catch { /* 忽略 */ }
+            // 1.2 持久化最近中断到 meta
+            try {
+              updateAgentSessionMeta(sessionId, {
+                lastInterruptReason: reason,
+                lastInterruptLabel: label,
+                lastInterruptAt: Date.now(),
+              })
+            } catch { /* 忽略 */ }
+          }
+
+          // D9 透传 endReason（completed 时前端据此清除旧 chip；非 completed 时置位并驱动 toast）
+          const finalOpts: CompleteOptions = { ...opts, endReason: reason, endReasonLabel: label }
+          callbacks.onComplete(completion.messages, finalOpts)
         }
         // 会话已空闲：通知协作层重查「父会话自动续跑」。
         // 场景：父会话发起 delegation 后结束等待子会话，期间用户手动压缩（/compact 占用了

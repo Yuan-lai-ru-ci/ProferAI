@@ -2794,6 +2794,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 清除 Agent 会话中断说明状态（消费/移除输入框中断 chip 时调用，保证重启不复活已消费的中断）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CLEAR_INTERRUPTION_STATE,
+    (_e, sessionId: string): AgentSessionMeta =>
+      updateAgentSessionMeta(sessionId, {
+        lastInterruptReason: undefined,
+        lastInterruptLabel: undefined,
+        lastInterruptAt: undefined,
+      })
+  )
+
   // 切换 Agent 会话归档状态
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TOGGLE_ARCHIVE,

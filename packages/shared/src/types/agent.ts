@@ -308,7 +308,7 @@ export interface SDKResultMessage {
   _channelModelId?: string
 }
 
-/** SDK system 消息（init / compact_boundary / permission_denied / task_started / task_progress / task_notification） */
+/** SDK system 消息（init / compact_boundary / compacting / permission_denied / interruption_record / task_started / task_progress / task_notification） */
 export interface SDKSystemMessage {
   type: 'system'
   subtype?: string
@@ -644,6 +644,25 @@ export type AgentStreamPayload =
 // ===== Agent 会话管理 =====
 
 /**
+ * Agent 任务结束原因（统一判定）
+ *
+ * 由主进程 orchestrator 的 owner finally 统一归一化，用于：
+ * - 持久化到会话 meta（lastInterruptReason），刷新/重启后可恢复中断说明 chip
+ * - 追加对话记录条目（interruption_record）
+ * - 透传到 STREAM_COMPLETE，驱动前端中断说明 chip 与 toast
+ *
+ * completed 表示正常完成，不算中断，不记录、不显示 chip。
+ */
+export type AgentEndReason =
+  | 'completed'        // 正常完成（不记录、不显示 chip）
+  | 'stopped_by_user'  // 用户手动停止
+  | 'max_turns'        // 达到轮次上限（Claude error_max_turns）
+  | 'max_budget'       // 达到预算上限（Claude error_max_budget_usd）
+  | 'max_tokens'       // 输出/上下文达到长度上限（Pi stopReason=length / subtype=max_tokens）
+  | 'error'            // 执行期错误 / preflight 错误 / 异常 catch
+  | 'unknown'          // 已知以外的未知 subtype
+
+/**
  * Agent 执行时使用的文件根。
  *
  * 未持久化该字段的历史会话必须按 session 解释，避免升级后将历史 SDK 相对路径
@@ -719,6 +738,12 @@ export interface AgentSessionMeta {
   completedButUnconfirmed?: boolean
   /** 最后一次流式执行是否被用户主动中断 */
   stoppedByUser?: boolean
+  /** 最近一次非正常结束的中断原因；正常完成时清除。仅表示「未消费的中断」，消费/移除后清除（见 agent:clear-interruption-state IPC）。 */
+  lastInterruptReason?: AgentEndReason
+  /** 最近中断的可读短文案（AGENT_END_REASON_LABELS 之一） */
+  lastInterruptLabel?: string
+  /** 最近中断时间戳 */
+  lastInterruptAt?: number
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: ProferPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
@@ -1301,6 +1326,10 @@ export interface AgentStreamCompletePayload {
   resultErrors?: string[]
   /** 本轮主体结束但仍有后台任务/定时任务在飞行：UI 进入"空闲可输入"态，等待任务完成自动唤醒 */
   backgroundTasksPending?: boolean
+  /** 归一化后的结束原因（仅主 orchestrator 路径透传；completed 不触发 chip） */
+  endReason?: AgentEndReason
+  /** 结束原因的可读短文案（AGENT_END_REASON_LABELS 之一），供 chip / toast 展示 */
+  endReasonLabel?: string
 }
 
 // ===== 文件浏览器 =====
@@ -1633,6 +1662,8 @@ export const AGENT_IPC_CHANNELS = {
   TOGGLE_PIN: 'agent:toggle-pin',
   /** 清除会话完成状态（兼容清除旧版 manualWorking）。channel 值保留旧名以兼容已缓存的 preload */
   CLEAR_COMPLETION_STATE: 'agent:confirm-working-done',
+  /** 清除中断说明状态（消费/移除 chip 时清 meta，保证重启不复活已消费的中断） */
+  CLEAR_INTERRUPTION_STATE: 'agent:clear-interruption-state',
   /** 切换会话归档状态 */
   TOGGLE_ARCHIVE: 'agent:toggle-archive',
   /** 搜索会话消息内容 */

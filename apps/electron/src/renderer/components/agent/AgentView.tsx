@@ -61,7 +61,8 @@ import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom } from '@/atoms/preview-atoms'
+import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentSessionStreamingStateAtomFamily,
@@ -170,6 +171,12 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
     parent_tool_use_id: null,
     _createdAt: createdAt,
   } as unknown as SDKMessage
+}
+
+/** 构造中断说明注入文本：告知 Agent 上次任务为何中断、建议衔接继续 */
+function buildAgentInterruptionText(state: AgentInterruptionState): string {
+  const time = new Date(state.at).toLocaleString('zh-CN', { hour12: false })
+  return `上次任务未完成，中断原因：${state.label}（${time}）。\n如本次请求与上次任务相关，请先继续完成上次任务。`
 }
 
 interface SDKMessageRecord {
@@ -794,6 +801,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
   const openPreview = useOpenPreview()
+  const currentAgentInterruption = useAtomValue(currentAgentInterruptionAtom)
 
   /** 移除当前引用选中文本 */
   const handleRemoveQuotedSelection = React.useCallback(() => {
@@ -803,6 +811,38 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       return m
     })
   }, [sessionId, setQuotedSelectionMap])
+
+  /** 移除中断说明 chip（用户不想告知 Agent 时）：清 atom + 同步清 meta，保证重启不复活 */
+  const handleRemoveInterruption = React.useCallback(() => {
+    store.set(agentInterruptionMapAtom, (prev) => {
+      const map = new Map(prev)
+      map.delete(sessionId)
+      return map
+    })
+    window.electronAPI.clearAgentInterruptionState(sessionId).catch(console.error)
+  }, [sessionId, store])
+
+  // 会话加载/重启恢复：meta 中仍有未消费的中断（lastInterruptReason 非 completed）且 atom 无值时，从 meta 填充。
+  // 消费/移除时 atom 清空且 meta 同步清除（clear-interruption-state IPC），故重启后不会复活已消费的 chip。
+  React.useEffect(() => {
+    const reason = sessionMeta?.lastInterruptReason
+    if (reason && reason !== 'completed') {
+      const existing = store.get(agentInterruptionMapAtom).get(sessionId)
+      if (!existing) {
+        store.set(agentInterruptionMapAtom, (prev) => {
+          const map = new Map(prev)
+          if (!map.has(sessionId)) {
+            map.set(sessionId, {
+              reason,
+              label: sessionMeta.lastInterruptLabel ?? '任务中断',
+              at: sessionMeta.lastInterruptAt ?? Date.now(),
+            })
+          }
+          return map
+        })
+      }
+    }
+  }, [sessionMeta?.lastInterruptReason, sessionMeta?.lastInterruptLabel, sessionId, store])
 
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
@@ -1757,6 +1797,26 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     return qs
   }, [sessionId, store])
 
+  /** 消费当前会话的待注入中断说明：读取并清空 atom + 同步清 meta；返回序列化块（无则空串） */
+  const consumeAgentInterruptionBlock = React.useCallback((): string => {
+    const state = store.get(agentInterruptionMapAtom).get(sessionId)
+    if (!state) return ''
+    store.set(agentInterruptionMapAtom, (prev) => {
+      const map = new Map(prev)
+      if (map.get(sessionId)?.at === state.at) map.delete(sessionId)
+      return map
+    })
+    // 同步清 meta，保证重启不复活已消费的 chip
+    window.electronAPI.clearAgentInterruptionState(sessionId).catch(console.error)
+    return buildQuotedSelectionBlock({
+      text: buildAgentInterruptionText(state),
+      filePath: state.label,
+      sourceType: 'agent-interruption',
+      sourceLabel: state.label,
+      capturedAt: state.at,
+    })
+  }, [sessionId, store])
+
   /** 向 liveMessages 追加一条乐观用户消息 */
   const appendLiveUserMessage = React.useCallback((message: SDKMessage) => {
     setLiveMessagesMap((prev) => {
@@ -1828,6 +1888,14 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const payload = buildQueuedMessageSendPayload(message, quotedSelectionBlock)
     if (!payload.rawText || !agentChannelId || !hasAvailableModel) return
 
+    // 会话级「待注入」中断说明前缀：任何一次发送发生时，若存在未消费的中断说明则拼到该条消息前缀并消费（只注入一次）。
+    // 拼接顺序「中断说明 → 用户引用 → 用户文本」；已排队的旧消息不追溯修改。
+    const interruptionBlock = consumeAgentInterruptionBlock()
+    if (interruptionBlock) {
+      payload.rawText = `${interruptionBlock}\n\n${payload.rawText}`.trim()
+      payload.sdkText = `${interruptionBlock}\n\n${payload.sdkText}`.trim()
+    }
+
     clearStoppedByUser()
 
     const startNewRun = async (): Promise<void> => {
@@ -1896,7 +1964,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
     streaming, backgroundWaiting, permissionMode, attachedDirs, attachedFileDirectories,
     clearStoppedByUser, queueMessageIntoActiveAgent, appendOptimisticPersistedMessage,
-    revealRendererDraft, sessionId, setStreamingStates,
+    revealRendererDraft, sessionId, setStreamingStates, consumeAgentInterruptionBlock,
   ])
 
   /** 发送消息 */
@@ -2115,8 +2183,10 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       })
     }
 
-    // 2. 构建最终消息
-    const finalMessage = fileReferences + effectiveText
+    // 2. 构建最终消息：拼接顺序「中断说明 → 用户引用 → 用户文本」。
+    // 中断说明是会话级「待注入」前缀，空闲直发时随本条消息消费；streaming 入队分支不消费（留给队列 drain 首条）。
+    const interruptionBlock = consumeAgentInterruptionBlock()
+    const finalMessage = interruptionBlock + fileReferences + effectiveText
 
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
@@ -2196,7 +2266,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2949,8 +3019,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               </div>
             )}
 
-            {/* 附件 + 引用选中文本 Chip（同排并排） */}
-            {(pendingFiles.length > 0 || currentQuotedSelection) && (
+            {/* 附件 + 引用选中文本 Chip + 中断说明 Chip（同排并排） */}
+            {(pendingFiles.length > 0 || currentQuotedSelection || (currentAgentInterruption && !streaming && !streamState?.stopping)) && (
               <div className="flex flex-wrap gap-2 px-3 pt-2.5 pb-1.5">
                 {pendingFiles.map((file) => (
                   <AttachmentPreviewItem
@@ -2967,6 +3037,15 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
                     text={currentQuotedSelection.text}
                     filePath={currentQuotedSelection.filePath}
                     onRemove={handleRemoveQuotedSelection}
+                  />
+                )}
+                {currentAgentInterruption && !streaming && !streamState?.stopping && (
+                  <QuotedSelectionChip
+                    variant="interruption"
+                    tooltip="点击向 Agent 说明中断原因"
+                    text={currentAgentInterruption.label}
+                    filePath={currentAgentInterruption.label}
+                    onRemove={handleRemoveInterruption}
                   />
                 )}
               </div>

@@ -1,14 +1,17 @@
 /**
- * QuotedSelectionChip — 引用选中文本的 Chip 标签
+ * QuotedSelectionChip — 引用选中文本 / 中断说明 的 Chip 标签
  *
- * 显示在 Agent 输入框上方，展示预览面板中选中的文本片段及来源文件。
- * 点击 X 按钮可移除引用。
+ * 显示在 Agent 输入框上方：
+ * - quote（默认）：展示预览面板中选中的文本片段及来源文件（primary 视觉）
+ * - interruption：展示任务中断原因说明（amber 视觉），悬停提示「点击向 Agent 说明中断原因」
+ * 点击 X 按钮可移除。
  */
 
 import * as React from 'react'
 import { X, Quote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileBaseName } from '@/lib/file-utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface QuotedSelectionChipProps {
   /** 选中的文本（截断显示） */
@@ -17,6 +20,10 @@ interface QuotedSelectionChipProps {
   filePath: string
   /** 移除回调 */
   onRemove: () => void
+  /** 视觉变体：quote=用户引用（默认）；interruption=中断说明（amber） */
+  variant?: 'quote' | 'interruption'
+  /** 悬停提示文案；有值时用 Tooltip 包裹 */
+  tooltip?: string
   className?: string
 }
 
@@ -37,6 +44,8 @@ export function QuotedSelectionChip({
   text,
   filePath,
   onRemove,
+  variant = 'quote',
+  tooltip,
   className,
 }: QuotedSelectionChipProps): React.ReactElement {
   const handleRemoveClick = React.useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -44,22 +53,31 @@ export function QuotedSelectionChip({
     onRemove()
   }, [onRemove])
 
-  return (
+  const isInterruption = variant === 'interruption'
+
+  const chip = (
     <div
       className={cn(
         'group/chip relative flex items-start gap-2 shrink-0 max-w-[33%]',
-        'rounded-lg bg-primary/8 border border-primary/20',
-        'pl-2.5 pr-7 py-1.5 text-[13px]',
-        'transition-colors hover:bg-primary/12',
+        'rounded-lg border pl-2.5 pr-7 py-1.5 text-[13px]',
+        'transition-colors',
+        isInterruption
+          ? 'bg-amber-500/10 border-amber-500/25 hover:bg-amber-500/15'
+          : 'bg-primary/8 border-primary/20 hover:bg-primary/12',
         className,
       )}
     >
-      <Quote className="size-4 shrink-0 mt-0.5 text-primary/60 rotate-180 -translate-y-[3px]" />
+      <Quote
+        className={cn(
+          'size-4 shrink-0 mt-0.5 rotate-180 -translate-y-[3px]',
+          isInterruption ? 'text-amber-500' : 'text-primary/60',
+        )}
+      />
       <div className="flex flex-col min-w-0">
-        <span className="text-foreground/80 line-clamp-2 leading-snug">
+        <span className={cn('line-clamp-2 leading-snug', isInterruption ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/80')}>
           {truncateText(text)}
         </span>
-        <span className="text-[11px] text-muted-foreground/60 mt-0.5">
+        <span className={cn('text-[11px] mt-0.5', isInterruption ? 'text-amber-600/70 dark:text-amber-400/70' : 'text-muted-foreground/60')}>
           {truncatePath(filePath)}
         </span>
       </div>
@@ -73,10 +91,23 @@ export function QuotedSelectionChip({
           'opacity-0 group-hover/chip:opacity-100 transition-opacity duration-200',
           'hover:bg-foreground/20 hover:text-foreground',
         )}
-        aria-label="移除引用"
+        aria-label={isInterruption ? '移除中断说明' : '移除引用'}
       >
         <X className="size-3" />
       </button>
     </div>
   )
+
+  if (tooltip) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{chip}</TooltipTrigger>
+        <TooltipContent side="top">
+          <p>{tooltip}</p>
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return chip
 }
