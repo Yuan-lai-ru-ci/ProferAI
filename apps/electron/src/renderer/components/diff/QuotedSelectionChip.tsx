@@ -3,7 +3,7 @@
  *
  * 显示在 Agent 输入框上方：
  * - quote（默认）：展示预览面板中选中的文本片段及来源文件（primary 视觉，两行：主文案 + 来源路径）
- * - interruption：展示任务中断原因说明（按中断类型配色，单行），悬停提示「向 Agent 说明中断原因」
+ * - interruption：展示任务中断原因说明（按中断类型配色，两行：主文案 + 中断原因），悬停提示「中断原因」
  * 点击 X 按钮可移除。
  */
 
@@ -25,6 +25,8 @@ interface QuotedSelectionChipProps {
   variant?: 'quote' | 'interruption'
   /** 中断类型 → 视觉基调（仅 interruption 变体生效，默认 amber） */
   interruptionTone?: AgentInterruptionTone
+  /** interruption 变体的副文案（第二行），如「中断原因」 */
+  description?: string
   /** 悬停提示文案；有值时用 Tooltip 包裹 */
   tooltip?: string
   className?: string
@@ -71,6 +73,7 @@ export function QuotedSelectionChip({
   onRemove,
   variant = 'quote',
   interruptionTone = 'amber',
+  description,
   tooltip,
   className,
 }: QuotedSelectionChipProps): React.ReactElement {
@@ -103,11 +106,15 @@ export function QuotedSelectionChip({
         <span className={cn('line-clamp-2 leading-snug', isInterruption ? toneStyles.text : 'text-foreground/80')}>
           {truncateText(text)}
         </span>
-        {!isInterruption && (
+        {isInterruption && description ? (
+          <span className="text-[11px] mt-0.5 text-muted-foreground/60">
+            {description}
+          </span>
+        ) : !isInterruption ? (
           <span className="text-[11px] mt-0.5 text-muted-foreground/60">
             {truncatePath(filePath)}
           </span>
-        )}
+        ) : null}
       </div>
       <button
         type="button"

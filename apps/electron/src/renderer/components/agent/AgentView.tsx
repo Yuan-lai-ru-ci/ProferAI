@@ -3057,7 +3057,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
                   <QuotedSelectionChip
                     variant="interruption"
                     interruptionTone={getAgentInterruptionTone(currentAgentInterruption.reason)}
-                    tooltip="向 Agent 说明中断原因"
+                    tooltip="中断原因"
+                    description="中断原因"
                     text={currentAgentInterruption.label}
                     filePath={currentAgentInterruption.label}
                     onRemove={handleRemoveInterruption}
