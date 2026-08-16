@@ -105,6 +105,7 @@ import {
   allPendingExitPlanRequestsAtom,
   allPendingPermissionRequestsAtom,
   agentMessageQueueAtomFamily,
+  agentQueueAutoSendMapAtom,
   finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
@@ -145,7 +146,6 @@ import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
 import {
   buildQueuedMessageSendPayload,
   createAgentQueuedMessage,
-  discardQueuedMessagesOnStop,
   moveQueuedMessage,
   isQueueTargetNoLongerActiveError,
   parseQueuedMessageMentions,
@@ -617,6 +617,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
+  const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
   // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
@@ -652,6 +653,21 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     [sessions, sessionId],
   )
   const hasSessionMeta = Boolean(sessionMeta)
+  // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省关/重启保留）；map 仅为运行时缓存，
+  // 首次/切会话且 meta 有值时由下方 effect 填充。
+  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false
+  // 切会话/首次：map 无值且 meta 有值 → 从 meta 填充运行时缓存（每个会话独立记忆，不串）
+  React.useEffect(() => {
+    const metaValue = sessionMeta?.autoQueueSendEnabled
+    if (metaValue === undefined) return
+    if (store.get(agentQueueAutoSendMapAtom).has(sessionId)) return
+    setAutoSendMap((prev) => {
+      if (prev.has(sessionId)) return prev
+      const map = new Map(prev)
+      map.set(sessionId, metaValue)
+      return map
+    })
+  }, [sessionId, sessionMeta?.autoQueueSendEnabled, setAutoSendMap])
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
   const agentChannelId = sessionMetaChannelId ?? sessionChannelMap.get(sessionId) ?? defaultChannelId
@@ -1024,6 +1040,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   // 持久化消息缓存 setter — 仅写入，读取时用 store.get 同步取值避免订阅触发重渲染
   const setMessagesCache = useSetAtom(agentSDKMessagesCacheAtom)
+  // 1.7.1：登记尚未被持久化重载确认的乐观消息（按 uuid），消息重载时合并保留，
+  // 避免队列自动发送的用户气泡被「主进程尚未持久化该用户消息」的整体重载覆盖。
+  const pendingOptimisticMessagesRef = React.useRef<Map<string, SDKMessage>>(new Map())
   const appendOptimisticPersistedMessage = React.useCallback((message: SDKMessage) => {
     // 切会话时优先命中内存缓存，因此乐观插入的用户消息也要同步写入缓存，
     // 否则“发送后立刻切走再切回”会短暂回退到旧消息数组。
@@ -1031,6 +1050,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     persistedSDKMessagesRef.current = next
     setPersistedSDKMessages(next)
     setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, next))
+    // 1.7.1：有 uuid 的乐观消息登记到待合并表（重载返回且持久化确认后会让位）
+    const optimisticUuid = (message as Record<string, unknown>).uuid
+    if (typeof optimisticUuid === 'string') {
+      pendingOptimisticMessagesRef.current.set(optimisticUuid, message)
+    }
   }, [sessionId, setMessagesCache])
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
@@ -1044,6 +1068,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const isSessionSwitch = loadingSessionIdRef.current !== sessionId
     if (isSessionSwitch) {
       loadingSessionIdRef.current = sessionId
+      // 1.7.1：乐观消息只属于当前会话，切会话时清空待合并登记，避免拼进新会话消息流
+      pendingOptimisticMessagesRef.current.clear()
       // 移动端：切会话时重置触顶加载状态（首次默认假设还有更多，待首帧返回后校正）。
       historyHasMoreRef.current = true
       setHistoryHasMore(true)
@@ -1085,11 +1111,25 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         const isPage = !Array.isArray(sdkMsgs) && sdkMsgs !== null && typeof sdkMsgs === 'object' && 'messages' in (sdkMsgs as Record<string, unknown>)
         const page = isPage ? (sdkMsgs as SDKMessagePageLike) : null
         const normalized: SDKMessage[] = isPage && page ? page.messages : (Array.isArray(sdkMsgs) ? (sdkMsgs as SDKMessage[]) : [])
+        // 1.7.1：合并尚未持久化的乐观消息（按 uuid），避免队列自动发送的用户气泡被重载覆盖
+        const persistedUuids = new Set(
+          normalized.filter((m) => typeof (m as Record<string, unknown>).uuid === 'string')
+            .map((m) => (m as Record<string, unknown>).uuid as string),
+        )
+        const preserved: SDKMessage[] = []
+        for (const [uuid, optimistic] of pendingOptimisticMessagesRef.current) {
+          if (persistedUuids.has(uuid)) {
+            pendingOptimisticMessagesRef.current.delete(uuid)   // 已持久化，乐观副本让位
+          } else {
+            preserved.push(optimistic)
+          }
+        }
+        const merged = preserved.length > 0 ? [...normalized, ...preserved] : normalized
         // 写入缓存（仅保留尾部窗口，防随加载历史无限膨胀；LRU 淘汰会话）
-        const cacheValue = normalized.slice(-AGENT_CACHE_WINDOW)
+        const cacheValue = merged.slice(-AGENT_CACHE_WINDOW)
         setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, cacheValue))
         unstable_batchedUpdates(() => {
-          setPersistedSDKMessages(normalized)
+          setPersistedSDKMessages(merged)
           setMessagesLoaded(true)
 
           // 桌面：从分页结果同步 hasMore；平板：从服务端读累计状态
@@ -1772,6 +1812,38 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     })
   }, [sessionId, store])
 
+  /**
+   * 1.6.1 把当前输入加入队列：消费引用选区 + 追加队列消息 + 清空输入框/建议。
+   * 供发送按钮左键（streaming/队列非空分支）、发送按钮右键（无条件入队）复用。
+   * 仅支持纯文本；输入为空且无附件时静默返回。
+   */
+  const enqueueCurrentInput = React.useCallback((): void => {
+    const text = inputContent.trim()
+    const effectiveText = text || suggestion || ''
+    const pendingFilesSnapshot = pendingFilesRef.current
+    if (!effectiveText && pendingFilesSnapshot.length === 0) return
+    // 运行中追加仅支持纯文本，不处理附件（与 streaming 分支旧语义一致）
+    if (pendingFilesSnapshot.length > 0) {
+      toast.info('队列暂不支持追加发送附件', {
+        description: '请先清空队列或撤除附件仅发送文本',
+      })
+      return
+    }
+    const quotedSelection = consumeQuotedSelection()
+    setQueuedMessages((prev) => [
+      ...prev,
+      createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
+    ])
+    setInputContent('')
+    setInputHtmlContent('')
+    setPromptSuggestions((prev) => {
+      if (!prev.has(sessionId)) return prev
+      const map = new Map(prev)
+      map.delete(sessionId)
+      return map
+    })
+  }, [consumeQuotedSelection, inputContent, pendingFilesRef, sessionId, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
+
   /** 向 liveMessages 追加一条乐观用户消息 */
   const appendLiveUserMessage = React.useCallback((message: SDKMessage) => {
     setLiveMessagesMap((prev) => {
@@ -1883,6 +1955,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           workspaceId: currentWorkspaceId || undefined,
           agentRuntime: sessionAgentRuntime,
           startedAt: streamStartedAt,
+          // 1.7.1：透传与乐观消息一致的 uuid，使主进程持久化后可按 uuid 与乐观气泡匹配去重
+          uuid: message.id,
           permissionModeOverride: permissionMode,
           ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
           ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
@@ -1933,6 +2007,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       toast.info('Agent 正在停止', { description: '停止完成前不会发送或清除你的草稿。' })
       return
     }
+
+    // 1.6.1 队列非空时所有入口强制入队：用户需先清空队列（发完/撤回/删除）才能直接发送。
+    if (queuedMessages.length > 0) {
+      enqueueCurrentInput()
+      return
+    }
+
     const additionalDirectoriesForRun = new Set(attachedDirs)
     for (const dir of attachedFileDirectories) {
       additionalDirectoriesForRun.add(dir)
@@ -1940,26 +2021,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
     // streaming：进入前端托管队列，turn 结束后 auto-drain 逐条发送（不打断当前 turn）。
     if (streaming) {
-      // 运行中追加仅支持纯文本，不处理附件
-      if (pendingFilesSnapshot.length > 0) {
-        toast.info('Agent 运行中暂不支持追加发送附件', {
-          description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
-        })
-        return
-      }
-      const quotedSelection = consumeQuotedSelection()
-      setQueuedMessages((prev) => [
-        ...prev,
-        createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
-      ])
-      setInputContent('')
-      setInputHtmlContent('')
-      setPromptSuggestions((prev) => {
-        if (!prev.has(sessionId)) return prev
-        const map = new Map(prev)
-        map.delete(sessionId)
-        return map
-      })
+      // 附件限制/消费引用/入队/清空输入统一收敛到 enqueueCurrentInput
+      enqueueCurrentInput()
       return
     }
 
@@ -2221,7 +2284,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2295,6 +2358,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   // turn 结束后自动发送队首消息（FIFO，三把 ref 防重入）
   React.useEffect(() => {
+    // 1.6 开关关：不自动 drain，队列保留，用户可手动逐条「立即发送」
+    if (!autoSendEnabled) return
+    // 渲染连贯性（1.7）：上一轮执行过程可能仍在 liveMessages（重载清理前）。
+    // 若此刻乐观用户气泡 append 到 persisted 末尾，会排在 live 的上轮执行之前，
+    // 导致 turn 分组把上轮执行并入本轮。等待 live 清空（上轮执行进入 persisted）后再自动发送。
+    if (liveMessages.length > 0) return
     if (autoSendingQueuedRef.current) return
     if (queuedSendInFlightRef.current) return
     if (queuedMessages.length === 0) return
@@ -2320,17 +2389,23 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         queuedSendInFlightRef.current = false
         autoSendingQueuedRef.current = false
       })
-  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping])
+  }, [autoSendEnabled, canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping, liveMessages.length])
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
     if (stopInFlightRef.current || streamState?.stopping) return
     stopInFlightRef.current = true
 
-    // 用户明确停止时，丢弃此前已经进入“运行中追加”队列的消息；停止之后的草稿不入队，见 handleSend。
-    // 先失效在飞消息的 restore 资格，再清空当前队列。
+    // 1.6：手动停止时不再清空队列（保留排队消息）；只关闭「自动发送」开关，
+    // 防止停止后立刻自动发送下一条排队消息。停止之后的草稿不入队，见 handleSend。
     queueStopEpochRef.current += 1
-    setQueuedMessages(discardQueuedMessagesOnStop)
+    setAutoSendMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, false)
+      return map
+    })
+    // 1.6.2 开关状态 per-session 持久化：手动停止 → 写 meta false（重启保留）
+    window.electronAPI.updateAgentQueueAutoSend(sessionId, false).catch(console.error)
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
       if (!current || (!current.running && !current.backgroundWaiting)) return prev
@@ -2348,7 +2423,18 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       .finally(() => {
         stopInFlightRef.current = false
       })
-  }, [sessionId, streamState?.stopping, setStreamingStates, setQueuedMessages])
+  }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
+
+  /** 1.6.2 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
+  const handleToggleAutoSend = React.useCallback((): void => {
+    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false)
+    setAutoSendMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, next)
+      return map
+    })
+    window.electronAPI.updateAgentQueueAutoSend(sessionId, next).catch(console.error)
+  }, [sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2826,27 +2912,47 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">
-        <p>停止 Agent ({getAcceleratorDisplay(getActiveAccelerator('stop-generation'))})</p>
+      <TooltipContent side="top" className="text-center">
+        <p>停止 Agent</p>
+        <p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p>
       </TooltipContent>
     </Tooltip>
   ) : (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className={cn(
-        toolBtnSize,
-        'rounded-full',
-        canSend
-          ? 'text-primary hover:bg-primary/10'
-          : 'text-foreground/30 cursor-not-allowed'
-      )}
-      onClick={handleSend}
-      disabled={!canSend}
-    >
-      <CornerDownLeft className="size-[22px]" />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            toolBtnSize,
+            'rounded-full',
+            canSend
+              ? 'text-primary hover:bg-primary/10'
+              : 'text-foreground/30 cursor-not-allowed'
+          )}
+          onClick={handleSend}
+          // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
+          onContextMenu={(event) => {
+            event.preventDefault()
+            enqueueCurrentInput()
+          }}
+          disabled={!canSend}
+        >
+          <CornerDownLeft className="size-[22px]" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-center">
+        {queuedMessages.length > 0 ? (
+          <p>点击添加到队列（Enter）</p>
+        ) : (
+          <>
+            <p>左键发送（Enter）</p>
+            <p>右键添加到队列</p>
+          </>
+        )}
+      </TooltipContent>
+    </Tooltip>
   )
 
   return (
@@ -2961,6 +3067,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
             <AgentMessageQueue
               items={queuedMessages}
               canSendNow={canSendQueuedNow}
+              autoSend={autoSendEnabled}
+              onToggleAutoSend={handleToggleAutoSend}
               onSendNow={handleSendQueuedNow}
               onRecall={handleRecallQueuedMessage}
               onRemove={handleRemoveQueuedMessage}

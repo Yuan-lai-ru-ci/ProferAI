@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildQueuedMessageSendPayload, createAgentQueuedMessage, discardQueuedMessagesOnStop, isQueueTargetNoLongerActiveError, shouldRestoreQueuedMessageAfterFailure } from './agent-message-queue'
+import { buildQueuedMessageSendPayload, createAgentQueuedMessage, isQueueTargetNoLongerActiveError, shouldRestoreQueuedMessageAfterFailure } from './agent-message-queue'
 import { buildQuotedSelectionBlock } from './quoted-selection'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 
@@ -9,15 +9,6 @@ describe('queue target lifecycle errors', () => {
     expect(isQueueTargetNoLongerActiveError(new Error('当前活跃 Agent runtime 不支持追加消息'))).toBe(false)
     expect(isQueueTargetNoLongerActiveError(new Error('[Agent 编排] 会话正在停止，无法追加消息: session-1'))).toBe(false)
     expect(isQueueTargetNoLongerActiveError('会话未运行，无法追加消息')).toBe(false)
-  })
-
-  test('Stop 丢弃已入队消息，返回独立的空队列以阻止旧消息被 drain 或立即发送', () => {
-    const queued = [createAgentQueuedMessage('第一条', 'one', 1), createAgentQueuedMessage('第二条', 'two', 2)]
-    const discarded = discardQueuedMessagesOnStop(queued)
-
-    expect(discarded).toEqual([])
-    expect(discarded).not.toBe(queued)
-    expect(queued.map((item) => item.id)).toEqual(['one', 'two'])
   })
 
   test('仅在未 Stop 的同一 queue epoch 中恢复失败的 in-flight 消息', () => {

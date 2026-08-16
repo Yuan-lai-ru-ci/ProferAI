@@ -47,6 +47,7 @@ import {
   agentDiffRefreshVersionAtom,
   agentNonGitFileChangesAtom,
   agentFileChangesCurrentRunAtom,
+  agentQueueAutoSendMapAtom,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -1185,6 +1186,21 @@ export function useGlobalAgentListeners(): void {
           // 让用户能据此判断重试 / 改提问 / 报 bug，而非只看到泛泛的兜底文案。
           const detail = data.resultErrors?.find((e) => typeof e === 'string' && e.trim().length > 0)?.trim()
           toast.warning(detail ? `任务执行出错：${detail}` : msg, { duration: 8000 })
+        }
+
+        // 1.6.2 异常结束自动关「自动发送」开关（resultSubtype 存在且非 success；软空闲 backgroundTasksPending 不触发，
+        // 手动停止由 handleStop 单独处理）。per-session 状态与 meta 同步持久化。
+        // 合并 #72 后：endReason 归一化覆盖 preflight/SDK 错误等 resultSubtype 为空的异常路径，一并关闭。
+        const abnormalEndBySubtype = !!data.resultSubtype && data.resultSubtype !== 'success'
+        const abnormalEndByReason = !!data.endReason && data.endReason !== 'completed'
+        if ((abnormalEndBySubtype || abnormalEndByReason) && !backgroundTasksPending) {
+          store.set(agentQueueAutoSendMapAtom, (prev) => {
+            if (!prev.get(data.sessionId)) return prev
+            const map = new Map(prev)
+            map.set(data.sessionId, false)
+            return map
+          })
+          window.electronAPI.updateAgentQueueAutoSend(data.sessionId, false).catch(console.error)
         }
 
         // 清除 Plan 模式状态（防止异常退出时残留）

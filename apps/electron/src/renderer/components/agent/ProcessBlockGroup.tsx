@@ -189,6 +189,11 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
   const userToggledRef = React.useRef(false)
   const wasStreamingRef = React.useRef(!!isStreaming)
   const autoCollapseTimersRef = React.useRef<number[]>([])
+  // 1.7.2 折叠自锁：上一轮结束已调度折叠倒计时；折叠完成后不再被 streaming 分支重新展开。
+  // 队列无缝衔接时 streaming false 窗口极短，新一轮 true 分支会 clearAutoCollapseTimers() + 重新展开，
+  // 导致上一轮折叠被取消——用这两个 ref 锁住「已调度的折叠」不被撤销。
+  const collapseScheduledRef = React.useRef(false)
+  const collapseDoneRef = React.useRef(false)
   const contentRef = React.useRef<HTMLDivElement>(null)
   const [measuredHeight, setMeasuredHeight] = React.useState<number | undefined>(undefined)
 
@@ -198,9 +203,16 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
   }, [])
 
   React.useEffect(() => {
-    clearAutoCollapseTimers()
+    // 1.7.2：已完成一次自动折叠——此后不参与 streaming 驱动的展开/折叠（除非用户手动展开）
+    if (collapseDoneRef.current) return
 
     if (isStreaming || keepExpandedAfterComplete) {
+      // 新一轮 streaming 开始：若上一轮已调度折叠，不取消它、也不重新展开
+      if (collapseScheduledRef.current) {
+        wasStreamingRef.current = true
+        return
+      }
+      clearAutoCollapseTimers()
       setCollapseCountdown(null)
       if (isStreaming && !wasStreamingRef.current) {
         userToggledRef.current = false
@@ -221,7 +233,9 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
       }
       return
     }
+    if (collapseScheduledRef.current) return  // 已在调度，勿重复
 
+    collapseScheduledRef.current = true
     const soundDelayTimer = window.setTimeout(() => {
       setCollapseCountdown(PROCESS_GROUP_AUTO_COLLAPSE_COUNTDOWN_SECONDS)
 
@@ -233,12 +247,19 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
       autoCollapseTimersRef.current.push(window.setTimeout(() => {
         setCollapseCountdown(null)
         setExpanded(false)
+        // 折叠完成：释放调度锁、置完成锁，后续不再被 streaming 分支重新展开
+        collapseScheduledRef.current = false
+        collapseDoneRef.current = true
       }, PROCESS_GROUP_AUTO_COLLAPSE_COUNTDOWN_SECONDS * 1000))
     }, PROCESS_GROUP_AUTO_COLLAPSE_SOUND_DELAY_MS)
     autoCollapseTimersRef.current.push(soundDelayTimer)
-
-    return clearAutoCollapseTimers
   }, [clearAutoCollapseTimers, isStreaming, keepExpandedAfterComplete])
+
+  // 组件卸载时清理全部折叠定时器。effect 内不再注册 cleanup，
+  // 避免新一轮 streaming 重跑 effect 时把上一轮已调度的折叠倒计时误清掉。
+  React.useEffect(() => {
+    return clearAutoCollapseTimers
+  }, [clearAutoCollapseTimers])
 
   // 折叠前测量实际高度，用于丝滑的 height 过渡（子元素不 reflow，只裁剪边界）
   React.useEffect(() => {
@@ -301,6 +322,9 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
         )}
         onClick={() => {
           userToggledRef.current = true
+          // 1.7.2：手动展开/收起后重置自锁，后续按 streaming 规则重新参与折叠
+          collapseScheduledRef.current = false
+          collapseDoneRef.current = false
           clearAutoCollapseTimers()
           setCollapseCountdown(null)
           setExpanded((prev) => !prev)
@@ -358,6 +382,9 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
                 className="flex items-center gap-1 text-xs text-foreground/40 hover:text-foreground/70 transition-colors"
                 onClick={() => {
                   userToggledRef.current = true
+                  // 1.7.2：手动收起后重置自锁，后续按 streaming 规则重新参与折叠
+                  collapseScheduledRef.current = false
+                  collapseDoneRef.current = false
                   clearAutoCollapseTimers()
                   setCollapseCountdown(null)
                   setExpanded(false)
