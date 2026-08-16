@@ -831,7 +831,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  <p>向 Agent 说明中断原因</p>
+                  <p>中断原因</p>
                 </TooltipContent>
               </Tooltip>
             )}
