@@ -79,14 +79,20 @@ export function getSessionTreeStatus(
   item: AgentSessionTreeItem,
   agentIndicatorMap: Map<string, SessionIndicatorStatus>,
 ): SessionIndicatorStatus {
-  const statuses = [
-    agentIndicatorMap.get(item.session.id) ?? 'idle',
-    ...item.childSessions.map((session) => getDelegatedChildStatus(session, agentIndicatorMap)),
-  ]
+  // 父会话自身状态
+  const parentStatus = agentIndicatorMap.get(item.session.id) ?? 'idle'
 
-  if (statuses.includes('blocked')) return 'blocked'
-  if (statuses.includes('running')) return 'running'
-  if (statuses.includes('completed')) return 'completed'
+  // 子会话只向上聚合 blocked / running：子代理正在运行或被阻塞时，
+  // 父会话行需要体现"有子代理在活动"；但子代理"已完成未查看"是后台结果，
+  // 不应让父会话保持绿色完成标记（用户不一定去查看子代理）。
+  const childActiveStatuses = item.childSessions
+    .map((session) => getDelegatedChildStatus(session, agentIndicatorMap))
+    .filter((status): status is 'blocked' | 'running' =>
+      status === 'blocked' || status === 'running')
+
+  if (parentStatus === 'blocked' || childActiveStatuses.includes('blocked')) return 'blocked'
+  if (parentStatus === 'running' || childActiveStatuses.includes('running')) return 'running'
+  if (parentStatus === 'completed') return 'completed'
   return 'idle'
 }
 
