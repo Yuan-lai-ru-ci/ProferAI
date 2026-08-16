@@ -61,7 +61,7 @@ import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
 import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
@@ -3042,7 +3042,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
                 {currentAgentInterruption && !streaming && !streamState?.stopping && (
                   <QuotedSelectionChip
                     variant="interruption"
-                    tooltip="点击向 Agent 说明中断原因"
+                    interruptionTone={getAgentInterruptionTone(currentAgentInterruption.reason)}
+                    tooltip="向 Agent 说明中断原因"
                     text={currentAgentInterruption.label}
                     filePath={currentAgentInterruption.label}
                     onRemove={handleRemoveInterruption}

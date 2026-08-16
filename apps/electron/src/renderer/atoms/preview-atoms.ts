@@ -125,3 +125,13 @@ export const currentAgentInterruptionAtom = atom<AgentInterruptionState | null>(
   if (!sessionId) return null
   return get(agentInterruptionMapAtom).get(sessionId) ?? null
 })
+
+/** 中断类型 → 视觉基调：error 用红，其余非错误中断用琥珀，unknown 用灰 */
+export type AgentInterruptionTone = 'amber' | 'red' | 'muted'
+
+/** 中断类型 → 视觉基调：error 用红，其余非错误中断用琥珀，unknown 用灰 */
+export function getAgentInterruptionTone(reason: AgentEndReason): AgentInterruptionTone {
+  if (reason === 'error') return 'red'
+  if (reason === 'unknown') return 'muted'
+  return 'amber'
+}

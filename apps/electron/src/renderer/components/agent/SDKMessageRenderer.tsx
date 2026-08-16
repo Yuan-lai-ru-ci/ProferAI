@@ -794,13 +794,13 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
                   <button
                     type="button"
                     onClick={handleInterruptBadgeClick}
-                    className="shrink-0 rounded-full border border-muted-foreground/30 bg-muted/20 px-2 py-0.5 text-xs text-muted-foreground/70 transition-colors cursor-pointer hover:bg-muted/40 hover:text-foreground/80 hover:border-muted-foreground/50"
+                    className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400 transition-colors cursor-pointer hover:bg-amber-500/20 hover:text-amber-600 dark:hover:text-amber-300 hover:border-amber-500/50"
                   >
                     已被用户中断
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  <p>点击向 Agent 说明中断原因</p>
+                  <p>向 Agent 说明中断原因</p>
                 </TooltipContent>
               </Tooltip>
             )}

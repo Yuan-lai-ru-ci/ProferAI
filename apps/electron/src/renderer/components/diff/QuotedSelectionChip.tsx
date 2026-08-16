@@ -2,29 +2,54 @@
  * QuotedSelectionChip — 引用选中文本 / 中断说明 的 Chip 标签
  *
  * 显示在 Agent 输入框上方：
- * - quote（默认）：展示预览面板中选中的文本片段及来源文件（primary 视觉）
- * - interruption：展示任务中断原因说明（amber 视觉），悬停提示「点击向 Agent 说明中断原因」
+ * - quote（默认）：展示预览面板中选中的文本片段及来源文件（primary 视觉，两行：主文案 + 来源路径）
+ * - interruption：展示任务中断原因说明（按中断类型配色，单行），悬停提示「向 Agent 说明中断原因」
  * 点击 X 按钮可移除。
  */
 
 import * as React from 'react'
-import { X, Quote } from 'lucide-react'
+import { X, Quote, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileBaseName } from '@/lib/file-utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import type { AgentInterruptionTone } from '@/atoms/preview-atoms'
 
 interface QuotedSelectionChipProps {
   /** 选中的文本（截断显示） */
   text: string
-  /** 来源文件路径（截断显示） */
+  /** 来源文件路径（截断显示）；interruption 变体不渲染此副文案 */
   filePath: string
   /** 移除回调 */
   onRemove: () => void
-  /** 视觉变体：quote=用户引用（默认）；interruption=中断说明（amber） */
+  /** 视觉变体：quote=用户引用（默认）；interruption=中断说明 */
   variant?: 'quote' | 'interruption'
+  /** 中断类型 → 视觉基调（仅 interruption 变体生效，默认 amber） */
+  interruptionTone?: AgentInterruptionTone
   /** 悬停提示文案；有值时用 Tooltip 包裹 */
   tooltip?: string
   className?: string
+}
+
+/** 中断类型 → 色调样式映射（容器 / 图标 / 主文案） */
+const INTERRUPTION_TONE_STYLES: Record<
+  AgentInterruptionTone,
+  { container: string; icon: string; text: string }
+> = {
+  amber: {
+    container: 'bg-amber-500/10 border-amber-500/25 hover:bg-amber-500/15',
+    icon: 'text-amber-500',
+    text: 'text-amber-600 dark:text-amber-400',
+  },
+  red: {
+    container: 'bg-red-500/10 border-red-500/25 hover:bg-red-500/15',
+    icon: 'text-red-500',
+    text: 'text-red-600 dark:text-red-400',
+  },
+  muted: {
+    container: 'bg-muted/20 border-muted/30 hover:bg-muted/30',
+    icon: 'text-muted-foreground/70',
+    text: 'text-muted-foreground',
+  },
 }
 
 function truncateText(text: string, maxLen: number = 80): string {
@@ -45,6 +70,7 @@ export function QuotedSelectionChip({
   filePath,
   onRemove,
   variant = 'quote',
+  interruptionTone = 'amber',
   tooltip,
   className,
 }: QuotedSelectionChipProps): React.ReactElement {
@@ -54,6 +80,7 @@ export function QuotedSelectionChip({
   }, [onRemove])
 
   const isInterruption = variant === 'interruption'
+  const toneStyles = INTERRUPTION_TONE_STYLES[interruptionTone]
 
   const chip = (
     <div
@@ -62,24 +89,25 @@ export function QuotedSelectionChip({
         'rounded-lg border pl-2.5 pr-7 py-1.5 text-[13px]',
         'transition-colors',
         isInterruption
-          ? 'bg-amber-500/10 border-amber-500/25 hover:bg-amber-500/15'
+          ? toneStyles.container
           : 'bg-primary/8 border-primary/20 hover:bg-primary/12',
         className,
       )}
     >
-      <Quote
-        className={cn(
-          'size-4 shrink-0 mt-0.5 rotate-180 -translate-y-[3px]',
-          isInterruption ? 'text-amber-500' : 'text-primary/60',
-        )}
-      />
+      {isInterruption ? (
+        <Info className={cn('size-4 shrink-0 mt-0.5', toneStyles.icon)} />
+      ) : (
+        <Quote className="size-4 shrink-0 mt-0.5 rotate-180 -translate-y-[3px] text-primary/60" />
+      )}
       <div className="flex flex-col min-w-0">
-        <span className={cn('line-clamp-2 leading-snug', isInterruption ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/80')}>
+        <span className={cn('line-clamp-2 leading-snug', isInterruption ? toneStyles.text : 'text-foreground/80')}>
           {truncateText(text)}
         </span>
-        <span className={cn('text-[11px] mt-0.5', isInterruption ? 'text-amber-600/70 dark:text-amber-400/70' : 'text-muted-foreground/60')}>
-          {truncatePath(filePath)}
-        </span>
+        {!isInterruption && (
+          <span className="text-[11px] mt-0.5 text-muted-foreground/60">
+            {truncatePath(filePath)}
+          </span>
+        )}
       </div>
       <button
         type="button"
