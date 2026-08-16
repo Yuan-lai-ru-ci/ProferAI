@@ -2937,7 +2937,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">
-        <p>停止 Agent ({getAcceleratorDisplay(getActiveAccelerator('stop-generation'))})</p>
+        <p>停止 Agent</p>
+        <p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p>
       </TooltipContent>
     </Tooltip>
   ) : (
@@ -2966,7 +2967,14 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">
-        <p>{queuedMessages.length > 0 ? '点击添加到队列（Enter）' : '左键发送（Enter）· 右键添加到队列'}</p>
+        {queuedMessages.length > 0 ? (
+          <p>点击添加到队列（Enter）</p>
+        ) : (
+          <>
+            <p>左键发送（Enter）</p>
+            <p>右键添加到队列</p>
+          </>
+        )}
       </TooltipContent>
     </Tooltip>
   )
