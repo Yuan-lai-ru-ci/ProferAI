@@ -48,8 +48,12 @@ import type {
   FeishuChatBinding,
   UpdateAutomationInput,
 } from '@profer/shared'
+import type { AgentPreset } from '@profer/shared'
+import { DEFAULT_PRESET_ID } from '@profer/shared'
 
 const NO_FEISHU_BINDING = '__none__'
+/** 预设选择器「跟随工作区默认」的哨兵值（Radix Select 不允许空字符串 value） */
+const PRESET_FOLLOW_DEFAULT = '__default__'
 
 function formatTime(ts?: number): string {
   if (!ts) return '—'
@@ -96,6 +100,7 @@ function getDraftSignature(draft: AutomationDraft): string {
     modelId: draft.modelId ?? '',
     workspaceId: draft.workspaceId ?? '',
     permissionMode: draft.permissionMode,
+    presetId: draft.presetId ?? '',
     sessionMode: draft.sessionMode,
     notificationTargets: draft.notificationTargets ?? [],
     active: draft.active,
@@ -115,6 +120,7 @@ function draftToCreateInput(draft: AutomationDraft): CreateAutomationInput {
     modelId: draft.modelId,
     workspaceId: draft.workspaceId,
     permissionMode: draft.permissionMode,
+    presetId: draft.presetId,
     sessionMode: draft.sessionMode,
     notificationTargets: draft.notificationTargets,
     sourceSessionId: draft.sourceSessionId,
@@ -136,6 +142,7 @@ function draftToUpdateInput(draft: AutomationDraft): UpdateAutomationInput {
     modelId: draft.modelId,
     workspaceId: draft.workspaceId ?? '',
     permissionMode: draft.permissionMode,
+    presetId: draft.presetId ?? '',
     sessionMode: draft.sessionMode,
     notificationTargets: draft.notificationTargets ?? [],
     active: draft.active,
@@ -257,6 +264,8 @@ export function AutomationFormView(): React.ReactElement | null {
   const [editingName, setEditingName] = React.useState(false)
   const [runningNow, setRunningNow] = React.useState(false)
   const [feishuBindings, setFeishuBindings] = React.useState<FeishuChatBinding[]>([])
+  const [presets, setPresets] = React.useState<AgentPreset[]>([])
+  const [defaultPresetId, setDefaultPresetId] = React.useState<string>(DEFAULT_PRESET_ID)
   const [saveStatus, setSaveStatus] = React.useState<SaveStatus>('idle')
   const [lastSavedAt, setLastSavedAt] = React.useState<number | null>(null)
   const nameInputRef = React.useRef<HTMLInputElement>(null)
@@ -304,6 +313,24 @@ export function AutomationFormView(): React.ReactElement | null {
         console.error('[定时任务] 获取飞书绑定失败:', err)
       })
   }, [formState.open])
+
+  // 预设为工作区级配置：任务所选工作区变化时重拉该工作区的预设列表（内置 + 自定义）
+  React.useEffect(() => {
+    if (!formState.open) return
+    const workspaceSlug = workspaces.find((ws) => ws.id === form?.workspaceId)?.slug
+    window.electronAPI.listAgentPresets(workspaceSlug)
+      .then(setPresets)
+      .catch((err: unknown) => {
+        console.error('[定时任务] 获取工作区预设失败:', err)
+        setPresets([])
+      })
+    window.electronAPI.getDefaultAgentPreset(workspaceSlug)
+      .then(setDefaultPresetId)
+      .catch((err: unknown) => {
+        console.error('[定时任务] 获取工作区默认预设失败:', err)
+        setDefaultPresetId(DEFAULT_PRESET_ID)
+      })
+  }, [formState.open, form?.workspaceId, workspaces])
 
   React.useEffect(() => {
     latestFormRef.current = form
@@ -1051,6 +1078,30 @@ export function AutomationFormView(): React.ReactElement | null {
                 </SelectContent>
               </Select>
             )}
+          </div>
+
+          {/* 预设：决定子会话的岗位能力（提示词段/工具裁剪/推理档位），权限与推理以本任务配置优先 */}
+          <div className="flex flex-col gap-2">
+            <Label>预设</Label>
+            <Select
+              value={form.presetId ?? PRESET_FOLLOW_DEFAULT}
+              onValueChange={(v) => update({ presetId: v === PRESET_FOLLOW_DEFAULT ? undefined : v })}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={PRESET_FOLLOW_DEFAULT}>
+                  跟随工作区默认（{presets.find((p) => p.id === defaultPresetId)?.name ?? '标准'}）
+                </SelectItem>
+                {presets.map((preset) => (
+                  <SelectItem key={preset.id} value={preset.id}>
+                    {preset.name}{preset.isBuiltin ? '（内置）' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground leading-relaxed">
+              预设决定子会话的岗位能力（提示词段、工具裁剪、推理强度）。预设的权限设置不覆盖上面的运行权限，无人值守安全优先。
+            </span>
           </div>
 
           {/* 飞书通知 */}

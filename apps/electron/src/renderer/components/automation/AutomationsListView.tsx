@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { Clock, Pause, Play, Power, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import {
   automationsAtom,
   automationFormAtom,
@@ -66,6 +67,31 @@ export function AutomationsListView(): React.ReactElement {
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  /** 预设 ID → 名称 映射（跨工作区合并，列表 badge 展示用） */
+  const [presetNames, setPresetNames] = React.useState<Map<string, string>>(new Map())
+
+  React.useEffect(() => {
+    let cancelled = false
+    const slugs = new Set(
+      automations
+        .map((a) => workspaces.find((w) => w.id === a.workspaceId)?.slug)
+        .filter((s): s is string => !!s),
+    )
+    for (const slug of slugs) {
+      void window.electronAPI.listAgentPresets(slug)
+        .then((ps) => {
+          if (cancelled) return
+          setPresetNames((prev) => {
+            const next = new Map(prev)
+            for (const p of ps) next.set(p.id, p.name)
+            return next
+          })
+        })
+        .catch(() => undefined)
+    }
+    return () => { cancelled = true }
+  }, [automations, workspaces])
 
   const refreshList = React.useCallback(async () => {
     const list = await window.electronAPI.listAutomations()
@@ -100,10 +126,10 @@ export function AutomationsListView(): React.ReactElement {
         ) : (
           <div className="flex flex-col gap-8 w-full px-2 pb-8 pt-2">
             {current.length > 0 && (
-              <Section title="启用中" automations={current} onEdit={handleEdit} onRefresh={refreshList} variant="active" />
+              <Section title="启用中" automations={current} onEdit={handleEdit} onRefresh={refreshList} variant="active" presetNames={presetNames} />
             )}
             {paused.length > 0 && (
-              <Section title="已暂停" automations={paused} onEdit={handleEdit} onRefresh={refreshList} variant="paused" />
+              <Section title="已暂停" automations={paused} onEdit={handleEdit} onRefresh={refreshList} variant="paused" presetNames={presetNames} />
             )}
           </div>
         )}
@@ -118,9 +144,11 @@ interface SectionProps {
   onEdit: (a: Automation) => void
   onRefresh: () => Promise<void>
   variant: 'active' | 'paused'
+  /** 预设 ID → 名称 映射（列表 badge 展示） */
+  presetNames: Map<string, string>
 }
 
-function Section({ title, automations, onEdit, onRefresh, variant }: SectionProps): React.ReactElement {
+function Section({ title, automations, onEdit, onRefresh, variant, presetNames }: SectionProps): React.ReactElement {
   /** 列表上的任务是否具备运行 / 启用所需的最小完整度 */
   const isRunnable = (a: Automation): boolean => !!a.channelId && !!a.workspaceId
 
@@ -199,6 +227,11 @@ function Section({ title, automations, onEdit, onRefresh, variant }: SectionProp
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
                 <span className="text-[14px] font-medium text-foreground truncate">{a.name}</span>
+                {a.presetId && presetNames.get(a.presetId) && (
+                  <span className="shrink-0 rounded bg-foreground/[0.06] px-1.5 py-px text-[10px] text-foreground/50">
+                    {presetNames.get(a.presetId)}
+                  </span>
+                )}
                 <span className="text-[12px] text-foreground/45 truncate">
                   {a.prompt.slice(0, 60)}{a.prompt.length > 60 ? '…' : ''}
                 </span>

@@ -12,6 +12,7 @@ import {
   type CreateAutomationInput,
   type UpdateAutomationInput,
 } from '@profer/shared'
+import { filterDisabledTools } from '@profer/shared'
 import {
   createAutomation,
   deleteAutomation,
@@ -76,6 +77,9 @@ function validDayOfMonthArr(v: unknown): boolean {
 }
 
 function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAutomationInput>): void {
+  if (input.presetId !== undefined && typeof input.presetId !== 'string') {
+    throw new Error(`非法的 presetId: ${String(input.presetId)}（应为预设 ID 字符串；空字符串恢复默认）`)
+  }
   if (input.scheduleType !== undefined && !validScheduleType(input.scheduleType)) {
     throw new Error(`非法的 scheduleType: ${String(input.scheduleType)}`)
   }
@@ -121,6 +125,7 @@ function summarizeAutomation(a: Automation, includeHistory: boolean): Record<str
     agentRuntime: a.agentRuntime ?? 'claude',
     completedAt: a.completedAt,
     sessionMode: a.sessionMode,
+    presetId: a.presetId,
     workspaceId: a.workspaceId,
     sourceSessionId: a.sourceSessionId,
     lastSessionId: a.lastSessionId,
@@ -177,6 +182,7 @@ function buildAutomationSchemas(z: ZodModule['z']) {
       active: z.boolean().optional().describe('创建后是否启用，默认 true'),
       agentRuntime: agentRuntime.optional().describe('运行该任务的 Agent runtime：claude 或 pi。不传则继承当前会话 runtime'),
       sessionMode: sessionMode.optional().describe('会话模式：daily=同一自然日内的触发复用同一个子会话，跨日新建（默认）；reuse=始终复用同一个子会话（保留长期上下文，token 成本更高）'),
+      presetId: z.string().min(1).max(200).optional().describe('运行该任务的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。不传则继承当前会话预设；未知 ID 会回退 standard'),
     },
     update: {
       id: z.string().optional().describe('定时任务 ID；定时任务自动执行中可省略以更新当前任务'),
@@ -195,6 +201,7 @@ function buildAutomationSchemas(z: ZodModule['z']) {
       active: z.boolean().optional().describe('启用或暂停任务'),
       agentRuntime: agentRuntime.optional().describe('新的 Agent runtime：claude 或 pi'),
       sessionMode: sessionMode.optional().describe('新的会话模式：daily=同一自然日内复用，跨日新建；reuse=始终复用同一个子会话'),
+      presetId: z.string().max(200).optional().describe('新的 Agent 预设 ID（内置或任务工作区的自定义预设）；下次触发生效。传空字符串恢复跟随工作区默认'),
     },
     delete: {
       id: z.string().describe('要删除的定时任务 ID'),
@@ -209,14 +216,12 @@ export async function injectAutomationMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   ctx: AutomationAgentToolContext,
+  disabledTools?: string[],
 ): Promise<void> {
   const { z } = await import('zod')
   const schemas = buildAutomationSchemas(z)
 
-  const server = sdk.createSdkMcpServer({
-    name: 'automation',
-    version: '1.0.0',
-    tools: [
+  const tools = [
       sdk.tool(
         'list_automations',
         '列出 Profer 持久化定时任务。用于查看已有长期反复任务、判断是否需要新建任务、检查运行状态和最近失败情况。',
@@ -265,6 +270,7 @@ export async function injectAutomationMcpServer(
             modelId: ctx.modelId,
             workspaceId: ctx.workspaceId,
             sessionMode: args.sessionMode,
+            presetId: args.presetId ?? getAgentSessionMeta(ctx.sessionId)?.presetId,
             sourceSessionId: ctx.sessionId,
             active: args.active ?? true,
           }
@@ -310,6 +316,7 @@ export async function injectAutomationMcpServer(
             active: args.active,
             agentRuntime: args.agentRuntime,
             sessionMode: args.sessionMode,
+            presetId: args.presetId,
           }
           if (input.name !== undefined) assertNonBlank(input.name, 'name')
           if (input.prompt !== undefined) assertNonBlank(input.prompt, 'prompt')
@@ -351,7 +358,12 @@ export async function injectAutomationMcpServer(
           return jsonResult({ started: true, id })
         },
       ),
-    ],
+  ]
+
+  const server = sdk.createSdkMcpServer({
+    name: 'automation',
+    version: '1.0.0',
+    tools: filterDisabledTools(tools, disabledTools),
   })
 
   mcpServers.automation = server as unknown as Record<string, unknown>

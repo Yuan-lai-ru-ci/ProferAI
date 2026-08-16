@@ -99,6 +99,12 @@ export interface Automation {
   workspaceId?: string
   /** 权限模式（无人值守运行时的工具审批策略，默认 bypassPermissions） */
   permissionMode?: AutomationPermissionMode
+  /**
+   * 运行子会话绑定的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。
+   * undefined = 跟随工作区默认预设（无默认则 standard）。
+   * 权限语义：预设的 permissionMode 不覆盖本任务的 permissionMode（无人值守安全优先）。
+   */
+  presetId?: string
   /** 会话模式：daily=同一自然日内复用子会话，跨日新建（默认）；reuse=始终复用同一个子会话 */
   sessionMode?: AutomationSessionMode
   /** 运行完成后的外部通知目标 */
@@ -198,6 +204,8 @@ export interface CreateAutomationInput {
   modelId?: string
   workspaceId?: string
   permissionMode?: AutomationPermissionMode
+  /** 运行子会话绑定的 Agent 预设 ID；不传则跟随工作区默认预设 */
+  presetId?: string
   sessionMode?: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
   sourceSessionId?: string
@@ -229,6 +237,8 @@ export interface UpdateAutomationInput {
   /** 工作区（用户可在创建后调整子会话归属的工作区） */
   workspaceId?: string
   permissionMode?: AutomationPermissionMode
+  /** 运行子会话绑定的 Agent 预设 ID；传空字符串清除并回退为跟随工作区默认 */
+  presetId?: string
   sessionMode?: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
   active?: boolean

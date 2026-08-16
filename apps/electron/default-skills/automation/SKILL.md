@@ -2,7 +2,7 @@
 name: automation
 description: Proma 内嵌自动任务与定时任务 Skill，属于 Proma 自带能力而不是用户临时安装的外部 Skill。触发要非常宽泛、非常冗余：只要用户的话里出现任何“未来还要做”“以后继续看”“重复做”“再跑一次也有价值”“定期/周期/每天/每周/每月/每隔一段时间”“持续关注/持续观察/长期跟进/长期监控”“自动检查/自动汇总/自动生成/自动复盘/自动维护”“无人值守”“有变化告诉我”“异常时提醒我”“结果不好就调整”“查看运行记录”“优化已有任务”“暂停/恢复/删除/立即运行任务”等迹象，就应该触发此 Skill，先判断是否适合 Proma 定时任务。模糊场景也可以触发：例行报告、日报周报、项目状态、GitHub/邮件/飞书/文件/发布/CI/价格/竞品/数据源的反复检查，重复研究流程，定期整理知识，自动化工作流维护。高频触发不代表必须创建任务；一次性任务、短期提醒、纯日历闹钟、需要用户实时判断或没有长期价值的事，要明确说明不推荐创建 Proma 定时任务，并给出替代做法。
 group: proma
-version: "1.0.8"
+version: "1.0.10"
 ---
 
 # Proma Automation
@@ -55,6 +55,7 @@ Proma 已提供内置 `automation` MCP 工具。你必须通过这些工具操�
 - `prompt`：每次自动执行时发给 Agent 的完整指令。
 - 权限模式：默认 `bypassPermissions` 适合无人值守；高风险场景可以设为 `auto`，但可能因为需要审批而挂起。
 - 会话模式（`sessionMode`）：默认 `daily`，同一自然日内的触发复用同一个子会话、跨日自动新建；`reuse` 始终复用同一个子会话保留长期上下文。选择策略见下文。
+- Agent 预设（`presetId`，可选）：内置 `standard`/`code`/`minimal` 或任务工作区的自定义预设，决定子会话的提示词段、工具裁剪和推理强度。创建时不传则继承当前会话的预设；未指派的任务跟随工作区默认预设。预设的权限设置不覆盖任务的权限模式，无人值守安全优先。
 
 ### 调度类型怎么选
 
@@ -124,12 +125,12 @@ Proma 已提供内置 `automation` MCP 工具。你必须通过这些工具操�
 
 ## 工具使用
 
-根据场景调用 `automation` MCP 工具：
+根据场景调用 `automation` MCP 工具。工具名按 runtime：Claude 运行时用裸名（如下列）；Pi Runtime 下同名工具带 `mcp__automation__` 前缀（如 `mcp__automation__list_automations`）。
 
 - `list_automations`：查看已有任务，避免重复创建，也用于了解启用/暂停状态。
 - `get_automation`：查看单个任务详情和运行记录；自动任务执行中可省略 `id` 读取当前任务。
 - `create_automation`：创建新的 Proma 定时任务，只用于确认值得长期反复执行的场景。
-- `update_automation`：修改任意字段——`name`、`prompt`、`scheduleType`/`intervalMinutes`/`timeOfDay`/`dayOfWeek`/`dayOfMonth`（频率）、`permissionMode`（权限模式）、`sessionMode`（会话模式）、`active`（启用/暂停）。调度相关字段变化时会自动重算下次运行时间。自动任务执行中可省略 `id` 更新当前任务。
+- `update_automation`：修改任意字段——`name`、`prompt`、`scheduleType`/`intervalMinutes`/`timeOfDay`/`dayOfWeek`/`dayOfMonth`（频率）、`permissionMode`（权限模式）、`sessionMode`（会话模式）、`presetId`（Agent 预设）、`active`（启用/暂停）。调度相关字段变化时会自动重算下次运行时间。自动任务执行中可省略 `id` 更新当前任务。
 - `delete_automation`：删除任务。除非用户明确要求，否则删除前要确认。
 - `run_automation_now`：用户要求立即验证，或你刚修改任务后需要试跑时使用。自动任务执行中不要触发自身重入。
 

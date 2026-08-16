@@ -366,6 +366,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     modelId: input.modelId,
     workspaceId: input.workspaceId,
     permissionMode: input.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,
+    presetId: input.presetId?.trim() || undefined,
     sessionMode: input.sessionMode,
     notificationTargets: input.notificationTargets,
     sourceSessionId: input.sourceSessionId,
@@ -404,6 +405,10 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
     target.workspaceId = input.workspaceId || undefined
   }
   if (input.permissionMode !== undefined) target.permissionMode = input.permissionMode
+  // presetId 允许设为空字符串表示「跟随工作区默认」；用 undefined 区分「不修改」
+  if (input.presetId !== undefined) {
+    target.presetId = input.presetId.trim() || undefined
+  }
   if (input.sessionMode !== undefined) target.sessionMode = input.sessionMode
   if (input.notificationTargets !== undefined) target.notificationTargets = input.notificationTargets
   if (input.maxRuns !== undefined) applyMaxRunsUpdate(target, input.maxRuns)

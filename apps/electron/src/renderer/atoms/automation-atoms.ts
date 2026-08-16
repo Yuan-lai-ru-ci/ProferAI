@@ -36,6 +36,8 @@ export interface AutomationDraft {
   channelId: string
   modelId?: string
   workspaceId?: string
+  /** 运行子会话绑定的 Agent 预设 ID；undefined = 跟随工作区默认预设 */
+  presetId?: string
   permissionMode: AutomationPermissionMode
   sessionMode: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
@@ -88,6 +90,7 @@ export function automationToDraft(a: Automation): AutomationDraft {
     channelId: a.channelId,
     modelId: a.modelId,
     workspaceId: a.workspaceId,
+    presetId: a.presetId,
     permissionMode: a.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,
     sessionMode: a.sessionMode ?? AUTOMATION_DEFAULT_SESSION_MODE,
     notificationTargets: a.notificationTargets,

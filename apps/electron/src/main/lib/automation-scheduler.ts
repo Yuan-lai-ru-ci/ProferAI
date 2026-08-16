@@ -34,6 +34,8 @@ import {
   computeNextRunAt,
 } from './automation-manager'
 import { createAgentSession, updateAgentSessionMeta, getAgentSessionMeta } from './agent-session-manager'
+import { getAgentWorkspace } from './agent-workspace-manager'
+import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
 import { getSessionContextUsageRatio } from './agent-session-usage'
 import { runAgentHeadless, isAgentSessionActive } from './agent-service'
 import { notifyAutomationRunFinished } from './automation-notification-service'
@@ -165,13 +167,27 @@ export async function runAutomation(automation: Automation, manual = false): Pro
     if (reuseSessionId) {
       targetSessionId = reuseSessionId
     } else {
-      const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId, automation.modelId, agentRuntime)
+      // 预设解析：任务指定 → 直接绑定；未指定 → 跟随任务工作区的默认预设（无则 standard）。
+      // createAgentSession 内部会按工作区再规范化一次，未知 ID 回退 standard。
+      const workspaceSlug = automation.workspaceId ? getAgentWorkspace(automation.workspaceId)?.slug : undefined
+      const presetId = automation.presetId?.trim() || getDefaultPresetId(workspaceSlug)
+      const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId, automation.modelId, agentRuntime, false, presetId || undefined)
       updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id, agentRuntime })
       targetSessionId = created.id
       setLastSessionId(automation.id, created.id)
     }
 
     const targetSessionMeta = getAgentSessionMeta(targetSessionId)
+    // 复用会话时同步任务预设：用户改了任务 presetId，下一轮消息就按新预设生效
+    //（与「会话内切换预设，下一轮消息完整生效」语义一致）。未指定 presetId 时不覆盖会话现状。
+    if (reuseSessionId && automation.presetId?.trim()) {
+      const workspaceSlug = automation.workspaceId ? getAgentWorkspace(automation.workspaceId)?.slug : undefined
+      const resolvedPresetId = resolvePresetId(workspaceSlug, automation.presetId.trim())
+      if (targetSessionMeta && targetSessionMeta.presetId !== resolvedPresetId) {
+        updateAgentSessionMeta(targetSessionId, { presetId: resolvedPresetId })
+        console.log(`[定时任务] ${automation.name} 已同步预设到复用会话: ${resolvedPresetId}`)
+      }
+    }
     const previousAgentRuntime: AgentRuntime = targetSessionMeta?.agentRuntime ?? 'claude'
     if (targetSessionMeta && previousAgentRuntime !== agentRuntime) {
       updateAgentSessionMeta(targetSessionId, {
