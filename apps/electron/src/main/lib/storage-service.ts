@@ -127,12 +127,13 @@ async function safeRmDir(dirPath: string): Promise<number> {
 // ─── 统计 ───
 
 function getActiveSessionIds(): Set<string> {
-  return new Set(listAgentSessions().map((s) => s.id))
+  // 孤儿检测需要全量（含归档），否则归档会话的文件会被误判为孤儿
+  return new Set(listAgentSessions(true).map((s) => s.id))
 }
 
 function getActiveSdkSessionIds(): Set<string> {
   const ids = new Set<string>()
-  for (const s of listAgentSessions()) {
+  for (const s of listAgentSessions(true)) {
     if (s.sdkSessionId) ids.add(s.sdkSessionId)
     if (s.forkSourceSdkSessionId) ids.add(s.forkSourceSdkSessionId)
   }
@@ -521,7 +522,7 @@ async function cleanupOrphanWorkspaces(): Promise<CleanupResult> {
 
 function cleanupArchivedSessions(beforeDays: number): CleanupResult {
   const cutoff = Date.now() - beforeDays * 24 * 60 * 60 * 1000
-  const sessions = listAgentSessions()
+  const sessions = listAgentSessions(true)
   const sdkDir = getSdkConfigDir()
   let freedBytes = 0, deletedCount = 0
   const errors: string[] = []

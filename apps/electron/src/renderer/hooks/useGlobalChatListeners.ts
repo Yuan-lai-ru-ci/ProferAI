@@ -18,6 +18,7 @@ import {
   pendingAgentRecommendationAtom,
 } from '@/atoms/chat-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
+import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import { refreshCreditsInto } from '@/hooks/useCreditsLoader'
 import type { ConversationStreamState } from '@/atoms/chat-atoms'
 import type {
@@ -109,9 +110,9 @@ export function useGlobalChatListeners(): void {
           return map
         })
 
-        // 刷新对话列表（updatedAt 已更新）
+        // 刷新对话列表（updatedAt 已更新；按当前视图拉取，避免归档视图被活跃列表覆盖）
         window.electronAPI
-          .listConversations()
+          .listConversations(store.get(sidebarViewModeAtom) === 'archived')
           .then((convs) => store.set(conversationsAtom, convs))
           .catch(console.error)
 

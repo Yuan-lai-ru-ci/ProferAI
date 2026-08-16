@@ -1173,7 +1173,7 @@ class FeishuBridge {
 
   private async handleListCommand(msgCtx: FeishuMessageContext): Promise<void> {
     const { chatId } = msgCtx
-    const sessions = listAgentSessions().filter(isVisibleAgentSession)
+    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
     const workspaces = listAgentWorkspacesByUpdatedAt()
     const binding = this.chatBindings.get(chatId)
     const currentWorkspaceId = binding?.workspaceId
@@ -1233,7 +1233,7 @@ class FeishuBridge {
 
   private async handleSwitchCommand(msgCtx: FeishuMessageContext, arg: string): Promise<void> {
     const { chatId } = msgCtx
-    const sessions = listAgentSessions().filter(isVisibleAgentSession)
+    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
 
     // 支持序号（如 /switch 1）和 ID 前缀两种方式
     const index = Number(arg)
@@ -1329,7 +1329,7 @@ class FeishuBridge {
     this.botConfig = { ...this.botConfig, defaultWorkspaceId: match.id }
 
     // 列出该工作区下最近 10 条会话（序号为全局排序位置）
-    const sessions = listAgentSessions().filter(isVisibleAgentSession)
+    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
     const recentSessions = sessions
       .filter((s) => s.workspaceId === match.id)
       .slice(0, 10)

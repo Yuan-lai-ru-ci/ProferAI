@@ -26,6 +26,7 @@ import {
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
+import { upsertAgentSession } from '@/lib/agent-session-list'
 
 type OpenSessionFn = (type: TabType, sessionId: string, title: string) => void
 
@@ -39,6 +40,7 @@ export function useOpenSession(): OpenSessionFn {
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
 
@@ -80,6 +82,18 @@ export function useOpenSession(): OpenSessionFn {
           window.electronAPI.updateSettings({
             agentWorkspaceId: session.workspaceId,
           }).catch(console.error)
+        } else {
+          // 归档会话不在活跃列表：拉取单条 meta 兜底，供 AgentView 等消费者读取
+          window.electronAPI.getAgentSessionMeta(sessionId).then((meta) => {
+            if (!meta) return
+            setAgentSessions((prev) => upsertAgentSession(prev, meta))
+            if (meta.workspaceId) {
+              setCurrentAgentWorkspaceId(meta.workspaceId)
+              window.electronAPI.updateSettings({
+                agentWorkspaceId: meta.workspaceId,
+              }).catch(console.error)
+            }
+          }).catch(console.error)
         }
       } else {
         setAppMode('scratch')
@@ -87,6 +101,6 @@ export function useOpenSession(): OpenSessionFn {
         setCurrentAgentSessionId(null)
       }
     },
-    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted],
+    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions],
   )
 }

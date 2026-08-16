@@ -792,8 +792,9 @@ function TabStatePersistenceInitializer(): null {
   useEffect(() => {
     Promise.all([
       window.electronAPI.getSettings(),
-      window.electronAPI.listConversations(),
-      window.electronAPI.listAgentSessions(),
+      // 启动恢复需要校验所有 tab 的会话有效性（含已归档，否则归档会话 tab 会被误过滤）
+      window.electronAPI.listConversations(true),
+      window.electronAPI.listAgentSessions(true),
     ]).then(([settings, conversations, agentSessions]) => {
       const tabState = settings.tabState
       if (!tabState?.tabs?.length) {

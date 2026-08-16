@@ -181,6 +181,7 @@ import {
   updateContextDividers,
   autoArchiveConversations,
   searchConversationMessages,
+  countArchivedConversations,
 } from './lib/conversation-manager'
 import { sendMessage, stopGeneration, generateTitle } from './lib/chat-service'
 import {
@@ -257,6 +258,7 @@ import {
   findOrphanSessions,
   snapshotAgentRuntimeMeta,
   restoreAgentRuntimeMeta,
+  countArchivedAgentSessions,
 } from './lib/agent-session-manager'
 import { listAgentPresets, getDefaultPresetId, setDefaultPresetId, createAgentPreset, copyAgentPreset, updateAgentPreset, deleteAgentPreset, getAgentPreset, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams } from './lib/agent-service'
@@ -1607,8 +1609,8 @@ export function registerIpcHandlers(): void {
   // 获取对话列表
   ipcMain.handle(
     CHAT_IPC_CHANNELS.LIST_CONVERSATIONS,
-    async (): Promise<ConversationMeta[]> => {
-      return listConversations()
+    async (_, includeArchived?: boolean): Promise<ConversationMeta[]> => {
+      return listConversations(includeArchived ?? false)
     }
   )
 
@@ -1664,7 +1666,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHAT_IPC_CHANNELS.TOGGLE_PIN,
     async (_, id: string): Promise<ConversationMeta> => {
-      const conversations = listConversations()
+      const conversations = listConversations(true)
       const current = conversations.find((c) => c.id === id)
       if (!current) throw new Error(`对话不存在: ${id}`)
       const newPinned = !current.pinned
@@ -1681,7 +1683,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHAT_IPC_CHANNELS.TOGGLE_ARCHIVE,
     async (_, id: string): Promise<ConversationMeta> => {
-      const conversations = listConversations()
+      const conversations = listConversations(true)
       const current = conversations.find((c) => c.id === id)
       if (!current) throw new Error(`对话不存在: ${id}`)
       const newArchived = !current.archived
@@ -2446,8 +2448,8 @@ export function registerIpcHandlers(): void {
   // 获取 Agent 会话列表
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_SESSIONS,
-    async (): Promise<AgentSessionMeta[]> => {
-      const sessions = listAgentSessions()
+    async (_, includeArchived?: boolean): Promise<AgentSessionMeta[]> => {
+      const sessions = listAgentSessions(includeArchived ?? false)
       // 启动所有已有附加目录的文件监听
       for (const session of sessions) {
         if (session.attachedDirectories) {
@@ -2457,6 +2459,26 @@ export function registerIpcHandlers(): void {
         }
       }
       return sessions
+    }
+  )
+
+  // 轻量：对话 + Agent 会话的归档计数（不传输 meta 列表）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_ARCHIVED_COUNTS,
+    async (): Promise<{ conversations: number; agentSessions: number }> => {
+      return {
+        conversations: countArchivedConversations(),
+        agentSessions: countArchivedAgentSessions(),
+      }
+    }
+  )
+
+  // 单个 Agent 会话 meta（归档会话打开时兜底读取；不存在返回 null）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_SESSION_META,
+    async (_, id: string): Promise<AgentSessionMeta | null> => {
+      if (typeof id !== 'string' || !id.trim()) return null
+      return getAgentSessionMeta(id) ?? null
     }
   )
 
@@ -2808,7 +2830,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TOGGLE_PIN,
     async (_, id: string): Promise<AgentSessionMeta> => {
-      const sessions = listAgentSessions()
+      const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
       const newPinned = !current.pinned
@@ -2825,7 +2847,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CLEAR_COMPLETION_STATE,
     async (_, id: string): Promise<AgentSessionMeta> => {
-      const sessions = listAgentSessions()
+      const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
       const updates: Partial<AgentSessionMeta> = {}
@@ -2851,7 +2873,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TOGGLE_ARCHIVE,
     async (_, id: string): Promise<AgentSessionMeta> => {
-      const sessions = listAgentSessions()
+      const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
       const newArchived = !current.archived
@@ -3061,7 +3083,7 @@ export function registerIpcHandlers(): void {
         throw new Error('至少需要保留一个项目')
       }
 
-      const affectedSessionIds = listAgentSessions()
+      const affectedSessionIds = listAgentSessions(true)
         .filter((session) => session.workspaceId === id)
         .map((session) => session.id)
       const affectedAutomationIds = listAutomations()
@@ -5537,7 +5559,7 @@ export function registerIpcHandlers(): void {
       return []
     }
 
-    const sessions = listAgentSessions()
+    const sessions = listAgentSessions(true)
       .filter((s) => s.workspaceId === workspaceId)
       .map((s) => ({ id: s.id, createdAt: s.createdAt, updatedAt: s.updatedAt, archived: s.archived }))
 

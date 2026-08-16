@@ -224,11 +224,27 @@ export function createDelegatedChildSessionMeta(params: {
 }
 
 /**
- * 获取所有会话（按 updatedAt 降序）
+ * 获取会话列表（按 updatedAt 降序）
+ *
+ * @param includeArchived 是否包含已归档会话；默认 false（高频侧边栏刷新只拉活跃）
  */
-export function listAgentSessions(): AgentSessionMeta[] {
+export function listAgentSessions(includeArchived = false): AgentSessionMeta[] {
   const index = readIndex()
-  return index.sessions.sort((a, b) => b.updatedAt - a.updatedAt)
+  return index.sessions
+    .filter((s) => includeArchived || !s.archived)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/**
+ * 已归档 Agent 会话数量（轻量计数，不排序、不返回 meta）
+ */
+export function countArchivedAgentSessions(): number {
+  const index = readIndex()
+  let count = 0
+  for (const s of index.sessions) {
+    if (s.archived && !s.draft) count += 1
+  }
+  return count
 }
 
 /**
@@ -320,7 +336,7 @@ export function ensureProjectDraftAgentSession(
   modelId?: string,
   agentRuntime: AgentRuntime = 'claude',
 ): AgentSessionMeta {
-  const existing = listAgentSessions().find((session) =>
+  const existing = listAgentSessions(true).find((session) =>
     session.workspaceId === workspaceId && session.draft && !session.archived,
   )
   if (!existing) {

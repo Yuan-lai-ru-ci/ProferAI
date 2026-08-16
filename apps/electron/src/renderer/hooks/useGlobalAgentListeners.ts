@@ -11,6 +11,7 @@ import { useEffect } from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import {
   agentStreamingStatesAtom,
   agentStreamErrorsAtom,
@@ -605,7 +606,7 @@ export function useGlobalAgentListeners(): void {
     }
 
     // ===== 0. 初始化：从持久化 meta 恢复 stoppedByUser 状态 =====
-    window.electronAPI.listAgentSessions().then((sessions) => {
+    window.electronAPI.listAgentSessions(store.get(sidebarViewModeAtom) === 'archived').then((sessions) => {
       const stoppedIds = new Set<string>(
         sessions.filter((s) => s.stoppedByUser).map((s) => s.id)
       )
@@ -632,7 +633,7 @@ export function useGlobalAgentListeners(): void {
         // 如果收到未知会话的事件（跨工作区场景），立即刷新会话列表
         const knownSessions = store.get(agentSessionsAtom)
         if (!knownSessions.some((s) => s.id === sessionId)) {
-          window.electronAPI.listAgentSessions()
+          window.electronAPI.listAgentSessions(store.get(sidebarViewModeAtom) === 'archived')
             .then((sessions) => store.set(agentSessionsAtom, (prev) => mergeFetchedAgentSessions(prev, sessions)))
             .catch(console.error)
         }
@@ -1252,9 +1253,9 @@ export function useGlobalAgentListeners(): void {
           // 注意：liveMessages 的清理已移至 AgentView 消息加载完成后执行，
           // 与 streamingState 清理同步，避免「实时消息已清 → 持久化消息未到」的空档闪烁
 
-          // 刷新会话列表并同步 stoppedByUser 状态
+          // 刷新会话列表并同步 stoppedByUser 状态（按当前视图拉取，避免归档视图被活跃列表覆盖）
           window.electronAPI
-            .listAgentSessions()
+            .listAgentSessions(store.get(sidebarViewModeAtom) === 'archived')
             .then((sessions) => {
               store.set(agentSessionsAtom, (prev) => mergeFetchedAgentSessions(prev, sessions))
               // 从持久化 meta 对齐 stoppedByUser 状态
@@ -1311,8 +1312,9 @@ export function useGlobalAgentListeners(): void {
         prev.map((s) => (s.id === sessionId ? { ...s, title } : s))
       )
       // 保留全量刷新语义：外部桥接会复用该事件通知新会话/绑定变化。
+      // 按当前视图拉取，避免归档视图被活跃列表覆盖。
       window.electronAPI
-        .listAgentSessions()
+        .listAgentSessions(store.get(sidebarViewModeAtom) === 'archived')
         .then((sessions) => {
           store.set(agentSessionsAtom, (prev) => mergeFetchedAgentSessions(prev, sessions))
         })

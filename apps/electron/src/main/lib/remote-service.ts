@@ -586,7 +586,7 @@ function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]) {
 
 /** 会话列表（脱敏，仅暴露平板端需要的字段） */
 function buildSessionList() {
-  return listAgentSessions().map(buildSessionItem)
+  return listAgentSessions(true).map(buildSessionItem)
 }
 
 /** 工作区（项目）列表（脱敏，仅暴露平板端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
@@ -951,7 +951,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'toggle_session_pin': {
       const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-      const current = listAgentSessions().find((s) => s.id === sessionId)
+      const current = listAgentSessions(true).find((s) => s.id === sessionId)
       if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
@@ -963,7 +963,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'toggle_session_archive': {
       const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-      const current = listAgentSessions().find((s) => s.id === sessionId)
+      const current = listAgentSessions(true).find((s) => s.id === sessionId)
       if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       const newArchived = !current.archived
       const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
@@ -1040,7 +1040,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     // ===== Chat（聊天工具）指令 =====
 
     case 'list_conversations': {
-      return { ok: true, data: listConversations() }
+      return { ok: true, data: listConversations(true) }
     }
 
     case 'create_conversation': {
@@ -1054,7 +1054,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'get_conversation_messages': {
       const id = parsed.conversationId as string
       if (!id) return { ok: false, error: '缺少 conversationId' }
-      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: getConversationMessages(id) }
     }
 
@@ -1062,7 +1062,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const id = parsed.conversationId as string
       const limit = Number.isInteger(parsed.limit) ? (parsed.limit as number) : 50
       if (!id) return { ok: false, error: '缺少 conversationId' }
-      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: getRecentMessages(id, Math.max(1, Math.min(500, limit))) }
     }
 
@@ -1070,7 +1070,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const id = parsed.conversationId as string
       const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
       if (!id || !title) return { ok: false, error: '缺少 conversationId 或 title' }
-      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: updateConversationMeta(id, { title }) }
     }
 
@@ -1079,14 +1079,14 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
       const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : undefined
       if (!id) return { ok: false, error: '缺少 conversationId' }
-      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: updateConversationMeta(id, { modelId, channelId }) }
     }
 
     case 'delete_conversation': {
       const id = parsed.conversationId as string
       if (!id) return { ok: false, error: '缺少 conversationId' }
-      if (!listConversations().some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
       deleteConversation(id)
       return { ok: true, data: { deleted: true } }
     }
@@ -1094,7 +1094,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'toggle_conversation_pin': {
       const id = parsed.conversationId as string
       if (!id) return { ok: false, error: '缺少 conversationId' }
-      const current = listConversations().find((c) => c.id === id)
+      const current = listConversations(true).find((c) => c.id === id)
       if (!current) return { ok: false, error: '对话不存在' }
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
@@ -1105,7 +1105,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'toggle_conversation_archive': {
       const id = parsed.conversationId as string
       if (!id) return { ok: false, error: '缺少 conversationId' }
-      const current = listConversations().find((c) => c.id === id)
+      const current = listConversations(true).find((c) => c.id === id)
       if (!current) return { ok: false, error: '对话不存在' }
       const newArchived = !current.archived
       const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
@@ -1135,7 +1135,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const channelId = parsed.channelId as string
       if (!conversationId || !userMessage) return { ok: false, error: '缺少 conversationId 或 userMessage' }
       if (!channelId) return { ok: false, error: '缺少 channelId（无法确定 API Key）' }
-      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
       // 异步执行，不阻塞 WS 响应；流式事件通过 chat_event 推回客户端
       void sendMessage(
         {
@@ -1170,7 +1170,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const conversationId = parsed.conversationId as string
       const messageId = parsed.messageId as string
       if (!conversationId || !messageId) return { ok: false, error: '缺少 conversationId 或 messageId' }
-      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: deleteMessage(conversationId, messageId) }
     }
 
@@ -1178,7 +1178,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const conversationId = parsed.conversationId as string
       const messageId = parsed.messageId as string
       if (!conversationId || !messageId) return { ok: false, error: '缺少 conversationId 或 messageId' }
-      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: truncateMessagesFrom(conversationId, messageId, parsed.preserveFirstMessageAttachments === true) }
     }
 
@@ -1186,7 +1186,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const conversationId = parsed.conversationId as string
       const dividers = Array.isArray(parsed.dividers) ? parsed.dividers as string[] : null
       if (!conversationId || !dividers) return { ok: false, error: '缺少 conversationId 或 dividers' }
-      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: updateContextDividers(conversationId, dividers) }
     }
 
@@ -1204,7 +1204,7 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       const mediaType = typeof parsed.mediaType === 'string' ? parsed.mediaType : ''
       const data = typeof parsed.data === 'string' ? parsed.data : ''
       if (!conversationId || !filename || !mediaType || !data) return { ok: false, error: '缺少附件数据' }
-      if (!listConversations().some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
+      if (!listConversations(true).some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
       try {
         return { ok: true, data: saveAttachment({ conversationId, filename, mediaType, data }) }
       } catch (e) {

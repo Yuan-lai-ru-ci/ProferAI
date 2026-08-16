@@ -1654,6 +1654,8 @@ export const AGENT_IPC_CHANNELS = {
   // 会话管理
   /** 获取会话列表 */
   LIST_SESSIONS: 'agent:list-sessions',
+  /** 获取单个会话 meta（归档会话兜底读取；不存在返回 null） */
+  GET_SESSION_META: 'agent:get-session-meta',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
   /** 为项目创建或复用隐藏的 Agent 草稿会话 */
@@ -1678,6 +1680,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_INTERRUPTION_STATE: 'agent:update-interruption-state',
   /** 切换会话归档状态 */
   TOGGLE_ARCHIVE: 'agent:toggle-archive',
+  /** 轻量：返回对话 + Agent 会话的归档计数（不传输 meta 列表） */
+  GET_ARCHIVED_COUNTS: 'agent:get-archived-counts',
   /** 搜索会话消息内容 */
   SEARCH_MESSAGES: 'agent:search-messages',
   /** 搜索当前工作区可引用的 Agent 会话 */
