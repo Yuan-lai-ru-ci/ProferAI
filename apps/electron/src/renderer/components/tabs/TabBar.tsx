@@ -33,13 +33,13 @@ import {
   workspaceFilesVersionAtom,
 } from '@/atoms/agent-atoms'
 import {
-  browserFilePanelManualRestoreSessionIdsAtom,
-  browserManualOpenSessionIdsAtom,
   browserPanelDismissedSessionIdsAtom,
   browserPanelOpenMapAtom,
   browserStateMapAtom,
 } from '@/atoms/browser-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
+import { openBrowserFromPush, openFilePanel } from '@/hooks/usePanelAutoLayout'
+import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
 import { Button } from '@/components/ui/button'
@@ -233,38 +233,41 @@ function TabBarInner({
   const hasFileChanges = filesVersion > 0
   const activeTab = React.useMemo(() => tabs.find((t) => t.id === activeTabId), [tabs, activeTabId])
   const activeAgentSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
+  // 实际可见性（B = 展开意图 A && 窗口足够），由 usePanelAutoLayout 统一计算
+  const visibility = useAtomValue(panelVisibilityAtom)
+  const filePanelVisible = visibility.filePanel
+  const browserVisible = activeAgentSessionId ? visibility.browser : false
   // 文件栏开关跨会话保留；草稿/Chat 等非 Agent 标签不会实际渲染右侧栏，
   // 不能因此让 TabBar 隐藏窗口控制按钮或预留不存在的侧栏空间。
-  const rightSidePanelIsVisible = isPanelOpen && activeTab?.type === 'agent'
-  const showOpenPanelButton = !isPanelOpen && activeTab?.type === 'agent'
+  const rightSidePanelIsVisible = filePanelVisible && activeTab?.type === 'agent'
+  const showOpenPanelButton = !filePanelVisible && activeTab?.type === 'agent'
+  const filePanelForcedHidden = isPanelOpen && !filePanelVisible
   // 受管浏览器入口：仅当当前标签是 Agent 会话时展示。主进程按会话隔离浏览器。
-  const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
+  const browserOpenMap = useAtomValue(browserPanelOpenMapAtom)
+  const setBrowserOpenMap = useSetAtom(browserPanelOpenMapAtom)
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
   const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
-  const [browserManualOpen, setBrowserManualOpen] = useAtom(browserManualOpenSessionIdsAtom)
-  const [browserFilePanelManualRestoreSessionIds, setBrowserFilePanelManualRestoreSessionIds] = useAtom(browserFilePanelManualRestoreSessionIdsAtom)
   const activeBrowserIsOpen = activeAgentSessionId ? browserOpenMap.get(activeAgentSessionId) === true : false
-  // 与文件面板按钮一致：受管浏览器入口只在关闭态显示；打开后由面板内部「关闭浏览器」收起（方案 A）。
-  const showBrowserButton = Boolean(activeAgentSessionId && !activeBrowserIsOpen)
+  // 图标在「面板实际不可见」时出现；若 A 仍为 true（被迫收起），图标高亮提示存在展开意图
+  const showBrowserButton = Boolean(activeAgentSessionId && !browserVisible)
+  const browserForcedHidden = Boolean(activeAgentSessionId && activeBrowserIsOpen && !browserVisible)
   // MainArea 的右边界会随着右侧文件面板或浏览器分栏提前结束；
   // 这两种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
-  const browserSidePanelVisible = Boolean(
-    activeAgentSessionId && browserOpenMap.get(activeAgentSessionId) === true,
-  )
+  const browserSidePanelVisible = browserVisible
   const hasRightSideContent = rightSidePanelIsVisible || browserSidePanelVisible
   // 窗口按钮本身已嵌入当前 TabBar。只有本区域真正延伸到窗口右缘时，
   // 工具组和标签才需为按钮留出 118px；有右侧分栏时无需预留。
   const topBarRightOffset = isWindows && !hasRightSideContent ? 132 : 9
   const togglePanel = React.useCallback(() => {
     if (!activeAgentSessionId) return
-    // 用户手动恢复文件面板时，记录该会话不再自动收起，避免与浏览器抢占空间时反复收起。
-    if (!isPanelOpen && browserOpenMap.get(activeAgentSessionId)) {
-      setBrowserFilePanelManualRestoreSessionIds((previous) => (
-        previous.includes(activeAgentSessionId) ? previous : [...previous, activeAgentSessionId]
-      ))
+    if (isPanelOpen) {
+      // A=true（可能被迫收起或可见）→ 点击取消展开意图
+      setSidePanelOpen(false)
+    } else {
+      // A=false 手动收起 → 点击打开意图；窗口不足时仅不可见并 toast，A 保持 true
+      openFilePanel()
     }
-    setSidePanelOpen((v) => !v)
-  }, [activeAgentSessionId, browserOpenMap, isPanelOpen, setBrowserFilePanelManualRestoreSessionIds, setSidePanelOpen])
+  }, [activeAgentSessionId, isPanelOpen, setSidePanelOpen])
 
   const openBrowser = React.useCallback(async () => {
     if (!activeAgentSessionId) return
@@ -272,12 +275,24 @@ function TabBarInner({
     if (typeof open !== 'function') return
     const state = await open(activeAgentSessionId)
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, state); return next })
-    setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, true); return next })
     // 用户主动重新打开浏览器，清除“已手动关闭”标记，恢复后续状态推送自动打开能力。
     setBrowserDismissed((previous) => { if (!previous.has(activeAgentSessionId)) return previous; const next = new Set(previous); next.delete(activeAgentSessionId); return next })
-    // 记录用户手动打开，窄屏不再被 MainArea 的 788 阈值自动收起（布局恢复宽后重置）。
-    setBrowserManualOpen((previous) => { if (previous.has(activeAgentSessionId)) return previous; const next = new Set(previous); next.add(activeAgentSessionId); return next })
-  }, [activeAgentSessionId, setBrowserDismissed, setBrowserManualOpen, setBrowserOpenMap, setBrowserStateMap])
+    // 统一落地：置展开意图 A=true；窗口不足时暂不可见并 toast（与 Agent 驱动打开行为一致）。
+    openBrowserFromPush(activeAgentSessionId)
+  }, [activeAgentSessionId, setBrowserDismissed, setBrowserStateMap])
+
+  // 浏览器图标在面板不可见时出现；点击按 A 状态切换：被迫收起（A=true）→ 取消展开意图；
+  // 手动收起（A=false）→ 打开。
+  const toggleBrowser = React.useCallback(() => {
+    if (!activeAgentSessionId) return
+    if (activeBrowserIsOpen) {
+      void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(activeAgentSessionId)
+      setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, false); return next })
+      setBrowserDismissed((previous) => { if (previous.has(activeAgentSessionId)) return previous; const next = new Set(previous); next.add(activeAgentSessionId); return next })
+    } else {
+      void openBrowser()
+    }
+  }, [activeAgentSessionId, activeBrowserIsOpen, openBrowser, setBrowserDismissed, setBrowserOpenMap])
 
   const topBarTools: TopBarTool[] = [
     {
@@ -287,7 +302,9 @@ function TabBarInner({
       label: '打开受管浏览器',
       tooltip: '打开受管浏览器',
       icon: <Globe2 className="size-3.5" />,
-      onClick: () => void openBrowser(),
+      onClick: toggleBrowser,
+      // 被迫收起（展开意图 A=true 但窗口不足）：图标高亮提示用户当前有展开意图
+      highlighted: browserForcedHidden,
     },
     {
       id: 'replay-intro',
@@ -304,6 +321,7 @@ function TabBarInner({
       tooltip: `打开文件面板 (${navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'})`,
       icon: <PanelRight className="size-3.5" />,
       onClick: togglePanel,
+      highlighted: filePanelForcedHidden,
       badge: hasFileChanges ? <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" /> : undefined,
     },
   ]
@@ -311,29 +329,6 @@ function TabBarInner({
   // 所以新增/删除按钮不会造成布局与可见入口脱节。
   const visibleTopBarToolCount = topBarTools.filter((tool) => tool.visible).length
   const tabScrollRightPadding = topBarRightOffset + visibleTopBarToolCount * 28 + (visibleTopBarToolCount - 1) * 4
-
-  // 某些会话打开浏览器（agent 驱动的 BrowserObserve 等会先于用户点击触发），
-  // 此时若文件面板仍展开会挤压浏览器宽度：自动收起一次，除非用户手动恢复过。
-  const priorBrowserStateRef = React.useRef<{ sessionId: string | null; open: boolean }>({ sessionId: null, open: false })
-  React.useEffect(() => {
-    const sessionId = activeAgentSessionId
-    const previous = priorBrowserStateRef.current
-    const shouldAutoCollapse = Boolean(
-      sessionId &&
-      previous.sessionId === sessionId &&
-      !previous.open &&
-      activeBrowserIsOpen &&
-      isPanelOpen &&
-      !browserFilePanelManualRestoreSessionIds.includes(sessionId),
-    )
-    priorBrowserStateRef.current = { sessionId, open: activeBrowserIsOpen }
-
-    if (!shouldAutoCollapse) return
-    setSidePanelOpen(false)
-    toast.message('已收起右侧文件面板，便于浏览网页', {
-      description: '按 ⌘⇧B（Windows / Linux：Ctrl+Shift+B）可重新打开；手动打开后，本会话不再自动收起。',
-    })
-  }, [activeAgentSessionId, activeBrowserIsOpen, browserFilePanelManualRestoreSessionIds, isPanelOpen, setSidePanelOpen])
 
   React.useEffect(() => {
     return registerShortcut('toggle-right-panel', togglePanel)
@@ -537,7 +532,9 @@ function TabBarInner({
       {/* 右侧文件栏或受管浏览器占据窗口最右缘时，控制按钮由该面板自身渲染。 */}
       <WindowControlsHost
         id="tab-bar"
-        active={!rightSidePanelIsVisible && !activeBrowserIsOpen}
+        // 用实际可见性（B）判定：浏览器/文件面板被迫收起（A=true 但窗口不足）时不渲染，
+        // 窗口控制按钮必须回到 TabBar；面板实际可见时才交给面板自身渲染。
+        active={!rightSidePanelIsVisible && !browserVisible}
         priority={10}
         className="absolute right-2 bottom-[3px]"
       />
@@ -553,6 +550,8 @@ interface TopBarTool {
   icon: React.ReactNode
   onClick: () => void
   badge?: React.ReactNode
+  /** 被迫收起（有展开意图但窗口不足）：图标显示为 hover 态高亮，提示存在展开意图 */
+  highlighted?: boolean
 }
 
 /**
@@ -585,7 +584,7 @@ function TopBarToolGroup({
               type="button"
               variant="ghost"
               size="icon"
-              className="relative h-7 w-7"
+              className={cn('relative h-7 w-7', tool.highlighted && 'bg-accent/70 text-accent-foreground')}
               aria-label={tool.label}
               onClick={tool.onClick}
             >

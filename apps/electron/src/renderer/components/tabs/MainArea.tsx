@@ -13,7 +13,9 @@ import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
 import { previewPanelOpenMapAtom, previewSplitRatioAtom } from '@/atoms/preview-atoms'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
-import { browserManualOpenSessionIdsAtom, browserPanelDismissedSessionIdsAtom, browserPanelOpenMapAtom, browserSplitRatioAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { browserPanelDismissedSessionIdsAtom, browserPanelOpenMapAtom, browserSplitRatioAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
+import { openBrowserFromPush } from '@/hooks/usePanelAutoLayout'
 import { BrowserPanel } from '@/components/browser/BrowserPanel'
 import type { BrowserViewState } from '@profer/shared'
 import { useTrackSessionView } from '@/hooks/useTrackSessionView'
@@ -23,7 +25,6 @@ import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
-import { agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
 import { interfaceVariantAtom } from '@/atoms/theme'
@@ -41,7 +42,6 @@ export function MainArea(): React.ReactElement {
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
   const appMode = useAtomValue(appModeAtom)
-  const sidePanelOpen = useAtomValue(agentSidePanelOpenAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
 
@@ -72,7 +72,6 @@ export function MainArea(): React.ReactElement {
   const [browserLayoutWidth, setBrowserLayoutWidth] = React.useState(0)
   const browserDragging = React.useRef(false)
   const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
-  const [browserManualOpen, setBrowserManualOpen] = useAtom(browserManualOpenSessionIdsAtom)
   // 浏览器面板仅属于 Agent 会话；必须同时满足「激活 tab 是 agent」和「当前处于 agent 模式」。
   // 否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成 appMode 与 activeTab.type 撕裂，
   // 让浏览器面板在已切到 Chat 的界面上错误残留。
@@ -83,12 +82,11 @@ export function MainArea(): React.ReactElement {
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
     // 仅当用户没有显式关闭过该会话的面板时才自动打开；用户在浏览器面板右上角手动收起后，
     // 主进程后续的 BROWSER_STATE_CHANGED 推送不能把它强制重新弹出来。
-    setBrowserOpenMap((previous) => {
-      const shouldOpen = previous.get(state.sessionId) !== false && !browserDismissed.has(state.sessionId)
-      if (!shouldOpen) return previous
-      const next = new Map(previous); next.set(state.sessionId, true); return next
-    })
-  }, [browserDismissed, setBrowserOpenMap, setBrowserStateMap])
+    // 打开的落地统一走 openBrowserFromPush：空间不足时保持 open 暂不可见并提示（5.7）。
+    if (!browserDismissed.has(state.sessionId)) {
+      openBrowserFromPush(state.sessionId)
+    }
+  }, [browserDismissed, setBrowserStateMap])
 
   React.useEffect(() => {
     // Vite renderer 可在 preload 热重载前先更新；旧 bridge 时浏览器功能不可用，
@@ -118,15 +116,14 @@ export function MainArea(): React.ReactElement {
   const CONVERSATION_MIN_WIDTH = 420
   // 与 AppShell 的 p-2 面板缝隙保持一致，避免侧边栏收起时出现额外空白。
   const BROWSER_SPLIT_GAP = 8
-  // 用户手动打开浏览器后，窄屏不再自动收起（补齐与文件面板 userOverrode 对等的保护）。
-  const browserManuallyOpened = browserSessionId ? browserManualOpen.has(browserSessionId) : false
-  const browserAutoHidden = showBrowserPanel
-    && !browserManuallyOpened
-    && browserLayoutWidth > 0
-    && browserLayoutWidth < CONVERSATION_MIN_WIDTH + BROWSER_MIN_WIDTH + BROWSER_SPLIT_GAP
-  const browserVisible = showBrowserPanel && !browserAutoHidden
 
-  // 以 MainArea 实际可用宽度决定是否可并排，避免右侧文件栏改变布局后仍错误挤压双栏。
+  // ===== 统一可见性（以窗口宽度为基准，由 usePanelAutoLayout 计算）=====
+  // 浏览器可见 = 展开意图 A 为 true 且窗口宽足够；窄窗只隐藏显示，A 保持不变。
+  const visibility = useAtomValue(panelVisibilityAtom)
+  const browserVisible = !!browserSessionId && visibility.browser
+  const filePanelVisible = visibility.filePanel
+
+  // 以 MainArea 实际可用宽度决定浏览器分栏比例 clamp（与自适应判定正交，保留现有拖拽行为）。
   React.useLayoutEffect(() => {
     const element = browserLayoutRef.current
     if (!element) return
@@ -136,33 +133,6 @@ export function MainArea(): React.ReactElement {
     update()
     return () => observer.disconnect()
   }, [])
-
-  // 窄屏时必须同时收起 renderer 面板和原生 WebContentsView。
-  // 只调用 hideAgentBrowser 会留下 browserOpenMap=true；在布局重排或状态推送时，
-  // BrowserPanel 工具栏可能重新挂到对话内容上。这里仅收起显示，不销毁浏览器会话、标签页或登录状态。
-  React.useEffect(() => {
-    if (!browserAutoHidden || !browserSessionId) return
-    void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
-    setBrowserOpenMap((previous) => {
-      if (previous.get(browserSessionId) !== true) return previous
-      const next = new Map(previous)
-      next.set(browserSessionId, false)
-      return next
-    })
-  }, [browserAutoHidden, browserSessionId, setBrowserOpenMap])
-  // 布局恢复（MainArea 足以并排）后，重置当前会话的「手动打开」标记，恢复后续自动收起能力，
-  // 与文件面板在窗口 ≥ 阈值时重置 userOverride 的行为对齐。
-  React.useEffect(() => {
-    if (!browserSessionId) return
-    const wideEnough = browserLayoutWidth >= CONVERSATION_MIN_WIDTH + BROWSER_MIN_WIDTH + BROWSER_SPLIT_GAP
-    if (!wideEnough) return
-    setBrowserManualOpen((previous) => {
-      if (!previous.has(browserSessionId)) return previous
-      const next = new Set(previous)
-      next.delete(browserSessionId)
-      return next
-    })
-  }, [browserLayoutWidth, browserSessionId, setBrowserManualOpen])
 
   const previewOpen =
     activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false) && !showBrowserPanel
@@ -264,9 +234,10 @@ export function MainArea(): React.ReactElement {
   const minConversationRatio = CONVERSATION_MIN_WIDTH / browserAvailableWidth
   const maxConversationRatio = 1 - BROWSER_MIN_WIDTH / browserAvailableWidth
   const clampedBrowserSplitRatio = Math.max(minConversationRatio, Math.min(maxConversationRatio, browserSplitRatio))
-  const mainPanelStyle: React.CSSProperties | undefined = browserVisible
-    ? { flex: `0 0 calc(${clampedBrowserSplitRatio * 100}% - ${BROWSER_SPLIT_GAP / 2}px)` }
-    : undefined
+  // 对话区占满剩余（Panel flex-1），浏览器分栏以固定像素宽度占位；width 过渡形成展开/收起动画（与文件面板一致）。
+  const browserWidthPx = browserVisible
+    ? Math.max(1, browserAvailableWidth * (1 - clampedBrowserSplitRatio))
+    : 0
   const browserDividerStyle: React.CSSProperties | undefined = browserVisible
     ? { left: `${clampedBrowserSplitRatio * 100}%` }
     : undefined
@@ -304,7 +275,6 @@ export function MainArea(): React.ReactElement {
       <Panel
         variant="grow"
         className="bg-content-area rounded-2xl shadow-xl dark:shadow-sm"
-        style={mainPanelStyle}
       >
         <div className="flex flex-1 min-h-0 relative overflow-hidden" data-split-container>
           {/* 左侧：TabBar + TabContent（始终保持在同一 DOM 位置，避免 Tab 切换时 unmount）
@@ -373,36 +343,46 @@ export function MainArea(): React.ReactElement {
         </div>
       </Panel>
 
-      {browserVisible && browserSessionId && (
+      {browserSessionId && (
         <>
-          <div
-            className="absolute z-10 top-0 bottom-0 w-3 -translate-x-1/2 cursor-col-resize rounded transition-colors hover:bg-primary/10 active:bg-primary/20"
-            style={browserDividerStyle}
-            onMouseDown={handleBrowserDragStart}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="调整会话与浏览器宽度"
-          />
-          <div className="flex flex-1 min-w-0">
-            <BrowserPanel
-            sessionId={browserSessionId}
-            state={browserState}
-            sessionTitle={activeTab?.title ?? ''}
-            // WindowControls 只会覆盖窗口最右缘。右侧文件栏展开时，浏览器卡片的右缘
-            // 已被侧栏隔开；继续预留 126px 会无端压扁地址栏，并在顶栏末端留下空白。
-            avoidWindowControls={!sidePanelOpen}
-            // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
-            // 让原生 hostView 立即拿到新 rect，但不销毁网页 WebContents。
-            layoutKey={sidePanelOpen ? 'side-panel-open' : 'side-panel-closed'}
-            onClose={() => {
-              // WebContentsView 不在 React DOM 层级内；先让主进程同步隐藏，
-              // 再卸载 BrowserSlot，避免 effect cleanup IPC 晚到时网页仍覆盖界面。
-              void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
-              setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(browserSessionId, false); return next })
-              setBrowserStateMap((previous) => { const next = new Map(previous); next.delete(browserSessionId); return next })
-              setBrowserDismissed((previous) => { const next = new Set(previous); next.add(browserSessionId); return next })
-            }}
+          {browserVisible && (
+            <div
+              className="absolute z-10 top-0 bottom-0 w-3 -translate-x-1/2 cursor-col-resize rounded transition-colors hover:bg-primary/10 active:bg-primary/20"
+              style={browserDividerStyle}
+              onMouseDown={handleBrowserDragStart}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整会话与浏览器宽度"
             />
+          )}
+          {/* 浏览器分栏常驻渲染：width 过渡形成展开/收起动画；隐藏时内容 opacity 淡出且不可交互，
+              原生 WebContentsView 由 BrowserSlot 依据容器尺寸（width 0 → visible:false）自动隐藏，不销毁会话。 */}
+          <div
+            className="flex-shrink-0 min-w-0 overflow-hidden transition-[width] duration-300"
+            style={{ width: browserWidthPx }}
+          >
+            <div className={cn('h-full transition-[opacity,visibility] duration-300', browserVisible ? 'opacity-100 visible' : 'opacity-0 pointer-events-none invisible')}>
+              <BrowserPanel
+              sessionId={browserSessionId}
+              state={browserState}
+              sessionTitle={activeTab?.title ?? ''}
+              // WindowControls 只会覆盖窗口最右缘。右侧文件栏实际可见时，浏览器卡片的右缘
+              // 已被侧栏隔开；继续预留 126px 会无端压扁地址栏，并在顶栏末端留下空白。
+              // （用可见性 B 而非意图 A：文件面板被迫收起时不渲染，浏览器回到窗口最右缘，需重新预留。）
+              avoidWindowControls={!filePanelVisible}
+              // 侧栏切换会改变浏览器卡片的结构性位置；重建空的 BrowserSlot，
+              // 让原生 hostView 立即拿到新 rect，但不销毁网页 WebContents。
+              layoutKey={filePanelVisible ? 'side-panel-open' : 'side-panel-closed'}
+              onClose={() => {
+                // WebContentsView 不在 React DOM 层级内；先让主进程同步隐藏，
+                // 再卸载 BrowserSlot，避免 effect cleanup IPC 晚到时网页仍覆盖界面。
+                void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
+                setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(browserSessionId, false); return next })
+                setBrowserStateMap((previous) => { const next = new Map(previous); next.delete(browserSessionId); return next })
+                setBrowserDismissed((previous) => { const next = new Set(previous); next.add(browserSessionId); return next })
+              }}
+              />
+            </div>
           </div>
         </>
       )}
