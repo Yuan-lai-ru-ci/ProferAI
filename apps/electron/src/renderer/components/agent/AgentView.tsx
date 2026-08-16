@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, Eye, GitBranch, Library } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, GitBranch, Library } from 'lucide-react'
 import type { KnowledgeReference } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
@@ -45,6 +45,7 @@ import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -61,7 +62,7 @@ import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentSessionStreamingStateAtomFamily,
@@ -104,7 +105,6 @@ import {
   allPendingPermissionRequestsAtom,
   agentMessageQueueAtomFamily,
   finalizeStreamingActivities,
-  agentProcessGroupsKeepExpandedAtom,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
@@ -415,89 +415,44 @@ function AgentRuntimeSelector({
   )
 }
 
-interface DisplayOptionsPopoverProps {
-  autoPreviewEnabled: boolean
-  processGroupsKeepExpanded: boolean
-  onAutoPreviewChange: (enabled: boolean) => void
-  onProcessGroupsKeepExpandedChange: (expanded: boolean) => void
-}
+// ===== 工具栏附件按钮（添加文件 / 附加文件夹 二级菜单） =====
 
-function DisplayOptionsPopover({
-  autoPreviewEnabled,
-  processGroupsKeepExpanded,
-  onAutoPreviewChange,
-  onProcessGroupsKeepExpandedChange,
-}: DisplayOptionsPopoverProps): React.ReactElement {
-  const [open, setOpen] = React.useState(false)
-  const hasEnabledOption = autoPreviewEnabled || processGroupsKeepExpanded
-  const hoverTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const handleMouseEnter = React.useCallback(() => {
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
-    setOpen(true)
-  }, [])
-
-  const handleMouseLeave = React.useCallback(() => {
-    hoverTimeout.current = setTimeout(() => setOpen(false), 150)
-  }, [])
-
-  React.useEffect(() => {
-    return () => {
-      if (hoverTimeout.current) clearTimeout(hoverTimeout.current)
-    }
-  }, [])
-
+function AttachMenuButton({ onAttachFile, onAttachFolder, toolBtnSize }: {
+  onAttachFile: () => void
+  onAttachFolder: () => void
+  toolBtnSize: string
+}): React.ReactElement {
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverAnchor asChild>
-        <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(
-              'size-[36px] rounded-full',
-              hasEnabledOption ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
-            )}
-            aria-label="显示选项"
-            aria-expanded={open}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => setOpen((value) => !value)}
-          >
-            <Eye className="size-5" />
-          </Button>
-        </div>
-      </PopoverAnchor>
-      <PopoverContent
-        side="top"
-        align="center"
-        sideOffset={8}
-        className="w-auto min-w-[190px] p-2 px-2.5"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-xs text-foreground/70">自动预览修改中文件</span>
-            <Switch
-              checked={autoPreviewEnabled}
-              onCheckedChange={onAutoPreviewChange}
-              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-            />
-          </div>
-          <div className="h-px bg-border" />
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-xs text-foreground/70">输出完保持展开</span>
-            <Switch
-              checked={processGroupsKeepExpanded}
-              onCheckedChange={onProcessGroupsKeepExpandedChange}
-              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-            />
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
+              aria-label="添加文件或文件夹"
+            >
+              <Paperclip className="size-5" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p>添加附件</p>
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent side="top" align="center" sideOffset={8} className="w-44">
+        <DropdownMenuItem onSelect={onAttachFile}>
+          <Paperclip />
+          添加文件
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onAttachFolder}>
+          <FolderPlus />
+          附加文件夹
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -553,7 +508,7 @@ function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactEl
 }
 
 /** 平板远程模式下从输入工具栏隐藏的项（依赖桌面文件系统/语音/全局设置，浏览器环境无意义） */
-const TABLET_HIDDEN_TOOLBAR_KEYS = new Set(['thinking', 'speech', 'attach-file', 'attach-folder', 'auto-preview', 'graph'])
+const TABLET_HIDDEN_TOOLBAR_KEYS = new Set(['thinking', 'speech', 'attach', 'graph'])
 
 export interface AgentViewProps {
   sessionId: string
@@ -2624,10 +2579,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
-  // ===== 预览面板状态（toggle 快捷键 + auto-preview 设置，分屏布局在 MainArea） =====
+  // ===== 预览面板状态（toggle 快捷键，分屏布局在 MainArea；显示选项已迁至设置页） =====
   const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
-  const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
-  const [processGroupsKeepExpanded, setProcessGroupsKeepExpanded] = useAtom(agentProcessGroupsKeepExpandedAtom)
 
   const togglePreviewPanel = React.useCallback(() => {
     setPreviewOpenMap((prev) => {
@@ -2724,45 +2677,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     },
     { key: 'speech', node: <SpeechButton className="size-[36px] shrink-0 rounded-full" /> },
     {
-      key: 'attach-file',
+      key: 'attach',
       node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
-              onClick={handleOpenFileDialog}
-            >
-              <Paperclip className="size-5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>添加附件</p>
-          </TooltipContent>
-        </Tooltip>
-      ),
-    },
-    {
-      key: 'attach-folder',
-      node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
-              onClick={handleAttachFolder}
-            >
-              <FolderPlus className="size-5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>附加文件夹</p>
-          </TooltipContent>
-        </Tooltip>
+        <AttachMenuButton
+          onAttachFile={handleOpenFileDialog}
+          onAttachFolder={handleAttachFolder}
+          toolBtnSize={toolBtnSize}
+        />
       ),
     },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
@@ -2781,17 +2702,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           planQuotaChannelId={planQuotaChannelId}
           sessionId={sessionId}
           onCompact={handleCompact}
-        />
-      ),
-    },
-    {
-      key: 'auto-preview',
-      node: (
-        <DisplayOptionsPopover
-          autoPreviewEnabled={autoPreviewEnabled}
-          processGroupsKeepExpanded={processGroupsKeepExpanded}
-          onAutoPreviewChange={setAutoPreviewEnabled}
-          onProcessGroupsKeepExpandedChange={setProcessGroupsKeepExpanded}
         />
       ),
     },
@@ -2826,10 +2736,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     backgroundWaiting,
     runtimeSwitchInFlight,
     handleCompact,
-    autoPreviewEnabled,
-    processGroupsKeepExpanded,
-    setAutoPreviewEnabled,
-    setProcessGroupsKeepExpanded,
     tabletMode,
   ])
 

@@ -1256,32 +1256,39 @@
   display: none;
 }
 
-/* 纤细滚动条 */
-.scrollbar-thin,
-.scrollbar-thin > * {
+/* ===== 全局 Profer 滚动条 =====
+ * 应用内所有滚动容器默认使用 6px 细滚动条，中性灰（--muted-foreground），
+ * 随主题/皮肤 token 自动适配明暗；平时透明，鼠标移入容器时淡入显示，
+ * 悬停 thumb 加深。显式隐藏仍用 .scrollbar-none；平板模式见 body.tablet-mode 规则。
+ * 代码中的 .scrollbar-thin 类名保留作语义兼容，样式已由本全局规则接管。
+ */
+* {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
 }
-.scrollbar-thin::-webkit-scrollbar,
-.scrollbar-thin > *::-webkit-scrollbar {
+*::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-.scrollbar-thin::-webkit-scrollbar-track,
-.scrollbar-thin > *::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-.scrollbar-thin::-webkit-scrollbar-thumb,
-.scrollbar-thin > *::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
   background-color: hsl(var(--muted-foreground) / 0.3);
-  border-radius: 3px;
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
 }
-.scrollbar-thin::-webkit-scrollbar-thumb:hover,
-.scrollbar-thin > *::-webkit-scrollbar-thumb:hover {
+*:hover {
+  scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent; /* Firefox：hover 加深 */
+}
+*:hover::-webkit-scrollbar-thumb {
+  opacity: 1;
+}
+*::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--muted-foreground) / 0.5);
 }
-.scrollbar-thin::-webkit-scrollbar-corner,
-.scrollbar-thin > *::-webkit-scrollbar-corner {
+*::-webkit-scrollbar-corner {
   background: transparent;
 }
 
