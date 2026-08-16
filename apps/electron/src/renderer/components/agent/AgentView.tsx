@@ -2936,7 +2936,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">
+      <TooltipContent side="top" className="text-center">
         <p>停止 Agent</p>
         <p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p>
       </TooltipContent>
@@ -2966,7 +2966,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           <CornerDownLeft className="size-[22px]" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">
+      <TooltipContent side="top" className="text-center">
         {queuedMessages.length > 0 ? (
           <p>点击添加到队列（Enter）</p>
         ) : (
