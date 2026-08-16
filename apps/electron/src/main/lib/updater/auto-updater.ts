@@ -136,16 +136,37 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     }).catch(() => {})
   } catch { /* 代理模块不可用时跳过 */ }
 
-  // 更新源：编译时注入，oss 走 GitHub Releases，commercial 走国内服务器
-  // 统一使用自建更新服务器
-  const updateFeedUrl =
-    process.env.PROFER_UPDATE_FEED_URL ||
-    'http://47.109.108.57/profer-updates/'
-  autoUpdater.setFeedURL({
-    provider: 'generic',
-    url: updateFeedUrl,
-  })
-  console.log('[更新] 更新源:', updateFeedUrl)
+  // 更新源：双渠道（2026-08-16 恢复）。
+  // - oss 构建（build:main-github / dist:win-github）：优先 GitHub Releases（electron-builder.yml publish 配置），
+  //   与 push-release.cjs / CI release.yml 上传产物一致；PROFER_UPDATE_FEED_URL 可覆盖。
+  // - commercial 构建（build:main-commercial）：走国内自建服务器（无需科学上网）。
+  const isCommercial = getBuildTarget() === 'commercial'
+  if (isCommercial) {
+    // 商业版：国内服务器直连
+    const updateFeedUrl =
+      process.env.PROFER_UPDATE_FEED_URL ||
+      'http://47.109.108.57/profer-updates/'
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: updateFeedUrl,
+    })
+    console.log('[更新] 更新源: 国内服务器', updateFeedUrl)
+  } else {
+    // 开源版：GitHub Releases 优先，环境变量 PROFER_UPDATE_FEED_URL 可覆盖为自建服务器
+    const envFeedUrl = process.env.PROFER_UPDATE_FEED_URL
+    if (envFeedUrl) {
+      autoUpdater.setFeedURL({ provider: 'generic', url: envFeedUrl })
+      console.log('[更新] 更新源: 环境变量覆盖', envFeedUrl)
+    } else {
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'Yuan-lai-ru-ci',
+        repo: 'ProferAI',
+        releaseType: 'release',
+      })
+      console.log('[更新] 更新源: GitHub Releases (Yuan-lai-ru-ci/ProferAI)')
+    }
+  }
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),

@@ -5,6 +5,8 @@ node_modules
 out
 dist
 *.tgz
+# GitHub Release 上传中间目录（收集 latest.yml / Setup exe / blockmap）
+apps/electron/release-assets/
 
 # code coverage
 coverage
