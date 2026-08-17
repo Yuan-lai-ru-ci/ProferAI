@@ -1,15 +1,18 @@
-name: Release
+name: Windows Release Verification
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要验证的分支、tag 或 commit SHA'
+        required: true
+        default: main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-verification-${{ inputs.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -37,15 +42,21 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify tag matches app version
+      - name: Verify app version and tag consistency
         shell: pwsh
         run: |
-          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
           $packageVersion = node -p "require('./apps/electron/package.json').version"
-          if ($tagVersion -ne $packageVersion) {
-            throw "Tag version v$tagVersion does not match apps/electron/package.json version $packageVersion"
+          if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Invalid apps/electron/package.json version: $packageVersion"
           }
-          "Releasing verified version: $packageVersion"
+          $requestedRef = "${{ inputs.ref }}"
+          if ($requestedRef -match '^v') {
+            $tagVersion = $requestedRef -replace '^v', ''
+            if ($tagVersion -ne $packageVersion) {
+              throw "Tag version $requestedRef does not match apps/electron/package.json version $packageVersion"
+            }
+          }
+          "Verifying version: $packageVersion"
 
       - name: Typecheck workspace
         run: bun run typecheck
@@ -129,19 +140,17 @@ jobs:
           Write-Host "Pi runtime closure verified"
           if (Test-Path $stdout) { Get-Content $stdout }
 
-      - name: Collect Windows release assets
+      - name: Verify Windows release assets
         shell: pwsh
         working-directory: apps/electron
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          $version = $tag.TrimStart("v")
+          $version = node -p "require('./package.json').version"
           $required = @(
             "latest.yml"
             "Profer-Setup-$version.exe"
             "Profer-Setup-$version.exe.blockmap"
           )
 
-          New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
           foreach ($name in $required) {
             $source = Join-Path "out" $name
             if (-not (Test-Path -LiteralPath $source)) {
@@ -149,33 +158,5 @@ jobs:
               Get-ChildItem -Path "out" -Recurse | Select-Object FullName, Length
               throw "Missing required Windows release asset: $name"
             }
-            Copy-Item -LiteralPath $source -Destination "release-assets/$name" -Force
+            "$name verified"
           }
-
-      - name: Remove stale release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        working-directory: apps/electron
-        run: |
-          gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes --cleanup-tag=false 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "No existing release to delete for $env:GITHUB_REF_NAME"
-            exit 0
-          }
-
-      - name: Upload GitHub release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Profer ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-          make_latest: true
-          generate_release_notes: true
-          files: |
-            apps/electron/release-assets/latest.yml
-            apps/electron/release-assets/*.exe
-            apps/electron/release-assets/*.exe.blockmap
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

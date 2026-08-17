@@ -1,183 +1,282 @@
 /**
- * Profer 一键发布（安全版）
- * 用法: node scripts/push-release.js 0.12.70
+ * Profer Windows 发布（本地构建 + 双通道上传）
  *
- * 流程:
- *  [1] bump 版本号
- *  [2] 推送服务端到生产 proma-team
- *  [3] 等容器就绪
- *  [4] 打包 Electron (NSIS)
- *  [5] 推送自动更新   —— 通道一: 国内 profer-updates 静态源
- *  [6] 更新 GitHub    —— 通道二: commit + tag + Release 资产 (需本机 gh CLI 已登录)
+ * 用法: node scripts/push-release.cjs <版本号>
  *
- * 安全: 使用 SSH 密钥认证，不再硬编码密码。
- * 本机缺 gh CLI 时通道二自动跳过, 不影响已完成的通道一。
+ * GitHub Release 只由本脚本写入。release.yml 仅保留手动构建验证，避免本地
+ * 上传与 tag 触发的 CI 同时创建、删除或上传同一个 Release。
  */
-const { spawn, execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
 const VERSION = process.argv[2];
-if (!VERSION) { console.error('用法: node scripts/push-release.js <版本号>'); process.exit(1); }
+if (!VERSION) {
+  console.error('用法: node scripts/push-release.cjs <版本号>');
+  process.exit(1);
+}
 
 const ROOT = path.resolve(__dirname, '..');
 const ELECTRON = path.join(ROOT, 'apps/electron');
+const OUT = path.join(ELECTRON, 'out');
+const TAG = `v${VERSION}`;
+const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
 const HOST = '47.109.108.57';
 const USER = 'ecs-user';
 const UPDATE_DIR = '/usr/share/nginx/html/profer-updates';
-const TAG = `v${VERSION}`;
-const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
-// 使用 Git Bash（能访问 Windows 文件系统 + SSH 密钥），不用 WSL bash
 const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
+const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000];
 
-function ssh(cmd, timeout = 30000) {
-  return new Promise((resolve) => {
-    const p = spawn(BASH, ['-c', `ssh -o StrictHostKeyChecking=no ${USER}@${HOST} '${cmd.replace(/'/g, "'\\''")}'`]);
-    let o = '', e = '';
-    p.stdout.on('data', d => o += d);
-    p.stderr.on('data', d => e += d);
-    p.on('close', () => resolve((o || e).trim()));
-    setTimeout(() => { try { p.kill() } catch {} }, timeout);
-  });
+function run(command, cwd = ROOT) {
+  return execSync(command, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+}
+
+function tryRun(command, cwd = ROOT) {
+  try {
+    return { ok: true, out: run(command, cwd) };
+  } catch (error) {
+    return { ok: false, out: ((error.stdout || '') + (error.stderr || '') || error.message || '').trim() };
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function quote(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+function transientGitHubError(output) {
+  return /\b(?:429|500|502|503|504)\b|no server is currently available|timeout|temporar(?:y|ily)|econnreset|eof/i.test(output);
+}
+
+async function retryGitHub(label, action, isRecovered = () => false) {
+  let lastError = '';
+  for (let attempt = 0; attempt < RELEASE_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      const delay = RELEASE_RETRY_DELAYS_MS[attempt];
+      console.log(`  ${label}: 等待 ${Math.round(delay / 1000)}s 后重试 (${attempt + 1}/${RELEASE_RETRY_DELAYS_MS.length})`);
+      await sleep(delay);
+      if (await isRecovered()) return;
+    }
+
+    const result = action();
+    if (result.ok) return;
+    lastError = result.out;
+    if (await isRecovered()) return;
+    if (!transientGitHubError(result.out) || attempt === RELEASE_RETRY_DELAYS_MS.length - 1) break;
+    console.warn(`  ${label}: GitHub 暂时不可用，准备重试。`);
+  }
+  throw new Error(`${label} 失败: ${lastError.slice(-500)}`);
 }
 
 function scp(local, remote) {
   return new Promise((resolve, reject) => {
     const src = local.replace(/\\/g, '/');
-    const p = spawn(BASH, ['-c', `scp -o StrictHostKeyChecking=no -q '${src.replace(/'/g, "'\\''")}' ${USER}@${HOST}:${remote}`]);
-    p.on('close', (code) => code === 0 ? resolve() : reject(new Error(`scp ${local} → ${remote} 失败 (exit ${code})`)));
-    setTimeout(() => { try { p.kill() } catch {} }, 600000); // 10min，大文件够用
+    const process = spawn(BASH, ['-c', `scp -o StrictHostKeyChecking=no -q '${src.replace(/'/g, "'\\''")}' ${USER}@${HOST}:${remote}`]);
+    const timer = setTimeout(() => { try { process.kill(); } catch {} }, 600_000);
+    process.on('close', (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolve() : reject(new Error(`scp ${local} -> ${remote} 失败 (exit ${code})`));
+    });
   });
 }
 
-// Windows 原生命令（npx / bun / node / git）
-function run(cmd, cwd = ROOT) {
-  return execSync(cmd, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+function ssh(command, timeout = 30_000) {
+  return new Promise((resolve, reject) => {
+    const process = spawn(BASH, ['-c', `ssh -o StrictHostKeyChecking=no ${USER}@${HOST} '${command.replace(/'/g, "'\\''")}'`]);
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { try { process.kill(); } catch {} }, timeout);
+    process.stdout.on('data', (data) => { stdout += data; });
+    process.stderr.on('data', (data) => { stderr += data; });
+    process.on('close', (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolve(stdout.trim()) : reject(new Error((stderr || stdout).trim() || `ssh 失败 (exit ${code})`));
+    });
+  });
 }
 
-// Git Bash 命令（tar / scp / ssh 等需要 Unix 工具的命令）
-function runBash(cmd, cwd = ROOT) {
-  const wslCwd = cwd.replace(/\\/g, '/').replace(/^([A-Z]):/i, (_, d) => `/${d.toLowerCase()}`);
-  return execSync(`cd '${wslCwd}' && PATH="/usr/bin:$PATH" ${cmd}`, { encoding: 'utf8', stdio: 'pipe', shell: BASH }).trim();
+function assertReleaseMetadata() {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ELECTRON, 'package.json'), 'utf8'));
+  const changelog = JSON.parse(fs.readFileSync(path.join(ELECTRON, 'resources', 'CHANGELOG.json'), 'utf8'));
+  if (pkg.version !== VERSION) throw new Error(`package.json 版本为 ${pkg.version}，不是 ${VERSION}`);
+  if (!Array.isArray(changelog.releases) || changelog.releases[0]?.version !== VERSION) {
+    throw new Error(`CHANGELOG.json 首条版本必须为 ${VERSION}`);
+  }
 }
 
-function tryRun(cmd, cwd = ROOT) {
-  try { return { ok: true, out: execSync(cmd, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim() }; }
-  catch (e) { return { ok: false, out: ((e.stdout || '') + (e.stderr || '') || e.message || '').trim() }; }
+function assertCleanWorktree() {
+  if (run('git status --porcelain=v1')) throw new Error('工作树不干净；请先提交或清理改动后再发布。');
+  if (!tryRun('git diff --check').ok) throw new Error('存在空白错误，不能发布。');
+}
+
+function assertRemoteMainIsAncestor() {
+  run('git fetch origin --prune');
+  if (!tryRun('git merge-base --is-ancestor origin/main HEAD').ok) {
+    throw new Error('本地 main 未包含最新 origin/main；请先人工处理分叉，发布脚本不会 rebase 活跃分支。');
+  }
+}
+
+function remoteTagTarget() {
+  const output = run(`git ls-remote --tags origin refs/tags/${TAG} refs/tags/${TAG}^{}`).trim();
+  if (!output) return null;
+  const lines = output.split(/\r?\n/).map((line) => line.split(/\s+/));
+  const peeled = lines.find(([, ref]) => ref.endsWith('^{}'));
+  return (peeled || lines[0])[0];
+}
+
+function localTagTarget() {
+  const result = tryRun(`git rev-list -n 1 refs/tags/${TAG}`);
+  return result.ok ? result.out : null;
+}
+
+function pushSourceAndTag() {
+  run('git push origin HEAD:main');
+  const head = run('git rev-parse HEAD');
+  const localTag = localTagTarget();
+  if (localTag && localTag !== head) throw new Error(`本地 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
+  const remoteTag = remoteTagTarget();
+  if (remoteTag && remoteTag !== head) throw new Error(`远端 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
+  if (!localTag) run(`git tag ${TAG}`);
+  if (!remoteTag) run(`git push origin ${TAG}`);
+}
+
+function sha256(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function readReleaseAssets() {
+  const result = tryRun(`gh release view ${TAG} --repo ${GH_REPO} --json assets,isDraft,name`);
+  if (!result.ok) return null;
+  return JSON.parse(result.out);
+}
+
+function matchingAsset(asset) {
+  const release = readReleaseAssets();
+  return Boolean(release?.assets?.some((item) => (
+    item.name === asset.name &&
+    item.size === asset.size &&
+    item.state === 'uploaded' &&
+    item.digest === `sha256:${asset.sha256}`
+  )));
+}
+
+function hasExpectedAssets(release, assets) {
+  return Boolean(release?.assets) && assets.every((asset) => release.assets.some((item) => (
+    item.name === asset.name &&
+    item.size === asset.size &&
+    item.state === 'uploaded' &&
+    item.digest === `sha256:${asset.sha256}`
+  )));
+}
+
+async function waitForExpectedAssets(assets) {
+  for (let attempt = 0; attempt < RELEASE_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) await sleep(RELEASE_RETRY_DELAYS_MS[attempt]);
+    const release = readReleaseAssets();
+    if (hasExpectedAssets(release, assets)) return release;
+    console.warn(`  GitHub Release 资产尚未可见，继续等待 (${attempt + 1}/${RELEASE_RETRY_DELAYS_MS.length})`);
+  }
+  throw new Error('GitHub Release 资产未在重试窗口内全部进入 uploaded 状态。');
+}
+
+async function ensureGitHubRelease(assets) {
+  const existing = readReleaseAssets();
+  if (!existing) {
+    const notesFile = path.join(ROOT, 'release-notes', `${TAG}.md`);
+    const notesArg = fs.existsSync(notesFile) ? `--notes-file ${quote(notesFile)}` : '--generate-notes';
+    await retryGitHub('创建 GitHub Release', () => {
+      const result = tryRun(
+        `gh release create ${TAG} --repo ${GH_REPO} --title ${quote(`Profer ${TAG}`)} --draft ${notesArg}`,
+      );
+      return !result.ok && /already exists|already_exists|HTTP 422/i.test(result.out)
+        ? { ok: true, out: result.out }
+        : result;
+    }, () => Boolean(readReleaseAssets()));
+  }
+
+  for (const asset of assets) {
+    if (matchingAsset(asset)) {
+      console.log(`  ${asset.name}: 已存在且 SHA-256 匹配`);
+      continue;
+    }
+    await retryGitHub(`上传 ${asset.name}`, () => tryRun(
+      `gh release upload ${TAG} ${quote(asset.path)} --repo ${GH_REPO} --clobber`,
+    ), () => matchingAsset(asset));
+  }
+
+  const release = await waitForExpectedAssets(assets);
+  const releaseName = `Profer ${TAG}`;
+  if (release.isDraft) {
+    await retryGitHub('发布 GitHub Release', () => tryRun(
+      `gh release edit ${TAG} --repo ${GH_REPO} --draft=false --latest --title ${quote(releaseName)}`,
+    ), () => {
+      const current = readReleaseAssets();
+      return current?.isDraft === false && current.name === releaseName;
+    });
+  } else {
+    await retryGitHub('校正 GitHub Release 元数据', () => tryRun(
+      `gh release edit ${TAG} --repo ${GH_REPO} --latest --title ${quote(releaseName)}`,
+    ), () => readReleaseAssets()?.name === releaseName);
+  }
 }
 
 (async () => {
-  console.log(`=== Profer 发布 v${VERSION} ===\n`);
+  console.log(`=== Profer 本地发布 ${TAG} ===`);
+  assertReleaseMetadata();
+  assertCleanWorktree();
+  assertRemoteMainIsAncestor();
 
-  // 1. 更新版本号
-  console.log('[1/6] 版本号...');
-  const pkgPath = path.join(ELECTRON, 'package.json');
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-  pkg.version = VERSION;
-  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
-  console.log(`  ${VERSION}`);
-
-  // 2. 完整构建 + 打包 Electron
-  console.log('\n[2/4] 打包 Electron...');
-  console.log('  [2a] build:main');
+  console.log('[1/4] 构建 Windows x64 安装包...');
   run("npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='oss'", ELECTRON);
-  console.log('  [2b] build:preload');
   run('npx esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron', ELECTRON);
-  console.log('  [2c] build:renderer (vite)');
-  const viteOut = run('npx vite build', ELECTRON);
-  console.log('    ' + (viteOut.match(/built in [\d.]+s/)?.[0] || 'OK'));
-  console.log('  [2d] build:cli');
+  run('npx vite build', ELECTRON);
   run('bun run scripts/build-cli.ts', ELECTRON);
-  console.log('  [2e] build:resources');
   run('bun run scripts/copy-resources.ts', ELECTRON);
-  console.log('  [2f] electron-builder --win --x64');
-  const ebOut = run('npx electron-builder --win --x64', ELECTRON);
-  const fileMatch = ebOut.match(/file=(out[^\s]*\.exe)/);
-  const installer = fileMatch ? fileMatch[1] : `out/Profer-Setup-${VERSION}.exe`;
-  console.log('  ' + installer);
+  fs.rmSync(path.join(OUT, 'win-unpacked'), { recursive: true, force: true });
+  run('npx electron-builder --win --x64', ELECTRON);
 
-  // 3. 上传安装包 (通道一: 自动更新)
-  console.log('\n[3/4] 上传安装包 (通道一: profer-updates)...');
-  const outDir = path.join(ELECTRON, 'out');
-  const installerPath = path.join(outDir, `Profer-Setup-${VERSION}.exe`);
-  const installerSize = fs.statSync(installerPath).size;
-  await scp(path.join(outDir, 'latest.yml'), '/tmp/latest.yml');
-  await scp(installerPath, `/tmp/Profer-Setup-${VERSION}.exe`);
-
-  const latestJson = JSON.stringify({
-    version: VERSION,
-    installer: `Profer-Setup-${VERSION}.exe`,
-    size: installerSize,
-    date: new Date().toISOString().split('T')[0],
-  });
-  const tmpJson = path.join(outDir, 'latest.json');
-  fs.writeFileSync(tmpJson, latestJson);
-  await scp(tmpJson, '/tmp/latest.json');
-
-  const result = await ssh(
-    `sudo mkdir -p ${UPDATE_DIR} && ` +
-    `sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && ` +
-    `sudo cp /tmp/Profer-Setup-${VERSION}.exe ${UPDATE_DIR}/ && ` +
-    `sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
-    `sudo ln -sf ${UPDATE_DIR}/Profer-Setup-${VERSION}.exe ${UPDATE_DIR}/Profer-latest.exe && ` +
-    `sudo chmod -R 755 ${UPDATE_DIR} && ` +
-    `echo OK`,
-    120000  // 大文件 cp 可能需要几十秒
-  );
-  console.log('  ' + (result.includes('OK') ? '已推送' : result.slice(0, 80)));
-
-  // 4. GitHub Release (通道二)
-  console.log('\n[4/4] GitHub Release (通道二)...');
-  const assets = ['latest.yml', `Profer-Setup-${VERSION}.exe`, `Profer-Setup-${VERSION}.exe.blockmap`]
-    .map(f => path.join(outDir, f)).filter(f => fs.existsSync(f));
-
-  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-  const ghExe = '"C:/Program Files/GitHub CLI/gh.exe"';
-  if (!GITHUB_TOKEN) {
-    console.log('  ⚠ 跳过: 未设置 GITHUB_TOKEN 环境变量 (通道一已成功, 不影响自动更新)。');
-    console.log('    设置后重跑本步即可上传 GitHub:');
-    console.log('      export GITHUB_TOKEN=ghp_xxxx');
-  } else {
-    tryRun(`git add "${pkgPath}"`, ROOT);
-    const commit = tryRun(`git commit -m "chore: release ${TAG} [auto-release]"`, ROOT);
-    console.log('  commit: ' + (commit.ok ? 'ok' : '跳过(无版本号变更)'));
-
-    // push 前先 pull --rebase 防冲突
-    tryRun(`git pull --rebase origin main`, ROOT);
-    tryRun(`git tag -f ${TAG}`, ROOT);
-    const push = tryRun(`git push origin HEAD && git push origin -f ${TAG}`, ROOT);
-    console.log('  push: ' + (push.ok ? 'ok' : push.out.slice(-160)));
-
-    const notesFile = path.join(ROOT, 'release-notes', `${TAG}.md`);
-    const notesArg = fs.existsSync(notesFile)
-      ? `--notes-file "${notesFile}"`
-      : `--notes "Profer ${TAG}"`;
-
-    // 先注入环境变量（Windows cmd 不认 export 前缀，直接 set process.env）
-    process.env.GITHUB_TOKEN = GITHUB_TOKEN
-    // 先创建 draft（不带资产）
-    let rel = tryRun(`${ghExe} release create ${TAG} --repo ${GH_REPO} --title "${TAG}" ${notesArg} --draft`, ROOT);
-    if (!rel.ok && /already exists|already_exists|HTTP 422/i.test(rel.out)) {
-      rel = { ok: true, out: '' };
-    }
-    if (rel.ok) {
-      // 逐个上传资产
-      for (const a of assets) {
-        const name = path.basename(a);
-        const up = tryRun(`${ghExe} release upload ${TAG} "${a}" --repo ${GH_REPO}`, ROOT);
-        console.log(`    ${name}: ${up.ok ? 'ok' : up.out.slice(-80)}`);
-      }
-      // 发布 draft
-      const pub = tryRun(`${ghExe} release edit ${TAG} --repo ${GH_REPO} --draft=false`, ROOT);
-      console.log('  publish: ' + (pub.ok ? 'ok' : pub.out.slice(-80)));
-    } else {
-      console.log('  release: ' + rel.out.slice(-200));
-    }
+  const assets = [
+    'latest.yml',
+    `Profer-Setup-${VERSION}.exe`,
+    `Profer-Setup-${VERSION}.exe.blockmap`,
+  ].map((name) => ({ name, path: path.join(OUT, name) }));
+  for (const asset of assets) {
+    if (!fs.existsSync(asset.path)) throw new Error(`缺少打包资产: ${asset.path}`);
+    asset.size = fs.statSync(asset.path).size;
+    asset.sha256 = sha256(asset.path);
   }
 
-  console.log(`\n=== 发布完成 v${VERSION} ===`);
-  console.log(`  安装包:            ${installer}`);
-  console.log(`  通道一(自动更新):  http://${HOST}/profer-updates/`);
-  console.log(`  通道二(GitHub):    https://github.com/${GH_REPO}/releases/tag/${TAG}`);
+  console.log('[2/4] 上传国内自动更新源...');
+  const installer = assets[1];
+  const latestJsonPath = path.join(OUT, 'latest.json');
+  fs.writeFileSync(latestJsonPath, JSON.stringify({
+    version: VERSION,
+    installer: installer.name,
+    size: installer.size,
+    date: new Date().toISOString().split('T')[0],
+  }));
+  await scp(assets[0].path, '/tmp/latest.yml');
+  await scp(installer.path, `/tmp/${installer.name}`);
+  await scp(latestJsonPath, '/tmp/latest.json');
+  await ssh(
+    `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && ` +
+    `sudo cp /tmp/${installer.name} ${UPDATE_DIR}/ && sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
+    `sudo ln -sf ${UPDATE_DIR}/${installer.name} ${UPDATE_DIR}/Profer-latest.exe && ` +
+    `sudo chmod -R 755 ${UPDATE_DIR}`,
+    120_000,
+  );
 
-})().catch(e => { console.error('\n发布失败:', e.message); process.exit(1); });
+  console.log('[3/4] 推送源码与版本 tag...');
+  pushSourceAndTag();
+
+  console.log('[4/4] 上传 GitHub Release（本地唯一写入者）...');
+  await ensureGitHubRelease(assets);
+  console.log(`=== 发布完成 ${TAG} ===`);
+})().catch((error) => {
+  console.error(`发布失败: ${error.message}`);
+  process.exit(1);
+});

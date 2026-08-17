@@ -128,7 +128,7 @@ nsis:
 # ============================================
 # 发布配置
 # 仅发布 Windows；macOS/Linux 不构建不发布（无 mac 开发者/测试环境，2026-08-08 起）。
-# Windows 由 push-release.cjs 或 CI release.yml 上传到 GitHub Release。
+# Windows Release 只由本地 scripts/push-release.cjs 上传；release.yml 仅供手动构建验证。
 # ============================================
 publish:
   provider: github

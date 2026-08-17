@@ -451,23 +451,18 @@ bun run generate:icons    # 生成应用图标
 
 **早期实现曾用"无条件 cpSync"绕开 seed 约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`）。
 
-### 发版流程（手动，2026-08-08 起）
+### 发版流程（本地唯一发布者，2026-08-18 起）
 
-发版 = 本地打 tag 并 push（tag push 触发 release.yml 构建发布）。auto-version.yml 已停用（
-GITHUB_TOKEN 推 tag 不触发 release.yml 且并发 bump 冲突，见 `workspace-files/.context/release-channel-research-2026-08-08.md`）：
+发版由本地 `scripts/push-release.cjs` 单独完成：构建一次 Windows x64 安装包、上传国内更新源、推送源码/tag、创建或补齐 GitHub Release。`release.yml` 改为仅手动触发的构建验证，绝不因 tag 自动构建或写入 GitHub Release，避免双重构建和两个发布者竞争同一 Release：
 
 ```bash
-# 1) 确认版本号（apps/electron/package.json）后打 tag 推送 → release.yml 自动构建 + GitHub Release
-git tag -a vX.Y.Z -m "Profer vX.Y.Z"
-git push origin vX.Y.Z
-
-# 2) 国内版（更新源：私有部署）
-bun run dist:win
-
-# 3) 上传国内更新服务器（scp/ssh 目标路径见本地发布脚本 scripts/push-release.cjs，勿在公开处改写）
+# 1) 先提交 package.json、CHANGELOG.json 和本次客户端代码；工作树必须干净
+# 2) 本地构建一次并发布两个通道（GitHub 登录或 GITHUB_TOKEN 需有效）
+node scripts/push-release.cjs X.Y.Z
+# 脚本不 rebase、不强推 tag；远端 main 或同名 tag 不一致会明确失败。
 ```
 
-> 注意：push-release.cjs 通道二的 commit 必须带 `[auto-release]` 后缀（防空 bump）；tag 与 package.json 版本必须一致（release.yml 校验）。
+> 注意：tag 与 package.json/CHANGELOG 首条版本必须一致。GitHub API 503 时脚本会有限重试，并在每次上传后按资产名、大小与 `uploaded` 状态收敛验证。
 
 两个构建目标编译时注入 `__PROFER_BUILD_TARGET__`（`oss` / `commercial`），互不串扰。
 
