@@ -96,6 +96,9 @@ export function AgentMessageQueue({
             />
             <span className="tabular-nums">自动发送</span>
           </button>
+          {autoSend && (
+            <span className="whitespace-nowrap text-[11px] text-muted-foreground/60">手动发送一条后自动生效</span>
+          )}
         </span>
         <span className="tabular-nums">{items.length}</span>
       </div>

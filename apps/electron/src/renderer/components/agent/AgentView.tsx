@@ -59,6 +59,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
+import { evaluateAutoSendTurn } from '@/lib/agent-autosend-turn'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
@@ -626,6 +627,16 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const queueStopEpochRef = React.useRef(0)
   const stopInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
+  // 队列自动发送「轮结束」版本号：每轮运行结束（running 下降沿）+1；consumedVersion 记录已消费版本
+  const turnVersionRef = React.useRef(0)
+  const consumedTurnVersionRef = React.useRef(0)
+  const prevRunningRef = React.useRef(false)
+  React.useEffect(() => {
+    const was = prevRunningRef.current
+    const now = streamState?.running ?? false
+    prevRunningRef.current = now
+    if (was && !now) turnVersionRef.current += 1
+  }, [streamState?.running])
   // Per-session 渠道/模型配置：已加载 metadata 是持久化真源，短暂 local Map 仅在加载前回退。
   const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
   const sessionModelMap = useAtomValue(agentSessionModelMapAtom)
@@ -2358,18 +2369,29 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     setQueuedMessages((prev) => moveQueuedMessage(prev, sourceId, targetId, placement))
   }, [setQueuedMessages])
 
-  // turn 结束后自动发送队首消息（FIFO，三把 ref 防重入）
+  // turn 结束后自动发送队首消息（FIFO，三把 ref 防重入；轮结束信号用版本号可消费决策）
   React.useEffect(() => {
-    // 1.6 开关关：不自动 drain，队列保留，用户可手动逐条「立即发送」
-    if (!autoSendEnabled) return
-    // 渲染连贯性（1.7）：上一轮执行过程可能仍在 liveMessages（重载清理前）。
-    // 若此刻乐观用户气泡 append 到 persisted 末尾，会排在 live 的上轮执行之前，
-    // 导致 turn 分组把上轮执行并入本轮。等待 live 清空（上轮执行进入 persisted）后再自动发送。
-    if (liveMessages.length > 0) return
-    if (autoSendingQueuedRef.current) return
-    if (queuedSendInFlightRef.current) return
-    if (queuedMessages.length === 0) return
-    if (!canSendQueuedNow || streaming || stoppedByUser) return
+    // 防重入：已有队列发送在飞行中，本次 effect 直接退出（不消费版本，
+    // 飞行中的发送启动的新一轮结束会再 +1 版本）
+    if (autoSendingQueuedRef.current || queuedSendInFlightRef.current) return
+
+    const decision = evaluateAutoSendTurn({
+      turnVersion: turnVersionRef.current,
+      consumedVersion: consumedTurnVersionRef.current,
+      autoSendEnabled,
+      queuedCount: queuedMessages.length,
+      liveMessagesPending: liveMessages.length > 0,
+      streaming,
+      stoppedByUser,
+      canSendQueuedNow,
+    })
+    if (decision === 'idle' || decision === 'defer') return
+    if (decision === 'consume') {
+      consumedTurnVersionRef.current = turnVersionRef.current
+      return
+    }
+    // decision === 'send'
+    consumedTurnVersionRef.current = turnVersionRef.current
     const message = queuedMessages[0]
     if (!message) return
     if (sendingQueuedMessageIdsRef.current.has(message.id)) return
