@@ -383,15 +383,32 @@ export function installElectronApiStub(): void {
           })
           const page = res as { messages?: unknown[]; startIndex?: number; hasMore?: boolean; total?: number }
           if (Array.isArray(page?.messages) && typeof page?.startIndex === 'number') {
-            const merged = [...(page.messages as unknown[]), ...prev.messages]
+            const incoming = page.messages as unknown[]
+            const merged = [...incoming, ...prev.messages]
             setCachedPage(sessionId, {
               messages: merged,
               startIndex: page.startIndex,
               hasMore: page.hasMore !== false,
             })
+            // AgentView 负责将本次更早页 prepend 到 UI。返回累计缓存会把旧页再插一次，
+            // 导致重复消息，并使滚动触顶与 hasMore 的状态变得不可靠。
+            return {
+              messages: incoming,
+              startIndex: page.startIndex,
+              endIndex: prev.startIndex - 1,
+              total: typeof page.total === 'number' ? page.total : merged.length,
+              hasMore: page.hasMore !== false,
+            }
           }
         }
-        return sdkMessagesPageCache.get(sessionId)?.messages ?? []
+        const current = sdkMessagesPageCache.get(sessionId)
+        return {
+          messages: [],
+          startIndex: current?.startIndex ?? 0,
+          endIndex: (current?.startIndex ?? 0) - 1,
+          total: current?.messages.length ?? 0,
+          hasMore: current?.hasMore ?? false,
+        }
       }
       // 明确请求“更早一页”用 before（兼容外部调用者）。
       if (opts && opts.before !== undefined) {
