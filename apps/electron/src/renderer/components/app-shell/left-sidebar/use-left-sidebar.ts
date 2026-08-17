@@ -91,6 +91,7 @@ import type { NavigationAction } from '@/lib/navigation-actions'
 import {
   replaceAgentSessionInFreshnessOrder,
   sortAgentSessionsByUpdatedAtDesc,
+  upsertAgentSession,
 } from '@/lib/agent-session-list'
 import type { AgentSessionMeta, AgentWorkspace, WorkspaceCapabilities } from '@profer/shared'
 
@@ -550,9 +551,25 @@ export function useLeftSidebar(tabletMode?: boolean) {
   const refreshSidebarLists = React.useCallback(() => {
     const includeArchived = viewMode === 'archived'
     window.electronAPI.listConversations(includeArchived).then(setConversations).catch(console.error)
-    window.electronAPI.listAgentSessions(includeArchived).then(setAgentSessions).catch(console.error)
+    window.electronAPI.listAgentSessions(includeArchived).then((sessions) => {
+      setAgentSessions(sessions)
+      // 启动恢复：把持久化 completedButUnconfirmed 的会话 id 加回未读集合（Set 幂等），重启后绿标仍在
+      const persistedUnreadIds = sessions.filter((s) => s.completedButUnconfirmed).map((s) => s.id)
+      if (persistedUnreadIds.length > 0) {
+        setUnviewedCompleted((prev) => {
+          let next = prev
+          for (const id of persistedUnreadIds) {
+            if (!prev.has(id)) {
+              if (next === prev) next = new Set(prev)
+              next.add(id)
+            }
+          }
+          return next
+        })
+      }
+    }).catch(console.error)
     refreshArchivedCounts()
-  }, [viewMode, setConversations, setAgentSessions, refreshArchivedCounts])
+  }, [viewMode, setConversations, setAgentSessions, setUnviewedCompleted, refreshArchivedCounts])
 
   // 初始加载：用户档案 + 按当前视图拉取列表/计数（viewMode effect 挂载时也会拉，重复无害）
   React.useEffect(() => {
@@ -1197,6 +1214,21 @@ export function useLeftSidebar(tabletMode?: boolean) {
     })
   }, [openSession, setActiveView, setUnviewedCompleted])
 
+  /** 标记 Agent 会话为「未读」：持久化 completedButUnconfirmed + 立即恢复绿标 + 同步列表数据 */
+  const handleMarkUnread = React.useCallback((id: string): void => {
+    window.electronAPI.setAgentCompletionState(id)
+      .then((meta) => {
+        setAgentSessions((prev) => upsertAgentSession(prev, meta))
+      })
+      .catch(console.error)
+    setUnviewedCompleted((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [setAgentSessions, setUnviewedCompleted])
+
   /** 重命名工作区（项目）名称 */
   const handleWorkspaceRename = React.useCallback(async (workspaceId: string, newName: string): Promise<void> => {
     try {
@@ -1621,6 +1653,7 @@ export function useLeftSidebar(tabletMode?: boolean) {
     handleToggleArchiveAgent,
     handleRequestMove,
     handleToggleDelegationParent,
+    handleMarkUnread,
     expandedDelegationParentIds,
 
     // workspaces / projects

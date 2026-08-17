@@ -53,6 +53,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     handleTogglePinAgent,
     handleToggleArchiveAgent,
     handleToggleDelegationParent,
+    handleMarkUnread,
     relativeTimeNow,
     workspaceSortMode,
     handleCycleWorkspaceSort,
@@ -292,6 +293,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                             onRename={handleAgentRename}
                             onTogglePin={handleTogglePinAgent}
                             onToggleArchive={handleToggleArchiveAgent}
+                            onMarkUnread={handleMarkUnread}
                           />
 
                           {childCount > 0 && expandedChildren && (
@@ -311,6 +313,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                                   onRename={handleAgentRename}
                                   onTogglePin={handleTogglePinAgent}
                                   onToggleArchive={handleToggleArchiveAgent}
+                                  onMarkUnread={handleMarkUnread}
                                 />
                               ))}
                             </div>
@@ -438,6 +441,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   onTogglePin={handleTogglePinAgent}
                   onToggleArchive={handleToggleArchiveAgent}
                   onToggleDelegationParent={handleToggleDelegationParent}
+                  onMarkUnread={handleMarkUnread}
                   workspaceSwitchTs={workspaceSwitchTs}
                 />
               ))}
@@ -509,6 +513,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                         onRename={handleAgentRename}
                         onTogglePin={handleTogglePinAgent}
                         onToggleArchive={handleToggleArchiveAgent}
+                        onMarkUnread={handleMarkUnread}
                       />
                     ))}
                   </div>

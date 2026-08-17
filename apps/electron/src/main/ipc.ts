@@ -2858,6 +2858,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 标记 Agent 会话为「未读」：持久化写入 completedButUnconfirmed = true（侧边栏「标记未读」入口）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SET_COMPLETION_STATE,
+    async (_, id: string): Promise<AgentSessionMeta> => {
+      const sessions = listAgentSessions(true)
+      const current = sessions.find((s) => s.id === id)
+      if (!current) throw new Error(`Agent session not found: ${id}`)
+      return updateAgentSessionMeta(id, { completedButUnconfirmed: true })
+    }
+  )
+
   // 更新 Agent 会话中断说明状态（state 非 null 置位：点击中断记录行向 Agent 说明原因；null 清除：消费/移除输入框中断 chip 时调用，保证重启不复活已消费的中断）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_INTERRUPTION_STATE,

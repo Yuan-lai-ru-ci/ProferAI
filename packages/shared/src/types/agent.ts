@@ -1676,6 +1676,8 @@ export const AGENT_IPC_CHANNELS = {
   TOGGLE_PIN: 'agent:toggle-pin',
   /** 清除会话完成状态（兼容清除旧版 manualWorking）。channel 值保留旧名以兼容已缓存的 preload */
   CLEAR_COMPLETION_STATE: 'agent:confirm-working-done',
+  /** 标记会话为「未读」（写入 completedButUnconfirmed，恢复绿色完成标记并持久化） */
+  SET_COMPLETION_STATE: 'agent:set-completion-state',
   /** 更新中断说明状态（state 非 null 置位：点击中断记录行；null 清除：消费/移除 chip 时清 meta，保证重启不复活已消费的中断）。一个通道双向。 */
   UPDATE_INTERRUPTION_STATE: 'agent:update-interruption-state',
   /** 切换会话归档状态 */
