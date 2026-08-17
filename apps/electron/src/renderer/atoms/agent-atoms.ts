@@ -298,6 +298,9 @@ export const workspaceCapabilitiesVersionAtom = atom(0)
 /** 工作区文件版本号 — 文件变化时自增，触发文件浏览器重新加载 */
 export const workspaceFilesVersionAtom = atom(0)
 
+/** 已读文件版本号 — 打开文件面板时同步到当前版本，用于「文件面板按钮红点只在有新变化时显示」的判断 */
+export const seenFilesVersionAtom = atom(0)
+
 // ===== Agent 运行中追加消息队列 Atoms =====
 
 /**
