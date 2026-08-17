@@ -187,25 +187,31 @@ function collectGlobalSearchDirs(): string[] {
  * 解析待预览的文件路径
  * - 绝对路径：直接 resolve，不存在时 fallback 搜索
  * - 相对路径：依次尝试 basePaths，返回第一个存在的；都不存在则 fallback 搜索
+ *
+ * opts.skipGlobalSearch=true 时跳过一切同步递归目录搜索（collectGlobalSearchDirs / searchFileInDir），
+ * 只做 basePaths 直接拼接、home、常用用户目录的 existsSync 快速判断。
+ * 供 FilePathChip 批量预检使用，避免批量 IPC 触发多次同步全局目录遍历阻塞主进程。
  */
-export function resolveTargetPath(filePath: string, basePaths?: string[]): string {
+export function resolveTargetPath(filePath: string, basePaths?: string[], opts?: { skipGlobalSearch?: boolean }): string {
   if (filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)) {
     const direct = resolve(filePath)
     if (existsSync(direct)) return direct
     const name = basename(direct)
-    if (basePaths) {
-      for (const base of basePaths) {
-        if (!base) continue
-        const found = searchFileInDir(base, name)
-        if (found) return found
+    if (!opts?.skipGlobalSearch) {
+      if (basePaths) {
+        for (const base of basePaths) {
+          if (!base) continue
+          const found = searchFileInDir(base, name)
+          if (found) return found
+        }
       }
-    }
-    const awIdx = filePath.indexOf('agent-workspaces')
-    if (awIdx !== -1) {
-      const wsRoot = filePath.slice(0, awIdx + 'agent-workspaces'.length)
-      if (existsSync(wsRoot)) {
-        const found = searchFileInDir(wsRoot, name)
-        if (found) return found
+      const awIdx = filePath.indexOf('agent-workspaces')
+      if (awIdx !== -1) {
+        const wsRoot = filePath.slice(0, awIdx + 'agent-workspaces'.length)
+        if (existsSync(wsRoot)) {
+          const found = searchFileInDir(wsRoot, name)
+          if (found) return found
+        }
       }
     }
     return direct
@@ -233,19 +239,22 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
     const commonFound = searchCommonDirs(filePath)
     if (commonFound) return commonFound
     // 全局 fallback：在所有已知工作区和附加目录中搜索（按文件名，递归 2 层）
-    const gName = basename(filePath)
-    const globalDirs = collectGlobalSearchDirs()
-    // 先尝试直接拼接（快路径）
-    for (const dir of globalDirs) {
-      const candidate = resolve(dir, filePath)
-      if (existsSync(candidate)) return candidate
-    }
-    // 再尝试在全局目录中按文件名搜索（默认深度 8，与绝对路径分支/下方 264 行一致；
-    // 受 searchFileInDir 内 MAX_SCANNED=500 + 跳过 node_modules/.git 等硬上限约束，
-    // 深度 3 会漏掉 apps/electron/src/main/lib/xxx 这类第 5 层的裸文件名）
-    for (const dir of globalDirs) {
-      const foundInDir = searchFileInDir(dir, gName)
-      if (foundInDir) return foundInDir
+    // 预检模式（skipGlobalSearch）下跳过，只保留上面的快速 existsSync 判断
+    if (!opts?.skipGlobalSearch) {
+      const gName = basename(filePath)
+      const globalDirs = collectGlobalSearchDirs()
+      // 先尝试直接拼接（快路径）
+      for (const dir of globalDirs) {
+        const candidate = resolve(dir, filePath)
+        if (existsSync(candidate)) return candidate
+      }
+      // 再尝试在全局目录中按文件名搜索（默认深度 8，与绝对路径分支/下方 264 行一致；
+      // 受 searchFileInDir 内 MAX_SCANNED=500 + 跳过 node_modules/.git 等硬上限约束，
+      // 深度 3 会漏掉 apps/electron/src/main/lib/xxx 这类第 5 层的裸文件名）
+      for (const dir of globalDirs) {
+        const foundInDir = searchFileInDir(dir, gName)
+        if (foundInDir) return foundInDir
+      }
     }
     return resolve(basePaths[0]!, filePath)
   }
@@ -256,15 +265,18 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
   const commonFound = searchCommonDirs(filePath)
   if (commonFound) return commonFound
   // 全局 fallback：在所有已知工作区和附加目录中搜索
-  const name = basename(filePath)
-  const globalDirs = collectGlobalSearchDirs()
-  for (const dir of globalDirs) {
-    const candidate = resolve(dir, filePath)
-    if (existsSync(candidate)) return candidate
-  }
-  for (const dir of globalDirs) {
-    const foundInDir = searchFileInDir(dir, name)
-    if (foundInDir) return foundInDir
+  // 预检模式（skipGlobalSearch）下跳过，只保留上面的快速 existsSync 判断
+  if (!opts?.skipGlobalSearch) {
+    const name = basename(filePath)
+    const globalDirs = collectGlobalSearchDirs()
+    for (const dir of globalDirs) {
+      const candidate = resolve(dir, filePath)
+      if (existsSync(candidate)) return candidate
+    }
+    for (const dir of globalDirs) {
+      const foundInDir = searchFileInDir(dir, name)
+      if (foundInDir) return foundInDir
+    }
   }
   return resolve(filePath)
 }
@@ -661,8 +673,8 @@ export function resolveAndReadFile(filePath: string, basePaths?: string[]): { re
 }
 
 /** 仅解析文件路径（不读取内容），供图片等用 profer-file:// 协议加载的场景使用 */
-export function resolveFilePath(filePath: string, basePaths?: string[]): string | null {
-  const safePath = resolveTargetPath(filePath, basePaths)
+export function resolveFilePath(filePath: string, basePaths?: string[], opts?: { skipGlobalSearch?: boolean }): string | null {
+  const safePath = resolveTargetPath(filePath, basePaths, opts)
   return existsSync(safePath) ? safePath : null
 }
 

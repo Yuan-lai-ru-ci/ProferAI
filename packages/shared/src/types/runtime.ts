@@ -207,6 +207,8 @@ export interface FileAccessOptions {
   workspaceSlug?: string
   /** 路径解析候选目录；主进程会先过滤到已授权目录内再使用 */
   candidateBasePaths?: string[]
+  /** 预检模式：仅快速判断文件是否存在，不做全局递归搜索（FilePathChip 批量预检用，避免主进程被同步目录搜索阻塞） */
+  preflight?: boolean
 }
 
 /** 已授权本地文件的 proma-file URL */
