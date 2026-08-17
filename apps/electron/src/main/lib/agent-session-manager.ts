@@ -2412,14 +2412,16 @@ export function paginateSDKMessages(
 
   // 统一切窗口起点的原始位置（首帧取最新 N 条；续页取 before 前 N 条）
   let startIndex = Math.max(0, tailExclusive - targetMessages)
-  // 向后（向尾部方向）快进到第一个 user-input 边界，保证窗口起点是完整 turn 的 start。
-  // 若窗口本就从头开始，则保持 0。
-  for (let i = startIndex; i < tailExclusive; i++) {
+  // 向前扩展到本页所属 turn 的 user-input 边界。原先向后跳到下一条用户输入会
+  // 永久丢弃 startRaw 与该输入之间的 assistant/tool 事件，且会使上划历史的页间出现缺口。
+  // 若该页开头属于会话最早的无 user 前缀，保持从 0 开始，保证所有持久化事件可达。
+  for (let i = startIndex; i > 0; i--) {
     const msg = messages[i]
     if (msg && msg.type === 'user' && isUserInputMessage(msg as SDKUserMessage)) {
       startIndex = i
       break
     }
+    if (i === 1) startIndex = 0
   }
 
   return {
