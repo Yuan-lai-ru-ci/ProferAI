@@ -9,7 +9,9 @@ import { autoUpdater } from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
-import { getBuildTarget } from '../build-target'
+import { runWithUpdateSourceFallback } from './update-fallback'
+import { getUpdateSources, type UpdateSource } from './update-sources'
+import { canReplaceUpdateStatus } from './update-state'
 
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
@@ -20,8 +22,15 @@ let win: BrowserWindow | null = null
 /** 定时检查定时器 */
 let checkInterval: ReturnType<typeof setInterval> | null = null
 
+/** 同一时间只允许一个检查/下载流程，防止手动与定时检查互相覆盖状态。 */
+let inFlightUpdateCheck: Promise<void> | null = null
+
 /** 更新状态并推送给渲染进程 */
 function setStatus(status: UpdateStatus): void {
+  if (!canReplaceUpdateStatus(currentStatus, status)) {
+    console.log(`[更新] 保留已下载状态，忽略迟到的 ${status.status} 事件`)
+    return
+  }
   currentStatus = status
   win?.webContents?.send(UPDATER_IPC_CHANNELS.ON_STATUS_CHANGED, status)
 }
@@ -31,13 +40,44 @@ export function getUpdateStatus(): UpdateStatus {
   return currentStatus
 }
 
-/** 重试配置 */
-const RETRY_DELAYS = [5_000, 15_000, 45_000] // 指数退避：5s → 15s → 45s
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
-/** 判断是否为可重试的网络错误 */
-function isRetryableError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err)
-  return /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|EPIPE|socket|network|proxy|tunnel|超时/.test(msg)
+/**
+ * 在单一更新源上完整执行“检查 → 下载”。
+ * autoDownload 关闭后，下载错误会回到调用方，从而可切换到备用源。
+ */
+async function checkSource(source: UpdateSource): Promise<boolean> {
+  autoUpdater.setFeedURL(source.configuration)
+  console.log(`[更新] 尝试更新源: ${source.label}`)
+
+  const result = await autoUpdater.checkForUpdates()
+  if (!result?.isUpdateAvailable) {
+    return false
+  }
+
+  await autoUpdater.downloadUpdate()
+  return true
+}
+
+async function runUpdateCheck(): Promise<void> {
+  setStatus({ status: 'checking' })
+
+  try {
+    const didDownload = await runWithUpdateSourceFallback(
+      getUpdateSources(),
+      checkSource,
+      (source, error) => {
+        console.warn(`[更新] ${source.label} 不可用，切换备用源:`, errorMessage(error))
+      },
+    )
+    if (!didDownload) console.log('[更新] 当前已是最新版本')
+  } catch (error) {
+    const message = errorMessage(error)
+    console.error('[更新] 所有更新源均不可用:', message)
+    setStatus({ status: 'error', error: message })
+  }
 }
 
 /** 手动触发检查更新 */
@@ -55,36 +95,15 @@ export async function checkForUpdates(): Promise<void> {
     return
   }
 
-  setStatus({ status: 'checking' })
-
-  let lastError: unknown
-  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
-    try {
-      // 30 秒超时兜底
-      const result = await Promise.race([
-        autoUpdater.checkForUpdates(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('检查更新超时（30 秒），请检查网络连接')), 30_000)
-        ),
-      ])
-      void result
-      return // 成功，事件驱动后续状态
-    } catch (err) {
-      lastError = err
-      if (attempt < RETRY_DELAYS.length && isRetryableError(err)) {
-        console.log(`[更新] 检查失败，${RETRY_DELAYS[attempt]! / 1000}s 后重试 (${attempt + 1}/${RETRY_DELAYS.length})...`)
-        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]!))
-      } else {
-        break
-      }
-    }
+  if (inFlightUpdateCheck) {
+    console.log('[更新] 合并重复检查请求')
+    return inFlightUpdateCheck
   }
 
-  console.error('[更新] 检查更新失败（已重试）:', lastError)
-  setStatus({
-    status: 'error',
-    error: lastError instanceof Error ? lastError.message : String(lastError),
+  inFlightUpdateCheck = runUpdateCheck().finally(() => {
+    inFlightUpdateCheck = null
   })
+  return inFlightUpdateCheck
 }
 
 /** 退出并安装已下载的更新 */
@@ -116,7 +135,7 @@ export function cleanupUpdater(): void {
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   win = mainWindow
 
-  // 开发模式不初始化更新检查（feed URL 仅在 electron-builder 打包后嵌入）
+  // 开发模式不初始化更新检查（feed URL 仅在打包后嵌入）
   if (!app.isPackaged) {
     console.log('[更新] 开发模式，自动更新模块未启用')
     return
@@ -136,38 +155,6 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     }).catch(() => {})
   } catch { /* 代理模块不可用时跳过 */ }
 
-  // 更新源：双渠道（2026-08-16 恢复）。
-  // - oss 构建（build:main-github / dist:win-github）：优先 GitHub Releases（electron-builder.yml publish 配置），
-  //   与 push-release.cjs / CI release.yml 上传产物一致；PROFER_UPDATE_FEED_URL 可覆盖。
-  // - commercial 构建（build:main-commercial）：走国内自建服务器（无需科学上网）。
-  const isCommercial = getBuildTarget() === 'commercial'
-  if (isCommercial) {
-    // 商业版：国内服务器直连
-    const updateFeedUrl =
-      process.env.PROFER_UPDATE_FEED_URL ||
-      'http://47.109.108.57/profer-updates/'
-    autoUpdater.setFeedURL({
-      provider: 'generic',
-      url: updateFeedUrl,
-    })
-    console.log('[更新] 更新源: 国内服务器', updateFeedUrl)
-  } else {
-    // 开源版：GitHub Releases 优先，环境变量 PROFER_UPDATE_FEED_URL 可覆盖为自建服务器
-    const envFeedUrl = process.env.PROFER_UPDATE_FEED_URL
-    if (envFeedUrl) {
-      autoUpdater.setFeedURL({ provider: 'generic', url: envFeedUrl })
-      console.log('[更新] 更新源: 环境变量覆盖', envFeedUrl)
-    } else {
-      autoUpdater.setFeedURL({
-        provider: 'github',
-        owner: 'Yuan-lai-ru-ci',
-        repo: 'ProferAI',
-        releaseType: 'release',
-      })
-      console.log('[更新] 更新源: GitHub Releases (Yuan-lai-ru-ci/ProferAI)')
-    }
-  }
-
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),
     warn: (...args: unknown[]) => console.warn('[更新-updater]', ...args),
@@ -175,8 +162,8 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     debug: (...args: unknown[]) => console.log('[更新-updater:debug]', ...args),
   }
 
-  // 自动下载，退出时自动安装
-  autoUpdater.autoDownload = true
+  // 由 checkSource 显式下载，才能在下载失败后切换另一个更新源。
+  autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
 
   // 监听更新事件
@@ -224,10 +211,8 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
 
   autoUpdater.on('error', (err) => {
     console.error('[更新] 更新出错:', err)
-    setStatus({
-      status: 'error',
-      error: err.message,
-    })
+    // 当前检查流程会捕获此错误并切换备用源。只有脱离该流程的异常才直接展示。
+    if (!inFlightUpdateCheck) setStatus({ status: 'error', error: err.message })
   })
 
   // 启动后延迟 10 秒首次检查
@@ -251,5 +236,5 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     win = null
   })
 
-  console.log('[更新] 自动更新模块已初始化（自动下载，用户确认后安装）')
+  console.log('[更新] 自动更新模块已初始化（国内主源、GitHub 备用，自动下载）')
 }

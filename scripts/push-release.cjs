@@ -259,12 +259,15 @@ async function ensureGitHubRelease(assets) {
     size: installer.size,
     date: new Date().toISOString().split('T')[0],
   }));
+  const blockmap = assets[2];
   await scp(assets[0].path, '/tmp/latest.yml');
   await scp(installer.path, `/tmp/${installer.name}`);
+  await scp(blockmap.path, `/tmp/${blockmap.name}`);
   await scp(latestJsonPath, '/tmp/latest.json');
   await ssh(
     `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && ` +
-    `sudo cp /tmp/${installer.name} ${UPDATE_DIR}/ && sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
+    `sudo cp /tmp/${installer.name} ${UPDATE_DIR}/ && sudo cp /tmp/${blockmap.name} ${UPDATE_DIR}/ && ` +
+    `sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
     `sudo ln -sf ${UPDATE_DIR}/${installer.name} ${UPDATE_DIR}/Profer-latest.exe && ` +
     `sudo chmod -R 755 ${UPDATE_DIR}`,
     120_000,

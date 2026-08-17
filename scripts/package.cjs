@@ -64,13 +64,15 @@ function ssh(cmd) {
   console.log('[3/3] 上传...');
   scpFile(path.join(OUT, 'latest.yml'), 'latest.yml');
   scpFile(exePath, exe);
+  const blockmap = `${exe}.blockmap`;
+  scpFile(path.join(OUT, blockmap), blockmap);
   // latest.json
   const latestJson = JSON.stringify({ version: VER, installer: exe, size: fs.statSync(exePath).size, date: new Date().toISOString().split('T')[0] });
   const tmpJson = path.join(OUT, 'latest.json');
   fs.writeFileSync(tmpJson, latestJson);
   scpFile(tmpJson, 'latest.json');
   // 服务器端部署
-  ssh(`sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && sudo cp /tmp/${exe} ${UPDATE_DIR}/ && sudo cp /tmp/latest.json ${UPDATE_DIR}/ && sudo ln -sf ${UPDATE_DIR}/${exe} ${UPDATE_DIR}/Profer-latest.exe && sudo chmod -R 755 ${UPDATE_DIR} && echo OK`);
+  ssh(`sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && sudo cp /tmp/${exe} ${UPDATE_DIR}/ && sudo cp /tmp/${blockmap} ${UPDATE_DIR}/ && sudo cp /tmp/latest.json ${UPDATE_DIR}/ && sudo ln -sf ${UPDATE_DIR}/${exe} ${UPDATE_DIR}/Profer-latest.exe && sudo chmod -R 755 ${UPDATE_DIR} && echo OK`);
   console.log(`  http://${HOST}/profer-updates/`);
 
   console.log(`\n=== ${VER} 完成 ===`);
