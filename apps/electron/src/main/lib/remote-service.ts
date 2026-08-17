@@ -78,6 +78,7 @@ import {
 import { sendMessage, stopGeneration, generateTitle } from './chat-service'
 import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './attachment-service'
 import { chatEventBus } from './chat-stream-bus'
+import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
 
 /** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -1333,6 +1334,34 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
         return { ok: true, data: readAttachmentAsBase64(localPath) }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : '附件读取失败' }
+      }
+    }
+
+    // ---- 文件预览：移动端经 WS 读取电脑端文件内容（Pocket 文件预览 MVP） ----
+    // 入参对齐桌面 FilePreviewDialog 的 FileAccessOptions：{ filePath, access?: { candidateBasePaths?: string[] } }
+    case 'resolve_and_read_file': {
+      const filePath = parsed.filePath as string
+      if (!filePath) return { ok: false, error: '缺少 filePath' }
+      const access = parsed.access as { candidateBasePaths?: string[] } | undefined
+      try {
+        const result = resolveAndReadFile(filePath, access?.candidateBasePaths)
+        if (!result) return { ok: false, error: '文件不存在、不可读或超过大小限制' }
+        return { ok: true, data: result }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : '文件读取失败' }
+      }
+    }
+
+    case 'read_file_as_data_url': {
+      const filePath = parsed.filePath as string
+      if (!filePath) return { ok: false, error: '缺少 filePath' }
+      const access = parsed.access as { candidateBasePaths?: string[] } | undefined
+      try {
+        const result = readFileAsDataUrl(filePath, access?.candidateBasePaths)
+        if (!result) return { ok: false, error: '文件不存在、不可读或超过大小限制' }
+        return { ok: true, data: result }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : '文件读取失败' }
       }
     }
 
