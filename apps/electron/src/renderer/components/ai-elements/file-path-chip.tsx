@@ -110,7 +110,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   const isAbsolute = isAbsoluteFilePathCore(cleanPath)
 
   const chipRef = React.useRef<HTMLButtonElement>(null)
-  const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'broken'>('idle')
+  const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'pending' | 'broken'>('idle')
   const store = useStore()
   const openPreview = useOpenPreview()
 
@@ -153,15 +153,20 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
         // 绝对路径：不传 options，允许访问任意位置（如 Desktop、Documents 等）
         // 相对路径：传 sessionId 和 candidateBasePaths，限制在授权目录内
+        // 预检模式（preflight: true）：主进程只做快速查找、跳过全局递归搜索，避免批量预检阻塞主进程
         const accessOptions = isAbsolute
-          ? { sessionId: sessionId ?? undefined }
-          : { sessionId: sessionId ?? undefined, candidateBasePaths: candidateBases.length > 0 ? candidateBases : undefined }
+          ? { sessionId: sessionId ?? undefined, preflight: true }
+          : { sessionId: sessionId ?? undefined, candidateBasePaths: candidateBases.length > 0 ? candidateBases : undefined, preflight: true }
 
         window.electronAPI.resolveFilePath(cleanPath, accessOptions)
           .then((resolved) => {
-            const exists = resolved !== null
-            cacheSet(key, exists)
-            setFileStatus(exists ? 'resolved' : 'broken')
+            if (resolved) {
+              cacheSet(key, true)
+              setFileStatus('resolved')
+            } else {
+              // 预检快速未命中：可能只是没触发全局搜索，不能误判为「不存在」，标记为「待查找」
+              setFileStatus('pending')
+            }
           })
           .catch(() => { /* IPC 失败不标记 */ })
       },
@@ -174,16 +179,27 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   const handleClick = React.useCallback(() => {
     const sessionId = store.get(currentAgentSessionIdAtom)
     if (sessionId) {
-      openPreview(sessionId, {
-        filePath: previewFilePath,
-        previewOnly: true,
-        basePaths: candidateBases.length > 0 ? candidateBases : undefined,
-      })
+      // 用户主动点击：做一次完整解析（允许全局搜索，单次可接受），解析成功才打开预览
+      window.electronAPI.resolveFilePath(previewFilePath, { sessionId })
+        .then((resolved) => {
+          if (resolved) {
+            openPreview(sessionId, {
+              filePath: previewFilePath,
+              previewOnly: true,
+              basePaths: candidateBases.length > 0 ? candidateBases : undefined,
+            })
+          } else {
+            // 完整查找仍失败 → 才标记「不存在」（虚线样式）
+            setFileStatus('broken')
+            toast.error(`未找到文件：${filename}`)
+          }
+        })
+        .catch(() => toast.error(`未找到文件：${filename}`))
     } else {
       // 无 session 时直接调用系统默认程序打开
       window.electronAPI.systemOpenFile(previewFilePath).catch(() => {})
     }
-  }, [store, openPreview, previewFilePath, candidateBases])
+  }, [store, openPreview, previewFilePath, candidateBases, filename])
 
   const handleShowInFolder = React.useCallback(() => {
     const bases = candidateBases.length > 0 ? candidateBases : undefined
@@ -202,7 +218,9 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
           'align-baseline not-prose',
           fileStatus === 'broken'
             ? 'opacity-50 border border-dashed border-muted-foreground/30 text-muted-foreground'
-            : 'bg-primary/10 text-primary',
+            : fileStatus === 'pending'
+              ? 'bg-muted/40 text-muted-foreground'
+              : 'bg-primary/10 text-primary',
           className
         )}
       >
@@ -219,14 +237,16 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
           ref={chipRef}
           type="button"
           onClick={handleClick}
-          title={fileStatus === 'broken' ? `文件不存在: ${displayPath}` : displayPath}
+          title={fileStatus === 'broken' ? `文件不存在: ${displayPath}` : fileStatus === 'pending' ? '待确认，点击查找' : displayPath}
           className={cn(
             'inline-flex items-center gap-1 rounded px-1.5 py-[2px] text-[12px] font-medium leading-[1.6]',
             'cursor-pointer transition-colors duration-150',
             'align-baseline not-prose',
             fileStatus === 'broken'
               ? 'opacity-50 border border-dashed border-muted-foreground/30 text-muted-foreground hover:opacity-70 hover:bg-muted/20'
-              : 'bg-primary/10 text-primary hover:bg-primary/20',
+              : fileStatus === 'pending'
+                ? 'bg-muted/40 text-muted-foreground hover:bg-muted/60'
+                : 'bg-primary/10 text-primary hover:bg-primary/20',
             className
           )}
         >

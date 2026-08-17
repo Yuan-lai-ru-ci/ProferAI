@@ -696,6 +696,7 @@ function normalizeFileAccessOptions(value?: FileAccessOptions | string[]): FileA
     candidateBasePaths: Array.isArray(value.candidateBasePaths)
       ? value.candidateBasePaths.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : undefined,
+    preflight: typeof value.preflight === 'boolean' ? value.preflight : undefined,
   }
 }
 
@@ -4411,7 +4412,8 @@ export function registerIpcHandlers(): void {
     async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<ResolvedFileUrl | null> => {
       const { resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
-      const result = resolveFilePath(filePath, getAllowedCandidateBasePaths(options))
+      // 预检模式（preflight=true）下跳过全局递归搜索，只做快速查找，避免批量预检阻塞主进程
+      const result = resolveFilePath(filePath, getAllowedCandidateBasePaths(options), { skipGlobalSearch: options?.preflight })
       if (result && !isPathAllowed(result, options)) {
         console.warn('[IPC] file:resolve-path 拒绝越界路径:', result)
         return null
