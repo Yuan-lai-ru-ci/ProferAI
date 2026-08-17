@@ -578,6 +578,9 @@ export function installElectronApiStub(): void {
       // 归纳会把已删除项目以 UUID 名字伪装成“幽灵项目”重新出现在平板侧栏。
       return [{ id: 'default', name: '默认工作区', slug: 'default', type: 'personal', createdAt: 0, updatedAt: 0 }]
     },
+    // 工作区列表变更推送：平板通过 WS 每次实时读工作区列表，无需接收主进程推送。
+    // 显式 stub 返回空函数，避免 Proxy 兜底返回 Promise，导致 React effect 清理函数拿到 Promise 触发警告。
+    onAgentWorkspacesChanged: () => noop,
     // 删除会话：走 remote-service 的 delete_session 指令（对齐桌面 stop-and-wait + 清理持久化语义）。
     // ⚠️ 必须显式 stub：缺省时 Proxy noop 会让 UI“假删除成功”（本地列表移除、主进程未删，刷新后复活）。
     deleteAgentSession: async (sessionId: string) => {

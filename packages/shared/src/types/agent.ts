@@ -1714,6 +1714,8 @@ export const AGENT_IPC_CHANNELS = {
   DELETE_WORKSPACE: 'agent:delete-workspace',
   /** 重排工作区顺序 */
   REORDER_WORKSPACES: 'agent:reorder-workspaces',
+  /** 主进程 → 渲染进程：工作区列表发生变化 */
+  WORKSPACES_CHANGED: 'agent-workspaces:changed',
 
   // 标题生成
   /** 生成 Agent 会话标题 */
