@@ -644,8 +644,17 @@ function buildChannelList() {
   }))
 }
 
+/** 单条 WS 连接已声明的最近活动会话，仅用于兼容旧 Pocket 文件预览请求。 */
+interface RemoteCommandContext {
+  activeSessionId?: string
+}
+
 /** 处理来自平板客户端的一条 JSON 指令消息 */
-async function handleCommand(message: string, requestId: unknown = null): Promise<CommandResult> {
+async function handleCommand(
+  message: string,
+  requestId: unknown = null,
+  context?: RemoteCommandContext,
+): Promise<CommandResult> {
   let parsed: { type?: string } & Record<string, unknown>
   try {
     parsed = JSON.parse(message)
@@ -654,6 +663,12 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
   }
 
   const type = parsed?.type as string
+  // 旧 Pocket 的 FilePreviewDialog 没有把 sessionId 传给 WS 文件读取命令。
+  // 它在打开会话时已经通过 get_sdk_messages/session_detail 等命令声明过会话，
+  // 因此仅在同一条受 token 保护的连接内保存该会话作为严格授权的回退上下文。
+  if (typeof parsed.sessionId === 'string' && parsed.sessionId) {
+    context && (context.activeSessionId = parsed.sessionId)
+  }
   switch (type) {
     case 'ping': {
       return { ok: true, data: { pong: true, time: Date.now() } }
@@ -1350,7 +1365,14 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     case 'resolve_and_read_file':
     case 'read_file_as_data_url': {
       const filePath = typeof parsed.filePath === 'string' ? parsed.filePath : ''
-      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      // Pocket 0.1.4 及更早版本沿用桌面 FileAccessOptions，将 sessionId
+      // 嵌套在 access 中。兼容该传输形状，但绝不采纳其 candidateBasePaths。
+      const legacyAccess = parsed.access as { sessionId?: unknown } | undefined
+      const sessionId = typeof parsed.sessionId === 'string'
+        ? parsed.sessionId
+        : typeof legacyAccess?.sessionId === 'string'
+          ? legacyAccess.sessionId
+          : context?.activeSessionId ?? ''
       if (!filePath || !sessionId) return { ok: false, error: '缺少 filePath 或 sessionId' }
       const session = getAgentSessionMeta(sessionId)
       if (!session?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
@@ -1450,6 +1472,7 @@ export function startRemoteService(): string | null {
     }
     console.log('[Remote] 平板客户端已连接')
     ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
+    const commandContext: RemoteCommandContext = {}
 
     // 收到指令
     ws.on('message', (raw: RawData) => {
@@ -1477,7 +1500,7 @@ export function startRemoteService(): string | null {
         return
       }
 
-      void handleCommand(body, reqId).then((result) => {
+      void handleCommand(body, reqId, commandContext).then((result) => {
         // 将指令响应作为 "command_result" 事件回给客户端
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(
