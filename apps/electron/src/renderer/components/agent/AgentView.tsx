@@ -2905,6 +2905,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     handleAgentRuntimeChange,
     sessionId,
     agentThinking,
+    piReasoningCapability,
+    sessionMeta,
     setAgentThinking,
     handleOpenFileDialog,
     agentChannelId,
