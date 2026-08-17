@@ -37,6 +37,8 @@ interface TabletRemoteClient {
   createSession(payload: { title?: string; channelId?: string; workspaceId?: string; modelId?: string }): Promise<unknown>
   ensureProjectDraftSession(payload: { workspaceId: string; channelId?: string; modelId?: string }): Promise<unknown>
   renameSession(sessionId: string, title: string): Promise<unknown>
+  resolveAndReadFile(filePath: string, sessionId: string): Promise<{ resolvedPath: string; content: string } | null>
+  readFileAsDataUrl(filePath: string, sessionId: string): Promise<{ resolvedPath: string; dataUrl: string } | null>
   getSdkMessages(
     sessionId: string,
     opts?: { before?: number; targetMessages?: number },
@@ -843,7 +845,16 @@ export function installElectronApiStub(): void {
     refreshSkins: () => unsupported('皮肤管理'),
     onSkinsChanged: () => () => undefined,
     writeClipboardPreview: () => unsupported('剪贴板预览'),
-    resolveAndReadFile: () => unsupported('读取本地文件'),
+    resolveAndReadFile: async (filePath: string, access?: { sessionId?: string }) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      if (!filePath || !access?.sessionId) throw new Error('文件预览缺少会话上下文')
+      return remoteClient.resolveAndReadFile(filePath, access.sessionId)
+    },
+    readFileAsDataUrl: async (filePath: string, access?: { sessionId?: string }) => {
+      if (!remoteClient) throw new Error('移动端连接未就绪')
+      if (!filePath || !access?.sessionId) throw new Error('文件预览缺少会话上下文')
+      return remoteClient.readFileAsDataUrl(filePath, access.sessionId)
+    },
     saveFilesToAgentSession: () => unsupported('保存文件到会话'),
     addAgentKnowledgeReferences: () => unsupported('知识库引用'),
     removeAgentKnowledgeReference: () => unsupported('知识库引用'),

@@ -362,6 +362,14 @@ export class WsClient {
     return this.sendCommand({ type: 'session_detail', sessionId })
   }
 
+  resolveAndReadFile(filePath: string, sessionId: string): Promise<{ resolvedPath: string; content: string } | null> {
+    return this.sendCommand({ type: 'resolve_and_read_file', filePath, sessionId })
+  }
+
+  readFileAsDataUrl(filePath: string, sessionId: string): Promise<{ resolvedPath: string; dataUrl: string } | null> {
+    return this.sendCommand({ type: 'read_file_as_data_url', filePath, sessionId })
+  }
+
   getSdkMessages(
     sessionId: string,
     opts?: { before?: number; targetMessages?: number },
