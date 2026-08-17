@@ -75,6 +75,14 @@ export function useOpenSession(): OpenSessionFn {
           return next
         })
 
+        // 打开查看即消费持久化的「标记未读」：清除 completedButUnconfirmed，重启后绿标不"复活"。
+        // IPC 幂等（未标记会话无副作用）；用 map 更新保持列表顺序不变。
+        window.electronAPI.clearAgentCompletionState(sessionId)
+          .then((meta) => {
+            setAgentSessions((prev) => prev.map((s) => (s.id === meta.id ? meta : s)))
+          })
+          .catch(console.error)
+
         // 同步 workspaceId，确保与 TabBar 切换行为一致
         const session = agentSessions.find((s) => s.id === sessionId)
         if (session?.workspaceId) {

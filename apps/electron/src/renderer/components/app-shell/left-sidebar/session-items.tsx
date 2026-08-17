@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, Globe, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus,
+  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, Globe, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
@@ -649,6 +649,8 @@ interface AgentSessionItemProps {
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
+  /** 标记会话为「未读」（恢复绿色完成标记） */
+  onMarkUnread?: (id: string) => void
 }
 
 export const AgentSessionItem = React.memo(function AgentSessionItem({
@@ -668,6 +670,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   onRename,
   onTogglePin,
   onToggleArchive,
+  onMarkUnread,
 }: AgentSessionItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -728,6 +731,12 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
         <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onRequestMove(session.id)}>
           <ArrowRightLeft size={14} />
           迁移到其他项目
+        </MenuItem>
+      )}
+      {canMove && onMarkUnread && (
+        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onMarkUnread(session.id)}>
+          <Mail size={14} />
+          标记未读
         </MenuItem>
       )}
       <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => startEdit()}>
@@ -905,6 +914,8 @@ interface DelegatedChildSessionItemProps {
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
+  /** 标记会话为「未读」（恢复绿色完成标记） */
+  onMarkUnread?: (id: string) => void
 }
 
 export const DelegatedChildSessionItem = React.memo(function DelegatedChildSessionItem({
@@ -920,6 +931,7 @@ export const DelegatedChildSessionItem = React.memo(function DelegatedChildSessi
   onRename,
   onTogglePin,
   onToggleArchive,
+  onMarkUnread,
 }: DelegatedChildSessionItemProps): React.ReactElement {
   const status = getDelegatedChildStatus(session, agentIndicatorMap)
 
@@ -937,6 +949,7 @@ export const DelegatedChildSessionItem = React.memo(function DelegatedChildSessi
       onRename={onRename}
       onTogglePin={onTogglePin}
       onToggleArchive={onToggleArchive}
+      onMarkUnread={onMarkUnread}
     />
   )
 })
@@ -979,6 +992,8 @@ interface AgentProjectGroupItemProps {
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
   onToggleDelegationParent: (id: string) => void
+  /** 标记会话为「未读」（恢复绿色完成标记） */
+  onMarkUnread?: (id: string) => void
   /** 工作区最近一次切换的时间戳，用于短暂高亮 */
   workspaceSwitchTs?: number
 }
@@ -1018,6 +1033,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   onTogglePin,
   onToggleArchive,
   onToggleDelegationParent,
+  onMarkUnread,
 }: AgentProjectGroupItemProps): React.ReactElement {
   const isCurrent = group.workspace.id === currentWorkspaceId
   /** 最近 1.2 秒内切换到此工作区时，短暂高亮 */
@@ -1301,6 +1317,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                       onRename={onRename}
                       onTogglePin={onTogglePin}
                       onToggleArchive={onToggleArchive}
+                      onMarkUnread={onMarkUnread}
                     />
 
                     {childCount > 0 && expandedChildren && (
@@ -1319,6 +1336,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                             onRename={onRename}
                             onTogglePin={onTogglePin}
                             onToggleArchive={onToggleArchive}
+                            onMarkUnread={onMarkUnread}
                           />
                         ))}
                       </div>
