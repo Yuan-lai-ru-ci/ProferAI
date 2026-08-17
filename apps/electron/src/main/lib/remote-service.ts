@@ -44,9 +44,15 @@ import {
   paginateSDKMessages,
   searchAgentSessionMessages,
 } from './agent-session-manager'
-import { getAgentSessionsDir, getConfigDir } from './config-paths'
+import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getSettings } from './settings-service'
-import { listAgentWorkspaces, createAgentWorkspace, getAgentWorkspace } from './agent-workspace-manager'
+import {
+  listAgentWorkspaces,
+  createAgentWorkspace,
+  getAgentWorkspace,
+  getWorkspaceAttachedDirectories,
+  getWorkspaceAttachedFiles,
+} from './agent-workspace-manager'
 import {
   listAgentPresets,
   getDefaultPresetId,
@@ -79,6 +85,7 @@ import { sendMessage, stopGeneration, generateTitle } from './chat-service'
 import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './attachment-service'
 import { chatEventBus } from './chat-stream-bus'
 import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
+import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
 
 /** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -1338,27 +1345,38 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
     }
 
     // ---- 文件预览：移动端经 WS 读取电脑端文件内容（Pocket 文件预览 MVP） ----
-    // 入参对齐桌面 FilePreviewDialog 的 FileAccessOptions：{ filePath, access?: { candidateBasePaths?: string[] } }
-    case 'resolve_and_read_file': {
-      const filePath = parsed.filePath as string
-      if (!filePath) return { ok: false, error: '缺少 filePath' }
-      const access = parsed.access as { candidateBasePaths?: string[] } | undefined
-      try {
-        const result = resolveAndReadFile(filePath, access?.candidateBasePaths)
-        if (!result) return { ok: false, error: '文件不存在、不可读或超过大小限制' }
-        return { ok: true, data: result }
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : '文件读取失败' }
-      }
-    }
-
+    // Remote token 可在非受信网络泄露，因此权限必须严格绑定到现有会话。
+    // 客户端提交的 candidateBasePaths 不参与授权或路径解析。
+    case 'resolve_and_read_file':
     case 'read_file_as_data_url': {
-      const filePath = parsed.filePath as string
-      if (!filePath) return { ok: false, error: '缺少 filePath' }
-      const access = parsed.access as { candidateBasePaths?: string[] } | undefined
+      const filePath = typeof parsed.filePath === 'string' ? parsed.filePath : ''
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!filePath || !sessionId) return { ok: false, error: '缺少 filePath 或 sessionId' }
+      const session = getAgentSessionMeta(sessionId)
+      if (!session?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
+      const workspace = getAgentWorkspace(session.workspaceId)
+      if (!workspace) return { ok: false, error: '会话工作区不存在' }
+
+      const resolvedPath = resolveAuthorizedRemoteFilePath(filePath, {
+        directoryRoots: [
+          getAgentSessionWorkspacePath(workspace.slug, sessionId),
+          getAgentWorkspacePath(workspace.slug),
+          getWorkspaceFilesDir(workspace.slug),
+          ...(session.attachedDirectories ?? []),
+          ...getWorkspaceAttachedDirectories(workspace.slug),
+        ],
+        exactFiles: [
+          ...(session.attachedFiles ?? []),
+          ...getWorkspaceAttachedFiles(workspace.slug),
+        ],
+      })
+      if (!resolvedPath) return { ok: false, error: '文件不存在或不在当前会话授权范围内' }
+
       try {
-        const result = readFileAsDataUrl(filePath, access?.candidateBasePaths)
-        if (!result) return { ok: false, error: '文件不存在、不可读或超过大小限制' }
+        const result = type === 'resolve_and_read_file'
+          ? resolveAndReadFile(resolvedPath)
+          : readFileAsDataUrl(resolvedPath)
+        if (!result) return { ok: false, error: '文件不可读或超过大小限制' }
         return { ok: true, data: result }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : '文件读取失败' }
