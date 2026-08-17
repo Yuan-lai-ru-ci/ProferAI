@@ -31,6 +31,7 @@ import {
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
   workspaceFilesVersionAtom,
+  seenFilesVersionAtom,
 } from '@/atoms/agent-atoms'
 import {
   browserPanelDismissedSessionIdsAtom,
@@ -230,7 +231,8 @@ function TabBarInner({
   const [isPanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
   const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
-  const hasFileChanges = filesVersion > 0
+  const seenFilesVersion = useAtomValue(seenFilesVersionAtom)
+  const hasFileChanges = filesVersion > seenFilesVersion
   const activeTab = React.useMemo(() => tabs.find((t) => t.id === activeTabId), [tabs, activeTabId])
   const activeAgentSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
   // 实际可见性（B = 展开意图 A && 窗口足够），由 usePanelAutoLayout 统一计算

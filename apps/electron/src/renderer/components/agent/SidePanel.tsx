@@ -26,6 +26,7 @@ import { DiffChangesList } from '@/components/diff/DiffChangesList'
 import {
   agentSidePanelOpenAtom,
   workspaceFilesVersionAtom,
+  seenFilesVersionAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
   agentAttachedDirectoriesMapAtom,
@@ -141,6 +142,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
 
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const setFilesVersion = useSetAtom(workspaceFilesVersionAtom)
+  const setSeenFilesVersion = useSetAtom(seenFilesVersionAtom)
   const diffRefreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
   const diffRefreshVersion = diffRefreshVersionMap.get(sessionId) ?? 0
   const nonGitFileChangesMap = useAtomValue(agentNonGitFileChangesAtom)
@@ -148,6 +150,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const fileChangesCurrentRunMap = useAtomValue(agentFileChangesCurrentRunAtom)
   const fileChangesCurrentRunId = fileChangesCurrentRunMap.get(sessionId)
   const hasFileChanges = filesVersion > 0
+
+  // 打开文件面板时把「已读文件版本」同步到当前版本，文件面板按钮红点只在有新变化时显示
+  React.useEffect(() => {
+    if (isOpen) setSeenFilesVersion(filesVersion)
+  }, [isOpen, filesVersion, setSeenFilesVersion])
 
   // 派生当前工作区信息
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
