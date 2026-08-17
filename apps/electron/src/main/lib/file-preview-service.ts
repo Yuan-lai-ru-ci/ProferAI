@@ -666,6 +666,39 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
   return existsSync(safePath) ? safePath : null
 }
 
+/** 常见图片扩展名 → MIME 映射（用于 readFileAsDataUrl 组装 data URL） */
+const IMAGE_MIME_MAP: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+}
+
+/**
+ * 读取文件为 base64 data URL（供移动端/平板预览图片等二进制文件）。
+ * 桌面端图片预览走 profer-file:// 自定义协议 URL，移动端无法加载该协议，
+ * 必须把内容直接以 data URL 形式经 WS 传输给客户端渲染。
+ * 复用 resolveTargetPath 的绝对/相对路径解析与 MAX_FILE_SIZE 体积限制。
+ */
+export function readFileAsDataUrl(filePath: string, basePaths?: string[]): { resolvedPath: string; dataUrl: string } | null {
+  const safePath = resolveTargetPath(filePath, basePaths)
+  if (!existsSync(safePath)) return null
+  try {
+    const st = statSync(safePath)
+    if (st.size > MAX_FILE_SIZE) return null
+    const ext = basename(safePath).split('.').pop()?.toLowerCase() ?? ''
+    const mime = IMAGE_MIME_MAP[ext] ?? 'application/octet-stream'
+    const buffer = readFileSync(safePath)
+    return { resolvedPath: safePath, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
+  } catch {
+    return null
+  }
+}
+
 /** 为内联 PDF 预览生成临时 HTML 文件（使用 profer-file:// 加载 PDF，无体积膨胀） */
 export async function preparePdfPreview(filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; tmpHtmlUrl: string } | null> {
   const safePath = resolveTargetPath(filePath, basePaths)
