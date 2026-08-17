@@ -611,7 +611,7 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
         <div
           ref={contentRef}
           className={cn(
-            'prose prose-sm dark:prose-invert max-w-none prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 text-[14px] leading-relaxed overflow-hidden transition-[max-height] duration-200',
+            'prose prose-sm dark:prose-invert max-w-none prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 text-[14px] leading-relaxed [&_.prose]:text-[14px] [&_.prose_strong]:font-medium overflow-hidden transition-[max-height] duration-200',
             dimmed ? 'text-muted-foreground' : 'text-foreground/90',
             shouldCollapse && !isExpanded && 'max-h-[5.6em]',
           )}
