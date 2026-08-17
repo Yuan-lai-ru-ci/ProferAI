@@ -2487,6 +2487,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     window.electronAPI.sendAgentMessage({
       sessionId,
       userMessage: '/compact',
+      // Reuse the optimistic bubble UUID so the persisted user message replaces it
+      // instead of rendering a second /compact entry.
+      uuid: localUuid,
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
