@@ -46,7 +46,18 @@ import {
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir } from './config-paths'
 import { getSettings } from './settings-service'
-import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
+import { listAgentWorkspaces, createAgentWorkspace, getAgentWorkspace } from './agent-workspace-manager'
+import {
+  listAgentPresets,
+  getDefaultPresetId,
+  setDefaultPresetId,
+  createAgentPreset,
+  copyAgentPreset,
+  updateAgentPreset,
+  deleteAgentPreset,
+  getAgentPreset,
+} from './agent-preset-manager'
+import type { AgentPresetCreateInput, AgentPresetUpdateInput } from '@profer/shared'
 import { AgentSessionDeletionCoordinator } from './agent-session-deletion'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
@@ -569,6 +580,7 @@ function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]) {
     title: s.title,
     channelId: s.channelId,
     modelId: s.modelId,
+    presetId: s.presetId,
     workspaceId: s.workspaceId,
     // 与桌面 LeftSidebar 相同的父子 Agent 会话关联；仅用于树形导航，不暴露委派内容。
     parentSessionId: s.parentSessionId,
@@ -822,6 +834,97 @@ async function handleCommand(message: string, requestId: unknown = null): Promis
       if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
       agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode } })
       return { ok: true, data: buildSessionItem(updated) }
+    }
+
+    // Agent 预设（对齐桌面 AGENT_PRESET_IPC_CHANNELS；pocket 无 Electron IPC，走 WS 读写预设）
+    case 'list_presets': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      try {
+        return { ok: true, data: listAgentPresets(workspaceSlug) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '获取预设列表失败' }
+      }
+    }
+
+    case 'get_default_preset': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      try {
+        return { ok: true, data: getDefaultPresetId(workspaceSlug) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '获取默认预设失败' }
+      }
+    }
+
+    case 'set_default_preset': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
+      if (!presetId) return { ok: false, error: '缺少 presetId' }
+      try {
+        return { ok: true, data: setDefaultPresetId(workspaceSlug, presetId) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '设置默认预设失败' }
+      }
+    }
+
+    case 'update_session_preset': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
+      if (!sessionId || !presetId) return { ok: false, error: '缺少 sessionId 或 presetId' }
+      const session = getAgentSessionMeta(sessionId)
+      if (!session) return { ok: false, error: '会话不存在' }
+      // 按会话所属工作区解析；存在性校验：未知 ID 报错而非静默回退 standard（与桌面 UPDATE_SESSION_PRESET 同语义）
+      const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
+      const resolved = getAgentPreset(workspaceSlug, presetId)
+      if (resolved.id !== presetId) return { ok: false, error: `预设不存在: ${presetId}` }
+      const updated = updateAgentSessionMeta(sessionId, { presetId })
+      return { ok: true, data: buildSessionItem(updated) }
+    }
+
+    case 'create_preset': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const input = parsed.input as AgentPresetCreateInput | undefined
+      if (!input) return { ok: false, error: '缺少 input' }
+      try {
+        return { ok: true, data: createAgentPreset(workspaceSlug, input) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '创建预设失败' }
+      }
+    }
+
+    case 'copy_preset': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const fromId = typeof parsed.fromId === 'string' ? parsed.fromId : ''
+      const name = typeof parsed.name === 'string' ? parsed.name : undefined
+      if (!fromId) return { ok: false, error: '缺少 fromId' }
+      try {
+        return { ok: true, data: copyAgentPreset(workspaceSlug, fromId, name) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '复制预设失败' }
+      }
+    }
+
+    case 'update_preset': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
+      const updates = parsed.updates as AgentPresetUpdateInput | undefined
+      if (!presetId || !updates) return { ok: false, error: '缺少 presetId 或 updates' }
+      try {
+        return { ok: true, data: updateAgentPreset(workspaceSlug, presetId, updates) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '更新预设失败' }
+      }
+    }
+
+    case 'delete_preset': {
+      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
+      if (!presetId) return { ok: false, error: '缺少 presetId' }
+      try {
+        deleteAgentPreset(workspaceSlug, presetId)
+        return { ok: true, data: null }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : '删除预设失败' }
+      }
     }
 
     case 'upload_attachment': {
