@@ -42,6 +42,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { openBrowserFromPush, openFilePanel } from '@/hooks/usePanelAutoLayout'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
+import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -239,6 +240,16 @@ function TabBarInner({
   const visibility = useAtomValue(panelVisibilityAtom)
   const filePanelVisible = visibility.filePanel
   const browserVisible = activeAgentSessionId ? visibility.browser : false
+  const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
+  // 预览分栏与 TabBar 同属 MainArea。预览未被浏览器替代、且文件栏未占用窗口右缘时，
+  // 它会接管窗口控制按钮；TabBar 此时不应继续留出控制区空档。
+  const previewOwnsWindowControls = Boolean(
+    isWindows
+    && activeAgentSessionId
+    && previewOpenMap.get(activeAgentSessionId)
+    && !filePanelVisible
+    && !browserVisible,
+  )
   // 文件栏开关跨会话保留；草稿/Chat 等非 Agent 标签不会实际渲染右侧栏，
   // 不能因此让 TabBar 隐藏窗口控制按钮或预留不存在的侧栏空间。
   const rightSidePanelIsVisible = filePanelVisible && activeTab?.type === 'agent'
@@ -256,9 +267,9 @@ function TabBarInner({
   // MainArea 的右边界会随着右侧文件面板或浏览器分栏提前结束；
   // 这两种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
   const browserSidePanelVisible = browserVisible
-  const hasRightSideContent = rightSidePanelIsVisible || browserSidePanelVisible
+  const hasRightSideContent = rightSidePanelIsVisible || browserSidePanelVisible || previewOwnsWindowControls
   // 窗口按钮本身已嵌入当前 TabBar。只有本区域真正延伸到窗口右缘时，
-  // 工具组和标签才需为按钮留出 118px；有右侧分栏时无需预留。
+  // 工具组和标签才需为按钮留出 118px；由右侧分栏或预览接管时无需预留。
   const topBarRightOffset = isWindows && !hasRightSideContent ? 132 : 9
   const togglePanel = React.useCallback(() => {
     if (!activeAgentSessionId) return
@@ -479,7 +490,7 @@ function TabBarInner({
           注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
           Windows 上背景拖拽层避开右上角 WindowControls 区域（126px），防止 hitmask 重叠。
           需要交互的单个 Tab 会在 TabBarItem 内部自己声明 titlebar-no-drag。 */}
-      <div className={cn("absolute inset-0 titlebar-drag-region", isWindows && "right-[126px]")} />
+      <div className={cn("absolute inset-0 titlebar-drag-region", isWindows && !previewOwnsWindowControls && "right-[126px]")} />
 
       {/* Tear-off 提示遮罩：拖出 TabBar 区域时，让 TabBar 下方出现一条高亮分割线 */}
       {tearingOff && (
@@ -536,7 +547,7 @@ function TabBarInner({
         id="tab-bar"
         // 用实际可见性（B）判定：浏览器/文件面板被迫收起（A=true 但窗口不足）时不渲染，
         // 窗口控制按钮必须回到 TabBar；面板实际可见时才交给面板自身渲染。
-        active={!rightSidePanelIsVisible && !browserVisible}
+        active={!rightSidePanelIsVisible && !browserVisible && !previewOwnsWindowControls}
         priority={10}
         className="absolute right-2 bottom-[3px]"
       />

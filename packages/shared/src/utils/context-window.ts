@@ -44,7 +44,7 @@ export function isDeepSeekV4Model(modelId?: string): boolean {
  * - Claude Fable 5
  * - DeepSeek V4 系列
  * - 小米 MiMo V2.5 / V2.5 Pro / V2 Pro
- * - 智谱 GLM-5.2、GLM-X-Preview[1m]
+ * - 智谱 GLM-5.2 / GLM-5.3、GLM-X-Preview[1m]
  * - MiniMax M3（智谱式兼容端点支持）
  *
  * 参考：https://docs.anthropic.com/en/docs/build-with-claude/context-windows
@@ -63,7 +63,7 @@ export function supports1MContext(modelId: string): boolean {
   }
   if (isDeepSeekV4Model(m)) return true
   if (m.includes('mimo-v2.5') || m.includes('mimo-v2-pro')) return true
-  if (m.includes('glm-5.2')) return true
+  if (m.includes('glm-5.2') || m.includes('glm-5.3')) return true
   if (m.includes('glm-x-preview') && hasExplicit1MSuffix) return true
   if (m.includes('minimax-m3')) return true
   // Kimi K3（短 ID 需精确匹配，避免误匹配其他含 "k3" 子串的模型名）
@@ -93,7 +93,9 @@ const AGENT_SDK_1M_PROVIDER_RULES: Partial<Record<ProviderType, readonly string[
   anthropic: ['claude-sonnet-4', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5'],
   'kimi-api': ['k3'],
   'kimi-coding': ['k3'],
-  'zhipu-coding': ['glm-5.2'],
+  'zhipu-coding': ['glm-5.2', 'glm-5.3'],
+  'zhipu-coding-team': ['glm-5.2', 'glm-5.3'],
+  zhipu: ['glm-5.3'],
   minimax: ['minimax-m3'],
   xiaomi: ['mimo-v2.5'],
   'xiaomi-token-plan': ['mimo-v2.5'],

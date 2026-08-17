@@ -8,6 +8,7 @@ import {
   extractApiError,
   isAutoRetryableTypedError,
   isAutoRetryableCatchError,
+  isInvalidRelayTokenError,
   isSessionNotFoundError,
   getRetryDelayMs,
   sdkPermissionModeForProferMode,
@@ -114,6 +115,18 @@ describe('isAutoRetryableCatchError', () => {
 
   test('正常错误字符串不可重试', () => {
     expect(isAutoRetryableCatchError(null, 'some random error')).toBe(false)
+  })
+})
+
+describe('isInvalidRelayTokenError', () => {
+  test('仅匹配平台代理的 relay token 401', () => {
+    expect(isInvalidRelayTokenError({ statusCode: 401, message: 'relay 令牌无效' })).toBe(true)
+    expect(isInvalidRelayTokenError(null, 'OpenAI API 错误 (401): {"error":"relay 令牌无效"}')).toBe(true)
+  })
+
+  test('普通 401 和非 401 不触发恢复', () => {
+    expect(isInvalidRelayTokenError({ statusCode: 401, message: 'API Key 无效' })).toBe(false)
+    expect(isInvalidRelayTokenError({ statusCode: 502, message: 'relay 令牌无效' })).toBe(false)
   })
 })
 

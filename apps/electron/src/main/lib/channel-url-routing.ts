@@ -11,6 +11,17 @@ function hasAnthropicPath(baseUrl?: string): boolean {
   }
 }
 
+const PI_NATIVE_BASE_URL_PROVIDERS = new Set<ProviderType>([
+  'openai',
+  'openai-responses',
+  'opencode-go-openai',
+  'zhipu',
+  'doubao',
+  'qwen',
+  'google',
+  'custom',
+])
+
 function isOfficialDeepSeekV1Url(baseUrl?: string): boolean {
   if (!baseUrl) return false
   try {
@@ -34,12 +45,12 @@ export function inferAgentBaseUrl(provider: ProviderType, baseUrl?: string, agen
     return baseUrl?.trim() ? normalizeBaseUrl(baseUrl) : undefined
   }
 
-  // Pi runtime 原生支持 OpenAI Completions / Responses；它们没有独立的
-  // Anthropic Agent endpoint，必须复用用户渠道的 Base URL。否则已有 OpenAI
-  // 渠道在切换到 Pi 时会把 undefined 传入模型注册层。
-  const usesPiOpenAiApi = provider === 'openai' || provider === 'openai-responses'
+  // Pi 原生 API 渠道没有独立的 Anthropic Agent endpoint，必须复用用户配置的
+  // Base URL；否则会把 undefined 传入模型注册层。
   return PROVIDER_DEFAULT_AGENT_URLS[provider]
-    ?? (isAgentCompatibleProvider(provider) || usesPiOpenAiApi ? baseUrl?.trim() : undefined)
+    ?? (isAgentCompatibleProvider(provider) || PI_NATIVE_BASE_URL_PROVIDERS.has(provider)
+      ? baseUrl?.trim()
+      : undefined)
 }
 
 export function normalizeChannelForCurrentSchema(channel: Channel): { channel: Channel; changed: boolean } {

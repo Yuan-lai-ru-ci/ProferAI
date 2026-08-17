@@ -58,7 +58,7 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
@@ -74,6 +74,7 @@ import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
+import { compactCompletedBackgroundStreamState } from '@/lib/agent-stream-state-cleanup'
 import { isAbsoluteFilePath, resolveRelativeToAbsolute } from '@/lib/file-utils'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
@@ -1237,6 +1238,27 @@ export function useGlobalAgentListeners(): void {
 
           // 清理后台任务
           store.set(backgroundTasksAtomFamily(data.sessionId), [])
+
+          // 后台会话没有挂载的 AgentView 来执行收尾清理（MainArea 只渲染活跃 Tab）。
+          // 仅回收未激活会话；当前会话继续在消息加载完成后同步移除实时气泡，避免闪烁。
+          if (store.get(activeSessionIdAtom) !== data.sessionId) {
+            store.set(liveMessagesMapAtom, (prev) => {
+              if (!prev.has(data.sessionId)) return prev
+              const map = new Map(prev)
+              map.delete(data.sessionId)
+              return map
+            })
+            store.set(agentStreamingStatesAtom, (prev) => {
+              const state = prev.get(data.sessionId)
+              const compacted = compactCompletedBackgroundStreamState(state)
+              if (compacted === state) return prev
+
+              const map = new Map(prev)
+              if (compacted) map.set(data.sessionId, compacted)
+              else map.delete(data.sessionId)
+              return map
+            })
+          }
 
           // 清理该 session 关联的未完成写工具记录，防止内存泄漏
           for (const [toolId, entry] of pendingWriteTools) {

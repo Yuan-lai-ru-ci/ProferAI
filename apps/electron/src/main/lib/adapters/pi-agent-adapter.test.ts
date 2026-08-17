@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 // 只验证 Pi 侧 AskUserQuestion 工具注册契约与权限包装闭环，不启动真实 Pi SDK。
-const { buildPromaProductToolDefinitions } = await import('./pi-agent-adapter')
+const { buildPromaProductToolDefinitions, shouldBlockToolForAskUserQuestion } = await import('./pi-agent-adapter')
 
 interface CapturedTool {
   name: string
@@ -32,6 +32,12 @@ interface AskUserToolResult {
 }
 
 describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
+  test('Given a mixed tool batch containing AskUserQuestion When checking a later tool Then blocks it until the user responds', () => {
+    expect(shouldBlockToolForAskUserQuestion(['AskUserQuestion', 'Bash'], 'Bash')).toBe(true)
+    expect(shouldBlockToolForAskUserQuestion(['AskUserQuestion', 'Bash'], 'AskUserQuestion')).toBe(false)
+    expect(shouldBlockToolForAskUserQuestion(['Bash'], 'Bash')).toBe(false)
+  })
+
   test('Given Pi runtime When building Proma product tools Then AskUserQuestion is registered with the interactive question schema', () => {
     const { sdk } = createPiSdkStub()
 

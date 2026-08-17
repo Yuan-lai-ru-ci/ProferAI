@@ -340,6 +340,8 @@ export interface ChannelsConfig {
   version: number
   /** 渠道列表 */
   channels: Channel[]
+  /** 已执行的一次性预设模型更新，避免重复追加用户主动移除的候选模型。 */
+  appliedPresetModelUpdates?: string[]
 }
 
 /**

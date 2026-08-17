@@ -48,7 +48,7 @@ import type {
   FeishuChatBinding,
   UpdateAutomationInput,
 } from '@profer/shared'
-import type { AgentPreset } from '@profer/shared'
+import type { AgentPreset, AgentRuntime } from '@profer/shared'
 import { DEFAULT_PRESET_ID } from '@profer/shared'
 
 const NO_FEISHU_BINDING = '__none__'
@@ -98,6 +98,7 @@ function getDraftSignature(draft: AutomationDraft): string {
     dayOfMonth: draft.dayOfMonth,
     channelId: draft.channelId,
     modelId: draft.modelId ?? '',
+    agentRuntime: draft.agentRuntime,
     workspaceId: draft.workspaceId ?? '',
     permissionMode: draft.permissionMode,
     presetId: draft.presetId ?? '',
@@ -118,6 +119,7 @@ function draftToCreateInput(draft: AutomationDraft): CreateAutomationInput {
     dayOfMonth: draft.dayOfMonth,
     channelId: draft.channelId,
     modelId: draft.modelId,
+    agentRuntime: draft.agentRuntime,
     workspaceId: draft.workspaceId,
     permissionMode: draft.permissionMode,
     presetId: draft.presetId,
@@ -140,6 +142,7 @@ function draftToUpdateInput(draft: AutomationDraft): UpdateAutomationInput {
     dayOfMonth: draft.dayOfMonth,
     channelId: draft.channelId,
     modelId: draft.modelId,
+    agentRuntime: draft.agentRuntime,
     workspaceId: draft.workspaceId ?? '',
     permissionMode: draft.permissionMode,
     presetId: draft.presetId ?? '',
@@ -1020,10 +1023,29 @@ export function AutomationFormView(): React.ReactElement | null {
             </div>
           )}
 
-          {/* 选择模型（定时任务只能跑 Agent，因此只显示已勾选为 Agent 兼容的渠道模型） */}
+          {/* 运行时决定模型协议，切换时清空旧模型，避免把 Claude 模型带给 Pi（或反向）。 */}
+          <div className="flex flex-col gap-2">
+            <Label>运行时</Label>
+            <Select
+              value={form.agentRuntime}
+              onValueChange={(value) => {
+                const agentRuntime = value as AgentRuntime
+                if (agentRuntime === form.agentRuntime) return
+                update({ agentRuntime, channelId: '', modelId: undefined })
+              }}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="claude">Claude</SelectItem>
+                <SelectItem value="pi">Pi</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 选择模型（Claude 仅显示 Agent 兼容渠道；Pi 使用 OpenAI 协议模型）。 */}
           <div className="flex flex-col gap-2">
             <Label>选择模型</Label>
-            {agentChannelIds.length === 0 ? (
+            {form.agentRuntime === 'claude' && agentChannelIds.length === 0 ? (
               <div className="flex items-center gap-2 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
                 <Settings size={14} className="shrink-0" />
                 <span>尚未启用任何 Agent 兼容渠道</span>
@@ -1040,9 +1062,10 @@ export function AutomationFormView(): React.ReactElement | null {
               </div>
             ) : (
               <ModelSelector
-                filterChannelIds={agentChannelIds}
+                filterChannelIds={form.agentRuntime === 'pi' ? undefined : agentChannelIds}
                 externalSelectedModel={selectedModel}
                 showChannelInTrigger
+                preferredProtocol={form.agentRuntime === 'pi' ? 'openai' : 'anthropic'}
                 onModelSelect={(opt) => update({ channelId: opt.channelId, modelId: opt.modelId })}
               />
             )}

@@ -53,4 +53,17 @@ describe('渠道 Chat/Agent URL 路由', () => {
 
     expect(agentUrl).toBe('https://cn.clawnode.cn/v1')
   })
+
+  test.each([
+    ['openai', 'https://gateway.example.com/v1'],
+    ['openai-responses', 'https://gateway.example.com/v1/responses'],
+    ['opencode-go-openai', 'https://gateway.example.com/v1'],
+    ['zhipu', 'https://gateway.example.com/api/paas/v4'],
+    ['doubao', 'https://gateway.example.com/api/v3'],
+    ['qwen', 'https://gateway.example.com/compatible-mode/v1'],
+    ['google', 'https://generativelanguage.googleapis.com'],
+    ['custom', 'https://gateway.example.com/v1/chat/completions'],
+  ] as const)('Given %s Pi 原生渠道 When 推导 Agent URL Then 复用用户填写的 Base URL', (provider, baseUrl) => {
+    expect(inferAgentBaseUrl(provider, baseUrl)).toBe(baseUrl)
+  })
 })

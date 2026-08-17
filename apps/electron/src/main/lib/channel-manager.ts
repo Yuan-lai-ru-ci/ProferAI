@@ -26,7 +26,7 @@ import type {
 import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, isCodexCredentialExpired, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { normalizeBaseUrl, normalizeAnthropicProviderUrl, getProferUserAgent } from '@profer/core'
+import { normalizeBaseUrl, normalizeAnthropicProviderUrl, normalizeOpenAIBaseUrlForSdk, resolveOpenAIModelsUrl, getProferUserAgent } from '@profer/core'
 import { parseMiniMaxGeneralQuotaWindows } from './channel-plan-quota-parsers'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
 import { refreshCodexOAuth } from './codex-oauth-service'
@@ -49,6 +49,45 @@ const CHANNEL_TEST_TIMEOUT_MS = 15_000
 /** 订阅 Plan / 余额查询超时（毫秒）。余额是 hover 触发的轻量查询，
  * 不应复用连通性测试的 15s 超时，否则网络抖动时用户会卡很久转圈 */
 const PLAN_QUOTA_TIMEOUT_MS = 5_000
+
+const GLM_53_PRESET_MODEL_UPDATE_ID = 'glm-5.3-candidates-v1'
+const GLM_53_PRESET_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly ChannelModel[]>> = {
+  zhipu: [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'zhipu-coding': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'zhipu-coding-team': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  doubao: [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'opencode-go-openai': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'ark-coding-plan': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+}
+
+function cloneModels(models: readonly ChannelModel[]): ChannelModel[] {
+  return models.map((model) => ({ ...model }))
+}
+
+/** Adds a new preset candidate only once, preserving existing channel/model enablement. */
+export function applyPresetModelCandidateUpdates(config: ChannelsConfig): { config: ChannelsConfig; changed: boolean } {
+  const appliedUpdates = new Set(config.appliedPresetModelUpdates ?? [])
+  if (appliedUpdates.has(GLM_53_PRESET_MODEL_UPDATE_ID)) return { config, changed: false }
+
+  let changed = false
+  const channels = config.channels.map((channel) => {
+    const candidates = GLM_53_PRESET_MODEL_CANDIDATES[channel.provider]
+    if (!candidates) return channel
+
+    const existingModelIds = new Set(channel.models.map((model) => model.id))
+    const missingCandidates = candidates.filter((model) => !existingModelIds.has(model.id))
+    if (missingCandidates.length === 0) return channel
+
+    changed = true
+    return { ...channel, models: [...channel.models, ...cloneModels(missingCandidates)] }
+  })
+
+  appliedUpdates.add(GLM_53_PRESET_MODEL_UPDATE_ID)
+  return {
+    config: { ...config, channels, appliedPresetModelUpdates: [...appliedUpdates] },
+    changed: changed || !config.appliedPresetModelUpdates?.includes(GLM_53_PRESET_MODEL_UPDATE_ID),
+  }
+}
 
 function withTimeout(init: RequestInit, timeoutMs: number = CHANNEL_TEST_TIMEOUT_MS): RequestInit {
   return { ...init, signal: AbortSignal.timeout(timeoutMs) }
@@ -77,15 +116,16 @@ function readConfig(): ChannelsConfig {
     const raw = readFileSync(configPath, 'utf-8')
     const parsed = JSON.parse(raw) as ChannelsConfig
     const normalized = normalizeConfigForCurrentSchema(parsed)
-    if (normalized.changed) {
+    const presetUpdated = applyPresetModelCandidateUpdates(normalized.config)
+    if (normalized.changed || presetUpdated.changed) {
       try {
-        writeFileSync(configPath, JSON.stringify(normalized.config, null, 2), 'utf-8')
-        console.log('[渠道管理] 已迁移渠道配置：拆分 Chat Base URL 与 Agent Base URL')
+        writeFileSync(configPath, JSON.stringify(presetUpdated.config, null, 2), 'utf-8')
+        console.log('[渠道管理] 已应用渠道配置迁移或预设模型更新')
       } catch (error) {
         console.warn('[渠道管理] 写入迁移后的渠道配置失败，将继续使用内存中的迁移结果:', error)
       }
     }
-    return normalized.config
+    return presetUpdated.config
   } catch (error) {
     console.error('[渠道管理] 读取配置文件失败:', error)
     return { version: CONFIG_VERSION, channels: [] }
@@ -719,6 +759,8 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'xiaomi-token-plan':
         return await testAnthropicCompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
       case 'openai':
+      case 'openai-responses':
+      case 'opencode-go-openai':
       case 'deepseek':
       case 'zhipu':
       case 'doubao':
@@ -826,7 +868,7 @@ async function testAnthropicCompatible(
  * 测试 OpenAI 兼容 API 连接（OpenAI / Custom）
  */
 async function testOpenAICompatible(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<ChannelTestResult> {
-  const url = normalizeBaseUrl(baseUrl)
+  const url = normalizeOpenAIBaseUrlForSdk(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
   const response = await fetchFn(`${url}/models`, {
@@ -1410,6 +1452,8 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
       case 'xiaomi-token-plan':
         return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'openai':
+      case 'openai-responses':
+      case 'opencode-go-openai':
       case 'deepseek':
       case 'zhipu':
       case 'doubao':
@@ -1450,6 +1494,8 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'xiaomi-token-plan':
         return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'openai':
+      case 'openai-responses':
+      case 'opencode-go-openai':
       case 'deepseek':
       case 'zhipu':
       case 'doubao':
@@ -1555,10 +1601,10 @@ interface OpenAIModelItem {
  * 通用 OpenAI 兼容格式，适用于大部分第三方供应商。
  */
 async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
-  const url = normalizeBaseUrl(baseUrl)
+  const url = resolveOpenAIModelsUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
-  const response = await fetchFn(`${url}/models`, {
+  const response = await fetchFn(url, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`,

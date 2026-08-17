@@ -44,7 +44,9 @@ function isProviderPayload(payload: unknown): payload is ProviderPayload {
  * 为 Codex Responses provider 请求注入 OpenAI reasoning.effort。
  *
  * 剥离 reasoning.mode（ChatGPT Codex OAuth 不支持该字段），
- * 并显式写入 reasoning.effort（GPT-5.x 默认 medium，off 必须显式 none）。
+ * 显式写入 reasoning.effort（GPT-5.x 默认 medium，off 必须显式 none），
+ * 并请求 detailed summary。OpenAI 不会返回原始 CoT，但 detailed summary 比 auto
+ * 更适合在 Profer 的过程视图中审计模型的公开推理摘要。
  */
 export function injectOpenAIThinkingLevel(
   payload: unknown,
@@ -62,6 +64,7 @@ export function injectOpenAIThinkingLevel(
     reasoning: {
       ...(payload.reasoning as Record<string, unknown> ?? {}),
       effort,
+      summary: 'detailed',
     },
   }
 }

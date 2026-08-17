@@ -14,10 +14,7 @@ import {
   previewFileMapAtom,
   previewModePreferenceAtom,
 } from '@/atoms/preview-atoms'
-import {
-  agentSessionPathMapAtom,
-  currentSessionSidePanelOpenAtom,
-} from '@/atoms/agent-atoms'
+import { agentSessionPathMapAtom } from '@/atoms/agent-atoms'
 import {
   activeTabIdAtom,
   getPreviewTabTitle,
@@ -33,6 +30,8 @@ import { DefaultAppOpenButton } from './DefaultAppOpenButton'
 import { getDefaultAppTargetPath, getPreviewFileAccess } from './preview-open-path'
 import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
 import { KnowledgePreviewContent } from '@/components/knowledge-base/KnowledgePreviewPanel'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
+import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 
 interface PreviewPanelProps {
   sessionId: string
@@ -46,7 +45,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   const tabs = useAtomValue(tabsAtom)
   const setTabs = useSetAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
-  const isSidePanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
+  const filePanelVisible = useAtomValue(panelVisibilityAtom).filePanel
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
   const knowledgePreviewMap = useAtomValue(agentKnowledgePreviewMapAtom)
   const setKnowledgePreviewMap = useSetAtom(agentKnowledgePreviewMapAtom)
@@ -58,7 +57,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   const sessionPath = sessionPathMap.get(sessionId) ?? ''
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   // 资料预览的元信息已在正文顶部显示，Windows 下不再把标题和关闭操作拆成两行。
-  const useStackedWindowsHeader = isWindows && !isSidePanelOpen && !knowledgeReference
+  const useStackedWindowsHeader = isWindows && !filePanelVisible && !knowledgeReference
 
   const fileName = knowledgeReference?.title ?? (currentFile ? getFileBaseName(currentFile.filePath) : '文件预览')
   const defaultAppTargetPath = currentFile ? getDefaultAppTargetPath(currentFile, sessionPath) : ''
@@ -200,7 +199,15 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   )
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-content-area titlebar-no-drag">
+    <div className="relative flex flex-col h-full overflow-hidden bg-content-area titlebar-no-drag">
+      {/* 预览在无右侧文件栏时延伸到窗口右缘，必须自行接管控制按钮。
+          否则 TabBar 宿主仍会把按钮留在左侧会话区，与预览标题栏脱节。 */}
+      <WindowControlsHost
+        id="preview-panel"
+        active={isWindows && !filePanelVisible}
+        priority={20}
+        className="absolute right-2 top-[3px] z-10"
+      />
       {/* 顶部栏：文件名 + 预览操作 */}
       <div className={cn('flex-shrink-0 border-b border-border/30 titlebar-no-drag', useStackedWindowsHeader && 'bg-content-area')}>
         {useStackedWindowsHeader ? (

@@ -32,7 +32,9 @@ describe('DeepSeek V4 1M 上下文能力', () => {
     expect(inferContextWindow('deepseek-reasoner')).toBe(DEFAULT_CONTEXT_WINDOW)
   })
 
-  test('Given GLM 显式 1M 变体 When 规范化 Then 保持其 1M 能力', () => {
+  test('Given GLM-5.3 or an explicit 1M GLM variant When normalizing Then preserves its 1M capability', () => {
+    expect(supports1MContext('glm-5.3')).toBe(true)
+    expect(inferContextWindow('gateway/glm-5.3')).toBe(ONE_MILLION_CONTEXT_WINDOW)
     expect(supports1MContext('glm-x-preview[1m]')).toBe(true)
   })
 })
@@ -52,6 +54,11 @@ describe('Agent SDK 1M 模型转换', () => {
 
   test('Given DeepSeek V4 经 custom 兼容网关 When provider 未验证 Then 不擅自追加 SDK 后缀', () => {
     expect(resolveAgentSdkModelId('gateway/deepseek-v4-pro', 'custom')).toBe('gateway/deepseek-v4-pro')
+  })
+
+  test('Given a verified GLM-5.3 provider/model pair When converting Then appends the Agent SDK 1M suffix', () => {
+    expect(resolveAgentSdkModelId('glm-5.3', 'zhipu')).toBe('glm-5.3[1m]')
+    expect(resolveAgentSdkModelId('glm-5.3', 'zhipu-coding')).toBe('glm-5.3[1m]')
   })
 
   test('Given DeepSeek provider 的非精确 V4 名称 When 转换 Then 不误加 1M 后缀', () => {

@@ -12,6 +12,7 @@ import type {
   AutomationScheduleType,
   AutomationPermissionMode,
   AutomationSessionMode,
+  AgentRuntime,
 } from '@profer/shared'
 import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@profer/shared'
 
@@ -35,6 +36,8 @@ export interface AutomationDraft {
   dayOfMonth: number[]
   channelId: string
   modelId?: string
+  /** 执行此任务的 Agent runtime；手动创建时必须显式保存，避免调度器回退 Claude。 */
+  agentRuntime: AgentRuntime
   workspaceId?: string
   /** 运行子会话绑定的 Agent 预设 ID；undefined = 跟随工作区默认预设 */
   presetId?: string
@@ -67,6 +70,7 @@ export function createEmptyDraft(): AutomationDraft {
     dayOfWeek: [1],
     dayOfMonth: [1],
     channelId: '',
+    agentRuntime: 'claude',
     permissionMode: AUTOMATION_DEFAULT_PERMISSION_MODE,
     sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
     active: true,
@@ -89,6 +93,7 @@ export function automationToDraft(a: Automation): AutomationDraft {
     dayOfMonth: Array.isArray(a.dayOfMonth) ? a.dayOfMonth : (a.dayOfMonth !== undefined ? [a.dayOfMonth] : [1]),
     channelId: a.channelId,
     modelId: a.modelId,
+    agentRuntime: a.agentRuntime ?? 'claude',
     workspaceId: a.workspaceId,
     presetId: a.presetId,
     permissionMode: a.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,

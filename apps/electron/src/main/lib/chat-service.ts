@@ -25,7 +25,7 @@ import {
 } from '@profer/core'
 import type { ImageAttachmentData, ContinuationMessage } from '@profer/core'
 import { listChannels, decryptApiKey, isCommercialMode, canSelfConfig } from './channel-manager'
-import { getTeamAuthWithRefresh } from './auth-service'
+import { getTeamAuthWithRefresh, recoverCommercialProxyAuth } from './auth-service'
 import { appendMessage, updateConversationMeta, getConversationMessages } from './conversation-manager'
 import { readAttachmentAsBase64, isImageAttachment } from './attachment-service'
 import { extractTextFromAttachment, isDocumentAttachment } from './document-parser'
@@ -53,6 +53,11 @@ const ANTHROPIC_PROXY_PROVIDERS = new Set([
   'xiaomi-token-plan',
   'zhipu-coding',
 ])
+
+function isInvalidRelayTokenError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /API 错误 \(401\):.*relay 令牌无效/i.test(message)
+}
 
 // ===== 平台相关：图片附件读取器 =====
 
@@ -333,6 +338,24 @@ export async function sendMessage(
     const proxyUrl = await getEffectiveProxyUrl()
     const fetchFn = getFetchFn(proxyUrl)
 
+    const streamWithRelayRecovery = async (request: { url: string; headers: Record<string, string>; body: string }) => {
+      try {
+        return await streamSSE({ request, adapter, signal: controller.signal, fetchFn, onEvent: handleStreamEvent })
+      } catch (error) {
+        if (!shouldUseCommercialProxy || controller.signal.aborted || !isInvalidRelayTokenError(error)) throw error
+
+        const recovered = await recoverCommercialProxyAuth()
+        if (!recovered) throw error
+
+        proxyBaseUrl = `${recovered.baseUrl}${ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'}`
+        apiKey = recovered.proxyToken || recovered.token
+        request.url = proxyBaseUrl
+        request.headers.Authorization = `Bearer ${apiKey}`
+        console.warn('[聊天服务] relay 令牌已刷新，正在重试一次代理请求')
+        return streamSSE({ request, adapter, signal: controller.signal, fetchFn, onEvent: handleStreamEvent })
+      }
+    }
+
     // 9. 工具续接循环
     let continuationMessages: ContinuationMessage[] = []
     let round = 0
@@ -394,13 +417,7 @@ export async function sendMessage(
         request.url = proxyBaseUrl
       }
 
-      const { content, reasoning, thinkingBlocks, toolCalls, stopReason } = await streamSSE({
-        request,
-        adapter,
-        signal: controller.signal,
-        fetchFn,
-        onEvent: handleStreamEvent,
-      })
+      const { content, reasoning, thinkingBlocks, toolCalls, stopReason } = await streamWithRelayRecovery(request)
 
       // 如果没有工具调用或不是 tool_use 停止，退出循环
       if (!toolCalls || toolCalls.length === 0 || stopReason !== 'tool_use') {
@@ -471,13 +488,7 @@ export async function sendMessage(
 
       if (proxyBaseUrl) finalRequest.url = proxyBaseUrl
 
-      await streamSSE({
-        request: finalRequest,
-        adapter,
-        signal: controller.signal,
-        fetchFn,
-        onEvent: handleStreamEvent,
-      })
+      await streamWithRelayRecovery(finalRequest)
     }
 
     // 10. 保存 assistant 消息（空内容不保存，除非有生成的附件）

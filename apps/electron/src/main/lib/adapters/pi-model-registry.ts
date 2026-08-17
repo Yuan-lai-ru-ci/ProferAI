@@ -13,16 +13,12 @@ import {
   type ProviderType,
   type XaiOAuthCredentials,
   inferReasoningTransport,
+  type ReasoningTransport,
   resolveReasoningCapability,
   resolveReasoningProfile,
   type ReasoningCapability,
 } from '@profer/shared'
-import {
-  getProferUserAgent,
-  normalizeAnthropicBaseUrlForSdk,
-  normalizeOpenAIBaseUrlForSdk,
-  resolveAnthropicMessagesUrl,
-} from '@profer/core'
+import { getProferUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeOpenAIBaseUrlForSdk, resolveAnthropicMessagesUrl } from '@profer/core'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from '../xai-oauth-credentials'
@@ -36,20 +32,30 @@ type PiCatalogModelPatch = Pick<PiCatalogModel, 'id'> & Partial<PiCatalogModel>
 
 interface PiModelDefaults {
   reasoning: boolean
+  thinkingLevelMap?: PiCatalogModel['thinkingLevelMap']
+  compat?: PiCatalogModel['compat']
   input: PiCatalogModel['input']
   cost: PiModelCost
   contextWindow: number
   maxTokens: number
 }
 
-const ZERO_MODEL_COST: PiModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+const ZERO_MODEL_COST: PiModelCost = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+}
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_MAX_TOKENS = 64_000
+const VOLCENGINE_GLM_MAX_TOKENS = 128_000
+const GLM_53_MAX_TOKENS = 131_072
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api'
 const CODEX_MAX_TOKENS = 128_000
 const CODEX_54_MINI_CONTEXT_WINDOW = 400_000
 const CODEX_56_CONTEXT_WINDOW = 1_050_000
 const CODEX_THINKING_LEVEL_MAP = { xhigh: 'xhigh', minimal: 'low' } as const
+const OFFICIAL_GPT_56_MODEL_IDS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
 
 const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
   {
@@ -112,9 +118,62 @@ function loadPiAiCompat(): Promise<PiAiCompat> {
   return piAiCompatPromise
 }
 
+function toReasoningTransport(api: Api): ReasoningTransport {
+  switch (api) {
+    case 'anthropic-messages':
+      return 'anthropic-messages'
+    case 'openai-completions':
+      return 'openai-completions'
+    case 'openai-responses':
+      return 'openai-responses'
+    default:
+      return 'other'
+  }
+}
+
+/** Compiles the shared model profile into Pi catalog compatibility metadata. */
+function compilePiReasoningCapabilities(api: Api, modelId: string | undefined): Pick<PiModelDefaults, 'compat' | 'thinkingLevelMap'> | undefined {
+  const transport = toReasoningTransport(api)
+  const profile = resolveReasoningProfile({ modelId, transport })
+  const encoding = profile?.encodings[transport]
+  if (!encoding) return undefined
+
+  const thinkingLevelMap = encoding.effortMap as PiCatalogModel['thinkingLevelMap']
+  switch (encoding.kind) {
+    case 'adaptive-effort':
+      return { compat: { forceAdaptiveThinking: true }, thinkingLevelMap }
+    case 'deepseek-output-effort':
+    case 'anthropic-manual':
+      return { thinkingLevelMap }
+    case 'openai-reasoning-effort':
+      return { compat: { supportsReasoningEffort: true }, thinkingLevelMap }
+    case 'zai-thinking-effort':
+      return {
+        compat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: true,
+          thinkingFormat: 'zai',
+          zaiToolStream: true,
+        },
+        thinkingLevelMap,
+      }
+    case 'zai-toggle':
+      return {
+        compat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          thinkingFormat: 'zai',
+          zaiToolStream: true,
+        },
+        thinkingLevelMap,
+      }
+  }
+}
+
 function normalizePiApi(provider: ProviderType): Api {
   switch (provider) {
     case 'openai':
+    case 'opencode-go-openai':
     case 'zhipu':
     case 'doubao':
     case 'qwen':
@@ -147,6 +206,7 @@ function candidatePiProviders(provider: ProviderType): KnownProvider[] {
     case 'zhipu':
       return ['zai']
     case 'zhipu-coding':
+    case 'zhipu-coding-team':
       return ['zai-coding-cn', 'zai']
     case 'minimax':
       return ['minimax', 'minimax-cn']
@@ -161,8 +221,7 @@ function candidatePiProviders(provider: ProviderType): KnownProvider[] {
 
 function findCatalogModelById(models: readonly PiCatalogModel[], modelId: string): PiCatalogModel | undefined {
   const normalized = modelId.toLowerCase()
-  return models.find((model) =>
-    model.id.toLowerCase() === normalized || model.name.toLowerCase() === normalized)
+  return models.find((model) => model.id.toLowerCase() === normalized || model.name.toLowerCase() === normalized)
 }
 
 async function getCatalogModels(provider: KnownProvider): Promise<readonly PiCatalogModel[]> {
@@ -196,15 +255,12 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
  * 解析某 Pi 模型可用的推理档位能力（供 renderer 思考档位菜单展示）。
  *
  * 级联优先级：
- *   1. reasoning profile（deepseek-v4 / k3 / glm-5.2 / openai 推理模型）→ 精确档位
+ *   1. reasoning profile（deepseek-v4 / k3 / GLM-5.x / openai 推理模型）→ 精确档位
  *   2. Pi catalog 元数据（reasoning + thinkingLevelMap）→ 依模型标记
  *
  * 由 IPC 桥接给 renderer，无能力返回 undefined（renderer 回退完整七档或隐藏菜单）。
  */
-export async function resolvePiReasoningCapability(
-  provider: ProviderType,
-  modelId: string | undefined,
-): Promise<ReasoningCapability | undefined> {
+export async function resolvePiReasoningCapability(provider: ProviderType, modelId: string | undefined): Promise<ReasoningCapability | undefined> {
   if (!modelId) return undefined
 
   const transport = inferReasoningTransport(provider)
@@ -214,34 +270,42 @@ export async function resolvePiReasoningCapability(
   const catalogModel = await findPiCatalogModel(provider, modelId)
   return resolveReasoningCapability({
     profile,
-    catalog: catalogModel ? { reasoning: catalogModel.reasoning, thinkingLevelMap: catalogModel.thinkingLevelMap } : undefined,
+    catalog: catalogModel
+      ? {
+          reasoning: catalogModel.reasoning,
+          thinkingLevelMap: catalogModel.thinkingLevelMap,
+        }
+      : undefined,
   })
 }
 
-async function resolvePiModelDefaults(
-  input: PiAgentQueryOptions,
-  explicit1MContext = false,
-): Promise<PiModelDefaults> {
+async function resolvePiModelDefaults(input: PiAgentQueryOptions, explicit1MContext = false): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
+  const api = normalizePiApi(input.provider)
+  const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model)
+  const modelId = input.model?.toLowerCase()
+  const isOfficialGpt56 = input.provider === 'openai'
+    && input.channelId?.startsWith('newapi-')
+    && modelId != null
+    && OFFICIAL_GPT_56_MODEL_IDS.has(modelId)
   const isDeepSeekV4 = isDeepSeekV4Model(input.model)
-  const explicitCompatibleContextWindow = input.provider !== 'deepseek' && explicit1MContext && isDeepSeekV4
-    ? ONE_MILLION_CONTEXT_WINDOW
-    : undefined
-  const catalogContextWindow = input.provider !== 'deepseek' && isDeepSeekV4
-    ? undefined
-    : catalogModel?.contextWindow
-  const deepSeekCatalogMissContextWindow = !catalogModel && input.provider === 'deepseek' && isDeepSeekV4
-    ? ONE_MILLION_CONTEXT_WINDOW
-    : undefined
+  const isGlm53 = modelId === 'glm-5.3'
+  const isVolcengineGlm5x = (input.provider === 'doubao' || input.provider === 'ark-coding-plan') && (modelId === 'glm-5.2' || modelId === 'glm-5.3')
+  const explicitCompatibleContextWindow = input.provider !== 'deepseek' && explicit1MContext && isDeepSeekV4 ? ONE_MILLION_CONTEXT_WINDOW : undefined
+  const catalogContextWindow = input.provider !== 'deepseek' && isDeepSeekV4 ? undefined : catalogModel?.contextWindow
+  const deepSeekCatalogMissContextWindow = !catalogModel && input.provider === 'deepseek' && isDeepSeekV4 ? ONE_MILLION_CONTEXT_WINDOW : undefined
   return {
     reasoning: catalogModel?.reasoning ?? true,
+    thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap ?? catalogModel?.thinkingLevelMap,
+    compat: providerSpecificCapabilities?.compat,
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
-    contextWindow: explicitCompatibleContextWindow
-      ?? catalogContextWindow
-      ?? deepSeekCatalogMissContextWindow
-      ?? DEFAULT_CONTEXT_WINDOW,
-    maxTokens: catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    contextWindow: isOfficialGpt56
+      ? CODEX_56_CONTEXT_WINDOW
+      : isGlm53
+        ? Math.max(catalogContextWindow ?? DEFAULT_CONTEXT_WINDOW, ONE_MILLION_CONTEXT_WINDOW)
+      : (explicitCompatibleContextWindow ?? catalogContextWindow ?? deepSeekCatalogMissContextWindow ?? DEFAULT_CONTEXT_WINDOW),
+    maxTokens: isVolcengineGlm5x ? VOLCENGINE_GLM_MAX_TOKENS : (catalogModel?.maxTokens ?? (isGlm53 ? GLM_53_MAX_TOKENS : DEFAULT_MAX_TOKENS)),
   }
 }
 
@@ -257,10 +321,7 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
 }
 
 export function requiresPromaUserAgent(provider: ProviderType): boolean {
-  return provider === 'kimi-coding'
-    || provider === 'xiaomi-token-plan'
-    || provider === 'zhipu-coding'
-    || provider === 'zhipu-coding-team'
+  return provider === 'kimi-coding' || provider === 'xiaomi-token-plan' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team'
 }
 
 function usesBearerOnlyAnthropicAuth(provider: ProviderType): boolean {
@@ -325,16 +386,7 @@ function mergeCodexModels(models: readonly PiCatalogModel[]): PiCatalogModel[] {
 }
 
 function isCompleteCatalogModel(model: PiCatalogModelPatch): model is PiCatalogModel {
-  return Boolean(
-    model.name
-      && model.api
-      && model.provider
-      && model.baseUrl
-      && model.input
-      && model.cost
-      && model.contextWindow
-      && model.maxTokens,
-  )
+  return Boolean(model.name && model.api && model.provider && model.baseUrl && model.input && model.cost && model.contextWindow && model.maxTokens)
 }
 
 export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
@@ -354,16 +406,19 @@ export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
  * 刷新后的 access token，而不是存储的凭据 JSON。
  */
 async function buildCodexModelWithRuntimeKey(sdk: PiSdk, input: PiAgentQueryOptions) {
-  const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
+  const modelRuntime = await sdk.ModelRuntime.create({
+    allowModelNetwork: false,
+  })
   // 内置 codex 模型的 provider 字段即 'openai-codex'，token 必须设在该名下。
   modelRuntime.setRuntimeApiKey('openai-codex', input.apiKey)
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
-  const model = (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined)
-    ?? (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined)
+  const model =
+    (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined) ??
+    (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined) ??
     // 指定模型缺失时回退到首个内置 codex 模型，避免因模型 ID 漂移直接失败。
-    ?? modelRuntime.getModels('openai-codex')[0]
+    modelRuntime.getModels('openai-codex')[0]
   if (!model) {
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
@@ -372,10 +427,19 @@ async function buildCodexModelWithRuntimeKey(sdk: PiSdk, input: PiAgentQueryOpti
 
 /** 列出 Pi SDK 内置的 ChatGPT (Codex) 模型 ID，供渲染层"模型拉取"使用。 */
 export async function listCodexModels(): Promise<{ id: string; name: string }[]> {
-  return (await getCodexCatalogModels()).map((m) => ({ id: m.id, name: m.name }))
+  return (await getCodexCatalogModels()).map((m) => ({
+    id: m.id,
+    name: m.name,
+  }))
 }
 
-export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions): Promise<{ modelRuntime: Awaited<ReturnType<PiSdk['ModelRuntime']['create']>>; model: PiCatalogModel }> {
+export async function buildModel(
+  sdk: PiSdk,
+  input: PiAgentQueryOptions,
+): Promise<{
+  modelRuntime: Awaited<ReturnType<PiSdk['ModelRuntime']['create']>>
+  model: PiCatalogModel
+}> {
   if (input.provider === 'openai-codex') {
     return input.codexOAuthCredentials
       ? buildCodexModel(sdk, {
@@ -401,7 +465,9 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions): Promis
   // Pi 请求使用干净模型 ID，但先保留用户显式 `[1m]` 配置，供未知兼容网关声明能力。
   const explicit1MContext = /\[1m\]$/i.test(input.model ?? '')
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
-  const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
+  const modelRuntime = await sdk.ModelRuntime.create({
+    allowModelNetwork: false,
+  })
   if (shouldUseRuntimeApiKey(input.provider)) {
     modelRuntime.setRuntimeApiKey(providerName, resolvedApiKey)
   }
@@ -418,17 +484,21 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions): Promis
     ...(headers ? { headers } : {}),
     api,
     baseUrl,
-    models: [{
+    models: [
+      {
       id: resolvedModelId ?? 'default',
       name: resolvedModelId ?? 'Default',
       api,
       baseUrl,
       reasoning: modelDefaults.reasoning,
+        thinkingLevelMap: modelDefaults.thinkingLevelMap,
+        compat: modelDefaults.compat,
       input: modelDefaults.input,
       cost: modelDefaults.cost,
       contextWindow: modelDefaults.contextWindow,
       maxTokens: modelDefaults.maxTokens,
-    }],
+      },
+    ],
   })
   const model = modelRuntime.getModel(providerName, resolvedModelId ?? 'default')
   if (!model) throw new Error(`Pi model registration failed: ${resolvedModelId ?? 'default'}`)
@@ -447,11 +517,11 @@ export interface CodexModelInput {
   onCodexOAuthCredentialsRefreshed?: (credentials: CodexOAuthCredentials) => void | Promise<void>
 }
 
-function createCodexRuntimeCredentialStore(
-  initial: CodexOAuthCredentials,
-  onRefreshed?: CodexModelInput['onCodexOAuthCredentialsRefreshed'],
-) {
-  let credential: CodexRuntimeCredential | undefined = { type: 'oauth', ...initial }
+function createCodexRuntimeCredentialStore(initial: CodexOAuthCredentials, onRefreshed?: CodexModelInput['onCodexOAuthCredentialsRefreshed']) {
+  let credential: CodexRuntimeCredential | undefined = {
+    type: 'oauth',
+    ...initial,
+  }
 
   return {
     async read(providerId: string): Promise<CodexRuntimeCredential | undefined> {
@@ -468,12 +538,13 @@ function createCodexRuntimeCredentialStore(
       const previous = credential
       credential = await fn(credential)
 
-      if (credential && (
-        previous?.access !== credential.access
-        || previous?.refresh !== credential.refresh
-        || previous?.expires !== credential.expires
-        || previous?.accountId !== credential.accountId
-      )) {
+      if (
+        credential &&
+        (previous?.access !== credential.access ||
+          previous?.refresh !== credential.refresh ||
+          previous?.expires !== credential.expires ||
+          previous?.accountId !== credential.accountId)
+      ) {
         try {
           await onRefreshed?.(credential)
         } catch (error) {
@@ -501,19 +572,17 @@ export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
   }
 
   const modelRuntime = await sdk.ModelRuntime.create({
-    credentials: createCodexRuntimeCredentialStore(
-      input.codexOAuthCredentials,
-      input.onCodexOAuthCredentialsRefreshed,
-    ),
+    credentials: createCodexRuntimeCredentialStore(input.codexOAuthCredentials, input.onCodexOAuthCredentialsRefreshed),
     allowModelNetwork: false,
   })
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
-  const model = (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined)
-    ?? (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined)
+  const model =
+    (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined) ??
+    (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined) ??
     // 指定模型缺失时回退到首个内置 codex 模型，避免因模型 ID 漂移直接失败。
-    ?? modelRuntime.getModels('openai-codex')[0]
+    modelRuntime.getModels('openai-codex')[0]
   if (!model) {
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
@@ -533,12 +602,11 @@ export interface XaiModelInput {
   onXaiOAuthCredentialsRefreshed?: (credentials: XaiOAuthCredentials) => void | Promise<void>
 }
 
-function createXaiRuntimeCredentialStore(
-  channelId: string,
-  initial: XaiOAuthCredentials,
-  onRefreshed?: XaiModelInput['onXaiOAuthCredentialsRefreshed'],
-) {
-  let credential: XaiRuntimeCredential | undefined = { type: 'oauth', ...rememberXaiOAuthCredentials(channelId, initial) }
+function createXaiRuntimeCredentialStore(channelId: string, initial: XaiOAuthCredentials, onRefreshed?: XaiModelInput['onXaiOAuthCredentialsRefreshed']) {
+  let credential: XaiRuntimeCredential | undefined = {
+    type: 'oauth',
+    ...rememberXaiOAuthCredentials(channelId, initial),
+  }
 
   return {
     async read(providerId: string): Promise<XaiRuntimeCredential | undefined> {
@@ -553,21 +621,17 @@ function createXaiRuntimeCredentialStore(
     ): Promise<XaiRuntimeCredential | undefined> {
       if (providerId !== 'xai' || !credential) return undefined
       const previous = credential
-      const refreshed = await refreshXaiOAuthCredentialsSerial(
-        channelId,
-        credential,
-        async (latest) => {
+      const refreshed = await refreshXaiOAuthCredentialsSerial(channelId, credential, async (latest) => {
           const next = await fn({ type: 'oauth', ...latest })
           if (!next) throw new Error('Pi xAI OAuth 刷新未返回凭据')
-          return { access: next.access, refresh: next.refresh, expires: next.expires }
-        },
-      )
+        return {
+          access: next.access,
+          refresh: next.refresh,
+          expires: next.expires,
+        }
+      })
       credential = { type: 'oauth', ...refreshed }
-      if (
-        previous.access !== credential.access
-        || previous.refresh !== credential.refresh
-        || previous.expires !== credential.expires
-      ) {
+      if (previous.access !== credential.access || previous.refresh !== credential.refresh || previous.expires !== credential.expires) {
         try {
           await onRefreshed?.(credential)
         } catch (error) {
@@ -599,19 +663,16 @@ export async function buildXaiOAuthModel(sdk: PiSdk, input: XaiModelInput) {
     throw new Error('xAI OAuth 凭据或渠道标识缺失，请重新登录')
   }
   const modelRuntime = await sdk.ModelRuntime.create({
-    credentials: createXaiRuntimeCredentialStore(
-      input.channelId,
-      input.xaiOAuthCredentials,
-      input.onXaiOAuthCredentialsRefreshed,
-    ),
+    credentials: createXaiRuntimeCredentialStore(input.channelId, input.xaiOAuthCredentials, input.onXaiOAuthCredentialsRefreshed),
     allowModelNetwork: false,
   })
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const { getModels } = await loadPiAiCompat()
   const xaiModels = [...getModels('xai')]
-  const model = (resolvedModelId ? modelRuntime.getModel('xai', resolvedModelId) : undefined)
-    ?? (resolvedModelId ? findCatalogModelById(xaiModels, resolvedModelId) : undefined)
-    ?? modelRuntime.getModels('xai')[0]
+  const model =
+    (resolvedModelId ? modelRuntime.getModel('xai', resolvedModelId) : undefined) ??
+    (resolvedModelId ? findCatalogModelById(xaiModels, resolvedModelId) : undefined) ??
+    modelRuntime.getModels('xai')[0]
   if (!model) {
     throw new Error('未找到可用的 xAI（Grok）模型，请确认订阅已授权并升级 Pi 运行时')
   }

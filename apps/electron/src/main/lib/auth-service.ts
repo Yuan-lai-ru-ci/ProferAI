@@ -777,6 +777,30 @@ export function refreshAuthToken(): Promise<boolean> {
   return refreshInFlight
 }
 
+/**
+ * 代理返回“relay 令牌无效”时恢复商业渠道凭据。
+ *
+ * relay 令牌会在服务端重启或设备撤销后轮换。刷新授权会获取最新 relay token，
+ * 随后同步官方渠道，使聊天和 Agent 下次请求使用同一份最新本地配置。
+ */
+export async function recoverCommercialProxyAuth(): Promise<{ baseUrl: string; token: string; proxyToken?: string; membershipTier?: string; teamEmail?: string; teamAccountId?: string } | null> {
+  const refreshed = await refreshAuthToken().catch(() => false)
+  if (!refreshed) return null
+
+  const auth = getTeamAuth()
+  if (!auth) return null
+
+  try {
+    const { syncChannelsFromServer } = require('./channel-manager') as typeof import('./channel-manager')
+    await syncChannelsFromServer(auth.baseUrl, auth.token)
+  } catch (error) {
+    // 凭据已刷新；渠道列表同步失败不应阻断当前请求的一次恢复重试。
+    console.warn('[认证] relay 凭据恢复后的渠道同步失败:', (error as Error).message)
+  }
+
+  return getTeamAuth()
+}
+
 /** 当前会话是否处于商业模式（登录时存储的标记，不依赖 token 是否过期） */
 export function getCommercialMode(): boolean {
   const tokens = readTokens()

@@ -38,12 +38,9 @@ describe('Pi runtime 智谱团队版认证', () => {
     expect(requiresPromaUserAgent('zhipu-coding-team')).toBe(true)
   })
 
-  test.each(['kimi-coding', 'zhipu-coding', 'xiaomi-token-plan'] as const)(
-    'Given %s When requiresPromaUserAgent Then true',
-    (provider) => {
+  test.each(['kimi-coding', 'zhipu-coding', 'xiaomi-token-plan'] as const)('Given %s When requiresPromaUserAgent Then true', (provider) => {
       expect(requiresPromaUserAgent(provider)).toBe(true)
-    },
-  )
+  })
 
   test('Given 普通 anthropic 渠道 When resolvePiApiKey Then 原样返回', () => {
     expect(resolvePiApiKey('anthropic', 'plain-key')).toBe('plain-key')
@@ -93,14 +90,14 @@ describe('Pi runtime DeepSeek V4 1M 上下文', () => {
     expect(result.model.contextWindow).toBe(1_000_000)
   })
 
-  test('Given custom provider 的同名 V4 When 未显式声明 1M Then 保持保守默认窗口', async () => {
+  test('Given custom provider 填写完整 Chat Completions 端点 When 注册 Pi 模型 Then 保留协议根地址并使用保守窗口', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {
       sessionId: 'session-custom-v4',
       prompt: 'hi',
       apiKey: 'sk-test',
       provider: 'custom',
-      baseUrl: 'https://gateway.example.com/v1',
+      baseUrl: 'https://gateway.example.com/v1/chat/completions',
       model: 'gateway/deepseek-v4-pro',
       permissionMode: 'plan',
       systemPrompt: 'system',
@@ -108,6 +105,7 @@ describe('Pi runtime DeepSeek V4 1M 上下文', () => {
       piSessionDir: '/tmp/pi-session',
     })
 
+    expect(result.model.baseUrl).toBe('https://gateway.example.com/v1')
     expect(result.model.contextWindow).toBe(DEFAULT_CONTEXT_WINDOW)
   })
 
@@ -146,6 +144,131 @@ describe('Pi runtime DeepSeek V4 1M 上下文', () => {
 
     expect(result.model.id).toBe('gateway/deepseek-v4-flash')
     expect(result.model.contextWindow).toBe(1_000_000)
+  })
+})
+
+describe('Pi runtime GLM-5.3 fallback and reasoning metadata', () => {
+  test('Given GLM-5.3 is absent from the Pi catalog When registered for Zhipu Then preserves 1M context, 128K output, and official thinking toggle', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-glm-5.3',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'zhipu',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      model: 'glm-5.3',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.contextWindow).toBe(1_000_000)
+    expect(result.model.maxTokens).toBe(131_072)
+    expect(result.model.thinkingLevelMap).toMatchObject({
+      minimal: null,
+      low: null,
+      medium: null,
+      xhigh: null,
+      max: null,
+    })
+    expect(result.model.compat).toMatchObject({
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+      thinkingFormat: 'zai',
+      zaiToolStream: true,
+    })
+  })
+
+  test('Given GLM-5.3 on a Volcengine-compatible channel When registered Then caps output at that endpoint maximum', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-ark-glm-5.3',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'ark-coding-plan',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan',
+      model: 'glm-5.3',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.contextWindow).toBe(1_000_000)
+    expect(result.model.maxTokens).toBe(128_000)
+  })
+})
+
+describe('Pi runtime OpenAI Completions 渠道', () => {
+  test.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] as const)(
+    'Given 官方渠道的 %s When buildModel Then 注册 1.05M 上下文窗口',
+    async (model) => {
+      const sdk = await import('@earendil-works/pi-coding-agent')
+      const result = await buildModel(sdk, {
+        sessionId: `session-official-${model}`,
+        prompt: 'hi',
+        apiKey: 'sk-test',
+        provider: 'openai',
+        channelId: 'newapi-8',
+        baseUrl: 'https://team.example.com/v1/proxy',
+        model,
+        permissionMode: 'plan',
+        systemPrompt: 'system',
+        piAgentDir: '/tmp/pi-agent',
+        piSessionDir: '/tmp/pi-session',
+      })
+
+      expect(result.model.contextWindow).toBe(1_050_000)
+    },
+  )
+
+  test('Given 自配 OpenAI 的同名模型 When buildModel Then 保留 Pi catalog 的保守窗口', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-self-hosted-gpt',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'openai',
+      channelId: 'user-openai-channel',
+      baseUrl: 'https://gateway.example.com/v1',
+      model: 'gpt-5.6-terra',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.contextWindow).toBe(272_000)
+  })
+
+  test('Given OpenAI 协议渠道 When buildModel Then 注册为 Pi OpenAI Completions 并保留 Base URL', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+
+    for (const [provider, baseUrl] of [
+      ['openai', 'https://gateway.example.com/v1'],
+      ['opencode-go-openai', 'https://gateway.example.com/v1'],
+      ['zhipu', 'https://gateway.example.com/api/paas/v4'],
+      ['doubao', 'https://gateway.example.com/api/v3'],
+      ['qwen', 'https://gateway.example.com/compatible-mode/v1'],
+      ['custom', 'https://gateway.example.com/v1/chat/completions'],
+    ] as const) {
+      const result = await buildModel(sdk, {
+        sessionId: `session-${provider}`,
+        prompt: 'hi',
+        apiKey: 'sk-test',
+        provider,
+        baseUrl,
+        model: 'test-model',
+        permissionMode: 'plan',
+        systemPrompt: 'system',
+        piAgentDir: '/tmp/pi-agent',
+        piSessionDir: '/tmp/pi-session',
+      })
+
+      expect(result.model.api).toBe('openai-completions')
+      expect(result.model.baseUrl).toBe(provider === 'custom' ? 'https://gateway.example.com/v1' : baseUrl)
+    }
   })
 })
 

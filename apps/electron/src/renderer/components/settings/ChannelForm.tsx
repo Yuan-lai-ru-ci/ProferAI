@@ -165,7 +165,9 @@ function getPresetModelsForProvider(provider: ProviderType): ChannelModel[] {
       ]
     case 'zhipu':
     case 'zhipu-coding':
+    case 'zhipu-coding-team':
       return [
+        { id: 'glm-5.3', name: 'GLM-5.3', enabled: true },
         { id: 'glm-5.2', name: 'GLM-5.2', enabled: true },
         { id: 'glm-5.1', name: 'GLM-5.1', enabled: false },
       ]

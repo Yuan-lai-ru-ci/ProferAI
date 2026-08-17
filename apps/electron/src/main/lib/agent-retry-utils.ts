@@ -94,6 +94,16 @@ export function isSessionNotFoundError(errorMessage: string, stderr?: string): b
   return pattern.test(errorMessage) || (!!stderr && pattern.test(stderr))
 }
 
+/** 仅识别平台代理的 relay token 轮换，避免把普通 API Key 的 401 误判为可恢复故障。 */
+export function isInvalidRelayTokenError(
+  apiError: { statusCode: number; message: string } | null,
+  rawErrorMessage?: string,
+  stderr?: string,
+): boolean {
+  if (apiError?.statusCode !== 401 && !/\b401\b/.test(`${rawErrorMessage ?? ''}\n${stderr ?? ''}`)) return false
+  return /relay 令牌无效/i.test(`${apiError?.message ?? ''}\n${rawErrorMessage ?? ''}\n${stderr ?? ''}`)
+}
+
 /**
  * 计算重试延迟（指数退避 + ±20% jitter）
  *

@@ -45,12 +45,12 @@ describe('Pi Codex Thinking Level', () => {
     ['xhigh', 'xhigh'],
   ] as const)('Given thinkingLevel=%s When 注入 Then reasoning.effort=%s', (level, expectedEffort) => {
     const result = injectOpenAIThinkingLevel({ model: 'gpt-5.6-terra' }, level) as Record<string, unknown>
-    expect(result.reasoning).toEqual({ effort: expectedEffort })
+    expect(result.reasoning).toEqual({ effort: expectedEffort, summary: 'detailed' })
   })
 
   test('Given 推理关闭 + Codex 模型 Then 显式写入 none（GPT-5.x 默认 medium）', () => {
     const result = injectOpenAIThinkingLevel({ model: 'gpt-5.5' }, 'off') as Record<string, unknown>
-    expect(result.reasoning).toEqual({ effort: 'none' })
+    expect(result.reasoning).toEqual({ effort: 'none', summary: 'detailed' })
   })
 
   test('Given 非 Codex 模型 Then 不注入 reasoning', () => {
@@ -65,7 +65,7 @@ describe('Pi Codex Thinking Level', () => {
       { model: 'gpt-5.6-terra', reasoning: { mode: 'auto', summary: 'auto' } },
       'high',
     ) as Record<string, unknown>
-    expect(result.reasoning).toEqual({ mode: 'auto', summary: 'auto', effort: 'high' })
+    expect(result.reasoning).toEqual({ mode: 'auto', summary: 'detailed', effort: 'high' })
   })
 
   test('Given non-object payload Then 不注入', () => {

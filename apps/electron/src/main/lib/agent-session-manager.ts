@@ -8,7 +8,7 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, statSync, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
@@ -82,6 +82,24 @@ interface AgentSessionsIndex {
 /** 当前索引版本 */
 const INDEX_VERSION = 1
 
+/**
+ * 会话索引的内存缓存。
+ *
+ * Agent 运行期间会多次读取和更新会话元数据。索引随历史会话增长后，反复同步
+ * readFile + JSON.parse 会直接阻塞主进程；用 mtime 和 size 校验可保留外部修改感知。
+ */
+let indexCache: { data: AgentSessionsIndex; mtimeMs: number; size: number } | null = null
+
+function cacheIndex(data: AgentSessionsIndex): void {
+  try {
+    const stat = statSync(getAgentSessionsIndexPath())
+    indexCache = { data, mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    // 无法确认磁盘版本时绝不复用内存数据，交给下次读取走恢复路径。
+    indexCache = null
+  }
+}
+
 /** UPDATE_SESSION_AGENT_RUNTIME 需要原子回滚的 runtime-owned 元数据快照。 */
 export interface AgentRuntimeMetaSnapshot {
   agentRuntime: AgentRuntime
@@ -142,12 +160,26 @@ function normalizeSessionRuntime(session: AgentSessionMeta): AgentSessionMeta {
  */
 function readIndex(): AgentSessionsIndex {
   const indexPath = getAgentSessionsIndexPath()
+
+  if (indexCache) {
+    try {
+      const stat = statSync(indexPath)
+      if (stat.mtimeMs === indexCache.mtimeMs && stat.size === indexCache.size) {
+        return indexCache.data
+      }
+    } catch {
+      indexCache = null
+    }
+  }
+
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
   if (data) {
-    return {
+    const normalized: AgentSessionsIndex = {
       ...data,
       sessions: Array.isArray(data.sessions) ? data.sessions.map(normalizeSessionRuntime) : [],
     }
+    cacheIndex(normalized)
+    return normalized
   }
   return { version: INDEX_VERSION, sessions: [] }
 }
@@ -160,7 +192,10 @@ function writeIndex(index: AgentSessionsIndex): void {
 
   try {
     writeJsonFileAtomic(indexPath, index)
+    cacheIndex(index)
   } catch (error) {
+    // 调用方可能已原地修改缓存对象；写入失败后不能继续返回未落盘数据。
+    indexCache = null
     console.error('[Agent 会话] 写入索引文件失败:', error)
     throw new Error('写入 Agent 会话索引失败')
   }
@@ -2368,20 +2403,20 @@ export function searchAgentSessionReferences(input: AgentSessionReferenceSearchI
  *
  * 为什么按 turn 而非严格条数：渲染层 groupIntoTurns 依赖完整消息序列判定组边界
  * （assistant + user(tool_result) 会跨多条合成一个 turn）。若在中途硬切，客户端分组
- * 会断层/重复。因此：先按目标条数切出近似窗口，再把窗口起点快进到最近的用户输入
+ * 会断层/重复。因此：先按目标条数切出近似窗口，再将窗口起点向前扩展到所属用户输入
  * 边界，保证每页都是若干完整的用户输入起始的 turn。
  *
  * 首帧与续页统一算法：
  *   tailExclusive = before ?? total
  *   startRaw       = max(0, tailExclusive - targetMessages)
- *   start          = startRaw 向后（向尾部）快进到最近 user-input 边界
+ *   start          = startRaw 向前扩展到所属 turn 的 user-input 边界
  *   page           = messages[start, tailExclusive)
  *   hasMore        = start > 0
  *
  * @param messages 完整有序 SDKMessage 数组（getAgentSessionSDKMessages 结果）
  * @param opts.before 游标：只取索引 < before 的更早消息。缺省 = 取最新窗口（会话尾部）。
  *                    移动端拿到某页 startIndex 后，补更早时传 before = 该 startIndex。
- * @param opts.targetMessages 近似条数（缺省 10）。切出约这么多条后再补到完整 turn 边界。
+ * @param opts.targetMessages 近似条数（缺省 10）。切出约这么多条后向前补到完整 turn 边界。
  */
 export interface SDKMessagePage {
   messages: SDKMessage[]
