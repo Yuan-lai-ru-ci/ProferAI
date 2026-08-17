@@ -626,6 +626,15 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const queueStopEpochRef = React.useRef(0)
   const stopInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
+  // 队列自动发送「轮结束」信号：只有一轮运行结束（running 下降沿）才允许 auto-send 队首
+  const turnCompletedRef = React.useRef(false)
+  const prevRunningRef = React.useRef(false)
+  React.useEffect(() => {
+    const was = prevRunningRef.current
+    const now = streamState?.running ?? false
+    prevRunningRef.current = now
+    if (was && !now) turnCompletedRef.current = true
+  }, [streamState?.running])
   // Per-session 渠道/模型配置：已加载 metadata 是持久化真源，短暂 local Map 仅在加载前回退。
   const sessionChannelMap = useAtomValue(agentSessionChannelMapAtom)
   const sessionModelMap = useAtomValue(agentSessionModelMapAtom)
@@ -2362,6 +2371,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   React.useEffect(() => {
     // 1.6 开关关：不自动 drain，队列保留，用户可手动逐条「立即发送」
     if (!autoSendEnabled) return
+    // 轮结束事件驱动：必须有一轮运行刚结束才允许自动发送队首，
+    // 开关开启 / 右键入队本身不触发（只有 running 下降沿会置位该信号）
+    if (!turnCompletedRef.current) return
     // 渲染连贯性（1.7）：上一轮执行过程可能仍在 liveMessages（重载清理前）。
     // 若此刻乐观用户气泡 append 到 persisted 末尾，会排在 live 的上轮执行之前，
     // 导致 turn 分组把上轮执行并入本轮。等待 live 清空（上轮执行进入 persisted）后再自动发送。
@@ -2373,6 +2385,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const message = queuedMessages[0]
     if (!message) return
     if (sendingQueuedMessageIdsRef.current.has(message.id)) return
+    // 本轮轮结束信号已消费：即使发送失败恢复队列，也不应重发，保持 false
+    turnCompletedRef.current = false
     autoSendingQueuedRef.current = true
     queuedSendInFlightRef.current = true
     sendingQueuedMessageIdsRef.current.add(message.id)
