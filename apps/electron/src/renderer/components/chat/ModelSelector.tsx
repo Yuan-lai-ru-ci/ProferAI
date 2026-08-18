@@ -32,7 +32,7 @@ import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import type { Channel, ModelOption } from '@profer/shared'
-import { getChannelProtocol, getChannelSource, isOfficialChannel, type ChannelProtocol } from '@/lib/channel-model-groups'
+import { getChannelProtocol, getChannelSource, getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel, type ChannelProtocol } from '@/lib/channel-model-groups'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
 export const CompactModelSelectorCtx = React.createContext(false)
@@ -59,8 +59,11 @@ function buildModelOptions(channels: Channel[], filterChannelId?: string, filter
       const source = getChannelSource(channel)
       const key = `${source}:${model.id}`
       const existing = optionsByModel.get(key)
-      // 同名模型优先选当前运行时需要的协议；同协议重复保留第一个作为代表渠道。
-      if (existing && existing.protocol === preferredProtocol) continue
+      if (existing) {
+        existing.channelCount = (existing.channelCount ?? 0) + 1
+        // 同名模型优先选当前运行时需要的协议；同协议重复保留第一个作为代表渠道。
+        if (existing.protocol === preferredProtocol) continue
+      }
 
       optionsByModel.set(key, {
         channelId: channel.id,
@@ -70,7 +73,7 @@ function buildModelOptions(channels: Channel[], filterChannelId?: string, filter
         provider: channel.provider,
         multiplier: model.multiplier,
         protocol,
-        channelCount: (existing?.channelCount ?? 0) + 1,
+        channelCount: existing ? existing.channelCount : 1,
       })
     }
   }
@@ -154,7 +157,7 @@ export function ModelSelector({
     }
   }, [open, setChannels])
 
-  // 未登录时隐藏服务端托管的官方渠道（newapi-*），避免残留缓存渠道展示给未登录用户
+  // 未登录时隐藏服务端托管的官方渠道，避免残留缓存渠道展示给未登录用户
   const visibleChannels = React.useMemo(() => {
     if (authStatus.isLoggedIn) return channels
     return channels.filter((c) => !isOfficialChannel(c))
@@ -221,6 +224,13 @@ export function ModelSelector({
   const stableModelInfoRef = React.useRef(currentModelInfo)
   if (currentModelInfo) stableModelInfoRef.current = currentModelInfo
   const displayModelInfo = currentModelInfo ?? stableModelInfoRef.current
+  const displayChannelName = displayModelInfo
+    ? getOfficialChannelDisplayName(channels.find((channel) => channel.id === displayModelInfo.channelId) ?? {
+      id: displayModelInfo.channelId,
+      name: displayModelInfo.channelName,
+      managedType: undefined,
+    })
+    : null
 
   /** 选择模型并持久化到当前对话 */
   const handleSelect = (option: ModelOption): void => {
@@ -311,7 +321,7 @@ export function ModelSelector({
           compact && 'justify-center rounded-full size-7 px-0',
         )}
         title={displayModelInfo
-          ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
+          ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
           : '选择模型'}
       >
         {displayModelInfo ? (
@@ -327,7 +337,7 @@ export function ModelSelector({
           <>
             <span className="max-w-[200px] truncate">
               {displayModelInfo
-                ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
+                ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
                 : '选择模型'}
             </span>
             <ChevronDown className="size-3" />
@@ -382,7 +392,10 @@ export function ModelSelector({
                         className="size-5 rounded object-cover"
                       />
                       <span className="text-sm font-medium text-muted-foreground">
-                        {first.channelName}
+                        {(() => {
+                          const ch = channels.find((c) => c.id === channelId)
+                          return ch ? getOfficialChannelDisplayName(ch) : first.channelName
+                        })()}
                       </span>
                       {(() => {
                         const ch = channels.find((c) => c.id === channelId)
@@ -435,7 +448,7 @@ export function ModelSelector({
                             </span>
                           )}
                           {Number.isFinite(option.multiplier) && (
-                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={isModelFamilyChannel(channels.find((c) => c.id === option.channelId) ?? { id: option.channelId, managedType: undefined }) ? 'New API 计费倍率' : '模型倍率'}>
                               {option.multiplier!.toFixed(2)}x
                             </span>
                           )}

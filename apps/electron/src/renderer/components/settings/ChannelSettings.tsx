@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { ChannelForm } from './ChannelForm'
 import { ModelAvailabilityBar } from './ModelAvailabilityBar'
-import { isOfficialChannel } from '@/lib/channel-model-groups'
+import { getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel } from '@/lib/channel-model-groups'
 import { aggregateModelHealth } from '@/lib/channel-health-aggregation'
 
 /** 组件视图模式 */
@@ -49,6 +49,10 @@ export function ChannelSettings(): React.ReactElement {
   const setGlobalChannels = useSetAtom(channelsAtom)
   const authStatus = useAtomValue(authStatusAtom)
   const [deleteTarget, setDeleteTarget] = React.useState<Channel | null>(null)
+  const managedFamilyNames = React.useMemo(() => [...new Set(
+    channels.filter(isModelFamilyChannel).map((channel) => channel.name.trim()).filter(Boolean),
+  )], [channels])
+  const managedFamilySummary = managedFamilyNames.length > 0 ? managedFamilyNames.join('、') : '官方'
   const agentChannelIdsRef = React.useRef(agentChannelIds)
   const agentChannelIdRef = React.useRef(agentChannelId)
 
@@ -254,7 +258,7 @@ export function ChannelSettings(): React.ReactElement {
         title="模型配置"
         description={
           commercialMode && !canSelfConfig
-            ? '渠道由团队服务器统一管理，无需手动配置'
+            ? `${managedFamilySummary}模型池由团队服务器统一管理，无需手动配置；普通/VIP 路由与上游故障转移由后台处理`
             : '管理 AI 供应商连接，配置 API Key 和可用模型。支持 Agent 的渠道会显示对应标签'
         }
         action={
@@ -271,8 +275,8 @@ export function ChannelSettings(): React.ReactElement {
             <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
               <Server size={18} className="text-primary shrink-0" />
               <div className="flex-1">
-                <div className="text-sm font-medium">渠道由服务端统一管理</div>
-                <div className="text-xs text-muted-foreground">管理员在后台配置渠道后自动同步到你的客户端。你当前没有自配 API 权限（可能被管理员单独关闭），如需自行添加 API Key，请联系管理员开通后点「刷新权限」</div>
+                <div className="text-sm font-medium">模型池由服务端统一管理</div>
+                <div className="text-xs text-muted-foreground">{managedFamilySummary}模型池由后台按当前账号身份选择普通/VIP 路由，并负责上游主备与故障重试。你当前没有自配 API 权限（可能被管理员单独关闭），如需自行添加 API Key，请联系管理员开通后点「刷新权限」</div>
               </div>
               <Button size="sm" variant="outline" onClick={handleRefreshCaps} disabled={refreshingCaps} className="shrink-0">
                 <RefreshCw size={14} className={refreshingCaps ? 'animate-spin' : ''} />
@@ -296,7 +300,7 @@ export function ChannelSettings(): React.ReactElement {
                 const officialChannels = channels.filter(isOfficialChannel)
                 const selfConfiguredChannels = channels.filter((channel) => !isOfficialChannel(channel))
                 return <>
-                  {groupOfficialChannels(officialChannels).map((group) => <OfficialChannelGroupRow key={`${group.name}:${group.provider}`} channels={group.channels} health={officialHealth} />)}
+                  {groupOfficialChannels(officialChannels).map((group) => <OfficialChannelGroupRow key={`${group.name}:${group.provider}:${group.channels[0]?.familyId ?? ''}`} channels={group.channels} health={officialHealth} isModelFamily={group.isModelFamily} />)}
                   {selfConfiguredChannels.map((channel) => (
                     <ChannelRow
                       key={channel.id}
@@ -335,21 +339,22 @@ export function ChannelSettings(): React.ReactElement {
   )
 }
 
-interface OfficialChannelGroup { name: string; provider: ProviderType; channels: Channel[] }
+interface OfficialChannelGroup { name: string; provider: ProviderType; channels: Channel[]; isModelFamily: boolean }
 
 function groupOfficialChannels(channels: Channel[]): OfficialChannelGroup[] {
   const groups = new Map<string, OfficialChannelGroup>()
   for (const channel of channels) {
     const name = channel.name.trim()
-    const key = `${channel.provider}:${name}`
+    const modelFamily = isModelFamilyChannel(channel)
+    const key = modelFamily ? `family:${channel.familyId ?? channel.id}` : `${channel.provider}:${name}`
     const existing = groups.get(key)
     if (existing) existing.channels.push(channel)
-    else groups.set(key, { name, provider: channel.provider, channels: [channel] })
+    else groups.set(key, { name, provider: channel.provider, channels: [channel], isModelFamily: modelFamily })
   }
   return [...groups.values()]
 }
 
-function OfficialChannelGroupRow({ channels, health }: { channels: Channel[]; health: OfficialChannelHealth[] }): React.ReactElement {
+function OfficialChannelGroupRow({ channels, health, isModelFamily }: { channels: Channel[]; health: OfficialChannelHealth[]; isModelFamily: boolean }): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const representative = channels[0]!
   const enabledModels = new Map<string, string>()
@@ -371,8 +376,8 @@ function OfficialChannelGroupRow({ channels, health }: { channels: Channel[]; he
       <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30" aria-expanded={expanded}>
         <img src={getChannelLogo(representative)} alt="" className="h-8 w-8 shrink-0 rounded" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{representative.name} · 官方{multiple ? ` · ${channels.length} 个渠道` : ''}</span>
-          <span className="block truncate text-xs text-muted-foreground">{PROVIDER_LABELS[representative.provider]} · {enabledModels.size} 个模型已启用</span>
+          <span className="block truncate text-sm font-medium">{isModelFamily ? getOfficialChannelDisplayName(representative) : `${representative.name} · 官方`}{multiple ? ` · ${channels.length} 个渠道` : ''}</span>
+          <span className="block truncate text-xs text-muted-foreground">{isModelFamily ? `${PROVIDER_LABELS[representative.provider]} 协议 · 当前账号 ${enabledModels.size} 个模型可用` : `${PROVIDER_LABELS[representative.provider]} · ${enabledModels.size} 个模型已启用`}</span>
         </span>
         <span className="flex items-center gap-1 shrink-0">
           {supportsClaude && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-600">Claude</span>}
@@ -381,7 +386,7 @@ function OfficialChannelGroupRow({ channels, health }: { channels: Channel[]; he
         </span>
       </button>
       {expanded && <div className="border-t border-border/50 bg-muted/20 px-5 py-3 pl-[68px] space-y-2">
-        {multiple && <p className="text-xs text-muted-foreground">已合并 {channels.length} 个同名官方渠道；上游主备与重试由 New API 自动处理。</p>}
+        {isModelFamily ? <p className="text-xs text-muted-foreground">这是服务端汇流的模型池；普通/VIP 路由、上游主备与故障重试由后台自动处理。</p> : multiple ? <p className="text-xs text-muted-foreground">已合并 {channels.length} 个同名官方渠道；上游主备与重试由 New API 自动处理。</p> : null}
         {[...enabledModels.entries()].map(([id, name]) => {
           const summary = groupedHealth.get(id)
           return <div key={id} className="space-y-1"><div className="flex items-center gap-2 text-xs"><span className="min-w-0 flex-1 truncate text-foreground">{name}</span></div>{summary && <ModelAvailabilityBar model={summary.model} samples={summary.slots} compact />}</div>

@@ -18,6 +18,14 @@ export function isOfficialChannel(channel: Pick<Channel, 'id' | 'serverManaged'>
   return channel.serverManaged === true || channel.id.startsWith('newapi-')
 }
 
+export function isModelFamilyChannel(channel: Pick<Channel, 'id' | 'managedType'>): boolean {
+  return channel.managedType === 'model-family' || channel.id.startsWith('newapi-family-')
+}
+
+export function getOfficialChannelDisplayName(channel: Pick<Channel, 'id' | 'name' | 'managedType'>): string {
+  return isModelFamilyChannel(channel) ? `${channel.name} 模型池` : channel.name
+}
+
 export function getChannelSource(channel: Pick<Channel, 'id' | 'serverManaged'>): ChannelSource {
   return isOfficialChannel(channel) ? 'official' : 'self-configured'
 }

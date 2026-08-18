@@ -633,6 +633,8 @@ function buildChannelList() {
     // 缺 serverManaged 会让 ModelSelector 的 getChannelSource 把所有渠道都当作 self-configured，
     // 同名模型（如多个渠道的 gpt-5.6-terra）去重互相覆盖，导致模型列表缩水。
     serverManaged: c.serverManaged,
+    managedType: c.managedType,
+    familyId: c.familyId,
     models: getEnabledModels(c).map((m) => ({
       id: m.id,
       name: m.name,

@@ -309,7 +309,20 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
     throw new Error(`渠道同步失败: HTTP ${resp.status}`)
   }
 
-  const data = await resp.json() as { commercialMode: boolean; channels: Array<{ id: string; name: string; provider: string; apiKey: string; baseUrl: string; agentBaseUrl?: string; models: ChannelModel[] }> }
+  const data = await resp.json() as {
+    commercialMode: boolean
+    channels: Array<{
+      id: string
+      name: string
+      provider: string
+      apiKey: string
+      baseUrl: string
+      agentBaseUrl?: string
+      managedType?: 'model-family' | 'legacy'
+      familyId?: string
+      models: ChannelModel[]
+    }>
+  }
 
   if (!data.commercialMode || !data.channels) return
 
@@ -365,6 +378,8 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
       models: mergedModels,
       enabled: localExisting?.enabled ?? true,
       serverManaged: true,
+      managedType: ch.managedType ?? 'legacy',
+      familyId: ch.familyId,
       createdAt: localExisting?.createdAt ?? now,
       updatedAt: now,
     })
