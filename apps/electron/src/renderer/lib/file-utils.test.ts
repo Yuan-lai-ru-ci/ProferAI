@@ -87,6 +87,11 @@ describe('resolveRelativeToAbsolute（R4 统一拼接实现）', () => {
       .toBe('C:\\ws\\项目\\workspace-files/docs/方案.md')
   })
 
+  test('Windows 反斜杠相对路径与正斜杠写法解析到同一目标', () => {
+    expect(resolveRelativeToAbsolute('1233\\2344\\4566.txt', ['C:/ws/profer']))
+      .toBe('C:/ws/profer/1233/2344/4566.txt')
+  })
+
   test('尾部斜杠 base', () => {
     expect(resolveRelativeToAbsolute('src/a.md', ['C:/ws/profer/'])).toBe('C:/ws/profer/src/a.md')
   })

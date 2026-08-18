@@ -52,20 +52,23 @@ export function getLastPathSegments(path: string | null | undefined, n = 2): str
  */
 export function resolveRelativeToAbsolute(cleanPath: string, candidateBases: string[]): string {
   if (candidateBases.length === 0) return cleanPath
-  const firstSegment = cleanPath.split('/')[0]
+
+  // 相对路径在消息中可能使用 Windows 反斜杠；统一为正斜杠后再按目录段匹配，
+  // 使 src\\main.ts 与 src/main.ts 在预览解析时落到同一文件。
+  const relativePath = cleanPath.replace(/\\/g, '/')
+  const firstSegment = relativePath.split('/')[0]
   if (firstSegment) {
     for (const base of candidateBases) {
-      const baseName = getFileBaseName(base)
+      const normalizedBase = base.replace(/[\\/]+$/, '')
+      const baseName = getFileBaseName(normalizedBase)
       if (baseName === firstSegment) {
-        const parentDir = base.endsWith('/')
-          ? base.slice(0, base.slice(0, -1).lastIndexOf('/'))
-          : base.slice(0, base.lastIndexOf('/'))
-        return parentDir.endsWith('/') ? `${parentDir}${cleanPath}` : `${parentDir}/${cleanPath}`
+        const parentDir = getFileParentPath(normalizedBase)
+        return parentDir ? `${parentDir}/${relativePath}` : relativePath
       }
     }
   }
-  const base = candidateBases[0]!
-  return base.endsWith('/') ? `${base}${cleanPath}` : `${base}/${cleanPath}`
+  const base = candidateBases[0]!.replace(/[\\/]+$/, '')
+  return `${base}/${relativePath}`
 }
 
 export function getFileParentPath(filePath: string): string | null {

@@ -27,8 +27,8 @@ const COMPACT_THRESHOLD_RATIO = 0.775
 const WARNING_RATIO = 0.80
 /** Popover hover 关闭延迟（ms），与 AgentThinkingPopover 一致 */
 const HOVER_CLOSE_DELAY = 150
-/** 手动压缩长按触发时长（ms） */
-const LONG_PRESS_DURATION = 650
+/** 手动压缩长按触发时长（ms），文件路径搜索长按复用其一半。 */
+export const LONG_PRESS_DURATION = 650
 
 interface ContextUsageBadgeProps {
   inputTokens?: number

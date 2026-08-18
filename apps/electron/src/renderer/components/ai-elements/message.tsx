@@ -747,6 +747,10 @@ const USER_REMARK_PLUGINS: RemarkPluginFn[] = [remarkMentions, remarkPreserveBre
 
 interface UserMessageContentProps extends HTMLAttributes<HTMLDivElement> {
   children: string
+  /** 当前 Agent 会话工作目录，用于识别用户消息中的相对文件路径。 */
+  basePath?: string
+  /** 附加目录候选，用于识别用户消息中的相对文件路径。 */
+  basePaths?: string[]
 }
 
 /**
@@ -755,7 +759,7 @@ interface UserMessageContentProps extends HTMLAttributes<HTMLDivElement> {
  * - 点击展开/收起，带渐变遮罩
  */
 export const UserMessageContent = React.memo(
-  function UserMessageContent({ children, className, ...props }: UserMessageContentProps): React.ReactElement {
+  function UserMessageContent({ children, className, basePath, basePaths, ...props }: UserMessageContentProps): React.ReactElement {
     const [isExpanded, setIsExpanded] = React.useState(false)
     const [shouldCollapse, setShouldCollapse] = React.useState(false)
     const contentRef = React.useRef<HTMLDivElement>(null)
@@ -786,7 +790,7 @@ export const UserMessageContent = React.memo(
             shouldCollapse && !isExpanded && 'max-h-[6.5em]'
           )}
         >
-          <MessageResponse className="prose-p:my-0.5 prose-headings:my-1.5" remarkPlugins={USER_REMARK_PLUGINS}>{children}</MessageResponse>
+          <MessageResponse basePath={basePath} basePaths={basePaths} className="prose-p:my-0.5 prose-headings:my-1.5" remarkPlugins={USER_REMARK_PLUGINS}>{children}</MessageResponse>
         </div>
         {shouldCollapse && (
           <button
@@ -814,7 +818,10 @@ export const UserMessageContent = React.memo(
       </div>
     )
   },
-  (prevProps, nextProps) => prevProps.children === nextProps.children
+  (prevProps, nextProps) =>
+    prevProps.children === nextProps.children &&
+    prevProps.basePath === nextProps.basePath &&
+    prevProps.basePaths === nextProps.basePaths
 )
 
 // ===== MessageLoading 加载动画 =====

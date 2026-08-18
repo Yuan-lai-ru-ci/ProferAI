@@ -941,15 +941,34 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
         <span className="text-xs truncate flex-1" title={dirPath}>
           {dirName}
         </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-          onClick={(e) => { e.stopPropagation(); onDetach() }}
-        >
-          <X className="size-3" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="更多操作"
+              title="更多操作"
+              className="h-6 w-6 rounded flex items-center justify-center text-muted-foreground hover:bg-accent/70 hover:text-foreground invisible group-hover:visible focus-visible:visible data-[state=open]:visible flex-shrink-0"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <MoreHorizontal className="size-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+            {onAddToChat && (
+              <DropdownMenuItem className="text-xs py-1 [&>svg]:size-3.5">
+                <MessageSquarePlus />
+                添加到聊天
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              className="text-xs py-1 text-destructive focus:text-destructive [&>svg]:size-3.5"
+              onSelect={onDetach}
+            >
+              <X />
+              移除附加
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       {expanded && (
         <div className="relative">

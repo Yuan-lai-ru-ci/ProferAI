@@ -83,6 +83,8 @@ export interface SDKMessageRendererProps {
   allMessages: SDKMessage[]
   /** 相对路径解析基准 */
   basePath?: string
+  /** 附加目录候选，用于解析相对文件路径。 */
+  basePaths?: string[]
   /** 是否显示消息头部（模型 icon + 名称），默认 true */
   showHeader?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
@@ -848,6 +850,7 @@ export function SDKMessageRenderer({
   message,
   allMessages,
   basePath,
+  basePaths,
   showHeader = true,
   sessionModelId,
 }: SDKMessageRendererProps): React.ReactElement | null {
@@ -910,7 +913,7 @@ export function SDKMessageRenderer({
   if (msgType === 'user') {
     const uMsg = message as SDKUserMessage
     if (isUserInputMessage(uMsg)) {
-      return <UserInputMessage message={uMsg} />
+      return <UserInputMessage message={uMsg} basePath={basePath} basePaths={basePaths} />
     }
     return null
   }
@@ -1128,7 +1131,7 @@ function ScheduledRunBadge(): React.ReactElement {
   )
 }
 
-function UserInputMessage({ message }: { message: SDKUserMessage }): React.ReactElement {
+function UserInputMessage({ message, basePath, basePaths }: { message: SDKUserMessage; basePath?: string; basePaths?: string[] }): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
@@ -1180,7 +1183,7 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
             ))}
           </div>
         )}
-        {text && <UserMessageContent>{text}</UserMessageContent>}
+        {text && <UserMessageContent basePath={basePath} basePaths={basePaths}>{text}</UserMessageContent>}
       </MessageContent>
       {text && (
         <MessageActions className="pl-[46px] mt-0.5">
@@ -1405,6 +1408,7 @@ export interface MessageGroupRendererProps {
   /** 跨 turn 历史 TaskCreate id → subject 映射（由父组件 useMemo 算一次后传入） */
   historicalTaskSubjects: Map<string, string>
   basePath?: string
+  basePaths?: string[]
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
   /** 错误重试回调（仅当 turn 含错误消息时使用） */
@@ -1497,13 +1501,13 @@ export function getGroupPreview(group: MessageGroup): string {
   return texts.join(' ').slice(0, 200)
 }
 
-export function MessageGroupRenderer({ group, allMessages, historicalTaskSubjects, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
     return (
       <div data-message-id={groupId} data-message-role="user">
-        <UserInputMessage message={group.message} />
+        <UserInputMessage message={group.message} basePath={basePath} basePaths={basePaths} />
       </div>
     )
   }
