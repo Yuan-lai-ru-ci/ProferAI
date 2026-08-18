@@ -32,7 +32,7 @@ import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import type { Channel, ModelOption } from '@profer/shared'
-import { getChannelProtocol, getChannelSource, type ChannelProtocol } from '@/lib/channel-model-groups'
+import { getChannelProtocol, getChannelSource, isOfficialChannel, type ChannelProtocol } from '@/lib/channel-model-groups'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
 export const CompactModelSelectorCtx = React.createContext(false)
@@ -157,7 +157,7 @@ export function ModelSelector({
   // 未登录时隐藏服务端托管的官方渠道（newapi-*），避免残留缓存渠道展示给未登录用户
   const visibleChannels = React.useMemo(() => {
     if (authStatus.isLoggedIn) return channels
-    return channels.filter((c) => !c.id.startsWith('newapi-'))
+    return channels.filter((c) => !isOfficialChannel(c))
   }, [channels, authStatus.isLoggedIn])
 
   const modelOptions = React.useMemo(() => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol), [visibleChannels, filterChannelId, filterChannelIds, preferredProtocol])

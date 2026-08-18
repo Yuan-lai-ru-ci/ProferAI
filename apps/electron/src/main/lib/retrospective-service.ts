@@ -21,6 +21,7 @@ import { getTeamAuthWithRefresh } from './auth-service'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { isCommercialBuild } from './build-target'
+import { isOfficialManagedChannel } from './official-channel'
 import { getSettings } from './settings-service'
 import { getAgentSessionSDKMessages, getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { loadGraph, appendGraphEvent } from './project-graph-service'
@@ -243,7 +244,7 @@ async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promis
 
   let apiKey: string
   let proxyBaseUrl = ''
-  if ((isCommercialBuild() || isCommercialMode()) && channel.id?.startsWith('newapi-')) {
+  if ((isCommercialBuild() || isCommercialMode()) && isOfficialManagedChannel(channel)) {
     const auth = await getTeamAuthWithRefresh()
     if (!auth) {
       console.warn('[回溯] 团队账号登录已过期，跳过')

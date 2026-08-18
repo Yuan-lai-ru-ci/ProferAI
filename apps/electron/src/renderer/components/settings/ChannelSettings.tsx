@@ -95,7 +95,7 @@ export function ChannelSettings(): React.ReactElement {
   const loadChannels = React.useCallback(async (): Promise<Channel[]> => {
     try {
       const list = await window.electronAPI.listChannels()
-      const visible = authStatus.isLoggedIn ? list : list.filter((c) => !c.id.startsWith('newapi-'))
+      const visible = authStatus.isLoggedIn ? list : list.filter((c) => !isOfficialChannel(c))
       setChannels(visible)
       setGlobalChannels(visible)
       return visible
@@ -404,7 +404,7 @@ interface ChannelRowProps {
 }
 
 function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSelfConfig, health }: ChannelRowProps): React.ReactElement {
-  const isOfficial = channel.id.startsWith('newapi-')
+  const isOfficial = isOfficialChannel(channel)
   const [expanded, setExpanded] = React.useState(false)
   const enabledCount = channel.models.filter((m) => m.enabled).length
   const canExpand = isOfficial && !!health?.models.length

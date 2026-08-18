@@ -33,6 +33,7 @@ import { refreshCodexOAuth } from './codex-oauth-service'
 import { refreshXaiOAuth } from './xai-oauth-service'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
 import { isCommercialBuild } from './build-target'
+import { isOfficialManagedChannel } from './official-channel'
 import {
   inferAgentBaseUrl,
   normalizeChannelForCurrentSchema,
@@ -336,7 +337,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   const preCleanupCount = existingConfig.channels.length
   const localChannels = existingConfig.channels.filter((c) => {
     if (serverIds.has(c.id)) return false // 服务端仍在管理，后面会用最新数据覆盖
-    if (c.serverManaged || c.id.startsWith('newapi-')) return false // 之前由服务端管理但现在不在列表中了 → 已删除，清理
+    if (isOfficialManagedChannel(c)) return false // 之前由服务端管理但现在不在列表中了 → 已删除，清理
     return true // 用户自建本地渠道，保留
   })
   const cleanedCount = preCleanupCount - localChannels.length - serverIds.size
@@ -513,7 +514,7 @@ export function createChannel(input: ChannelCreateInput): Channel {
  */
 export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
   // 官方同步渠道（newapi-*）：允许切换 channel enabled + 模型 enabled，不允许改名称/供应商/API Key/增删模型
-  if (id.startsWith('newapi-')) {
+  if (isOfficialManagedChannel({ id })) {
     if (input.name !== undefined || input.provider !== undefined ||
         input.baseUrl !== undefined || input.agentBaseUrl !== undefined ||
         input.apiKey !== undefined) {
@@ -577,7 +578,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
  * 删除渠道
  */
 export function deleteChannel(id: string): void {
-  if (id.startsWith('newapi-')) throw new Error('官方同步渠道不可删除，请在 New API 后台管理')
+  if (isOfficialManagedChannel({ id })) throw new Error('官方同步渠道不可删除，请在 New API 后台管理')
   if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)

@@ -22,6 +22,7 @@ import { getProferUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeOpenAIBas
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from '../xai-oauth-credentials'
+import { isOfficialManagedChannel } from '../official-channel'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type PiAiCompat = typeof import('@earendil-works/pi-ai/compat')
@@ -285,7 +286,8 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions, explicit1MCont
   const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model)
   const modelId = input.model?.toLowerCase()
   const isOfficialGpt56 = input.provider === 'openai'
-    && input.channelId?.startsWith('newapi-')
+    && input.channelId != null
+    && isOfficialManagedChannel({ id: input.channelId })
     && modelId != null
     && OFFICIAL_GPT_56_MODEL_IDS.has(modelId)
   const isDeepSeekV4 = isDeepSeekV4Model(input.model)

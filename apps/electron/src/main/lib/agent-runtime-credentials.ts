@@ -2,6 +2,7 @@ import type { Channel, ProviderType } from '@profer/shared'
 import { getTeamAuthWithRefresh } from './auth-service'
 import { decryptApiKey, isCommercialMode, resolveChannelAgentBaseUrl } from './channel-manager'
 import { isCommercialBuild } from './build-target'
+import { isOfficialManagedChannel } from './official-channel'
 
 /** 单次 Agent 请求专属的已解析凭据；严禁写入 process.env 或日志。 */
 export interface ResolvedRuntimeCredentials {
@@ -23,7 +24,7 @@ export type ResolveRuntimeCredentialsResult =
 export async function resolveRuntimeCredentials(
   channel: Pick<Channel, 'id' | 'provider' | 'baseUrl' | 'agentBaseUrl'>,
 ): Promise<ResolveRuntimeCredentialsResult> {
-  const isOfficialChannel = channel.id.startsWith('newapi-')
+  const isOfficialChannel = isOfficialManagedChannel(channel)
   const forceBearerAuth = (isCommercialBuild() || isCommercialMode()) && isOfficialChannel
 
   if (forceBearerAuth) {

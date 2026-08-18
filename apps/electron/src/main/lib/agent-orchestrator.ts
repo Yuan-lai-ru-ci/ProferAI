@@ -84,6 +84,7 @@ import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
 import { isCommercialBuild } from './build-target'
+import { isOfficialManagedChannel } from './official-channel'
 import {
   appendSDKMessages,
   updateAgentSessionMeta,
@@ -492,7 +493,7 @@ export class AgentOrchestrator {
 
       let apiKey: string
       let proxyBaseUrl = ''
-      if ((isCommercialBuild() || isCommercialMode()) && channel.id?.startsWith('newapi-')) {
+      if ((isCommercialBuild() || isCommercialMode()) && isOfficialManagedChannel(channel)) {
         const auth = await getTeamAuthWithRefresh()
         if (!auth) {
           console.warn('[Agent 标题生成] 团队账号登录已过期，跳过 AI 标题生成')
