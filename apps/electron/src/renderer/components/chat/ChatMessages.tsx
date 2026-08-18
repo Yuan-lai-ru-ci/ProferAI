@@ -46,6 +46,7 @@ import { useSmoothStream } from '@profer/ui'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { useConversationParallelMode } from '@/hooks/useConversationSettings'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
+import { parseQuotedSelectionRefs } from '@/lib/quoted-selection'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
@@ -340,7 +341,7 @@ export function ChatMessages({
     () => messages.map((m) => ({
       id: m.id,
       role: m.role as MinimapItem['role'],
-      preview: m.content.slice(0, 200),
+      preview: (m.role === 'user' ? parseQuotedSelectionRefs(m.content).text : m.content).slice(0, 200),
       avatar: m.role === 'user' ? userProfile.avatar : undefined,
       model: m.model,
     })),

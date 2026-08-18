@@ -84,8 +84,6 @@ import {
   installPiRequestProxyFetch,
   runWithPiRequestProxy,
 } from './pi-request-proxy'
-import { createPiHarness, createPiHarnessFollowUpSystemMessage, type PiHarnessToolCall } from '../pi-harness'
-import { appendPiHarnessDiagnostic } from '../pi-harness-diagnostics'
 import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
@@ -826,7 +824,6 @@ function resolveGuardedRealPath(path: string): string {
 
 interface ToolWrapOptions {
   canUseTool?: PiAgentQueryOptions['canUseTool']
-  onToolCall?: (call: PiHarnessToolCall) => void
 }
 
 function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
@@ -834,9 +831,8 @@ function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
   options: ToolWrapOptions,
 ): ToolDefinition<TParams, TDetails, TState> {
   const canUseTool = options.canUseTool
-  const onToolCall = options.onToolCall
   const executionMode = 'sequential' as const
-  if (!canUseTool && !onToolCall) return { ...definition, executionMode }
+  if (!canUseTool) return { ...definition, executionMode }
   return {
     ...definition,
     executionMode,
@@ -855,7 +851,6 @@ function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
         }
         updatedParams = restorePiInput(definition.name, rawInput, permission.updatedInput)
       }
-      onToolCall?.({ name: definition.name, input: updatedParams })
       return definition.execute(
         toolCallId,
         updatedParams as typeof params,
@@ -1090,7 +1085,6 @@ function normalizeStringArray(value: unknown): string[] | undefined {
 export function buildPromaProductToolDefinitions(
   sdk: PiSdk,
   canUseTool: PiAgentQueryOptions['canUseTool'],
-  onToolCall?: ToolWrapOptions['onToolCall'],
 ): ToolDefinition[] {
   const tasks = new Map<string, ProferTaskItem>()
   let nextTaskId = 1
@@ -1288,7 +1282,7 @@ export function buildPromaProductToolDefinitions(
   ] as unknown as ToolDefinition[]
 
   return definitions.map((tool) =>
-    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
+    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
 }
 
 const FORCE_KILL_WSL_GRACE_MS = 800
@@ -1562,7 +1556,6 @@ function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  onToolCall?: ToolWrapOptions['onToolCall'],
 ): ToolDefinition[] {
   const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId)
   const definitions = [
@@ -1577,16 +1570,15 @@ function buildBuiltinToolDefinitions(
   ] as unknown as ToolDefinition[]
 
   return definitions.map((tool) =>
-    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
+    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
 }
 
 function wrapCustomToolDefinitions(
   tools: ToolDefinition[] | undefined,
   canUseTool: PiAgentQueryOptions['canUseTool'],
-  onToolCall?: ToolWrapOptions['onToolCall'],
 ): ToolDefinition[] {
   return (tools ?? []).map((tool) =>
-    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool, onToolCall }) as ToolDefinition)
+    wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
 }
 
 export function installRuntimeGuardHooks(session: AgentSession, guard: AgentRuntimeGuard): void {
@@ -1688,9 +1680,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ? sdk.SessionManager.open(sessionFile, input.piSessionDir, cwd)
         : sdk.SessionManager.create(cwd, input.piSessionDir)
       const { modelRuntime, model } = await buildModel(sdk, input)
-      // cwd 供 harness 把工具参数里的相对路径解析为绝对路径，与读回验证匹配一致
-      const harness = input.compactRequest ? undefined : createPiHarness({ userPrompt: input.prompt, cwd })
-      const onToolCall: ToolWrapOptions['onToolCall'] = (call) => harness?.recordToolCall(call)
       const autoCompactionReserveTokens = calculatePiAutoCompactionReserveTokens(
         model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       )
@@ -1708,10 +1697,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           cwd,
           input.canUseTool,
           input.runtimeEnv,
-          onToolCall,
         ),
-        ...buildPromaProductToolDefinitions(sdk, input.canUseTool, onToolCall),
-        ...wrapCustomToolDefinitions(input.customTools, input.canUseTool, onToolCall),
+        ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
+        ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
       ]
 
       const settingsManager = sdk.SettingsManager.inMemory({
@@ -1988,7 +1976,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 break
               }
               if (terminalRetryError) {
-                harness?.markTerminalFailure()
                 runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
                 queue.push(terminalRetryError.sdkMessage)
               }
@@ -2037,7 +2024,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                   recovered || active.abortRequested || active.interrupting,
                 )
                 if (terminalRetryError) {
-                  harness?.markTerminalFailure()
                   runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
                   queue.push(terminalRetryError.sdkMessage)
                 }
@@ -2076,7 +2062,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 pendingNativeOverflowRecovery = false
                 const terminalRetryError = retryTerminalGate.settle(active.abortRequested || active.interrupting)
                 if (terminalRetryError) {
-                  harness?.markTerminalFailure()
                   runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
                   queue.push(terminalRetryError.sdkMessage)
                 }
@@ -2146,16 +2131,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 dropTrailingAbortedAssistant: () => {
                   session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
                 },
-                createFollowUpPrompt: () => {
-                  const followUpPrompt = harness?.createFollowUpPrompt()
-                  if (followUpPrompt && harness) {
-                    // 续轮身份标注：自动注入的验证请求以系统消息推给 UI（渲染为「系统验证兜底」），
-                    // 避免 Pi transcript 里这条 user 消息在回看/持久化时被误认为用户自己发的。
-                    queue.push(createPiHarnessFollowUpSystemMessage(session.sessionId, harness.createDecision()))
-                  }
-                  return followUpPrompt
-                },
-                markBlocked: () => harness?.markBlocked(),
               },
             )
             if (!compactContextRequested) break
@@ -2198,10 +2173,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             // prompt 链结束后 Pi 已落盘；此时从 SessionManager entries 精确取得 entry ID 映射，
             // 供分叉/回退定位 branch 点使用。
             persistPiEntryBindings()
-            // 本轮决策写入诊断事件（尽力而为，不阻塞主流程；compact 场景无 harness）。
-            if (harness) {
-              appendPiHarnessDiagnostic(input.sessionId, harness.createDecision())
-            }
             queue.close()
           })
           .catch((error) => queue.fail(error))

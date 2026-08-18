@@ -1,8 +1,9 @@
 # Phase B 计划 — Agent Preset 与 Pi Harness 深化
 
+> 历史计划：其中“验证兜底/Harness 自动续轮”子功能已于 2026-08-19 按用户决定移除，Agent 知识库引用/读取也已下线。保留本文仅作历史记录；当前代码以不自动追加验证轮次、Chat 保留资料库为准。
 > 记录日期:2026-08-16
-> 上游会话:preset 能力提升 + pi runtime 提示词 + harness 改进(已落地 Phase A + 导出/导入)
-> 端到端验证:真实 Electron 主进程 + Pi runtime + deepseek-v4-flash 真模型调用,preset 工具与 harness 续轮均取证通过
+> 上游会话:preset 能力提升 + pi runtime 提示词 + harness 改进（历史记录）
+> 当前实现：预设能力保留；Harness 自动续轮和 Agent 知识库能力已移除
 
 ## 一、已完成基线(勿重复)
 
@@ -16,7 +17,9 @@
 
 ## 二、Phase B 任务清单
 
-### B1. Harness 感知与边界(优先级:高)
+### B1. Harness 感知与边界（历史方案，已废止）
+
+> B1 的 Harness 续轮、诊断和双 runtime 对齐方案已整体移除；仅保留 Agent 自行完成最小验证的提示词规范。
 
 1. ✅ **续轮身份标注（2026-08-16 完成）**:harness follow-up 注入时同步推送 `system/subtype=harness_follow_up` 系统消息（含未验证文件清单），经 orchestrator 持久化到 JSONL;UI 渲染为「系统验证兜底」提示卡（SDKMessageRenderer `HarnessFollowUpNotice` + session-core/renderer 双侧分组逻辑），不再可能被误认为用户自己发的消息。冒烟已取证（系统消息落盘 ✅）。
 2. ✅ **验证命令判定细化（2026-08-16 完成）**:新增 `INSTALL_COMMAND_PREFIX`（npm/bun/pnpm/yarn install 族永远不算验证）+ `referencesWrittenPath`（命令引用本轮写入路径 = 定向验证）+ `VALIDATION_KEYWORD_PATTERN`（tsc/test/lint 等验证语义命令仍算验证）;不引用写入路径的泛化命令（如全仓 `bun run build`）不再误判为「已验证」。eval corpus 扩到 18 例。
@@ -31,9 +34,9 @@
 3. ✅ **更细粒度能力裁剪（2026-08-16 完成，单工具级）**:评估后做「单工具禁用」黑名单式（与 disabledToolGroups 统一心智，不做字面白名单——组禁用与单工具叠加语义最简）。shared 新增 `AGENT_PRESET_GROUP_TOOL_NAMES` 事实表（四组 24 工具短名，跨 runtime 统一口径：Claude 裸名 / Pi `mcp__server__tool` 末段）+ `filterDisabledTools` 纯函数；`AgentPreset.disabledTools` 全链路（manager 校验/净化/合并并集/脱离冻结/导出导入 + Claude 五个 inject 注入点 + Pi `buildPiBuiltinTools` 统一过滤 + 双侧工具 schema + UI 组内单工具勾选）。**命令级白名单（Bash 命令级）本轮不做**：需跨 runtime 接入 permission 层与 WSL 包装，与 permissionMode（plan 模式已含只读命令判定）重叠，成本高收益薄，留作远期评估。
 4. **Phase 2 共享市场(远期)**:复用 Skills 市场机制,预设导出/导入文件格式(profer-agent-presets v1)是天然载体。
 
-### B3. 一致性补全遗留(会话中发现,未修)
+### B3. 一致性补全遗留（历史记录）
 
-1. ~~Claude runtime 知识库工具缺失~~ **已取消（2026-08-16 用户确认）**：知识库是砍掉的功能，本项不修复。曾临时实现的 `knowledge-base-agent-tools.ts` 注入与提示词 runtime 分支已全部回退（工作树恢复原状），不保留任何相关改动。
+1. **Agent 知识库能力已于 2026-08-19 移除**：Chat 继续保留通用资料库；Agent 不再提供资料引用、session allowlist、读取工具、相关 IPC/preload 或资料预览入口，旧 session 索引读取时会清理遗留字段。
 2. ✅ **AskUserQuestion 的 Pi 侧注册（2026-08-16 确认已打通）**:调查确认 Pi 侧提问闭环已端到端存在，无需修复——`buildPromaProductToolDefinitions` 注册 `AskUserQuestion`（questions 入参 + 执行返回 `{answers}`），统一 `canUseTool` 恒走 `askUserService.handleAskUserQuestion`（横幅阻塞 + `respondToAskUser` 注入 answers，经 `restorePiInput` 合并回参数）；提示词段「不确定性处理」为 runtime 中立文案（两 runtime 同名同 schema），无需按 runtime 分支。补取证单测 `pi-agent-adapter.test.ts`（3 用例：注册契约 / answers 注入返还 / deny 抛错），并导出 `buildPromaProductToolDefinitions` 供测试引用。
 3. ✅ **pdf skill YAML frontmatter 告警（2026-08-16 完成）**:`default-skills/pdf/SKILL.md` description 未加引号,含「: 」触发 YAML "Nested mappings are not allowed in compact mappings";已加双引号并 bump version 1.0.4→1.0.5（契约要求）。注意:老工作区已有副本不会被自动覆盖（2026-08-14 起只做「缺失即注入」），需用户经元 Skill 手动同步。
 4. **newapi 中转渠道 403**:GPT/Claude 渠道被服务端套餐限制(「仅 Plus 及以上套餐可用」),属用户账户侧,非代码问题。
@@ -60,8 +63,10 @@
 
 ## 五、本轮（2026-08-16 接手）进展快照
 
-- **完成**:B1-1 续轮身份标注、B1-2 验证命令判定细化、B1-4 输入解析防护、B1-5 Claude runtime 对齐（claude-harness 追踪器 + adapter 终态续轮注入 + 编排层注解 + 诊断 runtime 字段 + Claude 提示词兜底文案 + 冒烟双 runtime）、B2-2 预设继承/派生（basePresetId）、B2-3 单工具级裁剪（disabledTools + 组内工具事实表）、B3-2 AskUserQuestion Pi 侧注册（确认已打通 + 取证单测）、B3-3 pdf skill YAML；**B3-1 取消**（知识库为砍掉的功能，临时改动已回退）
+> 以上关于 Pi/Claude Harness 续轮、诊断、`harness_follow_up` 系统消息和对应冒烟取证的内容均已废止（2026-08-19）。Agent 自行验证规范保留，系统不再自动发起验证模型调用。
+
+- **完成**:预设继承/派生（basePresetId）、单工具级裁剪（disabledTools + 组内工具事实表）、AskUserQuestion Pi 侧注册、pdf skill YAML；**Harness 自动续轮与 Agent 知识库均已移除**
 - **改动文件**:`pi-harness.ts`（运行时中立说明 + `AgentHarness*` 别名）、`claude-harness.ts`（新增，Claude 消息流→工具事实追踪器）、`claude-agent-adapter.ts`（observe + 终态评估 + 续轮注入 + 诊断落盘）、`agent-orchestrator.ts`（识别 `_keepChannelOpenForHarnessFollowUp` 免 drain 超时）、`pi-harness-diagnostics.ts`（runtime 字段 `pi|claude`，schema v2）、`agent-prompt-builder.ts`（Claude Runtime 段落 + 兜底文案）、`claude-harness.test.ts`（新增 10 用例）、`agent-prompt-builder.test.ts`（补 electron mock + Claude 段落断言）、`pi-harness-diagnostics.test.ts`（schema v2 + runtime 透传）、`agent-session-smoke.ts`（harness 段双 runtime + `--claude` 前置）、`pi-harness.ts`（判定细化 + 系统消息构建器）、`pi-agent-adapter.ts`（follow-up 推送系统消息 + 导出 `buildPromaProductToolDefinitions`）、`agent-preset-manager.ts`（派生合并/校验/脱离基座/单工具校验净化）、`shared/types/agent-preset.ts`（`basePresetId` + `mergeAgentPreset` + `AGENT_PRESET_GROUP_TOOL_NAMES` + `disabledTools` + `filterDisabledTools`）、`agent-preset-tools.ts` + `pi-builtin-tools.ts`（双侧工具 schema 同步 + Pi 统一过滤）、Claude 侧五个注入点（task-graph/memory-archive/team-memory/collaboration/automation 按短名过滤）、`AgentPresetSettings.tsx`（基座选择器 + 徽标 + 组内单工具勾选）、`shared/types/agent.ts`（`pending_paths`）、`session-core/src/group.ts` + `SDKMessageRenderer.tsx`（分组/渲染「系统验证兜底」）、`SDKMessageRenderer.test.ts`（新增）、`pi-agent-adapter.test.ts`（新增，B3-2 取证）、`pi-builtin-tools.test.ts`（补 electron mock + 派生/单工具契约用例）、`default-skills/pdf/SKILL.md`（YAML 引号 + version 1.0.5）、`agent-session-smoke.ts`（落盘取证 + 派生合并/单工具裁剪自检）
 - **验证**:shared/session-core/electron typecheck 全过;目标单测 108/108（新增 claude-harness 10 用例：写入→follow-up、失败写入忽略、读回/验证语义 Bash 闭环、错误结果与 max_turns 失败终态、软中断 markBlocked、replay 忽略、无结果不追踪、follow-up 单次触发;diagnostics schema v2 + runtime 透传;prompt-builder Claude 段落断言）;**端到端冒烟**：B1-5 前一轮已取证派生合并 ✅ + 单工具裁剪 ✅ + 第一轮真实会话 ✅；本轮改动未跑真实冒烟（Claude harness 续轮需有效 Claude runtime 渠道，`--claude` 前置探测已就绪，上游 API 若可用即可取证）
-- **版本**:shared 0.1.37、session-core 0.1.1、electron 0.15.51（B1-5 在 0.15.50 基础上再 bump）
+- **版本**:历史快照版本信息保留，当前版本以仓库 `package.json` 为准
 - **遗留**:B1-3 bash 写文件盲区、B2-1 内置预设模板扩充（继承/单工具机制已就位，扩充内容可直接受益）、B2-3 命令级白名单（Bash 命令级，评估后暂缓：与 permissionMode 重叠）、B4 冒烟资产固化说明已随脚本更新。文档同步（CLAUDE.md/README.md）仍需用户允许后另做。

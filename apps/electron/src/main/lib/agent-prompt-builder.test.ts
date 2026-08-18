@@ -69,9 +69,9 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('高风险、不可逆或外部副作用')
     expect(piPrompt).toContain('最小相关验证')
     expect(piPrompt).toContain('两次独立证据')
-    // 验证 Harness 兜底规则对 Pi 明示，避免多余续轮
-    expect(piPrompt).toContain('验证 Harness 会自动兜底')
-    expect(piPrompt).toContain('自动追加一次只做最小验证的续轮')
+    // 验证闭环责任由 Agent 自身承担，系统不再自动追加续轮
+    expect(piPrompt).toContain('系统不会自动追加验证轮次')
+    expect(piPrompt).not.toContain('自动追加一次只做最小验证的续轮')
     // 工具名按 runtime 适配：Pi 带 mcp__ 前缀，Claude 用 in-process MCP 裸名
     expect(piPrompt).toContain('mcp__task-graph__proma_task_create')
     expect(piPrompt).toContain('mcp__agent-presets__preset_create')
@@ -86,9 +86,10 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('单次弱信号、临时过程和未经验证的推断不要写入')
     expect(piPrompt).not.toContain('不要写入长期记忆文件')
     expect(claudePrompt).not.toContain('### Pi Runtime 自主执行准则')
-    // B1-5：Claude runtime 也有专属段落，且 harness 兜底文案对 Claude 明示
+    // Claude runtime 也有专属段落，且明确要求 Agent 自行完成验证闭环
     expect(claudePrompt).toContain('## Claude Agent Runtime')
-    expect(claudePrompt).toContain('验证 Harness 会自动兜底')
+    expect(claudePrompt).toContain('系统不会自动追加验证轮次')
+    expect(claudePrompt).not.toContain('自动追加一次只做验证的续轮')
     expect(piPrompt).not.toContain('## Claude Agent Runtime')
   })
 

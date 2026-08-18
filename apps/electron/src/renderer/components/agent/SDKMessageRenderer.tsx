@@ -13,10 +13,10 @@
 
 import * as React from 'react'
 import { extractUserText, isUserInputMessage } from '@profer/session-core'
-import { Bot, Loader2, AlertTriangle, ShieldCheck, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
-import { getFileBaseName } from '@/lib/file-utils'
+import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
@@ -24,7 +24,6 @@ import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesS
 import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './ProcessBlockGroup'
 import { extractToolResultText, isTaskProgressTool, parseTaskCreateResult } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
-import { extractReadKnowledgeItems } from './knowledge-read-indicator'
 import { DurationBadge } from './AgentMessages'
 import {
   Message,
@@ -150,37 +149,6 @@ function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): Rea
           )}
           {reason && reason !== denialMessage && (
             <p className="break-words text-muted-foreground/70">{reason}</p>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function HarnessFollowUpNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
-  const paths = Array.isArray(message.pending_paths)
-    ? message.pending_paths.filter((path): path is string => typeof path === 'string' && path.length > 0)
-    : []
-  const MAX_SHOWN_PATHS = 5
-
-  return (
-    <div className="my-3 pl-[46px] pr-1">
-      <div className="flex items-start gap-2.5 rounded-md border border-sky-500/20 bg-sky-500/5 px-3 py-2.5 text-xs text-foreground/80">
-        <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-sky-500" />
-        <div className="min-w-0 space-y-1">
-          <span className="font-medium text-foreground">系统验证兜底</span>
-          <p className="break-words text-muted-foreground">
-            检测到本轮修改了 {paths.length > 0 ? `${paths.length} 个` : '本地'}文件但尚未验证，已自动发起一次最小验证复查。
-          </p>
-          {paths.length > 0 && (
-            <ul className="space-y-0.5 break-all font-mono text-[11px] text-muted-foreground/80">
-              {paths.slice(0, MAX_SHOWN_PATHS).map((path) => (
-                <li key={path}>· {path}</li>
-              ))}
-              {paths.length > MAX_SHOWN_PATHS && (
-                <li>· …（共 {paths.length} 个文件，仅列出前 {MAX_SHOWN_PATHS} 个）</li>
-              )}
-            </ul>
           )}
         </div>
       </div>
@@ -381,9 +349,9 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       }
     } else if (msg.type === 'system') {
       const sysMsg = msg as SDKSystemMessage
-      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / harness_follow_up）
+      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / interruption_record）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'harness_follow_up' || sysMsg.subtype === 'interruption_record') {
+      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'interruption_record') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -442,7 +410,7 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
     for (let i = result.length - 1; i >= 0; i--) {
       const prev = result[i]!
       if (prev.type === 'user') break // 真正的用户输入阻断合并
-      if (prev.type === 'system' && ['compact_boundary', 'permission_denied', 'harness_follow_up'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
+      if (prev.type === 'system' && ['compact_boundary', 'permission_denied'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
       if (prev.type === 'assistant-turn') {
         if (prev.model === group.model) {
           mergeTargetIdx = i
@@ -742,7 +710,6 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   const renderProcessGroupBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
     return renderTopLevelBlock(block, i)
   }
-  const readKnowledgeItems = extractReadKnowledgeItems(turn.turnMessages)
 
   return (
     <Message from="assistant">
@@ -774,7 +741,6 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
               )
             })}
           </div>
-          {readKnowledgeItems.length > 0 && <div className="flex flex-wrap gap-1.5 border-t border-border/40 pt-2 text-xs text-muted-foreground"><span>已读取资料：</span>{readKnowledgeItems.map((item) => <Badge key={item.itemId} variant="secondary" className="max-w-[240px] truncate font-normal">{item.title}</Badge>)}</div>}
           {/* 如果有错误但也有内容块，在末尾显示错误 */}
           {hasError && errorContent && topLevelBlocks.length > 0 && (
             <div className="mt-3 text-sm text-destructive">
@@ -946,42 +912,24 @@ export interface AttachedFileRef {
   path: string
 }
 
-/** 解析的引用文件 */
-export interface QuotedFileRef {
-  /** 源文件路径 */
-  path: string
-  /** 源文件名 */
-  filename: string
-}
+/** 解析的引用来源（文件或 Agent 历史/草稿等上下文） */
+export type QuotedFileRef = ParsedQuotedSelectionRef
 
-/** 解析消息中的 <attached_files> 块和 <quoted_file> 块，返回文件列表、引用列表和剩余文本 */
+/**
+ * 解析用户消息中的附件和引用块，返回可显示的附件/引用 chip 与正文。
+ *
+ * 引用块会传给 Agent 作为上下文，不应将原始 XML 泄漏到对话 UI；文件引用和
+ * Agent 历史、草稿、中断原因等上下文引用均由 quoted-selection 的统一解析器处理。
+ */
 export function parseAttachedFiles(content: string): { files: AttachedFileRef[]; quotes: QuotedFileRef[]; text: string } {
   // 防止超长输入导致正则回溯性能问题
   const MAX_PARSE_LENGTH = 100_000
   const safeContent = content.length > MAX_PARSE_LENGTH ? content.slice(0, MAX_PARSE_LENGTH) : content
-
-  const quoteRegex = /<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g
-  const quotes: QuotedFileRef[] = []
-  let quoteMatch: RegExpExecArray | null
-  while ((quoteMatch = quoteRegex.exec(safeContent)) !== null) {
-    const pathMatch = quoteMatch[0].match(/path="([^"]*)"/)
-    if (pathMatch) {
-      // 反解 XML 实体：&amp; 必须最后做，否则会被先一步解出的 & 误伤
-      const filePath = pathMatch[1]!
-        .replace(/&quot;/g, '"')
-        .replace(/&gt;/g, '>')
-        .replace(/&lt;/g, '<')
-        .replace(/&amp;/g, '&')
-      quotes.push({ path: filePath, filename: getFileBaseName(filePath) })
-    }
-  }
+  const { quotes, text: textWithoutQuotes } = parseQuotedSelectionRefs(safeContent)
 
   const regex = /<attached_files>\n?([\s\S]*?)\n?<\/attached_files>\n*/
-  const match = safeContent.match(regex)
-  if (!match) {
-    const cleanText = safeContent.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '').trim()
-    return { files: [], quotes, text: cleanText }
-  }
+  const match = textWithoutQuotes.match(regex)
+  if (!match) return { files: [], quotes, text: textWithoutQuotes }
 
   const files: AttachedFileRef[] = []
   const lines = match[1]!.split('\n')
@@ -992,10 +940,11 @@ export function parseAttachedFiles(content: string): { files: AttachedFileRef[];
     }
   }
 
-  let text = safeContent.replace(regex, '')
-  text = text.replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
-  text = text.trim()
-  return { files, quotes, text }
+  return {
+    files,
+    quotes,
+    text: textWithoutQuotes.replace(regex, '').trim(),
+  }
 }
 
 /** 判断文件是否为图片类型 */
@@ -1470,16 +1419,12 @@ export function getGroupId(group: MessageGroup): string {
  */
 export function getGroupPreview(group: MessageGroup): string {
   if (group.type === 'user') {
-    return stripScheduledRunMarker(extractUserText(group.message) ?? '')
-      .replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '')
-      .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
-      .slice(0, 200)
+    return parseAttachedFiles(stripScheduledRunMarker(extractUserText(group.message) ?? '')).text.slice(0, 200)
   }
   if (group.type === 'system') {
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
-    if (group.message.subtype === 'harness_follow_up') return '系统验证兜底：已自动复查未验证改动'
     if (group.message.subtype === 'interruption_record') return group.message.message ?? '任务中断'
     return ''
   }
@@ -1515,7 +1460,6 @@ export function MessageGroupRenderer({ group, allMessages, historicalTaskSubject
     // visible indicator is rendered at the list tail by AgentMessages from isCompacting.
     if (subtype === 'compacting') return null
     if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
-    if (subtype === 'harness_follow_up') return <div data-message-id={groupId}><HarnessFollowUpNotice message={group.message} /></div>
     if (subtype === 'interruption_record') return <div data-message-id={groupId}><InterruptionRecordNotice message={group.message} /></div>
     return null
   }

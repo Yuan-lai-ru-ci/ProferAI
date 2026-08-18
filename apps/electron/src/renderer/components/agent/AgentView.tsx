@@ -17,17 +17,13 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, GitBranch, Library } from 'lucide-react'
-import type { KnowledgeReference } from '@profer/shared'
-import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
-import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
-// previewPanelOpenMapAtom 由下方现有 atoms import 统一提供。
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, GitBranch } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
-import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
+import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { PermissionModeSelector } from './PermissionModeSelector'
@@ -888,45 +884,47 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
 
-  // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
-  const hasAvailableModel = React.useMemo(() => {
-    const eligibleChannelIds = sessionAgentRuntime === 'pi'
-      ? undefined
-      : agentChannelIds
-    return globalChannels.some(
-      (channel) => channel.enabled
-        && (eligibleChannelIds === undefined || eligibleChannelIds.includes(channel.id))
-        && channel.models.some((model) => model.enabled),
-    )
-  }, [globalChannels, agentChannelIds, sessionAgentRuntime])
+  // 检查当前 Agent runtime 是否存在协议兼容的可用模型。
+  const hasAvailableModel = React.useMemo(
+    () => resolveAgentModelSelection(globalChannels, sessionAgentRuntime, agentChannelIds) !== null,
+    [globalChannels, agentChannelIds, sessionAgentRuntime],
+  )
   React.useEffect(() => {
     // 历史空模型会话仅在空闲时自动补全，不能与运行中的本轮 binding 竞争。
-    if (!agentChannelId || agentModelId || streaming || backgroundWaiting) return
+    if (agentModelId || streaming || backgroundWaiting) return
 
-    const channel = globalChannels.find((c) => c.id === agentChannelId && c.enabled)
-    if (!channel) return
+    const selection = resolveAgentModelSelection(
+      globalChannels,
+      sessionAgentRuntime,
+      agentChannelIds,
+      agentChannelId ? { channelId: agentChannelId, modelId: '' } : null,
+    )
+    if (!selection) return
 
-    const firstModel = channel.models.find((m) => m.enabled)
-    if (!firstModel) return
-
-    if (defaultModelId !== firstModel.id) {
-      setDefaultModelId(firstModel.id)
+    if (defaultChannelId !== selection.channelId || defaultModelId !== selection.modelId) {
+      setDefaultChannelId(selection.channelId)
+      setDefaultModelId(selection.modelId)
       window.electronAPI.updateSettings({
-        agentChannelId,
-        agentModelId: firstModel.id,
+        agentChannelId: selection.channelId,
+        agentModelId: selection.modelId,
       }).catch(console.error)
     }
-    window.electronAPI.updateAgentSessionModel(sessionId, agentChannelId, firstModel.id)
+    window.electronAPI.updateAgentSessionModel(sessionId, selection.channelId, selection.modelId)
       .then((updated) => {
+        setSessionChannelMap((prev) => {
+          const map = new Map(prev)
+          if (updated.channelId) map.set(sessionId, updated.channelId)
+          return map
+        })
         setSessionModelMap((prev) => {
           const map = new Map(prev)
-          map.set(sessionId, updated.modelId ?? firstModel.id)
+          map.set(sessionId, updated.modelId ?? selection.modelId)
           return map
         })
         setAgentSessions((prev) => prev.map((session) => session.id === updated.id ? updated : session))
       })
       .catch((error) => console.error('[AgentView] 自动补全会话模型持久化失败:', error))
-  }, [agentChannelId, agentModelId, streaming, backgroundWaiting, globalChannels, sessionId, defaultModelId, setSessionModelMap, setDefaultModelId, setAgentSessions])
+  }, [agentChannelId, agentModelId, agentChannelIds, streaming, backgroundWaiting, globalChannels, sessionAgentRuntime, sessionId, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, setAgentSessions])
 
   // 获取当前 session 的工作路径（文件浏览器需要）
   React.useEffect(() => {
@@ -1087,6 +1085,20 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       historyHasMoreRef.current = true
       setHistoryHasMore(true)
       setHistoryLoading(false)
+      // 会话切换/重新挂载时，若该会话已经不在运行，live 消息只能是上一次
+      // 挂载遗留的实时副本。持久化 JSONL 才是完成会话的权威来源；先清掉
+      // 这份 stale live，避免切回会话时把同一条 /compact 再叠加一份。
+      // 运行中的会话必须保留 live，以支持切走后回来继续看流式进度。
+      const streamStateAtMount = store.get(agentStreamingStatesAtom).get(sessionId)
+      if (!streamStateAtMount?.running) {
+        setLiveMessagesMap((prev) => {
+          if (!prev.has(sessionId)) return prev
+          const map = new Map(prev)
+          map.delete(sessionId)
+          return map
+        })
+      }
+
       // 命中缓存则立即填充，消除「先清空 → 等 IPC 全量读盘」的可见空窗；
       // IPC 返回后仍会以最新数据覆盖。未命中才回退到清空 + loading 态。
       // 注意：refreshVersion bump（流结束/出错/rewind）不是会话切换，
@@ -1761,7 +1773,40 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     try {
       // 主进程在同一 IPC turn 内持久化 session runtime 与新会话默认 runtime。
       const updated = await window.electronAPI.updateSessionAgentRuntime(sessionId, runtime)
-      setAgentSessions((previous) => previous.map((item) => item.id === sessionId ? updated : item))
+      let nextSession = updated
+      const nextModel = resolveAgentModelSelection(
+        globalChannels,
+        runtime,
+        agentChannelIds,
+        agentChannelId && agentModelId ? { channelId: agentChannelId, modelId: agentModelId } : null,
+      )
+      const currentModelIsCompatible = nextModel?.channelId === updated.channelId && nextModel?.modelId === updated.modelId
+      if (!currentModelIsCompatible) {
+        nextSession = await window.electronAPI.updateAgentSessionModel(
+          sessionId,
+          nextModel?.channelId,
+          nextModel?.modelId,
+        )
+        setSessionChannelMap((previous) => {
+          const next = new Map(previous)
+          if (nextModel?.channelId) next.set(sessionId, nextModel.channelId)
+          else next.delete(sessionId)
+          return next
+        })
+        setSessionModelMap((previous) => {
+          const next = new Map(previous)
+          if (nextModel?.modelId) next.set(sessionId, nextModel.modelId)
+          else next.delete(sessionId)
+          return next
+        })
+        setDefaultChannelId(nextModel?.channelId ?? '')
+        setDefaultModelId(nextModel?.modelId ?? '')
+        window.electronAPI.updateSettings({
+          agentChannelId: nextModel?.channelId,
+          agentModelId: nextModel?.modelId,
+        }).catch(console.error)
+      }
+      setAgentSessions((previous) => previous.map((item) => item.id === sessionId ? nextSession : item))
     } catch (error) {
       console.error('[AgentView] 切换 Agent Runtime 失败:', error)
       setAgentRuntime(previousDefaultRuntime)
@@ -1776,7 +1821,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       setRuntimeSwitchInFlight(false)
       requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
     }
-  }, [agentRuntime, backgroundWaiting, sessionAgentRuntime, sessionId, sessionMeta, setAgentRuntime, setAgentSessions, streaming])
+  }, [agentChannelId, agentChannelIds, agentModelId, agentRuntime, backgroundWaiting, globalChannels, sessionAgentRuntime, sessionId, sessionMeta, setAgentRuntime, setAgentSessions, setDefaultChannelId, setDefaultModelId, setSessionChannelMap, setSessionModelMap, streaming])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -2190,21 +2235,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       setPendingFiles([])
     }
 
-    // 构建引用选中文本：知识库预览仍走既有 quoted_file 契约；其余来源由统一 helper 保留来源语义。
+    // 构建引用选中文本：统一 helper 保留文件、历史和中断来源语义。
     const quotedSelection = store.get(quotedSelectionMapAtom).get(sessionId)
     if (quotedSelection) {
       const capturedAt = quotedSelection.capturedAt
-      if (quotedSelection.sourceType === 'knowledge-preview') {
-        const safePath = quotedSelection.filePath
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-        const safeText = quotedSelection.text.replace(/<\/quoted_file>/gi, '</quoted_file_>')
-        fileReferences += `<quoted_file path="${safePath}">\n${safeText}\n</quoted_file>\n\n`
-      } else {
-        fileReferences += buildQuotedSelectionBlock(quotedSelection)
-      }
+      fileReferences += buildQuotedSelectionBlock(quotedSelection)
 
       store.set(quotedSelectionMapAtom, (prev) => {
         const m = new Map(prev)
@@ -2778,19 +2813,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     return registerShortcut('toggle-preview-panel', togglePreviewPanel)
   }, [togglePreviewPanel])
 
-  const [knowledgePickerOpen, setKnowledgePickerOpen] = React.useState(false)
-  const [knowledgeReferences, setKnowledgeReferences] = React.useState<KnowledgeReference[]>([])
-  const [availableKnowledgeIds, setAvailableKnowledgeIds] = React.useState<Set<string> | null>(null)
-  const setKnowledgePreviewMap = useSetAtom(agentKnowledgePreviewMapAtom)
-  const setPreviewOpenMapForKnowledge = useSetAtom(previewPanelOpenMapAtom)
-  const openKnowledgePreview = React.useCallback((reference: KnowledgeReference) => {
-    setKnowledgePreviewMap((previous) => { const next = new Map(previous); next.set(sessionId, reference); return next })
-    setPreviewOpenMapForKnowledge((previous) => { const next = new Map(previous); next.set(sessionId, true); return next })
-  }, [sessionId, setKnowledgePreviewMap, setPreviewOpenMapForKnowledge])
-  React.useEffect(() => {
-    void window.electronAPI.getAgentKnowledgeReferences(sessionId).then(setKnowledgeReferences).catch((error) => console.error('[Agent] 加载资料引用失败:', error))
-    void window.electronAPI.knowledge.getLibrarySnapshot().then((snapshot) => setAvailableKnowledgeIds(new Set(snapshot.items.map((item) => item.id)))).catch(() => setAvailableKnowledgeIds(null))
-  }, [sessionId])
   const hasTextInput = inputContent.trim().length > 0
   const isCompacting = contextStatus.isCompacting
   const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
@@ -2806,6 +2828,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <ModelSelector
           filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
           preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
+          strictProtocolFilter
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
         />
@@ -2821,13 +2844,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    // 资料库入口已暂时关闭，恢复时取消下面注释即可
-    /*
-    {
-      key: 'knowledge-library',
-      node: <Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-[36px] shrink-0 rounded-full text-primary hover:bg-primary/10 hover:text-primary" onClick={() => setKnowledgePickerOpen(true)}><Library className="size-5"/></Button></TooltipTrigger><TooltipContent side="top"><p>从资料库导入</p></TooltipContent></Tooltip>,
-    },
-    */
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
     { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} /> },
     {
@@ -2987,7 +3003,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex h-full min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
+      <div data-profer-navigation-region="conversation" tabIndex={-1} className="agent-conversation flex h-full min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header（平板竖屏由外部顶栏承担标题时隐藏，避免双标题） */}
         {!hideAgentHeader && <AgentHeader sessionId={sessionId} />}
 
@@ -3027,10 +3043,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
-          {knowledgeReferences.length > 0 && <div className="mb-2 flex flex-wrap gap-1.5 px-1">{knowledgeReferences.map((reference) => {
-            const unavailable = availableKnowledgeIds !== null && !availableKnowledgeIds.has(reference.itemId)
-            return <span key={reference.itemId} className={cn('inline-flex h-7 max-w-[260px] items-center gap-1 rounded border border-border/70 bg-background/60 px-2 text-xs text-foreground/80', unavailable && 'border-destructive/25 bg-destructive/5 text-destructive')}><button type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline disabled:no-underline"><Library className="size-3.5 shrink-0 text-muted-foreground"/><span className="truncate">{unavailable ? `${reference.title}（已删除）` : reference.title}</span></button><button type="button" aria-label={`撤销资料 ${reference.title} 的访问授权`} className="shrink-0 rounded hover:bg-accent" onClick={() => void window.electronAPI.removeAgentKnowledgeReference(sessionId, reference.itemId).then(setKnowledgeReferences).catch((error) => toast.error(error instanceof Error ? error.message : '撤销资料授权失败'))}><X className="size-3.5"/></button></span>
-          })}</div>}
           {/* 下方 composer 以完整顶部圆角叠在服务轨上；服务轨延伸至圆角背后。 */}
           <div className="composer-stack">
             <RuntimeProcessPanel sessionId={sessionId} />
@@ -3212,12 +3224,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-
-    <KnowledgeReferencePicker open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen} onConfirm={async (itemIds) => {
-      const references = await window.electronAPI.addAgentKnowledgeReferences(sessionId, itemIds)
-      setKnowledgeReferences(references)
-      toast.success(`已向当前 Agent 导入 ${references.length} 份资料`)
-    }} />
 
     </>
   )

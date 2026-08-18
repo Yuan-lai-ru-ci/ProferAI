@@ -1,4 +1,5 @@
-import type { AgentRuntime } from '@profer/shared'
+import type { AgentRuntime, Channel } from '@profer/shared'
+import { getChannelProtocol } from './channel-model-groups'
 
 /** Pi can use every enabled channel without changing Claude's compatibility whitelist. */
 export function nextAgentChannelIdsAfterModelSelect(
@@ -10,4 +11,39 @@ export function nextAgentChannelIdsAfterModelSelect(
   return currentChannelIds.includes(selectedChannelId)
     ? currentChannelIds
     : [...currentChannelIds, selectedChannelId]
+}
+
+export interface AgentModelSelection {
+  channelId: string
+  modelId: string
+}
+
+/** Resolve a model that is valid for the selected Agent runtime. */
+export function resolveAgentModelSelection(
+  channels: Channel[],
+  runtime: AgentRuntime,
+  claudeChannelIds: string[],
+  current?: AgentModelSelection | null,
+): AgentModelSelection | null {
+  const preferredProtocol = runtime === 'pi' ? 'openai' : 'anthropic'
+  const isEligibleChannel = (channel: Channel): boolean => (
+    channel.enabled
+      && getChannelProtocol(channel.provider) === preferredProtocol
+      && (runtime === 'pi' || claudeChannelIds.includes(channel.id))
+  )
+
+  if (current) {
+    const channel = channels.find((item) => item.id === current.channelId)
+    if (channel && isEligibleChannel(channel) && channel.models.some((model) => model.enabled && model.id === current.modelId)) {
+      return current
+    }
+  }
+
+  for (const channel of channels) {
+    if (!isEligibleChannel(channel)) continue
+    const model = channel.models.find((item) => item.enabled)
+    if (model) return { channelId: channel.id, modelId: model.id }
+  }
+
+  return null
 }

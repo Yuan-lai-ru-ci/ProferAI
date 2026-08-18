@@ -17,6 +17,7 @@ import { userProfileAtom } from '@/atoms/user-profile'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
+import { parseQuotedSelectionRefs } from '@/lib/quoted-selection'
 import type {
   ChatMessage,
   SDKMessage,
@@ -270,9 +271,8 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
 }
 
 function normalizePreviewText(text: string): string {
-  return text
+  return parseQuotedSelectionRefs(text).text
     .replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/g, '')
-    .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
     .replace(/\r\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()

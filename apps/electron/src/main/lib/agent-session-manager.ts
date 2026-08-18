@@ -155,6 +155,13 @@ function normalizeSessionRuntime(session: AgentSessionMeta): AgentSessionMeta {
   return session.agentRuntime === agentRuntime ? session : { ...session, agentRuntime }
 }
 
+/** 移除 Agent 知识库下线前遗留的 session allowlist，不影响 Chat 消息中的同名字段。 */
+function removeLegacyAgentKnowledgeReferences(session: AgentSessionMeta): AgentSessionMeta {
+  if (!Object.prototype.hasOwnProperty.call(session, 'knowledgeReferences')) return session
+  const { knowledgeReferences: _removed, ...withoutKnowledgeReferences } = session as AgentSessionMeta & { knowledgeReferences?: unknown }
+  return withoutKnowledgeReferences
+}
+
 /**
  * 读取会话索引文件
  */
@@ -174,11 +181,27 @@ function readIndex(): AgentSessionsIndex {
 
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
   if (data) {
-    const normalized: AgentSessionsIndex = {
-      ...data,
-      sessions: Array.isArray(data.sessions) ? data.sessions.map(normalizeSessionRuntime) : [],
+    let removedLegacyKnowledgeReferences = false
+    const sessions = Array.isArray(data.sessions)
+      ? data.sessions.map((session) => {
+          const normalized = normalizeSessionRuntime(session)
+          const cleaned = removeLegacyAgentKnowledgeReferences(normalized)
+          if (cleaned !== normalized) removedLegacyKnowledgeReferences = true
+          return cleaned
+        })
+      : []
+    const normalized: AgentSessionsIndex = { ...data, sessions }
+    let cacheNormalized = true
+    if (removedLegacyKnowledgeReferences) {
+      try {
+        writeJsonFileAtomic(indexPath, normalized)
+        console.info('[Agent 会话] 已清理下线前遗留的知识库引用字段')
+      } catch (error) {
+        cacheNormalized = false
+        console.warn('[Agent 会话] 清理遗留知识库引用字段失败，将在下次读取时重试:', error)
+      }
     }
-    cacheIndex(normalized)
+    if (cacheNormalized) cacheIndex(normalized)
     return normalized
   }
   return { version: INDEX_VERSION, sessions: [] }
@@ -665,7 +688,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'knowledgeReferences' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'autoQueueSendEnabled' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn' | 'presetId' | 'lastInterruptReason' | 'lastInterruptLabel' | 'lastInterruptAt'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'autoQueueSendEnabled' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn' | 'presetId' | 'lastInterruptReason' | 'lastInterruptLabel' | 'lastInterruptAt'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)

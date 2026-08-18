@@ -28,8 +28,6 @@ import { getFileBaseName } from '@/lib/file-utils'
 import { DiffTabContent } from './DiffTabContent'
 import { DefaultAppOpenButton } from './DefaultAppOpenButton'
 import { getDefaultAppTargetPath, getPreviewFileAccess } from './preview-open-path'
-import { agentKnowledgePreviewMapAtom } from '@/atoms/knowledge-preview-atoms'
-import { KnowledgePreviewContent } from '@/components/knowledge-base/KnowledgePreviewPanel'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 
@@ -47,26 +45,20 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const filePanelVisible = useAtomValue(panelVisibilityAtom).filePanel
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
-  const knowledgePreviewMap = useAtomValue(agentKnowledgePreviewMapAtom)
-  const setKnowledgePreviewMap = useSetAtom(agentKnowledgePreviewMapAtom)
-
-  const knowledgeReference = knowledgePreviewMap.get(sessionId) ?? null
-  const currentFile = knowledgeReference ? null : fileMap.get(sessionId) ?? null
+  const currentFile = fileMap.get(sessionId) ?? null
 
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const sessionPath = sessionPathMap.get(sessionId) ?? ''
   const isWindows = React.useMemo(() => detectIsWindows(), [])
-  // 资料预览的元信息已在正文顶部显示，Windows 下不再把标题和关闭操作拆成两行。
-  const useStackedWindowsHeader = isWindows && !filePanelVisible && !knowledgeReference
+  const useStackedWindowsHeader = isWindows && !filePanelVisible
 
-  const fileName = knowledgeReference?.title ?? (currentFile ? getFileBaseName(currentFile.filePath) : '文件预览')
+  const fileName = currentFile ? getFileBaseName(currentFile.filePath) : '文件预览'
   const defaultAppTargetPath = currentFile ? getDefaultAppTargetPath(currentFile, sessionPath) : ''
   const defaultAppAccess = currentFile ? getPreviewFileAccess(sessionId, currentFile, sessionPath) : undefined
 
   const handleClosePanel = React.useCallback(() => {
-    setKnowledgePreviewMap((previous) => { const next = new Map(previous); next.delete(sessionId); return next })
     setOpenMap((prev) => { const m = new Map(prev); m.set(sessionId, false); return m })
-  }, [sessionId, setKnowledgePreviewMap, setOpenMap])
+  }, [sessionId, setOpenMap])
 
   const handleOpenPreviewTab = React.useCallback(() => {
     if (!currentFile) return
@@ -85,35 +77,15 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   }, [currentFile, sessionId, setActiveTabId, setOpenMap, setTabs, tabs])
 
   const handleShowInFolder = React.useCallback(() => {
-    if (knowledgeReference) {
-      window.electronAPI.knowledge.showItemInFolder(knowledgeReference.itemId)
-        .catch((err) => console.error('[PreviewPanel] 打开知识库资料位置失败:', err))
-      return
-    }
     if (!defaultAppTargetPath) return
     window.electronAPI.showItemInFolder(
       defaultAppTargetPath,
       currentFile?.basePaths,
     ).catch((err) => console.error('[PreviewPanel] 打开文件位置失败:', err))
-  }, [defaultAppTargetPath, currentFile?.basePaths, knowledgeReference])
+  }, [defaultAppTargetPath, currentFile?.basePaths])
 
   const renderPreviewActions = (): React.ReactElement => (
     <div className="ml-auto flex items-center gap-0.5 shrink-0">
-      {knowledgeReference?.origin === 'local' && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={handleShowInFolder}
-              className="flex items-center justify-center size-6 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
-              aria-label="在文件管理器中显示"
-            >
-              <FolderOpen className="size-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom"><p>在文件管理器中显示</p></TooltipContent>
-        </Tooltip>
-      )}
       {currentFile && (
         <DefaultAppOpenButton
           filePath={defaultAppTargetPath}
@@ -227,7 +199,6 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
         ) : (
           <div
             className="flex items-center h-[34px] px-3"
-            style={knowledgeReference && isWindows ? { paddingRight: WINDOWS_WINDOW_CONTROLS_SAFE_AREA } : undefined}
           >
             <span className="text-xs text-muted-foreground truncate">
               {fileName}
@@ -239,7 +210,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
 
       {/* 内容区 */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {knowledgeReference ? <KnowledgePreviewContent reference={knowledgeReference} onClose={handleClosePanel} agentSessionId={sessionId} /> : currentFile ? (
+        {currentFile ? (
           <DiffTabContent
             key={`${sessionId}:${currentFile.filePath}`}
             filePath={currentFile.filePath}

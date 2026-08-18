@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, CompactingIndicator, buildHistoricalTaskSubjects, type MessageGroup } from './SDKMessageRenderer'
 import { extractUserText } from '@profer/session-core'
 import { buildLiveGroupSet } from './live-group-set'
+import { mergeMessagesByUuid } from '@/lib/agent-message-merge'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
@@ -613,8 +614,12 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
     const persistedWithKeys = persisted.map(stampStableKey)
     const liveWithKeys = live.map(stampStableKey)
+    // UUID 是跨 persisted/live 生命周期的唯一身份（尤其是 /compact 的乐观气泡）。
+    // 先合并同 UUID 消息，再处理无 UUID 消息的有序尾部重叠；否则切换会话后
+    // 每次重新挂载都会把同一条 live 消息再叠加一份。
+    const mergedByUuid = mergeMessagesByUuid(persistedWithKeys, liveWithKeys)
     if (streaming || liveWithKeys.length === 0 || persistedWithKeys.length === 0) {
-      return [...persistedWithKeys, ...liveWithKeys]
+      return mergedByUuid
     }
 
     // 流式结束后的刷新中，持久化消息尾部可能已经包含 live 序列。
@@ -633,11 +638,11 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       if (matches) break
     }
 
-    if (overlap === 0) return [...persistedWithKeys, ...liveWithKeys]
-    return [
-      ...persistedWithKeys.slice(0, persistedWithKeys.length - overlap),
-      ...liveWithKeys,
-    ]
+    if (overlap === 0) return mergedByUuid
+    return mergeMessagesByUuid(
+      persistedWithKeys.slice(0, persistedWithKeys.length - overlap),
+      liveWithKeys,
+    )
   }, [persistedSDKMessages, liveMessages, streaming])
   const hasContent = allSDKMessages.length > 0
 

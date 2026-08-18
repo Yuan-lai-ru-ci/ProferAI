@@ -62,7 +62,6 @@ import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
-import { buildAgentKnowledgePrompt } from './agent-knowledge-prompt'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
 import { injectAgentPresetMcpServer } from './agent-preset-tools'
 import {
@@ -653,7 +652,7 @@ export class AgentOrchestrator {
           m.type === 'user' ||
           m.type === 'result' ||
           (m.type === 'system' &&
-            ['compact_boundary', 'permission_denied', 'harness_follow_up'].includes((m as import('@profer/shared').SDKSystemMessage).subtype ?? '')),
+            ['compact_boundary', 'permission_denied'].includes((m as import('@profer/shared').SDKSystemMessage).subtype ?? '')),
       )
       .filter((m) => {
       // Pi partial 仅用于实时预览；即使未来调用方误传，也不能污染 JSONL 历史。
@@ -852,14 +851,9 @@ export class AgentOrchestrator {
       return
     }
 
-    const requestSource = userMessage.includes('<quoted_context source="knowledge-preview"')
-      ? 'knowledge-selection'
-      : userMessage.includes('<quoted_file path="知识库 ·')
-        ? 'legacy-knowledge-selection'
-        : 'agent-message'
     console.info('[Agent 编排] 请求路由:', {
       sessionId,
-      requestSource,
+      requestSource: 'agent-message',
       channelId,
       modelId: modelId || DEFAULT_MODEL_ID,
       provider: channel.provider,
@@ -1189,9 +1183,9 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 注入 mentioned_tools: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
       }
 
-      const knowledgePrompt = buildAgentKnowledgePrompt(sessionMeta?.knowledgeReferences || [])
-      if (knowledgePrompt) console.log(`[Agent 编排] 已注入受控资料读取指令: ${sessionMeta?.knowledgeReferences?.length ?? 0} 份`)
-      const contextualMessage = `${dynamicCtx}${knowledgePrompt ? `\n\n${knowledgePrompt}` : ''}\n\n${enrichedMessage}`
+      const contextualMessage = `${dynamicCtx}
+
+${enrichedMessage}`
 
       const isCompactCommand = userMessage.trim() === '/compact'
       const finalPrompt = isCompactCommand
@@ -2345,7 +2339,7 @@ export class AgentOrchestrator {
             // 累积 assistant 和 user 消息用于持久化
             // - 跳过 replay 消息，避免 resume 时重复写入
             // - 对 user 消息，仅累积含 tool_result 的（初始用户消息已在步骤 5 手动持久化）
-            // - 对 system 消息，仅累积需要持久化显示的（compact_boundary / permission_denied / harness_follow_up）
+            // - 对 system 消息，仅累积需要持久化显示的（compact_boundary / permission_denied）
             if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'result') {
               const msgRecord = msg as Record<string, unknown>
               if (!msgRecord.isReplay && !isPartialMessage) {
@@ -2366,7 +2360,7 @@ export class AgentOrchestrator {
               }
             } else if (msg.type === 'system') {
               const sysMsg = msg as import('@profer/shared').SDKSystemMessage
-              if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'harness_follow_up') {
+              if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'permission_denied') {
                 accumulatedMessages.push(msg)
               }
             }
@@ -2389,17 +2383,13 @@ export class AgentOrchestrator {
               // adapter 在"本轮结束但仍有后台任务/定时任务在飞行"时打的注解：
               // 走轻量完成（UI 空闲可输入、host 保留会话），等待 task_notification 自动续轮。
               const keptOpenForTasks = (msg as Record<string, unknown>)._keepChannelOpenForTasks === true
-              // B1-5：adapter 在 harness 验证兜底续轮时打的注解：本轮未真正结束，
-              // 保持事件循环继续消费续轮消息，但不进入轻量空闲态（UI 保持运行中）。
-              const keptOpenForHarnessFollowUp = (msg as Record<string, unknown>)._keepChannelOpenForHarnessFollowUp === true
-              const keepChannelOpen = errorHelpers.shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks || keptOpenForHarnessFollowUp
+              const keepChannelOpen = errorHelpers.shouldKeepChannelOpen(resultTerminalReason) || keptOpenForTasks
               // 分类打点：跟踪线上哪种 terminal_reason 最常见，配合 deferred_tool_use 回填决策
               const hasDeferredTool = (msg as { deferred_tool_use?: unknown }).deferred_tool_use != null
               console.log(
                 `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}, ` +
                 `terminal_reason=${resultTerminalReason ?? 'undefined'}, keepChannelOpen=${keepChannelOpen}` +
                 (keptOpenForTasks ? ', keptOpenForTasks=true' : '') +
-                (keptOpenForHarnessFollowUp ? ', keptOpenForHarnessFollowUp=true' : '') +
                 (hasDeferredTool ? ', hasDeferredTool=true' : ''),
               )
               if (keptOpenForTasks) {

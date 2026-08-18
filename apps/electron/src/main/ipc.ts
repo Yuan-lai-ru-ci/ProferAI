@@ -3365,34 +3365,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // Agent 资料引用只写 session metadata allowlist，绝不加入附加目录或任意文件路径。
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES,
-    async (_, sessionId: string, itemIds: string[]): Promise<import('@profer/shared').KnowledgeReference[]> => {
-      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('Agent 会话标识无效')
-      if (!Array.isArray(itemIds) || itemIds.length < 1 || itemIds.length > 10 || itemIds.some((id) => typeof id !== 'string' || id.length > 160)) throw new Error('资料引用数量或标识无效')
-      const { addKnowledgeReferencesToAgentSession } = require('./lib/agent-knowledge-references')
-      return addKnowledgeReferencesToAgentSession(sessionId, itemIds, { getSession: getAgentSessionMeta, updateSession: updateAgentSessionMeta })
-    },
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_KNOWLEDGE_REFERENCES,
-    async (_, sessionId: string): Promise<import('@profer/shared').KnowledgeReference[]> => {
-      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('Agent 会话标识无效')
-      const { getKnowledgeReferencesForAgentSession } = require('./lib/agent-knowledge-references')
-      return getKnowledgeReferencesForAgentSession(sessionId, { getSession: getAgentSessionMeta })
-    },
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.REMOVE_KNOWLEDGE_REFERENCE,
-    async (_, sessionId: string, itemId: string): Promise<import('@profer/shared').KnowledgeReference[]> => {
-      if (typeof sessionId !== 'string' || !sessionId.trim() || typeof itemId !== 'string' || !itemId.trim() || itemId.length > 160) throw new Error('资料引用标识无效')
-      const { removeKnowledgeReferenceFromAgentSession } = require('./lib/agent-knowledge-references')
-      return removeKnowledgeReferenceFromAgentSession(sessionId, itemId, { getSession: getAgentSessionMeta, updateSession: updateAgentSessionMeta })
-    },
-  )
 
   // 中止 Agent 执行。必须等待底层 run 的 finally 完成后才向渲染层返回，
   // 否则用户刚点击「停止」就发送下一条消息时，编排器仍持有 active session，

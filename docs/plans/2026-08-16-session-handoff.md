@@ -1,9 +1,10 @@
 # 会话交接快照(2026-08-16) — 新会话/子代理接手起点
 
+> 历史交接快照：验证兜底/Harness 自动续轮和 Agent 知识库引用/读取已于 2026-08-19 移除；当前实现不再自动追加验证轮次，Chat 仍保留通用资料库。其余预设相关历史信息仍需以当前源码复核。
 > 用途:主线上下文过长时,新 agent 读本文件即可无损接手,无需回读对话历史。
 > 关联文档:`docs/plans/2026-08-16-agent-preset-phase-b-plan.md`(Phase B 任务清单,以它为准)
 
-## 1. 本轮已完成的改动(全部未提交,与用户既有 WIP 共存于工作树)
+## 1. 历史改动快照（部分方案已废止）
 
 | 文件 | 改动 |
 |---|---|
@@ -25,7 +26,7 @@
 
 - typecheck:shared + electron 通过
 - 单测:目标 5 文件 66/66 通过;全量 616 pass / 27 fail,**失败全是既有环境问题**(沙箱 EPERM spawn、Pi SDK 0.80.9 vs 冒烟期望 0.82.1、electron mock hooks),不在本次改动模块
-- **真实端到端已取证通过**:deepseek-v4-flash + Pi runtime,模型真实调用了 `mcp__agent-presets__preset_list`/`preset_create`(落盘成功),harness 在模型写文件不验证后**自动注入续轮并列出文件路径**,模型读回验证回复「验证通过」(transcript: `~/.profer-dev/sdk-config/sessions/pi/*_01a0094e-*.jsonl`)
+- **历史端到端已取证通过（已废止）**:deepseek-v4-flash + Pi runtime,模型真实调用了 `mcp__agent-presets__preset_list`/`preset_create`；当时 Harness 曾在模型写文件不验证后自动注入续轮并列出文件路径。该验证兜底功能已于 2026-08-19 移除。
 
 ## 3. 关键环境知识(踩过的坑)
 

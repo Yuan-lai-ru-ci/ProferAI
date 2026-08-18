@@ -13,7 +13,7 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
-import type { AgentRuntime, ProferPermissionMode, KnowledgeReference, Todo } from '@profer/shared'
+import type { AgentRuntime, ProferPermissionMode, Todo } from '@profer/shared'
 import type {
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -113,91 +113,6 @@ function textToolResult(text: string, details?: unknown): AgentToolResult<unknow
     content: [{ type: 'text', text }],
     details,
   } as AgentToolResult<unknown>
-}
-
-// ===== 知识库工具 =====
-
-/**
- * Pi 不能消费 Claude SDK 的 in-process MCP server；在此复用相同的 session allowlist
- * 与知识服务，确保资料库引用对两个 runtime 具有一致的最小访问边界。
- */
-export function buildPiKnowledgeBaseTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId'>): ToolDefinition[] {
-  const currentReferences = (): KnowledgeReference[] => getAgentSessionMeta(ctx.sessionId)?.knowledgeReferences || []
-  const list = async (): Promise<AgentToolResult<unknown>> => {
-    const references = currentReferences()
-    const { listKnowledgeItems } = await import('../knowledge-item-service')
-    const currentItemIds = new Set(listKnowledgeItems().map((item) => item.id))
-    return jsonToolResult({
-      // Session metadata 是授权意图，不是知识库存在性的替代品；已删除资料必须显示为不可读。
-      items: references.map((reference) => ({ ...reference, readable: currentItemIds.has(reference.itemId) })),
-      message: references.length ? undefined : '当前 Agent 会话未导入任何资料。请让用户通过资料库按钮显式导入。',
-    })
-  }
-
-  return [
-    sdk.defineTool({
-      name: 'mcp__knowledge-base__list_imported_knowledge',
-      label: '列出已导入资料',
-      description: '列出当前 Agent 会话显式导入的资料。只能访问此列表中的资料。',
-      parameters: Type.Object({}),
-      async execute() {
-        console.log(`[Pi 资料工具] Agent 列出已授权资料: session=${ctx.sessionId}, count=${currentReferences().length}`)
-        return list()
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__knowledge-base__read_imported_knowledge',
-      label: '读取已导入资料',
-      description: '读取或搜索当前 Agent 会话显式导入的资料。绝不读取其他会话或全库资料。',
-      parameters: Type.Object({
-        itemIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 10, description: '要读取的已导入资料 ID；省略时仅列出资料元数据。' })),
-        query: Type.Optional(Type.String({ maxLength: 500, description: '可选：在已导入资料内搜索相关片段。' })),
-        topK: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { itemIds?: string[]; query?: string; topK?: number }
-        const references = currentReferences()
-        const allowed = new Set(references.map((reference) => reference.itemId))
-        const requested = args.itemIds ? [...new Set(args.itemIds)] : []
-        const denied = requested.filter((id) => !allowed.has(id))
-        const permitted = requested.filter((id) => allowed.has(id))
-        if (denied.length) {
-          return jsonToolResult({ error: 'KNOWLEDGE_ITEM_NOT_IMPORTED', deniedItemIds: denied, message: '请求的资料未导入当前 Agent 会话，已拒绝读取。' })
-        }
-        if (!references.length || (!args.query && !permitted.length)) return list()
-
-        const { getKnowledgeItem, listKnowledgeItems, searchKnowledgeItemsForChat } = await import('../knowledge-item-service')
-        if (args.query) {
-          const results = await searchKnowledgeItemsForChat(args.query, permitted.length ? permitted : [...allowed], args.topK ?? 5)
-          return jsonToolResult({
-            results: results.map((result) => ({
-              itemId: result.item.id,
-              title: result.item.title,
-              kind: result.item.kind,
-              origin: result.item.origin,
-              content: result.content,
-              startIndex: result.startIndex,
-              endIndex: result.endIndex,
-            })),
-            message: results.length ? undefined : '已导入资料中没有可读取的匹配片段。',
-          })
-        }
-
-        const currentItems = new Map(listKnowledgeItems().map((item) => [item.id, item]))
-        const items = await Promise.all(permitted.map(async (id) => {
-          const reference = references.find((candidate) => candidate.itemId === id)!
-          const currentItem = currentItems.get(id)
-          // 已撤销或删除的资料绝不能仅因旧 session metadata 仍存在就触发读取。
-          if (!currentItem) return { itemId: id, title: reference.title, unavailable: true, revoked: true }
-          const loaded = getKnowledgeItem(id)
-          return loaded
-            ? { itemId: id, title: currentItem.title, kind: currentItem.kind, origin: currentItem.origin, content: loaded.text.slice(0, 6_000), truncated: loaded.text.length > 6_000 }
-            : { itemId: id, title: currentItem.title, unavailable: true }
-        }))
-        return jsonToolResult({ items })
-      },
-    }),
-  ] as unknown as ToolDefinition[]
 }
 
 // ===== 个人记忆工具 =====
@@ -1339,20 +1254,19 @@ export async function buildPiBuiltinTools(
     }
   }
 
-  // 知识库与任务图原本是 Claude SDK 的 in-process MCP server；Pi 需要显式桥接。
+  // 注入个人记忆、任务图、规划中心和 Agent 预设工具。
   try {
     if (!disabled.has('memory')) {
       tools.push(...buildPiMemoryArchiveTools(sdk, ctx))
       tools.push(...buildTeamMemoryTools(sdk, ctx))
     }
-    tools.push(...buildPiKnowledgeBaseTools(sdk, ctx))
     if (!disabled.has('task-graph')) {
       tools.push(...buildPiTaskGraphTools(sdk, ctx))
     }
     tools.push(...buildPiPlanningTools(sdk))
     tools.push(...buildPiAgentPresetTools(sdk, ctx))
   } catch (error) {
-    console.error('[Pi 桥接] 注入知识库、任务图或规划中心工具失败:', error)
+    console.error('[Pi 桥接] 注入个人记忆、任务图或规划中心工具失败:', error)
   }
 
   // Automation 是 Profer 已有的本地能力，不依赖上游 builtin-MCP catalog。

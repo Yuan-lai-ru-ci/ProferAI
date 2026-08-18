@@ -20,14 +20,15 @@ export function aggregateModelHealth(models: ModelAvailability[]): AggregatedMod
     ...recent,
   ]
 
+  // degraded 表示请求成功但响应较慢，仍属于可用请求；只有 failure 才降低可用率。
   // 数值与健康条使用同一窗口，避免“条全红但百分比仍很高”的矛盾。
-  const successCount = recent.filter((sample) => sample.status === 'success').length
+  const availableCount = recent.filter((sample) => sample.status !== 'failure').length
   const modelId = models[0]!.modelId
   const end = sorted[0]!.createdAt
   return {
     model: {
       modelId,
-      availability: Math.round((successCount / recent.length) * 100),
+      availability: Math.round((availableCount / recent.length) * 100),
       sampleCount: recent.length,
       avgLatencyMs: Math.round(recent.reduce((total, sample) => total + sample.durationMs, 0) / recent.length),
       updatedAt: end,

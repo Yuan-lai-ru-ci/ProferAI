@@ -17,8 +17,6 @@ export interface PiPromptChainDependencies {
   rejectPendingInterruptPrompts: (error: unknown) => void
   createAbortError: () => Error
   dropTrailingAbortedAssistant: () => void
-  createFollowUpPrompt?: () => string | undefined
-  markBlocked?: () => void
 }
 
 /**
@@ -96,7 +94,6 @@ export async function runPiPromptChain(
 
     const pendingInterrupt = state.pendingInterruptPrompts.shift()
     if (pendingInterrupt) {
-      deps.markBlocked?.()
       nextInterrupt = pendingInterrupt
       try {
         nextPrompt = await pendingInterrupt.contentReady
@@ -106,6 +103,5 @@ export async function runPiPromptChain(
       }
       continue
     }
-    nextPrompt = deps.createFollowUpPrompt?.()
   }
 }

@@ -40,12 +40,17 @@ export const CompactModelSelectorCtx = React.createContext(false)
 /**
  * 从渠道列表构建扁平化的模型选项。
  *
- * 多个渠道可能都是同一个平台网关（例如多个 New API 渠道），
- * 它们提供的同名模型在用户界面上只应出现一次。底层仍保留一个
- * 代表性 channelId，现有 Chat/Agent 会话协议无需改变；真正的上游
- * 主备选择由网关完成。
+ * 官方托管渠道可能属于同一个平台网关（例如多个 New API 渠道），
+ * 它们提供的同名模型在用户界面上只应出现一次。用户自配渠道则始终
+ * 保留独立选项，避免不同自配端点被错误地视为同一个路由。
  */
-function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[], preferredProtocol: ChannelProtocol = 'openai'): ModelOption[] {
+function buildModelOptions(
+  channels: Channel[],
+  filterChannelId?: string,
+  filterChannelIds?: string[],
+  preferredProtocol: ChannelProtocol = 'openai',
+  strictProtocolFilter = false,
+): ModelOption[] {
   const optionsByModel = new Map<string, ModelOption>()
 
   for (const channel of channels) {
@@ -53,15 +58,20 @@ function buildModelOptions(channels: Channel[], filterChannelId?: string, filter
     if (filterChannelId && channel.id !== filterChannelId) continue
     if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
 
+    const protocol = getChannelProtocol(channel.provider)
+    if (strictProtocolFilter && protocol !== preferredProtocol) continue
+
     for (const model of channel.models) {
       if (!model.enabled) continue
-      const protocol = getChannelProtocol(channel.provider)
       const source = getChannelSource(channel)
-      const key = `${source}:${model.id}`
+      // 只有官方托管渠道进入模型池；用户自配渠道按 channel + model 独立展示。
+      const key = source === 'official'
+        ? `${source}:${model.id}`
+        : `${source}:${channel.id}:${model.id}`
       const existing = optionsByModel.get(key)
       if (existing) {
         existing.channelCount = (existing.channelCount ?? 0) + 1
-        // 同名模型优先选当前运行时需要的协议；同协议重复保留第一个作为代表渠道。
+        // 官方同名模型优先选当前运行时需要的协议；同协议重复保留第一个作为代表渠道。
         if (existing.protocol === preferredProtocol) continue
       }
 
@@ -111,6 +121,8 @@ interface ModelSelectorProps {
   compact?: boolean
   /** 当前调用运行时需要的协议；Pi/Chat 为 OpenAI，Claude Agent 为 Anthropic。 */
   preferredProtocol?: 'openai' | 'anthropic'
+  /** Agent runtime 严格限制协议；Chat 等通用选择器默认保留多协议模型。 */
+  strictProtocolFilter?: boolean
 }
 
 export function ModelSelector({
@@ -121,6 +133,7 @@ export function ModelSelector({
   showChannelInTrigger = false,
   compact: compactProp,
   preferredProtocol = 'openai',
+  strictProtocolFilter = false,
 }: ModelSelectorProps = {}): React.ReactElement {
   const compactCtx = React.useContext(CompactModelSelectorCtx)
   const compact = compactProp ?? compactCtx
@@ -163,7 +176,10 @@ export function ModelSelector({
     return channels.filter((c) => !isOfficialChannel(c))
   }, [channels, authStatus.isLoggedIn])
 
-  const modelOptions = React.useMemo(() => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol), [visibleChannels, filterChannelId, filterChannelIds, preferredProtocol])
+  const modelOptions = React.useMemo(
+    () => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter),
+    [visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter],
+  )
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
 
   // 搜索过滤

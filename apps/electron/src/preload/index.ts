@@ -665,13 +665,6 @@ export interface ElectronAPI {
   /** 发送 Agent 消息 */
   sendAgentMessage: (input: AgentSendInput) => Promise<void>
 
-  /** 将资料导入当前 Agent session 的受控 allowlist。 */
-  addAgentKnowledgeReferences: (sessionId: string, itemIds: string[]) => Promise<import('@profer/shared').KnowledgeReference[]>
-  /** 获取当前 Agent session 已导入资料。 */
-  getAgentKnowledgeReferences: (sessionId: string) => Promise<import('@profer/shared').KnowledgeReference[]>
-  /** 撤销当前 Agent session 对一份资料的访问授权。 */
-  removeAgentKnowledgeReference: (sessionId: string, itemId: string) => Promise<import('@profer/shared').KnowledgeReference[]>
-
   /** 中止 Agent 执行 */
   stopAgent: (sessionId: string) => Promise<void>
 
@@ -2147,18 +2140,6 @@ const electronAPI: ElectronAPI = {
 
   sendAgentMessage: (input: AgentSendInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEND_MESSAGE, input)
-  },
-
-  addAgentKnowledgeReferences: (sessionId: string, itemIds: string[]) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES, sessionId, itemIds)
-  },
-
-  getAgentKnowledgeReferences: (sessionId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_KNOWLEDGE_REFERENCES, sessionId)
-  },
-
-  removeAgentKnowledgeReference: (sessionId: string, itemId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_KNOWLEDGE_REFERENCE, sessionId, itemId)
   },
 
   stopAgent: (sessionId: string) => {

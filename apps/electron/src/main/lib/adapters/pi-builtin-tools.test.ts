@@ -31,7 +31,6 @@ mock.module('electron', () => ({
 
 const {
   buildPiBuiltinTools,
-  buildPiKnowledgeBaseTools,
   buildPiMemoryArchiveTools,
   buildPiPlanningTools,
   buildPiTaskGraphTools,
@@ -129,17 +128,6 @@ describe('Pi Profer in-process tool bridges', () => {
       presetManager.__resetAgentPresetsConfigPathForTest()
       rmSync(tmpDir, { recursive: true, force: true })
     }
-  })
-
-  test('Given Pi runtime When building knowledge tools Then it exposes the session-scoped allowlist tools', () => {
-    const { sdk, tools } = createPiSdkStub()
-
-    buildPiKnowledgeBaseTools(sdk, { sessionId: 'pi-knowledge-test' })
-
-    expect(tools.map((tool) => tool.name)).toEqual([
-      'mcp__knowledge-base__list_imported_knowledge',
-      'mcp__knowledge-base__read_imported_knowledge',
-    ])
   })
 
   test('Given Pi runtime When building memory tools without a workspace Then it does not expose personal memory search', () => {

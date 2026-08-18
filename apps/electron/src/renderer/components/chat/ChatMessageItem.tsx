@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { AlertCircle, FileText, Library, Pencil, RotateCcw, Trash2 } from 'lucide-react'
+import { AlertCircle, FileText, Library, Pencil, Quote, RotateCcw, Trash2 } from 'lucide-react'
 import {
   Message,
   MessageHeader,
@@ -41,6 +41,7 @@ import type { ChatMessage, KnowledgeReference } from '@profer/shared'
 import type { InlineEditSubmitPayload } from './InlineEditForm'
 import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
 import { cn } from '@/lib/utils'
+import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
 import { openKnowledgePreview } from '@/components/knowledge-base/KnowledgePreviewPanel'
 
 // 重导出供外部使用
@@ -59,6 +60,16 @@ function KnowledgeReferenceCards({ references }: { references: KnowledgeReferenc
     const unavailable = availableIds !== null && !availableIds.has(reference.itemId)
     return <button key={reference.itemId} type="button" disabled={unavailable} onClick={() => openKnowledgePreview(reference)} className={cn('flex w-full items-center gap-2 rounded border border-border/60 bg-background/60 px-2 py-1.5 text-left text-xs hover:bg-accent disabled:cursor-not-allowed', unavailable && 'opacity-55')}><FileText className="size-3.5 text-muted-foreground"/><span className="min-w-0 flex-1 truncate">{reference.title}</span>{unavailable ? <span className="shrink-0 text-destructive">已删除，不可读取</span> : <span className="shrink-0 text-muted-foreground">{reference.kind} · {reference.origin === 'arxiv' ? '研究资料' : '本地资料'}</span>}</button>
   })}</div></div>
+}
+
+/** Chat 用户消息中的上下文引用 Chip；引用正文只作为 Agent 上下文，不直接显示。 */
+function QuotedContextChip({ quote }: { quote: ParsedQuotedSelectionRef }): React.ReactElement {
+  return (
+    <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-primary/20 bg-primary/8 px-2.5 py-1 text-[12px] text-muted-foreground">
+      <Quote className="size-3.5 shrink-0 text-primary/60" />
+      <span className="truncate">{quote.label ?? quote.filename}</span>
+    </div>
+  )
 }
 
 /**
@@ -129,6 +140,10 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
   const [isDeleting, setIsDeleting] = React.useState(false)
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
+  const parsedUserContent = React.useMemo(
+    () => message.role === 'user' ? parseQuotedSelectionRefs(message.content) : null,
+    [message.content, message.role],
+  )
 
   /** 确认删除消息 */
   const handleDeleteConfirm = async (): Promise<void> => {
@@ -234,14 +249,21 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
               {!isInlineEditing && message.attachments && message.attachments.length > 0 && (
                 <MessageAttachments attachments={message.attachments} />
               )}
+              {!isInlineEditing && parsedUserContent && parsedUserContent.quotes.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {parsedUserContent.quotes.map((quote, index) => (
+                    <QuotedContextChip key={`${quote.path}:${index}`} quote={quote} />
+                  ))}
+                </div>
+              )}
               {isInlineEditing ? (
                 <InlineEditForm
                   message={message}
                   onSubmit={handleInlineEditSubmit}
                   onCancel={() => onCancelInlineEdit?.()}
                 />
-              ) : message.content && (
-                <UserMessageContent>{message.content}</UserMessageContent>
+              ) : parsedUserContent?.text && (
+                <UserMessageContent>{parsedUserContent.text}</UserMessageContent>
               )}
             </>
           )}
@@ -250,7 +272,7 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
         {/* 操作按钮（非 streaming 时显示，hover 时可见） */}
         {(message.content || message.error || (message.attachments && message.attachments.length > 0)) && !isStreaming && !isInlineEditing && (
           <MessageActions className="pl-[46px] mt-0.5 min-h-[28px]">
-            <CopyButton content={message.content} copyAsPlainText={message.role === 'user'} />
+            <CopyButton content={message.role === 'user' && parsedUserContent ? parsedUserContent.text : message.content} copyAsPlainText={message.role === 'user'} />
             {message.role === 'assistant' && conversationId && (
               <MigrateToAgentButton conversationId={conversationId} />
             )}

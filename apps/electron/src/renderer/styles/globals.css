@@ -2518,20 +2518,35 @@
   }
 }
 
-/* ===== 平板竖屏：消息内容区向左拓宽 40px 并对齐 =====
- * 保留头像/模型标识，但把 assistant 与 user 消息内容区左缩进从 46px 收窄到 6px
- * （相当于向左扩 40px），竖屏下获得更多文字观看空间，且两边气泡对齐。
- * 同 turn 底部附属区（文件改动汇总的虚线分隔 + 操作按钮栏）也一并对齐到 6px，
- * 避免出现“正文已左移、底下虚线与分叉按钮仍停在 46px”的错位。
+/* ===== 窄屏 Agent：消息内容向头像侧收拢 =====
+ * 消息头部仍保留头像、模型名/用户名和时间；正文、思考/执行过程、复制操作栏以及
+ * 文件改动汇总不再为头像额外预留 46px，避免窄窗口下内容整体被推到右侧。
+ * 使用容器查询而不是 viewport 查询，兼容右侧面板打开后主对话区变窄的桌面布局。
  */
+.agent-conversation {
+  container-type: inline-size;
+}
+
+@container (max-width: 720px) {
+  .agent-conversation .message-item .message-content,
+  .agent-conversation .message-item .file-changes-summary,
+  .agent-conversation .message-item .agent-turn-actions,
+  .agent-conversation .message-item > .message-actions {
+    padding-left: 6px;
+  }
+
+  .agent-conversation .message-item > .message-content + .file-changes-summary,
+  .agent-conversation .message-item > .message-content + .file-changes-summary + .agent-turn-actions {
+    padding-left: 6px;
+  }
+}
+
+/* 平板竖屏没有稳定的容器尺寸，继续按屏幕方向收拢消息内容。 */
 @media (orientation: portrait) {
-  body.tablet-mode .message-item .message-content {
-    padding-left: 6px;
-  }
-  body.tablet-mode .message-item .file-changes-summary {
-    padding-left: 6px;
-  }
-  body.tablet-mode .message-item .agent-turn-actions {
+  body.tablet-mode .message-item .message-content,
+  body.tablet-mode .message-item .file-changes-summary,
+  body.tablet-mode .message-item .agent-turn-actions,
+  body.tablet-mode .message-item > .message-actions {
     padding-left: 6px;
   }
 }

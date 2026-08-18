@@ -781,7 +781,6 @@ export function installElectronApiStub(): void {
     getWorkspaceAttachedFiles: () => Promise.resolve([]),
     getSessionProcessCount: () => Promise.resolve(0),
     listSessionProcesses: () => Promise.resolve([]),
-    getAgentKnowledgeReferences: () => Promise.resolve([]),
     knowledge: {
       getLibrarySnapshot: () => Promise.resolve({ items: [] }),
       // 知识库引用选择器：平板暂不支持知识库，返回空列表（必须显式返回数组，
@@ -856,8 +855,6 @@ export function installElectronApiStub(): void {
       return remoteClient.readFileAsDataUrl(filePath, access.sessionId)
     },
     saveFilesToAgentSession: () => unsupported('保存文件到会话'),
-    addAgentKnowledgeReferences: () => unsupported('知识库引用'),
-    removeAgentKnowledgeReference: () => unsupported('知识库引用'),
     migrateChatToAgent: () => unsupported('Chat 迁移到 Agent'),
     // 提示词编辑（PromptEditorSidebar/SystemPromptSelector 的 CRUD）：平板不暴露设置入口，
     // 必须明确拒绝，避免 Proxy 兜底 undefined 污染 promptConfigAtom / selectedPromptIdAtom。

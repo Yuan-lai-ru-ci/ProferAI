@@ -1,5 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-import { nextAgentChannelIdsAfterModelSelect } from './agent-channel-selection'
+import type { Channel } from '@profer/shared'
+import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from './agent-channel-selection'
+
+function channel(id: string, provider: Channel['provider'], models: string[]): Channel {
+  return {
+    id,
+    name: id,
+    provider,
+    baseUrl: '',
+    apiKey: '',
+    enabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+    models: models.map((modelId) => ({ id: modelId, name: modelId, enabled: true })),
+  }
+}
 
 describe('nextAgentChannelIdsAfterModelSelect', () => {
   test('adds the selected channel for Claude runtime', () => {
@@ -19,5 +34,40 @@ describe('nextAgentChannelIdsAfterModelSelect', () => {
   test('does not migrate a Pi default channel into the Claude whitelist', () => {
     const channelIds: string[] = []
     expect(nextAgentChannelIdsAfterModelSelect(channelIds, 'openai-responses', 'pi')).toBe(channelIds)
+  })
+})
+
+describe('resolveAgentModelSelection', () => {
+  const channels = [
+    channel('claude', 'anthropic', ['claude-sonnet-4-6']),
+    channel('openai', 'openai', ['gpt-5.5']),
+  ]
+
+  test('Pi selects an OpenAI protocol model', () => {
+    expect(resolveAgentModelSelection(channels, 'pi', ['claude'])).toEqual({
+      channelId: 'openai',
+      modelId: 'gpt-5.5',
+    })
+  })
+
+  test('Claude selects an Anthropic protocol model from its whitelist', () => {
+    expect(resolveAgentModelSelection(channels, 'claude', ['claude'])).toEqual({
+      channelId: 'claude',
+      modelId: 'claude-sonnet-4-6',
+    })
+  })
+
+  test('rejects a Claude model as the current Pi selection', () => {
+    expect(resolveAgentModelSelection(channels, 'pi', ['claude'], {
+      channelId: 'claude',
+      modelId: 'claude-sonnet-4-6',
+    })).toEqual({
+      channelId: 'openai',
+      modelId: 'gpt-5.5',
+    })
+  })
+
+  test('returns null when the runtime has no compatible model', () => {
+    expect(resolveAgentModelSelection([channels[0]!], 'pi', ['claude'])).toBeNull()
   })
 })

@@ -5,11 +5,10 @@
  * 首个认证通过的渠道跑完整流程：
  * 1. 预设创建 → 绑定会话 → 运行时生效（真实 agent-preset-manager / orchestrator 链路）
  * 2. 会话内 preset 工具调用（严格解析 transcript 的 tool_use 块）
- * 3. harness 验证闭环：让 Agent 写入文件后不验证，观察自动续轮（B1-5 起 Pi 与 Claude 双侧）
  *
  * 可选参数：
  *   --probe-only  只跑解密环境自检，不发起模型调用
- *   --claude      把 Claude runtime 候选排在前面（验证 Claude 侧 harness 兜底）
+ *   --claude      把 Claude runtime 候选排在前面
  *
  * 用法（apps/electron 目录下）：
  *   bunx esbuild scripts/agent-session-smoke.ts --bundle --platform=node --format=cjs \
@@ -23,7 +22,7 @@
 import { app, safeStorage } from 'electron'
 import { getSettings } from '../src/main/lib/settings-service'
 import { getAgentWorkspace } from '../src/main/lib/agent-workspace-manager'
-import { createAgentSession, getAgentSessionMeta, getAgentSessionSDKMessages } from '../src/main/lib/agent-session-manager'
+import { createAgentSession, getAgentSessionMeta } from '../src/main/lib/agent-session-manager'
 import { createAgentPreset, listAgentPresets, deleteAgentPreset, getAgentPreset } from '../src/main/lib/agent-preset-manager'
 import { runAgentHeadless } from '../src/main/lib/agent-service'
 import { readFileSync, existsSync, appendFileSync, writeFileSync, readdirSync } from 'node:fs'
@@ -271,7 +270,6 @@ async function main(): Promise<void> {
   let working: Candidate | undefined
   let sessionId = ''
   let run1: { finalText: string; error?: string } | undefined
-  let run2: { finalText: string; error?: string } | undefined
   const sessionIds: string[] = []
 
   // ② 逐候选探测：首个认证通过的渠道继续跑完整流程
@@ -308,13 +306,6 @@ async function main(): Promise<void> {
     console.log(`[冒烟] 第一轮工具调用统计: ${JSON.stringify(counts)}`)
     console.log(`[冒烟] 证据: ${listName}=${counts[listName] ?? 0} 次, ${createName}=${counts[createName] ?? 0} 次`)
 
-    // ④ harness 兜底（B1-5 起 Pi 与 Claude 双侧均验证）
-    run2 = await runTurn({
-      ...baseInput,
-      userMessage: candidate.runtime === 'pi'
-        ? '用 write 工具在当前会话目录创建 smoke-verify.md，内容只有一行「smoke ok」。写完这一轮立即结束回复，不要读回、不要运行任何命令、不要做任何验证。'
-        : '用 Write 工具在当前会话目录创建 smoke-verify.md，内容只有一行「smoke ok」。写完这一轮立即结束回复，不要读回、不要运行任何命令、不要做任何验证。',
-    }, '第二轮（harness 兜底）')
     break
   }
 
@@ -328,26 +319,6 @@ async function main(): Promise<void> {
   if (run1) {
     console.log(`[冒烟] ── 第一轮最终回复（前 400 字）──\n${run1.finalText.slice(0, 400)}`)
     if (run1.error) console.log(`[冒烟] 第一轮错误: ${run1.error}`)
-  }
-
-  let followUpFired = false
-  if (run2) {
-    console.log(`[冒烟] ── 第二轮最终回复（前 400 字）──\n${run2.finalText.slice(0, 400)}`)
-    if (run2.error) console.log(`[冒烟] 第二轮错误: ${run2.error}`)
-    const transcript2 = readTranscript(sessionId)
-    // 源码版 follow-up 说「尚未进行验证」，文档版说「尚未验证结果」——两种都是 harness 续轮
-    followUpFired = /尚未进行验证|尚未验证结果/.test(transcript2)
-    console.log(`[冒烟] harness 续轮触发: ${followUpFired ? '是 ✅' : '否 ❌'}`)
-    // B1-1 取证：harness follow-up 必须以系统消息（harness_follow_up）进入 Profer JSONL，
-    // 供 UI 渲染「系统验证兜底」提示，而不是被当成用户自己发的消息。
-    const followUpNotice = getAgentSessionSDKMessages(sessionId).some(
-      (message) => (message as { type?: string; subtype?: string }).type === 'system'
-        && (message as { subtype?: string }).subtype === 'harness_follow_up',
-    )
-    console.log(`[冒烟] 验证兜底系统消息落盘: ${followUpNotice ? '是 ✅' : '否 ❌'}`)
-    followUpFired = followUpFired && followUpNotice
-  } else {
-    console.log('[冒烟] harness 判定: 跳过（第二轮未运行）')
   }
 
   // 清理：删掉冒烟创建的预设（会话保留，可在应用内查看）
@@ -365,9 +336,8 @@ async function main(): Promise<void> {
   console.log(`[冒烟] 本次创建的会话: ${sessionIds.join(', ') || '无'}`)
 
   // 无工作区时跳过派生/单工具自检（视为通过）；有工作区则必须取证成功。
-  // B1-5 起 harness 兜底对 Pi 与 Claude 双侧生效：无论命中哪个 runtime 都必须取证成功。
   const presetChecksOk = !workspaceSlug || (derivedMergeOk && toolFilterOk)
-  const ok = Boolean(working && run1 && !run1.error && followUpFired && presetChecksOk)
+  const ok = Boolean(working && run1 && !run1.error && presetChecksOk)
   console.log(`[冒烟] 派生合并/单工具裁剪自检计入判定: ${presetChecksOk ? '是' : '否'}`)
   console.log(`[冒烟] ═══ 判定: ${ok ? 'PASS ✅' : 'FAIL ❌'} ═══`)
   app.exit(ok ? 0 : 1)
