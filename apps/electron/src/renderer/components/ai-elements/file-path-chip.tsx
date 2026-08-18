@@ -180,7 +180,12 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     const sessionId = store.get(currentAgentSessionIdAtom)
     if (sessionId) {
       // 用户主动点击：做一次完整解析（允许全局搜索，单次可接受），解析成功才打开预览
-      window.electronAPI.resolveFilePath(previewFilePath, { sessionId })
+      // 必须带上 candidateBasePaths：预览路径是相对路径或裸文件名时，主进程需要
+      // basePaths 才能在授权目录内解析（否则无 basePaths 时裸文件名解析失败，点击打不开）
+      window.electronAPI.resolveFilePath(previewFilePath, {
+        sessionId,
+        candidateBasePaths: candidateBases.length > 0 ? candidateBases : undefined,
+      })
         .then((resolved) => {
           if (resolved) {
             openPreview(sessionId, {
