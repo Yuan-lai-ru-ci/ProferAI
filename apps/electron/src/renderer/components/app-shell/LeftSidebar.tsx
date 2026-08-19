@@ -35,8 +35,8 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
         'relative h-full overflow-hidden sidebar-collapse-ease',
         !noTransition && 'transition-[width] duration-300 will-change-[width] contain-layout',
         isClassic
-          ? 'bg-background rounded-2xl shadow-xl dark:shadow-md'
-          : 'bg-[hsl(var(--sidebar-surface))] rounded-2xl shadow-xl dark:shadow-md'
+          ? 'bg-surface-raised rounded-2xl shadow-xl dark:shadow-md'
+          : 'bg-sidebar rounded-2xl shadow-xl dark:shadow-md'
       )}
       style={{
         width: sidebarCollapsed ? 60 : width ?? 300,

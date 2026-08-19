@@ -63,12 +63,12 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     unsafeCSS: `
       :root, :host {
         --diffs-bg: transparent;
-        --diffs-addition-base: rgb(67,167,71);
-        --diffs-deletion-base: rgb(206,66,52);
-        --diffs-addition-bg: light-dark(rgb(228,244,233), rgb(19,34,23));
-        --diffs-deletion-bg: light-dark(rgb(248,231,230), rgb(39,22,20));
-        --diffs-separator-bg: hsl(var(--background));
-        --diffs-gap-style: 3px solid hsl(var(--content-area));
+        --diffs-addition-base: hsl(var(--diff-addition-fg));
+        --diffs-deletion-base: hsl(var(--diff-deletion-fg));
+        --diffs-addition-bg: hsl(var(--diff-addition-bg));
+        --diffs-deletion-bg: hsl(var(--diff-deletion-bg));
+        --diffs-separator-bg: hsl(var(--raised-surface));
+        --diffs-gap-style: 3px solid hsl(var(--surface-border));
         --diffs-scrollbar-thumb: light-dark(hsl(var(--muted-foreground) / 0.6), hsl(var(--muted-foreground) / 0.2));
         --diffs-scrollbar-thumb-hover: light-dark(hsl(var(--muted-foreground) / 0.8), hsl(var(--muted-foreground) / 0.35));
       }
@@ -103,12 +103,12 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
       }
       [data-line-type=change-addition] [data-column-number],
       [data-line-type=change-addition] [data-gutter-buffer]:not([data-gutter-buffer=buffer]) {
-        color: rgb(67,167,71) !important;
+        color: hsl(var(--diff-addition-fg)) !important;
         background-color: var(--diffs-addition-bg) !important;
       }
       [data-line-type=change-deletion] [data-column-number],
       [data-line-type=change-deletion] [data-gutter-buffer]:not([data-gutter-buffer=buffer]) {
-        color: rgb(206,66,52) !important;
+        color: hsl(var(--diff-deletion-fg)) !important;
         background-color: var(--diffs-deletion-bg) !important;
       }
       [data-gutter-buffer=buffer] {
@@ -118,14 +118,14 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
       [data-line-type=metadata] [data-column-number],
       [data-line-type=expanded] [data-column-number],
       [data-gutter] {
-        background-color: hsl(var(--content-area)) !important;
+        background-color: hsl(var(--raised-surface)) !important;
       }
     `,
   }), [viewMode, theme])
 
   if (tooLarge) {
     return (
-      <div className="h-full bg-content-area overflow-auto">
+      <div className="h-full bg-surface-raised overflow-auto">
         <div className="flex items-center justify-center h-full">
           <div className="text-center text-muted-foreground px-4">
             <p className="text-[13px] font-medium mb-1">文件过大，无法显示差异对比</p>
@@ -133,7 +133,7 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
               旧文件 {oldLines.toLocaleString()} 行，新文件 {newLines.toLocaleString()} 行
             </p>
             <p className="text-[12px] text-muted-foreground/60 mt-2">
-              请使用命令行 <code className="px-1 py-0.5 rounded bg-muted text-[11px]">git diff</code> 查看
+              请使用命令行 <code className="rounded bg-code px-1 py-0.5 text-[11px] text-code-foreground">git diff</code> 查看
             </p>
           </div>
         </div>
@@ -142,7 +142,7 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
   }
 
   return (
-    <div className="h-full diff-scroll bg-content-area overflow-auto">
+    <div className="h-full diff-scroll bg-surface-raised overflow-auto">
       <MultiFileDiff oldFile={oldFile} newFile={newFile} options={options} className="h-full" />
     </div>
   )

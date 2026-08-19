@@ -415,8 +415,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
         {/* 卡片式输入容器 — 对标 Cherry Studio: border-radius 17px, 0.5px border */}
         <div
           className={cn(
-            'agent-input-surface rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
-            'focus-within:border-foreground/20',
+            'agent-input-surface rounded-[17px] border-[0.5px] border-surface-border bg-input/70 backdrop-blur-sm transition-all duration-200',
+            'focus-within:border-focus/40 focus-within:ring-2 focus-within:ring-focus/10',
             isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
           )}
           onDragOver={handleDragOver}

@@ -3077,7 +3077,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
             <RuntimeProcessPanel sessionId={sessionId} />
             <div
               className={cn(
-                'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 [.composer-stack:has(.service-rail)_&]:-mt-5',
+                'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-surface-border bg-input/70 backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 focus-within:border-focus/40 focus-within:ring-2 focus-within:ring-focus/10 [.composer-stack:has(.service-rail)_&]:-mt-5',
                 (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
                 isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
               )}

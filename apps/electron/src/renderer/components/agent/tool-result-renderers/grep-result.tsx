@@ -120,21 +120,21 @@ export function GrepResultRenderer({ result, isError, input }: GrepResultRendere
         </div>
 
         {groups.map((group) => (
-          <div key={group.file} className="rounded-md overflow-hidden bg-zinc-900 dark:bg-zinc-950">
+          <div key={group.file} className="overflow-hidden rounded-md border border-surface-border/60 bg-code text-code-foreground">
             {/* 文件头 */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/50 text-[11px]">
+            <div className="flex items-center gap-1.5 bg-surface-sunken/50 px-3 py-1.5 text-[11px]">
               <FileTypeIcon name={group.file.split('/').pop() || group.file} isDirectory={false} size={12} />
-              <span className="font-mono text-zinc-300">{group.file}</span>
-              <span className="text-zinc-500">({group.matches.length})</span>
+              <span className="font-mono text-code-foreground/85">{group.file}</span>
+              <span className="text-muted-foreground">({group.matches.length})</span>
             </div>
             {/* 匹配行 */}
             <div className="font-mono text-[12px]">
               {group.matches.map((m, i) => (
-                <div key={i} className="flex px-3 py-0.5 hover:bg-zinc-800/30">
-                  <span className="shrink-0 w-10 text-right pr-3 select-none text-zinc-500 text-[11px]">
+                <div key={i} className="flex px-3 py-0.5 hover:bg-surface-selected/30">
+                  <span className="shrink-0 w-10 text-right pr-3 select-none text-[11px] text-muted-foreground">
                     {m.line}
                   </span>
-                  <span className={cn('flex-1 whitespace-pre-wrap break-all text-zinc-200')}>
+                  <span className={cn('flex-1 whitespace-pre-wrap break-all text-code-foreground')}>
                     {highlightPattern(m.content, pattern)}
                   </span>
                 </div>

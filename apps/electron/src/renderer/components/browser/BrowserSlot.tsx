@@ -156,5 +156,5 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
     }
   }, [sessionId, tabId])
 
-  return <div ref={ref} className="flex-1 min-h-0 bg-muted/15 titlebar-no-drag" aria-label="受管浏览器页面" />
+  return <div ref={ref} className="flex-1 min-h-0 bg-browser-host titlebar-no-drag" aria-label="受管浏览器页面" />
 }

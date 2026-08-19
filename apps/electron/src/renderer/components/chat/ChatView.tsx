@@ -718,7 +718,7 @@ function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = fa
         </div>
       </div>
 
-      {previewReference ? <aside className="flex h-full min-w-[320px] max-w-[55%] flex-[0_1_42%] flex-col border-l border-border bg-background"><header className="flex h-11 shrink-0 items-center border-b border-border px-3"><span className="min-w-0 flex-1 truncate text-sm font-medium">{previewReference.title}</span><button type="button" aria-label="关闭资料预览" onClick={() => setPreviewReference(null)} className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><X className="size-4"/></button></header><KnowledgePreviewContent reference={previewReference}/></aside> : null}
+      {previewReference ? <aside className="flex h-full min-w-[320px] max-w-[55%] flex-[0_1_42%] flex-col border-l border-surface-border bg-surface-raised"><header className="flex h-11 shrink-0 items-center border-b border-surface-border px-3"><span className="min-w-0 flex-1 truncate text-sm font-medium">{previewReference.title}</span><button type="button" aria-label="关闭资料预览" onClick={() => setPreviewReference(null)} className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><X className="size-4"/></button></header><KnowledgePreviewContent reference={previewReference}/></aside> : null}
 
       {/* 提示词编辑侧栏 */}
       <div className={cn(

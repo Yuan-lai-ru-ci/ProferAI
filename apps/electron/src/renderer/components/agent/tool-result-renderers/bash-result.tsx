@@ -39,13 +39,13 @@ export function BashResultRenderer({ result, isError, input }: BashResultRendere
     return (
       <div className={cn(
         'rounded-md font-mono text-[12px] leading-relaxed overflow-x-auto',
-        'bg-zinc-900 text-zinc-100 dark:bg-zinc-950',
+        'bg-code text-code-foreground border border-surface-border/60',
         'p-3',
       )}>
         {/* 命令回显 */}
         {command && (
-          <div className="text-zinc-500 mb-2 select-none">
-            <span className="text-green-400">$</span> {command}
+          <div className="mb-2 select-none text-muted-foreground">
+            <span className="text-success">$</span> {command}
           </div>
         )}
         {/* 输出行 */}
@@ -56,7 +56,7 @@ export function BashResultRenderer({ result, isError, input }: BashResultRendere
               key={i}
               className={cn(
                 'whitespace-pre-wrap break-all min-h-[1.25em]',
-                type === 'stderr' && 'text-red-400',
+                type === 'stderr' && 'text-destructive',
               )}
             >
               {line || '\u200B'}

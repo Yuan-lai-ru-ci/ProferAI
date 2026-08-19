@@ -114,7 +114,7 @@ export function MarkdownRichEditor({
           'px-4 py-3 text-[length:var(--md-preview-font-size,15px)] leading-relaxed',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_pre]:rounded-md [&_pre]:p-3',
-          '[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.875em]',
+          '[&_code]:bg-quote [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.875em]',
           '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
           '[&_table_p]:my-0',
           '[&_input[type=checkbox]]:accent-primary',

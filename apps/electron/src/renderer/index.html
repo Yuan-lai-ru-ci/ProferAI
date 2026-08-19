@@ -34,8 +34,8 @@
             html.classList.add('skin-' + style)
             if (tone === 'dark') html.classList.add('dark')
           } else {
-            // 旧主题回退（theme-* 兼容层）：无 tone 缓存时按后缀推断
-            html.classList.add('theme-' + style)
+            // 桌面未知皮肤先只恢复基础明暗，等待 renderer 注册表确认后应用 skin-*。
+            // 不主动加入 theme-*，避免 desktop 主路径落入 legacy 双写视觉层。
             if (style.endsWith('-dark')) {
               html.classList.add('dark')
             }

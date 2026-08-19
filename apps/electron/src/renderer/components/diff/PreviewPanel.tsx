@@ -171,7 +171,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
   )
 
   return (
-    <div className="relative flex flex-col h-full overflow-hidden bg-content-area titlebar-no-drag">
+    <div className="relative flex flex-col h-full overflow-hidden bg-surface-raised titlebar-no-drag">
       {/* 预览在无右侧文件栏时延伸到窗口右缘，必须自行接管控制按钮。
           否则 TabBar 宿主仍会把按钮留在左侧会话区，与预览标题栏脱节。 */}
       <WindowControlsHost
@@ -181,7 +181,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
         className="absolute right-2 top-[3px] z-10"
       />
       {/* 顶部栏：文件名 + 预览操作 */}
-      <div className={cn('flex-shrink-0 border-b border-border/30 titlebar-no-drag', useStackedWindowsHeader && 'bg-content-area')}>
+      <div className={cn('flex-shrink-0 border-b border-surface-border/30 titlebar-no-drag', useStackedWindowsHeader && 'bg-surface-raised')}>
         {useStackedWindowsHeader ? (
           <>
             <div
@@ -192,7 +192,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
                 {fileName}
               </span>
             </div>
-            <div className="flex items-center h-[30px] px-3 border-t border-border/20 bg-muted/20">
+            <div className="flex items-center h-[30px] px-3 border-t border-surface-border/20 bg-surface-sunken/40">
               {renderPreviewActions()}
             </div>
           </>

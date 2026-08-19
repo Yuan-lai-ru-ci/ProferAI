@@ -157,7 +157,7 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
         'max-w-[calc(56rem-18px)] h-[calc(80vh-24px)] flex flex-col p-0 gap-0',
         state.status === 'image' && 'max-w-[calc(64rem-18px)] h-[calc(90vh-24px)]',
       )}>
-        <DialogHeader className="flex flex-row items-center justify-between px-4 py-2 border-b flex-shrink-0">
+        <DialogHeader className="flex flex-row items-center justify-between border-b border-surface-border px-4 py-2 flex-shrink-0">
           <DialogTitle className="text-sm font-medium truncate flex-1 mr-2">{fileName}</DialogTitle>
           <DialogDescription className="sr-only">
             预览文件 {fileName}
@@ -179,14 +179,14 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
           </div>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 overflow-auto">
+        <div className="flex-1 min-h-0 overflow-auto bg-surface-raised">
           {state.status === 'loading' && (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
           )}
           {state.status === 'image' && (
-            <div className="flex items-center justify-center h-full bg-black/5">
+            <div className="flex items-center justify-center h-full bg-surface-sunken/50">
               <img src={state.src} alt={fileName} className="max-w-full max-h-full object-contain" />
             </div>
           )}
@@ -197,7 +197,7 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
             <iframe src={state.src} className="w-full h-full border-0" />
           )}
           {state.status === 'text' && (
-            <pre className="p-4 text-xs font-mono whitespace-pre-wrap overflow-auto h-full">
+            <pre className="h-full overflow-auto bg-code p-4 font-mono text-xs whitespace-pre-wrap text-code-foreground">
               <code>{state.content}</code>
             </pre>
           )}

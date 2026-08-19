@@ -208,7 +208,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         )}
       />
 
-      <div className="shell-bg h-screen w-screen flex overflow-clip bg-background">
+      <div className="shell-bg h-screen w-screen flex overflow-clip bg-surface-shell">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
         <div
           className={cn(
@@ -230,7 +230,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           )}
         </div>
         {!isClassic && (
-          <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-border/80 dark:bg-border/70" />
+          <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-surface-border/80" />
         )}
 
         {/* 中间容器 */}
@@ -256,7 +256,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             )}
           >
             {!isClassic && (
-              <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-border/80 dark:bg-border/70" />
+              <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-surface-border/80" />
             )}
             {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
             {filePanelVisible && (

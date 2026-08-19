@@ -238,7 +238,9 @@ export async function handleSkinsChanged(payload: { deletedId: string | null }):
 export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = 'default', systemIsDark: boolean = true): void {
   const html = document.documentElement
 
-  // 计算目标状态。注册表就绪后用 skin-* + 动态 CSS；无 IPC 的平板继续走 theme-* 兼容层。
+  // 计算目标状态。注册表就绪后桌面只用 skin-* + 动态 CSS；仅无 IPC 的
+  // tablet 入口保留 theme-* 兼容层，避免 desktop 主窗口重新命中 legacy 双写规则。
+  const allowLegacyThemeFallback = document.body?.classList.contains('tablet-mode') ?? false
   let targetStyleClass: string | null = null
   let targetSkinClass: string | null = null
   let targetIsDark: boolean
@@ -252,7 +254,9 @@ export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = '
       cacheSkinTone(skin.tone)
       void applySkinCss(themeStyle)
     } else {
-      targetStyleClass = `theme-${themeStyle}`
+      // 注册表尚未就绪时，桌面只保持可读的基础 light/dark 表面；registry 完成后
+      // initializeTheme 会再次调用本函数并注入 skin CSS。tablet 无 IPC 时才保留旧路径。
+      if (allowLegacyThemeFallback) targetStyleClass = `theme-${themeStyle}`
       targetIsDark = themeStyle.endsWith('-dark')
     }
   } else if (themeMode === 'system') {

@@ -136,6 +136,38 @@
     --dashed-border-hover: 0 0% 9% / 0.50;
     /* Markdown 预览正文字号（medium 档默认；initializer 加载用户偏好后会覆盖） */
     --md-preview-font-size: 15px;
+
+    /* Skin Surface Contract v2：桌面主窗口的语义表面默认值。
+     * v1 用户皮肤可只覆写旧 token；缺失的 v2 token 在此安全回退。 */
+    --shell-surface: 0 0% 100%;
+    --raised-surface: 0 0% 100%;
+    --sunken-surface: 0 0% 96.8%;
+    --surface-border: 0 0% 89.8%;
+    --surface-border-strong: 0 0% 78%;
+    --input-hover: 0 0% 94.5%;
+    --control-surface: 0 0% 100%;
+    --control-hover: 0 0% 96.1%;
+    --selected-surface: 0 0% 92%;
+    --selected-foreground: 0 0% 9%;
+    --focus-ring: 0 0% 3.9%;
+    --overlay: 0 0% 0%;
+    --overlay-foreground: 0 0% 100%;
+    --message-surface: 0 0% 100%;
+    --message-user-surface: 0 0% 96.1%;
+    --code-fg: 0 0% 94%;
+    --blockquote-surface: 0 0% 96.1%;
+    --table-header-surface: 0 0% 96.1%;
+    --diff-addition-bg: 142 71% 45% / 0.12;
+    --diff-addition-fg: 142 55% 24%;
+    --diff-deletion-bg: 0 84% 60% / 0.12;
+    --diff-deletion-fg: 0 65% 36%;
+    --browser-host-surface: 0 0% 100%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 26 83% 14%;
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
   }
 
   .dark {
@@ -175,14 +207,45 @@
     /* 虚线边框色（新会话按钮、搜索按钮） */
     --dashed-border: 0 0% 98% / 0.25;
     --dashed-border-hover: 0 0% 98% / 0.40;
+
+    /* Skin Surface Contract v2：深色默认值必须让框架、浮层、内容与状态表面可辨。 */
+    --shell-surface: 0 0% 7%;
+    --raised-surface: 0 0% 10.5%;
+    --sunken-surface: 0 0% 5.5%;
+    --surface-border: 0 0% 18%;
+    --surface-border-strong: 0 0% 30%;
+    --input-hover: 0 0% 17%;
+    --control-surface: 0 0% 14.9%;
+    --control-hover: 0 0% 21%;
+    --selected-surface: 0 0% 24%;
+    --selected-foreground: 0 0% 98%;
+    --focus-ring: 0 0% 83.1%;
+    --overlay: 0 0% 0%;
+    --overlay-foreground: 0 0% 98%;
+    --message-surface: 0 0% 9.5%;
+    --message-user-surface: 0 0% 14.9%;
+    --code-fg: 0 0% 92%;
+    --blockquote-surface: 0 0% 12%;
+    --table-header-surface: 0 0% 12%;
+    --diff-addition-bg: 142 65% 45% / 0.18;
+    --diff-addition-fg: 142 60% 75%;
+    --diff-deletion-bg: 0 70% 52% / 0.20;
+    --diff-deletion-fg: 0 80% 78%;
+    --browser-host-surface: 0 0% 7%;
+    --success: 142 65% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 26 83% 14%;
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
   }
 
-  /* ===== 特殊风格主题 =====
+  /* ===== LEGACY TABLET / NO-IPC FALLBACK =====
    *
-   * ⚠ 双写同步义务：以下 .theme-* token 块与 resources/skins/<id>/skin.css 定义
-   * 同一批主题 token（值必须一致）。此处是平板端/无皮肤注册场景的 fallback
-   * （applyThemeToDOM 的 theme-* 分支），skin.css 是正常路径（skin-* 分支）。
-   * 修改任一 token 必须同步另一处；可用 node scripts/check-skin-token-sync.mjs 校验。
+   * 这些 .theme-* token 块只服务于无 IPC 的 tablet fallback；desktop 主窗口使用
+   * skin-* + 动态 #skin-css，不能主动进入本区。为保持 tablet 兼容，旧 token 仍需
+   * 与 resources/skins/<id>/skin.css 的交集同步；用 check-skin-token-sync.mjs 校验。
+   * v2 token 不再承担此双写义务，新增 desktop 表面应直接使用 Surface Contract。
    */
 
   /* 雾纸暖灰 (mist-paper-dark) — 安静的暖石墨工作台
@@ -1052,7 +1115,7 @@
   right: 0;
   bottom: 0;
   height: 1px;
-  background-color: hsl(var(--border) / 0.8);
+  background-color: hsl(var(--surface-border) / 0.8);
   pointer-events: none;
   z-index: 0;
 }
@@ -1060,7 +1123,7 @@
 .app-tab-active {
   position: relative;
   z-index: 1;
-  background-color: hsl(var(--content-area));
+  background-color: hsl(var(--tab-surface));
 }
 
 .app-tab-active::after {
@@ -1070,13 +1133,13 @@
   right: 0;
   bottom: 0;
   height: 1px;
-  background-color: hsl(var(--content-area));
+  background-color: hsl(var(--tab-surface));
   pointer-events: none;
   z-index: 1;
 }
 
 .app-tab-inactive:hover {
-  background-color: hsl(var(--tab-surface) / 0.7);
+  background-color: hsl(var(--selected-surface) / 0.7);
 }
 
 /* 输入模式容器可先挂载资料引用、附件等辅助区；不能再以 first-child 推断输入框。 */
@@ -1232,17 +1295,16 @@
     0 1px 3px 0 rgb(0 0 0 / 0.06);
 }
 
-/* 设置卡片样式：只有默认深色主题用透明，其他都用卡片背景 */
+/* 设置卡片统一消费 v2 raised/surface-border；皮肤不再依赖 theme-* 例外。 */
 .settings-card {
-  background: hsl(var(--card));
-  box-shadow:
-    0 1px 2px 0 rgb(0 0 0 / 0.03),
-    0 1px 3px 0 rgb(0 0 0 / 0.06);
+  background: hsl(var(--raised-surface));
+  border: 1px solid hsl(var(--surface-border) / 0.65);
+  box-shadow: var(--shadow-sm);
 }
 .dark:not([class*="theme-"]) .settings-card {
-  background: transparent;
-  box-shadow: none;
-  border: 1px solid hsl(var(--border) / 0.3);
+  background: hsl(var(--raised-surface));
+  box-shadow: var(--shadow-sm);
+  border-color: hsl(var(--surface-border) / 0.65);
 }
 
 /* 隐藏滚动条但保留滚动功能 */
@@ -1767,10 +1829,18 @@
   -webkit-app-region: no-drag;
 }
 
+/* Markdown / Tiptap 引用块统一走内容合约，保留 primary 作为语义引导色。 */
+:is(.prose, .ProseMirror) blockquote {
+  background-color: hsl(var(--blockquote-surface));
+  border-left-color: hsl(var(--primary) / 0.7);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 0.5rem 0.75rem;
+}
+
 /* ===== Tiptap 可编辑表格样式 ===== */
 .ProseMirror table,
 .ProseMirror table.markdown-table {
-  border: 1px solid hsl(var(--foreground) / 0.22);
+  border: 1px solid hsl(var(--surface-border));
   border-collapse: separate;
   border-radius: 6px;
   border-spacing: 0;
@@ -1800,9 +1870,9 @@
 .ProseMirror .md-th {
   background-clip: padding-box;
   border: 0 !important;
-  border-right: 1px solid hsl(var(--foreground) / 0.28) !important;
-  border-bottom: 1px solid hsl(var(--foreground) / 0.16) !important;
-  box-shadow: inset -1px 0 0 hsl(var(--background) / 0.9);
+  border-right: 1px solid hsl(var(--surface-border)) !important;
+  border-bottom: 1px solid hsl(var(--surface-border) / 0.72) !important;
+  box-shadow: inset -1px 0 0 hsl(var(--raised-surface) / 0.9);
   min-width: 48px;
   padding: 4px 8px;
   position: relative;
@@ -1811,14 +1881,14 @@
 
 .ProseMirror table.markdown-table td,
 .ProseMirror table.markdown-table th {
-  border-right-color: hsl(var(--foreground) / 0.28) !important;
+  border-right-color: hsl(var(--surface-border)) !important;
 }
 
 .ProseMirror table td:not(:last-child)::after,
 .ProseMirror table th:not(:last-child)::after,
 .ProseMirror table.markdown-table td:not(:last-child)::after,
 .ProseMirror table.markdown-table th:not(:last-child)::after {
-  background: hsl(var(--foreground) / 0.28);
+  background: hsl(var(--surface-border));
   bottom: 0;
   content: '';
   pointer-events: none;
@@ -1841,14 +1911,14 @@
 
 .ProseMirror table th,
 .ProseMirror table.markdown-table th {
-  background-color: hsl(var(--muted) / 0.5);
+  background-color: hsl(var(--table-header-surface));
   font-weight: 600;
   text-align: left;
 }
 
 .ProseMirror table tr:nth-child(even) td,
 .ProseMirror table.markdown-table tr:nth-child(even) td {
-  background-color: hsl(var(--muted) / 0.15);
+  background-color: hsl(var(--sunken-surface) / 0.5);
 }
 
 .ProseMirror .selectedCell::after {
@@ -1866,25 +1936,14 @@
 
 /* ===== Tiptap 可编辑代码块 ===== */
 .ProseMirror pre.markdown-code-block {
-  background: hsl(var(--muted) / 0.45) !important;
-  color: hsl(var(--foreground)) !important;
+  background: hsl(var(--code-bg)) !important;
+  color: hsl(var(--code-fg)) !important;
+  border: 1px solid hsl(var(--surface-border) / 0.72);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
   font-size: 13px;
   line-height: 1.6;
   tab-size: 2;
   white-space: pre;
-}
-
-.dark .ProseMirror pre.markdown-code-block,
-.theme-ocean-dark .ProseMirror pre.markdown-code-block,
-.theme-slate-dark .ProseMirror pre.markdown-code-block {
-  background: hsl(var(--muted)) !important;
-  color: hsl(var(--foreground)) !important;
-}
-
-.theme-forest-dark .ProseMirror pre.markdown-code-block {
-  background: hsl(150 20% 9%) !important;
-  color: hsl(var(--foreground)) !important;
 }
 
 .ProseMirror pre.markdown-code-block code,

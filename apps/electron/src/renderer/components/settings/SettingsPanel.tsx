@@ -304,14 +304,14 @@ export function SettingsPanel({
   return (
     <div className="flex flex-col h-full">
       {/* 顶部 Header 栏 */}
-      <div className="h-12 flex items-center justify-between px-5 border-b border-border/50 flex-shrink-0">
+      <div className="h-12 flex items-center justify-between px-5 border-b border-surface-border/50 flex-shrink-0">
         <h2 className="text-sm font-medium text-foreground">
           {activeTabLabel}
         </h2>
         {onClose && (
           <button
             onClick={handleClose}
-            className="rounded-md p-1.5 text-muted-foreground/60 hover:text-foreground hover:bg-muted transition-colors"
+            className="rounded-md p-1.5 text-muted-foreground/60 hover:text-foreground hover:bg-control transition-colors"
           >
             <X size={16} />
           </button>
@@ -321,7 +321,7 @@ export function SettingsPanel({
       {/* 下方主体：左导航 + 右内容（竖屏由 globals.css 改为纵向布局：顶部横条 tab + 内容） */}
       <div className="settings-body flex flex-1 min-h-0">
         {/* 左侧 Tab 导航 */}
-        <div className="settings-nav w-[160px] border-r border-border/50 pt-3 pb-2 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
+        <div className="settings-nav w-[160px] border-r border-surface-border/50 bg-surface-sunken/30 pt-3 pb-2 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
           <nav className="flex flex-col gap-0.5">
             {groups.map((group) => (
               <React.Fragment key={group.title ?? "__root__"}>
@@ -337,8 +337,8 @@ export function SettingsPanel({
                     className={cn(
                       "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
                       effectiveTab === tab.id
-                        ? "bg-muted text-foreground font-medium"
-                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                        ? "bg-surface-selected text-foreground font-medium"
+                        : "text-muted-foreground hover:bg-surface-selected/50 hover:text-foreground",
                     )}
                   >
                     {tab.icon}

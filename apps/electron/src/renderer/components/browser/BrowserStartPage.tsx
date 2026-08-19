@@ -40,7 +40,7 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin bg-background/40">
+    <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin bg-browser-host">
       <div className="mx-auto flex max-w-3xl flex-col items-center px-6 py-14">
         {/* Logo + 标题 */}
         <div className="mb-8 flex flex-col items-center gap-3">
@@ -55,7 +55,7 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
 
         {/* 搜索 / 地址框 */}
         <form onSubmit={submit} className="w-full max-w-xl">
-          <div className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 shadow-sm focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20">
+          <div className="flex items-center gap-2 rounded-full border border-surface-border bg-input px-4 py-2 shadow-sm focus-within:border-focus/50 focus-within:ring-2 focus-within:ring-focus/20">
             <Search className="size-4 shrink-0 text-muted-foreground" />
             <Input
               value={query}
@@ -79,10 +79,10 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
                   <button
                     type="button"
                     onClick={() => openItem(bookmark.url)}
-                    className="flex w-full flex-col items-center gap-2 rounded-xl border border-transparent p-3 text-center transition-colors hover:border-border hover:bg-muted/40"
+                    className="flex w-full flex-col items-center gap-2 rounded-xl border border-transparent p-3 text-center transition-colors hover:border-surface-border hover:bg-surface-selected/40"
                     aria-label={`打开书签 ${bookmark.title}`}
                   >
-                    <span className="flex size-10 items-center justify-center overflow-hidden rounded-lg bg-background shadow-sm ring-1 ring-border/50">
+                    <span className="flex size-10 items-center justify-center overflow-hidden rounded-lg bg-surface-raised shadow-sm ring-1 ring-surface-border/50">
                       {bookmark.favicon ? (
                         <img src={bookmark.favicon} alt="" className="size-6 object-contain" loading="lazy" />
                       ) : (
@@ -95,7 +95,7 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
                     <button
                       type="button"
                       onClick={() => onRemoveBookmark(bookmark.id)}
-                      className="absolute right-1 top-1 hidden size-5 items-center justify-center rounded-full bg-muted text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/90 hover:text-white group-hover:flex group-hover:opacity-100"
+                      className="absolute right-1 top-1 hidden size-5 items-center justify-center rounded-full bg-control text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/90 hover:text-destructive-foreground group-hover:flex group-hover:opacity-100"
                       aria-label={`删除书签 ${bookmark.title}`}
                     >
                       <X className="size-3" />
@@ -126,7 +126,7 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
                   key={entry.url}
                   type="button"
                   onClick={() => openItem(entry.url)}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50"
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface-selected/50"
                   aria-label={`打开 ${entry.title}`}
                 >
                   <Globe2 className="size-4 shrink-0 text-muted-foreground" />

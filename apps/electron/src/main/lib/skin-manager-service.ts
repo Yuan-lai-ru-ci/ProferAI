@@ -83,6 +83,10 @@ function validatePackage(root: string): { id: string; info: SkinInfo } | SkinMan
       name: manifest.name.trim(),
       tone: manifest.tone as 'light' | 'dark',
       builtin: false,
+      // 用户皮肤的 contractVersion 只是能力声明，不作为安装门槛；v1 始终兼容。
+      contractVersion: typeof manifest.contractVersion === 'number' && Number.isInteger(manifest.contractVersion) && manifest.contractVersion >= 2
+        ? manifest.contractVersion
+        : 1,
       version: typeof manifest.version === 'string' ? manifest.version : undefined,
       author: typeof manifest.author === 'string' ? manifest.author : undefined,
       description: typeof manifest.description === 'string' ? manifest.description : undefined,

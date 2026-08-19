@@ -6,5 +6,9 @@
   "author": "Profer",
   "description": "CRT 终端 — 暖磷光",
   "tooltip": "该主题包含轻微闪烁动画",
-  "titlebar": { "color": "#0d0e0c", "symbolColor": "#acb09f" }
+  "titlebar": {
+    "color": "#0d0e0c",
+    "symbolColor": "#acb09f"
+  },
+  "contractVersion": 2
 }

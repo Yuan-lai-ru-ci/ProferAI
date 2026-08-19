@@ -6,5 +6,9 @@
   "author": "Profer",
   "description": "森息晨光 — 自然绿调",
   "previewScale": 1.45,
-  "titlebar": { "color": "#ecf1ee", "symbolColor": "#1d3026" }
+  "titlebar": {
+    "color": "#ecf1ee",
+    "symbolColor": "#1d3026"
+  },
+  "contractVersion": 2
 }

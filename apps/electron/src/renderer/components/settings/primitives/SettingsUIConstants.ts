@@ -24,4 +24,4 @@ export const CARD_CLASS = 'rounded-xl settings-card'
 export const ROW_CLASS = 'flex items-center justify-between px-4 py-3'
 
 /** 卡片内分隔线样式 */
-export const DIVIDER_CLASS = 'border-border/50'
+export const DIVIDER_CLASS = 'border-surface-border/50'

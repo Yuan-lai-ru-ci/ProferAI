@@ -61,6 +61,9 @@ jobs:
       - name: Typecheck workspace
         run: bun run typecheck
 
+      - name: Verify built-in skin surface contract
+        run: bun --cwd apps/electron run check:skin-contract
+
       - name: Run unit and regression tests
         # --isolate: bun 的 mock.module('electron') 是进程级注册表，默认并行下多文件互相覆盖导致误报；隔离模式保证每个测试文件独立
         run: bun test --isolate --timeout 30000

@@ -28,7 +28,7 @@ const TooltipContent = React.forwardRef<
         // 深色毛玻璃效果：主题色调深色背景 + 模糊 + 高对比度文字
         "z-[10050] overflow-hidden rounded-lg px-3 py-2 text-xs",
         "bg-tooltip/90 text-tooltip-foreground backdrop-blur-md",
-        "shadow-lg shadow-black/25",
+        "shadow-lg",
         "animate-in fade-in-0 zoom-in-95",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
         "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",

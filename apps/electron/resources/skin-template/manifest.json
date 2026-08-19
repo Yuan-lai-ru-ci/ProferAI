@@ -3,6 +3,7 @@
   "name": "我的皮肤",
   "tone": "dark",
   "version": "1.0.0",
+  "contractVersion": 2,
   "author": "你的名字",
   "description": "我的第一款 Profer 皮肤",
   "titlebar": {

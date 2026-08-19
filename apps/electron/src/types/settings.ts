@@ -179,6 +179,8 @@ export interface SkinInfo {
   id: string
   name: string
   tone: 'light' | 'dark'
+  /** Skin Surface Contract 版本；缺失视为 v1，内置皮肤 v2 起必须显式声明 2。 */
+  contractVersion: number
   version?: string
   author?: string
   description?: string

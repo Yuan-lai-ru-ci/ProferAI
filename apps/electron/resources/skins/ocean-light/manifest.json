@@ -5,5 +5,9 @@
   "version": "1.0.0",
   "author": "Profer",
   "description": "晴空碧海 — 海天晨光",
-  "titlebar": { "color": "#e6eef5", "symbolColor": "#1b2632" }
+  "titlebar": {
+    "color": "#e6eef5",
+    "symbolColor": "#1b2632"
+  },
+  "contractVersion": 2
 }

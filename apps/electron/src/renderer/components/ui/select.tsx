@@ -18,11 +18,11 @@ const SelectTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       // 与 Input 同款 hairline + hover 加深 + 双层 focus glow，保证表单字段视觉一致
-      "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-border/60 bg-background/40 px-3 py-2 text-sm shadow-xs ring-offset-background",
+      "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-surface-border/60 bg-input/40 px-3 py-2 text-sm shadow-xs ring-offset-background",
       "transition-[border-color,box-shadow,background-color] duration-150 ease-out",
       "data-[placeholder]:text-muted-foreground/80",
-      "hover:border-border",
-      "focus:outline-none focus:border-ring focus:bg-background focus:ring-4 focus:ring-ring/15",
+      "hover:border-surface-border-strong hover:bg-input-hover/50",
+      "focus:outline-none focus:border-focus focus:bg-input focus:ring-4 focus:ring-focus/15",
       "disabled:cursor-not-allowed disabled:opacity-50",
       "[&>span]:line-clamp-1",
       className
@@ -81,7 +81,7 @@ const SelectContent = React.forwardRef<
       ref={ref}
       className={cn(
         // 与 Dropdown / Popover 同款 lg 圆角 + hairline + shadow-lg
-        "relative z-[100] max-h-[--radix-select-content-available-height] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-lg border border-border/50 bg-popover text-popover-foreground shadow-lg titlebar-no-drag",
+        "relative z-[100] max-h-[--radix-select-content-available-height] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-lg border border-surface-border/60 bg-popover text-popover-foreground shadow-lg titlebar-no-drag",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 origin-[--radix-select-content-transform-origin]",
         position === "popper" &&
           "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
@@ -146,7 +146,7 @@ const SelectSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Separator
     ref={ref}
-    className={cn("-mx-1 my-1 h-px bg-muted", className)}
+    className={cn("-mx-1 my-1 h-px bg-surface-border/70", className)}
     {...props}
   />
 ))

@@ -35,6 +35,7 @@
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "check:skin-token-sync": "node scripts/check-skin-token-sync.mjs",
+    "check:skin-contract": "node scripts/check-skin-surface-contract.mjs",
     "test:memory-search": "node scripts/memory-search-verify.mjs",
     "diagnose:openai-reasoning": "node scripts/diagnose-openai-reasoning.mjs",
     "generate:icons": "cd resources && ./generate-icons.sh",

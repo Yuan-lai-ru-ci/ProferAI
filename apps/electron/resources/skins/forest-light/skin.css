@@ -65,3 +65,37 @@
   --scroll-thumb-hover: hsl(150 35% 38% / 0.30);
   --scroll-thumb-active: hsl(150 35% 38% / 0.40);
 }
+
+/* ===== Skin Surface Contract v2 =====
+ * 本组将稳定的语义表面映射到本皮肤既有色板；业务组件不得依赖具体色相。 */
+:root {
+  --shell-surface: var(--background);
+  --raised-surface: var(--card);
+  --sunken-surface: var(--muted);
+  --surface-border: var(--border);
+  --surface-border-strong: var(--border);
+  --input-hover: var(--muted);
+  --control-surface: var(--secondary);
+  --control-hover: var(--accent);
+  --selected-surface: var(--accent);
+  --selected-foreground: var(--accent-foreground);
+  --focus-ring: var(--ring);
+  --overlay: 0 0% 0%;
+  --overlay-foreground: var(--foreground);
+  --message-surface: var(--content-area);
+  --message-user-surface: var(--secondary);
+  --code-fg: var(--foreground);
+  --blockquote-surface: var(--muted);
+  --table-header-surface: var(--muted);
+  --diff-addition-bg: 142 65% 45% / 0.18;
+  --diff-addition-fg: 142 60% 75%;
+  --diff-deletion-bg: 0 70% 52% / 0.20;
+  --diff-deletion-fg: 0 80% 78%;
+  --browser-host-surface: var(--content-area);
+  --success: 142 65% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 26 83% 14%;
+  --info: var(--primary);
+  --info-foreground: var(--primary-foreground);
+}

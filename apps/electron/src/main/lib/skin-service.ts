@@ -119,6 +119,7 @@ export interface SkinManifestRaw {
   id?: unknown
   name?: unknown
   tone?: unknown
+  contractVersion?: unknown
   version?: unknown
   author?: unknown
   description?: unknown
@@ -182,6 +183,10 @@ export function readManifest(dir: string, builtin: boolean): SkinInfo | null {
     id: manifest.id as string,
     name: typeof manifest.name === 'string' && manifest.name ? manifest.name : (manifest.id as string),
     tone: manifest.tone as 'light' | 'dark',
+    // v1 皮肤没有 contractVersion；无效值同样按 v1 降级，保证用户旧皮肤可继续加载。
+    contractVersion: typeof manifest.contractVersion === 'number' && Number.isInteger(manifest.contractVersion) && manifest.contractVersion >= 2
+      ? manifest.contractVersion
+      : 1,
     version: typeof manifest.version === 'string' ? manifest.version : undefined,
     author: typeof manifest.author === 'string' ? manifest.author : undefined,
     description: typeof manifest.description === 'string' ? manifest.description : undefined,

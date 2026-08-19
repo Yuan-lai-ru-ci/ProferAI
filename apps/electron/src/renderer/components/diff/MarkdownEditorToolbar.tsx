@@ -68,6 +68,13 @@ function collectRuntimeStyles(): string {
       // 无法访问的 sheet（CORS / 跨域字体表）跳过
     }
   }
+
+  // 皮肤 CSS 由 atoms/theme.ts 动态写入 <style id="skin-css">。部分 Chromium
+  // 上该 inline sheet 不稳定地出现在 document.styleSheets 中；显式附加其文本，
+  // 确保截图继承主窗口的 skin-* token 与 profer-skin:// 资源引用。
+  const skinCss = document.getElementById('skin-css')?.textContent?.trim()
+  if (skinCss) chunks.push(skinCss)
+
   return chunks.join('\n')
 }
 
@@ -194,7 +201,7 @@ function TableGridPicker({ editor }: { editor: Editor }) {
                 key={i}
                 className={cn(
                   'h-4 w-4 cursor-pointer rounded-sm border',
-                  selected ? 'border-primary bg-primary/20' : 'border-border bg-background hover:border-primary/50',
+                  selected ? 'border-primary bg-primary/20' : 'border-surface-border bg-input hover:border-primary/50',
                 )}
                 onMouseEnter={() => setHover({ row: r, col: c })}
                 onClick={() => insert(r, c)}
@@ -254,7 +261,7 @@ function LinkPopover({ editor, active }: { editor: Editor; active: boolean }) {
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') apply() }}
             placeholder="https://..."
-            className="h-7 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:border-primary"
+            className="h-7 flex-1 rounded-md border border-surface-border bg-input px-2 text-xs outline-none focus:border-focus"
             autoFocus
           />
           <Button size="sm" className="h-7 px-2 text-xs" onClick={apply}>
@@ -340,7 +347,7 @@ export function MarkdownEditorToolbar({ editor }: MarkdownEditorToolbarProps): R
   }, [handleScreenshot])
 
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-0.5 border-b border-border/50 bg-background px-2 py-1">
+    <div className="sticky top-0 z-10 flex items-center gap-0.5 border-b border-surface-border/50 bg-surface-raised px-2 py-1">
       {/* 行内格式 */}
       <ToolbarButton icon={Bold} label="加粗" shortcut={`${mod}B`} active={activeState.bold} onClick={() => editor.chain().focus().toggleBold().run()} />
       <ToolbarButton icon={Italic} label="斜体" shortcut={`${mod}I`} active={activeState.italic} onClick={() => editor.chain().focus().toggleItalic().run()} />
@@ -381,7 +388,7 @@ export function MarkdownEditorToolbar({ editor }: MarkdownEditorToolbarProps): R
       {screenshotting && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="mr-1 flex h-7 w-7 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <div className="mr-1 flex h-7 w-7 items-center justify-center rounded-md bg-control text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="截图处理中" />
             </div>
           </TooltipTrigger>
