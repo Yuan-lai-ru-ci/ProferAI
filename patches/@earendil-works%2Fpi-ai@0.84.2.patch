@@ -1,7 +1,7 @@
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -61,6 +61,17 @@
+@@ -61,6 +61,19 @@
      // "stream ended without ..." and "Anthropic stream ended before message_stop"
      // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
      "ended without",
@@ -14,6 +14,8 @@ diff --git a/dist/utils/retry.js b/dist/utils/retry.js
 +    // These strings are emitted by undici and compatible proxy transports.
 +    "peer closed connection",
 +    "incomplete chunked read",
++    // Some upstream OpenAI-compatible proxies return this exact transport failure.
++    "response stream was interrupted",
 +    // Browser/undici wording: `TypeError: Failed to fetch`.
 +    "failed to fetch",
      "stream ended before message_stop",

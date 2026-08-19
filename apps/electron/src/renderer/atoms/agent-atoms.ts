@@ -813,14 +813,15 @@ export function applyAgentEvent(
       return { ...prev, running: true, backgroundWaiting: false }
 
     case 'typed_error':
-      // 处理类型化错误（TypedError）
-      // 停止运行，清除重试状态
-      return { ...prev, running: false, retrying: undefined }
+      // 错误消息只负责展示，不能提前释放 renderer 运行态。
+      // 主进程 active ownership 要到 owner finally 才释放；若此处先置 running=false，
+      // 用户会在锁仍占用时发送/压缩，随后被主进程拒绝并出现乐观消息撤回。
+      // 与 complete/stop 一致，只有 STREAM_COMPLETE IPC 才能真正结束运行态。
+      return { ...prev, retrying: undefined }
 
     case 'error':
-      // 改进：error 事件不再清除 retrying 状态
-      // retrying 状态由专用事件控制
-      return { ...prev, running: false }
+      // 同上：保留 running，retrying 由专用事件控制；等待 STREAM_COMPLETE 收尾。
+      return prev
 
     case 'usage_update':
       return {

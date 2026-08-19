@@ -30,6 +30,7 @@ describe('Pi native retry classifier', () => {
   })
 
   test.each([
+    'Upstream response stream was interrupted',
     'peer closed connection',
     'incomplete chunked read',
     'peer closed connection without sending complete message body (incomplete chunked read)',

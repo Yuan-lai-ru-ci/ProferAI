@@ -48,6 +48,7 @@ import {
   updateShortcutOverrides,
 } from '@/lib/shortcut-registry'
 import { getFileParentPath } from '@/lib/file-utils'
+import { isImageAttachmentMediaType, resolveAgentAttachmentPrompt } from '@profer/shared'
 
 /**
  * 快捷键初始化 + 全局 Handler 注册
@@ -272,10 +273,16 @@ export function GlobalShortcuts(): null {
           store.set(tabsAtom, result.tabs)
           store.set(activeTabIdAtom, result.activeTabId)
 
+          // 纯图片没有文字任务时默认读图；用户有文字时保留其任务。
+          const userTask = resolveAgentAttachmentPrompt(
+            data.text,
+            (data.files ?? []).map((file) => isImageAttachmentMediaType(file.mediaType) ? 'image' : 'file'),
+          )
+
           // 设置待发送消息（附件引用已内联到消息文本中）
           store.set(agentPendingPromptAtom, {
             sessionId: meta.id,
-            message: fileReferences + data.text,
+            message: fileReferences + userTask,
             ...(additionalDirectories.size > 0 && { additionalDirectories: Array.from(additionalDirectories) }),
           })
         } else {

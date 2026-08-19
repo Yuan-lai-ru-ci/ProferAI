@@ -9,7 +9,7 @@
 
 import { BrowserWindow } from 'electron'
 import type { AgentStreamPayload } from '@profer/shared'
-import { AGENT_IPC_CHANNELS, isVisibleAgentSession } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, isVisibleAgentSession, resolveAgentAttachmentPrompt } from '@profer/shared'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
 import {
   listAgentWorkspacesByUpdatedAt,
@@ -697,7 +697,10 @@ export class BridgeCommandHandler {
     const fileReferences = attachments?.length
       ? buildAttachedFilesBlock(attachments.map(a => ({ label: a.label, path: a.absolutePath })))
       : ''
-    const effectiveText = text.trim() || (attachments?.length ? '请查看上面附加的文件。' : '')
+    const effectiveText = resolveAgentAttachmentPrompt(
+      text,
+      attachments?.map((attachment) => attachment.kind) ?? [],
+    )
     const userMessage = fileReferences + effectiveText
 
     const input = {

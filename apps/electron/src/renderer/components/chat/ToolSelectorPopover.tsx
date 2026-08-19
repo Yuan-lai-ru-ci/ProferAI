@@ -48,9 +48,14 @@ export function ToolSelectorPopover(): React.ReactElement {
   const setSettingsTab = useSetAtom(settingsTabAtom)
 
   /** 切换工具开关（通过 IPC 更新后端配置，再刷新 atom） */
-  const toggleTool = async (toolId: string, currentEnabled: boolean): Promise<void> => {
+  const toggleTool = async (
+    toolId: string,
+    currentEnabled: boolean,
+  ): Promise<void> => {
     try {
-      await window.electronAPI.updateChatToolState(toolId, { enabled: !currentEnabled })
+      await window.electronAPI.updateChatToolState(toolId, {
+        enabled: !currentEnabled,
+      })
       const updated = await window.electronAPI.getChatTools()
       setChatTools(updated)
     } catch (err) {
@@ -76,7 +81,9 @@ export function ToolSelectorPopover(): React.ReactElement {
               size="icon"
               className={cn(
                 'size-[30px] rounded-full',
-                hasActiveTools ? 'text-blue-500' : 'text-foreground/60 hover:text-foreground',
+                hasActiveTools
+                  ? 'text-blue-500'
+                  : 'text-foreground/60 hover:text-foreground',
               )}
             >
               <Wrench className="size-5" />
@@ -108,27 +115,32 @@ export function ToolSelectorPopover(): React.ReactElement {
                     className="flex items-center justify-between py-1.5 px-1 rounded-md hover:bg-muted/50"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className={cn(
-                        'shrink-0',
-                        !canToggle && 'opacity-40',
-                      )}>
+                      <span
+                        className={cn('shrink-0', !canToggle && 'opacity-40')}
+                      >
                         {getToolIcon(tool.meta.icon)}
                       </span>
-                      <span className={cn(
-                        'text-sm truncate',
-                        !canToggle && 'text-muted-foreground',
-                      )}>
+                      <span
+                        className={cn(
+                          'text-sm truncate',
+                          !canToggle && 'text-muted-foreground',
+                        )}
+                      >
                         {tool.meta.name}
                       </span>
                       {!canToggle && (
                         <span className="text-[10px] text-muted-foreground shrink-0">
-                          需配置
+                          {tool.meta.id === 'gpt-image'
+                            ? '需登录/配置'
+                            : '需配置'}
                         </span>
                       )}
                     </div>
                     <Switch
                       checked={isEnabled && canToggle}
-                      onCheckedChange={() => toggleTool(tool.meta.id, isEnabled)}
+                      onCheckedChange={() =>
+                        toggleTool(tool.meta.id, isEnabled)
+                      }
                       disabled={!canToggle}
                       className="scale-75"
                     />

@@ -49,6 +49,24 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain(join(workspaceRoot, '.claude', 'memory', 'MEMORY.md'))
   })
 
+  test('Context 恢复先发现目录内容，不默认读取或创建 note.md', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'bypassPermissions',
+      isPiRuntime: true,
+    })
+
+    expect(prompt).toContain('先列出两个目录；只读取**实际存在且与当前任务相关**的文件')
+    expect(prompt).toContain('不得默认创建或读取 `note.md`、`todo.md`')
+    expect(prompt).toContain('不默认读取或创建 `note.md`')
+    expect(prompt).toContain('目录为空、目标文件不存在或资料无关时直接跳过')
+    expect(prompt).toContain('按主题命名的 Markdown — 研究与分析输出')
+    expect(prompt).toContain('不使用通用 `note.md`')
+    expect(prompt).not.toContain('会话级 `.context/`（note.md、todo.md）')
+  })
+
   test('Pi 获得结果导向但可控的行动阶梯，Claude 不获得 Pi 专属段落', () => {
     const piPrompt = buildSystemPrompt({
       workspaceName: 'Demo',

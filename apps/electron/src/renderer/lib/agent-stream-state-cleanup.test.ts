@@ -1,10 +1,44 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { compactCompletedBackgroundStreamState } from './agent-stream-state-cleanup'
+import { compactCompletedBackgroundStreamState, settleCompletedAgentStreamState } from './agent-stream-state-cleanup'
 
 function state(overrides: Partial<AgentStreamState> = {}): AgentStreamState {
   return { running: false, content: 'partial output', toolActivities: [{ toolUseId: 'tool-1', toolName: 'Read', input: {}, done: false }], ...overrides }
 }
+
+describe('settleCompletedAgentStreamState', () => {
+  test('Given a failed compact run When STREAM_COMPLETE arrives Then releases every input lock', () => {
+    const unfinished = { toolUseId: 'tool-2', toolName: 'CompactContext', input: {}, done: false }
+    expect(settleCompletedAgentStreamState(state({
+      running: true,
+      stopping: true,
+      isCompacting: true,
+      compactInFlight: true,
+      backgroundWaiting: true,
+      toolActivities: [unfinished],
+    }), false)).toMatchObject({
+      running: false,
+      stopping: false,
+      isCompacting: false,
+      compactInFlight: false,
+      backgroundWaiting: false,
+      toolActivities: [{ ...unfinished, done: true }],
+    })
+  })
+
+  test('Given background tasks remain When STREAM_COMPLETE arrives Then keeps only the soft-idle channel state', () => {
+    expect(settleCompletedAgentStreamState(state({
+      running: true,
+      isCompacting: true,
+      compactInFlight: true,
+    }), true)).toMatchObject({
+      running: false,
+      backgroundWaiting: true,
+      isCompacting: false,
+      compactInFlight: false,
+    })
+  })
+})
 
 describe('compactCompletedBackgroundStreamState', () => {
   test('Given a completed background state without usage When compacting Then removes it', () => {

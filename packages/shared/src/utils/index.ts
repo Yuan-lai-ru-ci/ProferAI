@@ -29,6 +29,12 @@ export {
   normalizeThinkingSignatureError,
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
+export {
+  DEFAULT_IMAGE_ATTACHMENT_PROMPT,
+  resolveAgentAttachmentPrompt,
+  isImageAttachmentMediaType,
+} from './agent-image-attachment'
+export type { AgentAttachmentKind } from './agent-image-attachment'
 export { supportsProviderPlanQuota } from './channel-plan-quota'
 // Pi 自动压缩阈值（80% 占用触发）
 export {

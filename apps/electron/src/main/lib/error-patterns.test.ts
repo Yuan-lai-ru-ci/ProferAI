@@ -18,6 +18,7 @@ describe('isTransientNetworkError', () => {
     'premature close',
     'peer closed connection',
     'incomplete chunked read',
+    'Upstream response stream was interrupted',
   ])('Given 已知瞬时网络错误 "%s" Then 判定为可重试', (msg) => {
     expect(isTransientNetworkError(msg)).toBe(true)
   })
@@ -90,6 +91,8 @@ describe('classifyNetworkError', () => {
     expect(classifyNetworkError('stream ended before a terminal response event')).toBe('stream_interrupted')
     expect(classifyNetworkError('stream ended before message_stop')).toBe('stream_interrupted')
     expect(classifyNetworkError('peer closed connection')).toBe('stream_interrupted')
+    expect(classifyNetworkError('Upstream response stream was interrupted')).toBe('stream_interrupted')
+    expect(classifyNetworkError('Response stream was interrupted')).toBe('stream_interrupted')
   })
 
   test('Given 响应体解析失败 Then 分类为 parse_error（优先级高于 stream）', () => {

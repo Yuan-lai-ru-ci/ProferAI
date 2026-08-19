@@ -27,7 +27,7 @@ import type {
   SDKAssistantMessage,
   SDKUserMessage,
 } from '@profer/shared'
-import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS, isVisibleAgentSession } from '@profer/shared'
+import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS, isVisibleAgentSession, resolveAgentAttachmentPrompt } from '@profer/shared'
 import { getDecryptedBotAppSecret } from './feishu-config'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
@@ -1627,8 +1627,11 @@ class FeishuBridge {
       await this.sendMessage(chatId, `${prefix}Agent 处理中...`)
     }
 
-    // 构建消息：附件引用 + 文本
-    const userText = text || (hasAnyAttachment ? '请查看上面附加的文件。' : '')
+    // 纯图片没有文字任务时默认读图；用户有文字时保留其任务。
+    const userText = resolveAgentAttachmentPrompt(text, [
+      ...imageAttachments.map(() => 'image' as const),
+      ...fileAttachments.map(() => 'file' as const),
+    ])
 
     // 拉取被引用消息（用户长按"回复"触发；parent_id 由 handleFeishuMessage 透传）
     let quoted: QuotedMessage | undefined

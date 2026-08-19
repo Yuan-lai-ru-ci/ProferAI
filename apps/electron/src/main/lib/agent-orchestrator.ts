@@ -718,7 +718,7 @@ export class AgentOrchestrator {
     const streamStartedAt = input.startedAt ?? Date.now()
     if (this.deletingSessions.has(sessionId)) {
       callbacks.onError('会话正在删除，无法发送消息')
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      // 删除拒绝不是一次 run 的结束，不能触发 renderer 的完成/收尾逻辑。
       return
     }
     const runGeneration = randomUUID()
@@ -733,7 +733,8 @@ export class AgentOrchestrator {
         `runCompletionsPending=${hungCompletion ? 'true(finally未释放)' : 'false'}`,
       )
       callbacks.onError(stopping ? 'Agent 正在停止，请稍候再试' : '上一条消息仍在处理中，请稍候再试')
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      // 请求被并发保护拒绝，未取得 activeSessions 的 owner token。不能发送 complete：
+      // 它不是一次 run 的结束，且会触发 renderer 的完成通知/收尾逻辑，干扰真正的 owner run。
       return
     }
     let resolveCompletion!: () => void

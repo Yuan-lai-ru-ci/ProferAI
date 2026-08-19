@@ -36,7 +36,10 @@ const pendingTitles = new Map<string, GenerateTitleInput>()
 /**
  * 注册待生成标题信息（由 ChatView.handleSend 在首条消息时调用）
  */
-export function registerPendingTitle(conversationId: string, input: GenerateTitleInput): void {
+export function registerPendingTitle(
+  conversationId: string,
+  input: GenerateTitleInput,
+): void {
   pendingTitles.set(conversationId, input)
 }
 
@@ -47,7 +50,7 @@ export function useGlobalChatListeners(): void {
     /** 辅助函数：更新 Map 中某个对话的流式状态 */
     const updateState = (
       convId: string,
-      updater: (prev: ConversationStreamState) => ConversationStreamState
+      updater: (prev: ConversationStreamState) => ConversationStreamState,
     ): void => {
       store.set(streamingStatesAtom, (prev) => {
         const current = prev.get(convId) ?? {
@@ -82,7 +85,7 @@ export function useGlobalChatListeners(): void {
           ...s,
           content: s.content + event.delta,
         }))
-      }
+      },
     )
 
     // ===== 2. 流式推理内容 =====
@@ -92,7 +95,7 @@ export function useGlobalChatListeners(): void {
           ...s,
           reasoning: s.reasoning + event.delta,
         }))
-      }
+      },
     )
 
     // ===== 3. 流式完成 =====
@@ -106,7 +109,10 @@ export function useGlobalChatListeners(): void {
         // 递增消息刷新版本号，通知 ChatView 重新加载消息
         store.set(chatMessageRefreshAtom, (prev) => {
           const map = new Map(prev)
-          map.set(event.conversationId, (prev.get(event.conversationId) ?? 0) + 1)
+          map.set(
+            event.conversationId,
+            (prev.get(event.conversationId) ?? 0) + 1,
+          )
           return map
         })
 
@@ -121,25 +127,33 @@ export function useGlobalChatListeners(): void {
         if (titleInput) {
           pendingTitles.delete(event.conversationId)
           console.log('[GlobalChatListeners] 开始生成标题:', titleInput)
-          window.electronAPI.generateTitle(titleInput).then((title) => {
-            console.log('[GlobalChatListeners] 标题生成结果:', title)
-            if (!title) return
-            window.electronAPI
-              .updateConversationTitle(event.conversationId, title)
-              .then((updated) => {
-                console.log('[GlobalChatListeners] 标题更新成功:', updated.title)
-                store.set(conversationsAtom, (prev) =>
-                  prev.map((c) => (c.id === updated.id ? updated : c))
-                )
-                // 同步更新标签页标题
-                store.set(tabsAtom, (prev) => updateTabTitle(prev, event.conversationId, title))
-              })
-              .catch(console.error)
-          }).catch((error) => {
-            console.error('[GlobalChatListeners] 标题生成失败:', error)
-          })
+          window.electronAPI
+            .generateTitle(titleInput)
+            .then((title) => {
+              console.log('[GlobalChatListeners] 标题生成结果:', title)
+              if (!title) return
+              window.electronAPI
+                .updateConversationTitle(event.conversationId, title)
+                .then((updated) => {
+                  console.log(
+                    '[GlobalChatListeners] 标题更新成功:',
+                    updated.title,
+                  )
+                  store.set(conversationsAtom, (prev) =>
+                    prev.map((c) => (c.id === updated.id ? updated : c)),
+                  )
+                  // 同步更新标签页标题
+                  store.set(tabsAtom, (prev) =>
+                    updateTabTitle(prev, event.conversationId, title),
+                  )
+                })
+                .catch(console.error)
+            })
+            .catch((error) => {
+              console.error('[GlobalChatListeners] 标题生成失败:', error)
+            })
         }
-      }
+      },
     )
 
     // ===== 4. 流式错误 =====
@@ -177,10 +191,13 @@ export function useGlobalChatListeners(): void {
         // 流式状态的完全清除由 ChatView 在消息加载完成后执行
         store.set(chatMessageRefreshAtom, (prev) => {
           const map = new Map(prev)
-          map.set(event.conversationId, (prev.get(event.conversationId) ?? 0) + 1)
+          map.set(
+            event.conversationId,
+            (prev.get(event.conversationId) ?? 0) + 1,
+          )
           return map
         })
-      }
+      },
     )
 
     // ===== 5. 工具活动 =====
@@ -191,12 +208,21 @@ export function useGlobalChatListeners(): void {
           toolActivities: [...s.toolActivities, event.activity],
         }))
 
+        // 官方生图成功后刷新余额，避免侧栏/额度页延迟显示本次固定 5 积分扣费。
+        if (
+          event.activity.type === 'result' &&
+          event.activity.toolName === 'generate_image' &&
+          !event.activity.isError
+        ) {
+          void refreshCreditsInto(store)
+        }
+
         // 检测 Agent 推荐工具结果，写入推荐 atom
         if (
-          event.activity.type === 'result'
-          && event.activity.toolName === 'suggest_agent_mode'
-          && event.activity.result
-          && !event.activity.isError
+          event.activity.type === 'result' &&
+          event.activity.toolName === 'suggest_agent_mode' &&
+          event.activity.result &&
+          !event.activity.isError
         ) {
           try {
             const parsed = JSON.parse(event.activity.result) as {
@@ -204,7 +230,11 @@ export function useGlobalChatListeners(): void {
               reason?: string
               suggestedPrompt?: string
             }
-            if (parsed.type === 'agent_recommendation' && parsed.reason && parsed.suggestedPrompt) {
+            if (
+              parsed.type === 'agent_recommendation' &&
+              parsed.reason &&
+              parsed.suggestedPrompt
+            ) {
               store.set(pendingAgentRecommendationAtom, {
                 reason: parsed.reason,
                 suggestedPrompt: parsed.suggestedPrompt,
@@ -215,7 +245,7 @@ export function useGlobalChatListeners(): void {
             // JSON 解析失败，忽略
           }
         }
-      }
+      },
     )
 
     return () => {

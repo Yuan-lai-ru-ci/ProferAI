@@ -35,7 +35,6 @@ import {
   agentPermissionModeMapAtom,
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
-  finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -74,7 +73,7 @@ import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
-import { compactCompletedBackgroundStreamState } from '@/lib/agent-stream-state-cleanup'
+import { compactCompletedBackgroundStreamState, settleCompletedAgentStreamState } from '@/lib/agent-stream-state-cleanup'
 import { isAbsoluteFilePath, resolveRelativeToAbsolute } from '@/lib/file-utils'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
@@ -1111,16 +1110,7 @@ export function useGlobalAgentListeners(): void {
             return prev
           }
           const map = new Map(prev)
-          map.set(data.sessionId, {
-            ...current,
-            running: false,
-            // backgroundTasksPending=true → 进入/保持软空闲态（通道仍开着，handleSend 走注入路径）；
-            // false → 真正结束，清除软空闲态，新消息回到新建 run 路径。
-            backgroundWaiting: backgroundTasksPending,
-            // 只有主进程确认的 STREAM_COMPLETE 才能结束 renderer 的 stopping 过渡态。
-            stopping: false,
-            ...finalizeStreamingActivities(current.toolActivities),
-          })
+          map.set(data.sessionId, settleCompletedAgentStreamState(current, backgroundTasksPending))
           return map
         })
 

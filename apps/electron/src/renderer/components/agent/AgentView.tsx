@@ -118,6 +118,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import { isImageAttachmentMediaType, resolveAgentAttachmentPrompt } from '@profer/shared'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
 const DESKTOP_AGENT_PAGE_SIZE = 60
@@ -622,6 +623,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
   const queueStopEpochRef = React.useRef(0)
   const stopInFlightRef = React.useRef(false)
+  // 覆盖附件落盘等 await 之前的启动窗口；React 的 streaming 快照还未更新时，
+  // 防止重复提交再次创建同一会话的 run。
+  const sendStartInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
   // 队列自动发送「轮结束」版本号：每轮运行结束（running 下降沿）+1；consumedVersion 记录已消费版本
   const turnVersionRef = React.useRef(0)
@@ -2061,8 +2065,23 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const effectiveText = text || suggestion || ''
     const pendingFilesSnapshot = pendingFilesRef.current
     if (!messagesLoaded || (!effectiveText && pendingFilesSnapshot.length === 0) || !agentChannelId || !hasAvailableModel) return
-    if (streamState?.stopping) {
+    // 纯图片没有文字任务时，默认读图并直接描述；用户已有文字时始终以文字为准。
+    const resolvedUserTask = resolveAgentAttachmentPrompt(
+      effectiveText,
+      pendingFilesSnapshot.map((file) => isImageAttachmentMediaType(file.mediaType) ? 'image' : 'file'),
+    )
+    // 不依赖本次 render 捕获的 streaming 快照：同一事件循环内的重复点击可能发生在
+    // setStreamingStates 生效前；store 才是当前 renderer 的同步真源。
+    const liveStreamState = store.get(agentStreamingStatesAtom).get(sessionId)
+    const liveStreaming = liveStreamState?.running ?? streaming
+    const liveBackgroundWaiting = liveStreamState?.backgroundWaiting ?? backgroundWaiting
+    const liveStopping = liveStreamState?.stopping ?? streamState?.stopping
+    if (liveStopping) {
       toast.info('Agent 正在停止', { description: '停止完成前不会发送或清除你的草稿。' })
+      return
+    }
+    if (sendStartInFlightRef.current) {
+      toast.info('消息正在准备发送，请稍候')
       return
     }
 
@@ -2078,14 +2097,14 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     }
 
     // streaming：进入前端托管队列，turn 结束后 auto-drain 逐条发送（不打断当前 turn）。
-    if (streaming) {
+    if (liveStreaming) {
       // 附件限制/消费引用/入队/清空输入统一收敛到 enqueueCurrentInput
       enqueueCurrentInput()
       return
     }
 
     // backgroundWaiting（软空闲，无活跃 turn）：直接注入，无需中断。
-    if (backgroundWaiting) {
+    if (liveBackgroundWaiting) {
       if (pendingFilesSnapshot.length > 0) {
         toast.info('Agent 后台等待中暂不支持追加发送附件', {
           description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
@@ -2111,6 +2130,10 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       return
     }
 
+    // 从此处到 IPC 请求创建之前可能包含附件落盘等 await；同步锁必须覆盖整个窗口，
+    // 否则连续点击会在主进程 activeSessions 真正占用前发出第二个 new-run 请求。
+    sendStartInFlightRef.current = true
+    try {
     // 清除当前会话的错误消息
     setAgentStreamErrors((prev) => {
       if (!prev.has(sessionId)) return prev
@@ -2252,7 +2275,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     // 2. 构建最终消息：拼接顺序「中断说明 → 用户引用 → 用户文本」。
     // 中断说明是会话级「待注入」前缀，空闲直发时随本条消息消费；streaming 入队分支不消费（留给队列 drain 首条）。
     const interruptionBlock = consumeAgentInterruptionBlock()
-    const finalMessage = interruptionBlock + fileReferences + effectiveText
+    const finalMessage = interruptionBlock + fileReferences + resolvedUserTask
 
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
@@ -2308,9 +2331,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
-        const skills = [...effectiveText.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
-        const mcps = [...effectiveText.matchAll(/#mcp:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
-        const sessionIds = [...effectiveText.matchAll(/&session:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const skills = [...resolvedUserTask.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const mcps = [...resolvedUserTask.matchAll(/#mcp:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const sessionIds = [...resolvedUserTask.matchAll(/&session:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
         return {
           ...(skills.length > 0 && { mentionedSkills: skills }),
           ...(mcps.length > 0 && { mentionedMcpServers: mcps }),
@@ -2326,12 +2349,18 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       console.error('[AgentView] 发送消息失败:', error)
       setStreamingStates((prev) => {
         const current = prev.get(sessionId)
-        if (!current) return prev
+        // 仅回滚本次请求设置的 optimistic running 状态。旧请求的拒绝/失败不得把
+        // 后续真正运行中的会话误标为空闲，否则下一条会再次撞上主进程并发保护。
+        if (!current || current.startedAt !== streamStartedAt) return prev
         const map = new Map(prev)
         map.set(sessionId, { ...current, running: false })
         return map
       })
     })
+    } finally {
+      // IPC 调用已创建且 stream state 已同步写入；之后由 liveStreamState 判断运行状态。
+      sendStartInFlightRef.current = false
+    }
   }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
