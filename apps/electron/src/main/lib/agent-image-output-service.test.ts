@@ -56,6 +56,17 @@ describe('sendAgentLocalImage', () => {
     expect(result.image.mediaType).toBe('image/gif')
   })
 
+  test('Given a relative image path When sending Then it resolves relative to the Agent session cwd', async () => {
+    const fixture = createFixture()
+    const source = join(fixture.sessionDir, 'relative.webp')
+    writeFileSync(source, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]))
+
+    const result = await sendAgentLocalImage({ path: 'relative.webp' }, contextFor(fixture))
+
+    expect(result.image.mediaType).toBe('image/webp')
+    expect(existsSync(result.image.absolutePath)).toBe(true)
+  })
+
   test('Given a file outside authorized roots When sending Then it rejects without creating an output copy', async () => {
     const fixture = createFixture()
     const source = join(fixture.outsideDir, 'secret.png')

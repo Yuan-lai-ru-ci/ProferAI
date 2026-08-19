@@ -84,9 +84,13 @@ export async function sendAgentLocalImage(
   if (!requestedPath) throw new Error('图片路径不能为空')
   if (!context.agentCwd.trim()) throw new Error('当前会话没有可写的 Agent 工作目录')
 
+  const requestedCandidate = isAbsolute(requestedPath)
+    ? requestedPath
+    : resolve(context.agentCwd, requestedPath)
   let source: string
   try {
-    source = await realpath(resolve(requestedPath))
+    // Agent 通常在 cwd 中以相对路径引用产物；绝不可按 Electron 进程 cwd 解析。
+    source = await realpath(resolve(requestedCandidate))
   } catch {
     throw new Error(`图片文件不存在或无法访问: ${requestedPath}`)
   }
