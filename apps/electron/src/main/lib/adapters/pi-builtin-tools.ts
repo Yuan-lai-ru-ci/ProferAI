@@ -345,7 +345,7 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
             ...(args.effort && { effort: args.effort }),
             ...(args.permissionMode && { permissionMode: args.permissionMode }),
             ...(args.skillSlugs !== undefined && { skillSlugs: args.skillSlugs }),
-            ...(args.mcpServerNames && { mcpServerNames: args.mcpServerNames }),
+            ...(args.mcpServerNames !== undefined && { mcpServerNames: args.mcpServerNames }),
             ...(args.allowSubagents !== undefined && { allowSubagents: args.allowSubagents }),
             ...(args.basePresetId !== undefined && { basePresetId: args.basePresetId }),
           })

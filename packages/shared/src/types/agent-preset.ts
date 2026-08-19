@@ -292,7 +292,8 @@ export function toAgentPresetExportEntry(preset: AgentPreset): AgentPresetExport
     ...(preset.effort && { effort: preset.effort }),
     ...(preset.permissionMode && { permissionMode: preset.permissionMode }),
     ...(preset.skillSlugs !== undefined && { skillSlugs: preset.skillSlugs }),
-    ...(preset.mcpServerNames?.length && { mcpServerNames: preset.mcpServerNames }),
+    // undefined=不裁剪，[]=禁用全部用户 MCP，导出时必须保留该能力边界。
+    ...(preset.mcpServerNames !== undefined && { mcpServerNames: preset.mcpServerNames }),
     ...(preset.allowSubagents !== undefined && { allowSubagents: preset.allowSubagents }),
     ...(preset.basePresetId !== undefined && { basePresetId: preset.basePresetId }),
   }

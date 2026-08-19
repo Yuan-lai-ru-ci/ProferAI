@@ -84,6 +84,11 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(sessions.getAgentSessionMeta(second.id)?.sdkSessionId).toBe('pi-keep-id')
   })
 
+  test('Given a session is created with a preset When re-reading index Then the preset persists', () => {
+    const session = sessions.createAgentSession('delegation preset', undefined, undefined, undefined, 'pi', false, 'minimal')
+    expect(sessions.getAgentSessionMeta(session.id)?.presetId).toBe('minimal')
+  })
+
   test('Given sessions have distinct channel/model selections When re-reading index Then each selection persists independently', () => {
     const first = sessions.createAgentSession('first selection', 'channel-a', undefined, 'model-a', 'pi')
     const second = sessions.createAgentSession('second selection', 'channel-b', undefined, 'model-b', 'pi')

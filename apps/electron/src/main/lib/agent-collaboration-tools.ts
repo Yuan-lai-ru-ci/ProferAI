@@ -784,7 +784,16 @@ function startDelegation(
   // 会话持久化后的工作区是唯一权威来源。工具调用上下文可能来自已切换项目的旧流，
   // 不能让它把子会话创建或执行到另一个项目中。
   const workspaceId = effectiveParent?.workspaceId ?? ctx.workspaceId
-  const child = createAgentSession(title, ctx.channelId, workspaceId, effectiveModelId, inheritedRuntime)
+  // 子会话必须继承父会话预设，避免受限父预设静默回退为 standard。
+  const child = createAgentSession(
+    title,
+    ctx.channelId,
+    workspaceId,
+    effectiveModelId,
+    inheritedRuntime,
+    false,
+    effectiveParent?.presetId,
+  )
   const rootSessionId = effectiveParent?.rootSessionId ?? effectiveParent?.id ?? ctx.sessionId
   updateAgentSessionMeta(child.id, {
     parentSessionId: ctx.sessionId,
@@ -1266,8 +1275,9 @@ export function buildPiCollaborationTools(
 
   const permissionModeType = Type.Optional(Type.Union([
     Type.Literal('plan'),
+    Type.Literal('auto'),
     Type.Literal('bypassPermissions'),
-  ], { description: '子会话权限模式' }))
+  ], { description: '子会话权限模式；不能高于父会话权限' }))
 
   const delegateItemType = Type.Object({
     title: Type.Optional(Type.String({ description: '子会话标题' })),
