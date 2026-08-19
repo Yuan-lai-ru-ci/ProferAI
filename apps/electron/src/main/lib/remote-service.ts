@@ -26,8 +26,9 @@ import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 
+import { AGENT_IPC_CHANNELS, type AgentSessionMeta } from '@profer/shared'
 import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
 import { getUserProfile } from './user-profile-service'
 import {
@@ -715,6 +716,35 @@ function buildSessionList() {
   return listAgentSessions(true).map(buildSessionItem)
 }
 
+/**
+ * Pocket 修改会话元数据后，命令响应只会回给发起设备；这里补齐对所有已打开桌面窗口
+ * 与其它 Pocket 连接的实时通知，避免置顶、归档等操作必须等待下一条 Agent 事件才显示。
+ */
+function publishSessionUpdated(session: AgentSessionMeta): void {
+  agentEventBus.emit(session.id, {
+    kind: 'profer_event',
+    event: { type: 'session_updated', session },
+  })
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(AGENT_IPC_CHANNELS.SESSION_UPDATED, { session })
+    }
+  }
+}
+
+function publishSessionDeleted(sessionId: string): void {
+  const payload: import('@profer/shared').AgentStreamPayload = {
+    kind: 'profer_event',
+    event: { type: 'session_deleted', sessionId },
+  }
+  agentEventBus.emit(sessionId, payload)
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload })
+    }
+  }
+}
+
 /** 工作区（项目）列表（脱敏，仅暴露平板端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
 function buildWorkspaceList() {
   return listAgentWorkspaces().map((w) => ({
@@ -803,6 +833,7 @@ async function handleCommand(
           },
           deleteSession: deleteAgentSession,
         })
+        publishSessionDeleted(sessionId)
         return { ok: true, data: { sessionId } }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : '删除会话失败' }
@@ -883,8 +914,9 @@ async function handleCommand(
       if (!result) return { ok: false, error: '计划审批不存在或已处理' }
       agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'exit_plan_mode_resolved', requestId } })
       if (result.targetMode) {
-        updateAgentSessionMeta(result.sessionId, { permissionMode: result.targetMode })
+        const updated = updateAgentSessionMeta(result.sessionId, { permissionMode: result.targetMode })
         agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode: result.targetMode } })
+        publishSessionUpdated(updated)
       }
       return { ok: true, data: { sessionId: result.sessionId } }
     }
@@ -942,6 +974,7 @@ async function handleCommand(
       if (!channel) return { ok: false, error: '渠道不可用或不存在' }
       if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
       const updated = updateAgentSessionMeta(sessionId, { channelId, modelId })
+      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -953,6 +986,7 @@ async function handleCommand(
       const meta = getAgentSessionMeta(sessionId)
       if (!meta) return { ok: false, error: '会话不存在' }
       const updated = updateAgentSessionMeta(sessionId, { agentRuntime: runtime })
+      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -964,6 +998,7 @@ async function handleCommand(
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
       if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
       agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode } })
+      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1079,6 +1114,7 @@ async function handleCommand(
       if (!sessionId || !title) return { ok: false, error: '缺少 sessionId 或 title' }
       const meta = updateAgentSessionMeta(sessionId, { title })
       if (!meta) return { ok: false, error: '会话不存在' }
+      publishSessionUpdated(meta)
       return { ok: true, data: buildSessionItem(meta) }
     }
 
@@ -1088,6 +1124,7 @@ async function handleCommand(
       const workspaceId = parsed.workspaceId as string | undefined
       const modelId = parsed.modelId as string | undefined
       const meta = createAgentSession(title, channelId, workspaceId, modelId)
+      publishSessionUpdated(meta)
       return { ok: true, data: { sessionId: meta.id, title: meta.title } }
     }
 
@@ -1103,6 +1140,7 @@ async function handleCommand(
         modelId,
         getSettings().agentRuntime ?? 'claude',
       )
+      publishSessionUpdated(meta)
       return { ok: true, data: { sessionId: meta.id, title: meta.title, draft: meta.draft ?? true } }
     }
 
@@ -1160,6 +1198,7 @@ async function handleCommand(
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
         const meta = await forkAgentSession({ sessionId, upToMessageUuid })
+        publishSessionUpdated(meta)
         return { ok: true, data: buildSessionItem(meta) }
       } catch (error) {
         console.error('[Remote] fork_session 失败:', error)
@@ -1190,7 +1229,9 @@ async function handleCommand(
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
       if (newPinned && current.archived) updates.archived = false
-      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, updates)) }
+      const updated = updateAgentSessionMeta(sessionId, updates)
+      publishSessionUpdated(updated)
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     // 归档/取消归档（对齐桌面 TOGGLE_ARCHIVE：归档时自动取消置顶）
@@ -1202,7 +1243,9 @@ async function handleCommand(
       const newArchived = !current.archived
       const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
       if (newArchived && current.pinned) updates.pinned = false
-      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, updates)) }
+      const updated = updateAgentSessionMeta(sessionId, updates)
+      publishSessionUpdated(updated)
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     // 移动会话到项目（对齐桌面 MOVE_SESSION_TO_WORKSPACE：运行中拒绝）
@@ -1215,7 +1258,9 @@ async function handleCommand(
         if (isAgentSessionActive(sessionId)) return { ok: false, error: '会话正在运行中，请停止后再迁移' }
       }
       try {
-        return { ok: true, data: buildSessionItem(moveSessionToWorkspace(sessionId, targetWorkspaceId)) }
+        const updated = moveSessionToWorkspace(sessionId, targetWorkspaceId)
+        publishSessionUpdated(updated)
+        return { ok: true, data: buildSessionItem(updated) }
       } catch (error) {
         console.error('[Remote] move_session_to_workspace 失败:', error)
         return { ok: false, error: error instanceof Error ? error.message : '移动会话失败' }
@@ -1233,7 +1278,9 @@ async function handleCommand(
       }
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换推理档位' }
-      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })) }
+      const updated = updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })
+      publishSessionUpdated(updated)
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     // 队列消息：向正在运行的 Agent 注入（interrupt=true 时软打断当前 turn 立即插入）。

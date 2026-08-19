@@ -623,6 +623,9 @@ export type ProferEvent =
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
+  // 跨端会话元数据同步：Pocket 远程命令修改会话后立即通知桌面与其他 Pocket 客户端。
+  | { type: 'session_updated'; session: AgentSessionMeta }
+  | { type: 'session_deleted'; sessionId: string }
   | { type: 'run_resumed'; sessionId: string }
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
