@@ -204,6 +204,13 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(imageTool!.description).toContain('PROMA_IMAGE_ATTACHMENT')
   })
 
+  test('Given a Pi session without a workspace When building builtin tools Then it does not authorize the home cwd for image output', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, { ...baseCtx, workspaceSlug: undefined, agentCwd: 'C:/Users/test', allowedRoots: [] })
+
+    expect(tools.some((tool) => tool.name === 'send_local_image')).toBe(false)
+  })
+
   test('Given no disabled groups Then all four groups are registered', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, baseCtx)

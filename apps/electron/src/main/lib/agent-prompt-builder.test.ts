@@ -168,8 +168,10 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).not.toContain('7. **定时任务**')
     expect(withoutAutomation).not.toContain('Bash cron')
     // 其余交互规范条目不受影响
-    expect(withoutAutomation).toContain('8. **AI 生图**')
-    expect(withoutAutomation).toContain('9. **PPT 视觉交付门禁**')
+    expect(withoutAutomation).toContain('8. **发送既有本地图片**')
+    expect(withoutAutomation).toContain('9. **AI 生图**')
+    expect(withoutAutomation).toContain('10. **PPT 视觉交付门禁**')
+    expect(withoutAutomation).toContain('send_local_image')
     expect(withoutAutomation).toContain('6. **自检习惯**')
   })
 
