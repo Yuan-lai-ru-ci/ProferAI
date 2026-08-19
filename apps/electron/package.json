@@ -29,7 +29,7 @@
     "verify:tablet": "node scripts/verify-tablet.cjs",
     "verify:release-assets": "node scripts/verify-release-assets.cjs",
     "verify:packaged-pi-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-packaged-pi-runtime.ps1",
-    "release:verify:windows": "bun run build:github && bun run sync:runtime-deps && npx electron-builder --win --x64 --publish never && bun run verify:release-assets && bun run verify:packaged-pi-runtime",
+    "release:verify:windows": "bun run build:github && bun run sync:runtime-deps && electron-builder --win --x64 --publish never && bun run verify:release-assets && bun run verify:packaged-pi-runtime",
     "build:github": "bun run build:main-github && bun run verify:build-target:oss && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources && bun run verify:tablet",
     "build:commercial": "bun run build:main-commercial && bun run verify:build-target:commercial && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources",
     "start": "bun run build && bunx electron .",

@@ -28,12 +28,26 @@ try {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     throw 'Pi runtime closure probe timed out after 120s'
   }
-  if ($process.ExitCode -ne 0) {
-    $out = if (Test-Path $stdout) { Get-Content -Raw $stdout } else { '' }
-    $err = if (Test-Path $stderr) { Get-Content -Raw $stderr } else { '' }
+  # GUI 子系统进程在 Windows PowerShell 中可能不回填 ExitCode；此时用探针的
+  # 机器可读成功 JSON 与空 stderr 作为门禁，若 ExitCode 可用仍必须为 0。
+  $process.Refresh()
+  $out = if (Test-Path $stdout) { Get-Content -Raw $stdout } else { '' }
+  $err = if (Test-Path $stderr) { Get-Content -Raw $stderr } else { '' }
+  if ($null -ne $process.ExitCode -and $process.ExitCode -ne 0) {
     throw "packaged Pi runtime 闭包探针失败（exit $($process.ExitCode)）`n$out`n$err"
   }
-  if (Test-Path $stdout) { Get-Content $stdout }
+  if (-not [string]::IsNullOrWhiteSpace($err)) {
+    throw "packaged Pi runtime 闭包探针输出 stderr：`n$err"
+  }
+  try {
+    $result = $out | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw "packaged Pi runtime 闭包探针未输出有效 JSON：`n$out"
+  }
+  if ($result.ok -ne $true) {
+    throw "packaged Pi runtime 闭包探针未报告成功：`n$out"
+  }
+  Get-Content $stdout
   Write-Host '[verify:packaged-pi-runtime] OK'
 } finally {
   $env:ELECTRON_RUN_AS_NODE = $previousRunAsNode
