@@ -106,6 +106,7 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, g
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import { buildPiTaskPrompt } from './pi-task-prompt'
 import { getAgentPreset } from './agent-preset-manager'
 import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
@@ -1548,30 +1549,41 @@ ${enrichedMessage}`
       })
       const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
       const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
-      const systemPromptAppend =
-        buildSystemPrompt({
+      // 工具组禁用同步隐藏对应提示词段落；该映射由 shared 提供唯一事实源。
+      const suppressPromptSections = [
+        ...(sessionPreset.suppressPromptSections ?? []),
+        ...[...disabledToolGroups]
+          .map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g as keyof typeof AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP])
+          .filter((v): v is AgentPresetSuppressKey => typeof v === 'string'),
+      ]
+      const baseSystemPrompt = buildSystemPrompt({
         workspaceName: workspace?.name,
         workspaceSlug,
         sessionId,
         permissionMode: initialPermissionMode,
         presetName: sessionPreset.name,
-        // 方案 3：工具组禁用同步隐藏提示词段落，自动映射来自 shared 唯一事实表
-        // （task-graph→task-graph、memory→memory、collaboration→subagents、automation→automation）
-        suppressSections: [
-          ...(sessionPreset.suppressPromptSections ?? []),
-            ...[...disabledToolGroups]
-            .map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g as keyof typeof AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP])
-              .filter((v): v is AgentPresetSuppressKey => typeof v === 'string'),
-        ],
+        suppressSections: suppressPromptSections,
         claudeAvailable,
         deepSeekSubagentModel: modelRouting.subagentModel,
         isPiRuntime: agentRuntime === 'pi',
         isTeamWorkspace: workspace?.type === 'team',
-        }) +
+      })
+      const promptAdditions =
         attachedDirectoriesPrompt +
         (sessionPreset.promptSections?.length ? `\n\n${sessionPreset.promptSections.join('\n\n')}` : '') +
         (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
-      const piSystemPrompt = systemPromptAppend
+      const systemPromptAppend = baseSystemPrompt + promptAdditions
+      // Pi 的 system prompt 会随每轮请求进入模型上下文。只从 buildSystemPrompt 原文
+      // 降级低频 SOP，随后再拼附件、预设自定义段落和 automation runtime context，避免
+      // 条件 section 的尾部截取影响这些动态内容；Claude 保持原有完整 prompt 不变。
+      const piSystemPrompt = agentRuntime === 'pi'
+        ? buildPiTaskPrompt({
+            basePrompt: baseSystemPrompt,
+            userMessage,
+            toolNames: (piCustomTools ?? []).map((tool) => tool.name),
+            forceAutomation: Boolean(automationContext),
+          }) + promptAdditions
+        : systemPromptAppend
       const piRuntimeEnv = buildAgentRuntimeEnv({
         proxyUrl: await getEffectiveProxyUrl(),
         runtimeStatus: getRuntimeStatus(),

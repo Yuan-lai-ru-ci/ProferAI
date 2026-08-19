@@ -25,6 +25,7 @@ mock.module('electron', () => ({
 }))
 
 const { buildSystemPrompt } = await import('./agent-prompt-builder')
+const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName } = await import('./config-paths')
 
 describe('buildSystemPrompt', () => {
@@ -173,6 +174,49 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
     expect(withoutAutomation).toContain('6. **自检习惯**')
+  })
+
+  test('Pi composer 将低频 SOP 留给任务命中时注入，核心安全规则始终保留', () => {
+    const basePrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: true,
+    })
+    const toolNames = [
+      'BrowserObserve',
+      'plan_ppt_visuals',
+      'audit_ppt_delivery',
+      'mcp__automation__create_automation',
+      'mcp__collaboration__delegate_agent',
+      'mcp__memory-archive__search_memory',
+    ]
+
+    const ordinary = buildPiTaskPrompt({
+      basePrompt,
+      userMessage: '检查这个 TypeScript 项目的类型错误。',
+      toolNames,
+    })
+    expect(ordinary).toContain('低风险、可逆的本地操作')
+    expect(ordinary).toContain('修改后必须闭环')
+    expect(ordinary).toContain('计划模式文件路径')
+    expect(ordinary).not.toContain('## Profer 受管浏览器')
+    expect(ordinary).not.toContain('PPT 视觉交付门禁')
+    expect(ordinary).not.toContain('7. **定时任务**')
+    expect(ordinary).not.toContain('## SubAgent 委派策略')
+    expect(ordinary).not.toContain('### Pi Runtime 与文件记忆')
+    // 普通本地任务应显著减去低频 SOP，而不是只做无意义的段落重排。
+    expect(ordinary.length).toBeLessThan(basePrompt.length * 0.65)
+
+    const webAndPpt = buildPiTaskPrompt({
+      basePrompt,
+      userMessage: '访问 https://example.com 并做成 pptx 幻灯片。',
+      toolNames,
+    })
+    expect(webAndPpt).toContain('## Profer 受管浏览器')
+    expect(webAndPpt).toContain('PPT 视觉交付门禁')
+    expect(webAndPpt).not.toContain('7. **定时任务**')
   })
 
   test('团队记忆工具名按 runtime 适配（Pi 前缀 / Claude 裸名）', () => {
