@@ -1026,7 +1026,7 @@ function AttachedFileChip({ file }: { file: AttachedFileRef }): React.ReactEleme
 function QuoteChip({ quote }: { quote: QuotedFileRef }): React.ReactElement {
   return (
     <div className="inline-flex items-center gap-1.5 rounded-md bg-primary/8 border border-primary/20 px-2.5 py-1 text-[12px] text-muted-foreground">
-      <Quote className="size-3.5 shrink-0 text-primary/60" />
+      <Quote className="size-3.5 shrink-0 rotate-180 -translate-y-[3px] text-primary/60" />
       <span className="truncate max-w-[200px]">{quote.filename}</span>
     </div>
   )
