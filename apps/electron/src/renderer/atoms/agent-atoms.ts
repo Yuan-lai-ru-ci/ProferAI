@@ -823,6 +823,14 @@ export function applyAgentEvent(
       // 同上：保留 running，retrying 由专用事件控制；等待 STREAM_COMPLETE 收尾。
       return prev
 
+    case 'context_window':
+      // 主端运行时快照/SDK 事件优先于模型名推断和任何旧 usage fallback。
+      return {
+        ...prev,
+        contextWindow: event.contextWindow,
+        usageUpdatedAt: Date.now(),
+      }
+
     case 'usage_update':
       return {
         ...prev,

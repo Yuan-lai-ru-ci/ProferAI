@@ -135,8 +135,9 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'context_window':
-        // main 进程从 SDK result 拿到的真实 contextWindow，转成 usage_update 让 atom 合并到 streamState
-        return [{ type: 'usage_update', usage: { contextWindow: evt.contextWindow } }]
+        // 主端/SDK 确认的会话窗口，不可降级为 usage_update：后者只会填补空值，
+        // 无法覆盖此前由模型名得到的 200K 临时 fallback。
+        return [{ type: 'context_window', contextWindow: evt.contextWindow }]
       case 'permission_mode_changed':
         return [{ type: 'permission_mode_changed', mode: evt.mode }]
       case 'run_resumed':

@@ -35,6 +35,7 @@ import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
+import { AgentRuntimeContextStore } from './agent-runtime-context'
 
 // ===== 实例创建 =====
 
@@ -44,9 +45,18 @@ const piAdapter = new PiAgentAdapter()
 // Both runtimes remain behind the same orchestrator, credential gate, P0 lifecycle and Plan-mode boundary.
 const adapter = new RuntimeRoutingAgentAdapter({ claude: claudeAdapter, pi: piAdapter })
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
+const runtimeContextStore = new AgentRuntimeContextStore()
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
+
+/**
+ * 返回当前活跃会话的运行时上下文窗口快照，供 Pocket 在首次连接/重连时水合。
+ * 该数据不持久化，run_idle 到达后会立刻清除，避免向历史会话注入旧窗口。
+ */
+export function listActiveAgentRuntimeContexts(sessionIds?: readonly string[]) {
+  return runtimeContextStore.list(sessionIds)
+}
 
 /**
  * 会话 → webContents 映射
@@ -133,6 +143,19 @@ export function getMainRendererWebContents(): WebContents | null {
 }
 
 // ===== EventBus IPC 转发中间件 =====
+
+// 运行时上下文窗口是会话级状态，不应只依赖 Pocket 恰好在线时收到的瞬时事件。
+// 在事件总线统一记录，覆盖桌面、远程、headless、Claude 与 Pi 的全部 Agent 入口。
+eventBus.use((sessionId, payload, next) => {
+  if (payload.kind === 'profer_event') {
+    if (payload.event.type === 'context_window') {
+      runtimeContextStore.setContextWindow(sessionId, payload.event.contextWindow)
+    } else if (payload.event.type === 'run_idle') {
+      runtimeContextStore.clear(sessionId)
+    }
+  }
+  next()
+})
 
 // 必须先于 IPC 转发记录，确保刷新重连时能按原顺序回放所有已发生的实时事件。
 eventBus.use((sessionId, payload, next) => {
@@ -247,6 +270,7 @@ export async function runAgent(
     // 仅在 orchestrator 已完成此会话时清理映射
     // 避免被拒绝的请求误删仍在运行的会话映射
     if (!orchestrator.isActive(input.sessionId)) {
+      runtimeContextStore.clear(input.sessionId)
       sessionWebContents.delete(input.sessionId)
       activeStreamEventBacklogs.delete(input.sessionId)
     }
@@ -367,6 +391,7 @@ export async function runAgentHeadless(
     }
   } finally {
     if (!orchestrator.isActive(runInput.sessionId)) {
+      runtimeContextStore.clear(runInput.sessionId)
       sessionWebContents.delete(runInput.sessionId)
       activeStreamEventBacklogs.delete(runInput.sessionId)
     }
