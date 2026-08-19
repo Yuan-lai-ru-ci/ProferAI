@@ -272,7 +272,7 @@ import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import { listTeamMemories, readTeamMemory, createTeamMemory, updateTeamMemory, listTeamMemoryRevisions, archiveTeamMemory } from './lib/team-memory-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -337,6 +337,7 @@ import {
   detectSkillConflict,
 } from './lib/skill-master-manager'
 import { resolveMemoryWikilink, findMemoryBacklinks } from './lib/memory-wikilink-service'
+import { searchFileCandidate, type FileSearchResult as FileCandidateSearchResult } from './lib/file-search-service'
 import { downloadPptMaterial, searchPptMaterials } from './lib/ppt-material-service'
 import { createMemoryArchiveSearcher } from './lib/memory-archive-search'
 import type { MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
@@ -698,6 +699,34 @@ function normalizeFileAccessOptions(value?: FileAccessOptions | string[]): FileA
       : undefined,
     preflight: typeof value.preflight === 'boolean' ? value.preflight : undefined,
   }
+}
+
+const activeFileSearches = new Map<string, AbortController>()
+
+function getFileSearchRoots(sessionId: string): string[] {
+  const meta = getAgentSessionMeta(sessionId)
+  if (!meta) return []
+  const roots: string[] = []
+  const seen = new Set<string>()
+  const addRoot = (root: string | undefined): void => {
+    if (!root) return
+    const normalized = resolve(root)
+    const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+    if (!seen.has(key)) {
+      seen.add(key)
+      roots.push(normalized)
+    }
+  }
+
+  const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+  if (workspace?.slug) {
+    addRoot(getAgentSessionWorkspacePath(workspace.slug, sessionId))
+    // 不加入整个 workspace 根目录，避免把其他 session 的 cwd/文件纳入搜索范围。
+    addRoot(getWorkspaceFilesDir(workspace.slug))
+    for (const directory of getWorkspaceAttachedDirectories(workspace.slug)) addRoot(directory)
+  }
+  for (const directory of meta.attachedDirectories ?? []) addRoot(directory)
+  return roots
 }
 
 function getWorkspaceSlugsForAccess(options?: FileAccessOptions): string[] {
@@ -4378,6 +4407,54 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 文件路径 chip 的后台候选搜索：根目录只由主进程按会话元数据构造。
+  ipcMain.handle(
+    'file:search-candidate',
+    async (_, input: import('@profer/shared').FileSearchCandidateRequest): Promise<import('@profer/shared').FileSearchCandidateResult> => {
+      if (!input || typeof input.sessionId !== 'string' || typeof input.requestId !== 'string' || typeof input.targetName !== 'string') {
+        throw new Error('文件搜索请求无效')
+      }
+      const roots = getFileSearchRoots(input.sessionId)
+      if (roots.length === 0) throw new Error('Agent 会话不存在或没有授权搜索目录')
+      if (activeFileSearches.has(input.requestId)) {
+        return { requestId: input.requestId, done: true, cancelled: true, error: '搜索请求已在进行中' }
+      }
+      const controller = new AbortController()
+      activeFileSearches.set(input.requestId, controller)
+      try {
+        const result: FileCandidateSearchResult = await searchFileCandidate({
+          requestId: input.requestId,
+          targetName: input.targetName,
+          roots,
+          maxDepth: input.mode === 'deep' ? 12 : 3,
+          maxResults: input.mode === 'deep' ? 50 : 1,
+          alreadyFound: input.alreadyFound,
+          signal: controller.signal,
+        })
+        return result
+      } catch (error) {
+        return {
+          requestId: input.requestId,
+          done: true,
+          cancelled: controller.signal.aborted,
+          error: error instanceof Error ? error.message : '文件搜索失败',
+        }
+      } finally {
+        activeFileSearches.delete(input.requestId)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'file:cancel-search',
+    async (_, requestId: string): Promise<boolean> => {
+      const controller = activeFileSearches.get(requestId)
+      if (!controller) return false
+      controller.abort()
+      return true
+    },
+  )
+
   // 仅解析文件路径（供 PDF/图片等用 profer-file:// 加载）
   ipcMain.handle(
     'file:resolve-path',
@@ -4390,7 +4467,7 @@ export function registerIpcHandlers(): void {
         console.warn('[IPC] file:resolve-path 拒绝越界路径:', result)
         return null
       }
-      return result ? { url: registerProferFilePath(result) } : null
+      return result ? { url: registerProferFilePath(result), resolvedPath: result } : null
     }
   )
 

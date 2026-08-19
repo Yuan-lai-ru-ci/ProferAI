@@ -214,6 +214,27 @@ export interface FileAccessOptions {
 /** 已授权本地文件的 proma-file URL */
 export interface ResolvedFileUrl {
   url: string
+  /** 主进程最终解析到的本地绝对路径，供路径 chip 展示和预览标题使用。 */
+  resolvedPath?: string
+}
+
+/** 文件路径 chip 的一次候选搜索请求。授权根目录由主进程根据 sessionId 构造。 */
+export interface FileSearchCandidateRequest {
+  requestId: string
+  sessionId: string
+  targetName: string
+  mode: 'simple' | 'deep'
+  alreadyFound: string[]
+}
+
+/** 文件路径 chip 的一次候选搜索结果；简单搜索返回一个 candidate，深度搜索可返回多个 candidates。 */
+export interface FileSearchCandidateResult {
+  requestId: string
+  candidate?: { path: string }
+  candidates?: Array<{ path: string }>
+  done: boolean
+  cancelled: boolean
+  error?: string
 }
 
 /** Office 文件内联预览类型 */

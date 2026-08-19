@@ -816,6 +816,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   allMessages={allSDKMessages}
                   historicalTaskSubjects={historicalTaskSubjects}
                   basePath={sessionPath || undefined}
+                  basePaths={attachedDirs}
                   onFork={shouldDisableActions ? undefined : onFork}
                   onRewind={shouldDisableActions ? undefined : onRewind}
                   onRetry={shouldDisableActions ? undefined : onRetry}

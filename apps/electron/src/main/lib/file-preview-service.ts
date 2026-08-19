@@ -239,9 +239,17 @@ export function resolveTargetPath(filePath: string, basePaths?: string[], opts?:
     const commonFound = searchCommonDirs(filePath)
     if (commonFound) return commonFound
     // 全局 fallback：在所有已知工作区和附加目录中搜索（按文件名，递归 2 层）
-    // 预检模式（skipGlobalSearch）下跳过，只保留上面的快速 existsSync 判断
-    if (!opts?.skipGlobalSearch) {
-      const gName = basename(filePath)
+    const gName = basename(filePath)
+    if (opts?.skipGlobalSearch) {
+      // 预检快速查找：在 basePaths 内做浅层递归（深度 3），把工作区/授权目录内
+      // 子目录中的文件识别为「已存在」，避免裸文件名引用几乎全部落到「待查找」；
+      // 不做跨工作区全局搜索（那部分延迟到点击时完整解析），避免批量预检阻塞主进程
+      for (const base of basePaths) {
+        if (!base) continue
+        const found = searchFileInDir(base, gName, 3)
+        if (found) return found
+      }
+    } else {
       const globalDirs = collectGlobalSearchDirs()
       // 先尝试直接拼接（快路径）
       for (const dir of globalDirs) {

@@ -10,8 +10,25 @@ describe('isRelativeFilePath 路径检测', () => {
     expect(isRelativeFilePath('docs/guide/intro.md')).toBe(true)
   })
 
-  // 注：反斜杠相对路径（docs\guide\intro.md）有意不识别——反斜杠在 inline code 中
-  // 常见于转义符/Windows 命令，放开会引入误伤；相对路径仅支持正斜杠分隔。
+  test('识别带空格的中文目录和文件名相对路径', () => {
+    expect(isRelativeFilePath('新建文件夹/新建文件夹/新建 Microsoft Word 文档.docx')).toBe(true)
+  })
+
+  test('识别 Windows 反斜杠相对路径', () => {
+    expect(isRelativeFilePath('docs\\guide\\intro.md')).toBe(true)
+  })
+
+  test('识别带空格和行号的 Windows 相对路径', () => {
+    expect(isRelativeFilePath('新建文件夹\\新建 Microsoft Word 文档.docx:42')).toBe(true)
+  })
+
+  test('排除单个带空格的文件名，避免扩大普通文案误识别', () => {
+    expect(isRelativeFilePath('新建 Microsoft Word 文档.docx')).toBe(false)
+  })
+
+  test('允许输入首尾空格，解析前会统一 trim', () => {
+    expect(isRelativeFilePath(' docs/guide/intro.md ')).toBe(true)
+  })
 
   test('识别中文文件名相对路径（回归：ASCII 正则误排除）', () => {
     expect(isRelativeFilePath('测试.md')).toBe(true)

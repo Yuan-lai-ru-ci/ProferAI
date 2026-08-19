@@ -977,6 +977,11 @@ export interface ElectronAPI {
   /** 仅解析文件路径（供 PDF/图片等用 profer-file:// 加载） */
   resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').ResolvedFileUrl | null>
 
+  /** 在当前 Agent 会话授权范围内异步搜索一个同名候选。 */
+  searchFileCandidate: (request: import('@profer/shared').FileSearchCandidateRequest) => Promise<import('@profer/shared').FileSearchCandidateResult>
+  /** 取消当前文件候选搜索。 */
+  cancelFileSearch: (requestId: string) => Promise<boolean>
+
   /** 解析 HTML 预览路径，并授权加载同目录的相对资源 */
   resolveHtmlPreviewPath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').ResolvedFileUrl | null>
 
@@ -2608,6 +2613,14 @@ const electronAPI: ElectronAPI = {
 
   resolveFilePath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke('file:resolve-path', filePath, access) as Promise<import('@profer/shared').ResolvedFileUrl | null>
+  },
+
+  searchFileCandidate: (request: import('@profer/shared').FileSearchCandidateRequest) => {
+    return ipcRenderer.invoke('file:search-candidate', request) as Promise<import('@profer/shared').FileSearchCandidateResult>
+  },
+
+  cancelFileSearch: (requestId: string) => {
+    return ipcRenderer.invoke('file:cancel-search', requestId) as Promise<boolean>
   },
 
   resolveHtmlPreviewPath: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
