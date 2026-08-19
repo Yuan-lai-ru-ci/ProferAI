@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { getDelegatedChildStatus, getSessionTreeStatus, type AgentSessionTreeItem } from './session-tree'
+import { collectDelegatedDeletionSessionIds, getDelegatedChildStatus, getSessionTreeStatus, type AgentSessionTreeItem } from './session-tree'
 import type { AgentSessionMeta } from '@profer/shared'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 
@@ -37,6 +37,20 @@ function makeItem(parentId: string, childIds: string[]): AgentSessionTreeItem {
 function makeMap(entries: Record<string, SessionIndicatorStatus>): Map<string, SessionIndicatorStatus> {
   return new Map(Object.entries(entries))
 }
+
+describe('collectDelegatedDeletionSessionIds', () => {
+  test('Given 嵌套委派子会话和普通会话 When 收集删除范围 Then 仅包含根与所有委派后代', () => {
+    const sessions = [
+      makeSession({ id: 'parent' }),
+      makeSession({ id: 'child', parentSessionId: 'parent', sourceDelegationId: 'd-child' }),
+      makeSession({ id: 'grandchild', parentSessionId: 'child', sourceDelegationId: 'd-grandchild' }),
+      makeSession({ id: 'ordinary', parentSessionId: 'parent' }),
+      makeSession({ id: 'unrelated', parentSessionId: 'other', sourceDelegationId: 'd-other' }),
+    ]
+
+    expect(collectDelegatedDeletionSessionIds(sessions, 'parent')).toEqual(new Set(['parent', 'child', 'grandchild']))
+  })
+})
 
 describe('getSessionTreeStatus — 父会话状态聚合', () => {
   test('Given 父会话 idle 且子代理完成后未查看 When 聚合状态 Then 父会话为 idle（不显示绿色完成标记）', () => {

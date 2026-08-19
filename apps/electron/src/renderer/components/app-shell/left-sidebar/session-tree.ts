@@ -124,6 +124,29 @@ export function getDirectDelegatedChildren(
   ))
 }
 
+/** 返回包含根会话在内的全部委派后代；防御异常索引里的环。 */
+export function collectDelegatedDeletionSessionIds(
+  sessions: AgentSessionMeta[],
+  rootSessionId: string,
+): Set<string> {
+  const childrenByParentId = new Map<string, AgentSessionMeta[]>()
+  for (const session of sessions) {
+    if (!session.parentSessionId || !session.sourceDelegationId) continue
+    const children = childrenByParentId.get(session.parentSessionId) ?? []
+    children.push(session)
+    childrenByParentId.set(session.parentSessionId, children)
+  }
+
+  const ids = new Set<string>()
+  const visit = (sessionId: string): void => {
+    if (ids.has(sessionId)) return
+    ids.add(sessionId)
+    for (const child of childrenByParentId.get(sessionId) ?? []) visit(child.id)
+  }
+  visit(rootSessionId)
+  return ids
+}
+
 export function hasPinnedVisibleParent(session: AgentSessionMeta, sessions: AgentSessionMeta[]): boolean {
   if (!isDelegatedChildSession(session) || !session.parentSessionId) return false
   const parent = sessions.find((item) => item.id === session.parentSessionId)

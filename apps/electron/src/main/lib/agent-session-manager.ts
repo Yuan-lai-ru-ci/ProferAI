@@ -314,6 +314,34 @@ export function getAgentSessionMeta(id: string): AgentSessionMeta | undefined {
 }
 
 /**
+ * 返回删除指定会话时应一并清理的会话 ID，顺序为叶子会话到根会话。
+ *
+ * 只有带 sourceDelegationId 的记录才是协作委派子会话；普通会话即使带有
+ * 历史异常 parentSessionId 也绝不可被级联删除。通过 visited 防御损坏索引中的环。
+ */
+export function getAgentSessionDeletionOrder(id: string): string[] {
+  const sessions = readIndex().sessions
+  const childrenByParentId = new Map<string, AgentSessionMeta[]>()
+  for (const session of sessions) {
+    if (!session.parentSessionId || !session.sourceDelegationId) continue
+    const children = childrenByParentId.get(session.parentSessionId) ?? []
+    children.push(session)
+    childrenByParentId.set(session.parentSessionId, children)
+  }
+
+  const visited = new Set<string>()
+  const order: string[] = []
+  const visit = (sessionId: string): void => {
+    if (visited.has(sessionId)) return
+    visited.add(sessionId)
+    for (const child of childrenByParentId.get(sessionId) ?? []) visit(child.id)
+    order.push(sessionId)
+  }
+  visit(id)
+  return order
+}
+
+/**
  * 创建新会话
  */
 export function createAgentSession(
