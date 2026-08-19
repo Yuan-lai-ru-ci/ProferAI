@@ -8,6 +8,7 @@ import * as React from 'react'
 import { Download } from 'lucide-react'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { CollapsibleResult } from './collapsible-result'
+import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from '../image-attachment-marker'
 
 interface DefaultResultRendererProps {
   result: string
@@ -31,25 +32,8 @@ function tryParseKeyValue(text: string): Array<{ key: string; value: string }> |
   return null
 }
 
-/** 从文本中提取 PROMA_IMAGE_ATTACHMENT 标记 */
-function parseGeneratedImages(text: string): { images: Array<{ localPath: string; filename: string; mediaType: string }>; cleanText: string } {
-  const markerRegex = /\[PROMA_IMAGE_ATTACHMENT:(.+?)\]/g
-  const images: Array<{ localPath: string; filename: string; mediaType: string }> = []
-  let match: RegExpExecArray | null
-  while ((match = markerRegex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1]!)
-      if (parsed.localPath && parsed.filename) {
-        images.push(parsed)
-      }
-    } catch { /* 忽略 */ }
-  }
-  const cleanText = text.replace(markerRegex, '').replace(/\n{3,}/g, '\n\n').trim()
-  return { images, cleanText }
-}
-
 /** 生成图片缩略图 */
-function GeneratedImageThumb({ image }: { image: { localPath: string; filename: string; mediaType: string } }): React.ReactElement {
+function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
 
@@ -104,8 +88,8 @@ export function DefaultResultRenderer({ result, isError }: DefaultResultRenderer
     )
   }
 
-  // 解析生成图片标记（MCP 生图工具）
-  const { images, cleanText } = React.useMemo(() => parseGeneratedImages(result), [result])
+  // 解析受控图片附件标记；仅加载 PNG/JPEG/GIF/WebP。
+  const { images, cleanText } = React.useMemo(() => parseAgentImageAttachmentMarkers(result), [result])
 
   // 纯文本 fallback
   if (images.length === 0) {

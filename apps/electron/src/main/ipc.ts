@@ -244,6 +244,7 @@ import {
   createAgentSession,
   ensureProjectDraftAgentSession,
   getAgentSessionMeta,
+  getAgentSessionDeletionOrder,
   getAgentSessionSDKMessages,
   updateAgentSessionMeta,
   deleteAgentSession,
@@ -2832,6 +2833,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.DELETE_SESSION,
     async (_, id: string): Promise<void> => {
       return agentSessionDeletionCoordinator.delete(id, {
+        getDeletionOrder: getAgentSessionDeletionOrder,
         beginDeletion: beginAgentSessionDeletion,
         endDeletion: endAgentSessionDeletion,
         stopAndWait: stopAgentAndWait,
@@ -3131,8 +3133,14 @@ export function registerIpcHandlers(): void {
         .filter((automation) => automation.workspaceId === id)
         .map((automation) => automation.id)
 
+      // affectedSessionIds 是删除前的快照；父会话的级联删除会先清理其委派后代，
+      // 因此跳过已经由前一次树级事务处理的节点，避免对同一会话重复清理。
+      const deletedSessionIds = new Set<string>()
       for (const sessionId of affectedSessionIds) {
+        if (deletedSessionIds.has(sessionId)) continue
+        const deletionOrder = getAgentSessionDeletionOrder(sessionId)
         await agentSessionDeletionCoordinator.delete(sessionId, {
+          getDeletionOrder: () => deletionOrder,
           beginDeletion: beginAgentSessionDeletion,
           endDeletion: endAgentSessionDeletion,
           stopAndWait: stopAgentAndWait,
@@ -3145,6 +3153,7 @@ export function registerIpcHandlers(): void {
           },
           deleteSession: deleteAgentSession,
         })
+        for (const deletedSessionId of deletionOrder) deletedSessionIds.add(deletedSessionId)
       }
       for (const automationId of affectedAutomationIds) {
         deleteAutomation(automationId)

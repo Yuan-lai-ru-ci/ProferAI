@@ -33,6 +33,7 @@ import { getUserProfile } from './user-profile-service'
 import {
   listAgentSessions,
   getAgentSessionMeta,
+  getAgentSessionDeletionOrder,
   getAgentSessionMessages,
   getAgentSessionSDKMessages,
   createAgentSession,
@@ -685,6 +686,7 @@ async function handleCommand(
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
         await agentSessionDeletionCoordinator.delete(sessionId, {
+          getDeletionOrder: getAgentSessionDeletionOrder,
           beginDeletion: beginAgentSessionDeletion,
           endDeletion: endAgentSessionDeletion,
           stopAndWait: stopAgentAndWait,

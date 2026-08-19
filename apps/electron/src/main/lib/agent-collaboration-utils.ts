@@ -40,11 +40,9 @@ export interface RecoveredDelegationState {
 export function resolveDelegationPermissionMode(
   parentMode: ProferPermissionMode | undefined,
   requestedMode: ProferPermissionMode | undefined,
-  agentRuntime?: AgentRuntime,
+  _agentRuntime?: AgentRuntime,
 ): ProferPermissionMode {
-  // Pi 子会话目前不支持 Plan 模式下的完整工具集，固定直接执行。
-  if (agentRuntime === 'pi') return 'bypassPermissions'
-
+  // 子会话绝不能高于父会话权限；Pi 也必须遵守此边界。
   const parent = parentMode ?? 'auto'
   const requested = requestedMode ?? parent
   return PERMISSION_RANK[requested] <= PERMISSION_RANK[parent] ? requested : parent

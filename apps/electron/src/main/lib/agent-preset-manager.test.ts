@@ -244,6 +244,18 @@ describe('自定义预设 CRUD', () => {
     expect(dirty?.disabledToolGroups).toEqual(['task-graph'])
   })
 
+  test('mcpServerNames 空数组=禁用全部用户 MCP（保留），null=清除', () => {
+    const created = createAgentPreset(WS_A, { name: '零 MCP', description: 'd', mcpServerNames: [] })
+    expect(created.mcpServerNames).toEqual([])
+    expect(listAgentPresets(WS_A).find((preset) => preset.id === created.id)?.mcpServerNames).toEqual([])
+
+    const copied = copyAgentPreset(WS_A, created.id, '零 MCP 副本')
+    expect(copied.mcpServerNames).toEqual([])
+
+    const cleared = updateAgentPreset(WS_A, created.id, { mcpServerNames: null })
+    expect(cleared.mcpServerNames).toBeUndefined()
+  })
+
   test('updateAgentPreset 更新字段；skillSlugs 空数组=禁用全部 skill（保留），null=清除', () => {
     const created = createAgentPreset(WS_A, { name: '原始', description: 'd', skillSlugs: ['a'] })
     const updated = updateAgentPreset(WS_A, created.id, {
@@ -351,6 +363,17 @@ describe('预设导出 / 导入文件', () => {
     expect(entry.id).toBeUndefined()
     expect(entry.isBuiltin).toBeUndefined()
     expect(entry.createdAt).toBeUndefined()
+  })
+
+  test('导出后导入到另一个工作区：空 MCP 白名单保持为禁用全部用户 MCP', () => {
+    const created = createAgentPreset(WS_A, {
+      name: '零 MCP 导出',
+      description: '不加载用户 MCP',
+      mcpServerNames: [],
+    })
+    const result = importAgentPresets(WS_B, serializeAgentPresetsForExport([created]))
+    expect(result.imported[0]?.mcpServerNames).toEqual([])
+    expect(listAgentPresets(WS_B).find((preset) => preset.id === result.imported[0]?.id)?.mcpServerNames).toEqual([])
   })
 
   test('导出后导入到另一个工作区：新 UUID、能力字段保留', () => {

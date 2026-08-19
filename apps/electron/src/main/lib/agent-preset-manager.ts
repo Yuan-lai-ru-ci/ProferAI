@@ -275,7 +275,8 @@ export function createAgentPreset(workspaceSlug: string | undefined, input: Agen
     ...(input.effort && { effort: input.effort }),
     ...(input.permissionMode && { permissionMode: input.permissionMode }),
     ...(input.skillSlugs !== undefined && { skillSlugs: input.skillSlugs }),
-    ...(input.mcpServerNames?.length && { mcpServerNames: input.mcpServerNames }),
+    // undefined=不裁剪，[]=禁用全部用户 MCP，非空=白名单。
+    ...(input.mcpServerNames !== undefined && { mcpServerNames: input.mcpServerNames }),
     ...(input.allowSubagents !== undefined && { allowSubagents: input.allowSubagents }),
     ...(input.basePresetId !== undefined && { basePresetId: input.basePresetId }),
     createdAt: now,
@@ -342,7 +343,8 @@ export function updateAgentPreset(workspaceSlug: string | undefined, presetId: s
   if (updates.permissionMode !== undefined) existing.permissionMode = updates.permissionMode ?? undefined
   // skillSlugs 语义：null=清除（回退全量），[]=禁用全部 skill（保留），非空=白名单
   if (updates.skillSlugs !== undefined) existing.skillSlugs = updates.skillSlugs ?? undefined
-  if (updates.mcpServerNames !== undefined) existing.mcpServerNames = updates.mcpServerNames?.length ? updates.mcpServerNames : undefined
+  // undefined=不修改，null=清除（不裁剪），[]=禁用全部用户 MCP。
+  if (updates.mcpServerNames !== undefined) existing.mcpServerNames = updates.mcpServerNames ?? undefined
   if (updates.allowSubagents !== undefined) existing.allowSubagents = updates.allowSubagents ?? undefined
   // 派生基座：null=脱离（冻结当前生效配置），值=切换（内置 ID，已校验）
   if (updates.basePresetId === null) {

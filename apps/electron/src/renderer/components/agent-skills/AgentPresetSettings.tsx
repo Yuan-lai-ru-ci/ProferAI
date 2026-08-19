@@ -51,6 +51,9 @@ interface PresetFormState {
 }
 
 /** 产品内置工具组选项（预设可禁用） */
+/** Radix Select 保留空字符串给 placeholder，表单的“跟随/独立”状态使用非空哨兵值。 */
+const SELECT_DEFAULT_VALUE = '__default__'
+
 const TOOL_GROUP_OPTIONS: Array<{ value: AgentPresetToolGroup; label: string; hint: string }> = [
   { value: 'task-graph', label: '任务图', hint: 'proma_task_* 子任务图工具' },
   { value: 'memory', label: '长期记忆', hint: 'Auto Memory 与 memory-archive' },
@@ -531,10 +534,10 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-foreground/70">派生基座（可选）</label>
-              <Select value={form.basePresetId} onValueChange={(v) => setForm((f) => ({ ...f, basePresetId: v }))}>
+              <Select value={form.basePresetId || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, basePresetId: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                 <SelectTrigger><SelectValue placeholder="独立预设（不基于内置预设）" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">独立预设（不基于内置预设）</SelectItem>
+                  <SelectItem value={SELECT_DEFAULT_VALUE}>独立预设（不基于内置预设）</SelectItem>
                   <SelectItem value="standard">基于「标准」</SelectItem>
                   <SelectItem value="code">基于「代码」</SelectItem>
                   <SelectItem value="minimal">基于「极简」</SelectItem>
@@ -556,10 +559,10 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-foreground/70">推理强度</label>
-                <Select value={form.effort} onValueChange={(v) => setForm((f) => ({ ...f, effort: v }))}>
+                <Select value={form.effort || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, effort: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                   <SelectTrigger><SelectValue placeholder="跟随全局设置" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">跟随全局设置</SelectItem>
+                    <SelectItem value={SELECT_DEFAULT_VALUE}>跟随全局设置</SelectItem>
                     <SelectItem value="low">低</SelectItem>
                     <SelectItem value="medium">中</SelectItem>
                     <SelectItem value="high">高</SelectItem>
@@ -569,10 +572,10 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
               </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-foreground/70">权限模式</label>
-                <Select value={form.permissionMode} onValueChange={(v) => setForm((f) => ({ ...f, permissionMode: v }))}>
+                <Select value={form.permissionMode || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, permissionMode: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                   <SelectTrigger><SelectValue placeholder="跟随会话默认" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">跟随会话默认</SelectItem>
+                    <SelectItem value={SELECT_DEFAULT_VALUE}>跟随会话默认</SelectItem>
                     <SelectItem value="auto">自动审批</SelectItem>
                     <SelectItem value="bypassPermissions">完全自动</SelectItem>
                     <SelectItem value="plan">计划模式</SelectItem>
@@ -608,10 +611,10 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
             <p className="text-[10px] text-muted-foreground">白名单按名尽力匹配：预设里选了但工作区没有的项会自动忽略；标注「未启用」的项需先在 Skills/MCP 页启用。</p>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-foreground/70">子 Agent 委派</label>
-              <Select value={form.allowSubagents} onValueChange={(v) => setForm((f) => ({ ...f, allowSubagents: v }))}>
+              <Select value={form.allowSubagents || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, allowSubagents: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                 <SelectTrigger><SelectValue placeholder="跟随默认策略" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">跟随默认策略</SelectItem>
+                  <SelectItem value={SELECT_DEFAULT_VALUE}>跟随默认策略</SelectItem>
                   <SelectItem value="yes">允许委派</SelectItem>
                   <SelectItem value="no">禁止委派</SelectItem>
                 </SelectContent>

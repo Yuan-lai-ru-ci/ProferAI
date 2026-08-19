@@ -99,27 +99,6 @@ function ssh(command, timeout = 30_000) {
   });
 }
 
-function assertReleaseMetadata() {
-  const pkg = JSON.parse(fs.readFileSync(path.join(ELECTRON, 'package.json'), 'utf8'));
-  const changelog = JSON.parse(fs.readFileSync(path.join(ELECTRON, 'resources', 'CHANGELOG.json'), 'utf8'));
-  if (pkg.version !== VERSION) throw new Error(`package.json 版本为 ${pkg.version}，不是 ${VERSION}`);
-  if (!Array.isArray(changelog.releases) || changelog.releases[0]?.version !== VERSION) {
-    throw new Error(`CHANGELOG.json 首条版本必须为 ${VERSION}`);
-  }
-}
-
-function assertCleanWorktree() {
-  if (run('git status --porcelain=v1')) throw new Error('工作树不干净；请先提交或清理改动后再发布。');
-  if (!tryRun('git diff --check').ok) throw new Error('存在空白错误，不能发布。');
-}
-
-function assertRemoteMainIsAncestor() {
-  run('git fetch origin --prune');
-  if (!tryRun('git merge-base --is-ancestor origin/main HEAD').ok) {
-    throw new Error('本地 main 未包含最新 origin/main；请先人工处理分叉，发布脚本不会 rebase 活跃分支。');
-  }
-}
-
 function remoteTagTarget() {
   const output = run(`git ls-remote --tags origin refs/tags/${TAG} refs/tags/${TAG}^{}`).trim();
   if (!output) return null;
@@ -134,12 +113,13 @@ function localTagTarget() {
 }
 
 function pushSourceAndTag() {
-  run('git push origin HEAD:main');
+  // 预检之后再次检查，确保任何 git 写入前都不会覆盖冲突 tag。
   const head = run('git rev-parse HEAD');
   const localTag = localTagTarget();
-  if (localTag && localTag !== head) throw new Error(`本地 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
   const remoteTag = remoteTagTarget();
+  if (localTag && localTag !== head) throw new Error(`本地 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
   if (remoteTag && remoteTag !== head) throw new Error(`远端 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
+  run('git push origin HEAD:main');
   if (!localTag) run(`git tag ${TAG}`);
   if (!remoteTag) run(`git push origin ${TAG}`);
 }
@@ -226,18 +206,14 @@ async function ensureGitHubRelease(assets) {
 
 (async () => {
   console.log(`=== Profer 本地发布 ${TAG} ===`);
-  assertReleaseMetadata();
-  assertCleanWorktree();
-  assertRemoteMainIsAncestor();
+  // 必须先完成所有只读预检；随后才允许构建、上传或 Git/GitHub 写入。
+  run(`node scripts/verify-release-preflight.cjs ${VERSION}`);
 
-  console.log('[1/4] 构建 Windows x64 安装包...');
-  run("npx esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='oss'", ELECTRON);
-  run('npx esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron', ELECTRON);
-  run('npx vite build', ELECTRON);
-  run('bun run scripts/build-cli.ts', ELECTRON);
-  run('bun run scripts/copy-resources.ts', ELECTRON);
+  console.log('[1/4] 执行发布验证门禁...');
+  run('bun run typecheck');
+  run('bun test --isolate --timeout 30000');
   fs.rmSync(path.join(OUT, 'win-unpacked'), { recursive: true, force: true });
-  run('npx electron-builder --win --x64', ELECTRON);
+  run('bun run release:verify:windows', ELECTRON);
 
   const assets = [
     'latest.yml',

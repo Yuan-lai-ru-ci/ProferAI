@@ -26,6 +26,7 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
+import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from './image-attachment-marker'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
@@ -648,34 +649,8 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
 
 // ===== PROMA_IMAGE_ATTACHMENT 生成图片解析与渲染 =====
 
-/** 从文本中解析的生成图片引用 */
-interface ParsedGeneratedImage {
-  localPath: string
-  filename: string
-  mediaType: string
-}
-
-/** 从文本中提取 [PROMA_IMAGE_ATTACHMENT:{...}] 标记，返回图片列表和清理后的文本 */
-function parseGeneratedImages(text: string): { images: ParsedGeneratedImage[]; cleanText: string } {
-  const markerRegex = /\[PROMA_IMAGE_ATTACHMENT:(.+?)\]/g
-  const images: ParsedGeneratedImage[] = []
-  let match: RegExpExecArray | null
-  while ((match = markerRegex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1]!) as ParsedGeneratedImage
-      if (parsed.localPath && parsed.filename) {
-        images.push(parsed)
-      }
-    } catch {
-      // 忽略解析失败的标记
-    }
-  }
-  const cleanText = text.replace(markerRegex, '').replace(/\n{3,}/g, '\n\n').trim()
-  return { images, cleanText }
-}
-
 /** 生成图片缩略图组件（点击可预览大图） */
-function GeneratedImageThumb({ image }: { image: ParsedGeneratedImage }): React.ReactElement {
+function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
 
@@ -730,7 +705,7 @@ export function ContentBlock({ block, allMessages, basePath, basePaths, animate 
     if (!textBlock.text) return null
 
     // 解析生成图片标记 [PROMA_IMAGE_ATTACHMENT:{...}]
-    const { images, cleanText } = parseGeneratedImages(textBlock.text)
+    const { images, cleanText } = parseAgentImageAttachmentMarkers(textBlock.text)
 
     return (
       <>

@@ -22,6 +22,7 @@ import type { SidebarModel } from './use-left-sidebar'
 export function SidebarDialogs({ s }: { s: SidebarModel }): React.ReactElement {
   const {
     pendingDeleteId,
+    pendingDeleteDelegatedChildCount,
     setPendingDeleteId,
     handleConfirmDelete,
     pendingDeleteWorkspaceId,
@@ -59,7 +60,9 @@ export function SidebarDialogs({ s }: { s: SidebarModel }): React.ReactElement {
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除对话</AlertDialogTitle>
             <AlertDialogDescription>
-              删除后将无法恢复，确定要删除这个对话吗？
+              {pendingDeleteDelegatedChildCount > 0
+                ? `删除后将无法恢复，并将同时永久删除 ${pendingDeleteDelegatedChildCount} 个协作子会话。`
+                : '删除后将无法恢复，确定要删除这个对话吗？'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

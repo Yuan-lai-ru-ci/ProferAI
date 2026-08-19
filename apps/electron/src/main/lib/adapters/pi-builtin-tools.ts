@@ -61,6 +61,8 @@ import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
 import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
+import { sendAgentLocalImage } from '../agent-image-output-service'
+import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -345,7 +347,7 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
             ...(args.effort && { effort: args.effort }),
             ...(args.permissionMode && { permissionMode: args.permissionMode }),
             ...(args.skillSlugs !== undefined && { skillSlugs: args.skillSlugs }),
-            ...(args.mcpServerNames && { mcpServerNames: args.mcpServerNames }),
+            ...(args.mcpServerNames !== undefined && { mcpServerNames: args.mcpServerNames }),
             ...(args.allowSubagents !== undefined && { allowSubagents: args.allowSubagents }),
             ...(args.basePresetId !== undefined && { basePresetId: args.basePresetId }),
           })
@@ -485,6 +487,32 @@ function stringArray(value: unknown): string[] | undefined {
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function buildPiAgentImageOutputTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  if (!ctx.agentCwd || !ctx.workspaceSlug) return []
+
+  return [
+    sdk.defineTool({
+      name: 'send_local_image',
+      label: '发送本地图片',
+      description: 'Send an existing local PNG/JPEG/GIF/WebP as an image in the final Agent response. The path must be inside the current session workspace or an explicitly authorized attached directory. Returns a PROMA_IMAGE_ATTACHMENT marker; copy that marker unchanged into your final response. This tool does not generate or edit images.',
+      promptSnippet: 'SendLocalImage: safely copy an authorized local image to the session output and copy the returned PROMA_IMAGE_ATTACHMENT marker unchanged into the final response.',
+      parameters: Type.Object({
+        path: Type.String({ minLength: 1, maxLength: 4096 }),
+        caption: Type.Optional(Type.String({ maxLength: 500 })),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { path?: unknown; caption?: unknown }
+        const path = typeof args.path === 'string' ? args.path : ''
+        const caption = typeof args.caption === 'string' ? args.caption : undefined
+        return formatAgentImageOutputToolResult(await sendAgentLocalImage({ path, caption }, {
+          agentCwd: ctx.agentCwd!,
+          allowedRoots: ctx.allowedRoots ?? [],
+        })) as AgentToolResult<unknown>
+      },
+    }),
+  ] as unknown as ToolDefinition[]
 }
 
 function buildPiPptMaterialTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
@@ -1239,6 +1267,12 @@ export async function buildPiBuiltinTools(
   })
 
   const tools: ToolDefinition[] = []
+
+  try {
+    tools.push(...buildPiAgentImageOutputTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入本地图片输出工具失败:', error)
+  }
 
   try {
     tools.push(...buildPiPptMaterialTools(sdk, ctx))
