@@ -86,6 +86,7 @@ import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './atta
 import { chatEventBus } from './chat-stream-bus'
 import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
 import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
+import { RemoteAgentEventLog, type RemoteAgentEventRecord } from './remote-agent-event-log'
 
 /** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -130,6 +131,21 @@ let chatBusUnsubscribe: (() => void) | null = null
 /** 记录当前监听地址（用于启动日志提示） */
 let listenAddress: string | null = null
 
+/** 服务实例 ID：Pocket 发现主进程重启后清除旧 cursor，改走快照恢复。 */
+let serverInstanceId = randomUUID()
+const remoteAgentEventLog = new RemoteAgentEventLog()
+
+type AgentReplayState = {
+  replaying: boolean
+  queuedLiveFrames: RemoteAgentEventRecord[]
+  lastSentEventId: number
+  fallbackTimer: ReturnType<typeof setTimeout> | null
+}
+
+const AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS = 5000
+
+const agentReplayStates = new WeakMap<WebSocket, AgentReplayState>()
+
 /** 是否已执行启动检查（避免重复启动） */
 let isStarted = false
 
@@ -171,13 +187,103 @@ function isPartialSdkPayload(payload: unknown): boolean {
 }
 
 /** 真正把一条 agent_event 帧广播给所有已连接平板客户端。 */
-function broadcastAgentFrame(sessionId: string, payload: unknown): void {
-  const frame = JSON.stringify({ kind: 'agent_event', sessionId, payload })
+function broadcastAgentFrame(sessionId: string, payload: import('@profer/shared').AgentStreamPayload): void {
+  const record = remoteAgentEventLog.append(sessionId, payload)
   for (const client of wss?.clients ?? []) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(frame)
+    if (client.readyState !== WebSocket.OPEN) continue
+    const replayState = agentReplayStates.get(client)
+    if (replayState?.replaying) {
+      replayState.queuedLiveFrames.push(record)
+      if (replayState.queuedLiveFrames.length > 2500) {
+        try { client.close(1013, 'replay queue overflow') } catch { /* ignore */ }
+      }
+      continue
     }
+    sendAgentEventRecord(client, record)
   }
+}
+
+function sendAgentEventRecord(client: WebSocket, record: RemoteAgentEventRecord): void {
+  if (client.readyState !== WebSocket.OPEN) return
+  client.send(JSON.stringify({
+    kind: 'agent_event',
+    eventId: record.eventId,
+    sessionId: record.sessionId,
+    payload: record.payload,
+  }))
+  const replayState = agentReplayStates.get(client)
+  if (replayState) replayState.lastSentEventId = Math.max(replayState.lastSentEventId, record.eventId)
+}
+
+function releaseAgentReplayGate(client: WebSocket): void {
+  const replayState = agentReplayStates.get(client)
+  if (!replayState || !replayState.replaying) return
+  if (replayState.fallbackTimer) {
+    clearTimeout(replayState.fallbackTimer)
+    replayState.fallbackTimer = null
+  }
+  for (const record of replayState.queuedLiveFrames.sort((a, b) => a.eventId - b.eventId)) {
+    sendAgentEventRecord(client, record)
+  }
+  replayState.queuedLiveFrames = []
+  replayState.replaying = false
+}
+
+function sendAgentReplayResult(client: WebSocket, requestId: unknown, replay: ReturnType<RemoteAgentEventLog['replayAfter']>): void {
+  if (client.readyState !== WebSocket.OPEN) return
+  client.send(JSON.stringify({
+    kind: 'agent_events_resumed',
+    requestId,
+    fromEventId: replay.fromEventId,
+    toEventId: replay.toEventId,
+    replayed: replay.records.length,
+    complete: !replay.requiresSnapshot,
+    requiresSnapshot: replay.requiresSnapshot,
+    oldestEventId: replay.oldestEventId,
+    latestEventId: replay.latestEventId,
+  }))
+}
+
+function replayAgentEvents(client: WebSocket, requestId: unknown, cursor: unknown): void {
+  const replayState = agentReplayStates.get(client)
+  if (!replayState || client.readyState !== WebSocket.OPEN) return
+  if (!replayState.replaying) {
+    sendAgentReplayResult(client, requestId, {
+      records: [],
+      fromEventId: null,
+      toEventId: replayState.lastSentEventId || null,
+      oldestEventId: remoteAgentEventLog.getOldestEventId(),
+      latestEventId: remoteAgentEventLog.getLatestEventId(),
+      requiresSnapshot: false,
+    })
+    return
+  }
+  if (replayState.fallbackTimer) {
+    clearTimeout(replayState.fallbackTimer)
+    replayState.fallbackTimer = null
+  }
+  const normalizedCursor = cursor === null ? null : typeof cursor === 'number' ? cursor : -1
+  const replay = remoteAgentEventLog.replayAfter(normalizedCursor)
+  if (replay.requiresSnapshot) {
+    // 日志窗口已经不完整时，不发送半段事件；客户端随后按快照重建。
+    replayState.queuedLiveFrames = []
+    replayState.replaying = false
+    sendAgentReplayResult(client, requestId, replay)
+    return
+  }
+  const replayedIds = new Set<number>()
+  for (const record of replay.records) {
+    if (record.eventId <= replayState.lastSentEventId) continue
+    sendAgentEventRecord(client, record)
+    replayedIds.add(record.eventId)
+  }
+  for (const record of replayState.queuedLiveFrames.sort((a, b) => a.eventId - b.eventId)) {
+    if (record.eventId <= replayState.lastSentEventId || replayedIds.has(record.eventId)) continue
+    sendAgentEventRecord(client, record)
+  }
+  replayState.queuedLiveFrames = []
+  replayState.replaying = false
+  sendAgentReplayResult(client, requestId, replay)
 }
 
 /**
@@ -186,7 +292,7 @@ function broadcastAgentFrame(sessionId: string, payload: unknown): void {
  * - 非 partial（含 final 完整消息）：先取消 pending 的 partial 再立即广播，
  *   确保 final 不被延迟到达的旧 partial 覆盖（renderer 按同 UUID 覆盖，顺序必须保证）。
  */
-function broadcastAgentEvent(sessionId: string, payload: unknown): void {
+function broadcastAgentEvent(sessionId: string, payload: import('@profer/shared').AgentStreamPayload): void {
   if (isPartialSdkPayload(payload)) {
     const existing = partialMergeTimers.get(sessionId)
     if (existing) clearTimeout(existing)
@@ -1475,6 +1581,17 @@ export function startRemoteService(): string | null {
     console.log('[Remote] 平板客户端已连接')
     ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
     const commandContext: RemoteCommandContext = {}
+    const replayState: AgentReplayState = {
+      replaying: true,
+      queuedLiveFrames: [],
+      lastSentEventId: 0,
+      fallbackTimer: null,
+    }
+    replayState.fallbackTimer = setTimeout(() => {
+      // 兼容未实现 resume_agent_events 的旧 Pocket：握手超时后恢复普通实时广播。
+      releaseAgentReplayGate(ws)
+    }, AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS)
+    agentReplayStates.set(ws, replayState)
 
     // 收到指令
     ws.on('message', (raw: RawData) => {
@@ -1502,6 +1619,11 @@ export function startRemoteService(): string | null {
         return
       }
 
+      if (parsedRaw?.type === 'resume_agent_events') {
+        replayAgentEvents(ws, reqId, (parsedRaw as { cursor?: unknown }).cursor ?? null)
+        return
+      }
+
       void handleCommand(body, reqId, commandContext).then((result) => {
         // 将指令响应作为 "command_result" 事件回给客户端
         if (ws.readyState === WebSocket.OPEN) {
@@ -1513,11 +1635,20 @@ export function startRemoteService(): string | null {
     })
 
     ws.on('close', () => {
+      const replayState = agentReplayStates.get(ws)
+      if (replayState?.fallbackTimer) clearTimeout(replayState.fallbackTimer)
+      agentReplayStates.delete(ws)
       console.log('[Remote] 平板客户端断开')
     })
 
-    // 连接建立后推送一条握手
-    ws.send(JSON.stringify({ kind: 'hello', serverTime: Date.now() }))
+    // 连接建立后推送握手。客户端可据此判断旧 cursor 是否跨越了服务重启。
+    ws.send(JSON.stringify({
+      kind: 'hello',
+      serverTime: Date.now(),
+      serverInstanceId,
+      latestAgentEventId: remoteAgentEventLog.getLatestEventId(),
+      oldestAgentEventId: remoteAgentEventLog.getOldestEventId(),
+    }))
   })
 
   // 订阅 agentEventBus，把工作流事件广播给所有平板客户端
@@ -1613,6 +1744,8 @@ export function stopRemoteService(): void {
     httpServer?.close()
   } catch { /* ignore */ }
   httpServer = null
+  remoteAgentEventLog.clear()
+  serverInstanceId = randomUUID()
   isStarted = false
   listenAddress = null
   remoteError = null
