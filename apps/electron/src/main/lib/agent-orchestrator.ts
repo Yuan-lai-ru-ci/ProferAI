@@ -151,6 +151,7 @@ import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
 import { injectPptMaterialMcpServer } from './ppt-material-agent-tools'
+import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
 import { browserController } from './browser-controller'
 import {
   applySdkCredentials,
@@ -1125,6 +1126,23 @@ export class AgentOrchestrator {
       }
       await injectAgentPresetMcpServer(sdk, mcpServers, { sessionId })
       await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
+      // 本地图片输出只在受工作区授权的会话注册；没有 workspace 的 cwd 是 homedir，不能默认授权整个用户目录。
+      const imageOutputAllowedRoots = workspaceSlug && agentCwd
+        ? [
+            agentCwd,
+            ...collectAttachedDirectories({
+              extraDirs: additionalDirectories,
+              sessionMeta,
+              workspaceSlug,
+            }),
+          ]
+        : []
+      if (agentCwd && imageOutputAllowedRoots.length > 0) {
+        await injectAgentImageOutputMcpServer(sdk, mcpServers, {
+          agentCwd,
+          allowedRoots: imageOutputAllowedRoots,
+        })
+      }
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
       if (agentRuntime === 'claude') {

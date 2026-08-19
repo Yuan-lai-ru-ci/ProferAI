@@ -195,6 +195,15 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     triggeredBy: 'user' as const,
   }
 
+  test('Given a workspace-backed Pi session When building builtin tools Then it exposes send_local_image', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
+
+    const imageTool = tools.find((tool) => tool.name === 'send_local_image')
+    expect(imageTool).toBeDefined()
+    expect(imageTool!.description).toContain('PROMA_IMAGE_ATTACHMENT')
+  })
+
   test('Given no disabled groups Then all four groups are registered', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, baseCtx)
