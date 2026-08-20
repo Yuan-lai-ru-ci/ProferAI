@@ -61,7 +61,7 @@ export function Message({ className, from, ...props }: MessageProps): React.Reac
     <div
       className={cn(
         'message-item group flex w-full flex-col gap-0.5 rounded-[10px] px-2.5 py-2.5',
-        from === 'user' ? 'is-user bg-message-user' : 'is-assistant bg-message',
+        from === 'user' ? 'is-user' : 'is-assistant',
         className
       )}
       {...props}
@@ -781,7 +781,7 @@ export const UserMessageContent = React.memo(
     }, [])
 
     return (
-      <div className={cn('relative inline-block max-w-full rounded-[10px] bg-message-user px-3.5 py-2.5', shouldCollapse && !isExpanded && 'pb-6', className)} {...props}>
+      <div className={cn('relative inline-block max-w-full rounded-[10px] bg-primary/10 px-3.5 py-2.5', shouldCollapse && !isExpanded && 'pb-6', className)} {...props}>
         <div
           ref={contentRef}
           className={cn(

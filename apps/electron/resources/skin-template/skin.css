@@ -77,6 +77,24 @@
   --shell-bg-gradient: linear-gradient(145deg, hsl(222 32% 7%), hsl(222 24% 12%));
 }
 
+/* 可选：消息样式。
+ * 默认产品布局保持 Agent 透明、用户仅有内容区的 bg-primary/10 小气泡。
+ * --message-surface / --message-user-surface 仅提供颜色，不会自动使整条消息卡片化。
+ *
+ * 方案 A：只有明确希望把整个消息条目渲染为卡片时，才取消下面规则的注释。
+.message-item.is-assistant {
+  background: hsl(var(--message-surface));
+}
+.message-item.is-user {
+  background: hsl(var(--message-user-surface));
+}
+ *
+ * 方案 B：保留默认流式布局，仅调整用户内容小气泡的颜色时，取消下面规则的注释。
+.message-item.is-user [class~="bg-primary/10"] {
+  background: hsl(var(--message-user-surface));
+}
+*/
+
 /* 可选：使用包内背景图。取消注释前，把图片放入 assets/background.webp。
  * ⚠️ 背景不能挂 body——AppShell 的 .shell-bg 是全屏不透明层，会完全盖住 body；
  * 必须挂在 .shell-bg 上。assets/... 会由主进程安全改写为
