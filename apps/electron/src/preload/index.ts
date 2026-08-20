@@ -698,6 +698,9 @@ export interface ElectronAPI {
   /** 重排工作区顺序 */
   reorderAgentWorkspaces: (orderedIds: string[]) => Promise<AgentWorkspace[]>
 
+  /** 订阅工作区列表变更（创建/删除/重命名/重排后由主进程广播），返回取消订阅函数 */
+  onAgentWorkspacesChanged: (callback: () => void) => () => void
+
   // ===== 工作区能力（MCP + Skill） =====
 
   /** 获取工作区能力摘要 */
@@ -2184,6 +2187,12 @@ const electronAPI: ElectronAPI = {
 
   reorderAgentWorkspaces: (orderedIds: string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REORDER_WORKSPACES, orderedIds)
+  },
+
+  onAgentWorkspacesChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(AGENT_IPC_CHANNELS.WORKSPACES_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.WORKSPACES_CHANGED, listener) }
   },
 
   // 工作区能力（MCP + Skill）

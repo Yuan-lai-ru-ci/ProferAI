@@ -569,8 +569,10 @@ export function useLeftSidebar(tabletMode?: boolean) {
         })
       }
     }).catch(console.error)
+    // 顺带刷新工作区列表：窗口聚焦/列表刷新时同步最新工作区（否则 pocket 新建工作区一直不出现）
+    window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
     refreshArchivedCounts()
-  }, [viewMode, setConversations, setAgentSessions, setUnviewedCompleted, refreshArchivedCounts])
+  }, [viewMode, setConversations, setAgentSessions, setUnviewedCompleted, setWorkspacesStable, refreshArchivedCounts])
 
   // 初始加载：用户档案 + 按当前视图拉取列表/计数（viewMode effect 挂载时也会拉，重复无害）
   React.useEffect(() => {
@@ -598,6 +600,15 @@ export function useLeftSidebar(tabletMode?: boolean) {
   // 监听团队工作区同步事件，登录/注册成功后自动刷新侧边栏
   React.useEffect(() => {
     const unsub = window.electronAPI.team.onWorkspacesSynced(() => {
+      window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
+    })
+    return unsub
+  }, [setWorkspacesStable])
+
+  // 监听工作区列表变更（创建/删除/重命名/重排、平板远程创建）：主进程广播后刷新侧边栏，
+  // 否则运行中的桌面端一直用启动时的工作区快照，新工作区的会话会被归入默认工作区
+  React.useEffect(() => {
+    const unsub = window.electronAPI.onAgentWorkspacesChanged(() => {
       window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
     })
     return unsub

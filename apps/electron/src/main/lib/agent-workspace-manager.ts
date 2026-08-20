@@ -7,6 +7,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync } from 'node:fs'
+import { BrowserWindow } from 'electron'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path'
@@ -25,6 +26,7 @@ import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { normalizeDefaultSkillSlug, RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
 import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
+import { broadcastAgentWorkspaceChange } from './agent-workspace-events'
 import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
 import type { AgentPreset } from '@profer/shared'
 
@@ -233,7 +235,17 @@ export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
   for (const ws of byId.values()) reordered.push(ws)
   index.workspaces = reordered
   writeIndex(index)
+  broadcastAgentWorkspacesChanged()
   return reordered
+}
+
+/**
+ * 广播工作区列表变更（创建/删除/重命名/重排后调用），让已运行的渲染进程
+ * 及时刷新侧边栏工作区列表。个人工作区可能由平板端（remote-service）动态创建，
+ * 若不广播，桌面端渲染进程会一直使用启动时的旧列表，导致新工作区的会话被归入默认工作区。
+ */
+export function broadcastAgentWorkspacesChanged(): void {
+  broadcastAgentWorkspaceChange(BrowserWindow.getAllWindows())
 }
 
 export function getAgentWorkspace(id: string): AgentWorkspace | undefined {
@@ -316,6 +328,7 @@ export function createAgentWorkspace(
 
   index.workspaces.unshift(workspace)
   writeIndex(index)
+  broadcastAgentWorkspacesChanged()
 
   const typeLabel = workspace.type === 'team' ? '团队' : '个人'
   console.log(`[Agent 工作区] 已创建${typeLabel}工作区: ${name} (slug: ${slug})`)
@@ -349,6 +362,7 @@ export function updateAgentWorkspace(
 
   index.workspaces[idx] = updated
   writeIndex(index)
+  broadcastAgentWorkspacesChanged()
 
   console.log(`[Agent 工作区] 已更新工作区: ${updated.name} (${updated.id})`)
   return updated
@@ -405,6 +419,7 @@ export function deleteAgentWorkspace(id: string): void {
   }
 
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
+  broadcastAgentWorkspacesChanged()
 }
 
 /** 确保默认工作区存在，首次启动时自动创建（slug: default） */
