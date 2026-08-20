@@ -2407,7 +2407,17 @@ ${enrichedMessage}`
               }
             }
 
-            // Turn 结束时：持久化累积消息
+            // 可恢复性 checkpoint：不能只等 result/run_completed 才写 JSONL。
+            // AskUser、权限、ExitPlan 等工具会在 result 之前无限期等待用户；此时若 Pocket
+            // 被系统杀掉，冷启动快照只能读取已有 JSONL。立即落盘每条非 partial 的持久化消息，
+            // 才能保证“用户原始指令 → 已执行工具 → 待回答交互”在任意阻塞点可完整恢复。
+            // partial 仍只用于实时预览，且上面的累积条件已经排除了 replay，故不会污染历史或重复写入。
+            if (accumulatedMessages.length > 0) {
+              this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+              accumulatedMessages.length = 0
+            }
+
+            // Turn 结束时：持久化累积消息（正常情况下已由 checkpoint 清空；保留兜底语义）。
             if (msg.type === 'result') {
               capturedResultSubtype = (msg as { subtype?: string }).subtype
               // SDK 的 SDKResultError 在 errors[] 中携带真实错误原因（error_during_execution 等场景），

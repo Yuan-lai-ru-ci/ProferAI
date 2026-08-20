@@ -26,8 +26,9 @@ import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 
+import { AGENT_IPC_CHANNELS, type AgentSessionMeta } from '@profer/shared'
 import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
 import { getUserProfile } from './user-profile-service'
 import {
@@ -87,6 +88,7 @@ import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './atta
 import { chatEventBus } from './chat-stream-bus'
 import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
 import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
+import { RemoteAgentEventLog, type RemoteAgentEventRecord } from './remote-agent-event-log'
 
 /** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -131,6 +133,21 @@ let chatBusUnsubscribe: (() => void) | null = null
 /** 记录当前监听地址（用于启动日志提示） */
 let listenAddress: string | null = null
 
+/** 服务实例 ID：Pocket 发现主进程重启后清除旧 cursor，改走快照恢复。 */
+let serverInstanceId = randomUUID()
+const remoteAgentEventLog = new RemoteAgentEventLog()
+
+type AgentReplayState = {
+  replaying: boolean
+  queuedLiveFrames: RemoteAgentEventRecord[]
+  lastSentEventId: number
+  fallbackTimer: ReturnType<typeof setTimeout> | null
+}
+
+const AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS = 5000
+
+const agentReplayStates = new WeakMap<WebSocket, AgentReplayState>()
+
 /** 是否已执行启动检查（避免重复启动） */
 let isStarted = false
 
@@ -172,13 +189,103 @@ function isPartialSdkPayload(payload: unknown): boolean {
 }
 
 /** 真正把一条 agent_event 帧广播给所有已连接平板客户端。 */
-function broadcastAgentFrame(sessionId: string, payload: unknown): void {
-  const frame = JSON.stringify({ kind: 'agent_event', sessionId, payload })
+function broadcastAgentFrame(sessionId: string, payload: import('@profer/shared').AgentStreamPayload): void {
+  const record = remoteAgentEventLog.append(sessionId, payload)
   for (const client of wss?.clients ?? []) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(frame)
+    if (client.readyState !== WebSocket.OPEN) continue
+    const replayState = agentReplayStates.get(client)
+    if (replayState?.replaying) {
+      replayState.queuedLiveFrames.push(record)
+      if (replayState.queuedLiveFrames.length > 2500) {
+        try { client.close(1013, 'replay queue overflow') } catch { /* ignore */ }
+      }
+      continue
     }
+    sendAgentEventRecord(client, record)
   }
+}
+
+function sendAgentEventRecord(client: WebSocket, record: RemoteAgentEventRecord): void {
+  if (client.readyState !== WebSocket.OPEN) return
+  client.send(JSON.stringify({
+    kind: 'agent_event',
+    eventId: record.eventId,
+    sessionId: record.sessionId,
+    payload: record.payload,
+  }))
+  const replayState = agentReplayStates.get(client)
+  if (replayState) replayState.lastSentEventId = Math.max(replayState.lastSentEventId, record.eventId)
+}
+
+function releaseAgentReplayGate(client: WebSocket): void {
+  const replayState = agentReplayStates.get(client)
+  if (!replayState || !replayState.replaying) return
+  if (replayState.fallbackTimer) {
+    clearTimeout(replayState.fallbackTimer)
+    replayState.fallbackTimer = null
+  }
+  for (const record of replayState.queuedLiveFrames.sort((a, b) => a.eventId - b.eventId)) {
+    sendAgentEventRecord(client, record)
+  }
+  replayState.queuedLiveFrames = []
+  replayState.replaying = false
+}
+
+function sendAgentReplayResult(client: WebSocket, requestId: unknown, replay: ReturnType<RemoteAgentEventLog['replayAfter']>): void {
+  if (client.readyState !== WebSocket.OPEN) return
+  client.send(JSON.stringify({
+    kind: 'agent_events_resumed',
+    requestId,
+    fromEventId: replay.fromEventId,
+    toEventId: replay.toEventId,
+    replayed: replay.records.length,
+    complete: !replay.requiresSnapshot,
+    requiresSnapshot: replay.requiresSnapshot,
+    oldestEventId: replay.oldestEventId,
+    latestEventId: replay.latestEventId,
+  }))
+}
+
+function replayAgentEvents(client: WebSocket, requestId: unknown, cursor: unknown): void {
+  const replayState = agentReplayStates.get(client)
+  if (!replayState || client.readyState !== WebSocket.OPEN) return
+  if (!replayState.replaying) {
+    sendAgentReplayResult(client, requestId, {
+      records: [],
+      fromEventId: null,
+      toEventId: replayState.lastSentEventId || null,
+      oldestEventId: remoteAgentEventLog.getOldestEventId(),
+      latestEventId: remoteAgentEventLog.getLatestEventId(),
+      requiresSnapshot: false,
+    })
+    return
+  }
+  if (replayState.fallbackTimer) {
+    clearTimeout(replayState.fallbackTimer)
+    replayState.fallbackTimer = null
+  }
+  const normalizedCursor = cursor === null ? null : typeof cursor === 'number' ? cursor : -1
+  const replay = remoteAgentEventLog.replayAfter(normalizedCursor)
+  if (replay.requiresSnapshot) {
+    // 日志窗口已经不完整时，不发送半段事件；客户端随后按快照重建。
+    replayState.queuedLiveFrames = []
+    replayState.replaying = false
+    sendAgentReplayResult(client, requestId, replay)
+    return
+  }
+  const replayedIds = new Set<number>()
+  for (const record of replay.records) {
+    if (record.eventId <= replayState.lastSentEventId) continue
+    sendAgentEventRecord(client, record)
+    replayedIds.add(record.eventId)
+  }
+  for (const record of replayState.queuedLiveFrames.sort((a, b) => a.eventId - b.eventId)) {
+    if (record.eventId <= replayState.lastSentEventId || replayedIds.has(record.eventId)) continue
+    sendAgentEventRecord(client, record)
+  }
+  replayState.queuedLiveFrames = []
+  replayState.replaying = false
+  sendAgentReplayResult(client, requestId, replay)
 }
 
 /**
@@ -187,7 +294,7 @@ function broadcastAgentFrame(sessionId: string, payload: unknown): void {
  * - 非 partial（含 final 完整消息）：先取消 pending 的 partial 再立即广播，
  *   确保 final 不被延迟到达的旧 partial 覆盖（renderer 按同 UUID 覆盖，顺序必须保证）。
  */
-function broadcastAgentEvent(sessionId: string, payload: unknown): void {
+function broadcastAgentEvent(sessionId: string, payload: import('@profer/shared').AgentStreamPayload): void {
   if (isPartialSdkPayload(payload)) {
     const existing = partialMergeTimers.get(sessionId)
     if (existing) clearTimeout(existing)
@@ -610,6 +717,35 @@ function buildSessionList() {
   return listAgentSessions(true).map(buildSessionItem)
 }
 
+/**
+ * Pocket 修改会话元数据后，命令响应只会回给发起设备；这里补齐对所有已打开桌面窗口
+ * 与其它 Pocket 连接的实时通知，避免置顶、归档等操作必须等待下一条 Agent 事件才显示。
+ */
+function publishSessionUpdated(session: AgentSessionMeta): void {
+  agentEventBus.emit(session.id, {
+    kind: 'profer_event',
+    event: { type: 'session_updated', session },
+  })
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(AGENT_IPC_CHANNELS.SESSION_UPDATED, { session })
+    }
+  }
+}
+
+function publishSessionDeleted(sessionId: string): void {
+  const payload: import('@profer/shared').AgentStreamPayload = {
+    kind: 'profer_event',
+    event: { type: 'session_deleted', sessionId },
+  }
+  agentEventBus.emit(sessionId, payload)
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload })
+    }
+  }
+}
+
 /** 工作区（项目）列表（脱敏，仅暴露平板端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
 function buildWorkspaceList() {
   return listAgentWorkspaces().map((w) => ({
@@ -699,6 +835,7 @@ async function handleCommand(
           },
           deleteSession: deleteAgentSession,
         })
+        publishSessionDeleted(sessionId)
         return { ok: true, data: { sessionId } }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : '删除会话失败' }
@@ -779,8 +916,9 @@ async function handleCommand(
       if (!result) return { ok: false, error: '计划审批不存在或已处理' }
       agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'exit_plan_mode_resolved', requestId } })
       if (result.targetMode) {
-        updateAgentSessionMeta(result.sessionId, { permissionMode: result.targetMode })
+        const updated = updateAgentSessionMeta(result.sessionId, { permissionMode: result.targetMode })
         agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode: result.targetMode } })
+        publishSessionUpdated(updated)
       }
       return { ok: true, data: { sessionId: result.sessionId } }
     }
@@ -838,6 +976,7 @@ async function handleCommand(
       if (!channel) return { ok: false, error: '渠道不可用或不存在' }
       if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
       const updated = updateAgentSessionMeta(sessionId, { channelId, modelId })
+      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -849,6 +988,7 @@ async function handleCommand(
       const meta = getAgentSessionMeta(sessionId)
       if (!meta) return { ok: false, error: '会话不存在' }
       const updated = updateAgentSessionMeta(sessionId, { agentRuntime: runtime })
+      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -860,6 +1000,7 @@ async function handleCommand(
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
       if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
       agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode } })
+      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -975,6 +1116,7 @@ async function handleCommand(
       if (!sessionId || !title) return { ok: false, error: '缺少 sessionId 或 title' }
       const meta = updateAgentSessionMeta(sessionId, { title })
       if (!meta) return { ok: false, error: '会话不存在' }
+      publishSessionUpdated(meta)
       return { ok: true, data: buildSessionItem(meta) }
     }
 
@@ -984,6 +1126,7 @@ async function handleCommand(
       const workspaceId = parsed.workspaceId as string | undefined
       const modelId = parsed.modelId as string | undefined
       const meta = createAgentSession(title, channelId, workspaceId, modelId)
+      publishSessionUpdated(meta)
       return { ok: true, data: { sessionId: meta.id, title: meta.title } }
     }
 
@@ -999,6 +1142,7 @@ async function handleCommand(
         modelId,
         getSettings().agentRuntime ?? 'claude',
       )
+      publishSessionUpdated(meta)
       return { ok: true, data: { sessionId: meta.id, title: meta.title, draft: meta.draft ?? true } }
     }
 
@@ -1056,6 +1200,7 @@ async function handleCommand(
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
         const meta = await forkAgentSession({ sessionId, upToMessageUuid })
+        publishSessionUpdated(meta)
         return { ok: true, data: buildSessionItem(meta) }
       } catch (error) {
         console.error('[Remote] fork_session 失败:', error)
@@ -1086,7 +1231,9 @@ async function handleCommand(
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
       if (newPinned && current.archived) updates.archived = false
-      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, updates)) }
+      const updated = updateAgentSessionMeta(sessionId, updates)
+      publishSessionUpdated(updated)
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     // 归档/取消归档（对齐桌面 TOGGLE_ARCHIVE：归档时自动取消置顶）
@@ -1098,7 +1245,9 @@ async function handleCommand(
       const newArchived = !current.archived
       const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
       if (newArchived && current.pinned) updates.pinned = false
-      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, updates)) }
+      const updated = updateAgentSessionMeta(sessionId, updates)
+      publishSessionUpdated(updated)
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     // 移动会话到项目（对齐桌面 MOVE_SESSION_TO_WORKSPACE：运行中拒绝）
@@ -1111,7 +1260,9 @@ async function handleCommand(
         if (isAgentSessionActive(sessionId)) return { ok: false, error: '会话正在运行中，请停止后再迁移' }
       }
       try {
-        return { ok: true, data: buildSessionItem(moveSessionToWorkspace(sessionId, targetWorkspaceId)) }
+        const updated = moveSessionToWorkspace(sessionId, targetWorkspaceId)
+        publishSessionUpdated(updated)
+        return { ok: true, data: buildSessionItem(updated) }
       } catch (error) {
         console.error('[Remote] move_session_to_workspace 失败:', error)
         return { ok: false, error: error instanceof Error ? error.message : '移动会话失败' }
@@ -1129,7 +1280,9 @@ async function handleCommand(
       }
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换推理档位' }
-      return { ok: true, data: buildSessionItem(updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })) }
+      const updated = updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })
+      publishSessionUpdated(updated)
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     // 队列消息：向正在运行的 Agent 注入（interrupt=true 时软打断当前 turn 立即插入）。
@@ -1477,6 +1630,17 @@ export function startRemoteService(): string | null {
     console.log('[Remote] 平板客户端已连接')
     ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
     const commandContext: RemoteCommandContext = {}
+    const replayState: AgentReplayState = {
+      replaying: true,
+      queuedLiveFrames: [],
+      lastSentEventId: 0,
+      fallbackTimer: null,
+    }
+    replayState.fallbackTimer = setTimeout(() => {
+      // 兼容未实现 resume_agent_events 的旧 Pocket：握手超时后恢复普通实时广播。
+      releaseAgentReplayGate(ws)
+    }, AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS)
+    agentReplayStates.set(ws, replayState)
 
     // 收到指令
     ws.on('message', (raw: RawData) => {
@@ -1504,6 +1668,11 @@ export function startRemoteService(): string | null {
         return
       }
 
+      if (parsedRaw?.type === 'resume_agent_events') {
+        replayAgentEvents(ws, reqId, (parsedRaw as { cursor?: unknown }).cursor ?? null)
+        return
+      }
+
       void handleCommand(body, reqId, commandContext).then((result) => {
         // 将指令响应作为 "command_result" 事件回给客户端
         if (ws.readyState === WebSocket.OPEN) {
@@ -1515,11 +1684,20 @@ export function startRemoteService(): string | null {
     })
 
     ws.on('close', () => {
+      const replayState = agentReplayStates.get(ws)
+      if (replayState?.fallbackTimer) clearTimeout(replayState.fallbackTimer)
+      agentReplayStates.delete(ws)
       console.log('[Remote] 平板客户端断开')
     })
 
-    // 连接建立后推送一条握手
-    ws.send(JSON.stringify({ kind: 'hello', serverTime: Date.now() }))
+    // 连接建立后推送握手。客户端可据此判断旧 cursor 是否跨越了服务重启。
+    ws.send(JSON.stringify({
+      kind: 'hello',
+      serverTime: Date.now(),
+      serverInstanceId,
+      latestAgentEventId: remoteAgentEventLog.getLatestEventId(),
+      oldestAgentEventId: remoteAgentEventLog.getOldestEventId(),
+    }))
   })
 
   // 订阅 agentEventBus，把工作流事件广播给所有平板客户端
@@ -1615,6 +1793,8 @@ export function stopRemoteService(): void {
     httpServer?.close()
   } catch { /* ignore */ }
   httpServer = null
+  remoteAgentEventLog.clear()
+  serverInstanceId = randomUUID()
   isStarted = false
   listenAddress = null
   remoteError = null

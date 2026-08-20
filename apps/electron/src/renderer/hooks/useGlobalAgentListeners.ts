@@ -625,8 +625,11 @@ export function useGlobalAgentListeners(): void {
           const proferEvent = payload.event
           if (proferEvent.type === 'external_run_started') {
             activateExternalAgentRun(proferEvent)
-          } else if (proferEvent.type === 'delegation_session_updated') {
+          } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {
             store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, proferEvent.session))
+            store.set(tabsAtom, (tabs) => updateTabTitle(tabs, proferEvent.session.id, proferEvent.session.title))
+          } else if (proferEvent.type === 'session_deleted') {
+            store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== proferEvent.sessionId))
           }
         }
 
@@ -1335,6 +1338,7 @@ export function useGlobalAgentListeners(): void {
 
     const cleanupSessionUpdated = window.electronAPI.onAgentSessionUpdated(({ session }) => {
       store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, session))
+      store.set(tabsAtom, (tabs) => updateTabTitle(tabs, session.id, session.title))
       if (!session.draft) {
         store.set(draftSessionIdsAtom, (previous) => {
           if (!previous.has(session.id)) return previous
