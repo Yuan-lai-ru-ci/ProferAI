@@ -1,6 +1,12 @@
 {
   "releases": [
     {
+      "version": "0.15.56",
+      "date": "2026-08-20",
+      "title": "v0.15.56",
+      "notes": "- 新增：Agent 可直接列出、读取、创建和更新规划中心 Todo\n- 优化：Claude 与 Pi Runtime 的规划工具保持一致，并增加 Todo 并发更新保护\n- 修复：规划中心 Todo 与 Agent 会话状态的同步体验"
+    },
+    {
       "version": "0.15.55",
       "date": "2026-08-20",
       "title": "v0.15.55",
