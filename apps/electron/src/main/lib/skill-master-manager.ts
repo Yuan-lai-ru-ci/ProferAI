@@ -555,9 +555,10 @@ function parseMasterFrontmatter(content: string): { name?: string; description?:
   return out
 }
 
-/** 提取 frontmatter（去除 BOM），无则返回 null */
+/** 提取 frontmatter（去除 BOM 并统一 CRLF），无则返回 null */
 function extractFrontmatter(content: string): string | null {
   if (content.charCodeAt(0) === 0xfeff) content = content.slice(1)
+  content = content.replace(/\r\n/g, '\n')
   const m = content.match(/^---\s*\n([\s\S]*?)\n---/)
   return m?.[1] ?? null
 }

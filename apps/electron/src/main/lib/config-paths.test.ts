@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   __setBundledSkillsDirForTest,
+  __setLegacyBundledSkillDirectoryHashesForTest,
   getDefaultSkillsDir,
   seedDefaultSkills,
 } from './config-paths'
@@ -41,6 +43,7 @@ function seedState(): { version: number; skills: Record<string, { owner: string;
 
 afterEach(() => {
   __setBundledSkillsDirForTest(undefined)
+  __setLegacyBundledSkillDirectoryHashesForTest(undefined)
   if (originalConfigDir === undefined) delete process.env.PROFER_CONFIG_DIR
   else process.env.PROFER_CONFIG_DIR = originalConfigDir
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true })
@@ -133,5 +136,53 @@ describe('seedDefaultSkills', () => {
     seedDefaultSkills()
     expect(readFileSync(skillPath(), 'utf-8')).toContain('用户原有正文')
     expect(existsSync(skillPath())).toBe(true)
+  })
+
+  test('Given 无种子状态但内容精确命中历史内置 Skill When 启动 Then 接管并升级到当前内置版', () => {
+    const root = makeRoot()
+    process.env.PROFER_CONFIG_DIR = join(root, 'config')
+    const legacy = '---\nname: test-skill\ndescription: 历史内置描述\nversion: 1.0.0\n---\n\n旧内置正文\n'
+    writeFile(skillPath(), legacy)
+    const legacyHash = createHash('sha256').update('SKILL.md').update('\0').update(Buffer.from(legacy)).update('\0').digest('hex')
+    __setLegacyBundledSkillDirectoryHashesForTest({ 'test-skill': [legacyHash] })
+    __setBundledSkillsDirForTest(writeBundledSkill(root, '1.0.1', '新版内置正文'))
+
+    seedDefaultSkills()
+
+    expect(readFileSync(skillPath(), 'utf-8')).toContain('新版内置正文')
+    expect(seedState().skills['test-skill']).toMatchObject({ owner: 'managed', bundledVersion: '1.0.1' })
+  })
+
+  test('Given 无种子状态但历史 Skill 带用户附属文件 When 启动 Then 不接管也不覆盖', () => {
+    const root = makeRoot()
+    process.env.PROFER_CONFIG_DIR = join(root, 'config')
+    const legacy = '---\nname: test-skill\ndescription: 历史内置描述\nversion: 1.0.0\n---\n\n旧内置正文\n'
+    writeFile(skillPath(), legacy)
+    writeFile(join(getDefaultSkillsDir(), 'test-skill', 'user-note.md'), '用户附属内容')
+    const legacyHash = createHash('sha256').update('SKILL.md').update('\0').update(Buffer.from(legacy)).update('\0').digest('hex')
+    __setLegacyBundledSkillDirectoryHashesForTest({ 'test-skill': [legacyHash] })
+    __setBundledSkillsDirForTest(writeBundledSkill(root, '1.0.1', '新版内置正文'))
+
+    seedDefaultSkills()
+
+    expect(readFileSync(skillPath(), 'utf-8')).toContain('旧内置正文')
+    expect(readFileSync(join(getDefaultSkillsDir(), 'test-skill', 'user-note.md'), 'utf-8')).toBe('用户附属内容')
+    expect(seedState().skills['test-skill']).toEqual({ owner: 'user-owned' })
+  })
+
+  test('Given 旧版已误标 user-owned 的完整历史种子 When 启动 Then 仍接管并升级', () => {
+    const root = makeRoot()
+    process.env.PROFER_CONFIG_DIR = join(root, 'config')
+    const legacy = '---\nname: test-skill\ndescription: 历史内置描述\nversion: 1.0.0\n---\n\n旧内置正文\n'
+    writeFile(skillPath(), legacy)
+    writeFile(join(getDefaultSkillsDir(), '.seed-state.json'), JSON.stringify({ version: 1, skills: { 'test-skill': { owner: 'user-owned' } } }))
+    const legacyHash = createHash('sha256').update('SKILL.md').update('\0').update(Buffer.from(legacy)).update('\0').digest('hex')
+    __setLegacyBundledSkillDirectoryHashesForTest({ 'test-skill': [legacyHash] })
+    __setBundledSkillsDirForTest(writeBundledSkill(root, '1.0.1', '新版内置正文'))
+
+    seedDefaultSkills()
+
+    expect(readFileSync(skillPath(), 'utf-8')).toContain('新版内置正文')
+    expect(seedState().skills['test-skill']).toMatchObject({ owner: 'managed', bundledVersion: '1.0.1' })
   })
 })

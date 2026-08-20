@@ -667,6 +667,12 @@ function writeDefaultSkillSeedState(userDir: string, state: DefaultSkillSeedStat
  * 计算 Skill 目录的确定性 SHA-256：覆盖全部非屏蔽文件及其相对路径。
  * 任意正文、frontmatter 或附属文件变化都会令哈希不同。
  */
+function normalizeSkillFileForHash(content: Buffer): Buffer {
+  // Git 的 autocrlf、历史压缩包与 cpSync 可能只造成 LF/CRLF 差异；这不应被
+  // 误判为用户编辑，否则内置 Skill 永远无法平滑升级。
+  return Buffer.from(content.toString('utf-8').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'), 'utf-8')
+}
+
 function hashDefaultSkillDir(dir: string): string {
   const files: string[] = []
   const collect = (current: string): void => {
@@ -682,9 +688,112 @@ function hashDefaultSkillDir(dir: string): string {
   const hash = createHash('sha256')
   for (const file of files.sort((a, b) => a.localeCompare(b))) {
     const path = relative(dir, file).split(sep).join('/')
-    hash.update(path).update('\0').update(readFileSync(file)).update('\0')
+    hash.update(path).update('\0').update(normalizeSkillFileForHash(readFileSync(file))).update('\0')
   }
   return hash.digest('hex')
+}
+
+/**
+ * 引入 .seed-state.json 之前随 Proma/早期 Profer 发出的整个 Skill 目录指纹。
+ *
+ * 只有目录内容完整命中某个历史出厂版本（忽略 BOM/换行）才会被接管为受管种子；
+ * 用户修改正文、增删脚本或参考资料都会改变指纹，继续遵循“绝不覆盖”的保守策略。
+ * key 必须与当前目录 slug 一致，防止同内容被错误迁移到其他 Skill。
+ */
+const LEGACY_BUNDLED_SKILL_DIRECTORY_HASHES: Readonly<Record<string, readonly string[]>> = {
+  automation: [
+    '385cfbfd1cfe1c433aafef7f54444968505f1deb6342473f974e3cd82fbbe332',
+    'b278054bad5a908d28a2954d3028dbdcd35b1696e7928ef4522243392e57774a',
+    '8483c3b1c94d55c10dbdb7311f8b2ac546db30c8b9dbea372f1cc2e7b2cd74d5',
+    '759c7211b177ab5b553565e6db0cc2d5f23f45d53f698c22665c84a2bf82d186',
+    'd17e17b31aa179d211d8037acd8bcbe0194a2fcb3b5e8aa4c28f436fe91f4f6f',
+    'e8a1e60bf4782061dfb7d0d4aab8057d22a7b91042673a26d80e03d9e5f51b03',
+  ],
+  brainstorming: [
+    '05565edbd09ec12cb3aa3bd0a9af83dbc86524101278428579a3462d59c4ded3',
+    '3682bde98145886e0425db07c410d6c168bbb3e7766bf6f857312755ed702a4f',
+  ],
+  docx: [
+    '56c6f07ce8d9adf996702606c4058888530aa05aa720759bcca16cb47f21f74e',
+    'd3d5d97b9c08063fbf6098478b46dedda368dcc6d21ce54596890e2e024da2a5',
+    'cc143d3b68617792889733f6d14998a88c9c2f97f7f91dad898589c8879f50c5',
+  ],
+  'executing-plans': [
+    '3a5e7552484de0cb4a2bdb46df32fc418b053fe8ba582d7a7ad92d5cecbcd8ab',
+    '62d15c1379c29635aa2bb28519c6c22aa4e84256cc4245dc271e1defc7c6532a',
+  ],
+  'find-skills': [
+    '1af4daf8ce4f3df37d3cf1166bee91e7408fe69d171789b1b5a4e71c6b033676',
+    'c1720ff6ac18832a05d91cd913eee8781310e9f376ce77b8d5fc25a32e530a89',
+  ],
+  'guizang-ppt-skill': [
+    '44172ecea6f975a958a0e919529f09398929075a0734fa659e5f38534bb0f724',
+  ],
+  'in-app-browser': [
+    'd4a70341754d71806a296510aa423450e50c94d71b12c88406ebf9777b9dfea5',
+    'c3960d6d53c3c4d8cea937c9cf5c8c7a0b6779770b557912f8fe34c67806d2d0',
+  ],
+  pdf: [
+    '11a233660874233aed3d395e3aac238eaacb27759efdf3aef33ad792691b545c',
+    'd6c369b43ae13ebb7fb3919ec77d15c8e17bf3de9afcb6bfe78c9a779dde927c',
+    '6bdc1954a0db9694efb62c6a7b29767acfb8177442a5a6112d5134dacd70bde0',
+    '3fbb1ba6a5281ed04cc1215ca7e3acc8a9da9c7be25fca3ff8eb27872b9fa0c9',
+    '7c96a2fd5ed6490df5282564198dba6a93ca5f576457908214cb2599e47a3da5',
+  ],
+  pptx: [
+    'cda0e526ddd0f5ce7bd179fd0ff1d9b65cf0d5e6b7689619dcc0a9158331f2a5',
+    'd5db190ef90f1dec6a1ab53b30879176c3e72177bdca282b552e02af5b05ecef',
+    'fee49051cf9e9bb43feee88742847dcd7552ed7a2ef233e553d3f501a6247e76',
+    'd6f29ddbde486d3efce867ebe711045a74b0e9757e98461df3aaa4037c48b50b',
+    'b903b70c73ef7182f00810ad498a97fac0411976673681c616e373ac390ec04d',
+  ],
+  'profer-coach': [
+    '9a0c6775c83d753779d4293eb356c253ceab87b82e6ef91b529e359a922440ad',
+    'f0383281768dbf0e909c4922c9ef33b86c14d96d5c1cc118a0f6806080ee1364',
+  ],
+  'session-cleaner': [
+    'e32455faa14a300485b4a6abb88e6440e8f74f491647f0787e4d24b661302017',
+    '34380c1f3428c38c4742449046295a3fe04305f97f43f75243bce0701fd2de00',
+    '44f0d3a73e4dded8aef708b93208bc3470b7e636ac8a1d33d5f7c5ed73457ceb',
+  ],
+  'skill-creator': [
+    'ef520dc392bfff0cba7d4485c78a6ac98e403ecd85b7110d7fd2364915108746',
+    '6476bfd29f5af50a6a5d0b4d6b4d521830bd34b4e2b56f159e2c286d77917488',
+    '17fb80a21629055c53eb6020dfd1aa2330197058fc5fb72462f378f405b309dc',
+    'e141179cf76bbe3fdbd2616f1573b24b8abb3dca93676ca782d736c63a73c074',
+  ],
+  'tool-builder': [
+    '1651dfd1a449335e0455976feae678ff09052855cf060d94c114435be8071b25',
+    '17ea35385ea543fc668baad9f3cc2941e6c86cdb4e944df9e600f81d5d2d577e',
+    '43ba5b045e5f7bd5d3c0f613b3008f3710f47b14bf01ccd5695f22bfc6f51cb6',
+  ],
+  'user-sense': [
+    '3db6c922794255a83631237dcf10792ee58c392f42015972e7d067c019bc4fb8',
+    'bb6b523acdbd108ac99a131e8d9b6f4ad51bd8c32b64abeb0461dd192a3ae2bc',
+  ],
+  'writing-plans': [
+    'd5a0f5f9ab3dec492442757151c4299ac6f71f347665a498f6cd7d79be59ecd1',
+    'b7c6507b412401048cfd24079fa1752c76c97684b538e7d843f2d8ff4446f166',
+  ],
+  xlsx: [
+    'ba43824de5faed80868258dac55163e0753ed8d3c42d23bbfec91313426c3d64',
+    '6c059ec7720b628bf8eea36005aa062f4bb785ee4977033ada6d9f2da6d50ec9',
+    'ff4b2e66b89e1a248d4270de95373b673a986d2976fe26afd7e0c90cc24deb50',
+  ],
+}
+
+/** 测试用：注入最小历史种子指纹集，避免测试依赖真实产品文案。 */
+let testLegacyBundledSkillDirectoryHashes: Readonly<Record<string, readonly string[]>> | undefined
+
+export function __setLegacyBundledSkillDirectoryHashesForTest(
+  hashes: Readonly<Record<string, readonly string[]>> | undefined,
+): void {
+  testLegacyBundledSkillDirectoryHashes = hashes
+}
+
+function isKnownLegacyBundledSkill(slug: string, skillDir: string): boolean {
+  const expectedHashes = (testLegacyBundledSkillDirectoryHashes ?? LEGACY_BUNDLED_SKILL_DIRECTORY_HASHES)[slug]
+  return !!expectedHashes && expectedHashes.includes(hashDefaultSkillDir(skillDir))
 }
 
 /**
@@ -731,11 +840,22 @@ export function seedDefaultSkills(): void {
           continue
         }
 
-        // 引入基线追踪前已有的元 Skill 无法可靠区分用户改动，保守保护。
-        if (!record) {
-          state.skills[entry.name] = { owner: 'user-owned' }
-          stateChanged = true
-          console.log(`[配置] 保留已有元 Skill（缺少内置基线）: ${entry.name}`)
+        // 引入基线追踪前已有的元 Skill：早期版本会把它们直接标成无基线的
+        // user-owned。两种情况下都只有精确命中已知历史出厂目录时才接管；未命中
+        // （包括任意用户编辑）一律保护，绝不覆盖。
+        const hasNoTrustworthyBaseline = !record || (record.owner === 'user-owned' && !record.bundledHash)
+        if (hasNoTrustworthyBaseline) {
+          if (isKnownLegacyBundledSkill(entry.name, target)) {
+            rmSync(target, { recursive: true, force: true })
+            cpSync(source, target, { recursive: true, filter: defaultSkillCopyFilter })
+            state.skills[entry.name] = { owner: 'managed', bundledHash, bundledVersion: bundledVer }
+            stateChanged = true
+            console.log(`[配置] 已接管并升级历史内置 Skill: ${entry.name} (${bundledVer})`)
+          } else if (!record) {
+            state.skills[entry.name] = { owner: 'user-owned' }
+            stateChanged = true
+            console.log(`[配置] 保留已有元 Skill（缺少可信内置基线）: ${entry.name}`)
+          }
           continue
         }
 

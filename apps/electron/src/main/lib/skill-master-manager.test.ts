@@ -68,6 +68,18 @@ describe('skill-master-manager', () => {
     expect(readMasterSkillContent('test-skill')).toContain('version: 1.0.0')
   })
 
+  test('Given CRLF 格式且 description 含引号的元 Skill When 列出 Then 正确显示描述', () => {
+    const roots = makeTempRoots()
+    writeFile(
+      join(roots.master, 'quoted-skill', 'SKILL.md'),
+      '---\r\nname: quoted-skill\r\ndescription: "Handles \\"quoted\\" metadata safely"\r\nversion: "1.0.0"\r\n---\r\n\r\n# quoted\r\n',
+    )
+    __setSkillMasterRoots(roots.master, roots.workspaces)
+
+    const skill = listMasterSkills().find((item) => item.slug === 'quoted-skill')
+    expect(skill?.description).toBe('Handles \\"quoted\\" metadata safely')
+  })
+
   test('Given 保存元 skill 覆盖内容 When 写入 Then 版本自动 patch+1 且生成历史快照', () => {
     const roots = setupSkill('1.2.0')
     const version = saveMasterSkill('test-skill', '---\nname: 测试技能\nversion: 1.2.0\n---\n\n# 测试技能 v2\n\n新增内容。\n')
