@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
+import { isAbsoluteFilePath, isRelativeFilePath, shouldSearchFileCandidate } from './file-path-chip'
 
 describe('isRelativeFilePath 路径检测', () => {
   test('识别英文文件名相对路径', () => {
@@ -56,6 +56,16 @@ describe('isRelativeFilePath 路径检测', () => {
 
   test('排除变量名（不带可预览扩展名）', () => {
     expect(isRelativeFilePath('someVariable')).toBe(false)
+  })
+})
+
+describe('FilePathChip 候选搜索策略', () => {
+  test('工具调用已提供绝对路径时直接预览，不按同名文件搜索', () => {
+    expect(shouldSearchFileCandidate(true)).toBe(false)
+  })
+
+  test('仅有相对路径或裸文件名时才搜索候选', () => {
+    expect(shouldSearchFileCandidate(false)).toBe(true)
   })
 })
 

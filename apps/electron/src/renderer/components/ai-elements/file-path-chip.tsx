@@ -60,6 +60,11 @@ function searchCacheKey(sessionId: string | undefined, filePath: string, bases: 
   return `${sessionId ?? ''}\0${filePath}\0${bases.join('\0')}`
 }
 
+/** 只有无法由真实工具路径确定位置的相对引用，才需要按文件名搜索候选。 */
+export function shouldSearchFileCandidate(isAbsolute: boolean): boolean {
+  return !isAbsolute
+}
+
 export function FilePathChip({ filePath, basePath, basePaths, className }: FilePathChipProps): React.ReactElement {
   const trimmedPath = filePath.trim()
   const { path: cleanPath, suffix: lineColSuffix } = stripLineCol(trimmedPath)
@@ -255,6 +260,15 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
       longPressTriggeredRef.current = false
       return
     }
+
+    // 工具调用和本轮文件名映射已提供绝对路径时，它就是唯一可靠的预览目标。
+    // 不能先按文件名做浅层候选搜索：深层源码常超出浅搜深度，且同名文件会被错误选中。
+    // 相对路径仍沿用候选搜索，保留“Agent 只提到裸文件名”时的按需定位能力。
+    if (!shouldSearchFileCandidate(isAbsolute)) {
+      openPreviewPath(cleanPath)
+      return
+    }
+
     // 优先同步读取缓存，避免从预览返回后的水合间隙误触发一次搜索。
     const cached = fileSearchCache.get(cacheKey)
     const cachedPath = cached && cached.expiresAt > Date.now()
@@ -268,7 +282,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     }
     // 每次短按都搜索一个尚未发现的候选，并在命中后直接预览。
     void startSearch('simple', true)
-  }, [cacheKey, openPreviewPath, selectedPath, startSearch])
+  }, [cacheKey, cleanPath, isAbsolute, openPreviewPath, selectedPath, startSearch])
 
   const handleChipContextMenu = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()

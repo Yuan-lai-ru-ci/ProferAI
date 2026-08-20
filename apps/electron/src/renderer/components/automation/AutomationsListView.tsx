@@ -63,7 +63,7 @@ function formatSchedule(a: Automation): ScheduleText {
   return { summary: `每 ${min / 1440} 天` }
 }
 
-export function AutomationsListView(): React.ReactElement {
+export function AutomationsListView({ embedded = false }: { embedded?: boolean } = {}): React.ReactElement {
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
@@ -118,8 +118,7 @@ export function AutomationsListView(): React.ReactElement {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* 规划中心已提供页标题与「新建」操作，这里直接呈现列表，避免重复标题造成大块留白。 */}
+    <div className={cn('h-full flex flex-col overflow-hidden', embedded && 'rounded-b-2xl bg-card')}>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {automations.length === 0 ? (
           <EmptyState onCreate={handleCreate} />

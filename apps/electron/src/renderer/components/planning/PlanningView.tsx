@@ -35,7 +35,7 @@ function CreateShortcutHint(): React.ReactElement | null {
   return (
     <ShortcutKeycaps
       shortcutId="new-session"
-      className="ml-1.5"
+      className="ml-1.5 hidden min-[1280px]:inline-flex"
       keycapClassName="border-primary-foreground/30 bg-primary-foreground/10 text-primary-foreground shadow-none"
       separatorClassName="text-primary-foreground/70"
     />
@@ -52,6 +52,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const teamWorkspaceId = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.type === 'team' ? currentWorkspaceId : undefined
   const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
+  const [calendarToolbarTarget, setCalendarToolbarTarget] = React.useState<HTMLDivElement | null>(null)
   const automations = useAtomValue(automationsAtom)
   const todos = useAtomValue(todosAtom)
   const todayEnd = endOfToday()
@@ -112,57 +113,31 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
     <div data-profer-navigation-region="planning" tabIndex={-1} className="flex h-full flex-col overflow-hidden bg-content-area">
       {/* AppShell 已提供独立的 Windows 顶部拖拽条；这里不能再声明 drag-region，
           否则 Electron 的命中区域会覆盖右上角 WindowControls，导致最小化/最大化/关闭失效。 */}
-      <header className={cn('flex w-full items-start justify-between gap-6', standalone ? 'px-5 pb-5 pt-8' : 'px-6 pb-6 pt-8 sm:px-8 xl:px-10')}>
+      <header className={cn('flex w-full items-start', standalone ? 'px-5 pb-3 pt-4' : 'px-6 pb-3 pt-4 sm:px-8 xl:px-10')}>
         <div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <h1 className="text-2xl font-semibold tracking-tight text-wrap-balance">{teamWorkspaceId ? '团队任务/日程' : '任务/日程'}</h1>
             {tab === 'todos' && <div className="titlebar-no-drag flex items-center gap-1.5 text-xs text-muted-foreground"><PlanningStat label="待完成" value={openTodoCount} /><PlanningStat label="今天" value={todayTodoCount} /><PlanningStat label="本周" value={weekTodoCount} /></div>}
           </div>
         </div>
-        <div className="titlebar-no-drag flex items-center gap-2">
-          {tab === 'todos' && (
-            <button
-              type="button"
-              onClick={triggerTodoCreate}
-              aria-keyshortcuts="Meta+N Control+N"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
-            >
-              <Plus size={16} /> 新建 Todo<CreateShortcutHint />
-            </button>
-          )}
-          {tab === 'calendar' && (
-            <button
-              type="button"
-              onClick={triggerCalendarCreate}
-              aria-keyshortcuts="Meta+N Control+N"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
-            >
-              <Plus size={16} /> 新建日程<CreateShortcutHint />
-            </button>
-          )}
-          {tab === 'automations' && automations.length > 0 && (
-            <button
-              type="button"
-              onClick={createAutomation}
-              aria-keyshortcuts="Meta+N Control+N"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
-            >
-              <Plus size={16} /> 新建定时任务<CreateShortcutHint />
-            </button>
-          )}
-        </div>
       </header>
-      <div className={cn('titlebar-no-drag flex w-full items-center justify-between gap-5', standalone ? 'px-5' : 'px-6 sm:px-8 xl:px-10')}>
-        <nav className="inline-flex h-8 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
-          {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-7 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}
-        </nav>
-        {tab === 'todos' && <div className="flex min-w-0 items-center justify-end gap-2 text-sm text-muted-foreground"><span className="hidden shrink-0 sm:inline">{todayLabel}</span><span className="hidden h-3 w-px bg-border/70 sm:inline" />{nextPlannedTodo ? <button type="button" onClick={openNextPlannedTodo} className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-right transition-colors hover:bg-muted/55 hover:text-foreground" title={`查看：${nextPlannedTodo.title}`}><span className="shrink-0 text-xs">下一项</span><span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span><span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span></button> : <span className="text-xs sm:text-sm">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>}</div>}
-      </div>
-      <main className={cn('min-h-0 flex-1 titlebar-no-drag', standalone ? 'px-5 pb-5 pt-4' : 'px-6 pb-8 pt-6 sm:px-8 xl:px-10', tab === 'calendar' || tab === 'todos' ? 'overflow-hidden' : 'overflow-y-auto')}>
-        <div className={cn('w-full', (tab === 'calendar' || tab === 'todos') && 'h-full')}>
-          {tab === 'todos' && <TodoWorkspace standalone={standalone} teamWorkspaceId={teamWorkspaceId ?? undefined} />}
-          {tab === 'calendar' && <CalendarWorkspace />}
-          {tab === 'automations' && <AutomationsListView />}
+      <main className={cn('min-h-0 flex-1 overflow-hidden titlebar-no-drag', standalone ? 'px-5 pb-4 pt-3' : 'px-6 pb-6 pt-3 sm:px-8 xl:px-10')}>
+        <div className="h-full w-full">
+          <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-surface-border/50 bg-surface-raised shadow-lg">
+            {tab === 'calendar' ? <div ref={setCalendarToolbarTarget} className="shrink-0" /> : <div className="flex shrink-0 items-center gap-3 border-b border-surface-border/45 px-4 py-2.5 sm:px-5">
+              <nav className="inline-flex h-9 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
+                {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}
+              </nav>
+              <div className="hidden min-w-0 flex-1 text-right text-sm text-muted-foreground 2xl:block">{tab === 'todos' && <div className="flex min-w-0 items-center justify-end gap-2"><span className="hidden shrink-0 sm:inline">{todayLabel}</span><span className="hidden h-3 w-px bg-border/70 sm:inline" />{nextPlannedTodo ? <button type="button" onClick={openNextPlannedTodo} className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-right transition-colors hover:bg-muted/55 hover:text-foreground" title={`查看：${nextPlannedTodo.title}`}><span className="shrink-0 text-xs">下一项</span><span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span><span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span></button> : <span className="text-xs sm:text-sm">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>}</div>}{tab === 'automations' && <span className="text-xs">管理 Agent 的周期性任务</span>}</div>
+              {tab === 'todos' && <button type="button" onClick={triggerTodoCreate} aria-keyshortcuts="Meta+N Control+N" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"><Plus size={15} /> 新建 Todo<CreateShortcutHint /></button>}
+              {tab === 'automations' && <button type="button" onClick={createAutomation} aria-keyshortcuts="Meta+N Control+N" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"><Plus size={15} /> 新建定时任务<CreateShortcutHint /></button>}
+            </div>}
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {tab === 'todos' && <TodoWorkspace standalone={standalone} teamWorkspaceId={teamWorkspaceId ?? undefined} embedded />}
+              {tab === 'calendar' && <CalendarWorkspace embedded toolbarTarget={calendarToolbarTarget} toolbarStart={<nav className="inline-flex h-9 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">{TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}</nav>} toolbarEnd={<button type="button" onClick={triggerCalendarCreate} aria-keyshortcuts="Meta+N Control+N" className="ml-2 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"><Plus size={15} /> 新建日程<CreateShortcutHint /></button>} />}
+              {tab === 'automations' && <AutomationsListView embedded />}
+            </div>
+          </section>
         </div>
       </main>
     </div>
@@ -213,7 +188,7 @@ function dateTimeLabel(timestamp: number): string {
   return formatTodoDueDate(timestamp)
 }
 
-function TodoWorkspace({ standalone = false, teamWorkspaceId }: { standalone?: boolean; teamWorkspaceId?: string } = {}): React.ReactElement {
+function TodoWorkspace({ standalone = false, teamWorkspaceId, embedded = false }: { standalone?: boolean; teamWorkspaceId?: string; embedded?: boolean } = {}): React.ReactElement {
   const todos = useAtomValue(todosAtom)
   const groups = useAtomValue(todoPlanningGroupsAtom)
   const tags = useAtomValue(planningTagsAtom)
@@ -555,7 +530,7 @@ function TodoWorkspace({ standalone = false, teamWorkspaceId }: { standalone?: b
   ]
 
   return (
-    <section className="relative h-full min-h-[580px] overflow-hidden rounded-2xl border border-surface-border/50 bg-surface-raised shadow-lg">
+    <section className={cn('relative h-full min-h-[580px] overflow-hidden bg-surface-raised', embedded ? 'rounded-b-2xl' : 'rounded-2xl border border-surface-border/50 shadow-lg')}>
       <div className="grid h-full min-h-0 w-full grid-cols-[minmax(10.5rem,13.5rem)_minmax(0,1fr)] overflow-hidden">
         <aside className="flex min-h-0 flex-col overflow-y-auto border-r border-surface-border/45 bg-surface-sunken/35 p-3 scrollbar-thin">
           <div className="px-2 pb-3 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Todo</div>

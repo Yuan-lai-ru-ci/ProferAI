@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { CalendarDays, ChevronLeft, ChevronRight, Folder, ListTodo, Plus, Repeat2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -164,7 +165,7 @@ function draftFromEvent(event?: CalendarEvent, startAt = Math.ceil(Date.now() / 
   }
 }
 
-export function CalendarWorkspace(): React.ReactElement {
+export function CalendarWorkspace({ embedded = false, toolbarStart, toolbarEnd, toolbarTarget }: { embedded?: boolean; toolbarStart?: React.ReactNode; toolbarEnd?: React.ReactNode; toolbarTarget?: HTMLElement | null } = {}): React.ReactElement {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const teamWorkspaceId = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.type === 'team' ? currentWorkspaceId ?? undefined : undefined
@@ -457,18 +458,21 @@ export function CalendarWorkspace(): React.ReactElement {
     }
   }
 
-  return (
-    <section ref={calendarRef} className="relative flex h-full min-h-[560px] flex-col overflow-hidden rounded-2xl border border-border/50 bg-card shadow-[0_10px_30px_rgb(0_0_0_/_0.035)]">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/45 px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-xl border border-border/45 bg-muted/35 p-0.5">
-            <Button type="button" variant={mode === 'week' ? 'secondary' : 'ghost'} size="sm" className="h-10 rounded-lg" onClick={() => setMode('week')}>周</Button>
-            <Button type="button" variant={mode === 'month' ? 'secondary' : 'ghost'} size="sm" className="h-10 rounded-lg" onClick={() => setMode('month')}>月</Button>
-          </div>
-          <PlanningGroupManager scope="calendar" groups={groups} itemLabel="日程" getUsageCount={(groupId) => calendarGroupUsageCounts.get(groupId) ?? 0} onCreate={createCalendarGroup} onRename={renameCalendarGroup} onDelete={deleteCalendarGroup} trigger={<Button type="button" variant="ghost" className="h-10 gap-1.5 px-2.5 text-sm"><Folder size={16} />分组</Button>} />
-        </div>
-        <div className="flex items-center gap-1.5"><Button type="button" variant="ghost" size="icon" className="size-10" aria-label="上一段时间" onClick={() => navigate(-1)}><ChevronLeft size={17} /></Button><h2 className="min-w-44 text-center text-sm font-semibold tabular-nums">{heading}</h2><Button type="button" variant="ghost" size="icon" className="size-10" aria-label="下一段时间" onClick={() => navigate(1)}><ChevronRight size={17} /></Button></div>
+  const calendarToolbar = <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/45 px-4 py-2 sm:px-5">
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {toolbarStart}
+      <div className="flex h-9 items-center gap-0.5 rounded-lg border border-border/45 bg-muted/35 p-0.5">
+        <Button type="button" variant={mode === 'week' ? 'secondary' : 'ghost'} size="sm" className="h-8 rounded-md px-3" onClick={() => setMode('week')}>周</Button>
+        <Button type="button" variant={mode === 'month' ? 'secondary' : 'ghost'} size="sm" className="h-8 rounded-md px-3" onClick={() => setMode('month')}>月</Button>
       </div>
+      <PlanningGroupManager scope="calendar" groups={groups} itemLabel="日程" getUsageCount={(groupId) => calendarGroupUsageCounts.get(groupId) ?? 0} onCreate={createCalendarGroup} onRename={renameCalendarGroup} onDelete={deleteCalendarGroup} trigger={<Button type="button" variant="ghost" className="h-9 gap-1.5 px-2 text-sm"><Folder size={16} />分组</Button>} />
+    </div>
+    <div className="flex shrink-0 items-center gap-1"><Button type="button" variant="ghost" size="icon" className="size-9" aria-label="上一段时间" onClick={() => navigate(-1)}><ChevronLeft size={16} /></Button><h2 className="min-w-40 text-center text-sm font-semibold tabular-nums sm:min-w-44">{heading}</h2><Button type="button" variant="ghost" size="icon" className="size-9" aria-label="下一段时间" onClick={() => navigate(1)}><ChevronRight size={16} /></Button>{toolbarEnd}</div>
+  </div>
+
+  return (
+    <section ref={calendarRef} className={cn('relative flex h-full min-h-[560px] flex-col overflow-hidden bg-card', embedded ? 'rounded-b-2xl' : 'rounded-2xl border border-border/50 shadow-[0_10px_30px_rgb(0_0_0_/_0.035)')}>
+      {toolbarTarget ? createPortal(calendarToolbar, toolbarTarget) : calendarToolbar}
       <div className="relative grid min-h-0 flex-1 grid-cols-1">
         <div ref={calendarBodyRef} className="min-h-0 overflow-hidden">
           {mode === 'month' ? <MonthCalendar monthStart={rangeStart} today={today} events={events} todos={scheduleTodos} automations={activeAutomations} onSelectEvent={selectEvent} onSelectTodo={selectTodo} /> : <WeekCalendar weekStart={rangeStart} events={events} todos={scheduleTodos} automations={activeAutomations} draftPreview={showDraftPreview && createOpen ? draft : undefined} quickCreateOpen={createOpen} onNavigate={navigate} onSelectEvent={selectEvent} onCreateAt={openCreate} onSelectTodo={selectTodo} />}

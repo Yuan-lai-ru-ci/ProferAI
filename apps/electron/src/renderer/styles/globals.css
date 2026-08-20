@@ -1354,6 +1354,21 @@
   background: transparent;
 }
 
+/* 左侧会话/项目列表：默认不露出滚动条，鼠标进入列表后才显示，仍支持滚轮和触控板滚动。 */
+.sidebar-session-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.sidebar-session-scroll::-webkit-scrollbar {
+  width: 0;
+}
+.sidebar-session-scroll:hover {
+  scrollbar-width: thin;
+}
+.sidebar-session-scroll:hover::-webkit-scrollbar {
+  width: 6px;
+}
+
 /* 滚动区域上下渐隐遮罩 */
 .mask-fade-y {
   mask-image: linear-gradient(
