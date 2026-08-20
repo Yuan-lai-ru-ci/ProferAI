@@ -37,6 +37,7 @@ import {
 } from '@profer/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
+import { normalizeDefaultSkillSlug, normalizeDefaultSkillSlugs, RENAMED_DEFAULT_SKILLS } from '../default-skill-slugs'
 
 import type {
   AgentSession,
@@ -691,18 +692,64 @@ function isPromaSkillPath(path: string | undefined, allowedRoots: string[]): boo
  */
 function matchesSkillSlug(skill: Skill, slugs: Set<string> | undefined): boolean {
   if (slugs === undefined) return true
-  return skillCommandAliases(skill).some((alias) => slugs.has(alias))
+  return skillCommandAliases(skill).some((alias) => slugs.has(normalizeDefaultSkillSlug(alias)))
+}
+
+/** 若 Skill 是已改名默认 Skill 的任一版本，返回其当前规范 slug。 */
+function canonicalRenamedDefaultSkillSlug(skill: Skill): string | undefined {
+  const aliases = skillCommandAliases(skill)
+  for (const [oldSlug, newSlug] of RENAMED_DEFAULT_SKILLS) {
+    if (aliases.includes(oldSlug) || aliases.includes(newSlug)) return newSlug
+  }
+  return undefined
+}
+
+function isCanonicalDefaultSkillPath(skill: Skill, canonicalSlug: string): boolean {
+  return skill.name === canonicalSlug || basename(skill.baseDir) === canonicalSlug
+}
+
+/**
+ * 新旧默认 Skill 同时存在时，优先保留当前 slug 的副本，避免同一规则被重复注入。
+ * 仅影响明确登记的历史默认 slug；其它同名用户 Skill 保留既有加载行为。
+ */
+function dedupeRenamedDefaultSkills(skills: Skill[]): Skill[] {
+  const result: Skill[] = []
+  const indexes = new Map<string, number>()
+  for (const skill of skills) {
+    const canonicalSlug = canonicalRenamedDefaultSkillSlug(skill)
+    if (!canonicalSlug) {
+      result.push(skill)
+      continue
+    }
+    const existingIndex = indexes.get(canonicalSlug)
+    if (existingIndex === undefined) {
+      indexes.set(canonicalSlug, result.length)
+      result.push(skill)
+      continue
+    }
+    const existing = result[existingIndex]
+    if (!existing) {
+      indexes.set(canonicalSlug, result.length)
+      result.push(skill)
+      continue
+    }
+    if (isCanonicalDefaultSkillPath(skill, canonicalSlug) && !isCanonicalDefaultSkillPath(existing, canonicalSlug)) {
+      result[existingIndex] = skill
+    }
+  }
+  return result
 }
 
 export function createPromaSkillsOverride(additionalSkillPaths: string[] | undefined, skillSlugs?: string[]): (base: SkillLoadResult) => SkillLoadResult {
   const allowedRoots = buildAllowedSkillRoots(additionalSkillPaths)
   // 语义：undefined = 不裁剪（全量注入）；[] = 明确 0 个 skill（全部隐藏）；非空 = 白名单。
   // 不能用 `skillSlugs ?? []` 再转 Set，否则丢失 undefined 与空数组的区分（空数组是合法的"全禁"表达）。
-  const slugSet = skillSlugs === undefined ? undefined : new Set(skillSlugs)
+  const normalizedSkillSlugs = normalizeDefaultSkillSlugs(skillSlugs)
+  const slugSet = normalizedSkillSlugs === undefined ? undefined : new Set(normalizedSkillSlugs)
   return (base) => ({
-    skills: base.skills.filter((skill) =>
+    skills: dedupeRenamedDefaultSkills(base.skills.filter((skill) =>
       (isPromaSkillPath(skill.filePath, allowedRoots) || isPromaSkillPath(skill.baseDir, allowedRoots))
-      && matchesSkillSlug(skill, slugSet)),
+      && matchesSkillSlug(skill, slugSet))),
     diagnostics: base.diagnostics.filter((diagnostic) => isPromaSkillPath(diagnostic.path, allowedRoots)),
   })
 }
@@ -743,6 +790,8 @@ function buildSkillLookup(skills: Skill[]): Map<string, Skill> {
   for (const skill of skills) {
     for (const alias of skillCommandAliases(skill)) {
       if (!lookup.has(alias)) lookup.set(alias, skill)
+      const normalizedAlias = normalizeDefaultSkillSlug(alias)
+      if (!lookup.has(normalizedAlias)) lookup.set(normalizedAlias, skill)
     }
   }
   return lookup
@@ -765,7 +814,8 @@ async function preparePromptWithPromaSkills(
 ): Promise<string> {
   await resourceLoader.reload()
 
-  const requestedNames = explicitSkillNames?.length ? explicitSkillNames : extractSkillCommandNames(prompt)
+  const requestedNames = (explicitSkillNames?.length ? explicitSkillNames : extractSkillCommandNames(prompt))
+    .map(normalizeDefaultSkillSlug)
   if (requestedNames.length === 0) return prompt
 
   const skillLookup = buildSkillLookup(resourceLoader.getSkills().skills)
@@ -1093,7 +1143,7 @@ export function buildPromaProductToolDefinitions(
     sdk.defineTool({
       name: 'EnterPlanMode',
       label: '进入计划模式',
-      description: '进入 Proma 计划模式。进入后只能调研、整理计划，并等待用户批准后再执行写操作。',
+      description: '进入 Profer 计划模式。进入后只能调研、整理计划，并等待用户批准后再执行写操作。',
       promptSnippet: '进入计划模式，先调研并输出计划，再等待用户确认。',
       parameters: Type.Object({
         reason: Type.Optional(Type.String({ description: '进入计划模式的原因。' })),
@@ -1121,7 +1171,7 @@ export function buildPromaProductToolDefinitions(
     sdk.defineTool({
       name: 'AskUserQuestion',
       label: '询问用户',
-      description: '当需要用户选择、补充信息或确认偏好时调用，Proma 会展示可交互问答横幅。',
+      description: '当需要用户选择、补充信息或确认偏好时调用，Profer 会展示可交互问答横幅。',
       promptSnippet: '向用户提出结构化问题并等待回答。',
       parameters: Type.Object({
         questions: Type.Array(Type.Object({

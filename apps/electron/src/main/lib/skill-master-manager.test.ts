@@ -147,4 +147,20 @@ describe('skill-master-manager', () => {
     expect(skill).toBeDefined()
     expect(skill!.syncedWorkspaceCount).toBe(2)
   })
+
+  test('Given 历史 Coach slug When 同步 Then 写入当前 slug 与规范 Master 来源', () => {
+    const roots = makeTempRoots()
+    writeFile(
+      join(roots.master, 'profer-coach', 'SKILL.md'),
+      '---\nname: profer-coach\nversion: 1.0.3\n---\n\n# Profer Coach\n',
+    )
+    __setSkillMasterRoots(roots.master, roots.workspaces)
+
+    const result = syncMasterSkillToWorkspace('proma-coach', 'ws-a')
+    const source = JSON.parse(readFileSync(join(roots.workspaces, 'ws-a', 'skills', 'profer-coach', '.source.json'), 'utf-8'))
+
+    expect(result.success).toBe(true)
+    expect(existsSync(join(roots.workspaces, 'ws-a', 'skills', 'profer-coach', 'SKILL.md'))).toBe(true)
+    expect(source.masterSlug).toBe('profer-coach')
+  })
 })

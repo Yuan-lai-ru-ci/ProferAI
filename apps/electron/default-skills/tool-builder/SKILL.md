@@ -1,9 +1,7 @@
 ---
 name: tool-builder
 description: 交互式创建和管理 Chat 模式的自定义 HTTP 工具。当用户想要创建新的 API 工具、配置 Chat 工具、添加自定义工具、管理自定义工具、或说"帮我创建一个 XX 工具"时使用此 Skill。也适用于调试、修复或删除已有的自定义工具。
-version: "1.0.0"
----
-version: "1.0.0"
+version: "1.0.1"
 ---
 # Tool Builder
 
@@ -24,7 +22,7 @@ version: "1.0.0"
 
 ### 2. 构建配置
 
-根据收集的信息构建工具配置 JSON。配置文件位于 `~/.proma/chat-tools.json`。
+根据收集的信息构建工具配置 JSON。配置文件位于 `~/.profer/chat-tools.json`。
 
 #### 配置文件结构
 
@@ -92,7 +90,7 @@ version: "1.0.0"
 ### 3. 写入配置
 
 操作步骤：
-1. 读取 `~/.proma/chat-tools.json`（如不存在则创建）
+1. 读取 `~/.profer/chat-tools.json`（如不存在则创建）
 2. 将新工具追加到 `customTools` 数组（按 `id` 去重）
 3. 在 `toolStates` 中添加 `{ "enabled": true }` 使其默认启用
 4. 写回文件（保持 JSON 格式化）

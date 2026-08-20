@@ -568,7 +568,7 @@ function SkillsTab({ customSkills, builtinSkills, total, updateCount, updatingSk
         <SkillSection title="我的 Skills" skills={customSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="PROMA 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
+        <SkillSection title="Profer 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
       )}
     </div>
   )

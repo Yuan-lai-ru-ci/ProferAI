@@ -48,6 +48,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('以及当前目录的 CLAUDE.md')
     expect(prompt).toContain(join(workspaceRoot, 'workspace-files', '.context'))
     expect(prompt).toContain(join(workspaceRoot, '.claude', 'memory', 'MEMORY.md'))
+    expect(prompt).not.toContain('Profer 脱胎于开源项目')
   })
 
   test('Context 恢复先发现目录内容，不默认读取或创建 note.md', () => {
@@ -173,6 +174,8 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('9. **AI 生图**')
     expect(withoutAutomation).toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
+    expect(withoutAutomation).toContain('图片附件标记')
+    expect(withoutAutomation).not.toContain('`PROMA_IMAGE_ATTACHMENT` 标记')
     expect(withoutAutomation).toContain('6. **自检习惯**')
   })
 

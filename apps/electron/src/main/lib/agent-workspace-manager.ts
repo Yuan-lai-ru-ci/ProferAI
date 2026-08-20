@@ -22,6 +22,7 @@ import {
   parseSkillVersion,
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
+import { normalizeDefaultSkillSlug, RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
 import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
 import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
@@ -33,6 +34,52 @@ interface AgentWorkspacesIndex {
 }
 
 const INDEX_VERSION = 3
+
+/**
+ * 更新改名默认 Skill 的 Master 来源标记。
+ * 仅处理受管 Master 副本；普通用户/导入 Skill 的来源信息原样保留。
+ */
+function migrateRenamedMasterSource(skillDir: string, oldSlug: string, newSlug: string): void {
+  const sourcePath = join(skillDir, '.source.json')
+  if (!existsSync(sourcePath)) return
+  try {
+    const source = JSON.parse(readFileSync(sourcePath, 'utf-8')) as Record<string, unknown>
+    if (source.sourceKind !== 'master' || source.masterSlug !== oldSlug) return
+    source.masterSlug = newSlug
+    writeFileSync(sourcePath, JSON.stringify(source, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn(`[Agent 工作区] 更新默认 Skill 来源标记失败 (${oldSlug} → ${newSlug}):`, err)
+  }
+}
+
+/**
+ * 迁移单个工作区中改名的默认 Skill。
+ * 新旧目录同时存在时绝不删除旧副本；运行时优先加载当前 slug，避免重复注入。
+ */
+function migrateRenamedDefaultSkillsInWorkspace(workspaceSlug: string): void {
+  const directories = [getWorkspaceSkillsDir(workspaceSlug), getInactiveSkillsDir(workspaceSlug)]
+  for (const [oldSlug, newSlug] of RENAMED_DEFAULT_SKILLS) {
+    for (const directory of directories) {
+      const oldPath = join(directory, oldSlug)
+      const newPath = join(directory, newSlug)
+      if (existsSync(newPath)) {
+        migrateRenamedMasterSource(newPath, oldSlug, newSlug)
+        if (existsSync(oldPath)) {
+          console.warn(`[Agent 工作区] 默认 Skill slug 迁移冲突，保留新旧副本: ${workspaceSlug}/${oldSlug} / ${newSlug}`)
+        }
+        continue
+      }
+      if (!existsSync(oldPath)) continue
+      try {
+        renameSync(oldPath, newPath)
+        migrateRenamedMasterSource(newPath, oldSlug, newSlug)
+        console.log(`[Agent 工作区] 已迁移默认 Skill: ${workspaceSlug}/${oldSlug} → ${newSlug}`)
+      } catch (err) {
+        console.warn(`[Agent 工作区] 迁移默认 Skill 失败 (${workspaceSlug}/${oldSlug} → ${newSlug}):`, err)
+      }
+    }
+  }
+}
 
 /** Windows 保留设备名，用作 slug 时需要回避（否则 mkdir 失败） */
 const WINDOWS_RESERVED_SLUGS = new Set([
@@ -194,7 +241,7 @@ export function getAgentWorkspace(id: string): AgentWorkspace | undefined {
   return index.workspaces.find((w) => w.id === id)
 }
 
-/** 将 ~/.proma/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
+/** 将 ~/.profer/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
 function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: boolean } = {}): void {
   const defaultDir = getDefaultSkillsDir()
   const targetDir = getWorkspaceSkillsDir(workspaceSlug)
@@ -429,6 +476,7 @@ export function upgradeDefaultSkillsInWorkspaces(): void {
   const index = readIndex()
 
   for (const workspace of index.workspaces) {
+    migrateRenamedDefaultSkillsInWorkspace(workspace.slug)
     const activeDir = getWorkspaceSkillsDir(workspace.slug)
     const inactiveDir = getInactiveSkillsDir(workspace.slug)
 
@@ -667,15 +715,15 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
   return skills
 }
 
-/** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+/** 获取默认 Skills 的 slug 列表（来自 ~/.profer/default-skills/；历史 slug 已归一化）。 */
 export function getDefaultSkillSlugs(): string[] {
   const dir = getDefaultSkillsDir()
   if (!existsSync(dir)) return []
 
   try {
-    return readdirSync(dir, { withFileTypes: true })
+    return [...new Set(readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
+      .map((entry) => normalizeDefaultSkillSlug(entry.name)))]
   } catch {
     return []
   }

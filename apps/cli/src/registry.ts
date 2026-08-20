@@ -16,7 +16,7 @@ export interface CommandContext {
 export interface Command {
   name: string
   summary: string
-  /** 一行用法示例（不含 "proma " 前缀）。 */
+  /** 一行用法示例（不含 "profer " 前缀）。 */
   usage: string
   run: (ctx: CommandContext) => Promise<CommandExit> | CommandExit
 }

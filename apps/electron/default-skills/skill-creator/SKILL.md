@@ -1,12 +1,16 @@
 ---
 name: skill-creator
 description: Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.
-version: "1.1.1"
+version: "1.1.2"
 ---
 
 # Skill Creator
 
 A skill for creating new skills and iteratively improving them.
+
+## Content Ownership Boundary
+
+When a request involves renaming or rebranding, only edit content the user explicitly owns or has identified as product-managed. Do not bulk-replace text in user-created or imported skills, third-party product names, URLs, commands, protocol values, or internal identifiers. Present the affected scope and risks before changing those items.
 
 At a high level, the process of creating a skill goes like this:
 

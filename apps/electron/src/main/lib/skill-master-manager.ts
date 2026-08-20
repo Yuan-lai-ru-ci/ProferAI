@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, cpSync
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { getConfigDir, getDefaultSkillsDir, getWorkspaceSkillsDir } from './config-paths'
+import { normalizeDefaultSkillSlug } from './default-skill-slugs'
 import type { MasterSkillMeta, MasterSkillVersion, SyncSkillResult, SkillConflict, SkillImportSource } from '@profer/shared'
 
 // ============================================================
@@ -273,7 +274,8 @@ export function countMasterSyncedAll(): Map<string, number> {
     try {
       const src = JSON.parse(readFileSync(f, 'utf-8')) as MasterSourceFile
       if (src.sourceKind === 'master' && src.masterSlug) {
-        count.set(src.masterSlug, (count.get(src.masterSlug) ?? 0) + 1)
+        const masterSlug = normalizeDefaultSkillSlug(src.masterSlug)
+        count.set(masterSlug, (count.get(masterSlug) ?? 0) + 1)
       }
     } catch { /* 忽略损坏文件 */ }
   }
@@ -282,8 +284,9 @@ export function countMasterSyncedAll(): Map<string, number> {
 
 /** 统计已同步到多少个工作区（复用一次扫描结果） */
 export function countMasterSyncedWorkspaces(masterSlug: string, countMap?: Map<string, number>): number {
-  if (countMap) return countMap.get(masterSlug) ?? 0
-  return countMasterSyncedAll().get(masterSlug) ?? 0
+  const normalizedSlug = normalizeDefaultSkillSlug(masterSlug)
+  if (countMap) return countMap.get(normalizedSlug) ?? 0
+  return countMasterSyncedAll().get(normalizedSlug) ?? 0
 }
 
 /**
@@ -336,16 +339,17 @@ export function syncMasterSkillToWorkspace(
   targetWorkspaceSlug: string,
   opts: { force?: boolean } = {},
 ): SyncSkillResult {
-  const masterDir = join(getMasterSkillsDirBase(), masterSlug)
+  const normalizedMasterSlug = normalizeDefaultSkillSlug(masterSlug)
+  const masterDir = join(getMasterSkillsDirBase(), normalizedMasterSlug)
   if (!existsSync(join(masterDir, 'SKILL.md'))) {
-    return { workspaceSlug: targetWorkspaceSlug, success: false, error: `元 Skill 不存在: ${masterSlug}` }
+    return { workspaceSlug: targetWorkspaceSlug, success: false, error: `元 Skill 不存在: ${normalizedMasterSlug}` }
   }
 
-  const targetDir = join(workspaceSkillsDirOf(targetWorkspaceSlug), masterSlug)
+  const targetDir = join(workspaceSkillsDirOf(targetWorkspaceSlug), normalizedMasterSlug)
 
   // 冲突检测（除非强制覆盖）
   if (!opts.force) {
-    const conflict = detectSkillConflictLocal(targetWorkspaceSlug, masterSlug)
+    const conflict = detectSkillConflictLocal(targetWorkspaceSlug, normalizedMasterSlug)
     if (conflict.hasConflict) {
       return {
         workspaceSlug: targetWorkspaceSlug,
@@ -365,10 +369,10 @@ export function syncMasterSkillToWorkspace(
     sourceWorkspaceSlug: 'master',
     sourceWorkspaceName: '全局元 Skill',
     importedAt: new Date().toISOString(),
-    sourceVersion: parseFrontmatterVersion(readMasterSkillContent(masterSlug)),
+    sourceVersion: parseFrontmatterVersion(readMasterSkillContent(normalizedMasterSlug)),
     sourceKind: 'master',
-    baselineVersion: parseFrontmatterVersion(readMasterSkillContent(masterSlug)),
-    masterSlug,
+    baselineVersion: parseFrontmatterVersion(readMasterSkillContent(normalizedMasterSlug)),
+    masterSlug: normalizedMasterSlug,
     baselineHash: masterHash,
     baselineHashMap: buildDirHashMap(masterDir),
   }

@@ -98,6 +98,7 @@ import { normalizeAgentEndReason } from './agent-end-reason'
 import {
   getAgentWorkspace,
   getWorkspaceMcpConfig,
+  getWorkspaceSkills,
   getWorkspaceAutoMemoryDir,
   getWorkspaceMemoryArchivePath,
   ensurePluginManifest,
@@ -108,6 +109,7 @@ import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { buildPiTaskPrompt } from './pi-task-prompt'
 import { getAgentPreset } from './agent-preset-manager'
+import { normalizeDefaultSkillSlugs } from './default-skill-slugs'
 import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -1074,6 +1076,15 @@ export class AgentOrchestrator {
       // 10. 构建 MCP 服务器配置 + 自定义工具（生图工具仅 Chat 模式可用）
       // Agent 预设提前解析：MCP 白名单裁剪在构建时生效；提示词/权限/effort 注入在后面复用同一对象。
       const sessionPreset = getAgentPreset(workspaceSlug, getAgentSessionMeta(sessionId)?.presetId)
+      // 仅归一化已知内置历史 slug，不改写用户自建 Skill 名称。
+      const presetSkillSlugs = normalizeDefaultSkillSlugs(sessionPreset.skillSlugs)
+      // Claude SDK 的本地插件发现不经过 Pi 的 skillsOverride。未配置预设白名单时，
+      // 显式传入活跃 Skill 的规范列表，以排除新旧默认 slug 并存造成的重复注入。
+      const activeWorkspaceSkillSlugs = workspaceSlug
+        ? normalizeDefaultSkillSlugs(getWorkspaceSkills(workspaceSlug).map((skill) => skill.slug))
+        : undefined
+      const effectiveSkillSlugs = presetSkillSlugs ?? activeWorkspaceSkillSlugs
+      const normalizedMentionedSkills = normalizeDefaultSkillSlugs(mentionedSkills) ?? []
       // 方案 3：预设禁用的产品内置工具组（注入时直接不注册）；allowSubagents=false 等价禁用协作工具
       const disabledToolGroups = new Set<string>(sessionPreset.disabledToolGroups ?? [])
       if (sessionPreset.allowSubagents === false) disabledToolGroups.add('collaboration')
@@ -1190,9 +1201,9 @@ export class AgentOrchestrator {
         enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
       }
-      if (mentionedSkills?.length || mentionedMcpServers?.length) {
+      if (normalizedMentionedSkills.length || mentionedMcpServers?.length) {
         const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
-        for (const slug of mentionedSkills ?? []) {
+        for (const slug of normalizedMentionedSkills) {
           const qualifiedName = workspaceSlug ? `profer-workspace-${workspaceSlug}:${slug}` : slug
           toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
         }
@@ -1200,7 +1211,7 @@ export class AgentOrchestrator {
           toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
         }
         enrichedMessage = `<mentioned_tools>\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${userMessage}`
-        console.log(`[Agent 编排] 注入 mentioned_tools: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
+        console.log(`[Agent 编排] 注入 mentioned_tools: ${normalizedMentionedSkills.length} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
       }
 
       const contextualMessage = `${dynamicCtx}
@@ -1622,8 +1633,8 @@ ${enrichedMessage}`
           ...(workspaceSlug && {
             additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)],
           }),
-          ...(sessionPreset.skillSlugs !== undefined && {
-            skillSlugs: sessionPreset.skillSlugs,
+          ...(effectiveSkillSlugs !== undefined && {
+            skillSlugs: effectiveSkillSlugs,
           }),
           ...(piCustomTools && { customTools: piCustomTools }),
           ...(sessionMeta?.codexFastMode && { codexFastMode: true }),
@@ -1663,8 +1674,8 @@ ${enrichedMessage}`
           ],
         }),
         // 预设 Skill 白名单（Claude SDK 原生 skills 过滤：未列出的 skill 对模型隐藏且 Skill 工具拒绝；[] = 0 skill）
-        ...(sessionPreset.skillSlugs !== undefined && {
-          skills: sessionPreset.skillSlugs,
+        ...(effectiveSkillSlugs !== undefined && {
+          skills: effectiveSkillSlugs,
         }),
         // 合并附加目录：用户当次输入 + 会话级 + 工作区级（详见 collectAttachedDirectories）
         ...(allAdditionalDirectories.length > 0 && {
@@ -3128,9 +3139,10 @@ ${enrichedMessage}`
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
     }
-    if (mentionedSkills?.length || mentionedMcpServers?.length) {
+    const normalizedMentionedSkills = normalizeDefaultSkillSlugs(mentionedSkills) ?? []
+    if (normalizedMentionedSkills.length || mentionedMcpServers?.length) {
       const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
-      for (const slug of mentionedSkills ?? []) {
+      for (const slug of normalizedMentionedSkills) {
         const qualifiedName = workspaceSlug ? `profer-workspace-${workspaceSlug}:${slug}` : slug
         toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
       }

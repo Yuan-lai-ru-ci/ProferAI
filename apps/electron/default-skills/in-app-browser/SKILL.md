@@ -1,13 +1,13 @@
 ---
 name: in-app-browser
-description: Proma 内嵌受管浏览器使用指南。当用户要求打开、展示、访问、浏览或操作网页，或提到小红书、X/Twitter、LinkedIn、BOSS 直聘、登录后站内搜索、动态页面、截图或本地 HTML/React 预览时使用。对邮件、消息、文档、项目管理等已有匹配专用 MCP/API/CLI 的服务，必须优先使用专用工具；仅在没有匹配工具、工具无法完成当前能力或用户明确要求网页时改用 Browser。浏览器工具出现在当前工具列表时，必须先阅读本 Skill 再进行网页操作；不要因为工具直接可见就跳过。
-group: proma
-version: "1.0.9"
+description: Profer 内嵌受管浏览器使用指南。当用户要求打开、展示、访问、浏览或操作网页，或提到小红书、X/Twitter、LinkedIn、BOSS 直聘、登录后站内搜索、动态页面、截图或本地 HTML/React 预览时使用。对邮件、消息、文档、项目管理等已有匹配专用 MCP/API/CLI 的服务，必须优先使用专用工具；仅在没有匹配工具、工具无法完成当前能力或用户明确要求网页时改用 Browser。浏览器工具出现在当前工具列表时，必须先阅读本 Skill 再进行网页操作；不要因为工具直接可见就跳过。
+group: profer
+version: "1.0.10"
 ---
 
-# Proma In-App Browser
+# Profer In-App Browser
 
-Proma 的 `Browser*` 工具控制当前会话关联的受管浏览器。网页以应用内可见的原生 View 呈现；点击、输入和跳转都会留下状态与操作轨迹。浏览器 profile 仅持久保存在本机，并按工作区隔离。
+Profer 的 `Browser*` 工具控制当前会话关联的受管浏览器。网页以应用内可见的原生 View 呈现；点击、输入和跳转都会留下状态与操作轨迹。浏览器 profile 仅持久保存在本机，并按工作区隔离。
 
 ## 先选择正确的操作界面
 

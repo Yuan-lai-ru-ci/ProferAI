@@ -127,7 +127,7 @@ function SkillDetailBody({
   }
 
   const sourceLabel = isBuiltin
-    ? 'PROMA 内置'
+    ? 'Profer 内置'
     : skill.importSource
       ? `从 ${skill.importSource.sourceWorkspaceName} 导入`
       : '当前工作区'

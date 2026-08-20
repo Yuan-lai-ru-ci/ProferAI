@@ -1,8 +1,8 @@
 ---
 name: user-sense
 description: Profer 内置的"用户感知"默认 Skill，开箱即用。目标是通过首次扫描本地环境（系统信息、已安装应用、文件类型统计、最近打开文件、浏览器书签分类）构建"本地用户画像"，让 Profer 懂用户的工作性质、作息习惯与兴趣方向，从而提供个性化对话和主动服务（Proactive Center）。当用户是新工作区首次使用、画像文件不存在或明显过期（>30 天）、用户提到"更懂我""记住我的偏好/习惯/工作性质""Proactive Center""个性化推荐"，或对话语境需要理解用户身份（开发者/科研/办公/娱乐）时触发。触发后先检查画像是否存在，再决定是构建、更新还是仅消费画像；构建画像前必须向用户说明扫描范围并征得同意，未经同意不得扫描。
-group: proma
-version: "1.0.0"
+group: profer
+version: "1.0.1"
 ---
 
 # UserSense（用户感知）
@@ -37,7 +37,7 @@ Profer 默认 Skill，随应用分发，所有用户开箱即用。职责：**�
 # 系统信息（OS/架构/语言/时区）
 Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSLanguage, MUILanguages
 Get-TimeZone | Select-Object Id
-# 作息模式：统计本机 Agent 会话文件（~/.profer/agent-sessions/*.jsonl 或 ~/.proma/agent-sessions/*.jsonl）创建时间的时段分布
+# 作息模式：统计本机 Agent 会话文件（~/.profer/agent-sessions/*.jsonl）创建时间的时段分布
 Get-ChildItem "$env:USERPROFILE\.profer\agent-sessions" -Filter *.jsonl -ErrorAction SilentlyContinue |
   ForEach-Object { (Get-Date $_.CreationTime).Hour } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 Name, Count
 ```

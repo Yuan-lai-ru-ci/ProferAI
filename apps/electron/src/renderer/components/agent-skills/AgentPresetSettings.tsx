@@ -55,7 +55,7 @@ interface PresetFormState {
 const SELECT_DEFAULT_VALUE = '__default__'
 
 const TOOL_GROUP_OPTIONS: Array<{ value: AgentPresetToolGroup; label: string; hint: string }> = [
-  { value: 'task-graph', label: '任务图', hint: 'proma_task_* 子任务图工具' },
+  { value: 'task-graph', label: '任务图', hint: '子任务图工具' },
   { value: 'memory', label: '长期记忆', hint: 'Auto Memory 与 memory-archive' },
   { value: 'collaboration', label: '协作子 Agent', hint: '委派与协作工具（等价禁止委派）' },
   { value: 'automation', label: '定时任务', hint: 'Profer Automation 工具' },

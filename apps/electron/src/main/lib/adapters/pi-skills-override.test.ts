@@ -45,6 +45,8 @@ beforeAll(() => {
   // 真实创建目录，确保 buildAllowedSkillRoots 的 realpath 能解析
   mkdirSync(join(skillsRoot, 'alpha'), { recursive: true })
   mkdirSync(join(skillsRoot, 'beta'), { recursive: true })
+  mkdirSync(join(skillsRoot, 'proma-coach'), { recursive: true })
+  mkdirSync(join(skillsRoot, 'profer-coach'), { recursive: true })
   alpha = makeSkill('alpha', skillsRoot)
   beta = makeSkill('beta', skillsRoot)
   // 根目录之外的 skill：即使白名单命中也被路径守卫过滤
@@ -78,5 +80,13 @@ describe('createPromaSkillsOverride skillSlugs 语义', () => {
     const override = createPromaSkillsOverride([skillsRoot], ['alpha'])
     const result = override(makeBase([alpha, outside]))
     expect(result.skills.map((s) => s.name)).toEqual(['alpha'])
+  })
+
+  test('历史 Coach 白名单解析为新 slug，且新旧目录并存时只注入新副本', () => {
+    const legacyCoach = makeSkill('proma-coach', skillsRoot)
+    const currentCoach = makeSkill('profer-coach', skillsRoot)
+    const override = createPromaSkillsOverride([skillsRoot], ['proma-coach'])
+    const result = override(makeBase([legacyCoach, currentCoach]))
+    expect(result.skills.map((s) => s.name)).toEqual(['profer-coach'])
   })
 })

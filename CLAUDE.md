@@ -220,7 +220,7 @@ bun run generate:icons    # 生成应用图标
 | 服务 | 职责 |
 |------|------|
 | `runtime-init.ts` | 运行时初始化：Shell 环境、Bun、Git 检测（`bun-finder.ts`、`git-detector.ts`、`shell-env.ts`） |
-| `config-paths.ts` | 配置路径管理：`~/.proma/` 目录结构 |
+| `config-paths.ts` | 配置路径管理：`~/.profer/` 目录结构 |
 | `user-profile-service.ts` | 用户档案持久化 |
 | `settings-service.ts` | 应用设置持久化（主题等） |
 | `updater/` | 自动更新：Electron Updater 集成 |
@@ -303,10 +303,10 @@ bun run generate:icons    # 生成应用图标
 | `AgentListenersInitializer` | 挂载 `useGlobalAgentListeners`，全局 Agent IPC 监听 |
 | `UpdaterInitializer` | 订阅主进程推送的自动更新状态变化事件 |
 
-### 本地文件存储（`~/.proma/`）
+### 本地文件存储（`~/.profer/`）
 
 ```
-~/.proma/
+~/.profer/
 ├── channels.json           # 渠道配置（API Key 经 safeStorage 加密）
 ├── conversations.json      # 对话索引（元数据，轻量）
 ├── conversations/          # 消息存储
@@ -343,11 +343,11 @@ bun run generate:icons    # 生成应用图标
 
 ## 默认 Skills（`apps/electron/default-skills/`）
 
-应用启动时 semver 比较自动同步到 `~/.proma/default-skills/` 和各工作区。共 14 个：
+应用启动时 semver 比较自动同步到 `~/.profer/default-skills/` 和各工作区。共 14 个：
 
 | Skill | 用途 |
 |-------|------|
-| `automation` | Proma 内嵌定时任务 Skill |
+| `automation` | Profer 内嵌定时任务 Skill |
 | `brainstorming` | 创意工作前需求探索和设计 |
 | `docx` | Word 文档创建/读取/编辑 |
 | `executing-plans` | 带审查检查点的实现计划执行 |
@@ -355,7 +355,7 @@ bun run generate:icons    # 生成应用图标
 | `guizang-ppt-skill` | 横向翻页网页 PPT 生成 |
 | `pdf` | PDF 文档处理 |
 | `pptx` | PowerPoint 演示文稿 |
-| `proma-coach` | Proma 使用顾问，优化工作流 |
+| `profer-coach` | Profer 使用顾问，优化工作流 |
 | `session-cleaner` | 会话 JSONL 清洗为 Markdown |
 | `skill-creator` | Skill 创建/编辑/评估 |
 | `tool-builder` | 自定义 HTTP 工具管理 |
@@ -560,7 +560,7 @@ React UI 更新
 - **Agent SDK**：@anthropic-ai/claude-agent-sdk（[v1 文档](https://platform.claude.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)）
 - **MCP 集成**：Model Context Protocol 用于外部数据源
 - **凭证存储**：AES-256-GCM 加密
-- **配置位置**：`~/.proma/`（类似 `~/.craft-agent/`）
+- **配置位置**：`~/.profer/`（类似 `~/.craft-agent/`）
 
 ## 核心特性
 

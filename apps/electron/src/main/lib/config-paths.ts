@@ -5,9 +5,11 @@
  * 所有用户配置存储在 ~/.profer/ 目录下。
  */
 
-import { join, basename, resolve, sep } from 'node:path'
-import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync } from 'node:fs'
+import { join, basename, resolve, sep, relative } from 'node:path'
+import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
+import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 
 /** Vite 开发服务器端口（避开旧 Proma 的 5173） */
 export const VITE_DEV_SERVER_PORT = 5174
@@ -542,8 +544,147 @@ const DEFAULT_SKILL_COPY_BLOCKLIST = new Set([
   '__pycache__',
 ])
 
+const DEFAULT_SKILL_SEED_STATE_FILE = '.seed-state.json'
+
+type DefaultSkillSeedOwner = 'managed' | 'user-owned'
+
+interface DefaultSkillSeedRecord {
+  /** 最近一次由应用写入的内置内容哈希；只有未变更时才可自动升级。 */
+  bundledHash?: string
+  bundledVersion?: string
+  owner: DefaultSkillSeedOwner
+}
+
+interface DefaultSkillSeedState {
+  version: 1
+  skills: Record<string, DefaultSkillSeedRecord>
+}
+
+/**
+ * 将旧默认 Skill slug 迁移到新 slug。
+ *
+ * 只在目标目录不存在时移动，避免覆盖用户已经创建或同步的新 Skill；版本历史和
+ * 受管种子记录同时迁移，让后续默认内容升级仍能正确识别用户改动。
+ */
+function migrateRenamedDefaultSkills(userDir: string, state: DefaultSkillSeedState): boolean {
+  let stateChanged = false
+  const historyDir = join(userDir, '..', 'default-skills-history')
+
+  for (const [oldSlug, newSlug] of RENAMED_DEFAULT_SKILLS) {
+    const oldPath = join(userDir, oldSlug)
+    const newPath = join(userDir, newSlug)
+    if (existsSync(newPath)) {
+      if (existsSync(oldPath)) {
+        console.warn(`[配置] 默认 Skill slug 迁移冲突，保留新旧目录: ${oldSlug} / ${newSlug}`)
+      }
+      continue
+    }
+
+    if (existsSync(oldPath)) {
+      try {
+        renameSync(oldPath, newPath)
+        console.log(`[配置] 已迁移默认 Skill: ${oldSlug} → ${newSlug}`)
+      } catch (err) {
+        console.warn(`[配置] 迁移默认 Skill 失败 (${oldSlug} → ${newSlug}):`, err)
+        continue
+      }
+    }
+
+    const oldHistoryPath = join(historyDir, oldSlug)
+    const newHistoryPath = join(historyDir, newSlug)
+    if (existsSync(oldHistoryPath) && !existsSync(newHistoryPath)) {
+      try {
+        renameSync(oldHistoryPath, newHistoryPath)
+      } catch (err) {
+        console.warn(`[配置] 迁移默认 Skill 历史失败 (${oldSlug} → ${newSlug}):`, err)
+      }
+    }
+
+    const oldRecord = state.skills[oldSlug]
+    if (oldRecord && !state.skills[newSlug]) {
+      state.skills[newSlug] = oldRecord
+      delete state.skills[oldSlug]
+      stateChanged = true
+    }
+  }
+
+  return stateChanged
+}
+
+/** 测试用：覆盖内置 default-skills 来源，不触发 Electron 路径解析。 */
+let testBundledSkillsDirOverride: string | undefined
+
+export function __setBundledSkillsDirForTest(dir: string | undefined): void {
+  testBundledSkillsDirOverride = dir
+}
+
 function defaultSkillCopyFilter(src: string): boolean {
   return !DEFAULT_SKILL_COPY_BLOCKLIST.has(basename(src))
+}
+
+function getBundledSkillsDir(): string {
+  if (testBundledSkillsDirOverride) return testBundledSkillsDirOverride
+  const { app } = require('electron')
+  return app.isPackaged
+    ? join(process.resourcesPath, 'default-skills')
+    : join(__dirname, '../default-skills')
+}
+
+function getDefaultSkillSeedStatePath(userDir: string): string {
+  return join(userDir, DEFAULT_SKILL_SEED_STATE_FILE)
+}
+
+function isDefaultSkillSeedRecord(value: unknown): value is DefaultSkillSeedRecord {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<DefaultSkillSeedRecord>
+  return record.owner === 'managed' || record.owner === 'user-owned'
+}
+
+function readDefaultSkillSeedState(userDir: string): DefaultSkillSeedState {
+  const path = getDefaultSkillSeedStatePath(userDir)
+  if (!existsSync(path)) return { version: 1, skills: {} }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<DefaultSkillSeedState>
+    if (parsed.version !== 1 || !parsed.skills || typeof parsed.skills !== 'object') {
+      throw new Error('格式无效')
+    }
+    const skills = Object.fromEntries(
+      Object.entries(parsed.skills).filter(([, record]) => isDefaultSkillSeedRecord(record)),
+    )
+    return { version: 1, skills }
+  } catch {
+    // 无法验证旧状态时宁可将所有已有 Skill 视为用户拥有，绝不冒险覆盖。
+    console.warn('[配置] 默认 Skill 同步状态不可读，将保护已有元 Skill')
+    return { version: 1, skills: {} }
+  }
+}
+
+function writeDefaultSkillSeedState(userDir: string, state: DefaultSkillSeedState): void {
+  writeFileSync(getDefaultSkillSeedStatePath(userDir), `${JSON.stringify(state, null, 2)}\n`, 'utf-8')
+}
+
+/**
+ * 计算 Skill 目录的确定性 SHA-256：覆盖全部非屏蔽文件及其相对路径。
+ * 任意正文、frontmatter 或附属文件变化都会令哈希不同。
+ */
+function hashDefaultSkillDir(dir: string): string {
+  const files: string[] = []
+  const collect = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (DEFAULT_SKILL_COPY_BLOCKLIST.has(entry.name)) continue
+      const absolute = join(current, entry.name)
+      if (entry.isDirectory()) collect(absolute)
+      else if (entry.isFile()) files.push(absolute)
+    }
+  }
+  collect(dir)
+
+  const hash = createHash('sha256')
+  for (const file of files.sort((a, b) => a.localeCompare(b))) {
+    const path = relative(dir, file).split(sep).join('/')
+    hash.update(path).update('\0').update(readFileSync(file)).update('\0')
+  }
+  return hash.digest('hex')
 }
 
 /**
@@ -552,15 +693,12 @@ function defaultSkillCopyFilter(src: string): boolean {
  * 打包模式下从 process.resourcesPath/default-skills 复制。
  * 开发模式下从源码 default-skills/ 目录复制。
  *
- * - 缺失的 Skill：直接复制
- * - 已存在的 Skill：比较 SKILL.md 中的 version，bundled 更新时才覆盖
- *   （避免每次启动同步 4MB+ 文件阻塞主进程）
+ * - 缺失的 Skill：直接复制，并记录内置内容基线。
+ * - 已存在的受管 Skill：仅在内容仍等于上次内置基线且 bundled 更新时才覆盖。
+ * - 有任意用户改动，或历史上没有可信内置基线的 Skill：保护本地内容，不自动覆盖。
  */
 export function seedDefaultSkills(): void {
-  const { app } = require('electron')
-  const bundledDir = app.isPackaged
-    ? join(process.resourcesPath, 'default-skills')
-    : join(__dirname, '../default-skills')
+  const bundledDir = getBundledSkillsDir()
 
   if (!existsSync(bundledDir)) {
     console.log('[配置] 未找到内置 default-skills 目录，跳过')
@@ -568,6 +706,8 @@ export function seedDefaultSkills(): void {
   }
 
   const userDir = getDefaultSkillsDir()
+  const state = readDefaultSkillSeedState(userDir)
+  let stateChanged = migrateRenamedDefaultSkills(userDir, state)
 
   try {
     const entries = readdirSync(bundledDir, { withFileTypes: true })
@@ -579,14 +719,36 @@ export function seedDefaultSkills(): void {
       const target = join(userDir, entry.name)
 
       try {
+        const bundledHash = hashDefaultSkillDir(source)
+        const bundledVer = parseSkillVersion(source)
+        const record = state.skills[entry.name]
+
         if (!existsSync(target)) {
           cpSync(source, target, { recursive: true, filter: defaultSkillCopyFilter })
+          state.skills[entry.name] = { owner: 'managed', bundledHash, bundledVersion: bundledVer }
+          stateChanged = true
           console.log(`[配置] 已同步默认 Skill: ${entry.name}`)
           continue
         }
 
-        const bundledVer = parseSkillVersion(source)
+        // 引入基线追踪前已有的元 Skill 无法可靠区分用户改动，保守保护。
+        if (!record) {
+          state.skills[entry.name] = { owner: 'user-owned' }
+          stateChanged = true
+          console.log(`[配置] 保留已有元 Skill（缺少内置基线）: ${entry.name}`)
+          continue
+        }
+
+        if (record.owner === 'user-owned') continue
+
         const existingVer = parseSkillVersion(target)
+        const currentHash = hashDefaultSkillDir(target)
+        if (record.bundledHash !== currentHash) {
+          state.skills[entry.name] = { ...record, owner: 'user-owned' }
+          stateChanged = true
+          console.log(`[配置] 保留用户修改的元 Skill: ${entry.name}`)
+          continue
+        }
 
         if (compareSemver(bundledVer, existingVer) > 0) {
           // rm-then-cp：rmSync 不依赖目标文件写权限（只读 .git/objects/ 等
@@ -594,6 +756,8 @@ export function seedDefaultSkills(): void {
           // rmSync({ force: true }) 只需父目录可写就能 unlink）。
           rmSync(target, { recursive: true, force: true })
           cpSync(source, target, { recursive: true, filter: defaultSkillCopyFilter })
+          state.skills[entry.name] = { owner: 'managed', bundledHash, bundledVersion: bundledVer }
+          stateChanged = true
           console.log(`[配置] 已升级默认 Skill: ${entry.name} (${existingVer} → ${bundledVer})`)
         }
       } catch (err) {
@@ -602,6 +766,8 @@ export function seedDefaultSkills(): void {
         console.warn(`[配置] 同步默认 Skill 失败 (${entry.name})，跳过:`, err)
       }
     }
+
+    if (stateChanged) writeDefaultSkillSeedState(userDir, state)
   } catch (err) {
     console.warn('[配置] 同步默认 Skills 失败:', err)
   }
