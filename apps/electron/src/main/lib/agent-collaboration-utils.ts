@@ -40,9 +40,12 @@ export interface RecoveredDelegationState {
 export function resolveDelegationPermissionMode(
   parentMode: ProferPermissionMode | undefined,
   requestedMode: ProferPermissionMode | undefined,
-  _agentRuntime?: AgentRuntime,
+  agentRuntime?: AgentRuntime,
 ): ProferPermissionMode {
-  // 子会话绝不能高于父会话权限；Pi 也必须遵守此边界。
+  // Pi 协作子 Agent 由用户主会话批量调度，固定完全自动，避免每个子会话分别等待人工审批。
+  if (agentRuntime === 'pi') return 'bypassPermissions'
+
+  // Claude 子会话绝不能高于父会话权限。
   const parent = parentMode ?? 'auto'
   const requested = requestedMode ?? parent
   return PERMISSION_RANK[requested] <= PERMISSION_RANK[parent] ? requested : parent
