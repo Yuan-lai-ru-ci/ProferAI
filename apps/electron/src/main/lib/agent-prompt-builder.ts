@@ -27,6 +27,12 @@ function buildTaskGraphGuideline(isPiRuntime: boolean | undefined): string {
   return `- **任务图**：多步骤任务用 \`${create}\` 创建子任务并填 \`dependsOn\`。用 \`${update}\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`${create}\` 落成节点，再补依赖/分叉边，别只口头描述。`
 }
 
+/** 规划 Todo 工具清单：Pi 运行时带 mcp__planning__ 前缀 */
+function buildPlanningTodoGuideline(isPiRuntime: boolean | undefined): string {
+  const prefix = isPiRuntime ? 'mcp__planning__' : ''
+  return `- **规划 Todo**：规划中心 Todo 与任务图不同，用 \`${prefix}list_todos\`/\`${prefix}get_todo\` 读取，用 \`${prefix}create_todo\` 创建，用 \`${prefix}update_todo\` 更新。更新前必须先读取最新 Todo，并把返回的 \`updatedAt\` 作为 \`expectedUpdatedAt\`；发生冲突时重新读取，不覆盖用户修改。当前 Agent 暂不直接删除 Todo，删除请由用户在规划中心操作。`
+}
+
 /** 预设管理工具清单：Pi 运行时带 mcp__agent-presets__ 前缀 */
 function buildPresetToolList(isPiRuntime: boolean | undefined): string {
   const prefix = isPiRuntime ? 'mcp__agent-presets__' : ''
@@ -120,7 +126,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   // 工具使用指南（任务图条目按预设可隐藏，其余条目恒定；工具名按 runtime 适配）
   sections.push(`## 工具使用指南
-${suppress.has('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${TOOL_USAGE_GUIDELINES}`)
+${suppress.has('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${buildPlanningTodoGuideline(ctx.isPiRuntime)}\n${TOOL_USAGE_GUIDELINES}`)
 
   // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 Profer 协作子会话；极简类预设可隐藏）
   const claudeAvailable = ctx.claudeAvailable !== false

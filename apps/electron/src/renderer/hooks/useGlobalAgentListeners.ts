@@ -1364,7 +1364,7 @@ export function useGlobalAgentListeners(): void {
         store.set(agentPendingPromptAtom, {
           sessionId: session.id,
           // non-Pi runtime 需要内联 Todo 快照，Pi 走 mcp__planning__get_todo。
-          message: buildTodoAgentPrompt(todo.id, session.agentRuntime === 'pi', todo),
+          message: buildTodoAgentPrompt(todo.id, session.agentRuntime ?? 'pi', todo),
         })
       },
     )

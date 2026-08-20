@@ -113,6 +113,31 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).not.toContain('## Claude Agent Runtime')
   })
 
+  test('规划 Todo 指引按 runtime 使用正确工具名并要求并发保护', () => {
+    const piPrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: true,
+    })
+    const claudePrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: false,
+    })
+
+    expect(piPrompt).toContain('`mcp__planning__list_todos`')
+    expect(piPrompt).toContain('`mcp__planning__update_todo`')
+    expect(claudePrompt).toContain('`list_todos`')
+    expect(claudePrompt).toContain('`update_todo`')
+    expect(claudePrompt).not.toContain('`mcp__planning__list_todos`')
+    expect(piPrompt).toContain('`expectedUpdatedAt`')
+    expect(piPrompt).toContain('暂不直接删除 Todo')
+  })
+
   test('极简预设 suppressPromptSections 隐藏任务图指南、委派策略与记忆体系段落', () => {
     const minimalPrompt = buildSystemPrompt({
       workspaceName: 'Demo',

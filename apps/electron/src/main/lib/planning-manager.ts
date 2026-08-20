@@ -362,6 +362,7 @@ export function listTodos(query: TodoListQuery = {}): Todo[] {
   const where: string[] = []; const params: Record<string, unknown> = {}; const limit = normalizeLimit(query.limit)
   if (query.status) { where.push('status = :status'); params.status = query.status }
   if (query.dueBefore !== undefined) { where.push('due_at IS NOT NULL AND due_at <= :dueBefore'); params.dueBefore = query.dueBefore }
+  if (query.workspaceId !== undefined) { where.push('workspace_id = :workspaceId'); params.workspaceId = query.workspaceId }
   if (limit) params.limit = limit
   const sql = `SELECT * FROM todos ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, due_at IS NULL, due_at, updated_at DESC ${limit ? 'LIMIT :limit' : ''}`
   return hydrateTodos(getDatabase().prepare(sql).all(params) as TodoRow[])

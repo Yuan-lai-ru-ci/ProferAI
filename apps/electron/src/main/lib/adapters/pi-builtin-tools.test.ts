@@ -147,12 +147,17 @@ describe('Pi Profer in-process tool bridges', () => {
     expect(result.details?.hits?.[0]).toMatchObject({ file: 'memory.md', content: 'hit:Pi' })
   })
 
-  test('Given Pi runtime When building planning tools Then it exposes the Todo reader required by Todo Agent handoff', () => {
+  test('Given Pi runtime When building planning tools Then it exposes list/get/create/update Todo tools', () => {
     const { sdk, tools } = createPiSdkStub()
 
-    buildPiPlanningTools(sdk)
+    buildPiPlanningTools(sdk, { sessionId: 'pi-planning-test' })
 
-    expect(tools.map((tool) => tool.name)).toEqual(['mcp__planning__get_todo'])
+    expect(tools.map((tool) => tool.name)).toEqual([
+      'mcp__planning__list_todos',
+      'mcp__planning__get_todo',
+      'mcp__planning__create_todo',
+      'mcp__planning__update_todo',
+    ])
   })
 
   test('Given Pi runtime When building task graph tools Then it exposes Profer structured task tools', () => {

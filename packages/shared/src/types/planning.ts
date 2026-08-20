@@ -118,6 +118,8 @@ export interface TodoListQuery {
   status?: TodoStatus
   dueBefore?: number
   limit?: number
+  /** Agent/团队规划读取时限定到指定工作区；个人规划未传入时保持完整列表行为。 */
+  workspaceId?: string
 }
 
 /** 日程列表的可选时间范围；未传入时保持完整列表的既有行为。 */

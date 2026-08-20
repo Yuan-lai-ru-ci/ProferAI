@@ -514,7 +514,7 @@ function TodoWorkspace({ standalone = false, teamWorkspaceId }: { standalone?: b
         setPendingPrompt({
           sessionId: session.id,
           // non-Pi runtime 需要内联 Todo 快照，Pi 走 mcp__planning__get_todo。
-          message: buildTodoAgentPrompt(updatedTodo.id, session.agentRuntime === 'pi', updatedTodo),
+          message: buildTodoAgentPrompt(updatedTodo.id, session.agentRuntime ?? 'pi', updatedTodo),
         })
       }
       toast.success('已启动 Agent', { description: standalone ? `已在主窗口的「${workspace.name}」中开始处理` : `将在「${workspace.name}」中处理此 Todo` })

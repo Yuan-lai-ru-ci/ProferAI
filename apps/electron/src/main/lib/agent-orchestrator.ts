@@ -64,6 +64,7 @@ import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTeamMemoryMcpServer } from './team-memory-agent-tools'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
 import { injectAgentPresetMcpServer } from './agent-preset-tools'
+import { injectPlanningMcpServer } from './planning-agent-tools'
 import {
   delegationLinkFromResult,
   delegationToGraphEvents,
@@ -1138,6 +1139,13 @@ export class AgentOrchestrator {
         await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId }, disabledTools)
       }
       await injectAgentPresetMcpServer(sdk, mcpServers, { sessionId })
+      if (agentRuntime === 'claude') {
+        await injectPlanningMcpServer(sdk, mcpServers, {
+          sessionId,
+          workspaceId,
+          isTeamWorkspace: workspace?.type === 'team',
+        })
+      }
       await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
       // 本地图片输出只在受工作区授权的会话注册；没有 workspace 的 cwd 是 homedir，不能默认授权整个用户目录。
       const imageOutputAllowedRoots = workspaceSlug && agentCwd

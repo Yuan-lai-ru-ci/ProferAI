@@ -13,10 +13,13 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
-import type { AgentRuntime, ProferPermissionMode, Todo } from '@profer/shared'
+import type { AgentRuntime, ProferPermissionMode } from '@profer/shared'
 import type {
   CreateAutomationInput,
+  CreateTodoInput,
+  TodoListQuery,
   UpdateAutomationInput,
+  UpdateTodoInput,
 } from '@profer/shared'
 import { filterDisabledTools } from '@profer/shared'
 import {
@@ -41,7 +44,12 @@ import {
   deleteAgentPreset,
   getAgentPreset,
 } from '../agent-preset-manager'
-import { getTodo } from '../planning-manager'
+import {
+  createPlanningTodo,
+  getPlanningTodo,
+  listPlanningTodos,
+  updatePlanningTodo,
+} from '../planning-agent-operations'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
@@ -159,22 +167,91 @@ export function buildPiMemoryArchiveTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCo
 
 // ===== 规划中心工具 =====
 
-/** Pi 的 Todo 启动提示依赖此工具读取 SQLite 中的最新原始任务，避免把过期快照塞进首条消息。 */
-export function buildPiPlanningTools(sdk: PiSdk): ToolDefinition[] {
-  return [
+/** Pi 的规划 Todo 工具与 Claude MCP 共享同一操作层，避免 runtime 行为漂移。 */
+export function buildPiPlanningTools(
+  sdk: PiSdk,
+  ctx: Partial<Pick<PiBuiltinToolsContext, 'sessionId' | 'workspaceId' | 'isTeamWorkspace' | 'disabledTools'>> & Pick<PiBuiltinToolsContext, 'sessionId'>,
+): ToolDefinition[] {
+  const tools = [
+    sdk.defineTool({
+      name: 'mcp__planning__list_todos',
+      label: '列出规划 Todo',
+      description: '列出当前 Agent 项目中的规划 Todo。规划 Todo 与任务图不同，适合记录用户待办和后续事项。',
+      parameters: Type.Object({
+        status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('completed')])),
+        dueBefore: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          return jsonToolResult({ todos: await listPlanningTodos({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as TodoListQuery) })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
     sdk.defineTool({
       name: 'mcp__planning__get_todo',
       label: '读取规划 Todo',
-      description: '读取本地规划中心中某个 Todo 的原始最新记录，包含说明、优先级、时间、分组、标签、提醒和关联会话。',
+      description: '读取当前 Agent 项目中某个规划 Todo 的原始最新记录。更新前必须先读取，以获得 expectedUpdatedAt。',
       parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
       async execute(_toolCallId, params) {
-        const { id } = params as { id: string }
-        const todo: Todo | undefined = getTodo(id.trim())
-        if (!todo) throw new Error(`Todo 不存在: ${id}`)
-        return jsonToolResult({ todo })
+        try {
+          const { id } = params as { id: string }
+          return jsonToolResult({ todo: await getPlanningTodo({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, id.trim()) })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
       },
     }),
-  ] as unknown as ToolDefinition[]
+    sdk.defineTool({
+      name: 'mcp__planning__create_todo',
+      label: '创建规划 Todo',
+      description: '在当前 Agent 项目的规划中心创建 Todo。仅在用户目标确实需要记录规划待办时使用。',
+      parameters: Type.Object({
+        title: Type.String({ minLength: 1, maxLength: 500 }),
+        notes: Type.Optional(Type.String()),
+        priority: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')])),
+        dueAt: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+        groupId: Type.Optional(Type.String({ minLength: 1 })),
+        tagIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        reminders: Type.Optional(Type.Array(Type.Object({ triggerAt: Type.Number({ exclusiveMinimum: 0 }) }))),
+        assigneeId: Type.Optional(Type.String({ minLength: 1 })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          return jsonToolResult({ todo: await createPlanningTodo({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as Omit<CreateTodoInput, 'sessionId' | 'workspaceId'>) })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__planning__update_todo',
+      label: '更新规划 Todo',
+      description: '更新当前 Agent 项目的规划 Todo。必须先读取最新 Todo，并把其 updatedAt 作为 expectedUpdatedAt；冲突时重新读取。',
+      parameters: Type.Object({
+        id: Type.String({ minLength: 1 }),
+        expectedUpdatedAt: Type.Number({ exclusiveMinimum: 0 }),
+        title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+        notes: Type.Optional(Type.String()),
+        priority: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')])),
+        dueAt: Type.Optional(Type.Union([Type.Number({ exclusiveMinimum: 0 }), Type.Null()])),
+        groupId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+        tagIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('completed')])),
+        assigneeId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          return jsonToolResult({ todo: await updatePlanningTodo({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as Omit<UpdateTodoInput, 'workspaceId'>) })
+        } catch (error) {
+          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }),
+  ]
+  return filterDisabledTools(tools, ctx.disabledTools) as unknown as ToolDefinition[]
 }
 
 // ===== 任务图工具 =====
@@ -1297,7 +1374,12 @@ export async function buildPiBuiltinTools(
     if (!disabled.has('task-graph')) {
       tools.push(...buildPiTaskGraphTools(sdk, ctx))
     }
-    tools.push(...buildPiPlanningTools(sdk))
+    tools.push(...buildPiPlanningTools(sdk, {
+      sessionId: ctx.sessionId,
+      workspaceId: ctx.workspaceId,
+      isTeamWorkspace: ctx.isTeamWorkspace,
+      disabledTools: ctx.disabledTools,
+    }))
     tools.push(...buildPiAgentPresetTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入个人记忆、任务图或规划中心工具失败:', error)
