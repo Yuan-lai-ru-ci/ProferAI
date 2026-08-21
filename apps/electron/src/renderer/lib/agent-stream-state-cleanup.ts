@@ -1,6 +1,17 @@
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 
 /**
+ * 判断终态事件是否仍属于当前 run。旧 run 的 completion 不能触发通知、标记或关闭新 run。
+ */
+export function isCurrentAgentStreamCompletion(
+  state: AgentStreamState | undefined,
+  completion: { startedAt?: number },
+): state is AgentStreamState {
+  if (!state || (!state.running && !state.backgroundWaiting)) return false
+  return state.startedAt == null || (completion.startedAt != null && state.startedAt <= completion.startedAt)
+}
+
+/**
  * 主进程确认一轮 run 已真实结束后，将 renderer 状态收敛到可继续输入的终态。
  * 错误消息、result 等 SDK 事件都不能代替 STREAM_COMPLETE 调用此函数，因为它们可能
  * 早于 orchestrator owner finally 到达；只有 STREAM_COMPLETE 才代表主进程运行锁已释放。

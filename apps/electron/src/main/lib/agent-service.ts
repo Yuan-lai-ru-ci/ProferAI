@@ -33,6 +33,7 @@ import { PiAgentAdapter } from './adapters/pi-agent-adapter'
 import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
+import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 
@@ -261,15 +262,7 @@ export async function runAgent(
  */
 export async function runAgentHeadless(
   input: AgentSendInput,
-  callbacks: {
-    onError: (error: string) => void
-    /** 流式完成回调。messages/opts 为 orchestrator 传出的完整已持久化消息与完成元数据；
-     *  无渲染进程的外部调用方（如平板 remote-service）可用它们拿到最终结果，
-     *  后向兼容：不接收参数的旧调用方（飞书/bridge/automation）会自然忽略多余实参。 */
-    onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: import('@profer/shared').AgentEndReason; endReasonLabel?: string }) => void
-    onTitleUpdated: (title: string) => void
-    source?: AgentExternalRunSource
-  },
+  callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   // 尝试注册主窗口 webContents，让流式事件同步推送到桌面端
   const wc = getMainRendererWebContents()
@@ -294,21 +287,27 @@ export async function runAgentHeadless(
         }
       },
       onComplete: (messages, opts) => {
-        callbacks.onComplete(messages, opts)
-        // 同步到渲染进程
-        if (wc && !wc.isDestroyed()) {
-          wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
-            sessionId: runInput.sessionId,
-            messages,
-            stoppedByUser: opts?.stoppedByUser ?? false,
-            startedAt: opts?.startedAt,
-            resultSubtype: opts?.resultSubtype,
-            resultErrors: opts?.resultErrors,
-            backgroundTasksPending: opts?.backgroundTasksPending,
-            endReason: opts?.endReason,
-            endReasonLabel: opts?.endReasonLabel,
-          })
-        }
+        forwardHeadlessAgentCompletion({
+          callbacks,
+          messages,
+          opts,
+          forwardToRenderer: (completionMessages, completionOpts) => {
+            // 同步到渲染进程
+            if (wc && !wc.isDestroyed()) {
+              wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
+                sessionId: runInput.sessionId,
+                messages: completionMessages,
+                stoppedByUser: completionOpts?.stoppedByUser ?? false,
+                startedAt: completionOpts?.startedAt,
+                resultSubtype: completionOpts?.resultSubtype,
+                resultErrors: completionOpts?.resultErrors,
+                backgroundTasksPending: completionOpts?.backgroundTasksPending,
+                endReason: completionOpts?.endReason,
+                endReasonLabel: completionOpts?.endReasonLabel,
+              })
+            }
+          },
+        })
       },
       onTitleUpdated: (title) => {
         callbacks.onTitleUpdated(title)
@@ -360,10 +359,11 @@ export async function runAgentHeadless(
     console.error(`[Agent 服务] errorMessage: ${errorMessage || '(空)'}`)
     console.error(`[Agent 服务] ══════════ runAgentHeadless 未处理异常 结束 ══════════`)
     callbacks.onError(errorMessage)
-    callbacks.onComplete()
+    const completion = { stoppedByUser: false, startedAt, endReason: 'error' as const, endReasonLabel: '执行出错' }
+    callbacks.onComplete([], completion)
     if (wc && !wc.isDestroyed()) {
       wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: runInput.sessionId, error: errorMessage })
-      wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId: runInput.sessionId, messages: [], stoppedByUser: false, startedAt })
+      wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, { sessionId: runInput.sessionId, messages: [], ...completion })
     }
   } finally {
     if (!orchestrator.isActive(runInput.sessionId)) {
@@ -372,6 +372,10 @@ export async function runAgentHeadless(
     }
   }
 }
+
+// headless run 的渲染进程 completion 必须与普通桌面 run 走同一 service 转发，
+// 不能由协作层另行构造字段不完整的 STREAM_COMPLETE。
+setHeadlessAgentRunner((input, callbacks) => runAgentHeadless(input, callbacks))
 
 /**
  * 生成 Agent 会话标题

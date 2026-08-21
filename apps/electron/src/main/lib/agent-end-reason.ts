@@ -10,6 +10,8 @@
 
 import type { AgentEndReason } from '@profer/shared'
 
+export const DELEGATION_CANCELLED_RESULT_SUBTYPE = 'delegation_cancelled'
+
 export interface NormalizeAgentEndReasonInput {
   /** SDK result 消息的 subtype（success / error_max_turns / error_max_budget_usd / max_tokens / error_during_execution 等） */
   resultSubtype?: string
@@ -70,6 +72,9 @@ export function normalizeAgentEndReason(input: NormalizeAgentEndReasonInput): Ag
   }
   if (resultSubtype === 'error_during_execution') {
     return { reason: 'error', label: AGENT_END_REASON_LABELS.error }
+  }
+  if (resultSubtype === DELEGATION_CANCELLED_RESULT_SUBTYPE) {
+    return { reason: 'unknown', label: '因父会话停止而取消' }
   }
 
   if (hasError === true) {
