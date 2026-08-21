@@ -1342,7 +1342,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           const current = prev.get(sessionId)
           if (!current) return prev
           const map = new Map(prev)
-          map.set(sessionId, { ...current, running: false })
+          map.set(sessionId, { ...current, running: false, stopping: false })
           return map
         })
       })
@@ -2031,7 +2031,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           const current = prev.get(sessionId)
           if (!current) return prev
           const map = new Map(prev)
-          map.set(sessionId, { ...current, running: false })
+          map.set(sessionId, { ...current, running: false, stopping: false })
           return map
         })
         throw error
@@ -2353,7 +2353,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         // 后续真正运行中的会话误标为空闲，否则下一条会再次撞上主进程并发保护。
         if (!current || current.startedAt !== streamStartedAt) return prev
         const map = new Map(prev)
-        map.set(sessionId, { ...current, running: false })
+        map.set(sessionId, { ...current, running: false, stopping: false })
         return map
       })
     })

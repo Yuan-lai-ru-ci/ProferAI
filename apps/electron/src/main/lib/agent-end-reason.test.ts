@@ -5,7 +5,7 @@
  * max_budget / max_tokens / error / unknown / 防御性兜底 / label 一致性。
  */
 import { describe, test, expect } from 'bun:test'
-import { normalizeAgentEndReason, AGENT_END_REASON_LABELS } from './agent-end-reason'
+import { normalizeAgentEndReason, AGENT_END_REASON_LABELS, DELEGATION_CANCELLED_RESULT_SUBTYPE } from './agent-end-reason'
 import type { NormalizeAgentEndReasonInput } from './agent-end-reason'
 import type { AgentEndReason } from '@profer/shared'
 
@@ -53,6 +53,11 @@ describe('normalizeAgentEndReason', () => {
   test('hasError 与已知 subtype 冲突时 subtype 优先（error_max_turns > hasError）', () => {
     const result = normalizeAgentEndReason({ resultSubtype: 'error_max_turns', hasError: true })
     expect(result.reason).toBe('max_turns')
+  })
+
+  test('父会话级联取消使用非用户终态文案', () => {
+    expect(normalizeAgentEndReason({ resultSubtype: DELEGATION_CANCELLED_RESULT_SUBTYPE }))
+      .toEqual({ reason: 'unknown', label: '因父会话停止而取消' })
   })
 
   test('未知 subtype → unknown', () => {
