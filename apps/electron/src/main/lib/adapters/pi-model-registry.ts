@@ -58,6 +58,20 @@ const CODEX_56_CONTEXT_WINDOW = 1_050_000
 const CODEX_THINKING_LEVEL_MAP = { xhigh: 'xhigh', minimal: 'low' } as const
 const OFFICIAL_GPT_56_MODEL_IDS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
 
+/** Pi 内置 OpenAI/Codex catalog 当前把这三个已验证 SKU 误标为 272K。 */
+function resolveVerifiedGpt56ContextWindow(modelId?: string): number | undefined {
+  return modelId && OFFICIAL_GPT_56_MODEL_IDS.has(modelId.trim().toLowerCase())
+    ? CODEX_56_CONTEXT_WINDOW
+    : undefined
+}
+
+function applyVerifiedGpt56ContextWindow(model: PiCatalogModel): PiCatalogModel {
+  const contextWindow = resolveVerifiedGpt56ContextWindow(model.id)
+  return contextWindow != null && model.contextWindow !== contextWindow
+    ? { ...model, contextWindow }
+    : model
+}
+
 const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
   {
     id: 'gpt-5.4',
@@ -424,7 +438,7 @@ async function buildCodexModelWithRuntimeKey(sdk: PiSdk, input: PiAgentQueryOpti
   if (!model) {
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
-  return { modelRuntime, model }
+  return { modelRuntime, model: applyVerifiedGpt56ContextWindow(model) }
 }
 
 /** 列出 Pi SDK 内置的 ChatGPT (Codex) 模型 ID，供渲染层"模型拉取"使用。 */
@@ -588,7 +602,7 @@ export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
   if (!model) {
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
-  return { modelRuntime, model }
+  return { modelRuntime, model: applyVerifiedGpt56ContextWindow(model) }
 }
 
 type XaiRuntimeCredential = XaiOAuthCredentials & {

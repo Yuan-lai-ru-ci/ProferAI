@@ -321,6 +321,8 @@ describe('ChatGPT Codex 模型目录补丁', () => {
 
     expect(result.model.id).toBe('gpt-5.6-terra')
     expect(result.model.provider).toBe('openai-codex')
+    expect(result.model.contextWindow).toBe(1_050_000)
+    expect(result.model.contextWindow).toBe(1_050_000)
   })
 
   test('Given Codex 补丁模型 When 读取目录 Then 使用 Codex Responses 协议和百万上下文', async () => {
