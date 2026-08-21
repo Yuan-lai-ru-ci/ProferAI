@@ -217,23 +217,21 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             isClassic ? 'p-2 pr-0' : '',
             // 收起 rail 必须压过其右侧的分隔线；冷启动直接恢复收起状态时，
             // 分隔线处于更高层会裁掉 rail 最右侧，造成整列图标视觉上向左偏移。
-            sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[60] flex-none crt-sidebar',
+            sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[70] flex-none crt-sidebar',
           )}
         >
           <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
-          {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
+          {/* 左栏复用主区既有的 8px 外边距作为拖动命中区：不额外占宽度，也不覆盖侧栏滚动条。 */}
           {!sidebarCollapsed && (
             <div
-              className={cn(
-                'absolute right-0 top-0 bottom-0 w-4 translate-x-1/2 cursor-col-resize hover:bg-primary/5 active:bg-primary/50 transition-colors z-20'
-              )}
+              className="titlebar-no-drag absolute left-full top-0 bottom-0 z-[80] w-1.5 translate-x-px cursor-col-resize pointer-events-auto"
               onMouseDown={handleLeftSidebarMouseDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整左侧边栏宽度"
             />
           )}
         </div>
-        {!isClassic && (
-          <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-surface-border/80" />
-        )}
 
         {/* 中间容器 */}
         <div className="flex-1 min-w-0 p-2 relative z-[60]">
@@ -253,24 +251,20 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             className={cn(
               // 只让 SidePanel 自身展开。若同时动画化外层 padding，面板会在横向展开时
               // 从 top: 0 平移到 p-2 的最终基线，视觉上像从右上方斜着滑入。
-              'relative z-[60] flex items-stretch crt-sidebar',
-              filePanelVisible ? 'p-2 pl-0' : 'p-0'
+              filePanelVisible ? 'relative z-[70] flex items-stretch crt-sidebar p-2 pl-0' : 'relative z-[60] flex items-stretch crt-sidebar p-0'
             )}
           >
-            {!isClassic && (
-              <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-surface-border/80" />
-            )}
-            {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
+            <RightSidePanel width={clampedRightPanelWidth} />
+            {/* 透明命中区收窄为 6px，仅落在现有中缝中心，不参与布局也不产生额外留白。 */}
             {filePanelVisible && (
               <div
-                className={cn(
-                  'absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors',
-                  isClassic ? 'z-10' : 'z-20'
-                )}
+                className="titlebar-no-drag absolute -left-[7px] top-0 bottom-0 z-[80] w-1.5 cursor-col-resize pointer-events-auto"
                 onMouseDown={handleMouseDown}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整右侧文件面板宽度"
               />
             )}
-            <RightSidePanel width={clampedRightPanelWidth} />
           </div>
         )}
       </div>

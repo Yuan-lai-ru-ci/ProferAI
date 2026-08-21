@@ -1332,7 +1332,11 @@ export function TeamWorkspaceView(): React.ReactElement {
 
   return (
     <>
-      <div className="h-full flex gap-2 min-w-0"
+      <div
+        className={cn(
+          'h-full flex min-w-0',
+          layoutMode === 'files' && !agentPanelCollapsed ? 'gap-0' : 'gap-2',
+        )}
       >
       {/* ===== 文件为主：完整文件管理区 ===== */}
       {layoutMode === 'files' ? (
@@ -2038,6 +2042,17 @@ export function TeamWorkspaceView(): React.ReactElement {
         />
       )}
 
+        {/* Agent 面板的宽度调节条独占两栏中缝，避免覆盖文件区滚动条。 */}
+        {layoutMode === 'files' && !agentPanelCollapsed && (
+          <div
+            className="panel-resize-handle-x titlebar-no-drag"
+            onMouseDown={handleAgentPanelResizeMouseDown}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整 Agent 面板宽度"
+          />
+        )}
+
         {/* ===== 右侧：AI 对话面板 ===== */}
         {layoutMode === 'files' && agentPanelCollapsed ? (
           <div
@@ -2076,12 +2091,6 @@ export function TeamWorkspaceView(): React.ReactElement {
           onDragLeave={handleAgentDragLeave}
           onDrop={handleAgentDrop}
         >
-          {layoutMode === 'files' && (
-            <div
-              className="titlebar-no-drag absolute left-0 top-0 bottom-0 z-[60] w-3 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-primary/10 active:bg-primary/40"
-              onMouseDown={handleAgentPanelResizeMouseDown}
-            />
-          )}
           {agentDropOver && (
             <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/60 bg-primary/5 backdrop-blur-[1px]">
               <div className="flex items-center gap-2 rounded-lg bg-background/95 px-3 py-2 text-xs font-medium text-primary shadow-lg">

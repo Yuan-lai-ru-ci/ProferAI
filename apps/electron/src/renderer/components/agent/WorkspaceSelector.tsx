@@ -388,13 +388,14 @@ export function WorkspaceSelector(): React.ReactElement {
           )}
         </div>
 
-        {/* 拖拽调整高度的 handle */}
+        {/* 高度调节条作为列表和下方区域之间的独立中缝，不覆盖列表滚动条。 */}
         <div
           onMouseDown={handleResizeStart}
-          className="h-1 cursor-row-resize group/resize flex items-center justify-center hover:bg-foreground/[0.06] transition-colors titlebar-no-drag"
-        >
-          <div className="w-8 h-[2px] rounded-full bg-foreground/0 group-hover/resize:bg-foreground/20 transition-colors" />
-        </div>
+          className="panel-resize-handle-y titlebar-no-drag"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="调整项目列表高度"
+        />
       </div>
 
       {/* 删除确认弹窗 */}
