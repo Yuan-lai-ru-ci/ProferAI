@@ -1369,6 +1369,61 @@
   width: 6px;
 }
 
+/* ===== 面板分隔拖动条 =====
+ * 拖动条始终作为两个面板之间的独立布局项，占用 8px 中缝而不覆盖任一内容区。
+ * 视觉上只显示中心 1px 细线，悬停/拖动时再增强，避免与内容滚动条竞争命中区域。
+ */
+.panel-resize-handle-x,
+.panel-resize-handle-y {
+  position: relative;
+  flex: 0 0 auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.panel-resize-handle-x {
+  width: 8px;
+  align-self: stretch;
+  cursor: col-resize;
+}
+.panel-resize-handle-y {
+  height: 8px;
+  width: 100%;
+  cursor: row-resize;
+}
+.panel-resize-handle-x::after,
+.panel-resize-handle-y::after {
+  position: absolute;
+  content: '';
+  background: hsl(var(--surface-border) / 0.8);
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+}
+.panel-resize-handle-x::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+/* 左栏沿用主区原有留白，不额外绘制细线，避免形成割裂感。 */
+.panel-resize-handle-overlay::after {
+  display: none;
+}
+.panel-resize-handle-y::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.panel-resize-handle-x:hover::after,
+.panel-resize-handle-y:hover::after,
+.panel-resize-handle-x:active::after,
+.panel-resize-handle-y:active::after {
+  background: hsl(var(--primary) / 0.7);
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.12);
+}
+
 /* 滚动区域上下渐隐遮罩 */
 .mask-fade-y {
   mask-image: linear-gradient(
