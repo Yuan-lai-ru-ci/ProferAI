@@ -26,6 +26,7 @@ import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download
 import { cn } from '@/lib/utils'
 import { shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@/lib/mermaid-detection'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
+import { normalizeMarkdownEmphasisWhitespace } from '@/lib/normalize-markdown-emphasis'
 import { getFileBaseName } from '@/lib/file-utils'
 import { Button } from '@/components/ui/button'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
@@ -725,7 +726,9 @@ export const MessageResponse = React.memo(
           urlTransform={mentionUrlTransform}
           components={components}
         >
-          {normalizeLatexDelimiters(children.replace(/<!--PROMA_AUTOMATION:[\s\S]*?-->/g, '').trim())}
+          {normalizeMarkdownEmphasisWhitespace(
+            normalizeLatexDelimiters(children.replace(/<!--PROMA_AUTOMATION:[\s\S]*?-->/g, '').trim())
+          )}
         </Markdown>
       </div>
     )
