@@ -1,9 +1,11 @@
-import { basename, isAbsolute, resolve, sep } from 'node:path'
-import { readdir, stat } from 'node:fs/promises'
+import { basename, resolve, sep } from 'node:path'
+import { readdir, realpath, stat } from 'node:fs/promises'
 
 export interface FileSearchRequest {
   requestId: string
   targetName: string
+  /** 完整路径查询；传入时只确认该路径，不执行同名文件递归搜索。 */
+  targetPath?: string
   roots: string[]
   maxDepth: number
   alreadyFound?: string[]
@@ -64,10 +66,84 @@ function yieldToEventLoop(): Promise<void> {
  * 简单搜索将 maxResults 设为 1；深度搜索可以一次收集多个候选，但始终受目录深度和条目上限约束。
  */
 export async function searchFileCandidate(request: FileSearchRequest): Promise<FileSearchResult> {
-  const targetName = basename(request.targetName.replace(/[\\/]+/g, sep))
-  const targetNameKey = process.platform === 'win32' ? targetName.toLowerCase() : targetName
   const found = new Set((request.alreadyFound ?? []).map(normalizePath))
   const roots = Array.from(new Set(request.roots.filter(Boolean).map(normalizePath)))
+
+  if (request.targetPath !== undefined) {
+    if (isCancelled(request.signal)) {
+      return {
+        requestId: request.requestId,
+        done: true,
+        cancelled: true,
+      }
+    }
+
+    const targetPath = resolve(request.targetPath)
+    const normalizedTargetPath = normalizePath(targetPath)
+    if (found.has(normalizedTargetPath)) {
+      return {
+        requestId: request.requestId,
+        done: true,
+        cancelled: false,
+        candidates: [],
+      }
+    }
+
+    try {
+      if (!(await stat(targetPath)).isFile()) {
+        return {
+          requestId: request.requestId,
+          done: true,
+          cancelled: false,
+          candidates: [],
+        }
+      }
+      // 目标与授权根目录都使用真实路径校验，避免根目录内的符号链接指向目录外文件。
+      // 已删除的附加目录不应让仍有效的授权根目录也失效。
+      const realTargetPath = await realpath(targetPath)
+      const realRoots = (await Promise.all(roots.map(async (root) => {
+        try {
+          return await realpath(root)
+        } catch {
+          return undefined
+        }
+      }))).filter((root): root is string => root !== undefined)
+      if (!realRoots.some((root) => isPathInsideRoot(realTargetPath, root))) {
+        return {
+          requestId: request.requestId,
+          done: true,
+          cancelled: false,
+          candidates: [],
+        }
+      }
+    } catch {
+      return {
+        requestId: request.requestId,
+        done: true,
+        cancelled: false,
+        candidates: [],
+      }
+    }
+
+    if (isCancelled(request.signal)) {
+      return {
+        requestId: request.requestId,
+        done: true,
+        cancelled: true,
+      }
+    }
+
+    return {
+      requestId: request.requestId,
+      candidate: { path: targetPath },
+      candidates: [{ path: targetPath }],
+      done: true,
+      cancelled: false,
+    }
+  }
+
+  const targetName = basename(request.targetName.replace(/[\\/]+/g, sep))
+  const targetNameKey = process.platform === 'win32' ? targetName.toLowerCase() : targetName
   const maxDepth = Math.max(0, Math.min(request.maxDepth, 16))
   const maxResults = Math.max(1, Math.min(request.maxResults ?? 1, 50))
   const matches: string[] = []
