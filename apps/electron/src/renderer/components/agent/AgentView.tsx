@@ -3139,6 +3139,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               items={queuedMessages}
               canSendNow={canSendQueuedNow}
               autoSend={autoSendEnabled}
+              agentRunning={streaming}
               onToggleAutoSend={handleToggleAutoSend}
               onSendNow={handleSendQueuedNow}
               onRecall={handleRecallQueuedMessage}
