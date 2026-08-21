@@ -7034,29 +7034,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_WORKSPACE_HEATMAP_DAILY,
     async (_, workspaceId: string) => {
-      const { listAgentSessions } = await import('./lib/agent-session-manager')
-      const { readIndex: readWsIndex } =
-        await import('./lib/agent-workspace-manager')
-      const { getWorkspaceHeatmapDaily } =
-        await import('./lib/workspace-heatmap-service')
-
-      // 只对普通工作区开放
-      const wsIndex = readWsIndex()
-      const workspace = wsIndex.workspaces.find((w) => w.id === workspaceId)
-      if (!workspace || workspace.type === 'team') {
-        return []
-      }
-
-      const sessions = listAgentSessions(true)
-        .filter((s) => s.workspaceId === workspaceId)
-        .map((s) => ({
-          id: s.id,
-          createdAt: s.createdAt,
-          updatedAt: s.updatedAt,
-          archived: s.archived,
-        }))
-
-      return getWorkspaceHeatmapDaily(workspaceId, sessions)
+      const { loadWorkspaceHeatmapDaily } =
+        await import('./lib/workspace-heatmap-query')
+      return loadWorkspaceHeatmapDaily(workspaceId)
     },
   )
 
