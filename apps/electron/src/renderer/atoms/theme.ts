@@ -130,7 +130,7 @@ export const interfaceVariantAtom = atom<InterfaceVariant>(getCachedInterfaceVar
 /** 系统当前是否为深色模式（优先从 matchMedia 同步读取，避免默认 dark 导致的启动闪烁） */
 export const systemIsDarkAtom = atom<boolean>(
   typeof window !== 'undefined'
-    ? window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true)
     : true
 )
 

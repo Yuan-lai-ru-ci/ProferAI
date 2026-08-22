@@ -17,7 +17,7 @@
     "electron:start": "bun run --filter='@profer/electron' start",
     "build": "bun run --filter='*' build",
     "typecheck": "bun run --filter='*' typecheck",
-    "test": "bun test"
+    "test": "bun test --isolate"
   },
   "devDependencies": {
     "@types/bun": "latest",

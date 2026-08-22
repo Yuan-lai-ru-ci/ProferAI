@@ -1256,6 +1256,8 @@ export interface SessionHealth {
   title: string
   /** agent-sessions/<id>.jsonl 是否存在 */
   hasProferJsonl: boolean
+  /** agent-sessions/<id>-pi-harness.jsonl 是否存在；缺失代表可安全降级的历史会话，不是孤儿条件 */
+  hasPiHarnessJsonl: boolean
   /** SDK project 目录下是否有对应 JSONL */
   hasSdkJsonl: boolean
   /** 工作区目录是否存在 */
@@ -1971,6 +1973,8 @@ export const AGENT_IPC_CHANNELS = {
   GET_GRAPH: 'agent:get-graph',
   /** 获取当前会话的 Graph 摘要 */
   GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
+  /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
+  GET_PI_HARNESS_SNAPSHOT: 'agent:get-pi-harness-snapshot',
   /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
   APPEND_GRAPH_EVENT: 'agent:append-graph-event',
   /** 回溯放弃抽取：通读会话增量轮次，抽取放弃方向写进图（渲染进程 → 主进程，返回刷新后的图） */
