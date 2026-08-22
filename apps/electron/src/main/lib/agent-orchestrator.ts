@@ -3006,10 +3006,14 @@ ${enrichedMessage}`
    */
   stop(sessionId: string, source: AgentStopSource = 'user'): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
+    // Preserve main's stop-source attribution for user vs. cascaded cancellation.
     this.stoppedBySessions.set(sessionId, source)
-    // Scope exists only when the Pi Harness gate admitted this user Turn. Stop is
-    // a hard task boundary: mark paused before asking the adapter to abort.
-    pauseActivePiHarnessRun(sessionId, 'user_stop')
+    // A user Stop is a Pi Harness hard task boundary. Cascaded parent-session
+    // cancellation keeps main's existing attribution semantics and does not
+    // impersonate an explicit user Stop in the Harness ledger.
+    if (source === 'user') {
+      pauseActivePiHarnessRun(sessionId, 'user_stop')
+    }
     browserController.cancelSession(sessionId)
     try {
       this.adapter.abort(sessionId)
