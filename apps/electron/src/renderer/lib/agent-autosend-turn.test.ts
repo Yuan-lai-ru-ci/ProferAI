@@ -35,6 +35,13 @@ describe('evaluateAutoSendTurn 轮结束自动发送决策', () => {
     expect(evaluateAutoSendTurn(baseState({ turnVersion: 1, consumedVersion: 0, queuedCount: 1 }))).toBe('send')
   })
 
+  test('运行中开启后：当前轮结束产生新版本，队列立即获得自动发送资格', () => {
+    // 开关开启时当前 Agent 仍在运行；此前没有未消费的轮结束事件。
+    expect(evaluateAutoSendTurn(baseState({ turnVersion: 3, consumedVersion: 3, queuedCount: 1 }))).toBe('idle')
+    // 当前轮结束后 version +1，不需要额外手动发送一轮。
+    expect(evaluateAutoSendTurn(baseState({ turnVersion: 4, consumedVersion: 3, queuedCount: 1 }))).toBe('send')
+  })
+
   test('live 未清空：等待上轮执行进入 persisted，不消费版本号 → defer', () => {
     expect(evaluateAutoSendTurn(baseState({ turnVersion: 1, consumedVersion: 0, queuedCount: 1, liveMessagesPending: true }))).toBe('defer')
   })

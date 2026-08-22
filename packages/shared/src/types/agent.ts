@@ -581,6 +581,8 @@ export type AgentEvent =
   | { type: 'retry_failed'; finalAttempt: RetryAttempt }  // 新增：重试失败
   // Usage 更新
   | { type: 'usage_update'; usage: AgentEventUsage }
+  // 主端/SDK 确认的会话级上下文窗口；必须可覆盖模型名推断的临时 fallback。
+  | { type: 'context_window'; contextWindow: number }
   // 上下文压缩
   | { type: 'compacting' }
   | { type: 'compact_complete' }
@@ -1749,6 +1751,8 @@ export const AGENT_IPC_CHANNELS = {
   PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
   /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
   BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
+  /** 将浏览器原生视图的可见性所有权切换到当前前台 Agent 会话。 */
+  SET_BROWSER_FOREGROUND: 'agent:set-browser-foreground',
   /** 仅隐藏原生 WebContentsView，保留浏览器会话与标签。 */
   HIDE_BROWSER: 'agent:hide-browser',
   CLOSE_BROWSER: 'agent:close-browser',

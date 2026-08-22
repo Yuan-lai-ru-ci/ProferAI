@@ -83,8 +83,10 @@ type BrowserSessionRecord = {
   lastLayoutRevision: number
   /** 窗口级原生宿主；所有 WebContentsView 均作为它的子 View。 */
   hostView: View
-  /** 宿主在原生窗口坐标系中的最后边界。 */
+  /** 宿主（整张浏览器卡片）在原生窗口坐标系中的最后边界。 */
   lastHostBounds?: BrowserViewLayout['bounds']
+  /** 网页在原生宿主局部坐标系中的最后边界。 */
+  lastTabBounds?: BrowserViewLayout['bounds']
   /** 上次布局应用后的实际可见状态；隐藏→显示过渡时强制重绘，避免 WebContentsView 白屏。 */
   lastVisible: boolean
 }
@@ -177,6 +179,7 @@ function describeBrowserScriptException(response: CdpResponse): string {
 
 export class BrowserController {
   private owner: BrowserWindow | null = null
+  private foregroundSessionId: string | null = null
   private readonly sessions = new Map<string, BrowserSessionRecord>()
   private readonly configurations = new Map<string, BrowserSessionConfiguration>()
   /** Electron persistent partition 生命周期长于 Agent session；同一 Session 只安装一次 guard。 */
@@ -211,6 +214,28 @@ export class BrowserController {
 
   setOwnerWindow(window: BrowserWindow): void {
     this.owner = window
+  }
+
+  /**
+   * 同步当前前台 Agent 会话。后台 Agent 仍可创建、导航和操作自己的网页，
+   * 但它们的原生 WebContentsView 不得显示或抢占主窗口。
+   */
+  setForegroundSession(sessionId: string | null): void {
+    if (sessionId === null) {
+      this.hideAll()
+      return
+    }
+    this.foregroundSessionId = sessionId
+    this.hideOtherBrowserSessions(sessionId)
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession) return
+    // 仅切换所有权，不在这里显示视图；显示必须等待当前 renderer 的布局 IPC。
+    browserSession.hostView.setVisible(false)
+    browserSession.lastVisible = false
+    for (const tab of browserSession.tabs.values()) {
+      tab.view.setVisible(false)
+      tab.state.visible = false
+    }
   }
 
   private emit(browserSession: BrowserSessionRecord): void {
@@ -636,6 +661,8 @@ export class BrowserController {
 
   open(sessionId: string): BrowserViewState {
     // 用户从界面手动打开浏览器时，初始标签不应伪装成 Agent 标签。
+    // 前台会话所有权由 renderer 的 setAgentBrowserForeground 同步维护；
+    // 这里不能再次切换所有权，否则旧会话迟到的 open IPC 可能抢回主窗口。
     const browserSession = this.getOrCreateSession(sessionId, [], false)
     this.markUserBrowserContext(browserSession)
     this.emit(browserSession)
@@ -643,11 +670,9 @@ export class BrowserController {
   }
 
   getState(sessionId: string): BrowserViewState | null {
+    // getState 只读取状态，不改变前台所有权。前台会话由 renderer 通过
+    // setAgentBrowserForeground 同步设置，避免旧会话迟到的异步读取结果夺回所有权。
     const browserSession = this.sessions.get(sessionId)
-    // renderer 每次激活并读取某会话状态时，都明确“当前关注的会话”就是它：即使用户切到的
-    // 会话尚未开过浏览器（browserSession 为 null），也不应再有其它会话的预览网页残留覆盖界面。
-    // 因此即使目标会话不存在，也要先把其它所有已存在会话的原生视图隐藏掉。
-    this.hideOtherBrowserSessions(sessionId)
     if (!browserSession) return null
     return structuredClone(this.buildState(browserSession))
   }
@@ -662,6 +687,7 @@ export class BrowserController {
     for (const [otherSessionId, otherSession] of this.sessions) {
       if (otherSessionId === activeSessionId) continue
       if (otherSession.hostView.getVisible()) otherSession.hostView.setVisible(false)
+      otherSession.lastVisible = false
       for (const otherTab of otherSession.tabs.values()) {
         if (otherTab.view.getVisible()) otherTab.view.setVisible(false)
         if (otherTab.state.visible) otherTab.state.visible = false
@@ -698,23 +724,42 @@ export class BrowserController {
     if (!tab) return
     const bounds = layout.bounds
     const hasValidBounds = bounds.width > 4 && bounds.height > 4
-    const visible = layout.visible && hasValidBounds && !!this.owner && !this.owner.isDestroyed() && this.owner.isVisible()
+    const visible = layout.visible
+      && browserSession.sessionId === this.foregroundSessionId
+      && hasValidBounds
+      && !!this.owner
+      && !this.owner.isDestroyed()
+      && this.owner.isVisible()
     const zoomFactor = this.owner?.webContents.getZoomFactor() ?? 1
-    const rawBounds = {
-      x: Math.round(bounds.x * zoomFactor),
-      y: Math.round(bounds.y * zoomFactor),
-      width: Math.max(0, Math.round(bounds.width * zoomFactor)),
-      height: Math.max(0, Math.round(bounds.height * zoomFactor)),
-    }
+    const scaleBounds = (value: BrowserViewLayout['bounds']) => ({
+      x: Math.round(value.x * zoomFactor),
+      y: Math.round(value.y * zoomFactor),
+      width: Math.max(0, Math.round(value.width * zoomFactor)),
+      height: Math.max(0, Math.round(value.height * zoomFactor)),
+    })
+    const rawBounds = scaleBounds(bounds)
     // 原生 View 的 bounds 是窗口 contentView 坐标，不能允许异常/过渡布局把网页画出窗口。
     const contentBounds = this.owner?.contentView.getBounds()
-    const maxWidth = Math.max(0, (contentBounds?.width ?? rawBounds.width) - Math.max(0, rawBounds.x))
-    const maxHeight = Math.max(0, (contentBounds?.height ?? rawBounds.height) - Math.max(0, rawBounds.y))
-    const adjustedBounds = {
-      x: Math.max(0, rawBounds.x),
-      y: Math.max(0, rawBounds.y),
-      width: Math.min(rawBounds.width, maxWidth),
-      height: Math.min(rawBounds.height, maxHeight),
+    const constrainToWindow = (value: BrowserViewLayout['bounds']) => {
+      const x = Math.max(0, value.x)
+      const y = Math.max(0, value.y)
+      return {
+        x,
+        y,
+        width: Math.min(value.width, Math.max(0, (contentBounds?.width ?? value.width) - x)),
+        height: Math.min(value.height, Math.max(0, (contentBounds?.height ?? value.height) - y)),
+      }
+    }
+    // WebContentsView 无法由 renderer 的 overflow-hidden 裁剪；将带圆角的原生
+    // hostView 扩展至整张浏览器卡片，并让网页在其中按局部坐标定位，才能裁掉底部露角。
+    const adjustedBounds = constrainToWindow(scaleBounds(layout.hostBounds ?? bounds))
+    const localX = Math.max(0, rawBounds.x - adjustedBounds.x)
+    const localY = Math.max(0, rawBounds.y - adjustedBounds.y)
+    const tabLayoutBounds = {
+      x: localX,
+      y: localY,
+      width: Math.min(rawBounds.width, Math.max(0, adjustedBounds.width - localX)),
+      height: Math.min(rawBounds.height, Math.max(0, adjustedBounds.height - localY)),
     }
     // 隐藏→显示过渡：即使边界未变也必须重写 bounds 并请求重绘。
     // 仅 setVisible(true) 时 Chromium 不会重新合成 WebContentsView 表面，网页会停留在空白。
@@ -733,10 +778,11 @@ export class BrowserController {
       if (other.view.getVisible() !== shouldBeVisible) other.view.setVisible(shouldBeVisible)
     }
     const tabBounds = tab.view.getBounds()
-    if (tabBounds.x !== 0 || tabBounds.y !== 0
-      || tabBounds.width !== adjustedBounds.width || tabBounds.height !== adjustedBounds.height) {
-      tab.view.setBounds({ x: 0, y: 0, width: adjustedBounds.width, height: adjustedBounds.height })
+    if (tabBounds.x !== tabLayoutBounds.x || tabBounds.y !== tabLayoutBounds.y
+      || tabBounds.width !== tabLayoutBounds.width || tabBounds.height !== tabLayoutBounds.height) {
+      tab.view.setBounds(tabLayoutBounds)
     }
+    browserSession.lastTabBounds = { ...tabLayoutBounds }
     if (visible) {
       // 跨会话互斥：本会话浏览器被激活显示时，立即隐藏其他所有会话的原生视图。
       // 原生 View 全部 addChildView 在同一个主窗口 contentView 上且盖在 renderer DOM 之上。
@@ -759,9 +805,14 @@ export class BrowserController {
       if (other.tabId !== tab.tabId) other.view.setVisible(false)
     }
     const hostBounds = browserSession.lastHostBounds
-    if (hostBounds) tab.view.setBounds({ x: 0, y: 0, width: hostBounds.width, height: hostBounds.height })
+    const tabBounds = browserSession.lastTabBounds
+    if (tabBounds) tab.view.setBounds(tabBounds)
     tab.view.webContents.setZoomFactor(tab.zoomFactor)
-    const visible = !!hostBounds && !!this.owner && !this.owner.isDestroyed() && this.owner.isVisible()
+    const visible = browserSession.sessionId === this.foregroundSessionId
+      && !!hostBounds
+      && !!this.owner
+      && !this.owner.isDestroyed()
+      && this.owner.isVisible()
     if (visible) this.hideOtherBrowserSessions(browserSession.sessionId)
     browserSession.hostView.setVisible(visible)
     tab.view.setVisible(visible)
@@ -1434,8 +1485,11 @@ export class BrowserController {
    * renderer 上。面板关闭动作必须同步走这条主进程路径，避免页面视觉残留。
    */
   hide(sessionId: string): void {
+    // 隐藏是当前会话的面板动作，不等于失去前台所有权；保留 ownership，
+    // 这样用户再次点击打开时，新的 BrowserSlot layout 可以正常显示视图。
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) return
+    browserSession.lastVisible = false
     browserSession.hostView.setVisible(false)
     for (const tab of browserSession.tabs.values()) {
       tab.view.setVisible(false)
@@ -1450,7 +1504,9 @@ export class BrowserController {
    * 旧会话的网页会裸奔在旧位置，脱离浏览器容器、不再受控。
    */
   hideAll(): void {
+    this.foregroundSessionId = null
     for (const browserSession of this.sessions.values()) {
+      browserSession.lastVisible = false
       browserSession.hostView.setVisible(false)
       for (const tab of browserSession.tabs.values()) {
         tab.view.setVisible(false)
@@ -1460,6 +1516,7 @@ export class BrowserController {
   }
 
   async close(sessionId: string): Promise<void> {
+    if (this.foregroundSessionId === sessionId) this.foregroundSessionId = null
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) return
     this.sessions.delete(sessionId)
@@ -1474,6 +1531,7 @@ export class BrowserController {
   }
 
   dispose(): void {
+    this.foregroundSessionId = null
     for (const sessionId of [...this.sessions.keys()]) void this.close(sessionId)
     this.configurations.clear()
     this.owner = null

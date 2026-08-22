@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Profer icon concept — Steady</title>
+  <desc>Two rounded geometric planes overlap and open toward the upper right.</desc>
+  <g transform="rotate(-8 512 512)">
+    <path fill="#777777" d="M326 176c0-54 44-98 98-98h270c55 0 100 45 100 100v424c0 55-45 100-100 100H420c-54 0-98-44-98-98V176Z"/>
+    <path fill="#171717" d="M228 326c0-55 45-100 100-100h260c55 0 100 45 100 100v300c0 55-45 100-100 100H322c-54 0-98-44-98-98V326Z"/>
+    <path fill="#F2F1ED" d="M326 226h214c55 0 100 45 100 100v42c-25-22-58-35-94-35H326c-54 0-98 44-98 98v-5c0-55 45-100 100-100h-2v-100Z"/>
+  </g>
+</svg>

@@ -223,6 +223,8 @@ export interface FileSearchCandidateRequest {
   requestId: string
   sessionId: string
   targetName: string
+  /** 完整/绝对路径搜索时使用；存在时主进程只查询该路径，不按文件名递归搜索。 */
+  targetPath?: string
   mode: 'simple' | 'deep'
   alreadyFound: string[]
 }

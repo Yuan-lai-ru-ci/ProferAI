@@ -9,14 +9,13 @@ import { randomUUID } from 'node:crypto'
 import type {
   AgentMessage,
   AgentSessionMeta,
-  AgentStreamCompletePayload,
   AgentStreamPayload,
   AskUserRequest,
   PermissionRequest,
   ProferPermissionMode,
   SDKMessage,
 } from '@profer/shared'
-import { AGENT_IPC_CHANNELS, filterDisabledTools } from '@profer/shared'
+import { filterDisabledTools } from '@profer/shared'
 import {
   createAgentSession,
   getAgentSessionMeta,
@@ -28,12 +27,7 @@ import {
   runRegisteredHeadlessAgent,
   stopRegisteredAgent,
 } from './agent-headless-runner-registry'
-import {
-  getMainRendererWebContents,
-  isAgentSessionActive,
-  registerWebContents,
-  unregisterWebContents,
-} from './agent-service'
+import { isAgentSessionActive } from './agent-service'
 import {
   MAX_RUNNING_DELEGATIONS_PER_PARENT,
   buildRecoveredDelegationState,
@@ -713,7 +707,8 @@ function stopDelegation(parentSessionId: string, delegationId: string): Record<s
     }
   }
 
-  stopRegisteredAgent(record.childSessionId)
+  // 由父协作工具取消子会话并非 child UI 的直接 user stop。
+  stopRegisteredAgent(record.childSessionId, 'delegation_cancel')
   markDelegationFinished(record, 'cancelled')
   return {
     delegation: getDelegationSummary(record),
@@ -734,7 +729,7 @@ export function stopDelegationsForParent(parentSessionId: string): number {
   for (const record of delegations.values()) {
     if (record.parentSessionId === parentSessionId && record.status === 'running') {
       try {
-        stopRegisteredAgent(record.childSessionId)
+        stopRegisteredAgent(record.childSessionId, 'delegation_cancel')
         markDelegationFinished(record, 'cancelled')
         stopped++
       } catch (err) {
@@ -836,24 +831,6 @@ function startDelegation(
     expectedOutput: args.expectedOutput,
   })
 
-  // 注册主窗口 webContents，让子会话的流式事件能推送到前端 UI
-  const childWebContents = getMainRendererWebContents()
-  if (childWebContents) {
-    registerWebContents(child.id, childWebContents)
-  }
-
-  const sendStreamComplete = (opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string }) => {
-    if (childWebContents && !childWebContents.isDestroyed()) {
-      childWebContents.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
-        sessionId: child.id,
-        messages: [],
-        stoppedByUser: opts?.stoppedByUser ?? false,
-        startedAt: opts?.startedAt,
-        resultSubtype: opts?.resultSubtype,
-      } satisfies AgentStreamCompletePayload)
-    }
-  }
-
   runRegisteredHeadlessAgent(
     {
       sessionId: child.id,
@@ -869,15 +846,14 @@ function startDelegation(
       source: 'delegation',
       onError: (error) => {
         markDelegationFinished(record, 'failed', { error })
-        sendStreamComplete()
-        unregisterWebContents(child.id)
       },
       onComplete: (messages) => {
-        if (record.status !== 'running') return
-        const resultSummary = summarizeChildResult(child.id, messages)
-        markDelegationFinished(record, 'completed', { resultSummary })
-        sendStreamComplete()
-        unregisterWebContents(child.id)
+        // 级联取消会预先写入 cancelled；该状态仅阻断重复 delegation 收尾，
+        // 不能阻断 agent-service 对同一 run 的权威 STREAM_COMPLETE 转发。
+        if (record.status === 'running') {
+          const resultSummary = summarizeChildResult(child.id, messages)
+          markDelegationFinished(record, 'completed', { resultSummary })
+        }
       },
       onTitleUpdated: (updatedTitle) => {
         record.title = updatedTitle
@@ -887,8 +863,6 @@ function startDelegation(
     markDelegationFinished(record, 'failed', {
       error: error instanceof Error ? error.message : '未知错误',
     })
-    sendStreamComplete()
-    unregisterWebContents(child.id)
   })
 
   return { record, effectivePermissionMode: permissionMode, effectiveModelId }
@@ -1189,20 +1163,8 @@ export async function injectAgentCollaborationMcpServer(
 
           const child = updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
 
-          const childWc = getMainRendererWebContents()
-          if (childWc) {
-            registerWebContents(record.childSessionId, childWc)
-          }
-
-          const sendContinueComplete = (opts?: { stoppedByUser?: boolean }) => {
-            if (childWc && !childWc.isDestroyed()) {
-              childWc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
-                sessionId: record.childSessionId,
-                messages: [],
-                stoppedByUser: opts?.stoppedByUser ?? false,
-              } satisfies AgentStreamCompletePayload)
-            }
-          }
+          const startedAt = Date.now()
+          record.startedAt = startedAt
 
           runRegisteredHeadlessAgent(
             {
@@ -1213,21 +1175,18 @@ export async function injectAgentCollaborationMcpServer(
               workspaceId: child.workspaceId ?? record.workspaceId ?? ctx.workspaceId,
               permissionModeOverride: record.permissionMode,
               triggeredBy: 'delegation',
-              startedAt: Date.now(),
+              startedAt,
             },
             {
               source: 'delegation',
               onError: (error) => {
                 markDelegationFinished(record, 'failed', { error })
-                sendContinueComplete()
-                unregisterWebContents(record.childSessionId)
               },
               onComplete: (messages) => {
-                if (record.status !== 'running') return
-                const resultSummary = summarizeChildResult(record.childSessionId, messages)
-                markDelegationFinished(record, 'completed', { resultSummary })
-                sendContinueComplete()
-                unregisterWebContents(record.childSessionId)
+                if (record.status === 'running') {
+                  const resultSummary = summarizeChildResult(record.childSessionId, messages)
+                  markDelegationFinished(record, 'completed', { resultSummary })
+                }
               },
               onTitleUpdated: () => {},
             },
@@ -1235,8 +1194,6 @@ export async function injectAgentCollaborationMcpServer(
             markDelegationFinished(record, 'failed', {
               error: error instanceof Error ? error.message : '未知错误',
             })
-            sendContinueComplete()
-            unregisterWebContents(record.childSessionId)
           })
 
           const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), DEFAULT_WAIT_SECONDS * 1000))
@@ -1554,20 +1511,8 @@ export function buildPiCollaborationTools(
 
         const child = updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
 
-        const childWc2 = getMainRendererWebContents()
-        if (childWc2) {
-          registerWebContents(record.childSessionId, childWc2)
-        }
-
-        const sendPiContinueComplete = (opts?: { stoppedByUser?: boolean }) => {
-          if (childWc2 && !childWc2.isDestroyed()) {
-            childWc2.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, {
-              sessionId: record.childSessionId,
-              messages: [],
-              stoppedByUser: opts?.stoppedByUser ?? false,
-            } satisfies AgentStreamCompletePayload)
-          }
-        }
+        const startedAt = Date.now()
+        record.startedAt = startedAt
 
         runRegisteredHeadlessAgent(
           {
@@ -1578,21 +1523,18 @@ export function buildPiCollaborationTools(
             workspaceId: child.workspaceId ?? record.workspaceId ?? ctx.workspaceId,
             permissionModeOverride: record.permissionMode,
             triggeredBy: 'delegation',
-            startedAt: Date.now(),
+            startedAt,
           },
           {
             source: 'delegation',
             onError: (error) => {
               markDelegationFinished(record, 'failed', { error })
-              sendPiContinueComplete()
-              unregisterWebContents(record.childSessionId)
             },
             onComplete: (messages) => {
-              if (record.status !== 'running') return
-              const resultSummary = summarizeChildResult(record.childSessionId, messages)
-              markDelegationFinished(record, 'completed', { resultSummary })
-              sendPiContinueComplete()
-              unregisterWebContents(record.childSessionId)
+              if (record.status === 'running') {
+                const resultSummary = summarizeChildResult(record.childSessionId, messages)
+                markDelegationFinished(record, 'completed', { resultSummary })
+              }
             },
             onTitleUpdated: () => {},
           },
@@ -1600,8 +1542,6 @@ export function buildPiCollaborationTools(
           markDelegationFinished(record, 'failed', {
             error: error instanceof Error ? error.message : '未知错误',
           })
-          sendPiContinueComplete()
-          unregisterWebContents(record.childSessionId)
         })
 
         const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), DEFAULT_WAIT_SECONDS * 1000))

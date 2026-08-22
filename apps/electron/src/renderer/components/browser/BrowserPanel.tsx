@@ -295,7 +295,7 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   // 会话来源标识：区分用户手动、自动任务、委派子会话，让用户一眼看出是谁在驱动这个浏览器。
   const sourceLabel = state?.executionSource === 'automation' ? '自动任务' : state?.executionSource === 'delegation' ? '委派' : null
   return (
-    <div className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl bg-browser-host shadow-xl dark:shadow-sm titlebar-no-drag">
+    <div data-browser-native-host className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl bg-browser-host shadow-xl dark:shadow-sm titlebar-no-drag">
       {/* 浏览器是最右侧分栏时，窗口按钮成为浏览器顶栏的一部分。 */}
       <WindowControlsHost id="browser-panel" active={avoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-[3px] z-10" />
       <div className={`flex items-center h-[34px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>

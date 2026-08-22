@@ -3439,6 +3439,18 @@ export function registerIpcHandlers(): void {
     })
   }
 
+  ipcMain.on(
+    AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND,
+    (event, sessionId: string | null): void => {
+      if (sessionId !== null && typeof sessionId !== 'string') return
+      try {
+        assertSensitiveAgentIpcSender(event)
+        browserController.setForegroundSession(sessionId)
+      } catch {
+        // renderer 切换会话期间的旧消息无需打断 UI；后续布局/状态读取会再次同步。
+      }
+    },
+  )
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_BROWSER,
     async (event, sessionId: string): Promise<BrowserViewState> => {
@@ -5715,7 +5727,8 @@ export function registerIpcHandlers(): void {
         !input ||
         typeof input.sessionId !== 'string' ||
         typeof input.requestId !== 'string' ||
-        typeof input.targetName !== 'string'
+        typeof input.targetName !== 'string' ||
+        (input.targetPath !== undefined && typeof input.targetPath !== 'string')
       ) {
         throw new Error('文件搜索请求无效')
       }
@@ -5736,6 +5749,7 @@ export function registerIpcHandlers(): void {
         const result: FileCandidateSearchResult = await searchFileCandidate({
           requestId: input.requestId,
           targetName: input.targetName,
+          targetPath: input.targetPath,
           roots,
           maxDepth: input.mode === 'deep' ? 12 : 3,
           maxResults: input.mode === 'deep' ? 50 : 1,

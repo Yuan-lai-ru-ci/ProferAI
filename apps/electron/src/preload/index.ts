@@ -211,6 +211,8 @@ export interface ElectronAPI {
   pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
   /** 订阅受管网页下载被拦截的脱敏事件。 */
   onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => () => void
+  /** 同步切换浏览器原生视图的前台会话所有权。 */
+  setAgentBrowserForeground: (sessionId: string | null) => void
   hideAgentBrowser: (sessionId: string) => Promise<void>
   closeAgentBrowser: (sessionId: string) => Promise<void>
   setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => Promise<import('@profer/shared').BrowserViewState>
@@ -1549,6 +1551,9 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserDownloadBlockedEvent) => callback(payload)
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
     return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
+  },
+  setAgentBrowserForeground: (sessionId: string | null) => {
+    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND, sessionId)
   },
   hideAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.HIDE_BROWSER, sessionId),
   closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),

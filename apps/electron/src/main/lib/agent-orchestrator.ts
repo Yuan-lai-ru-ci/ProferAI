@@ -77,7 +77,8 @@ import {
 } from './task-graph-event-converter'
 import { appendGraphEvent } from './project-graph-service'
 import { injectAgentCollaborationMcpServer, registerCollaborationEventBus, stopDelegationsForParent } from './agent-collaboration-tools'
-import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
+import { getAgentStopCompletionOptions, setAgentStopper, type AgentStopSource } from './agent-headless-runner-registry'
+import { normalizeAgentEndReason } from './agent-end-reason'
 import { getAdapter, fetchTitle } from '@profer/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
@@ -95,7 +96,6 @@ import {
   rewindFilesFromSnapshot,
   rewindPiSession,
 } from './agent-session-manager'
-import { normalizeAgentEndReason } from './agent-end-reason'
 import {
   getAgentWorkspace,
   getWorkspaceMcpConfig,
@@ -156,6 +156,7 @@ import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
 import { injectPptMaterialMcpServer } from './ppt-material-agent-tools'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
+import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
 import { browserController } from './browser-controller'
 import {
   applySdkCredentials,
@@ -255,8 +256,8 @@ export class AgentOrchestrator {
   /** 队列消息本地记录（sessionId → UUID 集合，用于防重） */
   private queuedMessageUuids = new Map<string, Set<string>>()
 
-  /** 被用户手动中止的会话集合（在 stop 中标记，catch block 中消费） */
-  private stoppedBySessions = new Set<string>()
+  /** 已请求停止的会话及来源（在 stop 中标记，所有终态出口统一消费）。 */
+  private stoppedBySessions = new Map<string, AgentStopSource>()
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, ProferPermissionMode>()
@@ -272,10 +273,8 @@ export class AgentOrchestrator {
     this.eventBus = eventBus
     registerCollaborationEventBus(eventBus)
 
-    // 注册 headless runner，供协作工具 / 自动任务 / 桥接命令等非 UI 场景调用
-    setHeadlessAgentRunner((input, callbacks) => this.sendMessage(input, callbacks))
-    setAgentStopper((sessionId) => {
-      this.stop(sessionId)
+    setAgentStopper((sessionId, source) => {
+      this.stop(sessionId, source)
     })
   }
 
@@ -285,10 +284,17 @@ export class AgentOrchestrator {
    * SDK 在 query.close() 后不一定走异常路径：某些版本会先正常 yield result 再结束迭代。
    * 因此停止标记必须在所有终态路径统一消费，而不能只依赖 catch 块。
    */
-  private consumeStoppedByUser(sessionId: string): boolean {
-    const stoppedByUser = this.stoppedBySessions.has(sessionId)
+  private consumeStopSource(sessionId: string): AgentStopSource | undefined {
+    const source = this.stoppedBySessions.get(sessionId)
     this.stoppedBySessions.delete(sessionId)
-    return stoppedByUser
+    return source
+  }
+
+  private getStopCompletionOptions(sessionId: string): {
+    stoppedByUser: boolean
+    resultSubtype?: string
+  } {
+    return getAgentStopCompletionOptions(this.consumeStopSource(sessionId))
   }
 
   /**
@@ -1168,6 +1174,15 @@ export class AgentOrchestrator {
           agentCwd,
           allowedRoots: imageOutputAllowedRoots,
         })
+        // Pi receives the same tool through sdk.defineTool below. Inject the SDK MCP
+        // server only for Claude to avoid duplicate tool names after Pi MCP conversion.
+        if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
+          await injectAgentGptImageMcpServer(sdk, mcpServers, {
+            sessionId,
+            agentCwd,
+            allowedRoots: imageOutputAllowedRoots,
+          })
+        }
       }
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
@@ -1919,17 +1934,17 @@ ${enrichedMessage}`
 
             // 等待期间如果用户停止或本 run 已不再拥有会话，退出。
             if (this.stoppedBySessions.has(sessionId) || this.activeSessions.get(sessionId) !== runGeneration) {
-              const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
+              const stopOptions = this.getStopCompletionOptions(sessionId)
               this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
               try {
                 updateAgentSessionMeta(sessionId, {
-                  stoppedByUser: wasStoppedByUser,
+                  stoppedByUser: stopOptions.stoppedByUser,
                 })
               } catch {
                 /* 会话可能已删除 */
               }
               completeRun(getAgentSessionMessages(sessionId), {
-                stoppedByUser: wasStoppedByUser,
+                ...stopOptions,
                 startedAt: streamStartedAt,
               })
               return
@@ -2552,7 +2567,8 @@ ${enrichedMessage}`
             stopTimer = null
           }
 
-          const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
+          const stopOptions = this.getStopCompletionOptions(sessionId)
+          const wasStoppedByUser = stopOptions.stoppedByUser
 
           // 正常完成 — 如果之前有重试，发送 retry_cleared
           if (!wasStoppedByUser && retryAttemptsScheduled > 0) {
@@ -2587,9 +2603,9 @@ ${enrichedMessage}`
 
           // 发送完成信号
           completeRun(getAgentSessionMessages(sessionId), {
-            stoppedByUser: wasStoppedByUser,
+            ...stopOptions,
             startedAt: streamStartedAt,
-            resultSubtype: capturedResultSubtype,
+            resultSubtype: stopOptions.resultSubtype ?? capturedResultSubtype,
             resultErrors: capturedResultErrors,
           })
 
@@ -2612,19 +2628,19 @@ ${enrichedMessage}`
 
           // 用户主动中止：stopping 时仍保留 active ownership，直到 finally 真实释放。
           if (this.stoppedBySessions.has(sessionId)) {
-            const wasStoppedByUser = this.consumeStoppedByUser(sessionId)
-            console.log(`[Agent 编排] 会话 ${sessionId} 已被用户中止`)
+            const stopOptions = this.getStopCompletionOptions(sessionId)
+            console.log(`[Agent 编排] 会话 ${sessionId} 已被${stopOptions.stoppedByUser ? '用户' : '父会话级联'}中止`)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             // 持久化中断状态到会话 meta
             try {
               updateAgentSessionMeta(sessionId, {
-                stoppedByUser: wasStoppedByUser,
+                stoppedByUser: stopOptions.stoppedByUser,
               })
             } catch {
               /* 会话可能已删除 */
             }
             completeRun(getAgentSessionMessages(sessionId), {
-              stoppedByUser: wasStoppedByUser,
+              ...stopOptions,
               startedAt: streamStartedAt,
             })
             return
@@ -2988,12 +3004,16 @@ ${enrichedMessage}`
   /**
    * 中止指定会话；Stop 仅标记并 abort，运行所有权由 owner finally 释放。
    */
-  stop(sessionId: string): void {
+  stop(sessionId: string, source: AgentStopSource = 'user'): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
-    this.stoppedBySessions.add(sessionId)
-    // Scope exists only when the Pi Harness gate admitted this user Turn. Stop is
-    // a hard task boundary: mark paused before asking the adapter to abort.
-    pauseActivePiHarnessRun(sessionId, 'user_stop')
+    // Preserve main's stop-source attribution for user vs. cascaded cancellation.
+    this.stoppedBySessions.set(sessionId, source)
+    // A user Stop is a Pi Harness hard task boundary. Cascaded parent-session
+    // cancellation keeps main's existing attribution semantics and does not
+    // impersonate an explicit user Stop in the Harness ledger.
+    if (source === 'user') {
+      pauseActivePiHarnessRun(sessionId, 'user_stop')
+    }
     browserController.cancelSession(sessionId)
     try {
       this.adapter.abort(sessionId)
@@ -3006,7 +3026,7 @@ ${enrichedMessage}`
     } catch (err) {
       console.error(`[Agent 编排] 级联停止子会话失败: sessionId=${sessionId}`, err)
     }
-    console.log(`[Agent 编排] 已请求中止会话: ${sessionId}`)
+    console.log(`[Agent 编排] 已请求中止会话: ${sessionId}, source=${source}`)
   }
 
   /** 检查指定会话是否正在处理或停止中。 */

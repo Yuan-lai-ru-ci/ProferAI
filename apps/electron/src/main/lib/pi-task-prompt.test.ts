@@ -50,6 +50,7 @@ const ALL_TOOLS = [
   'mcp__memory-archive__search_memory',
   'mcp__team-memory__search_team_memories',
   'send_local_image',
+  'generate_image',
   'plan_ppt_visuals',
   'audit_ppt_delivery',
 ]
@@ -87,6 +88,22 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).not.toContain('AUTOMATION_RULES')
     expect(prompt).not.toContain('COLLABORATION_RULES')
     expect(prompt).not.toContain('PI_MEMORY_RULES')
+  })
+
+  test('生图或修图任务仅在 generate_image 实际注册时恢复图片 SOP', () => {
+    const enabled = buildPiTaskPrompt({
+      basePrompt: BASE_PROMPT,
+      userMessage: '请生成图片并把这张本地参考图修成绿色。',
+      toolNames: ['generate_image'],
+    })
+    expect(enabled).toContain('IMAGE_GENERATION_RULES')
+
+    const unavailable = buildPiTaskPrompt({
+      basePrompt: BASE_PROMPT,
+      userMessage: '请生成图片。',
+      toolNames: [],
+    })
+    expect(unavailable).not.toContain('IMAGE_GENERATION_RULES')
   })
 
   test('长期自动化、协作与记忆任务恢复对应规则', () => {
