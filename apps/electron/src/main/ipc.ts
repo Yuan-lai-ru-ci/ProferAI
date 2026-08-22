@@ -5712,7 +5712,8 @@ export function registerIpcHandlers(): void {
         !input ||
         typeof input.sessionId !== 'string' ||
         typeof input.requestId !== 'string' ||
-        typeof input.targetName !== 'string'
+        typeof input.targetName !== 'string' ||
+        (input.targetPath !== undefined && typeof input.targetPath !== 'string')
       ) {
         throw new Error('文件搜索请求无效')
       }
@@ -5733,6 +5734,7 @@ export function registerIpcHandlers(): void {
         const result: FileCandidateSearchResult = await searchFileCandidate({
           requestId: input.requestId,
           targetName: input.targetName,
+          targetPath: input.targetPath,
           roots,
           maxDepth: input.mode === 'deep' ? 12 : 3,
           maxResults: input.mode === 'deep' ? 50 : 1,

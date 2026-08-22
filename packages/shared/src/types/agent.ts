@@ -581,6 +581,8 @@ export type AgentEvent =
   | { type: 'retry_failed'; finalAttempt: RetryAttempt }  // 新增：重试失败
   // Usage 更新
   | { type: 'usage_update'; usage: AgentEventUsage }
+  // 主端/SDK 确认的会话级上下文窗口；必须可覆盖模型名推断的临时 fallback。
+  | { type: 'context_window'; contextWindow: number }
   // 上下文压缩
   | { type: 'compacting' }
   | { type: 'compact_complete' }

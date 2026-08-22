@@ -77,6 +77,8 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   const [showRawPath, setShowRawPath] = React.useState(false)
   const [candidates, setCandidates] = React.useState<string[]>([])
   const [selectedPath, setSelectedPath] = React.useState<string>()
+  /** candidates / selectedPath 当前归属的缓存键，防止组件复用时旧路径状态污染新路径。 */
+  const [stateCacheKey, setStateCacheKey] = React.useState<string>()
   const [searching, setSearching] = React.useState(false)
   const [deepCandidateMenuOpen, setDeepCandidateMenuOpen] = React.useState(false)
   const [deepMenuAnchor, setDeepMenuAnchor] = React.useState<{ x: number; y: number }>()
@@ -98,9 +100,23 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     () => searchCacheKey(store.get(currentAgentSessionIdAtom) ?? undefined, cleanPath, candidateBases),
     [candidateBases, cleanPath, store],
   )
-  const displayPath = selectedPath ?? (isAbsolute ? cleanPath : resolveRelativeToAbsolute(cleanPath, candidateBases))
+  const fallbackDisplayPath = isAbsolute ? cleanPath : resolveRelativeToAbsolute(cleanPath, candidateBases)
+  const displayPath = stateCacheKey === cacheKey ? (selectedPath ?? fallbackDisplayPath) : fallbackDisplayPath
 
   React.useEffect(() => {
+    const activeRequestId = requestIdRef.current
+    if (activeRequestId) {
+      cancelledRequestsRef.current.add(activeRequestId)
+      requestIdRef.current = undefined
+      void window.electronAPI.cancelFileSearch(activeRequestId)
+    }
+    setSearching(false)
+    setCandidates([])
+    setSelectedPath(undefined)
+    setStateCacheKey(cacheKey)
+    setFileStatus('idle')
+    setDeepCandidateMenuOpen(false)
+
     const cached = fileSearchCache.get(cacheKey)
     if (!cached) return
     if (cached.expiresAt <= Date.now()) {
@@ -113,13 +129,13 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   }, [cacheKey])
 
   React.useEffect(() => {
-    if (candidates.length === 0) return
+    if (stateCacheKey !== cacheKey || candidates.length === 0) return
     fileSearchCache.set(cacheKey, {
       candidates,
       selectedPath,
       expiresAt: Date.now() + FILE_SEARCH_CACHE_TTL_MS,
     })
-  }, [cacheKey, candidates, selectedPath])
+  }, [cacheKey, candidates, selectedPath, stateCacheKey])
 
   const openPreviewPath = React.useCallback((path: string) => {
     const sessionId = store.get(currentAgentSessionIdAtom)
@@ -151,6 +167,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
         requestId,
         sessionId,
         targetName: filename,
+        ...(isAbsolute ? { targetPath: cleanPath } : {}),
         mode,
         alreadyFound: candidates,
       })
@@ -193,7 +210,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
         setSearching(false)
       }
     }
-  }, [candidates, filename, openPreviewPath, searching, store])
+  }, [candidates, cleanPath, filename, isAbsolute, openPreviewPath, searching, store])
 
   const cancelSearch = React.useCallback(() => {
     const requestId = requestIdRef.current
@@ -274,7 +291,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     const cachedPath = cached && cached.expiresAt > Date.now()
       ? (cached.selectedPath ?? cached.candidates[0])
       : undefined
-    const previewPath = selectedPath ?? cachedPath
+    const previewPath = stateCacheKey === cacheKey ? (selectedPath ?? cachedPath) : cachedPath
     if (previewPath) {
       if (!selectedPath) setSelectedPath(previewPath)
       openPreviewPath(previewPath)
