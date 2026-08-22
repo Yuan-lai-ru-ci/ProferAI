@@ -197,6 +197,8 @@ describe('buildSystemPrompt', () => {
     // 其余交互规范条目不受影响
     expect(withoutAutomation).toContain('8. **发送既有本地图片**')
     expect(withoutAutomation).toContain('9. **AI 生图**')
+    expect(withoutAutomation).toContain('`generate_image`')
+    expect(withoutAutomation).toContain('不要尝试用代码、ASCII art 等伪造图片')
     expect(withoutAutomation).toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
     expect(withoutAutomation).toContain('图片附件标记')

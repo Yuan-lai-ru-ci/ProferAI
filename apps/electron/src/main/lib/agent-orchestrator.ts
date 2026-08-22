@@ -156,6 +156,7 @@ import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
 import { injectPptMaterialMcpServer } from './ppt-material-agent-tools'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
+import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
 import { browserController } from './browser-controller'
 import {
   applySdkCredentials,
@@ -1173,6 +1174,15 @@ export class AgentOrchestrator {
           agentCwd,
           allowedRoots: imageOutputAllowedRoots,
         })
+        // Pi receives the same tool through sdk.defineTool below. Inject the SDK MCP
+        // server only for Claude to avoid duplicate tool names after Pi MCP conversion.
+        if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
+          await injectAgentGptImageMcpServer(sdk, mcpServers, {
+            sessionId,
+            agentCwd,
+            allowedRoots: imageOutputAllowedRoots,
+          })
+        }
       }
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
