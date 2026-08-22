@@ -99,7 +99,8 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     const hasPptWorkflow = tools.has('plan_ppt_visuals') && tools.has('audit_ppt_delivery')
     const needsImageOutput = hasImageOutput
       && matches(task, /(?:发送|附上|展示|回复).*?(?:图片|图像|png|jpe?g|gif|webp)|(?:本地|已有).{0,8}(?:图片|图像)/i)
-    const needsImageGenerationRouting = matches(task, /(?:生成图片|画图|画一张|生图|p\s*图|修图|image generation)/i)
+    const needsImageGenerationRouting = tools.has('generate_image')
+      && matches(task, /(?:生成图片|画图|画一张|生图|p\s*图|修图|image generation)/i)
     const needsPpt = hasPptWorkflow && matches(task, /(?:\.pptx\b|\bppt\b|幻灯片|演示文稿|presentation|slides?)/i)
     if (needsImageOutput || needsImageGenerationRouting || needsPpt) lowFrequency.push(delivery.text)
   }

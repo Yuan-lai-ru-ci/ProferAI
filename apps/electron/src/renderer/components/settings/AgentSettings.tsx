@@ -55,7 +55,7 @@ export function AgentSettings(): React.ReactElement {
     {
       id: 'gpt-image',
       name: 'GPT Image',
-      description: 'AI 图片生成与编辑',
+      description: '启用并配置后，自动提供给 Chat 与 Agent 的图片生成和编辑能力',
       icon: <ImagePlus className="size-4" />,
       enabled: gptImageTool?.enabled ?? false,
       available: gptImageTool?.available ?? false,
