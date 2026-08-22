@@ -12,6 +12,21 @@ export function isCurrentAgentStreamCompletion(
 }
 
 /**
+ * 前端已乐观进入运行态、但 IPC 在真正启动 Agent 前同步拒绝（例如渠道已删除）时，
+ * 撤销这次尚未产生任何后端生命周期事件的假运行状态。
+ */
+export function rollbackRejectedAgentRunState(state: AgentStreamState): AgentStreamState {
+  return {
+    ...state,
+    running: false,
+    backgroundWaiting: false,
+    stopping: false,
+    isCompacting: false,
+    compactInFlight: false,
+  }
+}
+
+/**
  * 主进程确认一轮 run 已真实结束后，将 renderer 状态收敛到可继续输入的终态。
  * 错误消息、result 等 SDK 事件都不能代替 STREAM_COMPLETE 调用此函数，因为它们可能
  * 早于 orchestrator owner finally 到达；只有 STREAM_COMPLETE 才代表主进程运行锁已释放。
