@@ -173,7 +173,7 @@ import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
 import { detectAttachedDirectoryProjects } from './attached-directory-project-detector'
 import { isPiHarnessEnabled } from './pi-harness/feature-gate'
-import { pauseActivePiHarnessRun, settlePiHarnessRun, startPiHarnessRun } from './pi-harness/orchestrator-bridge'
+import { pauseActivePiHarnessRun, releaseManualPiHarnessCandidateContinuation, settlePiHarnessRun, startPiHarnessRun } from './pi-harness/orchestrator-bridge'
 
 // ===== 类型定义 =====
 
@@ -1635,8 +1635,13 @@ ${enrichedMessage}`
             userMessage,
             prompt: finalPrompt,
             permissionMode: initialPermissionMode,
+            manualCandidateContinuationTicket: input.piHarnessManualContinuationTicket,
           })
         } catch (error) {
+          // Generic sidecar observation remains fail-open. A manual continuation
+          // ticket is different: accepting a stale/invalid user click as an
+          // ordinary Pi request would violate the explicit-candidate boundary.
+          if (input.piHarnessManualContinuationTicket) throw error
           console.warn('[Pi Harness] 启动 sidecar scope 失败，按原 Pi 路径继续:', error)
         }
       }
@@ -2881,6 +2886,11 @@ ${enrichedMessage}`
         settlePiHarnessRun(sessionId, runEndedWithError ? 'failed' : 'completed')
       } catch (error) {
         console.warn('[Pi Harness] 结算 sidecar scope 失败，忽略:', error)
+      }
+      // A preflight failure can occur before Harness consumes the one-shot ticket.
+      // Releasing is harmless after consumption and lets the user retry explicitly.
+      if (input.piHarnessManualContinuationTicket) {
+        releaseManualPiHarnessCandidateContinuation(input.piHarnessManualContinuationTicket)
       }
       // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册

@@ -63,6 +63,7 @@ import {
   TEAM_FILE_IPC_CHANNELS,
   TEAM_MEMORY_IPC_CHANNELS,
   isAgentRuntime,
+  normalizeAgentRuntime,
   isProferPermissionMode,
   normalizePathForCompare,
   type AgentThinkingLevel,
@@ -445,6 +446,8 @@ import {
   onRuntimeProcessRegistryChanged,
 } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
+import { isPiHarnessEnabled } from './lib/pi-harness/feature-gate'
+import { prepareManualPiHarnessCandidateContinuation, releaseManualPiHarnessCandidateContinuation } from './lib/pi-harness/orchestrator-bridge'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -4406,6 +4409,59 @@ export function registerIpcHandlers(): void {
   // 中止 Agent 执行。必须等待底层 run 的 finally 完成后才向渲染层返回，
   // 否则用户刚点击「停止」就发送下一条消息时，编排器仍持有 active session，
   // 新消息会被并发保护拒绝，造成必须重复发送一次的体验问题。
+  /**
+   * User-only continuation for a Pi Harness ready_task candidate. The renderer
+   * nominates a task ID but never supplies prompt/runtime/channel metadata;
+   * all of that is re-read from the authoritative session in main.
+   */
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CONTINUE_PI_HARNESS_CANDIDATE,
+    async (event, input: import('@profer/shared').PiHarnessManualContinueInput): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input !== 'object' || typeof input.sessionId !== 'string' || typeof input.taskId !== 'string'
+        || input.sessionId.length === 0 || input.sessionId.length > 128 || input.taskId.length === 0 || input.taskId.length > 128) {
+        throw new Error('无效的候选任务请求')
+      }
+      if (!isPiHarnessEnabled()) throw new Error('Pi Harness 未启用')
+      const session = getAgentSessionMeta(input.sessionId)
+      if (!session) throw new Error('Agent 会话不存在')
+      if (normalizeAgentRuntime(session.agentRuntime) !== 'pi') throw new Error('仅 Pi 会话可继续 Harness 候选任务')
+      if (!session.channelId) throw new Error('当前会话未配置渠道')
+      if (isAgentSessionActive(input.sessionId)) throw new Error('会话仍在处理中，暂不能继续候选任务')
+
+      const prepared = prepareManualPiHarnessCandidateContinuation(input.sessionId, input.taskId)
+      const sendInput: AgentSendInput = {
+        sessionId: session.id,
+        userMessage: prepared.userMessage,
+        channelId: session.channelId,
+        ...(session.modelId ? { modelId: session.modelId } : {}),
+        ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
+        agentRuntime: 'pi',
+        ...(session.permissionMode ? { permissionModeOverride: session.permissionMode } : {}),
+        piHarnessManualContinuationTicket: prepared.ticketId,
+      }
+      try {
+        await coordinateAgentSend(sendInput, {
+          getSession: getAgentSessionMeta,
+          workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
+          getChannel: getChannelById,
+          startMirror: (candidateSession) => feishuBridgeManager.startSessionMirrorRun(candidateSession),
+          startAgent: () => runAgent(sendInput, event.sender, async (candidateSession) => {
+            try {
+              await feishuBridgeManager.startSessionMirrorRun(candidateSession)
+            } catch (error) {
+              console.error('[飞书 Session 镜像] Harness 候选继续后初始化失败:', error)
+            }
+          }),
+          onMirrorError: (error) => console.error('[飞书 Session 镜像] Harness 候选继续初始化失败:', error),
+        })
+      } catch (error) {
+        releaseManualPiHarnessCandidateContinuation(prepared.ticketId)
+        throw error
+      }
+    },
+  )
+
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (event, sessionId: string): Promise<void> => {

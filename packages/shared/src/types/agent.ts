@@ -1135,6 +1135,8 @@ export interface AgentSendInput {
   uuid?: string
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
+  /** Main-process one-shot ticket for a user-confirmed Pi Harness candidate. Not renderer-generated. */
+  piHarnessManualContinuationTicket?: string
 }
 
 // ===== Agent 队列消息 =====
@@ -1977,6 +1979,8 @@ export const AGENT_IPC_CHANNELS = {
   GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
   /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
   GET_PI_HARNESS_SNAPSHOT: 'agent:get-pi-harness-snapshot',
+  /** 用户显式确认继续一个 ready_task/shadow_mode Pi Harness candidate。 */
+  CONTINUE_PI_HARNESS_CANDIDATE: 'agent:continue-pi-harness-candidate',
   /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
   APPEND_GRAPH_EVENT: 'agent:append-graph-event',
   /** 回溯放弃抽取：通读会话增量轮次，抽取放弃方向写进图（渲染进程 → 主进程，返回刷新后的图） */

@@ -214,8 +214,15 @@ function NodeCard({ node, harness, x, y, selected, onClick }: { node: TaskNode; 
 
 // ===== 详情侧边面板 =====
 
-function DetailPanel({ node, harness, onClose }: { node: TaskNode; harness: PiHarnessTaskPresentation; onClose: () => void }) {
+function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
+  node: TaskNode
+  harness: PiHarnessTaskPresentation
+  onClose: () => void
+  onContinueCandidate: (taskId: string) => Promise<void>
+}) {
   const cfg = statusConfig[node.status]
+  const [continuing, setContinuing] = React.useState(false)
+  const [continuationError, setContinuationError] = React.useState<string | null>(null)
   const openSession = useOpenSession()
   const agentSessions = useAtomValue(agentSessionsAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -240,6 +247,20 @@ function DetailPanel({ node, harness, onClose }: { node: TaskNode; harness: PiHa
   const handleJumpToSession = () => {
     if (!targetSessionId) return
     openSession('agent', targetSessionId, node.subject)
+  }
+
+  const handleContinueCandidate = async () => {
+    if (!harness.canManuallyContinue || continuing) return
+    setContinuing(true)
+    setContinuationError(null)
+    try {
+      await onContinueCandidate(node.id)
+      toast.success('已开始继续该任务')
+    } catch (error) {
+      setContinuationError(error instanceof Error ? error.message : '启动候选任务失败')
+    } finally {
+      setContinuing(false)
+    }
   }
 
   return (
@@ -307,6 +328,21 @@ function DetailPanel({ node, harness, onClose }: { node: TaskNode; harness: PiHa
             {harness.pauseReason && <p className="text-xs text-muted-foreground">暂停原因：{harness.pauseReason}</p>}
             {harness.lastFactSummary && <p className="text-xs text-muted-foreground">最近证据：{harness.lastFactSummary}</p>}
             {harness.shadowCandidateLabel && <p className="text-xs text-muted-foreground">{harness.shadowCandidateLabel}</p>}
+            {harness.canManuallyContinue && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleContinueCandidate}
+                  disabled={continuing}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {continuing && <Loader2 className="size-3 animate-spin" />}
+                  {continuing ? '正在启动…' : '继续此任务'}
+                </button>
+                <p className="mt-1.5 text-[10px] text-muted-foreground/70">仅由你的点击启动新的 Pi Turn；不会自动继续。</p>
+              </div>
+            )}
+            {continuationError && <p className="text-xs text-red-500">{continuationError}</p>}
           </div>
         )}
 
@@ -446,7 +482,8 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
   React.useEffect(() => { injectBreatheStyle() }, [])
   const { graph, loading } = useGraphData(refreshVersion)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
-  const piHarness = usePiHarnessData(sessionId ?? undefined, refreshVersion)
+  const [candidateRefreshVersion, setCandidateRefreshVersion] = React.useState(0)
+  const piHarness = usePiHarnessData(sessionId ?? undefined, refreshVersion + candidateRefreshVersion)
   const setGraphQuestion = useSetAtom(graphQuestionAtom)
   const containerRef = React.useRef<HTMLDivElement>(null)
   const [scale, setScale] = React.useState(1)
@@ -455,6 +492,16 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
   const [dragging, setDragging] = React.useState(false)
   const dragRef = React.useRef<{ sx: number; sy: number; tx0: number; ty0: number } | null>(null)
   const [selectedNode, setSelectedNode] = React.useState<TaskNode | null>(null)
+
+  const continueCandidate = React.useCallback(async (taskId: string) => {
+    if (!sessionId) throw new Error('未选择 Agent 会话')
+    const api = window.electronAPI as {
+      continuePiHarnessCandidate?: (input: { sessionId: string; taskId: string }) => Promise<void>
+    }
+    if (!api.continuePiHarnessCandidate) throw new Error('当前版本不支持继续 Harness 候选任务')
+    await api.continuePiHarnessCandidate({ sessionId, taskId })
+    setCandidateRefreshVersion((version) => version + 1)
+  }, [sessionId])
 
   // 用 ref 存 scale/tx/ty 的快照，避免 wheel handler 的依赖问题
   const scaleRef = React.useRef(scale)
@@ -671,7 +718,7 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
         </div>
 
         {/* 右侧：详情面板（在正常流中，挤压左侧） */}
-        {selectedNode && <DetailPanel node={selectedNode} harness={presentPiHarnessTask(selectedNode.id, piHarness)} onClose={() => setSelectedNode(null)} />}
+        {selectedNode && <DetailPanel node={selectedNode} harness={presentPiHarnessTask(selectedNode.id, piHarness)} onClose={() => setSelectedNode(null)} onContinueCandidate={continueCandidate} />}
       </div>
     </div>
   )

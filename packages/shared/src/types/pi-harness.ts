@@ -25,6 +25,14 @@ export interface PiHarnessShadowCandidateView {
   action: 'required_verification' | 'ready_task'
   reason: string
   blockedReason?: string
+  /** True only for an unconsumed ready_task/shadow_mode candidate. */
+  canManuallyContinue?: boolean
+}
+
+/** Renderer may nominate only a graph task; the main process revalidates it. */
+export interface PiHarnessManualContinueInput {
+  sessionId: string
+  taskId: string
 }
 
 export interface PiHarnessTaskView {

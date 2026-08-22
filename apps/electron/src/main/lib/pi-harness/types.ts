@@ -125,6 +125,12 @@ export type PiHarnessEvent =
       payload: { action: string; reason: string; blockedReason?: string; estimatedPromptChars: number; fingerprint: string }
     })
   | (PiHarnessEventBase & {
+      /** Records a user click only; it never grants autonomous execution. */
+      type: 'manual_candidate_continued'
+      taskId: string
+      payload: { candidateFingerprint: string }
+    })
+  | (PiHarnessEventBase & {
       type: 'autonomy_budget_consumed'
       taskId?: string
       payload: { kind: 'task_transition' | 'repair_attempt' | 'verification_run'; estimatedCostUsd?: number }
@@ -164,6 +170,8 @@ export interface PiHarnessSnapshot {
   verificationByTask: Record<string, VerificationState>
   /** Persisted shadow candidate fingerprints prevent repeating the same no-change loop. */
   governorCandidateFingerprints: string[]
+  /** Candidate fingerprints explicitly chosen by a user; never treated as autonomy. */
+  manuallyContinuedCandidateFingerprints: string[]
   /** Sanitized later by the main process before renderer IPC projection. */
   governorCandidates: GovernorCandidateRecord[]
   goalPauseReasons: Record<string, string>
@@ -178,6 +186,7 @@ export function createEmptyPiHarnessSnapshot(sessionId: string): PiHarnessSnapsh
     facts: {},
     verificationByTask: {},
     governorCandidateFingerprints: [],
+    manuallyContinuedCandidateFingerprints: [],
     governorCandidates: [],
     goalPauseReasons: {},
     diagnostics: [],
