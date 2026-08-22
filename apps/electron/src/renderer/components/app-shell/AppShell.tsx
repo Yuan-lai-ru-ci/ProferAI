@@ -197,13 +197,15 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   return (
     <WindowControlsTemplateProvider>
     <AppShellProvider value={contextValue}>
-      {/* 可拖动标题栏区域，用于窗口拖动。
-          Windows 上必须避开右上角的 WindowControls 区域（buttons ~118px + 8px buffer = 126px），
-          否则 drag-region 与按钮区的 hitmask 重叠会让 OS 把单击当成标题栏点击，
-          表现为"按钮要双击才响应"。 */}
+      {/* 只保留顶端 8px 的全局拖拽缝隙。
+          过去这里覆盖 50px 高的固定 drag-region；它会和 TabBar 内的 no-drag
+          控件重叠。Electron 的原生 app-region 命中并不总是遵循 CSS z-index，
+          尤其当皮肤为 TabBar 创建 backdrop-filter 合成层时，Tab、工具按钮会被
+          误判为窗口拖动区而不可点击。TabBar、侧栏和各独立视图已经各自提供
+          局部 drag region，因此全局层不能覆盖任何实际交互区域。 */}
       <div
         className={cn(
-          'titlebar-drag-region fixed top-0 left-0 h-[50px] z-50',
+          'titlebar-drag-region fixed top-0 left-0 h-2 z-50',
           isWindows ? 'right-[126px]' : 'right-0'
         )}
       />
