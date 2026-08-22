@@ -12,6 +12,7 @@ export type { CapabilityChange } from './capabilities-diff'
 export {
   DEFAULT_CONTEXT_WINDOW,
   ONE_MILLION_CONTEXT_WINDOW,
+  CODEX_GPT_CONTEXT_WINDOW,
   supports1MContext,
   inferContextWindow,
   normalizeContextModelId,

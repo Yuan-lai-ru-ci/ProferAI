@@ -29,7 +29,7 @@ import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 
 import { AGENT_IPC_CHANNELS, type AgentSessionMeta } from '@profer/shared'
-import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
+import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
 import { getUserProfile } from './user-profile-service'
 import {
   listAgentSessions,
@@ -821,6 +821,21 @@ async function handleCommand(
 
     case 'list_sessions': {
       return { ok: true, data: buildSessionList() }
+    }
+
+    // 运行中上下文窗口为瞬时运行状态，不能只依赖客户端恰好在线时收到 context_window 事件。
+    // Pocket 在首次连接、重连或事件日志过期后的快照恢复时调用此命令水合。
+    case 'get_agent_runtime_contexts': {
+      const sessionIds = Array.isArray(parsed.sessionIds)
+        ? parsed.sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : undefined
+      // 以 orchestrator 的即时 active 状态二次过滤：即使进程在清理 run_idle 前收到命令，
+      // 也绝不把已结束 run 的短暂残留快照作为历史会话能力返回。
+      return {
+        ok: true,
+        data: listActiveAgentRuntimeContexts(sessionIds)
+          .filter((snapshot) => isAgentSessionActive(snapshot.sessionId)),
+      }
     }
 
     case 'delete_session': {

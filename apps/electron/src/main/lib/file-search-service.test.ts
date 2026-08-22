@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { searchFileCandidate } from './file-search-service'
@@ -55,6 +55,120 @@ describe('searchFileCandidate', () => {
       ])
     } finally {
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('完整路径命中时只返回该路径', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'profer-file-search-'))
+    try {
+      await mkdir(join(root, 'nested'), { recursive: true })
+      await writeFile(join(root, 'target.txt'), 'root')
+      await writeFile(join(root, 'nested', 'target.txt'), 'nested')
+
+      const result = await searchFileCandidate({
+        requestId: 'exact-hit',
+        targetName: 'target.txt',
+        targetPath: join(root, 'nested', 'target.txt'),
+        roots: [root],
+        maxDepth: 0,
+      })
+
+      expect(result.candidates).toEqual([{ path: join(root, 'nested', 'target.txt') }])
+      expect(result.candidate?.path).toBe(join(root, 'nested', 'target.txt'))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('完整路径不存在时不回退到同名文件搜索', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'profer-file-search-'))
+    try {
+      await mkdir(join(root, 'other'), { recursive: true })
+      await writeFile(join(root, 'other', 'target.txt'), 'other')
+
+      const result = await searchFileCandidate({
+        requestId: 'exact-missing',
+        targetName: 'target.txt',
+        targetPath: join(root, 'missing', 'target.txt'),
+        roots: [root],
+        maxDepth: 12,
+        maxResults: 50,
+      })
+
+      expect(result.candidate).toBeUndefined()
+      expect(result.candidates).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('完整路径位于授权根目录外时返回空结果', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'profer-file-search-'))
+    const outside = await mkdtemp(join(tmpdir(), 'profer-file-search-outside-'))
+    try {
+      await writeFile(join(outside, 'target.txt'), 'outside')
+
+      const result = await searchFileCandidate({
+        requestId: 'exact-outside',
+        targetName: 'target.txt',
+        targetPath: join(outside, 'target.txt'),
+        roots: [root],
+        maxDepth: 12,
+      })
+
+      expect(result.candidate).toBeUndefined()
+      expect(result.candidates).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  test('深度完整路径查询最多返回该路径', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'profer-file-search-'))
+    try {
+      await mkdir(join(root, 'first'), { recursive: true })
+      await mkdir(join(root, 'second'), { recursive: true })
+      await writeFile(join(root, 'first', 'target.txt'), 'first')
+      await writeFile(join(root, 'second', 'target.txt'), 'second')
+
+      const result = await searchFileCandidate({
+        requestId: 'exact-deep',
+        targetName: 'target.txt',
+        targetPath: join(root, 'first', 'target.txt'),
+        roots: [root],
+        maxDepth: 12,
+        maxResults: 50,
+      })
+
+      expect(result.candidates).toEqual([{ path: join(root, 'first', 'target.txt') }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('完整路径不能通过授权根目录内的符号链接访问目录外文件', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'profer-file-search-'))
+    const outside = await mkdtemp(join(tmpdir(), 'profer-file-search-outside-'))
+    try {
+      const outsideFile = join(outside, 'target.txt')
+      const linkedFile = join(root, 'linked-target.txt')
+      await writeFile(outsideFile, 'outside')
+      await symlink(outsideFile, linkedFile, 'file')
+
+      const result = await searchFileCandidate({
+        requestId: 'exact-symlink-outside',
+        targetName: 'linked-target.txt',
+        targetPath: linkedFile,
+        roots: [root],
+        maxDepth: 12,
+      })
+
+      expect(result.candidate).toBeUndefined()
+      expect(result.candidates).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
     }
   })
 

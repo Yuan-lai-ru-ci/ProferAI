@@ -73,7 +73,7 @@ import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
-import { compactCompletedBackgroundStreamState, settleCompletedAgentStreamState } from '@/lib/agent-stream-state-cleanup'
+import { compactCompletedBackgroundStreamState, isCurrentAgentStreamCompletion, settleCompletedAgentStreamState } from '@/lib/agent-stream-state-cleanup'
 import { isAbsoluteFilePath, resolveRelativeToAbsolute } from '@/lib/file-utils'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
@@ -135,8 +135,9 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'context_window':
-        // main 进程从 SDK result 拿到的真实 contextWindow，转成 usage_update 让 atom 合并到 streamState
-        return [{ type: 'usage_update', usage: { contextWindow: evt.contextWindow } }]
+        // 主端/SDK 确认的会话窗口，不可降级为 usage_update：后者只会填补空值，
+        // 无法覆盖此前由模型名得到的 200K 临时 fallback。
+        return [{ type: 'context_window', contextWindow: evt.contextWindow }]
       case 'permission_mode_changed':
         return [{ type: 'permission_mode_changed', mode: evt.mode }]
       case 'run_resumed':
@@ -1076,6 +1077,11 @@ export function useGlobalAgentListeners(): void {
         // 不发"任务已完成"通知（任务并未真正完成）、不清后台任务列表、不重载消息——
         // 等后台任务完成时 Agent 会自动唤醒续轮。
         const backgroundTasksPending = data.backgroundTasksPending === true
+        // 在任何可见副作用前验证本次 completion 是否仍属于当前 run，
+        // 防止迟到的旧终态通知、标记或关闭新 run。
+        const activeStreamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
+        if (!isCurrentAgentStreamCompletion(activeStreamState, data)) return
+
         // 发送桌面通知（任务完成，始终播放提示音）
         const enabled = store.get(notificationsEnabledAtom)
         const soundEnabled = store.get(notificationSoundEnabledAtom)
@@ -1103,15 +1109,7 @@ export function useGlobalAgentListeners(): void {
         // 竞态保护：通过 startedAt 区分新旧流，防止旧流的 complete 事件重置新流的 running 状态
         store.set(agentStreamingStatesAtom, (prev) => {
           const current = prev.get(data.sessionId)
-          // 既非运行中、也非软空闲态 → 已彻底结束，忽略重复/陈旧的完成事件。
-          // 软空闲态（running=false 但 backgroundWaiting=true）也要处理：空闲超时/用户停止
-          // 触发的真正完成会带 backgroundTasksPending=false，需借此清除 backgroundWaiting。
-          if (!current || (!current.running && !current.backgroundWaiting)) {
-            return prev
-          }
-          if (current.startedAt != null && (data.startedAt == null || current.startedAt > data.startedAt)) {
-            return prev
-          }
+          if (!isCurrentAgentStreamCompletion(current, data)) return prev
           const map = new Map(prev)
           map.set(data.sessionId, settleCompletedAgentStreamState(current, backgroundTasksPending))
           return map
@@ -1134,14 +1132,13 @@ export function useGlobalAgentListeners(): void {
           })
         }
 
-        // 标记用户主动打断状态
-        if (data.stoppedByUser) {
-          store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
-            const next = new Set(prev)
-            next.add(data.sessionId)
-            return next
-          })
-        }
+        // 只有明确 user stop 保留停止标记；正常和父级联取消都必须清掉旧标记。
+        store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
+          const next = new Set(prev)
+          if (data.stoppedByUser === true) next.add(data.sessionId)
+          else next.delete(data.sessionId)
+          return next
+        })
 
         // 中断说明 chip：非正常结束置位、正常完成清除；后台任务续轮（backgroundTasksPending）不置位。
         // 主进程 owner finally 统一归一化后透传 endReason，此处仅同步到会话级 atom。

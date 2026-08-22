@@ -13,6 +13,8 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000
 
 /** 1M 上下文窗口 */
 export const ONE_MILLION_CONTEXT_WINDOW = 1_000_000
+/** ChatGPT Codex GPT-5.4 / 5.5 / 5.6 的已验证上下文窗口 */
+export const CODEX_GPT_CONTEXT_WINDOW = 1_050_000
 
 export interface ModelUsageContextInfo {
   contextWindow?: number
@@ -61,6 +63,7 @@ export function supports1MContext(modelId: string): boolean {
     if (m.includes('fable-5')) return true
     return false
   }
+  if (/^gpt-(?:5\.4|5\.5|5\.6-(?:sol|terra|luna))$/.test(m)) return true
   if (isDeepSeekV4Model(m)) return true
   if (m.includes('mimo-v2.5') || m.includes('mimo-v2-pro')) return true
   if (m.includes('glm-5.2') || m.includes('glm-5.3')) return true
@@ -79,6 +82,10 @@ export function supports1MContext(modelId: string): boolean {
  */
 export function inferContextWindow(model?: string): number | undefined {
   if (!model) return undefined
+  const normalized = normalizeContextModelId(model)
+  if (normalized && /^gpt-(?:5\.4|5\.5|5\.6-(?:sol|terra|luna))$/.test(normalized)) {
+    return CODEX_GPT_CONTEXT_WINDOW
+  }
   if (supports1MContext(model)) return ONE_MILLION_CONTEXT_WINDOW
   return DEFAULT_CONTEXT_WINDOW
 }
@@ -147,13 +154,17 @@ export function resolveContextWindowFromModelUsage(
 
   if (preferredCanonical) {
     const exactEntry = entries.find(([modelId]) => canonicalize(modelId) === preferredCanonical)
-    if (exactEntry) return exactEntry[1].contextWindow ?? inferContextWindow(exactEntry[0])
+    if (exactEntry) return exactEntry[1].contextWindow
+      ?? inferContextWindow(preferredModelId)
+      ?? inferContextWindow(exactEntry[0])
 
     const preferredTail = normalizeContextModelId(preferredModelId)
     const tailMatches = entries.filter(([modelId]) => normalizeContextModelId(modelId) === preferredTail)
     if (tailMatches.length === 1) {
       const [modelId, info] = tailMatches[0]!
-      return info.contextWindow ?? inferContextWindow(modelId)
+      return info.contextWindow
+        ?? inferContextWindow(preferredModelId)
+        ?? inferContextWindow(modelId)
     }
   }
 
