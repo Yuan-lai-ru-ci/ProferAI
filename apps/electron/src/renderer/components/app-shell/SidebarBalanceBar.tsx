@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import {
   creditsPointsAtom,
-  creditsLifetimeConsumedAtom,
+  creditCycleSummaryAtom,
   creditsLowAtom,
   creditsExhaustedAtom,
   isInOverdraftAtom,
@@ -36,7 +36,7 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
   useCreditsLoader(60_000)
 
   const points = useAtomValue(creditsPointsAtom)
-  const lifetimeConsumed = useAtomValue(creditsLifetimeConsumedAtom)
+  const cycleSummary = useAtomValue(creditCycleSummaryAtom)
   const isLow = useAtomValue(creditsLowAtom)
   const isExhausted = useAtomValue(creditsExhaustedAtom)
   const isOverdraft = useAtomValue(isInOverdraftAtom)
@@ -54,11 +54,14 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
     setSettingsOpen(true)
   }
 
-  // 消耗占比（用于进度条）
-  const consumed = Math.round(lifetimeConsumed * 100) / 10
-  const total = points + consumed
-  const consumedPct = total > 0 ? Math.min(100, Math.round((consumed / total) * 100)) : 0
-  const remainingPct = 100 - consumedPct
+  // 进度条必须与积分页一致，以服务端的当前结算周期分母计算；绝不混入历史累计消耗。
+  const cycleTotalPoints = cycleSummary ? Math.round(cycleSummary.totalAllocated * 100) / 10 : null
+  const remainingPct = cycleTotalPoints && cycleTotalPoints > 0
+    ? Math.max(0, Math.min(100, Math.round((points / cycleTotalPoints) * 100)))
+    : 0
+  const cycleTooltip = cycleTotalPoints !== null
+    ? `本周期: ${formatPoints(points)} / ${formatPoints(cycleTotalPoints)}（${remainingPct}%）`
+    : '本周期额度同步中…'
 
   const tone = isOverdraft
     ? { text: 'text-red-500', bar: 'bg-red-500', track: 'bg-red-500/15', ring: 'border-red-500/30 bg-red-500/5 hover:bg-red-500/10' }
@@ -76,7 +79,7 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
         type="button"
         onClick={openCredits}
         aria-label={`我的积分 ${formatPoints(points)}`}
-        title={`我的积分 ${formatPoints(points)}\n${bucketTooltip}${isOverdraft ? '\n已透支！' : isExhausted ? '（已耗尽）' : isLow ? '（偏低）' : ''}`}
+        title={`我的积分 ${formatPoints(points)}\n${cycleTooltip}\n${bucketTooltip}${isOverdraft ? '\n已透支！' : isExhausted ? '（已耗尽）' : isLow ? '（偏低）' : ''}`}
         className={cn(
           'w-full flex items-center justify-center py-2 rounded-[10px] border transition-colors titlebar-no-drag',
           tone.ring,
@@ -92,7 +95,7 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
       type="button"
       onClick={openCredits}
       aria-label={`我的积分 ${formatPoints(points)}，点击查看`}
-      title={`我的积分 ${formatPoints(points)}\n${bucketTooltip}${isOverdraft ? '\n已透支！请尽快充值' : ''}`}
+      title={`我的积分 ${formatPoints(points)}\n${cycleTooltip}\n${bucketTooltip}${isOverdraft ? '\n已透支！请尽快充值' : ''}`}
       className={cn(
         'w-full flex flex-col gap-1.5 px-3 py-2 rounded-[10px] border transition-colors titlebar-no-drag text-left',
         tone.ring,
@@ -110,7 +113,7 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
       <div className={cn('h-1 rounded-full overflow-hidden', tone.track)}>
         <div
           className={cn('h-full rounded-full transition-all duration-500', tone.bar)}
-          style={{ width: `${Math.max(2, remainingPct)}%` }}
+          style={{ width: `${cycleTotalPoints === null ? 0 : Math.max(2, remainingPct)}%` }}
         />
       </div>
     </button>
