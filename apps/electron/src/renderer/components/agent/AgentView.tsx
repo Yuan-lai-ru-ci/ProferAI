@@ -154,6 +154,7 @@ import {
 import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
+import { rollbackRejectedAgentRunState } from '@/lib/agent-stream-state-cleanup'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -2597,7 +2598,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         const map = new Map(prev)
         const current = prev.get(sessionId)
         if (!current) return prev
-        map.set(sessionId, { ...current, isCompacting: false, compactInFlight: false })
+        map.set(sessionId, rollbackRejectedAgentRunState(current))
         return map
       })
     }).finally(() => {
