@@ -1079,7 +1079,7 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 将直接使用已保存的 sdkSessionId 进行 resume: ${existingSdkSessionId}`)
       }
 
-      // 10. 构建 MCP 服务器配置 + 自定义工具（生图工具仅 Chat 模式可用）
+      // 10. 构建 MCP 服务器配置 + 自定义工具（GPT Image 依渠道配置注入 Claude/Pi Agent）
       // Agent 预设提前解析：MCP 白名单裁剪在构建时生效；提示词/权限/effort 注入在后面复用同一对象。
       const sessionPreset = getAgentPreset(workspaceSlug, getAgentSessionMeta(sessionId)?.presetId)
       // 仅归一化已知内置历史 slug，不改写用户自建 Skill 名称。

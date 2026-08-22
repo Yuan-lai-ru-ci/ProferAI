@@ -67,7 +67,7 @@ import {
   parseEventsFromJsonl,
   serializeEvent,
 } from '@profer/project-core'
-// GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
+// GPT Image 的产物由统一附件生命周期管理；Agent 会话无需额外清理逻辑
 
 /**
  * 会话索引文件格式

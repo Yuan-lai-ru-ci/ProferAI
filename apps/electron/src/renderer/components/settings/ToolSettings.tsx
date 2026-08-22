@@ -379,7 +379,7 @@ function GptImageSettings(): React.ReactElement {
   return (
     <SettingsSection
       title="GPT Image"
-      description="在 Chat 中生成图片或编辑参考图；Agent 模式不提供生图工具"
+      description="在 Chat 和已启用工具的 Agent 会话中生成图片或编辑参考图"
       action={<Switch checked={enabled} onCheckedChange={handleToggle} />}
     >
       <SettingsCard divided={false}>
