@@ -76,11 +76,15 @@ function mutationsAffectAppOverlay(mutations: MutationRecord[]): boolean {
 
 export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: string }): React.ReactElement {
   const ref = React.useRef<HTMLDivElement>(null)
+  // WebContentsView 是原生层，不能被 DOM 的 overflow-hidden 裁剪。浏览器整卡的边界
+  // 由最近的 rounded-2xl 面板提供，让主进程能将圆角设在真正的原生宿主上。
+  const hostRef = React.useRef<HTMLElement | null>(null)
 
   React.useLayoutEffect(() => {
     const element = ref.current
     const setLayout = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserLayout
     if (!element || typeof setLayout !== 'function') return
+    hostRef.current = element.closest<HTMLElement>('[data-browser-native-host]')
     let frame = 0
     let pendingVisible = true
     const publish = (visible: boolean) => {
@@ -89,6 +93,7 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
       frame = requestAnimationFrame(() => {
         frame = 0
         const rect = element.getBoundingClientRect()
+        const hostRect = hostRef.current?.getBoundingClientRect() ?? rect
         setLayout({
           sessionId,
           tabId,
@@ -98,11 +103,17 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
             x: Math.round(rect.x), y: Math.round(rect.y),
             width: Math.round(rect.width), height: Math.round(rect.height),
           },
+          hostBounds: {
+            x: Math.round(hostRect.x), y: Math.round(hostRect.y),
+            width: Math.round(hostRect.width), height: Math.round(hostRect.height),
+          },
         })
       })
     }
     const publishCurrentVisibility = () => publish(!findBlockingOverlay(element))
     const observer = new ResizeObserver(() => publishCurrentVisibility())
+    observer.observe(element)
+    if (hostRef.current && hostRef.current !== element) observer.observe(hostRef.current)
     const overlayObserver = new MutationObserver((mutations) => {
       if (mutationsAffectAppOverlay(mutations)) publishCurrentVisibility()
     })
@@ -110,7 +121,6 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
     // body 的浮层观察无法看到此 mutation，必须立即重新测量原生宿主 bounds。
     const themeObserver = new MutationObserver(() => publishCurrentVisibility())
     const publishBounded = () => publishCurrentVisibility()
-    observer.observe(element)
     overlayObserver.observe(document.body, {
       childList: true,
       subtree: true,
@@ -126,17 +136,28 @@ export function BrowserSlot({ sessionId, tabId }: { sessionId: string; tabId: st
     // 在浏览器可见期间用 rAF 轮询比对几何，发生位移/尺寸变化就重新同步布局。
     let layoutFrame = 0
     let prevRect: DOMRect | null = null
+    let prevHostRect: DOMRect | null = null
     const layoutLoop = (): void => {
       layoutFrame = 0
-      if (findBlockingOverlay(element)) { prevRect = null; scheduleLayoutLoop(); return }
+      if (findBlockingOverlay(element)) { prevRect = null; prevHostRect = null; scheduleLayoutLoop(); return }
       const rect = element.getBoundingClientRect()
-      if (rect.width <= 4 || rect.height <= 4) { prevRect = null; scheduleLayoutLoop(); return }
-      const changed = !prevRect
+      const hostRect = hostRef.current?.getBoundingClientRect() ?? rect
+      if (rect.width <= 4 || rect.height <= 4) { prevRect = null; prevHostRect = null; scheduleLayoutLoop(); return }
+      const rectChanged = !prevRect
         || Math.abs(rect.x - prevRect.x) > 0.5
         || Math.abs(rect.y - prevRect.y) > 0.5
         || Math.abs(rect.width - prevRect.width) > 0.5
         || Math.abs(rect.height - prevRect.height) > 0.5
-      if (changed) { prevRect = rect; publishCurrentVisibility() }
+      const hostChanged = !prevHostRect
+        || Math.abs(hostRect.x - prevHostRect.x) > 0.5
+        || Math.abs(hostRect.y - prevHostRect.y) > 0.5
+        || Math.abs(hostRect.width - prevHostRect.width) > 0.5
+        || Math.abs(hostRect.height - prevHostRect.height) > 0.5
+      if (rectChanged || hostChanged) {
+        prevRect = rect
+        prevHostRect = hostRect
+        publishCurrentVisibility()
+      }
       scheduleLayoutLoop()
     }
     const scheduleLayoutLoop = (): void => {
