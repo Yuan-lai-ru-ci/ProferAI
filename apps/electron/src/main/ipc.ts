@@ -5063,6 +5063,21 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_PI_HARNESS_SNAPSHOT,
+    async (event, sessionId: string): Promise<import('@profer/shared').PiHarnessSnapshotView> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+        throw new Error('无效的会话标识')
+      }
+      const [{ loadPiHarnessSnapshot }, { toPiHarnessSnapshotView }] = await Promise.all([
+        import('./lib/pi-harness/pi-harness-store'),
+        import('./lib/pi-harness/snapshot-view'),
+      ])
+      return toPiHarnessSnapshotView(loadPiHarnessSnapshot(sessionId))
+    },
+  )
+
+  ipcMain.handle(
     AGENT_IPC_CHANNELS.APPEND_GRAPH_EVENT,
     async (
       event,

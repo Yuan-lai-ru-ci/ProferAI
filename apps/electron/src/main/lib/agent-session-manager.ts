@@ -17,6 +17,7 @@ import {
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
   getAgentSessionMessagesPath,
+  getPiHarnessEventsPath,
   getAgentSessionWorkspacePath,
   getAgentWorkspacePath,
   getSdkConfigDir,
@@ -67,6 +68,8 @@ import {
   parseEventsFromJsonl,
   serializeEvent,
 } from '@profer/project-core'
+import { copySettledPiHarnessEventsForFork } from './pi-harness/pi-harness-store'
+import { forkPiSessionArtifact } from './pi-session-fork'
 // GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
 /**
@@ -775,10 +778,11 @@ export function deleteAgentSession(id: string): void {
   const removed = index.sessions.splice(idx, 1)[0]!
   writeIndex(index)
 
-  // 删除消息与任务图文件。任务图和会话消息均属于该 Profer session，删除必须同步清理。
+  // 删除消息、任务图与 Harness sidecar。它们均属于该 Profer session，删除必须同步清理。
   for (const [label, filePath] of [
     ['消息', getAgentSessionMessagesPath(id)],
     ['任务图', getGraphJsonlPath(getAgentSessionsDir(), id)],
+    ['Pi Harness 账本', getPiHarnessEventsPath(id)],
   ] as const) {
     if (!existsSync(filePath)) continue
     try {
@@ -910,13 +914,16 @@ export function findOrphanSessions(): SessionHealth[] {
       sessionId: session.id,
       title: session.title,
       hasProferJsonl: false,
+      hasPiHarnessJsonl: false,
       hasSdkJsonl: false,
       hasWorkspaceDir: false,
       isOrphan: false,
     }
 
-    // 检查 Profer JSONL
+    // 检查 Profer JSONL。Harness sidecar 缺失仅表示历史会话可从空 snapshot 降级，
+    // 不是孤儿条件，绝不能因此阻断恢复。
     health.hasProferJsonl = existsSync(getAgentSessionMessagesPath(session.id))
+    health.hasPiHarnessJsonl = existsSync(getPiHarnessEventsPath(session.id))
 
     // 检查 runtime 对应的原生 session JSONL。Claude 与 Pi 的持久化目录和文件名规则不同。
     if (session.sdkSessionId) {
@@ -1113,14 +1120,14 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
   const destDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, newMeta.id) : undefined
 
   try {
-    const sdk = await import('@earendil-works/pi-coding-agent')
     const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
-    const sourceManager = sdk.SessionManager.open(sourceMeta.piSessionFile, sessionDir, sourceDir)
-    const branchFile = sourceManager.createBranchedSession(forkPoint.entryId)
-    if (!branchFile || !existsSync(branchFile)) {
-      throw new Error('Pi 未能生成分叉 session artifact')
-    }
-    const forkedManager = sdk.SessionManager.forkFrom(branchFile, destDir ?? sourceDir ?? process.cwd(), sessionDir)
+    const forkedManager = await forkPiSessionArtifact({
+      sourceSessionFile: sourceMeta.piSessionFile,
+      sessionDir,
+      sourceDir,
+      destinationDir: destDir,
+      entryId: forkPoint.entryId,
+    })
     const piSessionFile = forkedManager.getSessionFile()
     if (!piSessionFile || !existsSync(piSessionFile)) throw new Error('Pi 分叉 artifact 校验失败')
     if (forkPoint.interruptedText) {
@@ -1157,6 +1164,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
       sourceDir,
       destDir,
     })
+    copySettledPiHarnessEventsForFork(sourceMeta.id, newMeta.id, resolveForkTimestamp(targetUuid, getAgentSessionSDKMessages(sourceMeta.id)))
     return newMeta
   } catch (error) {
     // 尚未对外返回的新 session 可安全清理，避免留下会被侧栏打开的半成品。
@@ -1638,6 +1646,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     // Graph 事件存储为 {sessionId}-graph.jsonl，fork 创建新 sessionId，
     // 不复制则新会话看不到 fork 点之前的任务图（表现：任务图空白/不跟随）。
     copyTruncatedGraphJsonl(sessionId, newMeta.id, upToMessageUuid, sourceMessages)
+    copySettledPiHarnessEventsForFork(sessionId, newMeta.id, resolveForkTimestamp(upToMessageUuid, sourceMessages))
 
     console.log(`[Agent 会话] 分叉会话已创建（SDK 原生 fork）: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息, sdkSessionId=${forkResult.sessionId})`)
     return newMeta
@@ -1703,6 +1712,15 @@ function rewritePathsInJsonlFile(filePath: string, sourceDir: string, destDir: s
  * 截断逻辑：以 fork 目标消息的 _createdAt 为截止时间戳，
  * 只复制该时间点之前的图事件，保证 fork 会话只看到 fork 点的任务状态。
  */
+/** Resolve a branch boundary from the persisted display message timestamp. */
+function resolveForkTimestamp(upToMessageUuid: string | undefined, sourceMessages: SDKMessage[]): number {
+  if (!upToMessageUuid) return Date.now()
+  const target = sourceMessages.find(
+    (message) => 'uuid' in message && (message as { uuid?: string }).uuid === upToMessageUuid,
+  ) as (SDKMessage & { _createdAt?: unknown }) | undefined
+  return typeof target?._createdAt === 'number' ? target._createdAt : Date.now()
+}
+
 function copyTruncatedGraphJsonl(
   sourceSessionId: string,
   destSessionId: string,

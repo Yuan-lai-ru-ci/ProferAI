@@ -2,6 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'b
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
+import { appendPiHarnessEvent, loadPiHarnessSnapshot } from './pi-harness/pi-harness-store'
+import { PI_HARNESS_EVENT_VERSION, type PiHarnessEvent } from './pi-harness/types'
 
 type AgentSessionManager = typeof import('./agent-session-manager')
 
@@ -12,33 +14,21 @@ const originalPromaDev = process.env.PROMA_DEV
 const originalProferConfigDir = process.env.PROFER_CONFIG_DIR
 const appendedCustomMessages: Array<{ customType: string; content: string; display: boolean; details?: unknown }> = []
 
-// agent-session-manager loads Pi lazily for fork, so this focused fake isolates
-// entry-tree semantics without requiring a real Pi session JSONL fixture.
-mock.module('@earendil-works/pi-coding-agent', () => ({
-  SessionManager: {
-    open: (sessionFile: string) => ({
-      createBranchedSession: (entryId: string) => {
-        const branchFile = join(tempHome, `.pi-branch-${entryId}.jsonl`)
-        writeFileSync(branchFile, '', 'utf-8')
-        return branchFile
-      },
-      getSessionFile: () => sessionFile,
-      getSessionId: () => 'pi-test-session',
+// 分叉测试只替换本地 Pi 分叉边界，不能 mock 正式 Pi SDK 包：Bun 的 mock.module()
+// 在非隔离调用中会污染后续 SDK smoke / model registry 测试。
+mock.module('./pi-session-fork', () => ({
+  forkPiSessionArtifact: async () => {
+    const forkFile = join(tempHome, '.pi-fork.jsonl')
+    writeFileSync(forkFile, '', 'utf-8')
+    return {
+      getSessionFile: () => forkFile,
+      getSessionId: () => 'pi-fork-session',
       getEntry: (entryId: string) => entryId === 'entry-keep' ? { id: entryId } : undefined,
-    }),
-    forkFrom: (_branchFile: string) => {
-      const forkFile = join(tempHome, '.pi-fork.jsonl')
-      writeFileSync(forkFile, '', 'utf-8')
-      return {
-        getSessionFile: () => forkFile,
-        getSessionId: () => 'pi-fork-session',
-        getEntry: (entryId: string) => entryId === 'entry-keep' ? { id: entryId } : undefined,
-        appendCustomMessageEntry: (customType: string, content: string, display: boolean, details?: unknown) => {
-          appendedCustomMessages.push({ customType, content, display, details })
-          return 'interrupted-context'
-        },
-      }
-    },
+      appendCustomMessageEntry: (customType: string, content: string, display: boolean, details?: unknown) => {
+        appendedCustomMessages.push({ customType, content, display, details })
+        return 'interrupted-context'
+      },
+    }
   },
 }))
 
@@ -150,6 +140,23 @@ describe('Pi 会话分叉', () => {
     // 源 Pi session artifact 必须真实存在，forkPiAgentSession 会 existsSync 校验。
     writeFileSync(join(tempHome, 'pi-session.jsonl'), '', 'utf-8')
 
+    const policy = { governorMode: 'shadow' as const, permissionMode: 'bypassPermissions' as const, maxFocusChars: 1200 }
+    const settledHarnessEvents: PiHarnessEvent[] = [
+      {
+        version: PI_HARNESS_EVENT_VERSION, eventId: 'goal-created', timestamp: Date.now() - 3,
+        sessionId: 'pi-source-session', goalId: 'source-settled-goal', type: 'goal_created', payload: { policy },
+      },
+      {
+        version: PI_HARNESS_EVENT_VERSION, eventId: 'goal-settled', timestamp: Date.now() - 2,
+        sessionId: 'pi-source-session', goalId: 'source-settled-goal', type: 'goal_settled', payload: { reason: 'done' },
+      },
+      {
+        version: PI_HARNESS_EVENT_VERSION, eventId: 'active-created', timestamp: Date.now() - 1,
+        sessionId: 'pi-source-session', goalId: 'source-active-goal', type: 'goal_created', payload: { policy },
+      },
+    ]
+    for (const harnessEvent of settledHarnessEvents) appendPiHarnessEvent('pi-source-session', harnessEvent)
+
     const forked = await manager.forkAgentSession({
       sessionId: 'pi-source-session',
       upToMessageUuid: 'assistant-1',
@@ -162,6 +169,10 @@ describe('Pi 会话分叉', () => {
     // 新 branch 只保留分叉点之前的 entry 映射。
     expect(forked.piEntryBindings).toEqual({ 'assistant-1': 'entry-keep' })
     expect(existsSync(forked.piSessionFile!)).toBe(true)
+    const forkHarness = loadPiHarnessSnapshot(forked.id)
+    expect(Object.keys(forkHarness.goals)).toHaveLength(1)
+    expect(forkHarness.goals['source-settled-goal']).toBeUndefined()
+    expect(Object.values(forkHarness.goals)[0]).toMatchObject({ sessionId: forked.id, state: 'settled' })
 
     const persisted = manager.getAgentSessionMeta(forked.id)
     expect(persisted).toMatchObject({

@@ -34,6 +34,7 @@
     "build:commercial": "bun run build:main-commercial && bun run verify:build-target:commercial && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources",
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
+    "test": "bun test --isolate",
     "check:skin-token-sync": "node scripts/check-skin-token-sync.mjs",
     "check:skin-contract": "node scripts/check-skin-surface-contract.mjs",
     "test:memory-search": "node scripts/memory-search-verify.mjs",

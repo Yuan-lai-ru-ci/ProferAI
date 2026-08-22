@@ -34,6 +34,8 @@ import {
   type GraphSummary,
   type TaskNode,
   type TaskStatus,
+  getReadyTasks,
+  selectHarnessFocus,
   type GraphEvent,
 } from '@profer/project-core'
 import type { AgentSessionMeta } from '@profer/shared'
@@ -59,6 +61,28 @@ export function loadGraph(sessionId: string): TaskGraph {
 export function getGraphSummary(sessionId: string): GraphSummary {
   const graph = loadGraph(sessionId)
   return generateSummary(graph)
+}
+
+/**
+ * Loads the graph once and derives the small set of deterministic facts needed
+ * by the Harness. Callers must not reload the JSONL separately for focus/ready.
+ */
+export function loadHarnessGraphSnapshot(sessionId: string, previousFocusTaskId?: string): {
+  graph: TaskGraph
+  readyTaskIds: string[]
+  focusTaskId?: string
+  focusReason: string
+} {
+  const graph = loadGraph(sessionId)
+  const focus = selectHarnessFocus(graph, previousFocusTaskId)
+  return {
+    graph,
+    readyTaskIds: getReadyTasks(graph)
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      .map((task) => task.id),
+    focusTaskId: focus.task?.id,
+    focusReason: focus.reason,
+  }
 }
 
 /**

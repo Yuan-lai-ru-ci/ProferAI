@@ -1,0 +1,26 @@
+{
+  "name": "verified readback remains a shadow-only ready-task candidate",
+  "sessionId": "eval-verified",
+  "userMessage": "继续实现已有任务",
+  "graphEvents": [
+    { "type": "task_created", "taskId": "implement", "timestamp": 1, "payload": { "subject": "实现产物", "description": "@verify: bun test target\n@artifact: dist/output.txt", "dependsOn": [] } },
+    { "type": "task_status_changed", "taskId": "implement", "timestamp": 2, "payload": { "newStatus": "in_progress" } },
+    { "type": "task_created", "taskId": "document", "timestamp": 3, "payload": { "subject": "整理说明", "description": "", "dependsOn": [] } }
+  ],
+  "harnessEvents": [
+    { "version": 1, "eventId": "goal", "timestamp": 10, "sessionId": "eval-verified", "goalId": "goal-1", "type": "goal_created", "payload": { "activeTaskId": "implement", "policy": { "governorMode": "shadow", "permissionMode": "bypassPermissions", "maxFocusChars": 1200 } } },
+    { "version": 1, "eventId": "turn", "timestamp": 11, "sessionId": "eval-verified", "goalId": "goal-1", "turnId": "turn-1", "type": "turn_started", "payload": { "activeTaskId": "implement" } },
+    { "version": 1, "eventId": "write", "timestamp": 12, "sessionId": "eval-verified", "goalId": "goal-1", "turnId": "turn-1", "type": "tool_fact_recorded", "payload": { "fact": { "id": "write", "goalId": "goal-1", "turnId": "turn-1", "taskId": "implement", "kind": "file_mutation", "timestamp": 12, "toolName": "Write", "outcome": "success", "subject": { "path": "dist/output.txt" }, "summary": "Write success dist/output.txt", "fingerprint": "write" } } },
+    { "version": 1, "eventId": "read", "timestamp": 13, "sessionId": "eval-verified", "goalId": "goal-1", "turnId": "turn-1", "type": "tool_fact_recorded", "payload": { "fact": { "id": "read", "goalId": "goal-1", "turnId": "turn-1", "taskId": "implement", "kind": "file_read", "timestamp": 13, "toolName": "Read", "outcome": "success", "subject": { "path": "dist/output.txt" }, "summary": "Read success dist/output.txt", "fingerprint": "read" } } },
+    { "version": 1, "eventId": "test", "timestamp": 14, "sessionId": "eval-verified", "goalId": "goal-1", "turnId": "turn-1", "type": "tool_fact_recorded", "payload": { "fact": { "id": "test", "goalId": "goal-1", "turnId": "turn-1", "taskId": "implement", "kind": "verification_command", "timestamp": 14, "toolName": "Bash", "outcome": "success", "subject": { "category": "test", "exitCode": 0 }, "summary": "Bash test success exit=0", "fingerprint": "test" } } },
+    { "version": 1, "eventId": "settled", "timestamp": 15, "sessionId": "eval-verified", "goalId": "goal-1", "turnId": "turn-1", "type": "turn_state_changed", "payload": { "state": "settled", "usage": { "modelCalls": 1, "inputTokens": 100, "outputTokens": 50, "durationMs": 1000 } } },
+    { "version": 1, "eventId": "candidate", "timestamp": 16, "sessionId": "eval-verified", "goalId": "goal-1", "taskId": "document", "type": "governor_candidate_recorded", "payload": { "action": "ready_task", "reason": "下游任务已就绪: 整理说明", "blockedReason": "shadow_mode", "estimatedPromptChars": 240, "fingerprint": "ready:document" } }
+  ],
+  "expected": {
+    "goalIntakeKind": "existing_graph",
+    "focusTaskId": "implement",
+    "focusKind": "in_progress",
+    "assuranceByTask": { "implement": "verified", "document": "not_required" },
+    "telemetry": { "modelCalls": 1, "inputTokens": 100, "outputTokens": 50, "candidateCount": 1, "falseVerified": 0, "taskTransitions": 0 }
+  }
+}

@@ -90,6 +90,17 @@ export {
   formatTaskContext,
 } from './graph-query'
 
+// Harness 查询（纯函数，供运行时确定性选择任务焦点）
+export {
+  selectHarnessFocus,
+  getHarnessBlockedTasks,
+  getTaskVerificationContext,
+  type HarnessFocus,
+  type HarnessFocusKind,
+  type HarnessBlockedTask,
+  type TaskVerificationContext,
+} from './harness-query'
+
 // Project 元数据
 export {
   createProjectMeta,

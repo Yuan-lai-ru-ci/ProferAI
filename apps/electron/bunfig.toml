@@ -1,0 +1,7 @@
+# Electron 包可独立执行 `bun test`，因此保留与 workspace 根一致的测试契约。
+# Bun 从子包 cwd 运行时不会继承根 bunfig.toml 的相对 preload 路径。
+
+[test]
+preload = ["../../test/preload-electron-mock.ts"]
+
+# Bun 1.3.14 的 isolate 仅支持 CLI 参数；package.json 的 `test` 脚本显式传递它。

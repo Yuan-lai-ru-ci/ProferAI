@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import {
   __setBundledSkillsDirForTest,
   __setLegacyBundledSkillDirectoryHashesForTest,
+  getConfigDir,
   getDefaultSkillsDir,
   seedDefaultSkills,
 } from './config-paths'
@@ -47,6 +48,17 @@ afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PROFER_CONFIG_DIR
   else process.env.PROFER_CONFIG_DIR = originalConfigDir
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true })
+})
+
+describe('getConfigDir', () => {
+  test('Given PROFER_CONFIG_DIR When resolving Then it returns the explicit isolated root', () => {
+    const root = makeRoot()
+    const override = join(root, 'isolated-config')
+    process.env.PROFER_CONFIG_DIR = override
+
+    expect(getConfigDir()).toBe(override)
+    expect(existsSync(override)).toBe(true)
+  })
 })
 
 describe('seedDefaultSkills', () => {

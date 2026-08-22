@@ -874,6 +874,9 @@ export interface ElectronAPI {
   /** 获取当前会话的 Graph 摘要 */
   getGraphSummary: (sessionId: string) => Promise<import('@profer/project-core').GraphSummary>
 
+  /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
+  getPiHarnessSnapshot: (sessionId: string) => Promise<import('@profer/shared').PiHarnessSnapshotView>
+
   /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => Promise<void>
 
@@ -2464,6 +2467,10 @@ const electronAPI: ElectronAPI = {
 
   getGraphSummary: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId)
+  },
+
+  getPiHarnessSnapshot: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_HARNESS_SNAPSHOT, sessionId)
   },
 
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => {

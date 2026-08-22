@@ -17,9 +17,10 @@ export const VITE_DEV_SERVER_PORT = 5174
 export const VITE_DEV_SERVER_URL = `http://localhost:${VITE_DEV_SERVER_PORT}`
 
 /**
- * 获取配置目录名称
+ * 获取默认配置目录名称
  *
  * 开发模式下返回 '.profer-dev'，正式版本返回 '.profer'。
+ * 受控运行可通过 PROFER_CONFIG_DIR 覆盖实际配置根；该覆盖不改变默认名称。
  *
  * 检测优先级：
  * 1. PROFER_DEV=1 环境变量（显式覆盖）
@@ -41,7 +42,7 @@ export function getConfigDirName(): string {
       }
     }
     const mode = _configDirName === '.profer-dev' ? '开发模式' : '正式版本'
-    console.log(`[配置] 配置目录: ~/${_configDirName}/（${mode}）`)
+    console.log(`[配置] 默认配置目录名: ~/${_configDirName}/（${mode}）；实际路径可由 PROFER_CONFIG_DIR 覆盖`)
   }
   return _configDirName
 }
@@ -300,6 +301,16 @@ export function getAgentSessionsDir(): string {
  */
 export function getAgentSessionMessagesPath(id: string): string {
   return join(getAgentSessionsDir(), `${id}.jsonl`)
+}
+
+/**
+ * 获取指定 Pi Host Harness 会话级事件账本路径。
+ *
+ * 与 Profer 展示消息、Project Graph JSONL 并列，但仅保存内部执行控制事实；
+ * 缺失文件代表该历史会话尚未启用 Harness，读取方必须安全降级为空 snapshot。
+ */
+export function getPiHarnessEventsPath(id: string): string {
+  return join(getAgentSessionsDir(), `${id}-pi-harness.jsonl`)
 }
 
 /**
