@@ -56,11 +56,13 @@ function SkinGroup({ title, skins, themeMode, themeStyle, onSelect, onDelete, em
       <div className="px-4 pt-3 text-sm font-medium">{title}</div>
       {skins.length === 0 ? empty : <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">{skins.map((skin) => {
         const active = themeMode === 'special' && themeStyle === skin.id
-        return <button key={skin.id} onClick={() => onSelect(skin.id)} className={`relative overflow-hidden rounded-lg border text-left transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'border-surface-border hover:border-primary/50'}`}>
-          <SkinPreview skin={skin} />
-          <div className="p-2"><div className="flex items-center gap-1 truncate text-xs font-medium">{skin.name}{active && <Check size={13} className="shrink-0 text-primary" />}</div><div className="truncate text-[11px] text-muted-foreground">{skin.author || (skin.builtin ? 'Profer 内置' : '本地皮肤')} · {skin.tone === 'dark' ? '深色' : '浅色'}</div></div>
-          {onDelete && <button type="button" title="删除皮肤" aria-label={`删除皮肤 ${skin.name}`} onClick={(event) => { event.stopPropagation(); onDelete(skin) }} className="absolute right-1 top-1 rounded bg-surface-raised/80 p-1 text-muted-foreground hover:text-destructive"><Trash2 size={13} /></button>}
-        </button>
+        return <div key={skin.id} className="relative">
+          <button type="button" onClick={() => onSelect(skin.id)} className={`w-full overflow-hidden rounded-lg border text-left transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'border-surface-border hover:border-primary/50'}`}>
+            <SkinPreview skin={skin} />
+            <div className="p-2"><div className="flex items-center gap-1 truncate text-xs font-medium">{skin.name}{active && <Check size={13} className="shrink-0 text-primary" />}</div><div className="truncate text-[11px] text-muted-foreground">{skin.author || (skin.builtin ? 'Profer 内置' : '本地皮肤')} · {skin.tone === 'dark' ? '深色' : '浅色'}</div></div>
+          </button>
+          {onDelete && <button type="button" title="删除皮肤" aria-label={`删除皮肤 ${skin.name}`} onClick={() => onDelete(skin)} className="absolute right-1 top-1 rounded bg-surface-raised/80 p-1 text-muted-foreground hover:text-destructive"><Trash2 size={13} /></button>}
+        </div>
       })}</div>}
     </SettingsCard>
   )
