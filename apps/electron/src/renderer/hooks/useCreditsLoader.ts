@@ -17,6 +17,7 @@ import {
   creditsBalancePackageAtom,
   creditsBalanceReferralAtom,
   creditsBalancePurchasedAtom,
+  creditCycleSummaryAtom,
   membershipTierAtom,
   isVipAtom,
   multiplierAtom,
@@ -34,6 +35,7 @@ function clearCreditsState(store: JotaiStore): void {
   store.set(creditsBalancePackageAtom, 0)
   store.set(creditsBalanceReferralAtom, 0)
   store.set(creditsBalancePurchasedAtom, 0)
+  store.set(creditCycleSummaryAtom, null)
   store.set(membershipTierAtom, 'free')
   store.set(isVipAtom, false)
   store.set(multiplierAtom, 1.0)
@@ -69,6 +71,8 @@ export async function refreshCreditsInto(store: JotaiStore): Promise<void> {
     store.set(creditsBalancePackageAtom, d.balancePackage ?? 0)
     store.set(creditsBalanceReferralAtom, d.balanceReferral ?? 0)
     store.set(creditsBalancePurchasedAtom, d.balancePurchased ?? 0)
+    // 服务端灰度或旧版本未返回时保持 null，界面会明确提示同步中，不能倒退到历史累计分母。
+    store.set(creditCycleSummaryAtom, d.cycleSummary ?? null)
     store.set(membershipTierAtom, d.membershipTier ?? 'free')
     store.set(isVipAtom, !!d.isVip)
     store.set(multiplierAtom, d.multiplier ?? 1.0)

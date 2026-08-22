@@ -43,6 +43,27 @@ export const creditsLifetimeConsumedPointsAtom = atom((get) => {
 /** 是否正在加载 */
 export const creditsLoadingAtom = atom<boolean>(false)
 
+// ---- 当前结算周期汇总（货币单位；服务端按套餐周期/中国自然月聚合） ----
+export interface CreditCycleSummary {
+  balancePackage: number
+  balanceReferral: number
+  balancePurchased: number
+  packageConsumed: number
+  referralConsumed: number
+  purchasedConsumed: number
+  packageAllocated: number
+  referralAllocated: number
+  purchasedAllocated: number
+  totalAllocated: number
+  packagePeriodStartsAt: number
+  packagePeriodEndsAt: number | null
+  monthStartsAt: number
+  monthEndsAt: number
+}
+
+/** null 表示接口尚未返回周期汇总，不能退回错误的历史累计分母。 */
+export const creditCycleSummaryAtom = atom<CreditCycleSummary | null>(null)
+
 // ---- 积分分账 ----
 export const creditsBalancePackageAtom = atom<number>(0)
 export const creditsBalanceReferralAtom = atom<number>(0)
