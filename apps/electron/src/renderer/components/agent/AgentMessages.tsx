@@ -122,7 +122,6 @@ interface AgentMessagesProps {
   tabletMode?: boolean
   /** Desktop-only durable image generation timeline cards. */
   imageGenerations?: AgentImageGenerationCard[]
-  onRetryImageGeneration?: (generationId: string) => Promise<void>
   /** 移动端触顶自动加载：还有更早消息时可触发。 */
   onLoadEarlierHistory?: () => void
   /** 移动端：更早是否还有内容（服务端 hasMore）。 */
@@ -502,7 +501,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onRetryImageGeneration, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -818,7 +817,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           <>
             {/* 统一时间线：SDK 消息组和持久化图片卡按创建时间合并，卡片不依赖 tool nesting。 */}
             {visibleTimeline.map((item) => {
-              if (item.kind === 'image') return <AgentImageGenerationCardView key={`generation:${item.id}`} card={item.card} onRetry={onRetryImageGeneration} />
+              if (item.kind === 'image') return <AgentImageGenerationCardView key={`generation:${item.id}`} card={item.card} />
               const group = item.group
               const isLive = liveGroupSet.has(group)
               const isErrorGroup = group.type === 'assistant-turn'

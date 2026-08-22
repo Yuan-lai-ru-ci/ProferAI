@@ -631,14 +631,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     return () => { cancelled = true }
   }, [sessionId, tabletMode, setImageGenerations])
 
-  const retryImageGeneration = React.useCallback(async (generationId: string): Promise<void> => {
-    const card = await window.electronAPI.retryAgentImageGeneration({ sessionId, generationId })
-    setImageGenerations((previous) => {
-      const next = new Map(previous)
-      next.set(sessionId, upsertAgentImageGeneration(previous.get(sessionId) ?? [], card))
-      return next
-    })
-  }, [sessionId, setImageGenerations])
 
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
@@ -3088,7 +3080,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onCompact={handleCompact}
           tabletMode={tabletMode}
           imageGenerations={imageGenerations}
-          onRetryImageGeneration={retryImageGeneration}
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}
