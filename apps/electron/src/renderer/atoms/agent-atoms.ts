@@ -653,18 +653,23 @@ export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorSta
 /**
  * 处理 AgentEvent 并更新流式状态（纯函数）
  */
+function preserveFailedRetry(prev: AgentStreamState): AgentStreamState['retrying'] {
+  return prev.retrying?.failed ? prev.retrying : undefined
+}
+
 export function applyAgentEvent(
   prev: AgentStreamState,
   event: AgentEvent,
 ): AgentStreamState {
   switch (event.type) {
     case 'text_delta':
-      // 开始接收文本 - 清除重试状态（重试成功）
-      return { ...prev, content: prev.content + event.text, retrying: undefined }
+      // 开始接收文本 - 清除非失败重试状态（失败历史仍需保留）
+      return { ...prev, content: prev.content + event.text, retrying: preserveFailedRetry(prev) }
 
     case 'text_complete':
-      // 用完整文本替换增量累积的文本（用于回放场景：只需 text_complete 即可重建文本状态）
-      return { ...prev, content: event.text }
+      // 用完整文本替换增量累积的文本（用于回放场景：只需 text_complete 即可重建文本状态）。
+      // 完整文本代表成功收到模型响应，清除非失败 retry；retry_failed 仍由 failed=true 保留。
+      return { ...prev, content: event.text, retrying: preserveFailedRetry(prev) }
 
     case 'tool_start': {
       const existing = prev.toolActivities.find((t) => t.toolUseId === event.toolUseId)
@@ -676,8 +681,8 @@ export function applyAgentEvent(
               ? { ...t, input: event.input, intent: event.intent || t.intent, displayName: event.displayName || t.displayName }
               : t
           ),
-          // 开始工具调用 - 清除重试状态（重试成功）
-          retrying: undefined,
+          // 开始工具调用 - 清除非失败重试状态（失败历史仍需保留）
+          retrying: preserveFailedRetry(prev),
         }
       }
       return {
@@ -691,8 +696,8 @@ export function applyAgentEvent(
           done: false,
           parentToolUseId: event.parentToolUseId,
         }],
-        // 开始工具调用 - 清除重试状态（重试成功）
-        retrying: undefined,
+        // 开始工具调用 - 清除非失败重试状态（失败历史仍需保留）
+        retrying: preserveFailedRetry(prev),
       }
     }
 
@@ -803,7 +808,7 @@ export function applyAgentEvent(
           ...(needResultFallback && event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
           ...(needResultFallback && { usageUpdatedAt: Date.now() }),
         } : {}),
-        retrying: undefined,
+        retrying: preserveFailedRetry(prev),
         ...finalizeStreamingActivities(prev.toolActivities),
       }
     }

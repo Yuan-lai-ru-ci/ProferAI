@@ -14,6 +14,8 @@
 export type AgentWorkflowEvent = {
   sessionId: string
   payload: unknown
+  /** 服务端 Agent 事件日志中的单调游标。旧服务端可能省略。 */
+  eventId?: number
 }
 
 export type ChatWorkflowEvent = {
@@ -32,9 +34,10 @@ type CommandResultMessage = {
 }
 
 type InboundMessage =
-  | { kind: 'hello'; serverTime: number }
+  | { kind: 'hello'; serverTime: number; serverInstanceId?: string; latestAgentEventId?: number | null; oldestAgentEventId?: number | null }
   | { kind: 'pong'; serverTime: number }
-  | { kind: 'agent_event'; sessionId: string; payload: unknown }
+  | { kind: 'agent_event'; eventId?: number; sessionId: string; payload: unknown }
+  | { kind: 'agent_events_resumed'; requestId?: string | null; requiresSnapshot?: boolean; latestEventId?: number | null }
   | { kind: 'chat_event'; conversationId: string; channel: string; payload: unknown }
   | CommandResultMessage
 
@@ -51,6 +54,8 @@ export interface WsClientOptions {
   onChatEvent?: (evt: ChatWorkflowEvent) => void
   /** 指令结果回调（按 requestId 分发） */
   onCommandResult?: (result: CommandResultMessage) => void
+  /** Agent 事件回放不可用或服务实例变化时，请求上层按服务端快照收敛状态。 */
+  onAgentSnapshotRequired?: () => void
 }
 
 export class WsClient {
@@ -79,6 +84,12 @@ export class WsClient {
   onAgentEvent?: WsClientOptions['onAgentEvent']
   onChatEvent?: WsClientOptions['onChatEvent']
   onCommandResult?: WsClientOptions['onCommandResult']
+  onAgentSnapshotRequired?: WsClientOptions['onAgentSnapshotRequired']
+
+  /** 当前服务实例及最后已交付的 Agent 事件游标。仅在同一实例内复用。 */
+  private serverInstanceId: string | null = null
+  private lastAgentEventId: number | null = null
+  private hasSeenHello = false
 
   constructor(options: WsClientOptions) {
     this.url = options.url
@@ -87,6 +98,7 @@ export class WsClient {
     this.onAgentEvent = options.onAgentEvent
     this.onChatEvent = options.onChatEvent
     this.onCommandResult = options.onCommandResult
+    this.onAgentSnapshotRequired = options.onAgentSnapshotRequired
   }
 
   connect(): void {
@@ -178,17 +190,51 @@ export class WsClient {
 
   private handleMessage(msg: InboundMessage): void {
     switch (msg.kind) {
-      case 'hello':
-        // 连接就绪
+      case 'hello': {
+        const instanceId = typeof msg.serverInstanceId === 'string' && msg.serverInstanceId.length > 0
+          ? msg.serverInstanceId
+          : null
+        const isInitialHello = !this.hasSeenHello
+        const sameServerInstance = isInitialHello || (instanceId !== null && instanceId === this.serverInstanceId)
+        if (!isInitialHello && !sameServerInstance) {
+          // 服务端重启后 eventId 空间可能复用，旧 cursor 不再安全，必须走快照。
+          this.serverInstanceId = instanceId
+          this.lastAgentEventId = null
+          this.onAgentSnapshotRequired?.()
+        } else if (isInitialHello) {
+          this.serverInstanceId = instanceId
+        } else if (sameServerInstance && this.lastAgentEventId !== null && instanceId !== null) {
+          // resume_agent_events 是协议握手，不进入 pendingCommands，避免被普通命令超时/FIFO 逻辑干扰。
+          this.ws?.send(JSON.stringify({ type: 'resume_agent_events', cursor: this.lastAgentEventId }))
+        }
+        this.hasSeenHello = true
         break
+      }
       case 'pong':
         // 存活信号已在 onmessage 统一刷新 lastPongAt，这里无需额外处理。
         break
-      case 'agent_event':
+      case 'agent_event': {
+        // 有 eventId 时只接受严格晚于最后游标的事件，兼容服务端旧版本的无游标帧。
+        const eventId = normalizeEventId(msg.eventId)
+        if (eventId !== null) {
+          if (this.lastAgentEventId !== null && eventId <= this.lastAgentEventId) return
+          this.lastAgentEventId = eventId
+        }
         this.onAgentEvent?.({
           sessionId: msg.sessionId,
           payload: msg.payload,
+          ...(eventId !== null ? { eventId } : {}),
         })
+        break
+      }
+      case 'agent_events_resumed':
+        if (msg.requiresSnapshot === true) {
+          // 快照是当前服务端状态的权威结果；推进到响应中的最新游标，
+          // 避免旧 cursor 在每次重连时反复触发同一轮快照回退。
+          const latestEventId = normalizeEventId(msg.latestEventId)
+          if (latestEventId !== null) this.lastAgentEventId = Math.max(this.lastAgentEventId ?? -1, latestEventId)
+          this.onAgentSnapshotRequired?.()
+        }
         break
       case 'chat_event':
         this.onChatEvent?.({
@@ -646,3 +692,7 @@ function isTransientConnectionError(err: Error): boolean {
  * 心跳周期 25s，阈值取 3 个周期（75s），容忍偶发丢包与单次 ping 丢失。
  */
 const HEARTBEAT_DEAD_THRESHOLD_MS = 3 * 25000
+
+function normalizeEventId(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}

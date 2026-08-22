@@ -32,7 +32,7 @@ import { useGlobalChatListeners } from '@/hooks/useGlobalChatListeners'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { authStatusAtom } from '@/atoms/identity-atoms'
 import { channelsAtom, channelsLoadedAtom, conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
-import { agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentStreamingStatesAtom, agentMessageRefreshAtom } from '@/atoms/agent-atoms'
+import { agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentStreamingStatesAtom, agentMessageRefreshAtom, type AgentStreamState } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { initTabletUiScale } from '@/atoms/ui-scale'
 import { UiScaleContainer } from '@/components/UiScaleContainer'
@@ -231,6 +231,8 @@ function App(): React.ReactElement {
   const conversations = useAtomValue(conversationsAtom)
   const userProfile = useAtomValue(userProfileAtom)
   const clientRef = useRef<WsClient | null>(null)
+  /** 每次交付 Agent 事件递增；快照回包仅能收敛请求期间没有新事件的 session。 */
+  const agentEventRevisionsRef = useRef(new Map<string, number>())
 
   // 界面状态：reconnecting = 已绑定但断线，保持主界面 + 横幅自动重连（不再回登录页“重新校验”）
   const [connection, setConnection] = useState<'idle' | 'connecting' | 'open' | 'reconnecting' | 'error' | 'unauthorized'>('idle')
@@ -301,6 +303,7 @@ function App(): React.ReactElement {
         else setConnection('connecting')
       },
       onAgentEvent: (evt) => handleAgentEvent(client, evt),
+      onAgentSnapshotRequired: () => { void loadSessions(client) },
       onChatEvent: (evt) => handleChatEvent(evt),
     })
     clientRef.current = client
@@ -337,6 +340,9 @@ function App(): React.ReactElement {
   }, [setChannels, setChannelsLoaded, setAgentChannelIds, setAgentChannelId, setAgentModelId])
 
   const loadSessions = useCallback(async (client: WsClient) => {
+    // 在请求开始时记录各 session 的事件版本；回包前若收到新 Agent event，
+    // 则该 session 不再接受本次旧快照的状态清理。
+    const revisionsAtRequestStart = new Map(agentEventRevisionsRef.current)
     try {
       const data = await client.listSessions() as SessionInfo[]
       if (!Array.isArray(data)) return
@@ -382,24 +388,28 @@ function App(): React.ReactElement {
       // 原生 LeftSidebar 直接读取这些 atoms；平板只替换数据传输层。
       setNativeSessions(personalSessions as never)
 
-      // 陈旧 streaming 兜底：主进程返回 active=false 的会话若本地仍标记 running，
-      // 说明完成事件在断线/事件丢失时没送达（平板没有桌面 STREAM_COMPLETE IPC 保底）。
-      // 以主进程权威状态为准强制清理，否则停止按钮会永远亮着、点击也无效（stop 守卫直接 return）。
+      // 陈旧状态兜底：仅对服务端确认 inactive、请求期间没有更新 Agent event、
+      // 且不是 backgroundWaiting 的会话收敛本地运行/重试状态。
+      // backgroundWaiting 虽然 running=false，但服务端仍保留 active session，不能误清。
       const remoteActiveIds = new Set(personalSessions.filter((s) => s.active).map((s) => s.id))
-      const staleIds = new Set<string>()
-      for (const [sid, st] of tabletStore.get(agentStreamingStatesAtom)) {
-        if (st?.running && !remoteActiveIds.has(sid)) staleIds.add(sid)
-      }
-      if (staleIds.size > 0) {
-        tabletStore.set(agentStreamingStatesAtom, (prev) => {
-          const map = new Map(prev)
-          for (const sid of staleIds) {
-            const cur = map.get(sid)
-            if (cur?.running) map.set(sid, { ...cur, running: false, stopping: false })
-          }
-          return map
-        })
-      }
+      tabletStore.set(agentStreamingStatesAtom, (prev) => {
+        let next: Map<string, AgentStreamState> | null = null
+        for (const [sid, current] of prev) {
+          const revisionAtStart = revisionsAtRequestStart.get(sid) ?? 0
+          const currentRevision = agentEventRevisionsRef.current.get(sid) ?? 0
+          if (remoteActiveIds.has(sid) || currentRevision !== revisionAtStart || current?.backgroundWaiting) continue
+          const shouldClearRunning = current?.running === true || current?.stopping === true
+          const shouldClearRetry = current?.retrying !== undefined && !current.retrying.failed
+          if (!shouldClearRunning && !shouldClearRetry) continue
+          next ??= new Map(prev)
+          next.set(sid, {
+            ...current,
+            ...(shouldClearRunning ? { running: false, stopping: false } : {}),
+            ...(shouldClearRetry ? { retrying: undefined } : {}),
+          })
+        }
+        return next ?? prev
+      })
 
       // 优先从服务端获取真实项目（工作区）列表，带真实项目名称；
       // 旧版服务端无 list_workspaces 指令时回退为从会话归纳 workspaceId。
@@ -501,6 +511,8 @@ function App(): React.ReactElement {
   }, [])
 
   const handleAgentEvent = useCallback((client: WsClient, evt: AgentWorkflowEvent) => {
+    const currentRevision = agentEventRevisionsRef.current.get(evt.sessionId) ?? 0
+    agentEventRevisionsRef.current.set(evt.sessionId, currentRevision + 1)
     emitTabletAgentStreamEvent({ sessionId: evt.sessionId, payload: evt.payload as AgentStreamPayload })
     const p = evt.payload as { kind?: string; event?: { type?: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean } } | null
     // run_completed（remote-service 在 orchestrator onComplete 时广播，携带真实完成元数据）
