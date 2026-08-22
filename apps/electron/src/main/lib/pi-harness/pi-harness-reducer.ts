@@ -152,6 +152,11 @@ export function replayPiHarnessEvents(
           })
         }
         break
+      case 'manual_candidate_continued':
+        if (!snapshot.manuallyContinuedCandidateFingerprints.includes(event.payload.candidateFingerprint)) {
+          snapshot.manuallyContinuedCandidateFingerprints.push(event.payload.candidateFingerprint)
+        }
+        break
     }
   }
 

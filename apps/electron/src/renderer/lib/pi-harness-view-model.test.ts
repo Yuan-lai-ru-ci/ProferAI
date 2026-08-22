@@ -28,11 +28,16 @@ describe('Pi Harness graph view model', () => {
     expect(presentPiHarnessTask('task', snapshot)).toMatchObject({ badge: { label: '已暂停' }, pauseReason: 'user_stop' })
   })
 
-  test('labels shadow candidates as observed and never executable UI actions', () => {
-    const snapshot: PiHarnessSnapshotView = {
+  test('keeps verification candidates read-only and exposes only ready_task/shadow_mode as user-continuable', () => {
+    const verification: PiHarnessSnapshotView = {
       sessionId: 'session', tasks: { task: { taskId: 'task', shadowCandidate: { action: 'required_verification', reason: '缺少测试', blockedReason: 'shadow_mode' } } },
     }
-    expect(presentPiHarnessTask('task', snapshot).shadowCandidateLabel).toContain('shadow，未执行')
+    const ready: PiHarnessSnapshotView = {
+      sessionId: 'session', tasks: { task: { taskId: 'task', shadowCandidate: { action: 'ready_task', reason: '下游任务就绪', blockedReason: 'shadow_mode', canManuallyContinue: true } } },
+    }
+    expect(presentPiHarnessTask('task', verification)).toMatchObject({ shadowCandidateLabel: expect.stringContaining('shadow，未执行') })
+    expect(presentPiHarnessTask('task', verification).canManuallyContinue).toBeUndefined()
+    expect(presentPiHarnessTask('task', ready)).toMatchObject({ canManuallyContinue: true })
   })
 
   test('returns no presentation for an absent Harness snapshot', () => {

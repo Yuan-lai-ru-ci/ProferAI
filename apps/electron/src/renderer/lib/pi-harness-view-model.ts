@@ -7,6 +7,8 @@ export interface PiHarnessTaskPresentation {
   pauseReason?: string
   lastFactSummary?: string
   shadowCandidateLabel?: string
+  /** UI hint from the sanitized main-process projection; never a scheduling command. */
+  canManuallyContinue?: boolean
 }
 
 function executionLabel(state: NonNullable<PiHarnessTaskView['execution']>['state']): string {
@@ -37,6 +39,7 @@ export function presentPiHarnessTask(
       shadowCandidateLabel: task.shadowCandidate.action === 'required_verification'
         ? `后续验证候选（shadow，未执行）：${task.shadowCandidate.reason}`
         : `后续任务候选（shadow，未执行）：${task.shadowCandidate.reason}`,
+      ...(task.shadowCandidate.canManuallyContinue ? { canManuallyContinue: true } : {}),
     } : {}),
   }
 

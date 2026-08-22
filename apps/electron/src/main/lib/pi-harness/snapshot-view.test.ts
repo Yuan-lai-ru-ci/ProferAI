@@ -38,4 +38,21 @@ describe('Pi Harness snapshot view', () => {
     expect(serialized).not.toContain('internal-event')
     expect(serialized).not.toContain('evidenceFactIds')
   })
+
+  test('exposes manual continuation only for an unconsumed ready_task shadow candidate', () => {
+    const value = snapshot()
+    value.governorCandidates[0] = {
+      eventId: 'internal-ready-event', goalId: 'goal', taskId: 'task', timestamp: 6,
+      action: 'ready_task', reason: '下游任务已就绪', blockedReason: 'shadow_mode', estimatedPromptChars: 240, fingerprint: 'ready-fingerprint',
+    }
+    expect(toPiHarnessSnapshotView(value).tasks.task?.shadowCandidate).toMatchObject({
+      action: 'ready_task', blockedReason: 'shadow_mode', canManuallyContinue: true,
+    })
+
+    value.manuallyContinuedCandidateFingerprints.push('ready-fingerprint')
+    const candidate = toPiHarnessSnapshotView(value).tasks.task?.shadowCandidate
+    expect(candidate?.canManuallyContinue).toBeUndefined()
+    expect(JSON.stringify(candidate)).not.toContain('ready-fingerprint')
+    expect(JSON.stringify(candidate)).not.toContain('internal-ready-event')
+  })
 })

@@ -3,11 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appendGraphEvent } from '../project-graph-service'
-import { loadPiHarnessSnapshot } from './pi-harness-store'
+import { appendPiHarnessEvent, loadPiHarnessSnapshot } from './pi-harness-store'
+import { PI_HARNESS_EVENT_VERSION } from './types'
 import {
   clearPiHarnessRunsForTest,
   getActivePiHarnessRunForTest,
   pauseActivePiHarnessRun,
+  prepareManualPiHarnessCandidateContinuation,
+  releaseManualPiHarnessCandidateContinuation,
   settlePiHarnessRun,
   startPiHarnessRun,
 } from './orchestrator-bridge'
@@ -176,5 +179,75 @@ describe('Pi Harness orchestrator bridge', () => {
     expect(Object.keys(snapshot.facts)).toHaveLength(3)
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
     expect(snapshot.goals[scope.goalId]?.autonomyUsage.taskTransitions).toBe(0)
+  })
+
+  test('continues only a user-selected ready_task shadow candidate in a new Pi Turn', () => {
+    useTempConfig()
+    appendGraphEvent('manual', { type: 'task_created', taskId: 'root', timestamp: 1, payload: { subject: '已完成根任务', description: '', dependsOn: [] } })
+    appendGraphEvent('manual', { type: 'task_status_changed', taskId: 'root', timestamp: 2, payload: { newStatus: 'completed' } })
+    appendGraphEvent('manual', { type: 'task_created', taskId: 'follow', timestamp: 3, payload: { subject: '候选后续任务', description: '只处理这个节点', dependsOn: ['root'] } })
+    appendPiHarnessEvent('manual', {
+      version: PI_HARNESS_EVENT_VERSION, eventId: 'goal', timestamp: 4, sessionId: 'manual', goalId: 'goal', type: 'goal_created',
+      payload: { rootTaskId: 'root', activeTaskId: 'root', policy: { governorMode: 'shadow', permissionMode: 'bypassPermissions', maxFocusChars: 1200 } },
+    })
+    appendPiHarnessEvent('manual', {
+      version: PI_HARNESS_EVENT_VERSION, eventId: 'candidate', timestamp: 5, sessionId: 'manual', goalId: 'goal', taskId: 'follow', type: 'governor_candidate_recorded',
+      payload: { action: 'ready_task', reason: '下游任务已就绪', blockedReason: 'shadow_mode', estimatedPromptChars: 240, fingerprint: 'ready:follow' },
+    })
+
+    const prepared = prepareManualPiHarnessCandidateContinuation('manual', 'follow')
+    expect(prepared.userMessage).toContain('候选后续任务')
+    expect(() => prepareManualPiHarnessCandidateContinuation('manual', 'follow')).toThrow('正在启动')
+
+    const scope = startPiHarnessRun({
+      sessionId: 'manual', permissionMode: 'bypassPermissions', userMessage: prepared.userMessage, prompt: prepared.userMessage,
+      manualCandidateContinuationTicket: prepared.ticketId,
+    })!
+    const snapshot = loadPiHarnessSnapshot('manual')
+    expect(scope.activeTaskId).toBe('follow')
+    expect(Object.keys(snapshot.turns)).toHaveLength(1)
+    expect(snapshot.manuallyContinuedCandidateFingerprints).toEqual(['ready:follow'])
+    expect(snapshot.goals.goal?.autonomyUsage.taskTransitions).toBe(0)
+    expect(() => prepareManualPiHarnessCandidateContinuation('manual', 'follow')).toThrow('会话仍在处理中')
+    settlePiHarnessRun('manual', 'completed')
+    expect(() => prepareManualPiHarnessCandidateContinuation('manual', 'follow')).toThrow('不是可继续')
+  })
+
+  test('rejects a stale one-shot ticket rather than falling back to an ordinary Harness turn', () => {
+    useTempConfig()
+    appendGraphEvent('stale-ticket', { type: 'task_created', taskId: 'root', timestamp: 1, payload: { subject: '根任务', description: '', dependsOn: [] } })
+    appendGraphEvent('stale-ticket', { type: 'task_status_changed', taskId: 'root', timestamp: 2, payload: { newStatus: 'completed' } })
+    appendGraphEvent('stale-ticket', { type: 'task_created', taskId: 'follow', timestamp: 3, payload: { subject: '后续任务', description: '', dependsOn: ['root'] } })
+    appendPiHarnessEvent('stale-ticket', {
+      version: PI_HARNESS_EVENT_VERSION, eventId: 'goal', timestamp: 4, sessionId: 'stale-ticket', goalId: 'goal', type: 'goal_created',
+      payload: { policy: { governorMode: 'shadow', permissionMode: 'bypassPermissions', maxFocusChars: 1200 } },
+    })
+    appendPiHarnessEvent('stale-ticket', {
+      version: PI_HARNESS_EVENT_VERSION, eventId: 'candidate', timestamp: 5, sessionId: 'stale-ticket', goalId: 'goal', taskId: 'follow', type: 'governor_candidate_recorded',
+      payload: { action: 'ready_task', reason: '下游任务已就绪', blockedReason: 'shadow_mode', estimatedPromptChars: 240, fingerprint: 'ready:follow' },
+    })
+    const prepared = prepareManualPiHarnessCandidateContinuation('stale-ticket', 'follow')
+    releaseManualPiHarnessCandidateContinuation(prepared.ticketId)
+    expect(() => startPiHarnessRun({
+      sessionId: 'stale-ticket', permissionMode: 'bypassPermissions', userMessage: prepared.userMessage, prompt: prepared.userMessage,
+      manualCandidateContinuationTicket: prepared.ticketId,
+    })).toThrow('候选任务已失效')
+    expect(loadPiHarnessSnapshot('stale-ticket').turns).toEqual({})
+  })
+
+  test('rejects stale/non-ready/non-shadow candidates without mutating the ledger', () => {
+    useTempConfig()
+    appendGraphEvent('reject', { type: 'task_created', taskId: 'blocked', timestamp: 1, payload: { subject: '受阻任务', description: '', dependsOn: ['missing'] } })
+    appendPiHarnessEvent('reject', {
+      version: PI_HARNESS_EVENT_VERSION, eventId: 'goal', timestamp: 2, sessionId: 'reject', goalId: 'goal', type: 'goal_created',
+      payload: { policy: { governorMode: 'shadow', permissionMode: 'bypassPermissions', maxFocusChars: 1200 } },
+    })
+    appendPiHarnessEvent('reject', {
+      version: PI_HARNESS_EVENT_VERSION, eventId: 'candidate', timestamp: 3, sessionId: 'reject', goalId: 'goal', taskId: 'blocked', type: 'governor_candidate_recorded',
+      payload: { action: 'ready_task', reason: '伪造', blockedReason: 'shadow_mode', estimatedPromptChars: 0, fingerprint: 'ready:blocked' },
+    })
+    expect(() => prepareManualPiHarnessCandidateContinuation('reject', 'blocked')).toThrow('不是可继续')
+    expect(loadPiHarnessSnapshot('reject').manuallyContinuedCandidateFingerprints).toEqual([])
+    releaseManualPiHarnessCandidateContinuation('missing-ticket')
   })
 })

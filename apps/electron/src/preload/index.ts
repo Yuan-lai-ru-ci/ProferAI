@@ -879,6 +879,9 @@ export interface ElectronAPI {
   /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
   getPiHarnessSnapshot: (sessionId: string) => Promise<import('@profer/shared').PiHarnessSnapshotView>
 
+  /** 用户显式继续一个 ready_task/shadow_mode Harness 候选任务。 */
+  continuePiHarnessCandidate: (input: import('@profer/shared').PiHarnessManualContinueInput) => Promise<void>
+
   /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => Promise<void>
 
@@ -2476,6 +2479,10 @@ const electronAPI: ElectronAPI = {
 
   getPiHarnessSnapshot: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_HARNESS_SNAPSHOT, sessionId)
+  },
+
+  continuePiHarnessCandidate: (input: import('@profer/shared').PiHarnessManualContinueInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CONTINUE_PI_HARNESS_CANDIDATE, input)
   },
 
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => {

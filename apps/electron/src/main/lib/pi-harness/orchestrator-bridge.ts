@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ProferPermissionMode, SDKMessage } from '@profer/shared'
 import { appendGraphEvent, loadHarnessGraphSnapshot } from '../project-graph-service'
+import { getReadyTasks, type TaskNode } from '@profer/project-core'
 import { appendPiHarnessEvent, loadPiHarnessSnapshot } from './pi-harness-store'
 import { buildGraphFocusPacket } from './graph-focus-packet'
 import { decideGoalIntake } from './goal-controller'
@@ -24,6 +25,97 @@ export interface PiHarnessRunScope {
 }
 
 const activeScopes = new Map<string, PiHarnessRunScope>()
+
+interface ManualCandidateContinuationTicket {
+  id: string
+  sessionId: string
+  goalId: string
+  taskId: string
+  candidateFingerprint: string
+  userMessage: string
+}
+
+/**
+ * Tickets exist only in main-process memory between a user click and the normal
+ * Agent send path. They are not prompt text, IPC input, sidecar state, or an
+ * autonomous scheduling queue.
+ */
+const manualCandidateContinuationTickets = new Map<string, ManualCandidateContinuationTicket>()
+
+function latestManualCandidate(snapshot: ReturnType<typeof loadPiHarnessSnapshot>, sessionId: string, taskId: string): ManualCandidateContinuationTicket | undefined {
+  const graph = loadHarnessGraphSnapshot(sessionId).graph
+  const task = graph.nodes[taskId]
+  if (!task || !getReadyTasks(graph).some((candidate) => candidate.id === taskId)) return undefined
+  const candidate = [...snapshot.governorCandidates]
+    .filter((item) => item.taskId === taskId
+      && item.action === 'ready_task'
+      && item.blockedReason === 'shadow_mode'
+      && !snapshot.manuallyContinuedCandidateFingerprints.includes(item.fingerprint)
+      && snapshot.goals[item.goalId]?.state === 'active'
+      && snapshot.goals[item.goalId]?.policy.governorMode === 'shadow')
+    .sort((a, b) => b.timestamp - a.timestamp || b.eventId.localeCompare(a.eventId))[0]
+  if (!candidate) return undefined
+  return {
+    id: randomUUID(),
+    sessionId,
+    goalId: candidate.goalId,
+    taskId,
+    candidateFingerprint: candidate.fingerprint,
+    userMessage: buildManualCandidateContinuationMessage(task),
+  }
+}
+
+function clipped(value: string, maxChars: number): string {
+  const safe = value
+    .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret)\s*[:=]\s*[^\s,;]+/gi, '[redacted]')
+    .replace(/\b(?:sk|pk|prelay)_[A-Za-z0-9_-]{8,}\b/g, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const chars = [...safe]
+  return chars.length <= maxChars ? chars.join('') : `${chars.slice(0, Math.max(0, maxChars - 1)).join('')}…`
+}
+
+/** The visible user instruction is deliberately finite and task-only. */
+function buildManualCandidateContinuationMessage(task: TaskNode): string {
+  const description = clipped(task.description, 600)
+  return [
+    `继续 Project Graph 中已就绪的任务：${clipped(task.subject, 180)}`,
+    description ? `任务说明：${description}` : '',
+    '这是用户明确选择的后续任务。仅聚焦该任务；如需改变方向，请先向用户说明。',
+  ].filter(Boolean).join('\n')
+}
+
+/**
+ * Revalidates a renderer-nominated task against Graph + sidecar and reserves a
+ * one-shot main-process ticket. This has no model or queue side effect.
+ */
+export function prepareManualPiHarnessCandidateContinuation(sessionId: string, taskId: string): { ticketId: string; userMessage: string } {
+  if (activeScopes.has(sessionId)) throw new Error('会话仍在处理中，暂不能继续候选任务')
+  if ([...manualCandidateContinuationTickets.values()].some((ticket) => ticket.sessionId === sessionId && ticket.taskId === taskId)) {
+    throw new Error('该候选任务正在启动，请勿重复继续')
+  }
+  const candidate = latestManualCandidate(loadPiHarnessSnapshot(sessionId), sessionId, taskId)
+  if (!candidate) throw new Error('该任务不是可继续的就绪候选，或候选已失效')
+  manualCandidateContinuationTickets.set(candidate.id, candidate)
+  return { ticketId: candidate.id, userMessage: candidate.userMessage }
+}
+
+/** Releases an unconsumed ticket after the normal send path rejects or ends. */
+export function releaseManualPiHarnessCandidateContinuation(ticketId: string): void {
+  manualCandidateContinuationTickets.delete(ticketId)
+}
+
+function takeManualCandidateContinuation(ticketId: string | undefined, sessionId: string): ManualCandidateContinuationTicket | undefined {
+  if (!ticketId) return undefined
+  const ticket = manualCandidateContinuationTickets.get(ticketId)
+  if (!ticket || ticket.sessionId !== sessionId) return undefined
+  manualCandidateContinuationTickets.delete(ticketId)
+  // The interval from explicit user click to Pi start has no active Agent run;
+  // nevertheless re-read deterministic state before consuming the candidate.
+  const current = latestManualCandidate(loadPiHarnessSnapshot(sessionId), sessionId, ticket.taskId)
+  if (!current || current.goalId !== ticket.goalId || current.candidateFingerprint !== ticket.candidateFingerprint) return undefined
+  return ticket
+}
 
 function policy(permissionMode: ProferPermissionMode): PiHarnessPolicySnapshot {
   return { governorMode: 'shadow', permissionMode, maxFocusChars: 1_200 }
@@ -227,21 +319,27 @@ export function startPiHarnessRun(options: {
   userMessage: string
   prompt: string
   permissionMode: ProferPermissionMode
+  /** Internal one-shot ticket created only by the protected manual-continuation IPC. */
+  manualCandidateContinuationTicket?: string
 }): PiHarnessRunScope | undefined {
   if (options.userMessage.trim() === '/compact') return undefined
 
+  const manual = takeManualCandidateContinuation(options.manualCandidateContinuationTicket, options.sessionId)
+  if (options.manualCandidateContinuationTicket && !manual) {
+    throw new Error('候选任务已失效，请刷新任务图后重试')
+  }
   const before = loadPiHarnessSnapshot(options.sessionId)
-  const existingGoal = latestRunnableGoal(before.goals)
-  let graphSnapshot = loadHarnessGraphSnapshot(options.sessionId, existingGoal?.activeTaskId)
-  const decision = decideGoalIntake({
+  const existingGoal = manual ? before.goals[manual.goalId] : latestRunnableGoal(before.goals)
+  let graphSnapshot = loadHarnessGraphSnapshot(options.sessionId, manual?.taskId ?? existingGoal?.activeTaskId)
+  const decision = manual ? undefined : decideGoalIntake({
     userMessage: options.userMessage,
     graph: graphSnapshot.graph,
     previousFocusTaskId: existingGoal?.activeTaskId,
   })
-  if (decision.kind === 'manual_compact') return undefined
+  if (decision?.kind === 'manual_compact') return undefined
 
   let rootTaskId: string | undefined
-  if (!existingGoal && decision.kind === 'minimal_root' && decision.rootTask) {
+  if (!existingGoal && decision?.kind === 'minimal_root' && decision.rootTask) {
     rootTaskId = randomUUID()
     appendGraphEvent(options.sessionId, {
       type: 'task_created',
@@ -252,7 +350,7 @@ export function startPiHarnessRun(options: {
     graphSnapshot = loadHarnessGraphSnapshot(options.sessionId)
   }
 
-  const selectedTaskId = graphSnapshot.focusTaskId
+  const selectedTaskId = manual?.taskId ?? graphSnapshot.focusTaskId
   const goalId = existingGoal?.id ?? randomUUID()
   if (!existingGoal) {
     appendPiHarnessEvent(options.sessionId, {
@@ -265,6 +363,18 @@ export function startPiHarnessRun(options: {
       payload: { rootTaskId, activeTaskId: selectedTaskId, policy: policy(options.permissionMode) },
     })
   }
+  if (manual) {
+    appendPiHarnessEvent(options.sessionId, {
+      version: 1,
+      eventId: randomUUID(),
+      timestamp: Date.now(),
+      sessionId: options.sessionId,
+      goalId,
+      taskId: manual.taskId,
+      type: 'manual_candidate_continued',
+      payload: { candidateFingerprint: manual.candidateFingerprint },
+    })
+  }
   appendPiHarnessEvent(options.sessionId, {
     version: 1,
     eventId: randomUUID(),
@@ -272,7 +382,7 @@ export function startPiHarnessRun(options: {
     sessionId: options.sessionId,
     goalId,
     type: 'task_focus_changed',
-    payload: { activeTaskId: selectedTaskId, reason: graphSnapshot.focusReason },
+    payload: { activeTaskId: selectedTaskId, reason: manual ? '用户明确继续 shadow 候选任务' : graphSnapshot.focusReason },
   })
 
   const turnId = randomUUID()
@@ -330,4 +440,5 @@ export function getActivePiHarnessRunForTest(sessionId: string): PiHarnessRunSco
 
 export function clearPiHarnessRunsForTest(): void {
   activeScopes.clear()
+  manualCandidateContinuationTickets.clear()
 }

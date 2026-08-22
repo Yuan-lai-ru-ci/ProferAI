@@ -64,6 +64,9 @@ export function toPiHarnessSnapshotView(snapshot: PiHarnessSnapshot): PiHarnessS
     const taskId = candidate.taskId ?? goal?.activeTaskId
     if (!taskId) continue
     const existing = tasks[taskId]
+    const canManuallyContinue = candidate.action === 'ready_task'
+      && candidate.blockedReason === 'shadow_mode'
+      && !snapshot.manuallyContinuedCandidateFingerprints.includes(candidate.fingerprint)
     tasks[taskId] = {
       taskId,
       ...existing,
@@ -71,6 +74,7 @@ export function toPiHarnessSnapshotView(snapshot: PiHarnessSnapshot): PiHarnessS
         action: candidate.action === 'ready_task' ? 'ready_task' : 'required_verification',
         reason: candidate.reason,
         blockedReason: candidate.blockedReason,
+        ...(canManuallyContinue ? { canManuallyContinue: true } : {}),
       },
     }
   }
