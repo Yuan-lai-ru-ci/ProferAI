@@ -15,6 +15,15 @@ export function agentMessageGroupCreatedAt(group: MessageGroup): number {
   return messageCreatedAt(group.message)
 }
 
+/**
+ * Cards are intentionally transient status UI. Completed output is delivered by the
+ * canonical PROMA_IMAGE_ATTACHMENT in the Agent reply; a failed attempt remains visible
+ * in its existing tool audit trail rather than becoming a second conversation item.
+ */
+export function getPendingImageGenerationCards(cards: AgentImageGenerationCard[]): AgentImageGenerationCard[] {
+  return cards.filter((card) => card.status === 'requesting' || card.status === 'saving')
+}
+
 /** Stable merge for desktop card timeline. Same timestamp deliberately keeps SDK group first. */
 export function mergeAgentImageGenerationTimeline(
   groups: MessageGroup[],

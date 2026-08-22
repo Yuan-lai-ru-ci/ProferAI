@@ -46,7 +46,7 @@ import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import type { AgentEventUsage, RetryAttempt, SDKMessage, AgentImageGenerationCard } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { AgentImageGenerationCardView } from './AgentImageGenerationCard'
-import { mergeAgentImageGenerationTimeline } from './agent-image-generation-timeline'
+import { getPendingImageGenerationCards, mergeAgentImageGenerationTimeline } from './agent-image-generation-timeline'
 
 function stableStringify(value: unknown): string {
   if (value == null || typeof value !== 'object') return JSON.stringify(value) ?? String(value)
@@ -678,7 +678,8 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       .map((group) => group.type === 'assistant-turn' ? group.createdAt : (group.message as Record<string, unknown>)._createdAt)
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
       .reduce<number | undefined>((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined)
-    return (imageGenerations ?? []).filter((card) => firstCreatedAt === undefined || card.createdAt >= firstCreatedAt)
+    return getPendingImageGenerationCards(imageGenerations ?? [])
+      .filter((card) => firstCreatedAt === undefined || card.createdAt >= firstCreatedAt)
   }, [visibleGroups, imageGenerations, tabletMode])
   const visibleTimeline = React.useMemo(
     () => mergeAgentImageGenerationTimeline(visibleGroups, visibleImageGenerations, getGroupId),
