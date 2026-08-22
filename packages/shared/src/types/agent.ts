@@ -544,6 +544,43 @@ export interface AgentToolResultImage {
   mediaType: string
 }
 
+/** Agent 图片生成独立时间线卡片的真实生命周期状态。 */
+export type AgentImageGenerationStatus = 'requesting' | 'saving' | 'succeeded' | 'failed'
+
+/** 图片生成使用的参考图来源；绝不向 renderer 暴露外部文件路径。 */
+export interface AgentImageGenerationReference {
+  kind: 'none' | 'paths' | 'last_generated'
+  generationId?: string
+}
+
+/** 可安全跨 EventBus/IPC 传输的图片生成记录。 */
+export interface AgentImageGenerationCard {
+  version: 1
+  id: string
+  sessionId: string
+  toolCallId: string
+  status: AgentImageGenerationStatus
+  prompt: string
+  size: '1024x1024' | '1536x1024' | '1024x1536' | 'auto'
+  quality: 'auto' | 'low' | 'medium' | 'high'
+  reference: AgentImageGenerationReference
+  image?: { localPath: string; filename: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' }
+  revisedPrompt?: string
+  mode?: 'official' | 'byok'
+  chargedCredits?: 5
+  error?: string
+  createdAt: number
+  updatedAt: number
+  completedAt?: number
+  retryOf?: string
+}
+
+/** renderer 只能用 session/id 请求重试，不能重放或改变 provider 参数。 */
+export interface RetryAgentImageGenerationInput {
+  sessionId: string
+  generationId: string
+}
+
 /** 计划阶段状态变化来源 */
 export type AgentPlanModeChangeSource = 'initial' | 'tool' | 'permission'
 
@@ -622,6 +659,7 @@ export type ProferEvent =
   | { type: 'model_resolved'; model: string }
   | { type: 'context_window'; contextWindow: number }
   | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
+  | { type: 'image_generation_updated'; sessionId: string; record: AgentImageGenerationCard }
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
@@ -1666,6 +1704,10 @@ export const AGENT_IPC_CHANNELS = {
   ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
+  /** 列出当前会话已持久化的图片生成独立时间线卡片 */
+  LIST_IMAGE_GENERATIONS: 'agent:list-image-generations',
+  /** 仅按 generation ID 重试失败的图片生成；参数在主进程重建 */
+  RETRY_IMAGE_GENERATION: 'agent:retry-image-generation',
   /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
   RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
   /** 更新会话标题 */

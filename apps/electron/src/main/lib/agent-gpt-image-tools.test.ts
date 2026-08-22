@@ -49,6 +49,7 @@ describe('Agent GPT Image Claude adapter', () => {
     const [tool] = captured[0]!.tools!
     expect(tool!.name).toBe(AGENT_GPT_IMAGE_TOOL_NAME)
     expect(JSON.stringify(tool!.parameters)).toContain('referenceImagePaths')
+    expect(JSON.stringify(tool!.parameters)).toContain('useLastGeneratedImage')
     expect(JSON.stringify(tool!.parameters)).toContain('1536x1024')
     const result = await tool!.handler({ prompt: 'blue square' }) as { content: Array<{ text: string }> }
     expect(result.content[0]!.text).toContain('[PROMA_IMAGE_ATTACHMENT:')

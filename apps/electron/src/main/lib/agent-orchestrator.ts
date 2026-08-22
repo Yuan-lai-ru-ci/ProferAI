@@ -1169,6 +1169,12 @@ export class AgentOrchestrator {
             }),
           ]
         : []
+      const emitImageGenerationUpdate = (record: import('@profer/shared').AgentImageGenerationCard): void => {
+        this.eventBus.emit(sessionId, {
+          kind: 'profer_event',
+          event: { type: 'image_generation_updated', sessionId, record },
+        })
+      }
       if (agentCwd && imageOutputAllowedRoots.length > 0) {
         await injectAgentImageOutputMcpServer(sdk, mcpServers, {
           agentCwd,
@@ -1181,6 +1187,7 @@ export class AgentOrchestrator {
             sessionId,
             agentCwd,
             allowedRoots: imageOutputAllowedRoots,
+            onGenerationUpdate: emitImageGenerationUpdate,
           })
         }
       }
@@ -1293,6 +1300,7 @@ ${enrichedMessage}`
               workspaceSlug,
               agentCwd,
               allowedRoots: browserAllowedRoots,
+              onImageGenerationUpdate: emitImageGenerationUpdate,
               permissionMode: initialPermissionMode,
               triggeredBy: input.triggeredBy,
               disabledToolGroups: [...disabledToolGroups],

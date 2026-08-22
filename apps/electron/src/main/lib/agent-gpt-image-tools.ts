@@ -6,7 +6,7 @@ import { GPT_IMAGE_QUALITIES, GPT_IMAGE_SIZES, type GptImageQuality, type GptIma
 
 export const AGENT_GPT_IMAGE_TOOL_NAME = 'generate_image'
 
-const DESCRIPTION = 'Generate one image from a prompt, or edit 1–4 authorized local PNG/JPEG/GIF/WebP reference files. Official mode charges 5 Profer credits only after successful delivery. Use referenceImagePaths only for files in the current Agent workspace or explicitly authorized directories. The result includes a PROMA_IMAGE_ATTACHMENT marker; copy it unchanged into the final response.'
+const DESCRIPTION = 'Generate one image from a prompt, edit 1–4 authorized local PNG/JPEG/GIF/WebP reference files, or edit the latest successful image generated in this current Agent session with useLastGeneratedImage. useLastGeneratedImage cannot be combined with referenceImagePaths. Official mode charges 5 Profer credits only after successful delivery. The result includes a PROMA_IMAGE_ATTACHMENT marker; copy it unchanged into the final response.'
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; details?: unknown; isError?: boolean }
 
@@ -61,12 +61,14 @@ export async function injectAgentGptImageMcpServer(
           size: z.enum(GPT_IMAGE_SIZES).optional(),
           quality: z.enum(GPT_IMAGE_QUALITIES).optional(),
           referenceImagePaths: z.array(z.string().min(1).max(4096)).min(1).max(4).optional(),
+          useLastGeneratedImage: z.boolean().optional(),
         },
         async (args, extra) => formatAgentGptImageToolResult(await generateAgentGptImage({
           prompt: args.prompt,
           size: args.size as GptImageSize | undefined,
           quality: args.quality as GptImageQuality | undefined,
           referenceImagePaths: args.referenceImagePaths,
+          useLastGeneratedImage: args.useLastGeneratedImage,
           toolCallId: claudeToolCallId(extra),
         }, context)),
       ),

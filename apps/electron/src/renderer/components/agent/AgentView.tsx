@@ -105,6 +105,9 @@ import {
   finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
+  agentImageGenerationsAtom,
+  agentSessionImageGenerationsAtomFamily,
+  upsertAgentImageGeneration,
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
@@ -590,6 +593,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   // atom 输出引用未变，订阅者跳过通知。
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
+  const imageGenerations = useAtomValue(agentSessionImageGenerationsAtomFamily(sessionId))
+  const setImageGenerations = useSetAtom(agentImageGenerationsAtom)
   const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
@@ -608,6 +613,33 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         .catch(() => {})
     }
   }, [streaming, sessionId, setPersistedGraph])
+  React.useEffect(() => {
+    if (tabletMode) return
+    let cancelled = false
+    window.electronAPI.listAgentImageGenerations(sessionId)
+      .then((cards) => {
+        if (cancelled) return
+        setImageGenerations((previous) => {
+          const next = new Map(previous)
+          let merged = previous.get(sessionId) ?? []
+          for (const card of cards) merged = upsertAgentImageGeneration(merged, card)
+          next.set(sessionId, merged)
+          return next
+        })
+      })
+      .catch((error) => console.warn('[AgentView] 图片生成记录恢复失败:', error))
+    return () => { cancelled = true }
+  }, [sessionId, tabletMode, setImageGenerations])
+
+  const retryImageGeneration = React.useCallback(async (generationId: string): Promise<void> => {
+    const card = await window.electronAPI.retryAgentImageGeneration({ sessionId, generationId })
+    setImageGenerations((previous) => {
+      const next = new Map(previous)
+      next.set(sessionId, upsertAgentImageGeneration(previous.get(sessionId) ?? [], card))
+      return next
+    })
+  }, [sessionId, setImageGenerations])
+
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
@@ -3055,6 +3087,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
           tabletMode={tabletMode}
+          imageGenerations={imageGenerations}
+          onRetryImageGeneration={retryImageGeneration}
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}

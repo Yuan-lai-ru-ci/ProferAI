@@ -610,6 +610,10 @@ export interface ElectronAPI {
     (id: string): Promise<SDKMessage[]>
     (id: string, opts: { tail?: number; before?: number }): Promise<{ messages: SDKMessage[]; total: number; startIndex: number; endIndex: number; hasMore: boolean }>
   }
+  /** 获取当前会话脱敏后的图片生成独立时间线卡片。 */
+  listAgentImageGenerations: (sessionId: string) => Promise<import('@profer/shared').AgentImageGenerationCard[]>
+  /** 仅按会话和 generation ID 重试失败卡；主进程重建受信任参数。 */
+  retryAgentImageGeneration: (input: import('@profer/shared').RetryAgentImageGenerationInput) => Promise<import('@profer/shared').AgentImageGenerationCard>
 
   /** 更新 Agent 会话标题 */
   updateAgentSessionTitle: (id: string, title: string) => Promise<AgentSessionMeta>
@@ -2069,6 +2073,14 @@ const electronAPI: ElectronAPI = {
 
   getAgentSessionSDKMessages: (id: string, opts?: { tail?: number; before?: number }) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id, opts)
+  },
+
+  listAgentImageGenerations: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_IMAGE_GENERATIONS, sessionId)
+  },
+
+  retryAgentImageGeneration: (input: import('@profer/shared').RetryAgentImageGenerationInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RETRY_IMAGE_GENERATION, input)
   },
 
   restoreActiveAgentStreams: () => {

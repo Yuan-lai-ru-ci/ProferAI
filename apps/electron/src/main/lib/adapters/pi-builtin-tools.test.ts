@@ -244,6 +244,8 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const tool = tools.find((item) => item.name === 'generate_image')
     expect(tool).toBeDefined()
     expect(tool!.description).toContain('referenceImagePaths')
+    expect(tool!.description).toContain('useLastGeneratedImage')
+    expect(JSON.stringify(tool!.parameters)).toContain('useLastGeneratedImage')
     expect(JSON.stringify(tool!.parameters)).toContain('1024x1024')
     const result = await tool!.execute!('pi-call-1', { prompt: 'blue square' }) as { content: Array<{ text: string }> }
     expect(result.content[0]!.text).toContain('[PROMA_IMAGE_ATTACHMENT:')

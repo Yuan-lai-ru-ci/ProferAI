@@ -43,8 +43,10 @@ import { mergeMessagesByUuid } from '@/lib/agent-message-merge'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
-import type { AgentEventUsage, RetryAttempt, SDKMessage } from '@profer/shared'
+import type { AgentEventUsage, RetryAttempt, SDKMessage, AgentImageGenerationCard } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
+import { AgentImageGenerationCardView } from './AgentImageGenerationCard'
+import { mergeAgentImageGenerationTimeline } from './agent-image-generation-timeline'
 
 function stableStringify(value: unknown): string {
   if (value == null || typeof value !== 'object') return JSON.stringify(value) ?? String(value)
@@ -118,6 +120,9 @@ interface AgentMessagesProps {
   onCompact?: () => void
   /** 平板远程模式不显示桌面端的用户消息悬浮置顶导航条。 */
   tabletMode?: boolean
+  /** Desktop-only durable image generation timeline cards. */
+  imageGenerations?: AgentImageGenerationCard[]
+  onRetryImageGeneration?: (generationId: string) => Promise<void>
   /** 移动端触顶自动加载：还有更早消息时可触发。 */
   onLoadEarlierHistory?: () => void
   /** 移动端：更早是否还有内容（服务端 hasMore）。 */
@@ -497,7 +502,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onRetryImageGeneration, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -644,7 +649,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       liveWithKeys,
     )
   }, [persistedSDKMessages, liveMessages, streaming])
-  const hasContent = allSDKMessages.length > 0
+  const hasContent = allSDKMessages.length > 0 || (!tabletMode && (imageGenerations?.length ?? 0) > 0)
 
   // 压缩流程进行中（含收尾窗口：compact_boundary 已到但 result 未到）
   // → 一律抑制 AgentRunningIndicator，避免压缩分隔符切换期间闪烁。
@@ -665,6 +670,20 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     ? 0
     : (visibleGroupStart ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE))
   const visibleGroups = allGroups.slice(resolvedVisibleGroupStart)
+  // When SDK history is paged, do not inject cards older than the loaded message tail;
+  // they appear naturally after the user loads the corresponding older message page.
+  const visibleImageGenerations = React.useMemo(() => {
+    if (tabletMode) return []
+    const firstCreatedAt = visibleGroups
+      .map((group) => group.type === 'assistant-turn' ? group.createdAt : (group.message as Record<string, unknown>)._createdAt)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .reduce<number | undefined>((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined)
+    return (imageGenerations ?? []).filter((card) => firstCreatedAt === undefined || card.createdAt >= firstCreatedAt)
+  }, [visibleGroups, imageGenerations, tabletMode])
+  const visibleTimeline = React.useMemo(
+    () => mergeAgentImageGenerationTimeline(visibleGroups, visibleImageGenerations, getGroupId),
+    [visibleGroups, visibleImageGenerations],
+  )
   const hasEarlierGroups = !pagedMode && resolvedVisibleGroupStart > 0
   const loadEarlierGroups = React.useCallback(() => {
     // 全量老路径的本地 slice 前移一页；分页模式由 onLoadEarlierHistory 服务端拉取接管。
@@ -796,8 +815,10 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           <EmptyState />
         ) : (
           <>
-            {/* 统一消息渲染（持久化 + 实时合并为一个列表，确保 system 消息位置正确） */}
-            {visibleGroups.map((group) => {
+            {/* 统一时间线：SDK 消息组和持久化图片卡按创建时间合并，卡片不依赖 tool nesting。 */}
+            {visibleTimeline.map((item) => {
+              if (item.kind === 'image') return <AgentImageGenerationCardView key={`generation:${item.id}`} card={item.card} onRetry={onRetryImageGeneration} />
+              const group = item.group
               const isLive = liveGroupSet.has(group)
               const isErrorGroup = group.type === 'assistant-turn'
                 && group.assistantMessages.some((m) => !!m.error)

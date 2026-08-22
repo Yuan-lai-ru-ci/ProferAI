@@ -433,6 +433,7 @@ import {
   updateAgentPermissionMode,
   rewindAgentSession,
   restoreActiveAgentStreams,
+  agentEventBus,
 } from './lib/agent-service'
 import {
   mapSdkShellTasks,
@@ -448,6 +449,9 @@ import {
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { isPiHarnessEnabled } from './lib/pi-harness/feature-gate'
 import { prepareManualPiHarnessCandidateContinuation, releaseManualPiHarnessCandidateContinuation } from './lib/pi-harness/orchestrator-bridge'
+import { listImageGenerationCards, getImageGenerationRecordForRetry } from './lib/agent-image-generation-records'
+import { retryAgentGptImage } from './lib/agent-gpt-image-service'
+import { isAgentGptImageAvailable } from './lib/agent-gpt-image-tools'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -457,6 +461,7 @@ import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
 import {
   getAgentSessionWorkspacePath,
+  resolveAgentSessionWorkspacePath,
   getAgentWorkspacesDir,
   getWorkspaceSkillsDir,
   getWorkspaceFilesDir,
@@ -3666,6 +3671,59 @@ export function registerIpcHandlers(): void {
       return opts
         ? getAgentSessionSDKMessages(id, opts)
         : getAgentSessionSDKMessages(id)
+    },
+  )
+
+  // 只返回已脱敏、当前会话所属的图片生成时间线记录。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_IMAGE_GENERATIONS,
+    async (event, sessionId: string): Promise<import('@profer/shared').AgentImageGenerationCard[]> => {
+      assertSensitiveAgentIpcSender(event)
+      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) throw new Error('无效的 Agent 会话标识')
+      const session = getAgentSessionMeta(sessionId)
+      if (!session?.workspaceId) throw new Error('Agent 会话不存在或不支持图片生成记录')
+      const workspace = getAgentWorkspace(session.workspaceId)
+      if (!workspace) throw new Error('Agent 工作区不存在')
+      return listImageGenerationCards({ sessionId, agentCwd: resolveAgentSessionWorkspacePath(workspace.slug, sessionId) })
+    },
+  )
+
+  // renderer 只能提交 generation ID；主进程重建安全上下文、重新验证失败记录和当前工具配置。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RETRY_IMAGE_GENERATION,
+    async (event, input: import('@profer/shared').RetryAgentImageGenerationInput): Promise<import('@profer/shared').AgentImageGenerationCard> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string' || typeof input.generationId !== 'string'
+        || !input.sessionId.trim() || !input.generationId.trim() || input.sessionId.length > 200 || input.generationId.length > 200) {
+        throw new Error('无效的图片重试请求')
+      }
+      if (isAgentSessionActive(input.sessionId)) throw new Error('Agent 正在运行，完成后再重试图片生成')
+      if (!isAgentGptImageAvailable()) throw new Error('图片生成工具当前不可用，请检查 GPT Image 设置后重试')
+      const session = getAgentSessionMeta(input.sessionId)
+      if (!session?.workspaceId) throw new Error('Agent 会话不存在或不支持图片生成记录')
+      const workspace = getAgentWorkspace(session.workspaceId)
+      if (!workspace) throw new Error('Agent 工作区不存在')
+      const agentCwd = resolveAgentSessionWorkspacePath(workspace.slug, input.sessionId)
+      const record = await getImageGenerationRecordForRetry({ sessionId: input.sessionId, agentCwd }, input.generationId)
+      if (!record) throw new Error('该图片生成记录不存在、已成功或不属于当前会话')
+      if (record.reference.kind === 'paths') throw new Error('参考图编辑失败后请让 Agent 重新选择参考图，不能自动重试')
+      const result = await retryAgentGptImage(record, {
+        sessionId: input.sessionId,
+        agentCwd,
+        // Session cwd is the only retry root. Path-reference retries are rejected above,
+        // so JSONL never re-grants arbitrary external directories.
+        allowedRoots: [agentCwd],
+        onGenerationUpdate: (card) => {
+          const payload = { kind: 'profer_event' as const, event: { type: 'image_generation_updated' as const, sessionId: input.sessionId, record: card } }
+          agentEventBus.emit(input.sessionId, payload)
+          if (!event.sender.isDestroyed()) event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: input.sessionId, payload })
+        },
+      })
+      if (!result.ok) throw new Error(result.error)
+      const cards = await listImageGenerationCards({ sessionId: input.sessionId, agentCwd })
+      const card = cards.find((item) => item.id === result.generationId)
+      if (!card) throw new Error('图片生成记录保存失败')
+      return card
     },
   )
 

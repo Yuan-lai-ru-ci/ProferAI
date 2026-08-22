@@ -12,6 +12,7 @@ const calls: unknown[] = []
 let providerResult: { ok: true; bytes: Buffer; mediaType: 'image/png'; mode: 'official' } | { ok: false; error: string } | undefined
 
 const { generateAgentGptImage, __setAgentGptImageProviderForTest } = await import('./agent-gpt-image-service')
+const { createImageGenerationRecord, transitionImageGenerationRecord, listImageGenerationCards } = await import('./agent-image-generation-records')
 const roots: string[] = []
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -101,8 +102,47 @@ describe('generateAgentGptImage', () => {
   test('provider failures do not create an output directory or marker', async () => {
     const f = fixture()
     providerResult = { ok: false as const, error: 'upstream rejected' }
-    const result = await generateAgentGptImage({ toolCallId: 'failed', prompt: 'x' }, context(f))
+    const updates: string[] = []
+    const result = await generateAgentGptImage({ toolCallId: 'failed', prompt: 'x' }, { ...context(f), onGenerationUpdate: (record) => updates.push(record.status) })
     expect(result).toMatchObject({ ok: false, error: 'upstream rejected' })
+    expect(updates).toEqual(['requesting', 'failed'])
     expect(existsSync(join(f.session, '.context', 'agent-output-images'))).toBe(false)
+  })
+
+  test('emits honest requesting, saving and succeeded cards only after durable transitions', async () => {
+    const f = fixture()
+    providerResult = success()
+    const updates: Array<{ status: string; chargedCredits?: number; localPath?: string }> = []
+    const result = await generateAgentGptImage({ toolCallId: 'life', prompt: 'blue rocket' }, {
+      ...context(f), onGenerationUpdate: (record) => updates.push({ status: record.status, chargedCredits: record.chargedCredits, localPath: record.image?.localPath }),
+    })
+    expect(result).toMatchObject({ ok: true })
+    expect(updates.map((item) => item.status)).toEqual(['requesting', 'saving', 'succeeded'])
+    expect(updates[2]).toMatchObject({ chargedCredits: 5, localPath: expect.stringContaining('agent-output-images') })
+  })
+
+  test('uses only the latest successful artifact from this session for last-generated editing', async () => {
+    const f = fixture()
+    const first = await createImageGenerationRecord({ ...context(f), toolCallId: 'prior', prompt: 'prior', reference: { kind: 'none' } })
+    await transitionImageGenerationRecord(context(f), first.id, { status: 'saving' })
+    const priorPath = join(f.session, '.context', 'agent-output-images', 'prior.png')
+    mkdirSync(join(f.session, '.context', 'agent-output-images'), { recursive: true })
+    writeFileSync(priorPath, png)
+    await transitionImageGenerationRecord(context(f), first.id, { status: 'succeeded', image: { localPath: priorPath, filename: 'prior.png', mediaType: 'image/png' } })
+    providerResult = success()
+
+    const result = await generateAgentGptImage({ toolCallId: 'edit', prompt: 'make it green', useLastGeneratedImage: true }, context(f))
+    expect(result).toMatchObject({ ok: true, edited: true })
+    expect((calls[0] as { references: unknown[] }).references).toHaveLength(1)
+    const cards = await listImageGenerationCards(context(f))
+    expect(cards.at(-1)).toMatchObject({ reference: { kind: 'last_generated' } })
+  })
+
+  test('rejects missing or conflicting last-generated reference before provider contact', async () => {
+    const f = fixture()
+    providerResult = success()
+    await expect(generateAgentGptImage({ toolCallId: 'none', prompt: 'x', useLastGeneratedImage: true }, context(f))).resolves.toMatchObject({ ok: false, error: expect.stringContaining('没有') })
+    await expect(generateAgentGptImage({ toolCallId: 'both', prompt: 'x', useLastGeneratedImage: true, referenceImagePaths: ['x.png'] }, context(f))).resolves.toMatchObject({ ok: false, error: expect.stringContaining('不能') })
+    expect(calls).toHaveLength(0)
   })
 })
