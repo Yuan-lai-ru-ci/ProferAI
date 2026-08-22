@@ -13,7 +13,13 @@ export interface BrowserViewLayout {
   /** Renderer 全局单调递增代际；主进程忽略晚到的旧布局 IPC。 */
   revision: number
   visible: boolean
+  /** 实际网页内容区边界。 */
   bounds: BrowserViewBounds
+  /**
+   * 浏览器整张卡片的边界。原生宿主以此边界裁剪圆角，网页则在其中按 bounds 相对定位。
+   * 缺省时兼容旧 renderer：宿主边界退化为网页内容区。
+   */
+  hostBounds?: BrowserViewBounds
 }
 
 export type BrowserExecutionSource = 'user' | 'automation' | 'delegation'

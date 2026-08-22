@@ -83,8 +83,10 @@ type BrowserSessionRecord = {
   lastLayoutRevision: number
   /** 窗口级原生宿主；所有 WebContentsView 均作为它的子 View。 */
   hostView: View
-  /** 宿主在原生窗口坐标系中的最后边界。 */
+  /** 宿主（整张浏览器卡片）在原生窗口坐标系中的最后边界。 */
   lastHostBounds?: BrowserViewLayout['bounds']
+  /** 网页在原生宿主局部坐标系中的最后边界。 */
+  lastTabBounds?: BrowserViewLayout['bounds']
   /** 上次布局应用后的实际可见状态；隐藏→显示过渡时强制重绘，避免 WebContentsView 白屏。 */
   lastVisible: boolean
 }
@@ -729,21 +731,35 @@ export class BrowserController {
       && !this.owner.isDestroyed()
       && this.owner.isVisible()
     const zoomFactor = this.owner?.webContents.getZoomFactor() ?? 1
-    const rawBounds = {
-      x: Math.round(bounds.x * zoomFactor),
-      y: Math.round(bounds.y * zoomFactor),
-      width: Math.max(0, Math.round(bounds.width * zoomFactor)),
-      height: Math.max(0, Math.round(bounds.height * zoomFactor)),
-    }
+    const scaleBounds = (value: BrowserViewLayout['bounds']) => ({
+      x: Math.round(value.x * zoomFactor),
+      y: Math.round(value.y * zoomFactor),
+      width: Math.max(0, Math.round(value.width * zoomFactor)),
+      height: Math.max(0, Math.round(value.height * zoomFactor)),
+    })
+    const rawBounds = scaleBounds(bounds)
     // 原生 View 的 bounds 是窗口 contentView 坐标，不能允许异常/过渡布局把网页画出窗口。
     const contentBounds = this.owner?.contentView.getBounds()
-    const maxWidth = Math.max(0, (contentBounds?.width ?? rawBounds.width) - Math.max(0, rawBounds.x))
-    const maxHeight = Math.max(0, (contentBounds?.height ?? rawBounds.height) - Math.max(0, rawBounds.y))
-    const adjustedBounds = {
-      x: Math.max(0, rawBounds.x),
-      y: Math.max(0, rawBounds.y),
-      width: Math.min(rawBounds.width, maxWidth),
-      height: Math.min(rawBounds.height, maxHeight),
+    const constrainToWindow = (value: BrowserViewLayout['bounds']) => {
+      const x = Math.max(0, value.x)
+      const y = Math.max(0, value.y)
+      return {
+        x,
+        y,
+        width: Math.min(value.width, Math.max(0, (contentBounds?.width ?? value.width) - x)),
+        height: Math.min(value.height, Math.max(0, (contentBounds?.height ?? value.height) - y)),
+      }
+    }
+    // WebContentsView 无法由 renderer 的 overflow-hidden 裁剪；将带圆角的原生
+    // hostView 扩展至整张浏览器卡片，并让网页在其中按局部坐标定位，才能裁掉底部露角。
+    const adjustedBounds = constrainToWindow(scaleBounds(layout.hostBounds ?? bounds))
+    const localX = Math.max(0, rawBounds.x - adjustedBounds.x)
+    const localY = Math.max(0, rawBounds.y - adjustedBounds.y)
+    const tabLayoutBounds = {
+      x: localX,
+      y: localY,
+      width: Math.min(rawBounds.width, Math.max(0, adjustedBounds.width - localX)),
+      height: Math.min(rawBounds.height, Math.max(0, adjustedBounds.height - localY)),
     }
     // 隐藏→显示过渡：即使边界未变也必须重写 bounds 并请求重绘。
     // 仅 setVisible(true) 时 Chromium 不会重新合成 WebContentsView 表面，网页会停留在空白。
@@ -762,10 +778,11 @@ export class BrowserController {
       if (other.view.getVisible() !== shouldBeVisible) other.view.setVisible(shouldBeVisible)
     }
     const tabBounds = tab.view.getBounds()
-    if (tabBounds.x !== 0 || tabBounds.y !== 0
-      || tabBounds.width !== adjustedBounds.width || tabBounds.height !== adjustedBounds.height) {
-      tab.view.setBounds({ x: 0, y: 0, width: adjustedBounds.width, height: adjustedBounds.height })
+    if (tabBounds.x !== tabLayoutBounds.x || tabBounds.y !== tabLayoutBounds.y
+      || tabBounds.width !== tabLayoutBounds.width || tabBounds.height !== tabLayoutBounds.height) {
+      tab.view.setBounds(tabLayoutBounds)
     }
+    browserSession.lastTabBounds = { ...tabLayoutBounds }
     if (visible) {
       // 跨会话互斥：本会话浏览器被激活显示时，立即隐藏其他所有会话的原生视图。
       // 原生 View 全部 addChildView 在同一个主窗口 contentView 上且盖在 renderer DOM 之上。
@@ -788,7 +805,8 @@ export class BrowserController {
       if (other.tabId !== tab.tabId) other.view.setVisible(false)
     }
     const hostBounds = browserSession.lastHostBounds
-    if (hostBounds) tab.view.setBounds({ x: 0, y: 0, width: hostBounds.width, height: hostBounds.height })
+    const tabBounds = browserSession.lastTabBounds
+    if (tabBounds) tab.view.setBounds(tabBounds)
     tab.view.webContents.setZoomFactor(tab.zoomFactor)
     const visible = browserSession.sessionId === this.foregroundSessionId
       && !!hostBounds
