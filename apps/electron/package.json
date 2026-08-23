@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "bun run scripts/dev-kill.ts --vite && concurrently -k -n vite,electron -c blue,green \"bun run dev:vite\" \"bun run dev:electron\"",
     "dev:split": "bash scripts/dev-split.sh",
-    "dev:vite": "vite dev",
+    "build:ooxml": "node scripts/build-ooxml.mjs",
+    "dev:vite": "bun run build:ooxml && vite dev",
     "dev:kill": "bun run scripts/dev-kill.ts",
     "dev:electron": "bun run dev:kill && bun run build:main && bun run build:preload && bun run build:resources && bun run scripts/sleep.ts 2 && concurrently -k -n main,preload,app -c yellow,magenta,cyan \"bun run watch:main\" \"bun run watch:preload\" \"bunx electronmon .\"",
     "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='\"oss\"'",
@@ -19,7 +20,7 @@
     "watch:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='\"oss\"' --watch=forever",
     "watch:main-commercial": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='\"commercial\"' --watch=forever",
     "watch:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron --watch=forever",
-    "build:renderer": "vite build",
+    "build:renderer": "bun run build:ooxml && vite build",
     "build:tablet": "echo '[tablet] 独立构建已废弃：平板产物由 build:renderer 多入口一并产出（dist/renderer/tablet），此命令仅作兼容' && vite build",
     "build:resources": "bun run scripts/copy-resources.ts",
     "build:cli": "bun run scripts/build-cli.ts",
@@ -57,6 +58,7 @@
     "@earendil-works/pi-agent-core": "0.84.2",
     "@earendil-works/pi-ai": "0.84.2",
     "@earendil-works/pi-coding-agent": "0.84.2",
+    "@silurus/ooxml": "0.71.0",
     "pdfjs-dist": "^4.10.38"
   },
   "optionalDependencies": {

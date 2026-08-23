@@ -19,6 +19,8 @@ import {
   previewModePreferenceAtom,
   type PreviewFile,
 } from '@/atoms/preview-atoms'
+import { agentSessionPathMapAtom } from '@/atoms/agent-atoms'
+import { isAbsoluteFilePath } from '@/lib/file-utils'
 import {
   activeTabIdAtom,
   closeTab,
@@ -32,15 +34,49 @@ import {
 /** Jotai store 类型（从 useStore 推导，避免直接 import 内部 Store 类型） */
 type JotaiStore = ReturnType<typeof useStore>
 
+function normalizePreviewPath(filePath: string): string {
+  if (!/^[A-Za-z]:[\\/]/.test(filePath)) return filePath
+  const normalized = filePath
+    .replace(/\\/g, '/')
+    .replace(/^([A-Za-z]:)\/+/, '$1/')
+  return normalized.replace(
+    /^([A-Za-z]:\/Users\/[^/]+)\.(profer(?:-dev)?|proma(?:-dev)?)(?=\/|$)/i,
+    '$1/.$2',
+  )
+}
+
+function joinPreviewPath(basePath: string, filePath: string): string {
+  return normalizePreviewPath(`${basePath.replace(/[\\/]+$/, '')}/${filePath.replace(/^[\\/]+/, '')}`)
+}
+
+/** 将所有预览入口的相对路径归一为真实绝对路径，保证默认应用探测使用同一目标。 */
+function normalizePreviewFile(store: JotaiStore, sessionId: string, file: PreviewFile): PreviewFile {
+  if (isAbsoluteFilePath(file.filePath)) {
+    const filePath = normalizePreviewPath(file.filePath)
+    return filePath === file.filePath ? file : { ...file, filePath }
+  }
+
+  const sessionPath = store.get(agentSessionPathMapAtom).get(sessionId) ?? ''
+  const basePath = file.basePaths?.find(Boolean) ?? file.dirPath ?? sessionPath
+  if (!basePath || !file.filePath) return file
+
+  return {
+    ...file,
+    filePath: joinPreviewPath(basePath, file.filePath),
+    dirPath: file.dirPath ?? basePath,
+  }
+}
+
 export function useOpenPreview() {
   const store = useStore()
 
   return React.useCallback(
     (sessionId: string, file: PreviewFile) => {
+      const normalizedFile = normalizePreviewFile(store, sessionId, file)
       // 1. 文件状态两种模式都需要，先写入
       store.set(previewFileMapAtom, (prev) => {
         const m = new Map(prev)
-        m.set(sessionId, file)
+        m.set(sessionId, normalizedFile)
         return m
       })
 
@@ -65,7 +101,7 @@ export function useOpenPreview() {
       const result = openTab(store.get(tabsAtom), {
         type: 'preview',
         sessionId,
-        title: getPreviewTabTitle(file.filePath),
+        title: getPreviewTabTitle(normalizedFile.filePath),
       })
       store.set(tabsAtom, result.tabs)
       store.set(activeTabIdAtom, result.activeTabId)

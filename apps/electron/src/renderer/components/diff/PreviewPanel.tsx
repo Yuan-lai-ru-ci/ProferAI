@@ -13,6 +13,7 @@ import {
   previewPanelOpenMapAtom,
   previewFileMapAtom,
   previewModePreferenceAtom,
+  updatePreviewModePreference,
 } from '@/atoms/preview-atoms'
 import { agentSessionPathMapAtom } from '@/atoms/agent-atoms'
 import {
@@ -30,6 +31,7 @@ import { DefaultAppOpenButton } from './DefaultAppOpenButton'
 import { getDefaultAppTargetPath, getPreviewFileAccess } from './preview-open-path'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
+import { toast } from 'sonner'
 
 interface PreviewPanelProps {
   sessionId: string
@@ -114,7 +116,11 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => setPreviewModePref((p) => (p === 'split' ? 'tab' : 'split'))}
+              onClick={() => {
+                const next = previewModePref === 'split' ? 'tab' : 'split'
+                setPreviewModePref(next)
+                void updatePreviewModePreference(next)
+              }}
               className={cn(
                 'flex items-center justify-center size-6 shrink-0 rounded transition-colors',
                 previewModePref === 'split'
@@ -180,32 +186,29 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
         priority={20}
         className="absolute right-2 top-[3px] z-10"
       />
-      {/* 顶部栏：文件名 + 预览操作 */}
+      {/* 顶部栏：上行只显示文件名，下行显示路径和预览操作。 */}
       <div className={cn('flex-shrink-0 border-b border-surface-border/30 titlebar-no-drag', useStackedWindowsHeader && 'bg-surface-raised')}>
-        {useStackedWindowsHeader ? (
-          <>
-            <div
-              className="flex items-center h-[34px] pl-3"
-              style={{ paddingRight: WINDOWS_WINDOW_CONTROLS_SAFE_AREA }}
+        <div
+          className="flex items-center h-[34px] px-3"
+          style={useStackedWindowsHeader ? { paddingRight: WINDOWS_WINDOW_CONTROLS_SAFE_AREA } : undefined}
+        >
+          <span className="min-w-0 truncate text-xs text-muted-foreground" title={currentFile?.filePath}>
+            {fileName}
+          </span>
+        </div>
+        <div className="flex items-center h-[30px] gap-2 px-3 border-t border-surface-border/20 bg-surface-sunken/40">
+          {currentFile && (
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(currentFile.filePath).then(() => toast.success('文件路径复制成功')).catch(() => toast.error('文件路径复制失败'))}
+              className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground/65 hover:text-foreground hover:underline underline-offset-2"
+              title={`${currentFile.filePath}（点击复制完整路径）`}
             >
-              <span className="text-xs text-muted-foreground truncate">
-                {fileName}
-              </span>
-            </div>
-            <div className="flex items-center h-[30px] px-3 border-t border-surface-border/20 bg-surface-sunken/40">
-              {renderPreviewActions()}
-            </div>
-          </>
-        ) : (
-          <div
-            className="flex items-center h-[34px] px-3"
-          >
-            <span className="text-xs text-muted-foreground truncate">
-              {fileName}
-            </span>
-            {renderPreviewActions()}
-          </div>
-        )}
+              {currentFile.filePath}
+            </button>
+          )}
+          {renderPreviewActions()}
+        </div>
       </div>
 
       {/* 内容区 */}
@@ -221,6 +224,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
             readOnly={currentFile.readOnly}
             basePaths={currentFile.basePaths}
             baseRef={currentFile.baseRef}
+            hideToolbar
             onEmptyDiff={handleClosePanel}
           />
         ) : (

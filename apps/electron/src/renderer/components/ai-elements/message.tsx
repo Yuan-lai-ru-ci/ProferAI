@@ -529,7 +529,7 @@ const MarkdownLink = React.memo(function MarkdownLink({
     }
   }
 
-  return (
+  const link = (
     <a
       {...linkProps}
       href={href}
@@ -552,6 +552,7 @@ const MarkdownLink = React.memo(function MarkdownLink({
           if (sessionId) {
             openPreview(sessionId, {
               filePath: filePathFromUrl,
+              dirPath: ctxBasePaths?.[0],
               previewOnly: true,
               readOnly: true,
               basePaths: ctxBasePaths,
@@ -572,6 +573,8 @@ const MarkdownLink = React.memo(function MarkdownLink({
       {linkChildren}
     </a>
   )
+
+  return link
 })
 
 /** 递归提取纯文本（children 可能是字符串数组） */

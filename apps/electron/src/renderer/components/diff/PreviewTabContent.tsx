@@ -8,6 +8,7 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { PanelRight, FolderOpen } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { toast } from 'sonner'
 import {
   agentSessionPathMapAtom,
 } from '@/atoms/agent-atoms'
@@ -98,38 +99,50 @@ export function PreviewTabContent({ sessionId }: PreviewTabContentProps): React.
   const dirPath = currentFile.dirPath || sessionPath || getFallbackDirPath(currentFile.filePath, sessionPath)
   const defaultAppTargetPath = getDefaultAppTargetPath(currentFile, sessionPath)
   const defaultAppAccess = getPreviewFileAccess(sessionId, currentFile, sessionPath)
-  const toolbarActions = (
-    <>
-      <DefaultAppOpenButton
-        filePath={defaultAppTargetPath}
-        access={defaultAppAccess}
-      />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => {
-              window.electronAPI.showItemInFolder(
-                defaultAppTargetPath,
-                currentFile?.basePaths,
-              ).catch((err) => console.error('[PreviewTabContent] 打开文件位置失败:', err))
-            }}
-            className="flex items-center justify-center size-6 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
-            aria-label="打开文件所在位置"
-          >
-            <FolderOpen className="size-3.5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <p>在文件管理器中显示</p>
-        </TooltipContent>
-      </Tooltip>
-      <TearOffButton sessionId={sessionId} />
-    </>
-  )
-
   return (
     <div className="flex h-full flex-col overflow-hidden bg-content-area">
+      <div className="flex h-[34px] shrink-0 items-center gap-2 border-b border-border/30 px-3 titlebar-no-drag">
+        <span className="min-w-0 max-w-[30%] truncate text-xs font-medium text-muted-foreground" title={currentFile.filePath}>
+          {fileName}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(currentFile.filePath)
+              .then(() => toast.success('文件路径复制成功'))
+              .catch(() => toast.error('文件路径复制失败'))
+          }}
+          className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground/65 hover:text-foreground hover:underline underline-offset-2"
+          title={`${currentFile.filePath}（点击复制完整路径）`}
+        >
+          {currentFile.filePath}
+        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <DefaultAppOpenButton
+            filePath={defaultAppTargetPath}
+            access={defaultAppAccess}
+          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  window.electronAPI.showItemInFolder(
+                    defaultAppTargetPath,
+                    currentFile.basePaths,
+                  ).catch((err) => console.error('[PreviewTabContent] 打开文件位置失败:', err))
+                }}
+                className="flex items-center justify-center size-6 shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
+                aria-label="打开文件所在位置"
+              >
+                <FolderOpen className="size-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom"><p>在文件管理器中显示</p></TooltipContent>
+          </Tooltip>
+          <TearOffButton sessionId={sessionId} />
+        </div>
+      </div>
       <div className="min-h-0 flex-1 overflow-hidden">
         <DiffTabContent
           key={`${sessionId}:${currentFile.filePath}`}
@@ -141,7 +154,7 @@ export function PreviewTabContent({ sessionId }: PreviewTabContentProps): React.
           readOnly={currentFile.readOnly}
           basePaths={currentFile.basePaths}
           baseRef={currentFile.baseRef}
-          toolbarActions={toolbarActions}
+          hideToolbar
         />
       </div>
     </div>

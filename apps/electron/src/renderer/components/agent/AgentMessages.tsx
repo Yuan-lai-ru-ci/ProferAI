@@ -756,7 +756,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
   return (
     <TabletModeContext.Provider value={tabletMode}>
-    <BasePathsProvider basePaths={attachedDirs}>
+    <BasePathsProvider basePaths={[...(sessionPath ? [sessionPath] : []), ...(attachedDirs ?? [])]}>
     <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
     <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
@@ -837,7 +837,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   allMessages={allSDKMessages}
                   historicalTaskSubjects={historicalTaskSubjects}
                   basePath={sessionPath || undefined}
-                  basePaths={attachedDirs}
+                  basePaths={[...(sessionPath ? [sessionPath] : []), ...(attachedDirs ?? [])]}
                   onFork={shouldDisableActions ? undefined : onFork}
                   onRewind={shouldDisableActions ? undefined : onRewind}
                   onRetry={shouldDisableActions ? undefined : onRetry}
@@ -880,7 +880,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                             block={block}
                             allMessages={allSDKMessages}
                             basePath={sessionPath || undefined}
-                            basePaths={attachedDirs}
+                            basePaths={[...(sessionPath ? [sessionPath] : []), ...(attachedDirs ?? [])]}
                             index={index}
                             dimmed={hasSmoothTextContent && block.type !== 'text'}
                             isStreaming={streaming}
