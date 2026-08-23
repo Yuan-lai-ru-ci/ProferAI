@@ -162,6 +162,10 @@
     --diff-deletion-bg: 0 84% 60% / 0.12;
     --diff-deletion-fg: 0 65% 36%;
     --browser-host-surface: 0 0% 100%;
+    /* 分栏背景契约：工作区承托与卡片表面分离，避免 shell 渐变和阴影参与圆角绘制。 */
+    --workspace-canvas: var(--sunken-surface);
+    --panel-surface: var(--raised-surface);
+    --panel-border: var(--surface-border);
     --success: 142 71% 45%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
@@ -1887,6 +1891,16 @@
 
 .office-slide li + li {
   margin-top: 4px;
+}
+
+/* Silurus Docx/Pptx ScrollViewer 内部滚动容器（wrapper > scrollHost）：
+   scrollHost 的 spacer 按「最大页宽 + 左右 padding」撑宽，但没有扣除垂直滚动条
+   占用的宽度，因此多页文档出现垂直滚动条时，底部会多出一条横向滚动条。
+   页面本身按 fitWidth 缩放、水平居中，不会横向溢出可视区，隐藏横向滚动条是安全的。
+   DOM 层级：containerRef(data-office-format) > viewerHostRef > wrapper > scrollHost */
+[data-office-format='docx'] > div > div > div,
+[data-office-format='pptx'] > div > div > div {
+  overflow-x: hidden !important;
 }
 
 /* ===== 语音输入浮窗拖动区域 ===== */

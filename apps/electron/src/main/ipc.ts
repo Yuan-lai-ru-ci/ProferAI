@@ -2712,6 +2712,8 @@ export function registerIpcHandlers(): void {
             )
           }
         })
+        // 受管浏览器原生视图背景跟随主题，避免加载/拖拽时露白
+        browserController.syncThemeBackground()
       }
 
       return result
@@ -2844,6 +2846,8 @@ export function registerIpcHandlers(): void {
         isDark,
       )
     })
+    // 受管浏览器原生视图背景跟随系统主题
+    browserController.syncThemeBackground()
   })
 
   // ===== 自定义通知音效 =====
@@ -3479,7 +3483,8 @@ export function registerIpcHandlers(): void {
       if (
         !layout ||
         typeof layout.sessionId !== 'string' ||
-        !layout.bounds ||
+        !layout.viewportBounds ||
+        !layout.pageBounds ||
         !Number.isSafeInteger(layout.revision)
       )
         return

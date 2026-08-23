@@ -13,13 +13,15 @@ export interface BrowserViewLayout {
   /** Renderer 全局单调递增代际；主进程忽略晚到的旧布局 IPC。 */
   revision: number
   visible: boolean
-  /** 实际网页内容区边界。 */
-  bounds: BrowserViewBounds
   /**
-   * 浏览器整张卡片的边界。原生宿主以此边界裁剪圆角，网页则在其中按 bounds 相对定位。
-   * 缺省时兼容旧 renderer：宿主边界退化为网页内容区。
+   * 唯一由 renderer 测得并由主进程应用的原生浏览器视口（CSS 像素）。
+   * 它代表完整原生 frame；网页内容在其中使用局部坐标，圆角裁切也只由该 frame 负责。
    */
-  hostBounds?: BrowserViewBounds
+  viewportBounds: BrowserViewBounds
+  /** 原生 frame 的四角统一裁切半径（CSS 像素）。 */
+  viewportRadius: number
+  /** 网页在 native frame 内的局部矩形；当前工具栏/标签栏位于 renderer DOM，不占原生 frame。 */
+  pageBounds: BrowserViewBounds
 }
 
 export type BrowserExecutionSource = 'user' | 'automation' | 'delegation'
