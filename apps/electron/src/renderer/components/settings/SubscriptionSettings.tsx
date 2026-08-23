@@ -246,9 +246,6 @@ export function SubscriptionSettings(): React.ReactElement {
 
   return (
     <div className="space-y-5">
-      {/* ---- 充值积分块（用户自助充值） ---- */}
-      <RechargeSection />
-
       {/* ---- 四档定价卡 ---- */}
       <div>
         <div className="flex items-center gap-2 mb-3">
@@ -330,6 +327,9 @@ export function SubscriptionSettings(): React.ReactElement {
           ))}
         </div>
       </div>
+
+      {/* ---- 充值积分块（用户自助充值） ---- */}
+      <RechargeSection />
 
       {/* ---- VIP 叠加层 ---- */}
       <div className="rounded-xl border border-yellow-400/40 bg-yellow-50/30 dark:bg-yellow-950/10 p-5">
