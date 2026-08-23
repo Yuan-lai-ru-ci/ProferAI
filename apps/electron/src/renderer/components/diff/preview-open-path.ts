@@ -45,7 +45,7 @@ export function getPreviewCandidateBasePaths(
   basePaths: readonly string[] | undefined,
   ...contextPaths: Array<string | null | undefined>
 ): string[] {
-  return uniqueTruthyPaths([...(basePaths ?? []), ...contextPaths].map((path) => normalizeWindowsDrivePath(path)))
+  return uniqueTruthyPaths([...(basePaths ?? []), ...contextPaths].map((path) => path ? normalizeWindowsDrivePath(path) : path))
 }
 
 /**
