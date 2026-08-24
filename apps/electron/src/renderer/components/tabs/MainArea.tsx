@@ -314,13 +314,11 @@ export function MainArea(): React.ReactElement {
     document.addEventListener('mouseup', onMouseUp)
   }, [setBrowserSplitRatio, setIsDraggingBrowser])
 
-  // 分栏画布是唯一承托背景；卡片自身只负责表面、边界与圆角，不再叠加大范围阴影。
   return (
-    <div ref={browserLayoutRef} className="relative flex h-full min-w-0 bg-workspace-canvas">
+    <div ref={browserLayoutRef} className="relative flex h-full min-w-0">
       <Panel
         variant="grow"
-        // 对话区与浏览器是两张独立卡片；完整圆角由卡片自身保留，边界改用语义细边框。
-        className="rounded-2xl border border-panel-border/70 bg-panel-surface shadow-none"
+        className="bg-content-area rounded-2xl shadow-xl dark:shadow-sm"
       >
         <div className="flex flex-1 min-h-0 relative overflow-hidden" data-split-container>
           {/* 左侧：TabBar + TabContent（始终保持在同一 DOM 位置，避免 Tab 切换时 unmount）

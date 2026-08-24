@@ -29,6 +29,24 @@ const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName } = await import('./config-paths')
 
 describe('buildSystemPrompt', () => {
+  test('默认注入果断执行风格，同时保留高风险操作安全边界', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      isPiRuntime: true,
+    })
+
+    expect(prompt).toContain('## 行动风格：果断执行，保留安全边界')
+    expect(prompt).toContain('默认推进，不等待许可')
+    expect(prompt).toContain('用合理默认值消解非关键歧义')
+    expect(prompt).toContain('把提问留给真正的决策点')
+    expect(prompt).toContain('避免怯懦式沟通')
+    expect(prompt).toContain('安全边界不可绕过')
+    expect(prompt).toContain('删除/覆盖重要数据、发布部署、付费、对外发送和远端写入')
+  })
+
   test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
     const slug = 'demo-workspace'
     const sessionId = 'session-123'
@@ -228,6 +246,8 @@ describe('buildSystemPrompt', () => {
       userMessage: '检查这个 TypeScript 项目的类型错误。',
       toolNames,
     })
+    expect(ordinary).toContain('## 行动风格：果断执行，保留安全边界')
+    expect(ordinary).toContain('避免怯懦式沟通')
     expect(ordinary).toContain('低风险、可逆的本地操作')
     expect(ordinary).toContain('修改后必须闭环')
     expect(ordinary).toContain('计划模式文件路径')

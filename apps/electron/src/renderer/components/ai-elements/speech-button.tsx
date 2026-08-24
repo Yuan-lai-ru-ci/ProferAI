@@ -14,6 +14,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 
 interface SpeechButtonProps {
   /** @deprecated 语音结果统一由全局语音输入回填到当前输入框 */
@@ -21,11 +22,16 @@ interface SpeechButtonProps {
   /** 是否禁用 */
   disabled?: boolean
   className?: string
+  /** Agent 输入区使用统一 Composer 触发器；Chat 默认保持原样。 */
+  composerTool?: boolean
+  tabletMode?: boolean
 }
 
 export function SpeechButton({
   disabled = false,
   className,
+  composerTool = false,
+  tabletMode = false,
 }: SpeechButtonProps): React.ReactElement {
   const handleClick = useCallback((): void => {
     void (async () => {
@@ -43,6 +49,21 @@ export function SpeechButton({
       }
     })()
   }, [])
+
+  if (composerTool) {
+    return (
+      <AgentComposerToolTrigger
+        label="语音输入"
+        tooltip="语音输入"
+        tabletMode={tabletMode}
+        className={className}
+        onClick={handleClick}
+        disabled={disabled}
+      >
+        <MicIcon className="size-5" />
+      </AgentComposerToolTrigger>
+    )
+  }
 
   return (
     <Tooltip>

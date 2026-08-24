@@ -24,7 +24,6 @@ import {
   Users,
   Coins,
   CreditCard,
-  KeyRound,
   Database,
   Network,
   MonitorSmartphone,
@@ -81,11 +80,10 @@ export interface SettingsTabGroup {
   items: SettingsTabItem[];
 }
 
-/** 账户相关：额度 / 订阅 / 开放 API（位于导航顶部「账户」分组） */
+/** 账户相关：额度与订阅（位于导航顶部「账户」分组） */
 const ACCOUNT_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
   { id: "subscription", label: "立即订阅", icon: <CreditCard size={16} /> },
-  { id: "openapi", label: "开放 API", icon: <KeyRound size={16} /> },
 ];
 
 /** 模型与能力：渠道 / Agent / 提示词 / Chat 工具 */
@@ -224,7 +222,7 @@ export function SettingsPanel({
   }
 
   // 受限环境（平板）传入白名单时直接使用（无分组标题）；否则按语义分组组装导航。
-  // 未登录时过滤掉依赖团队账号的 Tab（额度 / 订阅 / 开放 API / 团队管理 / 登录设备）。
+  // 未登录时过滤掉依赖团队账号的 Tab（额度 / 订阅 / 团队管理 / 登录设备）。
   const groups = React.useMemo<SettingsTabGroup[]>(() => {
     if (tabsOverride) {
       return [{ items: tabsOverride }]

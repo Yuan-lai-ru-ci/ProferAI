@@ -38,9 +38,7 @@ import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
-import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { AgentComposerToolMenuItem, AgentComposerToolPopover, AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -275,34 +273,22 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverAnchor asChild>
-        <div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={openAIConfig?.disabled}
-            className={cn(
-              'size-[36px] rounded-full',
-              isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground',
-            )}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => setOpen((value) => !value)}
-            aria-label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
-            aria-expanded={open}
-          >
-            <Brain className="size-5" />
-          </Button>
-        </div>
-      </PopoverAnchor>
-      <PopoverContent
-        side="top"
-        align="center"
-        sideOffset={8}
-        className={cn('p-2 px-2.5', isOpenAIReasoning ? 'w-36' : 'w-auto min-w-[180px]')}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
+    <AgentComposerToolPopover
+      open={open}
+      onOpenChange={setOpen}
+      tooltip={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
+      className={cn('p-2 px-2.5', isOpenAIReasoning ? 'w-36' : 'w-auto min-w-[180px]')}
+      trigger={(
+        <AgentComposerToolTrigger
+          label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
+          state={isEnabled ? 'active' : 'default'}
+          disabled={openAIConfig?.disabled}
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <Brain className="size-5" />
+        </AgentComposerToolTrigger>
+      )}
+    >
         {isOpenAIReasoning ? (
           <div className="flex flex-col">
             <div className="px-2 py-1 text-xs text-muted-foreground">推理档位</div>
@@ -313,18 +299,14 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
                 label: OPENAI_THINKING_LABELS[level] ?? level,
               })),
             ].map(({ level, label }) => (
-              <button
+              <AgentComposerToolMenuItem
                 key={level ?? '__default__'}
-                type="button"
+                selected={(openAIConfig?.currentLevel ?? null) === level}
                 onClick={() => handleOpenAILevelChange(level)}
-                className={cn(
-                  'flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent',
-                  (openAIConfig?.currentLevel ?? null) === level && 'bg-accent font-medium',
-                )}
               >
                 <span className="w-4 text-center">{(openAIConfig?.currentLevel ?? null) === level ? '✓' : ''}</span>
                 <span>{label}</span>
-              </button>
+              </AgentComposerToolMenuItem>
             ))}
             <div className="my-1 h-px bg-border" />
             <div className="flex items-center justify-between gap-4 px-2 py-1">
@@ -352,16 +334,15 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
               <span className="text-xs text-foreground/70">思考强度</span>
               <div className="flex gap-0.5">
                 {(['low', 'medium', 'high', 'max'] as const).map((v) => (
-                  <button key={v} type="button" onClick={() => handleEffortChange(v)} className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors', (effort ?? 'high') === v ? 'bg-primary text-primary-foreground' : 'text-foreground/50 hover:bg-muted hover:text-foreground/70')}>
+                  <AgentComposerToolMenuItem key={v} selected={(effort ?? 'high') === v} className="w-auto px-1.5 py-0.5 text-[10px]" onClick={() => handleEffortChange(v)}>
                     {v === 'low' ? '低' : v === 'medium' ? '中' : v === 'high' ? '高' : '最大'}
-                  </button>
+                  </AgentComposerToolMenuItem>
                 ))}
               </div>
             </div>
           </div>
         )}
-      </PopoverContent>
-    </Popover>
+    </AgentComposerToolPopover>
   )
 }
 
@@ -383,87 +364,67 @@ function AgentRuntimeSelector({
   const current = AGENT_RUNTIME_OPTIONS.find((option) => option.value === runtime) ?? AGENT_RUNTIME_OPTIONS[0]!
 
   return (
-    <Popover open={open} onOpenChange={(nextOpen) => setOpen(disabled ? false : nextOpen)}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={disabled}
-              className="h-8 shrink-0 gap-1.5 rounded-md px-2 text-xs font-medium text-foreground/60 hover:bg-muted/50 hover:text-foreground"
-              aria-label={`Agent 内核：${current.label}`}
-            >
-              <Bot className="size-3.5" />
-              <span>{current.label}</span>
-            </Button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <p>{disabled ? 'Agent 运行中，完成后可切换内核' : '切换当前会话下一轮使用的 Agent 内核'}</p>
-        </TooltipContent>
-      </Tooltip>
-      <PopoverContent side="top" align="start" sideOffset={8} className="w-48 p-1.5" onOpenAutoFocus={(event) => event.preventDefault()}>
-        {AGENT_RUNTIME_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={cn(
-              'flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted',
-              option.value === runtime && 'bg-muted',
-            )}
-            onClick={() => { onChange(option.value); setOpen(false) }}
-          >
-            <span className="text-xs font-medium">{option.label}</span>
-            <span className="mt-0.5 text-[11px] text-muted-foreground">{option.description}</span>
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
+    <AgentComposerToolPopover
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(disabled ? false : nextOpen)}
+      align="start"
+      className="w-48"
+      tooltip={disabled ? 'Agent 运行中，完成后可切换内核' : '切换当前会话下一轮使用的 Agent 内核'}
+      trigger={(
+        <AgentComposerToolTrigger
+          label={`Agent 内核：${current.label}`}
+          disabled={disabled}
+          className="w-auto gap-1.5 px-2 text-xs font-medium"
+        >
+          <Bot className="size-3.5" />
+          <span>{current.label}</span>
+        </AgentComposerToolTrigger>
+      )}
+    >
+      {AGENT_RUNTIME_OPTIONS.map((option) => (
+        <AgentComposerToolMenuItem
+          key={option.value}
+          selected={option.value === runtime}
+          className="flex-col items-stretch gap-0.5"
+          onClick={() => { onChange(option.value); setOpen(false) }}
+        >
+          <span className="text-xs font-medium">{option.label}</span>
+          <span className="text-[11px] text-muted-foreground">{option.description}</span>
+        </AgentComposerToolMenuItem>
+      ))}
+    </AgentComposerToolPopover>
   )
 }
 
 // ===== 工具栏附件按钮（添加文件 / 附加文件夹 二级菜单） =====
 
-function AttachMenuButton({ onAttachFile, onAttachFolder, toolBtnSize }: {
+function AttachMenuButton({ onAttachFile, onAttachFolder, tabletMode }: {
   onAttachFile: () => void
   onAttachFolder: () => void
-  toolBtnSize: string
+  tabletMode: boolean
 }): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
-          aria-label="添加文件或文件夹"
-          title="添加附件"
-        >
+    <AgentComposerToolPopover
+      open={open}
+      onOpenChange={setOpen}
+      className="w-44"
+      tooltip="添加文件或文件夹"
+      trigger={(
+        <AgentComposerToolTrigger label="添加文件或文件夹" tabletMode={tabletMode}>
           <Paperclip className="size-5" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent side="top" align="center" sideOffset={8} className="w-44 p-1.5">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none transition-colors duration-100 hover:bg-accent/70"
-          onClick={() => { setOpen(false); onAttachFile() }}
-        >
-          <Paperclip className="size-4 shrink-0" />
-          添加文件
-        </button>
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none transition-colors duration-100 hover:bg-accent/70"
-          onClick={() => { setOpen(false); onAttachFolder() }}
-        >
-          <FolderPlus className="size-4 shrink-0" />
-          附加文件夹
-        </button>
-      </PopoverContent>
-    </Popover>
+        </AgentComposerToolTrigger>
+      )}
+    >
+      <AgentComposerToolMenuItem onClick={() => { setOpen(false); onAttachFile() }}>
+        <Paperclip className="size-4 shrink-0" />
+        添加文件
+      </AgentComposerToolMenuItem>
+      <AgentComposerToolMenuItem onClick={() => { setOpen(false); onAttachFolder() }}>
+        <FolderPlus className="size-4 shrink-0" />
+        附加文件夹
+      </AgentComposerToolMenuItem>
+    </AgentComposerToolPopover>
   )
 }
 
@@ -489,32 +450,25 @@ function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactEl
   const inProgress = summary?.statusCounts.in_progress ?? 0
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          className={cn(
-            'flex items-center gap-1.5 h-9 rounded-lg transition-[transform,background-color,border-color,color] duration-150 ease-out active:scale-[0.97]',
-            hasData
-              ? 'px-2.5 bg-muted/40 text-xs hover:bg-accent/70 hover:text-accent-foreground'
-              : 'w-9 justify-center text-muted-foreground/40 hover:bg-accent/70 hover:text-accent-foreground',
-          )}
-        >
-          <GitBranch className={cn('size-[14px] flex-shrink-0', hasData && 'text-muted-foreground')} />
-          {hasData && (
-            <>
-              <span className="font-medium text-foreground/70 tabular-nums">{completed}/{total}</span>
-              <div className="w-8 h-1 bg-muted rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-400 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
-              </div>
-              <span className="text-muted-foreground/50">{inProgress > 0 ? '进行中' : progress === 100 ? '完成' : ''}</span>
-            </>
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top">任务图{hasData ? ` · ${completed}/${total}` : ''}</TooltipContent>
-    </Tooltip>
+    <AgentComposerToolTrigger
+      label={`任务图${hasData ? ` · ${completed}/${total}` : ''}`}
+      tooltip={`任务图${hasData ? ` · ${completed}/${total}` : ''}`}
+      state={hasData ? 'active' : 'muted'}
+      onClick={onClick}
+      className={cn(
+        'flex w-auto items-center gap-1.5 px-2',
+        hasData ? 'min-w-9' : 'justify-center px-0',
+      )}
+    >
+      <GitBranch className="size-[14px] shrink-0" />
+      {hasData && (
+        <>
+          <span className="font-medium text-foreground/70 tabular-nums">{completed}/{total}</span>
+          <span className="h-1 w-8 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-emerald-400 transition-all duration-500" style={{ width: `${progress}%` }} /></span>
+          <span className="text-muted-foreground/50">{inProgress > 0 ? '进行中' : progress === 100 ? '完成' : ''}</span>
+        </>
+      )}
+    </AgentComposerToolTrigger>
   )
 }
 
@@ -2871,18 +2825,18 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const isCompacting = contextStatus.isCompacting
   const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
 
-  // 触控目标尺寸：平板 44px（size-11），桌面保持 36px
-  const toolBtnSize = tabletMode ? 'size-11' : 'size-[36px]'
-
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => {
     const items: ToolbarItem[] = [
     {
       key: 'model',
-      node: (
+      label: '模型',
+      render: () => (
         <ModelSelector
           filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
           preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
           strictProtocolFilter
+          composerTool
+          tabletMode={tabletMode}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
         />
@@ -2890,7 +2844,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     },
     {
       key: 'runtime',
-      node: (
+      label: 'Agent 内核',
+      render: () => (
         <AgentRuntimeSelector
           runtime={sessionAgentRuntime}
           disabled={streaming || backgroundWaiting || runtimeSwitchInFlight}
@@ -2898,11 +2853,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
-    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} /> },
+    { key: 'permission-mode', label: '权限模式', render: () => <PermissionModeSelector sessionId={sessionId} composerTool tabletMode={tabletMode} /> },
+    { key: 'preset', label: '预设', render: () => <PresetSelector sessionId={sessionId} tabletMode={tabletMode} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} /> },
     {
       key: 'thinking',
-      node: (
+      label: '思考设置',
+      render: () => (
         <AgentThinkingPopover
           agentThinking={agentThinking}
           onToggle={() => {
@@ -2928,21 +2884,23 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    { key: 'speech', node: <SpeechButton className="size-[36px] shrink-0 rounded-full" /> },
+    { key: 'speech', label: '语音输入', render: () => <SpeechButton composerTool tabletMode={tabletMode} /> },
     {
       key: 'attach',
-      node: (
+      label: '添加文件或文件夹',
+      render: () => (
         <AttachMenuButton
           onAttachFile={handleOpenFileDialog}
           onAttachFolder={handleAttachFolder}
-          toolBtnSize={toolBtnSize}
+          tabletMode={tabletMode}
         />
       ),
     },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
     {
       key: 'context-usage',
-      node: (
+      label: '上下文使用量',
+      render: () => (
         <ContextUsageBadge
           inputTokens={contextStatus.inputTokens}
           outputTokens={contextStatus.outputTokens}
@@ -2954,13 +2912,16 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           isProcessing={streaming || backgroundWaiting}
           planQuotaChannelId={planQuotaChannelId}
           sessionId={sessionId}
+          composerTool
+          tabletMode={tabletMode}
           onCompact={handleCompact}
         />
       ),
     },
     {
       key: 'graph',
-      node: <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
+      label: '任务图',
+      render: () => <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
     },
   ]
     return tabletMode
@@ -2995,63 +2956,34 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   ])
 
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            toolBtnSize,
-            'rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]',
-          )}
-          onClick={handleStop}
-          disabled={streamState?.stopping}
-        >
-          <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="text-center">
-        <p>停止 Agent</p>
-        <p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p>
-      </TooltipContent>
-    </Tooltip>
+    <AgentComposerToolTrigger
+      label="停止 Agent"
+      tooltip={<div className="text-center"><p>停止 Agent</p><p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p></div>}
+      state="destructive"
+      tabletMode={tabletMode}
+      onClick={handleStop}
+      disabled={streamState?.stopping}
+    >
+      <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
+    </AgentComposerToolTrigger>
   ) : (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            toolBtnSize,
-            'rounded-full',
-            canSend
-              ? 'text-primary hover:bg-primary/10'
-              : 'text-foreground/30 cursor-not-allowed'
-          )}
-          onClick={handleSend}
-          // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
-          onContextMenu={(event) => {
-            event.preventDefault()
-            enqueueCurrentInput()
-          }}
-          disabled={!canSend}
-        >
-          <CornerDownLeft className="size-[22px]" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="text-center">
-        {queuedMessages.length > 0 ? (
-          <p>点击添加到队列（Enter）</p>
-        ) : (
-          <>
-            <p>左键发送（Enter）</p>
-            <p>右键添加到队列</p>
-          </>
-        )}
-      </TooltipContent>
-    </Tooltip>
+    <AgentComposerToolTrigger
+      label="发送消息"
+      tooltip={queuedMessages.length > 0
+        ? '点击添加到队列（Enter）'
+        : <div className="text-center"><p>左键发送（Enter）</p><p>右键添加到队列</p></div>}
+      state={canSend ? 'active' : 'muted'}
+      tabletMode={tabletMode}
+      onClick={handleSend}
+      // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
+      onContextMenu={(event) => {
+        event.preventDefault()
+        enqueueCurrentInput()
+      }}
+      disabled={!canSend}
+    >
+      <CornerDownLeft className="size-[22px]" />
+    </AgentComposerToolTrigger>
   )
 
   return (

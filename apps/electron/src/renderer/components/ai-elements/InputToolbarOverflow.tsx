@@ -25,11 +25,20 @@ import {
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
+export type ToolbarItemPlacement = 'toolbar' | 'overflow'
+
 export interface ToolbarItem {
   /** 唯一标识 */
   key: string
-  /** 行内渲染的节点（建议是 36px 圆形按钮或带文本的紧凑按钮） */
-  node: React.ReactNode
+  /**
+   * 旧入口兼容：Chat 等尚未迁移的调用方仍可直接传节点。
+   * 新的 Composer 应优先使用 render，使工具在主栏和溢出栏通过同一声明渲染。
+   */
+  node?: React.ReactNode
+  /** 标准化工具渲染器；收到当前 placement，禁止为 overflow 复制第二个业务组件。 */
+  render?: (placement: ToolbarItemPlacement) => React.ReactNode
+  /** 供 overflow 和无障碍标识使用的稳定名称。 */
+  label?: string
 }
 
 interface InputToolbarOverflowProps {
@@ -154,6 +163,11 @@ export function InputToolbarOverflow({
   const overflowItems = items.slice(visibleCount)
   const hasOverflow = overflowItems.length > 0
 
+  /** 统一主栏/溢出栏的挂载路径：每项仅被当前 placement 渲染一次。 */
+  const renderItem = React.useCallback((item: ToolbarItem, placement: ToolbarItemPlacement): React.ReactNode => {
+    return item.render ? item.render(placement) : item.node
+  }, [])
+
   const setItemRef = (key: string) => (el: HTMLDivElement | null): void => {
     if (el) itemRefs.current.set(key, el)
     else itemRefs.current.delete(key)
@@ -173,7 +187,7 @@ export function InputToolbarOverflow({
       >
         {visibleItems.map((it) => (
           <div key={it.key} ref={setItemRef(it.key)} className="shrink-0 flex items-center">
-            {it.node}
+            {renderItem(it, 'toolbar')}
           </div>
         ))}
         {hasOverflow && (
@@ -205,7 +219,7 @@ export function InputToolbarOverflow({
               <div className="flex items-center gap-1.5">
                 {overflowItems.map((it) => (
                   <div key={it.key} className="shrink-0 flex items-center">
-                    {it.node}
+                    {renderItem(it, 'overflow')}
                   </div>
                 ))}
               </div>

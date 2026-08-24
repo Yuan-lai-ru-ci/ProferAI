@@ -9,8 +9,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Zap, Compass, Map as MapIcon } from 'lucide-react'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Button } from '@/components/ui/button'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom } from '@/atoms/agent-atoms'
 import type { ProferPermissionMode } from '@profer/shared'
 import { PROFER_PERMISSION_MODE_CONFIG, PROFER_PERMISSION_MODE_ORDER } from '@profer/shared'
@@ -24,9 +23,12 @@ const MODE_ICONS: Record<ProferPermissionMode, React.ComponentType<{ className?:
 
 interface PermissionModeSelectorProps {
   sessionId: string
+  /** 输入区调用时通过统一 Composer 触发器保证 hover/focus/tooltip 一致。 */
+  composerTool?: boolean
+  tabletMode?: boolean
 }
 
-export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProps): React.ReactElement | null {
+export function PermissionModeSelector({ sessionId, composerTool = false, tabletMode = false }: PermissionModeSelectorProps): React.ReactElement | null {
   const [modeMap, setModeMap] = useAtom(agentPermissionModeMapAtom)
   const setPlanModeSessions = useSetAtom(agentPlanModeSessionsAtom)
   const defaultMode = useAtomValue(agentDefaultPermissionModeAtom)
@@ -85,27 +87,28 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
   const config = PROFER_PERMISSION_MODE_CONFIG[mode]
   const Icon = MODE_ICONS[mode]
 
+  if (composerTool) {
+    return (
+      <AgentComposerToolTrigger
+        label={config.label}
+        tooltip={<div className="max-w-[200px]"><p className="font-medium">{config.label}</p><p className="mt-0.5 text-xs text-muted-foreground">{config.description}</p><p className="mt-1 text-xs text-muted-foreground">点击切换模式</p></div>}
+        tabletMode={tabletMode}
+        onClick={() => { cycleMode(); requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus()) }}
+      >
+        <Icon className="size-5" />
+      </AgentComposerToolTrigger>
+    )
+  }
+
   return (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={config.label}
-            onClick={() => { cycleMode(); requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus()) }}
-            className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
-          >
-            <Icon className="size-5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-[200px]">
-          <p className="font-medium">{config.label}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">{config.description}</p>
-          <p className="text-xs text-muted-foreground mt-1">点击切换模式</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <button
+      type="button"
+      aria-label={config.label}
+      title={`${config.label}：${config.description}`}
+      onClick={() => { cycleMode(); requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus()) }}
+      className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
+    >
+      <Icon className="size-5" />
+    </button>
   )
 }

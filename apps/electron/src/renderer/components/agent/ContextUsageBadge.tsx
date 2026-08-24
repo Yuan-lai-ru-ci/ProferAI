@@ -15,6 +15,7 @@ import { Loader2, Minimize2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
 import { usePlanQuota } from '@/hooks/use-plan-quota'
 
@@ -51,6 +52,9 @@ interface ContextUsageBadgeProps {
    * 避免新会话尚未发消息时仍显示上一个会话的 token 数。
    */
   sessionId?: string
+  /** Agent Composer 传入时，使用统一触发器的 hover/focus/尺寸外壳。 */
+  composerTool?: boolean
+  tabletMode?: boolean
 }
 
 /** 格式化 token 数为可读字符串（如 1234 → "1.2k"） */
@@ -190,6 +194,8 @@ export function ContextUsageBadge({
   onCompact,
   planQuotaChannelId,
   sessionId,
+  composerTool = false,
+  tabletMode = false,
 }: ContextUsageBadgeProps): React.ReactElement | null {
   // 订阅 Plan 额度状态：数据与刷新状态跨入口共享（usePlanQuota + planQuotaStateAtomFamily），
   // 挂载预取、hover 补查、手动刷新统一由 hook 处理，refreshing 反映任何来源的请求在飞。
@@ -295,14 +301,11 @@ export function ContextUsageBadge({
 
   // 压缩中 → 按钮位置显示 spinner
   if (isCompacting) {
+    if (composerTool) {
+      return <AgentComposerToolTrigger label="正在压缩上下文" state="muted" tabletMode={tabletMode} disabled><Loader2 className="size-4 animate-spin" /></AgentComposerToolTrigger>
+    }
     return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-[36px] rounded-full text-muted-foreground cursor-default"
-        disabled
-      >
+      <Button type="button" variant="ghost" size="icon" className="size-[36px] rounded-full text-muted-foreground cursor-default" disabled>
         <Loader2 className="size-4 animate-spin" />
       </Button>
     )
@@ -351,22 +354,28 @@ export function ContextUsageBadge({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'size-[36px] rounded-full',
-            isWarning ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/60 hover:text-foreground',
-          )}
-          onMouseEnter={() => {
-            cancelClose()
-            setOpen(true)
-          }}
-          onMouseLeave={scheduleClose}
-        >
-          <UsageRing ratio={ratio} isWarning={isWarning} />
-        </Button>
+        {composerTool ? (
+          <AgentComposerToolTrigger
+            label={percent != null ? `上下文使用量：${percent}%` : '上下文使用量'}
+            state={isWarning ? 'warning' : 'default'}
+            tabletMode={tabletMode}
+            onMouseEnter={() => { cancelClose(); setOpen(true) }}
+            onMouseLeave={scheduleClose}
+          >
+            <UsageRing ratio={ratio} isWarning={isWarning} />
+          </AgentComposerToolTrigger>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn('size-[36px] rounded-full', isWarning ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/60 hover:text-foreground')}
+            onMouseEnter={() => { cancelClose(); setOpen(true) }}
+            onMouseLeave={scheduleClose}
+          >
+            <UsageRing ratio={ratio} isWarning={isWarning} />
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent
         side="top"

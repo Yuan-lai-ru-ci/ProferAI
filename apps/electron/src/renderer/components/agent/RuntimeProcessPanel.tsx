@@ -180,7 +180,10 @@ export function RuntimeProcessPanel({ sessionId, className }: RuntimeProcessPane
     ? rows.length
     : (registeredCount > 0 ? registeredCount : (hasSdkActive ? sdkActiveCount : 0))
   const railClassName = cn(
-    'service-rail relative rounded-t-[17px] border-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
+    // Composer 会以负 margin 覆盖 service rail 底部；保留完整 border 会让底边在
+    // 半透明/毛玻璃输入框下透出为一条错误的分隔线。服务轨只画上、左、右边，
+    // 由 composer 自己的顶边界承担两者的交接。
+    'service-rail relative rounded-t-[17px] border-x-[0.5px] border-t-[0.5px] border-border bg-muted/25 pb-5 shadow-sm',
     className,
   )
 

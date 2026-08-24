@@ -31,6 +31,7 @@ import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
+import { AgentComposerToolTooltip, getAgentComposerToolTriggerClass } from '@/components/ai-elements/composer/ComposerTool'
 import type { Channel, ModelOption } from '@profer/shared'
 import { getChannelProtocol, getChannelSource, getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel, type ChannelProtocol } from '@/lib/channel-model-groups'
 
@@ -123,6 +124,9 @@ interface ModelSelectorProps {
   preferredProtocol?: 'openai' | 'anthropic'
   /** Agent runtime 严格限制协议；Chat 等通用选择器默认保留多协议模型。 */
   strictProtocolFilter?: boolean
+  /** Agent 输入区使用统一的 Composer hover/focus/Tooltip 外壳，Chat 默认不变。 */
+  composerTool?: boolean
+  tabletMode?: boolean
 }
 
 export function ModelSelector({
@@ -134,6 +138,8 @@ export function ModelSelector({
   compact: compactProp,
   preferredProtocol = 'openai',
   strictProtocolFilter = false,
+  composerTool = false,
+  tabletMode = false,
 }: ModelSelectorProps = {}): React.ReactElement {
   const compactCtx = React.useContext(CompactModelSelectorCtx)
   const compact = compactProp ?? compactCtx
@@ -329,7 +335,29 @@ export function ModelSelector({
   return (
     <>
       {/* 触发按钮 */}
-      <button
+      {composerTool && (
+        <AgentComposerToolTooltip label={displayModelInfo
+          ? `模型 · ${showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName}`
+          : '选择模型'}>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label={displayModelInfo
+              ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
+              : '选择模型'}
+            className={cn(
+              getAgentComposerToolTriggerClass('default', tabletMode, 'model-selector-trigger flex w-auto items-center gap-1.5 px-2 text-xs'),
+              compact && 'justify-center px-0',
+            )}
+          >
+            {displayModelInfo ? (
+              <img src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)} alt={displayModelInfo.modelName} className="size-4 rounded object-cover" />
+            ) : <Cpu className="size-3.5" />}
+            {!compact && <><span className="max-w-[200px] truncate">{displayModelInfo ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName) : '选择模型'}</span><ChevronDown className="size-3" /></>}
+          </button>
+        </AgentComposerToolTooltip>
+      )}
+      {!composerTool && <button
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
@@ -359,7 +387,7 @@ export function ModelSelector({
             <ChevronDown className="size-3" />
           </>
         )}
-      </button>
+      </button>}
 
       {/* 模型选择 Dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
