@@ -83,6 +83,11 @@ extraResources:
     to: skins
     filter:
       - "**/*"
+  # PPT Style Pack（风格注册表与固定视觉缩略图；运行时路径 process.resourcesPath/ppt-style-packs）
+  - from: resources/ppt-style-packs
+    to: ppt-style-packs
+    filter:
+      - "**/*"
   # 皮肤模板（skin-manager 新建/导入皮肤时复制，打包路径 process.resourcesPath/skin-template）
   - from: resources/skin-template
     to: skin-template
