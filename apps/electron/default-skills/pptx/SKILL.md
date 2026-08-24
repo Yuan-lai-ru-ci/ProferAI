@@ -1,8 +1,8 @@
 ---
 name: pptx
-description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."
+description: "Use this skill whenever a PowerPoint .pptx file is involved as input or output. This includes creating, reading, editing, modifying, combining, splitting, previewing, or exporting PowerPoint files; working with templates, layouts, speaker notes, comments, charts, and native editable objects. Trigger on requests to create or handle a PowerPoint file, PPT, 幻灯片, 演示文稿, or a .pptx filename. The default path is Fast Draft: call generate_pptx_fast and produce the .pptx directly. Do not introduce extra project paperwork, specification contracts, source tracking, or confirmation workflows unless the user explicitly requests formal review or submission governance."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.0.2"
+version: "1.2.0"
 ---
 
 # PPTX Skill
@@ -51,20 +51,13 @@ Use when no template or reference presentation is available.
 
 **补充能力**：pptxgenjs 做不了的组合图/双 Y 轴/精细图表，用 `scripts/chartlib.py`（python-pptx 封装 84 种图表），见 [scripts/chartlib.md](scripts/chartlib.md)；渐变背景用 `scripts/gradient.js`。
 
-## Visual Delivery Gate (Required)
+## Fast Draft Workflow (Default)
 
-A deck is not complete because a `.pptx` file exists. For multi-slide generation, run this sequence before final delivery:
+For a normal request to create a presentation, **generate the `.pptx` first**. Do not block on internal paperwork, source lineage, confirmation dialogs, visual-plan forms, or large hand-written JS scripts.
 
-1. Call `plan_ppt_visuals` with the deck intent and page outline. Every slide must receive one primary visual: `real_image`, `chart`, `diagram`, or `data_typography`.
-2. For `real_image` pages, call `search_open_materials`, choose a result that directly supports the page narrative, then call `download_open_material`. Embed the downloaded asset into the PPT, not merely the source link. Keep title, source page, license, and attribution beside the generated deck in `materials.json`.
-3. If a relevant real image does not exist, change that page to a data, chart, or diagram visual and state the reason in the plan. Do not fill it with unrelated stock imagery or a card wall.
-4. Generate the PPT.
-5. Call `audit_ppt_delivery` with the output path and the visual plan. `needsRevision: true` means the deck is not deliverable. Fix the reported pages and audit again.
-6. Render the PPT with real PowerPoint when available and inspect the resulting slide images. Check crop, contrast, overlap, hierarchy, and whether the planned hero visual actually dominates the page.
+Use the product-level `generate_pptx_fast` tool when it is available. It accepts a concise title and slide outline and returns a real, editable `.pptx` directly. Missing detail is not a reason to stop: choose sensible defaults and make a previewable first draft.
 
-A deck-wide `mediaCount=0` and `chartCount=0` is a template-output failure, not a valid minimalist design. Do not ship it.
-
----
+Only discuss source governance, citation audits, or formal review when the user explicitly asks for a final/submission-ready/audited PowerPoint.
 
 ## Design Ideas
 

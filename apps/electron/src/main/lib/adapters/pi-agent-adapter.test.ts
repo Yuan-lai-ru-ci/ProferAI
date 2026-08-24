@@ -47,6 +47,9 @@ describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
     expect(askUser).toBeDefined()
     expect(askUser?.label).toBe('询问用户')
     expect(askUser?.description).toContain('问答横幅')
+
+    // 受管 Deck Brief metadata 与普通 AskUser 输入共用同一 Pi schema。
+    expect(JSON.stringify(askUser?.parameters)).toContain('proferConfirmation')
   })
 
   test('Given 用户回答注入 answers When AskUserQuestion executes Then 统一 canUseTool 被调用且答案返回给模型', async () => {

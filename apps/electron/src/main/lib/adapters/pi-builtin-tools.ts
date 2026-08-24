@@ -68,7 +68,7 @@ import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
-import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
+import { buildPiFastPptTools } from '../ppt-fast-agent-tools'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
 import { generateAgentGptImage } from '../agent-gpt-image-service'
@@ -111,6 +111,8 @@ export interface PiBuiltinToolsContext {
   agentCwd?: string
   /** 图片外发前必须校验在这些已授权目录内。 */
   allowedRoots?: string[]
+  /** PPT 专用能力是否已通过会话级激活门禁。 */
+  pptCapabilityActive?: boolean
   /** 图片生命周期持久化成功后通知 renderer 的安全卡片。 */
   onImageGenerationUpdate?: (record: AgentImageGenerationCard) => void
   /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
@@ -630,67 +632,6 @@ function buildPiAgentGptImageTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
           useLastGeneratedImage: args.useLastGeneratedImage === true,
           signal,
         }, { sessionId: ctx.sessionId, agentCwd: ctx.agentCwd!, allowedRoots: ctx.allowedRoots ?? [], onGenerationUpdate: ctx.onImageGenerationUpdate })) as AgentToolResult<unknown>
-      },
-    }),
-  ] as unknown as ToolDefinition[]
-}
-
-function buildPiPptMaterialTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
-  return [
-    sdk.defineTool({
-      name: 'search_open_materials',
-      label: '搜索开放许可素材',
-      description: 'Search real images suitable for a PPT from open-license sources. Defaults to Public Domain/CC0; set includeAttribution true to include CC BY. Keep source and license information when using an image.',
-      promptSnippet: 'SearchOpenMaterials: find openly licensed real images for a PPT and retain their source/license information.',
-      parameters: Type.Object({
-        query: Type.String({ description: 'Search query. English keywords usually retrieve better visual results.' }),
-        includeAttribution: Type.Optional(Type.Boolean({ description: 'Include CC BY materials that need attribution.' })),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as Record<string, unknown>
-        const query = typeof args.query === 'string' ? args.query.trim() : ''
-        if (!query) throw new Error('query 必填')
-        const payload = await searchPptMaterials({ query, includeAttribution: args.includeAttribution === true })
-        return jsonToolResult(payload)
-      },
-    }),
-    sdk.defineTool({
-      name: 'download_open_material',
-      label: '下载开放许可素材',
-      description: 'Download a search_open_materials result to the current Agent workspace .context/ppt-materials directory and return its local path, source page, and license.',
-      promptSnippet: 'DownloadOpenMaterial: download a selected open-license image into the Agent workspace for PPT generation.',
-      parameters: Type.Object({ material: Type.Object({
-        id: Type.String(), source: Type.Literal('wikimedia'), title: Type.String(), thumbnailUrl: Type.String(), originalUrl: Type.String(), landingPageUrl: Type.String(), licenseCode: Type.String(), licenseUrl: Type.Optional(Type.String()), creator: Type.Optional(Type.String()), attribution: Type.Optional(Type.String()), width: Type.Optional(Type.Number()), height: Type.Optional(Type.Number()), mediaType: Type.Optional(Type.String()),
-      }) }),
-      async execute(_toolCallId, params) {
-        if (!ctx.agentCwd) throw new Error('当前会话没有可写的 Agent 工作目录')
-        const material = (params as { material: import('@profer/shared').PptMaterialItem }).material
-        return jsonToolResult(await downloadPptMaterialToWorkspace({ material }, ctx.agentCwd))
-      },
-    }),
-    sdk.defineTool({
-      name: 'plan_ppt_visuals',
-      label: '规划 PPT 视觉',
-      description: 'Create a required slide-by-slide visual plan before generating a deck. Every slide receives a real image, chart, diagram, or data-typography hero visual.',
-      promptSnippet: 'PlanPptVisuals: create a per-slide visual plan before generating a PPT.',
-      parameters: Type.Object({
-        deckIntent: Type.String(),
-        slides: Type.Array(Type.Object({ slideNumber: Type.Optional(Type.Number()), title: Type.String(), purpose: Type.Optional(Type.String()) })),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { deckIntent: string; slides: Array<{ slideNumber?: number; title: string; purpose?: string }> }
-        return jsonToolResult(planPptVisuals(args.deckIntent, args.slides))
-      },
-    }),
-    sdk.defineTool({
-      name: 'audit_ppt_delivery',
-      label: '审计 PPT 视觉交付',
-      description: 'Required after PPT generation. Detects missing images/charts and visual-plan failures. needsRevision=true means keep revising instead of delivering.',
-      promptSnippet: 'AuditPptDelivery: audit the generated PPTX before final delivery; revise when needsRevision is true.',
-      parameters: Type.Object({ filePath: Type.String(), visualPlan: Type.Optional(Type.Any()) }),
-      async execute(_toolCallId, params) {
-        const args = params as { filePath: string; visualPlan?: import('../ppt-delivery-audit-service').PptVisualPlan }
-        return jsonToolResult(auditPptDelivery(args.filePath, args.visualPlan))
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -1400,10 +1341,13 @@ export async function buildPiBuiltinTools(
     console.error('[Pi 桥接] 注入 GPT Image 工具失败:', error)
   }
 
-  try {
-    tools.push(...buildPiPptMaterialTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入开放许可 PPT 素材工具失败:', error)
+  if (ctx.pptCapabilityActive === true && ctx.agentCwd) {
+    try {
+      // Fast path only: no Deck Spec/Project/material workflow in normal PPT sessions.
+      tools.push(...buildPiFastPptTools(sdk, { agentCwd: ctx.agentCwd }) as unknown as ToolDefinition[])
+    } catch (error) {
+      console.error('[Pi 桥接] 注入快速 PPTX 工具失败:', error)
+    }
   }
 
   if (isWebSearchEnabledForAgent()) {

@@ -5078,7 +5078,7 @@ export function registerIpcHandlers(): void {
     async (event, response: AskUserResponse): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
       const { requestId, answers } = response
-      const sessionId = askUserService.respondToAskUser(requestId, answers)
+      const sessionId = await askUserService.respondToAskUser(requestId, answers)
 
       if (sessionId) {
         event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {

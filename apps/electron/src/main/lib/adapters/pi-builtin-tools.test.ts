@@ -269,6 +269,33 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(tools.some((tool) => tool.name === 'send_local_image')).toBe(false)
   })
 
+  test('Given PPT capability inactive Then PPT-specific tools are not registered', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      pptCapabilityActive: false,
+    })
+    const names = tools.map((tool) => tool.name)
+    expect(names).not.toContain('plan_ppt_visuals')
+    expect(names).not.toContain('audit_ppt_delivery')
+    expect(names).not.toContain('search_open_materials')
+  })
+
+  test('Given PPT capability active Then PPT-specific tools are registered', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      agentCwd: 'C:/safe/session',
+      allowedRoots: ['C:/safe/attached'],
+      pptCapabilityActive: true,
+    })
+    const names = tools.map((tool) => tool.name)
+    expect(names).toContain('generate_pptx_fast')
+    for (const forbidden of ['plan_ppt_visuals', 'audit_ppt_delivery', 'search_open_materials', 'inspect_deck_sources', 'create_deck_project', 'confirm_deck_brief', 'compile_deck_project']) {
+      expect(names).not.toContain(forbidden)
+    }
+  })
+
   test('Given no disabled groups Then all four groups are registered', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, baseCtx)

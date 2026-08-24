@@ -24,6 +24,8 @@ export * from './chat'
 // 开放许可 PPT 素材相关类型
 export * from './ppt-material'
 
+// Deck Project / 原生 PPTX 生成相关类型
+
 // Agent 相关类型
 export * from './agent'
 export * from './pi-harness'

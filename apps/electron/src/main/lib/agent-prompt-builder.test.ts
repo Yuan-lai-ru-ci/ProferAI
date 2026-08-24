@@ -29,22 +29,28 @@ const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName } = await import('./config-paths')
 
 describe('buildSystemPrompt', () => {
-  test('默认注入果断执行风格，同时保留高风险操作安全边界', () => {
+  test('普通会话默认不注入 PPT 专用长门禁', () => {
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo',
       workspaceSlug: 'demo-workspace',
       sessionId: 'session-123',
       permissionMode: 'auto',
-      isPiRuntime: true,
+      pptCapabilityActive: false,
     })
+    expect(prompt).not.toContain('PPT 视觉交付门禁')
+    expect(prompt).not.toContain('inspect_deck_sources')
+    expect(prompt).not.toContain('PptxScrollViewer')
+  })
 
-    expect(prompt).toContain('## 行动风格：果断执行，保留安全边界')
-    expect(prompt).toContain('默认推进，不等待许可')
-    expect(prompt).toContain('用合理默认值消解非关键歧义')
-    expect(prompt).toContain('把提问留给真正的决策点')
-    expect(prompt).toContain('避免怯懦式沟通')
-    expect(prompt).toContain('安全边界不可绕过')
-    expect(prompt).toContain('删除/覆盖重要数据、发布部署、付费、对外发送和远端写入')
+  test('PPT 能力激活后只注入快速生成指引，不暴露治理工作流', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-123', permissionMode: 'auto', pptCapabilityActive: true,
+    })
+    expect(prompt).toContain('generate_pptx_fast')
+    expect(prompt).toContain('直接调用')
+    for (const forbidden of ['Deck Spec', 'Deck Project', 'Deck Brief', 'inspect_deck_sources', 'create_deck_project', 'compile_deck_project', '确认 Deck Brief', 'assetRefs']) {
+      expect(prompt).not.toContain(forbidden)
+    }
   })
 
   test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
@@ -217,7 +223,7 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('9. **AI 生图**')
     expect(withoutAutomation).toContain('`generate_image`')
     expect(withoutAutomation).toContain('不要尝试用代码、ASCII art 等伪造图片')
-    expect(withoutAutomation).toContain('10. **PPT 视觉交付门禁**')
+    expect(withoutAutomation).not.toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
     expect(withoutAutomation).toContain('图片附件标记')
     expect(withoutAutomation).not.toContain('`PROMA_IMAGE_ATTACHMENT` 标记')
@@ -231,6 +237,7 @@ describe('buildSystemPrompt', () => {
       sessionId: 'session-123',
       permissionMode: 'auto',
       isPiRuntime: true,
+      pptCapabilityActive: true,
     })
     const toolNames = [
       'BrowserObserve',
@@ -246,8 +253,6 @@ describe('buildSystemPrompt', () => {
       userMessage: '检查这个 TypeScript 项目的类型错误。',
       toolNames,
     })
-    expect(ordinary).toContain('## 行动风格：果断执行，保留安全边界')
-    expect(ordinary).toContain('避免怯懦式沟通')
     expect(ordinary).toContain('低风险、可逆的本地操作')
     expect(ordinary).toContain('修改后必须闭环')
     expect(ordinary).toContain('计划模式文件路径')
@@ -263,9 +268,10 @@ describe('buildSystemPrompt', () => {
       basePrompt,
       userMessage: '访问 https://example.com 并做成 pptx 幻灯片。',
       toolNames,
+      pptCapabilityActive: true,
     })
     expect(webAndPpt).toContain('## Profer 受管浏览器')
-    expect(webAndPpt).toContain('PPT 视觉交付门禁')
+    expect(webAndPpt).toContain('快速 PPTX 生成')
     expect(webAndPpt).not.toContain('7. **定时任务**')
   })
 

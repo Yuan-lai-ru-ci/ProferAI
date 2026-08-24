@@ -10,6 +10,86 @@
 
 ---
 
+## 0.1 产品方向纠偏：视觉创作优先，治理与审计兜底（2026-08-24）
+
+### 已验证的问题
+
+雪崩组会样例暴露出首版实现把精力过多放在后验治理：来源版本、hash、确认收据、OOXML、Notes、可编辑性与科研措辞审计都在工作；但第一次生成阶段把 AI 的视觉判断压缩为少量 `visualRole/layoutIntent` 到固定组件的映射。结果是“文件合规、论点可追溯，但排版像通用自动模板”。
+
+**这不是可以靠多加几条 QA 规则解决的小问题。** 后续审计只能阻断错误，不能让一个原本平庸的构图变成有说服力的页面。首版的判断标准必须从“先合规再好看”反转为：**先形成有意图的画面，再以来源、语义编辑和科研规范守住底线。**
+
+### 新的优先级与流水线
+
+```text
+真实素材 / 数据 / 受众场景
+  → AI 视觉策划（叙事镜头、主视觉、焦点、数据编码、跨页节奏）
+  → 基于素材尺寸与密度的构图候选（不是固定模板套壳）
+  → 原生可编辑对象编译
+  → PowerPoint 渲染为真实页面
+  → 视觉复盘与按 slideId 重排
+  → 来源 / 科研表达 / 可编辑性 / OOXML 审计兜底
+  → 交付
+```
+
+优先级固定为：
+
+```text
+视觉创作质量
+> 信息层级与跨页叙事
+> 原生可编辑实现
+> 来源、科研口径、确认收据与 OOXML 审计
+```
+
+后四者仍是 Profer 的护城河，但不得替代前两者；任何“通过结构审计”的 PPT 都不得自动被表述为“设计通过”。
+
+### 第一次创作必须拥有的设计决策
+
+每页在编译前都必须有 `visualDirection`（由 Agent 生成、受 schema 约束、可写入 Deck Spec），至少描述：
+
+- **dominantEvidence**：本页唯一主证据/主视觉，以及它支撑的 claim；
+- **composition**：例如 `evidence-led-two-thirds`、`annotated-detail`、`quantitative-ratio`、`causal-chain`、`full-bleed-divider`，不允许泛化为“左图右卡片”；
+- **focus**：图像/地图必须指出应保留的区域、局部放大对象或必须保留的图例；
+- **dataEncoding**：数字之间的关系如何原生呈现（比例条、点阵、排序条形图、趋势线、地图标注等）；只有一个不可替代的关键指标才允许 `single-stat`；
+- **hierarchy**：一句视觉结论、辅助信息、来源/图注分别处于哪一层；
+- **negativeConstraints**：本页明确禁止的退化结构，例如 `no_kpi_grid`、`no_card_wall`、`no_decorative_diagonal`、`no_unreadable_full-paper-figure`；
+- **transitionIntent**：本页与前后页的镜头关系，例如“先展示验证位置，再展示识别比例，再解释漏测机制”。
+
+`visualRole` 只描述语义对象类别，不能再单独决定版式；`layoutIntent` 只能是经过视觉策划选定的构图候选，不得降级为万能模板名。
+
+### 对雪崩样例的硬性重构原则
+
+以下两种页面从 `academic-editorial` 默认模板中移除，不能再产出：
+
+1. **地图 + 四格 KPI**：地图必须是主视觉时，统计量只能服务于地图的观察结论。密集论文地图先裁出有效区域、保留必要图例、标出与 claim 对应的线路/样点；必要时采用“主图 + 局部放大 + 一条结论”，而不是把四个同权数字放在右侧。
+2. **大数字色块 + 三张解释卡**：`17 / 22 / 5 / 77.3%` 必须使用一个能表达关系的原生量化视觉（点阵、比例条、分组条形图或空间标记）；“漏测原因/适用边界/验证价值”应组织为因果链、边注或紧贴证据的标注，而不是三张彩色卡片。
+
+此外，`17 / 22` 若只表示“实际起动点中被识别的数量”，标题不得写成“总体精度”；应写成“起动点识别率”，并在图注或 Notes 中明确：`识别率 = 被识别起动点数 / 实际起动点总数 = 17 / 22`。未经完整混淆矩阵，不能把该比值表述为 precision 或 accuracy。
+
+### 不再接受的伪审美验收
+
+以下情况即使 OOXML、来源和 Notes 全部通过，也必须 `needsVisualRevision=true`，不得交付：
+
+- 同页四个及以上等权 KPI 数字、没有数据关系图；
+- 一个大数字色块旁堆叠二至四张解释卡；
+- 论文地图/截图缩小到图例、标注或结论区域不可读；
+- 相邻内容页使用同一种“标题 + 卡片”构图，缺少叙事节奏；
+- 色块只承担装饰或分类、没有承载数据关系/阅读层级；
+- 页面最大元素不是核心 claim 的证据或结论；
+- 空白是组件未排满造成的，而非为主视觉聚焦留下的呼吸区。
+
+### 视觉复盘的真实能力边界
+
+“渲染后由 AI 看图并自动改版”只能在当前运行时具备可靠视觉模型和受控图片输入时作为硬门禁。当前渠道模型若不能读图，系统必须：
+
+1. 仍生成 PowerPoint COM renders 和客观几何/可读性信号；
+2. 将视觉候选、版式理由、风险及 render 路径呈现给用户；
+3. 明确标记 `visualReview: unavailable`，绝不把“文件已渲染”说成“AI 已完成美学评审”；
+4. 优先改进首次视觉策划和版式库，而不是用无法执行的视觉 QA 伪装闭环。
+
+后续支持视觉模型后，再将“渲染图 → 视觉批评 JSON → slideId 修订 → 再渲染”的循环升级为交付硬门禁。
+
+---
+
 ## 0. 范围、非目标与保护边界
 
 ### 首版必须交付
@@ -19,7 +99,9 @@
 - 会话级 `deck-project/` 持久化；
 - 动态追问由现有 `AskUserQuestion` 承载，Brief 未确认时编译工具拒绝执行；
 - `academic-editorial` 与 `profer-cloud-dancer` 两个 Style Pack；
-- 封面、章节、Assertion–Evidence、原生图表、机制图、对比、结论/参考文献等核心语义页；
+- 封面、章节、证据主导页、原生图表、机制图、对比、结论/参考文献等核心语义页；
+- 每页的首次视觉策划：主证据、构图、素材焦点、数据编码、信息层级、跨页转场和负面约束；
+- `academic-editorial` 默认拒绝地图 + KPI 宫格、大数字色块 + 解释卡墙等低信息密度模板；
 - 原生文本、形状、连接符、表格、图表和 Speaker Notes；照片/论文原图/截图允许是图片；
 - Claude 与 Pi 的工具注册契约一致；
 - 至少一份学生 fixture 真实生成、Agent 对话内 Office/Silurus PPTX 预览、结构审计、PowerPoint COM 渲染（环境可用时）和一次修订后再审计。
@@ -27,7 +109,7 @@
 ### 首版明确不做
 
 - 脱离 Agent 对话的独立 PPT 编辑工作台；Agent 对话内的 PPTX 预览是首版必做链路；
-- 视觉模型自动评审平台；当前模型不支持看图时，不假装完成视觉判断；
+- 完整的视觉模型自动评审平台；当前模型不支持看图时，不假装完成视觉判断，但首版仍必须产出视觉策划、COM renders、客观版式风险和可供用户审阅的路径；
 - 竞品自动抓取和完整盲评平台；只保留 fixture/rubric 资产；
 - OOXML 手工分组或 Cloud Dancer 的 PowerPoint grouping；
 - 整页图片伪装成可编辑 PPT；
@@ -230,11 +312,12 @@ Expected: FAIL，因为解析函数和类型尚不存在。
 - `DeckSourceStatus = 'current' | 'superseded' | 'historical' | 'conflicted' | 'unknown'`；
 - `DeckSourceRecord`：`id`、`absolutePath`、`relativePath`、`kind`、`size`、`mtimeMs`、`contentHash`、`status`、`locator`、`title`、`excerpt`、`versionSignals`；
 - `DeckBrief`：`goal`、`audience`、`occasion`、`durationMinutes`、`slideCount`、`coreClaims`、`includedSourceIds`、`excludedSourceIds`、`styleId`、`citationPolicy`、`speakerNotesPolicy`、`assumptions`、`confirmedAt?`、`confirmationHash?`；
-- `DeckSlideSpec`：`slideId`、`claim`、`evidenceRefs`、`visualRole`、`layoutIntent`、`densityBudget`、`editableObjects`、`content`、`speakerNotes`、`citations`；
+- `DeckSlideSpec`：`slideId`、`claim`、`evidenceRefs`、`visualRole`、`layoutIntent`、`densityBudget`、`editableObjects`、`assetRefs?`、`visualDirection`、`content`、`speakerNotes`、`citations`；
+- `DeckVisualDirection`：`dominantEvidence`、`composition`、`focus?`、`dataEncoding?`、`hierarchy`、`negativeConstraints`、`transitionIntent?`；
 - `DeckSpec`：schema version、deck id、style id、slide array、source hashes；
 - `DeckProjectState`：`draft | awaiting_confirmation | confirmed | compiled | needs_revision`。
 
-`ppt-deck-schema.ts` 用 Zod 或等价的显式运行时校验，不使用 `as any`。验证要求：数组非空、SHA-256 为 64 位 hex、来源引用必须存在、`confirmedAt` 只有确认工具能写入。
+`ppt-deck-schema.ts` 用 Zod 或等价的显式运行时校验，不使用 `as any`。验证要求：数组非空、SHA-256 为 64 位 hex、来源引用必须存在、`confirmedAt` 只有确认工具能写入。`visualDirection` 不得为空泛口号：`dominantEvidence` 必须引用本页 evidence/data，`quantitative-ratio`/`chart` composition 必须声明 `dataEncoding`，`image_with_annotation` 必须声明 `focus`，且 `negativeConstraints` 至少包含一个本页要避免的退化布局。
 
 **Step 4: 运行通过测试**
 
@@ -369,7 +452,10 @@ Expected: FAIL。
 - 字体回退链；
 - 12-column 网格和安全边距；
 - 图表系列色和对比度门槛；
-- 每种 `visualRole × densityBudget` 允许的布局候选；
+- 每种 `visualRole × densityBudget` 可用的构图候选，以及这些候选应满足的主证据比例、图注/图例可读性和数据编码条件；
+- `academic-editorial` 的显式反模式清单：禁止 `kpi_grid`、`card_wall`、`big_number_plus_explanation_cards`、`unreadable_full_paper_figure`；
+- 图像密度与焦点规则：密集地图/论文图不得自动等比缩小到不可读，必须采用裁剪、局部放大或换成图表/图解；
+- 跨页叙事节奏：相邻内容页不得无条件复用同一构图；
 - Cloud Dancer 的原生形状母题频率限制，禁止内容页铺满舞者。
 
 预览读取复用 `registerProferFilePath`：只把随应用打包的固定 `preview.webp` 注册成 opaque `profer-file://` URL。preview 字段继续使用现有 `AskUserQuestionOption.preview` Markdown 字符串，不扩展 Claude/Pi schema，不接受任意本地路径。
@@ -528,7 +614,7 @@ git commit -m "feat(agent): gate deck compilation on brief confirmation"
 
 用 Claude SDK stub 和 Pi SDK stub 各验证：
 
-- 两边都注册相同的四个短名：`inspect_deck_sources`、`create_deck_project`、`confirm_deck_brief`、`compile_deck_project`；
+- 两边都注册相同的六个短名：`inspect_deck_sources`、`create_deck_project`、`import_deck_assets`、`write_deck_spec`、`confirm_deck_brief`、`compile_deck_project`；
 - `inspect_deck_sources` 只能读取当前 session 的 `agentCwd + allowedRoots`；
 - `create_deck_project` 把来源清单和 Brief 写入项目，但不把状态改成 confirmed；
 - `confirm_deck_brief` 只能消费 AskUser 已写入的 receipt；
@@ -553,7 +639,7 @@ Expected: FAIL。
 - `inspect_deck_sources`：调用 Task 2 服务并返回可供 Agent 追问的证据与缺口；
 - `create_deck_project`：调用 Task 4 创建项目，返回 brief confirmation token；
 - `confirm_deck_brief`：只做 receipt/state 检查，不能接受 `confirmed: true` 这种布尔绕过；
-- `compile_deck_project`：调用 compiler，成功后立即调用结构审计并把结果写入 `qa/`。
+- `compile_deck_project`：调用 compiler，成功后立即调用结构与 visual-composition 审计并把结果写入 `qa/`；任一审计需要 revision 时不得向 Agent 表述为可交付成品。
 
 兼容保留现有 `plan_ppt_visuals`、`search_open_materials`、`download_open_material`、`audit_ppt_delivery`，不改变旧工具输入输出。
 
@@ -620,7 +706,9 @@ bun add --cwd apps/electron pptxgenjs@4.0.1
 
 **Step 4: 实现最小编译器**
 
-`ppt-layout-engine.ts` 只处理确定性候选和约束：安全边距、字号下限、文本估算高度、图片比例、密度预算和跨页布局角色。评分顺序固定为：不越界 > 可读性 > 证据完整 > 视觉层级 > 装饰。
+`ppt-layout-engine.ts` 不再把 `visualRole` 直接映射为固定模板。它先读取页面 `visualDirection`、真实图片尺寸/密度、数据关系和相邻页面节奏，生成至少两个受约束的构图候选，再由明确规则选择最能支撑 claim 的方案。确定性约束包括：安全边距、字号下限、文本估算高度、图片比例、图例可读性、密度预算、主次比例、跨页布局角色和负面约束。
+
+评分顺序固定改为：**主证据与 claim 的视觉耦合 > 信息层级和数据关系 > 可读性 > 跨页叙事节奏 > 证据完整 > 不越界 > 装饰**。不允许以“安全的 KPI 宫格/卡片墙”换取实现便利。
 
 首版 `ppt-slide-components.ts` 实现这些语义组件：
 
@@ -633,9 +721,12 @@ bun add --cwd apps/electron pptxgenjs@4.0.1
 - `image_with_annotation`；
 - `limitations`；
 - `conclusion`；
-- `references`。
+- `references`；
+- `quantitative_ratio`：用点阵、比例条、分组条形图等原生对象表达“分子/分母/漏测”等关系，禁止默认退化为同权 KPI；
+- `annotated_evidence`：主图、必要图例、局部放大和原生标注围绕一个观察结论组织；
+- `causal_chain`：原因、机制、适用边界沿一条阅读链组织，禁止拆成同权彩色卡片墙。
 
-`ppt-deck-compiler.ts` 创建 PptxGenJS 实例、设置 layout、应用 Style Pack、生成原生对象、写 Notes、输出到 project `output/`。每个对象都由语义 ID 命名；不使用 shape group，不把整页 SVG/PNG 当内容层。
+`ppt-deck-compiler.ts` 创建 PptxGenJS 实例、设置 layout、应用 Style Pack、生成原生对象、写 Notes、输出到 project `output/`。每个对象都由语义 ID 命名；不使用 shape group，不把整页 SVG/PNG 当内容层。编译器必须把最终选择的构图、素材裁剪/contain 决策、主证据对象和版式风险写入 `qa/visual-composition.json`，供用户与后续视觉模型复盘。
 
 支持“局部重编译”的第一版实现为：重新读取完整 Deck Spec，仅重用未变化页面的 `compiledSlideCache` 元数据和素材哈希；若 PptxGenJS 无法安全拼接 slide，则生成完整新包但只重新计算受影响页，并在 QA 中记录 `recompiledSlideIds`。不要为了伪造局部修改直接手改 OOXML。
 
@@ -699,7 +790,9 @@ Expected: FAIL。
 - EMU 坐标、尺寸和文本节点；
 - project 的 source hashes 与 deck metadata。
 
-输出统一 `PptIssue`：`code`、`severity(P0|P1|P2)`、`slideId`、`objectId`、`message`、`suggestedFix`。最低门禁：P0/P1 未清零时 `needsRevision=true`；统计 `editableObjectCount`、`allowedImageCount`、`editableCoverage`，但不把“有形状”当成审美通过。
+输出统一 `PptIssue`：`code`、`severity(P0|P1|P2)`、`slideId`、`objectId`、`message`、`suggestedFix`。最低结构门禁：P0/P1 未清零时 `needsRevision=true`；统计 `editableObjectCount`、`allowedImageCount`、`editableCoverage`，但不把“有形状”当成审美通过。
+
+同时新增确定性 `visualCompositionAudit`，输出独立字段 `needsVisualRevision` 和 `visualIssues`。它不是伪装成视觉模型，而是明确阻断已验证的低质量退化模式：KPI 宫格、卡片墙、大数字替代数据关系、主视觉不可读、无效留白、主证据层级不足、相邻页构图重复、颜色没有承担信息关系。其结果必须与结构审计并列呈现；结构 PASS 不得覆盖视觉 FAIL。
 
 保留 `planPptVisuals` 和现有审计字段，新增字段采用可选形式，确保历史工具调用结果可读。
 
@@ -741,9 +834,10 @@ git commit -m "feat(pptx): add structural editability and lineage gates"
 
 验证：
 
-- Claude/Pi 都出现 `inspect_deck_sources/create_deck_project/confirm_deck_brief/compile_deck_project`；
+- Claude/Pi 都出现 `inspect_deck_sources/create_deck_project/import_deck_assets/write_deck_spec/confirm_deck_brief/compile_deck_project`；
 - 提示词只在实际工具可用时要求新工具；
-- PPT Skill 明确：先 inspect → 动态追问 → Brief → 用户确认 → Deck Spec → compile → audit → PowerPoint render；
+- PPT Skill 明确：先 inspect → 动态追问 → Brief → 用户确认 → 素材导入 → 含 `visualDirection` 的 Deck Spec → compile → visual-composition/结构 audit → PowerPoint render；
+- Prompt 明确要求先做视觉策划和数据编码选择，禁止把 `visualRole` 直接翻译为 KPI 宫格或卡片墙；
 - 默认 Skill 版本 bump（例如 `1.0.2 → 1.1.0`）；
 - Packaged resource path 使用 `process.resourcesPath/ppt-style-packs`，dev path 使用 `__dirname/resources/ppt-style-packs`；
 - electron-builder 的 `extraResources` 包含 `ppt-style-packs`；
@@ -825,7 +919,10 @@ fixture 必须包含：
 - 一页带真实数据的原生 chart；
 - 一页实验截图图片例外；
 - 一页结论和引用 Notes；
-- 一条不会被误用的旧数据。
+- 一条不会被误用的旧数据；
+- 一张细节密集的论文地图/实验图，用于验证“主图 + 局部放大/标注”而不是缩小原图 + KPI 宫格；
+- 一组 `17 / 22 / 5` 类的分子分母结果，用于验证原生比例/点阵/条形编码而不是大数字卡与解释卡墙；
+- 至少三张连续结果页，用于验证“位置证据 → 量化结果 → 漏测机制/边界”的跨页镜头节奏。
 
 断言：
 
@@ -857,8 +954,9 @@ Expected: FAIL。
 powershell -NoProfile -ExecutionPolicy Bypass -File apps/electron/default-skills/pptx/scripts/office/pptx2png.ps1 -InputPath <project>/output/student-lab-meeting.pptx -OutDir <project>/renders
 ```
 
-6. 用 PNG 尺寸、数量、空白页、主色占比等确定性检查确认渲染没有崩溃；当前渠道不能看图时，只输出需要用户人工审阅的 montage/路径，不声称完成视觉模型评审；
-7. 人为修复一个页级 issue，再只重编译该 slideId，重新审计，记录 `qa/fix-round-1.json`。
+6. 用 PNG 尺寸、数量、空白页、主色占比、最大证据对象占比、最小图例/图注字号、卡片数量、同权数字数量、相邻页构图相似度等确定性信号，确认渲染未崩溃且没有命中已知低质量模板；输出 `qa/visual-composition.json`；
+7. 当前渠道不能看图时，只输出需要用户人工审阅的 montage/render 路径和明确的 `visualReview: unavailable`，不声称完成视觉模型评审；
+8. 人为修复一个页级视觉或结构 issue，再只重编译该 slideId，重新审计，记录 `qa/fix-round-1.json`。
 
 必须检查 PowerPoint 打开无修复提示；若 COM/Office 在环境不可用，报告 `renderUnavailable`，不能伪造通过。
 
@@ -940,6 +1038,8 @@ bun run --filter='@profer/electron' verify:packaged-pi-runtime
 - COM 渲染是否可用；
 - 结构审计 JSON；
 - 一次修订前后受影响 slideId；
+- 视觉策划与 visual-composition 审计结果；
+- 哪些页面由用户人工审阅，哪些（若能力可用）经过视觉模型复盘；
 - 未完成项和风险：视觉模型未启用、Cloud Dancer 未分组、竞品盲评未自动化等。
 
 **Step 5: Commit**
@@ -1029,11 +1129,13 @@ Expected: 主工作树原有改动仍在，未被功能分支操作改写。
 2. current/superseded/historical/conflicted/unknown 的来源状态可持久化且可追溯；
 3. Claude/Pi 工具契约一致；
 4. PptxGenJS 随应用依赖存在，不依赖全局 npm；
-5. 生成 PPTX 能在 PowerPoint 打开，Notes 存在，核心文本/图表/形状为原生对象；
-6. Cloud Dancer 以可编辑几何转译，不用主题图整页铺底；
-7. 结构 QA P0/P1 清零，语义级可编辑覆盖率目标 ≥90%；
-8. 至少完成一次修订后再审计；
-9. 所有失败、不可用工具和视觉判断边界写入验收记录；
-10. 主工作树无关未提交改动完整保留。
+5. 每页在编译前均有主证据、构图、数据编码、焦点和负面约束；`visualRole` 不得单独退化为固定模板；
+6. 生成 PPTX 能在 PowerPoint 打开，Notes 存在，核心文本/图表/形状为原生对象；
+7. Cloud Dancer 以可编辑几何转译，不用主题图整页铺底；
+8. 结构 QA P0/P1 清零，且 visual-composition 审计不包含 KPI 宫格、卡片墙、不可读主图或无数据关系的大数字等 P1 视觉问题；
+9. 语义级可编辑覆盖率目标 ≥90%；
+10. 至少完成一次按 `slideId` 的视觉或结构修订后再审计；
+11. 所有失败、不可用工具和视觉判断边界写入验收记录；
+12. 主工作树无关未提交改动完整保留。
 
 

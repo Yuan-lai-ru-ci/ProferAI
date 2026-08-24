@@ -14,6 +14,8 @@ export interface PiTaskPromptOptions {
   toolNames: Iterable<string>
   /** 自动任务运行时即使用户文本未出现周期关键词，也需要完整 Automation SOP。 */
   forceAutomation?: boolean
+  /** PPT 专用能力是否已由会话级门禁激活。 */
+  pptCapabilityActive?: boolean
 }
 
 interface PromptSection {
@@ -96,7 +98,9 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   if (delivery) {
     prompt = delivery.rest
     const hasImageOutput = tools.has('send_local_image')
-    const hasPptWorkflow = tools.has('plan_ppt_visuals') && tools.has('audit_ppt_delivery')
+    const hasPptWorkflow = options.pptCapabilityActive === true
+      && tools.has('plan_ppt_visuals')
+      && tools.has('audit_ppt_delivery')
     const needsImageOutput = hasImageOutput
       && matches(task, /(?:发送|附上|展示|回复).*?(?:图片|图像|png|jpe?g|gif|webp)|(?:本地|已有).{0,8}(?:图片|图像)/i)
     const needsImageGenerationRouting = tools.has('generate_image')

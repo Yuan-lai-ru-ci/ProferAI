@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "id": "academic-editorial",
+  "name": "Academic Editorial",
+  "description": "纸白、墨黑和单一强调色组成的期刊式研究叙事，适合文献汇报、实验结果和课程作业。",
+  "tokens": {
+    "canvas": { "width": 13.333, "height": 7.5, "background": "#F7F5F0" },
+    "colors": {
+      "canvas": "#F7F5F0",
+      "ink": "#17191C",
+      "mutedInk": "#5D6268",
+      "accent": "#A20D18",
+      "rule": "#B7B4AE",
+      "panel": "#EEEBE4",
+      "white": "#FFFFFF"
+    },
+    "typography": {
+      "fontFallback": ["Aptos", "Arial", "Microsoft YaHei", "Noto Sans CJK SC"],
+      "titlePt": 30,
+      "sectionPt": 24,
+      "bodyPt": 15,
+      "captionPt": 9,
+      "pageNumberPt": 8,
+      "lineHeight": 1.12
+    },
+    "grid": { "columns": 12, "gutter": 0.12, "marginX": 0.62, "marginY": 0.48, "safeArea": 0.18 },
+    "spacing": { "unit": 0.08, "small": 0.16, "medium": 0.28, "large": 0.52 },
+    "lineWidthPt": { "hairline": 0.6, "rule": 1.1, "emphasis": 2.4 },
+    "cornerRadius": 0
+  },
+  "layoutGrammar": {
+    "title": { "low": ["title-left-air", "title-asymmetric-rule"], "medium": ["title-left-air", "title-asymmetric-rule"], "high": ["title-left-air"] },
+    "section": { "low": ["section-numbered-air"], "medium": ["section-numbered-air", "section-rule"], "high": ["section-rule"] },
+    "assertion_evidence": { "low": ["editorial-split", "claim-with-marker"], "medium": ["editorial-split", "claim-with-marker"], "high": ["editorial-split"] },
+    "chart": { "low": ["chart-large-with-caption"], "medium": ["chart-large-with-caption", "chart-evidence-column"], "high": ["chart-large-with-caption"] },
+    "mechanism_diagram": { "low": ["diagram-open-grid"], "medium": ["diagram-open-grid", "diagram-numbered"], "high": ["diagram-numbered"] },
+    "comparison": { "low": ["comparison-rule-columns"], "medium": ["comparison-rule-columns"], "high": ["comparison-rule-columns"] },
+    "image_with_annotation": { "low": ["image-caption-margin"], "medium": ["image-caption-margin"], "high": ["image-caption-margin"] },
+    "limitations": { "low": ["limitations-air"], "medium": ["limitations-numbered"], "high": ["limitations-numbered"] },
+    "conclusion": { "low": ["conclusion-number"], "medium": ["conclusion-number", "conclusion-claim-rule"], "high": ["conclusion-claim-rule"] },
+    "references": { "low": ["references-compact"], "medium": ["references-compact"], "high": ["references-compact"] }
+  },
+  "motifs": [
+    { "id": "evidence-marker", "kind": "filled-square-with-number", "editable": true, "maxPerSlide": 4, "allowedRoles": ["assertion_evidence", "chart", "mechanism_diagram"] },
+    { "id": "accent-rule", "kind": "horizontal-rule", "editable": true, "maxPerSlide": 2, "allowedRoles": ["title", "section", "conclusion"] },
+    { "id": "paper-grain", "kind": "subtle-texture", "editable": false, "maxPerSlide": 1, "allowedRoles": ["title", "section"] }
+  ],
+  "chartLanguage": {
+    "seriesColors": ["#17191C", "#A20D18", "#7A8086", "#B7B4AE"],
+    "axisColor": "#5D6268",
+    "gridColor": "#D7D3CC",
+    "labelPt": 9,
+    "annotationStyle": "red-rule-and-number",
+    "maxSeries": 4,
+    "minContrastRatio": 4.5
+  },
+  "imageDirection": {
+    "preferred": ["paper-figure", "experiment-screenshot", "clean-scientific-photo"],
+    "aspectRatios": ["4:3", "16:9", "1:1"],
+    "treatment": "quiet-crop-with-caption",
+    "avoid": ["stock-business-photo", "decorative-gradient-background"]
+  },
+  "narrativeRhythm": {
+    "sequence": ["air", "evidence", "mechanism", "evidence", "air", "conclusion"],
+    "densitySwing": "wide",
+    "chapterBreatherEvery": 4,
+    "avoidRepeatingLayoutMoreThan": 2
+  },
+  "qaProfile": {
+    "minBodyPt": 13,
+    "minCaptionPt": 8,
+    "maxContentMotifs": 3,
+    "maxTextRatio": 0.42,
+    "forbidden": ["card-wall", "full-slide-rasterized-content", "decorative-gradient-background", "rhetorical-headline", "presentational-slogan"],
+    "required": ["one-dominant-claim", "evidence-marker-or-citation", "asymmetric-whitespace"]
+  },
+  "editorialPolicy": {
+    "mode": "scientific-editorial",
+    "headlineStyle": "evidence-statement",
+    "requireMetricDefinition": true,
+    "requireNativeQuantitativeVisual": true,
+    "requireConclusionBoundary": true,
+    "forbiddenHeadlinePatterns": ["rhetorical-question", "presentational-slogan", "unsupported-causal-claim"],
+    "narrativeRoles": ["title", "section", "assertion_evidence", "chart", "mechanism_diagram", "comparison", "image_with_annotation", "limitations", "conclusion", "references"]
+  },
+  "preview": {
+    "asset": "preview.webp",
+    "alt": "Academic Editorial 风格缩略图"
+  }
+}

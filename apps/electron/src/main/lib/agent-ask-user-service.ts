@@ -16,7 +16,6 @@ import type {
   AskUserQuestion,
   AskUserQuestionOption,
 } from '@profer/shared'
-
 /** canUseTool 返回的权限结果 */
 type PermissionResult = {
   behavior: 'allow'
@@ -30,6 +29,8 @@ type PermissionResult = {
 interface PendingAskUser {
   resolve: (result: PermissionResult) => void
   request: AskUserRequest
+  /** 原始输入仅留在主进程，用于恢复 SDK 工具调用，不随 renderer request 泄露。 */
+  toolInput: Record<string, unknown>
 }
 
 /**
@@ -40,7 +41,6 @@ interface PendingAskUser {
 export class AgentAskUserService {
   /** 待处理的 AskUser 请求 Map（requestId → PendingAskUser） */
   private pendingRequests = new Map<string, PendingAskUser>()
-
   /**
    * 处理 AskUserQuestion 工具调用
    *
@@ -55,15 +55,17 @@ export class AgentAskUserService {
   ): Promise<PermissionResult> {
     const questions = this.parseQuestions(input)
 
+    const requestId = randomUUID()
+    const rendererToolInput = { ...input }
     const request: AskUserRequest = {
-      requestId: randomUUID(),
+      requestId,
       sessionId,
       questions,
-      toolInput: input,
+      toolInput: rendererToolInput,
     }
 
     return new Promise<PermissionResult>((resolve) => {
-      this.pendingRequests.set(request.requestId, { resolve, request })
+      this.pendingRequests.set(request.requestId, { resolve, request, toolInput: input })
 
       signal.addEventListener('abort', () => {
         if (this.pendingRequests.has(request.requestId)) {
@@ -82,15 +84,16 @@ export class AgentAskUserService {
    *
    * @returns 对应的 sessionId，用于向渲染进程发送 resolved 事件；未找到返回 null
    */
-  respondToAskUser(requestId: string, answers: Record<string, string>): string | null {
+  async respondToAskUser(requestId: string, answers: Record<string, string>): Promise<string | null> {
     const pending = this.pendingRequests.get(requestId)
     if (!pending) return null
 
     const sessionId = pending.request.sessionId
+    this.pendingRequests.delete(requestId)
 
-    // 构建 updatedInput：保留原始输入 + 注入 answers
+    // 构建 updatedInput：保留原始输入 + 注入 answers；内部 metadata 不展示给 renderer。
     const updatedInput: Record<string, unknown> = {
-      ...pending.request.toolInput,
+      ...pending.toolInput,
       answers,
     }
 
@@ -98,7 +101,6 @@ export class AgentAskUserService {
       behavior: 'allow' as const,
       updatedInput,
     })
-    this.pendingRequests.delete(requestId)
     return sessionId
   }
 

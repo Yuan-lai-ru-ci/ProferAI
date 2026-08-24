@@ -1114,7 +1114,7 @@ export async function injectAgentCollaborationMcpServer(
           if (blocked.type === 'ask_user' && blocked.askUserRequestId) {
             const { askUserService } = await import('./agent-ask-user-service')
             const answers = args.answers ?? {}
-            const sessionId = askUserService.respondToAskUser(blocked.askUserRequestId, answers)
+            const sessionId = await askUserService.respondToAskUser(blocked.askUserRequestId, answers)
             blocked.resolved = !!sessionId
             if (blocked.resolved && _eventBusRef) {
               _eventBusRef.emit(blocked.childSessionId, {
@@ -1457,7 +1457,7 @@ export function buildPiCollaborationTools(
         if (blocked.type === 'ask_user' && blocked.askUserRequestId) {
           const { askUserService } = await import('./agent-ask-user-service')
           const answers = args.answers ?? {}
-          const sessionId = askUserService.respondToAskUser(blocked.askUserRequestId, answers)
+          const sessionId = await askUserService.respondToAskUser(blocked.askUserRequestId, answers)
           blocked.resolved = !!sessionId
           if (blocked.resolved && _eventBusRef) {
             _eventBusRef.emit(blocked.childSessionId, {

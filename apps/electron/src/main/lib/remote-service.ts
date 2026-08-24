@@ -933,7 +933,7 @@ async function handleCommand(
       const requestId = parsed.requestId as string
       const answers = parsed.answers
       if (!requestId || !answers || typeof answers !== 'object' || Array.isArray(answers)) return { ok: false, error: '缺少有效 requestId 或 answers' }
-      const sessionId = askUserService.respondToAskUser(requestId, answers as Record<string, string>)
+      const sessionId = await askUserService.respondToAskUser(requestId, answers as Record<string, string>)
       if (!sessionId) return { ok: false, error: '提问请求不存在或已处理' }
       agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'ask_user_resolved', requestId } })
       return { ok: true, data: { sessionId } }
