@@ -15,7 +15,26 @@ import type {
   AskUserRequest,
   AskUserQuestion,
   AskUserQuestionOption,
+  ProferAskUserConfirmation,
 } from '@profer/shared'
+import { recordDeckBriefConfirmation } from './ppt-deck-project-service'
+
+const DECK_BRIEF_CONFIRMATION_LABEL = '确认 Deck Brief'
+
+function parseDeckBriefConfirmation(value: unknown): ProferAskUserConfirmation | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  if (raw.kind !== 'deck-brief' || typeof raw.projectDir !== 'string' || typeof raw.confirmationToken !== 'string') return undefined
+  return {
+    kind: 'deck-brief',
+    projectDir: raw.projectDir,
+    confirmationToken: raw.confirmationToken,
+  }
+}
+
+function hasExactDeckBriefConfirmation(answers: Record<string, string>): boolean {
+  return Object.values(answers).some((answer) => answer.trim() === DECK_BRIEF_CONFIRMATION_LABEL)
+}
 
 /** canUseTool 返回的权限结果 */
 type PermissionResult = {
@@ -30,6 +49,9 @@ type PermissionResult = {
 interface PendingAskUser {
   resolve: (result: PermissionResult) => void
   request: AskUserRequest
+  /** 原始输入仅留在主进程，用于恢复 SDK 工具调用，不随 renderer request 泄露。 */
+  toolInput: Record<string, unknown>
+  confirmation?: ProferAskUserConfirmation
 }
 
 /**
@@ -55,15 +77,19 @@ export class AgentAskUserService {
   ): Promise<PermissionResult> {
     const questions = this.parseQuestions(input)
 
+    const requestId = randomUUID()
+    const confirmation = parseDeckBriefConfirmation(input.proferConfirmation)
+    const rendererToolInput = { ...input }
+    delete rendererToolInput.proferConfirmation
     const request: AskUserRequest = {
-      requestId: randomUUID(),
+      requestId,
       sessionId,
       questions,
-      toolInput: input,
+      toolInput: rendererToolInput,
     }
 
     return new Promise<PermissionResult>((resolve) => {
-      this.pendingRequests.set(request.requestId, { resolve, request })
+      this.pendingRequests.set(request.requestId, { resolve, request, toolInput: input, confirmation })
 
       signal.addEventListener('abort', () => {
         if (this.pendingRequests.has(request.requestId)) {
@@ -82,15 +108,32 @@ export class AgentAskUserService {
    *
    * @returns 对应的 sessionId，用于向渲染进程发送 resolved 事件；未找到返回 null
    */
-  respondToAskUser(requestId: string, answers: Record<string, string>): string | null {
+  async respondToAskUser(requestId: string, answers: Record<string, string>): Promise<string | null> {
     const pending = this.pendingRequests.get(requestId)
     if (!pending) return null
 
     const sessionId = pending.request.sessionId
+    this.pendingRequests.delete(requestId)
 
-    // 构建 updatedInput：保留原始输入 + 注入 answers
+    if (pending.confirmation && hasExactDeckBriefConfirmation(answers)) {
+      try {
+        await recordDeckBriefConfirmation({
+          projectDir: pending.confirmation.projectDir,
+          confirmationToken: pending.confirmation.confirmationToken,
+          requestId,
+        })
+      } catch (error) {
+        pending.resolve({
+          behavior: 'deny',
+          message: error instanceof Error ? error.message : 'Deck Brief 确认失败',
+        })
+        return sessionId
+      }
+    }
+
+    // 构建 updatedInput：保留原始输入 + 注入 answers；内部 metadata 不展示给 renderer。
     const updatedInput: Record<string, unknown> = {
-      ...pending.request.toolInput,
+      ...pending.toolInput,
       answers,
     }
 
@@ -98,7 +141,6 @@ export class AgentAskUserService {
       behavior: 'allow' as const,
       updatedInput,
     })
-    this.pendingRequests.delete(requestId)
     return sessionId
   }
 

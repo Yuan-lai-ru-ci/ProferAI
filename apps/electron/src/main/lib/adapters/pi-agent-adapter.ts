@@ -1188,6 +1188,12 @@ export function buildPromaProductToolDefinitions(
           }))),
         })),
         answers: Type.Optional(Type.Record(Type.String(), Type.String())),
+        // 受管的 Deck Brief 确认 metadata 只由主进程消费，不进入 renderer 展示。
+        proferConfirmation: Type.Optional(Type.Object({
+          kind: Type.Literal('deck-brief'),
+          projectDir: Type.String(),
+          confirmationToken: Type.String(),
+        })),
       }),
       async execute(_toolCallId, params) {
         const input = params as Record<string, unknown>
