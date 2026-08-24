@@ -29,6 +29,28 @@ const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName } = await import('./config-paths')
 
 describe('buildSystemPrompt', () => {
+  test('普通会话默认不注入 PPT 专用长门禁', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      pptCapabilityActive: false,
+    })
+    expect(prompt).not.toContain('PPT 视觉交付门禁')
+  })
+
+  test('PPT 能力激活后注入 PPT 专用长门禁', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      pptCapabilityActive: true,
+    })
+    expect(prompt).toContain('PPT 视觉交付门禁')
+  })
+
   test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
     const slug = 'demo-workspace'
     const sessionId = 'session-123'
@@ -199,7 +221,7 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('9. **AI 生图**')
     expect(withoutAutomation).toContain('`generate_image`')
     expect(withoutAutomation).toContain('不要尝试用代码、ASCII art 等伪造图片')
-    expect(withoutAutomation).toContain('10. **PPT 视觉交付门禁**')
+    expect(withoutAutomation).not.toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
     expect(withoutAutomation).toContain('图片附件标记')
     expect(withoutAutomation).not.toContain('`PROMA_IMAGE_ATTACHMENT` 标记')
@@ -213,6 +235,7 @@ describe('buildSystemPrompt', () => {
       sessionId: 'session-123',
       permissionMode: 'auto',
       isPiRuntime: true,
+      pptCapabilityActive: true,
     })
     const toolNames = [
       'BrowserObserve',
@@ -243,6 +266,7 @@ describe('buildSystemPrompt', () => {
       basePrompt,
       userMessage: '访问 https://example.com 并做成 pptx 幻灯片。',
       toolNames,
+      pptCapabilityActive: true,
     })
     expect(webAndPpt).toContain('## Profer 受管浏览器')
     expect(webAndPpt).toContain('PPT 视觉交付门禁')

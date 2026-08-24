@@ -76,11 +76,22 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).not.toContain('BROWSER_RULES')
   })
 
+  test('PPT 任务在能力未激活时不恢复 PPT SOP，即使工具名称存在', () => {
+    const prompt = buildPiTaskPrompt({
+      basePrompt: BASE_PROMPT,
+      userMessage: '请做成一个 pptx 幻灯片。',
+      toolNames: ['plan_ppt_visuals', 'audit_ppt_delivery'],
+      pptCapabilityActive: false,
+    })
+    expect(prompt).not.toContain('PPT_VISUAL_GATE')
+  })
+
   test('网页与 PPT 任务仅恢复对应的实际可用工作流规则', () => {
     const prompt = buildPiTaskPrompt({
       basePrompt: BASE_PROMPT,
       userMessage: '打开 https://example.com，整理后做成一个 .pptx 演示文稿。',
       toolNames: ['BrowserObserve', 'plan_ppt_visuals', 'audit_ppt_delivery'],
+      pptCapabilityActive: true,
     })
 
     expect(prompt).toContain('BROWSER_RULES')

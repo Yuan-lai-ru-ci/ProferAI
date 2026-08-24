@@ -756,6 +756,8 @@ export interface AgentSessionMeta {
   openAIThinkingLevel?: AgentThinkingLevel | null
   /** 所属工作区 ID */
   workspaceId?: string
+  /** 当前 Agent 会话是否已激活 PPT 专用能力；缺省为 false。 */
+  pptCapabilityActive?: boolean
   /** 是否置顶 */
   pinned?: boolean
   /** 是否已归档 */

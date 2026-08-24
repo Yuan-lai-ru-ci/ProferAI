@@ -111,6 +111,8 @@ export interface PiBuiltinToolsContext {
   agentCwd?: string
   /** 图片外发前必须校验在这些已授权目录内。 */
   allowedRoots?: string[]
+  /** PPT 专用能力是否已通过会话级激活门禁。 */
+  pptCapabilityActive?: boolean
   /** 图片生命周期持久化成功后通知 renderer 的安全卡片。 */
   onImageGenerationUpdate?: (record: AgentImageGenerationCard) => void
   /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
@@ -1400,10 +1402,12 @@ export async function buildPiBuiltinTools(
     console.error('[Pi 桥接] 注入 GPT Image 工具失败:', error)
   }
 
-  try {
-    tools.push(...buildPiPptMaterialTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入开放许可 PPT 素材工具失败:', error)
+  if (ctx.pptCapabilityActive === true) {
+    try {
+      tools.push(...buildPiPptMaterialTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入开放许可 PPT 素材工具失败:', error)
+    }
   }
 
   if (isWebSearchEnabledForAgent()) {

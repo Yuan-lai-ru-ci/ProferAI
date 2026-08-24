@@ -269,6 +269,30 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(tools.some((tool) => tool.name === 'send_local_image')).toBe(false)
   })
 
+  test('Given PPT capability inactive Then PPT-specific tools are not registered', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      pptCapabilityActive: false,
+    })
+    const names = tools.map((tool) => tool.name)
+    expect(names).not.toContain('plan_ppt_visuals')
+    expect(names).not.toContain('audit_ppt_delivery')
+    expect(names).not.toContain('search_open_materials')
+  })
+
+  test('Given PPT capability active Then PPT-specific tools are registered', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      pptCapabilityActive: true,
+    })
+    const names = tools.map((tool) => tool.name)
+    expect(names).toContain('plan_ppt_visuals')
+    expect(names).toContain('audit_ppt_delivery')
+    expect(names).toContain('search_open_materials')
+  })
+
   test('Given no disabled groups Then all four groups are registered', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, baseCtx)
