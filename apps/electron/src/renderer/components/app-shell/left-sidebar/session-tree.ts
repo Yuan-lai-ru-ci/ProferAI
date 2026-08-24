@@ -71,8 +71,12 @@ export function getDelegatedChildStatus(
   agentIndicatorMap: Map<string, SessionIndicatorStatus>,
 ): SessionIndicatorStatus {
   const status = agentIndicatorMap.get(session.id)
-  if (status) return status
-  return session.delegationStatus === 'running' ? 'running' : 'idle'
+  // 实时 blocked/running 应立即反映；但子会话本轮 stream 结束时可能先产生
+  // completed 指示、后更新 delegationStatus。只要持久化委派仍是 running，
+  // 就不能让这段时序窗口把父会话误显示为已完成。
+  if (status === 'blocked' || status === 'running') return status
+  if (session.delegationStatus === 'running') return 'running'
+  return status ?? 'idle'
 }
 
 export function getSessionTreeStatus(
@@ -96,8 +100,24 @@ export function getSessionTreeStatus(
   return 'idle'
 }
 
-export function countCompletedDelegatedChildren(childSessions: AgentSessionMeta[]): number {
-  return childSessions.filter((session) => session.delegationStatus === 'completed').length
+export interface DelegationSummary {
+  total: number
+  running: number
+  completed: number
+}
+
+/**
+ * 汇总父会话的直接委派子会话状态。
+ *
+ * `running` 只采用持久化 delegationStatus：侧栏与正文都能在父轮次结束后、
+ * 子会话仍独立运行时稳定显示等待态；终态不伪装为成功完成。
+ */
+export function getDelegationSummary(childSessions: AgentSessionMeta[]): DelegationSummary {
+  return {
+    total: childSessions.length,
+    running: childSessions.filter((session) => session.delegationStatus === 'running').length,
+    completed: childSessions.filter((session) => session.delegationStatus === 'completed').length,
+  }
 }
 
 export function treeContainsSessionId(item: AgentSessionTreeItem, sessionId: string | null): boolean {

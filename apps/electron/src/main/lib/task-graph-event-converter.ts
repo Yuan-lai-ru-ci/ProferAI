@@ -21,6 +21,8 @@ export interface TaskGraphEventConversion {
 export interface TaskGraphAutoLinkContext {
   currentTaskId: string | null
   lastCompletedTaskId: string | null
+  /** 父会话仍有 live 协作子会话时，禁止本轮将普通任务写为 completed。 */
+  completionBlockedByRunningDelegations?: boolean
 }
 
 const TASK_STATUSES = new Set<TaskStatus>([
@@ -110,7 +112,11 @@ export function nativeTaskToolToGraphEvents(
   if (status === 'deleted') {
     events.push({ type: 'task_deleted', taskId, timestamp, payload: { source: 'agent' } })
   } else if (typeof status === 'string' && TASK_STATUSES.has(status as TaskStatus)) {
-    events.push({ type: 'task_status_changed', taskId, timestamp, payload: { newStatus: status as TaskStatus } })
+    // 子会话仍在运行时，父 Agent 的本轮输出只是暂时结束；待自动续跑收集结果后
+    // 再由父 Agent 正常决定何时完成任务，避免任务图抢先显示完成。
+    if (!(status === 'completed' && autoLinkContext.completionBlockedByRunningDelegations)) {
+      events.push({ type: 'task_status_changed', taskId, timestamp, payload: { newStatus: status as TaskStatus } })
+    }
   }
 
   const subject = stringValue(invocation.input, 'subject')
@@ -130,7 +136,17 @@ export function nativeTaskToolToGraphEvents(
   return { events, nextCurrentTaskId: taskId }
 }
 
-/** Structured MCP handlers persist their own events; only use them to track task association. */
+/** MCP task update 用此显式结果通知编排层：completed 写入被 live delegation 保护拦截。 */
+export function isTaskCompletionBlocked(result: unknown): boolean {
+  const text = textFromResult(result)
+  if (!text) return false
+  try {
+    return JSON.parse(text)?.completionBlocked === true
+  } catch {
+    return false
+  }
+}
+
 export function structuredTaskToolCurrentTaskId(invocation: TaskToolInvocation): string | undefined {
   if (!isStructuredTaskGraphTool(invocation.toolName)) return undefined
   if (invocation.toolName.endsWith('proma_task_create')) return parseCreatedTask(invocation.result)?.id

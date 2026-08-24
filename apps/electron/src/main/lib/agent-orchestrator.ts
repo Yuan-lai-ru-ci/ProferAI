@@ -69,6 +69,7 @@ import {
   delegationLinkFromResult,
   delegationToGraphEvents,
   isDelegateAgentTool,
+  isTaskCompletionBlocked,
   nativeTaskToolToGraphEvents,
   resolveRecentAutoLinkTaskId,
   structuredTaskAutoLinkEvent,
@@ -76,7 +77,7 @@ import {
   type TaskToolInvocation,
 } from './task-graph-event-converter'
 import { appendGraphEvent } from './project-graph-service'
-import { injectAgentCollaborationMcpServer, registerCollaborationEventBus, stopDelegationsForParent } from './agent-collaboration-tools'
+import { hasRunningDelegations, injectAgentCollaborationMcpServer, registerCollaborationEventBus, stopDelegationsForParent } from './agent-collaboration-tools'
 import { getAgentStopCompletionOptions, setAgentStopper, type AgentStopSource } from './agent-headless-runner-registry'
 import { normalizeAgentEndReason } from './agent-end-reason'
 import { getAdapter, fetchTitle } from '@profer/core'
@@ -2095,6 +2096,7 @@ ${enrichedMessage}`
                   const conversion = nativeTaskToolToGraphEvents(invocation, sessionId, Date.now(), {
                     currentTaskId,
                     lastCompletedTaskId: lastCompletedTaskId ?? resolvePersistedRecentTask(),
+                    completionBlockedByRunningDelegations: hasRunningDelegations(sessionId),
                   })
                   for (const graphEvent of conversion.events) {
                     appendGraphEvent(sessionId, graphEvent)
@@ -2111,7 +2113,7 @@ ${enrichedMessage}`
                     lastCompletedTaskId: lastCompletedTaskId ?? resolvePersistedRecentTask(),
                   })
                   if (autoLink) appendGraphEvent(sessionId, autoLink)
-                  if (invocation.toolName.endsWith('proma_task_update') && invocation.input.status === 'completed' && structuredTaskId) {
+                  if (invocation.toolName.endsWith('proma_task_update') && invocation.input.status === 'completed' && structuredTaskId && !isTaskCompletionBlocked(block.content)) {
                     lastCompletedTaskId = structuredTaskId
                     currentTaskId = null
                   } else if (structuredTaskId) {

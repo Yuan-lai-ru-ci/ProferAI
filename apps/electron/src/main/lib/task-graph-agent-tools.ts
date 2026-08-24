@@ -22,6 +22,7 @@ import {
   parseAbandon,
 } from '@profer/project-core'
 import { appendGraphEvent } from './project-graph-service'
+import { hasRunningDelegations } from './agent-collaboration-tools'
 import { filterDisabledTools } from '@profer/shared'
 
 // ===== 类型 =====
@@ -177,8 +178,10 @@ export async function injectTaskGraphMcpServer(
 
           const ts = now()
 
-          // 状态变更（deleted 由原生 TaskUpdate 的 status='deleted' 处理）
-          if (status) {
+          // 状态变更（deleted 由原生 TaskUpdate 的 status='deleted' 处理）。
+          // 子会话仍在运行时，父会话本轮结束不代表整个任务完成，必须等待自动续跑。
+          const completionBlocked = status === 'completed' && hasRunningDelegations(ctx.sessionId)
+          if (status && !completionBlocked) {
             appendGraphEvent(ctx.sessionId, {
               type: 'task_status_changed',
               taskId,
@@ -216,7 +219,15 @@ export async function injectTaskGraphMcpServer(
             })
           }
 
-          return jsonResult({ taskId, updated: true })
+          return jsonResult({
+            taskId,
+            updated: !completionBlocked,
+            ...(completionBlocked && {
+              completionBlocked: true,
+              error: 'RUNNING_DELEGATIONS',
+              message: '仍有协作子会话运行中，任务保持进行中。',
+            }),
+          })
         },
       ),
   ]

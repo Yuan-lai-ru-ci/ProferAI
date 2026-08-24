@@ -27,7 +27,10 @@ import {
   runRegisteredHeadlessAgent,
   stopRegisteredAgent,
 } from './agent-headless-runner-registry'
-import { isAgentSessionActive } from './agent-service'
+import {
+  isAgentSessionActive,
+  runAgentHeadless,
+} from './agent-service'
 import {
   MAX_RUNNING_DELEGATIONS_PER_PARENT,
   buildRecoveredDelegationState,
@@ -282,6 +285,16 @@ function getRunningDelegationCount(parentSessionId: string): number {
     .length
 }
 
+/**
+ * 返回当前进程中父会话是否仍有 live 协作子会话。
+ *
+ * 只读内存委派记录，不能以落盘 metadata 的旧 `running` 状态推断活跃任务；
+ * 重启恢复时旧记录会被收敛为 interrupted。
+ */
+export function hasRunningDelegations(parentSessionId: string): boolean {
+  return getRunningDelegationCount(parentSessionId) > 0
+}
+
 function createDelegationCompletion(): Pick<DelegationRecord, 'completion' | 'resolveCompletion'> {
   let resolveCompletion: () => void = () => {}
   const completion = new Promise<void>((resolve) => {
@@ -420,7 +433,10 @@ function scheduleParentAutoContinuation(parentSessionId: string): void {
 
   parentAutoContinuationLocks.add(parentSessionId)
   completed.forEach((record) => autoContinuedDelegationIds.add(record.delegationId))
-  runRegisteredHeadlessAgent(
+  // 自动续跑需要走 agent-service 的 headless 包装，而不是只调用底层 runner：
+  // 前者会为父会话注册当前 renderer、发 external_run_started、转发流事件并发送
+  // STREAM_COMPLETE。否则内容虽已落盘，但当前打开的父会话只能在切换回来后才重读到。
+  runAgentHeadless(
     {
       sessionId: parentSessionId,
       userMessage: buildParentAutoContinuationPrompt(completed),

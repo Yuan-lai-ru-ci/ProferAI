@@ -50,7 +50,7 @@ import {
   listPlanningTodos,
   updatePlanningTodo,
 } from '../planning-agent-operations'
-import { buildPiCollaborationTools } from '../agent-collaboration-tools'
+import { buildPiCollaborationTools, hasRunningDelegations } from '../agent-collaboration-tools'
 import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
@@ -321,7 +321,10 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
           return jsonToolResult({ error: 'TASK_NOT_FOUND', taskId: args.taskId, message: '当前会话任务图中不存在该任务，已拒绝写入。' })
         }
         const timestamp = Date.now()
-        if (args.status) {
+        // 父会话尚有运行中的协作子会话时，本轮不能提前完成任务；
+        // 子会话结束后父会话会自动续跑，并由后续正常更新决定最终状态。
+        const completionBlocked = args.status === 'completed' && hasRunningDelegations(ctx.sessionId)
+        if (args.status && !completionBlocked) {
           appendGraphEvent(ctx.sessionId, { type: 'task_status_changed', taskId: args.taskId, timestamp, payload: { newStatus: args.status } })
         }
         if (args.dependsOn !== undefined) {
@@ -340,7 +343,15 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
             payload: { reason: args.abandonReason, confidence: 1, evidenceTurns: [], source: 'agent' },
           })
         }
-        return jsonToolResult({ taskId: args.taskId, updated: true })
+        return jsonToolResult({
+          taskId: args.taskId,
+          updated: !completionBlocked,
+          ...(completionBlocked && {
+            completionBlocked: true,
+            error: 'RUNNING_DELEGATIONS',
+            message: '仍有协作子会话运行中，任务保持进行中。',
+          }),
+        })
       },
     }),
   ] as unknown as ToolDefinition[]
