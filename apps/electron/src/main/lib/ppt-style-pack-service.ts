@@ -79,6 +79,15 @@ export interface PptStylePackDefinition {
     forbidden: string[]
     required: string[]
   }
+  editorialPolicy: {
+    mode: 'scientific-editorial' | 'general-editorial'
+    headlineStyle: 'evidence-statement' | 'narrative'
+    requireMetricDefinition: boolean
+    requireNativeQuantitativeVisual: boolean
+    requireConclusionBoundary: boolean
+    forbiddenHeadlinePatterns: string[]
+    narrativeRoles: string[]
+  }
   preview: { asset: string; alt: string }
 }
 
@@ -140,6 +149,22 @@ function validateDefinition(raw: unknown, expectedId?: string): PptStylePackDefi
     imageDirection: requireRecord(value.imageDirection, 'pack.json.imageDirection') as PptStylePackDefinition['imageDirection'],
     narrativeRhythm: requireRecord(value.narrativeRhythm, 'pack.json.narrativeRhythm') as PptStylePackDefinition['narrativeRhythm'],
     qaProfile: requireRecord(value.qaProfile, 'pack.json.qaProfile') as PptStylePackDefinition['qaProfile'],
+    editorialPolicy: (() => {
+      const policy = requireRecord(value.editorialPolicy, 'pack.json.editorialPolicy')
+      const mode = requireString(policy.mode, 'pack.json.editorialPolicy.mode')
+      if (mode !== 'scientific-editorial' && mode !== 'general-editorial') throw new Error('pack.json.editorialPolicy.mode 无效')
+      const headlineStyle = requireString(policy.headlineStyle, 'pack.json.editorialPolicy.headlineStyle')
+      if (headlineStyle !== 'evidence-statement' && headlineStyle !== 'narrative') throw new Error('pack.json.editorialPolicy.headlineStyle 无效')
+      return {
+        mode,
+        headlineStyle,
+        requireMetricDefinition: policy.requireMetricDefinition === true,
+        requireNativeQuantitativeVisual: policy.requireNativeQuantitativeVisual === true,
+        requireConclusionBoundary: policy.requireConclusionBoundary === true,
+        forbiddenHeadlinePatterns: Array.isArray(policy.forbiddenHeadlinePatterns) ? policy.forbiddenHeadlinePatterns.map((value) => requireString(value, 'pack.json.editorialPolicy.forbiddenHeadlinePatterns')) : [],
+        narrativeRoles: Array.isArray(policy.narrativeRoles) ? policy.narrativeRoles.map((value) => requireString(value, 'pack.json.editorialPolicy.narrativeRoles')) : [],
+      } satisfies PptStylePackDefinition['editorialPolicy']
+    })(),
     preview: (() => {
       const preview = requireRecord(value.preview, 'pack.json.preview')
       return {

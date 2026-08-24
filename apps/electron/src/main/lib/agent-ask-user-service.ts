@@ -15,27 +15,7 @@ import type {
   AskUserRequest,
   AskUserQuestion,
   AskUserQuestionOption,
-  ProferAskUserConfirmation,
 } from '@profer/shared'
-import { recordDeckBriefConfirmation } from './ppt-deck-project-service'
-
-const DECK_BRIEF_CONFIRMATION_LABEL = '确认 Deck Brief'
-
-function parseDeckBriefConfirmation(value: unknown): ProferAskUserConfirmation | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const raw = value as Record<string, unknown>
-  if (raw.kind !== 'deck-brief' || typeof raw.projectDir !== 'string' || typeof raw.confirmationToken !== 'string') return undefined
-  return {
-    kind: 'deck-brief',
-    projectDir: raw.projectDir,
-    confirmationToken: raw.confirmationToken,
-  }
-}
-
-function hasExactDeckBriefConfirmation(answers: Record<string, string>): boolean {
-  return Object.values(answers).some((answer) => answer.trim() === DECK_BRIEF_CONFIRMATION_LABEL)
-}
-
 /** canUseTool 返回的权限结果 */
 type PermissionResult = {
   behavior: 'allow'
@@ -51,7 +31,6 @@ interface PendingAskUser {
   request: AskUserRequest
   /** 原始输入仅留在主进程，用于恢复 SDK 工具调用，不随 renderer request 泄露。 */
   toolInput: Record<string, unknown>
-  confirmation?: ProferAskUserConfirmation
 }
 
 /**
@@ -62,14 +41,6 @@ interface PendingAskUser {
 export class AgentAskUserService {
   /** 待处理的 AskUser 请求 Map（requestId → PendingAskUser） */
   private pendingRequests = new Map<string, PendingAskUser>()
-  /** Deck Project 创建后由主进程按会话暂存；不暴露给 Agent 或 renderer。 */
-  private armedDeckConfirmations = new Map<string, ProferAskUserConfirmation>()
-
-  armDeckBriefConfirmation(sessionId: string, confirmation: ProferAskUserConfirmation): void {
-    if (!sessionId.trim() || confirmation.kind !== 'deck-brief') throw new Error('无效的 Deck Brief 确认上下文')
-    this.armedDeckConfirmations.set(sessionId, confirmation)
-  }
-
   /**
    * 处理 AskUserQuestion 工具调用
    *
@@ -85,11 +56,7 @@ export class AgentAskUserService {
     const questions = this.parseQuestions(input)
 
     const requestId = randomUUID()
-    const explicitConfirmation = parseDeckBriefConfirmation(input.proferConfirmation)
-    const hasConfirmationOption = questions.some((question) => question.options.some((option) => option.label === DECK_BRIEF_CONFIRMATION_LABEL))
-    const confirmation = explicitConfirmation ?? (hasConfirmationOption ? this.armedDeckConfirmations.get(sessionId) : undefined)
     const rendererToolInput = { ...input }
-    delete rendererToolInput.proferConfirmation
     const request: AskUserRequest = {
       requestId,
       sessionId,
@@ -98,7 +65,7 @@ export class AgentAskUserService {
     }
 
     return new Promise<PermissionResult>((resolve) => {
-      this.pendingRequests.set(request.requestId, { resolve, request, toolInput: input, confirmation })
+      this.pendingRequests.set(request.requestId, { resolve, request, toolInput: input })
 
       signal.addEventListener('abort', () => {
         if (this.pendingRequests.has(request.requestId)) {
@@ -124,23 +91,6 @@ export class AgentAskUserService {
     const sessionId = pending.request.sessionId
     this.pendingRequests.delete(requestId)
 
-    if (pending.confirmation && hasExactDeckBriefConfirmation(answers)) {
-      try {
-        await recordDeckBriefConfirmation({
-          projectDir: pending.confirmation.projectDir,
-          confirmationToken: pending.confirmation.confirmationToken,
-          requestId,
-        })
-        this.armedDeckConfirmations.delete(sessionId)
-      } catch (error) {
-        pending.resolve({
-          behavior: 'deny',
-          message: error instanceof Error ? error.message : 'Deck Brief 确认失败',
-        })
-        return sessionId
-      }
-    }
-
     // 构建 updatedInput：保留原始输入 + 注入 answers；内部 metadata 不展示给 renderer。
     const updatedInput: Record<string, unknown> = {
       ...pending.toolInput,
@@ -165,7 +115,6 @@ export class AgentAskUserService {
    * 清除指定会话的所有待处理 AskUser 请求
    */
   clearSessionPending(sessionId: string): void {
-    this.armedDeckConfirmations.delete(sessionId)
     for (const [requestId, pending] of this.pendingRequests) {
       if (pending.request.sessionId === sessionId) {
         pending.resolve({ behavior: 'deny', message: '会话已结束' })

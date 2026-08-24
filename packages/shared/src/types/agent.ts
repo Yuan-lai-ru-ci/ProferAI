@@ -1524,11 +1524,6 @@ export interface WorkspaceWorktreeRepo {
 // ===== AskUserQuestion 交互式问答类型 =====
 
 /** 主进程受管的 AskUser 确认元数据；不会放入 renderer 展示模型。 */
-export interface ProferAskUserConfirmation {
-  kind: 'deck-brief'
-  projectDir: string
-  confirmationToken: string
-}
 
 /** AskUserQuestion 工具的选项定义 */
 export interface AskUserQuestionOption {
@@ -1563,7 +1558,6 @@ export interface AskUserRequest {
   /** 工具原始输入（用于构建 updatedInput；仅主进程内部使用） */
   toolInput: Record<string, unknown>
   /** 主进程内部确认元数据；不应出现在 renderer payload 中 */
-  proferConfirmation?: ProferAskUserConfirmation
 }
 
 /** AskUser 响应（渲染进程 → 主进程） */

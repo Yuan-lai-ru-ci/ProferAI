@@ -42,21 +42,15 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('PptxScrollViewer')
   })
 
-  test('PPT 能力激活后注入 PPT 专用长门禁', () => {
+  test('PPT 能力激活后只注入快速生成指引，不暴露治理工作流', () => {
     const prompt = buildSystemPrompt({
-      workspaceName: 'Demo',
-      workspaceSlug: 'demo-workspace',
-      sessionId: 'session-123',
-      permissionMode: 'auto',
-      pptCapabilityActive: true,
+      workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-123', permissionMode: 'auto', pptCapabilityActive: true,
     })
-    expect(prompt).toContain('PPT 视觉交付门禁')
-    expect(prompt).toContain('inspect_deck_sources')
-    expect(prompt).toContain('current / superseded / historical / conflicted / unknown')
-    expect(prompt).toContain('确认 Deck Brief')
-    expect(prompt).toContain('compile_deck_project')
-    expect(prompt).toContain('FilePreviewDialog → PptxScrollViewer')
-    expect(prompt).toContain('slideId')
+    expect(prompt).toContain('generate_pptx_fast')
+    expect(prompt).toContain('直接调用')
+    for (const forbidden of ['Deck Spec', 'Deck Project', 'Deck Brief', 'inspect_deck_sources', 'create_deck_project', 'compile_deck_project', '确认 Deck Brief', 'assetRefs']) {
+      expect(prompt).not.toContain(forbidden)
+    }
   })
 
   test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
@@ -277,7 +271,7 @@ describe('buildSystemPrompt', () => {
       pptCapabilityActive: true,
     })
     expect(webAndPpt).toContain('## Profer 受管浏览器')
-    expect(webAndPpt).toContain('PPT 视觉交付门禁')
+    expect(webAndPpt).toContain('快速 PPTX 生成')
     expect(webAndPpt).not.toContain('7. **定时任务**')
   })
 

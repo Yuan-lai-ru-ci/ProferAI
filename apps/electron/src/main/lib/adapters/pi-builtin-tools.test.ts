@@ -290,13 +290,10 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
       pptCapabilityActive: true,
     })
     const names = tools.map((tool) => tool.name)
-    expect(names).toContain('plan_ppt_visuals')
-    expect(names).toContain('audit_ppt_delivery')
-    expect(names).toContain('search_open_materials')
-    expect(names).toContain('inspect_deck_sources')
-    expect(names).toContain('create_deck_project')
-    expect(names).toContain('confirm_deck_brief')
-    expect(names).toContain('compile_deck_project')
+    expect(names).toContain('generate_pptx_fast')
+    for (const forbidden of ['plan_ppt_visuals', 'audit_ppt_delivery', 'search_open_materials', 'inspect_deck_sources', 'create_deck_project', 'confirm_deck_brief', 'compile_deck_project']) {
+      expect(names).not.toContain(forbidden)
+    }
   })
 
   test('Given no disabled groups Then all four groups are registered', async () => {

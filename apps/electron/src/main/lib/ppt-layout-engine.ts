@@ -68,13 +68,13 @@ function planByRole(slide: DeckSlideSpec, pack: PptStylePackDefinition): PptLayo
     case 'section':
       return { slide: full, header, content: { x: full.x, y: 1.25, w: 7.4, h: 4.9 }, sidebar: { x: 9.75, y: 1.2, w: 2.4, h: 4.9 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'chart':
-      return { slide: full, header, content: { x: left.x, y: 1.35, w: left.w, h: 4.85 }, sidebar: { x: right.x, y: 1.35, w: right.w, h: 4.85 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
+      return { slide: full, header, content: { x: full.x, y: 1.35, w: 8.15, h: 4.85 }, sidebar: { x: 9.35, y: 1.35, w: 3.36, h: 4.85 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'mechanism_diagram':
       return { slide: full, header, content: { x: full.x, y: 1.4, w: full.w, h: 4.95 }, sidebar: right, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'comparison':
       return { slide: full, header, content: { x: full.x, y: 1.35, w: full.w, h: 4.9 }, sidebar: right, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'image_with_annotation':
-      return { slide: full, header, content: { x: left.x, y: 1.35, w: left.w, h: 4.85 }, sidebar: { x: wideRight.x, y: 1.35, w: wideRight.w, h: 4.85 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
+      return { slide: full, header, content: { x: full.x, y: 1.35, w: 7.35, h: 4.85 }, sidebar: { x: 8.55, y: 1.35, w: 4.16, h: 4.85 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'limitations':
       return { slide: full, header, content: { x: full.x, y: 1.4, w: 7.6, h: 4.8 }, sidebar: { x: 9.35, y: 1.4, w: 2.8, h: 4.8 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'conclusion':
@@ -83,7 +83,7 @@ function planByRole(slide: DeckSlideSpec, pack: PptStylePackDefinition): PptLayo
       return { slide: full, header, content: { x: full.x, y: 1.25, w: full.w, h: 5.55 }, sidebar: right, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
     case 'assertion_evidence':
     default:
-      return { slide: full, header, content: { x: left.x, y: 1.35, w: left.w, h: 4.85 }, sidebar: { x: right.x, y: 1.35, w: right.w, h: 4.85 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
+      return { slide: full, header, content: { x: full.x, y: 1.35, w: 7.25, h: 4.85 }, sidebar: { x: 8.45, y: 1.35, w: 4.26, h: 4.85 }, footer, visualRole: slide.visualRole, layoutIntent: slide.layoutIntent, densityBudget: slide.densityBudget }
   }
 }
 

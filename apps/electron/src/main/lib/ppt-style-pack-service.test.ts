@@ -34,6 +34,7 @@ describe('ppt style pack service', () => {
       expect(pack.definition).toHaveProperty('imageDirection')
       expect(pack.definition).toHaveProperty('narrativeRhythm')
       expect(pack.definition).toHaveProperty('qaProfile')
+      expect(pack.definition).toHaveProperty('editorialPolicy')
     }
   })
 
@@ -51,6 +52,14 @@ describe('ppt style pack service', () => {
     expect(pack.definition.tokens.grid.columns).toBe(12)
     expect(pack.definition.layoutGrammar.assertion_evidence.medium).toContain('editorial-split')
     expect(pack.definition.motifs.some((motif) => motif.id === 'evidence-marker')).toBe(true)
+    expect(pack.definition.editorialPolicy).toMatchObject({
+      mode: 'scientific-editorial',
+      headlineStyle: 'evidence-statement',
+      requireMetricDefinition: true,
+      requireNativeQuantitativeVisual: true,
+      requireConclusionBoundary: true,
+    })
+    expect(pack.definition.qaProfile.forbidden).toEqual(expect.arrayContaining(['rhetorical-headline', 'presentational-slogan']))
   })
 
   test('Cloud Dancer 使用指定色板、云朵/拱形/月牙，并限制内容页母题频率', () => {

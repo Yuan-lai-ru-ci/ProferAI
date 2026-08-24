@@ -77,6 +77,15 @@
     "forbidden": ["card-wall", "full-slide-rasterized-content", "full-slide-dancer-on-content", "stretched-vertical-preview"],
     "required": ["one-dominant-claim", "soft-negative-space", "motif-locality"]
   },
+  "editorialPolicy": {
+    "mode": "general-editorial",
+    "headlineStyle": "narrative",
+    "requireMetricDefinition": false,
+    "requireNativeQuantitativeVisual": true,
+    "requireConclusionBoundary": false,
+    "forbiddenHeadlinePatterns": ["unsupported-causal-claim"],
+    "narrativeRoles": ["title", "section", "assertion_evidence", "chart", "mechanism_diagram", "comparison", "image_with_annotation", "limitations", "conclusion", "references"]
+  },
   "preview": {
     "asset": "preview.webp",
     "alt": "Profer Cloud Dancer 风格缩略图"

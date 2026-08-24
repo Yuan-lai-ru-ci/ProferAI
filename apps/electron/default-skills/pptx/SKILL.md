@@ -1,8 +1,8 @@
 ---
 name: pptx
-description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."
+description: "Use this skill whenever a PowerPoint .pptx file is involved as input or output. This includes creating, reading, editing, modifying, combining, splitting, previewing, or exporting PowerPoint files; working with templates, layouts, speaker notes, comments, charts, and native editable objects. Trigger on requests to create or handle a PowerPoint file, PPT, 幻灯片, 演示文稿, or a .pptx filename. The default path is Fast Draft: call generate_pptx_fast and produce the .pptx directly. Do not introduce extra project paperwork, specification contracts, source tracking, or confirmation workflows unless the user explicitly requests formal review or submission governance."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.1.0"
+version: "1.2.0"
 ---
 
 # PPTX Skill
@@ -51,23 +51,13 @@ Use when no template or reference presentation is available.
 
 **补充能力**：pptxgenjs 做不了的组合图/双 Y 轴/精细图表，用 `scripts/chartlib.py`（python-pptx 封装 84 种图表），见 [scripts/chartlib.md](scripts/chartlib.md)；渐变背景用 `scripts/gradient.js`。
 
-## Governed Student Deck Workflow (Required)
+## Fast Draft Workflow (Default)
 
-A deck is not complete because a `.pptx` file exists. When the session exposes the governed Deck Project tools, use the following workflow before delivery:
+For a normal request to create a presentation, **generate the `.pptx` first**. Do not block on internal paperwork, source lineage, confirmation dialogs, visual-plan forms, or large hand-written JS scripts.
 
-1. Call `inspect_deck_sources` for user-selected workspace materials. Treat `current`, `superseded`, `historical`, `conflicted`, and `unknown` as distinct states. Explicit versions/dates, content relationships and user confirmation outrank `mtime`; unresolved conflicts require a question.
-2. Dynamically clarify audience, occasion, duration, goal, claim boundary, evidence gaps and visual preference. Build a Deck Brief rather than using a fixed form.
-3. Call `create_deck_project`, then show the Brief and the fixed Style Pack previews with a normal `AskUserQuestion`. Include the exact option `确认 Deck Brief`. The main process stores the one-time confirmation credential; never fake `confirmed: true` or edit receipt fields.
-4. Every slide in the Deck Spec must carry a stable `slideId`, one claim, concrete `evidenceRefs`, a `visualRole`, Style-Pack-approved `layoutIntent`, density budget, editable object list, citations and Speaker Notes.
-5. Call `plan_ppt_visuals`. Every slide must receive one primary visual: `real_image`, native chart, native diagram, editable table, or data typography. Only `real_image` pages should use `search_open_materials` and `download_open_material`; embed the chosen asset and retain source/license information.
-6. Call `compile_deck_project` only after the Brief confirmation receipt exists. The compiler emits semantic native text, charts, tables, connectors and shapes; photos, paper figures and experiment screenshots are allowed image exceptions. Do not rasterize whole content slides or stretch a Style Pack preview across a slide.
-7. Inspect the returned source/editability/OOXML audit. `needsRevision=true` or any P0/P1 issue means the deck is not deliverable. Fix the affected stable `slideId`, compile again and rerun the audit.
-8. Open the resulting `.pptx` in the existing Agent conversation preview (`FilePreviewDialog` / `PptxScrollViewer`; Office HTML is fallback), not a separate PPT workspace and not a montage substitute. Refresh the same output preview after a slide revision.
-9. When PowerPoint COM is available on Windows, render slides to PNG under the Deck Project `renders/` directory and inspect crop, contrast, overlap, hierarchy and main-visual dominance. If COM or visual review is unavailable, report that honestly rather than claiming a visual pass.
+Use the product-level `generate_pptx_fast` tool when it is available. It accepts a concise title and slide outline and returns a real, editable `.pptx` directly. Missing detail is not a reason to stop: choose sensible defaults and make a previewable first draft.
 
-A deck-wide `mediaCount=0` and `chartCount=0` can still be valid only when diagrams/tables/data typography provide a verified dominant native visual. A plain text-and-shapes template, unrelated stock imagery, card walls, or full-slide raster content is a delivery failure.
-
----
+Only discuss source governance, citation audits, or formal review when the user explicitly asks for a final/submission-ready/audited PowerPoint.
 
 ## Design Ideas
 
