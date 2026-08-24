@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { DeckBrief, DeckSourceLineage, DeckSpec } from '@profer/shared'
 import { createDeckProject, getDeckBriefConfirmationToken, recordDeckBriefConfirmation, writeDeckSourceLineage, writeDeckSpec } from './ppt-deck-project-service'
 import { compileDeckProject } from './ppt-deck-compiler'
+import { auditPptOoxml } from './ppt-oo-xml-audit'
 
 const roots: string[] = []
 afterEach(() => {
@@ -129,6 +130,16 @@ describe('ppt deck compiler', () => {
     expect(notes).toContain('result.md')
     expect(notes).toContain('建议时长')
     expect(notes).toContain('潜在追问')
+
+    const structuralAudit = auditPptOoxml(result.outputPath, {
+      deckSpec: makeSpec(),
+      sourceLineage: makeLineage(),
+    })
+    expect(structuralAudit.slideCount).toBe(5)
+    expect(structuralAudit.slideWidth).toBeCloseTo(13.333, 2)
+    expect(structuralAudit.slideHeight).toBeCloseTo(7.5, 2)
+    expect(structuralAudit.editabilityCoverage).toBeGreaterThan(0.9)
+    expect(structuralAudit.issues.filter((issue) => issue.severity === 'P0')).toEqual([])
   })
 
   test('Cloud Dancer 使用原生几何母题，不把 preview.webp 铺成内容背景', async () => {

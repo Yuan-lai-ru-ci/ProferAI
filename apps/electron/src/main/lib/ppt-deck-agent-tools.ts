@@ -160,7 +160,11 @@ async function compileProject(ctx: PptDeckAgentContext, projectDir: string, opti
   })
   const compiled = await compile(safeProjectDir) as { outputPath?: string }
   if (!compiled.outputPath) throw new Error('Deck compiler 未返回 outputPath')
-  const audit = auditPptDelivery(compiled.outputPath)
+  const compiledSnapshot = await readDeckProject(safeProjectDir)
+  const audit = auditPptDelivery(compiled.outputPath, undefined, {
+    deckSpec: compiledSnapshot.deckSpec,
+    sourceLineage: compiledSnapshot.sourceLineage,
+  })
   writeJsonForDeckProject(safeProjectDir, 'qa/ppt-delivery-audit.json', audit)
   return result({
     schemaVersion: 1,

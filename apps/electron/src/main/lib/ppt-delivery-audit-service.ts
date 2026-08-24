@@ -1,6 +1,8 @@
 import AdmZip from 'adm-zip'
 import { existsSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
+import type { DeckSourceLineage, DeckSpec } from '@profer/shared'
+import { auditPptOoxml, type PptOoxmlAudit, type PptOoxmlIssue } from './ppt-oo-xml-audit'
 
 export type PptHeroVisual = 'real_image' | 'chart' | 'diagram' | 'data_typography'
 
@@ -36,6 +38,15 @@ export interface PptDeliveryAudit {
   needsRevision: boolean
   reasons: string[]
   slides: PptDeliveryAuditSlide[]
+  /** Governed Deck Project 编译后附加；普通旧 PPT 审计保持 undefined。 */
+  editabilityCoverage?: number
+  structuralIssues?: PptOoxmlIssue[]
+  structuralAudit?: PptOoxmlAudit
+}
+
+export interface GovernedPptAuditInput {
+  deckSpec: DeckSpec | unknown
+  sourceLineage: DeckSourceLineage | unknown
 }
 
 const HERO_VISUALS: PptHeroVisual[] = ['real_image', 'chart', 'diagram', 'data_typography']
@@ -77,7 +88,7 @@ export function planPptVisuals(deckIntent: string, slides: Array<{ slideNumber?:
   }
 }
 
-export function auditPptDelivery(filePath: string, visualPlan?: PptVisualPlan): PptDeliveryAudit {
+export function auditPptDelivery(filePath: string, visualPlan?: PptVisualPlan, governed?: GovernedPptAuditInput): PptDeliveryAudit {
   const resolved = resolve(filePath)
   if (extname(resolved).toLowerCase() !== '.pptx') throw new Error('仅支持审计 .pptx 文件')
   if (!existsSync(resolved)) throw new Error(`PPT 文件不存在: ${resolved}`)
@@ -109,7 +120,29 @@ export function auditPptDelivery(filePath: string, visualPlan?: PptVisualPlan): 
   if (mediaCount === 0 && chartCount === 0) reasons.push('整套 PPT 没有嵌入图片或原生图表，属于模板化形状输出')
   if (visualPlan && visualPlan.slides.length !== slides.length) reasons.push('视觉计划页数与实际 PPT 页数不一致')
   for (const slide of slides) reasons.push(...slide.issues.map((issue) => `第 ${slide.slideNumber} 页：${issue}`))
-  return { filePath: resolved, slideCount: slides.length, mediaCount, chartCount, embeddedCount, needsRevision: reasons.length > 0, reasons, slides }
+
+  const structuralAudit = governed ? auditPptOoxml(resolved, governed) : undefined
+  if (structuralAudit) {
+    for (const issue of structuralAudit.issues.filter((item) => item.severity === 'P0' || item.severity === 'P1')) {
+      const prefix = issue.slideNumber ? `第 ${issue.slideNumber} 页` : '整套 PPT'
+      reasons.push(`${prefix} [${issue.code}/${issue.severity}]：${issue.message}`)
+    }
+  }
+  return {
+    filePath: resolved,
+    slideCount: slides.length,
+    mediaCount,
+    chartCount,
+    embeddedCount,
+    needsRevision: reasons.length > 0,
+    reasons,
+    slides,
+    ...(structuralAudit ? {
+      editabilityCoverage: structuralAudit.editabilityCoverage,
+      structuralIssues: structuralAudit.issues,
+      structuralAudit,
+    } : {}),
+  }
 }
 
 export function assertPptDeliveryAccepted(audit: PptDeliveryAudit): void {
