@@ -108,9 +108,10 @@ describe('ppt deck agent tools', () => {
       await injectPptDeckMcpServer(sdk, {}, { sessionId: 's-1', agentCwd: root, allowedRoots: [] })
       const create = tools.find((tool) => tool.name === 'create_deck_project')!
       const createdRaw = await create.execute({ brief: makeBrief() }) as { content: Array<{ text: string }> }
-      const created = JSON.parse(createdRaw.content[0]!.text) as { projectDir: string; state: string; confirmationToken: string }
+      const created = JSON.parse(createdRaw.content[0]!.text) as { projectDir: string; state: string; confirmationToken?: string; confirmation: { armedForSession: boolean } }
       expect(created.state).toBe('awaiting_confirmation')
-      expect(created.confirmationToken).toBeString()
+      expect(created.confirmationToken).toBeUndefined()
+      expect(created.confirmation.armedForSession).toBe(true)
 
       const confirm = tools.find((tool) => tool.name === 'confirm_deck_brief')!
       await expect(confirm.execute({ projectDir: created.projectDir, confirmed: true })).rejects.toThrow('确认')

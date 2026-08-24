@@ -12,6 +12,7 @@ import {
 } from './ppt-deck-project-service'
 import { parseDeckBrief } from './ppt-deck-schema'
 import { auditPptDelivery } from './ppt-delivery-audit-service'
+import { askUserService } from './agent-ask-user-service'
 
 interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -113,15 +114,20 @@ async function createProject(ctx: PptDeckAgentContext, rawBrief: unknown, source
   const project = await createDeckProject({ agentCwd: ctx.agentCwd, brief: parsedBrief })
   if (sourceLineage !== undefined) await writeDeckSourceLineage(project.projectDir, sourceLineage)
   const confirmationToken = await getDeckBriefConfirmationToken(project.projectDir)
+  askUserService.armDeckBriefConfirmation(ctx.sessionId, {
+    kind: 'deck-brief',
+    projectDir: project.projectDir,
+    confirmationToken,
+  })
   return result({
     schemaVersion: 1,
     projectDir: project.projectDir,
     deckId: project.deckId,
     state: 'awaiting_confirmation',
-    confirmationToken,
     confirmation: {
       kind: 'deck-brief',
-      instruction: '调用 AskUserQuestion 展示 Deck Brief，并将此 token 作为受管 proferConfirmation metadata 传入；不要把 token 展示给用户。',
+      armedForSession: true,
+      instruction: '调用普通 AskUserQuestion 展示 Deck Brief，并提供精确选项“确认 Deck Brief”；一次性 token 由主进程内部保管，不会返回给 Agent 或 renderer。',
     },
     next: '先由用户确认 Deck Brief；确认收据写入后才能调用 compile_deck_project。',
   })

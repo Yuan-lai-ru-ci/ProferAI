@@ -62,6 +62,13 @@ interface PendingAskUser {
 export class AgentAskUserService {
   /** 待处理的 AskUser 请求 Map（requestId → PendingAskUser） */
   private pendingRequests = new Map<string, PendingAskUser>()
+  /** Deck Project 创建后由主进程按会话暂存；不暴露给 Agent 或 renderer。 */
+  private armedDeckConfirmations = new Map<string, ProferAskUserConfirmation>()
+
+  armDeckBriefConfirmation(sessionId: string, confirmation: ProferAskUserConfirmation): void {
+    if (!sessionId.trim() || confirmation.kind !== 'deck-brief') throw new Error('无效的 Deck Brief 确认上下文')
+    this.armedDeckConfirmations.set(sessionId, confirmation)
+  }
 
   /**
    * 处理 AskUserQuestion 工具调用
@@ -78,7 +85,9 @@ export class AgentAskUserService {
     const questions = this.parseQuestions(input)
 
     const requestId = randomUUID()
-    const confirmation = parseDeckBriefConfirmation(input.proferConfirmation)
+    const explicitConfirmation = parseDeckBriefConfirmation(input.proferConfirmation)
+    const hasConfirmationOption = questions.some((question) => question.options.some((option) => option.label === DECK_BRIEF_CONFIRMATION_LABEL))
+    const confirmation = explicitConfirmation ?? (hasConfirmationOption ? this.armedDeckConfirmations.get(sessionId) : undefined)
     const rendererToolInput = { ...input }
     delete rendererToolInput.proferConfirmation
     const request: AskUserRequest = {
@@ -122,6 +131,7 @@ export class AgentAskUserService {
           confirmationToken: pending.confirmation.confirmationToken,
           requestId,
         })
+        this.armedDeckConfirmations.delete(sessionId)
       } catch (error) {
         pending.resolve({
           behavior: 'deny',
@@ -155,6 +165,7 @@ export class AgentAskUserService {
    * 清除指定会话的所有待处理 AskUser 请求
    */
   clearSessionPending(sessionId: string): void {
+    this.armedDeckConfirmations.delete(sessionId)
     for (const [requestId, pending] of this.pendingRequests) {
       if (pending.request.sessionId === sessionId) {
         pending.resolve({ behavior: 'deny', message: '会话已结束' })

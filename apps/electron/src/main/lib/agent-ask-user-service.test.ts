@@ -85,6 +85,29 @@ describe('AgentAskUserService', () => {
     await expect(readDeckProject(project.projectDir)).resolves.toMatchObject({ brief: { state: 'confirmed' } })
   })
 
+  test('会话级受管确认不要求 Agent/renderer 传 token，普通 AskUser schema 即可完成确认', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'profer-ask-user-'))
+    tempRoots.push(root)
+    const project = await createDeckProject({ agentCwd: root, brief: makeBrief() })
+    const token = await getDeckBriefConfirmationToken(project.projectDir)
+    const service = new AgentAskUserService()
+    service.armDeckBriefConfirmation('session-armed', { kind: 'deck-brief', projectDir: project.projectDir, confirmationToken: token })
+
+    const result = service.handleAskUserQuestion(
+      'session-armed',
+      { questions: [{ question: '请确认 Deck Brief', options: [{ label: '确认 Deck Brief' }, { label: '修改方向' }] }] },
+      new AbortController().signal,
+      (request) => {
+        expect(JSON.stringify(request)).not.toContain(token)
+        expect(JSON.stringify(request)).not.toContain(project.projectDir)
+        void service.respondToAskUser(request.requestId, { '请确认 Deck Brief': '确认 Deck Brief' })
+      },
+    )
+
+    await expect(result).resolves.toMatchObject({ behavior: 'allow' })
+    expect((await readDeckProject(project.projectDir)).brief.state).toBe('confirmed')
+  })
+
   test('选择修改、伪造 token 或 Abort 都不能确认 Brief', async () => {
     const root = mkdtempSync(join(tmpdir(), 'profer-ask-user-'))
     tempRoots.push(root)

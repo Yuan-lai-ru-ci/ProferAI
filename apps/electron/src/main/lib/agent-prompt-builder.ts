@@ -423,7 +423,15 @@ Context 用来承载正在进行的任务状态、长期工作区资料和可搜
 9. **AI 生图**：当实际工具列表包含 \`generate_image\` 时，用户要求画画、生成图片、P 图、修图等应直接调用该工具；需要编辑时仅可传入当前会话工作目录或用户已授权附加目录内的本地 PNG/JPEG/GIF/WebP 路径。用户说“修改上一张图”时，使用 \`useLastGeneratedImage: true\`，它只指本当前会话中最近一张成功的 Agent 生成图，不能与 \`referenceImagePaths\` 同时传入，也不适用于用户上传图、\`send_local_image\` 或其他会话的图片。工具结果会返回图片附件标记，必须在最终回复中原样保留。若 \`generate_image\` 不在实际工具列表中，明确告知用户在设置中启用并登录/配置 GPT Image（官方模式或自带 Key）后重试。不要尝试用代码、ASCII art 等伪造图片。`)
 
   if (ctx.pptCapabilityActive) {
-    sections.push(`10. **PPT 视觉交付门禁**：当前会话已激活 PPT 能力。用户要求创建或重做多页 PPT 时，不能直接套模板。必须先调用 \`plan_ppt_visuals\` 生成逐页视觉计划；每页要有真实图片、图表、图解或数据大字之一作为主视觉。计划为 \`real_image\` 的页面必须调用 \`search_open_materials\`，再用 \`download_open_material\` 下载与叙事直接相关的素材并真正嵌入 PPT；找不到合适图片时，改用图表、图解或数据主视觉并说明原因，不能用无关库存图或卡片墙替代。PPT 生成后必须调用 \`audit_ppt_delivery\`：若返回 \`needsRevision=true\`，继续修订，不得把该文件交付给用户。Deck Brief 未获得用户确认收据前，不得编译或写出最终 PPTX。保留素材来源页、许可和署名信息。`)
+    sections.push(`10. **PPT 视觉交付门禁**：当前会话已激活受管 PPT 能力。创建、重做或继续修改学生多页 PPT 时，必须按顺序执行：
+   1. 先用 \`inspect_deck_sources\` 检查用户指定材料与授权目录，综合显式版本/日期、内容关系和用户确认处理 \`current / superseded / historical / conflicted / unknown\`；不得只按 mtime，也不得把旧稿和最新版混用。冲突无法可靠裁决时必须追问。
+   2. 结合用户当下要求、相关工作区文件与长期记忆动态追问；通常 3–6 轮，每轮只问信息增益最高的问题。先形成 Deck Brief，包含受众、场合、时长、目标、核心论点、采用/排除/冲突来源、预计页数、引用/Notes 策略与推荐 Style Pack。
+   3. 调用 \`create_deck_project\` 创建会话级项目。随后使用普通 \`AskUserQuestion\` 展示 Brief 和固定 Style Pack 缩略图，必须提供精确选项“确认 Deck Brief”；确认凭据由主进程按会话保管，不能自己写 \`confirmed: true\` 或在文件中伪造 receipt。未获确认不得调用 \`compile_deck_project\`。
+   4. 每页 Deck Spec 必须有稳定 \`slideId\`、单一 claim、具体 evidenceRefs、visualRole、受 Style Pack 允许的 layoutIntent、密度预算、可编辑对象、Speaker Notes 和引用；来源须绑定版本、locator 与 SHA-256。
+   5. 生成前用 \`plan_ppt_visuals\` 规划逐页主视觉；真实图片页才搜索/下载并嵌入相关开放许可素材，找不到合适图片时改用原生图表、图解或数据主视觉，不能用无关库存图、卡片墙或整页图片伪装可编辑 PPT。
+   6. 调用 \`compile_deck_project\` 后检查工具返回的结构/来源/可编辑性 audit；P0/P1 或 \`needsRevision=true\` 必须按 \`slideId\` 修订并重新编译，不能直接交付。
+   7. 编译成功后把 \`output/*.pptx\` 交给当前 Agent 对话已有的 Office 预览链路（\`FilePreviewDialog → PptxScrollViewer\`，失败时 Office HTML fallback），不要新建独立 PPT 工作台，也不要把 PNG montage 当最终 PPTX 预览替代品。用户说“修改第 N 页”时更新稳定 slideId 并刷新同一输出预览。
+   8. Windows 有 PowerPoint COM 时额外渲染 PNG 写入项目 \`renders/\` 作为 QA 证据；COM 不可用时如实报告，不能声称完成视觉模型评审。保留素材来源页、许可和署名信息。`)
   }
 
   sections.push(`## Profer 受管浏览器

@@ -2,7 +2,7 @@
 name: pptx
 description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.0.2"
+version: "1.1.0"
 ---
 
 # PPTX Skill
@@ -51,18 +51,21 @@ Use when no template or reference presentation is available.
 
 **补充能力**：pptxgenjs 做不了的组合图/双 Y 轴/精细图表，用 `scripts/chartlib.py`（python-pptx 封装 84 种图表），见 [scripts/chartlib.md](scripts/chartlib.md)；渐变背景用 `scripts/gradient.js`。
 
-## Visual Delivery Gate (Required)
+## Governed Student Deck Workflow (Required)
 
-A deck is not complete because a `.pptx` file exists. For multi-slide generation, run this sequence before final delivery:
+A deck is not complete because a `.pptx` file exists. When the session exposes the governed Deck Project tools, use the following workflow before delivery:
 
-1. Call `plan_ppt_visuals` with the deck intent and page outline. Every slide must receive one primary visual: `real_image`, `chart`, `diagram`, or `data_typography`.
-2. For `real_image` pages, call `search_open_materials`, choose a result that directly supports the page narrative, then call `download_open_material`. Embed the downloaded asset into the PPT, not merely the source link. Keep title, source page, license, and attribution beside the generated deck in `materials.json`.
-3. If a relevant real image does not exist, change that page to a data, chart, or diagram visual and state the reason in the plan. Do not fill it with unrelated stock imagery or a card wall.
-4. Generate the PPT.
-5. Call `audit_ppt_delivery` with the output path and the visual plan. `needsRevision: true` means the deck is not deliverable. Fix the reported pages and audit again.
-6. Render the PPT with real PowerPoint when available and inspect the resulting slide images. Check crop, contrast, overlap, hierarchy, and whether the planned hero visual actually dominates the page.
+1. Call `inspect_deck_sources` for user-selected workspace materials. Treat `current`, `superseded`, `historical`, `conflicted`, and `unknown` as distinct states. Explicit versions/dates, content relationships and user confirmation outrank `mtime`; unresolved conflicts require a question.
+2. Dynamically clarify audience, occasion, duration, goal, claim boundary, evidence gaps and visual preference. Build a Deck Brief rather than using a fixed form.
+3. Call `create_deck_project`, then show the Brief and the fixed Style Pack previews with a normal `AskUserQuestion`. Include the exact option `确认 Deck Brief`. The main process stores the one-time confirmation credential; never fake `confirmed: true` or edit receipt fields.
+4. Every slide in the Deck Spec must carry a stable `slideId`, one claim, concrete `evidenceRefs`, a `visualRole`, Style-Pack-approved `layoutIntent`, density budget, editable object list, citations and Speaker Notes.
+5. Call `plan_ppt_visuals`. Every slide must receive one primary visual: `real_image`, native chart, native diagram, editable table, or data typography. Only `real_image` pages should use `search_open_materials` and `download_open_material`; embed the chosen asset and retain source/license information.
+6. Call `compile_deck_project` only after the Brief confirmation receipt exists. The compiler emits semantic native text, charts, tables, connectors and shapes; photos, paper figures and experiment screenshots are allowed image exceptions. Do not rasterize whole content slides or stretch a Style Pack preview across a slide.
+7. Inspect the returned source/editability/OOXML audit. `needsRevision=true` or any P0/P1 issue means the deck is not deliverable. Fix the affected stable `slideId`, compile again and rerun the audit.
+8. Open the resulting `.pptx` in the existing Agent conversation preview (`FilePreviewDialog` / `PptxScrollViewer`; Office HTML is fallback), not a separate PPT workspace and not a montage substitute. Refresh the same output preview after a slide revision.
+9. When PowerPoint COM is available on Windows, render slides to PNG under the Deck Project `renders/` directory and inspect crop, contrast, overlap, hierarchy and main-visual dominance. If COM or visual review is unavailable, report that honestly rather than claiming a visual pass.
 
-A deck-wide `mediaCount=0` and `chartCount=0` is a template-output failure, not a valid minimalist design. Do not ship it.
+A deck-wide `mediaCount=0` and `chartCount=0` can still be valid only when diagrams/tables/data typography provide a verified dominant native visual. A plain text-and-shapes template, unrelated stock imagery, card walls, or full-slide raster content is a delivery failure.
 
 ---
 

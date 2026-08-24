@@ -90,11 +90,12 @@ describe('buildPiTaskPrompt', () => {
     const prompt = buildPiTaskPrompt({
       basePrompt: BASE_PROMPT,
       userMessage: '打开 https://example.com，整理后做成一个 .pptx 演示文稿。',
-      toolNames: ['BrowserObserve', 'plan_ppt_visuals', 'audit_ppt_delivery'],
+      toolNames: ['BrowserObserve', 'inspect_deck_sources', 'create_deck_project', 'confirm_deck_brief', 'compile_deck_project', 'plan_ppt_visuals', 'audit_ppt_delivery'],
       pptCapabilityActive: true,
     })
 
     expect(prompt).toContain('BROWSER_RULES')
+    expect(prompt).toContain('PPT_VISUAL_GATE')
     expect(prompt).toContain('PPT_VISUAL_GATE')
     expect(prompt).not.toContain('AUTOMATION_RULES')
     expect(prompt).not.toContain('COLLABORATION_RULES')

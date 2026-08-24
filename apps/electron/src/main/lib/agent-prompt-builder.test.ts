@@ -38,6 +38,8 @@ describe('buildSystemPrompt', () => {
       pptCapabilityActive: false,
     })
     expect(prompt).not.toContain('PPT 视觉交付门禁')
+    expect(prompt).not.toContain('inspect_deck_sources')
+    expect(prompt).not.toContain('PptxScrollViewer')
   })
 
   test('PPT 能力激活后注入 PPT 专用长门禁', () => {
@@ -49,6 +51,12 @@ describe('buildSystemPrompt', () => {
       pptCapabilityActive: true,
     })
     expect(prompt).toContain('PPT 视觉交付门禁')
+    expect(prompt).toContain('inspect_deck_sources')
+    expect(prompt).toContain('current / superseded / historical / conflicted / unknown')
+    expect(prompt).toContain('确认 Deck Brief')
+    expect(prompt).toContain('compile_deck_project')
+    expect(prompt).toContain('FilePreviewDialog → PptxScrollViewer')
+    expect(prompt).toContain('slideId')
   })
 
   test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
