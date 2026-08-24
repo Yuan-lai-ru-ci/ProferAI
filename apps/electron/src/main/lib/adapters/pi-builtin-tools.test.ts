@@ -285,12 +285,18 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, {
       ...baseCtx,
+      agentCwd: 'C:/safe/session',
+      allowedRoots: ['C:/safe/attached'],
       pptCapabilityActive: true,
     })
     const names = tools.map((tool) => tool.name)
     expect(names).toContain('plan_ppt_visuals')
     expect(names).toContain('audit_ppt_delivery')
     expect(names).toContain('search_open_materials')
+    expect(names).toContain('inspect_deck_sources')
+    expect(names).toContain('create_deck_project')
+    expect(names).toContain('confirm_deck_brief')
+    expect(names).toContain('compile_deck_project')
   })
 
   test('Given no disabled groups Then all four groups are registered', async () => {

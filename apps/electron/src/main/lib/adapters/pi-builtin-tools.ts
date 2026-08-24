@@ -69,6 +69,7 @@ import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
 import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
+import { buildPiPptDeckTools } from '../ppt-deck-agent-tools'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
 import { generateAgentGptImage } from '../agent-gpt-image-service'
@@ -1405,8 +1406,16 @@ export async function buildPiBuiltinTools(
   if (ctx.pptCapabilityActive === true) {
     try {
       tools.push(...buildPiPptMaterialTools(sdk, ctx))
+      if (ctx.agentCwd) {
+        tools.push(...buildPiPptDeckTools(sdk, {
+          sessionId: ctx.sessionId,
+          agentCwd: ctx.agentCwd,
+          allowedRoots: ctx.allowedRoots ?? [],
+          workspaceSlug: ctx.workspaceSlug,
+        }) as unknown as ToolDefinition[])
+      }
     } catch (error) {
-      console.error('[Pi 桥接] 注入开放许可 PPT 素材工具失败:', error)
+      console.error('[Pi 桥接] 注入开放许可 PPT / Deck Project 工具失败:', error)
     }
   }
 

@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import type { DeckBrief, DeckProjectManifest, DeckProjectState, DeckSpec } from '@profer/shared'
-import { parseDeckBrief } from './ppt-deck-schema'
+import { parseDeckBrief, parseSourceLineage } from './ppt-deck-schema'
 
 const DECK_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const CONFIRMATION_TOKEN_RE = /^[A-Za-z0-9_-]{32,}$/
@@ -325,6 +325,14 @@ export async function writeDeckSpec(projectDir: string, spec: DeckSpec): Promise
   const deckId = typeof current.deckId === 'string' ? current.deckId : undefined
   if (spec.deckId !== deckId) throw new DeckProjectError('DECK_PROJECT_INVALID_INPUT', 'Deck Spec deckId 与项目不一致', { projectDir: safeProjectDir, file: 'deck-spec.json' })
   writeJsonAtomic(safeProjectDir, 'deck-spec.json', spec)
+}
+
+export async function writeDeckSourceLineage(projectDir: string, lineage: unknown): Promise<void> {
+  const safeProjectDir = validateProjectPath(projectDir)
+  ensureRequiredFiles(safeProjectDir)
+  const parsed = parseSourceLineage(lineage)
+  writeJsonAtomic(safeProjectDir, 'source-lineage.json', parsed)
+  writeJsonAtomic(safeProjectDir, 'sources.json', { schemaVersion: 1, sources: parsed.sources })
 }
 
 /** Issue a one-time high entropy token; only its SHA-256 is persisted. */

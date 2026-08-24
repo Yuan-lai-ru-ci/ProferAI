@@ -155,6 +155,7 @@ import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
 import { injectPptMaterialMcpServer } from './ppt-material-agent-tools'
+import { injectPptDeckMcpServer } from './ppt-deck-agent-tools'
 import { evaluatePptCapability } from './ppt-capability-gate'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
 import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
@@ -1121,6 +1122,18 @@ export class AgentOrchestrator {
         }
       }
       const mcpServers = this.buildMcpServers(workspaceSlug, sessionPreset.mcpServerNames)
+      const pptAllowedRoots = [
+        ...new Set(
+          [
+            workspaceId ? agentCwd : undefined,
+            ...collectAttachedDirectories({
+              extraDirs: additionalDirectories,
+              sessionMeta,
+              workspaceSlug,
+            }),
+          ].filter((root): root is string => typeof root === 'string' && root.length > 0),
+        ),
+      ]
       if (!disabledToolGroups.has('automation')) {
         await injectAutomationMcpServer(
           sdk,
@@ -1177,6 +1190,12 @@ export class AgentOrchestrator {
       }
       if (pptCapabilityActive) {
         await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
+        await injectPptDeckMcpServer(sdk, mcpServers, {
+          sessionId,
+          agentCwd,
+          allowedRoots: pptAllowedRoots,
+          workspaceSlug,
+        })
       }
       // 本地图片输出只在受工作区授权的会话注册；没有 workspace 的 cwd 是 homedir，不能默认授权整个用户目录。
       const imageOutputAllowedRoots = workspaceSlug && agentCwd
