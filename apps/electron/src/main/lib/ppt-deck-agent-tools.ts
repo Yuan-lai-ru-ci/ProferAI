@@ -8,8 +8,10 @@ import {
   readDeckProject,
   recordDeckBriefConfirmation,
   writeDeckSourceLineage,
+  writeJsonForDeckProject,
 } from './ppt-deck-project-service'
 import { parseDeckBrief } from './ppt-deck-schema'
+import { auditPptDelivery } from './ppt-delivery-audit-service'
 
 interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -152,14 +154,23 @@ async function compileProject(ctx: PptDeckAgentContext, projectDir: string, opti
   const safeProjectDir = assertSessionProject(ctx, projectDir)
   // 确认门禁必须在 compiler 之前执行，未确认时不会加载/运行编译器。
   await assertDeckCompilable(safeProjectDir)
-  if (!options.compile) throw new Error('Deck compiler 尚未接入；项目已通过确认门禁，请稍后重试')
-  const compiled = await options.compile(safeProjectDir)
+  const compile = options.compile ?? (async (dir: string) => {
+    const { compileDeckProject } = await import('./ppt-deck-compiler')
+    return compileDeckProject(dir)
+  })
+  const compiled = await compile(safeProjectDir) as { outputPath?: string }
+  if (!compiled.outputPath) throw new Error('Deck compiler 未返回 outputPath')
+  const audit = auditPptDelivery(compiled.outputPath)
+  writeJsonForDeckProject(safeProjectDir, 'qa/ppt-delivery-audit.json', audit)
   return result({
     schemaVersion: 1,
     projectDir: safeProjectDir,
     state: 'compiled',
     result: compiled,
-    next: '调用内置 PPTX 预览并运行 source/editability QA。',
+    audit,
+    next: audit.needsRevision
+      ? '审计发现问题，先按 slideId 修订并重新编译，再打开预览。'
+      : '打开内置 PPTX 预览并继续 source/editability QA。',
   })
 }
 

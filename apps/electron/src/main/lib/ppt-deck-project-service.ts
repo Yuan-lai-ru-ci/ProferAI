@@ -335,6 +335,32 @@ export async function writeDeckSourceLineage(projectDir: string, lineage: unknow
   writeJsonAtomic(safeProjectDir, 'sources.json', { schemaVersion: 1, sources: parsed.sources })
 }
 
+/** Internal compiler/project service helper; validates the project path before writing. */
+export function writeJsonForDeckProject(projectDir: string, file: string, value: unknown): void {
+  const safeProjectDir = validateProjectPath(projectDir)
+  writeJsonAtomic(safeProjectDir, file, value)
+}
+
+export async function markDeckProjectCompiled(projectDir: string, details: {
+  outputPath: string
+  outputHash: string
+  recompiledSlideIds: string[]
+  reusedSlideIds: string[]
+}): Promise<void> {
+  const snapshot = await assertDeckCompilable(projectDir)
+  const compiledBrief: DeckBrief = { ...snapshot.brief, state: 'compiled' }
+  writeJsonAtomic(snapshot.manifest.projectDir, 'brief.json', compiledBrief)
+  writeJsonAtomic(snapshot.manifest.projectDir, 'context-manifest.json', {
+    ...snapshot.contextManifest,
+    state: 'compiled',
+    outputPath: details.outputPath,
+    outputHash: details.outputHash,
+    compiledAt: new Date().toISOString(),
+    recompiledSlideIds: details.recompiledSlideIds,
+    reusedSlideIds: details.reusedSlideIds,
+  })
+}
+
 /** Issue a one-time high entropy token; only its SHA-256 is persisted. */
 export async function getDeckBriefConfirmationToken(projectDir: string): Promise<string> {
   const snapshot = await readDeckProject(projectDir)

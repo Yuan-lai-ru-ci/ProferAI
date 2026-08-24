@@ -201,6 +201,19 @@ export function getPptStylePack(id: string, options: PptStylePackServiceOptions 
   return buildPack(join(resourceRoot, id), id, options)
 }
 
+/** 编译器只读取受控设计契约，不注册 preview URL，也不会接触用户自定义路径。 */
+export function getPptStylePackDefinition(id: string, options: Pick<PptStylePackServiceOptions, 'resourceRoot'> = {}): PptStylePackDefinition {
+  if (!EXPECTED_PACK_IDS.includes(id as PptStylePackId)) throw new Error(`未知 Style Pack: ${id}`)
+  const resourceRoot = resolve(options.resourceRoot ?? getBuiltinStylePackRoot())
+  const packDir = join(resourceRoot, id)
+  const definition = readDefinition(packDir, id)
+  const previewPath = resolve(packDir, definition.preview.asset)
+  if (!isPathInside(packDir, previewPath) || !existsSync(previewPath) || !statSync(previewPath).isFile()) {
+    throw new Error(`Style Pack 预览资源不存在或越界: ${id}`)
+  }
+  return definition
+}
+
 /** 仅用于诊断和测试：返回当前 Style Pack 资源的相对 preview 路径，不暴露给 Agent。 */
 export function getPptStylePackPreviewAssetPath(id: string, options: PptStylePackServiceOptions = {}): string {
   const pack = getPptStylePack(id, { ...options, registerPreviewPath: (path) => path })
