@@ -1,15 +1,13 @@
 import * as React from 'react'
 import { useStore } from 'jotai'
 import { toast } from 'sonner'
-import { ChevronRight, Copy, Loader2 } from 'lucide-react'
+import { Copy, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore, resolveRelativeToAbsolute } from '@/lib/file-utils'
 import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
-import { LONG_PRESS_DURATION } from '@/components/agent/ContextUsageBadge'
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { FileSearchCandidateResult } from '@profer/shared'
 
@@ -74,23 +72,13 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   const store = useStore()
   const openPreview = useOpenPreview()
   const [fileStatus, setFileStatus] = React.useState<'idle' | 'resolved' | 'pending' | 'broken'>('idle')
-  const [showRawPath, setShowRawPath] = React.useState(false)
   const [candidates, setCandidates] = React.useState<string[]>([])
   const [selectedPath, setSelectedPath] = React.useState<string>()
   /** candidates / selectedPath 当前归属的缓存键，防止组件复用时旧路径状态污染新路径。 */
   const [stateCacheKey, setStateCacheKey] = React.useState<string>()
   const [searching, setSearching] = React.useState(false)
-  const [deepCandidateMenuOpen, setDeepCandidateMenuOpen] = React.useState(false)
-  const [deepMenuAnchor, setDeepMenuAnchor] = React.useState<{ x: number; y: number }>()
-  const [longPressProgress, setLongPressProgress] = React.useState(0)
-  const [longPressDirection, setLongPressDirection] = React.useState<'left' | 'right'>('left')
   const requestIdRef = React.useRef<string>()
   const cancelledRequestsRef = React.useRef(new Set<string>())
-  const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
-  const longPressFrameRef = React.useRef<number>()
-  const longPressStartedAtRef = React.useRef<number>()
-  const longPressButtonRef = React.useRef<0 | 2>()
-  const longPressTriggeredRef = React.useRef(false)
 
   const candidateBases = React.useMemo(() => {
     if (basePaths && basePaths.length > 0) return basePaths.filter(Boolean)
@@ -115,7 +103,6 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     setSelectedPath(undefined)
     setStateCacheKey(cacheKey)
     setFileStatus('idle')
-    setDeepCandidateMenuOpen(false)
 
     const cached = fileSearchCache.get(cacheKey)
     if (!cached) return
@@ -190,7 +177,6 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
         } else {
           setFileStatus('resolved')
         }
-        if (mode === 'deep') setDeepCandidateMenuOpen(true)
         if (!openOnFound) toast.info('没有更多同名文件')
         return
       }
@@ -198,7 +184,6 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
       const previewPath = selectedPath ?? newPaths[0]!
       if (!selectedPath) setSelectedPath(previewPath)
       setFileStatus('resolved')
-      if (mode === 'deep') setDeepCandidateMenuOpen(true)
       if (openOnFound) openPreviewPath(previewPath)
     } catch (error) {
       if (requestIdRef.current !== requestId || cancelledRequestsRef.current.has(requestId)) return
@@ -222,7 +207,6 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
   }, [])
 
   React.useEffect(() => () => {
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
     const requestId = requestIdRef.current
     if (requestId) {
       cancelledRequestsRef.current.add(requestId)
@@ -236,48 +220,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
       .catch(() => toast.error('复制路径失败'))
   }, [displayPath])
 
-  const clearLongPress = React.useCallback(() => {
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
-    longPressTimerRef.current = undefined
-    if (longPressFrameRef.current !== undefined) cancelAnimationFrame(longPressFrameRef.current)
-    longPressFrameRef.current = undefined
-    longPressStartedAtRef.current = undefined
-    longPressButtonRef.current = undefined
-    setLongPressProgress(0)
-  }, [])
-
-  const handleChipPointerDown = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    if ((event.button !== 0 && event.button !== 2) || searching) return
-    longPressTriggeredRef.current = false
-    longPressButtonRef.current = event.button
-    setLongPressDirection(event.button === 0 ? 'left' : 'right')
-    const duration = Math.round(LONG_PRESS_DURATION * 0.65)
-    if (event.button === 0) setDeepMenuAnchor({ x: event.clientX + 10, y: event.clientY + 10 })
-    const startedAt = performance.now()
-    longPressStartedAtRef.current = startedAt
-    const updateProgress = (now: number): void => {
-      if (longPressStartedAtRef.current !== startedAt || longPressTriggeredRef.current) return
-      const progress = Math.min(1, (now - startedAt) / duration)
-      setLongPressProgress(progress)
-      if (progress < 1) longPressFrameRef.current = requestAnimationFrame(updateProgress)
-    }
-    longPressFrameRef.current = requestAnimationFrame(updateProgress)
-    longPressTimerRef.current = setTimeout(() => {
-      const button = longPressButtonRef.current
-      longPressTriggeredRef.current = true
-      clearLongPress()
-      longPressTriggeredRef.current = true
-      if (button === 0) void startSearch('deep', false)
-      if (button === 2) setShowRawPath((current) => !current)
-    }, duration)
-  }, [clearLongPress, copyDisplayPath, searching, startSearch])
-
   const handleChipClick = React.useCallback(() => {
-    if (longPressTriggeredRef.current) {
-      longPressTriggeredRef.current = false
-      return
-    }
-
     // 工具调用和本轮文件名映射已提供绝对路径时，它就是唯一可靠的预览目标。
     // 不能先按文件名做浅层候选搜索：深层源码常超出浅搜深度，且同名文件会被错误选中。
     // 相对路径仍沿用候选搜索，保留“Agent 只提到裸文件名”时的按需定位能力。
@@ -303,11 +246,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const handleChipContextMenu = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
-    if (longPressTriggeredRef.current) {
-      longPressTriggeredRef.current = false
-      return
-    }
-    // 右键短按复制完整路径；右键长按才切换显示模式。
+    // 右键复制完整路径。
     copyDisplayPath()
   }, [copyDisplayPath])
 
@@ -322,28 +261,21 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
 
   const chipClassName = cn(
     'relative inline-flex max-w-full items-center gap-1 overflow-hidden rounded border px-1.5 py-[2px] text-[12px] font-medium leading-[1.6] align-baseline not-prose',
-    showRawPath ? 'border-border/70 bg-muted/30 text-foreground/80' : fileStatus === 'broken' ? 'border-dashed border-muted-foreground/30 text-muted-foreground' : fileStatus === 'pending' ? 'border-border/50 bg-muted/40 text-muted-foreground' : 'border-primary/20 bg-primary/10 text-primary',
+    fileStatus === 'broken' ? 'border-dashed border-muted-foreground/30 text-muted-foreground' : fileStatus === 'pending' ? 'border-border/50 bg-muted/40 text-muted-foreground' : 'border-primary/20 bg-primary/10 text-primary',
     className,
   )
-  const chipProgressStyle = longPressProgress > 0 ? {
-    backgroundImage: `linear-gradient(${longPressDirection === 'left' ? 90 : 270}deg, hsl(var(--primary) / 0.24) ${longPressProgress * 100}%, transparent ${longPressProgress * 100}%)`,
-  } : undefined
-
   return (
-    <span className={chipClassName} style={chipProgressStyle}>
+    <span className={chipClassName}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={handleChipClick}
             onContextMenu={handleChipContextMenu}
-            onPointerDown={handleChipPointerDown}
-            onPointerUp={clearLongPress}
-            onPointerCancel={clearLongPress}
-            onPointerLeave={clearLongPress}
             className="relative z-[1] inline-flex min-w-0 max-w-full items-center gap-1 bg-transparent p-0 text-inherit outline-none"
           >
-            {showRawPath ? <span className="whitespace-normal break-all">{displayPath}{lineColSuffix}</span> : <><FileTypeIcon name={filename} isDirectory={false} size={14} /><span className="truncate">{filename}{lineColSuffix}</span></>}
+            <FileTypeIcon name={filename} isDirectory={false} size={14} />
+            <span className="truncate">{filename}{lineColSuffix}</span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="top" align="center" sideOffset={10} className="max-w-[min(520px,calc(100vw-32px))] p-2">
@@ -358,32 +290,10 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
               <Copy className="size-3.5" />
             </button>
           </div>
-          <p className="mt-1 text-tooltip-muted">左键搜索并预览 左键长按深度搜索 右键复制路径 右键长按切换显示</p>
+          <p className="mt-1 text-tooltip-muted">左键搜索并预览 右键复制路径</p>
         </TooltipContent>
       </Tooltip>
       {searching && <Loader2 className="relative z-[1] size-3.5 shrink-0 animate-spin text-muted-foreground" />}
-      <Popover open={deepCandidateMenuOpen} onOpenChange={setDeepCandidateMenuOpen}>
-        <PopoverAnchor asChild>
-          <span
-            aria-hidden="true"
-            className="pointer-events-none fixed size-px"
-            style={{ left: deepMenuAnchor?.x ?? 0, top: deepMenuAnchor?.y ?? 0 }}
-          />
-        </PopoverAnchor>
-        <PopoverContent side="bottom" align="start" sideOffset={8} className="w-auto max-w-[min(520px,calc(100vw-32px))] p-1">
-          {candidates.length === 0 ? <p className="px-2 py-1.5 text-xs text-muted-foreground">暂无已找到的候选</p> : candidates.map((path) => (
-            <button
-              key={normalizeCandidatePath(path)}
-              type="button"
-              onClick={() => { setSelectedPath(path); setFileStatus('resolved'); setDeepCandidateMenuOpen(false) }}
-              className="flex w-full items-start gap-1 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-            >
-              <ChevronRight className="mt-0.5 size-3 shrink-0" />
-              <span className="whitespace-normal break-all">{path}</span>
-            </button>
-          ))}
-        </PopoverContent>
-      </Popover>
     </span>
   )
 }
