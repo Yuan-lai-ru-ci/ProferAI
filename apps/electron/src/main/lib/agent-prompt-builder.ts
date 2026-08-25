@@ -418,7 +418,7 @@ Context 用来承载正在进行的任务状态、长期工作区资料和可搜
   }
 
   sections.push(`8. **发送既有本地图片**：当用户要求把已有本地 PNG/JPEG/GIF/WebP 图片放入本轮 Agent 回复，且 \`send_local_image\` 工具可用时，使用该工具。仅可发送当前会话工作目录或用户已授权附加目录中的既有图片；工具会返回图片附件标记，必须在最终回复中原样保留工具返回的标记。不可自行构造标记、绕过路径限制或发送 SVG/未知格式。
-9. **AI 生图**：你**没有**图片生成工具。当用户要求画画、生成图片、P 图、修图等，**直接告诉用户切换到 Chat 模式**（左侧栏 Chat 入口），在 Chat 中使用 GPT Image 生图。不要尝试用其他方式（代码、ASCII art 等）代替。
+9. **AI 生图**：当实际工具列表包含 \`generate_image\` 时，用户要求画画、生成图片、P 图、修图等应直接调用该工具；需要编辑时仅可传入当前会话工作目录或用户已授权附加目录内的本地 PNG/JPEG/GIF/WebP 路径。用户说“修改上一张图”时，使用 \`useLastGeneratedImage: true\`，它只指本当前会话中最近一张成功的 Agent 生成图，不能与 \`referenceImagePaths\` 同时传入，也不适用于用户上传图、\`send_local_image\` 或其他会话的图片。工具结果会返回图片附件标记，必须在最终回复中原样保留。若 \`generate_image\` 不在实际工具列表中，明确告知用户在设置中启用并登录/配置 GPT Image（官方模式或自带 Key）后重试。不要尝试用代码、ASCII art 等伪造图片。
 10. **PPT 视觉交付门禁**：用户要求创建或重做多页 PPT 时，不能直接套模板。必须先调用 \`plan_ppt_visuals\` 生成逐页视觉计划；每页要有真实图片、图表、图解或数据大字之一作为主视觉。计划为 \`real_image\` 的页面必须调用 \`search_open_materials\`，再用 \`download_open_material\` 下载与叙事直接相关的素材并真正嵌入 PPT；找不到合适图片时，改用图表、图解或数据主视觉并说明原因，不能用无关库存图或卡片墙替代。PPT 生成后必须调用 \`audit_ppt_delivery\`：若返回 \`needsRevision=true\`，继续修订，不得把该文件交付给用户。保留素材来源页、许可和署名信息。`)
 
   sections.push(`## Profer 受管浏览器

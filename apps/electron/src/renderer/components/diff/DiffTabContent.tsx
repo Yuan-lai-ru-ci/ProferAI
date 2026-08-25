@@ -26,6 +26,7 @@ import { PreviewFindBar } from './PreviewFindBar'
 import { MarkdownToc } from './MarkdownToc'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PIERRE_FILE_CSS } from '@/components/agent/tool-result-renderers/pierre-styles'
+import { OfficePreview } from '@/components/file-browser/office-preview/OfficePreview'
 
 const MD_EXTS = new Set(['.md', '.markdown'])
 const HTML_EXTS = new Set(['.html', '.htm'])
@@ -217,11 +218,13 @@ interface DiffTabContentProps {
   onEmptyDiff?: () => void
   /** 由外层场景注入的额外工具按钮，例如默认应用打开、返回会话 */
   toolbarActions?: React.ReactNode
+  /** 上层已提供文件名和操作栏时，隐藏本组件的路径/操作重复栏。 */
+  hideToolbar?: boolean
   /** 基准 ref（如 "origin/main"），用于 worktree vs main 模式 */
   baseRef?: string
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, baseRef }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, hideToolbar = false, baseRef }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
@@ -237,6 +240,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [docxHtml, setDocxHtml] = React.useState('')
   const [officeHtml, setOfficeHtml] = React.useState('')
   const [officeText, setOfficeText] = React.useState('')
+  const [officeFallbackHtml, setOfficeFallbackHtml] = React.useState('')
   // HTML 默认展示运行后的页面；用户可随时切换回源码高亮预览。
   const [htmlPreviewUrl, setHtmlPreviewUrl] = React.useState('')
   const [htmlSourceMode, setHtmlSourceMode] = React.useState(false)
@@ -440,6 +444,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setDocxHtml(cached.docxHtml ?? '')
       setOfficeHtml(cached.officeHtml ?? '')
       setOfficeText(cached.officeText ?? '')
+      setOfficeFallbackHtml(cached.officeHtml ?? '')
       setHtmlPreviewUrl(cached.htmlPreviewUrl ?? '')
       setPdfSrc(cached.pdfSrc ?? '')
       setPdfZoom(100)
@@ -457,6 +462,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setDocxHtml('')
       setOfficeHtml('')
       setOfficeText('')
+      setOfficeFallbackHtml('')
       setHtmlPreviewUrl('')
       setPdfSrc('')
       setPdfZoom(100)
@@ -522,6 +528,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               const text = result?.text ?? ''
               setOfficeHtml(html)
               setOfficeText(text)
+              setOfficeFallbackHtml(html)
               cacheSet(cacheKey, { oldContent: '', newContent: '', officeHtml: html, officeText: text })
               return
             }
@@ -902,14 +909,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0">
+      {!hideToolbar && <div className="flex h-8 items-center gap-1.5 border-b border-surface-border/60 px-3 flex-shrink-0">
         <button
           type="button"
           onClick={handleCopyPath}
-          className="text-[12px] text-foreground/60 truncate text-left cursor-pointer hover:text-foreground hover:underline underline-offset-2"
-          title={`${filePath}（点击复制）`}
+          className="min-w-0 flex-1 truncate text-left text-[12px] text-foreground/60 hover:text-foreground hover:underline underline-offset-2"
+          title={`${filePath}（点击复制完整路径）`}
         >
-          {filePath}
+          {getFileBaseName(filePath) || filePath}
         </button>
 
         {!previewOnly && (
@@ -998,11 +1005,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           )
         )}
 
-        <button type="button" onClick={handleCopy}
-          className={cn("p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0", previewOnly && !isEditableText && "ml-auto")}
-          title="复制文件内容">
-          {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
-        </button>
+        {!(previewOnly && (isDocx || isOfficePreview)) && (
+          <button type="button" onClick={handleCopy}
+            className={cn("p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0", previewOnly && !isEditableText && "ml-auto")}
+            title="复制文件内容">
+            {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
+          </button>
+        )}
 
         <button
           type="button"
@@ -1028,7 +1037,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         )}
 
         {toolbarActions}
-      </div>
+      </div>}
 
       <div className="relative flex-1 min-h-0 flex">
         <PreviewFindBar
@@ -1150,19 +1159,25 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               </div>
               ) : null
             ) : isDocx ? (
-              docxHtml ? (
-                <div
-                  className="prose prose-sm dark:prose-invert max-w-none px-4 py-3"
-                  dangerouslySetInnerHTML={{ __html: docxHtml }}
-                />
-              ) : null
+              <OfficePreview
+                filePath={filePath}
+                fileName={filePath}
+                access={fileAccess}
+                className="h-full"
+                fallback={docxHtml ? (
+                  <div className="prose prose-sm dark:prose-invert max-w-none px-4 py-3" dangerouslySetInnerHTML={{ __html: docxHtml }} />
+                ) : undefined}
+              />
             ) : isOfficePreview ? (
-              officeHtml ? (
-                <div
-                  className="office-preview-host"
-                  dangerouslySetInnerHTML={{ __html: officeHtml }}
-                />
-              ) : null
+              <OfficePreview
+                filePath={filePath}
+                fileName={filePath}
+                access={fileAccess}
+                className="h-full"
+                fallback={officeFallbackHtml ? (
+                  <div className="office-preview-host" dangerouslySetInnerHTML={{ __html: officeFallbackHtml }} />
+                ) : undefined}
+              />
             ) : isLegacyOffice ? null : isHtml && !htmlSourceMode ? (
               htmlPreviewUrl ? (
                 <iframe

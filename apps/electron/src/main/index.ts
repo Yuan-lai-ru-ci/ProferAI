@@ -561,7 +561,7 @@ function createWindow(): void {
     splashShown = false
     rendererReady = false
     // Ctrl/Cmd+R 刷新 renderer：内存态 browserOpenMap/browserState（非持久化）将随重建清空，
-    // 不再有 BrowserSlot 去 setLayout 定位/隐藏原生 view。必须在此隐藏所有浏览器原生视图，
+    // 不再有 BrowserViewport 去 setLayout 定位/隐藏原生 view。必须在此隐藏所有浏览器原生视图，
     // 否则主窗口重新显示后旧会话网页会裸奔脱出容器、不受控制（刷新场景需回到未打开浏览器态）。
     browserController.hideAll()
     // 刷新时重建启动画面，避免退化成固定尺寸的小方块。

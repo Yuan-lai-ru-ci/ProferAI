@@ -26,6 +26,7 @@ export * from './ppt-material'
 
 // Agent 相关类型
 export * from './agent'
+export * from './pi-harness'
 export * from './browser'
 
 // 推理 profile 相关类型

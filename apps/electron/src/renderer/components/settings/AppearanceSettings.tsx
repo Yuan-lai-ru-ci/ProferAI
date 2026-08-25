@@ -39,7 +39,11 @@ import {
   updateUiScale,
   UI_SCALE_OPTIONS,
 } from '@/atoms/ui-scale'
-import { previewModePreferenceAtom, type PreviewModePreference } from '@/atoms/preview-atoms'
+import {
+  previewModePreferenceAtom,
+  updatePreviewModePreference,
+  type PreviewModePreference,
+} from '@/atoms/preview-atoms'
 import { cn } from '@/lib/utils'
 import { SkinManager } from './SkinManager'
 import { detectIsWindows } from '@/lib/platform'
@@ -236,7 +240,11 @@ export function AppearanceSettings({ tabletMode = false }: { tabletMode?: boolea
               label="Agent 预览展开方式"
               description="点击文件、工具结果「预览」按钮时的默认展开位置；拖拽预览 Tab 出标签栏可即时切换为侧边分屏"
               value={previewModePref}
-              onValueChange={(v) => setPreviewModePref(v as PreviewModePreference)}
+              onValueChange={(v) => {
+                const preference = v as PreviewModePreference
+                setPreviewModePref(preference)
+                void updatePreviewModePreference(preference)
+              }}
               options={PREVIEW_MODE_OPTIONS}
             />
           )}

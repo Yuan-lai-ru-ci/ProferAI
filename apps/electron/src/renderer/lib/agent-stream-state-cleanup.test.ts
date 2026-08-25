@@ -1,10 +1,28 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { compactCompletedBackgroundStreamState, settleCompletedAgentStreamState } from './agent-stream-state-cleanup'
+import { compactCompletedBackgroundStreamState, rollbackRejectedAgentRunState, settleCompletedAgentStreamState } from './agent-stream-state-cleanup'
 
 function state(overrides: Partial<AgentStreamState> = {}): AgentStreamState {
   return { running: false, content: 'partial output', toolActivities: [{ toolUseId: 'tool-1', toolName: 'Read', input: {}, done: false }], ...overrides }
 }
+
+describe('rollbackRejectedAgentRunState', () => {
+  test('Given an optimistic compact is rejected before an Agent run starts When rolling back Then no input lock remains', () => {
+    expect(rollbackRejectedAgentRunState(state({
+      running: true,
+      backgroundWaiting: true,
+      stopping: true,
+      isCompacting: true,
+      compactInFlight: true,
+    }))).toMatchObject({
+      running: false,
+      backgroundWaiting: false,
+      stopping: false,
+      isCompacting: false,
+      compactInFlight: false,
+    })
+  })
+})
 
 describe('settleCompletedAgentStreamState', () => {
   test('Given a failed compact run When STREAM_COMPLETE arrives Then releases every input lock', () => {

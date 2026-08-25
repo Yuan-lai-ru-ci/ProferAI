@@ -66,6 +66,32 @@ export function getWindowFrameColor(): string {
 }
 
 /**
+ * 受管浏览器卡片宿主（data-browser-native-host）的 DOM 背景色，即 globals.css 的
+ * `--browser-host-surface`：亮色 `0 0% 100%`（纯白）、暗色 `0 0% 7%`（#121212）。
+ * 受管浏览器 WebContentsView / hostView 的背景必须与它一致，否则圆角边缘会出现色差分层。
+ */
+export function getBrowserHostSurfaceColor(): string {
+  const settings = getSettings()
+  const systemIsDark = nativeTheme.shouldUseDarkColors
+  let isDark: boolean
+  if (settings.themeMode === 'system') {
+    isDark = systemIsDark
+  } else if (settings.themeMode === 'dark') {
+    isDark = true
+  } else if (
+    settings.themeMode === 'special'
+    && settings.themeStyle
+    && settings.themeStyle !== 'default'
+  ) {
+    // 特殊主题的亮暗按风格名判定（与 globals .dark 覆盖机制一致的主流皮肤命名）
+    isDark = /dark|midnight|night|ink|black/i.test(settings.themeStyle)
+  } else {
+    isDark = false
+  }
+  return isDark ? '#121212' : '#ffffff'
+}
+
+/**
  * 同步 Windows 原生窗口外壳颜色。
  *
  * `titleBarStyle: 'hidden'` 仍保留一圈由 Windows/DWM 合成的非客户区；若 BrowserWindow

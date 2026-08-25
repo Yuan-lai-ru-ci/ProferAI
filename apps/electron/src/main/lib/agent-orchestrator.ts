@@ -157,6 +157,7 @@ import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
 import { injectPptMaterialMcpServer } from './ppt-material-agent-tools'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
+import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
 import { browserController } from './browser-controller'
 import {
   applySdkCredentials,
@@ -172,6 +173,8 @@ import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './ada
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
 import { detectAttachedDirectoryProjects } from './attached-directory-project-detector'
+import { isPiHarnessEnabled } from './pi-harness/feature-gate'
+import { pauseActivePiHarnessRun, releaseManualPiHarnessCandidateContinuation, settlePiHarnessRun, startPiHarnessRun } from './pi-harness/orchestrator-bridge'
 
 // ===== 类型定义 =====
 
@@ -774,6 +777,9 @@ export class AgentOrchestrator {
     // 运行级错误标志：preflight / 异常 catch / TypedError 无 subtype 等无 resultSubtype 的错误路径
     // 据此归一化为 error。必须放在 try 之外，owner finally 需要读取它。
     let runEndedWithError = false
+    // Phase 3 only records the lifecycle of this Pi user Turn. It never queues or
+    // starts a follow-up turn; the gate is fail-closed and sidecar errors fail-open.
+    let piHarnessScope: ReturnType<typeof startPiHarnessRun> | undefined
 
     try {
     // 0.5 清除上一轮中断标记
@@ -1080,7 +1086,7 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 将直接使用已保存的 sdkSessionId 进行 resume: ${existingSdkSessionId}`)
       }
 
-      // 10. 构建 MCP 服务器配置 + 自定义工具（生图工具仅 Chat 模式可用）
+      // 10. 构建 MCP 服务器配置 + 自定义工具（GPT Image 依渠道配置注入 Claude/Pi Agent）
       // Agent 预设提前解析：MCP 白名单裁剪在构建时生效；提示词/权限/effort 注入在后面复用同一对象。
       const sessionPreset = getAgentPreset(workspaceSlug, getAgentSessionMeta(sessionId)?.presetId)
       // 仅归一化已知内置历史 slug，不改写用户自建 Skill 名称。
@@ -1164,11 +1170,27 @@ export class AgentOrchestrator {
             }),
           ]
         : []
+      const emitImageGenerationUpdate = (record: import('@profer/shared').AgentImageGenerationCard): void => {
+        this.eventBus.emit(sessionId, {
+          kind: 'profer_event',
+          event: { type: 'image_generation_updated', sessionId, record },
+        })
+      }
       if (agentCwd && imageOutputAllowedRoots.length > 0) {
         await injectAgentImageOutputMcpServer(sdk, mcpServers, {
           agentCwd,
           allowedRoots: imageOutputAllowedRoots,
         })
+        // Pi receives the same tool through sdk.defineTool below. Inject the SDK MCP
+        // server only for Claude to avoid duplicate tool names after Pi MCP conversion.
+        if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
+          await injectAgentGptImageMcpServer(sdk, mcpServers, {
+            sessionId,
+            agentCwd,
+            allowedRoots: imageOutputAllowedRoots,
+            onGenerationUpdate: emitImageGenerationUpdate,
+          })
+        }
       }
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
@@ -1279,6 +1301,7 @@ ${enrichedMessage}`
               workspaceSlug,
               agentCwd,
               allowedRoots: browserAllowedRoots,
+              onImageGenerationUpdate: emitImageGenerationUpdate,
               permissionMode: initialPermissionMode,
               triggeredBy: input.triggeredBy,
               disabledToolGroups: [...disabledToolGroups],
@@ -1614,10 +1637,28 @@ ${enrichedMessage}`
         runtimeStatus: getRuntimeStatus(),
         shellPreference: getSettings().agentShellPreference,
       })
+      if (agentRuntime === 'pi' && isPiHarnessEnabled()) {
+        try {
+          piHarnessScope = startPiHarnessRun({
+            sessionId,
+            userMessage,
+            prompt: finalPrompt,
+            permissionMode: initialPermissionMode,
+            manualCandidateContinuationTicket: input.piHarnessManualContinuationTicket,
+          })
+        } catch (error) {
+          // Generic sidecar observation remains fail-open. A manual continuation
+          // ticket is different: accepting a stale/invalid user click as an
+          // ordinary Pi request would violate the explicit-candidate boundary.
+          if (input.piHarnessManualContinuationTicket) throw error
+          console.warn('[Pi Harness] 启动 sidecar scope 失败，按原 Pi 路径继续:', error)
+        }
+      }
+
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
         agentRuntime,
-        prompt: finalPrompt,
+        prompt: piHarnessScope?.prompt ?? finalPrompt,
         // Pi must receive the channel model unchanged: Claude's `[1m]` suffix is not a provider model ID.
         model: agentRuntime === 'pi' ? selectedModelId : effectiveSdkModelId,
         cwd: agentCwd,
@@ -1783,6 +1824,15 @@ ${enrichedMessage}`
             event: { type: 'retry', ...retry },
           })
         },
+        ...(agentRuntime === 'pi' && piHarnessScope && {
+          onHarnessLifecycle: (event: import('./adapters/pi-harness-lifecycle').PiHarnessLifecycleEvent) => {
+            try {
+              piHarnessScope?.observeLifecycle(event)
+            } catch (error) {
+              console.warn('[Pi Harness] lifecycle observation 失败，忽略并继续 Pi:', error)
+            }
+          },
+        }),
       }
 
       console.log(`[Agent 编排] 开始通过 Adapter 遍历事件流...`)
@@ -2082,6 +2132,7 @@ ${enrichedMessage}`
                       type?: string
                       tool_use_id?: string
                       content?: unknown
+                      is_error?: boolean
                     }>
                   }
                 }
@@ -2137,6 +2188,20 @@ ${enrichedMessage}`
                       }
                     }
                   }
+                }
+                // Graph persistence remains authoritative and independent. Harness
+                // receives the already-completed tool result as a fail-open tap.
+                try {
+                  piHarnessScope?.observeToolResult({
+                    toolUseId: invocation.toolUseId,
+                    toolName: invocation.toolName,
+                    input: invocation.input,
+                    result: block.content,
+                    isError: block.is_error === true,
+                    timestamp: Date.now(),
+                  })
+                } catch (error) {
+                  console.warn('[Pi Harness] tool fact observation 失败，忽略并继续 Pi:', error)
                 }
                 taskToolUses.delete(block.tool_use_id)
               }
@@ -2434,7 +2499,15 @@ ${enrichedMessage}`
 
             // Turn 结束时：持久化累积消息（正常情况下已由 checkpoint 清空；保留兜底语义）。
             if (msg.type === 'result') {
+              try {
+                piHarnessScope?.observeResult(msg)
+              } catch (error) {
+                console.warn('[Pi Harness] result observation 失败，忽略并继续 Pi:', error)
+              }
               capturedResultSubtype = (msg as { subtype?: string }).subtype
+              // Harness 只用 result subtype 结算当前 Turn；不改变既有 UI/重试路径。
+              // success 之外的 result 不能被 sidecar 错记成已完成。
+              if (capturedResultSubtype && capturedResultSubtype !== 'success') runEndedWithError = true
               // SDK 的 SDKResultError 在 errors[] 中携带真实错误原因（error_during_execution 等场景），
               // 捕获后透传到前端展示具体错误。
               const rawResultErrors = (msg as { errors?: unknown }).errors
@@ -2816,6 +2889,19 @@ ${enrichedMessage}`
         failRun(`${retryFailureMessage}: ${lastRetryableError}`, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
       }
     } finally {
+      // Do not let sidecar accounting alter the original completion path. A user
+      // stop has already paused and removed its scope in stop(); all other paths
+      // settle the current Turn only and never schedule follow-up work.
+      try {
+        settlePiHarnessRun(sessionId, runEndedWithError ? 'failed' : 'completed')
+      } catch (error) {
+        console.warn('[Pi Harness] 结算 sidecar scope 失败，忽略:', error)
+      }
+      // A preflight failure can occur before Harness consumes the one-shot ticket.
+      // Releasing is harmless after consumption and lets the user retry explicitly.
+      if (input.piHarnessManualContinuationTicket) {
+        releaseManualPiHarnessCandidateContinuation(input.piHarnessManualContinuationTicket)
+      }
       // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       // 只有仍持有本 generation 的 finally 能释放并清理 session scoped state。
@@ -2940,7 +3026,14 @@ ${enrichedMessage}`
    */
   stop(sessionId: string, source: AgentStopSource = 'user'): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
+    // Preserve main's stop-source attribution for user vs. cascaded cancellation.
     this.stoppedBySessions.set(sessionId, source)
+    // A user Stop is a Pi Harness hard task boundary. Cascaded parent-session
+    // cancellation keeps main's existing attribution semantics and does not
+    // impersonate an explicit user Stop in the Harness ledger.
+    if (source === 'user') {
+      pauseActivePiHarnessRun(sessionId, 'user_stop')
+    }
     browserController.cancelSession(sessionId)
     try {
       this.adapter.abort(sessionId)

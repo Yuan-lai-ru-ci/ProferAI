@@ -106,6 +106,9 @@ import {
   finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
+  agentImageGenerationsAtom,
+  agentSessionImageGenerationsAtomFamily,
+  upsertAgentImageGeneration,
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
@@ -155,6 +158,7 @@ import {
 import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
+import { rollbackRejectedAgentRunState } from '@/lib/agent-stream-state-cleanup'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -590,6 +594,8 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   // atom 输出引用未变，订阅者跳过通知。
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
+  const imageGenerations = useAtomValue(agentSessionImageGenerationsAtomFamily(sessionId))
+  const setImageGenerations = useSetAtom(agentImageGenerationsAtom)
   const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
@@ -608,6 +614,25 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         .catch(() => {})
     }
   }, [streaming, sessionId, setPersistedGraph])
+  React.useEffect(() => {
+    if (tabletMode) return
+    let cancelled = false
+    window.electronAPI.listAgentImageGenerations(sessionId)
+      .then((cards) => {
+        if (cancelled) return
+        setImageGenerations((previous) => {
+          const next = new Map(previous)
+          let merged = previous.get(sessionId) ?? []
+          for (const card of cards) merged = upsertAgentImageGeneration(merged, card)
+          next.set(sessionId, merged)
+          return next
+        })
+      })
+      .catch((error) => console.warn('[AgentView] 图片生成记录恢复失败:', error))
+    return () => { cancelled = true }
+  }, [sessionId, tabletMode, setImageGenerations])
+
+
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
@@ -2604,7 +2629,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         const map = new Map(prev)
         const current = prev.get(sessionId)
         if (!current) return prev
-        map.set(sessionId, { ...current, isCompacting: false, compactInFlight: false })
+        map.set(sessionId, rollbackRejectedAgentRunState(current))
         return map
       })
     }).finally(() => {
@@ -3062,6 +3087,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
           tabletMode={tabletMode}
+          imageGenerations={imageGenerations}
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}

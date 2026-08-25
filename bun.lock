@@ -39,13 +39,14 @@
     },
     "apps/electron": {
       "name": "@profer/electron",
-      "version": "0.15.51",
+      "version": "0.15.60",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.201",
         "@anthropic-ai/sdk": "^0.93.0",
         "@earendil-works/pi-agent-core": "0.84.2",
         "@earendil-works/pi-ai": "0.84.2",
         "@earendil-works/pi-coding-agent": "0.84.2",
+        "@silurus/ooxml": "0.71.0",
         "pdfjs-dist": "^4.10.38",
       },
       "devDependencies": {
@@ -202,7 +203,7 @@
     },
     "packages/shared": {
       "name": "@profer/shared",
-      "version": "0.1.37",
+      "version": "0.1.39",
       "devDependencies": {
         "typescript": "^5.0.0",
       },
@@ -774,6 +775,8 @@
     "@shikijs/types": ["@shikijs/types@3.23.0", "https://registry.npmmirror.com/@shikijs/types/-/types-3.23.0.tgz", { "dependencies": { "@shikijs/vscode-textmate": "^10.0.2", "@types/hast": "^3.0.4" } }, "sha512-3JZ5HXOZfYjsYSk0yPwBrkupyYSLpAE26Qc0HLghhZNGTZg/SKxXIIgoxOpmmeQP0RRSDJTk1/vPfw9tbw+jSQ=="],
 
     "@shikijs/vscode-textmate": ["@shikijs/vscode-textmate@10.0.2", "https://registry.npmmirror.com/@shikijs/vscode-textmate/-/vscode-textmate-10.0.2.tgz", {}, "sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg=="],
+
+    "@silurus/ooxml": ["@silurus/ooxml@0.71.0", "https://registry.npmmirror.com/@silurus/ooxml/-/ooxml-0.71.0.tgz", {}, "sha512-pi934ijv8ABRmqyBb0g+2A6m4l4hfxdK048gvLRFOLjDlE8marbxzTerm0ABqvSgK9y1F2xLKeMas8G6Pnr16w=="],
 
     "@silvia-odwyer/photon-node": ["@silvia-odwyer/photon-node@0.3.4", "https://registry.npmmirror.com/@silvia-odwyer/photon-node/-/photon-node-0.3.4.tgz", {}, "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA=="],
 

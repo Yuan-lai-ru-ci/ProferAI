@@ -293,6 +293,8 @@ export interface AppSettings {
   markdownFontSize?: MarkdownFontSize
   /** 界面缩放档位（默认 'standard' 100%；平板端无缓存时默认 'large' 110%） */
   uiScale?: UiScale
+  /** Agent 预览默认展开方式（默认 'tab'） */
+  previewModePreference?: 'tab' | 'split'
   /** 上次是否在 Scratch Pad 页（用于重启恢复） */
   scratchPadActive?: boolean
   /** 应用图标变体 ID（dock + window icon），'default' 或 logo 变体 id */

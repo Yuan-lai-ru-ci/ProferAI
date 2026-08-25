@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, mock, test } from 'bun:test'
 
 // memory-archive 使用 node:sqlite，Pi bridge 测试只验证注册契约，避免 Bun 测试运行器加载原生 Node 模块。
 mock.module('../memory-archive-search', () => ({
@@ -8,6 +8,22 @@ mock.module('../memory-archive-search', () => ({
 }))
 
 // 内置工具桥接经会话/工作区服务间接导入 Electron；Bun 单测需提供最小主进程 mock。
+let imageToolAvailable = false
+let generatedImageResult: unknown = undefined
+
+mock.module('../chat-tool-config', () => ({
+  getToolState: () => ({ enabled: imageToolAvailable }), getToolCredentials: () => ({}),
+  getGptImageCredentials: () => ({ mode: 'official', apiKey: '', baseUrl: '', model: '' }),
+}))
+mock.module('../auth-service', () => ({
+  getTeamAuth: () => ({ token: 'test' }), getTeamAuthWithRefresh: async () => undefined,
+  refreshAuthToken: async () => false, getAccessToken: () => null, getAuthStatus: () => ({ isLoggedIn: false }), recoverCommercialProxyAuth: async () => null,
+}))
+mock.module('../chat-tools/gpt-image-tool', () => ({ isGptImageAvailable: () => imageToolAvailable }))
+mock.module('../agent-gpt-image-service', () => ({
+  generateAgentGptImage: async () => generatedImageResult,
+}))
+
 mock.module('electron', () => ({
   BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },
   app: { getPath: () => '', isPackaged: false },
@@ -18,7 +34,7 @@ mock.module('electron', () => ({
   Notification: class {},
   powerMonitor: {},
   powerSaveBlocker: {},
-  safeStorage: {},
+  safeStorage: { isEncryptionAvailable: () => false, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() },
   screen: {},
   shell: {},
   net: {},
@@ -40,7 +56,8 @@ const {
 interface CapturedTool {
   name: string
   description: string
-  execute?: (toolCallId: string, params: unknown) => Promise<unknown>
+  parameters?: unknown
+  execute?: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<unknown>
 }
 
 function createPiSdkStub(): {
@@ -183,6 +200,10 @@ describe('Pi Profer in-process tool bridges', () => {
 })
 
 describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning)', () => {
+  afterEach(() => {
+    imageToolAvailable = false
+    generatedImageResult = undefined
+  })
   /** 工具组 → 工具名前缀映射（与 buildPiBuiltinTools 中的注册前缀一致） */
   const GROUP_PREFIXES = {
     memory: 'mcp__memory-archive__',
@@ -207,6 +228,38 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const imageTool = tools.find((tool) => tool.name === 'send_local_image')
     expect(imageTool).toBeDefined()
     expect(imageTool!.description).toContain('PROMA_IMAGE_ATTACHMENT')
+  })
+
+  test('Given GPT Image enabled and available in a workspace Pi session When building tools Then it exposes the unified generate_image schema and marker result', async () => {
+    imageToolAvailable = true
+    generatedImageResult = {
+      ok: true,
+      mode: 'official',
+      edited: false,
+      output: { marker: '[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/safe/session/.context/agent-output-images/x.png","filename":"x.png","mediaType":"image/png"}]' },
+    }
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
+
+    const tool = tools.find((item) => item.name === 'generate_image')
+    expect(tool).toBeDefined()
+    expect(tool!.description).toContain('referenceImagePaths')
+    expect(tool!.description).toContain('useLastGeneratedImage')
+    expect(JSON.stringify(tool!.parameters)).toContain('useLastGeneratedImage')
+    expect(JSON.stringify(tool!.parameters)).toContain('1024x1024')
+    const result = await tool!.execute!('pi-call-1', { prompt: 'blue square' }) as { content: Array<{ text: string }> }
+    expect(result.content[0]!.text).toContain('[PROMA_IMAGE_ATTACHMENT:')
+  })
+
+  test('Given GPT Image disabled or no workspace When building Pi tools Then generate_image is absent', async () => {
+    const disabled = createPiSdkStub()
+    await buildPiBuiltinTools(disabled.sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
+    expect(disabled.tools.some((tool) => tool.name === 'generate_image')).toBe(false)
+
+    imageToolAvailable = true
+    const noWorkspace = createPiSdkStub()
+    await buildPiBuiltinTools(noWorkspace.sdk, { ...baseCtx, workspaceSlug: undefined, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
+    expect(noWorkspace.tools.some((tool) => tool.name === 'generate_image')).toBe(false)
   })
 
   test('Given a Pi session without a workspace When building builtin tools Then it does not authorize the home cwd for image output', async () => {

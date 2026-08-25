@@ -48,6 +48,8 @@ import {
   agentNonGitFileChangesAtom,
   agentFileChangesCurrentRunAtom,
   agentQueueAutoSendMapAtom,
+  agentImageGenerationsAtom,
+  upsertAgentImageGeneration,
 } from '@/atoms/agent-atoms'
 import {
   notificationsEnabledAtom,
@@ -624,7 +626,15 @@ export function useGlobalAgentListeners(): void {
 
         if (payload.kind === 'profer_event') {
           const proferEvent = payload.event
-          if (proferEvent.type === 'external_run_started') {
+          if (proferEvent.type === 'image_generation_updated' && proferEvent.sessionId === sessionId && proferEvent.record.sessionId === sessionId) {
+            // Card events are independent timeline updates; never let them fabricate an Agent
+            // running state through legacy event conversion or cross-session cache pollution.
+            store.set(agentImageGenerationsAtom, (previous) => {
+              const next = new Map(previous)
+              next.set(sessionId, upsertAgentImageGeneration(previous.get(sessionId) ?? [], proferEvent.record))
+              return next
+            })
+          } else if (proferEvent.type === 'external_run_started') {
             activateExternalAgentRun(proferEvent)
           } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {
             store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, proferEvent.session))

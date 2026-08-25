@@ -22,8 +22,9 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
+import { currentAgentSessionIdAtom, graphQuestionAtom, agentSessionsAtom, agentSessionStreamingStateAtomFamily } from '@/atoms/agent-atoms'
 import { currentGraphAtom, persistedGraphAtomFamily } from '@/atoms/graph-atoms'
+import { type PiHarnessSnapshotView } from '@profer/shared'
 import { type TaskGraph, type TaskNode, type TaskStatus } from '@profer/project-core'
 import {
   computeTaskGraphLayout,
@@ -33,6 +34,7 @@ import {
 } from '@/lib/task-graph-layout'
 import { GraphQuestionInput } from './GraphQuestionInput'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { presentPiHarnessTask, type PiHarnessTaskPresentation } from '@/lib/pi-harness-view-model'
 
 // 呼吸动画样式（注入一次）—— 4s 周期，柔和渐变
 const breatheStyle = `
@@ -105,6 +107,34 @@ function useGraphData(refreshVersion: number): { graph: TaskGraph | null; loadin
   return { graph, loading: loading && !graph }
 }
 
+/** Harness snapshot is optional; missing IPC or ledger safely preserves the existing graph UI. */
+function usePiHarnessData(sessionId: string | undefined, refreshVersion: number): PiHarnessSnapshotView | null {
+  const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId ?? ''))
+  const [snapshot, setSnapshot] = React.useState<PiHarnessSnapshotView | null>(null)
+  const previousRunning = React.useRef(streamState?.running ?? false)
+  const [settledVersion, setSettledVersion] = React.useState(0)
+
+  React.useEffect(() => {
+    const wasRunning = previousRunning.current
+    const running = streamState?.running ?? false
+    previousRunning.current = running
+    if (wasRunning && !running) setSettledVersion((version) => version + 1)
+  }, [streamState?.running])
+
+  React.useEffect(() => {
+    if (!sessionId) { setSnapshot(null); return }
+    let cancelled = false
+    const api = window.electronAPI as { getPiHarnessSnapshot?: (id: string) => Promise<PiHarnessSnapshotView> }
+    if (!api.getPiHarnessSnapshot) { setSnapshot(null); return }
+    api.getPiHarnessSnapshot(sessionId)
+      .then((next) => { if (!cancelled) setSnapshot(next) })
+      .catch(() => { if (!cancelled) setSnapshot(null) })
+    return () => { cancelled = true }
+  }, [sessionId, refreshVersion, settledVersion])
+
+  return snapshot
+}
+
 // ===== 布局数据 =====
 
 interface NodePosition { id: string; x: number; y: number }
@@ -115,7 +145,7 @@ const EMPTY_POSITIONS: NodePosition[] = []
 const FORK_LINE_COLOR = '#fbbf24'
 // ===== 节点卡片（不透明、实色背景） =====
 
-function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number; y: number; selected: boolean; onClick: () => void }) {
+function NodeCard({ node, harness, x, y, selected, onClick }: { node: TaskNode; harness: PiHarnessTaskPresentation; x: number; y: number; selected: boolean; onClick: () => void }) {
   const cfg = statusConfig[node.status]
   const showDesc = node.description && node.description.length > 0
   const isCancelled = node.status === 'cancelled'
@@ -166,6 +196,16 @@ function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number
               {node.artifact.length} 个文件
             </div>
           )}
+          {harness.badge && (
+            <span className={cn(
+              'inline-flex mt-1.5 px-1.5 py-0.5 rounded text-[9px] font-medium',
+              harness.badge.tone === 'emerald' && 'bg-emerald-400/10 text-emerald-600 dark:text-emerald-400',
+              harness.badge.tone === 'amber' && 'bg-amber-400/10 text-amber-700 dark:text-amber-400',
+              harness.badge.tone === 'red' && 'bg-red-400/10 text-red-600 dark:text-red-400',
+              harness.badge.tone === 'blue' && 'bg-blue-400/10 text-blue-600 dark:text-blue-400',
+              harness.badge.tone === 'muted' && 'bg-muted text-muted-foreground',
+            )}>{harness.badge.label}</span>
+          )}
         </div>
       </button>
     </foreignObject>
@@ -174,8 +214,15 @@ function NodeCard({ node, x, y, selected, onClick }: { node: TaskNode; x: number
 
 // ===== 详情侧边面板 =====
 
-function DetailPanel({ node, onClose }: { node: TaskNode; onClose: () => void }) {
+function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
+  node: TaskNode
+  harness: PiHarnessTaskPresentation
+  onClose: () => void
+  onContinueCandidate: (taskId: string) => Promise<void>
+}) {
   const cfg = statusConfig[node.status]
+  const [continuing, setContinuing] = React.useState(false)
+  const [continuationError, setContinuationError] = React.useState<string | null>(null)
   const openSession = useOpenSession()
   const agentSessions = useAtomValue(agentSessionsAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -200,6 +247,20 @@ function DetailPanel({ node, onClose }: { node: TaskNode; onClose: () => void })
   const handleJumpToSession = () => {
     if (!targetSessionId) return
     openSession('agent', targetSessionId, node.subject)
+  }
+
+  const handleContinueCandidate = async () => {
+    if (!harness.canManuallyContinue || continuing) return
+    setContinuing(true)
+    setContinuationError(null)
+    try {
+      await onContinueCandidate(node.id)
+      toast.success('已开始继续该任务')
+    } catch (error) {
+      setContinuationError(error instanceof Error ? error.message : '启动候选任务失败')
+    } finally {
+      setContinuing(false)
+    }
   }
 
   return (
@@ -255,6 +316,33 @@ function DetailPanel({ node, onClose }: { node: TaskNode; onClose: () => void })
                 证据轮次：{node.abandonEvidence.map((t) => `Turn ${t}`).join('、')}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Pi Harness：只读执行/验证摘要，不暴露账本或控制操作 */}
+        {(harness.executionLabel || harness.assuranceLabel || harness.pauseReason || harness.lastFactSummary || harness.shadowCandidateLabel) && (
+          <div className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 space-y-1.5">
+            <div className="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider">执行与验证</div>
+            {harness.executionLabel && <p className="text-xs text-muted-foreground">当前执行：{harness.executionLabel}</p>}
+            {harness.assuranceLabel && <p className="text-xs text-muted-foreground">验证：{harness.assuranceLabel}</p>}
+            {harness.pauseReason && <p className="text-xs text-muted-foreground">暂停原因：{harness.pauseReason}</p>}
+            {harness.lastFactSummary && <p className="text-xs text-muted-foreground">最近证据：{harness.lastFactSummary}</p>}
+            {harness.shadowCandidateLabel && <p className="text-xs text-muted-foreground">{harness.shadowCandidateLabel}</p>}
+            {harness.canManuallyContinue && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleContinueCandidate}
+                  disabled={continuing}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {continuing && <Loader2 className="size-3 animate-spin" />}
+                  {continuing ? '正在启动…' : '继续此任务'}
+                </button>
+                <p className="mt-1.5 text-[10px] text-muted-foreground/70">仅由你的点击启动新的 Pi Turn；不会自动继续。</p>
+              </div>
+            )}
+            {continuationError && <p className="text-xs text-red-500">{continuationError}</p>}
           </div>
         )}
 
@@ -394,6 +482,8 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
   React.useEffect(() => { injectBreatheStyle() }, [])
   const { graph, loading } = useGraphData(refreshVersion)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const [candidateRefreshVersion, setCandidateRefreshVersion] = React.useState(0)
+  const piHarness = usePiHarnessData(sessionId ?? undefined, refreshVersion + candidateRefreshVersion)
   const setGraphQuestion = useSetAtom(graphQuestionAtom)
   const containerRef = React.useRef<HTMLDivElement>(null)
   const [scale, setScale] = React.useState(1)
@@ -402,6 +492,16 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
   const [dragging, setDragging] = React.useState(false)
   const dragRef = React.useRef<{ sx: number; sy: number; tx0: number; ty0: number } | null>(null)
   const [selectedNode, setSelectedNode] = React.useState<TaskNode | null>(null)
+
+  const continueCandidate = React.useCallback(async (taskId: string) => {
+    if (!sessionId) throw new Error('未选择 Agent 会话')
+    const api = window.electronAPI as {
+      continuePiHarnessCandidate?: (input: { sessionId: string; taskId: string }) => Promise<void>
+    }
+    if (!api.continuePiHarnessCandidate) throw new Error('当前版本不支持继续 Harness 候选任务')
+    await api.continuePiHarnessCandidate({ sessionId, taskId })
+    setCandidateRefreshVersion((version) => version + 1)
+  }, [sessionId])
 
   // 用 ref 存 scale/tx/ty 的快照，避免 wheel handler 的依赖问题
   const scaleRef = React.useRef(scale)
@@ -582,6 +682,7 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
                     <NodeCard
                       key={node.id}
                       node={node}
+                      harness={presentPiHarnessTask(node.id, piHarness)}
                       x={pos.x}
                       y={pos.y}
                       selected={selectedNode?.id === node.id}
@@ -617,7 +718,7 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
         </div>
 
         {/* 右侧：详情面板（在正常流中，挤压左侧） */}
-        {selectedNode && <DetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />}
+        {selectedNode && <DetailPanel node={selectedNode} harness={presentPiHarnessTask(selectedNode.id, piHarness)} onClose={() => setSelectedNode(null)} onContinueCandidate={continueCandidate} />}
       </div>
     </div>
   )

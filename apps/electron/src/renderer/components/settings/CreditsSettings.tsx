@@ -13,7 +13,6 @@ import { cn } from '@/lib/utils'
 import { SettingsSection, SettingsCard } from './primitives'
 import {
   creditsPointsAtom,
-  creditsLifetimeConsumedAtom,
   creditsLifetimeConsumedPointsAtom,
   creditsLoadingAtom,
   creditsLowAtom,
@@ -26,6 +25,7 @@ import {
   balancePackagePointsAtom,
   balanceReferralPointsAtom,
   balancePurchasedPointsAtom,
+  creditCycleSummaryAtom,
   isInOverdraftAtom,
   isVipAtom,
   membershipTierAtom,
@@ -58,7 +58,6 @@ export function CreditsSettings(): React.ReactElement {
   // 余额 / 订阅 / Drip 数据由 useCreditsLoader 统一驱动
   const { reload: reloadCredits } = useCreditsLoader(60_000)
   const points = useAtomValue(creditsPointsAtom)
-  const [lifetimeConsumed, setLifetimeConsumed] = useAtom(creditsLifetimeConsumedAtom)
   const lifetimeConsumedPoints = useAtomValue(creditsLifetimeConsumedPointsAtom)
   const [loading, setLoading] = useAtom(creditsLoadingAtom)
   const isLow = useAtomValue(creditsLowAtom)
@@ -73,6 +72,7 @@ export function CreditsSettings(): React.ReactElement {
   const pkgPts = useAtomValue(balancePackagePointsAtom)
   const refPts = useAtomValue(balanceReferralPointsAtom)
   const purPts = useAtomValue(balancePurchasedPointsAtom)
+  const cycleSummary = useAtomValue(creditCycleSummaryAtom)
   const isOverdraft = useAtomValue(isInOverdraftAtom)
   const isVip = useAtomValue(isVipAtom)
   const tier = useAtomValue(membershipTierAtom)
@@ -111,8 +111,17 @@ export function CreditsSettings(): React.ReactElement {
   React.useEffect(() => { loadAll() }, [loadAll])
 
   // ---- 派生值 ----
-  const totalPoints = (points ?? 0) + (lifetimeConsumedPoints ?? 0)
-  const remainingPct = totalPoints > 0 ? Math.round(((points ?? 0) / totalPoints) * 100) : 0
+  // 分母必须来自服务端按账期汇总，不能混入全历史累计消耗。
+  const cycleTotalPoints = cycleSummary ? Math.round(cycleSummary.totalAllocated * 100) / 10 : null
+  const remainingPct = cycleTotalPoints && cycleTotalPoints > 0
+    ? Math.max(0, Math.min(100, Math.round(((points ?? 0) / cycleTotalPoints) * 100)))
+    : 0
+  const packagePeriodEndsAt = cycleSummary?.packagePeriodEndsAt
+  const cycleEndsLabel = packagePeriodEndsAt
+    ? new Date(packagePeriodEndsAt).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })
+    : cycleSummary
+      ? new Date(cycleSummary.monthEndsAt).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })
+      : ''
   const balanceLoaded = points !== null
 
   // 水印色（与 SubscriptionSettings 一致）
@@ -223,23 +232,35 @@ export function CreditsSettings(): React.ReactElement {
           </div>
         </div>
 
-        {/* 进度条 + 累计消耗 */}
+        {/* 进度条按当前结算周期计算；历史累计消耗不参与分母。 */}
         {balanceLoaded && (
         <SettingsCard className="mt-3">
           <div className="px-4 py-2 space-y-2.5">
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">剩余</span>
-              <span className="font-semibold tabular-nums">{remainingPct}%</span>
-            </div>
-            <div className="relative h-2 bg-muted rounded-full">
-              <div
-                className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${isExhausted ? 'bg-destructive' : isLow ? 'bg-yellow-500' : 'bg-primary'}`}
-                style={{ width: `${Math.min(remainingPct, 100)}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-              <span>剩余 {fmtPointsNum(points ?? 0)} 积分</span>
-              <span>累计消耗 {fmtPointsNum(lifetimeConsumedPoints ?? 0)} 积分</span>
+            {cycleSummary && cycleTotalPoints !== null ? (
+              <>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">本周期剩余</span>
+                  <span className="font-semibold tabular-nums">{remainingPct}%</span>
+                </div>
+                <div className="relative h-2 bg-muted rounded-full">
+                  <div
+                    className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${isExhausted ? 'bg-destructive' : isLow ? 'bg-yellow-500' : 'bg-primary'}`}
+                    style={{ width: `${remainingPct}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
+                  <span>剩余 {fmtPointsNum(points ?? 0)} / {fmtPointsNum(cycleTotalPoints)} 积分</span>
+                  <span>本周期至 {cycleEndsLabel}</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  套餐额度按订阅周期结算；充值和返利余额按月结转。
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">正在同步本周期额度…</div>
+            )}
+            <div className="pt-0.5 text-[11px] text-muted-foreground tabular-nums">
+              历史累计消耗 {fmtPointsNum(lifetimeConsumedPoints ?? 0)} 积分
             </div>
           </div>
         </SettingsCard>

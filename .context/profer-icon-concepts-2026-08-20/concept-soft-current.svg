@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Profer icon concept — Soft Current</title>
+  <desc>Four rounded current-like strokes rise from a shared quiet baseline.</desc>
+  <g fill="#151515">
+    <path d="M188 733c-17 0-31-14-31-31V474c0-17 14-31 31-31h42c17 0 31 14 31 31v228c0 17-14 31-31 31h-42Z"/>
+    <path d="M336 733c-17 0-31-14-31-31V378c0-17 13-31 30-32l44-3c18-1 33 13 33 31v328c0 17-14 31-31 31h-45Z" transform="rotate(-4 359 552)"/>
+    <path d="M490 733c-18 0-32-15-31-33l14-421c1-16 13-28 29-30l46-6c19-2 35 13 34 32l-18 427c-1 17-15 31-32 31h-42Z" transform="rotate(-5 521 519)"/>
+    <path d="M649 733c-19 0-33-16-31-35l41-489c1-15 12-27 27-30l46-9c20-4 38 12 37 32l-48 499c-2 18-16 32-34 32h-38Z" transform="rotate(-4 687 488)"/>
+  </g>
+</svg>

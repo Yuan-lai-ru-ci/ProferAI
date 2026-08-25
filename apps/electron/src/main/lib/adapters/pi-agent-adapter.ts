@@ -78,6 +78,7 @@ import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
 import { runPiPromptChain, type PiInterruptReservation } from './pi-prompt-chain'
 import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
+import { mapPiHarnessLifecycleEvent, type PiHarnessLifecycleObserver } from './pi-harness-lifecycle'
 import { createWindowsPowerShellToolDefinition } from './pi-powershell-tool'
 import {
   closePiRequestProxyDispatcher,
@@ -129,6 +130,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onModelResolved?: (model: string) => void
   onContextWindow?: (contextWindow: number) => void
   onRetry?: (update: import('./pi-retry-control').PiRetryUpdate) => void
+  /** Passive lifecycle feed for Pi Host Harness; observers cannot control Session or queue prompts. */
+  onHarnessLifecycle?: PiHarnessLifecycleObserver
   thinkingLevel?: AgentThinkingLevel
   /**
    * DeepSeek V4 思考总开关（已废弃：思考强度与开关统一由 thinkingLevel 驱动，
@@ -1949,6 +1952,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
       unsubscribe = session.subscribe((event: AgentSessionEvent) => {
         try {
+          for (const lifecycleEvent of mapPiHarnessLifecycleEvent(event)) {
+            try {
+              input.onHarnessLifecycle?.(lifecycleEvent)
+            } catch (error) {
+              // Harness is observability/control-plane sidecar only. It must never
+              // break the Pi event stream or abort the current user Turn.
+              console.warn('[Pi adapter] Harness lifecycle observer 失败，忽略:', error)
+            }
+          }
           switch (event.type) {
             case 'message_update': {
               if (!isAssistantPiMessage(event.message)) break

@@ -125,7 +125,7 @@ function PickList({ items, selected, searchable, emptyHint, onToggle, onSelectAl
         </div>
         <div className="flex items-center gap-1">
           <Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={onSelectAll}>全选</Button>
-          <Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={onClear}>清空</Button>
+          <Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={onClear}>清空（全部禁用）</Button>
         </div>
       </div>
       <div className="max-h-56 overflow-y-auto scrollbar-thin">
@@ -290,8 +290,9 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
       disabledTools: form.disabledTools.length > 0 ? form.disabledTools : null,
       effort: (form.effort || null) as AgentEffort | null,
       permissionMode: (form.permissionMode || null) as ProferPermissionMode | null,
-      skillSlugs: form.skillSlugs.trim() ? parseSlugList(form.skillSlugs) : null,
-      mcpServerNames: form.mcpServerNames.trim() ? parseSlugList(form.mcpServerNames) : null,
+      // 白名单必须显式保存：空数组表示不注入，只有「全选」才是全部可用。
+      skillSlugs: parseSlugList(form.skillSlugs),
+      mcpServerNames: parseSlugList(form.mcpServerNames),
       allowSubagents: form.allowSubagents ? form.allowSubagents === 'yes' : null,
       // 派生基座：选内置=设置（切换）；留空=null（脱离基座，manager 冻结当前生效配置）
       basePresetId: form.basePresetId || null,
@@ -518,7 +519,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
           <DialogHeader>
             <DialogTitle>{formTitle}</DialogTitle>
             <DialogDescription>
-              提示词段之间用空行分隔。Skill / MCP 白名单在下方勾选（留空 = 不限制，工作区全部可用）。
+              提示词段之间用空行分隔。Skill / MCP 白名单在下方勾选；留空 = 不注入任何项，需全部可用时请点「全选」。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
@@ -585,7 +586,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">Skill 白名单（留空 = 全部可用）</label>
+                <label className="text-xs font-medium text-foreground/70">Skill 白名单（留空 = 全部禁用）</label>
                 <PickList
                   items={skillItems}
                   selected={selectedSkillSlugs}
@@ -597,7 +598,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">MCP 白名单（留空 = 全部可用）</label>
+                <label className="text-xs font-medium text-foreground/70">MCP 白名单（留空 = 全部禁用）</label>
                 <PickList
                   items={mcpItems}
                   selected={selectedMcpNames}
@@ -608,7 +609,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                 />
               </div>
             </div>
-            <p className="text-[10px] text-muted-foreground">白名单按名尽力匹配：预设里选了但工作区没有的项会自动忽略；标注「未启用」的项需先在 Skills/MCP 页启用。</p>
+            <p className="text-[10px] text-muted-foreground">白名单按名尽力匹配：留空时不会注入任何 Skill 或 MCP；需要完整能力请点各列表的「全选」。预设里选了但工作区没有的项会自动忽略；标注「未启用」的项需先在 Skills/MCP 页启用。</p>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-foreground/70">子 Agent 委派</label>
               <Select value={form.allowSubagents || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, allowSubagents: v === SELECT_DEFAULT_VALUE ? '' : v }))}>

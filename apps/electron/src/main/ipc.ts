@@ -63,6 +63,7 @@ import {
   TEAM_FILE_IPC_CHANNELS,
   TEAM_MEMORY_IPC_CHANNELS,
   isAgentRuntime,
+  normalizeAgentRuntime,
   isProferPermissionMode,
   normalizePathForCompare,
   type AgentThinkingLevel,
@@ -432,6 +433,7 @@ import {
   updateAgentPermissionMode,
   rewindAgentSession,
   restoreActiveAgentStreams,
+  agentEventBus,
 } from './lib/agent-service'
 import {
   mapSdkShellTasks,
@@ -445,6 +447,11 @@ import {
   onRuntimeProcessRegistryChanged,
 } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
+import { isPiHarnessEnabled } from './lib/pi-harness/feature-gate'
+import { prepareManualPiHarnessCandidateContinuation, releaseManualPiHarnessCandidateContinuation } from './lib/pi-harness/orchestrator-bridge'
+import { listImageGenerationCards, getImageGenerationRecordForRetry } from './lib/agent-image-generation-records'
+import { retryAgentGptImage } from './lib/agent-gpt-image-service'
+import { isAgentGptImageAvailable } from './lib/agent-gpt-image-tools'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -454,6 +461,7 @@ import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
 import {
   getAgentSessionWorkspacePath,
+  resolveAgentSessionWorkspacePath,
   getAgentWorkspacesDir,
   getWorkspaceSkillsDir,
   getWorkspaceFilesDir,
@@ -2704,6 +2712,8 @@ export function registerIpcHandlers(): void {
             )
           }
         })
+        // 受管浏览器原生视图背景跟随主题，避免加载/拖拽时露白
+        browserController.syncThemeBackground()
       }
 
       return result
@@ -2836,6 +2846,8 @@ export function registerIpcHandlers(): void {
         isDark,
       )
     })
+    // 受管浏览器原生视图背景跟随系统主题
+    browserController.syncThemeBackground()
   })
 
   // ===== 自定义通知音效 =====
@@ -3439,6 +3451,18 @@ export function registerIpcHandlers(): void {
     })
   }
 
+  ipcMain.on(
+    AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND,
+    (event, sessionId: string | null): void => {
+      if (sessionId !== null && typeof sessionId !== 'string') return
+      try {
+        assertSensitiveAgentIpcSender(event)
+        browserController.setForegroundSession(sessionId)
+      } catch {
+        // renderer 切换会话期间的旧消息无需打断 UI；后续布局/状态读取会再次同步。
+      }
+    },
+  )
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_BROWSER,
     async (event, sessionId: string): Promise<BrowserViewState> => {
@@ -3459,7 +3483,8 @@ export function registerIpcHandlers(): void {
       if (
         !layout ||
         typeof layout.sessionId !== 'string' ||
-        !layout.bounds ||
+        !layout.viewportBounds ||
+        !layout.pageBounds ||
         !Number.isSafeInteger(layout.revision)
       )
         return
@@ -3651,6 +3676,59 @@ export function registerIpcHandlers(): void {
       return opts
         ? getAgentSessionSDKMessages(id, opts)
         : getAgentSessionSDKMessages(id)
+    },
+  )
+
+  // 只返回已脱敏、当前会话所属的图片生成时间线记录。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_IMAGE_GENERATIONS,
+    async (event, sessionId: string): Promise<import('@profer/shared').AgentImageGenerationCard[]> => {
+      assertSensitiveAgentIpcSender(event)
+      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) throw new Error('无效的 Agent 会话标识')
+      const session = getAgentSessionMeta(sessionId)
+      if (!session?.workspaceId) throw new Error('Agent 会话不存在或不支持图片生成记录')
+      const workspace = getAgentWorkspace(session.workspaceId)
+      if (!workspace) throw new Error('Agent 工作区不存在')
+      return listImageGenerationCards({ sessionId, agentCwd: resolveAgentSessionWorkspacePath(workspace.slug, sessionId) })
+    },
+  )
+
+  // renderer 只能提交 generation ID；主进程重建安全上下文、重新验证失败记录和当前工具配置。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RETRY_IMAGE_GENERATION,
+    async (event, input: import('@profer/shared').RetryAgentImageGenerationInput): Promise<import('@profer/shared').AgentImageGenerationCard> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string' || typeof input.generationId !== 'string'
+        || !input.sessionId.trim() || !input.generationId.trim() || input.sessionId.length > 200 || input.generationId.length > 200) {
+        throw new Error('无效的图片重试请求')
+      }
+      if (isAgentSessionActive(input.sessionId)) throw new Error('Agent 正在运行，完成后再重试图片生成')
+      if (!isAgentGptImageAvailable()) throw new Error('图片生成工具当前不可用，请检查 GPT Image 设置后重试')
+      const session = getAgentSessionMeta(input.sessionId)
+      if (!session?.workspaceId) throw new Error('Agent 会话不存在或不支持图片生成记录')
+      const workspace = getAgentWorkspace(session.workspaceId)
+      if (!workspace) throw new Error('Agent 工作区不存在')
+      const agentCwd = resolveAgentSessionWorkspacePath(workspace.slug, input.sessionId)
+      const record = await getImageGenerationRecordForRetry({ sessionId: input.sessionId, agentCwd }, input.generationId)
+      if (!record) throw new Error('该图片生成记录不存在、已成功或不属于当前会话')
+      if (record.reference.kind === 'paths') throw new Error('参考图编辑失败后请让 Agent 重新选择参考图，不能自动重试')
+      const result = await retryAgentGptImage(record, {
+        sessionId: input.sessionId,
+        agentCwd,
+        // Session cwd is the only retry root. Path-reference retries are rejected above,
+        // so JSONL never re-grants arbitrary external directories.
+        allowedRoots: [agentCwd],
+        onGenerationUpdate: (card) => {
+          const payload = { kind: 'profer_event' as const, event: { type: 'image_generation_updated' as const, sessionId: input.sessionId, record: card } }
+          agentEventBus.emit(input.sessionId, payload)
+          if (!event.sender.isDestroyed()) event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: input.sessionId, payload })
+        },
+      })
+      if (!result.ok) throw new Error(result.error)
+      const cards = await listImageGenerationCards({ sessionId: input.sessionId, agentCwd })
+      const card = cards.find((item) => item.id === result.generationId)
+      if (!card) throw new Error('图片生成记录保存失败')
+      return card
     },
   )
 
@@ -4394,6 +4472,59 @@ export function registerIpcHandlers(): void {
   // 中止 Agent 执行。必须等待底层 run 的 finally 完成后才向渲染层返回，
   // 否则用户刚点击「停止」就发送下一条消息时，编排器仍持有 active session，
   // 新消息会被并发保护拒绝，造成必须重复发送一次的体验问题。
+  /**
+   * User-only continuation for a Pi Harness ready_task candidate. The renderer
+   * nominates a task ID but never supplies prompt/runtime/channel metadata;
+   * all of that is re-read from the authoritative session in main.
+   */
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CONTINUE_PI_HARNESS_CANDIDATE,
+    async (event, input: import('@profer/shared').PiHarnessManualContinueInput): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input !== 'object' || typeof input.sessionId !== 'string' || typeof input.taskId !== 'string'
+        || input.sessionId.length === 0 || input.sessionId.length > 128 || input.taskId.length === 0 || input.taskId.length > 128) {
+        throw new Error('无效的候选任务请求')
+      }
+      if (!isPiHarnessEnabled()) throw new Error('Pi Harness 未启用')
+      const session = getAgentSessionMeta(input.sessionId)
+      if (!session) throw new Error('Agent 会话不存在')
+      if (normalizeAgentRuntime(session.agentRuntime) !== 'pi') throw new Error('仅 Pi 会话可继续 Harness 候选任务')
+      if (!session.channelId) throw new Error('当前会话未配置渠道')
+      if (isAgentSessionActive(input.sessionId)) throw new Error('会话仍在处理中，暂不能继续候选任务')
+
+      const prepared = prepareManualPiHarnessCandidateContinuation(input.sessionId, input.taskId)
+      const sendInput: AgentSendInput = {
+        sessionId: session.id,
+        userMessage: prepared.userMessage,
+        channelId: session.channelId,
+        ...(session.modelId ? { modelId: session.modelId } : {}),
+        ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
+        agentRuntime: 'pi',
+        ...(session.permissionMode ? { permissionModeOverride: session.permissionMode } : {}),
+        piHarnessManualContinuationTicket: prepared.ticketId,
+      }
+      try {
+        await coordinateAgentSend(sendInput, {
+          getSession: getAgentSessionMeta,
+          workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
+          getChannel: getChannelById,
+          startMirror: (candidateSession) => feishuBridgeManager.startSessionMirrorRun(candidateSession),
+          startAgent: () => runAgent(sendInput, event.sender, async (candidateSession) => {
+            try {
+              await feishuBridgeManager.startSessionMirrorRun(candidateSession)
+            } catch (error) {
+              console.error('[飞书 Session 镜像] Harness 候选继续后初始化失败:', error)
+            }
+          }),
+          onMirrorError: (error) => console.error('[飞书 Session 镜像] Harness 候选继续初始化失败:', error),
+        })
+      } catch (error) {
+        releaseManualPiHarnessCandidateContinuation(prepared.ticketId)
+        throw error
+      }
+    },
+  )
+
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (event, sessionId: string): Promise<void> => {
@@ -5059,6 +5190,21 @@ export function registerIpcHandlers(): void {
       }
       const { getGraphSummary } = await import('./lib/project-graph-service')
       return getGraphSummary(sessionId)
+    },
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_PI_HARNESS_SNAPSHOT,
+    async (event, sessionId: string): Promise<import('@profer/shared').PiHarnessSnapshotView> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+        throw new Error('无效的会话标识')
+      }
+      const [{ loadPiHarnessSnapshot }, { toPiHarnessSnapshotView }] = await Promise.all([
+        import('./lib/pi-harness/pi-harness-store'),
+        import('./lib/pi-harness/snapshot-view'),
+      ])
+      return toPiHarnessSnapshotView(loadPiHarnessSnapshot(sessionId))
     },
   )
 
@@ -7036,29 +7182,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_WORKSPACE_HEATMAP_DAILY,
     async (_, workspaceId: string) => {
-      const { listAgentSessions } = await import('./lib/agent-session-manager')
-      const { readIndex: readWsIndex } =
-        await import('./lib/agent-workspace-manager')
-      const { getWorkspaceHeatmapDaily } =
-        await import('./lib/workspace-heatmap-service')
-
-      // 只对普通工作区开放
-      const wsIndex = readWsIndex()
-      const workspace = wsIndex.workspaces.find((w) => w.id === workspaceId)
-      if (!workspace || workspace.type === 'team') {
-        return []
-      }
-
-      const sessions = listAgentSessions(true)
-        .filter((s) => s.workspaceId === workspaceId)
-        .map((s) => ({
-          id: s.id,
-          createdAt: s.createdAt,
-          updatedAt: s.updatedAt,
-          archived: s.archived,
-        }))
-
-      return getWorkspaceHeatmapDaily(workspaceId, sessions)
+      const { loadWorkspaceHeatmapDaily } =
+        await import('./lib/workspace-heatmap-query')
+      return loadWorkspaceHeatmapDaily(workspaceId)
     },
   )
 

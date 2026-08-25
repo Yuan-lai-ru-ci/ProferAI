@@ -14,6 +14,8 @@ import { X, Download, ExternalLink, FolderOpen, Loader2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { OfficePreview } from './office-preview/OfficePreview'
+import type { FileAccessOptions } from '@profer/shared'
 
 interface FilePreviewDialogProps {
   open: boolean
@@ -28,6 +30,7 @@ type PreviewState =
   | { status: 'loading' }
   | { status: 'image'; src: string }
   | { status: 'html'; html: string }
+  | { status: 'office'; path: string; access?: FileAccessOptions; fallbackHtml?: string }
   | { status: 'iframe'; src: string }
   | { status: 'text'; content: string; language: string }
   | { status: 'unsupported' }
@@ -93,11 +96,9 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
         const result = await window.electronAPI.preparePdfPreview(localPath, access)
         if (result?.tmpHtmlUrl) setState({ status: 'iframe', src: result.tmpHtmlUrl })
         else setState({ status: 'error', message: '无法预览 PDF' })
-      } else if (e === 'docx') {
-        const result = await window.electronAPI.docxToHtml(localPath, access)
-        if (result?.html) setState({ status: 'html', html: result.html })
-        else setState({ status: 'error', message: '无法预览文档' })
-      } else if (['xlsx', 'pptx', 'odt', 'ods', 'odp'].includes(e)) {
+      } else if (['docx', 'xlsx', 'pptx'].includes(e)) {
+        setState({ status: 'office', path: localPath, access })
+      } else if (['odt', 'ods', 'odp'].includes(e)) {
         const result = await window.electronAPI.officeToHtml(localPath, access)
         if (result?.html) setState({ status: 'html', html: result.html })
         else setState({ status: 'error', message: '无法预览文档' })
@@ -131,6 +132,17 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       teamDownload ? { candidateBasePaths: [parentDir] } : undefined,
     ).catch(() => {})
   }
+
+  const handleOfficeError = React.useCallback(async (officePath: string, officeAccess?: FileAccessOptions): Promise<void> => {
+    try {
+      const result = ext(fileName) === 'docx'
+        ? await window.electronAPI.docxToHtml(officePath, officeAccess)
+        : await window.electronAPI.officeToHtml(officePath, officeAccess)
+      if (result?.html) setState((current) => current.status === 'office' ? { ...current, fallbackHtml: result.html } : current)
+    } catch {
+      // Office fallback is best effort; the viewer keeps its actionable error state.
+    }
+  }, [fileName])
 
   const handleShowInFolder = async (): Promise<void> => {
     let targetPath = resolvedPath ?? filePath
@@ -192,6 +204,16 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
           )}
           {state.status === 'html' && (
             <iframe srcDoc={state.html} className="w-full h-full border-0" sandbox="allow-scripts" />
+          )}
+          {state.status === 'office' && (
+            <OfficePreview
+              filePath={state.path}
+              fileName={fileName}
+              access={state.access}
+              className="h-full"
+              fallback={state.fallbackHtml ? <iframe srcDoc={state.fallbackHtml} className="h-full w-full border-0" sandbox="allow-scripts" /> : undefined}
+              onError={() => { void handleOfficeError(state.path, state.access) }}
+            />
           )}
           {state.status === 'iframe' && (
             <iframe src={state.src} className="w-full h-full border-0" />

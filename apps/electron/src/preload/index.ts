@@ -211,6 +211,8 @@ export interface ElectronAPI {
   pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
   /** 订阅受管网页下载被拦截的脱敏事件。 */
   onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => () => void
+  /** 同步切换浏览器原生视图的前台会话所有权。 */
+  setAgentBrowserForeground: (sessionId: string | null) => void
   hideAgentBrowser: (sessionId: string) => Promise<void>
   closeAgentBrowser: (sessionId: string) => Promise<void>
   setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => Promise<import('@profer/shared').BrowserViewState>
@@ -608,6 +610,10 @@ export interface ElectronAPI {
     (id: string): Promise<SDKMessage[]>
     (id: string, opts: { tail?: number; before?: number }): Promise<{ messages: SDKMessage[]; total: number; startIndex: number; endIndex: number; hasMore: boolean }>
   }
+  /** 获取当前会话脱敏后的图片生成独立时间线卡片。 */
+  listAgentImageGenerations: (sessionId: string) => Promise<import('@profer/shared').AgentImageGenerationCard[]>
+  /** 仅按会话和 generation ID 重试失败卡；主进程重建受信任参数。 */
+  retryAgentImageGeneration: (input: import('@profer/shared').RetryAgentImageGenerationInput) => Promise<import('@profer/shared').AgentImageGenerationCard>
 
   /** 更新 Agent 会话标题 */
   updateAgentSessionTitle: (id: string, title: string) => Promise<AgentSessionMeta>
@@ -873,6 +879,12 @@ export interface ElectronAPI {
 
   /** 获取当前会话的 Graph 摘要 */
   getGraphSummary: (sessionId: string) => Promise<import('@profer/project-core').GraphSummary>
+
+  /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
+  getPiHarnessSnapshot: (sessionId: string) => Promise<import('@profer/shared').PiHarnessSnapshotView>
+
+  /** 用户显式继续一个 ready_task/shadow_mode Harness 候选任务。 */
+  continuePiHarnessCandidate: (input: import('@profer/shared').PiHarnessManualContinueInput) => Promise<void>
 
   /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => Promise<void>
@@ -1547,6 +1559,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
     return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
   },
+  setAgentBrowserForeground: (sessionId: string | null) => {
+    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND, sessionId)
+  },
   hideAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.HIDE_BROWSER, sessionId),
   closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),
   setAgentBrowserZoom: (input: import('@profer/shared').BrowserTabInput & { zoomFactor: number }) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, input),
@@ -2060,6 +2075,14 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id, opts)
   },
 
+  listAgentImageGenerations: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_IMAGE_GENERATIONS, sessionId)
+  },
+
+  retryAgentImageGeneration: (input: import('@profer/shared').RetryAgentImageGenerationInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RETRY_IMAGE_GENERATION, input)
+  },
+
   restoreActiveAgentStreams: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS)
   },
@@ -2464,6 +2487,14 @@ const electronAPI: ElectronAPI = {
 
   getGraphSummary: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId)
+  },
+
+  getPiHarnessSnapshot: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_HARNESS_SNAPSHOT, sessionId)
+  },
+
+  continuePiHarnessCandidate: (input: import('@profer/shared').PiHarnessManualContinueInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CONTINUE_PI_HARNESS_CANDIDATE, input)
   },
 
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => {

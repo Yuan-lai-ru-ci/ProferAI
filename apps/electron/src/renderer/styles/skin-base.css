@@ -26,6 +26,13 @@ html[class*="skin-"] .shell-bg {
   background: var(--shell-bg-gradient);
 }
 
+/* 分栏背景契约：皮肤可直接覆写三个 token；未覆写时沿用 Surface Contract v2。 */
+html[class*="skin-"] {
+  --workspace-canvas: var(--sunken-surface);
+  --panel-surface: var(--raised-surface);
+  --panel-border: var(--surface-border);
+}
+
 /* ===== 模式切换器选中态 ===== */
 html[class*="skin-"] .mode-slider {
   background: var(--mode-slider-bg) !important;

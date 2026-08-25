@@ -544,6 +544,43 @@ export interface AgentToolResultImage {
   mediaType: string
 }
 
+/** Agent 图片生成独立时间线卡片的真实生命周期状态。 */
+export type AgentImageGenerationStatus = 'requesting' | 'saving' | 'succeeded' | 'failed'
+
+/** 图片生成使用的参考图来源；绝不向 renderer 暴露外部文件路径。 */
+export interface AgentImageGenerationReference {
+  kind: 'none' | 'paths' | 'last_generated'
+  generationId?: string
+}
+
+/** 可安全跨 EventBus/IPC 传输的图片生成记录。 */
+export interface AgentImageGenerationCard {
+  version: 1
+  id: string
+  sessionId: string
+  toolCallId: string
+  status: AgentImageGenerationStatus
+  prompt: string
+  size: '1024x1024' | '1536x1024' | '1024x1536' | 'auto'
+  quality: 'auto' | 'low' | 'medium' | 'high'
+  reference: AgentImageGenerationReference
+  image?: { localPath: string; filename: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' }
+  revisedPrompt?: string
+  mode?: 'official' | 'byok'
+  chargedCredits?: 5
+  error?: string
+  createdAt: number
+  updatedAt: number
+  completedAt?: number
+  retryOf?: string
+}
+
+/** renderer 只能用 session/id 请求重试，不能重放或改变 provider 参数。 */
+export interface RetryAgentImageGenerationInput {
+  sessionId: string
+  generationId: string
+}
+
 /** 计划阶段状态变化来源 */
 export type AgentPlanModeChangeSource = 'initial' | 'tool' | 'permission'
 
@@ -622,6 +659,7 @@ export type ProferEvent =
   | { type: 'model_resolved'; model: string }
   | { type: 'context_window'; contextWindow: number }
   | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
+  | { type: 'image_generation_updated'; sessionId: string; record: AgentImageGenerationCard }
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
@@ -1135,6 +1173,8 @@ export interface AgentSendInput {
   uuid?: string
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
+  /** Main-process one-shot ticket for a user-confirmed Pi Harness candidate. Not renderer-generated. */
+  piHarnessManualContinuationTicket?: string
 }
 
 // ===== Agent 队列消息 =====
@@ -1256,6 +1296,8 @@ export interface SessionHealth {
   title: string
   /** agent-sessions/<id>.jsonl 是否存在 */
   hasProferJsonl: boolean
+  /** agent-sessions/<id>-pi-harness.jsonl 是否存在；缺失代表可安全降级的历史会话，不是孤儿条件 */
+  hasPiHarnessJsonl: boolean
   /** SDK project 目录下是否有对应 JSONL */
   hasSdkJsonl: boolean
   /** 工作区目录是否存在 */
@@ -1662,6 +1704,10 @@ export const AGENT_IPC_CHANNELS = {
   ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
+  /** 列出当前会话已持久化的图片生成独立时间线卡片 */
+  LIST_IMAGE_GENERATIONS: 'agent:list-image-generations',
+  /** 仅按 generation ID 重试失败的图片生成；参数在主进程重建 */
+  RETRY_IMAGE_GENERATION: 'agent:retry-image-generation',
   /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
   RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
   /** 更新会话标题 */
@@ -1749,6 +1795,8 @@ export const AGENT_IPC_CHANNELS = {
   PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
   /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
   BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
+  /** 将浏览器原生视图的可见性所有权切换到当前前台 Agent 会话。 */
+  SET_BROWSER_FOREGROUND: 'agent:set-browser-foreground',
   /** 仅隐藏原生 WebContentsView，保留浏览器会话与标签。 */
   HIDE_BROWSER: 'agent:hide-browser',
   CLOSE_BROWSER: 'agent:close-browser',
@@ -1971,6 +2019,10 @@ export const AGENT_IPC_CHANNELS = {
   GET_GRAPH: 'agent:get-graph',
   /** 获取当前会话的 Graph 摘要 */
   GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
+  /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
+  GET_PI_HARNESS_SNAPSHOT: 'agent:get-pi-harness-snapshot',
+  /** 用户显式确认继续一个 ready_task/shadow_mode Pi Harness candidate。 */
+  CONTINUE_PI_HARNESS_CANDIDATE: 'agent:continue-pi-harness-candidate',
   /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
   APPEND_GRAPH_EVENT: 'agent:append-graph-event',
   /** 回溯放弃抽取：通读会话增量轮次，抽取放弃方向写进图（渲染进程 → 主进程，返回刷新后的图） */

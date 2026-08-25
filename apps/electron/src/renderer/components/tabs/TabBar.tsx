@@ -11,7 +11,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { Globe2, PanelRight } from 'lucide-react'
-import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   tabsAtom,
@@ -22,7 +21,6 @@ import {
 import type { TabItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
-import { replayIntroOpenAtom } from '@/atoms/intro-atoms'
 import {
   agentSessionsAtom,
   agentSidePanelOpenAtom,
@@ -230,7 +228,6 @@ function TabBarInner({
   // 该按钮的 absolute 定位与 DiffPanelTabBar.PanelRightClose 的 mr-1 mb-[3px] 坐标耦合，
   // 若右侧关闭按钮样式变化，这里需同步调整。
   const [isPanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
-  const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const seenFilesVersion = useAtomValue(seenFilesVersionAtom)
   const hasFileChanges = filesVersion > seenFilesVersion
@@ -318,14 +315,6 @@ function TabBarInner({
       onClick: toggleBrowser,
       // 被迫收起（展开意图 A=true 但窗口不足）：图标高亮提示用户当前有展开意图
       highlighted: browserForcedHidden,
-    },
-    {
-      id: 'replay-intro',
-      visible: true,
-      label: '重播开屏动画',
-      tooltip: '重播开屏动画',
-      icon: <Sparkles className="size-3.5" />,
-      onClick: () => setReplayIntroOpen(true),
     },
     {
       id: 'file-panel',

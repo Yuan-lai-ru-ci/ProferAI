@@ -197,13 +197,15 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   return (
     <WindowControlsTemplateProvider>
     <AppShellProvider value={contextValue}>
-      {/* 可拖动标题栏区域，用于窗口拖动。
-          Windows 上必须避开右上角的 WindowControls 区域（buttons ~118px + 8px buffer = 126px），
-          否则 drag-region 与按钮区的 hitmask 重叠会让 OS 把单击当成标题栏点击，
-          表现为"按钮要双击才响应"。 */}
+      {/* 只保留顶端 8px 的全局拖拽缝隙。
+          过去这里覆盖 50px 高的固定 drag-region；它会和 TabBar 内的 no-drag
+          控件重叠。Electron 的原生 app-region 命中并不总是遵循 CSS z-index，
+          尤其当皮肤为 TabBar 创建 backdrop-filter 合成层时，Tab、工具按钮会被
+          误判为窗口拖动区而不可点击。TabBar、侧栏和各独立视图已经各自提供
+          局部 drag region，因此全局层不能覆盖任何实际交互区域。 */}
       <div
         className={cn(
-          'titlebar-drag-region fixed top-0 left-0 h-[50px] z-50',
+          'titlebar-drag-region fixed top-0 left-0 h-2 z-50',
           isWindows ? 'right-[126px]' : 'right-0'
         )}
       />
@@ -215,23 +217,21 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             isClassic ? 'p-2 pr-0' : '',
             // 收起 rail 必须压过其右侧的分隔线；冷启动直接恢复收起状态时，
             // 分隔线处于更高层会裁掉 rail 最右侧，造成整列图标视觉上向左偏移。
-            sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[60] flex-none crt-sidebar',
+            sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[70] flex-none crt-sidebar',
           )}
         >
           <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
-          {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
+          {/* 左栏复用主区既有的 8px 外边距作为拖动命中区：不额外占宽度，也不覆盖侧栏滚动条。 */}
           {!sidebarCollapsed && (
             <div
-              className={cn(
-                'absolute right-0 top-0 bottom-0 w-4 translate-x-1/2 cursor-col-resize hover:bg-primary/5 active:bg-primary/50 transition-colors z-20'
-              )}
+              className="titlebar-no-drag absolute left-full top-0 bottom-0 z-[80] w-1.5 translate-x-px cursor-col-resize pointer-events-auto"
               onMouseDown={handleLeftSidebarMouseDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整左侧边栏宽度"
             />
           )}
         </div>
-        {!isClassic && (
-          <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-surface-border/80" />
-        )}
 
         {/* 中间容器 */}
         <div className="flex-1 min-w-0 p-2 relative z-[60]">
@@ -251,24 +251,20 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             className={cn(
               // 只让 SidePanel 自身展开。若同时动画化外层 padding，面板会在横向展开时
               // 从 top: 0 平移到 p-2 的最终基线，视觉上像从右上方斜着滑入。
-              'relative z-[60] flex items-stretch crt-sidebar',
-              filePanelVisible ? 'p-2 pl-0' : 'p-0'
+              filePanelVisible ? 'relative z-[70] flex items-stretch crt-sidebar p-2 pl-0' : 'relative z-[60] flex items-stretch crt-sidebar p-0'
             )}
           >
-            {!isClassic && (
-              <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-surface-border/80" />
-            )}
-            {/* 拖拽手柄 — 绝对定位，居中于主区域和右侧面板的缝隙 */}
+            <RightSidePanel width={clampedRightPanelWidth} />
+            {/* 透明命中区收窄为 6px，仅落在现有中缝中心，不参与布局也不产生额外留白。 */}
             {filePanelVisible && (
               <div
-                className={cn(
-                  'absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize active:bg-primary/50 transition-colors',
-                  isClassic ? 'z-10' : 'z-20'
-                )}
+                className="titlebar-no-drag absolute -left-[7px] top-0 bottom-0 z-[80] w-1.5 cursor-col-resize pointer-events-auto"
                 onMouseDown={handleMouseDown}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整右侧文件面板宽度"
               />
             )}
-            <RightSidePanel width={clampedRightPanelWidth} />
           </div>
         )}
       </div>

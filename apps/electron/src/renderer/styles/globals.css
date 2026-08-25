@@ -162,6 +162,10 @@
     --diff-deletion-bg: 0 84% 60% / 0.12;
     --diff-deletion-fg: 0 65% 36%;
     --browser-host-surface: 0 0% 100%;
+    /* 分栏背景契约：工作区承托与卡片表面分离，避免 shell 渐变和阴影参与圆角绘制。 */
+    --workspace-canvas: var(--sunken-surface);
+    --panel-surface: var(--raised-surface);
+    --panel-border: var(--surface-border);
     --success: 142 71% 45%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
@@ -1369,6 +1373,61 @@
   width: 6px;
 }
 
+/* ===== 面板分隔拖动条 =====
+ * 拖动条始终作为两个面板之间的独立布局项，占用 8px 中缝而不覆盖任一内容区。
+ * 视觉上只显示中心 1px 细线，悬停/拖动时再增强，避免与内容滚动条竞争命中区域。
+ */
+.panel-resize-handle-x,
+.panel-resize-handle-y {
+  position: relative;
+  flex: 0 0 auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.panel-resize-handle-x {
+  width: 8px;
+  align-self: stretch;
+  cursor: col-resize;
+}
+.panel-resize-handle-y {
+  height: 8px;
+  width: 100%;
+  cursor: row-resize;
+}
+.panel-resize-handle-x::after,
+.panel-resize-handle-y::after {
+  position: absolute;
+  content: '';
+  background: hsl(var(--surface-border) / 0.8);
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+}
+.panel-resize-handle-x::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+/* 左栏沿用主区原有留白，不额外绘制细线，避免形成割裂感。 */
+.panel-resize-handle-overlay::after {
+  display: none;
+}
+.panel-resize-handle-y::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.panel-resize-handle-x:hover::after,
+.panel-resize-handle-y:hover::after,
+.panel-resize-handle-x:active::after,
+.panel-resize-handle-y:active::after {
+  background: hsl(var(--primary) / 0.7);
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.12);
+}
+
 /* 滚动区域上下渐隐遮罩 */
 .mask-fade-y {
   mask-image: linear-gradient(
@@ -1832,6 +1891,16 @@
 
 .office-slide li + li {
   margin-top: 4px;
+}
+
+/* Silurus Docx/Pptx ScrollViewer 内部滚动容器（wrapper > scrollHost）：
+   scrollHost 的 spacer 按「最大页宽 + 左右 padding」撑宽，但没有扣除垂直滚动条
+   占用的宽度，因此多页文档出现垂直滚动条时，底部会多出一条横向滚动条。
+   页面本身按 fitWidth 缩放、水平居中，不会横向溢出可视区，隐藏横向滚动条是安全的。
+   DOM 层级：containerRef(data-office-format) > viewerHostRef > wrapper > scrollHost */
+[data-office-format='docx'] > div > div > div,
+[data-office-format='pptx'] > div > div > div {
+  overflow-x: hidden !important;
 }
 
 /* ===== 语音输入浮窗拖动区域 ===== */

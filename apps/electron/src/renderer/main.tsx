@@ -70,6 +70,7 @@ import {
   uiScaleAtom,
   initializeUiScale,
 } from './atoms/ui-scale'
+import { initializePreviewModePreference, previewModePreferenceAtom } from './atoms/preview-atoms'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
 import {
@@ -600,6 +601,20 @@ function UiScaleInitializer(): null {
 }
 
 /**
+ * 预览默认展开方式初始化组件。
+ * settings.json 是跨重启的权威值，localStorage 仅用于首屏和旧版本兼容。
+ */
+function PreviewModePreferenceInitializer(): null {
+  const setPreference = useSetAtom(previewModePreferenceAtom)
+
+  useEffect(() => {
+    void initializePreviewModePreference(setPreference)
+  }, [setPreference])
+
+  return null
+}
+
+/**
  * Chat IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Chat 流式事件
@@ -1087,6 +1102,7 @@ if (isQuickTaskWindow) {
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />
       <UiScaleInitializer />
+      <PreviewModePreferenceInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />
       <ChatToolInitializer />

@@ -13,7 +13,7 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
-import type { AgentRuntime, ProferPermissionMode } from '@profer/shared'
+import type { AgentRuntime, ProferPermissionMode, AgentImageGenerationCard } from '@profer/shared'
 import type {
   CreateAutomationInput,
   CreateTodoInput,
@@ -71,6 +71,14 @@ import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-mater
 import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
+import { generateAgentGptImage } from '../agent-gpt-image-service'
+import {
+  AGENT_GPT_IMAGE_DESCRIPTION,
+  AGENT_GPT_IMAGE_TOOL_NAME,
+  formatAgentGptImageToolResult,
+  isAgentGptImageAvailable,
+} from '../agent-gpt-image-tools'
+import { GPT_IMAGE_QUALITIES, GPT_IMAGE_SIZES } from '../gpt-image-service'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -103,6 +111,8 @@ export interface PiBuiltinToolsContext {
   agentCwd?: string
   /** 图片外发前必须校验在这些已授权目录内。 */
   allowedRoots?: string[]
+  /** 图片生命周期持久化成功后通知 renderer 的安全卡片。 */
+  onImageGenerationUpdate?: (record: AgentImageGenerationCard) => void
   /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
   windowsShellAvailable?: boolean
   /** 预设禁用的产品内置工具组（task-graph/memory/collaboration/automation），对应工具不注册 */
@@ -598,6 +608,39 @@ function buildPiAgentImageOutputTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): T
           agentCwd: ctx.agentCwd!,
           allowedRoots: ctx.allowedRoots ?? [],
         })) as AgentToolResult<unknown>
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+function buildPiAgentGptImageTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  // A home-directory fallback is not an authorized Agent workspace. Availability also
+  // includes the user-controlled Chat tool switch, so disabled/config-less Image is absent.
+  if (!ctx.agentCwd || !ctx.workspaceSlug || !ctx.allowedRoots?.length || !isAgentGptImageAvailable()) return []
+  return [
+    sdk.defineTool({
+      name: AGENT_GPT_IMAGE_TOOL_NAME,
+      label: '生成图片',
+      description: AGENT_GPT_IMAGE_DESCRIPTION,
+      promptSnippet: 'GenerateImage: generate one image or edit up to four authorized local reference images; preserve the returned PROMA_IMAGE_ATTACHMENT marker unchanged in the final response.',
+      parameters: Type.Object({
+        prompt: Type.String({ minLength: 1, maxLength: 10_000 }),
+        size: Type.Optional(Type.Union(GPT_IMAGE_SIZES.map((value) => Type.Literal(value)))),
+        quality: Type.Optional(Type.Union(GPT_IMAGE_QUALITIES.map((value) => Type.Literal(value)))),
+        referenceImagePaths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { minItems: 1, maxItems: 4 })),
+        useLastGeneratedImage: Type.Optional(Type.Boolean()),
+      }),
+      async execute(toolCallId, params, signal) {
+        const args = params as { prompt?: unknown; size?: unknown; quality?: unknown; referenceImagePaths?: unknown; useLastGeneratedImage?: unknown }
+        return formatAgentGptImageToolResult(await generateAgentGptImage({
+          toolCallId,
+          prompt: typeof args.prompt === 'string' ? args.prompt : '',
+          size: args.size as '1024x1024' | '1536x1024' | '1024x1536' | 'auto' | undefined,
+          quality: args.quality as 'auto' | 'low' | 'medium' | 'high' | undefined,
+          referenceImagePaths: Array.isArray(args.referenceImagePaths) ? args.referenceImagePaths.filter((path): path is string => typeof path === 'string') : undefined,
+          useLastGeneratedImage: args.useLastGeneratedImage === true,
+          signal,
+        }, { sessionId: ctx.sessionId, agentCwd: ctx.agentCwd!, allowedRoots: ctx.allowedRoots ?? [], onGenerationUpdate: ctx.onImageGenerationUpdate })) as AgentToolResult<unknown>
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -1360,6 +1403,12 @@ export async function buildPiBuiltinTools(
     tools.push(...buildPiAgentImageOutputTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入本地图片输出工具失败:', error)
+  }
+
+  try {
+    tools.push(...buildPiAgentGptImageTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 GPT Image 工具失败:', error)
   }
 
   try {

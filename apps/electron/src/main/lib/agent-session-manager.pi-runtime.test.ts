@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendPiHarnessEvent } from './pi-harness/pi-harness-store'
+import { PI_HARNESS_EVENT_VERSION, type PiHarnessEvent } from './pi-harness/types'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -59,6 +61,7 @@ describe('Pi runtime 会话持久化隔离', () => {
     const health = sessions.findOrphanSessions().find((item) => item.sessionId === meta.id)
 
     expect(health?.hasSdkJsonl).toBe(true)
+    expect(health?.hasPiHarnessJsonl).toBe(false)
     expect(health?.isOrphan).toBe(false)
     expect(health?.orphanReason).toBeUndefined()
   })
@@ -74,11 +77,19 @@ describe('Pi runtime 会话持久化隔离', () => {
       type: 'task_created', taskId: 'task-1', timestamp: Date.now(), payload: { subject: '删除时清理', description: '', dependsOn: [] },
     })
     const graphPath = join(configPaths.getAgentSessionsDir(), `${first.id}-graph.jsonl`)
+    const harnessEvent: PiHarnessEvent = {
+      version: PI_HARNESS_EVENT_VERSION,
+      eventId: 'harness-delete-event', timestamp: Date.now(), sessionId: first.id, goalId: 'goal-delete',
+      type: 'goal_created', payload: { policy: { governorMode: 'shadow', permissionMode: 'bypassPermissions', maxFocusChars: 1200 } },
+    }
+    appendPiHarnessEvent(first.id, harnessEvent)
+    const harnessPath = configPaths.getPiHarnessEventsPath(first.id)
 
     sessions.deleteAgentSession(first.id)
 
     expect(existsSync(deletedTranscript)).toBe(false)
     expect(existsSync(graphPath)).toBe(false)
+    expect(existsSync(harnessPath)).toBe(false)
     expect(existsSync(retainedTranscript)).toBe(true)
     expect(sessions.getAgentSessionMeta(first.id)).toBeUndefined()
     expect(sessions.getAgentSessionMeta(second.id)?.sdkSessionId).toBe('pi-keep-id')

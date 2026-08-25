@@ -26,6 +26,15 @@ describe('migrateLocalStorageKeys', () => {
     expect(store.getItem('profer-browser-split-ratio')).toBe('0.6')
   })
 
+  test('预览默认展开方式 key 迁移正确', async () => {
+    const store = makeStore()
+    store.setItem('proma-preview-mode-pref', '"split"')
+    const { migrateLocalStorageKeys: run } = await import(`./localstorage-migration.ts?t=${Date.now()}-preview-mode`)
+    ;(globalThis as any).localStorage = store
+    run()
+    expect(store.getItem('profer-preview-mode-pref')).toBe('"split"')
+  })
+
   test('新浏览器 file-panel key 迁移正确', async () => {
     const store = makeStore()
     store.setItem('proma-browser-file-panel-manual-restore-session-ids', '["s1","s2"]')

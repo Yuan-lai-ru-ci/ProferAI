@@ -19,7 +19,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
-import { BrowserSlot } from './BrowserSlot'
+import { BrowserViewport } from './BrowserViewport'
 import { BrowserStartPage } from './BrowserStartPage'
 
 interface BrowserPanelProps {
@@ -294,8 +294,9 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   const title = state?.title || '受管浏览器'
   // 会话来源标识：区分用户手动、自动任务、委派子会话，让用户一眼看出是谁在驱动这个浏览器。
   const sourceLabel = state?.executionSource === 'automation' ? '自动任务' : state?.executionSource === 'delegation' ? '委派' : null
+  // 浏览器卡片与对话卡片共享 panel-surface；网页内容单独使用 browser-host，不参与卡片外壳绘制。
   return (
-    <div className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl bg-browser-host shadow-xl dark:shadow-sm titlebar-no-drag">
+    <div data-browser-native-host className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl border border-panel-border/70 bg-panel-surface shadow-none titlebar-no-drag">
       {/* 浏览器是最右侧分栏时，窗口按钮成为浏览器顶栏的一部分。 */}
       <WindowControlsHost id="browser-panel" active={avoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-[3px] z-10" />
       <div className={`flex items-center h-[34px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
@@ -429,7 +430,12 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
             onClearHistory={clearHistory}
           />
         ) : (
-          <BrowserSlot key={`${activeTabId}:${layoutKey}`} sessionId={sessionId} tabId={activeTabId} />
+          <BrowserViewport
+            key={`${activeTabId}:${layoutKey}`}
+            sessionId={sessionId}
+            tabId={activeTabId}
+            visible={browserVisible}
+          />
         )
       ) : (
         <div className="flex flex-1 min-h-0 items-center justify-center bg-muted/15 px-8 text-center">

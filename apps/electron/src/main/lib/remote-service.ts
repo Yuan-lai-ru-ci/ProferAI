@@ -88,6 +88,7 @@ import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './atta
 import { chatEventBus } from './chat-stream-bus'
 import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
 import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
+import { loadWorkspaceHeatmapDaily } from './workspace-heatmap-query'
 import { RemoteAgentEventLog, type RemoteAgentEventRecord } from './remote-agent-event-log'
 
 /** 正式版默认监听端口 */
@@ -684,6 +685,11 @@ type CommandResult =
   | { ok: true; data: unknown }
   | { ok: false; error: string }
 
+export function validateWorkspaceHeatmapRequest(workspaceId: unknown): string | null {
+  if (typeof workspaceId !== 'string' || !workspaceId.trim()) return '缺少 workspaceId'
+  return null
+}
+
 /** 单个会话对象（脱敏，仅暴露平板端需要的字段；与桌面 AgentSessionMeta 平板所需子集兼容）。
  * 注意：必须包含 id/updatedAt/title/pinned/archived/draft 等完整字段——桌面复用组件
  * （AgentView/LeftSidebar）按桌面 IPC 返回完整对象的契约处理 .then((updated) => updated.id)
@@ -859,6 +865,16 @@ async function handleCommand(
 
     case 'list_workspaces': {
       return { ok: true, data: buildWorkspaceList() }
+    }
+
+    case 'get_workspace_heatmap_daily': {
+      const requestedWorkspaceId = parsed.workspaceId
+      const validationError = validateWorkspaceHeatmapRequest(requestedWorkspaceId)
+      if (validationError) return { ok: false, error: validationError }
+      if (typeof requestedWorkspaceId !== 'string') {
+        return { ok: false, error: '缺少 workspaceId' }
+      }
+      return { ok: true, data: loadWorkspaceHeatmapDaily(requestedWorkspaceId.trim()) }
     }
 
     case 'create_workspace': {

@@ -10,6 +10,7 @@ const KEY_MAP: Record<string, string> = {
   'proma-app-mode': 'profer-app-mode',
   'proma-auth-status': 'profer-auth-status',
   'proma-auto-preview-enabled': 'profer-auto-preview-enabled',
+  'proma-preview-mode-pref': 'profer-preview-mode-pref',
   'proma-selected-model': 'profer-selected-model',
   'proma-context-length': 'profer-context-length',
   'proma-thinking-enabled': 'profer-thinking-enabled',

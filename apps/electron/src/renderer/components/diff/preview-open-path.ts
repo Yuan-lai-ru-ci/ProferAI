@@ -5,10 +5,25 @@ import { isAbsoluteFilePath } from '@/lib/file-utils'
 // 绝对路径判定统一走 renderer/lib 公共实现（R2），此处仅转发以保持既有导入路径兼容
 export { isAbsoluteFilePath }
 
+function normalizeWindowsDrivePath(filePath: string): string {
+  // 默认应用 IPC 必须用可 realpath 的单一 Windows 路径格式；
+  // 对话链接和历史状态可能混用 C:/Users\\name\\...，统一为 C:/Users/name/...。
+  if (!/^[A-Za-z]:[\\/]/.test(filePath)) return filePath
+  const normalized = filePath
+    .replace(/\\/g, '/')
+    .replace(/^([A-Za-z]:)\/+/, '$1/')
+  // Markdown/file URL 在某些路径中会吞掉 `\\.`，把 `yuan.profer-dev`
+  // 还原为用户目录下的隐藏配置目录 `yuan/.profer-dev`。
+  return normalized.replace(
+    /^([A-Za-z]:\/Users\/[^/]+)\.(profer(?:-dev)?|proma(?:-dev)?)(?=\/|$)/i,
+    '$1/.$2',
+  )
+}
+
 function joinFilePath(basePath: string, filePath: string): string {
   const base = basePath.replace(/[\\/]+$/, '')
   const child = filePath.replace(/^[\\/]+/, '')
-  return `${base}/${child}`
+  return normalizeWindowsDrivePath(`${base}/${child}`)
 }
 
 function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
@@ -30,14 +45,14 @@ export function getPreviewCandidateBasePaths(
   basePaths: readonly string[] | undefined,
   ...contextPaths: Array<string | null | undefined>
 ): string[] {
-  return uniqueTruthyPaths([...(basePaths ?? []), ...contextPaths])
+  return uniqueTruthyPaths([...(basePaths ?? []), ...contextPaths].map((path) => path ? normalizeWindowsDrivePath(path) : path))
 }
 
 /**
  * Diff 服务需要相对 git 路径；系统默认 App 打开文件则必须使用实际文件路径。
  */
 export function getDefaultAppTargetPath(file: PreviewFile, sessionPath: string): string {
-  if (isAbsoluteFilePath(file.filePath)) return file.filePath
+  if (isAbsoluteFilePath(file.filePath)) return normalizeWindowsDrivePath(file.filePath)
 
   const basePath = file.previewOnly
     ? (file.basePaths?.[0] ?? file.dirPath ?? sessionPath)
