@@ -290,7 +290,6 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
       pptCapabilityActive: true,
     })
     const names = tools.map((tool) => tool.name)
-    expect(names).toContain('generate_pptx_fast')
     for (const forbidden of ['plan_ppt_visuals', 'audit_ppt_delivery', 'search_open_materials', 'inspect_deck_sources', 'create_deck_project', 'confirm_deck_brief', 'compile_deck_project']) {
       expect(names).not.toContain(forbidden)
     }

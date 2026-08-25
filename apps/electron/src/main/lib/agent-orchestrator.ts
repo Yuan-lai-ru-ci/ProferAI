@@ -154,7 +154,6 @@ import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { injectClaudeBrowserMcpServer } from './claude-browser-tools'
 import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
-import { injectFastPptMcpServer } from './ppt-fast-agent-tools'
 import { evaluatePptCapability } from './ppt-capability-gate'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
 import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
@@ -1175,10 +1174,6 @@ export class AgentOrchestrator {
           workspaceId,
           isTeamWorkspace: workspace?.type === 'team',
         })
-      }
-      if (pptCapabilityActive) {
-        // Fast path only: Deck Project/Spec governance must never block normal PPT creation.
-        await injectFastPptMcpServer(sdk, mcpServers, { agentCwd })
       }
       // 本地图片输出只在受工作区授权的会话注册；没有 workspace 的 cwd 是 homedir，不能默认授权整个用户目录。
       const imageOutputAllowedRoots = workspaceSlug && agentCwd

@@ -68,7 +68,6 @@ import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
-import { buildPiFastPptTools } from '../ppt-fast-agent-tools'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
 import { generateAgentGptImage } from '../agent-gpt-image-service'
@@ -1341,14 +1340,6 @@ export async function buildPiBuiltinTools(
     console.error('[Pi 桥接] 注入 GPT Image 工具失败:', error)
   }
 
-  if (ctx.pptCapabilityActive === true && ctx.agentCwd) {
-    try {
-      // Fast path only: no Deck Spec/Project/material workflow in normal PPT sessions.
-      tools.push(...buildPiFastPptTools(sdk, { agentCwd: ctx.agentCwd }) as unknown as ToolDefinition[])
-    } catch (error) {
-      console.error('[Pi 桥接] 注入快速 PPTX 工具失败:', error)
-    }
-  }
 
   if (isWebSearchEnabledForAgent()) {
     try {

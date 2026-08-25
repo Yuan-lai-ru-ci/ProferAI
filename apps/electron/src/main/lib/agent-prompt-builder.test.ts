@@ -42,13 +42,11 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('PptxScrollViewer')
   })
 
-  test('PPT 能力激活后只注入快速生成指引，不暴露治理工作流', () => {
+  test('PPT 能力激活后不注入已移除的快速生成通道或治理工作流', () => {
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-123', permissionMode: 'auto', pptCapabilityActive: true,
     })
-    expect(prompt).toContain('generate_pptx_fast')
-    expect(prompt).toContain('直接调用')
-    for (const forbidden of ['Deck Spec', 'Deck Project', 'Deck Brief', 'inspect_deck_sources', 'create_deck_project', 'compile_deck_project', '确认 Deck Brief', 'assetRefs']) {
+    for (const forbidden of ['generate_pptx_fast', '快速 PPTX 生成', 'Deck Spec', 'Deck Project', 'Deck Brief', 'inspect_deck_sources', 'create_deck_project', 'compile_deck_project', '确认 Deck Brief', 'assetRefs']) {
       expect(prompt).not.toContain(forbidden)
     }
   })
@@ -271,7 +269,9 @@ describe('buildSystemPrompt', () => {
       pptCapabilityActive: true,
     })
     expect(webAndPpt).toContain('## Profer 受管浏览器')
-    expect(webAndPpt).toContain('快速 PPTX 生成')
+    // PPT 任务走 PptxGenJS Skill；已移除 generate_pptx_fast 的专属提示词。
+    expect(webAndPpt).not.toContain('快速 PPTX 生成')
+    expect(webAndPpt).not.toContain('generate_pptx_fast')
     expect(webAndPpt).not.toContain('7. **定时任务**')
   })
 

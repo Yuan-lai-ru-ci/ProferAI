@@ -1,11 +1,23 @@
 ---
 name: pptx
-description: "Use this skill whenever a PowerPoint .pptx file is involved as input or output. This includes creating, reading, editing, modifying, combining, splitting, previewing, or exporting PowerPoint files; working with templates, layouts, speaker notes, comments, charts, and native editable objects. Trigger on requests to create or handle a PowerPoint file, PPT, 幻灯片, 演示文稿, or a .pptx filename. The default path is Fast Draft: call generate_pptx_fast and produce the .pptx directly. Do not introduce extra project paperwork, specification contracts, source tracking, or confirmation workflows unless the user explicitly requests formal review or submission governance."
+description: "Use this skill whenever a PowerPoint .pptx file is involved as input or output. This includes creating, reading, editing, modifying, combining, splitting, previewing, or exporting PowerPoint files; working with templates, layouts, speaker notes, comments, charts, and native editable objects. Trigger on requests to create or handle a PowerPoint file, PPT, 幻灯片, 演示文稿, or a .pptx filename. Do not introduce extra project paperwork, specification contracts, source tracking, or confirmation workflows unless the user explicitly requests formal review or submission governance."
 license: Proprietary. LICENSE.txt has complete terms
 version: "1.2.0"
 ---
 
 # PPTX Skill
+
+## Profer 默认视觉约定
+
+除非用户明确指定模板、品牌色或其他风格，Profer 生成的 `.pptx` 默认采用 **Cloud Dancer Academic（云端舞者学术风）**。完整设计规范以工作区 `workspace-files/.context/profer-ppt-design-system.md` 为准；生成前必须先读取该文件。
+
+最低要求：
+
+- 使用 PptxGenJS 生成可编辑原生对象；默认暖灰/米白底（`E8E3D7` / `F2EFE7` / `D3CCBF`）和近黑文字（`1D1C19`）。
+- 文本框、信息块、图表容器优先使用直角 `RECTANGLE`，不要默认圆角卡片墙、胶囊按钮或气泡容器。
+- 文本框可使用极浅低位移外阴影：`blur: 4–6`、`offset: 1–2`、`opacity: 0.10–0.16`；阴影服务于层级分离，不做装饰。
+- 整体气质必须硬朗、克制、学术、编辑化；云朵舞者插画只作为风格参考或章节视觉，不铺满每页。
+- 仍须遵守逐页主张—证据、真实视觉元素、网格、渲染 QA 和交付审计要求。
 
 ## Quick Reference
 
@@ -51,13 +63,10 @@ Use when no template or reference presentation is available.
 
 **补充能力**：pptxgenjs 做不了的组合图/双 Y 轴/精细图表，用 `scripts/chartlib.py`（python-pptx 封装 84 种图表），见 [scripts/chartlib.md](scripts/chartlib.md)；渐变背景用 `scripts/gradient.js`。
 
-## Fast Draft Workflow (Default)
+## Creation Guidance
 
-For a normal request to create a presentation, **generate the `.pptx` first**. Do not block on internal paperwork, source lineage, confirmation dialogs, visual-plan forms, or large hand-written JS scripts.
+Create an editable PowerPoint directly using the available PPTX tooling. Use sensible defaults when details are missing, and do not block ordinary requests on internal paperwork or confirmation workflows.
 
-Use the product-level `generate_pptx_fast` tool when it is available. It accepts a concise title and slide outline and returns a real, editable `.pptx` directly. Missing detail is not a reason to stop: choose sensible defaults and make a previewable first draft.
-
-Only discuss source governance, citation audits, or formal review when the user explicitly asks for a final/submission-ready/audited PowerPoint.
 
 ## Design Ideas
 
