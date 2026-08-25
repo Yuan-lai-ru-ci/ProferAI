@@ -25,6 +25,7 @@ export * from './chat'
 export * from './ppt-material'
 
 // Deck Project / 原生 PPTX 生成相关类型
+export * from './ppt-deck'
 
 // Agent 相关类型
 export * from './agent'
