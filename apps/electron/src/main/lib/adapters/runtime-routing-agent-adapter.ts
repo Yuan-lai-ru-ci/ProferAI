@@ -2,6 +2,7 @@ import {
   normalizeAgentRuntime,
   type AgentErrorHelpers,
   type AgentProviderAdapter,
+  type GetTaskOutputResult,
   type AgentQueryInput,
   type AgentRuntime,
   type SDKMessage,
@@ -72,6 +73,18 @@ export class RuntimeRoutingAgentAdapter implements AgentProviderAdapter {
 
   async interruptQuery(sessionId: string): Promise<void> {
     await this.getSessionAdapter(sessionId)?.interruptQuery?.(sessionId)
+  }
+
+  async getTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<GetTaskOutputResult> {
+    const adapter = this.getSessionAdapter(sessionId)
+    if (!adapter?.getTaskOutput) throw new Error('当前活跃 Agent runtime 不支持后台任务输出查询')
+    return adapter.getTaskOutput(sessionId, taskId, options)
+  }
+
+  async stopTask(sessionId: string, taskId: string): Promise<void> {
+    const adapter = this.getSessionAdapter(sessionId)
+    if (!adapter?.stopTask) throw new Error('当前活跃 Agent runtime 不支持后台任务停止')
+    await adapter.stopTask(sessionId, taskId)
   }
 
   async sendQueuedMessage(

@@ -6,13 +6,15 @@
  */
 
 import * as React from 'react'
-import { Loader2, Terminal, GitBranch } from 'lucide-react'
+import { Loader2, Terminal, GitBranch, Square, FileOutput } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BackgroundTask } from '@/atoms/agent-atoms'
 
 export interface TaskBadgeProps {
   task: BackgroundTask
   onClick: () => void
+  onStop?: () => void
+  onOutput?: () => void
 }
 
 /**
@@ -54,7 +56,7 @@ function shortenId(id: string): string {
  *
  * 显示运行中的后台任务，点击后滚动到对应的实时工具调用。
  */
-export function TaskBadge({ task, onClick }: TaskBadgeProps): React.ReactElement {
+export function TaskBadge({ task, onClick, onStop, onOutput }: TaskBadgeProps): React.ReactElement {
   // 本地计时器（Shell 任务），Agent 任务使用事件驱动的 elapsedSeconds
   const [localElapsed, setLocalElapsed] = React.useState(() =>
     Math.floor((Date.now() - task.startTime) / 1000)
@@ -75,9 +77,11 @@ export function TaskBadge({ task, onClick }: TaskBadgeProps): React.ReactElement
   const Icon = task.type === 'shell' ? Terminal : GitBranch
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onClick() }}
       className={cn(
         'h-[30px] px-3 py-1.5 rounded-[8px]',
         'flex items-center gap-2 shrink-0',
@@ -108,6 +112,31 @@ export function TaskBadge({ task, onClick }: TaskBadgeProps): React.ReactElement
       <span className="tabular-nums text-muted-foreground">
         {formatElapsed(displayElapsed)}
       </span>
-    </button>
+
+      {onOutput && (
+        <span
+          role="button"
+          tabIndex={0}
+          title="查看任务输出"
+          onClick={(event) => { event.stopPropagation(); onOutput() }}
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); onOutput() } }}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <FileOutput className="size-3" />
+        </span>
+      )}
+      {onStop && (
+        <span
+          role="button"
+          tabIndex={0}
+          title="停止任务"
+          onClick={(event) => { event.stopPropagation(); onStop() }}
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); onStop() } }}
+          className="text-destructive/80 hover:text-destructive"
+        >
+          <Square className="size-3" />
+        </span>
+      )}
+    </div>
   )
 }

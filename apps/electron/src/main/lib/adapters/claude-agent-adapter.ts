@@ -32,6 +32,7 @@ import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-pa
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { BackgroundTaskManager } from '../background-task-manager'
 
 /** SDK Query 对象类型（从动态导入中推断） */
 type SDKQuery = ReturnType<typeof import('@anthropic-ai/claude-agent-sdk').query>
@@ -593,6 +594,7 @@ const activeControllers = new Map<string, AbortController>()
 
 /** 活跃的 SDK Query 对象映射（sessionId → query），用于队列消息注入 */
 const activeQueries = new Map<string, SDKQuery>()
+const backgroundTaskManager = new BackgroundTaskManager()
 
 /** 活跃的消息通道映射（sessionId → channel），供后续消息注入 */
 const activeChannels = new Map<string, MessageChannel>()
@@ -740,6 +742,8 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
 
     activeChannels.delete(sessionId)
     sessionReadyStates.delete(sessionId)
+    // Keep completed records for the task output IPC until the next session run;
+    // active task records remain owned by the SDK query and are not guessed from renderer state.
 
     const controller = activeControllers.get(sessionId)
     if (controller) {
@@ -775,6 +779,20 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     }
   }
 
+  async getTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<import('@profer/shared').GetTaskOutputResult> {
+    return backgroundTaskManager.getOutput(sessionId, taskId, options)
+  }
+
+  async stopTask(sessionId: string, taskId: string): Promise<void> {
+    const record = backgroundTaskManager.get(sessionId, taskId)
+    if (!record) throw new Error(`后台任务不存在或不属于当前会话: ${taskId}`)
+    if (record.status !== 'running') return
+    const query = activeQueries.get(sessionId)
+    if (!query) throw new Error(`后台任务所属 Agent 已结束: ${taskId}`)
+    await query.stopTask(taskId)
+    backgroundTaskManager.markStopped(sessionId, taskId)
+  }
+
   dispose(): void {
     for (const timer of forceKillTimers.values()) {
       clearTimeout(timer)
@@ -802,6 +820,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     activeQueries.clear()
     activeChannels.clear()
     sessionReadyStates.clear()
+    backgroundTaskManager.clear()
   }
 
   /**
@@ -1016,6 +1035,23 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         }
 
         // 后台任务等待期间收到任意 task 活动消息：重置空闲计时器，避免误释放子进程。
+        if (msg.type === 'system') {
+          const taskId = typeof msg.task_id === 'string' ? msg.task_id : undefined
+          if (taskId && msg.subtype === 'task_started') {
+            backgroundTaskManager.upsert({ sessionId: options.sessionId, taskId, status: 'running' })
+          } else if (taskId && msg.subtype === 'task_progress') {
+            backgroundTaskManager.upsert({ sessionId: options.sessionId, taskId, status: 'running', summary: typeof msg.summary === 'string' ? msg.summary : undefined })
+          } else if (taskId && msg.subtype === 'task_notification') {
+            backgroundTaskManager.upsert({
+              sessionId: options.sessionId,
+              taskId,
+              status: msg.status === 'failed' || msg.status === 'stopped' ? msg.status : 'completed',
+              outputFile: typeof msg.output_file === 'string' ? msg.output_file : undefined,
+              summary: typeof msg.summary === 'string' ? msg.summary : undefined,
+            })
+          }
+        }
+
         if (msg.type === 'system' && idleTimer != null) {
           const sub = msg.subtype
           if (sub === 'task_started' || sub === 'task_progress' || sub === 'task_notification') {

@@ -416,6 +416,14 @@ export function stopAgent(sessionId: string): void {
   orchestrator.stop(sessionId)
 }
 
+export function getAgentTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<import('@profer/shared').GetTaskOutputResult> {
+  return adapter.getTaskOutput(sessionId, taskId, options)
+}
+
+export async function stopAgentTask(sessionId: string, taskId: string): Promise<void> {
+  await adapter.stopTask(sessionId, taskId)
+}
+
 /** 删除运行中会话前停止并等待其真实运行生命周期结束。 */
 export async function stopAgentAndWait(sessionId: string): Promise<void> {
   await orchestrator.stopAndWait(sessionId)

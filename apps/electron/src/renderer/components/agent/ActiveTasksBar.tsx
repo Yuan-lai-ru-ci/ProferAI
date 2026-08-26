@@ -17,6 +17,10 @@ export interface ActiveTasksBarProps {
   tasks: BackgroundTask[]
   /** 点击任务回调 */
   onTaskClick: (toolUseId: string) => void
+  /** 停止任务回调 */
+  onTaskStop?: (task: BackgroundTask) => Promise<void>
+  /** 查看任务输出回调 */
+  onTaskOutput?: (task: BackgroundTask) => Promise<void>
   /** 附加样式 */
   className?: string
 }
@@ -30,6 +34,8 @@ export function ActiveTasksBar({
   sessionId,
   tasks,
   onTaskClick,
+  onTaskStop,
+  onTaskOutput,
   className,
 }: ActiveTasksBarProps): React.ReactElement | null {
   // 无任务时不渲染
@@ -51,6 +57,8 @@ export function ActiveTasksBar({
             key={task.toolUseId}
             task={task}
             onClick={() => onTaskClick(task.toolUseId)}
+            onStop={onTaskStop ? () => onTaskStop(task) : undefined}
+            onOutput={onTaskOutput ? () => onTaskOutput(task) : undefined}
           />
         ))}
       </div>

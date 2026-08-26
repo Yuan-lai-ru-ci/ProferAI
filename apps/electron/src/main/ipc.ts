@@ -423,6 +423,8 @@ import {
   runAgent,
   stopAgent,
   stopAgentAndWait,
+  getAgentTaskOutput,
+  stopAgentTask,
   beginAgentSessionDeletion,
   endAgentSessionDeletion,
   generateAgentTitle,
@@ -4550,21 +4552,19 @@ export function registerIpcHandlers(): void {
 
   // ===== Agent 后台任务管理 =====
 
-  // 获取任务输出（保留接口，供未来扩展）
+  // 获取任务输出
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_TASK_OUTPUT,
-    async (_, input: GetTaskOutputInput): Promise<GetTaskOutputResult> => {
-      try {
-        // TODO: 实现通过 SDK 的 TaskOutput 获取任务输出
-        console.warn('[IPC] GET_TASK_OUTPUT: 当前版本暂未实现，返回空输出')
-        return {
-          output: '',
-          isComplete: false,
-        }
-      } catch (error) {
-        console.error('[IPC] 获取任务输出失败:', error)
-        throw error
+    async (event, input: GetTaskOutputInput): Promise<GetTaskOutputResult> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string' || input.sessionId.length === 0 || input.sessionId.length > 128
+        || typeof input.taskId !== 'string' || input.taskId.length === 0 || input.taskId.length > 128) {
+        throw new Error('无效的后台任务输出请求')
       }
+      return getAgentTaskOutput(input.sessionId, input.taskId, {
+        block: input.block === true,
+        timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : undefined,
+      })
     },
   )
 
@@ -4595,20 +4595,17 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 停止任务
+  // 独立停止任务
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_TASK,
-    async (_, input: StopTaskInput): Promise<void> => {
-      try {
-        if (input.type === 'shell') {
-          console.warn('[IPC] STOP_TASK: Shell 任务停止功能待实现')
-        } else {
-          console.warn('[IPC] STOP_TASK: Agent 任务暂不支持单独停止')
-        }
-      } catch (error) {
-        console.error('[IPC] 停止任务失败:', error)
-        throw error
+    async (event, input: StopTaskInput): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || (input.type !== 'agent' && input.type !== 'shell')
+        || typeof input.sessionId !== 'string' || input.sessionId.length === 0 || input.sessionId.length > 128
+        || typeof input.taskId !== 'string' || input.taskId.length === 0 || input.taskId.length > 128) {
+        throw new Error('无效的后台任务停止请求')
       }
+      await stopAgentTask(input.sessionId, input.taskId)
     },
   )
 

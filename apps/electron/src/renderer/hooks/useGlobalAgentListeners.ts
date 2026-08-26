@@ -787,7 +787,22 @@ export function useGlobalAgentListeners(): void {
           }
 
           // 处理后台任务事件
-          if (event.type === 'task_backgrounded') {
+          if (event.type === 'task_started') {
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
+              const toolUseId = event.toolUseId ?? event.taskId
+              if (prev.some((task) => task.id === event.taskId || task.toolUseId === toolUseId)) return prev
+              return [...prev, {
+                id: event.taskId,
+                type: 'agent' as const,
+                toolUseId,
+                startTime: Date.now(),
+                elapsedSeconds: 0,
+                intent: event.description,
+              }]
+            })
+          } else if (event.type === 'task_notification') {
+            store.set(backgroundTasksAtomFamily(sessionId), (prev) => prev.filter((task) => task.id !== event.taskId))
+          } else if (event.type === 'task_backgrounded') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
               if (prev.some((t) => t.toolUseId === event.toolUseId)) return prev
               return [...prev, {

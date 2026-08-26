@@ -1316,10 +1316,14 @@ export interface SessionHealth {
  * 获取任务输出请求
  */
 export interface GetTaskOutputInput {
+  /** 所属 Profer 会话 ID */
+  sessionId: string
   /** 任务 ID */
   taskId: string
   /** 是否阻塞等待完成（默认 false） */
   block?: boolean
+  /** 最长等待时间（毫秒） */
+  timeoutMs?: number
 }
 
 /**
@@ -1330,6 +1334,8 @@ export interface GetTaskOutputResult {
   output: string
   /** 任务是否已完成 */
   isComplete: boolean
+  status?: string
+  summary?: string
 }
 
 /**

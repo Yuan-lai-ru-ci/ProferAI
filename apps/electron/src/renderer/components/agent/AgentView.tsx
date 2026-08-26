@@ -27,6 +27,8 @@ import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
+import { ActiveTasksBar } from './ActiveTasksBar'
+import type { BackgroundTask } from '@/atoms/agent-atoms'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { PresetSelector } from './PresetSelector'
 import { agentPresetsAtom } from '@/atoms/agent-preset-atoms'
@@ -106,6 +108,7 @@ import {
   workspaceCapabilitiesVersionAtom,
   agentImageGenerationsAtom,
   agentSessionImageGenerationsAtomFamily,
+  backgroundTasksAtomFamily,
   upsertAgentImageGeneration,
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
@@ -597,6 +600,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
+  const backgroundTasks = useAtomValue(backgroundTasksAtomFamily(sessionId))
   const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
@@ -2962,6 +2966,28 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     tabletMode,
   ])
 
+  const handleBackgroundTaskStop = React.useCallback(async (task: BackgroundTask): Promise<void> => {
+    try {
+      await window.electronAPI.stopTask({ sessionId, taskId: task.id, type: task.type })
+      store.set(backgroundTasksAtomFamily(sessionId), (prev) => prev.filter((item) => item.id !== task.id))
+    } catch (error) {
+      toast.error('停止后台任务失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }, [sessionId, store])
+
+  const handleBackgroundTaskOutput = React.useCallback(async (task: BackgroundTask): Promise<void> => {
+    try {
+      const result = await window.electronAPI.getTaskOutput({ sessionId, taskId: task.id, block: false })
+      if (result.output) {
+        toast.info(`任务 #${task.id.slice(0, 8)} 输出`, { description: result.output.slice(-500) })
+      } else {
+        toast.info(`任务 #${task.id.slice(0, 8)} 暂无输出`, { description: result.summary ?? '任务仍在运行' })
+      }
+    } catch (error) {
+      toast.error('读取任务输出失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }, [sessionId])
+
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
     <AgentComposerToolTrigger
       label="停止 Agent"
@@ -3040,6 +3066,15 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
           {/* 下方 composer 以完整顶部圆角叠在服务轨上；服务轨延伸至圆角背后。 */}
           <div className="composer-stack">
+            <ActiveTasksBar
+              sessionId={sessionId}
+              tasks={backgroundTasks}
+              onTaskClick={(toolUseId) => {
+                document.querySelector(`[data-tool-use-id="${CSS.escape(toolUseId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              }}
+              onTaskStop={handleBackgroundTaskStop}
+              onTaskOutput={handleBackgroundTaskOutput}
+            />
             <RuntimeProcessPanel sessionId={sessionId} />
             <div
               className={cn(

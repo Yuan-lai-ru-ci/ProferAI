@@ -6,7 +6,7 @@
  * 未来可扩展：PiAgentAdapter 等。
  */
 
-import type { SDKMessage, TypedError } from './agent'
+import type { GetTaskOutputResult, SDKMessage, TypedError } from './agent'
 
 /** Agent runtime 实现。未知/旧持久化值一律按 Claude 回退。 */
 export type AgentRuntime = 'claude' | 'pi'
@@ -110,6 +110,10 @@ export interface AgentProviderAdapter {
   cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
+  /** 查询已登记后台任务输出。 */
+  getTaskOutput?(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<GetTaskOutputResult>
+  /** 独立停止已登记后台任务。 */
+  stopTask?(sessionId: string, taskId: string): Promise<void>
   /** 错误处理辅助函数（Provider 特化逻辑由 Adapter 提供） */
   errorHelpers: AgentErrorHelpers
   /**
