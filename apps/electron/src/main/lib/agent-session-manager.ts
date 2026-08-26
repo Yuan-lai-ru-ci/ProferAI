@@ -370,6 +370,8 @@ export function createAgentSession(
     workspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
     presetId: normalizeSessionPresetId(presetWorkspaceSlug, presetId),
+    // 新会话默认在当前轮结束后自动发送队首；用户可在队列面板中关闭。
+    autoQueueSendEnabled: true,
     ...(draft ? { draft: true } : {}),
     createdAt: now,
     updatedAt: now,

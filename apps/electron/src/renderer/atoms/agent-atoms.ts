@@ -317,7 +317,7 @@ export const seenFilesVersionAtom = atom(0)
 
 /**
  * 每会话「队列自动发送」开关的运行时缓存：true=轮结束自动发队首。
- * 权威来源是会话 meta（autoQueueSendEnabled，per-session 持久化、缺省关）；
+ * 权威来源是会话 meta（autoQueueSendEnabled，per-session 持久化、缺省开）；
  * 本 atom 仅在 map 无值且 meta 有值时由 meta 填充，手动切换/自动由开到关时同步更新并写回 meta。
  */
 export const agentQueueAutoSendMapAtom = atom<Map<string, boolean>>(new Map())

@@ -652,9 +652,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     () => getDelegationSummary(getDirectDelegatedChildren(sessions, sessionId)).running,
     [sessions, sessionId],
   )
-  // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省关/重启保留）；map 仅为运行时缓存，
+  // 1.6.2 每会话「队列自动发送」开关：权威来源是 session meta（缺省开/重启保留）；map 仅为运行时缓存，
   // 首次/切会话且 meta 有值时由下方 effect 填充。
-  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false
+  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true
   // 切会话/首次：map 无值且 meta 有值 → 从 meta 填充运行时缓存（每个会话独立记忆，不串）
   React.useEffect(() => {
     const metaValue = sessionMeta?.autoQueueSendEnabled
@@ -2499,9 +2499,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       })
   }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
 
-  /** 1.6.2 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
+  /** 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
   const handleToggleAutoSend = React.useCallback((): void => {
-    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false)
+    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true)
     setAutoSendMap((prev) => {
       const map = new Map(prev)
       map.set(sessionId, next)

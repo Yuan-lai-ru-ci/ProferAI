@@ -786,7 +786,7 @@ export interface AgentSessionMeta {
   lastInterruptLabel?: string
   /** 最近中断时间戳 */
   lastInterruptAt?: number
-  /** 队列「自动发送」开关：轮结束是否自动发送队首消息。per-session 持久化，缺省关（false）。手动停止/异常结束会自动置为 false。 */
+  /** 队列「自动发送」开关：轮结束是否自动发送队首消息。per-session 持久化，新会话及历史缺省值为开（true）。手动停止/异常结束会自动置为 false。 */
   autoQueueSendEnabled?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: ProferPermissionMode
