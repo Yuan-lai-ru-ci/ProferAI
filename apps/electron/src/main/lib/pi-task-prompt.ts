@@ -66,9 +66,10 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   const piMemory = removeSection(prompt, '### Pi Runtime 与文件记忆', '## 用户信息')
   if (piMemory) {
     prompt = piMemory.rest
-    const needsMemory = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
-      && matches(task, /(?:记住|记忆|长期偏好|跨会话|之前研究|过去做过|有没有记录|memory|remember|preference)/i)
-    if (needsMemory) lowFrequency.push(piMemory.text)
+    const hasMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
+    // 记忆治理不能按用户关键词懒加载：每轮收尾都需要检查候选，否则 Pi 会在普通任务中
+    // 永远看不到“自动沉淀”规则，导致只会搜索、不会更新。没有工具时仍不注入不存在的能力。
+    if (hasMemoryTool) lowFrequency.push(piMemory.text)
   }
 
   const teamMemory = removeSection(prompt, '## 团队共享知识记忆', '## 不确定性处理')
@@ -82,8 +83,8 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   const knowledgeGovernance = removeSection(prompt, '## Profer 知识维护架构', '## 任务完成标准')
   if (knowledgeGovernance) {
     prompt = knowledgeGovernance.rest
-    const needsKnowledgeGovernance = matches(task, /(?:记住|记忆|长期偏好|跨会话|之前研究|过去做过|有没有记录|沉淀|CLAUDE\.md|MEMORY\.md|memory archive|知识维护)/i)
-    if (needsKnowledgeGovernance) lowFrequency.push(knowledgeGovernance.text)
+    // 知识维护是跨任务的常驻行为约束，不能只在出现“记忆”关键词时注入。
+    lowFrequency.push(knowledgeGovernance.text)
   }
 
   const automation = removeSection(prompt, '7. **定时任务**', '8. **发送既有本地图片**')

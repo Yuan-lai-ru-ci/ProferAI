@@ -67,9 +67,10 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).toContain('UNCERTAINTY')
     expect(prompt).toContain('DELIVERY_CORE')
     expect(prompt).not.toContain('COLLABORATION_RULES')
-    expect(prompt).not.toContain('PI_MEMORY_RULES')
+    // Pi 每轮收尾都要主动检查记忆候选，个人记忆治理不能等关键词触发。
+    expect(prompt).toContain('PI_MEMORY_RULES')
     expect(prompt).not.toContain('TEAM_MEMORY_RULES')
-    expect(prompt).not.toContain('KNOWLEDGE_GOVERNANCE_RULES')
+    expect(prompt).toContain('KNOWLEDGE_GOVERNANCE_RULES')
     expect(prompt).not.toContain('AUTOMATION_RULES')
     expect(prompt).not.toContain('LOCAL_IMAGE_RULES')
     expect(prompt).not.toContain('PPT_VISUAL_GATE')
@@ -153,5 +154,7 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).not.toContain('BROWSER_RULES')
     expect(prompt).not.toContain('AUTOMATION_RULES')
     expect(prompt).not.toContain('COLLABORATION_RULES')
+    // 知识治理即使没有记忆工具也属于常驻行为规则，避免普通任务完全跳过收尾检查。
+    expect(prompt).toContain('KNOWLEDGE_GOVERNANCE_RULES')
   })
 })
