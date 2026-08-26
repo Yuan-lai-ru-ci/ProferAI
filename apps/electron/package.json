@@ -23,16 +23,17 @@
     "build:renderer": "bun run build:ooxml && vite build",
     "build:tablet": "echo '[tablet] 独立构建已废弃：平板产物由 build:renderer 多入口一并产出（dist/renderer/tablet），此命令仅作兼容' && vite build",
     "build:resources": "bun run scripts/copy-resources.ts",
+    "prepare:bundled-bun": "node scripts/prepare-bundled-bun.cjs",
     "build:cli": "bun run scripts/build-cli.ts",
     "sync:runtime-deps": "bun run scripts/sync-runtime-deps.ts",
     "sync:runtime-deps:dev": "bun run scripts/sync-runtime-deps.ts --no-clean",
-    "build": "bun run build:main && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources && bun run verify:tablet",
+    "build": "bun run build:main && bun run build:preload && bun run build:renderer && bun run prepare:bundled-bun && bun run build:cli && bun run build:resources && bun run verify:tablet",
     "verify:tablet": "node scripts/verify-tablet.cjs",
     "verify:release-assets": "node scripts/verify-release-assets.cjs",
     "verify:packaged-pi-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-packaged-pi-runtime.ps1",
-    "release:verify:windows": "bun run build:github && bun run sync:runtime-deps && node scripts/run-electron-builder.cjs --win --x64 --publish never && bun run verify:release-assets && bun run verify:packaged-pi-runtime",
-    "build:github": "bun run build:main-github && bun run verify:build-target:oss && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources && bun run verify:tablet",
-    "build:commercial": "bun run build:main-commercial && bun run verify:build-target:commercial && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources",
+    "release:verify:windows": "bun run build:github && bun run sync:runtime-deps && node scripts/run-electron-builder.cjs --win --x64 --publish never && bun run verify:release-assets && node scripts/verify-packaged-bun.cjs && bun run verify:packaged-pi-runtime",
+    "build:github": "bun run build:main-github && bun run verify:build-target:oss && bun run build:preload && bun run build:renderer && bun run prepare:bundled-bun && bun run build:cli && bun run build:resources && bun run verify:tablet",
+    "build:commercial": "bun run build:main-commercial && bun run verify:build-target:commercial && bun run build:preload && bun run build:renderer && bun run prepare:bundled-bun && bun run build:cli && bun run build:resources",
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate",
@@ -185,5 +186,11 @@
   "build": {
     "extends": "electron-builder.yml"
   },
-  "proma": {}
+  "proma": {
+    "bun": {
+      "version": "1.3.14",
+      "sha256": "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922",
+      "binarySha256": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c"
+    }
+  }
 }

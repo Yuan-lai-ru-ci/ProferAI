@@ -65,6 +65,12 @@ extraResources:
     to: bin
     filter:
       - "**/*"
+  # 固定版本的 Bun runtime。Agent 的 Bash 环境显式将此目录置于 PATH 首位，
+  # 因而安装版不依赖用户自行安装 Bun 或 GUI 进程继承的系统 PATH。
+  - from: resources/vendor/bun
+    to: vendor/bun
+    filter:
+      - "bun.exe"
   # 默认 Skills 模板（首次启动时同步到 ~/.proma/default-skills/）
   - from: default-skills
     to: default-skills
