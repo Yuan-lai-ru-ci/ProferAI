@@ -105,6 +105,8 @@ interface AgentMessagesProps {
   persistedSDKMessages?: SDKMessage[]
   streaming: boolean
   streamState?: AgentStreamState
+  /** 仍在运行中的直接协作子会话数；父会话本轮结束后用于展示等待态。 */
+  runningDelegationCount?: number
   /** Phase 2: 实时 SDKMessage 列表（流式期间累积） */
   liveMessages?: SDKMessage[]
   /** 当前会话工作目录，用于解析相对文件路径 */
@@ -501,7 +503,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -537,7 +539,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       return
     }
 
-    if ((!persistedSDKMessages || persistedSDKMessages.length === 0) && !streaming) {
+    if ((!persistedSDKMessages || persistedSDKMessages.length === 0) && !streaming && runningDelegationCount === 0) {
       setSkipFadeIn(true)
       setReady(true)
       return
@@ -547,7 +549,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       if (!cancelled) setReady(true)
     })
     return () => { cancelled = true }
-  }, [streaming, liveMessages, persistedSDKMessages, messagesLoaded])
+  }, [streaming, liveMessages, persistedSDKMessages, messagesLoaded, runningDelegationCount])
 
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''
@@ -811,7 +813,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
             </button>
           </div>
         )}
-        {!hasContent && !streaming ? (
+        {!hasContent && !streaming && runningDelegationCount === 0 ? (
           <EmptyState />
         ) : (
           <>
@@ -825,7 +827,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
               const shouldDisableActions = isLive && !isErrorGroup
               // 会话活跃态（streaming 或 backgroundWaiting）时禁用压缩/重试操作，
               // 防止用户误操作触发与正在运行的 agent session 冲突
-              const isSessionActive = streaming || (streamState?.backgroundWaiting ?? false)
+              const isSessionActive = streaming || (streamState?.backgroundWaiting ?? false) || runningDelegationCount > 0
               // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge
               const isLastAssistantTurn = !streaming && stoppedByUser
                 && group.type === 'assistant-turn'
@@ -909,6 +911,19 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   <Spinner size="sm" className="text-muted-foreground/40" />
                   <span className="text-[13px] font-light text-muted-foreground/45 tabular-nums">
                     后台任务执行中
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* 委派等待态：父会话本轮答复已经结束，但子会话仍在独立运行；
+                全部结束后主进程会自动续跑父会话。 */}
+            {!streaming && runningDelegationCount > 0 && !suppressAgentRunning && !streamState?.isCompacting && (
+              <div className="pl-[56px] min-h-[28px]">
+                <div className="flex items-center gap-2">
+                  <Spinner size="sm" className="text-blue-500/70" />
+                  <span className="text-[13px] font-light text-muted-foreground/70 tabular-nums">
+                    本轮已答复，仍在等待 {runningDelegationCount} 个协作子会话；完成后将自动继续。
                   </span>
                 </div>
               </div>

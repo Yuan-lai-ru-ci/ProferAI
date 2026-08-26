@@ -4,6 +4,7 @@ import {
   delegationLinkFromResult,
   delegationToGraphEvents,
   isDelegateAgentTool,
+  isTaskCompletionBlocked,
   nativeTaskToolToGraphEvents,
   structuredTaskAutoLinkEvent,
   structuredTaskToolCurrentTaskId,
@@ -61,6 +62,35 @@ describe('nativeTaskToolToGraphEvents', () => {
     expect(sequential.events[0]).toMatchObject({ payload: { dependsOn: ['finished'] } })
     expect(explicit.events[0]).toMatchObject({ payload: { dependsOn: ['chosen'] } })
     expect(explicit.events[0]?.payload).not.toHaveProperty('forkFrom')
+  })
+
+  test('Given running delegations When native TaskUpdate requests completed Then does not persist an early completion event', () => {
+    const blocked = nativeTaskToolToGraphEvents({
+      toolUseId: 'update-blocked', toolName: 'TaskUpdate',
+      input: { taskId: 'task-1', status: 'completed' },
+    }, 'session-1', 1000, {
+      currentTaskId: 'task-1',
+      lastCompletedTaskId: null,
+      completionBlockedByRunningDelegations: true,
+    })
+    const permitted = nativeTaskToolToGraphEvents({
+      toolUseId: 'update-permitted', toolName: 'TaskUpdate',
+      input: { taskId: 'task-1', status: 'completed' },
+    }, 'session-1', 1000, {
+      currentTaskId: 'task-1',
+      lastCompletedTaskId: null,
+      completionBlockedByRunningDelegations: false,
+    })
+
+    expect(blocked.events).toEqual([])
+    expect(permitted.events).toEqual([
+      { type: 'task_status_changed', taskId: 'task-1', timestamp: 1000, payload: { newStatus: 'completed' } },
+    ])
+  })
+
+  test('recognizes the structured completion guard response', () => {
+    expect(isTaskCompletionBlocked(JSON.stringify({ completionBlocked: true }))).toBe(true)
+    expect(isTaskCompletionBlocked(JSON.stringify({ updated: true }))).toBe(false)
   })
 
   test('reads structured MCP task and delegation results without duplicating its persistence', () => {

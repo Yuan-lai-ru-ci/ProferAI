@@ -46,7 +46,7 @@ import {
   ACTIVE_SESSION_STATUS_PRIORITY,
   buildAgentSessionTrees,
   collectTreeSessionIds,
-  countCompletedDelegatedChildren,
+  getDelegationSummary,
   getDelegatedChildStatus,
   getSessionTreeStatus,
   treeContainsSessionId,
@@ -633,6 +633,7 @@ interface AgentSessionItemProps {
   leftAccent?: SessionLeftAccent
   delegationSummary?: {
     total: number
+    running: number
     completed: number
     expanded: boolean
     onToggle: () => void
@@ -1303,8 +1304,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                       hasDraft={agentDraftIds.has(item.session.id)}
                       delegationSummary={childCount > 0
                         ? {
-                          total: childCount,
-                          completed: countCompletedDelegatedChildren(item.childSessions),
+                          ...getDelegationSummary(item.childSessions),
                           expanded: expandedChildren,
                           onToggle: () => onToggleDelegationParent(item.session.id),
                         }

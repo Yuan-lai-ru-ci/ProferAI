@@ -19,6 +19,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, GitBranch } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
+import { getDelegationSummary, getDirectDelegatedChildren } from '../app-shell/left-sidebar/session-tree'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
@@ -645,6 +646,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     [sessions, sessionId],
   )
   const hasSessionMeta = Boolean(sessionMeta)
+  // 父会话本轮空闲时，仍应依据持久化的直接子会话状态展示协作等待态。
+  // 自动续跑开始后 streaming 变为 true，提示由 AgentMessages 自动收起。
+  const runningDelegationCount = React.useMemo(
+    () => getDelegationSummary(getDirectDelegatedChildren(sessions, sessionId)).running,
+    [sessions, sessionId],
+  )
   // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省关/重启保留）；map 仅为运行时缓存，
   // 首次/切会话且 meta 有值时由下方 effect 填充。
   const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false
@@ -3001,6 +3008,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           persistedSDKMessages={persistedSDKMessages}
           streaming={streaming}
           streamState={streamState}
+          runningDelegationCount={runningDelegationCount}
           liveMessages={liveMessages}
           sessionPath={sessionPath}
           attachedDirs={allAttachedDirs}

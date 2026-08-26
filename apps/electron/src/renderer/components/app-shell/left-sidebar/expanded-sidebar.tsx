@@ -14,7 +14,7 @@ import { UserAvatar } from '@/components/chat/UserAvatar'
 import { SidebarWindowDragStrip, SIDEBAR_DRAG_STRIP_HEIGHT, AutomationSidebarEntry, SkillsSidebarEntry, renderWorkspaceSortIcon } from './navigation-items'
 import { ConversationItem, AgentSessionItem, DelegatedChildSessionItem, AgentProjectGroupItem, PINNED_SESSION_MAX_HEIGHT, getSessionLeftAccent } from './session-items'
 import { WORKSPACE_SORT_LABEL } from './sidebar-utils'
-import { getSessionTreeStatus, treeContainsSessionId, countCompletedDelegatedChildren } from './session-tree'
+import { getDelegationSummary, getSessionTreeStatus, treeContainsSessionId } from './session-tree'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import type { SidebarModel } from './use-left-sidebar'
 
@@ -278,8 +278,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                             hasDraft={agentDraftIds.has(item.session.id)}
                             delegationSummary={childCount > 0
                               ? {
-                                total: childCount,
-                                completed: countCompletedDelegatedChildren(item.childSessions),
+                                ...getDelegationSummary(item.childSessions),
                                 expanded: expandedChildren,
                                 onToggle: () => handleToggleDelegationParent(item.session.id),
                               }
