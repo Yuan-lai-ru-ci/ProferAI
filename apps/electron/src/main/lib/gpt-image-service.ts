@@ -1,5 +1,5 @@
 import { getGptImageCredentials } from './chat-tool-config'
-import { getTeamAuthWithRefresh } from './auth-service'
+import { getTeamAuthWithRefresh, recoverCommercialProxyAuth } from './auth-service'
 
 const DEFAULT_BASE_URL = 'https://api.openai.com'
 export const DEFAULT_GPT_IMAGE_MODEL = 'gpt-image-2'
@@ -126,29 +126,45 @@ function appendReferences(form: FormData, references: GptImageReference[]): void
   }
 }
 
-async function callOfficial(request: Pick<GptImageRequest, 'prompt' | 'idempotencyKey' | 'signal'> & { size: GptImageSize; quality: GptImageQuality; references: GptImageReference[] }): Promise<Response | undefined> {
-  const auth = await getTeamAuthWithRefresh()
+async function callOfficial(
+  request: Pick<GptImageRequest, 'prompt' | 'idempotencyKey' | 'signal'> & { size: GptImageSize; quality: GptImageQuality; references: GptImageReference[] },
+): Promise<Response | undefined> {
+  let auth = await getTeamAuthWithRefresh()
   if (!auth) return undefined
+
   const endpoint = request.references.length ? '/v1/proxy/images/edits' : '/v1/proxy/images/generations'
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${auth.proxyToken || auth.token}`,
-    'Idempotency-Key': request.idempotencyKey,
+  const send = async (current: NonNullable<typeof auth>): Promise<Response> => {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${current.proxyToken || current.token}`,
+      'Idempotency-Key': request.idempotencyKey,
+    }
+    if (!request.references.length) {
+      headers['Content-Type'] = 'application/json'
+      return fetch(`${current.baseUrl.replace(/\/+$/, '')}${endpoint}`, {
+        method: 'POST', headers, signal: request.signal,
+        body: JSON.stringify({ model: DEFAULT_GPT_IMAGE_MODEL, prompt: request.prompt, size: request.size, quality: request.quality, n: 1 }),
+      })
+    }
+    const form = new FormData()
+    form.set('model', DEFAULT_GPT_IMAGE_MODEL)
+    form.set('prompt', request.prompt)
+    form.set('size', request.size)
+    form.set('quality', request.quality)
+    form.set('n', '1')
+    appendReferences(form, request.references)
+    return fetch(`${current.baseUrl.replace(/\/+$/, '')}${endpoint}`, { method: 'POST', headers, body: form, signal: request.signal })
   }
-  if (!request.references.length) {
-    headers['Content-Type'] = 'application/json'
-    return fetch(`${auth.baseUrl.replace(/\/+$/, '')}${endpoint}`, {
-      method: 'POST', headers, signal: request.signal,
-      body: JSON.stringify({ model: DEFAULT_GPT_IMAGE_MODEL, prompt: request.prompt, size: request.size, quality: request.quality, n: 1 }),
-    })
-  }
-  const form = new FormData()
-  form.set('model', DEFAULT_GPT_IMAGE_MODEL)
-  form.set('prompt', request.prompt)
-  form.set('size', request.size)
-  form.set('quality', request.quality)
-  form.set('n', '1')
-  appendReferences(form, request.references)
-  return fetch(`${auth.baseUrl.replace(/\/+$/, '')}${endpoint}`, { method: 'POST', headers, body: form, signal: request.signal })
+
+  let response = await send(auth)
+  if (response.status !== 401 || request.signal?.aborted) return response
+
+  // 服务端重启后会轮换内存中无法恢复的 relay 明文；用 refresh token 获取新 relay，
+  // 并复用同一个幂等键只重试一次，避免放宽服务端鉴权或重复扣费。
+  const recovered = await recoverCommercialProxyAuth()
+  if (!recovered) return response
+  auth = recovered
+  response = await send(auth)
+  return response
 }
 
 async function callByok(request: Pick<GptImageRequest, 'prompt' | 'signal'> & { size: GptImageSize; quality: GptImageQuality; references: GptImageReference[]; apiKey: string; baseUrl: string; model: string }): Promise<Response> {

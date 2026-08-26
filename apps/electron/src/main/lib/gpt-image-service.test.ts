@@ -9,9 +9,13 @@ let credentials = { mode: 'official' as 'official' | 'byok', apiKey: '', baseUrl
 let auth: { baseUrl: string; token: string; proxyToken?: string } | undefined = {
   baseUrl: 'https://team.example/', token: 'team-token', proxyToken: 'proxy-token',
 }
+let recoveredAuth: typeof auth = auth
 
 mock.module('./chat-tool-config', () => ({ getGptImageCredentials: () => credentials }))
-mock.module('./auth-service', () => ({ getTeamAuthWithRefresh: async () => auth }))
+mock.module('./auth-service', () => ({
+  getTeamAuthWithRefresh: async () => auth,
+  recoverCommercialProxyAuth: async () => recoveredAuth,
+}))
 
 const { generateGptImage } = await import('./gpt-image-service')
 const originalFetch = globalThis.fetch
@@ -25,6 +29,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch
   credentials = { mode: 'official', apiKey: '', baseUrl: '', model: '' }
   auth = { baseUrl: 'https://team.example/', token: 'team-token', proxyToken: 'proxy-token' }
+  recoveredAuth = auth
 })
 
 describe('generateGptImage', () => {
@@ -43,6 +48,27 @@ describe('generateGptImage', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer proxy-token')
     expect(calls[0]!.headers.get('idempotency-key')).toBe('call-1')
     expect(await calls[0]!.json()).toEqual({ model: 'gpt-image-2', prompt: 'blue square', size: '1024x1024', quality: 'high', n: 1 })
+  })
+
+  test('refreshes a stale relay token once and reuses the idempotency key', async () => {
+    const calls: Request[] = []
+    const freshAuth = { baseUrl: 'https://team.example/', token: 'fresh-team-token', proxyToken: 'fresh-proxy-token' }
+    recoveredAuth = freshAuth
+    globalThis.fetch = (async (input, init) => {
+      const request = new Request(input, init)
+      calls.push(request)
+      if (calls.length === 1) return response({ error: 'relay 令牌无效' }, 401)
+      return response({ data: [{ b64_json: png.toString('base64') }] })
+    }) as typeof fetch
+
+    const result = await generateGptImage({ prompt: 'retry image', idempotencyKey: 'retry-key-1' })
+
+    expect(result.ok).toBe(true)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer proxy-token')
+    expect(calls[1]!.headers.get('authorization')).toBe('Bearer fresh-proxy-token')
+    expect(calls[0]!.headers.get('idempotency-key')).toBe('retry-key-1')
+    expect(calls[1]!.headers.get('idempotency-key')).toBe('retry-key-1')
   })
 
   test('official edit uses multipart endpoint and caps references at four', async () => {
