@@ -318,9 +318,9 @@ export function MainArea(): React.ReactElement {
     <div ref={browserLayoutRef} className="relative flex h-full min-w-0">
       <Panel
         variant="grow"
-        className="bg-content-area rounded-2xl shadow-xl dark:shadow-sm"
+        className="main-content-panel relative rounded-2xl shadow-xl dark:shadow-sm"
       >
-        <div className="flex flex-1 min-h-0 relative overflow-hidden" data-split-container>
+        <div className="relative flex flex-1 min-h-0 overflow-hidden" data-split-container>
           {/* 左侧：TabBar + TabContent（始终保持在同一 DOM 位置，避免 Tab 切换时 unmount）
               注：宽度变化不用 transition——文字逐帧 reflow 会导致行末字符抖动，
               视觉上像"内容从右向左推送"。让左侧瞬间变宽，由右侧 absolute 滑出动画

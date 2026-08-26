@@ -234,7 +234,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         </div>
 
         {/* 中间容器 */}
-        <div className="flex-1 min-w-0 p-2 relative z-[60]">
+        <div className="main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]">
           {/* 团队工作区：文件主区 + AI 侧栏；Skill 市场等视图切到 MainArea */}
           {showTeamWorkspaceView ? (
             <TeamWorkspaceView />

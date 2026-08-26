@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SettingsPanel - 设置面板
  *
  * 顶部 Header（标题 + 关闭按钮）+ 下方（左侧导航 + 右侧 ScrollArea 内容区域）。
@@ -26,8 +26,8 @@ import {
   CreditCard,
   Database,
   Network,
-  MonitorSmartphone,
-  } from "lucide-react";
+  UserRound,
+} from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
 import type { SettingsTab } from "@/atoms/settings-tab";
@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ChannelSettings } from "./ChannelSettings";
 import { GeneralSettings } from "./GeneralSettings";
+import { AccountSettings } from "./AccountSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AboutSettings } from "./AboutSettings";
 import { AgentSettings } from "./AgentSettings";
@@ -64,7 +65,6 @@ import { TabletConnectionSettings } from "./TabletConnectionSettings";
 import { TabletNotificationSettings } from "./TabletNotificationSettings";
 import { OpenApiSettings } from "./OpenApiSettings";
 import { ProxySettings } from "./ProxySettings";
-import { DevicesSettings } from "./DevicesSettings";
 
 /** 设置 Tab 定义 */
 export interface SettingsTabItem {
@@ -80,25 +80,21 @@ export interface SettingsTabGroup {
   items: SettingsTabItem[];
 }
 
-/** 账户相关：额度与订阅（位于导航顶部「账户」分组） */
+/** 账户：身份、额度、订阅和团队能力。开放 API 暂不开放入口。 */
 const ACCOUNT_GROUP_ITEMS: SettingsTabItem[] = [
+  { id: "account", label: "账户与资料", icon: <UserRound size={16} /> },
   { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
-  { id: "subscription", label: "立即订阅", icon: <CreditCard size={16} /> },
+  { id: "subscription", label: "订阅方案", icon: <CreditCard size={16} /> },
+  { id: "team", label: "团队管理", icon: <Users size={16} /> },
 ];
 
 /** 模型与能力：渠道 / Agent / 提示词 / Chat 工具 */
 const MODEL_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
-  { id: "tools", label: "Chat 工具", icon: <Wrench size={16} /> },
+  { id: "agent", label: "Agent 配置", icon: <Plug size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
+  { id: "tools", label: "Chat 工具", icon: <Wrench size={16} /> },
 ];
-
-/** Agent 模式专属 Tab */
-const AGENT_TAB: SettingsTabItem = {
-  id: "agent",
-  label: "Agent 配置",
-  icon: <Plug size={16} />,
-};
 
 /** 体验：外观 / 语音 / 快捷键 / 教程 */
 const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
@@ -108,27 +104,23 @@ const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "tutorial", label: "Profer 教程", icon: <GraduationCap size={16} /> },
 ];
 
-/** 连接：远程连接 / 代理 / 登录设备 */
+/** 连接：远程连接 / 代理 */
 const CONNECTION_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "bots", label: "远程连接", icon: <Bot size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Network size={16} /> },
-  { id: "devices", label: "登录设备", icon: <MonitorSmartphone size={16} /> },
 ];
 
-/** 系统：数据管理 / 团队 / 关于 */
+/** 系统：数据管理 / 关于 */
 const SYSTEM_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "data-management", label: "数据管理", icon: <Database size={16} /> },
-  { id: "team", label: "团队管理", icon: <Users size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
 /** 依赖团队账号登录的 Tab（未登录时不展示） */
-const ACCOUNT_TABS: ReadonlySet<SettingsTab> = new Set([
-  "team",
+const AUTH_REQUIRED_TABS: ReadonlySet<SettingsTab> = new Set([
   "credits",
   "subscription",
-  "openapi",
-  "devices",
+  "team",
 ]);
 
 /** 根据标签页 id 渲染对应内容 */
@@ -136,6 +128,8 @@ function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElem
   switch (tab) {
     case "general":
       return <GeneralSettings />;
+    case "account":
+      return <AccountSettings />;
     case "channels":
       return <ChannelSettings />;
     case "prompts":
@@ -167,12 +161,11 @@ function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElem
       return <CreditsSettings />;
     case "subscription":
       return <SubscriptionSettings />;
+    // 开放 API 暂无导航入口；保留渲染分支以兼容既有内部跳转和后续恢复。
     case "openapi":
       return <OpenApiSettings />;
     case "proxy":
       return <ProxySettings />;
-    case "devices":
-      return <DevicesSettings />;
     default:
       // tutorial 等特殊 tab 由 handleTabChange 拦截打开主区 Tab，不会在此渲染
       return <GeneralSettings />;
@@ -222,21 +215,20 @@ export function SettingsPanel({
   }
 
   // 受限环境（平板）传入白名单时直接使用（无分组标题）；否则按语义分组组装导航。
-  // 未登录时过滤掉依赖团队账号的 Tab（额度 / 订阅 / 团队管理 / 登录设备）。
+  // 未登录时过滤掉需要团队账号的 Tab；账户页始终保留，用于登录入口。
   const groups = React.useMemo<SettingsTabGroup[]>(() => {
     if (tabsOverride) {
       return [{ items: tabsOverride }]
     }
 
     const modelItems = appMode === "agent"
-      ? [...MODEL_GROUP_ITEMS, AGENT_TAB]
-      : MODEL_GROUP_ITEMS
+      ? MODEL_GROUP_ITEMS
+      : MODEL_GROUP_ITEMS.filter((item) => item.id !== "agent")
 
     const allGroups: SettingsTabGroup[] = [
-      // 首个无标题组：「通用设置」入口（用户档案 + 账户登录 + 通用偏好），不属于任何分组
-      { items: [{ id: "general", label: "通用设置", icon: <Settings size={16} /> }] },
+      { items: [{ id: "general", label: "通用偏好", icon: <Settings size={16} /> }] },
       { title: "账户", items: ACCOUNT_GROUP_ITEMS },
-      { title: "模型", items: modelItems },
+      { title: "模型与能力", items: modelItems },
       { title: "体验", items: EXPERIENCE_GROUP_ITEMS },
       { title: "连接", items: CONNECTION_GROUP_ITEMS },
       { title: "系统", items: SYSTEM_GROUP_ITEMS },
@@ -244,9 +236,9 @@ export function SettingsPanel({
 
     if (authStatus.isLoggedIn) return allGroups
 
-    // 未登录：过滤 ACCOUNT_TABS，并清理空分组
+    // 未登录：过滤需要鉴权的页面，并清理空分组
     return allGroups
-      .map((g) => ({ ...g, items: g.items.filter((t) => !ACCOUNT_TABS.has(t.id)) }))
+      .map((g) => ({ ...g, items: g.items.filter((t) => !AUTH_REQUIRED_TABS.has(t.id)) }))
       .filter((g) => g.items.length > 0)
   }, [appMode, tabsOverride, authStatus.isLoggedIn]);
 
@@ -319,8 +311,8 @@ export function SettingsPanel({
       {/* 下方主体：左导航 + 右内容（竖屏由 globals.css 改为纵向布局：顶部横条 tab + 内容） */}
       <div className="settings-body flex flex-1 min-h-0">
         {/* 左侧 Tab 导航 */}
-        <div className="settings-nav w-[160px] border-r border-surface-border/50 bg-surface-sunken/30 pt-3 pb-2 px-2 flex-shrink-0 overflow-y-auto scrollbar-thin">
-          <nav className="flex flex-col gap-0.5">
+        <div className="settings-nav w-[184px] border-r border-surface-border/50 bg-surface-sunken/30 pt-3 pb-3 px-2.5 flex-shrink-0 overflow-y-auto scrollbar-thin">
+          <nav className="flex flex-col gap-0.5" aria-label="设置分类">
             {groups.map((group) => (
               <React.Fragment key={group.title ?? "__root__"}>
                 {group.title && (
@@ -333,16 +325,19 @@ export function SettingsPanel({
                     key={tab.id}
                     onClick={() => handleTabChange(tab.id)}
                     className={cn(
-                      "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
+                      "group flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
                       effectiveTab === tab.id
-                        ? "bg-surface-selected text-foreground font-medium"
+                        ? "bg-surface-selected text-foreground font-medium shadow-sm"
                         : "text-muted-foreground hover:bg-surface-selected/50 hover:text-foreground",
                     )}
                   >
-                    {tab.icon}
-                    <span>{tab.label}</span>
+                    <span className={cn(
+                      "flex-shrink-0 transition-colors",
+                      effectiveTab === tab.id ? "text-primary" : "text-muted-foreground/70 group-hover:text-foreground"
+                    )}>{tab.icon}</span>
+                    <span className="truncate">{tab.label}</span>
                     {tab.id === "about" && (hasUpdate || hasEnvironmentIssues) && (
-                      <span className="w-2 h-2 rounded-full bg-red-500" />
+                      <span className="ml-auto w-2 h-2 rounded-full bg-red-500" />
                     )}
                   </button>
                 ))}
@@ -353,7 +348,11 @@ export function SettingsPanel({
 
         {/* 右侧内容区域（竖屏 flex-col 布局下需要 min-h-0 保持滚动约束） */}
         <ScrollArea className="flex-1 min-h-0">
-          <div className="px-6 py-4">{renderTabContent(effectiveTab, Boolean(tabsOverride))}</div>
+          <div className="settings-content px-6 py-5">
+            <div className="mx-auto w-full max-w-3xl">
+              {renderTabContent(effectiveTab, Boolean(tabsOverride))}
+            </div>
+          </div>
         </ScrollArea>
       </div>
 

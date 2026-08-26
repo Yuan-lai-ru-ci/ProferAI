@@ -129,7 +129,7 @@ function buildPlans(data: PricingData): PlanDef[] {
 }
 
 /** 兑换码输入组件 */
-function RedeemInput(): React.ReactElement {
+function RedeemInput({ onRedeemed }: { onRedeemed: () => Promise<void> }): React.ReactElement {
   const [code, setCode] = React.useState('')
   const [loading, setLoading] = React.useState(false)
 
@@ -159,14 +159,15 @@ function RedeemInput(): React.ReactElement {
         toast.error(d.error || '兑换失败')
         return
       }
-      toast.success(d.description || '兑换成功！')
+      await onRedeemed()
+      toast.success(d.description || '兑换成功！套餐与积分已刷新')
       setCode('')
     } catch {
       toast.error('兑换失败，请检查网络后重试')
     } finally {
       setLoading(false)
     }
-  }, [code])
+  }, [code, onRedeemed])
 
   return (
     <div className="flex items-center gap-2">
@@ -191,7 +192,7 @@ function RedeemInput(): React.ReactElement {
 }
 
 export function SubscriptionSettings(): React.ReactElement {
-  useCreditsLoader(60_000)
+  const { reload: reloadCredits } = useCreditsLoader(60_000)
   const inviteCode = useAtomValue(inviteCodeAtom)
 
   const [plans, setPlans] = React.useState<PlanDef[]>(PLANS_FALLBACK)
@@ -365,7 +366,7 @@ export function SubscriptionSettings(): React.ReactElement {
           <h3 className="text-sm font-semibold">兑换码</h3>
           <span className="text-[11px] text-muted-foreground">输入管理员发放的兑换码</span>
         </div>
-        <RedeemInput />
+        <RedeemInput onRedeemed={reloadCredits} />
       </div>
 
       {/* ---- 团队版 banner ---- */}

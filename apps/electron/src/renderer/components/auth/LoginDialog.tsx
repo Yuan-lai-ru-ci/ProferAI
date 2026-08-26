@@ -114,7 +114,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
         })
         const msg = result.joinedWorkspace
           ? `注册成功，已加入「${result.joinedWorkspace}」`
-          : mode === 'login' ? `已登录: ${result.teamEmail}` : `注册成功: ${result.teamEmail}`
+          : mode === 'login' ? `已登录: ${result.teamEmail}` : `注册成功：${result.teamEmail}，可前往「立即订阅」兑换套餐码`
         toast.success(msg)
         const restoreWarn = result.channelRestore?.warning
         if (mode === 'login' && restoreWarn) {
@@ -174,7 +174,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
             <DialogDescription className="text-sm leading-relaxed">
               {mode === 'login'
                 ? '登录账户，使用服务端渠道和协作功能'
-                : '创建账户，开始使用 Profer AI 助手'}
+                : openRegistration ? '验证邮箱后即可创建账户；购买套餐码后可在「立即订阅」兑换' : '创建账户，开始使用 Profer AI 助手'}
             </DialogDescription>
           </DialogHeader>
 
@@ -282,7 +282,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
               </Label>
               <Input id="invite-code" value={inviteCode}
                 onChange={(e) => setInviteCode(e.target.value)}
-                placeholder={openRegistration ? '有邀请码可填写，或完成邮箱验证' : '输入邀请码（如 UA1B2C3）'}
+                placeholder={openRegistration ? '可选：填写邀请码可获得邀请归因；否则完成邮箱验证' : '输入邀请码（如 UA1B2C3）'}
                 className="h-9 font-mono text-xs" required={!openRegistration} />
             </div>
           )}

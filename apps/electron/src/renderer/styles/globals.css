@@ -2594,7 +2594,7 @@
 
 /* ===== 平板竖屏：设置弹窗改为纵向布局（顶部横条 tab + 内容区全宽） =====
  * 平板设置只有少量 tab，竖屏下 160px 左侧导航会挤压内容区；
- * 改成顶部横向 tab 条（保留切换入口——多个 tab 时必须能切换），内容全宽。
+ * 改成顶部横向 tab 条（保留切换入口——多个 tab 时必须能切换），内容全宽。桌面端导航宽度由 SettingsPanel 统一控制。
  * body.tablet-mode 由 tablet/main.tsx 挂载时标记，覆盖 Portal 到 body 的弹窗（radix Dialog 默认 Portal）。桌面版不受影响。
  */
 @media (orientation: portrait) {
