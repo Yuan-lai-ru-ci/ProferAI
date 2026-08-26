@@ -67,9 +67,11 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   if (piMemory) {
     prompt = piMemory.rest
     const hasMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
-    // 记忆治理不能按用户关键词懒加载：每轮收尾都需要检查候选，否则 Pi 会在普通任务中
-    // 永远看不到“自动沉淀”规则，导致只会搜索、不会更新。没有工具时仍不注入不存在的能力。
-    if (hasMemoryTool) lowFrequency.push(piMemory.text)
+    // 完整的知识维护与收尾回写规则由常驻的「Profer 知识维护架构」承载；此处只保留
+    // Pi 专属文件操作细节，按记忆任务按需恢复，避免普通本地任务重复携带长段落。
+    const needsPiMemory = hasMemoryTool
+      && matches(task, /(?:记住|记忆|沉淀|归档|复用|memory|memories|知识维护|经验记录|更新.*(?:MEMORY|记忆))/i)
+    if (needsPiMemory) lowFrequency.push(piMemory.text)
   }
 
   const teamMemory = removeSection(prompt, '## 团队共享知识记忆', '## 不确定性处理')

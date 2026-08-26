@@ -67,8 +67,8 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).toContain('UNCERTAINTY')
     expect(prompt).toContain('DELIVERY_CORE')
     expect(prompt).not.toContain('COLLABORATION_RULES')
-    // Pi 每轮收尾都要主动检查记忆候选，个人记忆治理不能等关键词触发。
-    expect(prompt).toContain('PI_MEMORY_RULES')
+    // 收尾候选检查由常驻的知识治理架构承担；Pi 专属文件记忆细节只在记忆任务按需恢复。
+    expect(prompt).not.toContain('PI_MEMORY_RULES')
     expect(prompt).not.toContain('TEAM_MEMORY_RULES')
     expect(prompt).toContain('KNOWLEDGE_GOVERNANCE_RULES')
     expect(prompt).not.toContain('AUTOMATION_RULES')

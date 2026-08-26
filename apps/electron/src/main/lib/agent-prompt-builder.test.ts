@@ -258,9 +258,11 @@ describe('buildSystemPrompt', () => {
     expect(ordinary).not.toContain('PPT 视觉交付门禁')
     expect(ordinary).not.toContain('7. **定时任务**')
     expect(ordinary).not.toContain('## SubAgent 委派策略')
+    // Pi 专属文件记忆细节只在记忆任务按需恢复；常驻的知识维护架构仍负责收尾候选检查。
     expect(ordinary).not.toContain('### Pi Runtime 与文件记忆')
     // 普通本地任务应显著减去低频 SOP，而不是只做无意义的段落重排。
-    expect(ordinary.length).toBeLessThan(basePrompt.length * 0.65)
+    // 08-26 起收尾知识治理架构为常驻约束；其余低频 SOP 仍需裁掉，控制在基础 prompt 的 75% 内。
+    expect(ordinary.length).toBeLessThan(basePrompt.length * 0.75)
 
     const webAndPpt = buildPiTaskPrompt({
       basePrompt,
