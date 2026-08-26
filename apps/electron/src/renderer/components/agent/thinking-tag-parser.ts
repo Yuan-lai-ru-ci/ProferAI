@@ -34,7 +34,16 @@ function appendThinkingBlock(blocks: SDKContentBlock[], thinking: string): void 
  * 兼容部分模型把思考内容包在 <think> 或 <thinking> 标签里的返回格式。
  * 未闭合的标签在流式阶段按思考块处理，等闭合标签到达后会自然拆出后续正文。
  */
-export function parseThinkTagsFromText(text: string): SDKContentBlock[] {
+export interface ThinkTagParserOptions {
+  /**
+   * 已落定的消息中，模型偶尔只输出 `<thinking>` 开标签而遗漏闭标签。
+   * 此时将标签后的内容作为正文显示，避免最终交付被错误折叠进思考区。
+   * 流式阶段保持默认值 false，仍把未闭合标签视为进行中的思考。
+   */
+  unclosedTagAsText?: boolean
+}
+
+export function parseThinkTagsFromText(text: string, options: ThinkTagParserOptions = {}): SDKContentBlock[] {
   const lowerText = text.toLowerCase()
   const blocks: SDKContentBlock[] = []
   let cursor = 0
@@ -53,7 +62,11 @@ export function parseThinkTagsFromText(text: string): SDKContentBlock[] {
     const contentStart = openTag.index + openTagText.length
     const closeIndex = lowerText.indexOf(closeTagText, contentStart)
     if (closeIndex === -1) {
-      appendThinkingBlock(blocks, text.slice(contentStart))
+      if (options.unclosedTagAsText) {
+        appendTextBlock(blocks, text.slice(contentStart))
+      } else {
+        appendThinkingBlock(blocks, text.slice(contentStart))
+      }
       break
     }
 
@@ -64,16 +77,19 @@ export function parseThinkTagsFromText(text: string): SDKContentBlock[] {
   return blocks
 }
 
-export function splitThinkTagsInTextBlock(block: SDKTextBlock): SDKContentBlock[] {
+export function splitThinkTagsInTextBlock(block: SDKTextBlock, options?: ThinkTagParserOptions): SDKContentBlock[] {
   if (!containsThinkOpenTag(block.text.toLowerCase())) return [block]
-  return parseThinkTagsFromText(block.text)
+  return parseThinkTagsFromText(block.text, options)
 }
 
-export function normalizeThinkTagsInContentBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
+export function normalizeThinkTagsInContentBlocks(
+  blocks: SDKContentBlock[],
+  options?: ThinkTagParserOptions,
+): SDKContentBlock[] {
   const normalized: SDKContentBlock[] = []
   for (const block of blocks) {
     if (block.type === 'text' && 'text' in block && typeof block.text === 'string') {
-      normalized.push(...splitThinkTagsInTextBlock(block as SDKTextBlock))
+      normalized.push(...splitThinkTagsInTextBlock(block as SDKTextBlock, options))
     } else {
       normalized.push(block)
     }

@@ -581,7 +581,11 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
     const blocks = aMsg.message?.content
     if (Array.isArray(blocks)) {
       for (const block of blocks) {
-        for (const normalizedBlock of normalizeThinkTagsInContentBlocks([block])) {
+        for (const normalizedBlock of normalizeThinkTagsInContentBlocks([block], {
+          // 仅终态视觉兜底：若模型漏掉闭合标签，最终答复仍应作为正文显示。
+          // 流式中保留未闭合标签的既有思考渲染，等待可能随后到达的闭标签。
+          unclosedTagAsText: !isStreaming,
+        })) {
           enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: aMsg.parent_tool_use_id })
         }
       }

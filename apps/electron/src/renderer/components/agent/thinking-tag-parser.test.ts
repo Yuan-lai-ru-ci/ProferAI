@@ -16,6 +16,23 @@ describe('parseThinkTagsFromText', () => {
     ])
   })
 
+  test('Given 终态未闭合 <thinking> When 启用视觉兜底 Then 将剩余内容作为正文', () => {
+    expect(normalizeThinkTagsInContentBlocks([
+      { type: 'text', text: '<thinking>**Final concise response**\n\n已完成修改。' },
+    ], { unclosedTagAsText: true })).toEqual([
+      { type: 'text', text: '**Final concise response**\n\n已完成修改。' },
+    ])
+  })
+
+  test('Given 终态完整 <thinking> 标签 When 启用视觉兜底 Then 仍保留思考块', () => {
+    expect(normalizeThinkTagsInContentBlocks([
+      { type: 'text', text: '<thinking>分析过程</thinking>最终答复' },
+    ], { unclosedTagAsText: true })).toEqual([
+      { type: 'thinking', thinking: '分析过程' },
+      { type: 'text', text: '最终答复' },
+    ])
+  })
+
   test('Given <think> 旧格式 Then 保持兼容', () => {
     expect(normalizeThinkTagsInContentBlocks([
       { type: 'text', text: '<think>兼容旧标签</think>正文' },
