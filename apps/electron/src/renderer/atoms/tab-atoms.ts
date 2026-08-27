@@ -1,7 +1,7 @@
 /**
  * Tab Atoms — 当前工作区入口状态管理
  *
- * 顶部只保留 Scratch Pad 与当前会话两个入口；会话恢复与导航交给左侧列表。
+ * 顶部保留 Scratch Pad 与用户打开的会话入口；会话恢复与导航交给左侧列表。
  * 通过桥接 atom 与现有 currentConversationIdAtom / currentAgentSessionIdAtom 同步，
  * 确保所有现有派生 atoms 无需修改。
  */
@@ -233,8 +233,8 @@ export function getPersistableTabState(
   }
 }
 
-/** 打开或聚焦会话入口：始终用目标会话替换当前会话，避免顶部累积多个 Tab。
- *  restore 提示存在时，切回带预览的会话会一并重建其预览 Tab 并回到上次视图。 */
+/** 打开或聚焦会话入口：保留已打开的 Tab，新会话追加到末尾。
+ * restore 提示存在时，切回带预览的会话会一并重建其预览 Tab 并回到上次视图。 */
 export function openTab(
   tabs: TabItem[],
   item: { type: TabType; sessionId: string; title: string },
@@ -244,7 +244,7 @@ export function openTab(
 
   if (item.type === 'scratch') {
     return {
-      tabs: [scratchTab],
+      tabs: tabs.some((tab) => tab.id === SCRATCH_PAD_ID) ? tabs : [scratchTab, ...tabs],
       activeTabId: SCRATCH_PAD_ID,
     }
   }
@@ -257,7 +257,7 @@ export function openTab(
       title: TUTORIAL_TAB_TITLE,
     }
     return {
-      tabs: [scratchTab, tutorialTab],
+      tabs: tabs.some((tab) => tab.id === TUTORIAL_TAB_ID) ? tabs : [...tabs, tutorialTab],
       activeTabId: TUTORIAL_TAB_ID,
     }
   }
@@ -275,9 +275,14 @@ export function openTab(
       sessionId: item.sessionId,
       title: item.title,
     }
+    const withoutPreview = tabs.filter((tab) => tab.id !== previewTab.id)
+    const ownerIndex = withoutPreview.findIndex((tab) => tab.id === ownerAgentTab.id)
+    const nextTabs = ownerIndex === -1
+      ? [...withoutPreview, ownerAgentTab, previewTab]
+      : [...withoutPreview.slice(0, ownerIndex + 1), previewTab, ...withoutPreview.slice(ownerIndex + 1)]
 
     return {
-      tabs: [scratchTab, ownerAgentTab, previewTab],
+      tabs: nextTabs.some((tab) => tab.id === SCRATCH_PAD_ID) ? nextTabs : [scratchTab, ...nextTabs],
       activeTabId: previewTab.id,
     }
   }
@@ -290,6 +295,15 @@ export function openTab(
     title: item.title,
   }
 
+  const withoutStalePreview = tabs.filter((tab) => tab.id !== createPreviewTabId(item.sessionId))
+  const existingIndex = withoutStalePreview.findIndex((tab) => tab.id === sessionTab.id)
+  const tabsWithSession = existingIndex === -1
+    ? [...withoutStalePreview, sessionTab]
+    : withoutStalePreview.map((tab) => tab.id === sessionTab.id ? sessionTab : tab)
+  const tabsWithScratch = tabsWithSession.some((tab) => tab.id === SCRATCH_PAD_ID)
+    ? tabsWithSession
+    : [scratchTab, ...tabsWithSession]
+
   // 切回带预览的会话：重建该会话的预览 Tab，并按 lastView 决定激活哪个。
   if (restore?.previewTabOpen) {
     const previewTab: TabItem = {
@@ -298,14 +312,18 @@ export function openTab(
       sessionId: item.sessionId,
       title: restore.previewTitle,
     }
+    const ownerIndex = tabsWithScratch.findIndex((tab) => tab.id === sessionTab.id)
+    const nextTabs = ownerIndex === -1
+      ? [...tabsWithScratch, previewTab]
+      : [...tabsWithScratch.slice(0, ownerIndex + 1), previewTab, ...tabsWithScratch.slice(ownerIndex + 1)]
     return {
-      tabs: [scratchTab, sessionTab, previewTab],
+      tabs: nextTabs,
       activeTabId: restore.lastView === 'preview' ? previewTab.id : sessionTab.id,
     }
   }
 
   return {
-    tabs: [scratchTab, sessionTab],
+    tabs: tabsWithScratch,
     activeTabId: sessionTab.id,
   }
 }
@@ -360,7 +378,7 @@ export function closeTab(
   return { tabs: newTabs, activeTabId: newActiveTabId }
 }
 
-/** 重排标签顺序（当前只保留 Scratch + 当前会话，保留函数用于兼容旧调用） */
+/** 重排标签顺序（Scratch Pad 固定在第 0 位） */
 export function reorderTabs(
   tabs: TabItem[],
   fromIndex: number,
@@ -386,13 +404,9 @@ export function updateTabTitle(
   )
 }
 
-/** 确保 Scratch Pad 标签存在并位于首位，同时只保留一个会话入口 */
+/** 确保 Scratch Pad 标签存在并位于首位，保留所有已打开标签。 */
 export function ensureScratchPadTab(tabs: TabItem[]): TabItem[] {
-  const scratchTab = tabs.find((t) => t.id === SCRATCH_PAD_ID)
-  const sessionTab = tabs.filter((t) => t.id !== SCRATCH_PAD_ID && !isPreviewTab(t)).at(-1)
-  if (scratchTab) {
-    return sessionTab ? [scratchTab, sessionTab] : [scratchTab]
-  }
-  const newTab = createScratchPadTab()
-  return sessionTab ? [newTab, sessionTab] : [newTab]
+  const scratchTab = tabs.find((t) => t.id === SCRATCH_PAD_ID) ?? createScratchPadTab()
+  const withoutScratch = tabs.filter((tab) => tab.id !== SCRATCH_PAD_ID)
+  return [scratchTab, ...withoutScratch]
 }

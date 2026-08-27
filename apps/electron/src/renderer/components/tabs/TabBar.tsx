@@ -5,10 +5,11 @@
  * - 点击切换标签
  * - 中键关闭标签
  * - 拖拽重排序
- * - Chrome 风格等分宽度（溢出时可横向滚动）
+ * - 紧凑自适应宽度（溢出时可横向滚动）
  */
 
 import * as React from 'react'
+import { useLayoutEffect } from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { Globe2, PanelRight } from 'lucide-react'
 import { toast } from 'sonner'
@@ -16,6 +17,8 @@ import {
   tabsAtom,
   activeTabIdAtom,
   tabIndicatorMapAtom,
+  closeTab,
+  reorderTabs,
   updateTabTitle,
 } from '@/atoms/tab-atoms'
 import type { TabItem } from '@/atoms/tab-atoms'
@@ -23,6 +26,8 @@ import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
+  agentSessionDraftsAtom,
+  agentSessionDraftHtmlAtom,
   agentSidePanelOpenAtom,
   agentWorkspacesAtom,
   currentAgentSessionIdAtom,
@@ -52,8 +57,9 @@ import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
 
-export function TabBar(): React.ReactElement {
+export function TabBar({ teamMode = false }: { teamMode?: boolean } = {}): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
+  const setTabs = useSetAtom(tabsAtom)
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
 
@@ -100,13 +106,49 @@ export function TabBar(): React.ReactElement {
     return ids
   }, [agentSessions])
 
+  // 点击工作区创建的项目 draft 会话不应一直占用标签栏。
+  // 只有离开它、且输入框没有任何未发送文字时才移除标签入口；会话本身仍留在
+  // 主进程以便下次点击同一工作区复用。用上一枚 active tab 统一覆盖顶栏、侧栏和快捷切换器。
+  const previousActiveTabRef = React.useRef<TabItem | null>(null)
+  React.useEffect(() => {
+    const currentTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) ?? null : null
+    const previousTab = previousActiveTabRef.current
+    previousActiveTabRef.current = currentTab
+    if (!previousTab || !currentTab || previousTab.sessionId === currentTab.sessionId) return
+
+    const previousSession = agentSessions.find((session) => session.id === previousTab.sessionId)
+    if (!previousSession?.draft) return
+
+    // 自动关闭只在离开标签时判断一次；不要订阅输入草稿 Map，避免用户每敲一个字
+    // 都让整个 TabBar（以及所有标签项）重渲染。
+    const markdownDraft = store.get(agentSessionDraftsAtom).get(previousSession.id)?.trim() ?? ''
+    // TipTap 的纯空段落不算输入；其余富文本按文本内容判断，避免空编辑器阻止自动收起。
+    const htmlText = (store.get(agentSessionDraftHtmlAtom).get(previousSession.id) ?? '')
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim()
+    if (markdownDraft || htmlText) return
+
+    setTabs((previousTabs) => {
+      const sessionTab = previousTabs.find((tab) => (
+        tab.type === 'agent' && tab.sessionId === previousSession.id
+      ))
+      if (!sessionTab) return previousTabs
+      return closeTab(previousTabs, activeTabId, sessionTab.id).tabs
+    })
+  }, [activeTabId, agentSessions, setTabs, store, tabs])
+
   // 拖拽状态
   const dragState = React.useRef<{
     dragging: boolean
     tabId: string
     startX: number
-    startIndex: number
+    startY: number
+    lastX: number
+    pointerOffsetX: number
+    latestX: number
   } | null>(null)
+  const dragSettleCleanupRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleActivate = React.useCallback((tabId: string) => {
     setActiveTabId(tabId)
@@ -140,39 +182,165 @@ export function TabBar(): React.ReactElement {
       }
     } else if (tab.type === 'scratch' || tab.type === 'tutorial') {
       setCurrentConversationId(null)
-      if (appMode !== 'agent') {
+      // 个人 Agent 模式下保留 appMode，避免切到 Scratch 时收起右侧文件面板；
+      // 团队模式必须退出 TeamWorkspaceView，否则草稿/教程标签会被团队文件页遮住。
+      if (teamMode) {
+        setAppMode('scratch')
+        setCurrentAgentSessionId(null)
+      } else if (appMode !== 'agent') {
         setCurrentAgentSessionId(null)
       }
     }
-  }, [setActiveTabId, setAutomationForm, tabs, agentSessions, appMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
+  }, [setActiveTabId, setAutomationForm, tabs, agentSessions, appMode, teamMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键
     const idx = tabs.findIndex((t) => t.id === tabId)
     if (idx === -1) return
 
+    if (dragSettleCleanupRef.current !== null) {
+      clearTimeout(dragSettleCleanupRef.current)
+      dragSettleCleanupRef.current = null
+    }
+    const tabNode = document.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tabId)}"]`)
+    const tabRect = tabNode?.getBoundingClientRect()
     dragState.current = {
       dragging: false,
       tabId,
       startX: e.clientX,
-      startIndex: idx,
+      startY: e.clientY,
+      lastX: e.clientX,
+      pointerOffsetX: tabRect ? e.clientX - tabRect.left : 0,
+      latestX: e.clientX,
     }
 
+    const getNaturalTabLeft = (node: HTMLElement): number => {
+      const offsetParent = node.offsetParent as HTMLElement | null
+      if (!offsetParent) return node.getBoundingClientRect().left
+      const parentRect = offsetParent.getBoundingClientRect()
+      return parentRect.left + node.offsetLeft - offsetParent.scrollLeft
+    }
+
+    const applyDraggedTransform = (): void => {
+      const current = dragState.current
+      if (!current?.dragging) return
+      const node = document.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(current.tabId)}"]`)
+      if (!node) return
+      const left = current.latestX - current.pointerOffsetX
+      const dx = left - getNaturalTabLeft(node)
+      node.dataset.tabDragging = 'true'
+      node.style.transition = 'none'
+      node.style.transform = `translate3d(${dx}px, 0, 0)`
+      node.style.willChange = 'transform'
+      node.style.zIndex = '20'
+    }
+
+    let pendingMove: PointerEvent | null = null
+    let moveFrame: number | null = null
+
+    const processMove = (me: PointerEvent): void => {
+      const current = dragState.current
+      if (!current) return
+
+      const dx = Math.abs(me.clientX - current.startX)
+      const dy = Math.abs(me.clientY - current.startY)
+      if (!current.dragging && Math.max(dx, dy) <= 5) return
+      current.dragging = true
+      current.latestX = me.clientX
+      me.preventDefault()
+      applyDraggedTransform()
+
+      // 只根据拖动标签的视觉中心与相邻标签中心线比较，不再用 elementFromPoint。
+      // 这样拖动长标签时，即使它暂时覆盖了其他标签，也不会被自己的命中区域反复触发交换。
+      const movementX = me.clientX - current.lastX
+      current.lastX = me.clientX
+      if (Math.abs(movementX) < 0.5) return
+
+      const draggedNode = document.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(current.tabId)}"]`)
+      if (!draggedNode) return
+      const draggedCenter = me.clientX - current.pointerOffsetX + draggedNode.offsetWidth / 2
+      const direction = movementX < 0 ? -1 : 1
+
+      setTabs((previous) => {
+        const fromIndex = previous.findIndex((tab) => tab.id === current.tabId)
+        const toIndex = fromIndex + direction
+        const targetTab = previous[toIndex]
+        if (fromIndex === -1 || !targetTab || targetTab.id === current.tabId) return previous
+
+        const targetNode = document.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(targetTab.id)}"]`)
+        if (!targetNode) return previous
+        const targetCenter = getNaturalTabLeft(targetNode) + targetNode.offsetWidth / 2
+        const crossedTargetCenter = direction < 0
+          ? draggedCenter <= targetCenter
+          : draggedCenter >= targetCenter
+        if (!crossedTargetCenter) return previous
+
+        return reorderTabs(previous, fromIndex, toIndex)
+      })
+      // React 提交新顺序后，重新按新的自然位置计算偏移；否则长标签换位后
+      // 旧 transform 会残留一帧，造成被拖标签短暂跳一下。
+      applyDraggedTransform()
+      requestAnimationFrame(applyDraggedTransform)
+    }
+
+    // pointermove 可能高于屏幕刷新率；每帧只处理最后一个位置，避免重复布局读写。
     const handleMove = (me: PointerEvent): void => {
-      if (!dragState.current) return
-      const dx = Math.abs(me.clientX - dragState.current.startX)
-      if (dx > 5) dragState.current.dragging = true
+      pendingMove = me
+      if (moveFrame !== null) return
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = null
+        const latestMove = pendingMove
+        pendingMove = null
+        if (latestMove) processMove(latestMove)
+      })
     }
 
     const handleUp = (): void => {
       document.removeEventListener('pointermove', handleMove)
       document.removeEventListener('pointerup', handleUp)
+      document.removeEventListener('pointercancel', handleUp)
+      if (moveFrame !== null) {
+        cancelAnimationFrame(moveFrame)
+        moveFrame = null
+      }
+      // 松手前的最后一个 pointermove 仍需完成处理，避免鼠标刚越过中心线就松手时漏排一次。
+      const latestMove = pendingMove
+      pendingMove = null
+      if (latestMove) processMove(latestMove)
+
+      const current = dragState.current
+      if (current?.dragging) {
+        const node = document.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(current.tabId)}"]`)
+        if (node) {
+          node.style.transition = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)'
+          node.style.transform = 'translate3d(0, 0, 0)'
+          node.style.willChange = 'transform'
+          if (dragSettleCleanupRef.current !== null) clearTimeout(dragSettleCleanupRef.current)
+          dragSettleCleanupRef.current = setTimeout(() => {
+            node.dataset.tabDragging = ''
+            node.style.transition = ''
+            node.style.transform = ''
+            node.style.willChange = ''
+            node.style.zIndex = ''
+            dragSettleCleanupRef.current = null
+          }, 200)
+        }
+      }
       dragState.current = null
     }
 
     document.addEventListener('pointermove', handleMove)
     document.addEventListener('pointerup', handleUp)
-  }, [tabs])
+    document.addEventListener('pointercancel', handleUp)
+  }, [setTabs, tabs])
+
+  React.useEffect(() => {
+    return () => {
+      if (dragSettleCleanupRef.current !== null) {
+        clearTimeout(dragSettleCleanupRef.current)
+      }
+    }
+  }, [])
 
   if (tabs.length === 0) return <div className="h-[34px] titlebar-drag-region" />
 
@@ -188,6 +356,7 @@ export function TabBar(): React.ReactElement {
         onClose={requestClose}
         onDragStart={handleDragStart}
         onTearOff={handleTearOff}
+        teamMode={teamMode}
       />
     </>
   )
@@ -204,6 +373,7 @@ function TabBarInner({
   onClose,
   onDragStart,
   onTearOff,
+  teamMode,
 }: {
   tabs: TabItem[]
   activeTabId: string | null
@@ -214,6 +384,7 @@ function TabBarInner({
   onClose: (tabId: string) => void
   onDragStart: (tabId: string, e: React.PointerEvent) => void
   onTearOff: (tabId: string) => void
+  teamMode: boolean
 }): React.ReactElement {
   const [hoveredTabId, setHoveredTabId] = React.useState<string | null>(null)
   const setTabs = useSetAtom(tabsAtom)
@@ -265,9 +436,9 @@ function TabBarInner({
   // 这两种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
   const browserSidePanelVisible = browserVisible
   const hasRightSideContent = rightSidePanelIsVisible || browserSidePanelVisible || previewOwnsWindowControls
-  // 窗口按钮本身已嵌入当前 TabBar。只有本区域真正延伸到窗口右缘时，
-  // 工具组和标签才需为按钮留出 118px；由右侧分栏或预览接管时无需预留。
-  const topBarRightOffset = isWindows && !hasRightSideContent ? 132 : 9
+  // 窗口按钮本身已嵌入当前 TabBar。团队工作区的窗口按钮属于团队面板自身，
+  // 团队模式不在这里预留 132px，避免标签区右侧出现无意义空洞。
+  const topBarRightOffset = teamMode ? 9 : (isWindows && !hasRightSideContent ? 132 : 9)
   const togglePanel = React.useCallback(() => {
     if (!activeAgentSessionId) return
     if (isPanelOpen) {
@@ -308,7 +479,7 @@ function TabBarInner({
     {
       id: 'managed-browser',
       // 工具优先于标签：浏览器分栏压窄会话区时仍保留完整入口，标签区自行滚动压缩。
-      visible: showBrowserButton,
+      visible: !teamMode && showBrowserButton,
       label: '打开受管浏览器',
       tooltip: '打开受管浏览器',
       icon: <Globe2 className="size-3.5" />,
@@ -318,7 +489,7 @@ function TabBarInner({
     },
     {
       id: 'file-panel',
-      visible: showOpenPanelButton,
+      visible: !teamMode && showOpenPanelButton,
       label: '打开文件面板',
       tooltip: `打开文件面板 (${navigator.platform.includes('Mac') ? '⌘⇧B' : 'Ctrl+Shift+B'})`,
       icon: <PanelRight className="size-3.5" />,
@@ -338,6 +509,26 @@ function TabBarInner({
 
   // 滚动容器 ref
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  // 整体空间不足时，工作区徽标让位给会话标题；不是按单个标签的宽度判断，
+  // 避免普通未选中标签因为 hover 收缩而误隐藏徽标。
+  const [isCompactTabs, setIsCompactTabs] = React.useState(false)
+
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const measure = (): void => {
+      const hasOverflow = el.scrollWidth > el.clientWidth + 2
+      setIsCompactTabs((previous) => (
+        hasOverflow || (previous && el.scrollWidth > el.clientWidth - 96)
+      ))
+    }
+
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [tabs.length, tabScrollRightPadding, isCompactTabs])
 
   // 整条 TabBar 容器 ref，用于拖拽 tear-off 时检测鼠标是否离开 TabBar 区域
   const barRef = React.useRef<HTMLDivElement>(null)
@@ -411,6 +602,98 @@ function TabBarInner({
     return () => el.removeEventListener('wheel', handleWheel)
   }, [])
 
+  // FLIP：标签顺序变化后，从当前视觉位置平滑过渡到新位置，而不是被 Flex 布局瞬移。
+  // 每次连续交换都先读取上一段动画的当前位置，避免快速拖动时动画重新跳起。
+  const tabRectsRef = React.useRef(new Map<string, DOMRect>())
+  const tabAnimationFrameRef = React.useRef<number | null>(null)
+  const tabAnimationCleanupRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  useLayoutEffect(() => {
+    const tabNodes = Array.from(
+      scrollRef.current?.querySelectorAll<HTMLElement>('[data-tab-id]') ?? [],
+    )
+    const hasPreviousLayout = tabRectsRef.current.size > 0
+    const previousRects = new Map<string, DOMRect>()
+
+    // getBoundingClientRect 会包含当前 transform，正好可以作为连续动画的真实起点。
+    if (hasPreviousLayout) {
+      for (const node of tabNodes) {
+        const id = node.dataset.tabId
+        const isDragged = node.dataset.tabDragging === 'true'
+        if (id && !isDragged) previousRects.set(id, node.getBoundingClientRect())
+        if (!isDragged) {
+          node.style.transition = 'none'
+          node.style.transform = 'none'
+        }
+      }
+      // 清除旧 transform 后强制布局，读取这次数组顺序对应的自然位置。
+      void scrollRef.current?.offsetWidth
+    }
+
+    const nextRects = new Map<string, DOMRect>()
+    for (const node of tabNodes) {
+      const id = node.dataset.tabId
+      if (id) nextRects.set(id, node.getBoundingClientRect())
+    }
+
+    if (hasPreviousLayout) {
+      let hasMovement = false
+      for (const node of tabNodes) {
+        const id = node.dataset.tabId
+        if (node.dataset.tabDragging === 'true') continue
+        const previous = id ? previousRects.get(id) : undefined
+        const next = id ? nextRects.get(id) : undefined
+        if (!previous || !next) continue
+
+        const dx = previous.left - next.left
+        const dy = previous.top - next.top
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue
+        hasMovement = true
+
+        node.style.transform = `translate3d(${dx}px, ${dy}px, 0)`
+        node.style.willChange = 'transform'
+      }
+
+      if (hasMovement) {
+        if (tabAnimationFrameRef.current !== null) {
+          cancelAnimationFrame(tabAnimationFrameRef.current)
+        }
+        if (tabAnimationCleanupRef.current !== null) {
+          clearTimeout(tabAnimationCleanupRef.current)
+        }
+        tabAnimationFrameRef.current = requestAnimationFrame(() => {
+          for (const node of tabNodes) {
+            if (node.dataset.tabDragging === 'true') continue
+            node.style.transition = 'transform 340ms ease-out'
+            node.style.transform = 'translate3d(0, 0, 0)'
+          }
+          tabAnimationFrameRef.current = null
+          tabAnimationCleanupRef.current = setTimeout(() => {
+            for (const node of tabNodes) {
+              if (node.dataset.tabDragging === 'true') continue
+              node.style.transition = ''
+              node.style.transform = ''
+              node.style.willChange = ''
+            }
+            tabAnimationCleanupRef.current = null
+          }, 360)
+        })
+      }
+    }
+
+    tabRectsRef.current = nextRects
+  }, [tabs])
+
+  React.useEffect(() => {
+    return () => {
+      if (tabAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(tabAnimationFrameRef.current)
+      }
+      if (tabAnimationCleanupRef.current !== null) {
+        clearTimeout(tabAnimationCleanupRef.current)
+      }
+    }
+  }, [])
+
   // 新增 tab 时自动滚动到最右
   const prevTabCount = React.useRef(tabs.length)
   React.useEffect(() => {
@@ -474,7 +757,7 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className="flex items-end h-[34px] tabbar-bg relative">
+    <div ref={barRef} className="flex items-center h-[38px] tabbar-bg relative">
       {/* 顶部 TabBar 的空白区域必须保持可拖拽，尤其是 macOS/Windows 自定义标题栏。
           注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
           Windows 上背景拖拽层避开右上角 WindowControls 区域（126px），防止 hitmask 重叠。
@@ -490,7 +773,7 @@ function TabBarInner({
         ref={scrollRef}
         // 工具组位于同一行的右端并优先保留空间；标签区仅消费剩余宽度，
         // 宽度不足时横向滚动而非挤压/覆盖右端工具。
-        className="relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none"
+        className="relative flex items-center flex-1 min-w-0 overflow-x-auto scrollbar-none pl-4 pr-1 pb-1 gap-1"
         // 右侧工具组和 Windows 窗口控制区占用空间由同一份工具定义计算，
         // 新增或移除按钮时不必再手工维护多组 absolute right 偏移。
         style={{ paddingRight: tabScrollRightPadding }}
@@ -502,6 +785,7 @@ function TabBarInner({
             type={tab.type}
             title={tab.title}
             workspaceName={tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined}
+            hideWorkspaceName={isCompactTabs}
             isAutomation={tab.type === 'agent' && automationSessionIds.has(tab.sessionId)}
             onRename={tab.type === 'agent' ? (title) => handleRenameAgentSession(tab.sessionId, title) : undefined}
             isActive={tab.id === activeTabId}
@@ -536,7 +820,7 @@ function TabBarInner({
         id="tab-bar"
         // 用实际可见性（B）判定：浏览器/文件面板被迫收起（A=true 但窗口不足）时不渲染，
         // 窗口控制按钮必须回到 TabBar；面板实际可见时才交给面板自身渲染。
-        active={!rightSidePanelIsVisible && !browserVisible && !previewOwnsWindowControls}
+        active={!teamMode && !rightSidePanelIsVisible && !browserVisible && !previewOwnsWindowControls}
         priority={10}
         className="absolute right-2 bottom-[3px]"
       />

@@ -125,26 +125,53 @@ export function TeamWorkspaceView(): React.ReactElement {
     ? activeTab.sessionId
     : null
 
-  // 团队工作区专属：从 tabs 中找第一场属于本工作区的 Agent 会话
+  // 团队工作区只消费属于当前团队的 Agent/Preview Tab。
+  // 顶栏现在同时包含个人和团队标签，不能把个人标签误当成团队 Agent，
+  // 否则团队文件拖入会投递到错误会话，右侧面板也会显示错内容。
+  const activeTeamTab = React.useMemo(() => {
+    if (!activeTabAgentSessionId || !teamId) return null
+    const session = agentSessions.find((item) => item.id === activeTabAgentSessionId)
+    return session?.workspaceId === teamId ? activeTab : null
+  }, [activeTab, activeTabAgentSessionId, agentSessions, teamId])
+
+  // 当前激活的是团队 Tab 时跟随它；Preview Tab 要归一到所属 Agent Tab，
+  // 团队右侧面板始终显示对话而不是把文件预览误塞进 Agent 面板。
   const teamAgentTab = React.useMemo(() => {
     if (!teamId) return null
-    return tabs.find((t) => {
-      if (t.type !== 'agent' && t.type !== 'preview') return false
-      const session = agentSessions.find((s) => s.id === (t as { sessionId?: string }).sessionId)
+    if (activeTeamTab?.type === 'agent') return activeTeamTab
+    if (activeTeamTab?.type === 'preview') {
+      return tabs.find((tab) => tab.type === 'agent' && tab.sessionId === activeTeamTab.sessionId) ?? null
+    }
+    return tabs.find((tab) => {
+      if (tab.type !== 'agent') return false
+      const session = agentSessions.find((item) => item.id === tab.sessionId)
       return session?.workspaceId === teamId
     }) ?? null
-  }, [tabs, agentSessions, teamId])
+  }, [activeTeamTab, tabs, agentSessions, teamId])
 
-  const teamAgentTabId = (teamAgentTab as { id?: string })?.id ?? null
-
+  const teamAgentTabId = teamAgentTab?.id ?? null
   const currentTeamSessionId = currentAgentSessionId && agentSessions.some((session) => (
     session.id === currentAgentSessionId && session.workspaceId === teamId
   ))
     ? currentAgentSessionId
     : null
 
-  // 优先团队 Agent Tab，其次当前团队会话
-  const activeAgentSessionId = activeTabAgentSessionId ?? (currentTeamSessionId ?? (teamAgentTab ? (teamAgentTab as { sessionId: string }).sessionId : null))
+  const activeAgentSessionId = activeTeamTab?.sessionId
+    ?? currentTeamSessionId
+    ?? teamAgentTab?.sessionId
+    ?? null
+
+  // 从个人工作区切入团队工作区时，旧 activeTab 可能仍指向个人会话。
+  // 只在当前没有团队 Tab 激活时校正，避免把团队 Preview Tab 强行切回 Agent Tab。
+  React.useEffect(() => {
+    if (!teamId || activeTeamTab || !teamAgentTab) return
+    if (activeTabId === teamAgentTab.id) return
+    setActiveTabId(teamAgentTab.id)
+    setAppMode('agent')
+    setCurrentConversationId(null)
+    setCurrentAgentSessionId(teamAgentTab.sessionId)
+  }, [activeTabId, activeTeamTab, teamAgentTab, teamId, setActiveTabId, setAppMode, setCurrentConversationId, setCurrentAgentSessionId])
+
   const setActiveAgentPendingFiles = useSetAtom(agentPendingFilesAtomFamily(activeAgentSessionId ?? '__team-agent-drop__'))
 
   // 文件状态

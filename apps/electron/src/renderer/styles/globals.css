@@ -1142,7 +1142,14 @@
   z-index: 1;
 }
 
+.app-tab-inactive {
+  /* 未选中标签也保留明确轮廓，避免看起来像没有标签页。 */
+  border-color: hsl(var(--border) / 0.5);
+  background-color: hsl(var(--tab-surface) / 0.28);
+}
+
 .app-tab-inactive:hover {
+  border-color: hsl(var(--border) / 0.75);
   background-color: hsl(var(--selected-surface) / 0.7);
 }
 

@@ -15,13 +15,14 @@ import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { TabPreviewPanel } from './TabPreviewPanel'
-import { interfaceVariantAtom } from '@/atoms/theme'
 
 export interface TabBarItemProps {
   id: string
   type: TabType
   title: string
   workspaceName?: string
+  /** 标签栏整体空间不足时隐藏工作区徽标，让位给会话标题 */
+  hideWorkspaceName?: boolean
   isActive: boolean
   isStreaming: SessionIndicatorStatus
   /** 是否显示 hover 预览面板（由父级管理） */
@@ -53,6 +54,7 @@ export function TabBarItem({
   type,
   title,
   workspaceName,
+  hideWorkspaceName = false,
   isActive,
   isStreaming,
   isHovered,
@@ -70,21 +72,25 @@ export function TabBarItem({
   onPanelHoverLeave,
 }: TabBarItemProps): React.ReactElement {
   const buttonRef = React.useRef<HTMLButtonElement>(null)
+  const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null)
+  const suppressClickRef = React.useRef(false)
   const [isNarrow, setIsNarrow] = React.useState(false)
   const [editingTitle, setEditingTitle] = React.useState(false)
   const [draftTitle, setDraftTitle] = React.useState(title)
   const [savingTitle, setSavingTitle] = React.useState(false)
   const titleInputRef = React.useRef<HTMLInputElement>(null)
   const minimapCache = useAtomValue(tabMinimapCacheAtom)
-  const interfaceVariant = useAtomValue(interfaceVariantAtom)
-  const isClassic = interfaceVariant === 'classic'
 
   React.useEffect(() => {
     const el = buttonRef.current
     if (!el) return
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0]
-      if (entry) setIsNarrow(entry.contentRect.width < 72)
+      if (!entry) return
+      const width = entry.contentRect.width
+      // 工作区徽标不依赖 hover；只有标签进入极窄状态时才隐藏，
+      // 普通未选中标签的收缩主要由关闭按钮收回完成。
+      setIsNarrow(width < 72)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -97,6 +103,39 @@ export function TabBarItem({
       e.preventDefault()
       onMiddleClick()
     }
+  }
+
+  const handlePointerDown = (e: React.PointerEvent): void => {
+    if (e.button !== 0) return
+    pointerStartRef.current = { x: e.clientX, y: e.clientY }
+    suppressClickRef.current = false
+    e.currentTarget.setPointerCapture(e.pointerId)
+    onDragStart(e)
+  }
+
+  const handleClick = (e: React.MouseEvent): void => {
+    if (suppressClickRef.current) {
+      e.preventDefault()
+      e.stopPropagation()
+      suppressClickRef.current = false
+      return
+    }
+    onActivate()
+  }
+
+  const handlePointerMove = (e: React.PointerEvent): void => {
+    const start = pointerStartRef.current
+    if (!start) return
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 5) {
+      suppressClickRef.current = true
+    }
+  }
+
+  const handlePointerUp = (e: React.PointerEvent): void => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    pointerStartRef.current = null
   }
 
   const handleCloseClick = (e: React.MouseEvent): void => {
@@ -159,17 +198,19 @@ export function TabBarItem({
           ref={buttonRef}
           type="button"
           className={cn(
-            'group relative flex items-center justify-center gap-1.5 min-w-[82px] px-3 h-[34px]',
-            'text-xs transition-colors select-none cursor-pointer',
-            'border-t border-l border-r border-transparent',
-            isClassic ? 'rounded-t-lg' : 'rounded-none',
+            'group relative flex items-center justify-center gap-1.5 min-w-[82px] px-3 h-[32px] rounded-lg overflow-hidden',
+            'text-xs transition-colors select-none cursor-grab active:cursor-grabbing',
+            'border border-transparent',
             isActive
-              ? isClassic ? 'bg-content-area text-foreground border-border/50' : 'app-tab-active text-foreground border-border/80'
-              : isClassic ? 'text-muted-foreground hover:text-foreground hover:bg-muted/50' : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+              ? 'app-tab-active text-foreground shadow-sm'
+              : 'app-tab-inactive text-muted-foreground hover:text-foreground',
           )}
-          onClick={onActivate}
+          onClick={handleClick}
           onMouseDown={handleMouseDown}
-          onPointerDown={onDragStart}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
         >
           <StickyNote className="size-3.5" />
           <span className="truncate">草稿</span>
@@ -180,7 +221,11 @@ export function TabBarItem({
 
   return (
     <div
-      className="relative min-w-[120px] max-w-[320px] flex-[1_1_auto] titlebar-no-drag"
+      data-tab-id={id}
+      className={cn(
+        'relative max-w-[320px] flex-[0_1_auto] titlebar-no-drag transition-[min-width] duration-200 ease-out',
+        isActive ? 'min-w-[132px]' : 'min-w-[116px] hover:min-w-[132px]',
+      )}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
     >
@@ -190,18 +235,20 @@ export function TabBarItem({
         role="tab"
         aria-selected={isActive}
         className={cn(
-          'group relative flex items-center gap-1.5 px-3 h-[34px] w-full',
-          'text-xs transition-colors select-none cursor-pointer',
-          'border-t border-l border-r border-transparent',
-          isClassic ? 'rounded-t-lg' : 'rounded-none',
+          'group relative flex items-center gap-1.5 px-3 h-[32px] w-full rounded-lg overflow-hidden',
+          'text-xs transition-colors select-none cursor-grab active:cursor-grabbing',
+          'border border-transparent',
           isActive
-            ? isClassic ? 'bg-content-area text-foreground border-border/50' : 'app-tab-active text-foreground border-border/80'
-            : isClassic ? 'text-muted-foreground hover:text-foreground hover:bg-muted/50' : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+            ? 'app-tab-active text-foreground shadow-sm'
+            : 'app-tab-inactive text-muted-foreground hover:text-foreground',
           isTearingOff && 'ring-2 ring-primary/70 ring-offset-0 bg-primary/10',
         )}
-        onClick={onActivate}
+        onClick={handleClick}
         onMouseDown={handleMouseDown}
-        onPointerDown={onDragStart}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
         {type === 'preview' && !isNarrow && (
           <FileText className="size-3.5 shrink-0 text-muted-foreground" />
@@ -263,7 +310,7 @@ export function TabBarItem({
           </span>
         )}
 
-        {workspaceName && !isNarrow && (
+        {workspaceName && !hideWorkspaceName && !isNarrow && (
           <span className="shrink-0 px-1.5 py-0 rounded-full bg-primary/10 text-[10px] leading-4 workspace-badge font-medium truncate max-w-[86px]">
             {workspaceName}
           </span>
@@ -275,10 +322,16 @@ export function TabBarItem({
           role="button"
           tabIndex={-1}
           className={cn(
-            'size-4 rounded-sm flex items-center justify-center shrink-0',
-            'opacity-0 group-hover:opacity-100 hover:bg-muted-foreground/20 transition-opacity',
-            isActive && 'opacity-60',
+            'h-4 shrink-0 rounded-sm flex items-center justify-center overflow-hidden',
+            isActive
+              ? 'w-4 opacity-60'
+              : 'w-0 opacity-0 group-hover:w-4 group-hover:opacity-100',
+            'hover:bg-muted-foreground/20 transition-[width,opacity]',
           )}
+          // 阻止标签按钮把关闭操作误判为拖拽开始；否则父级会 setPointerCapture，
+          // 鼠标松开时关闭点击可能被拖拽流程吞掉。中键关闭不受影响。
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={handleCloseClick}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') handleCloseClick(e as unknown as React.MouseEvent)
@@ -293,7 +346,7 @@ export function TabBarItem({
           <span
             className={cn(
               'absolute inset-0 border-t-2 border-l-2 border-r-2 border-b-0 pointer-events-none',
-              isClassic ? 'rounded-t-lg' : 'rounded-none',
+              'rounded-lg',
               indicatorColor,
             )}
             aria-hidden="true"

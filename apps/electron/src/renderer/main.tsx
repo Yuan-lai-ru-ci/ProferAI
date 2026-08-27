@@ -871,21 +871,27 @@ function TabStatePersistenceInitializer(): null {
       }
 
       const activeTab = validTabs.find((t) => t.id === restoredActiveTabId) ?? validTabs[0] ?? null
-      store.set(tabsAtom, ensureScratchPadTab(activeTab ? [activeTab] : []))
-      store.set(activeTabIdAtom, restoredActiveTabId)
+      store.set(tabsAtom, ensureScratchPadTab(validTabs))
+      store.set(activeTabIdAtom, activeTab?.id ?? SCRATCH_PAD_ID)
 
-      // 同步 appMode 和 currentSessionId
+      // 同步 appMode、currentSessionId 和 Agent 所属工作区。
+      // 团队 Tab 恢复时必须以会话元数据为准，否则页面会按旧的个人工作区渲染。
       if (activeTab) {
         if (activeTab.type === 'chat') {
           store.set(appModeAtom, 'chat')
           store.set(currentConversationIdAtom, activeTab.sessionId)
+          store.set(currentAgentSessionIdAtom, null)
         } else {
           store.set(appModeAtom, 'agent')
           store.set(currentAgentSessionIdAtom, activeTab.sessionId)
+          const activeSession = agentSessions.find((session) => session.id === activeTab.sessionId)
+          if (activeSession?.workspaceId) {
+            store.set(currentAgentWorkspaceIdAtom, activeSession.workspaceId)
+          }
         }
       }
 
-      console.log(`[TabRestore] 已恢复当前会话入口，历史标签 ${validTabs.length} 个已收敛到左侧列表`)
+      console.log(`[TabRestore] 已恢复 ${validTabs.length} 个标签页`)
     }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
       .finally(() => { restoredRef.current = true })
   }, [store])

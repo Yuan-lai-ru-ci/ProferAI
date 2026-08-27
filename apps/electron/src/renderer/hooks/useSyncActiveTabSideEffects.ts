@@ -15,6 +15,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
+  agentWorkspacesAtom,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
@@ -30,6 +31,8 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const appMode = useAtomValue(appModeAtom)
 
   return useCallback<SyncActiveTabSideEffects>(
@@ -48,10 +51,15 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
         return
       }
 
-      if (newActiveTab.type === 'scratch') {
-        // Agent 模式下切到 Scratch Pad 时保持右侧文件面板不收起
+      if (newActiveTab.type === 'scratch' || newActiveTab.type === 'tutorial') {
+        // 个人 Agent 模式下切到 Scratch Pad 时保持右侧文件面板不收起；
+        // 团队工作区没有独立的 Scratch 内容区，必须退出团队视图，避免留下空 Agent 面板。
         setCurrentConversationId(null)
-        if (appMode !== 'agent') {
+        const currentWorkspace = agentWorkspaces.find((workspace) => workspace.id === currentWorkspaceId)
+        if (currentWorkspace?.type === 'team') {
+          setAppMode('scratch')
+          setCurrentAgentSessionId(null)
+        } else if (appMode !== 'agent') {
           setCurrentAgentSessionId(null)
         }
         return
@@ -87,6 +95,8 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
       setCurrentAgentWorkspaceId,
       setUnviewedCompleted,
       agentSessions,
+      agentWorkspaces,
+      currentWorkspaceId,
     ],
   )
 }

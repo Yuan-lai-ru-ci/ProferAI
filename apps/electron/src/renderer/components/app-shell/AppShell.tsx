@@ -11,6 +11,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { LeftSidebar } from './LeftSidebar'
 import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
+import { TabBar } from '@/components/tabs/TabBar'
 import { TeamWorkspaceView } from '@/components/agent/TeamWorkspaceView'
 import { WindowControlsTemplateProvider } from '@/components/WindowControlsTemplate'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
@@ -146,6 +147,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom)
   const leftDragging = React.useRef(false)
   const [isDraggingLeftSidebar, setIsDraggingLeftSidebar] = React.useState(false)
+  const leftSidebarElementRef = React.useRef<HTMLDivElement>(null)
   const clampedLeftSidebarWidth = clampLeftSidebarWidth(leftSidebarWidth)
 
   React.useEffect(() => {
@@ -154,6 +156,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     }
   }, [clampedLeftSidebarWidth, leftSidebarWidth, setLeftSidebarWidth])
 
+  // 实时宽度仍直接参与 Flex 布局，因此会话区会和此前一样被连续挤压；区别在于
+  // 拖拽帧只改侧栏根节点的 DOM style，绝不触发 Jotai/React 更新。这样 React 不会
+  // 每帧重新执行 AppShell 及其子树，浏览器只承担不可避免的文本重排。松手才持久化。
   const handleLeftSidebarMouseDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     leftDragging.current = true
@@ -161,11 +166,16 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     const startX = e.clientX
     const startWidth = clampedLeftSidebarWidth
     let latestClientX = startX
+    let previewWidth = startWidth
     let rafId = 0
 
     const applyWidth = () => {
-      const delta = latestClientX - startX
-      setLeftSidebarWidth(clampLeftSidebarWidth(startWidth + delta))
+      previewWidth = clampLeftSidebarWidth(startWidth + latestClientX - startX)
+      const sidebar = leftSidebarElementRef.current
+      if (sidebar) {
+        sidebar.style.width = `${previewWidth}px`
+        sidebar.style.minWidth = `${previewWidth}px`
+      }
     }
 
     const onMouseMove = (ev: MouseEvent) => {
@@ -178,14 +188,17 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       })
     }
 
-    const onMouseUp = () => {
+    const onMouseUp = (ev: MouseEvent) => {
+      latestClientX = ev.clientX
       leftDragging.current = false
-      setIsDraggingLeftSidebar(false)
       if (rafId) {
         cancelAnimationFrame(rafId)
         rafId = 0
       }
       applyWidth()
+      // 唯一的 atom 更新：同时同步 localStorage；真实宽度已在 DOM 上，视觉不会跳变。
+      setLeftSidebarWidth(previewWidth)
+      setIsDraggingLeftSidebar(false)
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
@@ -193,6 +206,15 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
   }, [clampedLeftSidebarWidth, setLeftSidebarWidth])
+
+  // 松手并由 atom 提交最终宽度后清除临时 inline style，恢复组件声明式宽度来源。
+  React.useLayoutEffect(() => {
+    if (isDraggingLeftSidebar) return
+    const sidebar = leftSidebarElementRef.current
+    if (!sidebar) return
+    sidebar.style.width = ''
+    sidebar.style.minWidth = ''
+  }, [isDraggingLeftSidebar, clampedLeftSidebarWidth])
 
   return (
     <WindowControlsTemplateProvider>
@@ -220,7 +242,11 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[70] flex-none crt-sidebar',
           )}
         >
-          <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
+          <LeftSidebar
+            containerRef={leftSidebarElementRef}
+            width={clampedLeftSidebarWidth}
+            noTransition={isDraggingLeftSidebar}
+          />
           {/* 左栏复用主区既有的 8px 外边距作为拖动命中区：不额外占宽度，也不覆盖侧栏滚动条。 */}
           {!sidebarCollapsed && (
             <div
@@ -235,9 +261,15 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
         {/* 中间容器 */}
         <div className="main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]">
-          {/* 团队工作区：文件主区 + AI 侧栏；Skill 市场等视图切到 MainArea */}
+          {/* 团队工作区也必须挂载统一顶栏；否则团队页面与个人页面各自拥有一套入口，
+              标签切换、关闭和拖拽排序会与团队 Agent 面板脱节。 */}
           {showTeamWorkspaceView ? (
-            <TeamWorkspaceView />
+            <div className="flex h-full min-h-0 flex-col">
+              <TabBar teamMode />
+              <div className="min-h-0 flex-1">
+                <TeamWorkspaceView />
+              </div>
+            </div>
           ) : (
             <MainArea />
           )}
