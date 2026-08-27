@@ -1,7 +1,7 @@
 /**
- * Windows 环境检测面板
+ * 本地环境检测面板
  *
- * 展示 Shell 环境（Git Bash / WSL）和 Node.js 的检测结果，
+ * Windows 展示 Shell 环境（Git Bash / WSL），其他平台使用系统 Shell；同时展示 Node.js 检测结果，
  * 用于 Onboarding Step 2 和设置里的 EnvironmentCheckDialog 复用。
  */
 
@@ -17,6 +17,7 @@ import {
   isNodeJsOkAtom,
 } from '@/atoms/environment'
 import { useAtomValue } from 'jotai'
+import { detectIsWindows } from '@/lib/platform'
 
 interface EnvironmentCheckPanelProps {
   /** 首次挂载时是否自动跑一次检测（Onboarding 用），Dialog 场景可设 false */
@@ -31,6 +32,7 @@ export function EnvironmentCheckPanel({
   const shellOk = useAtomValue(isShellEnvironmentOkAtom)
   const nodeOk = useAtomValue(isNodeJsOkAtom)
   const [isChecking, setIsChecking] = React.useState(false)
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   const refresh = React.useCallback(async () => {
     setIsChecking(true)
@@ -74,6 +76,10 @@ export function EnvironmentCheckPanel({
   if (!runtime) {
     shellStatus = 'checking'
     shellStatusText = '正在检测...'
+  } else if (!isWindows) {
+    // macOS/Linux use the user's native POSIX shell; Git Bash/WSL are Windows-only.
+    shellStatus = 'success'
+    shellStatusText = '系统 Shell 已可用'
   } else if (gitBashAvailable) {
     shellStatus = 'success'
     shellStatusText = `Git Bash v${shell?.gitBash?.version ?? ''} 已可用`
@@ -106,9 +112,13 @@ export function EnvironmentCheckPanel({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold">Windows 环境检测</h3>
+          <h3 className="text-sm font-semibold">
+            {isWindows ? 'Windows 环境检测' : '本地环境检测'}
+          </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Profer 在 Windows 上需要 Git Bash 或 WSL 才能运行 Agent
+            {isWindows
+              ? 'Profer 在 Windows 上需要 Git Bash 或 WSL 才能运行 Agent'
+              : '检查 Profer 运行 Agent 所需的本地工具'}
           </p>
         </div>
         <Button
@@ -131,10 +141,10 @@ export function EnvironmentCheckPanel({
         <EnvironmentCheckCard
           name="Shell 环境"
           status={shellStatus}
-          requirement="必需 · Git Bash 或 WSL 任一可用即可"
+          requirement={isWindows ? '必需 · Git Bash 或 WSL 任一可用即可' : '必需 · 使用系统 Shell'}
           statusText={shellStatusText}
           action={
-            shellStatus === 'error'
+            isWindows && shellStatus === 'error'
               ? { type: 'download', installerId: 'git-for-windows' }
               : { type: 'none' }
           }
@@ -147,13 +157,15 @@ export function EnvironmentCheckPanel({
           statusText={nodeStatusText}
           action={
             nodeStatus === 'warning'
-              ? { type: 'download', installerId: 'nodejs' }
+              ? isWindows
+                ? { type: 'download', installerId: 'nodejs' }
+                : { type: 'openExternal', url: 'https://nodejs.org/en/download/' }
               : { type: 'none' }
           }
         />
       </div>
 
-      {!shellOk && runtime && (
+      {isWindows && !shellOk && runtime && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
           Shell 环境未就绪：现在发送 Agent 消息会失败。请先安装 Git for Windows
           （会附带 Git Bash），安装完成后点「重新检测」。

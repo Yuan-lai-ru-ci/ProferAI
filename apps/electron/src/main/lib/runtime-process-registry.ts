@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRuntimeProcessesPath } from './config-paths'
-import { extractRequestedPort, listAliveProcesses, listPortPidMap, listProcessTree, type MonitoredProcess } from './process-monitor'
+import {
+  captureOsSnapshot,
+  extractRequestedPort,
+  listAliveProcesses,
+  listPortPidMap,
+  listProcessTree,
+  type MonitoredProcess,
+} from './process-monitor'
 
 /**
  * Persisted ownership records for long-running services launched by a runtime.
@@ -291,11 +298,28 @@ async function inspectOnce(): Promise<void> {
       const needPort = pendingServices.some((r) => requestedPort(r.command) !== undefined)
       const portMap = needPort ? await listPortPidMap() : null
       const trees = new Map<number, Map<number, MonitoredProcess>>()
+      // POSIX services are commonly reparented to launchd/init after their shell exits,
+      // so keep a lazy snapshot fallback for records that are not found in the shell tree.
+      let posixSnapshot: Awaited<ReturnType<typeof captureOsSnapshot>> | null = null
+      let posixSnapshotLoaded = false
       for (const rec of pendingServices) {
         const root = rec.shellPid
-        if (!root) continue // 无 shellPid 无法树遍历，保持 pending 至超时清理
-        if (!trees.has(root)) trees.set(root, await listProcessTree(root))
-        const found = matchRecordInTree(rec, trees.get(root), portMap)
+        const tree = root
+          ? (trees.has(root) ? trees.get(root) : await listProcessTree(root))
+          : undefined
+        if (root && tree) trees.set(root, tree)
+        let found = matchRecordInTree(rec, tree, portMap)
+
+        if (!found && (process.platform === 'darwin' || process.platform === 'linux')) {
+          if (!posixSnapshotLoaded) {
+            posixSnapshotLoaded = true
+            posixSnapshot = await captureOsSnapshot()
+          }
+          found = posixSnapshot
+            ? matchRecordAgainstSnapshot(rec, posixSnapshot.portPids, posixSnapshot.processes)
+            : undefined
+        }
+
         if (found) {
           rec.pid = found.pid
           rec.startTime = found.startTime

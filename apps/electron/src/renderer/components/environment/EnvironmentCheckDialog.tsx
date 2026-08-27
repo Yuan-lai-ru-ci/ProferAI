@@ -1,5 +1,5 @@
 /**
- * Windows 环境检测 Dialog
+ * 本地环境检测 Dialog
  *
  * 聊天里的错误卡片「打开环境检测」按钮 / 设置页入口都会打开它，
  * 复用 EnvironmentCheckPanel。
@@ -26,7 +26,7 @@ export function EnvironmentCheckDialog({ open, onOpenChange }: EnvironmentCheckD
         <DialogHeader>
           <DialogTitle>环境检测</DialogTitle>
           <DialogDescription>
-            检查并修复 Profer 运行所需的 Windows 本地环境
+            检查并修复 Profer 运行所需的本地环境
           </DialogDescription>
         </DialogHeader>
         <EnvironmentCheckPanel autoDetectOnMount={open} />

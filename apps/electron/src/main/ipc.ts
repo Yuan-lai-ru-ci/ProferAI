@@ -773,6 +773,10 @@ try {
 
 /** 查询占用指定文件/目录的进程名列表 */
 function findLockingProcesses(filePath: string): Promise<string[]> {
+  // Restart Manager and powershell.exe are Windows-only. POSIX callers use the
+  // generic fallback message instead of spawning a platform-specific process.
+  if (process.platform !== 'win32') return Promise.resolve([])
+
   return new Promise((resolve) => {
     let settled = false
     const finish = (names: string[]) => {

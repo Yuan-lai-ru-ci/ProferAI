@@ -56,6 +56,24 @@ describe('matchRecordAgainstSnapshot（复用共享快照，避免逐记录全�
     })
   })
 
+  test('POSIX 服务脱离 shell 后仍可按监听端口匹配', () => {
+    const record = rec({
+      command: 'npm run dev -- --port 5177',
+      cwd: '/Users/alice/project/app',
+    })
+    const portPids = new Map([[5177, [1234]]])
+    const processes = new Map([
+      [1234, {
+        name: '/opt/homebrew/bin/node',
+        cmd: 'node /private/tmp/vite.js --host 127.0.0.1:5177',
+        startTime: 1_750_000_000_500,
+      }],
+    ])
+    expect(matchRecordAgainstSnapshot(record, portPids, processes)).toEqual({
+      pid: 1234, startTime: 1_750_000_000_500, ports: [5177],
+    })
+  })
+
   test('无显式端口时按 cwd 内的命令关键字匹配', () => {
     const record = rec({ command: 'npm run dev', cwd: 'D:/project/app' })
     const portPids = new Map<number, number[]>()
