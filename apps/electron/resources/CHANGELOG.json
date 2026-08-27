@@ -1,6 +1,12 @@
 {
   "releases": [
     {
+      "version": "0.15.63",
+      "date": "2026-08-28",
+      "title": "v0.15.63",
+      "notes": "- 新增：支持在 Apple Silicon Mac 上进行本地无签名构建验收\n- 优化：Windows 与 macOS 的 Bundled Bun 按目标平台自动准备并校验\n- 优化：图片预览和 Lightbox 支持更稳定的滚轮缩放\n- 修复：归档会话不再从工作区历史 Token 热力图中消失"
+    },
+    {
       "version": "0.15.62",
       "date": "2026-08-26",
       "title": "v0.15.62",
