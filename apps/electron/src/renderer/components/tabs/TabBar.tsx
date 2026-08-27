@@ -512,16 +512,41 @@ function TabBarInner({
   // 整体空间不足时，工作区徽标让位给会话标题；不是按单个标签的宽度判断，
   // 避免普通未选中标签因为 hover 收缩而误隐藏徽标。
   const [isCompactTabs, setIsCompactTabs] = React.useState(false)
+  // 收起前的完整布局宽度。回弹不能读取收起后的 scrollWidth，否则徽标变少后
+  // scrollWidth 也随之变小，永远无法达到恢复阈值。
+  const expandedScrollWidthRef = React.useRef<number | null>(null)
+  const observedTabsLengthRef = React.useRef(tabs.length)
 
   React.useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
 
+    // Tab 数量变化后，之前记录的完整宽度已经失效；先恢复完整布局，下一轮重新测量。
+    if (observedTabsLengthRef.current !== tabs.length) {
+      observedTabsLengthRef.current = tabs.length
+      expandedScrollWidthRef.current = null
+      if (isCompactTabs) {
+        setIsCompactTabs(false)
+        return
+      }
+    }
+
     const measure = (): void => {
-      const hasOverflow = el.scrollWidth > el.clientWidth + 2
-      setIsCompactTabs((previous) => (
-        hasOverflow || (previous && el.scrollWidth > el.clientWidth - 96)
-      ))
+      if (!isCompactTabs) {
+        const hasOverflow = el.scrollWidth > el.clientWidth + 2
+        if (hasOverflow) {
+          // 在完整布局仍然存在时保存基准，再切换到紧凑布局。
+          expandedScrollWidthRef.current = el.scrollWidth
+          setIsCompactTabs(true)
+        }
+        return
+      }
+
+      const expandedWidth = expandedScrollWidthRef.current
+      if (expandedWidth === null) return
+      // 完整布局已经能放下时立即回弹；不能再额外加回弹宽度，
+      // 否则空间明明足够，标签仍会卡在紧凑态。
+      setIsCompactTabs(el.clientWidth + 2 < expandedWidth)
     }
 
     measure()
@@ -757,7 +782,7 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className="flex items-center h-[38px] tabbar-bg relative">
+    <div ref={barRef} className="flex items-end h-[38px] tabbar-bg relative">
       {/* 顶部 TabBar 的空白区域必须保持可拖拽，尤其是 macOS/Windows 自定义标题栏。
           注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
           Windows 上背景拖拽层避开右上角 WindowControls 区域（126px），防止 hitmask 重叠。
@@ -773,7 +798,7 @@ function TabBarInner({
         ref={scrollRef}
         // 工具组位于同一行的右端并优先保留空间；标签区仅消费剩余宽度，
         // 宽度不足时横向滚动而非挤压/覆盖右端工具。
-        className="relative flex items-center flex-1 min-w-0 overflow-x-auto scrollbar-none pl-4 pr-1 pb-1 gap-1"
+        className="relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none pl-4 pr-1 pb-1 gap-1"
         // 右侧工具组和 Windows 窗口控制区占用空间由同一份工具定义计算，
         // 新增或移除按钮时不必再手工维护多组 absolute right 偏移。
         style={{ paddingRight: tabScrollRightPadding }}
@@ -786,6 +811,7 @@ function TabBarInner({
             title={tab.title}
             workspaceName={tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined}
             hideWorkspaceName={isCompactTabs}
+            hideRenameControl={isCompactTabs}
             isAutomation={tab.type === 'agent' && automationSessionIds.has(tab.sessionId)}
             onRename={tab.type === 'agent' ? (title) => handleRenameAgentSession(tab.sessionId, title) : undefined}
             isActive={tab.id === activeTabId}

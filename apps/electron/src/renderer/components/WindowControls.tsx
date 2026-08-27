@@ -39,7 +39,7 @@ export function WindowControls({
   return (
     <div className={cn(
       'window-controls flex select-none',
-      variant === 'fixed' ? 'fixed top-[8px] right-[8px] z-[100]' : 'relative z-10 shrink-0',
+      variant === 'fixed' ? 'fixed top-[2px] right-[8px] z-[100]' : 'relative z-10 shrink-0',
       className,
     )}>
       {/* 最小化 */}

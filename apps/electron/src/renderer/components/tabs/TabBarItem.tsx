@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { FileText, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
+import { BookOpen, Bot, FileText, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -23,6 +23,8 @@ export interface TabBarItemProps {
   workspaceName?: string
   /** 标签栏整体空间不足时隐藏工作区徽标，让位给会话标题 */
   hideWorkspaceName?: boolean
+  /** 标签栏整体空间不足时隐藏重命名按钮 */
+  hideRenameControl?: boolean
   isActive: boolean
   isStreaming: SessionIndicatorStatus
   /** 是否显示 hover 预览面板（由父级管理） */
@@ -55,6 +57,7 @@ export function TabBarItem({
   title,
   workspaceName,
   hideWorkspaceName = false,
+  hideRenameControl = false,
   isActive,
   isStreaming,
   isHovered,
@@ -88,8 +91,7 @@ export function TabBarItem({
       const entry = entries[0]
       if (!entry) return
       const width = entry.contentRect.width
-      // 工作区徽标不依赖 hover；只有标签进入极窄状态时才隐藏，
-      // 普通未选中标签的收缩主要由关闭按钮收回完成。
+      // 工作区徽标由 TabBar 依据整体溢出情况统一控制；单个标签只负责极窄时隐藏标题。
       setIsNarrow(width < 72)
     })
     ro.observe(el)
@@ -173,6 +175,15 @@ export function TabBarItem({
   }
 
   const isScratch = type === 'scratch'
+  const tabTypeIcon = type === 'agent'
+    ? <Bot className="size-3.5 shrink-0" aria-hidden="true" />
+    : type === 'chat'
+      ? <MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
+      : type === 'preview'
+        ? <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        : type === 'tutorial'
+          ? <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          : null
   const indicatorColor = isScratch
     ? undefined
     : isStreaming !== 'idle'
@@ -223,8 +234,11 @@ export function TabBarItem({
     <div
       data-tab-id={id}
       className={cn(
-        'relative max-w-[320px] flex-[0_1_auto] titlebar-no-drag transition-[min-width] duration-200 ease-out',
-        isActive ? 'min-w-[132px]' : 'min-w-[116px] hover:min-w-[132px]',
+        // 空间宽裕时按内容自然宽度排列；拥挤时由 min-width + 横向滚动承接，不把单个标签撑满顶栏。
+        'relative w-fit max-w-[280px] flex-[0_1_auto] titlebar-no-drag transition-[min-width] duration-200 ease-out',
+        hideWorkspaceName
+          ? (isActive ? 'min-w-[144px]' : 'min-w-[128px] hover:min-w-[144px]')
+          : (isActive ? 'min-w-[132px]' : 'min-w-[116px] hover:min-w-[132px]'),
       )}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
@@ -250,9 +264,7 @@ export function TabBarItem({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
       >
-        {type === 'preview' && !isNarrow && (
-          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
+        {tabTypeIcon}
 
         {/* 标题（窄状态下隐藏，用 spacer 撑开让关闭按钮靠右） */}
         {isNarrow ? (
@@ -285,7 +297,7 @@ export function TabBarItem({
             ) : (
               <span className="min-w-0 flex-1 truncate">{title}</span>
             )}
-            {onRename && !editingTitle && (
+            {onRename && !editingTitle && !hideRenameControl && (
               <span
                 role="button"
                 tabIndex={-1}

@@ -9,7 +9,7 @@ interface OverlayColors {
   height: number
 }
 
-const OVERLAY_HEIGHT = 40
+const OVERLAY_HEIGHT = 32
 
 // Colors are computed as: alpha-composite of hsl(--muted / 0.5) over hsl(--content-area),
 // matching the actual rendered TabBar background color to eliminate the visual seam on Windows.
