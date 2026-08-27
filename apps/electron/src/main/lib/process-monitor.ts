@@ -1,20 +1,27 @@
 /**
  * process-monitor — 会话运行进程采集（期一 / M1b-M2）
  *
- * 用 PowerShell（Get-CimInstance / Get-NetTCPConnection，Windows 先行）枚举真实
- * OS 进程 + 端口映射，并把 SDK 后台任务（type:'shell'）的 command 匹配到真实 PID。
+ * 按平台枚举真实 OS 进程 + 端口映射，并把 SDK 后台任务（type:'shell'）的 command
+ * 匹配到真实 PID。Windows 使用 PowerShell/WMI，macOS/Linux 使用 ps/lsof。
  *
  * 设计原则：
- *  - 零第三方依赖；统一走 powershell.exe。⚠️ 实测 tasklist/netstat 在本进程 spawn
- *    ETIMEDOUT。**所有采集均为异步，优先复用长驻 PowerShell 管道，绝不用
- *    execFileSync**，避免阻塞主进程 / 冻结 UI。
- *  - pid 无转世：项带 startTime（CreationDate），kill 前 {pid,startTime} 双因子（isSameProcess）。
- *  - 接口预留跨平台：Windows 实装；mac/linux TODO（ps + ss|lsof）。
- *  - 超时给足 8s（PowerShell 冷启动 + 大表扫描）。
+ *  - 零第三方依赖；所有 OS 查询异步执行，避免阻塞主进程 / 冻结 UI。
+ *  - pid 无转世：项带 startTime，kill 前执行 {pid,startTime} 双因子校验。
+ *  - Windows 保留长驻 PowerShell 管道；POSIX 使用 ps/lsof，并在命令不可用时安全降级为空结果。
+ *  - 不支持的平台不调用任何平台命令，直接返回空结果。
  */
 
 import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { SDKBackgroundTaskSummary } from '@profer/shared'
+import {
+  captureOsSnapshotPosix,
+  getProcessInfoPosix,
+  isSameProcessPosix,
+  listPortPidMapPosix,
+  listProcessTreePosix,
+  listProcessesPosix,
+  type PosixProcessInfo,
+} from './process-monitor-posix'
 
 const EXEC_TIMEOUT_MS = 8000
 const PS = 'powershell.exe'
@@ -285,7 +292,7 @@ export async function listProcessesWin(): Promise<Map<number, { name: string; cm
 }
 
 /** pid + startTime 双因子（防 PID 转世）。startTime 缺失 → 拒绝（false）。容差 2s。 */
-export async function isSameProcess(pid: number, expectStartTime?: number): Promise<boolean> {
+export async function isSameProcessWin(pid: number, expectStartTime?: number): Promise<boolean> {
   if (!expectStartTime) return false
   const out = await psAsync(
     `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if($p){ $p | Select-Object @{N='cts';E={$p.CreationDate.ToString('o')}} | ConvertTo-Json -Compress }`,
@@ -311,7 +318,7 @@ export async function isSameProcess(pid: number, expectStartTime?: number): Prom
  */
 export async function listSessionDirProcesses(sessionPath: string): Promise<MonitoredProcess[]> {
   if (!sessionPath) return []
-  const { portPids, processes } = await captureOsSnapshotWin()
+  const { portPids, processes } = await captureOsSnapshot()
   const results: MonitoredProcess[] = []
   const normPath = sessionPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
   for (const [pid, info] of processes) {
@@ -340,7 +347,7 @@ export async function mapSdkShellTasks(
 ): Promise<MonitoredProcess[]> {
   const tasks = (sdkTasks ?? []).filter((t) => t.type === 'shell')
   if (tasks.length === 0) return []
-  const { portPids, processes: procs } = await captureOsSnapshotWin()
+  const { portPids, processes: procs } = await captureOsSnapshot()
   const results: MonitoredProcess[] = []
 
   for (const task of tasks) {
@@ -381,7 +388,7 @@ export async function mapSdkShellTasks(
 }
 
 /** 获取单进程信息（展示 / kill 前 double-check） */
-export async function getProcessInfo(pid: number): Promise<MonitoredProcess | null> {
+export async function getProcessInfoWin(pid: number): Promise<MonitoredProcess | null> {
   const out = await psAsync(
     `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if($p){ $p | Select-Object ProcessId,Name,CommandLine,@{N='cts';E={$p.CreationDate.ToString('o')}} | ConvertTo-Json -Compress }`,
   )
@@ -417,7 +424,7 @@ async function queryWinProcesses(filter: string): Promise<Array<{ ProcessId: num
  * 每层一次 WQL 过滤查询（ParentProcessId=a OR b …），BFS 逐层，maxDepth 防极端深树。
  * 相比全量枚举（Get-CimInstance 无 Filter），单树遍历只触碰 shell 的实际后代，开销从 ~400ms 降到 ~几十 ms。
  */
-export async function listProcessTree(rootPid: number, maxDepth = 8): Promise<Map<number, MonitoredProcess>> {
+export async function listProcessTreeWin(rootPid: number, maxDepth = 8): Promise<Map<number, MonitoredProcess>> {
   const out = new Map<number, MonitoredProcess>()
   if (!Number.isInteger(rootPid) || rootPid <= 0) return out
   const seen = new Set<number>([rootPid])
@@ -458,13 +465,21 @@ export async function listAliveProcesses(pids: number[]): Promise<Map<number, { 
   if (listAliveCache && listAliveCache.key === key && now - listAliveCache.at < LIST_ALIVE_TTL_MS) {
     return listAliveCache.result
   }
-  const rows = await queryWinProcesses(unique.map((p) => `ProcessId=${p}`).join(' OR '))
   const out = new Map<number, { name: string; cmd: string; startTime?: number }>()
-  for (const row of rows) {
-    const pid = Number(row.ProcessId)
-    if (!Number.isInteger(pid) || pid <= 0) continue
-    const startTime = row.cts ? Math.floor(new Date(row.cts).getTime()) : undefined
-    out.set(pid, { name: row.Name ?? '', cmd: row.CommandLine ?? '', startTime })
+  if (process.platform === 'win32') {
+    const rows = await queryWinProcesses(unique.map((p) => `ProcessId=${p}`).join(' OR '))
+    for (const row of rows) {
+      const pid = Number(row.ProcessId)
+      if (!Number.isInteger(pid) || pid <= 0) continue
+      const startTime = row.cts ? Math.floor(new Date(row.cts).getTime()) : undefined
+      out.set(pid, { name: row.Name ?? '', cmd: row.CommandLine ?? '', startTime })
+    }
+  } else if (process.platform === 'darwin' || process.platform === 'linux') {
+    const processes = await listProcessesPosix()
+    for (const pid of unique) {
+      const info = processes.get(pid)
+      if (info) out.set(pid, { name: info.name, cmd: info.cmd, startTime: info.startTime })
+    }
   }
   listAliveCache = { key, at: now, result: out }
   return out
@@ -474,26 +489,134 @@ export async function listAliveProcesses(pids: number[]): Promise<Map<number, { 
  * Prefer a graceful console/process-tree termination, then force-kill only if
  * the recorded PID is still the same process after the grace window.
  */
+function toMonitoredProcess(info: PosixProcessInfo, ports: number[] = []): MonitoredProcess {
+  return {
+    pid: info.pid,
+    name: info.name,
+    cmd: info.cmd,
+    startTime: info.startTime,
+    ports,
+  }
+}
+
+/** Platform-neutral port map. Windows keeps the PowerShell implementation. */
+export async function listPortPidMap(): Promise<Map<number, number[]>> {
+  if (process.platform === 'win32') return listPortPidMapWin()
+  if (process.platform === 'darwin' || process.platform === 'linux') return listPortPidMapPosix()
+  return new Map()
+}
+
+/** Platform-neutral OS snapshot. Unsupported hosts fail closed. */
+export async function captureOsSnapshot(): Promise<{
+  portPids: Map<number, number[]>
+  processes: Map<number, { name: string; cmd: string; startTime?: number }>
+}> {
+  if (process.platform === 'win32') return captureOsSnapshotWin()
+  if (process.platform !== 'darwin' && process.platform !== 'linux') {
+    return { portPids: new Map(), processes: new Map() }
+  }
+  const snapshot = await captureOsSnapshotPosix()
+  return {
+    portPids: snapshot.portPids,
+    processes: new Map([...snapshot.processes].map(([pid, info]) => [pid, {
+      name: info.name,
+      cmd: info.cmd,
+      startTime: info.startTime,
+    }])),
+  }
+}
+
+/** Platform-neutral process list. */
+export async function listProcesses(): Promise<Map<number, { name: string; cmd: string; startTime?: number }>> {
+  if (process.platform === 'win32') return listProcessesWin()
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return new Map()
+  const processes = await listProcessesPosix()
+  return new Map([...processes].map(([pid, info]) => [pid, {
+    name: info.name,
+    cmd: info.cmd,
+    startTime: info.startTime,
+  }]))
+}
+
+/** Platform-neutral process lookup and PID/start-time identity check. */
+export async function getProcessInfo(pid: number): Promise<MonitoredProcess | null> {
+  if (process.platform === 'win32') return getProcessInfoWin(pid)
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return null
+  const info = await getProcessInfoPosix(pid)
+  return info ? toMonitoredProcess(info) : null
+}
+
+export async function isSameProcess(pid: number, expectStartTime?: number): Promise<boolean> {
+  if (process.platform === 'win32') return isSameProcessWin(pid, expectStartTime)
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return false
+  return isSameProcessPosix(pid, expectStartTime)
+}
+
+/** Platform-neutral process tree lookup. */
+export async function listProcessTree(pid: number, maxDepth = 8): Promise<Map<number, MonitoredProcess>> {
+  if (process.platform === 'win32') return listProcessTreeWin(pid, maxDepth)
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return new Map()
+  const tree = await listProcessTreePosix(pid, maxDepth)
+  return new Map([...tree].map(([childPid, info]) => [childPid, toMonitoredProcess(info)]))
+}
+
+/** Signal a POSIX process group; fall back to the recorded PID if it is not a group leader. */
+function signalPosixProcessTree(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(-pid, signal)
+    return true
+  } catch {
+    try {
+      process.kill(pid, signal)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+/** Graceful process-tree termination with PID + start-time recheck on every platform. */
 export async function terminateProcessTreeGracefully(
   pid: number,
   startTime: number,
   graceMs = 2_500,
 ): Promise<{ ok: boolean; message: string; forced: boolean }> {
-  await new Promise<void>((resolve) => {
-    try {
-      execFile('taskkill.exe', ['/pid', String(pid), '/T'], { windowsHide: true }, () => resolve())
-    } catch { resolve() }
-  })
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve) => {
+      try {
+        execFile('taskkill.exe', ['/pid', String(pid), '/T'], { windowsHide: true }, () => resolve())
+      } catch { resolve() }
+    })
+  } else if (process.platform === 'darwin' || process.platform === 'linux') {
+    if (!signalPosixProcessTree(pid, 'SIGTERM')) {
+      return { ok: false, message: `无法发送终止信号到进程树 ${pid}`, forced: false }
+    }
+  } else {
+    return { ok: false, message: `不支持的平台 ${process.platform}`, forced: false }
+  }
+
   await new Promise((resolve) => setTimeout(resolve, graceMs))
   if (!await isSameProcess(pid, startTime)) {
     return { ok: true, message: `已优雅结束进程 ${pid}`, forced: false }
   }
-  const forced = killProcessTree(pid)
-  return { ok: forced.ok, message: forced.ok ? `优雅停止超时，已强制结束进程树 ${pid}` : forced.message, forced: true }
+
+  if (process.platform === 'win32') {
+    const forced = killProcessTree(pid)
+    return { ok: forced.ok, message: forced.ok ? `优雅停止超时，已强制结束进程树 ${pid}` : forced.message, forced: true }
+  }
+  const forced = signalPosixProcessTree(pid, 'SIGKILL')
+  return {
+    ok: forced,
+    message: forced ? `优雅停止超时，已强制结束进程树 ${pid}` : `强制结束进程树 ${pid} 失败`,
+    forced: true,
+  }
 }
 
-/** kill 进程树（Windows taskkill /T /F 杀整棵子树；posix 预留） */
+/** Windows taskkill /T /F kill implementation retained for the Windows branch. */
 export function killProcessTree(pid: number): { ok: boolean; message: string } {
+  if (process.platform !== 'win32') {
+    return { ok: signalPosixProcessTree(pid, 'SIGKILL'), message: `killed ${pid}` }
+  }
   try {
     execFileSync('taskkill.exe', ['/pid', String(pid), '/T', '/F'], {
       stdio: 'ignore', timeout: EXEC_TIMEOUT_MS, windowsHide: true,

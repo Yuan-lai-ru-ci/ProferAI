@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRuntimeProcessesPath } from './config-paths'
-import { extractRequestedPort, listAliveProcesses, listPortPidMapWin, listProcessTree, type MonitoredProcess } from './process-monitor'
+import { extractRequestedPort, listAliveProcesses, listPortPidMap, listProcessTree, type MonitoredProcess } from './process-monitor'
 
 /**
  * Persisted ownership records for long-running services launched by a runtime.
@@ -289,7 +289,7 @@ async function inspectOnce(): Promise<void> {
     // 1) pending 服务：按 shellPid 分组，每棵树一次遍历。
     if (pendingServices.length > 0) {
       const needPort = pendingServices.some((r) => requestedPort(r.command) !== undefined)
-      const portMap = needPort ? await listPortPidMapWin() : null
+      const portMap = needPort ? await listPortPidMap() : null
       const trees = new Map<number, Map<number, MonitoredProcess>>()
       for (const rec of pendingServices) {
         const root = rec.shellPid
