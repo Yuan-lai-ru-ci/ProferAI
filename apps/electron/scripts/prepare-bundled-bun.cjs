@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /**
- * 准备 Windows 安装包随附的 Bun runtime。
+ * 准备当前宿主平台的 Bun runtime。
  *
- * 优先复用构建机上版本和 SHA-256 均匹配的 Bun；构建机本来就必须能运行 Bun，
- * 因此不会为每次打包增加网络依赖。若本机缺少匹配二进制，则从 oven-sh/bun 固定
- * release 下载 ZIP，校验 package.json 中锁定的 SHA-256 后解压 bun.exe 到
- * resources/vendor/bun/。该目录由 electron-builder.yml 原样写入安装包。
+ * electron-builder 在目标平台 runner 上执行本脚本：
+ * - darwin-arm64 → bun-darwin-aarch64.zip → resources/vendor/bun/bun
+ * - darwin-x64   → bun-darwin-x64.zip → resources/vendor/bun/bun
+ * - win32-x64    → bun-windows-x64.zip → resources/vendor/bun/bun.exe
+ *
+ * 优先复用版本和 SHA-256 均匹配的本地 Bun；找不到时下载固定版本的 ZIP，
+ * 校验 ZIP 和二进制后再写入资源目录。解压和路径处理不依赖 Windows 专用命令。
  */
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -17,15 +20,38 @@ const { execFileSync } = require('node:child_process')
 const appRoot = path.resolve(__dirname, '..')
 const config = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).proma?.bun
 const version = config?.version
-const expectedSha256 = config?.sha256?.toLowerCase()
-const expectedBinarySha256 = config?.binarySha256?.toLowerCase()
-if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version) || !expectedSha256 || !/^[a-f0-9]{64}$/.test(expectedSha256) || !expectedBinarySha256 || !/^[a-f0-9]{64}$/.test(expectedBinarySha256)) {
-  throw new Error('apps/electron/package.json 中 proma.bun.version / sha256 / binarySha256 配置无效')
+if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version) || !config?.targets || typeof config.targets !== 'object') {
+  throw new Error('apps/electron/package.json 中 proma.bun.version / targets 配置无效')
 }
 
-const destination = path.join(appRoot, 'resources', 'vendor', 'bun', 'bun.exe')
+const PLATFORM_TARGETS = {
+  'darwin-arm64': { archive: 'bun-darwin-aarch64.zip', binary: 'bun' },
+  'darwin-x64': { archive: 'bun-darwin-x64.zip', binary: 'bun' },
+  'win32-x64': { archive: 'bun-windows-x64.zip', binary: 'bun.exe' },
+}
+
+function getPlatformTarget(platform = process.platform, arch = process.arch) {
+  const platformArch = `${platform}-${arch}`
+  const target = PLATFORM_TARGETS[platformArch]
+  if (!target) throw new Error(`不支持的 Bun 平台架构: ${platformArch}`)
+  const checksums = config.targets[platformArch]
+  if (!checksums || !/^[a-f0-9]{64}$/i.test(checksums.sha256 || '') || !/^[a-f0-9]{64}$/i.test(checksums.binarySha256 || '')) {
+    throw new Error(`apps/electron/package.json 缺少 ${platformArch} 的 Bun SHA-256 配置`)
+  }
+  return {
+    platformArch,
+    archive: target.archive,
+    binary: target.binary,
+    sha256: checksums.sha256.toLowerCase(),
+    binarySha256: checksums.binarySha256.toLowerCase(),
+  }
+}
+
+const target = getPlatformTarget()
+const vendorDir = path.join(appRoot, 'resources', 'vendor', 'bun')
+const destination = path.join(vendorDir, target.binary)
 const expectedVersion = version
-const url = `https://github.com/oven-sh/bun/releases/download/bun-v${version}/bun-windows-x64.zip`
+const url = `https://github.com/oven-sh/bun/releases/download/bun-v${version}/${target.archive}`
 
 function getVersion(binary) {
   try {
@@ -40,14 +66,16 @@ function getSha256(filePath) {
 }
 
 function findLocalBunCandidates() {
+  const binaryName = target.binary
   const candidates = [
     process.execPath,
-    process.env.BUN_INSTALL ? path.join(process.env.BUN_INSTALL, 'bun.exe') : null,
-    path.join(os.homedir(), '.bun', 'bin', 'bun.exe'),
+    process.env.BUN_INSTALL ? path.join(process.env.BUN_INSTALL, binaryName) : null,
+    path.join(os.homedir(), '.bun', 'bin', binaryName),
   ].filter(Boolean)
   try {
-    const whereOutput = execFileSync('where.exe', ['bun'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    candidates.push(...whereOutput.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))
+    const command = process.platform === 'win32' ? 'where.exe' : 'which'
+    const output = execFileSync(command, ['bun'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    candidates.push(...output.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))
   } catch { /* PATH 中没有 bun */ }
   return [...new Set(candidates)]
 }
@@ -55,7 +83,7 @@ function findLocalBunCandidates() {
 function findVerifiedLocalBun() {
   for (const candidate of findLocalBunCandidates()) {
     if (!fs.existsSync(candidate) || getVersion(candidate) !== expectedVersion) continue
-    if (getSha256(candidate).toLowerCase() !== expectedBinarySha256) continue
+    if (getSha256(candidate).toLowerCase() !== target.binarySha256) continue
     return candidate
   }
   return null
@@ -82,6 +110,7 @@ function download(urlString, filePath, redirects = 0) {
       response.pipe(output)
       output.on('finish', () => output.close(resolve))
       output.on('error', reject)
+      response.on('error', reject)
     })
     request.on('timeout', () => request.destroy(new Error('下载 Bun 超时')))
     request.on('error', reject)
@@ -108,55 +137,88 @@ async function downloadWithRetries(filePath) {
   throw lastError
 }
 
-async function main() {
-  const existingVersion = fs.existsSync(destination) ? getVersion(destination) : null
-  if (existingVersion === expectedVersion && getSha256(destination).toLowerCase() === expectedBinarySha256) {
-    console.log(`[prepare:bundled-bun] Bun ${expectedVersion} 已就绪: ${destination}`)
-    return
-  }
-
-  fs.mkdirSync(path.dirname(destination), { recursive: true })
-
-  // 构建本身通常由 Bun 启动。只接受版本和 SHA-256 都匹配的本地 Bun，
-  // 而非仅按版本信任 PATH 中的任意可执行文件。
-  const localBun = findVerifiedLocalBun()
-  if (localBun) {
-    fs.copyFileSync(localBun, destination)
-    console.log(`[prepare:bundled-bun] 使用已校验的本地 Bun ${expectedVersion}: ${localBun}`)
-    return
-  }
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profer-bun-'))
-  const archive = path.join(tempDir, 'bun-windows-x64.zip')
-  const extracted = path.join(tempDir, 'extracted')
-  try {
-    console.log(`[prepare:bundled-bun] 下载 Bun ${version}...`)
-    await downloadWithRetries(archive)
-    const actualSha256 = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex')
-    if (actualSha256 !== expectedSha256) {
-      throw new Error(`Bun ZIP SHA-256 不匹配: expected ${expectedSha256}, received ${actualSha256}`)
-    }
-
-    fs.mkdirSync(extracted)
+function extractArchive(archive, extracted) {
+  fs.mkdirSync(extracted, { recursive: true })
+  if (process.platform === 'win32') {
+    const archiveArg = archive.replace(/'/g, "''")
+    const extractedArg = extracted.replace(/'/g, "''")
     execFileSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-Command', `Expand-Archive -LiteralPath '${archive.replace(/'/g, "''")}' -DestinationPath '${extracted.replace(/'/g, "''")}' -Force`,
+      '-Command', `Expand-Archive -LiteralPath '${archiveArg}' -DestinationPath '${extractedArg}' -Force`,
     ], { stdio: 'inherit' })
-    const source = path.join(extracted, 'bun-windows-x64', 'bun.exe')
-    if (!fs.existsSync(source)) throw new Error(`Bun ZIP 中缺少预期文件: ${source}`)
+  } else {
+    execFileSync('unzip', ['-o', '-j', archive, '-d', extracted], { stdio: 'inherit' })
+  }
+}
+
+function findExtractedBinary(extracted) {
+  const matches = []
+  const stack = [extracted]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name)
+      if (entry.isDirectory()) stack.push(fullPath)
+      else if (entry.name === target.binary) matches.push(fullPath)
+    }
+  }
+  if (matches.length !== 1) throw new Error(`Bun ZIP 中预期找到 1 个 ${target.binary}，实际找到 ${matches.length} 个`)
+  return matches[0]
+}
+
+async function main() {
+  // 先检查目标文件，避免清理 vendorDir 时把唯一可复用的 Bun 删除。
+  if (fs.existsSync(destination) && getVersion(destination) === expectedVersion && getSha256(destination).toLowerCase() === target.binarySha256) {
+    if (target.binary !== 'bun.exe') fs.chmodSync(destination, 0o755)
+    console.log(`[prepare:bundled-bun] ${target.platformArch} Bun ${expectedVersion} 已就绪: ${destination}`)
+    return
+  }
+
+  // 在清理旧平台产物前解析本机 Bun；当构建机只通过当前 PATH 提供 Bun 时，
+  // 不能先删除 vendorDir 再尝试从那里查找。
+  const localBun = findVerifiedLocalBun()
+  fs.rmSync(vendorDir, { recursive: true, force: true })
+  fs.mkdirSync(vendorDir, { recursive: true })
+
+  if (localBun) {
+    fs.copyFileSync(localBun, destination)
+    if (target.binary !== 'bun.exe') fs.chmodSync(destination, 0o755)
+    console.log(`[prepare:bundled-bun] 使用已校验的 ${target.platformArch} Bun ${expectedVersion}: ${destination}`)
+    return
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profer-bun-'))
+  const archive = path.join(tempDir, target.archive)
+  const extracted = path.join(tempDir, 'extracted')
+  try {
+    console.log(`[prepare:bundled-bun] 下载 ${target.platformArch} Bun ${version}...`)
+    await downloadWithRetries(archive)
+    const actualSha256 = getSha256(archive).toLowerCase()
+    if (actualSha256 !== target.sha256) {
+      throw new Error(`Bun ZIP SHA-256 不匹配: expected ${target.sha256}, received ${actualSha256}`)
+    }
+
+    extractArchive(archive, extracted)
+    const source = findExtractedBinary(extracted)
     fs.copyFileSync(source, destination)
+    if (target.binary !== 'bun.exe') fs.chmodSync(destination, 0o755)
 
     const installedVersion = getVersion(destination)
     const installedSha256 = getSha256(destination).toLowerCase()
-    if (installedVersion !== expectedVersion || installedSha256 !== expectedBinarySha256) {
-      throw new Error(`Bun 安装后校验失败: version expected ${expectedVersion}, received ${installedVersion ?? '无法执行'}; binary SHA-256 expected ${expectedBinarySha256}, received ${installedSha256}`)
+    if (installedVersion !== expectedVersion || installedSha256 !== target.binarySha256) {
+      throw new Error(`Bun 安装后校验失败: version expected ${expectedVersion}, received ${installedVersion ?? '无法执行'}; binary SHA-256 expected ${target.binarySha256}, received ${installedSha256}`)
     }
-    console.log(`[prepare:bundled-bun] Bun ${installedVersion} 已验证并写入: ${destination}`)
+    console.log(`[prepare:bundled-bun] ${target.platformArch} Bun ${installedVersion} 已验证并写入: ${destination}`)
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })
   }
 }
 
-main().catch((error) => {
-  console.error(`[prepare:bundled-bun] ${error instanceof Error ? error.stack : String(error)}`)
-  process.exitCode = 1
-})
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[prepare:bundled-bun] ${error instanceof Error ? error.stack : String(error)}`)
+    process.exitCode = 1
+  })
+}
+
+module.exports = { getPlatformTarget, PLATFORM_TARGETS }

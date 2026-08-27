@@ -24,8 +24,8 @@ describe('工作区热力图 Token 统计', () => {
     expect(timestampToLocalDate(timestamp)).toBe(expected)
   })
 
-  test('升级缓存版本以使旧统计口径自动失效', () => {
-    expect(CACHE_VERSION).toBe(5)
+  test('升级缓存版本以触发一次历史数据恢复', () => {
+    expect(CACHE_VERSION).toBe(6)
   })
 
   test('已结算日期采用覆盖，重复补算不会重复计数', () => {

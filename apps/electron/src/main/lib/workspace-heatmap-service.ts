@@ -31,7 +31,7 @@ export interface HeatmapDailyEntry {
 }
 
 /** 缓存格式版本：结构变更时递增以自动淘汰旧缓存 */
-export const CACHE_VERSION = 5
+export const CACHE_VERSION = 6
 
 interface HeatmapCache {
   /** 缓存格式版本 */
@@ -162,7 +162,8 @@ function extractSessionDailyTokens(sessionId: string): Map<string, number> {
 // ── 聚合 ──────────────────────────────────────────────────
 
 /**
- * 扫描工作区下所有非归档会话，按日聚合 token 用量。
+ * 扫描工作区下仍保留 JSONL 的会话，按日聚合 token 用量；归档只影响列表展示，
+ * 不影响已经发生的历史用量。
  * 返回按日期升序排列的条目列表（最近 365 天）。
  */
 export function buildWorkspaceTokenDaily(
@@ -177,7 +178,7 @@ export function buildWorkspaceTokenDaily(
   const dayMap = new Map<string, number>()
 
   for (const session of sessions) {
-    if (session.archived) continue
+    // 归档只是索引元数据变化，不代表历史用量消失；只要 JSONL 仍在就应计入。
     const sessionDays = extractSessionDailyTokens(session.id)
     for (const [date, tokens] of sessionDays) {
       if (date < cutoffDate || date > throughDate) continue
@@ -191,7 +192,7 @@ export function buildWorkspaceTokenDaily(
 }
 
 /**
- * 增量扫描：只扫描 fromDate 到 toDate 范围内、尚未结算日期的 token。
+ * 增量扫描：只扫描 fromDate 到 toDate 范围内、尚未结算日期的 token；归档会话也纳入，
  * 日期一旦结算，结果即固定，不再包含当天这种仍会增长的数据。
  */
 function incrementalScan(
@@ -202,7 +203,7 @@ function incrementalScan(
   const dayMap = new Map<string, number>()
 
   for (const session of sessions) {
-    if (session.archived) continue
+    // 已结算日期的增量扫描也必须包含归档会话，避免归档造成历史缺口。
     const sessionDays = extractSessionDailyTokensInRange(session.id, fromDate, toDate)
     for (const [date, tokens] of sessionDays) {
       dayMap.set(date, (dayMap.get(date) ?? 0) + tokens)
@@ -243,19 +244,21 @@ function writeCache(workspaceId: string, cache: HeatmapCache): void {
  *      保证停留页面期间/当天后续的新 result 不会丢失。（旧实现此处直接 return 缓存，
  *      导致当天后续数据被永久丢弃）
  *
- * 历史数据缺口（如脏缓存遗留的丢失日期）无法靠增量补齐，应由上层删除脏缓存后重建一次。
+ * 历史数据缺口（如脏缓存遗留的丢失日期）无法靠增量补齐，因此版本 6
+ * 会用仍保留的会话 JSONL 做一次全量恢复；之后历史日期不再因归档变化。
  */
 export function getWorkspaceHeatmapDaily(
   workspaceId: string,
   sessions: Array<{ id: string; createdAt: number; updatedAt?: number; archived?: boolean }>,
 ): HeatmapDailyEntry[] {
-  const activeSessions = sessions.filter((s) => !s.archived)
+  // 归档不会改变已发生的 Token 用量；只要会话 JSONL 尚存，就纳入历史统计。
+  const selectedSessions = sessions
   const yesterday = yesterdayDate()
   const cache = readCache(workspaceId)
 
   // No cache: build history once, explicitly excluding today.
   if (!cache) {
-    const daily = buildWorkspaceTokenDaily(workspaceId, sessions, yesterday)
+    const daily = buildWorkspaceTokenDaily(workspaceId, selectedSessions, yesterday)
     writeCache(workspaceId, { version: CACHE_VERSION, lastFinalizedDate: yesterday, daily, cachedAt: Date.now() })
     return daily
   }
@@ -263,7 +266,7 @@ export function getWorkspaceHeatmapDaily(
   // Crossed one or more local dates: finalize all missing dates through yesterday.
   if (cache.lastFinalizedDate < yesterday) {
     const fromDate = nextDay(cache.lastFinalizedDate)
-    const incremental = incrementalScan(activeSessions, fromDate, yesterday)
+    const incremental = incrementalScan(selectedSessions, fromDate, yesterday)
     const daily = mergeDaily(cache.daily, incremental)
     writeCache(workspaceId, { version: CACHE_VERSION, lastFinalizedDate: yesterday, daily, cachedAt: Date.now() })
     return daily

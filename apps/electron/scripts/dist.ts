@@ -10,11 +10,11 @@
  * - 支持只构建 DMG 或 ZIP（--dmg / --zip）
  *
  * 使用：
- * bun run scripts/dist.ts                          # 完整打包（双架构 + DMG + ZIP）
+ * bun run scripts/dist.ts --win                 # 完整 Windows 打包
  * bun run scripts/dist.ts --current-arch            # 只构建当前架构（快速）
  * bun run scripts/dist.ts --current-arch --verbose   # 当前架构 + 详细日志
  * bun run scripts/dist.ts --current-arch --dmg       # 当前架构 + 只构建 DMG
- * bun run scripts/dist.ts --no-sign                 # 跳过代码签名
+ * bun run scripts/dist.ts --mac --current-arch --no-sign # Apple Silicon 本地 macOS 包
  */
 
 import { spawnSync } from 'child_process'
@@ -145,11 +145,13 @@ function parseArgs(): DistOptions {
         : args.includes('--dir')
           ? 'dir'
           : 'all',
-    platform: args.includes('--win')
-      ? 'win'
-      : args.includes('--linux')
-        ? 'linux'
-        : 'win', // 默认 Windows（mac 不发布，2026-08-08 起）
+    platform: args.includes('--mac')
+      ? 'mac'
+      : args.includes('--win')
+        ? 'win'
+        : args.includes('--linux')
+          ? 'linux'
+          : 'win', // 默认 Windows；macOS 必须显式选择。
   }
 }
 
@@ -158,16 +160,31 @@ function main(): void {
   const arch = process.arch // arm64 或 x64
   const results: StepResult[] = []
 
+  // P1 只支持在 Apple Silicon 真机上构建本地无签名包。拒绝从 Windows/Linux
+  // 伪造 macOS 产物，也不让 Intel Mac 被误认为已进入支持范围。
+  if (opts.platform === 'mac' && process.platform !== 'darwin') {
+    console.error('macOS 打包必须在 Apple Silicon Mac 上运行；当前宿主不是 darwin。')
+    process.exit(2)
+  }
+  if (opts.platform === 'mac' && arch !== 'arm64') {
+    console.error(`P1 仅支持 Apple Silicon arm64 本地构建，当前架构为 ${arch}。`)
+    process.exit(2)
+  }
+  if (opts.platform === 'mac' && !opts.noSign) {
+    console.error('P1 macOS 构建必须显式传 --no-sign；Developer ID 签名和 notarization 尚未接入。')
+    process.exit(2)
+  }
+
   // 打印配置信息
-  console.log(`\n${color.bgBlue}${color.bold} Proma 打包工具 ${color.reset}\n`)
+  console.log(`\n${color.bgBlue}${color.bold} Profer 打包工具 ${color.reset}\n`)
   console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
-  console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : 'arm64 + x64'}`)
+  console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : opts.platform === 'mac' ? 'arm64' : 'arm64 + x64'}`)
   console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
   console.log(`  ${color.bold}签名${color.reset}:     ${opts.noSign ? '跳过' : '启用'}`)
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = 6
+  const totalSteps = opts.platform === 'mac' ? 9 : 8
   let step = 0
 
   // ── 步骤 1: 构建主进程 ──
@@ -197,7 +214,25 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 4: 复制资源文件 ──
+  // ── 步骤 4: 准备随包 Bun ──
+  step++
+  printStepStart(step, totalSteps, '准备当前平台 Bundled Bun')
+  results.push(
+    runStep('准备 Bundled Bun', 'bun', ['run', 'prepare:bundled-bun'], { verbose: opts.verbose })
+  )
+  printStepResult(results[results.length - 1])
+  if (!results[results.length - 1].success) return printSummary(results)
+
+  // ── 步骤 5: 编译随包 CLI ──
+  step++
+  printStepStart(step, totalSteps, '编译 Profer CLI (bun --compile)')
+  results.push(
+    runStep('编译 Profer CLI', 'bun', ['run', 'build:cli'], { verbose: opts.verbose })
+  )
+  printStepResult(results[results.length - 1])
+  if (!results[results.length - 1].success) return printSummary(results)
+
+  // ── 步骤 6: 复制资源文件 ──
   step++
   printStepStart(step, totalSteps, '复制资源文件')
   results.push(
@@ -207,7 +242,7 @@ function main(): void {
   // 资源包缺失会导致打包产物缺 skins/icon 等，必须中断而非继续
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 5: 同步主进程运行时依赖 ──
+  // ── 步骤 7: 同步主进程运行时依赖 ──
   step++
   printStepStart(step, totalSteps, '同步主进程运行时依赖')
   results.push(
@@ -216,11 +251,15 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 6: electron-builder 打包 ──
+  // ── 步骤 8: electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 
   const builderArgs = ['electron-builder', `--${opts.platform}`]
+  // P1 只产出本地验收包，绝不能因 package.json 中的 GitHub publish 配置上传资产。
+  if (opts.platform === 'mac') {
+    builderArgs.push('--publish', 'never')
+  }
 
   // 只构建当前架构
   if (opts.currentArch) {
@@ -246,12 +285,22 @@ function main(): void {
   }
 
   results.push(
-    runStep('Electron Builder', 'bunx', builderArgs, {
+    runStep('Electron Builder', 'node', ['scripts/run-electron-builder.cjs', ...builderArgs.slice(1)], {
       verbose: true, // 打包步骤始终显示输出
       env: builderEnv,
     })
   )
   printStepResult(results[results.length - 1])
+  if (!results[results.length - 1].success) return printSummary(results)
+
+  if (opts.platform === 'mac') {
+    step++
+    printStepStart(step, totalSteps, '验证 macOS 安装包资源闭包')
+    results.push(
+      runStep('验证 macOS 安装包', 'bun', ['run', 'verify:mac-package'], { verbose: opts.verbose })
+    )
+    printStepResult(results[results.length - 1])
+  }
 
   printSummary(results)
 }

@@ -49,6 +49,9 @@ export const EXTERNAL_RUNTIME_PACKAGES: readonly string[] = [
   '@earendil-works/pi-coding-agent',
   '@earendil-works/pi-agent-core',
   '@earendil-works/pi-ai',
+  // build:renderer 通过 @silurus/ooxml 生成 OOXML 工具代码；该包位于 dependencies，
+  // 必须随 appDir node_modules 同步，否则 electron-builder 的生产依赖收集会中断打包。
+  '@silurus/ooxml',
   'pdfjs-dist',
 ]
 

@@ -44,6 +44,9 @@ const TEXT_EXTS = new Set([
 ])
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
+const MIN_IMAGE_ZOOM = 0.5
+const MAX_IMAGE_ZOOM = 3
+const IMAGE_ZOOM_STEP = 1.1
 
 function ext(name: string): string {
   return name.split('.').pop()?.toLowerCase() ?? ''
@@ -64,13 +67,33 @@ function langFromExt(e: string): string {
 export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownload }: FilePreviewDialogProps): React.ReactElement {
   const [state, setState] = React.useState<PreviewState>({ status: 'loading' })
   const [resolvedPath, setResolvedPath] = React.useState<string | null>(null)
+  const [imageZoom, setImageZoom] = React.useState(1)
+  const imagePreviewRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
     if (!open || !filePath) return
     setState({ status: 'loading' })
     setResolvedPath(null)
+    setImageZoom(1)
     loadPreview()
   }, [open, filePath]) // eslint-disable-line
+
+  // 原生 non-passive 监听器确保 Electron 中可阻止默认滚动，并允许在预览区域任意位置缩放。
+  React.useEffect(() => {
+    const element = imagePreviewRef.current
+    if (!element || state.status !== 'image') return
+
+    const handleWheel = (event: WheelEvent): void => {
+      event.preventDefault()
+      setImageZoom((currentZoom) => {
+        const nextZoom = currentZoom * (event.deltaY < 0 ? IMAGE_ZOOM_STEP : 1 / IMAGE_ZOOM_STEP)
+        return Math.min(MAX_IMAGE_ZOOM, Math.max(MIN_IMAGE_ZOOM, nextZoom))
+      })
+    }
+
+    element.addEventListener('wheel', handleWheel, { passive: false })
+    return () => element.removeEventListener('wheel', handleWheel)
+  }, [state.status])
 
   const loadPreview = async (): Promise<void> => {
     const e = ext(fileName)
@@ -198,8 +221,18 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
             </div>
           )}
           {state.status === 'image' && (
-            <div className="flex items-center justify-center h-full bg-surface-sunken/50">
-              <img src={state.src} alt={fileName} className="max-w-full max-h-full object-contain" />
+            <div
+              ref={imagePreviewRef}
+              className="flex items-center justify-center min-w-full min-h-full bg-surface-sunken/50"
+              title="在预览区域滚动滚轮可缩放"
+            >
+              <img
+                src={state.src}
+                alt={fileName}
+                className="max-w-full max-h-full object-contain select-none cursor-zoom-in"
+                style={{ transform: `scale(${imageZoom})` }}
+                draggable={false}
+              />
             </div>
           )}
           {state.status === 'html' && (

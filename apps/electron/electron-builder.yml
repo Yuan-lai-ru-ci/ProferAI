@@ -69,8 +69,9 @@ extraResources:
   # 因而安装版不依赖用户自行安装 Bun 或 GUI 进程继承的系统 PATH。
   - from: resources/vendor/bun
     to: vendor/bun
+    # prepare:bundled-bun 只保留当前目标平台的 bun / bun.exe，不能写死 Windows 文件名。
     filter:
-      - "bun.exe"
+      - "**/*"
   # 默认 Skills 模板（首次启动时同步到 ~/.proma/default-skills/）
   - from: default-skills
     to: default-skills
@@ -109,6 +110,46 @@ extraResources:
     to: CHANGELOG.json
 
 # ============================================
+# macOS 本地构建（P1：仅 Apple Silicon）
+# ============================================
+# 当前仅支持在 Apple Silicon Mac 上执行无签名本地构建；发布签名、公证、
+# Intel x64 和 GitHub macOS CI 会在真机验收后单独接入，不能由本配置暗示已支持。
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  # Bun 和 Profer CLI 均由当前 macOS runner 构建，并在将来启用签名时纳入签名范围。
+  binaries:
+    - resources/bin/profer
+    - resources/vendor/bun/bun
+  extendInfo:
+    NSMicrophoneUsageDescription: "Profer 需要访问麦克风，用于将你的语音实时转写为文本。"
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+
+# DMG 布局
+# 保持简单的应用 + Applications 链接，避免本地无签名验证引入额外主题资源依赖。
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 540
+    height: 380
+
+# ============================================
 # Windows 配置
 # ============================================
 win:
@@ -138,8 +179,8 @@ nsis:
 
 # ============================================
 # 发布配置
-# 仅发布 Windows；macOS/Linux 不构建不发布（无 mac 开发者/测试环境，2026-08-08 起）。
-# Windows Release 只由本地 scripts/push-release.cjs 上传；release.yml 仅供手动构建验证。
+# Windows Release 仍只由本地 scripts/push-release.cjs 上传；macOS 当前仅支持本地 arm64 无签名验收，
+# 不进入发布源。Linux 不构建不发布；release.yml 目前仍是 Windows 手动构建验证。
 # ============================================
 publish:
   provider: github
