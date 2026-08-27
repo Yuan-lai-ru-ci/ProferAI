@@ -4,7 +4,11 @@
  * 从 LeftSidebar.tsx 抽离的公共接口，供主文件与 use-left-sidebar hook 共用。
  */
 
+import type { Ref } from 'react'
+
 export interface LeftSidebarProps {
+  /** 侧栏根节点引用；用于拖拽时直接写入 DOM 宽度，避免把每帧宽度写入 React 状态。 */
+  containerRef?: Ref<HTMLDivElement>
   /** 可选固定宽度，默认使用 CSS 响应式宽度 */
   width?: number
   /** 拖拽过程中禁用 CSS transition，保证即时响应 */
