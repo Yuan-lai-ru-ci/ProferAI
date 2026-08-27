@@ -14,17 +14,19 @@ export type AgentComposerToolState = 'default' | 'active' | 'warning' | 'muted' 
 export type AgentComposerToolPlacement = 'toolbar' | 'overflow'
 
 export const AGENT_COMPOSER_TOOL_BASE_CLASS = [
-  'shrink-0 rounded-full transition-colors duration-150',
+  // 输入工具栏是同一组平级操作：所有状态共享同一种 surface hover；
+  // 语义状态只能影响前景内容，不再改变按钮底材。
+  'shrink-0 rounded-full bg-transparent transition-colors duration-150 hover:bg-accent',
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30',
   'disabled:cursor-not-allowed disabled:opacity-40',
 ].join(' ')
 
 const STATE_CLASS: Record<AgentComposerToolState, string> = {
-  default: 'text-foreground/60 hover:bg-accent hover:text-foreground',
-  active: 'text-primary hover:bg-primary/10 hover:text-primary',
-  warning: 'text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300',
-  muted: 'text-muted-foreground hover:bg-accent hover:text-foreground',
-  destructive: 'text-destructive hover:bg-destructive/10 hover:text-destructive',
+  default: 'text-foreground/60 hover:text-foreground',
+  active: 'text-primary hover:text-primary',
+  warning: 'text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300',
+  muted: 'text-muted-foreground hover:text-foreground',
+  destructive: 'text-destructive hover:text-destructive',
 }
 
 export function getAgentComposerToolSize(tabletMode = false): string {

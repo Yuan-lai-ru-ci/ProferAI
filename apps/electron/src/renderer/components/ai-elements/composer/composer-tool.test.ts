@@ -11,13 +11,20 @@ describe('Agent composer tool visual contract', () => {
     expect(getAgentComposerToolSize(true)).toBe('size-11')
   })
 
-  test('keeps shared hover and focus behavior across semantic states', () => {
+  test('keeps one hover material and focus behavior across semantic states', () => {
     for (const state of ['default', 'active', 'warning', 'muted', 'destructive'] as const) {
       const className = getAgentComposerToolTriggerClass(state)
       expect(className).toContain(AGENT_COMPOSER_TOOL_BASE_CLASS)
+      expect(className).toContain('hover:bg-accent')
       expect(className).toContain('focus-visible:ring-2')
       expect(className).toContain('disabled:opacity-40')
     }
+  })
+
+  test('does not let semantic states replace the common hover material', () => {
+    expect(getAgentComposerToolTriggerClass('active')).not.toContain('hover:bg-primary/10')
+    expect(getAgentComposerToolTriggerClass('warning')).not.toContain('hover:bg-amber-500/10')
+    expect(getAgentComposerToolTriggerClass('destructive')).not.toContain('hover:bg-destructive/10')
   })
 
   test('maps semantic states to distinct visual signals', () => {

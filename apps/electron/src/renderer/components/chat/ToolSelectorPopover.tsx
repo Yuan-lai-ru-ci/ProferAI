@@ -21,6 +21,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { Wrench, Brain, Globe, Settings, ImagePlus } from 'lucide-react'
 import { chatToolsAtom, hasActiveToolsAtom } from '@/atoms/chat-tool-atoms'
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
@@ -39,7 +40,7 @@ function getToolIcon(iconName?: string): React.ReactElement {
   }
 }
 
-export function ToolSelectorPopover(): React.ReactElement {
+export function ToolSelectorPopover({ composerTool = false, tabletMode = false }: { composerTool?: boolean; tabletMode?: boolean } = {}): React.ReactElement {
   const [open, setOpen] = useState(false)
   const tools = useAtomValue(chatToolsAtom)
   const setChatTools = useSetAtom(chatToolsAtom)
@@ -70,25 +71,35 @@ export function ToolSelectorPopover(): React.ReactElement {
     setSettingsTab('tools')
   }
 
+  const trigger = composerTool ? (
+    <AgentComposerToolTrigger
+      label="工具"
+      tabletMode={tabletMode}
+      className={hasActiveTools ? 'text-blue-500 hover:text-blue-500' : undefined}
+    >
+      <Wrench className="size-5" />
+    </AgentComposerToolTrigger>
+  ) : (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className={cn(
+        'size-[30px] rounded-full',
+        hasActiveTools
+          ? 'text-blue-500'
+          : 'text-foreground/60 hover:text-foreground',
+      )}
+    >
+      <Wrench className="size-5" />
+    </Button>
+  )
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip open={open ? false : undefined}>
         <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'size-[30px] rounded-full',
-                hasActiveTools
-                  ? 'text-blue-500'
-                  : 'text-foreground/60 hover:text-foreground',
-              )}
-            >
-              <Wrench className="size-5" />
-            </Button>
-          </PopoverTrigger>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent side="top">
           <p>工具</p>

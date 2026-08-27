@@ -19,6 +19,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { Settings2 } from 'lucide-react'
 import {
   CONTEXT_LENGTH_OPTIONS,
@@ -44,7 +45,7 @@ function valueToSliderPosition(value: ContextLengthValue): number {
   return index >= 0 ? index : CONTEXT_LENGTH_OPTIONS.length - 2 // 默认 20
 }
 
-export function ContextSettingsPopover(): React.ReactElement {
+export function ContextSettingsPopover({ composerTool = false, tabletMode = false }: { composerTool?: boolean; tabletMode?: boolean } = {}): React.ReactElement {
   const [open, setOpen] = useState(false)
   const [contextLength, setContextLength] = useConversationContextLength()
 
@@ -56,15 +57,21 @@ export function ContextSettingsPopover(): React.ReactElement {
     setContextLength(newValue)
   }
 
+  const trigger = composerTool ? (
+    <AgentComposerToolTrigger label="上下文设置" tabletMode={tabletMode}>
+      <Settings2 className="size-4" />
+    </AgentComposerToolTrigger>
+  ) : (
+    <Button type="button" variant="ghost" size="icon" className="h-8 w-8">
+      <Settings2 className="h-4 w-4 text-muted-foreground" />
+    </Button>
+  )
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip open={open ? false : undefined}>
         <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <Button type="button" variant="ghost" size="icon" className="h-8 w-8">
-              <Settings2 className="h-4 w-4 text-muted-foreground" />
-            </Button>
-          </PopoverTrigger>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent side="top">
           <p>上下文设置</p>

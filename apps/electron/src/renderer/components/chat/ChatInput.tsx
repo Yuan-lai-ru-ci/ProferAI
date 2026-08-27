@@ -27,12 +27,7 @@ import { PptMaterialPicker } from './PptMaterialPicker'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
-import { Button } from '@/components/ui/button'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import {
   conversationDraftsAtom,
@@ -303,7 +298,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
 
   const toolbarItems = React.useMemo<ToolbarItem[]>(() => [
     // 模型选择是 Chat 的一级动作，固定放在最左侧；窄窗口时也优先保留。
-    { key: 'model', node: <ModelSelector /> },
+    { key: 'model', node: <ModelSelector composerTool tabletMode={tabletMode} /> },
     // 资料库入口已暂时关闭，恢复时取消下面注释即可
     /*
     {
@@ -314,100 +309,60 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     {
       key: 'attach',
       node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground"
-              onClick={handleOpenFileDialog}
-            >
-              <Paperclip className="size-5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>添加附件</p>
-          </TooltipContent>
-        </Tooltip>
+        <AgentComposerToolTrigger label="添加附件" tooltip="添加附件" tabletMode={tabletMode} onClick={handleOpenFileDialog}>
+          <Paperclip className="size-5" />
+        </AgentComposerToolTrigger>
       ),
     },
     {
       key: 'ppt-materials',
       node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button type="button" variant="ghost" size="icon" className="size-[36px] shrink-0 rounded-full text-foreground/60 hover:text-foreground" onClick={() => setMaterialPickerOpen(true)}>
-              <ImagePlus className="size-5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top"><p>添加开放许可素材</p></TooltipContent>
-        </Tooltip>
+        <AgentComposerToolTrigger label="添加开放许可素材" tooltip="添加开放许可素材" tabletMode={tabletMode} onClick={() => setMaterialPickerOpen(true)}>
+          <ImagePlus className="size-5" />
+        </AgentComposerToolTrigger>
       ),
     },
     {
       key: 'thinking',
       node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'size-[36px] shrink-0 rounded-full',
-                thinkingEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground'
-              )}
-              onClick={() => setThinkingEnabled(!thinkingEnabled)}
-            >
-              <Brain className="size-5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>{thinkingEnabled ? '关闭思考模式' : '开启思考模式'}</p>
-          </TooltipContent>
-        </Tooltip>
+        <AgentComposerToolTrigger
+          label={thinkingEnabled ? '关闭思考模式' : '开启思考模式'}
+          tooltip={thinkingEnabled ? '关闭思考模式' : '开启思考模式'}
+          state={thinkingEnabled ? 'active' : 'default'}
+          tabletMode={tabletMode}
+          onClick={() => setThinkingEnabled(!thinkingEnabled)}
+        >
+          <Brain className="size-5" />
+        </AgentComposerToolTrigger>
       ),
     },
-    { key: 'speech', node: <SpeechButton className="size-[36px] shrink-0 rounded-full" /> },
-    { key: 'tools', node: <ToolSelectorPopover /> },
-    { key: 'context', node: <ContextSettingsPopover /> },
-    { key: 'clear', node: <ClearContextButton onClick={onClearContext} /> },
-  ], [handleOpenFileDialog, thinkingEnabled, setThinkingEnabled, onClearContext])
+    { key: 'speech', node: <SpeechButton composerTool tabletMode={tabletMode} /> },
+    { key: 'tools', node: <ToolSelectorPopover composerTool tabletMode={tabletMode} /> },
+    { key: 'context', node: <ContextSettingsPopover composerTool tabletMode={tabletMode} /> },
+    { key: 'clear', node: <ClearContextButton composerTool tabletMode={tabletMode} onClick={onClearContext} /> },
+  ], [handleOpenFileDialog, thinkingEnabled, setThinkingEnabled, onClearContext, tabletMode])
 
   const trailingNode = streaming ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-[36px] rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
-          onClick={onStop}
-        >
-          <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        <p>停止 Agent ({getAcceleratorDisplay(getActiveAccelerator('stop-generation'))})</p>
-      </TooltipContent>
-    </Tooltip>
+    <AgentComposerToolTrigger
+      label="停止生成"
+      tooltip={`停止生成 (${getAcceleratorDisplay(getActiveAccelerator('stop-generation'))})`}
+      state="destructive"
+      tabletMode={tabletMode}
+      onClick={onStop}
+    >
+      <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
+    </AgentComposerToolTrigger>
   ) : (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className={cn(
-        'size-[36px] rounded-full',
-        canSend
-          ? 'text-primary hover:bg-primary/10'
-          : 'text-foreground/30 cursor-not-allowed'
-      )}
+    <AgentComposerToolTrigger
+      label="发送消息"
+      tooltip="发送消息"
+      state={canSend ? 'active' : 'muted'}
+      tabletMode={tabletMode}
       onClick={handleSend}
       disabled={!canSend}
     >
       <CornerDownLeft className="size-[22px]" />
-    </Button>
+    </AgentComposerToolTrigger>
   )
 
   return (

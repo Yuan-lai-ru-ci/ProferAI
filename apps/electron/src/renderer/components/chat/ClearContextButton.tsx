@@ -12,18 +12,24 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { Eraser } from 'lucide-react'
 import type { ComponentProps } from 'react'
 
 export interface ClearContextButtonProps
-  extends Omit<ComponentProps<typeof Button>, 'onClick'> {
+  extends Omit<ComponentProps<typeof Button>, 'onClick' | 'size' | 'variant'> {
   /** 点击回调 */
   onClick?: () => void
+  /** 输入工具栏使用统一的 Composer 触发器。 */
+  composerTool?: boolean
+  tabletMode?: boolean
 }
 
 export function ClearContextButton({
   onClick,
   className,
+  composerTool = false,
+  tabletMode = false,
   ...props
 }: ClearContextButtonProps): React.ReactElement {
   // 检测平台以显示正确的快捷键
@@ -31,6 +37,21 @@ export function ClearContextButton({
     typeof navigator !== 'undefined' &&
     navigator.platform.toLowerCase().includes('mac')
   const shortcutKey = isMac ? '⌘K' : 'Ctrl+K'
+
+  if (composerTool) {
+    return (
+      <AgentComposerToolTrigger
+        label="清除上下文"
+        tooltip={`清除上下文 (${shortcutKey})`}
+        tabletMode={tabletMode}
+        className={className}
+        onClick={onClick}
+        {...props}
+      >
+        <Eraser className="size-4" />
+      </AgentComposerToolTrigger>
+    )
+  }
 
   return (
     <Tooltip>
