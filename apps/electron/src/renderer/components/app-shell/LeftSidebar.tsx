@@ -24,14 +24,13 @@ import { SidebarDialogs } from './left-sidebar/sidebar-dialogs'
 export type { LeftSidebarProps } from './left-sidebar/types'
 import type { LeftSidebarProps } from './left-sidebar/types'
 
-export function LeftSidebar({ containerRef, width, noTransition, tabletMode, renderSearchDialog = true }: LeftSidebarProps): React.ReactElement {
+export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialog = true }: LeftSidebarProps): React.ReactElement {
   const s = useLeftSidebar(tabletMode)
   const isClassic = s.isClassic
   const sidebarCollapsed = s.sidebarCollapsed
 
   return (
     <div
-      ref={containerRef}
       className={cn(
         'relative h-full overflow-hidden sidebar-collapse-ease',
         !noTransition && 'transition-[width] duration-300 will-change-[width] contain-layout',
