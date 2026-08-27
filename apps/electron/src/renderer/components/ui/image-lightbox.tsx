@@ -12,6 +12,10 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Download, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 3
+const ZOOM_STEP = 1.1
+
 interface ImageLightboxProps {
   /** 图片 src（data URL 或普通 URL） */
   src: string | null
@@ -32,6 +36,20 @@ export function ImageLightbox({
   onOpenChange,
   onSave,
 }: ImageLightboxProps): React.ReactElement | null {
+  const [zoom, setZoom] = React.useState(1)
+
+  React.useEffect(() => {
+    setZoom(1)
+  }, [open, src])
+
+  const handleImageWheel = React.useCallback((event: React.WheelEvent<HTMLImageElement>) => {
+    event.preventDefault()
+    setZoom((currentZoom) => {
+      const nextZoom = currentZoom * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP)
+      return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
+    })
+  }, [])
+
   if (!src) return null
 
   return (
@@ -70,12 +88,15 @@ export function ImageLightbox({
             预览图片：{alt || '图片'}
           </DialogPrimitive.Description>
 
-          {/* 大图 */}
+          {/* 大图：指针位于图片上时，滚轮缩放，不影响弹窗空白区域。 */}
           <img
             src={src}
             alt={alt}
-            className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain shadow-2xl select-none"
+            className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain shadow-2xl select-none cursor-zoom-in"
+            style={{ transform: `scale(${zoom})` }}
             draggable={false}
+            onWheel={handleImageWheel}
+            title="在图片上滚动滚轮可缩放"
           />
 
           {/* 右上角关闭按钮 */}
