@@ -22,8 +22,6 @@ export interface AgentImageOutputResult {
     filename: string
     mediaType: AgentImageMediaType
   }
-  /** 需由 Agent 原样置入最终回复的既有图片附件协议。 */
-  marker: string
 }
 
 export interface AuthorizedAgentImage {
@@ -91,7 +89,7 @@ export async function readAuthorizedAgentImage(path: string, context: AgentImage
   return { absolutePath: source, data, filename: displayFilename(source, detected.extension), mediaType: detected.mediaType }
 }
 
-/** Persist verified bytes under the current session and construct the one canonical renderer marker. */
+/** Persist verified bytes under the current session as a renderer-safe image artifact. */
 export async function writeAgentImageOutput(
   data: Buffer,
   mediaType: AgentImageMediaType,
@@ -116,7 +114,7 @@ export async function writeAgentImageOutput(
     filename: filename ? displayFilename(filename, detected.extension) : `generated-image${detected.extension}`,
     mediaType,
   }
-  return { image, marker: `[PROMA_IMAGE_ATTACHMENT:${JSON.stringify({ localPath: image.localPath, filename: image.filename, mediaType: image.mediaType })}]` }
+  return { image }
 }
 
 /** Safely copy an existing image from one authorized location into this session output. */

@@ -17,16 +17,18 @@ import { WebFetchResultRenderer } from './web-fetch-result'
 import { TaskGetResultRenderer } from './task-get-result'
 import { TaskListResultRenderer } from './task-list-result'
 import { DefaultResultRenderer } from './default-result'
+import type { ParsedAgentImageAttachment } from '../image-attachment-marker'
 
 export interface ToolResultRendererProps {
   toolName: string
   input: Record<string, unknown>
   result: string
   isError: boolean
+  imageAttachments?: ParsedAgentImageAttachment[]
   basePath?: string
 }
 
-export function ToolResultRenderer({ toolName, input, result, isError, basePath }: ToolResultRendererProps): React.ReactElement {
+export function ToolResultRenderer({ toolName, input, result, isError, imageAttachments, basePath }: ToolResultRendererProps): React.ReactElement {
   switch (toolName) {
     case 'Bash':
       return <BashResultRenderer result={result} isError={isError} input={input} />
@@ -49,7 +51,7 @@ export function ToolResultRenderer({ toolName, input, result, isError, basePath 
     case 'TaskList':
       return <TaskListResultRenderer result={result} isError={isError} />
     default:
-      return <DefaultResultRenderer result={result} isError={isError} />
+      return <DefaultResultRenderer result={result} isError={isError} imageAttachments={imageAttachments} />
   }
 }
 

@@ -26,7 +26,7 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
-import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from './image-attachment-marker'
+import { parseAgentImageAttachmentDetails, parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from './image-attachment-marker'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
@@ -47,6 +47,7 @@ import type {
 interface ToolResultData {
   result?: string
   isError?: boolean
+  imageAttachments?: ParsedAgentImageAttachment[]
 }
 
 /** 在 allMessages 中查找匹配 toolUseId 的工具结果 */
@@ -71,7 +72,13 @@ function useToolResult(toolUseId: string, allMessages: SDKMessage[]): ToolResult
                 .map((c) => c.text)
                 .join('\n')
             }
-            return { result, isError: resultBlock.is_error }
+            const rawMessage = userMsg as unknown as Record<string, unknown>
+            const details = rawMessage.tool_use_result ?? rawMessage.toolUseResult
+            return {
+              result,
+              isError: resultBlock.is_error,
+              imageAttachments: parseAgentImageAttachmentDetails(details),
+            }
           }
         }
       }
@@ -342,7 +349,10 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   const toolResult = useToolResult(block.id, allMessages)
   const resultText = toolResult?.result
   const isError = toolResult?.isError === true
-  const shouldShowResult = !!resultText
+  // generate_image 已有独立的持久化生成卡片；这里只让 send_local_image 的结构化附件
+  // 直接出现在工具行，避免同一张生图在时间线和工具结果中重复显示。
+  const imageAttachments = block.name === 'send_local_image' ? (toolResult?.imageAttachments ?? []) : []
+  const shouldShowResult = !!resultText || imageAttachments.length > 0
   const taskGetSummary = React.useMemo(() => {
     if (block.name !== 'TaskGet' || !resultText || isError) return null
     return parseTaskGetResult(resultText)
@@ -538,7 +548,15 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         )}
       </button>
 
-      {shouldShowResult && resultText && expanded && (
+      {imageAttachments.length > 0 && (
+        <div className="ml-5.5 mt-1 mb-2 flex flex-wrap gap-3">
+          {imageAttachments.map((image, i) => (
+            <GeneratedImageThumb key={`${image.localPath}:${i}`} image={image} />
+          ))}
+        </div>
+      )}
+
+      {shouldShowResult && expanded && (
         <div className={cn(
           'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
           animate && 'animate-in fade-in slide-in-from-top-1 duration-150',
@@ -546,8 +564,9 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           <ToolResultRenderer
             toolName={block.name}
             input={block.input}
-            result={resultText}
+            result={resultText ?? ''}
             isError={isError}
+            imageAttachments={[]}
             basePath={basePath}
           />
         </div>
@@ -647,7 +666,7 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
   )
 }
 
-// ===== PROMA_IMAGE_ATTACHMENT 生成图片解析与渲染 =====
+// ===== Agent 图片附件解析与渲染 =====
 
 /** 生成图片缩略图组件（点击可预览大图） */
 function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): React.ReactElement {
@@ -704,7 +723,7 @@ export function ContentBlock({ block, allMessages, basePath, basePaths, animate 
     const textBlock = block as SDKTextBlock
     if (!textBlock.text) return null
 
-    // 解析生成图片标记 [PROMA_IMAGE_ATTACHMENT:{...}]
+    // 兼容历史消息中的本地图片标记；新工具结果使用结构化附件。
     const { images, cleanText } = parseAgentImageAttachmentMarkers(textBlock.text)
 
     return (

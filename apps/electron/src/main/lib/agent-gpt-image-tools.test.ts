@@ -25,7 +25,7 @@ mock.module('./agent-gpt-image-service', () => ({
     mode: 'official',
     edited: false,
     output: {
-      marker: '[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/safe/.context/agent-output-images/image.png","filename":"image.png","mediaType":"image/png"}]',
+      image: { localPath: 'C:/safe/.context/agent-output-images/image.png', filename: 'image.png', mediaType: 'image/png' },
     },
   }),
 }))
@@ -51,7 +51,8 @@ describe('Agent GPT Image Claude adapter', () => {
     expect(JSON.stringify(tool!.parameters)).toContain('referenceImagePaths')
     expect(JSON.stringify(tool!.parameters)).toContain('useLastGeneratedImage')
     expect(JSON.stringify(tool!.parameters)).toContain('1536x1024')
-    const result = await tool!.handler({ prompt: 'blue square' }) as { content: Array<{ text: string }> }
-    expect(result.content[0]!.text).toContain('[PROMA_IMAGE_ATTACHMENT:')
+    const result = await tool!.handler({ prompt: 'blue square' }) as { content: Array<{ text: string }>; details?: { image?: { filename?: string } } }
+    expect(result.content[0]!.text).not.toContain('IMAGE_ATTACHMENT')
+    expect(result.details).toMatchObject({ image: { filename: 'image.png' } })
   })
 })

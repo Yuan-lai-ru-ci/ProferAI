@@ -6,7 +6,7 @@ import { GPT_IMAGE_QUALITIES, GPT_IMAGE_SIZES, type GptImageQuality, type GptIma
 
 export const AGENT_GPT_IMAGE_TOOL_NAME = 'generate_image'
 
-const DESCRIPTION = 'Generate one image from a prompt, edit 1–4 authorized local PNG/JPEG/GIF/WebP reference files, or edit the latest successful image generated in this current Agent session with useLastGeneratedImage. useLastGeneratedImage cannot be combined with referenceImagePaths. Official mode charges 5 Profer credits only after successful delivery. The result includes a PROMA_IMAGE_ATTACHMENT marker; copy it unchanged into the final response.'
+const DESCRIPTION = 'Generate one image from a prompt, edit 1–4 authorized local PNG/JPEG/GIF/WebP reference files, or edit the latest successful image generated in this current Agent session with useLastGeneratedImage. useLastGeneratedImage cannot be combined with referenceImagePaths. Official mode charges 5 Profer credits only after successful delivery. Profer automatically attaches the delivered image to the conversation; do not output internal image protocol markers.'
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; details?: unknown; isError?: boolean }
 
@@ -33,7 +33,7 @@ function toolResult(result: Awaited<ReturnType<typeof generateAgentGptImage>>): 
   return {
     content: [{
       type: 'text',
-      text: `图片已成功${result.edited ? '编辑' : '生成'}（1 张）${chargeHint}。请在最终回复中原样保留以下图片标记，并在标记外用正常文字说明图片内容：${result.revisedPrompt ? `\n修订后的提示词：${result.revisedPrompt}\n` : '\n'}${result.output.marker}`,
+      text: `图片已成功${result.edited ? '编辑' : '生成'}（1 张）${chargeHint}，并会自动显示在当前回复中。${result.revisedPrompt ? `\n修订后的提示词：${result.revisedPrompt}` : ''}\n请用正常文字说明图片内容，不要输出任何内部图片协议标记。`,
     }],
     details: result.output,
   }

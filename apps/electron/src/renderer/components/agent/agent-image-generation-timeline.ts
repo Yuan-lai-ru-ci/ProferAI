@@ -17,7 +17,7 @@ export function agentMessageGroupCreatedAt(group: MessageGroup): number {
 
 /**
  * Cards are intentionally transient status UI. Completed output is delivered by the
- * canonical PROMA_IMAGE_ATTACHMENT in the Agent reply; a failed attempt remains visible
+ * canonical structured image attachment in the Agent tool result; a failed attempt remains visible
  * in its existing tool audit trail rather than becoming a second conversation item.
  */
 export function getPendingImageGenerationCards(cards: AgentImageGenerationCard[]): AgentImageGenerationCard[] {

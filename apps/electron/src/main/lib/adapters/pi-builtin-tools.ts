@@ -595,8 +595,8 @@ function buildPiAgentImageOutputTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): T
     sdk.defineTool({
       name: 'send_local_image',
       label: '发送本地图片',
-      description: 'Send an existing local PNG/JPEG/GIF/WebP as an image in the final Agent response. The path must be inside the current session workspace or an explicitly authorized attached directory. Returns a PROMA_IMAGE_ATTACHMENT marker; copy that marker unchanged into your final response. This tool does not generate or edit images.',
-      promptSnippet: 'SendLocalImage: safely copy an authorized local image to the session output and copy the returned PROMA_IMAGE_ATTACHMENT marker unchanged into the final response.',
+      description: 'Send an existing local PNG/JPEG/GIF/WebP as an image in the final Agent response. The path must be inside the current session workspace or an explicitly authorized attached directory. Profer automatically attaches the verified image to the conversation; do not output internal image protocol markers. This tool does not generate or edit images.',
+      promptSnippet: 'SendLocalImage: safely copy an authorized local image to the session output; Profer automatically attaches the verified image, so do not output internal image protocol markers.',
       parameters: Type.Object({
         path: Type.String({ minLength: 1, maxLength: 4096 }),
         caption: Type.Optional(Type.String({ maxLength: 500 })),
@@ -623,7 +623,7 @@ function buildPiAgentGptImageTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
       name: AGENT_GPT_IMAGE_TOOL_NAME,
       label: '生成图片',
       description: AGENT_GPT_IMAGE_DESCRIPTION,
-      promptSnippet: 'GenerateImage: generate one image or edit up to four authorized local reference images; preserve the returned PROMA_IMAGE_ATTACHMENT marker unchanged in the final response.',
+      promptSnippet: 'GenerateImage: generate one image or edit up to four authorized local reference images; Profer automatically attaches the verified result, so do not output internal image protocol markers.',
       parameters: Type.Object({
         prompt: Type.String({ minLength: 1, maxLength: 10_000 }),
         size: Type.Optional(Type.Union(GPT_IMAGE_SIZES.map((value) => Type.Literal(value)))),

@@ -227,16 +227,16 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
 
     const imageTool = tools.find((tool) => tool.name === 'send_local_image')
     expect(imageTool).toBeDefined()
-    expect(imageTool!.description).toContain('PROMA_IMAGE_ATTACHMENT')
+    expect(imageTool!.description).not.toContain('IMAGE_ATTACHMENT')
   })
 
-  test('Given GPT Image enabled and available in a workspace Pi session When building tools Then it exposes the unified generate_image schema and marker result', async () => {
+  test('Given GPT Image enabled and available in a workspace Pi session When building tools Then it exposes the unified generate_image schema and structured image result', async () => {
     imageToolAvailable = true
     generatedImageResult = {
       ok: true,
       mode: 'official',
       edited: false,
-      output: { marker: '[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/safe/session/.context/agent-output-images/x.png","filename":"x.png","mediaType":"image/png"}]' },
+      output: { image: { localPath: 'C:/safe/session/.context/agent-output-images/x.png', filename: 'x.png', mediaType: 'image/png' } },
     }
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
@@ -247,8 +247,9 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(tool!.description).toContain('useLastGeneratedImage')
     expect(JSON.stringify(tool!.parameters)).toContain('useLastGeneratedImage')
     expect(JSON.stringify(tool!.parameters)).toContain('1024x1024')
-    const result = await tool!.execute!('pi-call-1', { prompt: 'blue square' }) as { content: Array<{ text: string }> }
-    expect(result.content[0]!.text).toContain('[PROMA_IMAGE_ATTACHMENT:')
+    const result = await tool!.execute!('pi-call-1', { prompt: 'blue square' }) as { content: Array<{ text: string }>; details?: { image?: { filename?: string } } }
+    expect(result.content[0]!.text).not.toContain('IMAGE_ATTACHMENT')
+    expect(result.details).toMatchObject({ image: { filename: 'x.png' } })
   })
 
   test('Given GPT Image disabled or no workspace When building Pi tools Then generate_image is absent', async () => {

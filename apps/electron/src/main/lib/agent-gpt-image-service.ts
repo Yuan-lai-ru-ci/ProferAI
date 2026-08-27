@@ -73,7 +73,7 @@ function notify(context: AgentGptImageContext, record: AgentImageGenerationRecor
 /**
  * Agent-facing image generation boundary. A record is durably created before any
  * reference/provider work. References are authorized before any provider request and
- * the provider result is only persisted through the established session output marker protocol.
+ * the provider result is only persisted through the established session output image protocol.
  */
 export async function generateAgentGptImage(
   input: AgentGptImageInput,

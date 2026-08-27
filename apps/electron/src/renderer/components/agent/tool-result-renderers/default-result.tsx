@@ -13,6 +13,7 @@ import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } fro
 interface DefaultResultRendererProps {
   result: string
   isError: boolean
+  imageAttachments?: ParsedAgentImageAttachment[]
 }
 
 /** 尝试将结果解析为 key-value 对 */
@@ -79,7 +80,7 @@ function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): 
   )
 }
 
-export function DefaultResultRenderer({ result, isError }: DefaultResultRendererProps): React.ReactElement {
+export function DefaultResultRenderer({ result, isError, imageAttachments = [] }: DefaultResultRendererProps): React.ReactElement {
   if (isError) {
     return (
       <pre className="rounded-md p-3 text-[12px] font-mono text-destructive/80 bg-destructive/5 whitespace-pre-wrap break-all overflow-x-auto">
@@ -89,7 +90,11 @@ export function DefaultResultRenderer({ result, isError }: DefaultResultRenderer
   }
 
   // 解析受控图片附件标记；仅加载 PNG/JPEG/GIF/WebP。
-  const { images, cleanText } = React.useMemo(() => parseAgentImageAttachmentMarkers(result), [result])
+  const { images: legacyImages, cleanText } = React.useMemo(() => parseAgentImageAttachmentMarkers(result), [result])
+  const images = React.useMemo(() => {
+    const all = [...imageAttachments, ...legacyImages]
+    return all.filter((image, index) => all.findIndex((item) => item.localPath === image.localPath) === index)
+  }, [imageAttachments, legacyImages])
 
   // 纯文本 fallback
   if (images.length === 0) {

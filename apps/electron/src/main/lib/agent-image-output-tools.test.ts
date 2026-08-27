@@ -23,17 +23,15 @@ describe('Agent local image output tool', () => {
     expect(Object.keys(servers)).toEqual(['agent-image-output'])
     expect(captured).toHaveLength(1)
     expect(captured[0]).toMatchObject({ name: 'send_local_image' })
-    expect(captured[0]!.description).toContain('PROMA_IMAGE_ATTACHMENT')
+    expect(captured[0]!.description).not.toContain('IMAGE_ATTACHMENT')
   })
 
-  test('Given a safe image result When formatting tool output Then the marker remains a standalone raw marker', () => {
-    const marker = '[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/safe/image.png","filename":"image.png","mediaType":"image/png"}]'
+  test('Given a safe image result When formatting tool output Then it returns a structured image without exposing an internal marker', () => {
     const formatted = formatAgentImageOutputToolResult({
       image: { localPath: 'C:/safe/image.png', absolutePath: 'C:/safe/image.png', filename: 'image.png', mediaType: 'image/png' },
-      marker,
     })
 
-    expect(formatted.content[0]!.text).toContain(marker)
-    expect(formatted.details).toMatchObject({ marker })
+    expect(formatted.content[0]!.text).not.toContain('IMAGE_ATTACHMENT')
+    expect(formatted.details).toMatchObject({ image: { filename: 'image.png', mediaType: 'image/png' } })
   })
 })

@@ -49,7 +49,7 @@ __setAgentGptImageProviderForTest(async (input) => {
 })
 
 describe('generateAgentGptImage', () => {
-  test('accepts relative authorized reference, delegates it, and writes a session marker artifact', async () => {
+  test('accepts relative authorized reference, delegates it, and writes a session image artifact', async () => {
     const f = fixture()
     writeFileSync(join(f.session, 'reference.png'), png)
     providerResult = success()
@@ -60,7 +60,7 @@ describe('generateAgentGptImage', () => {
     if (!result.ok) return
     expect(calls).toHaveLength(1)
     expect((calls[0] as { references: unknown[] }).references).toHaveLength(1)
-    expect(result.output.marker).toContain('PROMA_IMAGE_ATTACHMENT')
+    expect('marker' in result.output).toBe(false)
     expect(result.output.image.absolutePath).toContain('agent-output-images')
     expect(existsSync(result.output.image.absolutePath)).toBe(true)
   })
@@ -99,7 +99,7 @@ describe('generateAgentGptImage', () => {
     expect(calls).toHaveLength(0)
   })
 
-  test('provider failures do not create an output directory or marker', async () => {
+  test('provider failures do not create an output directory or image artifact', async () => {
     const f = fixture()
     providerResult = { ok: false as const, error: 'upstream rejected' }
     const updates: string[] = []

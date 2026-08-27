@@ -223,8 +223,8 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('不要尝试用代码、ASCII art 等伪造图片')
     expect(withoutAutomation).not.toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
-    expect(withoutAutomation).toContain('图片附件标记')
-    expect(withoutAutomation).not.toContain('`PROMA_IMAGE_ATTACHMENT` 标记')
+    expect(withoutAutomation).toContain('自动把校验后的图片附加到当前回复')
+    expect(withoutAutomation).not.toContain('PROMA_IMAGE_ATTACHMENT')
     expect(withoutAutomation).toContain('6. **自检习惯**')
   })
 

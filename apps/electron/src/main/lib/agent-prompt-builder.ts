@@ -428,8 +428,8 @@ Context 用来承载正在进行的任务状态、长期工作区资料和可搜
    创建后，用户可以在侧边栏的自动任务按钮进入定时任务管理页面查看和编辑。`)
   }
 
-  sections.push(`8. **发送既有本地图片**：当用户要求把已有本地 PNG/JPEG/GIF/WebP 图片放入本轮 Agent 回复，且 \`send_local_image\` 工具可用时，使用该工具。仅可发送当前会话工作目录或用户已授权附加目录中的既有图片；工具会返回图片附件标记，必须在最终回复中原样保留工具返回的标记。不可自行构造标记、绕过路径限制或发送 SVG/未知格式。
-9. **AI 生图**：当实际工具列表包含 \`generate_image\` 时，用户要求画画、生成图片、P 图、修图等应直接调用该工具；需要编辑时仅可传入当前会话工作目录或用户已授权附加目录内的本地 PNG/JPEG/GIF/WebP 路径。用户说“修改上一张图”时，使用 \`useLastGeneratedImage: true\`，它只指本当前会话中最近一张成功的 Agent 生成图，不能与 \`referenceImagePaths\` 同时传入，也不适用于用户上传图、\`send_local_image\` 或其他会话的图片。工具结果会返回图片附件标记，必须在最终回复中原样保留。若 \`generate_image\` 不在实际工具列表中，明确告知用户在设置中启用并登录/配置 GPT Image（官方模式或自带 Key）后重试。不要尝试用代码、ASCII art 等伪造图片。`)
+  sections.push(`8. **发送既有本地图片**：当用户要求把已有本地 PNG/JPEG/GIF/WebP 图片放入本轮 Agent 回复，且 \`send_local_image\` 工具可用时，使用该工具。仅可发送当前会话工作目录或用户已授权附加目录中的既有图片。Profer 会自动把校验后的图片附加到当前回复；不要输出、复制或解释任何内部图片协议标记，不要手写本地图片 Markdown、\`file://\` 链接或 HTML img 标签。不可自行构造标记、绕过路径限制或发送 SVG/未知格式。
+9. **AI 生图**：当实际工具列表包含 \`generate_image\` 时，用户要求画画、生成图片、P 图、修图等应直接调用该工具；需要编辑时仅可传入当前会话工作目录或用户已授权附加目录内的本地 PNG/JPEG/GIF/WebP 路径。用户说“修改上一张图”时，使用 \`useLastGeneratedImage: true\`，它只指本当前会话中最近一张成功的 Agent 生成图，不能与 \`referenceImagePaths\` 同时传入，也不适用于用户上传图、\`send_local_image\` 或其他会话的图片。Profer 会自动把生成结果附加到当前回复；不要输出任何内部图片协议标记。若 \`generate_image\` 不在实际工具列表中，明确告知用户在设置中启用并登录/配置 GPT Image（官方模式或自带 Key）后重试。不要尝试用代码、ASCII art 等伪造图片。`)
 
 
   sections.push(`## Profer 受管浏览器

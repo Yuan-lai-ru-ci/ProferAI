@@ -32,14 +32,14 @@ const contextFor = (fixture: ReturnType<typeof createFixture>) => ({
 })
 
 describe('sendAgentLocalImage', () => {
-  test('Given an authorized PNG When sending Then it copies the image into the session output directory and returns a marker', async () => {
+  test('Given an authorized PNG When sending Then it copies the image into the session output directory and returns structured image data', async () => {
     const fixture = createFixture()
     const source = join(fixture.authorizedDir, 'diagram.png')
     writePng(source, Buffer.from('test'))
 
     const result = await sendAgentLocalImage({ path: source }, contextFor(fixture))
 
-    expect(result.marker).toContain('[PROMA_IMAGE_ATTACHMENT:')
+    expect('marker' in result).toBe(false)
     expect(result.image.localPath).toMatch(/agent-output-images[\\/]/)
     expect(result.image.filename).toBe('diagram.png')
     expect(result.image.mediaType).toBe('image/png')
