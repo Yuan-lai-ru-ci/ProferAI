@@ -8,6 +8,32 @@ const STANDALONE_HTML_MEDIA_RE = /^\s*<(?:img|video)\b[^>]*(?:\/?>|>.*?<\/video>
 
 export const MARKDOWN_RENDERER_VERSION = 3
 
+/**
+ * 提取 Chromium 剪贴板 HTML 的正文 fragment，避免完整 html/body 文档被当作正文。
+ */
+export function normalizeClipboardHtml(html: string): string {
+  if (!html.trim()) return ''
+
+  let content = html.trim()
+  const fragmentStart = content.search(/<!--\s*StartFragment\s*-->/i)
+  const fragmentEnd = content.search(/<!--\s*EndFragment\s*-->/i)
+  if (fragmentStart >= 0 && fragmentEnd > fragmentStart) {
+    const startMarkerEnd = content.indexOf('-->', fragmentStart)
+    content = content.slice(startMarkerEnd + 3, fragmentEnd)
+  } else {
+    const bodyMatch = content.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)
+    if (bodyMatch?.[1] !== undefined) content = bodyMatch[1]
+  }
+
+  return content
+    .replace(/<!--\s*(?:StartFragment|EndFragment)\s*-->/gi, '')
+    .replace(/<!doctype[^>]*>/gi, '')
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<div\b[^>]*>/gi, '<p>')
+    .replace(/<\/div>/gi, '</p>')
+    .trim()
+}
+
 const EMOJI_SHORTCODES: Record<string, string> = {
   '+1': '👍',
   '-1': '👎',

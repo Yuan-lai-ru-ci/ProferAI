@@ -27,7 +27,7 @@ import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { lowlight } from '@/lib/lowlight'
-import { htmlToMarkdown } from '@/lib/markdown-rich-text'
+import { htmlToMarkdown, markdownToHtml, normalizeClipboardHtml } from '@/lib/markdown-rich-text'
 import { richTextRenderingEnabledAtom } from '@/atoms/ui-preferences'
 import { createFileMentionSuggestion } from '@/components/file-browser/file-mention-suggestion'
 import { createSkillMentionSuggestion, createMcpMentionSuggestion, createSessionMentionSuggestion } from '@/components/agent/mention-suggestions'
@@ -37,6 +37,53 @@ import {
   getLastFocusedVoiceInputId,
   setLastFocusedVoiceInputId,
 } from '@/lib/voice-input-focus'
+
+/** 将纯文本草稿安全地转换为 TipTap 可解析的 HTML，避免草稿中的 HTML 被执行/解释。 */
+function plainTextToEditorHtml(text: string): string {
+  const escapeHtml = (value: string): string => value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+  return text
+    .split(/\n\n+/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('')
+}
+
+/** TipTap 生命周期切换期间安全地写入编辑器内容。 */
+function setEditorContentSafely(editor: ReturnType<typeof useEditor>, html: string): boolean {
+  if (!editor || editor.isDestroyed || !editor.commands) return false
+  try {
+    editor.commands.setContent(html, { emitUpdate: false })
+    return true
+  } catch (error) {
+    // 编辑器可能正在被 TipTap 销毁；下一次 editor 变化会重新同步内容。
+    if (editor.isDestroyed || !editor.view) return false
+    throw error
+  }
+}
+
+function clearEditorContentSafely(editor: ReturnType<typeof useEditor>): boolean {
+  if (!editor || editor.isDestroyed || !editor.commands) return false
+  try {
+    editor.commands.clearContent(false)
+    return true
+  } catch (error) {
+    if (editor.isDestroyed || !editor.view) return false
+    throw error
+  }
+}
+
+/** 读取剪贴板 HTML 的可见纯文本，去掉代码复制附带的 style/span 外壳。 */
+function clipboardHtmlToPlainText(html: string): string {
+  if (typeof document === 'undefined') return html
+  const container = document.createElement('div')
+  container.innerHTML = html
+  return container.textContent || ''
+}
 
 // ===== 行数计算 =====
 
@@ -244,37 +291,25 @@ export function RichTextInput({
         // 禁用内置版本，使用下面单独配置的版本
         link: false,
         underline: false,
-        // 纯文本模式：禁用所有格式化扩展，仅保留 Document/Paragraph/Text/HardBreak/History
-        ...(richTextEnabled ? {} : {
-          blockquote: false,
-          bold: false,
-          bulletList: false,
-          code: false,
-          heading: false,
-          horizontalRule: false,
-          italic: false,
-          orderedList: false,
-          strike: false,
-        }),
+        // 始终保持同一份编辑器 schema。不能根据 Markdown 开关增删扩展，
+        // 否则 TipTap 会销毁并重建 Editor；切换期间同步 effect 可能拿到已销毁实例。
+        // 纯文本模式通过 Markdown/HTML 转换控制显示和序列化，不依赖重建 schema。
       }),
-      // 富文本模式下注册格式化扩展；纯文本模式下跳过
-      ...(richTextEnabled ? [
-        Underline,
-        Link.configure({
-          openOnClick: false,
-          autolink: false,
-          linkOnPaste: false,
-          HTMLAttributes: {
-            class: 'text-primary underline',
-          },
-        }),
-        CodeBlockLowlight.configure({
-          lowlight,
-          HTMLAttributes: {
-            class: 'rounded-md p-3 font-mono text-sm',
-          },
-        }),
-      ] : []),
+      Underline,
+      Link.configure({
+        openOnClick: false,
+        autolink: false,
+        linkOnPaste: false,
+        HTMLAttributes: {
+          class: 'text-primary underline',
+        },
+      }),
+      CodeBlockLowlight.configure({
+        lowlight,
+        HTMLAttributes: {
+          class: 'rounded-md p-3 font-mono text-sm',
+        },
+      }),
       Placeholder.configure({
         placeholder,
         emptyEditorClass: 'is-editor-empty',
@@ -326,7 +361,9 @@ export function RichTextInput({
         }),
       ] : []),
     ],
-    content: value || '',
+    // TipTap 的 content 接收 HTML；受控值是 Markdown，富文本模式下必须先解析，
+    // 否则已有草稿会把 **粗体**、标题和列表当成普通文本显示。
+    content: richTextEnabled ? markdownToHtml(value) : plainTextToEditorHtml(value),
     editable: !disabled,
     editorProps: {
       attributes: {
@@ -404,13 +441,14 @@ export function RichTextInput({
         }
 
         const html = event.clipboardData?.getData('text/html') ?? ''
-        // 预处理 HTML：将 <div> 替换为 <p>，避免 htmlToMarkdown 对 <div> 不分段导致换行丢失
-        const text = html
-          ? (htmlToMarkdown(
-              html
-                .replace(/<div\b[^>]*>/gi, '<p>')
-                .replace(/<\/div>/gi, '</p>')
-            ).trim() || plainText)
+        // 预处理 HTML：将 <div> 替换为 <p>，避免 TipTap 解析时不分段。
+        // 同时保留原始 HTML 供编辑器插入；不能先 htmlToMarkdown 再 markdownToHtml，
+        // 因为 Markdown 序列化会把 Windows 路径的反斜杠写成 `\\`，再把这份源码
+        // 当作普通粘贴内容处理就会让用户看到多余的反斜杠。
+        const normalizedHtml = normalizeClipboardHtml(html)
+        // 长文本附件仍需要 Markdown 版本，以便保留格式；编辑器插入则走上面的原始 HTML。
+        const text = normalizedHtml
+          ? (htmlToMarkdown(normalizedHtml).trim() || plainText)
           : plainText
         if (
           shouldConvertClipboardTextToAttachment({
@@ -425,11 +463,23 @@ export function RichTextInput({
           onPasteLongTextRef.current(text)
           return true
         }
-        // 直接插入文本，不走 ProseMirror 内部 clipboardData 解析（Electron 39+
-        // sandbox 环境下 ProseMirror capturePaste 回退路径不可靠，会导致粘贴静默失败）
+        // 直接插入剪贴板 HTML，不经过 Markdown 往返，避免普通文本中的反斜杠被重复转义。
+        // Electron 39+ sandbox 环境下 ProseMirror capturePaste 回退路径不可靠，因此仍由
+        // 我们显式阻止默认行为并调用 TipTap；没有 HTML 时才插入原始 text/plain。
         event.preventDefault()
-        if (text) {
-          view.dispatch(view.state.tr.insertText(text))
+        if (normalizedHtml) {
+          // 复制已渲染的列表/标题时保留真实 HTML；纯文本包装则解析其 Markdown。
+          const hasRichHtml = /<(?:h[1-6]|ul|ol|li|blockquote|pre|table|strong|b|em|i|s|del|code|a|img|hr)\b/i.test(normalizedHtml)
+          // 代码块复制出来通常是带样式的 <span>。这类 HTML 不是富文本结构，
+          // 不能直接交给 TipTap，否则部分 Electron 版本会把 span/html 源码显示出来。
+          // 只有明确包含标题、列表、强调、链接等结构时才保留 HTML；其余内容统一
+          // 取可见文本，再按 Markdown 解析。
+          const visibleText = hasRichHtml ? text : clipboardHtmlToPlainText(normalizedHtml)
+          const editorContent = hasRichHtml ? normalizedHtml : markdownToHtml(visibleText)
+          editor?.chain().focus().insertContent(editorContent).run()
+        } else if (plainText) {
+          // text/plain-only 粘贴在富文本模式下也要解析 Markdown。
+          editor?.chain().focus().insertContent(markdownToHtml(plainText)).run()
         }
         return true
       },
@@ -560,7 +610,7 @@ export function RichTextInput({
         }
         setIsManuallyCollapsed(false)
       } else {
-        const markdown = htmlToMarkdown(html, { skipMarkdownEscape: !richTextEnabled })
+        const markdown = htmlToMarkdown(html, { skipMarkdownEscape: !richTextEnabledRef.current })
         lastEditorValueRef.current = markdown
         onChange(markdown)
         onHtmlChangeRef.current?.(html)
@@ -580,7 +630,7 @@ export function RichTextInput({
         })
       }
     },
-  }, [richTextEnabled])
+  }, [])
 
   // 卸载时取消未触发的 rAF 行数检查，避免泄漏 / 在卸载组件上 setState
   useEffect(() => {
@@ -594,38 +644,49 @@ export function RichTextInput({
 
   // 追踪编辑器实例，重建时强制同步（避免 htmlValue 草稿丢失）
   const editorInstanceRef = useRef(editor)
+  // Markdown 开关切换时，即使 value 没变化，也必须重新构造编辑器内容。
+  const lastRichTextModeRef = useRef(richTextEnabled)
   // 同步外部 value 变化（清空时）
   useEffect(() => {
-    if (editor) {
+    // useEditor 在初始化/生命周期切换时可能暂时返回 null；所有命令调用都必须
+    // 通过可选链保护，不能假设编辑器实例在 effect 执行期间始终存在。
+    const currentEditor = editor
+    if (!currentEditor || currentEditor.isDestroyed) return
+
+    {
       const controllerValue = value
-      const isEditorRecreated = editor !== editorInstanceRef.current
-      editorInstanceRef.current = editor
-      // 如果值是编辑器自己设置的，跳过同步
-      // 但编辑器重建后必须强制同步（即使 value 未变，htmlValue 草稿可能不同）
-      if (!isEditorRecreated && controllerValue === lastEditorValueRef.current) {
+      const isEditorRecreated = currentEditor !== editorInstanceRef.current
+      const isRichTextModeChanged = lastRichTextModeRef.current !== richTextEnabled
+      editorInstanceRef.current = currentEditor
+      lastRichTextModeRef.current = richTextEnabled
+      // 如果值是编辑器自己设置的，跳过同步；但编辑器重建或 Markdown 开关切换后，
+      // 即使 value 未变也必须重新解析，避免富文本/纯文本模式显示错误。
+      if (!isEditorRecreated && !isRichTextModeChanged && controllerValue === lastEditorValueRef.current) {
         return
       }
 
       if (controllerValue === '') {
-        editor.commands.clearContent()
+        clearEditorContentSafely(currentEditor)
         lastEditorValueRef.current = ''
         isExpandedRef.current = false
         setIsExpanded(false)
         setIsManuallyCollapsed(false)
-      } else if (htmlValue) {
-        // 优先使用 HTML 草稿恢复（保留 mention 等富文本节点）
-        editor.commands.setContent(htmlValue)
+      } else if (htmlValue && richTextEnabled && !isRichTextModeChanged) {
+        // 优先使用 HTML 草稿恢复（保留 mention 等富文本节点）。开关刚切换时不能
+        // 使用旧 HTML，否则纯文本模式下的 **粗体** 会继续保留为富文本，反之亦然。
+        setEditorContentSafely(currentEditor, htmlValue)
         lastEditorValueRef.current = controllerValue
       } else {
-        const html = controllerValue
-          .split(/\n\n+/)
-          .map(para => `<p>${para.replace(/\n/g, '<br>')}</p>`)
-          .join('')
-        editor.commands.setContent(html)
+        // 受控值是 Markdown，富文本模式下要经过同一套 Markdown → HTML 管线；
+        // 纯文本模式则转义后再放进段落，避免原始 HTML 被 TipTap 当成 DOM 解析。
+        const html = richTextEnabled
+          ? markdownToHtml(controllerValue)
+          : plainTextToEditorHtml(controllerValue)
+        setEditorContentSafely(currentEditor, html)
         lastEditorValueRef.current = controllerValue
       }
     }
-  }, [editor, value])
+  }, [editor, value, richTextEnabled])
 
   // 同步 disabled 状态
   useEffect(() => {
@@ -653,7 +714,7 @@ export function RichTextInput({
   useEffect(() => {
     if (editor && !disabled && !tabletMode) {
       const timer = setTimeout(() => {
-        editor.commands.focus()
+        editor?.commands?.focus()
       }, 100)
       return () => clearTimeout(timer)
     }

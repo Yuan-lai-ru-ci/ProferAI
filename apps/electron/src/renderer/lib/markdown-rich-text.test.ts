@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { markdownToHtml, markdownToSafeDisplayHtml } from './markdown-rich-text'
+import { markdownToHtml, markdownToSafeDisplayHtml, normalizeClipboardHtml } from './markdown-rich-text'
 import { unescapeMarkdownTextForClipboard } from '@/components/chat/CopyButton'
 
 describe('message copy plain-text normalization', () => {
@@ -18,7 +18,42 @@ describe('message copy plain-text normalization', () => {
   })
 })
 
+describe('clipboard HTML normalization', () => {
+  test('keeps Windows path backslashes unchanged', () => {
+    const html = '<div>D:\\profer\\server-private.git</div>'
+
+    expect(normalizeClipboardHtml(html)).toBe('<p>D:\\profer\\server-private.git</p>')
+  })
+
+  test('preserves rich text markup while normalizing div blocks', () => {
+    expect(normalizeClipboardHtml('<div><strong>标题</strong></div>')).toBe('<p><strong>标题</strong></p>')
+  })
+
+  test('extracts the fragment from a complete Chromium HTML document', () => {
+    const html = '<html><head><style>.x { color: red }</style></head><body><!--StartFragment--><span class="x">D:\\profer\\server-private.git</span><!--EndFragment--></body></html>'
+
+    expect(normalizeClipboardHtml(html)).toBe('<span class="x">D:\\profer\\server-private.git</span>')
+  })
+})
+
 describe('markdownToHtml rich preview blocks', () => {
+  test('renders the markdown syntax used by the input editor', () => {
+    const html = markdownToHtml([
+      '# 标题',
+      '',
+      '**粗体**、*斜体*',
+      '',
+      '- 第一项',
+      '- 第二项',
+    ].join('\n'))
+
+    expect(html).toContain('<h1>标题</h1>')
+    expect(html).toContain('<strong>粗体</strong>')
+    expect(html).toContain('<em>斜体</em>')
+    expect(html).toContain('<ul>')
+    expect(html).toContain('<li>第一项</li>')
+  })
+
   test('renders markdown tables as standard HTML tables', () => {
     const html = markdownToHtml([
       '| Header 1 | Header 2 |',
