@@ -15,10 +15,13 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
 import type { AgentRuntime, ProferPermissionMode, AgentImageGenerationCard } from '@profer/shared'
 import type {
+  CalendarEventListQuery,
   CreateAutomationInput,
+  CreateCalendarEventInput,
   CreateTodoInput,
   TodoListQuery,
   UpdateAutomationInput,
+  UpdateCalendarEventInput,
   UpdateTodoInput,
 } from '@profer/shared'
 import { filterDisabledTools } from '@profer/shared'
@@ -45,9 +48,14 @@ import {
   getAgentPreset,
 } from '../agent-preset-manager'
 import {
+  createPlanningCalendarEvent,
   createPlanningTodo,
+  deletePlanningCalendarEvent,
+  getPlanningCalendarEvent,
   getPlanningTodo,
+  listPlanningCalendarEvents,
   listPlanningTodos,
+  updatePlanningCalendarEvent,
   updatePlanningTodo,
 } from '../planning-agent-operations'
 import { buildPiCollaborationTools, hasRunningDelegations } from '../agent-collaboration-tools'
@@ -259,6 +267,53 @@ export function buildPiPlanningTools(
         } catch (error) {
           return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
         }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__planning__list_calendar_events',
+      label: '列出本地日程',
+      description: '列出当前 Profer 工作区的本地日程；用户未明确要求外部日历时，日程默认指这里。',
+      parameters: Type.Object({ from: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), to: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),
+      async execute(_toolCallId, params) {
+        try { return jsonToolResult({ events: await listPlanningCalendarEvents({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as CalendarEventListQuery) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__planning__get_calendar_event',
+      label: '读取本地日程',
+      description: '读取当前 Profer 工作区本地日程的最新记录；更新前必须先读取。',
+      parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
+      async execute(_toolCallId, params) {
+        try { return jsonToolResult({ event: await getPlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, (params as { id: string }).id) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__planning__create_calendar_event',
+      label: '创建本地日程',
+      description: '在当前 Profer 工作区创建本地日程。除非用户明确要求 Google、Outlook 或其他外部日历，否则不要询问日历平台。',
+      parameters: Type.Object({
+        title: Type.String({ minLength: 1, maxLength: 500 }), notes: Type.Optional(Type.String()), startAt: Type.Number({ exclusiveMinimum: 0 }), endAt: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), allDay: Type.Optional(Type.Boolean()), groupId: Type.Optional(Type.String({ minLength: 1 })), tagIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))), reminders: Type.Optional(Type.Array(Type.Object({ triggerAt: Type.Number({ exclusiveMinimum: 0 }) }))), todoId: Type.Optional(Type.String({ minLength: 1 })),
+      }),
+      async execute(_toolCallId, params) {
+        try { return jsonToolResult({ event: await createPlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as Omit<CreateCalendarEventInput, 'workspaceId'>) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__planning__update_calendar_event',
+      label: '更新本地日程',
+      description: '更新当前 Profer 工作区本地日程；必须先读取最新日程并传入 expectedUpdatedAt。',
+      parameters: Type.Object({ id: Type.String({ minLength: 1 }), expectedUpdatedAt: Type.Number({ exclusiveMinimum: 0 }), title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })), notes: Type.Optional(Type.String()), startAt: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), endAt: Type.Optional(Type.Union([Type.Number({ exclusiveMinimum: 0 }), Type.Null()])), allDay: Type.Optional(Type.Boolean()), groupId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])), tagIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))), todoId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])), }),
+      async execute(_toolCallId, params) {
+        try { return jsonToolResult({ event: await updatePlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as Omit<UpdateCalendarEventInput, 'workspaceId'>) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__planning__delete_calendar_event',
+      label: '删除本地日程',
+      description: '仅在用户明确要求时删除当前 Profer 工作区本地日程。',
+      parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
+      async execute(_toolCallId, params) {
+        try { return jsonToolResult({ deleted: await deletePlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, (params as { id: string }).id) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
       },
     }),
   ]

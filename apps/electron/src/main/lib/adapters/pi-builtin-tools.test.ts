@@ -164,7 +164,7 @@ describe('Pi Profer in-process tool bridges', () => {
     expect(result.details?.hits?.[0]).toMatchObject({ file: 'memory.md', content: 'hit:Pi' })
   })
 
-  test('Given Pi runtime When building planning tools Then it exposes list/get/create/update Todo tools', () => {
+  test('Given Pi runtime When building planning tools Then it exposes Todo and local calendar tools', () => {
     const { sdk, tools } = createPiSdkStub()
 
     buildPiPlanningTools(sdk, { sessionId: 'pi-planning-test' })
@@ -174,6 +174,11 @@ describe('Pi Profer in-process tool bridges', () => {
       'mcp__planning__get_todo',
       'mcp__planning__create_todo',
       'mcp__planning__update_todo',
+      'mcp__planning__list_calendar_events',
+      'mcp__planning__get_calendar_event',
+      'mcp__planning__create_calendar_event',
+      'mcp__planning__update_calendar_event',
+      'mcp__planning__delete_calendar_event',
     ])
   })
 

@@ -151,13 +151,16 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: false,
     })
 
-    expect(piPrompt).toContain('`mcp__planning__list_todos`')
+    expect(piPrompt).toContain('`mcp__planning__create_todo`')
     expect(piPrompt).toContain('`mcp__planning__update_todo`')
-    expect(claudePrompt).toContain('`list_todos`')
+    expect(piPrompt).toContain('`mcp__planning__create_calendar_event`')
+    expect(piPrompt).toContain('不要主动询问 Google Calendar、Outlook')
+    expect(claudePrompt).toContain('`create_todo`')
     expect(claudePrompt).toContain('`update_todo`')
-    expect(claudePrompt).not.toContain('`mcp__planning__list_todos`')
+    expect(claudePrompt).toContain('`create_calendar_event`')
+    expect(claudePrompt).not.toContain('`mcp__planning__create_todo`')
     expect(piPrompt).toContain('`expectedUpdatedAt`')
-    expect(piPrompt).toContain('暂不直接删除 Todo')
+    expect(piPrompt).toContain('Todo 删除仍由用户在规划中心操作')
   })
 
   test('极简预设 suppressPromptSections 隐藏任务图指南、委派策略与记忆体系段落', () => {

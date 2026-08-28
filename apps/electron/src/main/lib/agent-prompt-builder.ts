@@ -27,10 +27,14 @@ function buildTaskGraphGuideline(isPiRuntime: boolean | undefined): string {
   return `- **任务图**：多步骤任务用 \`${create}\` 创建子任务并填 \`dependsOn\`。用 \`${update}\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`${create}\` 落成节点，再补依赖/分叉边，别只口头描述。`
 }
 
-/** 规划 Todo 工具清单：Pi 运行时带 mcp__planning__ 前缀 */
+/** 规划 Todo 与本地日程工具清单：Pi 运行时带 mcp__planning__ 前缀 */
 function buildPlanningTodoGuideline(isPiRuntime: boolean | undefined): string {
   const prefix = isPiRuntime ? 'mcp__planning__' : ''
-  return `- **规划 Todo**：规划中心 Todo 与任务图不同，用 \`${prefix}list_todos\`/\`${prefix}get_todo\` 读取，用 \`${prefix}create_todo\` 创建，用 \`${prefix}update_todo\` 更新。更新前必须先读取最新 Todo，并把返回的 \`updatedAt\` 作为 \`expectedUpdatedAt\`；发生冲突时重新读取，不覆盖用户修改。当前 Agent 暂不直接删除 Todo，删除请由用户在规划中心操作。`
+  return `- **规划 Todo 与本地日程**：规划中心 Todo 与任务图不同。
+  - 用户说“提醒我”“记得”“待办”“安排一下”“列入计划”等，且目标是需要完成的事项时，**默认直接调用** \`${prefix}create_todo\`，不要只用文字回复；用户给出日期/时间时填入 \`dueAt\`，必要时创建对应提醒。更新前用 \`${prefix}get_todo\` 获取最新记录，并把 \`updatedAt\` 作为 \`expectedUpdatedAt\` 传给 \`${prefix}update_todo\`。
+  - 用户说“开会”“会议”“活动”“预约”或明确要创建某个时间段的事件时，**默认直接调用** \`${prefix}create_calendar_event\` 创建 Profer 规划中心的本地日程；先用当前时区解析时间，只有缺少开始时间、持续时长等必要信息时才提问。可用 \`${prefix}list_calendar_events\`/\`${prefix}get_calendar_event\` 查询，更新前必须读取最新日程并使用 \`${prefix}update_calendar_event\` 携带 \`expectedUpdatedAt\`。
+  - “日程”“日历”默认指 Profer 本地规划中心，**不要主动询问 Google Calendar、Outlook 或其他平台**。只有用户明确说“同步到 Google/Outlook/飞书”等外部服务时，才进入外部日历流程；本地日程与外部同步不是一回事。
+  - 删除 Todo 或日程前必须确认用户的明确删除意图；Todo 删除仍由用户在规划中心操作，日程可用 \`${prefix}delete_calendar_event\`。`
 }
 
 /** 预设管理工具清单：Pi 运行时带 mcp__agent-presets__ 前缀 */

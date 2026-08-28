@@ -6,16 +6,25 @@
  */
 
 import type {
+  CalendarEvent,
+  CalendarEventListQuery,
+  CreateCalendarEventInput,
   CreateTodoInput,
   Todo,
   TodoListQuery,
+  UpdateCalendarEventInput,
   UpdateTodoInput,
 } from '@profer/shared'
 import {
+  createCalendarEvent,
   createTodo,
+  deleteCalendarEvent,
+  getCalendarEvent,
   getTodo,
+  listCalendarEvents,
   listTodos,
   touchTodoSession,
+  updateCalendarEvent,
   updateTodo,
 } from './planning-manager'
 import {
@@ -24,8 +33,12 @@ import {
 } from './planning-events'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import {
+  createTeamCalendarEvent,
   createTeamTodo,
+  deleteTeamCalendarEvent,
+  listTeamCalendarEvents,
   listTeamTodos,
+  updateTeamCalendarEvent,
   updateTeamTodo,
 } from './team-planning-service'
 
@@ -49,6 +62,17 @@ function assertTodoInContext(todo: Todo | undefined, ctx: PlanningAgentToolConte
     throw new Error('Todo 不属于当前团队工作区')
   }
   return todo
+}
+
+function assertCalendarEventInContext(event: CalendarEvent | undefined, ctx: PlanningAgentToolContext): CalendarEvent {
+  if (!event) throw new Error('日程不存在')
+  if (!ctx.workspaceId && event.workspaceId) {
+    throw new Error('日程不属于当前 Agent 项目')
+  }
+  if (ctx.workspaceId && event.workspaceId !== ctx.workspaceId) {
+    throw new Error('日程不属于当前工作区')
+  }
+  return event
 }
 
 function filterTodos(todos: Todo[], query: TodoListQuery): Todo[] {
@@ -120,4 +144,66 @@ export async function updatePlanningTodo(
     title: updated.title,
   })
   return updated
+}
+
+function filterCalendarEvents(events: CalendarEvent[], query: CalendarEventListQuery, workspaceId?: string): CalendarEvent[] {
+  const filtered = events.filter((event) => {
+    if (workspaceId && event.workspaceId !== workspaceId) return false
+    if (query.from !== undefined && (event.endAt ?? event.startAt) < query.from) return false
+    if (query.to !== undefined && event.startAt > query.to) return false
+    return true
+  })
+  return query.limit === undefined ? filtered : filtered.slice(0, Math.min(query.limit, 500))
+}
+
+export async function listPlanningCalendarEvents(ctx: PlanningAgentToolContext, query: CalendarEventListQuery = {}): Promise<CalendarEvent[]> {
+  if (isTeamContext(ctx)) return filterCalendarEvents(await listTeamCalendarEvents(ctx.workspaceId!), query)
+  return filterCalendarEvents(listCalendarEvents(query), query, ctx.workspaceId)
+}
+
+export async function getPlanningCalendarEvent(ctx: PlanningAgentToolContext, id: string): Promise<CalendarEvent> {
+  if (isTeamContext(ctx)) {
+    return assertCalendarEventInContext((await listTeamCalendarEvents(ctx.workspaceId!)).find((event) => event.id === id), ctx)
+  }
+  return assertCalendarEventInContext(getCalendarEvent(id), ctx)
+}
+
+export async function createPlanningCalendarEvent(
+  ctx: PlanningAgentToolContext,
+  input: Omit<CreateCalendarEventInput, 'workspaceId'>,
+): Promise<CalendarEvent> {
+  const payload: CreateCalendarEventInput = { ...input, ...(ctx.workspaceId ? { workspaceId: ctx.workspaceId } : {}) }
+  const event = isTeamContext(ctx)
+    ? await createTeamCalendarEvent(ctx.workspaceId!, payload)
+    : createCalendarEvent(payload)
+  broadcastPlanningChanged(['calendar_events', 'reminders'])
+  broadcastPlanningAgentOperation({ sessionId: ctx.sessionId, target: 'calendar_event', action: 'created', title: event.title })
+  return event
+}
+
+export async function updatePlanningCalendarEvent(
+  ctx: PlanningAgentToolContext,
+  input: Omit<UpdateCalendarEventInput, 'workspaceId'>,
+): Promise<CalendarEvent> {
+  await getPlanningCalendarEvent(ctx, input.id)
+  const payload: UpdateCalendarEventInput = { ...input, ...(ctx.workspaceId ? { workspaceId: ctx.workspaceId } : {}) }
+  const updated = isTeamContext(ctx)
+    ? await updateTeamCalendarEvent(ctx.workspaceId!, payload)
+    : updateCalendarEvent(payload)
+  if (!updated) throw new Error('日程不存在')
+  broadcastPlanningChanged(['calendar_events', 'reminders'])
+  broadcastPlanningAgentOperation({ sessionId: ctx.sessionId, target: 'calendar_event', action: 'updated', title: updated.title })
+  return updated
+}
+
+export async function deletePlanningCalendarEvent(ctx: PlanningAgentToolContext, id: string): Promise<boolean> {
+  const event = await getPlanningCalendarEvent(ctx, id)
+  if (isTeamContext(ctx)) {
+    await deleteTeamCalendarEvent(ctx.workspaceId!, id)
+  } else if (!deleteCalendarEvent(id)) {
+    throw new Error('日程不存在')
+  }
+  broadcastPlanningChanged(['calendar_events', 'reminders'])
+  broadcastPlanningAgentOperation({ sessionId: ctx.sessionId, target: 'calendar_event', action: 'deleted', title: event.title })
+  return true
 }

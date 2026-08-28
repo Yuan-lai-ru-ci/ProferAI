@@ -5,11 +5,16 @@
  * 业务路由、并发校验和事件广播统一复用 planning-agent-operations。
  */
 
-import type { CreateTodoInput, TodoListQuery, UpdateTodoInput } from '@profer/shared'
+import type { CalendarEventListQuery, CreateCalendarEventInput, CreateTodoInput, TodoListQuery, UpdateCalendarEventInput, UpdateTodoInput } from '@profer/shared'
 import {
+  createPlanningCalendarEvent,
   createPlanningTodo,
+  deletePlanningCalendarEvent,
+  getPlanningCalendarEvent,
   getPlanningTodo,
+  listPlanningCalendarEvents,
   listPlanningTodos,
+  updatePlanningCalendarEvent,
   updatePlanningTodo,
   type PlanningAgentToolContext,
 } from './planning-agent-operations'
@@ -38,6 +43,36 @@ function buildSchemas(z: typeof import('zod')['z']) {
       limit: z.number().int().min(1).max(500).optional(),
     },
     get: { id: z.string().trim().min(1) },
+    calendarList: {
+      from: z.number().finite().positive().optional(),
+      to: z.number().finite().positive().optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+    },
+    calendarGet: { id: z.string().trim().min(1) },
+    calendarCreate: {
+      title: z.string().trim().min(1).max(500),
+      notes: z.string().optional(),
+      startAt: z.number().finite().positive(),
+      endAt: z.number().finite().positive().optional(),
+      allDay: z.boolean().optional(),
+      groupId: z.string().trim().min(1).optional(),
+      tagIds: z.array(z.string().trim().min(1)).optional(),
+      reminders: z.array(reminder).optional(),
+      todoId: z.string().trim().min(1).optional(),
+    },
+    calendarUpdate: {
+      id: z.string().trim().min(1),
+      expectedUpdatedAt: z.number().finite().positive(),
+      title: z.string().trim().min(1).max(500).optional(),
+      notes: z.string().optional(),
+      startAt: z.number().finite().positive().optional(),
+      endAt: z.number().finite().positive().nullable().optional(),
+      allDay: z.boolean().optional(),
+      groupId: z.string().trim().min(1).nullable().optional(),
+      tagIds: z.array(z.string().trim().min(1)).optional(),
+      todoId: z.string().trim().min(1).nullable().optional(),
+    },
+    calendarDelete: { id: z.string().trim().min(1) },
     create: {
       title: z.string().trim().min(1).max(500),
       notes: z.string().optional(),
@@ -130,6 +165,46 @@ export async function injectPlanningMcpServer(
           } catch (error) {
             return jsonError(error)
           }
+        },
+      ),
+      sdk.tool(
+        'list_calendar_events',
+        '列出当前 Profer 工作区的本地日程。用户未明确要求同步外部日历时，日程默认指这里。',
+        schemas.calendarList,
+        async (args) => {
+          try { return jsonResult({ events: await listPlanningCalendarEvents(ctx, args as CalendarEventListQuery) }) } catch (error) { return jsonError(error) }
+        },
+      ),
+      sdk.tool(
+        'get_calendar_event',
+        '读取当前 Profer 工作区某个本地日程的最新记录；更新前必须先读取以获得 expectedUpdatedAt。',
+        schemas.calendarGet,
+        async (args) => {
+          try { return jsonResult({ event: await getPlanningCalendarEvent(ctx, (args as { id: string }).id) }) } catch (error) { return jsonError(error) }
+        },
+      ),
+      sdk.tool(
+        'create_calendar_event',
+        '在当前 Profer 工作区创建本地日程。除非用户明确要求 Google、Outlook 或其他外部日历，否则不要询问日历平台。',
+        schemas.calendarCreate,
+        async (args) => {
+          try { return jsonResult({ event: await createPlanningCalendarEvent(ctx, args as unknown as Omit<CreateCalendarEventInput, 'workspaceId'>) }) } catch (error) { return jsonError(error) }
+        },
+      ),
+      sdk.tool(
+        'update_calendar_event',
+        '更新当前 Profer 工作区的本地日程；必须先读取最新日程并传入 expectedUpdatedAt，冲突时重新读取。',
+        schemas.calendarUpdate,
+        async (args) => {
+          try { return jsonResult({ event: await updatePlanningCalendarEvent(ctx, args as unknown as Omit<UpdateCalendarEventInput, 'workspaceId'>) }) } catch (error) { return jsonError(error) }
+        },
+      ),
+      sdk.tool(
+        'delete_calendar_event',
+        '删除当前 Profer 工作区的本地日程。仅在用户明确要求删除时使用。',
+        schemas.calendarDelete,
+        async (args) => {
+          try { return jsonResult({ deleted: await deletePlanningCalendarEvent(ctx, (args as { id: string }).id) }) } catch (error) { return jsonError(error) }
         },
       ),
     ],
