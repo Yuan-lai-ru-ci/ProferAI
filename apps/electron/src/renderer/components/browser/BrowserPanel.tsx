@@ -298,8 +298,8 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   return (
     <div data-browser-native-host className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl border border-panel-border/70 bg-panel-surface shadow-none titlebar-no-drag">
       {/* 浏览器是最右侧分栏时，窗口按钮成为浏览器顶栏的一部分。 */}
-      <WindowControlsHost id="browser-panel" active={avoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-[3px] z-10" />
-      <div className={`flex items-center h-[34px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
+      <WindowControlsHost id="browser-panel" active={avoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-1 z-10" />
+      <div className={`flex items-center h-[40px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
         {sourceLabel && (
           <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">{sourceLabel}</span>
         )}

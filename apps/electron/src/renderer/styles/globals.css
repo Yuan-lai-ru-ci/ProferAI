@@ -659,8 +659,15 @@
 .window-controls {
   -webkit-app-region: no-drag;
   app-region: no-drag;
-  height: 28px;
-  gap: 1px;
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  gap: 0;
+  padding: 0 1px;
+  border: 1px solid hsl(var(--border) / 0.45);
+  border-radius: 6px;
+  background-color: hsl(var(--tabbar-surface));
+  overflow: hidden;
 }
 
 .window-control-btn {
@@ -668,24 +675,36 @@
   align-items: center;
   justify-content: center;
   width: 36px;
-  height: 28px;
-  border-radius: 4px;
+  height: 32px;
+  border-radius: 0;
   color: hsl(var(--muted-foreground));
-  background: transparent;
-  border: none;
+  /* 常态由外层容器统一承载底色；按钮仅在交互时显示反馈。 */
+  background-color: transparent;
+  border: 0;
   cursor: default;
   transition: background-color 0.15s ease, color 0.15s ease;
+  transform: none;
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
+.window-control-btn:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
+/* macOS 原生 traffic lights 占用左上角约 70px；Tab 从安全区之后开始。 */
+.topbar-macos > .topbar-editorial-scroll {
+  padding-left: 76px;
+}
+
 .window-control-btn:hover {
-  background-color: hsl(var(--muted) / 0.35);
+  background-color: hsl(var(--selected-surface));
   color: hsl(var(--foreground));
 }
 
 .window-control-btn:active {
-  background-color: hsl(var(--muted) / 0.5);
+  background-color: hsl(var(--selected-surface));
 }
 
 .window-control-close:hover {
@@ -1123,6 +1142,210 @@
   pointer-events: none;
   z-index: 0;
 }
+/* Editorial topbar prototype: a quiet context band, not a row of floating pills. */
+.topbar-editorial .topbar-context-anchor {
+  color: hsl(var(--muted-foreground));
+}
+
+.topbar-editorial .topbar-context-mark {
+  color: hsl(var(--primary));
+  background-color: hsl(var(--primary) / 0.12);
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.18);
+}
+
+.topbar-editorial .topbar-context-product {
+  color: hsl(var(--foreground) / 0.48);
+}
+
+.topbar-editorial .topbar-context-name {
+  color: hsl(var(--foreground) / 0.78);
+}
+
+.topbar-editorial .app-tab-active,
+.topbar-editorial .app-tab-inactive {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+/* 草稿复用普通 Tab 的背景、边框和圆角。 */
+/* ???????????????????????????? */
+.dark .topbar-editorial .app-tab-inactive {
+  background-color: hsl(var(--tab-surface) / 0.5);
+  border-color: hsl(var(--border) / 0.22);
+}
+
+.dark .topbar-editorial .app-tab-inactive:hover {
+  background-color: hsl(var(--tab-surface) / 0.78);
+  border-color: hsl(var(--border) / 0.42);
+}
+
+.topbar-editorial .app-tab-active {
+  border-color: hsl(var(--border) / 0.6);
+  background-color: hsl(var(--tab-surface) / 0.88);
+  /* 仅使用内阴影，避免外部投影越过 8px 圆角后显得发方。 */
+  box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.06), inset 0 -1px 0 hsl(0 0% 0% / 0.08);
+}
+
+/* 焦点和会话状态都使用完整圆角边框，不再叠加旧的金色顶线。 */
+.topbar-editorial .topbar-tab-focused,
+.topbar-editorial .topbar-tab-status-running,
+.topbar-editorial .topbar-tab-status-blocked,
+.topbar-editorial .topbar-tab-status-completed {
+  border-width: 2px;
+}
+
+.topbar-editorial .topbar-tab-focused {
+  border-color: hsl(var(--primary)); /* 聚焦 / 选中：与左侧栏 primary 状态条一致 */
+}
+
+.topbar-editorial .topbar-tab-status-running {
+  border-color: hsl(217 91% 60%); /* blue-500：左侧栏 running */
+  animation: topbar-tab-status-pulse 1.8s ease-in-out infinite;
+}
+
+.topbar-editorial .topbar-tab-status-blocked {
+  border-color: hsl(25 95% 53%); /* orange-500：左侧栏 blocked */
+}
+
+.topbar-editorial .topbar-tab-status-completed {
+  border-color: hsl(142 71% 45%); /* green-500：左侧会话列表 completed */
+}
+
+/* 深色主题的 inactive 规则选择器更具体；这里用相同语义层级确保状态色不会被覆盖。 */
+.dark .topbar-editorial .app-tab-inactive.topbar-tab-status-running {
+  border-color: hsl(217 91% 60%);
+}
+
+.dark .topbar-editorial .app-tab-inactive.topbar-tab-focused {
+  border-color: hsl(var(--primary));
+}
+
+.dark .topbar-editorial .app-tab-inactive.topbar-tab-status-blocked {
+  border-color: hsl(25 95% 53%);
+}
+
+.dark .topbar-editorial .app-tab-inactive.topbar-tab-status-completed {
+  border-color: hsl(142 71% 45%);
+}
+
+@keyframes topbar-tab-status-pulse {
+  0%,
+  100% {
+    border-color: hsl(217 91% 60% / 0.72);
+  }
+  50% {
+    border-color: hsl(217 91% 60%);
+  }
+}
+
+.topbar-editorial .app-tab-inactive {
+  border-color: hsl(var(--border) / 0.5);
+  background-color: hsl(var(--tab-surface) / 0.28);
+}
+
+.topbar-editorial .app-tab-inactive:hover {
+  border-color: hsl(var(--border) / 0.75);
+  background-color: hsl(var(--selected-surface) / 0.7);
+}
+
+/* 放在通用 inactive 规则之后，避免普通灰框覆盖焦点或会话状态框。 */
+.topbar-editorial .app-tab-inactive.topbar-tab-focused {
+  border-color: hsl(var(--primary));
+}
+
+.topbar-editorial .app-tab-inactive.topbar-tab-status-running {
+  border-color: hsl(217 91% 60%);
+}
+
+.topbar-editorial .app-tab-inactive.topbar-tab-status-blocked {
+  border-color: hsl(25 95% 53%);
+}
+
+.topbar-editorial .app-tab-inactive.topbar-tab-status-completed {
+  border-color: hsl(142 71% 45%);
+}
+
+.topbar-editorial .topbar-action-surface {
+  position: absolute;
+  isolation: isolate;
+  padding: 0 8px 0 12px;
+  border: 0;
+  border-radius: 0;
+  /* 主体从左到右保持纯色；左侧过渡由 ::before 延伸到 Tab 上方。 */
+  background: hsl(var(--tabbar-surface));
+  overflow: visible;
+}
+
+.topbar-editorial .topbar-action-surface::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -1px;
+  bottom: -1px;
+  left: -64px;
+  width: 64px;
+  pointer-events: none;
+  background: linear-gradient(
+    to left,
+    hsl(var(--tabbar-surface)),
+    hsl(var(--tabbar-surface) / 0.78) 30%,
+    hsl(var(--tabbar-surface) / 0) 100%
+  );
+}
+
+.topbar-editorial .topbar-tool-group {
+  background: transparent;
+  border-radius: 0;
+}
+
+.topbar-editorial .topbar-tool-button {
+  color: hsl(var(--muted-foreground) / 0.76);
+  border-radius: 0;
+  /* 按钮本身保持无底；统一背景由右侧操作面板承载。 */
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  transform: none !important;
+}
+
+.topbar-editorial .topbar-tool-button:hover,
+.topbar-editorial .topbar-tool-button:active,
+.topbar-editorial .topbar-tool-button-highlighted {
+  background: transparent !important;
+  color: hsl(var(--foreground));
+}
+
+.topbar-editorial .topbar-tool-button:hover {
+  color: hsl(var(--foreground));
+}
+
+/* 操作面板是唯一的背景层，窗口按钮组不再在右侧形成第二块内嵌色块。 */
+.topbar-editorial .topbar-action-surface .window-controls {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.topbar-editorial .topbar-tool-button:focus-visible,
+.topbar-editorial .app-tab-active:focus-visible,
+.topbar-editorial .app-tab-inactive:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar-editorial .app-tab-active,
+  .topbar-editorial .app-tab-inactive,
+  .topbar-editorial .topbar-tool-button {
+    transition: none;
+  }
+
+  .topbar-editorial .topbar-tab-status-running {
+    animation: none;
+  }
+}
 
 .app-tab-active {
   position: relative;
@@ -1213,6 +1436,49 @@
   border-color: hsl(var(--border) / 0.5) !important;
 }
 
+/* 经典主题的 active 边框使用 !important；顶栏状态需要在其后明确覆盖。 */
+.ui-classic .topbar-editorial .app-tab-active.topbar-tab-focused {
+  border-color: hsl(var(--primary)) !important;
+}
+
+.ui-classic .topbar-editorial .app-tab-active.topbar-tab-status-running {
+  border-color: hsl(217 91% 60%) !important;
+}
+
+.ui-classic .topbar-editorial .app-tab-active.topbar-tab-status-blocked {
+  border-color: hsl(25 95% 53%) !important;
+}
+
+.ui-classic .topbar-editorial .app-tab-active.topbar-tab-status-completed {
+  border-color: hsl(142 71% 45%) !important;
+}
+
+/* 顶栏 Tab 最终状态覆盖：聚焦使用主题 primary（对应左侧栏选中状态条），
+ * 运行/阻塞/完成沿用左侧会话列表的蓝/橙/绿，避免透明边框或主题规则覆盖。 */
+.topbar-editorial button.topbar-tab-focused {
+  border: 2px solid hsl(var(--primary)) !important;
+  box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.06), inset 0 -1px 0 hsl(0 0% 0% / 0.08) !important;
+}
+
+.topbar-editorial button.topbar-tab-status-running {
+  border: 2px solid hsl(217 91% 60%) !important;
+  animation: topbar-tab-status-pulse 1.8s ease-in-out infinite;
+}
+
+.topbar-editorial button.topbar-tab-status-blocked {
+  border: 2px solid hsl(25 95% 53%) !important;
+}
+
+.topbar-editorial button.topbar-tab-status-completed {
+  border: 2px solid hsl(142 71% 45%) !important;
+}
+
+/* Tab 自带 focus ring 已关闭；选中状态只显示主题 primary 的边框。 */
+.topbar-editorial button[role="tab"]:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 .ui-classic .agent-input-surface {
   background-color: hsl(var(--background) / 0.7) !important;
 }
@@ -1294,6 +1560,17 @@
 }
 
 .titlebar-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* 拖拽顶栏中的交互控件自动退出窗口拖拽区，避免新加按钮时误挡点击。
+ * TabBarItem、工具组和各独立页面仍可用 titlebar-no-drag 表达更大的交互区域。 */
+.titlebar-drag-region button,
+.titlebar-drag-region input,
+.titlebar-drag-region textarea,
+.titlebar-drag-region select,
+.titlebar-drag-region [role='button'] {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }

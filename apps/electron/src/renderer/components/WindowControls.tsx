@@ -4,6 +4,7 @@
  */
 
 import * as React from 'react'
+import { Copy, Minus, Square, X } from 'lucide-react'
 import { detectIsWindows } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 
@@ -39,22 +40,19 @@ export function WindowControls({
   return (
     <div className={cn(
       'window-controls flex select-none',
-      variant === 'fixed' ? 'fixed top-[2px] right-[8px] z-[100]' : 'relative z-10 shrink-0',
+      variant === 'fixed' ? 'fixed top-[2px] right-[8px] z-[100]' : 'relative z-30 shrink-0',
       className,
     )}>
-      {/* 最小化 */}
+      {/* Windows 原生语义顺序：最小化 → 最大化/还原 → 关闭。图标来自 Lucide 开源图标集。 */}
       <button
         type="button"
         className="window-control-btn"
         aria-label="最小化"
         onClick={() => window.electronAPI.windowMinimize()}
       >
-        <svg width="12" height="12" viewBox="0 0 12 12">
-          <rect x="1" y="5.5" width="10" height="1" fill="currentColor" />
-        </svg>
+        <Minus className="size-3.5" strokeWidth={1.5} aria-hidden="true" />
       </button>
 
-      {/* 最大化/还原 */}
       <button
         type="button"
         className="window-control-btn"
@@ -62,27 +60,19 @@ export function WindowControls({
         onClick={() => window.electronAPI.windowMaximize()}
       >
         {isMaximized ? (
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <rect x="3" y="0.5" width="8" height="8" rx="0.5" fill="none" stroke="currentColor" strokeWidth="1" />
-            <rect x="1" y="3.5" width="8" height="8" rx="0.5" fill="currentColor" stroke="currentColor" strokeWidth="1" />
-          </svg>
+          <Copy className="size-3.5" strokeWidth={1.5} aria-hidden="true" />
         ) : (
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <rect x="1.5" y="1.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1" />
-          </svg>
+          <Square className="size-3.5" strokeWidth={1.5} aria-hidden="true" />
         )}
       </button>
 
-      {/* 关闭 */}
       <button
         type="button"
         className="window-control-btn window-control-close"
         aria-label="关闭"
         onClick={() => window.electronAPI.windowClose()}
       >
-        <svg width="12" height="12" viewBox="0 0 12 12">
-          <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-        </svg>
+        <X className="size-3.5" strokeWidth={1.5} aria-hidden="true" />
       </button>
     </div>
   )

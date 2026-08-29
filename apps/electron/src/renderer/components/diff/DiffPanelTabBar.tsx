@@ -61,14 +61,14 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
   }
 
   return (
-    <div className="flex items-end h-[34px] tabbar-bg relative flex-shrink-0">
+    <div className="flex items-end h-[40px] tabbar-bg relative flex-shrink-0">
       <div className="absolute inset-0 titlebar-drag-region" />
       <div className="relative flex items-end flex-1 titlebar-no-drag">
         <button
           type="button"
           onClick={() => onTabChange('session')}
           className={cn(
-            'flex-1 min-w-0 px-3 h-[34px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
+            'flex-1 min-w-0 px-3 h-[40px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
             'border-t border-l border-r',
             isClassic ? 'rounded-t-lg' : 'rounded-none',
             activeTab === 'session'
@@ -82,7 +82,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           type="button"
           onClick={() => onTabChange('workspace')}
           className={cn(
-            'flex-1 min-w-0 px-3 h-[34px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
+            'flex-1 min-w-0 px-3 h-[40px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
             'border-t border-l border-r',
             isClassic ? 'rounded-t-lg' : 'rounded-none',
             activeTab === 'workspace'
@@ -96,7 +96,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           type="button"
           onClick={handleChangesClick}
           className={cn(
-            'flex-1 min-w-0 px-3 h-[34px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer relative',
+            'flex-1 min-w-0 px-3 h-[40px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer relative',
             'border-t border-l border-r',
             isClassic ? 'rounded-t-lg' : 'rounded-none',
             activeTab === 'changes'
@@ -118,7 +118,7 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
               <button
                 type="button"
                 onClick={onClose}
-                className="flex items-center justify-center size-[28px] mr-1 mb-[3px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
+                className="flex items-center justify-center size-[32px] mr-1 rounded text-muted-foreground hover:text-foreground transition-colors shrink-0"
               >
                 <PanelRightClose className="size-4" />
               </button>

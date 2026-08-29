@@ -184,15 +184,16 @@ export function TabBarItem({
         : type === 'tutorial'
           ? <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           : null
-  const indicatorColor = isScratch
-    ? undefined
-    : isStreaming !== 'idle'
-    ? isStreaming === 'completed'
-      ? 'border-green-500'
-      : isStreaming === 'blocked'
-        ? 'border-orange-500'
-        : 'border-blue-500'
-    : undefined
+  // 状态优先于聚焦态；所有边框都直接应用到 Tab 本体，确保完整贴合圆角。
+  const stateBorderClass = isStreaming === 'completed'
+    ? 'topbar-tab-status-completed'
+    : isStreaming === 'blocked'
+      ? 'topbar-tab-status-blocked'
+      : isStreaming === 'running'
+        ? 'topbar-tab-status-running'
+        : isActive
+          ? 'topbar-tab-focused'
+          : undefined
   const previewItems = minimapCache.get(id) ?? []
   // 当前 active Tab 不显示预览面板
   const showPreview = isHovered && !isActive
@@ -201,7 +202,7 @@ export function TabBarItem({
   if (isScratch) {
     return (
       <div
-        className="relative flex-shrink-0 titlebar-no-drag"
+        className="relative flex-none titlebar-no-drag"
         onMouseEnter={onHoverEnter}
         onMouseLeave={onHoverLeave}
       >
@@ -209,12 +210,13 @@ export function TabBarItem({
           ref={buttonRef}
           type="button"
           className={cn(
-            'group relative flex items-center justify-center gap-1.5 min-w-[82px] px-3 h-[32px] rounded-lg overflow-hidden',
-            'text-xs transition-colors select-none cursor-grab active:cursor-grabbing',
+            'group relative flex h-[32px] w-[32px] items-center justify-center overflow-hidden rounded-[8px] px-0',
+            'text-xs transition-colors select-none cursor-grab active:cursor-grabbing focus-visible:ring-0 focus-visible:ring-offset-0',
             'border border-transparent',
             isActive
-              ? 'app-tab-active text-foreground shadow-sm'
+              ? 'app-tab-active text-foreground'
               : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+            stateBorderClass,
           )}
           onClick={handleClick}
           onMouseDown={handleMouseDown}
@@ -222,9 +224,10 @@ export function TabBarItem({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
+          aria-label="草稿"
+          title="草稿"
         >
-          <StickyNote className="size-3.5" />
-          <span className="truncate">草稿</span>
+          <StickyNote className="size-3.5" aria-hidden="true" />
         </button>
       </div>
     )
@@ -235,7 +238,7 @@ export function TabBarItem({
       data-tab-id={id}
       className={cn(
         // 空间宽裕时按内容自然宽度排列；拥挤时由 min-width + 横向滚动承接，不把单个标签撑满顶栏。
-        'relative w-fit max-w-[280px] flex-[0_1_auto] titlebar-no-drag transition-[min-width] duration-200 ease-out',
+        'relative w-fit max-w-[280px] flex-none titlebar-no-drag transition-[min-width] duration-200 ease-out',
         hideWorkspaceName
           ? (isActive ? 'min-w-[144px]' : 'min-w-[128px] hover:min-w-[144px]')
           : (isActive ? 'min-w-[132px]' : 'min-w-[116px] hover:min-w-[132px]'),
@@ -249,12 +252,13 @@ export function TabBarItem({
         role="tab"
         aria-selected={isActive}
         className={cn(
-          'group relative flex items-center gap-1.5 px-3 h-[32px] w-full rounded-lg overflow-hidden',
-          'text-xs transition-colors select-none cursor-grab active:cursor-grabbing',
+          'group relative flex items-center gap-1.5 px-3 h-[32px] w-full rounded-[8px] overflow-hidden',
+          'text-xs transition-colors select-none cursor-grab active:cursor-grabbing focus-visible:ring-0 focus-visible:ring-offset-0',
           'border border-transparent',
           isActive
-            ? 'app-tab-active text-foreground shadow-sm'
+            ? 'app-tab-active text-foreground'
             : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+          stateBorderClass,
           isTearingOff && 'ring-2 ring-primary/70 ring-offset-0 bg-primary/10',
         )}
         onClick={handleClick}
@@ -353,17 +357,6 @@ export function TabBarItem({
         </span>
         )}
 
-        {/* 状态包边 */}
-        {indicatorColor && (
-          <span
-            className={cn(
-              'absolute inset-0 border-t-2 border-l-2 border-r-2 border-b-0 pointer-events-none',
-              'rounded-lg',
-              indicatorColor,
-            )}
-            aria-hidden="true"
-          />
-        )}
       </button>
 
       {/* 悬浮预览面板（Portal 渲染到 body） */}
