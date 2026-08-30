@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
 
-describe('mapPiNativeRetryEvent (SDK 0.84.2 映射)', () => {
+describe('mapPiNativeRetryEvent (SDK 0.84.3 映射)', () => {
   const ts = 1_000_000
 
   test('auto_retry_start -> starting', () => {

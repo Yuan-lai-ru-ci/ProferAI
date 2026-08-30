@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 
-describe('Pi SDK 0.84.2 运行时冒烟', () => {
+describe('Pi SDK 0.84.3 运行时冒烟', () => {
   test('sdk 可加载并且所需 API 存在', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     expect(sdk).toBeDefined()
@@ -23,7 +23,7 @@ describe('Pi SDK 0.84.2 运行时冒烟', () => {
     expect(sm.getCompactionSettings().enabled).toBe(true)
   })
 
-  test('Agent.constructor 可实例化且暴露 streamFunction（0.84.2）', async () => {
+  test('Agent.constructor 可实例化且暴露 streamFunction（0.84.3）', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')
     const { createRequire } = await import('node:module')

@@ -1,11 +1,12 @@
 diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
+index 528a246..36666aa 100644
 --- a/dist/core/agent-session.d.ts
 +++ b/dist/core/agent-session.d.ts
-@@ -69,15 +69,38 @@
+@@ -69,15 +69,38 @@ export type AgentSessionEvent = Exclude<AgentEvent, {
      willRetry: boolean;
      errorMessage?: string;
  } | {
-+    /** 已安排 retry，并且正在 backoff；尚未重新发起模型请求。 */
++    /** Retry has been scheduled and is currently backing off. */
      type: "auto_retry_start";
      attempt: number;
      maxAttempts: number;
@@ -16,7 +17,7 @@ diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
 +    maxTotalDelayMs: number;
 +    errorMessage: string;
 +} | {
-+    /** backoff 已结束，紧邻 agent.continue() 的实际 retry 请求。 */
++    /** Backoff completed; a retry request will start immediately. */
 +    type: "auto_retry_attempt_start";
 +    attempt: number;
 +    maxAttempts: number;
@@ -40,19 +41,19 @@ diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
      finalError?: string;
  } | {
      type: "summarization_retry_scheduled";
-@@ -95,11 +118,6 @@
+@@ -94,11 +117,6 @@ export type AgentSessionEvent = Exclude<AgentEvent, {
+     reason: "manual" | "threshold" | "overflow";
  } | {
      type: "summarization_retry_finished";
- } | {
+-} | {
 -    type: "auto_retry_end";
 -    success: boolean;
 -    attempt: number;
 -    finalError?: string;
--} | {
+ } | {
      type: "bash_execution_update";
      id?: string;
-     delta: string;
-@@ -211,6 +229,9 @@
+@@ -216,6 +234,9 @@ export declare class AgentSession {
      private _branchSummaryAbortController;
      private _retryAbortController;
      private _retryAttempt;
@@ -62,7 +63,7 @@ diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
      private readonly _bashAbortControllers;
      private _pendingBashMessages;
      private _extensionRunner;
-@@ -263,6 +284,8 @@
+@@ -269,6 +290,8 @@ export declare class AgentSession {
      private _lastAssistantMessage;
      /** Internal handler for agent events - shared by subscribe and reconnect */
      private _handleAgentEvent;
@@ -72,35 +73,34 @@ diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
      /** Find the last assistant message in agent state (including aborted ones) */
      private _findLastAssistantMessage;
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
+index f4fd9f3..9813d8b 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
-@@ -101,7 +101,14 @@
+@@ -99,7 +99,14 @@ export class AgentSession {
      _branchSummaryAbortController = undefined;
      // Retry state
      _retryAbortController = undefined;
-+    /** 连续失败段内已调度的 retry 次数。 */
++    /** Retries scheduled in the current consecutive-failure segment. */
      _retryAttempt = 0;
-+    /** 单次顶层 prompt 跨多个模型回合已调度的 retry 次数。 */
++    /** Retries scheduled across all model calls of one top-level prompt. */
 +    _retryRunAttempts = 0;
-+    /** 单次顶层 prompt 已消耗的累计退避等待时间。 */
++    /** Total backoff delay consumed by one top-level prompt. */
 +    _retryRunDelayMs = 0;
-+    /** 已完成等待、将在紧邻 agent.continue() 前发出的实际 retry-start 事件。 */
++    /** Retry details emitted immediately before agent.continue(). */
 +    _pendingRetryAttemptStart = undefined;
      // Bash execution state
      _bashAbortControllers = new Set();
      _pendingBashMessages = [];
-@@ -385,22 +392,45 @@
+@@ -388,22 +395,43 @@ export class AgentSession {
                  if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
                      this._overflowRecoveryAttempted = false;
                  }
 -                // Reset retry counter immediately on successful assistant response
 -                // This prevents accumulation across multiple LLM calls within a turn
-+                // 成功 assistant response 后只重置连续失败段计数；顶层 prompt 的总预算
-+                // 会持续到 _runAgentPrompt() 结束，防止工具回合间无限重新获得 retry 配额。
++                // Reset only the consecutive-failure counter. The total prompt budget
++                // remains in force, preventing tool loops from receiving fresh retries.
                  if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
 +                    const settings = this.settingsManager.getRetrySettings();
-+                    // 用户在实际 retry 请求期间停止时，Pi 会给出 aborted assistant；
-+                    // 它不是恢复成功，必须让 renderer 保持 cancelled 生命周期。
 +                    const retryCancelled = assistantMsg.stopReason === "aborted";
                      this._emit({
                          type: "auto_retry_end",
@@ -140,11 +140,11 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
              return false;
          }
          for (let i = event.messages.length - 1; i >= 0; i--) {
-@@ -743,13 +773,26 @@
+@@ -746,13 +774,24 @@ export class AgentSession {
      // =========================================================================
      async _runAgentPrompt(messages) {
          this._isAgentRunActive = true;
-+        // 每次用户 prompt 都有独立的总 retry / 等待预算；连续失败段仍沿用 _retryAttempt。
++        // Reset total retry budget for every top-level prompt.
 +        this._retryAttempt = 0;
 +        this._retryRunAttempts = 0;
 +        this._retryRunDelayMs = 0;
@@ -152,8 +152,6 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
          try {
              await this.agent.prompt(messages);
              while (await this._handlePostAgentRun()) {
-+                // auto_retry_start 表示等待已被安排。只有 sleep 完成、即将真正调用
-+                // agent.continue() 时才报告 attempt_start，避免 UI 把倒计时误当成请求已发起。
 +                const retryAttemptStart = this._pendingRetryAttemptStart;
 +                this._pendingRetryAttemptStart = undefined;
 +                if (retryAttemptStart) {
@@ -167,7 +165,7 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
              this._systemPromptOverride = undefined;
              this._flushPendingBashMessages();
              await this._emitAgentSettled();
-@@ -765,10 +808,12 @@
+@@ -768,10 +807,12 @@ export class AgentSession {
              return true;
          }
          if (msg.stopReason === "error" && this._retryAttempt > 0) {
@@ -181,7 +179,7 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
                  finalError: msg.errorMessage,
              });
              this._retryAttempt = 0;
-@@ -2120,22 +2165,30 @@
+@@ -2210,23 +2251,21 @@ export class AgentSession {
       */
      async _prepareRetry(message) {
          const settings = this.settingsManager.getRetrySettings();
@@ -192,12 +190,17 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
 -        if (this._retryAttempt > settings.maxRetries) {
 -            // Preserve the completed attempt count so post-run handling can emit the final failure.
 -            this._retryAttempt--;
-+        // 必须与 _willRetryAfterAgentEnd() 使用同一判断，否则上层会因错误的
-+        // willRetry 标记而吞掉真正的终态错误。
 +        if (!this._canScheduleRetry(settings)) {
              return false;
          }
 -        const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+-        this._emit({
+-            type: "auto_retry_start",
+-            attempt: this._retryAttempt,
+-            maxAttempts: settings.maxRetries,
+-            delayMs,
+-            errorMessage: message.errorMessage || "Unknown error",
+-        });
 +        const attempt = this._retryAttempt + 1;
 +        const totalAttempt = this._retryRunAttempts + 1;
 +        const nominalDelayMs = settings.baseDelayMs * 2 ** (attempt - 1);
@@ -208,38 +211,28 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
 +        this._retryAttempt = attempt;
 +        this._retryRunAttempts = totalAttempt;
 +        this._retryRunDelayMs += delayMs;
-+        const retryDetails = this._getRetryEventDetails(
-+            attempt,
-+            settings,
-+            delayMs,
-+            message.errorMessage || "Unknown error",
-+        );
-         this._emit({
-             type: "auto_retry_start",
--            attempt: this._retryAttempt,
--            maxAttempts: settings.maxRetries,
--            delayMs,
--            errorMessage: message.errorMessage || "Unknown error",
-+            ...retryDetails,
-         });
++        const retryDetails = this._getRetryEventDetails(attempt, settings, delayMs, message.errorMessage || "Unknown error");
++        this._emit({ type: "auto_retry_start", ...retryDetails });
          // Remove error message from agent state (keep in session for history)
          const messages = this.agent.state.messages;
-@@ -2149,12 +2202,12 @@
+         if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+@@ -2238,20 +2277,15 @@ export class AgentSession {
+             await sleep(delayMs, this._retryAbortController.signal);
          }
          catch {
-             // Aborted during sleep - emit end event so UI can clean up
+-            // Aborted during sleep - emit end event so UI can clean up
 -            const attempt = this._retryAttempt;
++            // Aborted during sleep - emit a terminal cancellation event for the UI.
              this._retryAttempt = 0;
-             this._emit({
-                 type: "auto_retry_end",
-                 success: false,
+-            this._emit({
+-                type: "auto_retry_end",
+-                success: false,
 -                attempt,
-+                outcome: "cancelled",
-+                ...retryDetails,
-                 finalError: "Retry cancelled",
-             });
+-                finalError: "Retry cancelled",
+-            });
++            this._emit({ type: "auto_retry_end", success: false, outcome: "cancelled", ...retryDetails, finalError: "Retry cancelled" });
              return false;
-@@ -2162,6 +2215,7 @@
+         }
          finally {
              this._retryAbortController = undefined;
          }
@@ -248,26 +241,27 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
      }
      /**
 diff --git a/dist/core/settings-manager.d.ts b/dist/core/settings-manager.d.ts
+index ea655c8..21b6f90 100644
 --- a/dist/core/settings-manager.d.ts
 +++ b/dist/core/settings-manager.d.ts
-@@ -17,8 +17,16 @@
+@@ -17,8 +17,16 @@ export interface ProviderRetrySettings {
  }
  export interface RetrySettings {
      enabled?: boolean;
-+    /** 连续失败段内最多调度的 retry 次数。 */
++    /** Maximum retries within one consecutive failure segment. */
      maxRetries?: number;
-+    /** 指数退避的基础等待时间。 */
++    /** Base exponential-backoff delay. */
      baseDelayMs?: number;
-+    /** 指数退避的对称抖动比例，范围为 0 至 1；默认 0。 */
++    /** Symmetric jitter ratio between 0 and 1; defaults to 0. */
 +    jitterRatio?: number;
-+    /** 单次顶层 prompt 跨多个模型回合的总 retry 预算。 */
++    /** Total retry budget across every model call within one top-level prompt. */
 +    maxTotalRetries?: number;
-+    /** 单次顶层 prompt 跨多个模型回合的累计退避等待预算。 */
++    /** Cumulative backoff-delay budget in one top-level prompt. */
 +    maxTotalDelayMs?: number;
      provider?: ProviderRetrySettings;
  }
  export type TuiMode = RendererTuiMode;
-@@ -223,6 +231,9 @@
+@@ -232,6 +240,9 @@ export declare class SettingsManager {
          enabled: boolean;
          maxRetries: number;
          baseDelayMs: number;
@@ -278,9 +272,10 @@ diff --git a/dist/core/settings-manager.d.ts b/dist/core/settings-manager.d.ts
      getHttpIdleTimeoutMs(): number;
      setHttpIdleTimeoutMs(timeoutMs: number): void;
 diff --git a/dist/core/settings-manager.js b/dist/core/settings-manager.js
+index a098f75..4220028 100644
 --- a/dist/core/settings-manager.js
 +++ b/dist/core/settings-manager.js
-@@ -548,10 +548,16 @@
+@@ -590,10 +590,16 @@ export class SettingsManager {
          this.save();
      }
      getRetrySettings() {
