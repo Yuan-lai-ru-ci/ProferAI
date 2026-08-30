@@ -13,7 +13,7 @@ export const browserSplitRatioAtom = atomWithStorage<number>('profer-browser-spl
 /**
  * 用户已手动关闭浏览器面板的会话 ID 集合。
  * 主进程 BROWSER_STATE_CHANGED 推送不应强制重开用户刚关掉的面板；
- * 只有当用户再次点浏览器按钮（openBrowser 清除标记）或首次触发时才自动打开。
+ * 切换回仍保留浏览器状态的会话时自动恢复，用户再次点浏览器按钮（openBrowser 清除标记）也可恢复。
  */
 export const browserPanelDismissedSessionIdsAtom = atom<Set<string>>(new Set<string>())
 

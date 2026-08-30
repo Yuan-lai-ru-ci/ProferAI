@@ -249,8 +249,10 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const pdfIframeRef = React.useRef<HTMLIFrameElement>(null)
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
-  // 默认 25%：预览面板空间有限，先展示缩略全貌，用户可手动放大查看细节
-  const [imageZoom, setImageZoom] = React.useState(0.25)
+  const MIN_IMAGE_ZOOM = 0.5
+  const MAX_IMAGE_ZOOM = 3
+  const IMAGE_ZOOM_STEP = 0.1
+  const [imageZoom, setImageZoom] = React.useState(0.5)
   const [imageNaturalSize, setImageNaturalSize] = React.useState({ w: 0, h: 0 })
   const imageContainerRef = React.useRef<HTMLDivElement>(null)
   const imageDragging = React.useRef(false)
@@ -381,7 +383,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     setPdfZoom(100)
     setImagePath('')
     setImageDataUrl('')
-    setImageZoom(0.25)
+    setImageZoom(0.5)
     setImageNaturalSize({ w: 0, h: 0 })
     setLoading(!isLegacyOffice)
     setMarkdownEditing(false)
@@ -390,15 +392,16 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     setMarkdownSaving(false)
   }, [filePath, sessionId, previewOnly, isLegacyOffice])
 
-  // non-passive wheel listener for pinch-to-zoom on image
+  // 预览区域直接接管滚轮缩放；non-passive 可阻止滚轮继续滚动外层页面。
   React.useEffect(() => {
     const el = imageContainerRef.current
-    if (!el || !isImage) return
+    if (!el || !isImage || !imageDataUrl) return
     const handler = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        setImageZoom((z) => Math.max(0.1, Math.min(5, z * (e.deltaY < 0 ? 1.04 : 1 / 1.04))))
-      }
+      e.preventDefault()
+      setImageZoom((z) => Math.min(
+        MAX_IMAGE_ZOOM,
+        Math.max(MIN_IMAGE_ZOOM, z + (e.deltaY < 0 ? IMAGE_ZOOM_STEP : -IMAGE_ZOOM_STEP)),
+      ))
     }
     el.addEventListener('wheel', handler, { passive: false })
     return () => el.removeEventListener('wheel', handler)
@@ -450,7 +453,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setPdfZoom(100)
       setImagePath(cached.imagePath ?? '')
       setImageDataUrl(cached.imageDataUrl ?? '')
-      setImageZoom(0.25)
+      setImageZoom(0.5)
       setImageNaturalSize({ w: 0, h: 0 })
       setLoading(false)
       return // 缓存命中，直接返回，不执行 load()
@@ -468,7 +471,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setPdfZoom(100)
       setImagePath('')
       setImageDataUrl('')
-      setImageZoom(0.25)
+      setImageZoom(0.5)
       setImageNaturalSize({ w: 0, h: 0 })
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
@@ -1109,13 +1112,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   <button
                     type="button"
                     className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => setImageZoom((z) => Math.max(0.1, z / 1.5))}
+                    onClick={() => setImageZoom((z) => Math.max(MIN_IMAGE_ZOOM, z - IMAGE_ZOOM_STEP))}
                   >−</button>
                   <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
                   <button
                     type="button"
                     className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => setImageZoom((z) => Math.min(5, z * 1.5))}
+                    onClick={() => setImageZoom((z) => Math.min(MAX_IMAGE_ZOOM, z + IMAGE_ZOOM_STEP))}
                   >+</button>
                 </div>
                 <div
@@ -1152,7 +1155,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                         const img = e.currentTarget
                         setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
                       }}
-                      style={{ width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : '100%', height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : 'auto', maxWidth: imageZoom <= 1 ? '100%' : 'none' }}
+                      style={{
+                        width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : 'auto',
+                        height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : 'auto',
+                        maxWidth: imageNaturalSize.w > 0 && imageZoom <= 1 ? '100%' : 'none',
+                        maxHeight: imageNaturalSize.h > 0 && imageZoom <= 1 ? '100%' : 'none',
+                        visibility: imageNaturalSize.w > 0 ? 'visible' : 'hidden',
+                      }}
                     />
                   </div>
                 </div>

@@ -46,7 +46,7 @@ const TEXT_EXTS = new Set([
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
 const MIN_IMAGE_ZOOM = 0.5
 const MAX_IMAGE_ZOOM = 3
-const IMAGE_ZOOM_STEP = 1.1
+const IMAGE_ZOOM_STEP = 0.1
 
 function ext(name: string): string {
   return name.split('.').pop()?.toLowerCase() ?? ''
@@ -86,7 +86,7 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault()
       setImageZoom((currentZoom) => {
-        const nextZoom = currentZoom * (event.deltaY < 0 ? IMAGE_ZOOM_STEP : 1 / IMAGE_ZOOM_STEP)
+        const nextZoom = currentZoom + (event.deltaY < 0 ? IMAGE_ZOOM_STEP : -IMAGE_ZOOM_STEP)
         return Math.min(MAX_IMAGE_ZOOM, Math.max(MIN_IMAGE_ZOOM, nextZoom))
       })
     }
@@ -223,14 +223,14 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
           {state.status === 'image' && (
             <div
               ref={imagePreviewRef}
-              className="flex items-center justify-center min-w-full min-h-full bg-surface-sunken/50"
-              title="在预览区域滚动滚轮可缩放"
+              className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-auto bg-surface-sunken/50"
+              title={`在预览区域滚动滚轮可缩放（${Math.round(imageZoom * 100)}%）`}
             >
               <img
                 src={state.src}
                 alt={fileName}
                 className="max-w-full max-h-full object-contain select-none cursor-zoom-in"
-                style={{ transform: `scale(${imageZoom})` }}
+                style={{ transform: `scale(${imageZoom})`, transformOrigin: 'center center', transition: 'transform 80ms ease-out' }}
                 draggable={false}
               />
             </div>

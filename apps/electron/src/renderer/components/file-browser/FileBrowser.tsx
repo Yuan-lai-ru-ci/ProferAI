@@ -987,7 +987,7 @@ function FileTreeItem({
     setExpanded(!expanded)
   }
 
-  /** 点击行为：选中 + 文件夹展开/收起 / 文件预览 */
+  /** 点击行为：选中 + 文件夹展开/收起；文件预览由双击或上下文菜单触发 */
   const handleClick = (e: React.MouseEvent): void => {
     e.stopPropagation()
     const isMulti = e.metaKey || e.ctrlKey
@@ -995,8 +995,6 @@ function FileTreeItem({
     if (isMulti) return
     if (entry.isDirectory) {
       void toggleDir()
-    } else {
-      onFilePreview?.(entry)
     }
   }
 

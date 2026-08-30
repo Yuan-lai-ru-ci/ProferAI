@@ -102,8 +102,8 @@ export function MainArea(): React.ReactElement {
 
     const previousSessionId = previousBrowserSessionIdRef.current
     if (previousSessionId && previousSessionId !== browserSessionId) {
-      // 浏览器是当前会话的临时面板，不跨会话恢复。先隐藏主进程中的原生
-      // WebContentsView，再让 renderer 的 BrowserViewport 卸载，避免网页脱离容器残留。
+      // 切换会话时只收起旧会话的面板，不销毁其浏览器状态；回到该会话时，
+      // 只要用户没有主动关闭浏览器，就应恢复面板。
       void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(previousSessionId)
       setBrowserOpenMap((previous) => {
         if (previous.get(previousSessionId) !== true) return previous
@@ -111,27 +111,9 @@ export function MainArea(): React.ReactElement {
         next.set(previousSessionId, false)
         return next
       })
-      // 切走期间即使旧会话仍有状态推送，也不能在后台重新打开面板。
-      setBrowserDismissed((previous) => {
-        if (previous.has(previousSessionId)) return previous
-        const next = new Set(previous)
-        next.add(previousSessionId)
-        return next
-      })
-    }
-    // 切入任何会话都从“浏览器面板关闭”开始。即使该会话之前有浏览器状态，
-    // 也不能因为切回会话而恢复面板；用户需要明确点击浏览器按钮。保留 dismissed
-    // 标记，避免切回瞬间旧会话的迟到状态推送又把面板唤起。
-    if (browserSessionId) {
-      setBrowserOpenMap((previous) => {
-        if (previous.get(browserSessionId) !== true) return previous
-        const next = new Map(previous)
-        next.set(browserSessionId, false)
-        return next
-      })
     }
     previousBrowserSessionIdRef.current = browserSessionId
-  }, [browserSessionId, setBrowserDismissed, setBrowserOpenMap])
+  }, [browserSessionId, setBrowserOpenMap])
 
   React.useEffect(() => {
     // Vite renderer 可在 preload 热重载前先更新；旧 bridge 时浏览器功能不可用，
@@ -148,12 +130,15 @@ export function MainArea(): React.ReactElement {
     let cancelled = false
     void getState(browserSessionId)
       .then((state) => {
-        if (!cancelled && state) publishBrowserState(state, { autoOpen: false })
+        if (!cancelled && state) {
+          // 切回会话时重新拉起已有浏览器；用户明确关闭过的会话仍保持收起。
+          publishBrowserState(state, { autoOpen: !browserDismissed.has(browserSessionId) })
+        }
       })
       // 后台会话及已删除会话会被主进程拒绝或返回空状态；无需打断当前界面。
       .catch(() => undefined)
     return () => { cancelled = true }
-  }, [browserSessionId, publishBrowserState])
+  }, [browserDismissed, browserSessionId, publishBrowserState])
 
   const showBrowserPanel = !!browserSessionId && (browserOpenMap.get(browserSessionId) ?? false)
   const browserState = browserSessionId ? browserStateMap.get(browserSessionId) ?? null : null
@@ -332,7 +317,7 @@ export function MainArea(): React.ReactElement {
             {/* 无 TabBar 的全屏/空状态视图使用通用主内容宿主；右侧分栏打开时由其更高优先级接管。 */}
             <WindowControlsHost
               id="main-content"
-              active={activeView === 'planning' || activeView === 'agent-skills' || automationFormOpen || tabs.length === 0}
+              active={automationFormOpen || tabs.length === 0}
               priority={10}
               className="absolute right-2 top-[3px] z-20"
             />
