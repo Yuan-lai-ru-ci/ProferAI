@@ -149,7 +149,7 @@ import {
 } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories } from './agent-directory-utils'
-import { buildAgentRuntimeEnv, prependBundledBunToPath } from './agent-runtime-env'
+import { buildAgentRuntimeEnv } from './agent-runtime-env'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
@@ -324,15 +324,6 @@ export class AgentOrchestrator {
       }
     }
 
-    // Windows 的 PATH 键可能保留为 "Path"。保持原有键名，避免把 Path/PATH
-    // 两个大小写变体同时交给 child_process 后由 Windows 按不透明顺序取其中之一。
-    const sdkPathKey = Object.keys(cleanEnv).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
-    const bundledBunPath = prependBundledBunToPath(
-      cleanEnv[sdkPathKey],
-      getRuntimeStatus(),
-      process.platform === 'win32' ? ';' : ':',
-      process.platform,
-    )
     const sdkEnv: Record<string, string | undefined> = {
       ...cleanEnv,
       // 提升输出 token 上限，避免 "exceeded 32000 output token maximum" 错误
@@ -341,9 +332,6 @@ export class AgentOrchestrator {
       // （开发模式无编译二进制，getBundledCliPath 返回 undefined，此处不注入，
       //   skill 回退到源码运行 bun apps/cli/src/index.ts）。
       ...(getBundledCliPath() ? { PROFER_CLI: getBundledCliPath() } : {}),
-      // 打包版的 Bun 随包分发。将其目录显式置于 Agent 子进程 PATH 首位，
-      // 避免 GUI 启动的 Electron 继承到旧/不完整的 Windows PATH。
-      ...(bundledBunPath ? { [sdkPathKey]: bundledBunPath } : {}),
       // 启用 Tasks 功能
       CLAUDE_CODE_ENABLE_TASKS: 'true',
       // 禁用实验性 beta 功能，使用稳定模式

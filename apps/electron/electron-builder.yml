@@ -65,13 +65,6 @@ extraResources:
     to: bin
     filter:
       - "**/*"
-  # 固定版本的 Bun runtime。Agent 的 Bash 环境显式将此目录置于 PATH 首位，
-  # 因而安装版不依赖用户自行安装 Bun 或 GUI 进程继承的系统 PATH。
-  - from: resources/vendor/bun
-    to: vendor/bun
-    # prepare:bundled-bun 只保留当前目标平台的 bun / bun.exe，不能写死 Windows 文件名。
-    filter:
-      - "**/*"
   # 默认 Skills 模板（首次启动时同步到 ~/.proma/default-skills/）
   - from: default-skills
     to: default-skills
@@ -121,10 +114,9 @@ mac:
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
-  # Bun 和 Profer CLI 均由当前 macOS runner 构建，并在将来启用签名时纳入签名范围。
+  # Profer CLI 由当前 macOS runner 构建，并在将来启用签名时纳入签名范围。
   binaries:
     - resources/bin/profer
-    - resources/vendor/bun/bun
   extendInfo:
     NSMicrophoneUsageDescription: "Profer 需要访问麦克风，用于将你的语音实时转写为文本。"
   target:

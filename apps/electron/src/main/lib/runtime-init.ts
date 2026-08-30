@@ -12,7 +12,7 @@
 import type { RuntimeStatus, RuntimeInitOptions, ShellEnvironmentStatus } from '@profer/shared'
 import { loadShellEnv } from './shell-env'
 import { detectNodeRuntime } from './node-detector'
-import { detectBunRuntime, getBundledBunPath } from './bun-finder'
+import { detectBunRuntime } from './bun-finder'
 import { detectGitRuntime, getGitRepoStatus } from './git-detector'
 import { detectGitBash } from './git-bash-detector'
 import { detectWsl } from './wsl-detector'
@@ -74,16 +74,13 @@ async function loadCachedRuntime(): Promise<RuntimeStatus | null> {
     // 解决"第一波没装环境，后面装了也检测不到"的问题
     let needsRewrite = false
 
-    // 新版本安装包可能开始随包携带 Bun，而旧 runtime-cache 仍记录系统 Bun。
-    // 不主动刷新会令已升级用户继续依赖旧 PATH，绕过 bundled runtime。
-    const bundledBunNowAvailable = Boolean(getBundledBunPath())
-    if (!cached.bun?.available || (bundledBunNowAvailable && cached.bun?.source !== 'bundled')) {
-      console.log('[运行时初始化] 缓存中 Bun 缺失或不是随包版本，尝试增量重检...')
+    if (!cached.bun?.available) {
+      console.log('[运行时初始化] 缓存中 Bun 未找到，尝试增量重检...')
       const bunStatus = await detectBunRuntime()
       if (bunStatus.available) {
         cached.bun = bunStatus
         needsRewrite = true
-        console.log('[运行时初始化] 增量重检发现 Bun:', bunStatus.version, `(${bunStatus.source})`)
+        console.log('[运行时初始化] 增量重检发现 Bun:', bunStatus.version)
       }
     }
 

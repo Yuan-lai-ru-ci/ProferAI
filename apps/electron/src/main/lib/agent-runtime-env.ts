@@ -74,28 +74,6 @@ export function dirnameForPlatform(path: string, platform: NodeJS.Platform): str
   return platform === 'win32' ? win32.dirname(path) : dirname(path)
 }
 
-/**
- * 将随包 Bun 的目录优先注入 Agent 子进程 PATH。
- * 仅信任 detectBunRuntime 已验证的 bundled 路径；系统 Bun 仍可被发现/展示，
- * 但不覆盖用户环境，以保证打包版的版本可预测。
- */
-export function prependBundledBunToPath(
-  currentPath: string | undefined,
-  runtimeStatus: RuntimeStatus | null | undefined,
-  pathDelimiter: string,
-  platform: NodeJS.Platform,
-): string | undefined {
-  const bundledBunPath = runtimeStatus?.bun?.source === 'bundled'
-    ? runtimeStatus.bun.path
-    : undefined
-  return prependPathEntry(
-    currentPath,
-    bundledBunPath ? dirnameForPlatform(bundledBunPath, platform) : undefined,
-    pathDelimiter,
-    platform,
-  )
-}
-
 function collectProxyEnv(proxyUrl: string | undefined, processEnv: NodeJS.ProcessEnv): Record<string, string> {
   const env: Record<string, string> = {}
   const trimmedProxyUrl = proxyUrl?.trim()
@@ -233,14 +211,8 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
   }
 
   const pathKey = getPathKey(processEnv)
-  const pathWithBundledBun = prependBundledBunToPath(
-    processEnv[pathKey],
-    options.runtimeStatus,
-    pathDelimiter,
-    platform,
-  )
   const enhancedPath = prependPathEntry(
-    pathWithBundledBun,
+    processEnv[pathKey],
     bundledCliPath ? dirnameForPlatform(bundledCliPath, platform) : undefined,
     pathDelimiter,
     platform,

@@ -7,9 +7,8 @@
  * - 用户可能从终端用 Bun 跑自定义脚本时的路径探测
  *
  * 检测顺序（统一逻辑，开发/打包一致）：
- * 1. 打包产物内 vendor/bun/（当前默认不打包，留给未来可选打包扩展）
- * 2. 系统 PATH（which bun / where bun）
- * 3. 开发仓库 apps/electron/vendor/bun/{platform-arch}/（dev 用）
+ * 1. 系统 PATH（which bun / where bun）
+ * 2. 开发仓库 apps/electron/vendor/bun/{platform-arch}/（dev 用）
  */
 
 import { existsSync } from 'fs'
@@ -52,31 +51,6 @@ export function getCurrentPlatformArch(): PlatformArch {
  */
 function getBunBinaryName(): string {
   return process.platform === 'win32' ? 'bun.exe' : 'bun'
-}
-
-/**
- * 获取打包环境下的 Bun 路径
- *
- * 打包后的目录结构：
- * - macOS: App.app/Contents/Resources/vendor/bun/bun
- * - Windows: resources/vendor/bun/bun.exe
- * - Linux: resources/vendor/bun/bun
- *
- * @returns Bun 二进制路径，如果不存在返回 null
- */
-export function getBundledBunPath(): string | null {
-  if (!app.isPackaged) {
-    return null
-  }
-
-  // process.resourcesPath 指向应用的 resources 目录
-  const bunPath = join(process.resourcesPath, 'vendor', 'bun', getBunBinaryName())
-
-  if (existsSync(bunPath)) {
-    return bunPath
-  }
-
-  return null
 }
 
 /**
@@ -173,7 +147,7 @@ export function validateBunExecutable(bunPath: string): string | null {
  * - 系统运行时状态卡片展示
  * - 用户执行依赖 Bun 的自定义脚本时提供可用性提示
  *
- * 检测顺序：bundled（若存在） → 系统 PATH → 开发 vendor 目录
+ * 检测顺序：系统 PATH → 开发 vendor 目录
  * 全部未命中时返回 available: false 但 **不视为错误**（error 置 null）。
  *
  * @returns Bun 运行时状态
@@ -185,7 +159,6 @@ export async function detectBunRuntime(): Promise<BunRuntimeStatus> {
     getPath: () => string | null
     source: 'bundled' | 'system' | 'vendor'
   }> = [
-    { getPath: getBundledBunPath, source: 'bundled' },
     { getPath: getSystemBunPath, source: 'system' },
     { getPath: getVendorBunPath, source: 'vendor' },
   ]

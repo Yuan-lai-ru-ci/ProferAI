@@ -184,7 +184,7 @@ function main(): void {
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = opts.platform === 'mac' ? 9 : 8
+  const totalSteps = opts.platform === 'mac' ? 8 : 7
   let step = 0
 
   // ── 步骤 1: 构建主进程 ──
@@ -214,16 +214,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 4: 准备随包 Bun ──
-  step++
-  printStepStart(step, totalSteps, '准备当前平台 Bundled Bun')
-  results.push(
-    runStep('准备 Bundled Bun', 'bun', ['run', 'prepare:bundled-bun'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 5: 编译随包 CLI ──
+  // ── 步骤 4: 编译随包 CLI ──
   step++
   printStepStart(step, totalSteps, '编译 Profer CLI (bun --compile)')
   results.push(
@@ -232,7 +223,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 6: 复制资源文件 ──
+  // ── 步骤 5: 复制资源文件 ──
   step++
   printStepStart(step, totalSteps, '复制资源文件')
   results.push(
@@ -242,7 +233,7 @@ function main(): void {
   // 资源包缺失会导致打包产物缺 skins/icon 等，必须中断而非继续
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 7: 同步主进程运行时依赖 ──
+  // ── 步骤 6: 同步主进程运行时依赖 ──
   step++
   printStepStart(step, totalSteps, '同步主进程运行时依赖')
   results.push(
@@ -251,7 +242,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 8: electron-builder 打包 ──
+  // ── 步骤 7: electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 
