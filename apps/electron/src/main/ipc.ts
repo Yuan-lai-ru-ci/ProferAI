@@ -51,6 +51,7 @@ import {
   SYSTEM_PROMPT_IPC_CHANNELS,
   CHAT_TOOL_IPC_CHANNELS,
   FEISHU_IPC_CHANNELS,
+  LARK_IPC_CHANNELS,
   DINGTALK_IPC_CHANNELS,
   WECHAT_IPC_CHANNELS,
   AUTOMATION_IPC_CHANNELS,
@@ -270,6 +271,7 @@ import {
   registerProferFilePath,
 } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
+import { DOMESTIC_UPDATE_FEED_URL, isSecureUpdateFeedUrl } from './lib/updater/update-sources'
 import {
   listChannels,
   createChannel,
@@ -558,6 +560,8 @@ import {
   searchPptMaterials,
 } from './lib/ppt-material-service'
 import { createMemoryArchiveSearcher } from './lib/memory-archive-search'
+import { cancelLarkLogin, detectLarkCli, installLarkCli, startLarkLogin, __setLarkLoginEventHandler } from './lib/lark-cli-service'
+import { cancelLarkMcpLogin, disableLarkMcpForWorkspace, enableLarkMcpForWorkspace, getLarkMcpStatus, saveLarkMcpCredentials, startLarkMcpLogin, testLarkMcpConnection, __setLarkMcpLoginEventHandler } from './lib/lark-mcp-service'
 import type { MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
 import { getAllToolInfos } from './lib/chat-tool-registry'
 import {
@@ -1601,6 +1605,15 @@ function assertSensitiveAgentIpcSender(event: {
   sender: { isDestroyed(): boolean }
 }): void {
   assertMainWindowSender(event, mainWindowGetter)
+}
+
+function assertGraphSessionAccess(sessionId: unknown): asserts sessionId is string {
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
+    throw new Error('无效的会话标识')
+  }
+  if (!getAgentSessionMeta(sessionId)) {
+    throw new Error('Agent 会话不存在')
+  }
 }
 
 let rendererReadyHandler: (() => void) | null = null
@@ -5166,13 +5179,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_GRAPH,
     async (event, sessionId: string) => {
       assertSensitiveAgentIpcSender(event)
-      if (
-        !sessionId ||
-        typeof sessionId !== 'string' ||
-        sessionId.length > 128
-      ) {
-        throw new Error('无效的会话标识')
-      }
+      assertGraphSessionAccess(sessionId)
       const { loadGraph } = await import('./lib/project-graph-service')
       return loadGraph(sessionId)
     },
@@ -5182,13 +5189,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY,
     async (event, sessionId: string) => {
       assertSensitiveAgentIpcSender(event)
-      if (
-        !sessionId ||
-        typeof sessionId !== 'string' ||
-        sessionId.length > 128
-      ) {
-        throw new Error('无效的会话标识')
-      }
+      assertGraphSessionAccess(sessionId)
       const { getGraphSummary } = await import('./lib/project-graph-service')
       return getGraphSummary(sessionId)
     },
@@ -5217,13 +5218,7 @@ export function registerIpcHandlers(): void {
       graphEvent: import('@profer/project-core').GraphEvent,
     ) => {
       assertSensitiveAgentIpcSender(event)
-      if (
-        !sessionId ||
-        typeof sessionId !== 'string' ||
-        sessionId.length > 128
-      ) {
-        throw new Error('无效的会话标识')
-      }
+      assertGraphSessionAccess(sessionId)
       if (!graphEvent || typeof graphEvent !== 'object' || !graphEvent.type) {
         throw new Error('无效的图事件')
       }
@@ -6649,9 +6644,11 @@ export function registerIpcHandlers(): void {
   // ===== GitHub Release =====
 
   /** 商业版 releases.json 地址，可通过 PROFER_UPDATE_FEED_URL 环境变量覆盖 */
-  const RELEASES_JSON_URL =
-    (process.env.PROFER_UPDATE_FEED_URL ||
-      'http://47.109.108.57/profer-updates/') + 'releases.json'
+  const configuredReleaseFeed = process.env.PROFER_UPDATE_FEED_URL
+  const releaseFeedUrl = isSecureUpdateFeedUrl(configuredReleaseFeed)
+    ? configuredReleaseFeed.trim().replace(/\/+$/, '')
+    : DOMESTIC_UPDATE_FEED_URL.replace(/\/+$/, '')
+  const RELEASES_JSON_URL = `${releaseFeedUrl}/releases.json`
 
   /** 从服务器获取 releases 列表（商业版数据源） */
   async function fetchServerReleases(): Promise<GitHubRelease[]> {
@@ -6714,6 +6711,29 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // ===== Lark CLI cloud capability =====
+  __setLarkLoginEventHandler((payload) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(LARK_IPC_CHANNELS.LOGIN_EVENT, payload)
+    }
+  })
+  __setLarkMcpLoginEventHandler((payload) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(LARK_IPC_CHANNELS.MCP_LOGIN_EVENT, payload)
+    }
+  })
+  ipcMain.handle(LARK_IPC_CHANNELS.GET_STATUS, async () => detectLarkCli())
+  ipcMain.handle(LARK_IPC_CHANNELS.REFRESH_STATUS, async () => detectLarkCli())
+  ipcMain.handle(LARK_IPC_CHANNELS.GET_MCP_STATUS, async () => getLarkMcpStatus())
+  ipcMain.handle(LARK_IPC_CHANNELS.SAVE_MCP_CREDENTIALS, async (_, input: import('@profer/shared').LarkMcpCredentialsInput) => saveLarkMcpCredentials(input))
+  ipcMain.handle(LARK_IPC_CHANNELS.ENABLE_MCP_FOR_WORKSPACE, async (_, workspaceSlug: string) => enableLarkMcpForWorkspace(workspaceSlug))
+  ipcMain.handle(LARK_IPC_CHANNELS.DISABLE_MCP_FOR_WORKSPACE, async (_, workspaceSlug: string) => disableLarkMcpForWorkspace(workspaceSlug))
+  ipcMain.handle(LARK_IPC_CHANNELS.START_MCP_LOGIN, async () => startLarkMcpLogin())
+  ipcMain.handle(LARK_IPC_CHANNELS.CANCEL_MCP_LOGIN, async () => { cancelLarkMcpLogin() })
+  ipcMain.handle(LARK_IPC_CHANNELS.TEST_MCP_CONNECTION, async () => testLarkMcpConnection())
+  ipcMain.handle(LARK_IPC_CHANNELS.INSTALL_CLI, async () => installLarkCli())
+  ipcMain.handle(LARK_IPC_CHANNELS.START_LOGIN, async () => startLarkLogin())
+  ipcMain.handle(LARK_IPC_CHANNELS.CANCEL_LOGIN, async () => { cancelLarkLogin() })
   // ===== 飞书集成 =====
 
   // --- 旧 API（向后兼容，操作 bots[0]）---

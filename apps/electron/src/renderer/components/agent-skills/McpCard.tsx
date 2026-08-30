@@ -23,6 +23,7 @@ interface McpCardProps {
 
 export function McpCard({ name, entry, onOpen, onToggle, onRequestDelete }: McpCardProps): React.ReactElement {
   const isBuiltin = entry.isBuiltin === true
+  const isManagedLarkMcp = name === 'lark-mcp' && isBuiltin
   const target = entry.type === 'stdio' ? entry.command : entry.url
   const test = entry.lastTestResult
 
@@ -56,18 +57,24 @@ export function McpCard({ name, entry, onOpen, onToggle, onRequestDelete }: McpC
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">{target || '未配置地址'}</div>
         </div>
-        <Switch
-          checked={entry.enabled}
-          onCheckedChange={onToggle}
-          onClick={(e) => e.stopPropagation()}
-          className="shrink-0"
-        />
+        {isManagedLarkMcp ? (
+          <span className="shrink-0 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+            专用管理
+          </span>
+        ) : (
+          <Switch
+            checked={entry.enabled}
+            onCheckedChange={onToggle}
+            onClick={(e) => e.stopPropagation()}
+            className="shrink-0"
+          />
+        )}
       </div>
 
       <div className="mt-auto flex items-center gap-2">
         {isBuiltin && (
           <span className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
-            <ShieldCheck size={12} /> 内置
+            <ShieldCheck size={12} /> {isManagedLarkMcp ? '官方托管' : '内置'}
           </span>
         )}
         {test && (

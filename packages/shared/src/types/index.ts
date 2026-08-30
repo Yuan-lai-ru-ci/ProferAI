@@ -60,6 +60,9 @@ export * from './chat-tool'
 // 飞书集成相关类型
 export * from './feishu'
 
+// Lark/飞书云端能力相关类型
+export * from './lark'
+
 // 钉钉集成相关类型
 export * from './dingtalk'
 

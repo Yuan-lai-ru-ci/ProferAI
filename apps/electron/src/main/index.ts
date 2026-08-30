@@ -145,6 +145,8 @@ import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
+import { disposeLarkCliService } from './lib/lark-cli-service'
+import { disposeLarkMcpService } from './lib/lark-mcp-service'
 import { browserController } from './lib/browser-controller'
 import { stopAllGenerations } from './lib/chat-service'
 import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
@@ -1041,6 +1043,8 @@ app.on('before-quit', () => {
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   void disposePiMcpConnections()
+  disposeLarkCliService()
+  disposeLarkMcpService()
   browserController.dispose()
   stopAllGenerations()
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）

@@ -107,6 +107,7 @@ import {
 } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
+import { getLarkMcpEntryWithRuntimeEnv, isLarkMcpEntry } from './lark-mcp-service'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { buildPiTaskPrompt } from './pi-task-prompt'
@@ -422,9 +423,16 @@ export class AgentOrchestrator {
     if (!workspaceSlug) return mcpServers
 
     const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
-    for (const [name, entry] of Object.entries(mcpConfig.servers ?? {})) {
-      if (!entry.enabled) continue
+    for (const [name, configuredEntry] of Object.entries(mcpConfig.servers ?? {})) {
+      if (!configuredEntry.enabled) continue
       if (name === 'memos-cloud') continue
+      const entry = isLarkMcpEntry(name, configuredEntry)
+        ? getLarkMcpEntryWithRuntimeEnv(workspaceSlug, configuredEntry)
+        : configuredEntry
+      if (!entry) {
+        console.warn('[Agent 编排] Lark MCP 凭据不可用，跳过加载')
+        continue
+      }
       // 预设 MCP 白名单：未列出的工作区 MCP 不加载
       if (mcpNameFilter && !mcpNameFilter.includes(name)) {
         console.log(`[Agent 编排] MCP 服务器 "${name}" 被预设白名单裁剪`)

@@ -43,18 +43,13 @@ import { SettingsInput } from './primitives/SettingsInput'
 import { SettingsSecretInput } from './primitives/SettingsSecretInput'
 import { SettingsRow } from './primitives/SettingsRow'
 import { feishuBotStatesAtom, feishuBindingsAtom } from '@/atoms/feishu-atoms'
-import { agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
+import { agentPendingPromptAtom, agentWorkspacesAtom, agentSessionsAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { settingsOpenAtom } from '@/atoms/settings-tab'
+import { useCreateSession } from '@/hooks/useCreateSession'
 import { cn } from '@/lib/utils'
-import { isVisibleAgentSession, type FeishuTestResult, type FeishuChatBinding, type FeishuBotConfig, type FeishuBotBridgeState, type FeishuRegisterAppQRCode, type FeishuRegisterAppStatus, type FeishuSessionMirrorSettings, type FeishuSessionSyncMode } from '@profer/shared'
+import { isVisibleAgentSession, type FeishuTestResult, type FeishuChatBinding, type FeishuBotConfig, type FeishuBotBridgeState, type FeishuRegisterAppQRCode, type FeishuRegisterAppStatus, type FeishuSessionMirrorSettings, type FeishuSessionSyncMode, type LarkCliStatus, type LarkLoginEvent, type LarkMcpStatus } from '@profer/shared'
 
 // ===== 常量 =====
-
-type FeishuTab = 'config' | 'bindings'
-
-const TAB_OPTIONS: Array<{ value: FeishuTab; label: string }> = [
-  { value: 'config', label: 'Bot 配置' },
-  { value: 'bindings', label: '绑定管理' },
-]
 
 /** 连接状态颜色映射 */
 const STATUS_CONFIG = {
@@ -317,77 +312,312 @@ function PermissionsStep(): React.ReactElement {
 
 // ===== 飞书 CLI 预置 Prompt =====
 
-const FEISHU_CLI_PROMPT = `请帮我配置飞书 CLI 开发环境，按以下步骤执行：
+const FEISHU_CLI_WORKSPACE_PROMPT = `请在当前 Profer 工作区完成飞书 CLI 配置，并在完成后验证结果。
 
-1. 安装飞书 CLI 到全局
-npm install -g @larksuite/cli
+要求：
+1. 先用官方 CLI 的 --help 确认当前版本支持的命令，不要猜参数。
+2. 只把 @larksuite/cli 可执行工具安装到全局：npm install -g @larksuite/cli。
+3. 把官方 Lark Agent Skills 安装到当前 Profer 工作区实际加载的 skills/ 目录；不要使用 -g，也不要只安装到 .agents/skills/，因为 Profer 不会从那里加载。
+4. 初始化独立的 Lark CLI 应用：lark-cli config init --new。不要复用 Profer 飞书 Bot 应用。
+5. 完成用户授权：lark-cli auth login --domain all。需要浏览器授权时提示我操作。
+6. 最后运行 lark-cli auth status，报告 CLI、授权和工作区 Skill 是否就绪；不要在聊天、文件或日志中输出 token、App Secret 或 Cookie。
 
-2. 将 SKILL 配置到本工作区（默认配置本工作区，但请提醒用户是否需要额外安装到全局，会使得预置上下文增加，造成不必要的Token消耗）
-npx skills add https://github.com/larksuite/cli -y -g
+如果当前 CLI 版本的 Skill 安装命令无法直接写入 Profer skills/，请先查看帮助，再采用安全的复制方式完成，不要留下只存在于 .agents/skills/ 的无效安装。`
 
-3. 初始化 CLI 配置（创建一个全新的飞书 CLI 应用，与 Profer 飞书 Bot 互不影响）
-lark-cli config init --new
-
-4. 一键申请全部领域的所有权限（文档/表格/日历/任务/邮件/通讯录/会议/审批/OKR/Wiki/多维表格/幻灯片/考勤/项目板等都包含在内）
-lark-cli auth login --domain all
-
-执行第 3 步时浏览器会弹出授权页面，引导用户完成应用创建并扫码授权；
-执行第 4 步时浏览器会再次弹出，引导用户一次性确认所有领域的权限——这一步是体验关键，跳过会导致后续 Agent 调用飞书文档/日历/邮件等能力时报权限不足。`
-
-/** 飞书 CLI 配置引导 */
+/** 可选的工作区级 Lark CLI 配置入口 */
 function FeishuCliSection(): React.ReactElement {
-  const [expanded, setExpanded] = React.useState(false)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId)
+  const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const { createAgent } = useCreateSession()
+  const [working, setWorking] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
 
-  const handleSendToAgent = React.useCallback(() => {
-    navigator.clipboard.writeText(FEISHU_CLI_PROMPT).then(() => {
+  const handleCopy = React.useCallback(() => {
+    navigator.clipboard.writeText(FEISHU_CLI_WORKSPACE_PROMPT).then(() => {
       setCopied(true)
-      toast.success('配置指令已复制，请在 Agent 对话中粘贴发送')
+      toast.success('配置提示词已复制')
       setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {
-      toast.error('复制失败')
-    })
+    }).catch(() => toast.error('复制失败'))
   }, [])
+
+  const handleStartInWorkspace = React.useCallback(async () => {
+    if (!currentWorkspace) {
+      toast.error('请先选择一个工作区')
+      return
+    }
+    setWorking(true)
+    try {
+      const sessionId = await createAgent()
+      if (!sessionId) {
+        toast.error('创建配置会话失败')
+        return
+      }
+      setPendingPrompt({ sessionId, message: FEISHU_CLI_WORKSPACE_PROMPT })
+      setSettingsOpen(false)
+      toast.success(`已在「${currentWorkspace.name}」开始配置`)
+    } finally {
+      setWorking(false)
+    }
+  }, [createAgent, currentWorkspace, setPendingPrompt, setSettingsOpen])
 
   return (
     <SettingsSection
-      title="配置飞书 CLI"
-      description="飞书官方开源的命令行工具，配置后 Profer Agent 将可以直接读消息、查日历、写文档、建多维表格、发邮件，把任务真正落到飞书里完成。"
+      title="给当前工作区增加飞书能力"
+      description="可选。Profer 会在当前工作区创建配置会话，自动安装 CLI、放置官方 Skills 并引导授权。普通 Bot 收发消息不需要这一步。"
     >
       <SettingsCard divided={false}>
-        <div className="px-4 py-4 space-y-2 text-sm text-muted-foreground">
-          <p className="text-xs">复制配置提示词，并前往飞书Bot日常绑定的<strong>工作区</strong>，创建新的 Profer Agent 对话并发送即可让 Profer 协助完成配置。</p>
-          <button
-            type="button"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-            onClick={() => setExpanded(!expanded)}
-          >
-            <ChevronRight size={14} className={cn('transition-transform duration-200', expanded && 'rotate-90')} />
-            <span>{expanded ? '收起配置步骤' : '展开查看配置步骤'}</span>
-          </button>
+        <div className="flex flex-wrap items-center gap-2 px-4 py-4">
+          <Button size="sm" onClick={() => void handleStartInWorkspace()} disabled={working || !currentWorkspace} className="gap-1.5">
+            {working ? <Loader2 size={14} className="animate-spin" /> : <PlayCircle size={14} />}
+            {working ? '正在打开配置会话…' : '在当前工作区配置'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleCopy} className="gap-1.5">
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            {copied ? '已复制' : '复制提示词'}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {currentWorkspace ? `目标工作区：${currentWorkspace.name}` : '请先选择工作区'}
+          </span>
+        </div>
+      </SettingsCard>
+    </SettingsSection>
+  )
+}
 
-          {expanded && (
-            <div className="bg-muted/50 rounded-md p-3 font-mono text-xs space-y-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-              <div><span className="text-foreground/70 font-semibold">步骤 1</span> — 安装飞书 CLI 到全局</div>
-              <div className="pl-3 text-foreground/60">npm install -g @larksuite/cli</div>
-              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 2</span> — 将 SKILL 配置到本工作区（默认本工作区；如需全局会增加 Token 消耗）</div>
-              <div className="pl-3 text-foreground/60">npx skills add https://github.com/larksuite/cli -y -g</div>
-              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 3</span> — 初始化 CLI（新建独立 CLI 应用，不影响 Profer 飞书 Bot）</div>
-              <div className="pl-3 text-foreground/60">lark-cli config init --new</div>
-              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 4</span> — 一键申请全部领域权限（文档/表格/日历/任务/邮件/通讯录/会议等）</div>
-              <div className="pl-3 text-foreground/60">lark-cli auth login --domain all</div>
+// ===== Lark 用户云端能力 =====
+
+function LarkCloudCapabilitiesSection(): React.ReactElement {
+  const [status, setStatus] = React.useState<LarkCliStatus | null>(null)
+  const [loginEvent, setLoginEvent] = React.useState<LarkLoginEvent | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [working, setWorking] = React.useState(false)
+
+  const refresh = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      setStatus(await window.electronAPI.refreshLarkCliStatus())
+    } catch {
+      toast.error('无法检测 Lark CLI')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void refresh()
+    return window.electronAPI.onLarkLoginEvent((event) => {
+      setLoginEvent(event)
+      if (event.type === 'completed') {
+        void refresh()
+        toast.success('Lark 用户授权已完成')
+      } else if (event.type === 'failed') {
+        toast.error(event.message)
+      }
+    })
+  }, [refresh])
+
+  const install = React.useCallback(async () => {
+    setWorking(true)
+    try {
+      const result = await window.electronAPI.installLarkCli()
+      result.success ? toast.success('Lark CLI 安装完成') : toast.error(result.message)
+      if (result.success) await refresh()
+    } finally {
+      setWorking(false)
+    }
+  }, [refresh])
+
+  const login = React.useCallback(async () => {
+    setWorking(true)
+    setLoginEvent(null)
+    try {
+      const result = await window.electronAPI.startLarkLogin()
+      if (!result.started) toast.error(result.message)
+      else if (result.authorizationUrl) {
+        setLoginEvent({ type: 'url', authorizationUrl: result.authorizationUrl, message: '请在浏览器中完成授权' })
+        openLink(result.authorizationUrl)
+      } else toast.info('登录流程已启动，请按 CLI 提示完成授权')
+    } catch {
+      toast.error('无法启动 Lark 登录流程')
+    } finally {
+      setWorking(false)
+    }
+  }, [])
+
+  const copyUrl = React.useCallback(() => {
+    const url = loginEvent?.authorizationUrl
+    if (!url) return
+    navigator.clipboard.writeText(url).then(() => toast.success('授权链接已复制')).catch(() => toast.error('复制失败'))
+  }, [loginEvent])
+
+  const authLabel = status?.auth.state === 'logged_in' ? '已登录' : status?.auth.state === 'reauthorization_required' ? '需要重新授权' : status?.auth.state === 'logged_out' ? '未登录' : '未知'
+  const ready = status?.cli.available && status.cli.version
+
+  return (
+    <SettingsSection title="飞书云端能力（Lark 用户授权）" description="通过官方 Lark CLI 使用你的用户身份访问云文档、表格和其他云端资源。凭据只保留在 CLI 的安全存储中，Profer 不读取或展示 token。">
+      <SettingsCard divided={false}>
+        <div className="px-4 py-4 space-y-4 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {loading ? <Loader2 size={16} className="animate-spin text-muted-foreground" /> : status?.error ? <XCircle size={16} className="text-red-500" /> : <CheckCircle2 size={16} className="text-green-500" />}
+              <span className="font-medium">Lark CLI：{ready ? `已安装（${status.cli.version}）` : '未检测到'}</span>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => void refresh()} disabled={loading} className="gap-1.5"><RefreshCw size={14} />检测</Button>
+          </div>
+
+          <div className="rounded-md bg-muted/50 p-3 space-y-1.5 text-xs text-muted-foreground">
+            <div>用户授权：<span className="text-foreground font-medium">{authLabel}</span>{status?.auth.userLabel ? ` · ${status.auth.userLabel}` : ''}</div>
+            <div>Node.js：{status?.node.version ?? '未检测到'} · npm：{status?.npm.version ?? '未检测到'} · npx：{status?.npx.version ?? '未检测到'}</div>
+            {status?.auth.scopeCount != null && <div>已授权范围：{status.auth.scopeCount} 项（具体 token/权限内容不会展示）</div>}
+            {status?.error && <div className="text-red-600 dark:text-red-400">诊断：{status.error}</div>}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {!ready && <Button size="sm" onClick={() => void install()} disabled={working} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}安装官方 CLI</Button>}
+            <Button size="sm" onClick={() => void login()} disabled={!ready || working} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}重新登录 / 授权</Button>
+            {status?.cli.path && <span className="self-center text-xs text-muted-foreground">路径：{status.cli.path}</span>}
+          </div>
+
+          {loginEvent?.authorizationUrl && (
+            <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
+              <div className="text-xs text-foreground">{loginEvent.message}</div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => openLink(loginEvent.authorizationUrl!)} className="gap-1.5"><ExternalLink size={14} />打开授权页</Button>
+                <Button size="sm" variant="outline" onClick={copyUrl} className="gap-1.5"><Copy size={14} />复制链接</Button>
+                <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.cancelLarkLogin()}>取消</Button>
+              </div>
             </div>
           )}
+        </div>
+      </SettingsCard>
+    </SettingsSection>
+  )
+}
 
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleSendToAgent}
-            className="gap-1.5"
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span>{copied ? '已复制至剪贴板' : '复制配置提示词'}</span>
-          </Button>
+function LarkMcpSection(): React.ReactElement {
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const [status, setStatus] = React.useState<LarkMcpStatus | null>(null)
+  const [appId, setAppId] = React.useState('')
+  const [appSecret, setAppSecret] = React.useState('')
+  const [workspaceSlug, setWorkspaceSlug] = React.useState('')
+  const [loginEvent, setLoginEvent] = React.useState<LarkLoginEvent | null>(null)
+  const [saving, setSaving] = React.useState(false)
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const next = await window.electronAPI.getLarkMcpStatus()
+      setStatus(next)
+      if (!workspaceSlug && workspaces[0]) setWorkspaceSlug(workspaces[0].slug)
+    } catch {
+      toast.error('无法读取 Lark MCP 配置')
+    }
+  }, [workspaceSlug, workspaces])
+
+  React.useEffect(() => { void refresh() }, [refresh])
+
+  React.useEffect(() => window.electronAPI.onLarkMcpLoginEvent((event) => {
+    setLoginEvent(event)
+    if (event.type === 'completed') toast.success('Lark MCP 用户授权已完成')
+    if (event.type === 'failed') toast.error(event.message)
+  }), [])
+
+  const saveCredentials = React.useCallback(async () => {
+    setSaving(true)
+    try {
+      const result = await window.electronAPI.saveLarkMcpCredentials({ appId, appSecret })
+      if (!result.success) { toast.error(result.message); return }
+      setAppSecret('')
+      toast.success('MCP 应用凭据已安全保存')
+      await refresh()
+    } finally { setSaving(false) }
+  }, [appId, appSecret, refresh])
+
+  const testConnection = React.useCallback(async () => {
+    setSaving(true)
+    try {
+      const result = await window.electronAPI.testLarkMcpConnection()
+      result.success ? toast.success('官方 Lark MCP 协议握手成功') : toast.error(result.message)
+    } finally { setSaving(false) }
+  }, [])
+
+  const login = React.useCallback(async () => {
+    setSaving(true)
+    setLoginEvent(null)
+    try {
+      const result = await window.electronAPI.startLarkMcpLogin()
+      if (!result.started) toast.error(result.message)
+      else toast.info('MCP 授权流程已启动，请在浏览器中完成确认')
+    } finally { setSaving(false) }
+  }, [])
+
+  const copyLoginUrl = React.useCallback(() => {
+    const url = loginEvent?.authorizationUrl
+    if (!url) return
+    navigator.clipboard.writeText(url).then(() => toast.success('授权链接已复制')).catch(() => toast.error('复制失败'))
+  }, [loginEvent])
+
+  const enable = React.useCallback(async () => {
+    if (!workspaceSlug) { toast.error('请选择工作区'); return }
+    setSaving(true)
+    try {
+      const result = await window.electronAPI.enableLarkMcpForWorkspace(workspaceSlug)
+      result.success ? toast.success('已为工作区启用官方 Lark MCP') : toast.error(result.message)
+      if (result.success) await refresh()
+    } finally { setSaving(false) }
+  }, [refresh, workspaceSlug])
+
+  const disable = React.useCallback(async () => {
+    if (!workspaceSlug) return
+    setSaving(true)
+    try {
+      const result = await window.electronAPI.disableLarkMcpForWorkspace(workspaceSlug)
+      result.success ? toast.success('已从工作区停用 Lark MCP') : toast.error(result.message)
+    } finally { setSaving(false) }
+  }, [workspaceSlug])
+
+  return (
+    <SettingsSection title="官方 Lark MCP（实验性）" description="为选定工作区接入官方 OpenAPI MCP。App Secret 使用系统加密存储，运行时注入，不会写入工作区 mcp.json、Skill 或聊天消息。">
+      <SettingsCard divided={false}>
+        <div className="px-4 py-4 space-y-4 text-sm">
+          <div className="rounded-md bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+            官方 MCP 仍处于 Beta。请创建或选择一个专用于 MCP 的飞书应用，配置 OAuth 回调地址 <code>http://localhost:3000/callback</code>，并为该应用开通文档、Base/多维表格和日历所需权限。日历通常需要用户权限 <code>calendar:calendar</code>、<code>calendar:calendar:read</code>；不要复用或粘贴 CLI token。
+          </div>
+          {status?.configured ? (
+            <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
+              <div>MCP 应用已配置：<span className="font-medium text-foreground">{status.appId}</span>（Secret 已加密保存，不可查看）</div>
+              <div>已启用工作区：{status.enabledWorkspaces.length ? status.enabledWorkspaces.join('、') : '无'}</div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <SettingsInput label="MCP App ID" value={appId} onChange={setAppId} placeholder="cli_xxxxx" />
+              <SettingsSecretInput label="MCP App Secret" value={appSecret} onChange={setAppSecret} placeholder="仅保存到本机加密存储" />
+              <Button size="sm" onClick={() => void saveCredentials()} disabled={saving || !appId.trim() || !appSecret.trim()} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}安全保存 MCP 凭据</Button>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={workspaceSlug} onValueChange={setWorkspaceSlug}>
+              <SelectTrigger className="h-8 w-[190px]"><SelectValue placeholder="选择工作区" /></SelectTrigger>
+              <SelectContent>{workspaces.map((workspace) => <SelectItem key={workspace.slug} value={workspace.slug}>{workspace.name}</SelectItem>)}</SelectContent>
+            </Select>
+            <Button size="sm" variant="outline" onClick={() => void testConnection()} disabled={saving || !status?.configured} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}测试连接</Button>
+            <Button size="sm" onClick={() => void login()} disabled={saving || !status?.configured} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}进行用户授权</Button>
+            <Button size="sm" onClick={() => void enable()} disabled={saving || !status?.configured || !workspaceSlug}>启用到工作区</Button>
+            <Button size="sm" variant="outline" onClick={() => void disable()} disabled={saving || !workspaceSlug}>停用</Button>
+          </div>
+          {loginEvent?.authorizationUrl && (
+            <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
+              <div className="text-xs text-foreground">{loginEvent.message}</div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => openLink(loginEvent.authorizationUrl!)} className="gap-1.5"><ExternalLink size={14} />打开授权页</Button>
+                <Button size="sm" variant="outline" onClick={copyLoginUrl} className="gap-1.5"><Copy size={14} />复制链接</Button>
+                <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.cancelLarkMcpLogin()}>取消</Button>
+              </div>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">当前已启用云文档、Base/多维表格和日历工具集（查询/创建/更新日历事件、查询忙闲与主日历）。请先完成 MCP 用户授权，再启用工作区；启用后，从该工作区新建的 Claude 与 Pi Agent 会话会发现相同的 Lark MCP 工具。</p>
         </div>
       </SettingsCard>
     </SettingsSection>
@@ -639,42 +869,6 @@ function FeishuBindingsTab(): React.ReactElement {
 
 // ===== 扫码注册 Dialog =====
 
-/** 扫码成功页底部的"下一步推荐"：把 CLI 提示词一键复制，让用户去 Agent 会话里跑 */
-function CliRecommendationCard(): React.ReactElement {
-  const [copied, setCopied] = React.useState(false)
-
-  const handleCopy = React.useCallback(() => {
-    navigator.clipboard.writeText(FEISHU_CLI_PROMPT).then(() => {
-      setCopied(true)
-      toast.success('提示词已复制，前往 Agent 对话粘贴发送')
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {
-      toast.error('复制失败')
-    })
-  }, [])
-
-  return (
-    <div className="w-full rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-3 space-y-2">
-      <div className="flex items-start gap-2">
-        <div className="flex-1 text-xs text-foreground/80 leading-relaxed">
-          <div className="font-medium text-foreground mb-0.5">想要更完整的飞书生态体验？</div>
-          补全飞书 CLI 后 Profer Agent 还可以直接读写你的文档、查日历、发邮件等。
-          复制下方提示词到任意工作区的新对话发送即可，Agent 会全程引导完成。
-        </div>
-      </div>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={handleCopy}
-        className="gap-1.5 w-full"
-      >
-        {copied ? <Check size={14} /> : <Copy size={14} />}
-        <span>{copied ? '已复制至剪贴板' : '复制配置提示词'}</span>
-      </Button>
-    </div>
-  )
-}
-
 interface RegisterFeishuDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -807,8 +1001,9 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
                 <span className="text-xs text-muted-foreground">已自动保存配置，正在启动 Bot…</span>
               </div>
 
-              {/* 推荐：补全飞书 CLI 获得完整生态体验 */}
-              <CliRecommendationCard />
+              <p className="max-w-[300px] text-center text-xs leading-5 text-muted-foreground">
+                现在就可以在飞书里搜索这个 Bot 并发送第一条消息。云文档和日历能力可稍后在高级设置中按工作区启用。
+              </p>
             </div>
           )}
 
@@ -1115,32 +1310,32 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
   return (
     <SettingsCard>
       {/* 头部：名称 + 状态 + 展开/折叠 */}
-      <div
-        role="button"
-        tabIndex={0}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/30 transition-colors cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(!expanded) } }}
-      >
-        <div className="flex items-center gap-3">
+      <div className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/30 transition-colors">
+        <button
+          type="button"
+          className="min-w-0 flex flex-1 items-center gap-3 text-left"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          aria-label={`${bot.name || '未命名 Bot'}配置详情`}
+        >
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusConfig.color}`} />
-          <span className="font-medium text-sm">{bot.name || '未命名 Bot'}</span>
-          <span className="text-xs text-muted-foreground">{bot.appId ? bot.appId.slice(0, 12) + '...' : '未配置'}</span>
-        </div>
-        <div className="flex items-center gap-2">
+          <span className="font-medium text-sm truncate">{bot.name || '未命名 Bot'}</span>
+          <span className="text-xs text-muted-foreground truncate">{bot.appId ? bot.appId.slice(0, 12) + '...' : '未配置'}</span>
+          <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
+        </button>
+        <div className="ml-3 flex items-center gap-2">
           {isConnected ? (
-            <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleToggle() }}>
+            <Button size="sm" variant="outline" onClick={() => void handleToggle()}>
               <PowerOff size={14} className="mr-1" />
               停止
             </Button>
           ) : bot.appId ? (
-            <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleToggle() }}
+            <Button size="sm" variant="outline" onClick={() => void handleToggle()}
               disabled={state?.status === 'connecting'}>
               {state?.status === 'connecting' ? <Loader2 size={14} className="animate-spin mr-1" /> : <Power size={14} className="mr-1" />}
               启动
             </Button>
           ) : null}
-          <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
         </div>
       </div>
 
@@ -1221,6 +1416,101 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
   )
 }
 
+// ===== 一站式接入入口 =====
+
+interface FeishuQuickStartProps {
+  bots: FeishuBotConfig[]
+  botStates: Record<string, FeishuBotBridgeState>
+  onRegister: () => void
+  onManualAdd: () => void
+  onRefresh: () => void
+  onTest: () => void
+  testing: boolean
+}
+
+function FeishuQuickStart({ bots, botStates, onRegister, onManualAdd, onRefresh, onTest, testing }: FeishuQuickStartProps): React.ReactElement {
+  const connectedBot = bots.find((bot) => botStates[bot.id]?.status === 'connected')
+  const configuredBot = bots.find((bot) => bot.appId)
+  const activeBot = connectedBot ?? configuredBot
+  const status = connectedBot
+    ? '已连接，可以开始使用'
+    : configuredBot
+      ? 'Bot 已保存，正在等待连接'
+      : '还没有连接飞书 Bot'
+  const statusTone = connectedBot
+    ? 'bg-green-500/10 text-green-700 dark:text-green-400'
+    : configuredBot
+      ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+      : 'bg-muted text-muted-foreground'
+
+  return (
+    <SettingsSection
+      title="连接飞书"
+      description="扫码创建一个 Bot，Profer 会自动保存并启动。完成后直接在飞书里发消息即可。"
+    >
+      <SettingsCard divided={false} className="overflow-hidden">
+        <div className="px-4 py-4 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <MessageSquare size={20} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-foreground">飞书 Bot</span>
+                <span className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs',
+                  statusTone,
+                )}>
+                  <span className={cn('h-1.5 w-1.5 rounded-full', connectedBot ? 'bg-green-500' : configuredBot ? 'bg-amber-500' : 'bg-muted-foreground/50')} />
+                  {status}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {activeBot ? `当前 Bot：${activeBot.name}` : '无需填写 App ID 或 App Secret'}
+              </p>
+            </div>
+            <Button size="sm" variant="ghost" onClick={onRefresh} className="shrink-0 gap-1.5" aria-label="刷新飞书连接状态">
+              <RefreshCw size={14} />
+              <span className="hidden sm:inline">刷新</span>
+            </Button>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-3" aria-label="飞书接入步骤">
+            {[
+              ['1', '扫码创建', '用飞书扫一扫完成授权'],
+              ['2', '自动启动', 'Profer 自动保存并连接'],
+              ['3', '开始使用', '在飞书搜索 Bot 并发消息'],
+            ].map(([number, title, description]) => (
+              <div key={number} className="rounded-lg bg-muted/45 px-3 py-2.5">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">{number}</span>
+                  {title}
+                </div>
+                <p className="mt-1 pl-7 text-xs leading-5 text-muted-foreground">{description}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={onRegister} className="gap-1.5">
+              <QrCode size={14} />
+              {bots.length ? '再创建一个 Bot' : '扫码创建飞书 Bot'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onTest} disabled={!activeBot || testing} className="gap-1.5">
+              {testing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              {testing ? '测试中…' : '测试连接'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onManualAdd} className="gap-1.5">
+              <Plus size={14} />
+              使用已有 Bot
+            </Button>
+          </div>
+        </div>
+      </SettingsCard>
+    </SettingsSection>
+  )
+}
+
 // ===== Bot 配置 Tab（多 Bot 版本）=====
 
 function FeishuConfigTab(): React.ReactElement {
@@ -1228,6 +1518,8 @@ function FeishuConfigTab(): React.ReactElement {
   const setBotStates = useSetAtom(feishuBotStatesAtom)
   const [bots, setBots] = React.useState<FeishuBotConfig[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [testing, setTesting] = React.useState(false)
+  const [advancedOpen, setAdvancedOpen] = React.useState(false)
 
   const loadBots = React.useCallback(async () => {
     try {
@@ -1286,6 +1578,21 @@ function FeishuConfigTab(): React.ReactElement {
 
   const [registerOpen, setRegisterOpen] = React.useState(false)
 
+  const handleQuickTest = React.useCallback(async () => {
+    const bot = bots.find((item) => botStates[item.id]?.status === 'connected') ?? bots.find((item) => item.appId)
+    if (!bot?.appId) return
+    setTesting(true)
+    try {
+      const secret = await window.electronAPI.getDecryptedFeishuBotSecret(bot.id)
+      const result = await window.electronAPI.testFeishuConnection(bot.appId, secret)
+      result.success ? toast.success(`连接测试通过${result.botName ? `：${result.botName}` : ''}`) : toast.error(result.message)
+    } catch {
+      toast.error('连接测试失败，请展开 Bot 管理查看详细信息')
+    } finally {
+      setTesting(false)
+    }
+  }, [botStates, bots])
+
   /** 扫码成功后：保存配置 + 自动启动 Bot */
   const handleRegisterSuccess = React.useCallback(async (result: { appId: string; appSecret: string }) => {
     try {
@@ -1328,51 +1635,59 @@ function FeishuConfigTab(): React.ReactElement {
         onSuccess={handleRegisterSuccess}
       />
 
-      {/* Bot 列表 */}
-      <SettingsSection
-        title="飞书 Bot 列表"
-        description="管理多个飞书机器人，每个 Bot 可绑定不同的工作区和模型"
-        action={
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => setRegisterOpen(true)}>
-              <QrCode size={14} className="mr-1.5" />
-              扫码创建
-            </Button>
-            <Button size="sm" variant="outline" onClick={handleAddBot}>
-              <Plus size={14} className="mr-1.5" />
-              手动添加
-            </Button>
-          </div>
-        }
-      >
-        {bots.length === 0 ? (
-          <SettingsCard divided={false}>
-            <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              还没有配置飞书 Bot。点击「扫码创建」一键接入，或「手动添加」用已有 App ID。
-            </div>
-          </SettingsCard>
-        ) : (
-          <div className="space-y-3">
-            {bots.map((bot) => (
-              <BotConfigCard
-                key={bot.id}
-                bot={bot}
-                state={botStates[bot.id]}
-                onSaved={loadBots}
-                onRemoved={loadBots}
-              />
-            ))}
-          </div>
-        )}
-      </SettingsSection>
+      <FeishuQuickStart
+        bots={bots}
+        botStates={botStates}
+        onRegister={() => setRegisterOpen(true)}
+        onManualAdd={() => { setAdvancedOpen(true); void handleAddBot() }}
+        onRefresh={() => { void refreshStates(); void loadBots() }}
+        onTest={() => void handleQuickTest()}
+        testing={testing}
+      />
 
-      <SessionMirrorSection bots={bots} />
-
-      {/* 手动创建飞书 Bot 引导 */}
-      <SettingsSection
-        title="手动创建飞书 Bot"
-        description="首次使用？按以下步骤在飞书开放平台创建机器人应用"
+      <details
+        className="group rounded-lg border border-border/60 bg-muted/10"
+        open={advancedOpen}
+        onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
       >
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+          <span>高级设置与手动配置</span>
+          <ChevronRight size={16} className="text-muted-foreground transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="space-y-8 border-t border-border/50 px-4 py-4">
+          {/* 已连接的 Bot：配置完成后只需在这里维护 */}
+          <SettingsSection
+            title="Bot 管理"
+            description="首次接入不用配置这里；需要修改凭证或管理多个 Bot 时再打开"
+          >
+            {bots.length === 0 ? (
+              <SettingsCard divided={false}>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  还没有配置飞书 Bot。点击上方「使用已有 Bot」后，在这里填写 App ID。
+                </div>
+              </SettingsCard>
+            ) : (
+              <div className="space-y-3">
+                {bots.map((bot) => (
+                  <BotConfigCard
+                    key={bot.id}
+                    bot={bot}
+                    state={botStates[bot.id]}
+                    onSaved={loadBots}
+                    onRemoved={loadBots}
+                  />
+                ))}
+              </div>
+            )}
+          </SettingsSection>
+
+          <SessionMirrorSection bots={bots} />
+
+          {/* 手动创建飞书 Bot 引导 */}
+          <SettingsSection
+            title="手动创建飞书 Bot"
+            description="只有使用已有开发者应用时才需要这一步"
+          >
         <SettingsCard divided={false}>
           <div className="px-4 py-4 space-y-5 text-sm">
             {/* 步骤 1 */}
@@ -1484,8 +1799,14 @@ function FeishuConfigTab(): React.ReactElement {
         </SettingsCard>
       </SettingsSection>
 
-      {/* 飞书 CLI 配置引导 */}
-      <FeishuCliSection />
+          {/* CLI 是默认的云端能力路径；先在目标工作区完成配置，再按需查看诊断或手动授权。 */}
+          <FeishuCliSection />
+          <LarkCloudCapabilitiesSection />
+
+          {/* MCP 当前不展示给普通用户：它与 CLI 能力重叠且需要第二套 App/OAuth 配置。
+              现有实现保留在代码中，待 CLI 覆盖不足时再作为实验性兜底入口开放。 */}
+        </div>
+      </details>
 
     </div>
   )
@@ -1494,31 +1815,20 @@ function FeishuConfigTab(): React.ReactElement {
 // ===== 主组件 =====
 
 export function FeishuSettings(): React.ReactElement {
-  const [activeTab, setActiveTab] = React.useState<FeishuTab>('config')
-
   return (
     <div className="space-y-6">
-      {/* Tab 切换栏 */}
-      <div className="inline-flex rounded-lg bg-muted p-1 gap-0.5">
-        {TAB_OPTIONS.map((tab) => (
-          <button
-            key={tab.value}
-            type="button"
-            onClick={() => setActiveTab(tab.value)}
-            className={cn(
-              'px-4 py-1.5 rounded-md text-sm font-medium transition-colors',
-              activeTab === tab.value
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {/* 默认只展示最短接入流程；绑定管理属于维护功能，不阻塞首次配置 */}
+      <FeishuConfigTab />
 
-      {/* Tab 内容 */}
-      {activeTab === 'config' ? <FeishuConfigTab /> : <FeishuBindingsTab />}
+      <details className="group rounded-lg border border-border/60 bg-muted/10">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+          <span>绑定管理</span>
+          <ChevronRight size={16} className="text-muted-foreground transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="border-t border-border/50 px-4 py-4">
+          <FeishuBindingsTab />
+        </div>
+      </details>
     </div>
   )
 }

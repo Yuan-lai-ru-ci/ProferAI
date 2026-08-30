@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, PPT_MATERIAL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, LARK_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, PPT_MATERIAL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type {
@@ -113,6 +113,13 @@ import type {
   FeishuChatBinding,
   FeishuPresenceReport,
   FeishuUpdateBindingInput,
+  LarkCliStatus,
+  LarkCliOperationResult,
+  LarkLoginStartResult,
+  LarkLoginEvent,
+  LarkMcpCredentialsInput,
+  LarkMcpSetupResult,
+  LarkMcpStatus,
   DingTalkConfig,
   DingTalkConfigInput,
   DingTalkBridgeState,
@@ -1102,6 +1109,22 @@ export interface ElectronAPI {
   onWorkspaceFilesChanged: (callback: () => void) => () => void
 
   // ===== 飞书集成 =====
+
+  /** Lark 用户云端能力（凭据留在官方 CLI credential store） */
+  getLarkCliStatus: () => Promise<LarkCliStatus>
+  refreshLarkCliStatus: () => Promise<LarkCliStatus>
+  installLarkCli: () => Promise<LarkCliOperationResult>
+  startLarkLogin: () => Promise<LarkLoginStartResult>
+  cancelLarkLogin: () => Promise<void>
+  onLarkLoginEvent: (callback: (event: LarkLoginEvent) => void) => () => void
+  getLarkMcpStatus: () => Promise<LarkMcpStatus>
+  saveLarkMcpCredentials: (input: LarkMcpCredentialsInput) => Promise<LarkMcpSetupResult>
+  enableLarkMcpForWorkspace: (workspaceSlug: string) => Promise<LarkMcpSetupResult>
+  disableLarkMcpForWorkspace: (workspaceSlug: string) => Promise<LarkMcpSetupResult>
+  startLarkMcpLogin: () => Promise<LarkLoginStartResult>
+  cancelLarkMcpLogin: () => Promise<void>
+  testLarkMcpConnection: () => Promise<LarkMcpSetupResult>
+  onLarkMcpLoginEvent: (callback: (event: LarkLoginEvent) => void) => () => void
 
   /** 获取飞书配置 */
   getFeishuConfig: () => Promise<FeishuConfig>
@@ -2780,6 +2803,31 @@ const electronAPI: ElectronAPI = {
 
   getReleaseByTag: (tag) => {
     return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG, tag)
+  },
+
+  // ===== Lark 用户云端能力 =====
+
+  getLarkCliStatus: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.GET_STATUS),
+  refreshLarkCliStatus: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.REFRESH_STATUS),
+  installLarkCli: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.INSTALL_CLI),
+  startLarkLogin: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.START_LOGIN),
+  cancelLarkLogin: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.CANCEL_LOGIN),
+  onLarkLoginEvent: (callback: (event: LarkLoginEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: LarkLoginEvent): void => callback(payload)
+    ipcRenderer.on(LARK_IPC_CHANNELS.LOGIN_EVENT, listener)
+    return () => { ipcRenderer.removeListener(LARK_IPC_CHANNELS.LOGIN_EVENT, listener) }
+  },
+  getLarkMcpStatus: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.GET_MCP_STATUS),
+  saveLarkMcpCredentials: (input: LarkMcpCredentialsInput) => ipcRenderer.invoke(LARK_IPC_CHANNELS.SAVE_MCP_CREDENTIALS, input),
+  enableLarkMcpForWorkspace: (workspaceSlug: string) => ipcRenderer.invoke(LARK_IPC_CHANNELS.ENABLE_MCP_FOR_WORKSPACE, workspaceSlug),
+  disableLarkMcpForWorkspace: (workspaceSlug: string) => ipcRenderer.invoke(LARK_IPC_CHANNELS.DISABLE_MCP_FOR_WORKSPACE, workspaceSlug),
+  startLarkMcpLogin: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.START_MCP_LOGIN),
+  cancelLarkMcpLogin: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.CANCEL_MCP_LOGIN),
+  testLarkMcpConnection: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.TEST_MCP_CONNECTION),
+  onLarkMcpLoginEvent: (callback: (event: LarkLoginEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: LarkLoginEvent): void => callback(payload)
+    ipcRenderer.on(LARK_IPC_CHANNELS.MCP_LOGIN_EVENT, listener)
+    return () => { ipcRenderer.removeListener(LARK_IPC_CHANNELS.MCP_LOGIN_EVENT, listener) }
   },
 
   // ===== 飞书集成 =====
