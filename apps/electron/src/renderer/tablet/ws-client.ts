@@ -124,9 +124,12 @@ export class WsClient {
   private openSocket(): void {
     this.emitStatus('connecting')
     try {
-      // token 通过 query 传递，服务端 /ws 鉴权读取
-      const separator = this.url.includes('?') ? '&' : '?'
-      const wsUrl = `${this.url}${separator}token=${encodeURIComponent(this.token)}`
+      // 官网中心 Relay 禁止把短 ticket 放进 URL（会进入 Nginx/access log），
+      // 改为连接建立后的第一帧 relay_auth；局域网旧服务继续使用 query token。
+      const isCentralRelay = /^wss:\/\/profer\.cn\/remote\/ws(?:$|\?)/i.test(this.url)
+      const wsUrl = isCentralRelay
+        ? this.url
+        : `${this.url}${this.url.includes('?') ? '&' : '?'}token=${encodeURIComponent(this.token)}`
       this.ws = new WebSocket(wsUrl)
     } catch (e) {
       this.emitStatus('error', String(e))
@@ -135,6 +138,9 @@ export class WsClient {
     }
 
     this.ws.onopen = () => {
+      if (/^wss:\/\/profer\.cn\/remote\/ws(?:$|\?)/i.test(this.url)) {
+        this.ws?.send(JSON.stringify({ kind: 'relay_auth', ticket: this.token }))
+      }
       this.clearHeartbeat()
       this.lastPongAt = Date.now()
       // 心跳保持连接：既定期发 ping，也检测假死（发送 ping 但长时间无 pong/任何入站帧）。

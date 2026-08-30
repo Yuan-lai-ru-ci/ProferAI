@@ -18,7 +18,7 @@ import { encryptToken, decryptToken } from './token-crypto'
 import type { TeamServerConfig } from '@profer/shared'
 
 /** 默认团队服务地址（商业版内置，认证页不向用户暴露服务器配置）。 */
-export const DEFAULT_TEAM_SERVER_URL = 'http://47.109.108.57/proma'
+export const DEFAULT_TEAM_SERVER_URL = 'https://profer.cn/proma'
 
 /** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
 const API_PREFIX = '/v1'
@@ -915,7 +915,29 @@ async function getAccessTokenForApi(): Promise<{ baseUrl: string; token: string 
   return { baseUrl: cur.baseUrl, token: cur.token }
 }
 
-/** 拉取当前账号的登录设备列表（含本机 deviceId 用于标注）。走 accessToken(JWT)。 */
+/** 获取中心中继短时 ticket。桌面端只为当前稳定 deviceId 申请 desktop ticket。 */
+export async function getRemoteRelayTicket(role: 'desktop' | 'viewer' = 'desktop', deviceSlotId?: string): Promise<{ ticket: string; expiresAt: number }> {
+  const deviceId = getDeviceAuthInfo().deviceId
+  const auth = await getAccessTokenForApi()
+  if (!auth) throw new Error('未登录团队账号')
+  let slotId = deviceSlotId
+  if (!slotId) {
+    const devices = await listRemoteDevices()
+    const current = devices.devices?.find((device) => device.deviceId === deviceId)
+    if (!current) throw new Error('当前设备尚未注册团队账号')
+    slotId = current.id
+  }
+  const response = await (undiciFetch as unknown as typeof fetch)(`${auth.baseUrl}${API_PREFIX}/account/remote-relay/tickets`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceSlotId: slotId, role }),
+  })
+  if (!response.ok) throw new Error(`远程中继授权失败 (${response.status})`)
+  const data = await response.json() as { ticket?: string; expiresAt?: number }
+  if (!data.ticket || !Number.isFinite(data.expiresAt)) throw new Error('远程中继授权响应无效')
+  return { ticket: data.ticket, expiresAt: data.expiresAt! }
+}
+
 export async function listRemoteDevices(): Promise<{
   ok: boolean
   devices?: Array<{ id: string; deviceId: string | null; deviceName: string; platform: string | null; appVersion?: string | null; createdAt: number; lastUsedAt: number }>

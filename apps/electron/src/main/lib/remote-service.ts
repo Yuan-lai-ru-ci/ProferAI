@@ -90,6 +90,7 @@ import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
 import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
 import { loadWorkspaceHeatmapDaily } from './workspace-heatmap-query'
 import { RemoteAgentEventLog, type RemoteAgentEventRecord } from './remote-agent-event-log'
+import { RemoteRelayClient, type RemoteRelaySink } from './remote-relay-client'
 
 /** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -121,6 +122,9 @@ const TABLET_STATIC_CSP =
 /** HTTP + WebSocket 服务实例 */
 let httpServer: HttpServer | null = null
 let wss: WebSocketServer | null = null
+let remoteRelayClient: RemoteRelayClient | null = null
+let remoteRelaySink: RemoteRelaySink | null = null
+let remoteRelayCommandContext: RemoteCommandContext = {}
 
 /** 闲置踢人定时器：定期扫描连接，清理长时间无任何入站消息（含 ping）的假死/僵尸连接。 */
 let idleSweepTimer: ReturnType<typeof setInterval> | null = null
@@ -192,6 +196,13 @@ function isPartialSdkPayload(payload: unknown): boolean {
 /** 真正把一条 agent_event 帧广播给所有已连接平板客户端。 */
 function broadcastAgentFrame(sessionId: string, payload: import('@profer/shared').AgentStreamPayload): void {
   const record = remoteAgentEventLog.append(sessionId, payload)
+  const frame = JSON.stringify({
+    kind: 'agent_event',
+    eventId: record.eventId,
+    sessionId: record.sessionId,
+    payload: record.payload,
+  })
+  if (remoteRelaySink?.isOpen()) remoteRelaySink.send(frame)
   for (const client of wss?.clients ?? []) {
     if (client.readyState !== WebSocket.OPEN) continue
     const replayState = agentReplayStates.get(client)
@@ -795,7 +806,7 @@ interface RemoteCommandContext {
 }
 
 /** 处理来自平板客户端的一条 JSON 指令消息 */
-async function handleCommand(
+export async function handleRemoteCommand(
   message: string,
   requestId: unknown = null,
   context?: RemoteCommandContext,
@@ -1704,7 +1715,7 @@ export function startRemoteService(): string | null {
         return
       }
 
-      void handleCommand(body, reqId, commandContext).then((result) => {
+      void handleRemoteCommand(body, reqId, commandContext).then((result) => {
         // 将指令响应作为 "command_result" 事件回给客户端
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(
@@ -1741,12 +1752,62 @@ export function startRemoteService(): string | null {
   // 平板 stub 按通道名分发到 onStreamChunk 等注册器。
   chatBusUnsubscribe = chatEventBus.on((conversationId, channel, payload) => {
     const frame = JSON.stringify({ kind: 'chat_event', conversationId, channel, payload })
+    if (remoteRelaySink?.isOpen()) remoteRelaySink.send(frame)
     for (const client of wss?.clients ?? []) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(frame)
       }
     }
   })
+
+  // 中心 relay 仅在显式开启时连接；默认仍保持本地 LAN 远程行为不变。
+  if (process.env.PROFER_REMOTE_RELAY === '1') {
+    remoteRelayClient = new RemoteRelayClient({
+      onOpen: (sink) => {
+        remoteRelaySink = sink
+        remoteRelayCommandContext = {}
+        // 让 Relay 后面的 Pocket 继续使用现有 WsClient 握手/快照协议。
+        sink.send(JSON.stringify({
+          kind: 'hello',
+          serverTime: Date.now(),
+          serverInstanceId,
+          latestAgentEventId: remoteAgentEventLog.getLatestEventId(),
+          oldestAgentEventId: remoteAgentEventLog.getOldestEventId(),
+        }))
+      },
+      onClose: () => {
+        remoteRelaySink = null
+        remoteRelayCommandContext = {}
+      },
+      onMessage: (raw, sink) => {
+        let parsed: { kind?: unknown; type?: unknown; _cmdId?: unknown; requestId?: unknown; cursor?: unknown }
+        try { parsed = JSON.parse(raw) } catch { return }
+        if (parsed.kind === 'relay_hello') return
+        if (parsed.kind === 'pong') return
+        if (parsed.type === 'ping') {
+          sink.send(JSON.stringify({ kind: 'pong', serverTime: Date.now() }))
+          return
+        }
+        if (parsed.type === 'resume_agent_events') {
+          // Relay 是透明转发层；桌面端不把 viewer 的 cursor 与本机 LAN viewer 状态混用。
+          // 当前最小实现要求 Pocket 重新取快照，避免跨连接 cursor 污染。
+          sink.send(JSON.stringify({
+            kind: 'agent_events_resumed',
+            requestId: parsed._cmdId ?? parsed.requestId ?? null,
+            requiresSnapshot: true,
+            latestEventId: remoteAgentEventLog.getLatestEventId(),
+          }))
+          return
+        }
+        if (typeof parsed.type !== 'string') return
+        const requestId = parsed._cmdId ?? parsed.requestId ?? null
+        void handleRemoteCommand(raw, requestId, remoteRelayCommandContext).then((result) => {
+          if (sink.isOpen()) sink.send(JSON.stringify({ kind: 'command_result', requestId, ...result }))
+        })
+      },
+    })
+    remoteRelayClient.start()
+  }
 
   // 监听地址：默认 0.0.0.0（局域网设备可访问，平板通过电脑局域网 IP:端口 访问）。
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
@@ -1766,6 +1827,9 @@ export function startRemoteService(): string | null {
     chatBusUnsubscribe = null
     try { wss?.close() } catch { /* ignore */ }
     wss = null
+    remoteRelayClient?.stop()
+    remoteRelayClient = null
+    remoteRelaySink = null
     const failedServer = httpServer
     httpServer = null
     try { failedServer?.close() } catch { /* ignore */ }
@@ -1804,6 +1868,10 @@ export function startRemoteService(): string | null {
 
 /** 停止 Profer Remote Service */
 export function stopRemoteService(): void {
+  remoteRelayClient?.stop()
+  remoteRelayClient = null
+  remoteRelaySink = null
+  remoteRelayCommandContext = {}
   eventBusUnsubscribe?.()
   eventBusUnsubscribe = null
   chatBusUnsubscribe?.()
