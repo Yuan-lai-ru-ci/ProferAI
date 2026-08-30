@@ -35,6 +35,7 @@ import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
 import { MasterSkillsTab } from './MasterSkillsTab'
 import { AgentPresetSettings } from './AgentPresetSettings'
 import { ImportPresetDialog } from './ImportPresetDialog'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 
 type CapabilityTab = 'skills' | 'marketplace' | 'mcp' | 'memory' | 'presets'
 
@@ -188,7 +189,8 @@ export function AgentSkillsView(): React.ReactElement {
 
   if (!data.hasWorkspace) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+      <div className="relative flex h-full flex-col items-center justify-center gap-3 text-center">
+        <div className="absolute inset-x-0 top-0 h-14 titlebar-drag-region" aria-hidden="true" />
         <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
           <Blocks className="size-8 text-foreground/30" />
         </div>
@@ -201,11 +203,11 @@ export function AgentSkillsView(): React.ReactElement {
   }
 
   return (
-    <div data-profer-navigation-region="agent-skills" className="flex h-full flex-col overflow-hidden">
-      {/* 顶部 50px 留给 AppShell 的全局 drag-region。不能把含 pt-14 的外层设为
-          no-drag，否则它的布局盒会覆盖窗口顶端并抵消全局拖拽区。交互控件从 56px
-          开始的内层才设为 no-drag，以同时保证窗口拖动和 Radix Popover 点击可用。 */}
-      <div className="mx-auto mt-14 flex w-full max-w-6xl shrink-0 items-center justify-between gap-3 px-4 pb-4 sm:px-6 lg:px-8">
+    <div data-profer-navigation-region="agent-skills" className="relative flex h-full flex-col overflow-hidden">
+      {/* 顶部标题区保留为窗口拖拽区；标题、工作区选择和窗口按钮保持可交互。 */}
+      <div className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region" aria-hidden="true" />
+      <div className="relative mx-auto mt-14 flex w-full max-w-6xl shrink-0 items-center justify-between gap-3 px-4 pb-4 sm:px-6 lg:px-8">
+        <WindowControlsHost id="agent-skills" priority={20} className="absolute right-2 top-[-56px] z-20" />
         <div className="titlebar-no-drag flex items-center gap-2.5">
           <Blocks className="size-6 text-foreground/70" />
           <h1 className="text-2xl font-semibold text-foreground">Agent 技能</h1>
@@ -250,7 +252,7 @@ export function AgentSkillsView(): React.ReactElement {
       </div>
 
       {/* 工具条 */}
-      <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-2 px-4 pb-4 sm:px-6 lg:px-8">
+      <div className="titlebar-drag-region mx-auto flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-2 px-4 pb-4 sm:px-6 lg:px-8">
         {/* Skills / 市场 / MCP / 记忆 切换 */}
         <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
           {(() => {

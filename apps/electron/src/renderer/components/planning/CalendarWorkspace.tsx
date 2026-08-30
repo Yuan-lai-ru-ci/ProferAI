@@ -458,7 +458,7 @@ export function CalendarWorkspace({ embedded = false, toolbarStart, toolbarEnd, 
     }
   }
 
-  const calendarToolbar = <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/45 px-4 py-2 sm:px-5">
+  const calendarToolbar = <div className="titlebar-drag-region flex w-full shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/45 px-4 py-2 sm:px-5">
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       {toolbarStart}
       <div className="flex h-9 items-center gap-0.5 rounded-lg border border-border/45 bg-muted/35 p-0.5">

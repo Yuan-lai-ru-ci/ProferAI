@@ -135,7 +135,7 @@ function PlatformSidebarItem({
       type="button"
       onClick={onClick}
       className={cn(
-        'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors text-left',
+        'flex min-w-0 shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
         isActive
           ? 'bg-muted text-foreground'
           : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
@@ -157,7 +157,7 @@ function PlatformSidebarItem({
       )}
 
       {/* 名称 */}
-      <span className="text-sm flex-1 min-w-0 truncate">
+      <span className="text-sm min-w-0 truncate">
         {platform.name}
       </span>
 
@@ -191,10 +191,10 @@ export function BotHubSettings(): React.ReactElement {
   const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('tablet')
 
   return (
-    <div className="flex -mx-6 -my-4 h-full">
-      {/* 左侧平台选择栏 */}
-      <div className="w-[140px] border-r border-border/50 py-3 px-2 flex-shrink-0">
-        <div className="space-y-0.5">
+    <div className="-mx-6 -my-5 flex h-full min-h-0 flex-col">
+      {/* 平台选择条：横向排列，避免远程连接页面出现一整列空白 */}
+      <div className="shrink-0 border-b border-border/50 px-4 py-2">
+        <nav className="flex flex-wrap items-center gap-1" aria-label="远程连接平台">
           {PLATFORMS.map((p) => (
             <PlatformSidebarItem
               key={p.id}
@@ -203,12 +203,12 @@ export function BotHubSettings(): React.ReactElement {
               onClick={() => setSelectedPlatform(p.id)}
             />
           ))}
-        </div>
+        </nav>
       </div>
 
-      {/* 右侧内容面板 */}
-      <ScrollArea className="flex-1 min-w-0">
-        <div className="px-6 py-4">
+      {/* 内容面板 */}
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="px-6 py-5">
           {renderPlatformPanel(selectedPlatform)}
         </div>
       </ScrollArea>

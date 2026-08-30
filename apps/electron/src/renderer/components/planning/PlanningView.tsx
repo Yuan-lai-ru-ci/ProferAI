@@ -24,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { TodoDatePicker, formatTodoDueDate } from '@/components/ui/todo-date-picker'
 import { ShortcutKeycaps } from '@/components/shortcuts/ShortcutKeycaps'
+import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 
 const TABS: Array<{ id: PlanningTab; label: string }> = [
   { id: 'todos', label: 'Todo' },
@@ -111,9 +112,10 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
   }, [createAutomation, tab, triggerCalendarCreate, triggerTodoCreate]), true, { exclusive: true })
   return (
     <div data-profer-navigation-region="planning" tabIndex={-1} className="flex h-full flex-col overflow-hidden bg-content-area">
-      {/* AppShell 已提供独立的 Windows 顶部拖拽条；这里不能再声明 drag-region，
-          否则 Electron 的命中区域会覆盖右上角 WindowControls，导致最小化/最大化/关闭失效。 */}
-      <header className={cn('flex w-full items-start', standalone ? 'px-5 pb-3 pt-4' : 'px-6 pb-3 pt-4 sm:px-8 xl:px-10')}>
+      {/* 页面标题区作为可拖拽空白区；标题旁的统计和窗口按钮保持可交互。 */}
+      <header className={cn('relative flex w-full items-start titlebar-drag-region', standalone ? 'px-5 pb-3 pt-4' : 'px-6 pb-3 pt-4 sm:px-8 xl:px-10')}>
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-2" aria-hidden="true" />
+        <WindowControlsHost id="planning" priority={20} className="absolute right-2 top-[3px] z-20" />
         <div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <h1 className="text-2xl font-semibold tracking-tight text-wrap-balance">{teamWorkspaceId ? '团队任务/日程' : '任务/日程'}</h1>
@@ -124,7 +126,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
       <main className={cn('min-h-0 flex-1 overflow-hidden titlebar-no-drag', standalone ? 'px-5 pb-4 pt-3' : 'px-6 pb-6 pt-3 sm:px-8 xl:px-10')}>
         <div className="h-full w-full">
           <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-surface-border/50 bg-surface-raised shadow-lg">
-            {tab === 'calendar' ? <div ref={setCalendarToolbarTarget} className="shrink-0" /> : <div className="flex shrink-0 items-center gap-3 border-b border-surface-border/45 px-4 py-2.5 sm:px-5">
+            {tab === 'calendar' ? <div ref={setCalendarToolbarTarget} className="shrink-0 titlebar-drag-region" /> : <div className="flex shrink-0 items-center gap-3 border-b border-surface-border/45 px-4 py-2.5 sm:px-5 titlebar-drag-region">
               <nav className="inline-flex h-9 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
                 {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}
               </nav>
