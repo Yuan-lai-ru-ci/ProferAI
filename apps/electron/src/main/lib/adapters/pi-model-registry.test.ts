@@ -46,6 +46,34 @@ describe('Pi runtime 智谱团队版认证', () => {
     expect(resolvePiApiKey('anthropic', 'plain-key')).toBe('plain-key')
     expect(requiresPromaUserAgent('anthropic')).toBe(false)
   })
+
+  test('Given Ollama Agent When building headers Then use local sentinel Bearer without User-Agent requirement', () => {
+    const headers = buildPiRequestHeaders('ollama', '')
+    expect(headers?.Authorization).toBe('Bearer ollama')
+    expect(headers?.['User-Agent']).toBeUndefined()
+  })
+})
+
+describe('Pi runtime Ollama 双协议注册', () => {
+  test('Given Ollama channel When buildModel Then use Anthropic messages with root Agent URL and local auth', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-ollama',
+      prompt: 'hi',
+      apiKey: '',
+      provider: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'qwen3:8b',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.api).toBe('anthropic-messages')
+    expect(result.model.baseUrl).toBe('http://127.0.0.1:11434')
+    expect(result.model.id).toBe('qwen3:8b')
+  })
 })
 
 describe('Pi runtime 模型 ID [1m] 剥离', () => {

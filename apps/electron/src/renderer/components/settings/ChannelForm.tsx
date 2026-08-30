@@ -78,7 +78,7 @@ interface ChannelFormProps {
 const CN_PROVIDERS: ProviderType[] = ['deepseek', 'qwen', 'zhipu', 'doubao', 'kimi-api', 'kimi-coding', 'zhipu-coding', 'minimax', 'xiaomi', 'xiaomi-token-plan']
 
 /** 境外供应商 */
-const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'google', 'anthropic-compatible', 'custom']
+const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'google', 'anthropic-compatible', 'ollama', 'custom']
 
 /** 所有可选供应商 */
 const PROVIDER_OPTIONS: ProviderType[] = [...CN_PROVIDERS, ...GLOBAL_PROVIDERS]
@@ -116,10 +116,11 @@ const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
   'xiaomi-token-plan': '/v1/messages',
   'openai-codex': '',
   xai: '',
+  ollama: '/v1/chat/completions',
   custom: '/chat/completions',
 }
 
-/** 走 Anthropic 协议的供应商集合（共用 /v1/messages 端点） */
+/** 走 Anthropic 协议的供应商集合（共用 /v1/messages 端点）；Ollama 仅用于 Agent */
 const ANTHROPIC_PROTOCOL_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'anthropic',
   'anthropic-compatible',
@@ -132,6 +133,20 @@ const ANTHROPIC_PROTOCOL_PROVIDERS: ReadonlySet<ProviderType> = new Set<Provider
   'xiaomi-token-plan',
 ])
 
+/** 根据 Ollama 地址提示请求是否会离开本机。 */
+function getOllamaNetworkScope(baseUrl: string): string {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase()
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return '仅本机访问'
+    if (hostname.endsWith('.local') || hostname.startsWith('10.') || hostname.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) {
+      return '请求将发送到局域网设备'
+    }
+    return '请求将发送到远程服务，请确认网络与隐私设置'
+  } catch {
+    return '无法识别地址范围，请填写有效 URL'
+  }
+}
+
 /**
  * 生成 API 端点预览 URL
  *
@@ -139,10 +154,13 @@ const ANTHROPIC_PROTOCOL_PROVIDERS: ReadonlySet<ProviderType> = new Set<Provider
  * 与运行时 channel-manager / AnthropicAdapter 的规范化逻辑保持一致。
  */
 function buildPreviewUrl(baseUrl: string, provider: ProviderType): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '')
+  if (provider === 'ollama') {
+    return `${trimmed.replace(/\/v1$/, '')}/v1/chat/completions（Agent: /v1/messages）`
+  }
   if (ANTHROPIC_PROTOCOL_PROVIDERS.has(provider)) {
     return `${normalizeAnthropicProviderUrl(baseUrl, provider)}/messages`
   }
-  const trimmed = baseUrl.trim().replace(/\/+$/, '')
   return `${trimmed}${PROVIDER_CHAT_PATHS[provider]}`
 }
 
@@ -366,7 +384,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 从供应商 API 拉取可用模型列表 */
   const handleFetchModels = async (): Promise<void> => {
-    if (!apiKey.trim() || !baseUrl.trim()) return
+    if ((provider !== 'ollama' && !apiKey.trim()) || !baseUrl.trim()) return
 
     setFetchingModels(true)
     setFetchResult(null)
@@ -395,7 +413,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 测试连接（直接使用表单当前值，无需先保存） */
   const handleTest = async (): Promise<void> => {
-    if (!apiKey.trim() || !baseUrl.trim()) return
+    if ((provider !== 'ollama' && !apiKey.trim()) || !baseUrl.trim()) return
 
     setTesting(true)
     setTestResult(null)
@@ -416,7 +434,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 执行创建渠道 */
   const doCreate = React.useCallback(async (): Promise<Channel | null> => {
-    if (!name.trim() || !apiKey.trim()) return null
+    if (!name.trim() || (provider !== 'ollama' && !apiKey.trim())) return null
 
     setSaving(true)
     try {
@@ -534,7 +552,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           <Button
             size="sm"
             onClick={handleCreate}
-            disabled={saving || !name.trim() || !apiKey.trim()}
+            disabled={saving || !name.trim() || (!isEdit && provider !== 'ollama' && !apiKey.trim())}
           >
             {saving && <Loader2 size={14} className="animate-spin" />}
             <span>创建</span>
@@ -564,18 +582,22 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             value={baseUrl}
             onChange={setBaseUrl}
             placeholder="https://api.example.com"
-            description={baseUrl.trim() ? `预览：${buildPreviewUrl(baseUrl, provider)}` : undefined}
+            description={baseUrl.trim()
+              ? provider === 'ollama'
+                ? `预览：${buildPreviewUrl(baseUrl, provider)}；${getOllamaNetworkScope(baseUrl)}`
+                : `预览：${buildPreviewUrl(baseUrl, provider)}`
+              : undefined}
           />
           {/* API Key + 测试连接同行 */}
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-foreground">API Key</div>
+              <div className="text-sm font-medium text-foreground">API Key{provider === 'ollama' ? '（可选）' : ''}</div>
               <Button
                 variant="outline"
                 size="sm"
                 type="button"
                 onClick={handleTest}
-                disabled={testing || !apiKey.trim() || !baseUrl.trim()}
+                disabled={testing || (provider !== 'ollama' && !apiKey.trim()) || !baseUrl.trim()}
                 className="h-7 text-xs"
               >
                 {testing ? (
@@ -591,8 +613,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={isEdit ? '留空则不更新' : '输入 API Key'}
-                required={!isEdit}
+                placeholder={provider === 'ollama' ? 'Ollama 默认使用本地认证标识，无需填写' : (isEdit ? '留空则不更新' : '输入 API Key')}
+                required={!isEdit && provider !== 'ollama'}
                 className="pr-10"
               />
               <button
@@ -671,7 +693,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             size="sm"
             type="button"
             onClick={handleFetchModels}
-            disabled={fetchingModels || !apiKey.trim() || !baseUrl.trim()}
+            disabled={fetchingModels || (provider !== 'ollama' && !apiKey.trim()) || !baseUrl.trim()}
             className="h-7 text-xs"
           >
             {fetchingModels ? (
@@ -679,7 +701,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             ) : (
               <Download size={12} />
             )}
-            <span>从供应商获取</span>
+            <span>{provider === 'ollama' ? '读取本机模型' : '从供应商获取'}</span>
           </Button>
         }
       >
@@ -816,7 +838,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             <AlertDialogCancel onClick={handleDiscard}>放弃编辑</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleSaveAndClose}
-              disabled={saving || !name.trim() || !apiKey.trim()}
+              disabled={saving || !name.trim() || (!isEdit && provider !== 'ollama' && !apiKey.trim())}
             >
               {saving ? <><Loader2 size={14} className="animate-spin" /> 保存中...</> : '保存并关闭'}
             </AlertDialogAction>

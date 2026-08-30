@@ -16,6 +16,11 @@ export function applyAgentSdkAuthEnv(
   apiKey: string,
   forceBearerAuth = false,
 ): void {
+  if (provider === 'ollama') {
+    target.ANTHROPIC_AUTH_TOKEN = apiKey || 'ollama'
+    return
+  }
+
   if (forceBearerAuth || usesAgentSdkBearerWithUserAgent(provider)) {
     target.ANTHROPIC_AUTH_TOKEN = apiKey
     if (usesAgentSdkBearerWithUserAgent(provider)) {

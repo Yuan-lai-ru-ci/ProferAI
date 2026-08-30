@@ -21,7 +21,7 @@ import type {
   ToolDefinition,
   ContinuationMessage,
 } from './types.ts'
-import { normalizeBaseUrl } from './url-utils.ts'
+import { resolveOpenAIChatCompletionsUrl } from './url-utils.ts'
 
 // ===== OpenAI 特有类型 =====
 
@@ -193,7 +193,8 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
-    const url = normalizeBaseUrl(input.baseUrl)
+    const url = resolveOpenAIChatCompletionsUrl(input.baseUrl, this.providerType)
+    const apiKey = this.providerType === 'ollama' ? (input.apiKey || 'ollama') : input.apiKey
     const messages = toOpenAIMessages(input)
 
     // 工具续接消息（必须在构造 bodyObj 之前完成，避免隐式修改已赋值的 messages 引用）
@@ -213,9 +214,9 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     return {
-      url: `${url}/chat/completions`,
+      url,
       headers: {
-        'Authorization': `Bearer ${input.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify(bodyObj),
@@ -272,12 +273,13 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
-    const url = normalizeBaseUrl(input.baseUrl)
+    const url = resolveOpenAIChatCompletionsUrl(input.baseUrl, this.providerType)
+    const apiKey = this.providerType === 'ollama' ? (input.apiKey || 'ollama') : input.apiKey
 
     return {
-      url: `${url}/chat/completions`,
+      url,
       headers: {
-        'Authorization': `Bearer ${input.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify({

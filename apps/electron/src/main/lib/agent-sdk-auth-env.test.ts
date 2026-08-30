@@ -28,4 +28,11 @@ describe('Agent SDK auth env', () => {
     expect(usesAgentSdkBearerWithUserAgent('kimi-coding')).toBe(true)
     expect(usesAgentSdkBearerWithUserAgent('anthropic')).toBe(false)
   })
+
+  test('Given Ollama without API key When credentials are applied Then use request-local sentinel token', () => {
+    const env: Record<string, string | undefined> = {}
+    applyAgentSdkAuthEnv(env, 'ollama', '')
+    expect(env).toEqual({ ANTHROPIC_AUTH_TOKEN: 'ollama' })
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+  })
 })

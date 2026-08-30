@@ -341,14 +341,14 @@ export function requiresPromaUserAgent(provider: ProviderType): boolean {
 }
 
 function usesBearerOnlyAnthropicAuth(provider: ProviderType): boolean {
-  return requiresPromaUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
+  return requiresPromaUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic' || provider === 'ollama'
 }
 
 export function buildPiRequestHeaders(provider: ProviderType, apiKey: string): PiRequestHeaders | undefined {
   if (normalizePiApi(provider) !== 'anthropic-messages') return undefined
 
   const headers: PiRequestHeaders = {
-    Authorization: `Bearer ${apiKey}`,
+    Authorization: `Bearer ${apiKey || 'ollama'}`,
   }
 
   if (requiresPromaUserAgent(provider)) {

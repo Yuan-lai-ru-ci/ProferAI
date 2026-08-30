@@ -171,6 +171,10 @@ export function normalizeOpenAIBaseUrlForSdk(baseUrl: string): string {
  * - custom: "https://api.example.com/v1/chat/completions" → 原样使用
  */
 export function resolveOpenAIChatCompletionsUrl(baseUrl: string, provider: ProviderType = 'openai'): string {
+  if (provider === 'ollama') {
+    const rootUrl = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
+    return `${rootUrl}/v1/chat/completions`
+  }
   if (provider === 'custom') {
     return trimTrailingUrlPathSlash(baseUrl)
   }
@@ -218,6 +222,9 @@ export function resolveOpenAIModelsUrl(baseUrl: string): string {
  * （已含版本路径如 `/coding/v1` 的不会重复追加），与 Agent SDK 自动拼接 /v1/messages 的行为保持一致。
  */
 export function normalizeAnthropicProviderUrl(baseUrl: string, provider: ProviderType): string {
+  if (provider === 'ollama') {
+    return normalizeVersionedAnthropicBaseUrl(baseUrl)
+  }
   if (
     provider === 'minimax'
     || provider === 'xiaomi'
@@ -244,6 +251,10 @@ export function normalizeAnthropicProviderUrl(baseUrl: string, provider: Provide
  * - anthropic-compatible: "https://gateway.example.com/v1/messages" → 原样使用
  */
 export function resolveAnthropicMessagesUrl(baseUrl: string, provider: ProviderType): string {
+  if (provider === 'ollama') {
+    const normalized = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
+    return `${normalized}/v1/messages`
+  }
   if (provider === 'anthropic-compatible') {
     return trimTrailingUrlPathSlash(baseUrl)
   }
@@ -263,6 +274,9 @@ export function resolveAnthropicMessagesUrl(baseUrl: string, provider: ProviderT
  * 内置供应商按协议根地址推导 /models。
  */
 export function resolveAnthropicModelsUrl(baseUrl: string, provider: ProviderType): string {
+  if (provider === 'ollama') {
+    return `${normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')}/v1/models`
+  }
   if (hasPathSuffix(baseUrl, '/messages')) {
     return replacePathSuffix(baseUrl, '/messages', '/models')
   }

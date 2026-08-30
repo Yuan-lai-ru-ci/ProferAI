@@ -36,6 +36,11 @@ export function inferAgentBaseUrl(provider: ProviderType, baseUrl?: string, agen
   const explicit = agentBaseUrl?.trim()
   if (explicit) return explicit
 
+  if (provider === 'ollama') {
+    const normalized = normalizeBaseUrl(baseUrl ?? '')
+    return normalized ? normalized.replace(/\/v1$/, '') : undefined
+  }
+
   if (provider === 'deepseek') {
     if (hasAnthropicPath(baseUrl)) return normalizeBaseUrl(baseUrl ?? '')
     return PROVIDER_DEFAULT_AGENT_URLS.deepseek

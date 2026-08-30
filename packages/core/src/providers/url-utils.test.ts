@@ -126,6 +126,11 @@ describe('normalizeAnthropicProviderUrl', () => {
     expect(url).toBe('https://api.kimi.com/coding/v1')
   })
 
+  test('Ollama 根地址与 /v1 地址均规范为 Anthropic /v1', () => {
+    expect(normalizeAnthropicProviderUrl('http://127.0.0.1:11434', 'ollama')).toBe('http://127.0.0.1:11434/v1')
+    expect(normalizeAnthropicProviderUrl('http://127.0.0.1:11434/v1', 'ollama')).toBe('http://127.0.0.1:11434/v1')
+  })
+
   test('minimax 协议根路径补全 /v1', () => {
     expect(normalizeAnthropicProviderUrl('https://api.minimaxi.com/anthropic', 'minimax')).toBe(
       'https://api.minimaxi.com/anthropic/v1',
@@ -199,6 +204,15 @@ describe('resolveOpenAIChatCompletionsUrl', () => {
   test('内置 openai 已是完整端点不重复追加', () => {
     expect(resolveOpenAIChatCompletionsUrl('https://api.openai.com/v1/chat/completions', 'openai')).toBe(
       'https://api.openai.com/v1/chat/completions',
+    )
+  })
+
+  test('Ollama 根地址与 /v1 地址解析为 OpenAI chat completions', () => {
+    expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:11434', 'ollama')).toBe(
+      'http://127.0.0.1:11434/v1/chat/completions',
+    )
+    expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:11434/v1', 'ollama')).toBe(
+      'http://127.0.0.1:11434/v1/chat/completions',
     )
   })
 
@@ -292,6 +306,11 @@ describe('resolveAnthropicMessagesUrl', () => {
       'https://api.anthropic.com/v1/messages',
     )
   })
+
+  test('Ollama 根地址与 /v1 地址均解析到 Anthropic messages', () => {
+    expect(resolveAnthropicMessagesUrl('http://127.0.0.1:11434', 'ollama')).toBe('http://127.0.0.1:11434/v1/messages')
+    expect(resolveAnthropicMessagesUrl('http://127.0.0.1:11434/v1', 'ollama')).toBe('http://127.0.0.1:11434/v1/messages')
+  })
 })
 
 describe('resolveAnthropicModelsUrl', () => {
@@ -329,6 +348,10 @@ describe('resolveAnthropicModelsUrl', () => {
     expect(resolveAnthropicModelsUrl('https://ark.cn-beijing.volces.com/api/plan', 'ark-coding-plan')).toBe(
       'https://ark.cn-beijing.volces.com/api/plan/v1/models',
     )
+  })
+
+  test('Ollama 模型列表使用 OpenAI-compatible /v1/models', () => {
+    expect(resolveAnthropicModelsUrl('http://127.0.0.1:11434', 'ollama')).toBe('http://127.0.0.1:11434/v1/models')
   })
 })
 

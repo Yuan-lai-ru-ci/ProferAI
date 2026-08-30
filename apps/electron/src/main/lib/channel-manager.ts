@@ -773,6 +773,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'minimax':
       case 'xiaomi':
       case 'xiaomi-token-plan':
+      case 'ollama':
         return await testAnthropicCompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
       case 'openai':
       case 'openai-responses':
@@ -830,6 +831,11 @@ async function testAnthropicCompatible(
     case 'xiaomi-token-plan':
       testModel = 'mimo-v2.5-pro'
       break
+    case 'ollama':
+      // testChannelDirect 没有选中模型参数，因此只验证服务和模型目录可达性。
+      // 实际模型存在性由 /api/tags 拉取结果与用户选择共同保证。
+      testModel = ''
+      break
     default:
       testModel = 'claude-sonnet-4-6'
   }
@@ -838,7 +844,9 @@ async function testAnthropicCompatible(
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
   }
-  if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
+  if (provider === 'ollama') {
+    headers.Authorization = `Bearer ${apiKey || 'ollama'}`
+  } else if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
     headers.Authorization = `Bearer ${apiKey}`
     headers['User-Agent'] = getProferUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
@@ -849,6 +857,17 @@ async function testAnthropicCompatible(
   } else {
     headers['x-api-key'] = apiKey
     headers.Authorization = `Bearer ${apiKey}`
+  }
+
+  if (provider === 'ollama') {
+    const rootUrl = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
+    const tagsResponse = await fetchFn(`${rootUrl}/api/tags`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey || 'ollama'}` },
+    })
+    if (tagsResponse.ok) return { success: true, message: 'Ollama 服务连接成功，已可读取本机模型' }
+    const tagsText = await tagsResponse.text().catch(() => '')
+    return { success: false, message: `Ollama 服务不可用 (${tagsResponse.status})${tagsText ? `: ${tagsText.slice(0, 200)}` : ''}` }
   }
 
   const endpoint = `${url}/messages`
@@ -1466,6 +1485,7 @@ export async function testChannelDirect(input: FetchModelsInput): Promise<Channe
       case 'minimax':
       case 'xiaomi':
       case 'xiaomi-token-plan':
+      case 'ollama':
         return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider)
       case 'openai':
       case 'openai-responses':
@@ -1509,6 +1529,8 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'xiaomi':
       case 'xiaomi-token-plan':
         return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider)
+      case 'ollama':
+        return await fetchOllamaModels(input.baseUrl, input.apiKey, proxyUrl)
       case 'openai':
       case 'openai-responses':
       case 'opencode-go-openai':
@@ -1546,6 +1568,36 @@ interface AnthropicModelItem {
  * Kimi Coding Plan 必须发送 Profer User-Agent。
  * 文档: https://docs.anthropic.com/en/api/models-list
  */
+interface OllamaTagItem {
+  name: string
+  size?: number
+  modified_at?: string
+}
+
+/** 从 Ollama 原生 API 读取本机已安装模型；此操作不会触发下载。 */
+async function fetchOllamaModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
+  const rootUrl = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
+  const fetchFn = getFetchFn(proxyUrl)
+  const response = await fetchFn(`${rootUrl}/api/tags`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKey || 'ollama'}` },
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    const hint = response.status === 404 ? '；请确认 Ollama 服务已启动' : ''
+    return { success: false, message: `Ollama 请求失败 (${response.status})${hint}${text ? `: ${text.slice(0, 200)}` : ''}`, models: [] }
+  }
+  const data = await response.json() as { models?: OllamaTagItem[] }
+  const models = (data.models ?? []).filter((item) => typeof item.name === 'string' && item.name.trim()).map((item) => ({
+    id: item.name,
+    name: item.name,
+    enabled: true,
+    source: 'fetched' as const,
+  }))
+  models.sort((a, b) => a.id.localeCompare(b.id))
+  return { success: true, message: `成功读取 ${models.length} 个 Ollama 模型`, models }
+}
+
 async function fetchAnthropicCompatibleModels(
   baseUrl: string,
   apiKey: string,

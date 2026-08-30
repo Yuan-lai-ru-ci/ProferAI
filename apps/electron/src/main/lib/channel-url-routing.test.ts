@@ -54,6 +54,11 @@ describe('渠道 Chat/Agent URL 路由', () => {
     expect(agentUrl).toBe('https://cn.clawnode.cn/v1')
   })
 
+  test('Given Ollama Chat Base URL When 推导 Agent URL Then 使用服务根地址', () => {
+    expect(inferAgentBaseUrl('ollama', 'http://127.0.0.1:11434')).toBe('http://127.0.0.1:11434')
+    expect(inferAgentBaseUrl('ollama', 'http://127.0.0.1:11434/v1/')).toBe('http://127.0.0.1:11434')
+  })
+
   test.each([
     ['openai', 'https://gateway.example.com/v1'],
     ['openai-responses', 'https://gateway.example.com/v1/responses'],
