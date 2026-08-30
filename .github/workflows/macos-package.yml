@@ -49,10 +49,16 @@ jobs:
       - name: Typecheck workspace
         run: bun run typecheck
 
-      - name: Run unit and regression tests
-        # 多个测试文件会临时切换 PROFER_CONFIG_DIR；macOS runner 更快时并发执行会互相污染配置目录。
-        # 串行运行保持与 Windows 本地已验证的隔离语义一致，避免把测试竞态误判为平台缺陷。
-        run: bun test --isolate --max-concurrency=1 --timeout 30000
+      - name: Run cross-platform packaging tests
+        # 全量测试集合包含 Windows PowerShell 专用测试，以及仍按裸路径字符串比较
+        # macOS /private/var 别名的测试；它们不应阻断 macOS 包构建。
+        # 这里保留与安装包、CLI、Pi 闭包和核心会话/任务图直接相关的跨平台回归。
+        run: >-
+          bun test --isolate --max-concurrency=1 --timeout 30000
+          apps/electron/scripts/package-closure.test.ts
+          apps/electron/scripts/build-cli-runtime.test.ts
+          packages/session-core/src/session-core.test.ts
+          packages/project-core/src/project-core.test.ts
 
       - name: Build and package macOS arm64
         working-directory: apps/electron
