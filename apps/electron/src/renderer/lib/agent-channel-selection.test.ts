@@ -41,12 +41,20 @@ describe('resolveAgentModelSelection', () => {
   const channels = [
     channel('claude', 'anthropic', ['claude-sonnet-4-6']),
     channel('openai', 'openai', ['gpt-5.5']),
+    channel('ollama', 'ollama', ['qwen3:8b']),
   ]
 
   test('Pi selects an OpenAI protocol model', () => {
     expect(resolveAgentModelSelection(channels, 'pi', ['claude'])).toEqual({
       channelId: 'openai',
       modelId: 'gpt-5.5',
+    })
+  })
+
+  test('Claude can select Ollama through its Anthropic-compatible protocol', () => {
+    expect(resolveAgentModelSelection([channels[2]!], 'claude', ['ollama'])).toEqual({
+      channelId: 'ollama',
+      modelId: 'qwen3:8b',
     })
   })
 

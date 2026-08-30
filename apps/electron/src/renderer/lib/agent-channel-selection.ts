@@ -1,5 +1,5 @@
 import type { AgentRuntime, Channel } from '@profer/shared'
-import { getChannelProtocol } from './channel-model-groups'
+import { getChannelProtocol, supportsChannelProtocol } from './channel-model-groups'
 
 /** Pi can use every enabled channel without changing Claude's compatibility whitelist. */
 export function nextAgentChannelIdsAfterModelSelect(
@@ -28,7 +28,7 @@ export function resolveAgentModelSelection(
   const preferredProtocol = runtime === 'pi' ? 'openai' : 'anthropic'
   const isEligibleChannel = (channel: Channel): boolean => (
     channel.enabled
-      && getChannelProtocol(channel.provider) === preferredProtocol
+      && supportsChannelProtocol(channel.provider, preferredProtocol)
       && (runtime === 'pi' || claudeChannelIds.includes(channel.id))
   )
 

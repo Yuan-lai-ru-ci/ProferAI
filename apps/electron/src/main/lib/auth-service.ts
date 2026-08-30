@@ -160,6 +160,12 @@ function writeTokens(tokens: AuthTokenStore): void {
 
 // ===== 认证操作 =====
 
+/**
+ * 会话世代用于隔离登出与异步续期的竞态：旧会话发出的 refresh 响应不得在登出后写回令牌。
+ */
+let authSessionGeneration = 0
+let logoutInProgress = false
+
 interface LoginResult {
   success: boolean
   teamAccountId?: string
@@ -589,6 +595,15 @@ export interface LogoutResult {
 
 /** 注销（清除本地令牌和渠道，并通知服务端吊销） */
 export async function logout(): Promise<LogoutResult> {
+  // 先让所有已在飞行中的 refresh 结果失效，并停止后续自动续期。
+  // 否则 refresh 在 logout 网络请求期间完成时会把旧 token 写回磁盘。
+  logoutInProgress = true
+  authSessionGeneration += 1
+  if (_autoRefreshTimer) {
+    clearTimeout(_autoRefreshTimer)
+    _autoRefreshTimer = null
+  }
+
   // 通知服务端吊销 accessToken
   const tokens = readTokens()
   const servers = listTeamServers()
@@ -606,6 +621,8 @@ export async function logout(): Promise<LogoutResult> {
   }
 
   writeTokens({})
+  // 令牌已清空；此后新的 refresh 不会再取得可用 refreshToken。
+  // logoutInProgress 继续保持为 true，直到渠道备份/清空也完成，避免登录或后台任务插入中间态。
 
   // 渠道处理策略：
   //  1) 有账号标识 → 先加密备份当前 channels.json，**备份成功才清空活跃文件**；备份失败则保留活跃文件并提示。
@@ -621,6 +638,7 @@ export async function logout(): Promise<LogoutResult> {
   if (!accountId) {
     // 本地无账号：保留渠道文件不清空
     _servers = null
+    logoutInProgress = false
     console.log('[认证] 已注销（本地模式，未清空渠道）')
     return { channelsCleared: false, channelsBackedUp: false, warning: '当前为本地模式，登出未清空自配渠道。' }
   }
@@ -630,6 +648,7 @@ export async function logout(): Promise<LogoutResult> {
   } catch (err) {
     // 备份失败（加密/写盘/校验）→ 不清空活跃渠道，避免丢失
     _servers = null
+    logoutInProgress = false
     console.warn('[认证] 渠道备份失败，已保留活跃渠道不清空:', (err as Error).message)
     return {
       channelsCleared: false,
@@ -650,6 +669,7 @@ export async function logout(): Promise<LogoutResult> {
   // 清除服务端内存缓存：防止登出后 _servers 残留
   _servers = null
 
+  logoutInProgress = false
   console.log('[认证] 已注销（渠道已加密备份并清空活跃文件）')
   return { channelsCleared: true, channelsBackedUp: true }
 }
@@ -663,6 +683,7 @@ const AUTO_REFRESH_BACKOFF_MS = [60_000, 300_000, 900_000, 1_800_000, 3_600_000]
 
 /** 启动主动 token 续期：accessToken 过期前 5 分钟自动刷新 */
 export function scheduleAutoRefresh(): void {
+  if (logoutInProgress) return
   if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer)
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
@@ -703,6 +724,11 @@ let refreshInFlight: Promise<boolean> | null = null
 
 /** 刷新 accessToken（用 refreshToken 换新的） */
 async function refreshAuthTokenImpl(): Promise<boolean> {
+  if (logoutInProgress) {
+    console.log('[认证] 登出进行中，跳过 token 刷新')
+    return false
+  }
+  const sessionGenerationAtStart = authSessionGeneration
   const tokens = readTokens()
   const servers = listTeamServers()
 
@@ -733,6 +759,10 @@ async function refreshAuthTokenImpl(): Promise<boolean> {
 
       if (response.ok) {
         const data = await response.json() as { accessToken: string; relayToken?: string; refreshToken?: string; expiresAt: number; commercialMode?: boolean; isAdmin?: boolean; membershipTier?: string; canSelfConfigApi?: boolean }
+        if (logoutInProgress || sessionGenerationAtStart !== authSessionGeneration) {
+          console.log('[认证] 已忽略登出前发起的 token 刷新结果')
+          return false
+        }
         console.log(`[认证] 刷新成功，新 token 过期时间: ${new Date(data.expiresAt).toISOString()}`)
         const commercialMode = data.commercialMode === undefined
           ? resolveCommercialMode(token.commercialMode)

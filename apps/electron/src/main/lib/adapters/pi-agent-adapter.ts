@@ -242,27 +242,54 @@ function resolvePiHttpProxy(input: Pick<PiAgentQueryOptions, 'proxyUrl' | 'runti
     ?? normalizeProxyUrl(getCaseInsensitiveRuntimeEnvValue(input.runtimeEnv?.env, 'ALL_PROXY'))
 }
 
+const OLLAMA_REMOTE_HTTP_IDLE_TIMEOUT_MS = 10 * 60 * 1000
+const OLLAMA_REMOTE_WEBSOCKET_CONNECT_TIMEOUT_MS = 30 * 1000
+
 function isNonNegativeFiniteNumber(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value >= 0
+}
+
+function isLocalOllamaBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase()
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
+  } catch {
+    return false
+  }
 }
 
 export function buildPiRemoteConnectionSettings(
   input: Pick<
     PiAgentQueryOptions,
-    'provider' | 'proxyUrl' | 'runtimeEnv' | 'transport' | 'httpIdleTimeoutMs' | 'websocketConnectTimeoutMs'
+    'provider' | 'baseUrl' | 'proxyUrl' | 'runtimeEnv' | 'transport' | 'httpIdleTimeoutMs' | 'websocketConnectTimeoutMs'
   >,
 ): PiRemoteConnectionSettings {
   const httpProxy = resolvePiHttpProxy(input)
+  const remoteOllama = input.provider === 'ollama' && !isLocalOllamaBaseUrl(input.baseUrl)
   // Node/Electron 的 WebSocket 不支持请求级 HTTP 代理注入；有代理的 Codex
-  // 默认改走可由 undici dispatcher 承载的 SSE。用户显式选择 transport 时保留其意图。
-  const transport = input.transport ?? (httpProxy && input.provider === 'openai-codex' ? 'sse' : undefined)
+  // 默认改走可由 undici dispatcher 承载的 SSE。远程 Ollama 固定 SSE，
+  // 因为远程反代通常只稳定支持 HTTP 长连接，且推理首 token 可能较慢。
+  const transport = input.transport ?? (
+    remoteOllama || (httpProxy && input.provider === 'openai-codex')
+      ? 'sse'
+      : undefined
+  )
+  const httpIdleTimeoutMs = isNonNegativeFiniteNumber(input.httpIdleTimeoutMs)
+    ? input.httpIdleTimeoutMs
+    : remoteOllama
+      ? OLLAMA_REMOTE_HTTP_IDLE_TIMEOUT_MS
+      : undefined
+  const websocketConnectTimeoutMs = isNonNegativeFiniteNumber(input.websocketConnectTimeoutMs)
+    ? input.websocketConnectTimeoutMs
+    : remoteOllama
+      ? OLLAMA_REMOTE_WEBSOCKET_CONNECT_TIMEOUT_MS
+      : undefined
   return {
     ...(httpProxy ? { httpProxy } : {}),
     ...(transport ? { transport } : {}),
-    ...(isNonNegativeFiniteNumber(input.httpIdleTimeoutMs) ? { httpIdleTimeoutMs: input.httpIdleTimeoutMs } : {}),
-    ...(isNonNegativeFiniteNumber(input.websocketConnectTimeoutMs)
-      ? { websocketConnectTimeoutMs: input.websocketConnectTimeoutMs }
-      : {}),
+    ...(httpIdleTimeoutMs !== undefined ? { httpIdleTimeoutMs } : {}),
+    ...(websocketConnectTimeoutMs !== undefined ? { websocketConnectTimeoutMs } : {}),
   }
 }
 
@@ -1722,10 +1749,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ? await import('@earendil-works/pi-ai/compat')
         : undefined
       installPiRequestProxyFetch()
+      const connectionSettings = buildPiRemoteConnectionSettings(input)
       requestProxyDispatcher = createPiRequestProxyDispatcher({
-        proxyUrl: resolvePiHttpProxy(input),
+        proxyUrl: connectionSettings.httpProxy,
         noProxy: getCaseInsensitiveRuntimeEnvValue(input.runtimeEnv?.env, 'NO_PROXY'),
-        httpIdleTimeoutMs: input.httpIdleTimeoutMs,
+        httpIdleTimeoutMs: connectionSettings.httpIdleTimeoutMs,
       })
       if (active.abortRequested) throw createAbortError()
 
@@ -1768,7 +1796,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         compaction: { enabled: true, reserveTokens: autoCompactionReserveTokens },
         // Continue the same transcript after transient failures so completed tools are not replayed.
         retry: { enabled: true, maxRetries: PI_NATIVE_MAX_RETRIES, baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS },
-        ...buildPiRemoteConnectionSettings(input),
+        ...connectionSettings,
       })
       const openAIReasoningProfile = (input.provider === 'openai-codex' || input.provider === 'xai' || input.provider === 'openai-responses')
         ? resolveReasoningProfile({

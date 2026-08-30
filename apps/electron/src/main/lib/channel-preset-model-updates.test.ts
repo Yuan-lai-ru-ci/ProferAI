@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Channel, ChannelsConfig } from '@profer/shared'
-import { applyPresetModelCandidateUpdates } from './channel-manager'
+import { applyPresetModelCandidateUpdates, getUserManagedChannelsForLogout } from './channel-manager'
 
 function createChannel(overrides: Partial<Channel> = {}): Channel {
   return {
@@ -16,6 +16,18 @@ function createChannel(overrides: Partial<Channel> = {}): Channel {
     ...overrides,
   }
 }
+
+describe('logout channel ownership', () => {
+  test('keeps self-configured channels and excludes official managed channels from logout backup', () => {
+    const channels = [
+      createChannel({ id: 'local-channel' }),
+      createChannel({ id: 'newapi-gpt', serverManaged: true }),
+      createChannel({ id: 'newapi-legacy' }),
+    ]
+
+    expect(getUserManagedChannelsForLogout(channels).map((channel) => channel.id)).toEqual(['local-channel'])
+  })
+})
 
 describe('GLM-5.3 preset model migration', () => {
   test('Given an existing Zhipu channel When applying the update Then appends GLM-5.3 disabled without changing enabled models', () => {

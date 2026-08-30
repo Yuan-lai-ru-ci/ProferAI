@@ -6,7 +6,7 @@
  * 数据持久化到 ~/.proma/channels.json。
  */
 
-import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { getChannelsPath } from './config-paths'
 import { encryptToken, decryptToken } from './token-crypto'
@@ -179,6 +179,28 @@ export function getChannelsLogoutBackupPath(accountId: string): string {
 }
 
 /**
+ * 判断是否存在待恢复的登出备份。
+ *
+ * 登出后渲染进程仍会刷新一次渠道列表；如果此时自动创建 DeepSeek
+ * 占位渠道，登录恢复会误判“当前已有渠道”而跳过真正的备份。
+ */
+export function hasPendingLogoutChannelBackup(): boolean {
+  const channelsPath = getChannelsPath()
+  const path = require('node:path') as typeof import('node:path')
+  const prefix = `${path.basename(channelsPath)}.logout-backup-`
+  try {
+    return readdirSync(path.dirname(channelsPath)).some((name) => name.startsWith(prefix))
+  } catch {
+    return false
+  }
+}
+
+/** 登出备份只保存用户自配渠道，官方渠道由登录后的服务端同步重新生成。 */
+export function getUserManagedChannelsForLogout(channels: Channel[]): Channel[] {
+  return channels.filter((channel) => !isOfficialManagedChannel(channel))
+}
+
+/**
  * 将当前渠道配置加密备份到磁盘（按账号隔离）
  *
  * logout 时调用：把整个 channels.json（含渠道元数据）用 token-crypto 整体加密后
@@ -197,8 +219,9 @@ export function backupChannelsForAccount(accountId: string | undefined | null): 
 
   const raw = readFileSync(configPath, 'utf-8')
   const parsed = JSON.parse(raw) as ChannelsConfig
-  if (!parsed.channels || parsed.channels.length === 0) {
-    // 无渠道时无需备份，也不应视为失败（清空活跃文件无损失）
+  const userManagedChannels = getUserManagedChannelsForLogout(parsed.channels || [])
+  if (userManagedChannels.length === 0) {
+    // 无自配渠道时无需备份，也不应视为失败（清空官方渠道无损失）
     return null
   }
   if (!accountId) {
@@ -206,7 +229,11 @@ export function backupChannelsForAccount(accountId: string | undefined | null): 
   }
 
   const backupPath = getChannelsLogoutBackupPath(accountId)
-  const encrypted = encryptToken(raw)
+  const backupConfig: ChannelsConfig = {
+    ...parsed,
+    channels: userManagedChannels,
+  }
+  const encrypted = encryptToken(JSON.stringify(backupConfig))
   if (!encrypted || encrypted.length === 0) {
     throw new Error('渠道加密备份生成为空，已中止（避免覆盖丢失）')
   }
@@ -219,7 +246,7 @@ export function backupChannelsForAccount(accountId: string | undefined | null): 
     throw new Error('渠道备份写回校验失败（文件为空），已中止清空')
   }
 
-  console.log(`[渠道管理] 已为账号 ${accountId.replace(/[^A-Za-z0-9._-]/g, '_')} 加密备份 ${parsed.channels.length} 个渠道 → ${backupPath}`)
+  console.log(`[渠道管理] 已为账号 ${accountId.replace(/[^A-Za-z0-9._-]/g, '_')} 加密备份 ${userManagedChannels.length} 个自配渠道 → ${backupPath}`)
   return backupPath
 }
 
@@ -269,26 +296,33 @@ export function restoreChannelsForAccount(accountId: string): RestoreChannelsRes
     return { restored: 0, error: `渠道备份解析失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
   }
 
-  if (!parsed.channels || parsed.channels.length === 0) {
+  const backedUpChannels = getUserManagedChannelsForLogout(parsed.channels || [])
+  if (backedUpChannels.length === 0) {
+    // 兼容旧版“整份配置备份”：解密确认有效后清理仅含官方渠道的旧备份。
+    rmSync(backupPath, { force: true })
     return { restored: 0, backupRetained: false }
   }
 
-  // 仅当前配置为空时恢复，避免覆盖用户新配置
+  // 合并而不是要求当前配置完全为空：登录其他账号后，官方渠道可能已先同步到本地，
+  // 不能因此阻断原账号自配渠道的恢复。已有同 ID 渠道不覆盖。
   const current = readConfig()
-  if (current.channels.length > 0) {
-    console.log('[渠道管理] 当前已有渠道，跳过备份恢复')
-    return { restored: 0, backupRetained: true }
+  const existingIds = new Set(current.channels.map((channel) => channel.id))
+  const channelsToRestore = backedUpChannels.filter((channel) => !existingIds.has(channel.id))
+  if (channelsToRestore.length === 0) {
+    // 备份中的渠道已经存在，删除重复备份，避免每次登录都重复提示/扫描。
+    rmSync(backupPath, { force: true })
+    return { restored: 0, backupRetained: false }
   }
 
   // 落盘成功后才删备份：写入失败时备份仍留在磁盘
   try {
-    writeConfig(parsed)
+    writeConfig({ ...current, channels: [...current.channels, ...channelsToRestore] })
   } catch (err) {
     return { restored: 0, error: `渠道备份写入本地失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
   }
   rmSync(backupPath, { force: true })
-  console.log(`[渠道管理] 已从加密备份恢复 ${parsed.channels.length} 个渠道 → ${backupPath}`)
-  return { restored: parsed.channels.length, backupRetained: false }
+  console.log(`[渠道管理] 已从加密备份恢复 ${channelsToRestore.length} 个自配渠道 → ${backupPath}`)
+  return { restored: channelsToRestore.length, backupRetained: false }
 }
 
 /**
@@ -298,6 +332,14 @@ export function restoreChannelsForAccount(accountId: string): RestoreChannelsRes
  * 同时备份旧配置到 channels.json.server-backup。
  */
 export async function syncChannelsFromServer(serverBaseUrl: string, accessToken: string): Promise<void> {
+  // 记录请求发起时的账号身份。登出后旧请求即使返回成功，也不得把官方渠道写回本地。
+  const { getTeamAuth } = require('./auth-service') as typeof import('./auth-service')
+  const authAtStart = getTeamAuth()
+  if (!authAtStart || authAtStart.baseUrl !== serverBaseUrl || authAtStart.teamAccountId === undefined) {
+    throw new Error('渠道同步已跳过：当前团队会话已失效')
+  }
+  const accountIdAtStart = authAtStart.teamAccountId
+
   const fetchFn = await getFetchFn()
   const url = `${serverBaseUrl}/v1/account/channels`
 
@@ -325,6 +367,12 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   }
 
   if (!data.commercialMode || !data.channels) return
+
+  // 请求期间可能发生登出或切换账号；再次校验账号后再落盘，避免旧响应污染新会话。
+  const authBeforeWrite = getTeamAuth()
+  if (!authBeforeWrite || authBeforeWrite.baseUrl !== serverBaseUrl || authBeforeWrite.teamAccountId !== accountIdAtStart) {
+    throw new Error('渠道同步已跳过：请求完成时团队会话已变化')
+  }
 
   // 防止空列表雪崩：服务端返回 0 条渠道时跳过同步，保留现有本地缓存。
   // 空结果通常是服务端异常导致，不应将客户端全部渠道清空。
@@ -448,11 +496,14 @@ export function canSelfConfig(): boolean {
 export function listChannels(): Channel[] {
   const config = readConfig()
 
+  // 登出后如果存在待恢复备份，不能创建占位渠道，否则会让登录恢复误判为“已有渠道”。
+  const hasPendingLogoutBackup = hasPendingLogoutChannelBackup()
+
   // 首次使用：如果没有 DeepSeek 渠道，自动创建预设
   const hasDeepSeek = config.channels.some(
     (c) => c.provider === 'deepseek' || c.baseUrl.includes('api.deepseek.com'),
   )
-  if (!hasDeepSeek) {
+  if (!hasDeepSeek && !hasPendingLogoutBackup) {
     const now = Date.now()
     const presetChannel: Channel = {
       id: randomUUID(),

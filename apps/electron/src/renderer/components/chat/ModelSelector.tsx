@@ -33,7 +33,7 @@ import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import { AgentComposerToolTooltip, getAgentComposerToolTriggerClass } from '@/components/ai-elements/composer/ComposerTool'
 import type { Channel, ModelOption } from '@profer/shared'
-import { getChannelProtocol, getChannelSource, getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel, type ChannelProtocol } from '@/lib/channel-model-groups'
+import { getChannelProtocol, getChannelSource, getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel, supportsChannelProtocol, type ChannelProtocol } from '@/lib/channel-model-groups'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
 export const CompactModelSelectorCtx = React.createContext(false)
@@ -60,7 +60,7 @@ function buildModelOptions(
     if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
 
     const protocol = getChannelProtocol(channel.provider)
-    if (strictProtocolFilter && protocol !== preferredProtocol) continue
+    if (strictProtocolFilter && !supportsChannelProtocol(channel.provider, preferredProtocol)) continue
 
     for (const model of channel.models) {
       if (!model.enabled) continue

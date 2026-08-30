@@ -185,7 +185,18 @@ function compilePiReasoningCapabilities(api: Api, modelId: string | undefined): 
   }
 }
 
-function normalizePiApi(provider: ProviderType): Api {
+function isLocalOllamaBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase()
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
+  } catch {
+    return false
+  }
+}
+
+function normalizePiApi(provider: ProviderType, baseUrl?: string): Api {
+  if (provider === 'ollama' && !isLocalOllamaBaseUrl(baseUrl)) return 'openai-completions'
   switch (provider) {
     case 'openai':
     case 'opencode-go-openai':
@@ -296,7 +307,7 @@ export async function resolvePiReasoningCapability(provider: ProviderType, model
 
 async function resolvePiModelDefaults(input: PiAgentQueryOptions, explicit1MContext = false): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
-  const api = normalizePiApi(input.provider)
+  const api = normalizePiApi(input.provider, input.baseUrl)
   const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model)
   const modelId = input.model?.toLowerCase()
   const isOfficialGpt56 = input.provider === 'openai'
@@ -327,7 +338,10 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions, explicit1MCont
 
 function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType): string | undefined {
   if (!baseUrl) return undefined
-  if (normalizePiApi(provider) === 'anthropic-messages') {
+  if (provider === 'ollama' && !isLocalOllamaBaseUrl(baseUrl)) {
+    return `${baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`
+  }
+  if (normalizePiApi(provider, baseUrl) === 'anthropic-messages') {
     return normalizeAnthropicBaseUrlForSdk(resolveAnthropicMessagesUrl(baseUrl, provider))
   }
   if (provider === 'custom' || provider === 'openai-responses') {
@@ -341,11 +355,11 @@ export function requiresPromaUserAgent(provider: ProviderType): boolean {
 }
 
 function usesBearerOnlyAnthropicAuth(provider: ProviderType): boolean {
-  return requiresPromaUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic' || provider === 'ollama'
+  return requiresPromaUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
 }
 
-export function buildPiRequestHeaders(provider: ProviderType, apiKey: string): PiRequestHeaders | undefined {
-  if (normalizePiApi(provider) !== 'anthropic-messages') return undefined
+export function buildPiRequestHeaders(provider: ProviderType, apiKey: string, baseUrl?: string): PiRequestHeaders | undefined {
+  if (normalizePiApi(provider, baseUrl) !== 'anthropic-messages') return undefined
 
   const headers: PiRequestHeaders = {
     Authorization: `Bearer ${apiKey || 'ollama'}`,
@@ -371,6 +385,7 @@ function shouldUseRuntimeApiKey(provider: ProviderType): boolean {
  * 与 Claude runtime 的 applyAgentSdkAuthEnv 保持一致。
  */
 export function resolvePiApiKey(provider: ProviderType, apiKey: string): string {
+  if (provider === 'ollama') return apiKey.trim() || 'ollama'
   return provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
 }
 
@@ -487,13 +502,13 @@ export async function buildModel(
   if (shouldUseRuntimeApiKey(input.provider)) {
     modelRuntime.setRuntimeApiKey(providerName, resolvedApiKey)
   }
-  const api = normalizePiApi(input.provider)
+  const api = normalizePiApi(input.provider, input.baseUrl)
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId }, explicit1MContext)
   const baseUrl = normalizePiBaseUrl(input.baseUrl, input.provider)
   if (!baseUrl) {
     throw new Error(`渠道 ${input.channelName ?? input.provider} 缺少 Base URL`)
   }
-  const headers = buildPiRequestHeaders(input.provider, resolvedApiKey)
+  const headers = buildPiRequestHeaders(input.provider, resolvedApiKey, input.baseUrl)
   modelRuntime.registerProvider(providerName, {
     name: input.channelName ?? providerName,
     apiKey: resolvedApiKey,

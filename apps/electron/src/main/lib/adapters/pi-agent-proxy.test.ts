@@ -36,6 +36,26 @@ describe('Pi request proxy', () => {
     })).toEqual({ httpProxy: 'http://127.0.0.1:7897' })
   })
 
+  test('Given local Ollama When building connection settings Then preserve SDK defaults', () => {
+    expect(buildPiRemoteConnectionSettings({
+      provider: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+    })).toEqual({})
+  })
+
+  test('Given remote Ollama When building connection settings Then use SSE and long idle timeouts', () => {
+    expect(buildPiRemoteConnectionSettings({
+      provider: 'ollama',
+      baseUrl: 'https://ollama.example.com/v1',
+      proxyUrl: 'http://127.0.0.1:7897',
+    })).toEqual({
+      httpProxy: 'http://127.0.0.1:7897',
+      transport: 'sse',
+      httpIdleTimeoutMs: 600000,
+      websocketConnectTimeoutMs: 30000,
+    })
+  })
+
   test('Given two concurrent Pi requests When each enters a proxy scope Then dispatchers do not cross-contaminate', async () => {
     const first = {} as Dispatcher
     const second = {} as Dispatcher

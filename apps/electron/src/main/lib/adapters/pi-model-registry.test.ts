@@ -47,15 +47,19 @@ describe('Pi runtime 智谱团队版认证', () => {
     expect(requiresPromaUserAgent('anthropic')).toBe(false)
   })
 
-  test('Given Ollama Agent When building headers Then use local sentinel Bearer without User-Agent requirement', () => {
-    const headers = buildPiRequestHeaders('ollama', '')
+  test('Given Ollama Agent When resolving empty key Then use local sentinel', () => {
+    expect(resolvePiApiKey('ollama', '  ')).toBe('ollama')
+  })
+
+  test('Given local Ollama Agent When building headers Then use local sentinel Bearer without User-Agent requirement', () => {
+    const headers = buildPiRequestHeaders('ollama', 'ollama', 'http://127.0.0.1:11434')
     expect(headers?.Authorization).toBe('Bearer ollama')
     expect(headers?.['User-Agent']).toBeUndefined()
   })
 })
 
 describe('Pi runtime Ollama 双协议注册', () => {
-  test('Given Ollama channel When buildModel Then use Anthropic messages with root Agent URL and local auth', async () => {
+  test('Given 本机 Ollama channel When buildModel Then preserve Anthropic messages and root Agent URL', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {
       sessionId: 'session-ollama',
@@ -73,6 +77,25 @@ describe('Pi runtime Ollama 双协议注册', () => {
     expect(result.model.api).toBe('anthropic-messages')
     expect(result.model.baseUrl).toBe('http://127.0.0.1:11434')
     expect(result.model.id).toBe('qwen3:8b')
+  })
+
+  test('Given 远程 Ollama channel When buildModel Then use OpenAI completions with /v1 Base URL', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-ollama-remote',
+      prompt: 'hi',
+      apiKey: '',
+      provider: 'ollama',
+      baseUrl: 'https://ollama.example.com/v1/',
+      model: 'qwen3:8b',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.api).toBe('openai-completions')
+    expect(result.model.baseUrl).toBe('https://ollama.example.com/v1')
   })
 })
 

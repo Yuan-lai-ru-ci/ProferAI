@@ -39,6 +39,19 @@ export function getChannelProtocol(provider: Channel['provider']): ChannelProtoc
   return anthropicProviders.has(provider) ? 'anthropic' : 'openai'
 }
 
+/**
+ * Some channels expose more than one wire protocol. Ollama uses OpenAI
+ * compatibility for Chat and Anthropic compatibility for Claude/Pi Agent.
+ * Keep getChannelProtocol's single display value for existing grouping code,
+ * but use this predicate whenever a runtime applies a strict protocol filter.
+ */
+export function supportsChannelProtocol(
+  provider: Channel['provider'],
+  protocol: ChannelProtocol,
+): boolean {
+  return provider === 'ollama' || getChannelProtocol(provider) === protocol
+}
+
 export function groupChannelModels(channels: Channel[]): ChannelModelGroup[] {
   const groups = new Map<string, ChannelModelGroup>()
   for (const channel of channels) {
