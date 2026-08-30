@@ -390,8 +390,10 @@ bun run generate:icons    # 生成应用图标
 - `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `claude-agent-sdk-${platform}-${arch}/{claude|claude.exe}` 得到 binary 路径
 
 **跨平台打包限制：**
-- macOS/Linux 不发布（无 mac 开发者与测试环境，2026-08-08 起）：release.yml 已删除 mac job，GitHub Release 只出 Windows 安装包；勿再往 CI 加回 mac 构建，除非有真实 mac 测试环境
-- 若未来恢复 mac：Apple Silicon runner 只会装 darwin-arm64，不会装 darwin-x64（cpu 不匹配），需要在 x64 runner 单独跑一次构建
+- 正式稳定发布默认仍只发布 Windows x64；Linux 不构建不发布。
+- macOS 现已具备 `macos-14` Apple Silicon (`darwin-arm64`) 的手动验收 workflow：`.github/workflows/macos-package.yml`。它只跑便携测试、typecheck、Mac 构建与包验证，并上传 Actions Artifact；不自动创建 Release。
+- macOS 当前仅支持无签名、无公证的 arm64 验收包。只有用户明确要求时，才可将该 Artifact 作为测试版资产加入 GitHub Pre-release；不能把它当作正式稳定 Mac 发布。
+- macOS/Linux 正式签名发布仍未接入。Apple Silicon runner 不会构建 darwin-x64；Intel 需要 x64 runner 单独构建。
 
 **不使用 extraResources 放 binary 的原因：**
 - `extraResources` 会将文件复制到 `Contents/Resources/` 目录，路径与 node_modules 解析不一致
@@ -453,7 +455,9 @@ bun run generate:icons    # 生成应用图标
 
 ### 发版流程（本地唯一发布者，2026-08-18 起）
 
-发版由本地 `scripts/push-release.cjs` 单独完成：构建一次 Windows x64 安装包、上传国内更新源、推送源码/tag、创建或补齐 GitHub Release。`release.yml` 改为仅手动触发的构建验证，绝不因 tag 自动构建或写入 GitHub Release，避免双重构建和两个发布者竞争同一 Release：
+正式 Windows 发版由本地 `scripts/push-release.cjs` 单独完成：构建一次签名 Windows x64 安装包、上传国内更新源、推送源码/tag、创建或补齐 GitHub Release。`release.yml` 改为仅手动触发的构建验证，绝不因 tag 自动构建或写入 GitHub Release，避免双重构建和两个发布者竞争同一 Release。
+
+macOS arm64 目前走独立的手动验收流程：先运行 `.github/workflows/macos-package.yml`，成功后可在用户明确确认的前提下，把同一 Actions Artifact 中的 DMG/ZIP 作为测试资产加入对应 GitHub Pre-release。它不进入 Windows 国内更新源。无签名 Windows 测试包若需同步国内源，也只能走明确确认的临时测试流程，不能调用正式 `push-release.cjs`，不能伪造 `latest.yml.sig`：
 
 ```bash
 # 1) 先提交 package.json、CHANGELOG.json 和本次客户端代码；工作树必须干净
