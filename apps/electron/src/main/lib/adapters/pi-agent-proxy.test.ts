@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import type { Dispatcher } from 'undici'
-import { buildPiRemoteConnectionSettings } from './pi-agent-adapter'
+import { buildPiRemoteConnectionSettings, buildPiRetrySettings } from './pi-agent-adapter'
 import {
   getPiRequestProxyDispatcher,
   runWithManagedPiRequestProxy,
@@ -34,6 +34,18 @@ describe('Pi request proxy', () => {
       provider: 'anthropic',
       proxyUrl: 'http://127.0.0.1:7897',
     })).toEqual({ httpProxy: 'http://127.0.0.1:7897' })
+  })
+
+  test('Given Ollama When building retry settings Then disable Pi native retries', () => {
+    expect(buildPiRetrySettings('ollama')).toEqual({ enabled: false })
+  })
+
+  test.each(['openai', 'openai-codex', 'anthropic'] as const)('Given %s When building retry settings Then preserve Pi native retries', (provider) => {
+    expect(buildPiRetrySettings(provider)).toEqual({
+      enabled: true,
+      maxRetries: 8,
+      baseDelayMs: 1000,
+    })
   })
 
   test('Given local Ollama When building connection settings Then preserve SDK defaults', () => {
