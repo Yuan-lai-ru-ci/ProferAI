@@ -127,6 +127,7 @@ import {
   sdkPermissionModeForProferMode,
   extractApiError,
   isAutoRetryableTypedError,
+  isOllamaToolStreamError,
   isAutoRetryableCatchError,
   isInvalidRelayTokenError,
   isSessionNotFoundError,
@@ -1766,10 +1767,12 @@ ${enrichedMessage}`
         }),
         // 启用文件检查点，支持 rewindFiles 回退
         enableFileCheckpointing: true,
-        // SDK 0.2.52+ 新增选项（从 settings 读取）
-        ...(appSettings.agentThinking && {
-          thinking: appSettings.agentThinking,
-        }),
+        // Ollama 0.32/0.33 的 Anthropic 兼容层在 Qwen3.8 开启 thinking 后，
+        // 工具结果续请求可能触发 "no user query found in messages"。
+        // 仅关闭扩展思考，不关闭普通文本流或工具能力；其他渠道沿用用户配置。
+        thinking: channel.provider === 'ollama'
+          ? { type: 'disabled' as const }
+          : appSettings.agentThinking,
         effort: sessionPreset.effort ?? appSettings.agentEffort ?? 'high',
         ...(appSettings.agentMaxBudgetUsd != null &&
           appSettings.agentMaxBudgetUsd > 0 && {
@@ -2281,7 +2284,9 @@ ${enrichedMessage}`
                         content: [
                           {
                             type: 'text',
-                            text: `⚠️ 连接中断：${separated.errorText}`,
+                            text: `⚠️ ${isOllamaToolStreamError(separated.errorText)
+                              ? 'Ollama 工具流兼容性错误：请更新 Ollama，或暂时关闭思考模式后重试。'
+                              : `连接中断：${separated.errorText}`}`,
                           },
                         ],
                       },
@@ -2305,6 +2310,7 @@ ${enrichedMessage}`
                       (typeof rawError === 'object' && rawError !== null ? ((rawError as Record<string, unknown>).errorType as ErrorCode) : undefined) ??
                       'unknown_error'
                     if (
+                      !isOllamaToolStreamError(separated.errorText) &&
                       isAutoRetryableTypedError({
                         code: errorCode,
                         title: '流式传输中断',
@@ -2358,6 +2364,13 @@ ${enrichedMessage}`
                 console.error(`  originalError: ${typedError.originalError?.slice(0, 300) || '(空)'}`)
 
                 // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
+                if (isOllamaToolStreamError(detailedMessage, originalError)) {
+                  typedError.canRetry = false
+                  typedError.actions = typedError.actions.filter((action) => action.action !== 'retry')
+                  typedError.title = 'Ollama 工具流兼容性错误'
+                  typedError.message = 'Ollama 在工具结果回传时中断了流式请求。请更新 Ollama，或暂时关闭思考模式后重试；普通对话不受影响。'
+                }
+
                 if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && canAutoRetry(attempt)) {
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
@@ -2732,7 +2745,7 @@ ${enrichedMessage}`
             continue
           }
 
-          if (isAutoRetryableCatchError(apiError, rawErrorMessage, stderrOutput) && canAutoRetry(attempt)) {
+          if (!isOllamaToolStreamError(rawErrorMessage, stderrOutput) && isAutoRetryableCatchError(apiError, rawErrorMessage, stderrOutput) && canAutoRetry(attempt)) {
             lastRetryableError = apiError ? `API Error ${apiError.statusCode}: ${apiError.message}` : error instanceof Error ? error.message : '未知错误'
             console.log(`[Agent 编排] 可重试错误 (catch, attempt ${attempt}/${MAX_AUTO_RETRIES}): ${lastRetryableError}`)
             // 保存部分内容

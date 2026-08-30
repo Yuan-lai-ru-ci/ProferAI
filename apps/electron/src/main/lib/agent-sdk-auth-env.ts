@@ -18,6 +18,10 @@ export function applyAgentSdkAuthEnv(
 ): void {
   if (provider === 'ollama') {
     target.ANTHROPIC_AUTH_TOKEN = apiKey || 'ollama'
+    // Ollama 兼容层的普通文本流仍保持开启；仅关闭 Claude Code 将 tool
+    // 参数拆成增量片段的 fine-grained tool streaming。Qwen3.8 + Ollama
+    // 0.32/0.33 在 tool_result 续请求上存在已公开的流式解析问题。
+    target.CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING = '0'
     return
   }
 

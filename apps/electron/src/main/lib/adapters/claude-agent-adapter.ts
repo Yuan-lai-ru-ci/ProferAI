@@ -198,6 +198,10 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
 /** 已知 SDK 错误 → 用户友好提示映射 */
 const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
   {
+    pattern: /no user query found in messages/i,
+    message: 'Ollama 在工具结果回传时中断了流式请求。当前多见于 Qwen3.8 + Ollama 0.32/0.33 的兼容性问题，请更新 Ollama 或暂时关闭思考模式后重试；普通对话不受影响。',
+  },
+  {
     pattern: /not logged in|please run \/login/i,
     message: '请检查是否选择了正确的 Profer 供应渠道和模型',
   },
@@ -395,6 +399,22 @@ export function mapSDKErrorToTypedError(
       message: '当前对话的上下文已超出模型限制，请压缩上下文或开启新会话',
       canRetry: false,
     },
+  }
+
+  // Ollama 工具结果续请求的已知上游协议错误不是网络瞬断，不能自动重试：
+  // Qwen3.8 在该错误后重试相同请求可能再次占满 Ollama runner，形成更长的假性超时。
+  if (/no user query found in messages/i.test(`${detailedMessage}\n${originalError}`)) {
+    return {
+      code: 'provider_error',
+      title: 'Ollama 工具流兼容性错误',
+      message: friendlyErrorMessage(detailedMessage),
+      actions: [
+        { key: 's', label: '设置', action: 'settings' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: false,
+      originalError,
+    }
   }
 
   // 瞬时网络错误（terminated / ECONNRESET / socket hang up 等）：

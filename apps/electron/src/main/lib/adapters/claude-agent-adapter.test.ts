@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getWindowsPowerShellPath, mapSDKErrorToTypedError, SDK_SETTING_SOURCES } from './claude-agent-adapter'
+import { friendlyErrorMessage, getWindowsPowerShellPath, mapSDKErrorToTypedError, SDK_SETTING_SOURCES } from './claude-agent-adapter'
 
 describe('Claude 适配器 Windows 清理命令', () => {
   test('Given PowerShell 未加入 PATH 但系统组件存在 When 解析 Then 使用 SystemRoot 下的绝对路径', () => {
@@ -20,6 +20,17 @@ describe('Claude 适配器 SDK 设置隔离', () => {
   test('Given Profer Agent SDK 查询 When 配置设置来源 Then 不加载用户级 Claude 设置', () => {
     expect(SDK_SETTING_SOURCES).toEqual(['project'])
     expect(SDK_SETTING_SOURCES).not.toContain('user')
+  })
+})
+
+describe('Claude 适配器 Ollama 工具流错误', () => {
+  test('Given Ollama tool-result stream error When mapping Then do not classify as transient network retry', () => {
+    const message = 'API Error: 500 no user query found in messages'
+    const error = mapSDKErrorToTypedError('unknown', message, message)
+    expect(error.code).toBe('provider_error')
+    expect(error.title).toBe('Ollama 工具流兼容性错误')
+    expect(error.canRetry).toBe(false)
+    expect(friendlyErrorMessage(message)).toContain('Ollama')
   })
 })
 

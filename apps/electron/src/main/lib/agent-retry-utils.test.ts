@@ -6,6 +6,7 @@
 import { describe, test, expect } from 'bun:test'
 import {
   extractApiError,
+  isOllamaToolStreamError,
   isAutoRetryableTypedError,
   isAutoRetryableCatchError,
   isInvalidRelayTokenError,
@@ -83,6 +84,13 @@ describe('isAutoRetryableTypedError', () => {
     expect(mapped.code).toBe('insufficient_credits')
     expect(mapped.canRetry).toBe(false)
     expect(isAutoRetryableTypedError(mapped)).toBe(false)
+  })
+})
+
+describe('Ollama 工具流错误', () => {
+  test('no user query found in messages 不是可自动重试的网络错误', () => {
+    expect(isOllamaToolStreamError('API Error: 500 no user query found in messages')).toBe(true)
+    expect(isAutoRetryableCatchError({ statusCode: 500, message: 'no user query found in messages' })).toBe(false)
   })
 })
 

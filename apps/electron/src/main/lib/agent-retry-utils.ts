@@ -25,6 +25,14 @@ export const MAX_AUTO_RETRY_WAIT_MS = 5 * 60_000
 /** 重试单次延迟上限（毫秒） */
 export const RETRY_MAX_DELAY_MS = 15_000
 
+/**
+ * Ollama Anthropic 兼容层在 Qwen3.8 的 tool_result 续请求上可能返回此协议错误。
+ * 它不是网络断流；重复提交相同上下文可能让 Ollama runner 长时间占用，因此禁止自动重试。
+ */
+export function isOllamaToolStreamError(...messages: Array<string | undefined>): boolean {
+  return messages.some((message) => typeof message === 'string' && /no user query found in messages/i.test(message))
+}
+
 export function sdkPermissionModeForProferMode(mode: ProferPermissionMode): ProferPermissionMode {
   return PROFER_PERMISSION_MODE_CONFIG[mode].sdkMode
 }
@@ -76,6 +84,7 @@ export function isAutoRetryableCatchError(
   rawErrorMessage?: string,
   stderr?: string,
 ): boolean {
+  if (isOllamaToolStreamError(apiError?.message, rawErrorMessage, stderr)) return false
   if (apiError) {
     if (apiError.statusCode === 429 || apiError.statusCode >= 500) return true
   }
