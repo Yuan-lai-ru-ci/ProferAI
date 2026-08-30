@@ -24,6 +24,7 @@ const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
 const HOST = '47.109.108.57';
 const USER = 'ecs-user';
+const UPDATE_FEED_URL = 'https://profer.cn/profer-updates/';
 const UPDATE_DIR = '/usr/share/nginx/html/profer-updates';
 const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
 const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000];
@@ -42,6 +43,15 @@ function tryRun(command, cwd = ROOT) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function assertReleaseSigningConfiguration() {
+  if (!process.env.CSC_LINK || !process.env.CSC_KEY_PASSWORD) {
+    throw new Error('缺少 CSC_LINK 或 CSC_KEY_PASSWORD；禁止发布未签名 Windows 安装包。');
+  }
+  if (!process.env.PROFER_UPDATE_METADATA_PRIVATE_KEY && !process.env.PROFER_UPDATE_METADATA_PRIVATE_KEY_FILE) {
+    throw new Error('缺少更新元数据签名私钥；禁止发布未签名 latest.yml。');
+  }
 }
 
 function quote(value) {
@@ -210,13 +220,17 @@ async function ensureGitHubRelease(assets) {
   run(`node scripts/verify-release-preflight.cjs ${VERSION}`);
 
   console.log('[1/4] 执行发布验证门禁...');
+  assertReleaseSigningConfiguration();
   run('bun run typecheck');
   run('bun test --isolate --timeout 30000');
   fs.rmSync(path.join(OUT, 'win-unpacked'), { recursive: true, force: true });
   run('bun run release:verify:windows', ELECTRON);
+  // release:verify:windows 已包含 latest.yml 内容哈希和 Authenticode 门禁；
+  // 未签名 Windows 安装包禁止进入任何上传步骤。
 
   const assets = [
     'latest.yml',
+    'latest.yml.sig',
     `Profer-Setup-${VERSION}.exe`,
     `Profer-Setup-${VERSION}.exe.blockmap`,
   ].map((name) => ({ name, path: path.join(OUT, name) }));
@@ -226,8 +240,17 @@ async function ensureGitHubRelease(assets) {
     asset.sha256 = sha256(asset.path);
   }
 
-  console.log('[2/4] 上传国内自动更新源...');
-  const installer = assets[1];
+  if (!UPDATE_FEED_URL.startsWith('https://')) {
+    throw new Error('更新源必须为 HTTPS，拒绝发布。');
+  }
+  console.log(`[2/4] 上传国内自动更新源（${UPDATE_FEED_URL}）...`);
+  const installer = assets.find((asset) => asset.name === `Profer-Setup-${VERSION}.exe`);
+  const metadata = assets.find((asset) => asset.name === 'latest.yml');
+  const metadataSignature = assets.find((asset) => asset.name === 'latest.yml.sig');
+  const blockmap = assets.find((asset) => asset.name.endsWith('.blockmap'));
+  if (!installer || !metadata || !metadataSignature || !blockmap) {
+    throw new Error('发布资产列表不完整，拒绝上传。');
+  }
   const latestJsonPath = path.join(OUT, 'latest.json');
   fs.writeFileSync(latestJsonPath, JSON.stringify({
     version: VERSION,
@@ -235,13 +258,13 @@ async function ensureGitHubRelease(assets) {
     size: installer.size,
     date: new Date().toISOString().split('T')[0],
   }));
-  const blockmap = assets[2];
-  await scp(assets[0].path, '/tmp/latest.yml');
+  await scp(metadata.path, '/tmp/latest.yml');
+  await scp(metadataSignature.path, '/tmp/latest.yml.sig');
   await scp(installer.path, `/tmp/${installer.name}`);
   await scp(blockmap.path, `/tmp/${blockmap.name}`);
   await scp(latestJsonPath, '/tmp/latest.json');
   await ssh(
-    `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && ` +
+    `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && sudo cp /tmp/latest.yml.sig ${UPDATE_DIR}/ && ` +
     `sudo cp /tmp/${installer.name} ${UPDATE_DIR}/ && sudo cp /tmp/${blockmap.name} ${UPDATE_DIR}/ && ` +
     `sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
     `sudo ln -sf ${UPDATE_DIR}/${installer.name} ${UPDATE_DIR}/Profer-latest.exe && ` +

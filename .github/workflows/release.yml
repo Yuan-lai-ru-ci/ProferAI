@@ -76,9 +76,22 @@ jobs:
       - name: Sync external Agent runtime dependencies
         run: bun run sync:runtime-deps
         working-directory: apps/electron
+      - name: Verify Windows signing secrets
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK) -or [string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)) {
+            throw '缺少 WIN_CSC_LINK 或 WIN_CSC_KEY_PASSWORD；禁止构建未签名 Windows 发布包。'
+          }
+
       - name: Package Windows release
         run: node scripts/run-electron-builder.cjs --win --x64 --publish never
         working-directory: apps/electron
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
       - name: Smoke test unpacked Windows app
         shell: pwsh
@@ -143,14 +156,29 @@ jobs:
           Write-Host "Pi runtime closure verified"
           if (Test-Path $stdout) { Get-Content $stdout }
 
+      - name: Sign update metadata
+        shell: pwsh
+        working-directory: apps/electron
+        env:
+          PROFER_UPDATE_METADATA_PRIVATE_KEY: ${{ secrets.PROFER_UPDATE_METADATA_PRIVATE_KEY }}
+        run: bun run sign:update-metadata
+
+      - name: Verify Authenticode and update metadata
+        shell: pwsh
+        working-directory: apps/electron
+        env:
+          PROFER_UPDATE_METADATA_PUBLIC_KEY: ${{ secrets.PROFER_UPDATE_METADATA_PUBLIC_KEY }}
+        run: bun run verify:release-assets
+
       - name: Verify Windows release assets
         shell: pwsh
         working-directory: apps/electron
         run: |
           $version = node -p "require('./package.json').version"
           $required = @(
-            "latest.yml"
-            "Profer-Setup-$version.exe"
+            "latest.yml",
+            "latest.yml.sig",
+            "Profer-Setup-$version.exe",
             "Profer-Setup-$version.exe.blockmap"
           )
 

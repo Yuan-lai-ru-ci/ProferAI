@@ -8,7 +8,8 @@ export interface UpdateSource {
   configuration: UpdateFeedConfiguration
 }
 
-export const DOMESTIC_UPDATE_FEED_URL = 'http://47.109.108.57/profer-updates/'
+/** 国内更新源必须使用有证书的 HTTPS 域名，禁止裸 IP 和明文 HTTP。 */
+export const DOMESTIC_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
 export const UPDATE_REQUEST_TIMEOUT_MS = 30_000
 
 const GITHUB_UPDATE_SOURCE: UpdateSource = {
@@ -24,7 +25,23 @@ const GITHUB_UPDATE_SOURCE: UpdateSource = {
 }
 
 function normalizeFeedUrl(url: string): string {
-  return url.replace(/\/+$/, '')
+  return url.trim().replace(/\/+$/, '')
+}
+
+/** 只接受 HTTPS 域名更新源；URL 中不得携带凭据或使用 IP 地址。 */
+export function isSecureUpdateFeedUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) return false
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      url.hostname.includes('.') &&
+      !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(url.hostname) &&
+      !/^\[[0-9a-f:]+\]$/i.test(url.hostname)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -35,13 +52,17 @@ export function getUpdateSources(overrideUrl = process.env.PROFER_UPDATE_FEED_UR
   const sources: UpdateSource[] = []
   const normalizedDomesticUrl = normalizeFeedUrl(DOMESTIC_UPDATE_FEED_URL)
 
-  if (overrideUrl && normalizeFeedUrl(overrideUrl) !== normalizedDomesticUrl) {
+  if (overrideUrl && !isSecureUpdateFeedUrl(overrideUrl)) {
+    console.warn('[更新] 忽略不安全的 PROFER_UPDATE_FEED_URL，仅允许 HTTPS 域名')
+  }
+
+  if (isSecureUpdateFeedUrl(overrideUrl) && normalizeFeedUrl(overrideUrl) !== normalizedDomesticUrl) {
     sources.push({
       id: 'override',
       label: '环境变量更新源',
       configuration: {
         provider: 'generic',
-        url: overrideUrl,
+        url: normalizeFeedUrl(overrideUrl),
         timeout: UPDATE_REQUEST_TIMEOUT_MS,
       },
     })

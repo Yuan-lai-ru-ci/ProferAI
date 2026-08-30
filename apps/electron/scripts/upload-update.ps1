@@ -7,7 +7,7 @@ $outDir = "out"
 $server = "ecs-user@47.109.108.57"
 $remoteDir = "/home/ecs-user/profer-updates"
 $nginxDir = "/usr/share/nginx/html/profer-updates"
-$feedUrl = "http://47.109.108.57/profer-updates/latest.yml"
+$feedUrl = "https://profer.cn/profer-updates/latest.yml"
 $stagingDir = Join-Path $outDir "update-upload"
 
 $yml = "$outDir\latest.yml"
@@ -77,7 +77,7 @@ if (pkg.version !== expectedVersion) {
   throw new Error(`Packaged version ${pkg.version} does not match latest.yml ${expectedVersion}`)
 }
 
-if (!main.includes('http://47.109.108.57/profer-updates/')) {
+if (!main.includes('https://profer.cn/profer-updates/')) {
   throw new Error('Packaged app does not include the commercial update feed')
 }
 
@@ -90,6 +90,8 @@ if (!main.includes(commercialTargetLiteral) || !main.includes(commercialTargetRe
 
 Write-Host "Checking packaged update target..."
 $verifyScript | node - $appAsar $manifestVersion
+Write-Host "Checking signed update metadata..."
+node scripts/verify-update-metadata.cjs
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
@@ -115,6 +117,13 @@ if (-not (Test-Path $blockmap)) {
   exit 1
 }
 
+$authenticode = Get-AuthenticodeSignature -LiteralPath $exe.FullName
+if ($authenticode.Status -ne 'Valid' -or -not $authenticode.SignerCertificate) {
+  Write-Error "Installer Authenticode signature is not valid: $($authenticode.Status)"
+  exit 1
+}
+Write-Host "Installer Authenticode signature verified: $($authenticode.SignerCertificate.Subject)"
+
 $remoteVersion = $null
 try {
   $remoteLatest = Get-WebText $feedUrl
@@ -137,18 +146,27 @@ New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 $stagedExe = Join-Path $stagingDir $manifestPath
 $stagedBlockmap = "$stagedExe.blockmap"
 $stagedYml = Join-Path $stagingDir "latest.yml"
+$signature = Join-Path $outDir "latest.yml.sig"
+$stagedSignature = Join-Path $stagingDir "latest.yml.sig"
+if (-not (Test-Path -LiteralPath $signature)) {
+  Write-Error "latest.yml.sig not found; sign metadata before uploading"
+  exit 1
+}
 
 Copy-Item $exe.FullName $stagedExe -Force
 Copy-Item $blockmap $stagedBlockmap -Force
 Copy-Item $yml $stagedYml -Force
+Copy-Item $signature $stagedSignature -Force
 
 Write-Host "Uploading files to $server ..."
 Write-Host "  $manifestPath"
 Write-Host "  latest.yml"
+Write-Host "  latest.yml.sig"
 Write-Host "  $($manifestPath).blockmap"
 
 Invoke-NativeCommand "scp" @($stagedExe, "${server}:${remoteDir}/")
 Invoke-NativeCommand "scp" @($stagedYml, "${server}:${remoteDir}/latest.yml")
+Invoke-NativeCommand "scp" @($stagedSignature, "${server}:${remoteDir}/latest.yml.sig")
 Invoke-NativeCommand "scp" @($stagedBlockmap, "${server}:${remoteDir}/")
 
 # 同步版本历史 releases.json（从仓库根目录 release-notes/ 生成）
