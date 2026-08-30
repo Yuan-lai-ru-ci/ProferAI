@@ -8,7 +8,7 @@ import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message
 interface AgentMessageQueueProps {
   items: AgentQueuedMessage[]
   canSendNow: boolean
-  /** 队列「自动发送」开关：true=轮结束自动发队首；用户手动停止会自动置 false */
+  /** 队列「自动发送」开关：默认开启；关闭后需手动逐条发送。 */
   autoSend: boolean
   /** 当前 Agent 是否正在执行；用于说明自动发送何时开始生效。 */
   agentRunning: boolean
@@ -85,7 +85,7 @@ export function AgentMessageQueue({
             onClick={onToggleAutoSend}
             title={
               autoSend
-                ? (agentRunning ? '自动发送已开启：本轮结束后自动发送队首' : '自动发送已开启：下次手动发送结束后自动发送队首')
+                ? (agentRunning ? '自动发送已开启：本轮结束后自动发送队首' : '自动发送已开启：空闲时立即发送队首')
                 : '自动发送已关闭：需手动逐条「立即发送」'
             }
             className={cn(
@@ -105,7 +105,7 @@ export function AgentMessageQueue({
           </button>
           {autoSend && (
             <span className="whitespace-nowrap text-[11px] text-muted-foreground/60">
-              {agentRunning ? '本轮结束后自动发送' : '下次手动发送后自动生效'}
+              {agentRunning ? '本轮结束后自动发送' : '空闲时立即发送'}
             </span>
           )}
         </span>

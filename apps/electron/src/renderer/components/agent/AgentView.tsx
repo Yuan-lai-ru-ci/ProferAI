@@ -56,7 +56,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
-import { evaluateAutoSendTurn } from '@/lib/agent-autosend-turn'
+import { evaluateAutoSendTurn, shouldStartAutoSendFromIdle } from '@/lib/agent-autosend-turn'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
@@ -604,6 +604,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
+  // 用户主动开启自动发送后的待处理请求；即使当下 live 消息尚未清空或仍在运行，
+  // 条件满足后也要自动启动队首，而不是要求用户再次点击。
+  const autoSendRequestedRef = React.useRef(false)
   // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
   const queueStopEpochRef = React.useRef(0)
   const stopInFlightRef = React.useRef(false)
@@ -1869,7 +1872,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
    * 供发送按钮左键（streaming/队列非空分支）、发送按钮右键（无条件入队）复用。
    * 仅支持纯文本；输入为空且无附件时静默返回。
    */
-  const enqueueCurrentInput = React.useCallback((): void => {
+  const enqueueCurrentInput = React.useCallback((disableAutoSend = false): void => {
     const text = inputContent.trim()
     const effectiveText = text || suggestion || ''
     const pendingFilesSnapshot = pendingFilesRef.current
@@ -1886,6 +1889,17 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       ...prev,
       createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
     ])
+    // 右键的语义是“仅排队，不自动发送”：成功入队后关闭本会话自动发送，
+    // 用户重新打开开关时才启动队首。左键在运行中入队则保留当前自动发送设置。
+    if (disableAutoSend) {
+      autoSendRequestedRef.current = false
+      setAutoSendMap((prev) => {
+        const map = new Map(prev)
+        map.set(sessionId, false)
+        return map
+      })
+      window.electronAPI.updateAgentQueueAutoSend(sessionId, false).catch(console.error)
+    }
     setInputContent('')
     setInputHtmlContent('')
     setPromptSuggestions((prev) => {
@@ -1894,7 +1908,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       map.delete(sessionId)
       return map
     })
-  }, [consumeQuotedSelection, inputContent, pendingFilesRef, sessionId, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
+  }, [consumeQuotedSelection, inputContent, pendingFilesRef, sessionId, setAutoSendMap, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
 
   /** 向 liveMessages 追加一条乐观用户消息 */
   const appendLiveUserMessage = React.useCallback((message: SDKMessage) => {
@@ -2429,6 +2443,19 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     // 飞行中的发送启动的新一轮结束会再 +1 版本）
     if (autoSendingQueuedRef.current || queuedSendInFlightRef.current) return
 
+    if (shouldStartAutoSendFromIdle({
+      autoSendEnabled,
+      autoSendRequested: autoSendRequestedRef.current,
+      queuedCount: queuedMessages.length,
+      liveMessagesPending: liveMessages.length > 0,
+      streaming,
+      canSendQueuedNow,
+    })) {
+      autoSendRequestedRef.current = false
+      handleSendQueuedNow(queuedMessages[0]!.id)
+      return
+    }
+
     const decision = evaluateAutoSendTurn({
       turnVersion: turnVersionRef.current,
       consumedVersion: consumedTurnVersionRef.current,
@@ -2477,6 +2504,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     // 1.6：手动停止时不再清空队列（保留排队消息）；只关闭「自动发送」开关，
     // 防止停止后立刻自动发送下一条排队消息。停止之后的草稿不入队，见 handleSend。
     queueStopEpochRef.current += 1
+    autoSendRequestedRef.current = false
     setAutoSendMap((prev) => {
       const map = new Map(prev)
       map.set(sessionId, false)
@@ -2503,7 +2531,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       })
   }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
 
-  /** 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
+  /** 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留）。
+   * 开启时若会话已空闲且队列非空，立即启动队首；运行中的会话仍等当前轮结束。
+   */
   const handleToggleAutoSend = React.useCallback((): void => {
     const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true)
     setAutoSendMap((prev) => {
@@ -2512,7 +2542,25 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       return map
     })
     window.electronAPI.updateAgentQueueAutoSend(sessionId, next).catch(console.error)
-  }, [sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled])
+
+    if (next) {
+      autoSendRequestedRef.current = true
+      if (shouldStartAutoSendFromIdle({
+        autoSendEnabled: next,
+        autoSendRequested: true,
+        queuedCount: queuedMessages.length,
+        liveMessagesPending: liveMessages.length > 0,
+        streaming,
+        canSendQueuedNow,
+      })) {
+        // 直接复用“立即发送”入口，避免仅依赖 turnVersion（空闲会话没有新的下降沿）。
+        autoSendRequestedRef.current = false
+        handleSendQueuedNow(queuedMessages[0]!.id)
+      }
+    } else {
+      autoSendRequestedRef.current = false
+    }
+  }, [canSendQueuedNow, handleSendQueuedNow, liveMessages.length, queuedMessages, sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled, streaming, store])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -3011,7 +3059,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
       onContextMenu={(event) => {
         event.preventDefault()
-        enqueueCurrentInput()
+        enqueueCurrentInput(true)
       }}
       disabled={!canSend}
     >

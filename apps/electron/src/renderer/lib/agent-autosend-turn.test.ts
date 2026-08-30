@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { evaluateAutoSendTurn } from './agent-autosend-turn'
+import { evaluateAutoSendTurn, shouldStartAutoSendFromIdle } from './agent-autosend-turn'
 import type { AutoSendTurnState } from './agent-autosend-turn'
 
 function baseState(overrides: Partial<AutoSendTurnState> = {}): AutoSendTurnState {
@@ -15,6 +15,35 @@ function baseState(overrides: Partial<AutoSendTurnState> = {}): AutoSendTurnStat
     ...overrides,
   }
 }
+
+describe('shouldStartAutoSendFromIdle 空闲队列自动启动', () => {
+  test('用户开启自动发送后，空闲且队列可发送时立即启动队首', () => {
+    expect(shouldStartAutoSendFromIdle({
+      autoSendEnabled: true,
+      autoSendRequested: true,
+      queuedCount: 1,
+      liveMessagesPending: false,
+      streaming: false,
+      canSendQueuedNow: true,
+    })).toBe(true)
+  })
+
+  test('未主动开启、仍在运行、live 未清空或不可发送时不启动', () => {
+    const base = {
+      autoSendEnabled: true,
+      autoSendRequested: false,
+      queuedCount: 1,
+      liveMessagesPending: false,
+      streaming: false,
+      canSendQueuedNow: true,
+    }
+    expect(shouldStartAutoSendFromIdle(base)).toBe(false)
+    expect(shouldStartAutoSendFromIdle({ ...base, autoSendRequested: true, streaming: true })).toBe(false)
+    expect(shouldStartAutoSendFromIdle({ ...base, autoSendRequested: true, liveMessagesPending: true })).toBe(false)
+    expect(shouldStartAutoSendFromIdle({ ...base, autoSendEnabled: false, autoSendRequested: true })).toBe(false)
+    expect(shouldStartAutoSendFromIdle({ ...base, autoSendRequested: true, canSendQueuedNow: false })).toBe(false)
+  })
+})
 
 describe('evaluateAutoSendTurn 轮结束自动发送决策', () => {
   test('回归：空队列结束后再入队不发送（轮结束信号不残留）', () => {
