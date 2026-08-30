@@ -114,4 +114,5 @@ export {
   projectProgress,
   projectStatusLabel,
   getGraphJsonlPath,
+  isSafeSessionId,
 } from './project-meta'

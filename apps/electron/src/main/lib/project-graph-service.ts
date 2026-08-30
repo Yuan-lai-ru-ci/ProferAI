@@ -7,8 +7,8 @@
  * - 通过 IPC 向渲染进程提供 Graph 查询接口
  */
 
-import { appendFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { appendFileSync, existsSync, readFileSync, mkdirSync, lstatSync, realpathSync } from 'node:fs'
+import { dirname, resolve, sep } from 'node:path'
 import { getAgentSessionsDir } from './config-paths'
 import {
   buildGraphFromEvents,
@@ -28,6 +28,7 @@ import {
   projectProgress,
   projectStatusLabel,
   getGraphJsonlPath,
+  isSafeSessionId,
   serializeEvent,
   type TaskGraph,
   type ProjectMeta,
@@ -45,8 +46,35 @@ import type { AgentSessionMeta } from '@profer/shared'
 /**
  * 从 JSONL 文件加载完整 Graph。
  */
+function assertSafeSessionId(sessionId: string): void {
+  if (!isSafeSessionId(sessionId)) throw new Error('无效的会话标识')
+}
+
+/**
+ * 解析并校验 Graph 文件路径。
+ * 会话 ID 校验阻止路径注入；这里再拒绝已有 Graph 文件的 symlink，
+ * 防止本地恶意文件把安全文件名重定向到会话目录外。
+ */
+function getSafeGraphPath(sessionId: string): string {
+  assertSafeSessionId(sessionId)
+  const sessionDir = getAgentSessionsDir()
+  const graphPath = resolve(getGraphJsonlPath(sessionDir, sessionId))
+  const realSessionDir = realpathSync(sessionDir)
+  if (graphPath !== realSessionDir && !graphPath.startsWith(realSessionDir + sep)) {
+    throw new Error('任务图路径不在会话目录内')
+  }
+  if (existsSync(graphPath)) {
+    if (lstatSync(graphPath).isSymbolicLink()) throw new Error('任务图文件不允许使用符号链接')
+    const realGraphPath = realpathSync(graphPath)
+    if (realGraphPath !== realSessionDir && !realGraphPath.startsWith(realSessionDir + sep)) {
+      throw new Error('任务图路径不在会话目录内')
+    }
+  }
+  return graphPath
+}
+
 export function loadGraph(sessionId: string): TaskGraph {
-  const graphJsonlPath = getGraphJsonlPath(getAgentSessionsDir(), sessionId)
+  const graphJsonlPath = getSafeGraphPath(sessionId)
   if (!existsSync(graphJsonlPath)) {
     return { nodes: {}, edges: [], forkEdges: [], updatedAt: Date.now() }
   }
@@ -127,7 +155,7 @@ export function queryProgress(sessionId: string): number {
  * 由会话创建时调用（如果用户指定了项目模式）。
  */
 export function initProjectMeta(sessionId: string): ProjectMeta {
-  const graphJsonlPath = getGraphJsonlPath(getAgentSessionsDir(), sessionId)
+  const graphJsonlPath = getSafeGraphPath(sessionId)
   return createProjectMeta(sessionId, graphJsonlPath)
 }
 
@@ -150,7 +178,7 @@ export function syncProjectMetaFromGraph(meta: ProjectMeta, sessionId: string): 
  * 自动创建目录（如果不存在）。
  */
 export function appendGraphEvent(sessionId: string, event: GraphEvent): void {
-  const graphJsonlPath = getGraphJsonlPath(getAgentSessionsDir(), sessionId)
+  const graphJsonlPath = getSafeGraphPath(sessionId)
   const dir = dirname(graphJsonlPath)
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })

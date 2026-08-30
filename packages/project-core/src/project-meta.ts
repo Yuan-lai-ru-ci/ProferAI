@@ -127,8 +127,24 @@ export function projectStatusLabel(meta: ProjectMeta): string {
  * @param sessionDir - Agent 会话存储目录（如 ~/.proma/agent-sessions/）
  * @param sessionId - 主会话 ID
  */
+const SAFE_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+
+/**
+ * 校验会话 ID 是否可以安全地嵌入会话文件名。
+ * 会话 ID 由 Profer 生成，目前为 UUID；保留字母、数字、下划线和连字符
+ * 也兼容历史测试/迁移数据，同时从根上排除路径分隔符、点段和控制字符。
+ */
+export function isSafeSessionId(sessionId: unknown): sessionId is string {
+  return typeof sessionId === 'string' && SAFE_SESSION_ID_PATTERN.test(sessionId)
+}
+
 export function getGraphJsonlPath(sessionDir: string, sessionId: string): string {
-  // 使用 POSIX 路径拼接以保持跨平台兼容
-  const normalizedDir = sessionDir.replace(/\\/g, '/')
+  if (!isSafeSessionId(sessionId)) {
+    throw new Error('无效的会话标识')
+  }
+
+  // 使用 POSIX 路径拼接以保持跨平台兼容。sessionId 已经过严格文件名校验，
+  // 因此结果只能位于 sessionDir 的直接子级，不能通过 .. 或分隔符逃逸。
+  const normalizedDir = sessionDir.replace(/\\/g, '/').replace(/\/+$/, '')
   return `${normalizedDir}/${sessionId}-graph.jsonl`
 }

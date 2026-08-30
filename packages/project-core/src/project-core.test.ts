@@ -34,6 +34,8 @@ import {
   isProjectCompleted,
   projectProgress,
   projectStatusLabel,
+  isSafeSessionId,
+  getGraphJsonlPath,
   topologicalSort,
   type GraphEvent,
   type TaskGraph,
@@ -724,6 +726,16 @@ describe('project-meta', () => {
 
     const archived = { ...meta, projectStatus: 'archived' as const }
     expect(projectStatusLabel(archived)).toBe('已归档')
+  })
+
+  test('session ID 只能用于安全的 graph 文件名，不能携带路径片段', () => {
+    expect(isSafeSessionId('session-123')).toBe(true)
+    expect(isSafeSessionId('550e8400-e29b-41d4-a716-446655440000')).toBe(true)
+    for (const value of ['', '.', '..', '../secret', 'nested/id', 'nested\\\\id', 'session id', 'session$1', 'a'.repeat(129)]) {
+      expect(isSafeSessionId(value)).toBe(false)
+      expect(() => getGraphJsonlPath('/sessions', value)).toThrow('无效的会话标识')
+    }
+    expect(getGraphJsonlPath('/sessions/', 'session-123')).toBe('/sessions/session-123-graph.jsonl')
   })
 })
 

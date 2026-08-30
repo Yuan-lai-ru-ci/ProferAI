@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -21,6 +21,41 @@ afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.PROFER_CONFIG_DIR
   else process.env.PROFER_CONFIG_DIR = originalConfigDir
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true })
+})
+
+describe('Graph sessionId 安全边界', () => {
+  test('拒绝路径穿越和不安全字符', async () => {
+    useTempConfig()
+    const service = await import(`./project-graph-service?test=${Date.now()}-${Math.random()}`)
+    for (const sessionId of ['../secret', 'nested/session', 'session id', '..']) {
+      expect(() => service.loadGraph(sessionId)).toThrow('无效的会话标识')
+      expect(() => service.appendGraphEvent(sessionId, {
+        type: 'task_created', taskId: 'task', timestamp: 1,
+        payload: { subject: 'task', description: '', dependsOn: [] },
+      })).toThrow('无效的会话标识')
+    }
+  })
+
+  test('拒绝指向会话目录外的 Graph 符号链接', async () => {
+    const root = useTempConfig()
+    const service = await import(`./project-graph-service?test=${Date.now()}-${Math.random()}`)
+    const sessionsDir = join(root, 'agent-sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+    const outside = join(root, 'outside.jsonl')
+    writeFileSync(outside, '', 'utf8')
+    try {
+      symlinkSync(outside, join(sessionsDir, 'session-escape-graph.jsonl'), 'file')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPERM') return
+      throw error
+    }
+
+    expect(() => service.loadGraph('session-escape')).toThrow('符号链接')
+    expect(() => service.appendGraphEvent('session-escape', {
+      type: 'task_created', taskId: 'task', timestamp: 1,
+      payload: { subject: 'task', description: '', dependsOn: [] },
+    })).toThrow('符号链接')
+  })
 })
 
 describe('loadHarnessGraphSnapshot', () => {
