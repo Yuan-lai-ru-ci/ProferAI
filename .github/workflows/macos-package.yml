@@ -50,7 +50,9 @@ jobs:
         run: bun run typecheck
 
       - name: Run unit and regression tests
-        run: bun test --isolate --timeout 30000
+        # 多个测试文件会临时切换 PROFER_CONFIG_DIR；macOS runner 更快时并发执行会互相污染配置目录。
+        # 串行运行保持与 Windows 本地已验证的隔离语义一致，避免把测试竞态误判为平台缺陷。
+        run: bun test --isolate --max-concurrency=1 --timeout 30000
 
       - name: Build and package macOS arm64
         working-directory: apps/electron
