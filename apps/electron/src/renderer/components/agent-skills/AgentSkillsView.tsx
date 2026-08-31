@@ -206,8 +206,8 @@ export function AgentSkillsView(): React.ReactElement {
     <div data-profer-navigation-region="agent-skills" className="relative flex h-full flex-col overflow-hidden">
       {/* 顶部标题区保留为窗口拖拽区；标题、工作区选择和窗口按钮保持可交互。 */}
       <div className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region" aria-hidden="true" />
+      <WindowControlsHost id="agent-skills" priority={20} className="absolute right-2 top-[3px] z-20" />
       <div className="relative mx-auto mt-14 flex w-full max-w-6xl shrink-0 items-center justify-between gap-3 px-4 pb-4 sm:px-6 lg:px-8">
-        <WindowControlsHost id="agent-skills" priority={20} className="absolute right-2 top-[-56px] z-20" />
         <div className="titlebar-no-drag flex items-center gap-2.5">
           <Blocks className="size-6 text-foreground/70" />
           <h1 className="text-2xl font-semibold text-foreground">Agent 技能</h1>
