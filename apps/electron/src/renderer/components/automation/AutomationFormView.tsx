@@ -1066,7 +1066,8 @@ export function AutomationFormView(): React.ReactElement | null {
                 externalSelectedModel={selectedModel}
                 showChannelInTrigger
                 preferredProtocol={form.agentRuntime === 'pi' ? 'openai' : 'anthropic'}
-                strictProtocolFilter
+                // Pi supports both OpenAI and Anthropic wire protocols.
+                strictProtocolFilter={form.agentRuntime !== 'pi'}
                 onModelSelect={(opt) => update({ channelId: opt.channelId, modelId: opt.modelId })}
               />
             )}

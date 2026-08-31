@@ -342,7 +342,11 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
     return `${baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`
   }
   if (normalizePiApi(provider, baseUrl) === 'anthropic-messages') {
-    return normalizeAnthropicBaseUrlForSdk(resolveAnthropicMessagesUrl(baseUrl, provider))
+    // Pi's Anthropic SDK appends `/v1/messages` itself. Do not first resolve
+    // the complete endpoint: that turns the commercial relay base
+    // `/v1/proxy` into `/v1/proxy/messages`, after which Pi appends another
+    // `/v1/messages` and the request lands on a 404 route.
+    return normalizeAnthropicBaseUrlForSdk(baseUrl)
   }
   if (provider === 'custom' || provider === 'openai-responses') {
     return normalizeOpenAIBaseUrlForSdk(baseUrl)
