@@ -18,7 +18,7 @@
  */
 
 import { spawnSync } from 'child_process'
-import { join } from 'path'
+import { delimiter, dirname, join } from 'path'
 
 // ============================================
 // 类型定义
@@ -114,7 +114,14 @@ function runStep(
   const result = spawnSync(command, args, {
     stdio: [stdio, stdio, 'inherit'], // 始终显示 stderr
     cwd: join(import.meta.dir, '..'),
-    env: { ...process.env, ...options.env },
+    // 通过绝对路径调用 Bun 时，宿主 shell 未必将 ~/.bun/bin 放入 PATH。
+    // 打包步骤内部大量脚本仍使用 `bun`，因此显式注入当前运行时目录，
+    // 兼容 Finder、IDE 和干净终端中直接执行 dist.ts 的场景。
+    env: {
+      ...process.env,
+      PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
+      ...options.env,
+    },
     shell: true,
   })
 

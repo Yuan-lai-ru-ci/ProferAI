@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isTransientNetworkError, isMalformedResponseError, classifyNetworkError, getCategoryRetryDelayMultiplier, type NetworkErrorCategory } from './error-patterns'
+import { isTransientNetworkError, isMalformedResponseError, classifyNetworkError, getCategoryRetryDelayMultiplier, isEphemeralTransportError, type NetworkErrorCategory } from './error-patterns'
 
 describe('isTransientNetworkError', () => {
   // 原有覆盖：确保扩展正则未回归
@@ -19,6 +19,7 @@ describe('isTransientNetworkError', () => {
     'peer closed connection',
     'incomplete chunked read',
     'Upstream response stream was interrupted',
+    'Upstream HTTP/2 stream failed',
   ])('Given 已知瞬时网络错误 "%s" Then 判定为可重试', (msg) => {
     expect(isTransientNetworkError(msg)).toBe(true)
   })
@@ -47,6 +48,22 @@ describe('isTransientNetworkError', () => {
     expect(isTransientNetworkError('invalid api key')).toBe(false)
     expect(isTransientNetworkError('400 Bad Request: model not found')).toBe(false)
     expect(isTransientNetworkError()).toBe(false)
+  })
+})
+
+describe('isEphemeralTransportError', () => {
+  test('Given HTTP/2 上游流错误 Then 判定为仅当前轮展示的临时错误', () => {
+    expect(isEphemeralTransportError('unknown_error', 'Upstream HTTP/2 stream failed')).toBe(true)
+    expect(classifyNetworkError('Upstream HTTP/2 stream failed')).toBe('stream_interrupted')
+  })
+
+  test('Given 业务错误 Then 仍允许写入会话历史', () => {
+    expect(isEphemeralTransportError('provider_error', 'model not found')).toBe(false)
+    expect(isEphemeralTransportError('prompt_too_long', '上下文过长')).toBe(false)
+  })
+
+  test('Given network_error 类型 Then 即使文案变化也不污染历史', () => {
+    expect(isEphemeralTransportError('network_error', '连接失败')).toBe(true)
   })
 })
 
